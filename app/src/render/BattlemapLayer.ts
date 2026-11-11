@@ -25,7 +25,7 @@ import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
 import { boundAt, drawBounds, drawSails, isBound, SAILS } from './countryside';
-import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawRaisedDrawbridge, drawWalls, drawWallTower, flagFloor, GATE_DEPTH, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
+import { banner, cornerHatch, drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawRaisedDrawbridge, drawWalls, drawWallTower, flagFloor, GATE_DEPTH, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { drawCaveMouth, drawThemedEntrance } from './entrances';
 import { noiseSource } from './noise';
@@ -952,9 +952,13 @@ export class BattlemapLayer {
     // its deck and grid, and the stub shown when play raises it, each on their own (shown by door
     // state). Chunks without one draw their structures in one piece.
     const drawbridges = c.shapes.filter((s) => s.kind === 18);
-    const lowKind = (k: number) => k === 0 || isBound(k);
-    const highKind = (k: number) => k === 4 || k === 9 || (k >= 10 && k <= 12);
-    const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX);
+    const lowKind = (k: number) => k === 0 || k === 20 || isBound(k);
+    const highKind = (k: number) => k === 4 || (k >= 10 && k <= 12);
+    // (Gatehouses go under the towers but over every chunk's walls (`gateG`): a curtain owned by the next
+    // chunk would otherwise end on top of its gate block. The walls still learn from them which way the
+    // town lies.)
+    const gates = c.shapes.filter((s) => s.kind === 9);
+    const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX, gates);
     const structHigh = drawbridges.length ? drawStructures(c.shapes.filter((s) => highKind(s.kind))) : null;
     const bridges = drawbridges.map((s) => {
       drawDrawbridgeSill(structG, s);
@@ -970,14 +974,16 @@ export class BattlemapLayer {
       return { key: bridgeKey(s, cx, cy), deck, stub, grid: deckGridG };
     });
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1 || s.kind === SAILS));
+    const gateG = gates.length ? drawStructures(gates) : null;
+    const gateGridG = new Graphics();
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
     const walkGridG = new Graphics();
     const topGridG = new Graphics();
     const pathGridG = new Graphics();
-    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 13 ? pathGridG : walkGridG, s);
-    for (const gr of [gridG, walkGridG, topGridG, pathGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
-    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, towerG, topGridG]) {
+    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 9 ? gateGridG : s.kind === 13 ? pathGridG : walkGridG, s);
+    for (const gr of [gridG, walkGridG, topGridG, pathGridG, gateGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
+    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, gateG, gateGridG, towerG, topGridG]) {
       if (!part) continue;
       this.prewarm(part);
       yield;
@@ -1009,6 +1015,13 @@ export class BattlemapLayer {
     decks.addChild(bridgeG, gridG);
     this.layers[2].addChildAt(decks, this.layers[2].getChildIndex(parts[2]));
     parts.push(decks);
+    if (gateG) {
+      // (At the bottom of the towers' layer: over every chunk's walls and roofs, under every tower.)
+      const holder = new Container();
+      holder.addChild(gateG, gateGridG);
+      this.layers[3].addChildAt(holder, 0);
+      parts.push(holder);
+    }
     let atmo: Mesh<Geometry, Shader> | null = null;
     let atmoUniforms: UniformGroup | null = null;
     if (atmosphere > 0) {
@@ -1047,7 +1060,7 @@ export class BattlemapLayer {
       roofGeometry,
       roofMesh,
       battleRoofs: battleG,
-      grids: [gridG, walkGridG, topGridG, pathGridG, ...bridges.map((b) => b.grid)],
+      grids: [gridG, walkGridG, topGridG, pathGridG, gateGridG, ...bridges.map((b) => b.grid)],
       decks,
       atmo,
       atmoUniforms,
@@ -1126,7 +1139,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1137,6 +1150,9 @@ const HALF_TURN = new Map([
   ['footbridge', -45],
   ['vegetable row', -135],
   ['wattle fence', -135],
+  ['lychgate', -135],
+  ['tomb slab', -90],
+  ['hitching rail', -135],
 ]);
 /** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
  * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
@@ -1180,9 +1196,11 @@ export const LONG_SHADOW = new Map([
   ['footbridge', [3.1, 0.85, 1.6]],
   ['wattle fence', [1.0, 0.36, 0.6]],
   ['vegetable row', [1.9, 0.7, 0.5]],
+  ['horse', [1.5, 0.55, 1]],
+  ['hitching rail', [2.0, 0.3, 0.6]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
-export const OWN_SHADOW = new Set(['market cross', 'water wheel']);
+export const OWN_SHADOW = new Set(['market cross', 'water wheel', 'kurgan']);
 
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;
@@ -1236,14 +1254,16 @@ function bridgeCells(s: Shape, cx: number, cy: number): number[] {
  * three, and a forecourt's garden wall, gate piers and gate. Bridges, piers and drawbridges are drawn apart
  * (`bridges.ts`; a drawbridge in pieces, for play). (`ox`, `oy`: the chunk's corner in world px, for the bounds' patterns.)
  */
-function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
+function drawStructures(shapes: Shape[], ox = 0, oy = 0, gates = shapes.filter((s) => s.kind === 9)): Graphics {
   const g = new Graphics();
   // (v63 countryside: hedgerows, dry-stone walls and fences low under the rest; a windmill's sails.)
   const bounds = shapes.filter((s) => isBound(s.kind));
   if (bounds.length) drawBounds(g, bounds, ox, oy);
   for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
+  // (A star bastion's platform under its curtain, which is drawn over its edge.)
+  for (const s of shapes) if (s.kind === 20) drawBastion(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
-  if (walls.length) drawWalls(g, walls);
+  if (walls.length) drawWalls(g, walls, gates);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
   for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);
@@ -1266,6 +1286,7 @@ function drawDais(g: Graphics, s: Shape) {
   const r = Math.hypot(dx, dy) || PX;
   const a = Math.atan2(dy, dx);
   const kind = Math.round(s.size / PX);
+  if (kind === 4) return drawMound(g, cx, cy, r, a);
   // Steps: three curved treads out from the rim.
   for (let k = 2; k >= 0; k--) {
     const ro = r + PX * 0.28 * (k + 1);
@@ -1313,6 +1334,66 @@ function drawDais(g: Graphics, s: Shape) {
     g.moveTo(cx, cy).lineTo(cx + PX * 2.2, cy + PX * 2.2).stroke({ width: PX * 0.3, color: 0x000000, alpha: 0.28 });
     g.rect(cx - PX * 0.2, cy - PX * 0.2, PX * 0.4, PX * 0.4).fill(0xd8d1c2).stroke({ width: 1.5, color: ROOF_INK });
     g.rect(cx - PX * 0.45, cy - PX * 0.09, PX * 0.9, PX * 0.18).fill(0xd8d1c2).stroke({ width: 1.2, color: ROOF_INK });
+  }
+}
+
+/**
+ * A steppe town's dais (`size` 4, R5 towns 114): a low bank of the trodden ground's own earth, uneven
+ * round its foot, its top lit toward the north-west and its far slope shaded, hoof prints worn round
+ * its edge, a rutted way up where a dais has its steps, a few tufts of grass where hooves don't reach.
+ */
+function drawMound(g: Graphics, cx: number, cy: number, r: number, a: number) {
+  let seed = (Math.round(cx * 5.3) * 73856093) ^ (Math.round(cy * 2.9) * 19349663);
+  const rnd = () => {
+    seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) | 0;
+    return ((seed ^ (seed >>> 13)) >>> 0) / 4294967296;
+  };
+  const [p1, p2, sq] = [rnd() * 6.28, rnd() * 6.28, 0.86 + rnd() * 0.12];
+  // (An uneven round, a little long across the way up.)
+  const blob = (x: number, y: number, rr: number, n = 22) => {
+    const pts: number[] = [];
+    for (let k = 0; k < n; k++) {
+      const t = (k / n) * Math.PI * 2;
+      const w = rr * (1 + 0.08 * Math.sin(3 * t + p1) + 0.05 * Math.cos(5 * t + p2));
+      const [u, v] = [Math.cos(t) * w, Math.sin(t) * w * sq];
+      pts.push(x + u * Math.cos(a) - v * Math.sin(a), y + u * Math.sin(a) + v * Math.cos(a));
+    }
+    return pts;
+  };
+  const R = r * 1.08;
+  // Its shadow to the south-east, the foot's dark band, the slope, the sunlit top.
+  g.poly(blob(cx + PX * 0.28, cy + PX * 0.34, R)).fill({ color: 0x3e2a18, alpha: 0.32 });
+  g.poly(blob(cx, cy, R * 1.04)).fill(0x6e5034);
+  g.poly(blob(cx, cy, R * 0.96)).fill(0x8a6844).stroke({ width: 1.6, color: 0x4e3824, alpha: 0.6 });
+  g.poly(blob(cx - R * 0.07, cy - R * 0.08, R * 0.74)).fill(0xa07c54);
+  g.poly(blob(cx - R * 0.12, cy - R * 0.14, R * 0.5)).fill({ color: 0xb48f63, alpha: 0.7 });
+  // The way up: a worn, paler tongue down to the foot, two ruts in it.
+  const [ux, uy, vx, vy] = [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a)];
+  const at = (al: number, ac: number): [number, number] => [cx + ux * al + vx * ac, cy + uy * al + vy * ac];
+  const wd = Math.min(PX * 0.7, R * 0.35);
+  g.poly([...at(R * 0.35, -wd * 0.8), ...at(R * 1.12, -wd), ...at(R * 1.12, wd), ...at(R * 0.35, wd * 0.8)]).fill({ color: 0xa8845a, alpha: 0.85 });
+  for (const c of [-0.4, 0.4]) g.moveTo(...at(R * 0.4, wd * c)).lineTo(...at(R * 1.1, wd * c * 1.15));
+  g.stroke({ width: 1.4, color: 0x5e4329, alpha: 0.6 });
+  // Hoof prints round the edge, in pairs, thicker by the way up.
+  for (let k = 0; k < 30; k++) {
+    const t = rnd() * Math.PI * 2;
+    const d = R * (0.82 + rnd() * 0.26);
+    const [hx, hy] = [cx + Math.cos(t) * d, cy + Math.sin(t) * d * sq];
+    const hr = PX * (0.07 + rnd() * 0.03);
+    g.moveTo(hx + hr, hy).arc(hx, hy, hr, 0, Math.PI * 1.3);
+    g.moveTo(hx + PX * 0.2 + hr, hy + PX * 0.1).arc(hx + PX * 0.2, hy + PX * 0.1, hr, 0.3, Math.PI * 1.5);
+  }
+  g.stroke({ width: 1.3, color: 0x4a3420, alpha: 0.75 });
+  // Tufts of grass on the top and the slope's far side.
+  for (let k = 0; k < 7; k++) {
+    const t = rnd() * Math.PI * 2;
+    const d = R * (k < 3 ? rnd() * 0.45 : 0.6 + rnd() * 0.3);
+    const [tx, ty] = [cx + Math.cos(t) * d, cy + Math.sin(t) * d * sq];
+    const h = PX * (0.16 + rnd() * 0.1);
+    for (const dx of [-0.6, 0, 0.6]) g.moveTo(tx + dx * h * 0.3, ty).lineTo(tx + dx * h * 0.8, ty - h * (dx === 0 ? 1.15 : 0.85));
+    g.stroke({ width: 2.4, color: 0x3e4a22, cap: 'round' });
+    for (const dx of [-0.6, 0, 0.6]) g.moveTo(tx + dx * h * 0.3, ty).lineTo(tx + dx * h * 0.8, ty - h * (dx === 0 ? 1.15 : 0.85));
+    g.stroke({ width: 1.2, color: k % 2 ? 0x7f8f42 : 0x6c7c38, cap: 'round' });
   }
 }
 

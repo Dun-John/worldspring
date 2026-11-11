@@ -731,7 +731,8 @@ fn battlemap_guarantee() {
                 .filter(|&i| st[i].tier >= Tier::Town)
                 .flat_map(|i| worldgen::town::layout(&ex.world, &ex.t0, i).parks.iter().map(|p| (p.kind, worldgen::town::geom::area(&p.pts).abs(), worldgen::town::geom::centroid(&p.pts))).collect::<Vec<_>>())
                 .collect();
-            for kind in [worldgen::town::ParkKind::Formal, worldgen::town::ParkKind::Common] {
+            // (R5 towns: a horse park's corrals too, 114.)
+            for kind in [worldgen::town::ParkKind::Formal, worldgen::town::ParkKind::Common, worldgen::town::ParkKind::Horses] {
                 let biggest = all.iter().filter(|p| p.0 == kind).max_by(|a, b| a.1.total_cmp(&b.1));
                 if let Some(&(_, _, c)) = biggest {
                     seams.push(sites.len());
@@ -1781,8 +1782,11 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
         }
     }
     // (Generated ones; a design may have no cellar, a yurt has one storey.)
-    let yurt = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|r| r.kind == "yurt") && !it.levels[0].has_stairs && it.levels[0].windows.is_empty();
-    assert!(it.levels.len() >= 2 || yurt || world.file.edits.designs.contains_key(id), "{tag}: only {} level", it.levels.len());
+    // (R5 towns: a steppe town's round felt hall, as a yurt.)
+    let yurt = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|r| matches!(r.kind, "yurt" | "felt hall" | "felt sanctuary" | "felt common room")) && !it.levels[0].has_stairs && it.levels[0].windows.is_empty();
+    // (R5 towns: a cemetery's tomb, one chamber on one storey.)
+    let tomb = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|r| r.kind == "tomb chamber") && !it.levels[0].has_stairs;
+    assert!(it.levels.len() >= 2 || yurt || tomb || world.file.edits.designs.contains_key(id), "{tag}: only {} level", it.levels.len());
     // A building's interior as a design builds it again exactly, and keeps the designer's rules.
     if id.starts_with("b:") {
         let (d, _) = interior::design::design_of(world, t0, id, false).unwrap();

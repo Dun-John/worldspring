@@ -132,6 +132,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `t:<layout>:<k>` | `t:0:2` | A wall tower |
 | `rd:<8 hex>` | `rd:c3517b52` | A road stretch (between settlements and junctions, as `list_roads` lists them). Made from its two ends (rounded to 10 ft, either way round; stretches with the same ends told apart by length, so two such twins may swap ids if a sketch change alters one's length), so it stays the same across every edit that leaves the roads as generated (renames, notes, sites, buildings, objects, crossings, town edits); a remake of the world, or a sketch change that moves one of its ends, gives it a new id. Renamed and annotated like a feature |
 | `v:<id>` | `v:zbfopudy` | A crossing put down by hand (bridge, ford, ferry): renamed and annotated like a feature |
+| `sq:<layout>:…` | `sq:0:p0`, `sq:0:20` | A town's square or park: `p<patch>` on a patch, `<corner>` where streets meet, `g<building>` a palace's garden, `r<road>` a cemetery by a road out |
+| `gt:<layout>:<corner>` | `gt:0:243` | A gate in a town's wall (while the town is walled) |
 | `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get_town_plan` |
 | `u:<layout>:<k>` | `u:312:0` | An underground site: dungeon, crypt, cave, mine or lava tube |
 | `w:<layout>:<sx>:<sy>` | `w:0:2:1` | A sewer section |
@@ -769,27 +771,68 @@ by the keep (flowerbeds, topiary at its corners, benches, a short hedge, now and
 trees. Buildings can be drawn in it. With
 `structure: "ruin"` the walls are broken, some towers fallen and every building a roofless shell.
 
-A **wall** is a line (`pts`, 2–64 corners, each side at least 10 ft, at most 3,000 ft in all; `closed: true` joins
-the last corner to the first): towers on its corners and along long runs, a gatehouse on each corner listed in
-`gates` (indices into `pts`) and wherever a road, a town's approach or its main street crosses it (side streets and
-alleys are closed by it). Where it would stand in water it is broken (a tower on each bank).
+The keep and the yard's buildings are the castle's pieces (`b:<layout>:<id>`, as `get_feature`, `search_features`
+and `get_battlemap` give them): `update_building` changes one as it changes a town's building (`func`, `name`,
+`floors`, `roof`, `tint`, `material`, `shape`, `shade`, `structure`; not its footprint, which is the castle's),
+`remove_buildings` takes a yard building away and `restore_building` puts a piece back as built. `keep_func` and
+`keep_name` on `create_feature` or `update_fortification` are the short form for the keep (`auto` and `""` put them
+back: the castle itself, named as the site). The changes are kept with the castle (by its `c:` id), so they stay on it
+when another site is deleted or the castle is redrawn; a yard building's change holds while a building stands where it
+was changed (a redrawn castle lays out its yard anew), the keep's follows the keep. A ruined piece (the castle in
+ruins, or the piece made `structure: "ruin"`) takes a function, a name and looks but no storeys; the keep is taken
+away only with `keep: false`.
 
-Both must stand on dry land, off river channels, and not cross another wall; a castle also stays off squares, roads
-and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
+```json
+{ "name": "create_feature", "arguments": { "kind": "castle", "rect": { "x_ft": 770000, "y_ft": 2330000, "width_ft": 400, "depth_ft": 300 }, "name": "Candlekeep", "keep_func": "library" } }
+{ "name": "update_building", "arguments": { "id": "b:322:18", "func": "library", "name": "The Great Library", "floors": 5 } }
+```
+
+A **wall** is a line (`pts`, 2–64 corners, each side at least 10 ft, at most 3,000 ft in all; `closed: true` joins
+the last corner to the first, and a closed wall may have 3–256 corners and run 24,000 ft round): towers on its
+corners and along long runs, a gatehouse on each corner listed in `gates` (indices into its line) and wherever a
+road, a town's approach or its main street crosses it (a closed wall: a lane through it, not one running along it).
+Side streets and alleys are closed by it, unless `street_gates: true` (a gate on every street crossing it, a new
+corner where none is within 20 ft); a closed wall that would have no gate gets one where its busiest side street
+crosses (the one nearest the town's middle), so every ring has a way in. In or round a town it is built as that town
+builds its own walls (stone, towers, gatehouses and merlons by its culture and wealth). Where it would stand in water
+it is broken (a tower on each bank); an open wall in the water is refused, a closed one is broken there.
+
+Or a ring round patches of a town's plan: `settlement` (the town's id) and `around_patches` (patch numbers from
+`get_town_plan`) in place of `pts`. Its line is the outer edge of those patches, which is the middle of the street
+round them: a lane inside the wall and one outside, the blocks untouched (where one district's lots run across a
+patch edge with no street, those buildings are in its way: `sides_without_street` in the refusal). Patches the set
+encloses are inside it (`enclosed_patches`). It is refused for patches in more than one piece (naming the pieces),
+patches meeting only at a corner, a side on the town's standing wall (take the walls down with `edit_town`, or leave
+out the patches on the edge), or more than 256 corners. Its gates: on every corner where a main street goes through;
+with `street_gates`, on every corner where a side street leaves it outward (patch corners are where three patches
+meet, so a street there ran on into the streets inside and round it); `gates` adds corners by hand. The line is
+taken from the plan as it stands and kept in the world file: corners moved later with `edit_town` leave it where it
+was, until `update_fortification` gets `around_patches` again.
+
+Both must stand on dry land, off river channels, and not cross another wall (the refusal names it: `that crosses
+wall c:4 at (x, y)` or `the town wall of city:…`); a castle also stays off squares, roads and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
 refusal, or taken away with it (one change) when `remove_in_way: true`. Corners snap to the 5-ft grid (`snap: false`
 not). Their wall and gate towers have interiors (`t:<layout>:<k>`), and a building drawn on the wall is refused. The
-result also gives `towers`, `gates`, `buildings` and the castle's `keep` (its building id).
+result also gives `towers`, `gates`, `buildings` and the castle's `keep` (its building id); a wall's also `corners`,
+`length_ft`, `closed`, `gate_list` (each gate as built: `corner` when on one, and `x_ft`, `y_ft`) and
+`streets_closed` (crossings with no gate: `corner`, `x_ft`, `y_ft`, `street` main or side); a ring round patches
+`around` (`settlement`, `patches`, `plan_corners`: the plan's corner for each corner of its line).
 
 ```json
 { "name": "create_feature", "arguments": { "kind": "castle", "rect": { "x_ft": 4772760, "y_ft": 1498825, "width_ft": 300, "depth_ft": 200 }, "gate": 2, "name": "Highmoor Keep" } }
 { "name": "create_feature", "arguments": { "kind": "wall", "pts": [[4772500, 1499150], [4773050, 1499150], [4773200, 1498650]], "gates": [1] } }
 { "name": "create_feature", "arguments": { "kind": "wall", "pts": [[412000, 380000], [413200, 380000], [413200, 381000], [412000, 381000]], "closed": true, "remove_in_way": true } }
+{ "name": "create_feature", "arguments": { "kind": "wall", "settlement": "city:6c30c809", "around_patches": [0, 3, 1, 2, 40, 9, 6, 7, 5, 4], "name": "Upper City Wall" } }
 ```
+The last answers (cut short) `{"id": "c:0", "closed": true, "corners": 19, "length_ft": 6005, "gates": 1, "gate_list":
+[{"corner": 7, "x_ft": 2912602, "y_ft": 1052812}], "streets_closed": [{"corner": 2, "street": "side", ...}, ...],
+"towers": 42, "around": {"settlement": "city:6c30c809", "patches": [...], "plan_corners": [0, 10, 13, ...]}}`.
 > *"Build a castle on the hill west of Bulol with its gate toward the road."* · *"Wall off the north side of Agentholm."* · *"A ruined fort, keep only."*
 
 ### `update_fortification`
-`id` (a castle's or wall's `c:` id) and any of `create_feature`'s castle or wall fields: a new outline or line, its
-gate or gates, `keep`, `yard_buildings`, `structure`, `closed`, `name`. Fields left out stay; the result is checked
+`id` (a castle's or wall's `c:` id) and any of `create_feature`'s castle or wall fields: a new outline or line
+(`pts`, or `settlement` and `around_patches`: the ring laid anew on the plan as it stands, its gates with it), its
+gate or gates, `street_gates`, `keep`, `yard_buildings`, `structure`, `closed`, `name`. Fields left out stay; the result is checked
 like a new one (`remove_in_way` as there). `delete_feature` takes it away.
 
 ### `update_feature`
@@ -1162,6 +1205,11 @@ The world's own buildings take the same changes (`edits.buildings`): what it is 
 generated. A new trade with no name of its own is named as a drawn building's would be. Every other building
 keeps its id and footprint. If the world is generated again from a changed sketch and the town is laid out anew,
 a change whose building no longer stands at its id is set aside (not applied to another building).
+
+A castle's keep and yard buildings (a castle made with `create_feature`) take the same changes but a footprint;
+they are kept with the castle (see "Castles and walls") and the reply names it (`castle: {id, name}`, `piece`). An id
+that is neither says what it is: a building drawn by hand (it goes by its `c:` id), a building of another site made
+by hand, a castle's building that isn't there, or no such place.
 
 ```json
 { "name": "update_building", "arguments": { "id": "c:4", "floors": 3, "roof": "battlements" } }
@@ -1710,10 +1758,17 @@ lots, `close` for a temple's with a close as built, `close_generated` when set b
 can't be set there, or why the one set isn't built, `park` for a park's patch: `formal` or `common` as laid out,
 `park_by_hand` when set by hand, `park_refused`: why the patch can't be made a park, `ward_planned` for a park's
 patch built on as a common ward's, too small once its streets were cut), `corners` (`corner`, `at`,
-`planned` when moved, `pinned`, `gate`, `wall`, `junction` where a square can open, `square_refused` where streets
+`planned` when moved, `pinned`, `gate`, `wall` (with `wall_next`: its neighbours along the wall `[prev, next]`, null at an open wall's end; `tower_removed` where the tower standing at that corner was taken down by hand), `junction` where a square can open, `square_refused` where streets
 meet but none can (a close's corner), `square` and `square_ft` (how far out from the corner its chords are cut,
-on average) for the one there, `square_generated` when set by hand: a kind or `none`), `max_move_ft`, `walls`
-(`built`, `generated`), `edited`, `set_aside`.
+on average) for the one there, `square_generated` when set by hand: a kind or `none`), `districts` (`id`, `name`,
+`kind`, `patches`; `by_hand` for one made by hand, `changed` when its patches or their wards were changed by hand),
+`max_move_ft`, `walls` (`built`, `generated`), `edited`, `set_aside`, `places`: its squares, parks and gates (`id`,
+`kind`: `square`, `park` or `gate`; `sort`: a square's `market`, `civic`, `fountain`, `well`, `crossroads` or `green`,
+a park's `formal`, `common`, `cemetery` or `horses`; `name`, `generated`, `x_ft`, `y_ft`, `size_ft`, `patch`, `district` with
+its id, `main` for the square the main streets lead to). Their ids are kept by what they stand on (a patch, a corner,
+a road, a palace), so an edit elsewhere in the town or the walls set on or off move none; a gate is there only
+while the town is walled. `get_feature`, `rename_feature`, notes, `list_names` (`kind` `square`, `park`, `gate`)
+and `search_features` take them as other features.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1729,10 +1784,30 @@ Change a town's layout. Every field is optional; they apply in this order: `rese
 `relax`, `patches`, `squares`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`,
 and the ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
 `gates`), `squares` (the kinds of its open spaces, quays aside), `parks` (how each is laid out), `functions_lost`, `unmerged` (merges dropped because
-a ward no longer allows them), `rects` (where the map is drawn again). A square set by hand where the wards no
+a ward no longer allows them), `districts_changed` (`patch`, `from`, `to`: district ids), `renames_carried` (`from`,
+`to`, `name`: a building renamed or noted that the change took away hands its name and note to the new building on
+its patch with the same function, a castle's to the new keep), `renames_lost` (`id`, `name`: those with none; the
+rename stays on the old id), `rects` (where the map is drawn again). A square or park whose patch or corner the
+change takes away goes with its id (and its name and note stay on that id); the rest keep theirs. A square set by hand where the wards no
 longer leave three streets goes with the change that took them. `added` and `taken_away` count buildings by id
 and footprint (a patch laid out again keeps reusing its new buildings' ids). A square set or taken away changes only
 the lots at its corner: they are trimmed back to it, or come back whole.
+
+Gates and towers go in and out of the town's own wall by its corners (`get_town_plan`: corners with `wall: true`;
+`gate_by_hand`, `gate_removed`, and `walls.by_hand` for what was set). A gate put in takes the town's gatehouse
+(its culture's form: square tower, twin drums, arched, bent, log), the id `gt:<layout>:<corner>` and a name like
+the others, and a track (12 ft) out through it to the nearest approach or road, or across the outskirts to the
+open country; it is refused (in `wall.refused`, with why) where there is none, at a corner on the water, at the
+wall's end, on a castle's curtain, under 80 ft from another gate, or where the wall's sides there are under 56 ft.
+A gate taken out closes the wall: its road stops 60 ft or more outside (or at a junction just past that), its main
+street inside, and its ground keeps clear as with the gate (nothing built nearer the wall). A tower goes up `f` of the way
+along a side (refused within 20 ft of another tower or a gate, over a building, or over a street crossing the
+wall) and comes down by its corner or its id (a gate's towers go with the gate); a corner's tower taken down goes
+back up by its corner. Every other gate and tower keeps its id, renames and notes (a tower put up by hand is
+`t:<layout>:1000000` and on; a hand gate's two `t:<layout>:2000000 + 2 × corner` and `+ 1`), and walls taken down
+and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `name`, `way_out_ft`, `towers`),
+`gates_removed` (`corner`, `id`, `name`), `towers_added` (`id`, `x_ft`, `y_ft`), `towers_removed` (ids), `refused`
+(what, `why`).
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1740,10 +1815,10 @@ the lots at its corner: they are trimmed back to it, or come back whole.
 | `moves` | `[{corner, to \| by \| as_generated}]` | | `to: [x_ft, y_ft]`, or `by: [dx_ft, dy_ft]` from where it stands now; `as_generated` puts it back |
 | `equalize` | `[patch]` | | Pull each patch toward a regular polygon (its corners move) |
 | `relax` | `{at, radius_ft, amount}` | | Each corner within `radius_ft` of `at` toward the middle of its neighbours, by `amount` (0–1, default 0.5) at the centre, less toward the edge |
-| `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, as_generated}]` | | `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
+| `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, district, as_generated}]` | | `district`: a district's id (`d:<layout>:<n>`: any patch to any district, apart or not), a name (the district of that name now, any case, else a new district so named: new ones follow the generated ones, so every district keeps its id; one emptied keeps its id with no patches or label) or `"auto"`; a district whose patches change takes its kind from its wards by area (the centre stays the centre) and its label at its largest piece; `rename_feature` renames one; `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
 | `squares` | `[{corner, kind}]` | | `kind`: crossroads, well, fountain, green, `"none"` (no square there) or `"auto"` (as generated); a square opens only at a `junction` |
-| `walls` | `true` \| `false` \| `"auto"` | | Walls up, down, or as generated |
-| `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` | | Back to as generated |
+| `walls` | `true` \| `false` \| `"auto"` \| `{built, gates_add, gates_remove, towers_add, towers_remove}` | | Walls up, down, or as generated; or by corner: `built` as the plain value, `gates_add`/`gates_remove`: `[corner]`, `towers_add`: `[[corner, next corner, f]]` (`f` 0.05–0.95, default 0.5) or `[corner]` (a tower taken down there, back up), `towers_remove`: `[corner \| "t:<layout>:<n>"]` |
+| `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` \| `"walls"` | | Back to as generated (`walls`: up or down and every gate and tower set by hand) |
 | `dry_run` | boolean | `false` | Report without changing anything |
 
 ```json
@@ -1751,6 +1826,12 @@ the lots at its corner: they are trimmed back to it, or come back whole.
 ```
 > *"Put a castle on the ward east of Agentholm's market, and take its walls down."* · *"Make the docks' lots
 > bigger and round off the square by the north gate."*
+
+```json
+{ "name": "edit_town", "arguments": { "id": "city:6c30c809", "walls": { "gates_add": [42], "towers_add": [[92, 93, 0.5]] } } }
+```
+→ `"wall": { "gates_added": [{ "corner": 42, "id": "gt:5:42", "name": "Harys Gate", "towers": ["t:5:2000084",
+"t:5:2000085"], "way_out_ft": 1221 }], "towers_added": [{ "id": "t:5:1000000", "x_ft": 2909301, "y_ft": 1052522 }] }`
 
 | Error | Why |
 |---|---|
@@ -1764,6 +1845,8 @@ the lots at its corner: they are trimmed back to it, or come back whole.
 | `only a park's patch is laid out as a garden…` | `park` asked of a patch whose ward isn't `park` |
 | `too much of that patch is on the water for a park…` / `no street comes to that patch…` / `parks are laid out inside the town` / `that patch is too small for a park…` / `a cliff crosses that patch…` | The `park` ward refused on that patch (`park_refused`) |
 | `the town was laid out anew: …` | The edit was made before a sketch change moved the town or its patches |
+| `corner N is not on the town's wall …` / `corners N and M are not next to each other on the wall` | A gate or tower asked off the wall's line |
+| `towers_remove: … is not one of this town's towers` | A tower id of another layout |
 
 ## Shaping the ground
 

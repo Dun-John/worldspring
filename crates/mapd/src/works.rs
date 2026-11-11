@@ -3,7 +3,8 @@
 
 use serde_json::{Value, json};
 use worldgen::agent;
-use worldgen::world::{CASTLE_MAX_FT, CASTLE_MIN_FT, Created, STRUCTURES, WALL_MAX_FT};
+use worldgen::town::pieces;
+use worldgen::world::{BuildingEdit, CASTLE_MAX_FT, CASTLE_MIN_FT, CastlePiece, Created, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
 
 use crate::Shared;
 use crate::tools::{found, schema, text};
@@ -20,8 +21,13 @@ pub fn props() -> Value {
         "keep": { "type": "boolean", "default": true, "description": "A castle's keep (the castle itself, named as the site) in the yard" },
         "yard_buildings": { "type": "boolean", "default": true, "description": "Buildings along the inside of a castle's walls (barracks, stables, a smithy...)" },
         "structure": { "type": "string", "enum": STRUCTURES, "description": "A castle roofed (default) or in ruins (broken walls, fallen towers, roofless buildings)" },
-        "pts": { "type": "array", "items": pt, "description": format!("A wall's line: corners [x_ft, y_ft] in order (2-64), each side at least 10 ft, at most {WALL_MAX_FT} ft in all. Towers stand on its corners and along long runs") },
-        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "A wall's corners (indices into pts) that are gates; roads and streets crossing it get gates of their own" },
+        "keep_func": { "type": "string", "description": "What a castle's keep is (else the castle itself): a business (a catalog key as list_names shows them: library, temple, wizard_tower...) or a home; auto: back to the castle. The short form of update_building on the keep" },
+        "keep_name": { "type": "string", "description": "The keep's own name (else the castle's); empty: back to the castle's" },
+        "pts": { "type": "array", "items": pt, "description": format!("A wall's line: corners [x_ft, y_ft] in order (2-64), each side at least 10 ft, at most {WALL_MAX_FT} ft in all (closed: 3-256 corners, {WALL_RING_MAX_FT} ft round). Towers stand on its corners and along long runs") },
+        "settlement": { "type": "string", "description": "With around_patches: the town (its id) whose patches the wall goes round" },
+        "around_patches": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Instead of pts: a closed wall round these patches of the settlement's plan (get_town_plan), one piece, on their outer edge (the middle of the street round them). Its line is taken from the plan as it stands and kept; give around_patches again to lay it anew after moving corners" },
+        "street_gates": { "type": "boolean", "default": false, "description": "A gate on every street crossing the wall (else side streets are closed: gates come only where a road, an approach or a main street crosses, and a ring with none gets one at its busiest street)" },
+        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "A wall's corners (indices into its line) that are gates; roads, approaches and main streets crossing it get gates of their own" },
         "closed": { "type": "boolean", "default": false, "description": "A wall's last corner joins its first (a ring)" },
         "snap": { "type": "boolean", "default": true, "description": "Snap corners to the 5-ft grid" },
         "remove_in_way": { "type": "boolean", "default": false, "description": "Take away the world's own buildings in its way (else it is refused, naming them)" },
@@ -34,7 +40,7 @@ pub fn list() -> Vec<Value> {
         m.insert("id".into(), json!({ "type": "string", "description": "A castle or wall drawn by hand (its created id c:<n>)" }));
         m.insert("name".into(), json!({ "type": "string" }));
     }
-    vec![json!({ "name": "update_fortification", "title": "Change a castle or wall", "description": "Change a castle or wall made with create_feature: a new outline (poly or rect) or line (pts), its gate or gates, keep, yard_buildings, structure, closed, name. Fields left out stay; it is checked like a new one. delete_feature takes it away.", "inputSchema": schema(update, &["id"]) })]
+    vec![json!({ "name": "update_fortification", "title": "Change a castle or wall", "description": "Change a castle or wall made with create_feature: a new outline (poly or rect) or line (pts), its gate or gates, keep, keep_func, keep_name, yard_buildings, structure, closed, name. Fields left out stay; it is checked like a new one. delete_feature takes it away.", "inputSchema": schema(update, &["id"]) })]
 }
 
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
@@ -91,6 +97,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         }
     };
     let castle = c.kind == "castle";
+    let mut ring_report = serde_json::Map::new();
     if castle {
         if let Some(p) = corners(a, "poly")?.or(rect(a)?) {
             if c.gate.is_some_and(|g| g as usize >= p.len()) {
@@ -110,18 +117,31 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         if let Some(s) = a["structure"].as_str() {
             c.structure = Some(s.to_string()).filter(|s| s != "roofed");
         }
+        keep_args(a, &mut c)?;
     } else {
-        if let Some(p) = corners(a, "pts")? {
+        let (before, was_closed) = (c.pts.clone(), c.closed);
+        if let Some(b) = a["closed"].as_bool() {
+            c.closed = b;
+        }
+        let ringed = match crate::handwalls::line(app, a, &mut c).await? {
+            Some(r) => {
+                ring_report = r;
+                true
+            }
+            None => false,
+        };
+        if !ringed && let Some(p) = corners(a, "pts")? {
             c.pts = p;
             c.gates.retain(|g| (*g as usize) < c.pts.len());
         }
         if let Some(g) = a["gates"].as_array() {
-            c.gates = g.iter().map(|v| v.as_u64().filter(|k| *k < 1000).map(|k| k as u32)).collect::<Option<Vec<_>>>().ok_or("gates: corner indices")?;
+            let hand = g.iter().map(|v| v.as_u64().filter(|k| *k < 1000).map(|k| k as u32)).collect::<Option<Vec<_>>>().ok_or("gates: corner indices")?;
+            if ringed { c.gates.extend(hand) } else { c.gates = hand }
             c.gates.sort_unstable();
             c.gates.dedup();
         }
-        if let Some(b) = a["closed"].as_bool() {
-            c.closed = b;
+        if !ringed && (creating || c.pts != before || c.closed != was_closed || a["street_gates"].is_boolean()) {
+            ring_report = crate::handwalls::street_gates(app, a, &mut c).await?;
         }
     }
     let pts = if castle { &c.poly } else { &c.pts };
@@ -142,14 +162,16 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         .worker
         .with(move |ex| {
             let skip = agent::layout_of(&ex.world, &ex.t0, &probe.id).filter(|_| !creating);
-            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way))
+            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way, s.in_way_names))
         })
         .await?;
-    let (p, name, in_way) = spot;
+    let (p, name, in_way, names) = spot;
     if !in_way.is_empty() && !a["remove_in_way"].as_bool().unwrap_or(false) {
-        let ids: Vec<&str> = in_way.iter().map(|(id, _)| id.as_str()).take(20).collect();
+        let ids: Vec<String> = in_way.iter().map(|(id, _)| names.get(id).map_or_else(|| id.clone(), |n| format!("{id} ({n})"))).take(20).collect();
+        // (A ring round patches: most stand where one district's lots run across a patch edge.)
+        let bare = ring_report.get("sides_without_street").map(|s| format!(" (the ring's sides from corners {s} run where lots cross a patch edge with no street)")).unwrap_or_default();
         return Err(format!(
-            "{} of the world's own buildings stand in the way ({}{}): pass remove_in_way: true to take them away with it",
+            "{} of the world's own buildings stand in the way ({}{}){bare}: pass remove_in_way: true to take them away with it",
             in_way.len(),
             ids.join(", "),
             if in_way.len() > ids.len() { ", ..." } else { "" }
@@ -193,6 +215,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         return found(app, id.to_string()).await;
     }
     let id = if creating { change["id"].as_str().unwrap_or_default().to_string() } else { cid };
+    let cid2 = id.clone();
     let mut v = app
         .worker
         .with(move |ex| {
@@ -201,17 +224,149 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
                 let l = worldgen::town::layout(&ex.world, &ex.t0, li);
                 v["towers"] = json!(l.towers.len());
                 v["gates"] = json!(l.gate_towers.len() / 2);
-                if let Some(k) = l.buildings.iter().find(|b| b.func.is_some_and(|f| worldgen::town::catalog::CATALOG[f as usize].key == "castle")) {
+                if let Some(k) = worldgen::town::pieces::keep_index(&l).map(|i| &l.buildings[i]) {
                     v["keep"] = json!(format!("b:{li}:{}", k.id));
                 }
                 v["buildings"] = json!(l.buildings.len());
+            }
+            if castle {
+                let aside = aside_of(ex, &cid2);
+                if !aside.is_empty() {
+                    v["pieces_set_aside"] = json!(aside);
+                }
             }
             Ok::<_, String>(v)
         })
         .await?;
     v["tool"] = json!(tool);
+    if !castle {
+        crate::handwalls::reply(app, &mut v, ring_report).await;
+    }
     if !removed.is_empty() {
         v["removed"] = json!(removed);
     }
     Ok(v)
+}
+
+/// `keep_func` and `keep_name` on a castle: its keep's piece edit (`Created::pieces`).
+fn keep_args(a: &Value, c: &mut Created) -> Result<(), String> {
+    let (func, name) = (a["keep_func"].as_str().map(str::trim), a["keep_name"].as_str().map(str::trim));
+    if func.is_none() && name.is_none() {
+        return Ok(());
+    }
+    if c.keep == Some(false) {
+        return Err("keep_func and keep_name are for a castle with a keep (it was made with keep: false)".into());
+    }
+    // (Where the keep stood when changed: kept for reading; the keep's edit follows the keep.)
+    let n = c.poly.len().max(1) as f64;
+    let at = if c.poly.is_empty() { [c.x, c.y] } else { [c.poly.iter().map(|q| q[0]).sum::<f64>() / n, c.poly.iter().map(|q| q[1]).sum::<f64>() / n] };
+    let p = c.pieces.entry(CastlePiece::KEEP.to_string()).or_insert_with(|| CastlePiece { edit: BuildingEdit { at, ..Default::default() }, name: None });
+    if let Some(f) = func {
+        p.edit.func = Some(f.to_string()).filter(|f| !f.is_empty() && f != "auto");
+    }
+    if let Some(n) = name {
+        p.name = Some(n.to_string()).filter(|n| !n.is_empty());
+    }
+    if p.is_noop() {
+        c.pieces.remove(CastlePiece::KEEP);
+    }
+    Ok(())
+}
+
+/// A castle's piece edits that find no building now, as the overview lists them (they stay stored).
+fn aside_of(ex: &worldgen::pipeline::Executor, castle: &str) -> Vec<Value> {
+    pieces::set_aside(&ex.world, &ex.t0).into_iter().filter(|(_, c, _)| c == castle).map(|(id, _, why)| json!({ "id": id, "why": why, "kept": true })).collect()
+}
+
+/// A castle piece's edit stored on its castle (`None`: as built), found by its `c:` id.
+async fn store_piece(app: &Shared, castle: String, key: String, piece: Option<CastlePiece>, tool: &'static str, id: String) -> Result<Value, String> {
+    app.edit("agent", 0, move |e| {
+        let c = e.created.iter_mut().find(|c| c.id == castle && !c.removed).ok_or_else(|| format!("{castle} was deleted meanwhile"))?;
+        match piece {
+            Some(p) => drop(c.pieces.insert(key, p)),
+            None => drop(c.pieces.remove(&key)),
+        }
+        Ok(json!({ "tool": tool, "id": id }))
+    })
+    .await
+}
+
+/// A castle piece read back after a change, with its castle.
+async fn piece_reply(app: &Shared, id: String, tool: &'static str, castle: (String, String)) -> Result<Value, String> {
+    let id2 = id.clone();
+    let c2 = castle.0.clone();
+    let (mut v, aside) = app
+        .worker
+        .with(move |ex| agent::get(&ex.world, &ex.t0, &id2).map(|v| (v, aside_of(ex, &c2))).ok_or_else(|| "changed, but it could not be read back".to_string()))
+        .await?;
+    if !aside.is_empty() {
+        v["pieces_set_aside"] = json!(aside);
+    }
+    v["tool"] = json!(tool);
+    v["id"] = json!(id);
+    v["castle"] = json!({ "id": castle.0, "name": castle.1 });
+    Ok(v)
+}
+
+/// `update_building` on a piece of a castle made by hand (its keep or a yard building): `None`
+/// when `id` is not one. The edit is kept on the castle (by its `c:` id).
+pub async fn update_piece(app: &Shared, id: &str, change: &agent::BuildingChange, name: Option<&str>, args: &Value) -> Result<Option<Value>, String> {
+    let (id2, change, name) = (id.to_string(), change.clone(), name.map(str::to_string));
+    // (Asked for in words update_building has none for: answered, not skipped.)
+    let stray = if args["removed"].as_bool() == Some(true) {
+        Some(format!("{id} is a piece of a castle: update_building does not take it away (remove_buildings does, a yard building only; the keep goes with update_fortification keep: false)"))
+    } else if args.get("footprint").is_some() {
+        Some(format!("{id} is a piece of a castle: its footprint is the castle's (redraw the castle with update_fortification); update_building has no footprint argument"))
+    } else {
+        None
+    };
+    let r = app
+        .worker
+        .with(move |ex| {
+            let Some(p) = pieces::piece_of(&ex.world, &ex.t0, &id2) else { return Ok(None) };
+            if let Some(s) = stray {
+                return Err(s);
+            }
+            let e = pieces::piece_edit(&ex.world, &p, &change, name.as_deref())?;
+            Ok(Some((p.castle.clone(), p.castle_name.clone(), p.key.clone(), p.what(), e)))
+        })
+        .await?;
+    let Some((castle, castle_name, key, what, e)) = r else { return Ok(None) };
+    store_piece(app, castle.clone(), key, e, "update_building", id.to_string()).await?;
+    let mut v = piece_reply(app, id.to_string(), "update_building", (castle, castle_name)).await?;
+    v["piece"] = json!(what);
+    Ok(Some(v))
+}
+
+/// Castle pieces among `ids` (yard buildings to take away): (id, castle, key, edit), each
+/// checked; the rest are left in `ids`.
+pub fn piece_removals(ex: &worldgen::pipeline::Executor, ids: &mut Vec<String>) -> Result<Vec<(String, String, String, CastlePiece)>, String> {
+    let mut out = Vec::new();
+    let mut rest = Vec::new();
+    for id in ids.drain(..) {
+        match pieces::piece_of(&ex.world, &ex.t0, &id) {
+            Some(p) => out.push((id, p.castle.clone(), p.key.clone(), pieces::piece_removal(&p)?)),
+            None => rest.push(id),
+        }
+    }
+    *ids = rest;
+    Ok(out)
+}
+
+/// `restore_building` on a castle piece: its edit taken off the castle. `None` when `id` is not
+/// one.
+pub async fn restore_piece(app: &Shared, id: &str) -> Result<Option<Value>, String> {
+    let id2 = id.to_string();
+    let r = app.worker.with(move |ex| Ok(pieces::piece_of(&ex.world, &ex.t0, &id2).map(|p| (p.castle.clone(), p.castle_name.clone(), p.key.clone())))).await?;
+    let Some((castle, castle_name, key)) = r else { return Ok(None) };
+    let (c2, k2, id3) = (castle.clone(), key.clone(), id.to_string());
+    app.edit("agent", 0, move |e| {
+        let c = e.created.iter_mut().find(|c| c.id == c2 && !c.removed).ok_or_else(|| format!("{c2} was deleted meanwhile"))?;
+        match c.pieces.remove(&k2) {
+            Some(_) => Ok(json!({ "tool": "restore_building", "id": id3 })),
+            None => Err(format!("{id3} is as built already")),
+        }
+    })
+    .await?;
+    piece_reply(app, id.to_string(), "restore_building", (castle, castle_name)).await.map(Some)
 }

@@ -1150,7 +1150,7 @@ pub struct BuildingChange {
 /// Generated building `id`'s edit with `change` made: checked (a new footprint as a drawn
 /// building's, skipping itself). `None` when it is then as generated.
 pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) -> Result<Option<crate::world::BuildingEdit>, String> {
-    let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (b:<layout>:<id>; buildings drawn by hand go by their c: id)"))?;
+    let (li, bi) = generated_building(t0, id).ok_or_else(|| town::pieces::not_generated(world, t0, id))?;
     let base = town::base_layout(world, t0, li);
     let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
     let at = geom::centroid(&g.poly);
@@ -1219,6 +1219,23 @@ pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) 
 /// as generated) or `{error}`.
 pub fn building_edit_json(world: &World, t0: &T0, id: &str, change_json: &str) -> String {
     let v: Value = serde_json::from_str(change_json).unwrap_or_default();
+    // (R5 towns) A piece of a castle made by hand: its edit is kept on the castle, by `key`
+    // (`{}` as the change just names the piece).
+    if generated_building(t0, id).is_none()
+        && let Some(p) = town::pieces::piece_of(world, t0, id)
+    {
+        let r = if v["remove"].as_bool() == Some(true) {
+            town::pieces::piece_removal(&p).map(Some)
+        } else {
+            let name = v["name"].as_str().map(str::to_string);
+            serde_json::from_value::<BuildingChange>(v).map_err(|e| e.to_string()).and_then(|c| town::pieces::piece_edit(world, &p, &c, name.as_deref()))
+        };
+        return match r {
+            Ok(e) => json!({ "piece": { "castle": p.castle, "key": p.key, "keep": p.keep(), "edit": e } }),
+            Err(e) => json!({ "error": e }),
+        }
+        .to_string();
+    }
     let r = if v["remove"].as_bool() == Some(true) {
         building_removal(world, t0, id).map(Some)
     } else {
@@ -1239,6 +1256,8 @@ pub struct WorksSpot {
     /// The world's own buildings in its way, to be taken away with it: (building id, its middle
     /// as generated).
     pub in_way: Vec<(String, P)>,
+    /// Those of them with a name, by id (for the refusal: "b:5:8 (the Smithy)").
+    pub in_way_names: crate::core::hash::FastMap<String, String>,
 }
 
 /// Where a castle (its outline) or a wall (its line) may stand: on the map, on dry land out of
@@ -1269,7 +1288,8 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         probes.extend((0..=k).map(|s| geom::lerp(a, b, s as f64 / k as f64)));
     }
     let shore = town::Shore::new(world, t0, [x0, y0, x1, y1]);
-    for p in &probes {
+    // (R5 towns: a closed wall is broken where it meets the water, as a town's: `sites::wall_site`.)
+    for p in probes.iter().filter(|_| !(c.closed && c.kind == "wall")) {
         if shore.wet(*p) {
             return Err(format!("that is in the water: {}", if castle { "draw it on dry land" } else { "end the wall at the shore" }));
         }
@@ -1284,6 +1304,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     let crosses_line = |w: &[P]| w.windows(2).any(|s| segs.iter().any(|&(a, b)| segs_cross(a, b, s[0], s[1]) || geom::seg_dist(s[0], a, b) < 1.0));
     let generated = t0.settlements.len() + t0.base_pois;
     let mut in_way: Vec<(String, P)> = Vec::new();
+    let mut in_way_names: crate::core::hash::FastMap<String, String> = Default::default();
     for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
         let li = l.index as usize;
         if Some(li) == skip {
@@ -1295,15 +1316,20 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
                 continue;
             }
             if li >= generated {
-                return Err(format!("that crosses {}", building_name(world, &l, b)));
+                let c = geom::centroid(&b.poly);
+                return Err(format!("that crosses b:{li}:{} ({}) at ({:.0}, {:.0})", b.id, building_name(world, &l, b), c[0], c[1]));
             }
             let base = town::base_layout(world, t0, li);
             if let Some(g) = base.building(b.id as usize) {
-                in_way.push((format!("b:{li}:{}", b.id), geom::centroid(&g.poly)));
+                let id = format!("b:{li}:{}", b.id);
+                if let Some(n) = world.file.edits.renames.get(&id).cloned().or_else(|| b.name.clone()).filter(|n| !n.is_empty()) {
+                    in_way_names.insert(id.clone(), n);
+                }
+                in_way.push((id, geom::centroid(&g.poly)));
             }
         }
         if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().any(|p| geom::contains(pts, *p)))) {
-            return Err("that crosses a wall".to_string());
+            return Err(town::handwall::wall_crossed(world, t0, &l, &segs));
         }
         if castle {
             if l.plazas.iter().any(|p| polys_overlap(pts, &p.pts)) {
@@ -1339,7 +1365,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         }
         word = namer.name(NameKind::Settlement, culture);
     }
-    Ok(WorksSpot { at, name: format!("{word} {}", if castle { "Castle" } else { "Wall" }), in_way })
+    Ok(WorksSpot { at, name: format!("{word} {}", if castle { "Castle" } else { "Wall" }), in_way, in_way_names })
 }
 
 /// `works_spot` as JSON: `{x, y, name, in_way: [{id, at}]}` or `{error}`. The castle or wall is
@@ -1368,7 +1394,7 @@ pub fn building_removal(world: &World, t0: &T0, id: &str) -> Result<crate::world
     if let Some((k, ..)) = drawn_pair(world, t0, id) {
         return Err(if world.file.edits.created[k].removed { format!("{id} is already deleted (restore_feature brings it back)") } else { format!("{id} is drawn by hand: delete_feature deletes it") });
     }
-    let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (buildings drawn by hand are deleted with delete_feature)"))?;
+    let (li, bi) = generated_building(t0, id).ok_or_else(|| town::pieces::not_generated(world, t0, id))?;
     let base = town::base_layout(world, t0, li);
     let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
     Ok(crate::world::BuildingEdit { at: geom::centroid(&g.poly), removed: true, ..Default::default() })
@@ -1611,11 +1637,15 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     let nums: Vec<usize> = parts.filter_map(|p| p.parse().ok()).collect();
     match (head, nums.as_slice()) {
         ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
-        ("d", [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).map(|q| q.label[q.label.len() / 2]),
-        ("t", [li, k]) if *li < town::layout_count(t0) => crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| t.0),
+        ("d", [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).and_then(|q| q.label.get(q.label.len() / 2).copied()),
+        ("t", [li, k]) if *li < town::layout_count(t0) => {
+            let l = town::layout(world, t0, *li);
+            l.tower_index(*k).and_then(|i| crate::interior::towers(&l).get(i).map(|t| t.0))
+        }
         ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
         ("w", [li, sx, sy]) if *li < t0.settlements.len() => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
+        ("sq" | "gt", _) => town::places::find(world, t0, id).map(|x| x.1.at),
         _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
     }
 }
@@ -1736,12 +1766,14 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
         (Some("d"), [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).map(|q| q.name.clone()),
         // Towers and ways underground as `layout_names` lists them; a sewer section as its site.
         (Some("t"), [li, k]) if *li < town::layout_count(t0) => {
-            crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| format!("{} {}", if t.2 { "Gate tower" } else { "Wall tower" }, k + 1))
+            let l = town::layout(world, t0, *li);
+            l.tower_index(*k).and_then(|i| crate::interior::towers(&l).get(i).map(|t| format!("{} {}", if t.2 { "Gate tower" } else { "Wall tower" }, i + 1)))
         }
         (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k)
             .map(|e| crate::sitelinks::dungeon_name(world, t0, *li).unwrap_or_else(|| cap(e.kind.name()))),
         (Some("k"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).filter(|b| crate::interior::has_deep_dungeon(b)).map(|_| "Deep dungeons".into()),
         (Some("w"), [li, ..]) if *li < town::layout_count(t0) => crate::interior::generate_id(world, t0, id).map(|it| it.name.unwrap_or_else(|| it.function.to_string())),
+        (Some("sq" | "gt"), _) => town::places::find(world, t0, id).map(|x| x.1.name),
         _ => match world.file.edits.created.iter().find(|c| c.id == id) {
             Some(c) => Some(c.name.clone()),
             None => match &t0.extra {
@@ -1793,7 +1825,7 @@ pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use
             return true;
         }
         let mut parts = at.split(':');
-        matches!(parts.next(), Some("b" | "d" | "t" | "u" | "k" | "w")) && parts.next().and_then(|s| s.parse::<usize>().ok()).is_some_and(|li| layouts.contains(&li))
+        matches!(parts.next(), Some("b" | "d" | "t" | "u" | "k" | "w" | "sq" | "gt")) && parts.next().and_then(|s| s.parse::<usize>().ok()).is_some_and(|li| layouts.contains(&li))
     }
 }
 
@@ -1952,9 +1984,10 @@ pub fn overview(world: &World, t0: &T0) -> Value {
         "npcs": world.file.edits.npcs.len(),
         "plots": world.file.edits.plots.len(),
         "roads": if p.generated_roads { "generated and drawn" } else { "only drawn" },
-        "buildings_changed": world.file.edits.buildings.len(),
+        // (With the pieces of hand castles that were changed.)
+        "buildings_changed": world.file.edits.buildings.len() + world.file.edits.created.iter().filter(|c| !c.removed).map(|c| c.pieces.len()).sum::<usize>(),
         // Changes to the world's own buildings that no longer apply (the town was laid out anew).
-        "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
+        "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).chain(town::pieces::set_aside(world, t0).into_iter().map(|(id, castle, why)| json!({ "id": id, "castle": castle, "why": why }))).collect::<Vec<_>>(),
         "designs_set_aside": crate::interior::design::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
         "towns_set_aside": town::wards::set_aside(world, t0).into_iter().map(|(layout, why)| json!({ "layout": layout, "why": why })).collect::<Vec<_>>(),
         "places_removed": places_removed(world),
@@ -2086,6 +2119,8 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
             }
         }
     }
+    let room = limit.saturating_sub(out.len());
+    out.extend(town::places::search(world, t0, &ql, kind, room, include_hidden));
     if let Some(rg) = &o.within {
         let at: std::collections::HashMap<&str, usize> = fs.iter().enumerate().map(|(i, f)| (f.id.as_str(), i)).collect();
         let ids: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
@@ -2271,7 +2306,13 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["kind"] = json!("building");
         v["name"] = json!(building_name(world, &l, b));
         v["function"] = json!(b.label());
-        v["floors"] = json!(b.floors);
+        // (A hand castle's ruined piece keeps the storeys it was built with, for when it is roofed again: it has none now.)
+        if b.structure == town::Structure::Ruin && town::pieces::piece_of(world, t0, id).is_some() {
+            v["floors"] = json!(0);
+            v["floors_note"] = json!("a ruin: a roofless shell has no storeys");
+        } else {
+            v["floors"] = json!(b.floors);
+        }
         // The roof's material and shape (battlements and ruins have none of their own).
         if b.roof != Some(town::RoofStyle::Battlements) && b.structure != town::Structure::Ruin {
             let k = town::roof::look(&l, b);
@@ -2337,6 +2378,10 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["kind"] = json!("district");
         v["name"] = json!(world.file.edits.renames.get(id).cloned().unwrap_or_else(|| q.name.clone()));
         v["district_kind"] = json!(q.kind.name());
+        set_whereabouts(world, t0, &mut v, nums[0]);
+    } else if matches!(head, "sq" | "gt") {
+        // (R5 towns: a square, park or gate, `town::places`.)
+        v.as_object_mut()?.extend(town::places::detail(world, t0, id)?.as_object()?.clone());
         set_whereabouts(world, t0, &mut v, nums[0]);
     } else if matches!(head, "u" | "w" | "k" | "t") {
         let it = crate::interior::generate_id(world, t0, id)?;
@@ -2631,7 +2676,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     let l = town::layout(world, t0, li);
     let mut out = Vec::new();
     for (qi, q) in l.quarters.iter().enumerate() {
-        out.push(name_entry(world, format!("d:{li}:{qi}"), "district", q.name.clone(), Some(q.label[q.label.len() / 2]), false));
+        out.push(name_entry(world, format!("d:{li}:{qi}"), "district", q.name.clone(), q.label.get(q.label.len() / 2).copied(), false));
     }
     for b in l.buildings.iter().filter(|b| b.func.is_some()) {
         let generated = b.name.clone().unwrap_or_else(|| b.label().to_string());
@@ -2640,7 +2685,10 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
         out.push(v);
     }
     for (k, (at, _, gate)) in crate::interior::towers(&l).into_iter().enumerate() {
-        out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
+        out.push(name_entry(world, format!("t:{li}:{}", l.tower_id(k)), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
+    }
+    for p in town::places::of(world, t0, &l) {
+        out.push(name_entry(world, p.id, p.kind, p.name, Some(p.at), false));
     }
     for e in l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer) {
         let name = crate::sitelinks::dungeon_name(world, t0, li).unwrap_or_else(|| cap(e.kind.name()));
@@ -2732,6 +2780,10 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
             }
         }
         v.extend(edits.crossings.iter().map(|(id, c)| name_entry(world, id.clone(), "crossing", crate::roadids::crossing_generated(c), Some(crate::roadids::crossing_mid(c)), false)));
+        // (R5 towns: squares, parks and gates are in their towns' layouts.)
+        if matches!(kind, Some("square" | "park" | "gate")) {
+            v.extend((0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= crate::t0::settle::Tier::Town).flat_map(|li| layout_names(world, t0, li)));
+        }
         v
     };
     Ok(json!({ "names": list.into_iter().filter(|v| kind.is_none_or(|k| v["kind"] == k)).collect::<Vec<_>>() }))

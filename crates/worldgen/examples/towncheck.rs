@@ -65,6 +65,10 @@
 //!   town edited round it (its patch's lots made small, rerolled; the walls taken down, else a far
 //!   patch rerolled): no building on another's ground (`Layout::grounds`), as generated or after the
 //!   edit, and a front door on every building within 150 ft of it.
+//!   Then districts drawn by hand (`district_edits`; also `districts` alone): a patch into a
+//!   neighbour's district, a far one, two into a new named one, a small district emptied, walls
+//!   as generated and toggled; renames and notes kept, carried or reported when a patch is laid
+//!   out anew.
 //! - `inns`: inns and caravanserais of `hub::inn::LEAST` squares or more laid out by zones: floors
 //!   fallen back on, `check_interior` (the drinking rules: the bar and tables in the taproom, the front
 //!   door into it, the stairs in it; every room reached), the programme (taproom, snug, private dining
@@ -77,6 +81,14 @@
 //!   corridor, no other building on their ground, the front door and the arch within 20 ft of a
 //!   street; those not round a yard, and every yard listed with where it is (`editor` edits each
 //!   one's patch as a monastery's: still round a yard after).
+//! - `walls` (not in `all`): walls by culture group (item 104, `town::wallstyle`): walled places and
+//!   their wall, castle and corner towers by shape; square towers where the style has none; towers whose
+//!   battlemap squares don't follow their shape (ring blocked, floor open, door reached); up to 3 places
+//!   a group listed with cameras (`fx, fy, zoom`) on the whole wall and on a tower by a gate.
+//! - `cemeteries` (not in `all`; R5 towns): cemeteries per tier and culture group, what they hold,
+//!   the rules (props or tombs on a walk, over the boundary or outside the plot, tomb doors not
+//!   reached from the way in, kurgans overlapping, a lychgate off the way in) and cameras; a park set
+//!   to a cemetery by hand, walls on and off.
 //! - `hash` (not in `all`): a hash per settlement layout (`L:`), per building of it (`B:`, with what it
 //!   is) and per building or tower interior (`b:`/`t:`), marked `C` in a settlement with a castle, one
 //!   per line on stdout (everything else goes to stderr): run it on two trees and diff to see what
@@ -89,7 +101,10 @@
 //!   portcullises and the water squares generators laid. THEME=temple,sunken_temple keeps only sites of those themes (`keep`, `undercroft`: keep dungeons, sewer sections). TERRAIN=1 also lays the terrain tools
 //!   (`under::chasm`, `under::water`) on a copy of each site and counts what they laid and what they left unreached.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
+//! - `castlepieces` (not in `all`): a castle drawn by hand, its keep and yard buildings changed (`Created::pieces`),
+//!   an earlier site deleted and taken out of the list, the castle in ruins; keeps of generated castles changed.
+//!
+//! Usage: cargo run --release -p worldgen --example towncheck -- [castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -104,7 +119,7 @@ use worldgen::core::tile::TileKey;
 use worldgen::pipeline::Executor;
 use worldgen::t0::T0;
 use worldgen::town::catalog::Ward;
-use worldgen::town::geom::{add, area, centroid, contains, cross, dist, dot, len, lerp, mul, seg_dist, sub};
+use worldgen::town::geom::{add, area, centroid, contains, cross, dist, dot, len, lerp, mean, mul, seg_dist, sub};
 use worldgen::town::{self, Layout, PlazaKind};
 use worldgen::{World, interior};
 
@@ -197,6 +212,10 @@ impl Report {
                     v.sort_by(|a, b| a.0.total_cmp(&b.0));
                     let (lo, mid, hi) = (&v[0], &v[v.len() / 2], &v[v.len() - 1]);
                     say!("    {label}: least {:.1} ({}), median {:.1}, greatest {:.1} ({}), of {}", lo.0, lo.1, mid.0, hi.0, hi.1, v.len());
+                    // (A curtain's bow, slice 2c: its 90th percentile too.)
+                    if label.contains("curtain bow") {
+                        say!("      90th percentile {:.1}", v[(v.len() * 9 / 10).min(v.len() - 1)].0);
+                    }
                 }
             }
         }
@@ -315,7 +334,7 @@ impl Ctx {
         let (kx0, ky0, kx1, ky1) = (k(r[0]), k(r[1]), k(r[2]), k(r[3]));
         let (cw, ch) = ((kx1 - kx0 + 1) as usize, (ky1 - ky0 + 1) as usize);
         let (nx, ny) = (cw * SQ, ch * SQ);
-        let mut w = Win { ox: kx0 as f64 * size, oy: ky0 as f64 * size, nx, ny, block: vec![false; nx * ny], street: vec![false; nx * ny], objects: Vec::new() };
+        let mut w = Win { ox: kx0 as f64 * size, oy: ky0 as f64 * size, nx, ny, block: vec![false; nx * ny], street: vec![false; nx * ny], objects: Vec::new(), gravel: vec![false; nx * ny], road: vec![false; nx * ny], runs: Vec::new() };
         for cj in 0..ch {
             for ci in 0..cw {
                 let c = self.chunk(kx0 + ci as u32, ky0 + cj as u32);
@@ -324,6 +343,14 @@ impl Ctx {
                     let a = idx(q % SQ, q / SQ);
                     w.block[a] |= c.building[q] != 0 || matches!(c.urban[q], URBAN_WALL | URBAN_TOWER);
                     w.street[a] = c.urban[q] == URBAN_STREET;
+                    w.gravel[a] = c.surface[q] == Surface::Gravel;
+                    w.road[a] = c.road_halo[(q / SQ + 1) * (SQ + 2) + q % SQ + 1] != 0 || c.urban[q] == URBAN_STREET;
+                }
+                // (R5 towns: dry-stone walls and hedges, world ft.)
+                let (cx, cy) = (w.ox + (ci * SQ) as f64 * SQUARE_FT, w.oy + (cj * SQ) as f64 * SQUARE_FT);
+                for s in c.structures.iter().filter(|s| matches!(s.kind, worldgen::battlemap::ShapeKind::DryWall | worldgen::battlemap::ShapeKind::Hedge) && s.pts.len() >= 2) {
+                    let f = |q: [f32; 2]| [cx + q[0] as f64 * SQUARE_FT, cy + q[1] as f64 * SQUARE_FT];
+                    w.runs.push((f(s.pts[0]), f(s.pts[1])));
                 }
                 let mut set = |i: i64, j: i64| {
                     if i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 {
@@ -377,6 +404,10 @@ struct Win {
     street: Vec<bool>,
     /// Every object (world ft) by name.
     objects: Vec<(P, String)>,
+    /// (R5 towns) gravel squares, road or street squares, dry-stone walls' and hedges' runs (world ft).
+    gravel: Vec<bool>,
+    road: Vec<bool>,
+    runs: Vec<(P, P)>,
 }
 
 impl Win {
@@ -1047,7 +1078,12 @@ fn town_ring(ctx: &Ctx, l: &Layout, li: usize, tag: &str, r: &mut Report) {
         }
         let (mut bare, mut run, mut first) = (0.0f64, 0.0, None);
         for (p, _) in samples(&[pa, pb], 5.0) {
-            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 8.0) {
+            // (Behind a bastion: its gorge, the bastion's walls round it.)
+            // (A round wall's curtains bowed out by up to 45 ft (Steppe 70), slice 2e: within 75 ft; or,
+            // where a notch of the ring was bridged and bowed, the wall met out along the side's outward
+            // normal within 200 ft.)
+            let beyond = add(p, mul(out, 200.0));
+            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 75.0 || crosses(p, beyond, q, s)) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
                 run = 0.0;
             } else {
                 run += 5.0;
@@ -1391,7 +1427,9 @@ fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: &str, it: &
             }
         }
     }
-    must!(it.levels.len() >= 2 || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
+    // (R5 towns: a cemetery's tomb is one chamber on one storey, `town::cemetery`.)
+    let tomb = l.building(id.rsplit(':').next().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX)).is_some_and(|b| b.func == town::catalog::index_of("tomb").map(|f| f as u16));
+    must!(it.levels.len() >= 2 || tomb || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
     if id.starts_with("b:") {
         match interior::design::design_of(world, t0, id, false) {
             Ok((d, _)) => match interior::design::problems(world, t0, id, &d) {
@@ -1584,7 +1622,8 @@ fn interiors(ctx: &mut Ctx, keeps: bool, r: &mut Report) {
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
         let buckets = building_buckets(&l);
-        let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && (!keeps || is_keep(b))).map(|b| format!("b:{li}:{}", b.id)).collect();
+        // (R5 towns: a steppe town's round felt halls checked by `steppe`.)
+        let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && (!keeps || is_keep(b)) && town::roof::felt_built(b).is_none()).map(|b| format!("b:{li}:{}", b.id)).collect();
         if !keeps {
             ids.extend((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}")));
         }
@@ -2793,11 +2832,44 @@ fn palace_rules(world: &World, t0: &T0, l: &Layout, li: usize, b: &town::Buildin
 
 // ---- The street editor. ----
 
+/// A hand castle laid as a tower house (no bailey, its one building a small tower keep, on a patch
+/// too small for a curtain): off the streets, walls and towers, on no building. False if not one.
+fn tower_house(l: &Layout, tag: &str, r: &mut Report) -> bool {
+    let keeps: Vec<&town::Building> = l.buildings.iter().filter(|b| b.ward == Ward::Castle).collect();
+    if l.plazas.iter().any(|p| p.kind == PlazaKind::Bailey) || keeps.len() != 1 || keeps[0].keep != Some(town::KeepKind::Plain) {
+        return false;
+    }
+    let b = keeps[0];
+    let name = format!("{tag}: b:{}:{} at {}", l.index, b.id, at(centroid(&b.poly)));
+    r.tally("placements as a tower house (a patch too small for a curtain)", 1);
+    let wd = l.walls.iter().flat_map(|w| w.windows(2)).map(|s| if contains(&b.poly, s[0]) { -1.0 } else { seg_poly(s[0], s[1], &b.poly) }).fold(f64::MAX, f64::min);
+    if wd < 4.0 {
+        r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: {wd:.1} ft from a wall"));
+    }
+    let towers = l.towers.iter().chain(&l.gate_towers).chain(l.extra_towers.iter().map(|t| &t.0));
+    if let Some(t) = towers.filter(|t| -depth(&b.poly, **t) < 12.0).next() {
+        r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: a tower at {} within 12 ft", at(*t)));
+    }
+    if let Some(o) = l.buildings.iter().find(|o| o.ward != Ward::Castle && poly_overlap(&shrink(&b.poly, 0.5), &shrink(&o.poly, 0.5))) {
+        r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: overlaps b:{}:{}", l.index, o.id));
+    }
+    let ways = l.roads.iter().map(|x| (&x.0, x.2)).chain(l.streets.iter().map(|s| (s, 18.0)));
+    for (pts, w) in ways {
+        let d = pts.windows(2).map(|s| if contains(&b.poly, s[0]) { 0.0 } else { seg_poly(s[0], s[1], &b.poly) }).fold(f64::MAX, f64::min);
+        if d < 0.5 * w - 1.0 {
+            r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: {d:.1} ft from a way {w:.0} ft wide"));
+        }
+    }
+    true
+}
+
 /// Castles set in the street editor at the town wall, walls on and off.
 fn editor(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&[
         "placements",
         "placements with no castle",
+        "placements as a tower house (a patch too small for a curtain)",
+        "tower houses within 4 ft of a wall, on a tower or a building, or on a street",
         "placements with any non-castle building changed",
         "non-castle buildings changed or gone, walls off against on",
         "new non-castle ids with the walls off",
@@ -2861,6 +2933,7 @@ fn editor(ctx: &mut Ctx, r: &mut Report) {
                 let tag = format!("#{ci} p{} walls {}", patch["patch"], if walls.is_empty() { "on" } else { "off" });
                 if l.castles.is_empty() {
                     r.add("placements with no castle", 1.0, format!("{tag}: no castle"));
+                } else if tower_house(&l, &tag, r) {
                 } else {
                     castle_checks(&world, t0, &l, &tag, false, r);
                     // Its keep and barracks as the castle's laid out by zones, and their halls.
@@ -2888,6 +2961,8 @@ fn editor(ctx: &mut Ctx, r: &mut Report) {
         }
     }
     monastery_edits(base, t0, r);
+    // R5 towns
+    district_edits(base, t0, r);
 }
 
 /// `monastery_edits`' counts, in order.
@@ -3542,6 +3617,244 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
     bad
 }
 
+/// R5 towns (103): where a village's lanes (`Layout::streets`) end and cross, both ends of each,
+/// anywhere. An end is joined on a way (within 1 ft of another lane's or a road's centre line: the
+/// network roads as `villages` samples them, and the layout's; a ring closed on itself); else at a
+/// building (15 ft), a yard or croft (8 ft) or the water, or at nothing; one by the green (within 35 ft
+/// of its rim) is also counted as not on its ring. Ends not joined 1-40 ft from a way's centre line are
+/// near one; those whose last 40 ft cross a way's centre line and stop
+/// past its far edge overshoot it. Crossings: a lane's piece across another lane's or a road's, but
+/// within 1 ft of the lane's ends or of a node both share. Farmsteads: farmyards by count.
+/// `LANE_DUMP=L<n>` prints that village's lanes, roads and what stands by each lane's ends (stderr);
+/// `NEAR_LIST=1` every end near a way but not joined (on the ring or not, ft past the green's rim,
+/// by water, the village's centre).
+fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
+    let off = |p: P| format!("({:.0}, {:.0})", p[0] - l.center[0], p[1] - l.center[1]);
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    let reach = 1.3 * l.radius;
+    let c = l.center;
+    let mut roads: Vec<Vec<(P, f64)>> = Vec::new();
+    for (ri, k) in t0.roads.segments_near([c[0] - reach, c[1] - reach, c[0] + reach, c[1] + reach], 0.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 40.0).ceil().clamp(1.0, 400.0) as usize;
+        roads.push((0..=n).map(|j| (rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p, 0.5 * rc.class.width_ft())).collect());
+    }
+    let mut river: Vec<(P, P, f64)> = Vec::new();
+    let rr = reach + 200.0;
+    for (ri, k) in t0.rivers.segments_near(c[0] - rr, c[1] - rr, c[0] + rr, c[1] + rr, 0.0) {
+        let rc = &t0.rivers.rivers[ri as usize];
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 20.0).ceil().clamp(2.0, 1200.0) as usize;
+        let pts: Vec<(P, f64)> = (0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft)).map(|c| (c.p, c.w)).collect();
+        river.extend(pts.windows(2).map(|s| (s[0].0, s[1].0, 0.5 * s[0].1.max(s[1].1))));
+    }
+    let by_water = |p: P| river.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw + 30.0) || wet(p) || [12.0, 25.0, 30.0].iter().any(|&d| (0..8).any(|k| wet(add(p, [d * libm::cos(k as f64 * 0.785), d * libm::sin(k as f64 * 0.785)]))));
+    // (Every way as segments with half widths, and whose: the lane's index, or none for a road.)
+    let mut segs: Vec<(P, P, f64, Option<usize>)> = Vec::new();
+    for (si, s) in l.streets.iter().enumerate() {
+        segs.extend(s.windows(2).map(|w| (w[0], w[1], 0.5 * town::village::LANE_W, Some(si))));
+    }
+    for q in &roads {
+        segs.extend(q.windows(2).map(|w| (w[0].0, w[1].0, w[0].1, None)));
+    }
+    let n_cross = segs.len();
+    segs.extend(l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w, None))));
+    let green = l.plazas.iter().find(|g| g.kind == PlazaKind::Green).map(|g| (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0])));
+    if std::env::var("LANE_DUMP").is_ok_and(|v| v == tag) {
+        for (si, st) in l.streets.iter().enumerate() {
+            eprintln!("lane {si}: {}", st.iter().map(|p| off(*p)).collect::<Vec<_>>().join(" "));
+        }
+        for q in &roads {
+            eprintln!("road: {}", q.iter().map(|p| off(p.0)).collect::<Vec<_>>().join(" "));
+        }
+        eprintln!("green {:?} centre ({:.0}, {:.0})", green.map(|g| (off(g.0), g.1)), l.center[0], l.center[1]);
+        for st in &l.streets {
+            for e in [st[0], st[st.len() - 1]] {
+                for b in l.buildings.iter().filter(|b| edge_dist(&b.poly, e) < 40.0) {
+                    eprintln!("  end {} building {:?} {:?} {:.1} ft, {} pts", off(e), b.ward, b.func, edge_dist(&b.poly, e), b.poly.len());
+                }
+                for p in l.crofts.iter().filter(|p| edge_dist(&p.pts, e) < 40.0) {
+                    eprintln!("  end {} plot {:?} {:.1} ft", off(e), p.kind, edge_dist(&p.pts, e));
+                }
+            }
+        }
+    }
+    let hit = |a: P, b: P, p: P, q: P| -> Option<P> {
+        let (e, f) = (sub(b, a), sub(q, p));
+        let den = cross(e, f);
+        if den.abs() < 1e-9 {
+            return None;
+        }
+        let (t, u) = (cross(sub(p, a), f) / den, cross(sub(p, a), e) / den);
+        (t > 0.0 && t < 1.0 && u > 0.0 && u < 1.0).then(|| add(a, mul(e, t)))
+    };
+    for (si, s) in l.streets.iter().enumerate() {
+        if s.len() < 2 {
+            continue;
+        }
+        for end in [0, 1] {
+            r.tally("lane ends", 1);
+            let (e, way): (P, Vec<P>) = if end == 0 { (s[0], s.to_vec()) } else { (s[s.len() - 1], s.iter().rev().copied().collect()) };
+            let others = || segs.iter().filter(|w| w.3 != Some(si));
+            let d = others().map(|w| seg_dist(e, w.0, w.1)).fold(f64::MAX, f64::min);
+            // (A ring round the green closed on itself: its ends one node.)
+            if d <= 1.0 || dist(s[0], s[s.len() - 1]) < 0.01 {
+                r.tally("lane ends joined", 1);
+                continue;
+            }
+            // (Its last 40 ft across a way and past its far edge.)
+            let mut back = vec![way[0]];
+            let mut acc = 0.0;
+            for w in way.windows(2) {
+                let k = dist(w[0], w[1]);
+                if acc + k >= 40.0 {
+                    back.push(lerp(w[0], w[1], (40.0 - acc) / k.max(1e-9)));
+                    break;
+                }
+                back.push(w[1]);
+                acc += k;
+            }
+            let start = way[way.len() - 1];
+            let over = others().find(|w| back.windows(2).any(|b| hit(b[0], b[1], w.0, w.1).is_some_and(|x| dist(x, e) > 1.0 && dist(x, start) > 1.0)) && seg_dist(e, w.0, w.1) > w.2);
+            if let Some(w) = over {
+                r.add("lane ends overshooting a way", 1.0, format!("{tag} {} by {:.0} ft (lane {si}, {} pts, {:.0} ft)", off(e), seg_dist(e, w.0, w.1) - w.2, s.len(), s.windows(2).map(|q| dist(q[0], q[1])).sum::<f64>()));
+            }
+            // (Within the ring lane's reach of the green: R5 towns 103, lanes there end on the ring.)
+            let ring = green.is_some_and(|(gc, gr)| s.len() >= 4 && s[1..s.len() - 1].iter().all(|p| (dist(*p, gc) - gr - 0.5 * town::village::LANE_W).abs() < 2.0));
+            if ring {
+                r.add("ring lane ends not on a way", 1.0, format!("{tag} {} (lane {si}, way {d:.0} ft{})", off(e), if by_water(e) { ", water" } else { "" }));
+            } else if green.is_some_and(|(gc, gr)| dist(e, gc) <= gr + town::village::LANE_W + 25.0) {
+                r.add("lane ends at the green's rim but not on the ring", 1.0, format!("{tag} {} (lane {si}, way {d:.0} ft{})", off(e), if by_water(e) { ", water" } else { "" }));
+            }
+            let at_building = l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) <= 15.0);
+            let at_yard = l.crofts.iter().any(|p| contains(&p.pts, e) || edge_dist(&p.pts, e) <= 8.0);
+            if d <= 40.0 && std::env::var("NEAR_LIST").is_ok() {
+                eprintln!("NEAR {tag} {} {d:.0} ring {ring} green {:.0} water {} centre ({:.0}, {:.0})", off(e), green.map_or(-1.0, |(gc, gr)| dist(e, gc) - gr), by_water(e), l.center[0], l.center[1]);
+            }
+            if d <= 40.0 {
+                r.add("lane ends near a way but not joined", 1.0, format!("{tag} {} {d:.0} ft off (lane {si}, {} pts, {}{}{})", off(e), s.len(), if at_building { "house " } else { "" }, if at_yard { "yard " } else { "" }, if by_water(e) { "water" } else { "" }));
+            }
+            if !at_building && !at_yard && !by_water(e) {
+                let near_b = l.buildings.iter().map(|b| edge_dist(&b.poly, e)).fold(f64::MAX, f64::min);
+                let near_p = l.crofts.iter().map(|p| edge_dist(&p.pts, e)).fold(f64::MAX, f64::min);
+                r.add("lane ends not joined, at nothing", 1.0, format!("{tag} {} {} ft out (lane {si}, {} pts, way {d:.0} ft, building {near_b:.0}, plot {near_p:.0})", off(e), dist(e, l.center) as i64, s.len()));
+            }
+        }
+        // (Across a later lane or a road.)
+        for w in s.windows(2) {
+            for o in segs[..n_cross].iter().filter(|o| o.3.is_none_or(|j| j > si)) {
+                let Some(x) = hit(w[0], w[1], o.0, o.1) else { continue };
+                if dist(x, s[0]) <= 1.0 || dist(x, s[s.len() - 1]) <= 1.0 {
+                    continue;
+                }
+                // (A road across a lane at a point of the lane's own: a crossroads.)
+                if o.3.is_none() && s.iter().any(|p| dist(*p, x) <= 1.0) {
+                    continue;
+                }
+                if let Some(j) = o.3 {
+                    let q = &l.streets[j];
+                    if dist(x, q[0]) <= 1.0 || dist(x, q[q.len() - 1]) <= 1.0 || (s.iter().any(|p| dist(*p, x) <= 1.0) && q.iter().any(|p| dist(*p, x) <= 1.0)) {
+                        continue;
+                    }
+                }
+                r.add("lanes crossing a lane or road away from a shared node", 1.0, format!("{tag} {} {} (lane {si} {} to {})", off(x), if o.3.is_some() { "lane" } else { "road" }, off(s[0]), off(s[s.len() - 1])));
+            }
+        }
+    }
+    r.tally("farmsteads", l.crofts.iter().filter(|p| format!("{:?}", p.kind) == "Farmyard").count());
+}
+
+/// `NEAR_DUMP=L<n>:<x>,<y>,<r>` prints what stands within `r` ft of the offset (x, y) from that
+/// village's middle: buildings, plots, lanes, roads, `rural::battle` runs and fields (stderr).
+fn near_dump(l: &Layout, bt: &worldgen::town::rural::Battle, tag: &str) {
+    let Ok(v) = std::env::var("NEAR_DUMP") else { return };
+    let Some((t, rest)) = v.split_once(':') else { return };
+    let n: Vec<f64> = rest.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    if t != tag || n.len() < 3 {
+        return;
+    }
+    let (q, rad) = (add(l.center, [n[0], n[1]]), n[2]);
+    let off = |p: P| format!("({:.0},{:.0})", p[0] - l.center[0], p[1] - l.center[1]);
+    let poly = |ps: &[P]| ps.iter().map(|p| off(*p)).collect::<Vec<_>>().join(" ");
+    let near = |ps: &[P]| contains(ps, q) || edge_dist(ps, q) < rad;
+    for (i, b) in l.buildings.iter().enumerate().filter(|(_, b)| near(&b.poly)) {
+        eprintln!("bldg {i} c {} {:?} {:?} {:?} {}", off(centroid(&b.poly)), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key), b.structure, poly(&b.poly));
+    }
+    for (i, p) in l.crofts.iter().enumerate().filter(|(_, p)| near(&p.pts)) {
+        let held = l.buildings.iter().filter(|b| contains(&p.pts, centroid(&b.poly))).count();
+        eprintln!("plot {i} {:?} {:?} holds {held}: {}", p.kind, p.bound, poly(&p.pts));
+    }
+    for (i, s) in l.streets.iter().enumerate().filter(|(_, s)| s.windows(2).any(|w| seg_dist(q, w[0], w[1]) < rad)) {
+        eprintln!("lane {i}: {}", poly(s));
+    }
+    for (pts, _, w) in l.roads.iter().filter(|(s, _, _)| s.windows(2).any(|w| seg_dist(q, w[0], w[1]) < rad)) {
+        eprintln!("layout road w {w:.0}: {}", poly(pts));
+    }
+    for &(a, b, k) in bt.runs.iter().filter(|r| seg_dist(q, r.0, r.1) < rad) {
+        eprintln!("run {k:?} {} {}", off(a), off(b));
+    }
+    for (i, f) in l.fields.iter().enumerate().filter(|(_, f)| near(f)) {
+        let x = &l.field_info[i];
+        eprintln!("field {i} {:?} {:?}: {}", x.kind, x.bound, poly(f));
+    }
+}
+
+/// R5 towns (103 fix): plots (crofts, yards) holding no building; farmyards with no lane to their
+/// gate; a plot's sides and back (as drawn, a croft's front open) within 6 ft (a yard's 4) of a building it does
+/// not hold, one in no other plot (a cottage beside it with no croft of its own, a hedge across its
+/// corner); the battlemap's runs
+/// (hedges, fences, walls, field rows) within 2 ft of any building, roofed or not; lanes through a
+/// building (the lane's band over it).
+fn plot_checks(l: &Layout, bt: &worldgen::town::rural::Battle, tag: &str, r: &mut Report) {
+    let off = |p: P| format!("({:.0}, {:.0})", p[0] - l.center[0], p[1] - l.center[1]);
+    // (A footprint's middle by its corners' mean: `centroid` loses a round home's small area in world ft.)
+    let mid = |q: &[P]| mul(q.iter().fold([0.0, 0.0], |s, p| add(s, *p)), 1.0 / q.len().max(1) as f64);
+    let holds = |p: &town::village::Plot, b: &town::Building| contains(&p.pts, mid(&b.poly));
+    for p in &l.crofts {
+        if !l.buildings.iter().any(|b| holds(p, b)) {
+            r.add("plots holding no building", 1.0, format!("{tag} {:?} {}", p.kind, off(mid(&p.pts))));
+        }
+        let n = p.pts.len();
+        let first = if p.kind == town::village::PlotKind::Croft { 1 } else { 0 };
+        for k in first..n {
+            let (a, e) = (p.pts[k], p.pts[(k + 1) % n]);
+            for b in l.buildings.iter().filter(|b| !holds(p, b)) {
+                // (A croft's 6 ft; a yard's 4, the cottages laid out after it: `village::off_yards`.)
+                let clear = if p.kind == town::village::PlotKind::Croft { 6.0 } else { 4.0 };
+                if seg_poly(a, e, &b.poly) >= clear && !contains(&b.poly, a) {
+                    continue;
+                }
+                // (In a plot of its own: that plot keeps its bounds off it, along this one's or not.)
+                let shared = l.crofts.iter().any(|q| !std::ptr::eq(q, p) && holds(q, b));
+                if !shared {
+                    r.add("plot bounds by a building not theirs", 1.0, format!("{tag} {:?} side {} {} by {:?} {:?} at {:.1} ft", p.kind, off(a), off(e), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key), seg_poly(a, e, &b.poly)));
+                }
+            }
+        }
+    }
+    for p in l.crofts.iter().filter(|p| p.kind == town::village::PlotKind::Farmyard) {
+        let gate = lerp(p.pts[0], p.pts[1], 0.5);
+        if !l.streets.iter().any(|s| s.windows(2).any(|w| seg_dist(gate, w[0], w[1]) < 8.0)) {
+            r.add("farmyards with no lane to their gate", 1.0, format!("{tag} {}", off(gate)));
+        }
+    }
+    // (A churchyard's graveyard is a building of its own, open: its wall runs round it.)
+    let graveyard = town::catalog::index_of("graveyard").map(|f| f as u16);
+    for &(a, e, k) in &bt.runs {
+        if let Some(b) = l.buildings.iter().filter(|b| b.func.is_none() || b.func != graveyard).find(|b| contains(&b.poly, a) || contains(&b.poly, e) || seg_poly(a, e, &b.poly) < 2.0) {
+            r.add("runs by any building", 1.0, format!("{tag} {k:?} {} {} by {:?} {:?} {:?}", off(a), off(e), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key), b.structure));
+        }
+    }
+    for (si, s) in l.streets.iter().enumerate() {
+        for w in s.windows(2) {
+            if let Some(b) = l.buildings.iter().find(|b| contains(&b.poly, w[0]) || seg_poly(w[0], w[1], &b.poly) < 0.5 * town::village::LANE_W - 0.5) {
+                r.add("lanes through a building", 1.0, format!("{tag} lane {si} {} {} by {:?} {:?}", off(w[0]), off(w[1]), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key)));
+                break;
+            }
+        }
+    }
+}
+
 /// `villages`: v63 village layouts (not part of `all`). Per village: its cottages, how many stand
 /// along each 100 ft of lane, those not square to the lane they front (> 8°), crofts overlapping
 /// another or a building they do not hold or a lane; the battlemap's bounds (hedges, fences, walls:
@@ -3549,6 +3862,10 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
 /// props. Places are offsets from the village's middle (ft).
 fn villages(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&["villages", "cottages", "cottages not square to their lane", "croft overlaps", "crofts over a building", "crofts over a lane", "bounds by a roof", "bounds across a lane", "lane kinks", "lanes ending at nothing inside the village", "greens with props", "greens without their well (of the first 24)"]);
+    r.counts(&["cottages by no lane or road", "lane ends", "lane ends joined", "lane ends not joined, at nothing", "lane ends near a way but not joined", "lane ends overshooting a way", "lanes crossing a lane or road away from a shared node", "farmsteads"]);
+    r.counts(&["plots holding no building", "farmyards with no lane to their gate", "plot bounds by a building not theirs", "runs by any building", "lanes through a building"]);
+    r.counts(&["greens without a ring lane", "lanes across the green", "lane ends at the green's rim but not on the ring", "ring lane ends not on a way"]);
+    r.counts(&["cottages facing the ring", "rings with fewer than 3 cottages facing them", "ways ending inside the green"]);
     let mut greens: Vec<(P, String)> = Vec::new();
     let mut gpolys: Vec<Vec<P>> = Vec::new();
     let mut fchunks: Vec<(P, String)> = Vec::new();
@@ -3577,6 +3894,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         let cottages: Vec<&&town::Building> = roofed.iter().filter(|b| b.func.is_none() && b.ward == Ward::Rural).collect();
         r.tally("cottages", cottages.len());
         let fronting = roofed.iter().filter(|b| ways.iter().any(|&(a, e, h)| seg_poly(a, e, &b.poly) < h + 14.0)).count();
+        r.tally("cottages by no lane or road", cottages.iter().filter(|b| !ways.iter().any(|&(a, e, h)| seg_poly(a, e, &b.poly) < h + 14.0)).count());
         if lane_ft > 150.0 {
             r.measure("houses fronting a lane per 100 ft of lane (fewest)", true, 100.0 * fronting as f64 / lane_ft.max(1.0), format!("{tag} {} houses, {lane_ft:.0} ft", roofed.len()));
             r.value("houses fronting a lane per 100 ft of lane", 100.0 * fronting as f64 / lane_ft, tag.clone());
@@ -3587,7 +3905,10 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
             if b.poly.len() != 4 || (b.func.is_some() && b.func == mill) {
                 continue;
             }
-            let Some(&(a, e, h)) = ways.iter().filter(|&&(a, e, h)| seg_poly(a, e, &b.poly) < h + 10.0).min_by(|x, y| seg_poly(x.0, x.1, &b.poly).total_cmp(&seg_poly(y.0, y.1, &b.poly))) else { continue };
+            let n_lane = l.streets.iter().map(|q| q.len().saturating_sub(1)).sum::<usize>();
+            // (Nearest by its gap; a tie, where a house's front runs past a bend in the lane, to the piece by its middle.)
+            let key = |a: P, e: P| seg_poly(a, e, &b.poly) + 0.05 * seg_dist(centroid(&b.poly), a, e);
+            let Some((wi, &(a, e, h))) = ways.iter().enumerate().filter(|&(_, &(a, e, h))| seg_poly(a, e, &b.poly) < h + 10.0).min_by(|x, y| key(x.1.0, x.1.1).total_cmp(&key(y.1.0, y.1.1))) else { continue };
             let u = sub(e, a);
             let s0 = sub(b.poly[1], b.poly[0]);
             let c = (dot(u, s0) / (len(u) * len(s0)).max(1e-9)).abs();
@@ -3596,7 +3917,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
             let deg = deg.min(90.0 - deg);
             if deg > 8.0 {
                 let held = l.crofts.iter().any(|p| contains(&p.pts, centroid(&b.poly)));
-                r.add("cottages not square to their lane", deg, format!("{tag} {} {deg:.0}° func {:?} croft {held} gap {:.1}", off(centroid(&b.poly)), b.func.map(|f| town::catalog::CATALOG[f as usize].key), seg_poly(a, e, &b.poly) - h));
+                r.add("cottages not square to their lane", deg, format!("{tag} {} {deg:.0}° func {:?} croft {held} gap {:.1} by a {}, {:.0} ft from a lane's end", off(centroid(&b.poly)), b.func.map(|f| town::catalog::CATALOG[f as usize].key), seg_poly(a, e, &b.poly) - h, if wi < n_lane { "lane" } else { "road" }, l.streets.iter().flat_map(|q| [q[0], q[q.len() - 1]]).map(|q| dist(q, centroid(&b.poly))).fold(f64::MAX, f64::min)));
             }
         }
         for (i, p) in l.crofts.iter().enumerate() {
@@ -3618,6 +3939,8 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         let mut bt = worldgen::town::rural::Battle::default();
         let bb = l.crofts.iter().flat_map(|p| p.pts.iter()).fold([l.center[0] - 10.0, l.center[1] - 10.0, l.center[0] + 10.0, l.center[1] + 10.0], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
         worldgen::town::rural::battle(&l, t0, [bb[0] - 20.0, bb[1] - 20.0, bb[2] + 20.0, bb[3] + 20.0], &|_| false, &mut bt);
+        near_dump(&l, &bt, &tag);
+        plot_checks(&l, &bt, &tag, r);
         for &(a, e, _) in &bt.runs {
             let pts: Vec<P> = samples(&[a, e], 1.0).into_iter().map(|s| s.0).collect();
             if let Some(p) = pts.iter().find(|p| roofed.iter().any(|b| contains(&b.poly, **p) || edge_dist(&b.poly, **p) < 2.0)) {
@@ -3630,8 +3953,8 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         for (si, s) in l.streets.iter().enumerate() {
             let e = s[s.len() - 1];
             let met = l.streets.iter().enumerate().any(|(j, q)| j != si && q.windows(2).any(|w| seg_dist(e, w[0], w[1]) < 15.0)) || ways.iter().skip(l.streets.iter().map(|q| q.len() - 1).sum()).any(|&(a, b, h)| seg_dist(e, a, b) < h + 15.0);
-            let on_green = l.plazas.iter().any(|g| g.kind == PlazaKind::Green && dist(e, centroid(&g.pts)) < dist(centroid(&g.pts), g.pts[0]) + 10.0);
-            if !met && !on_green && dist(e, l.center) < 0.9 * l.radius && !l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) < 20.0) && !l.crofts.iter().any(|p| edge_dist(&p.pts, e) < 12.0) {
+            // (A ring closed on itself has no end.)
+            if !met && dist(s[0], e) > 0.01 && dist(e, l.center) < 0.9 * l.radius && !l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) < 20.0) && !l.crofts.iter().any(|p| edge_dist(&p.pts, e) < 12.0) {
                 r.add("lanes ending at nothing inside the village", 1.0, format!("{tag} {}", off(e)));
             }
             for w in s.windows(3) {
@@ -3645,6 +3968,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
         }
+        lane_ends(world, t0, &l, &tag, r);
         fields_rows(&l, t0, &tag, r);
         if fchunks.len() < 8 {
             if let Some(f) = l.fields.iter().enumerate().filter(|(i, _)| l.field_info[*i].kind != town::fields::FieldUse::Orchard).max_by(|a, b| area(a.1).abs().total_cmp(&area(b.1).abs())) {
@@ -3654,6 +3978,62 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         if let Some(g) = l.plazas.iter().find(|p| p.kind == PlazaKind::Green) {
             let (c, rad) = (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0]));
             gpolys.push(g.pts.clone());
+            // (R5 towns, 103: the lane round it, its points but its ends on its centre line; no lane on its grass.)
+            let rr = rad + 0.5 * town::village::LANE_W;
+            if !l.streets.iter().any(|s| s.len() >= 4 && s[1..s.len() - 1].iter().all(|p| (dist(*p, c) - rr).abs() < 2.0)) {
+                r.add("greens without a ring lane", 1.0, format!("{tag} green {} r {rad:.0}, {} roads by", off(c), l.roads.len()));
+            }
+            for s in &l.streets {
+                if let Some(w) = s.windows(2).find(|w| seg_dist(c, w[0], w[1]) < rad - 1.0) {
+                    r.add("lanes across the green", 1.0, format!("{tag} {} to {}", off(w[0]), off(w[1])));
+                }
+            }
+            // (Cottages facing the ring: front within 15 ft of a ring lane's edge, square to its nearest piece within 15°, on its outer side.)
+            let on_c = |p: P| (dist(p, c) - rr).abs() < 2.0;
+            let pieces: Vec<(P, P)> = l.streets.iter().flat_map(|s| s.windows(2).filter(|w| on_c(w[0]) && on_c(w[1])).map(|w| (w[0], w[1]))).collect();
+            if !pieces.is_empty() {
+                // (Houses: the cottages and those given a trade, an inn or a smithy; not the church, shrine or mill.)
+                let house = |b: &&&town::Building| b.func.is_none_or(|f| !["church", "chapel", "shrine", "mill", "graveyard", "watermill", "windmill"].iter().any(|k| town::catalog::CATALOG[f as usize].key.contains(k)));
+                let facing = roofed.iter().filter(house).filter(|b| b.poly.len() == 4 && dist(centroid(&b.poly), c) > rr).filter(|b| {
+                    let key = |a: P, e: P| seg_poly(a, e, &b.poly) + 0.05 * seg_dist(centroid(&b.poly), a, e);
+                    let Some((a, e)) = pieces.iter().copied().min_by(|x, y| key(x.0, x.1).total_cmp(&key(y.0, y.1))) else { return false };
+                    let (u, s0) = (sub(e, a), sub(b.poly[1], b.poly[0]));
+                    let deg = libm::acos((dot(u, s0) / (len(u) * len(s0)).max(1e-9)).abs().min(1.0)).to_degrees();
+                    seg_poly(a, e, &b.poly) - 0.5 * town::village::LANE_W <= 15.0 && deg.min(90.0 - deg) <= 15.0
+                }).count();
+                r.tally("cottages facing the ring", facing);
+                if std::env::var("FACING_LIST").is_ok() {
+                    eprintln!("facing {tag} {facing} green {} r {rad:.0} centre {:.0} {:.0}", off(c), l.center[0], l.center[1]);
+                }
+                r.value("cottages facing a ring", facing as f64, tag.clone());
+                if facing < 3 {
+                    r.add("rings with fewer than 3 cottages facing them", 1.0, format!("{tag} {facing} facing, green {} r {rad:.0}", off(c)));
+                }
+            }
+            // (Ways ending inside the green, on no other way: lanes, the layout's roads and the network's.)
+            let mut ends: Vec<P> = l.streets.iter().flat_map(|s| [s[0], s[s.len() - 1]]).collect();
+            ends.extend(l.roads.iter().flat_map(|(q, _, _)| [q[0], q[q.len() - 1]]));
+            let mut net: Vec<Vec<P>> = Vec::new();
+            for (ri, k) in t0.roads.segments_near([c[0] - rad, c[1] - rad, c[0] + rad, c[1] + rad], 0.0) {
+                let rc = &t0.roads.roads[ri as usize];
+                let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 10.0).ceil().clamp(1.0, 400.0) as usize;
+                net.push((0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p).collect());
+                if k == 0 {
+                    ends.push(rc.eval(0, 0.0, 2.5, t0.cell_ft).p);
+                }
+                if k as usize + 2 == rc.pts.len() {
+                    ends.push(rc.eval(k as usize, 1.0, 2.5, t0.cell_ft).p);
+                }
+            }
+            let all: Vec<(P, P)> = l.streets.iter().chain(l.roads.iter().map(|q| &q.0)).chain(net.iter()).flat_map(|s| s.windows(2).map(|w| (w[0], w[1]))).collect();
+            for e in ends.into_iter().filter(|e| dist(*e, c) < rad - 2.0) {
+                // (An end shared with another way's piece passing it is a joint, not a dead end.)
+                let by = all.iter().filter(|&&(a, b)| seg_dist(e, a, b) < 1.0).count();
+                let mine = all.iter().filter(|&&(a, b)| dist(a, e) < 1.0 || dist(b, e) < 1.0).count();
+                if by <= mine.max(1) && mine <= 1 {
+                    r.add("ways ending inside the green", 1.0, format!("{tag} {} green {} r {rad:.0}", off(e), off(c)));
+                }
+            }
             if l.props.iter().any(|p| dist(p.at, c) < rad) {
                 r.tally("greens with props", 1);
             }
@@ -3748,7 +4128,7 @@ fn fields_rows(l: &Layout, t0: &T0, tag: &str, r: &mut Report) {
             rural::battle(l, t0, rect, &|_| false, &mut bt);
             r.measure("runs in a chunk (most, of the 900 a chunk holds)", false, bt.runs.len() as f64, format!("{tag} block ({bx},{by})"));
             for &(a, e, kind) in &bt.runs {
-                if kind == rural::RunKind::Fence {
+                if matches!(kind, rural::RunKind::Fence | rural::RunKind::Corral) {
                     continue;
                 }
                 let m = (dist(a, e) / 1.25).ceil().max(1.0) as usize;
@@ -4115,6 +4495,242 @@ fn yurts(ctx: &mut Ctx, r: &mut Report) {
                 listed += 1;
                 r.add("yurts listed", 0.0, format!("seed {} layout {li} {id} at {:.0},{:.0} door {ang:.0} aim {aim_ang:.0}", world.file.seed, c[0], c[1]));
             }
+        }
+    }
+    yurt_looks(ctx, r);
+    yurt_yards(ctx, r);
+}
+
+/// R5 towns (115): a steppe town's yurts (homes roofed round on 16-sided rings) by size (ft across) and
+/// felt (`roof::Look::shade`), and their clusters (walls within 14 ft of one another): those whose doors
+/// all lie within 60 degrees of one another, and those whose yurts all have one lane in reach (70 ft).
+fn yurt_looks(ctx: &mut Ctx, r: &mut Report) {
+    let bands = ["steppe yurts", "  under 14 ft across", "  14-16 ft", "  16-19 ft", "  19-22 ft", "  22-24 ft", "  over 24 ft"];
+    r.counts(&bands);
+    r.counts(&["  felt 0 cream", "  felt 1 off-white", "  felt 2 grey", "  felt 3 warm cream", "  felt 4 dusty grey", "  felt 5 smoke-browned", "  felt 6 red band", "  felt 7 sooty crown"]);
+    r.counts(&["yurt clusters (2 or more)", "  clusters with one lane in reach of all", "  clusters whose doors share a side (all within 60 degrees)", "  of those with one lane: doors sharing a side"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let felts = ["cream", "off-white", "grey", "warm cream", "dusty grey", "smoke-browned", "red band", "sooty crown"];
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.culture % 5 != 4 {
+            continue;
+        }
+        let ys: Vec<&town::Building> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && b.poly.len() == town::roof::ROUND_SIDES && b.parts.is_empty() && b.func.is_none() && town::roof::look(&l, b).shape == town::roof::Shape::Round).collect();
+        let fr: Vec<(P, f64, f64)> = ys
+            .iter()
+            .map(|b| {
+                let c = mean(&b.poly);
+                let m = lerp(b.poly[0], b.poly[1], 0.5);
+                (c, dist(b.poly[0], c), libm::atan2(m[1] - c[1], m[0] - c[0]).to_degrees())
+            })
+            .collect();
+        for (k, b) in ys.iter().enumerate() {
+            r.tally("steppe yurts", 1);
+            let d = 2.0 * fr[k].1;
+            r.tally(bands[if d < 13.9 { 1 } else if d < 16.0 { 2 } else if d < 19.0 { 3 } else if d < 22.0 { 4 } else if d <= 24.1 { 5 } else { 6 }], 1);
+            let s = town::roof::look(&l, b).shade as usize;
+            r.tally(&format!("  felt {s} {}", felts.get(s).unwrap_or(&"?")), 1);
+        }
+        let n = ys.len();
+        let mut up: Vec<usize> = (0..n).collect();
+        fn root(up: &mut [usize], mut a: usize) -> usize {
+            while up[a] != a {
+                a = up[a];
+            }
+            a
+        }
+        for a in 0..n {
+            for b in a + 1..n {
+                if dist(fr[a].0, fr[b].0) < fr[a].1 + fr[b].1 + 14.0 {
+                    let (ra, rb) = (root(&mut up, a), root(&mut up, b));
+                    if ra != rb {
+                        up[ra.max(rb)] = ra.min(rb);
+                    }
+                }
+            }
+        }
+        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for a in 0..n {
+            let ra = root(&mut up, a);
+            groups.entry(ra).or_default().push(a);
+        }
+        let ways: Vec<&Vec<P>> = l.roads.iter().map(|w| &w.0).chain(l.streets.iter()).collect();
+        let off = |a: f64, b: f64| ((a - b + 540.0) % 360.0 - 180.0).abs();
+        for g in groups.values().filter(|g| g.len() >= 2) {
+            r.tally("yurt clusters (2 or more)", 1);
+            let lane = ways.iter().any(|w| g.iter().all(|&k| w.windows(2).any(|e| seg_dist(fr[k].0, e[0], e[1]) <= 70.0)));
+            let share = g.iter().all(|&a| g.iter().all(|&b| off(fr[a].2, fr[b].2) <= 60.0));
+            if lane {
+                r.tally("  clusters with one lane in reach of all", 1);
+            }
+            if share {
+                r.tally("  clusters whose doors share a side (all within 60 degrees)", 1);
+            }
+            if share && lane {
+                r.tally("  of those with one lane: doors sharing a side", 1);
+            }
+        }
+    }
+}
+
+/// Whether two outlines touch or overlap (a corner of one in the other, or their edges crossing).
+fn outlines_touch(a: &[P], b: &[P]) -> bool {
+    let o = |p: P, q: P, s: P| cross(sub(q, p), sub(s, p));
+    a.iter().any(|&p| contains(b, p))
+        || b.iter().any(|&p| contains(a, p))
+        || (0..a.len()).any(|i| {
+            let (p, q) = (a[i], a[(i + 1) % a.len()]);
+            (0..b.len()).any(|j| {
+                let (s, t) = (b[j], b[(j + 1) % b.len()]);
+                o(p, q, s) * o(p, q, t) < 0.0 && o(s, t, p) * o(s, t, q) < 0.0
+            })
+        })
+}
+
+/// R5 towns (115): a steppe town's yurts' trodden ground, pens and carts (`town::yurts`): counted, their
+/// rules (none over a building, a lane, another's pen or cart, a door's open ground, or off its lot), and
+/// on the battlemap of the first 40 yurts with a pen or cart and 40 without per world: the trodden ring
+/// drawn as dirt, the props and fences laid, nothing else over a pen or a cart.
+fn yurt_yards(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["yurts with trodden ground", "yurts with a pen", "  horses in pens", "yurts with a cart", "  with a haystack too", "yurts drawn up toward their door"]);
+    r.counts(&["R pens and carts over a building", "R pens and carts over another's pen, cart or prop", "R pens and carts on a lane", "R pens and carts in a door's open ground", "R pens and carts off their lot"]);
+    r.counts(&["battlemap: yurts looked at", "battlemap: trodden rings drawn (dirt by the wall)", "battlemap: yurt props planned", "battlemap: yurt props laid", "battlemap: pen fence ft planned", "battlemap: pen fence ft laid", "R battlemap: objects over a pen or cart"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let size = world.geom.tile_size_ft(world.geom.max_level);
+    let mut look: Vec<(String, P, f64, Vec<[P; 4]>, Vec<(P, Kind)>, f64)> = Vec::new();
+    let (mut with, mut without, mut listed) = (0, 0, 0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.yurts.is_empty() {
+            continue;
+        }
+        let byid: HashMap<u32, &town::Building> = l.buildings.iter().map(|b| (b.id, b)).collect();
+        // (Every yurt's door ground: 10 ft out from its door side, 10 ft wide.)
+        let doors: Vec<(u32, Vec<P>)> = l
+            .yurts
+            .iter()
+            .filter_map(|y| byid.get(&y.id).map(|b| (y.id, b)))
+            .map(|(id, b)| {
+                let c = mean(&b.poly);
+                let m = lerp(b.poly[0], b.poly[1], 0.5);
+                let n = mul(sub(m, c), 1.0 / dist(m, c).max(1e-9));
+                (id, seg_rect(m, add(m, mul(n, town::YURT_CLEAR_FT)), 10.0).to_vec())
+            })
+            .collect();
+        let mut all: Vec<(u32, Vec<P>)> = Vec::new();
+        for y in &l.yurts {
+            r.tally("yurts with trodden ground", (y.trodden.len() >= 3) as usize);
+            let Some(b) = byid.get(&y.id) else { continue };
+            let c = mean(&b.poly);
+            let rr = dist(b.poly[0], c);
+            let mut boxes: Vec<[P; 4]> = Vec::new();
+            let mut planned: Vec<(P, Kind)> = Vec::new();
+            let mut fence = 0.0;
+            if let Some(p) = y.pen {
+                r.tally("yurts with a pen", 1);
+                if listed < 4 {
+                    listed += 1;
+                    r.add("  pens listed (fx, fy: the map's)", 0.0, format!("seed {} b:{li}:{} at {} fx {:.6} fy {:.6}", world.file.seed, y.id, at(c), c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft));
+                }
+                boxes.push(p.pts);
+                fence = (0..4).map(|e| dist(p.pts[e], p.pts[(e + 1) % 4])).sum::<f64>() - town::yurts::PEN_GATE_FT;
+            }
+            let mine: Vec<&town::Prop> = l.props.iter().filter(|p| matches!(p.kind, Kind::Horse | Kind::Cart | Kind::Haystack) && contains(&y.lot, p.at)).collect();
+            for p in &mine {
+                planned.push((p.at, p.kind));
+                match p.kind {
+                    Kind::Horse => r.tally("  horses in pens", 1),
+                    Kind::Cart => {
+                        r.tally("yurts with a cart", 1);
+                        boxes.push(horse_foot(p.kind, p.at, p.rot, p.scale).unwrap());
+                    }
+                    _ => {
+                        r.tally("  with a haystack too", 1);
+                        boxes.push(horse_foot(p.kind, p.at, p.rot, p.scale).unwrap());
+                    }
+                }
+            }
+            let ring = town::roof::round_footprint_sized(&y.lot, &|_| rr);
+            if ring.is_some_and(|g| dist(mean(&g), c) > 0.25) {
+                r.tally("yurts drawn up toward their door", 1);
+            }
+            let here = format!("seed {} b:{li}:{} at {}", world.file.seed, y.id, at(c));
+            for bx in &boxes {
+                if l.buildings.iter().any(|o| o.id != y.id && o.structure == town::Structure::Roofed && dist(o.poly[0], c) < 150.0 && outlines_touch(bx, &o.poly)) {
+                    r.add("R pens and carts over a building", 0.0, here.clone());
+                }
+                if all.iter().any(|(id, o)| *id != y.id && outlines_touch(bx, o)) || l.props.iter().any(|p| !mine.iter().any(|q| std::ptr::eq(*q, p)) && contains(bx, p.at)) {
+                    r.add("R pens and carts over another's pen, cart or prop", 0.0, here.clone());
+                }
+                let lane = l.roads.iter().any(|w| w.0.windows(2).any(|s| bx.iter().any(|&p| seg_dist(p, s[0], s[1]) < 0.5 * w.2) || boxes_cross(bx, &seg_rect(s[0], s[1], w.2))))
+                    || l.streets.iter().any(|w| w.windows(2).any(|s| boxes_cross(bx, &seg_rect(s[0], s[1], 10.0))));
+                if lane {
+                    r.add("R pens and carts on a lane", 0.0, here.clone());
+                }
+                if doors.iter().any(|(_, d)| boxes_cross(bx, d)) {
+                    r.add("R pens and carts in a door's open ground", 0.0, here.clone());
+                }
+                if !bx.iter().all(|&p| contains(&y.lot, p)) {
+                    r.add("R pens and carts off their lot", 0.0, here.clone());
+                }
+            }
+            for bx in &boxes {
+                all.push((y.id, bx.to_vec()));
+            }
+            let extra = !boxes.is_empty();
+            if (extra && with < 40) || (!extra && without < 40) {
+                if extra {
+                    with += 1;
+                } else {
+                    without += 1;
+                }
+                look.push((here, c, rr, if y.pen.is_some() { vec![y.pen.unwrap().pts] } else { boxes.clone() }, planned, fence));
+            }
+        }
+    }
+    for (here, c, rr, boxes, planned, fence) in look {
+        r.tally("battlemap: yurts looked at", 1);
+        let reach = rr + 30.0;
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let (mut dirt, mut laid, mut flen, mut over) = (0usize, 0usize, 0.0f64, 0usize);
+        for ky in k(c[1] - reach)..=k(c[1] + reach) {
+            for kx in k(c[0] - reach)..=k(c[0] + reach) {
+                let ch = ctx.chunk(kx, ky);
+                let (ox, oy) = (kx as f64 * size, ky as f64 * size);
+                for q in 0..SQ * SQ {
+                    let p = [ox + ((q % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    let d = dist(p, c);
+                    if d > rr && d < rr + town::yurts::TRODDEN_FT + 2.5 && ch.building[q] == 0 && ch.surface[q] == Surface::Dirt {
+                        dirt += 1;
+                    }
+                }
+                for o in &ch.objects {
+                    let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+                    if planned.iter().any(|q| q.1 == o.kind && dist(q.0, p) < 0.5) {
+                        laid += 1;
+                    } else if boxes.iter().any(|b| contains(b, p)) {
+                        over += 1;
+                        r.add("R battlemap: objects over a pen or cart", 0.0, format!("{here}: {} at {}", ch.name(o), at(p)));
+                    }
+                }
+                for s in ch.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Fence && s.pts.len() >= 2) {
+                    let f = |q: [f32; 2]| [ox + q[0] as f64 * SQUARE_FT, oy + q[1] as f64 * SQUARE_FT];
+                    let (a, e) = (f(s.pts[0]), f(s.pts[1]));
+                    if boxes.iter().any(|b| (0..4).any(|j| seg_dist(lerp(a, e, 0.5), b[j], b[(j + 1) % 4]) < 1.0)) {
+                        flen += dist(a, e);
+                    }
+                }
+            }
+        }
+        let _ = over;
+        r.tally("battlemap: trodden rings drawn (dirt by the wall)", (dirt > 0) as usize);
+        r.tally("battlemap: yurt props planned", planned.len());
+        r.tally("battlemap: yurt props laid", laid);
+        r.tally("battlemap: pen fence ft planned", fence as usize);
+        r.tally("battlemap: pen fence ft laid", flen as usize);
+        if dirt == 0 || laid < planned.len() || flen + 1.0 < fence {
+            r.add("battlemap: yurts short of dirt, props or fence", 0.0, format!("{here}: dirt squares {dirt}, props {laid}/{}, fence {flen:.0}/{fence:.0} ft", planned.len()));
         }
     }
 }
@@ -4560,8 +5176,528 @@ fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
     }
 }
 
+// ---- Walls by culture group (item 104). ----
+
+/// `walls`: per culture group (`l.culture % 5`), walled places and their towers by shape (wall towers,
+/// castle towers, corner towers); square towers where the style has none; towers whose battlemap squares
+/// don't follow their shape (the ring of wall blocking, the floor open, the door reached from outside);
+/// and up to 3 walled settlements per group listed with a camera on the whole wall and one on a tower
+/// by a gate (`fx, fy` as `scripts/shot.mjs` views take them). Towers of the first listed place per
+/// group are checked on the battlemap (`WALLS_ALL=1`: every listed place's).
+/// The bow of each long curtain (slice 2c): per side of the town's ring 150 ft and longer, the town
+/// wall along it (5-ft steps within 80 ft of it, beside the side), its greatest distance off the chord
+/// between its points nearest the side's two corners. Also the buildings centred in the town's patches
+/// that the wall leaves outside (a line to the town's middle crosses it an odd number of times), and
+/// how many it has inside.
+fn curtain_bows(ctx: &Ctx, l: &Layout, li: usize) -> (Vec<(f64, String)>, Vec<String>, usize) {
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let mut out = (Vec::new(), Vec::new(), 0);
+    let Ok(plan) = town::wards::plan_json(world, t0, li) else { return out };
+    if plan["walls"]["built"] != true {
+        return out;
+    }
+    let pt = |v: &serde_json::Value| -> P { [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0)] };
+    let corners: HashMap<u64, P> = plan["corners"].as_array().into_iter().flatten().filter_map(|c| Some((c["corner"].as_u64()?, pt(&c["at"])))).collect();
+    let mut sides: Vec<(u64, u64)> = Vec::new();
+    let mut patches: Vec<Vec<P>> = Vec::new();
+    for p in plan["patches"].as_array().into_iter().flatten().filter(|p| p["in_town"] == true) {
+        let cs: Vec<u64> = p["corners"].as_array().into_iter().flatten().filter_map(|c| c.as_u64()).collect();
+        patches.push(cs.iter().filter_map(|c| corners.get(c).copied()).collect());
+        sides.extend((0..cs.len()).map(|k| (cs[k], cs[(k + 1) % cs.len()])));
+    }
+    let shared: std::collections::HashSet<(u64, u64)> = sides.iter().copied().collect();
+    let town: Vec<&Vec<P>> = l.walls.iter().filter(|w| w.len() >= 2 && !l.castles.iter().any(|(c, rad)| dist(*c, w[w.len() / 2]) <= rad + 10.0)).collect();
+    let pts: Vec<P> = town.iter().flat_map(|w| samples(w, 5.0).into_iter().map(|s| s.0).chain(std::iter::once(w[w.len() - 1]))).collect();
+    // (Each wall point counts for the ring side nearest it, slice 2e: bows reach 80 ft out.)
+    let ring: Vec<(P, P)> = sides.iter().filter(|(a, b)| !shared.contains(&(*b, *a))).filter_map(|(a, b)| Some((*corners.get(a)?, *corners.get(b)?))).collect();
+    let side_of = |q: P| (0..ring.len()).min_by(|&x, &y| seg_dist(q, ring[x].0, ring[x].1).total_cmp(&seg_dist(q, ring[y].0, ring[y].1)));
+    let owner: Vec<Option<usize>> = pts.iter().map(|q| side_of(*q)).collect();
+    for (k, &(pa, pb)) in ring.iter().enumerate() {
+        let d = dist(pa, pb);
+        if d < 150.0 {
+            continue;
+        }
+        let u = mul(sub(pb, pa), 1.0 / d);
+        let near: Vec<P> = pts.iter().zip(&owner).filter(|(q, o)| **o == Some(k) && seg_dist(**q, pa, pb) < 80.0 && (0.0..=d).contains(&dot(sub(**q, pa), u))).map(|x| *x.0).collect();
+        let nearest = |c: P| near.iter().copied().min_by(|x, y| dist(*x, c).total_cmp(&dist(*y, c)));
+        let (Some(q0), Some(q1)) = (nearest(pa), nearest(pb)) else { continue };
+        if dist(q0, q1) < 100.0 {
+            continue;
+        }
+        let bow = near.iter().map(|q| seg_dist(*q, q0, q1)).fold(0.0, f64::max);
+        let m = lerp(pa, pb, 0.5);
+        out.0.push((bow, format!("L{li} side at {} fx {:.6} fy {:.6}", at(m), m[0] / world.geom.map_w_ft, m[1] / world.geom.map_h_ft)));
+    }
+    let segs: Vec<(P, P)> = town.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    let crosses = |p: P, q: P, a: P, b: P| {
+        let (o1, o2) = (cross(sub(q, p), sub(a, p)), cross(sub(q, p), sub(b, p)));
+        let (o3, o4) = (cross(sub(b, a), sub(p, a)), cross(sub(b, a), sub(q, a)));
+        o1 * o2 < 0.0 && o3 * o4 < 0.0
+    };
+    for bd in l.buildings.iter().filter(|bd| bd.poly.len() >= 3 && patches.iter().any(|f| contains(f, centroid(&bd.poly)))) {
+        let c = centroid(&bd.poly);
+        if segs.iter().filter(|&&(a, b)| crosses(c, l.center, a, b)).count() % 2 == 1 {
+            out.1.push(format!("L{li} b:{li}:{} at {}", bd.id, at(c)));
+        } else {
+            out.2 += 1;
+        }
+    }
+    out
+}
+
+/// Town wall towers (a castle's apart) and gate towers under 22 ft apart, centre to centre: two
+/// wall runs' corners meeting, each with its own tower (a gate's own pair apart).
+fn close_towers(l: &Layout, li: usize, r: &mut Report) {
+    let castle = |t: P| l.tower_forms.iter().any(|f| (f.0[0] - t[0]).abs() + (f.0[1] - t[1]).abs() < 1e-6 && f.1 & 16 != 0);
+    let ts: Vec<(P, bool)> = l.towers.iter().filter(|t| !castle(**t)).map(|t| (*t, false)).chain(l.gate_towers.iter().map(|t| (*t, true))).collect();
+    for i in 0..ts.len() {
+        for j in i + 1..ts.len() {
+            let d = dist(ts[i].0, ts[j].0);
+            // (A gate's pair: across its passage, both gate towers.)
+            if d < 22.0 && !(ts[i].1 && ts[j].1 && d > 8.0) {
+                let kind = match (ts[i].1, ts[j].1) {
+                    (false, false) => "wall towers",
+                    (true, true) => "gate towers",
+                    _ => "a gate tower and a wall tower",
+                };
+                r.add("town towers under 22 ft apart", 1.0, format!("L{li} {kind} {d:.1} ft apart at {} and {}", at(ts[i].0), at(ts[j].0)));
+            }
+        }
+    }
+}
+
+fn walls(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::battlemap::URBAN_TOWER_FLOOR;
+    use worldgen::town::wallstyle::{self, TowerShape};
+    const GROUPS: [&str; 5] = ["North", "West", "South", "Dry", "Steppe"];
+    const SHAPES: [&str; 4] = ["round", "square", "D", "octagon"];
+    r.counts(&[
+        "square towers where the style has none",
+        "towers not of their style's shapes",
+        "towers checked on the battlemap",
+        "towers whose battlemap squares don't follow their shape",
+        "towers by the water with their door in it (not counted above)",
+        "buildings under or within 4 ft of a town wall",
+        "town walls crossing a road or street off a gate",
+        "town walls crossing themselves",
+        "town walls on the water (5-ft steps)",
+        "gate passages blocked on the battlemap",
+        "bastions over a road, a building or the water",
+        "gate passages not walkable end to end on the battlemap",
+        "gatehouses over a road, a building or the water",
+        "castle gates not of their group's form",
+        "town towers under 22 ft apart",
+        "buildings in the town's patches the wall leaves outside",
+        "places listed",
+    ]);
+    const OUTLINES: [&str; 3] = ["straight", "star", "round"];
+    const MATERIALS: [&str; 3] = ["stone", "palisade", "rammed earth"];
+    let lattice = ctx.ex.world.geom.spacing_ft(ctx.ex.world.geom.first_refine_level - 1);
+    let all = std::env::var("WALLS_ALL").is_ok_and(|v| v == "1");
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let ns = t0.settlements.len();
+    let mut listed = [0usize; 5];
+    let mut to_check: Vec<(usize, Rc<Layout>)> = Vec::new();
+    let mut to_walk: Vec<(usize, Rc<Layout>)> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    let mut order: Vec<usize> = (0..town::layout_count(t0)).collect();
+    // (The biggest places first: a group's cities before its towns.)
+    order.sort_by_key(|&li| (std::cmp::Reverse(t0.settlements.get(li).map_or(0, |s| s.population)), li));
+    for li in order {
+        let l = town::layout(world, t0, li);
+        let g = (l.wall_style.group % 5) as usize;
+        if li < ns && t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town {
+            r.tally(&format!("{}: towns and up", GROUPS[g]), 1);
+        }
+        if l.walls.is_empty() {
+            continue;
+        }
+        r.tally(&format!("{}: walled places", GROUPS[g]), 1);
+        for t in l.towers.iter().copied().chain(l.extra_towers.iter().filter(|e| !e.1).map(|e| e.0)) {
+            let (shape, _) = l.tower_form(t);
+            let castle = l.tower_forms.iter().any(|f| (f.0[0] - t[0]).abs() + (f.0[1] - t[1]).abs() < 1e-6 && f.1 & 16 != 0);
+            let style = l.wall_style_at(t);
+            r.tally(&format!("{}: {} towers {}", GROUPS[g], if castle { "castle" } else { "wall" }, SHAPES[shape as usize]), 1);
+            if wallstyle::is_corner(&l.walls, t) {
+                r.tally(&format!("{}: corner towers {}", GROUPS[g], SHAPES[shape as usize]), 1);
+            }
+            if shape == TowerShape::Square && !style.has_square() {
+                r.add("square towers where the style has none", 1.0, format!("L{li} {}", at(t)));
+            }
+            if shape != style.tower && shape != style.corner {
+                r.add("towers not of their style's shapes", 1.0, format!("L{li} {} {}", SHAPES[shape as usize], at(t)));
+            }
+        }
+        close_towers(&l, li, r);
+        wall_rules(&l, li, lattice, t0, r);
+        gate_rules(&l, li, lattice, t0, r);
+        // How round the curtains run (castles' apart): the turning at each corner; runs of gentle steps
+        // (12 degrees or less, one way) turning 15 degrees or more are rounded corners, each with its radius
+        // (its steps' shorter sides over their turning, weighted by turning).
+        for w in l.walls.iter().filter(|w| w.len() >= 3 && !l.castles.iter().any(|(c, rad)| dist(*c, w[w.len() / 2]) <= rad + 10.0)) {
+            let mut run = (0.0f64, 0.0f64, 0.0f64);
+            let flush = |run: &mut (f64, f64, f64), r: &mut Report| {
+                if run.1.abs() >= 15.0 {
+                    r.tally(&format!("{}: rounded corners", GROUPS[g]), 1);
+                    r.tally(&format!("{}: rounded corners' radius ft (sum)", GROUPS[g]), (run.2 / run.1.abs()).round() as usize);
+                    r.tally(&format!("{}: curtain turning deg in rounded corners", GROUPS[g]), run.1.abs().round() as usize);
+                }
+                *run = (0.0, 0.0, 0.0);
+            };
+            for k in 1..w.len() - 1 {
+                let (u, v) = (sub(w[k], w[k - 1]), sub(w[k + 1], w[k]));
+                let turn = libm::atan2(cross(u, v), dot(u, v)).to_degrees();
+                r.tally(&format!("{}: curtain turning deg", GROUPS[g]), turn.abs().round() as usize);
+                if turn.abs() > 12.0 || turn.abs() < 0.5 || run.0 * turn < 0.0 {
+                    flush(&mut run, r);
+                }
+                if turn.abs() <= 12.0 && turn.abs() >= 0.5 {
+                    let rad = len(u).min(len(v)) / turn.abs().to_radians();
+                    run = (turn.signum(), run.1 + turn, run.2 + rad * turn.abs());
+                }
+            }
+            flush(&mut run, r);
+        }
+        // How far the long curtains bow (slice 2c), and the town's buildings the wall leaves outside.
+        let (bows, outside, inside) = curtain_bows(ctx, &l, li);
+        for b in bows {
+            r.value(&format!("{}: curtain bow ft (runs 150 ft and longer)", GROUPS[g]), b.0, b.1);
+        }
+        r.tally("buildings in the town's patches inside its wall", inside);
+        for w in outside {
+            r.add("buildings in the town's patches the wall leaves outside", 1.0, w);
+        }
+        let st = l.wall_style;
+        r.tally(&format!("{}: outline {}", GROUPS[g], OUTLINES[st.outline as usize]), 1);
+        r.tally(&format!("{}: material {}", GROUPS[g], MATERIALS[st.material as usize]), 1);
+        r.tally(&format!("{}: bastions placed", GROUPS[g]), l.bastions.len());
+        r.tally(&format!("{}: bastions dropped", GROUPS[g]), l.bastions_dropped as usize);
+        // Listed: settlements, up to 3 a group.
+        if li >= ns || listed[g] >= 3 {
+            continue;
+        }
+        listed[g] += 1;
+        r.tally("places listed", 1);
+        let s = &t0.settlements[li];
+        let bb = bbox(&l.walls.iter().flatten().copied().collect::<Vec<_>>());
+        let (cx, cy) = (0.5 * (bb[0] + bb[2]), 0.5 * (bb[1] + bb[3]));
+        let span = (bb[2] - bb[0]).max(bb[3] - bb[1]).max(100.0);
+        let whole = libm::log2(1100.0 / span);
+        // (A gate tower of the town's, not a castle's: the first in order.)
+        let town_gate = l.gate_towers.iter().find(|p| !l.castles.iter().any(|(c, rad)| dist(*c, **p) <= rad + 1.0));
+        let gate = town_gate.or(l.gate_towers.first()).copied().unwrap_or(l.towers.first().copied().unwrap_or([cx, cy]));
+        let st = l.wall_style;
+        lines.push(format!(
+            "    {} L{li} {} wealth {:.2}{}{}: wall fx {:.6} fy {:.6} zoom {whole:.1}; gate tower fx {:.6} fy {:.6} zoom 1.5 ({} towers, {} castle)",
+            GROUPS[g],
+            s.tier.name(),
+            wallstyle::wealth(s),
+            if st.rich { " rich" } else { "" },
+            if st.poor { " poor" } else { "" },
+            cx / mw,
+            cy / mh,
+            gate[0] / mw,
+            gate[1] / mh,
+            l.towers.len() + l.gate_towers.len(),
+            if l.castles.is_empty() { "no" } else { "a" },
+        ));
+        if let Some(q) = l.bastions.first() {
+            lines.push(format!("      bastion fx {:.6} fy {:.6} zoom 0.5", q[5][0] / mw, q[5][1] / mh));
+        }
+        if all || listed[g] == 1 {
+            to_check.push((li, l.clone()));
+        }
+        to_walk.push((li, l.clone()));
+    }
+    // Every gate of the places listed walked through on the battlemap.
+    for (li, l) in to_walk {
+        gate_walks(ctx, &l, li, r);
+    }
+    // The battlemap round each tower of the places checked.
+    for (li, l) in to_check {
+        // (Each town gate's way through: open squares from 15 ft out to 15 ft in.)
+        let houses = town::gatehouse::houses(&l);
+        for g in l.gates.iter().copied() {
+            let pair: Vec<P> = l.gate_towers.iter().copied().filter(|t| dist(*t, g) < 32.0).collect();
+            // (A bent entrance's way turns: walked through below.)
+            if pair.len() < 2 || town::gatehouse::of_tower(&houses, pair[0]).is_some_and(|h| h.0.form == wallstyle::Gatehouse::Bent) {
+                continue;
+            }
+            let u = sub(pair[1], pair[0]);
+            let n = mul([-u[1], u[0]], 1.0 / len(u).max(1e-9));
+            let w = ctx.window([g[0] - 30.0, g[1] - 30.0, g[0] + 30.0, g[1] + 30.0]);
+            let shut = (-3..=3).map(|k| add(g, mul(n, 5.0 * k as f64))).filter(|p| {
+                let (i, j) = (((p[0] - w.ox) / SQUARE_FT).floor() as i64, ((p[1] - w.oy) / SQUARE_FT).floor() as i64);
+                i >= 0 && j >= 0 && (i as usize) < w.nx && (j as usize) < w.ny && w.block[j as usize * w.nx + i as usize]
+            }).count();
+            if shut > 0 {
+                r.add("gate passages blocked on the battlemap", shut as f64, format!("L{li} gate {} ({shut} squares)", at(g)));
+            }
+        }
+        for (k, &(t, rad, gate)) in interior::towers(&l).iter().enumerate() {
+            let (shape, ras) = wallstyle::tower_raster(&l, t, rad, gate, SQUARE_FT);
+            let x0 = ras.i0 as f64 * SQUARE_FT - 40.0;
+            let y0 = ras.j0 as f64 * SQUARE_FT - 40.0;
+            let w = ctx.window([x0, y0, x0 + ras.nx as f64 * SQUARE_FT + 80.0, y0 + ras.ny as f64 * SQUARE_FT + 80.0]);
+            r.tally("towers checked on the battlemap", 1);
+            let wi = |gi: i64, gj: i64| -> Option<usize> {
+                let (i, j) = (gi - (w.ox / SQUARE_FT).round() as i64, gj - (w.oy / SQUARE_FT).round() as i64);
+                (i >= 0 && j >= 0 && (i as usize) < w.nx && (j as usize) < w.ny).then(|| j as usize * w.nx + i as usize)
+            };
+            let mut bad: Vec<String> = Vec::new();
+            let mut door: Option<usize> = None;
+            let mut floors = 0;
+            let mut wet = false;
+            for q in 0..ras.nx * ras.ny {
+                let v = ras.cells[q];
+                if v == 0 {
+                    continue;
+                }
+                let (gi, gj) = (ras.i0 + (q % ras.nx) as i64, ras.j0 + (q / ras.nx) as i64);
+                let Some(a) = wi(gi, gj) else { continue };
+                let (kx, ky) = (gi.div_euclid(SQ as i64), gj.div_euclid(SQ as i64));
+                let c = ctx.chunk(kx as u32, ky as u32);
+                let k = (gj - ky * SQ as i64) as usize * SQ + (gi - kx * SQ as i64) as usize;
+                let (b, u) = (c.building[k], c.urban[k]);
+                // (A building on it, the water, a deck: theirs.)
+                // (A way underground at its foot: its.)
+                if b != 0 || c.water_level[k] > c.height[k] || matches!(u, worldgen::battlemap::URBAN_DECK | worldgen::battlemap::URBAN_ENTRANCE) {
+                    if v == wallstyle::DOOR && b != 0 {
+                        bad.push("door under a building".into());
+                    }
+                    wet |= v == wallstyle::DOOR && c.water_level[k] > c.height[k];
+                    continue;
+                }
+                match v {
+                    wallstyle::RING if u != URBAN_TOWER => bad.push(format!("ring square open ({u})")),
+                    wallstyle::FLOOR | wallstyle::DOOR if u != URBAN_TOWER_FLOOR && u != URBAN_TOWER => bad.push(format!("floor square {u}")),
+                    _ => {}
+                }
+                if v != wallstyle::RING && u == URBAN_TOWER_FLOOR {
+                    floors += 1;
+                }
+                if v == wallstyle::DOOR {
+                    door = Some(a);
+                }
+            }
+            if floors == 0 {
+                bad.push("no open floor".into());
+            }
+            // The door reached from the ground 30 ft out (square to square past what blocks).
+            match door {
+                None if !ras.cells.contains(&wallstyle::DOOR) => bad.push("no door".into()),
+                None => {}
+                Some(d) => {
+                    let mut seen = vec![false; w.nx * w.ny];
+                    let mut q = VecDeque::from([d]);
+                    seen[d] = true;
+                    let mut out = false;
+                    while let Some(a) = q.pop_front() {
+                        let p = [w.ox + ((a % w.nx) as f64 + 0.5) * SQUARE_FT, w.oy + ((a / w.nx) as f64 + 0.5) * SQUARE_FT];
+                        if dist(p, t) > rad + 30.0 {
+                            out = true;
+                            break;
+                        }
+                        let (x, y) = ((a % w.nx) as i64, (a / w.nx) as i64);
+                        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                            let (nx, ny) = (x + dx, y + dy);
+                            if nx < 0 || ny < 0 || nx >= w.nx as i64 || ny >= w.ny as i64 {
+                                continue;
+                            }
+                            let n = ny as usize * w.nx + nx as usize;
+                            if !seen[n] && !w.block[n] {
+                                seen[n] = true;
+                                q.push_back(n);
+                            }
+                        }
+                    }
+                    if !out {
+                        bad.push("door not reached from outside".into());
+                    }
+                }
+            }
+            if wet {
+                r.add("towers by the water with their door in it (not counted above)", 1.0, format!("t:{li}:{k} {} {}", SHAPES[shape as usize], at(t)));
+                continue;
+            }
+            if !bad.is_empty() {
+                bad.dedup();
+                r.add("towers whose battlemap squares don't follow their shape", bad.len() as f64, format!("t:{li}:{k} {} {}: {}", SHAPES[shape as usize], at(t), bad.join(", ")));
+            }
+        }
+    }
+    for line in lines {
+        say!("{line}");
+    }
+}
+
+/// The town wall's rules (item 104) on one layout: buildings off it, roads and streets through it only
+/// at a gate, never crossing itself or standing on the water, its bastions clear.
+fn wall_rules(l: &Layout, li: usize, lattice: f64, t0: &T0, r: &mut Report) {
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    let half = 0.5 * l.wall_style.thickness();
+    let segs: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    let segx = |p: P, q: P, a: P, b: P| {
+        let c = |o: P, x: P, y: P| cross(sub(x, o), sub(y, o));
+        c(p, q, a) * c(p, q, b) < 0.0 && c(a, b, p) * c(a, b, q) < 0.0
+    };
+    let poly_seg = |poly: &[P], a: P, b: P| {
+        let n = poly.len();
+        let d = (0..n).map(|k| seg_dist(poly[k], a, b).min(seg_dist(a, poly[k], poly[(k + 1) % n])).min(seg_dist(b, poly[k], poly[(k + 1) % n]))).fold(f64::MAX, f64::min);
+        if contains(poly, a) || (0..n).any(|k| segx(poly[k], poly[(k + 1) % n], a, b)) { 0.0 } else { d }
+    };
+    let bb = bbox(&l.walls.iter().flatten().copied().collect::<Vec<_>>());
+    for b in l.buildings.iter().filter(|b| b.poly.iter().any(|p| p[0] > bb[0] - 30.0 && p[0] < bb[2] + 30.0 && p[1] > bb[1] - 30.0 && p[1] < bb[3] + 30.0)) {
+        // (Castles' own curtains have their rule.)
+        if l.castles.iter().any(|(c, rad)| dist(*c, centroid(&b.poly)) <= rad + 20.0) {
+            continue;
+        }
+        let d = segs.iter().map(|&(a, q)| poly_seg(&b.poly, a, q)).fold(f64::MAX, f64::min) - half;
+        // (The sprawl outside stands 7 ft off the wall's line, as its patches are laid: counted apart.)
+        if d < 4.0 && d > -half && matches!(b.ward, Ward::Slum | Ward::Farm) {
+            r.add("sprawl outside within 4 ft of a town wall's face (not under it)", 4.0 - d, format!("L{li} b:{li}:{} {:.1} ft", b.id, d));
+        } else if d < 4.0 {
+            r.add("buildings under or within 4 ft of a town wall", 4.0 - d, format!("L{li} b:{li}:{} {:?} {:?} {:.1} ft at {}", b.id, b.ward, b.structure, d, at(centroid(&b.poly))));
+        }
+    }
+    let gate_near = |p: P| l.gates.iter().chain(&l.gate_towers).any(|g| dist(*g, p) < 32.0) || l.castles.iter().any(|(c, rad)| dist(*c, p) <= rad + 30.0);
+    for (pts, what) in l.streets.iter().map(|s| (s, 9)).chain(l.roads.iter().filter(|r| r.1 != 3).map(|r| (&r.0, r.1))) {
+        for q in pts.windows(2) {
+            for &(a, b) in &segs {
+                if segx(q[0], q[1], a, b) {
+                    let m = lerp(a, b, 0.5);
+                    if !gate_near(q[0]) && !gate_near(q[1]) && !gate_near(m) {
+                        r.add("town walls crossing a road or street off a gate", 1.0, format!("L{li} {} at {}", if what == 9 { "street".to_string() } else { format!("road {what}") }, at(q[0])));
+                    }
+                }
+            }
+        }
+    }
+    for (i, &(a, b)) in segs.iter().enumerate() {
+        for &(c, d) in &segs[i + 1..] {
+            if segx(a, b, c, d) && !l.castles.iter().any(|(o, rad)| dist(*o, a) <= rad + 40.0) {
+                r.add("town walls crossing themselves", 1.0, format!("L{li} at {} and {}", at(a), at(c)));
+            }
+        }
+        let n = (dist(a, b) / 5.0).ceil().max(1.0) as usize;
+        let k = (0..n).filter(|&j| wet(lerp(a, b, (j as f64 + 0.5) / n as f64))).count();
+        if k > 0 && !l.castles.iter().any(|(c, rad)| dist(*c, a) <= rad + 10.0) {
+            r.add("town walls on the water (5-ft steps)", k as f64, format!("L{li} at {}", at(a)));
+        }
+    }
+    for q in &l.bastions {
+        let on_b = l.buildings.iter().find(|b| b.poly.iter().any(|p| contains(q, *p)) || q.iter().any(|p| contains(&b.poly, *p)));
+        // (A road's line more than 3 ft into it, or its paving more than 6 ft: the town's paved strips
+        // run along the wall's line, and those ending at the corner spread their paving into the gorge.)
+        let paved = |pts: &[P], w: f64| {
+            pts.windows(2).any(|s| {
+                let (u, n) = (sub(s[1], s[0]), (dist(s[0], s[1]) / 2.5).ceil().max(1.0) as usize);
+                let nrm = mul([-u[1], u[0]], 1.0 / len(u).max(1e-9));
+                (0..=n).any(|j| [-0.5 * w + 1.0, 0.0, 0.5 * w - 1.0].iter().any(|o| {
+                    let p = add(lerp(s[0], s[1], j as f64 / n as f64), mul(nrm, *o));
+                    contains(q, p) && depth(q, p) > if *o == 0.0 { 3.0 } else { 6.0 }
+                }))
+            })
+        };
+        let on_r = l.streets.iter().map(|s| (s.as_slice(), 9, 4.0)).chain(l.roads.iter().map(|r| (r.0.as_slice(), r.1, r.2))).find(|s| paved(s.0, s.2));
+        let on_w = wet(centroid(q)) || q.iter().any(|p| wet(*p));
+        if on_b.is_some() || on_r.is_some() || on_w {
+            let what = on_b.map(|b| format!("b:{li}:{} {:?}", b.id, b.ward)).or(on_r.map(|s| format!("road {}", s.1))).unwrap_or("water".into());
+            r.add("bastions over a road, a building or the water", 1.0, format!("L{li} at {}: {what}", at(q[2])));
+        }
+    }
+}
+
+const FORMS: [&str; 5] = ["square tower", "twin drums", "arched", "bent", "log"];
+
+/// The gatehouses' rules (item 104) on one layout: their forms counted, none over a road (but its own
+/// way through), a building or the water, a castle's gate of its group's form.
+fn gate_rules(l: &Layout, li: usize, lattice: f64, t0: &T0, r: &mut Report) {
+    use worldgen::town::gatehouse;
+    const GROUPS: [&str; 5] = ["North", "West", "South", "Dry", "Steppe"];
+    let g = GROUPS[(l.wall_style.group % 5) as usize];
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    let segx = |p: P, q: P, a: P, b: P| {
+        let c = |o: P, x: P, y: P| cross(sub(x, o), sub(y, o));
+        c(p, q, a) * c(p, q, b) < 0.0 && c(a, b, p) * c(a, b, q) < 0.0
+    };
+    let cuts = |poly: &[P], a: P, b: P| contains(poly, a) || contains(poly, b) || (0..poly.len()).any(|k| segx(poly[k], poly[(k + 1) % poly.len()], a, b));
+    for h in gatehouse::houses(l) {
+        r.tally(&format!("{g}: {}gatehouses {}", if h.castle { "castle " } else { "" }, FORMS[h.form as usize]), 1);
+        if h.castle && h.form != l.wall_style.castle().gatehouse {
+            r.add("castle gates not of their group's form", 1.0, format!("L{li} {} at {}", FORMS[h.form as usize], at(h.a)));
+        }
+        let solids = h.solids();
+        let way = h.passage();
+        let near = |p: &P| dist(*p, h.a) < 140.0;
+        let on_b = l.buildings.iter().filter(|b| b.poly.iter().any(near)).find(|b| solids.iter().any(|q| b.poly.iter().any(|p| contains(q, *p)) || q.iter().any(|p| contains(&b.poly, *p))));
+        // (A road's line more than 3 ft into a tower or the block: not the gate's own way, through it.)
+        let into = |p: P| solids.iter().any(|z| contains(z, p) && (0..z.len()).all(|k| seg_dist(p, z[k], z[(k + 1) % z.len()]) > 3.0));
+        let on_r = l.streets.iter().map(|s| (s, 9)).chain(l.roads.iter().filter(|r| r.1 != 3).map(|r| (&r.0, r.1))).find(|(pts, _)| {
+            !pts.windows(2).any(|q| way.iter().any(|w| cuts(w, q[0], q[1]))) && pts.windows(2).any(|q| {
+                let n = (dist(q[0], q[1]) / 2.5).ceil().max(1.0) as usize;
+                (near(&q[0]) || near(&q[1])) && solids.iter().any(|z| cuts(z, q[0], q[1])) && (0..=n).any(|j| into(lerp(q[0], q[1], j as f64 / n as f64)))
+            })
+        });
+        let on_w = solids.iter().any(|q| wet(centroid(q)) || q.iter().any(|p| wet(*p)));
+        if on_b.is_some() || on_r.is_some() || on_w {
+            let hit = on_r.and_then(|(pts, _)| pts.windows(2).flat_map(|q| (0..=8).map(move |j| lerp(q[0], q[1], j as f64 / 8.0))).find(|p| into(*p)));
+            let fr = hit.map(|p| { let u = mul(sub(h.b, h.a), 1.0 / h.len()); let d = sub(p, h.a); format!(" s {:.1} c {:.1} len {:.1}", dot(d, u), dot(d, h.n), h.len()) }).unwrap_or_default();
+            let what = on_b.map(|b| format!("b:{li}:{} {:?}", b.id, b.ward)).or(on_r.map(|s| format!("road {}{fr}", s.1))).unwrap_or("water".into());
+            r.add("gatehouses over a road, a building or the water", 1.0, format!("L{li} {} at {}: {what}", FORMS[h.form as usize], at(h.a)));
+        }
+    }
+}
+
+/// Each gate of `l` walked through on the battlemap: square to square (not corner to corner) from 8 ft
+/// out past its outer mouth to 8 ft past its inner one, within 40 ft of it.
+fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
+    for h in town::gatehouse::houses(l) {
+        let (o, i) = h.ends();
+        let m = lerp(h.a, h.b, 0.5);
+        let w = ctx.window([m[0] - 70.0, m[1] - 70.0, m[0] + 70.0, m[1] + 70.0]);
+        let ix = |p: P| {
+            let (i, j) = (((p[0] - w.ox) / SQUARE_FT).floor() as i64, ((p[1] - w.oy) / SQUARE_FT).floor() as i64);
+            (i >= 0 && j >= 0 && (i as usize) < w.nx && (j as usize) < w.ny).then(|| j as usize * w.nx + i as usize)
+        };
+        // (From any open square within 5 ft of each end: the ground past a mouth may be built on.)
+        let open_near = |p: P| (0..w.nx * w.ny).filter(|&k| !w.block[k]).find(|&k| dist(p, [w.ox + ((k % w.nx) as f64 + 0.5) * SQUARE_FT, w.oy + ((k / w.nx) as f64 + 0.5) * SQUARE_FT]) <= 5.0);
+        let (Some(_), Some(_)) = (ix(o), ix(i)) else { continue };
+        let (a, b) = (open_near(o), open_near(i));
+        let why = if a.is_none() || b.is_none() {
+            Some(if a.is_none() { "its way in shut" } else { "its way out shut" })
+        } else {
+            let (a, b) = (a.unwrap(), b.unwrap());
+            let mut seen = vec![false; w.nx * w.ny];
+            let mut q = VecDeque::from([a]);
+            seen[a] = true;
+            while let Some(k) = q.pop_front() {
+                let (x, y) = ((k % w.nx) as i64, (k / w.nx) as i64);
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w.nx as i64 || ny >= w.ny as i64 {
+                        continue;
+                    }
+                    let n = ny as usize * w.nx + nx as usize;
+                    let p = [w.ox + (nx as f64 + 0.5) * SQUARE_FT, w.oy + (ny as f64 + 0.5) * SQUARE_FT];
+                    if !seen[n] && !w.block[n] && dist(p, m) <= h.len() + 40.0 {
+                        seen[n] = true;
+                        q.push_back(n);
+                    }
+                }
+            }
+            (!seen[b]).then_some("no way through")
+        };
+        r.tally("gates walked through on the battlemap", 1);
+        if let Some(why) = why {
+            r.add("gate passages not walkable end to end on the battlemap", 1.0, format!("L{li} {} at {}: {why}", FORMS[h.form as usize], at(m)));
+        }
+    }
+}
+
 fn main() {
-    const MODES: [&str; 16] = ["yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
+    const MODES: [&str; 25] = ["horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -4578,7 +5714,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && modes == ["yurts"] {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["steppe"] || modes == ["horseparks"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -4608,7 +5744,16 @@ fn main() {
                 "piers" => piers(&mut ctx, &mut r),
                 "yurts" => yurts(&mut ctx, &mut r),
                 "villages" => villages(&mut ctx, &mut r),
+                "walls" => walls(&mut ctx, &mut r),
+                "steppe" => steppe(&mut ctx, &mut r),
+                "horseparks" => horseparks(&mut ctx, &mut r),
+                "cemeteries" => cemeteries(&mut ctx, &mut r),
+                "handwalls" => handwalls(&mut ctx, &mut r),
+                "wallgates" => wallgates(&mut ctx, &mut r),
+                "castlepieces" => castle_pieces(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
+                "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
+                "places" => places(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
@@ -4624,6 +5769,1992 @@ fn main() {
                 say!("  {mode}");
                 all.get_mut(mode).unwrap().print();
             }
+        }
+    }
+}
+
+// R5 towns
+/// Cemeteries (M21): per tier and culture group, how many and what they hold; the rules (each
+/// should be 0): props or tombs on a walk, over the boundary or outside the plot, tomb doors not
+/// reached from the way in, kurgans overlapping, a North or West lychgate off the way in, a tomb
+/// planned and not built. Then the editor: a park patch set to a cemetery by hand, walls on and off.
+fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
+    const GROUPS: [&str; 5] = ["North", "West", "South", "Dry", "Steppe"];
+    r.counts(&CEM_RULES);
+    r.counts(&["hand cemeteries refused", "hand cemeteries not laid"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let mut cams: Vec<String> = Vec::new();
+    let mut shown = [0usize; 5];
+    // (Up to 2 a group looked at on the battlemap: plot, props planned.)
+    let mut look: Vec<(usize, Vec<P>, usize)> = Vec::new();
+    let mut ground: Vec<(usize, town::Park)> = Vec::new();
+    r.counts(&CEM_GROUND);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town {
+            continue;
+        }
+        let g = (l.culture % 5) as usize;
+        let n = l.parks.iter().filter(|p| p.kind == town::ParkKind::Cemetery).count();
+        r.tally(&format!("{} {}: places", l.tier.name(), GROUPS[g]), 1);
+        r.tally(&format!("{} {}: cemeteries", l.tier.name(), GROUPS[g]), n);
+        let ps = if n > 0 { town::places::of(world, t0, &l) } else { Vec::new() };
+        for pk in l.parks.iter().filter(|p| p.kind == town::ParkKind::Cemetery) {
+            let by_road = pk.cemetery.is_some_and(|c| c.by_road);
+            cemetery_label(&ps, li, pk, &GROUPS, r);
+            r.tally(&format!("{}: cemeteries {}", GROUPS[g], if by_road { "by a road" } else { "in town" }), 1);
+            check_cemetery(world, t0, &l, li, pk, &GROUPS, r);
+            ground.push((li, pk.clone()));
+            if shown[g] < 2 {
+                shown[g] += 1;
+                look.push((g, pk.pts.clone(), town::cemetery::plan(pk).map_or(0, |pl| pl.props.len())));
+                let c = centroid(&pk.pts);
+                let span = pk.pts.iter().map(|q| dist(*q, c)).fold(0.0, f64::max) * 2.0;
+                cams.push(format!("    {} L{li} {}{}: fx {:.6} fy {:.6} zoom {:.1} (battlemap zoom 1.5)", GROUPS[g], l.tier.name(), if by_road { " by a road" } else { " in town" }, c[0] / mw, c[1] / mh, libm::log2(1100.0 / span.max(100.0))));
+            }
+        }
+    }
+    // The editor: up to 3 towns' first park-able patch set to a cemetery by hand, as walled and not.
+    let with = |ci: usize, edit: worldgen::world::TownEdit| {
+        let mut file = world.file.clone();
+        file.edits.towns.insert(town::wards::key(ci), edit);
+        World::new(file).unwrap()
+    };
+    let mut tried = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town) {
+        if tried >= 3 {
+            break;
+        }
+        let Ok(plan) = town::wards::plan_json(world, t0, ci) else { continue };
+        let pick = plan["patches"].as_array().unwrap().iter().find(|p| p["in_town"] == true && p.get("park_refused").is_none() && !matches!(p["ward"].as_str(), Some("plaza" | "castle" | "temple"))).and_then(|p| p["patch"].as_u64());
+        let Some(p) = pick else { continue };
+        tried += 1;
+        let walled = !town::layout(world, t0, ci).walls.is_empty();
+        for walls in [walled, !walled] {
+            let json = format!(r#"{{"patches":[{{"patch":{p},"ward":"park","park":"cemetery"}}],"walls":{walls}}}"#);
+            let Ok((Some(edit), _)) = town::wards::change(world, t0, ci, &serde_json::from_str(&json).unwrap()) else {
+                r.add("hand cemeteries refused", 1.0, format!("#{ci} patch {p} walls {walls}"));
+                continue;
+            };
+            let w2 = with(ci, edit);
+            let l = town::layout(&w2, t0, ci);
+            let at = plan["patches"].as_array().unwrap().iter().find(|q| q["patch"].as_u64() == Some(p)).map(|q| [q["at"][0].as_f64().unwrap(), q["at"][1].as_f64().unwrap()]).unwrap();
+            let hand = l.parks.iter().find(|pk| pk.kind == town::ParkKind::Cemetery && !pk.cemetery.is_some_and(|c| c.by_road) && dist(centroid(&pk.pts), at) < 200.0);
+            r.tally(&format!("hand cemeteries (walls {})", if walls { "on" } else { "off" }), 1);
+            match hand {
+                Some(pk) => {
+                    check_cemetery(&w2, t0, &l, ci, pk, &GROUPS, r);
+                    let fi = town::catalog::index_of("tomb").map(|f| f as u16);
+                    let tombs = l.buildings.iter().filter(|b| b.func == fi && contains(&pk.pts, centroid(&b.poly))).count();
+                    r.tally("hand cemeteries' tombs", tombs);
+                    if shown.iter().sum::<usize>() < 12 {
+                        let c = centroid(&pk.pts);
+                        cams.push(format!("    by hand #{ci} patch {p} walls {walls}: fx {:.6} fy {:.6} zoom 1.5", c[0] / mw, c[1] / mh));
+                    }
+                }
+                None => r.add("hand cemeteries not laid", 1.0, format!("#{ci} patch {p} walls {walls}")),
+            }
+        }
+    }
+    for (g, pts, planned) in look {
+        let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let w = ctx.window(b);
+        const NAMES: [&str; 7] = ["headstone", "cairn", "standing stone", "yew", "lychgate", "kurgan", "tomb slab"];
+        let laid = w.objects.iter().filter(|(p, n)| contains(&pts, *p) && NAMES.contains(&n.as_str())).count();
+        r.tally(&format!("{}: battlemap props planned (looked at)", GROUPS[g]), planned);
+        r.tally(&format!("{}: battlemap props laid (looked at)", GROUPS[g]), laid);
+    }
+    for (li, pk) in &ground {
+        cemetery_ground(ctx, *li, pk, &GROUPS, r);
+    }
+    say!("  cemetery cameras:");
+    for c in cams {
+        say!("{c}");
+    }
+}
+
+const CEM_RULES: [&str; 12] = [
+    "R props or tombs on a walk",
+    "R props or tombs over the boundary",
+    "R props or tombs outside the plot",
+    "R tomb doors not reached from the way in",
+    "R kurgans overlapping",
+    "R lychgates not on the way in (North, West)",
+    "R tombs planned and not built",
+    "R tombs with no tomb chamber",
+    "R plots by a road within 25 ft of a road as drawn",
+    "R tombs within 5 ft of the boundary's face",
+    "R yews within 10 ft of the gate or 2 ft of a walk",
+    "R cemetery labels on a walk, a tomb, a big prop or the boundary",
+];
+
+// R5 towns (M21 fixes): a cemetery as the battlemap lays it.
+const CEM_GROUND: [&str; 4] = ["R cemetery squares on a road", "R walk samples off the gravel", "R boundary samples with no wall or hedge", "R ways in not facing the road beside"];
+
+/// A cemetery's battlemap: no road square inside its boundary; its walks (and the link from the road)
+/// gravel all along (as the ground shader smooths the squares' gravel: a tent 1.5 squares round, at
+/// least half); its wall or hedge all round but for the gate; a way in by a road faces it.
+fn cemetery_ground(ctx: &mut Ctx, li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
+    let Some(pl) = town::cemetery::plan(pk) else { return };
+    let g = pk.cemetery.map_or(1, |c| c.group as usize % 5);
+    let here = format!("L{li} {} at {}", groups[g], at(town::geom::mean(&pk.pts)));
+    let b = pk.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+    let w = ctx.window([b[0] - 60.0, b[1] - 60.0, b[2] + 60.0, b[3] + 60.0]);
+    let on_road = (0..w.nx * w.ny).filter(|&k| w.road[k] && contains(&pl.boundary, w.centre(k))).count();
+    if on_road > 0 {
+        r.add(CEM_GROUND[0], on_road as f64, format!("{here}: {on_road} squares"));
+    }
+    let cover = |p: P| -> f64 {
+        let gx = (p[0] - w.ox) / SQUARE_FT - 0.5;
+        let gy = (p[1] - w.oy) / SQUARE_FT - 0.5;
+        let (ix, iy) = (gx.floor() as i64, gy.floor() as i64);
+        let (mut sum, mut ws) = (0.0, 0.0);
+        for j in -1..=2i64 {
+            for i in -1..=2i64 {
+                let (dx, dy) = (gx - (ix + i) as f64, gy - (iy + j) as f64);
+                let wt = (1.5 - dx.abs()).max(0.0) * (1.5 - dy.abs()).max(0.0);
+                let (a, c) = (ix + i, iy + j);
+                let on = a >= 0 && c >= 0 && (a as usize) < w.nx && (c as usize) < w.ny && w.gravel[c as usize * w.nx + a as usize];
+                sum += wt * on as u8 as f64;
+                ws += wt;
+            }
+        }
+        sum / ws.max(1e-9)
+    };
+    let mut walks: Vec<(P, P)> = pl.walks.iter().map(|&(a, e, _)| (a, e)).collect();
+    walks.extend(pl.link);
+    let (mut bad, mut all) = (0, 0);
+    for (a, e) in walks {
+        let l = dist(a, e);
+        let n = (l / 2.5) as usize;
+        for k in 1..n {
+            let p = lerp(a, e, k as f64 * 2.5 / l);
+            // (Where the link meets the road, the road's.)
+            let by_road = (-1..=1).any(|j| (-1..=1).any(|i| w.index(add(p, [i as f64 * SQUARE_FT, j as f64 * SQUARE_FT])).is_some_and(|k| w.road[k])));
+            if by_road {
+                continue;
+            }
+            all += 1;
+            if cover(p) < 0.5 {
+                bad += 1;
+            }
+        }
+    }
+    r.tally(&format!("{}: walk samples", groups[g]), all);
+    if bad > 0 {
+        r.add(CEM_GROUND[1], bad as f64, format!("{here}: {bad}/{all}"));
+    }
+    if pl.bound != town::cemetery::Bound::None {
+        let m = pl.boundary.len();
+        let (mut miss, mut all) = (0, 0);
+        for e in 0..m {
+            let (a, c) = (pl.boundary[e], pl.boundary[(e + 1) % m]);
+            let n = (dist(a, c) / 5.0) as usize;
+            for k in 1..n {
+                let p = lerp(a, c, k as f64 / n as f64);
+                if dist(p, pl.gate) < 0.5 * pl.gap + 2.0 {
+                    continue;
+                }
+                all += 1;
+                if !w.runs.iter().any(|&(u, v)| seg_dist(p, u, v) < 1.5) {
+                    miss += 1;
+                }
+            }
+        }
+        r.tally(&format!("{}: boundary samples", groups[g]), all);
+        if miss > 0 {
+            r.add(CEM_GROUND[2], miss as f64, format!("{here}: {miss}/{all}"));
+        }
+    }
+    if pk.cemetery.is_some_and(|c| c.by_road) {
+        let near = |p: P| (0..w.nx * w.ny).filter(|&k| w.road[k]).map(|k| dist(w.centre(k), p)).fold(f64::MAX, f64::min);
+        let side = |p: P| (0..w.nx * w.ny).filter(|&k| w.road[k]).map(|k| w.centre(k)).map(|q| if contains(&pk.pts, q) { 0.0 } else { (0..pk.pts.len()).map(|e| seg_dist(q, pk.pts[e], pk.pts[(e + 1) % pk.pts.len()])).fold(f64::MAX, f64::min) }).fold(p[0] * 0.0 + f64::MAX, f64::min);
+        let (dg, dm) = (near(pl.gate), side(pl.gate));
+        if dm < 40.0 && dg > dm + BOUND_SLACK {
+            r.add(CEM_GROUND[3], 1.0, format!("{here}: gate {dg:.0} ft from a road, plot {dm:.0}"));
+        }
+    }
+}
+
+/// How much farther (ft) than the plot's nearest edge a way in by a road may be from it.
+const BOUND_SLACK: f64 = 20.0;
+
+/// A cemetery's label (`places::of`): its baseline's every 2 ft off the walks, the tombs, the yews,
+/// kurgans and lychgate and 2 ft inside the boundary.
+fn cemetery_label(ps: &[town::places::Place], li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
+    let Some(pl) = town::cemetery::plan(pk) else { return };
+    let g = pk.cemetery.map_or(1, |c| c.group as usize % 5);
+    let Some(p) = ps.iter().find(|p| p.sort == "cemetery" && p.label.len() >= 2 && contains(&pk.pts, p.label[p.label.len() / 2])) else {
+        r.tally(&format!("{}: cemeteries with no label line", groups[g]), 1);
+        return;
+    };
+    r.tally(&format!("{}: cemetery labels", groups[g]), 1);
+    let len: f64 = p.label.windows(2).map(|q| dist(q[0], q[1])).sum();
+    r.tally(&format!("{}: cemetery label ft", groups[g]), len as usize);
+    if len < 36.0 {
+        r.tally(&format!("{}: cemetery labels under 36 ft", groups[g]), 1);
+    }
+    let m = pl.boundary.len();
+    let bad = p.label.windows(2).any(|q| {
+        let n = (dist(q[0], q[1]) / 2.0).ceil().max(1.0) as usize;
+        (0..=n).any(|k| {
+            let x = lerp(q[0], q[1], k as f64 / n as f64);
+            !contains(&pl.boundary, x)
+                || (0..m).any(|e| seg_dist(x, pl.boundary[e], pl.boundary[(e + 1) % m]) < 2.0)
+                || pl.walks.iter().any(|&(a, b, w)| seg_dist(x, a, b) < 0.5 * w + 1.0)
+                || pl.tombs.iter().any(|t| contains(t, x) || (0..t.len()).any(|e| seg_dist(x, t[e], t[(e + 1) % t.len()]) < 1.0))
+                || pl.props.iter().any(|q| match q.2 {
+                    Kind::Kurgan => dist(x, q.0) < town::cemetery::KURGAN_R * q.4 as f64,
+                    Kind::Yew => dist(x, q.0) < town::cemetery::YEW_R * q.4 as f64,
+                    Kind::Lychgate => dist(x, q.0) < 6.0,
+                    _ => false,
+                })
+        })
+    });
+    if bad {
+        r.add(CEM_RULES[11], 1.0, format!("L{li} {} at {}: {}", groups[g], at(town::geom::mean(&pk.pts)), p.name));
+    }
+}
+
+fn check_cemetery(world: &World, t0: &T0, l: &Layout, li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
+    let Some(pl) = town::cemetery::plan(pk) else {
+        r.add("cemeteries too small to lay out", 1.0, format!("L{li} at {}", at(town::geom::mean(&pk.pts))));
+        return;
+    };
+    let g = pk.cemetery.map_or(1, |c| c.group as usize % 5);
+    let here = format!("L{li} {} at {}", groups[g], at(town::geom::mean(&pk.pts)));
+    for (k, name) in [(Kind::Headstone, "headstones"), (Kind::Cairn, "cairns"), (Kind::StandingStone, "standing stones"), (Kind::Yew, "yews"), (Kind::Lychgate, "lychgates"), (Kind::Kurgan, "kurgans"), (Kind::TombSlab, "tomb slabs")] {
+        let c = pl.props.iter().filter(|p| p.2 == k).count();
+        if c > 0 {
+            r.tally(&format!("{}: {name}", groups[g]), c);
+        }
+    }
+    r.tally(&format!("{}: tomb buildings", groups[g]), pl.tombs.len());
+    let depth = |poly: &[P], p: P| if contains(poly, p) { (0..poly.len()).map(|e| seg_dist(p, poly[e], poly[(e + 1) % poly.len()])).fold(f64::MAX, f64::min) } else { 0.0 };
+    let foot = |k: Kind, s: f32| match k {
+        Kind::Yew => 2.0,
+        Kind::Kurgan => town::cemetery::KURGAN_R * s as f64,
+        Kind::TombSlab => 1.5,
+        Kind::Cairn => 2.0,
+        Kind::StandingStone => 1.2,
+        _ => 1.0,
+    };
+    for &(p, _, k, _, s) in &pl.props {
+        if k != Kind::Lychgate && pl.walks.iter().any(|&(a, b, w)| seg_dist(p, a, b) < 0.5 * w + 1.0) {
+            r.add(CEM_RULES[0], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+        if k != Kind::Lychgate && depth(&pl.boundary, p) < foot(k, s) {
+            r.add(CEM_RULES[1], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+        if !contains(&pk.pts, p) {
+            r.add(CEM_RULES[2], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+    }
+    // R5 towns (last fix): a plot by a road clear of every road as the map draws it at every level
+    // the plot is seen at (the tiles' pieces, `lod::roads::pieces`) and of the layout's roads.
+    {
+        let b = pk.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let geo = &world.geom;
+        let mut worst: Option<(f64, String)> = None;
+        let mut note = |gap: f64, what: String| {
+            if worst.as_ref().is_none_or(|w| gap < w.0) {
+                worst = Some((gap, what));
+            }
+        };
+        for lv in 0..=geo.max_level {
+            let sp = geo.spacing_ft(lv);
+            if sp > worldgen::lod::roads::CARVE_MAX_SPACING_FT {
+                continue;
+            }
+            for pc in worldgen::lod::roads::pieces(&t0.roads, b, 0.0, sp.max(20.0)) {
+                let hw = 0.5 * pc.class.width_ft();
+                for q in pc.pts.windows(2) {
+                    note(town::geom::poly_gap(&pk.pts, &[q[0].p, q[1].p]) - hw, format!("level {lv} ({sp:.0} ft)"));
+                }
+            }
+        }
+        for (k, (pts, c, w)) in l.roads.iter().enumerate() {
+            for q in pts.windows(2) {
+                note(town::geom::poly_gap(&pk.pts, &[q[0], q[1]]) - 0.5 * w, format!("layout road {k} (class {c}, {w:.0} ft)"));
+            }
+        }
+        if let Some((gap, what)) = worst.filter(|_| pk.cemetery.is_some_and(|c| c.by_road)) {
+            if gap < town::cemetery::VERGE - 5.0 {
+                r.add(CEM_RULES[8], 1.0, format!("{here}: {gap:.1} ft from the road at {what}"));
+            }
+        }
+    }
+    let face = |pl: &town::cemetery::Plan| if pl.bound == town::cemetery::Bound::None { 0.0 } else { 1.875 };
+    for t in &pl.tombs {
+        if t.iter().any(|&q| depth(&pl.boundary, q) < 5.0 + face(&pl)) {
+            r.add(CEM_RULES[9], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+    }
+    let gap_seg = (sub(pl.gate, mul(pl.along, 0.5 * pl.gap)), add(pl.gate, mul(pl.along, 0.5 * pl.gap)));
+    for &(p, _, k, _, s) in pl.props.iter().filter(|p| p.2 == Kind::Yew) {
+        let rr = town::cemetery::YEW_R * s as f64;
+        if seg_dist(p, gap_seg.0, gap_seg.1) < rr + 10.0 || pl.walks.iter().any(|&(a, b, w)| seg_dist(p, a, b) < 0.5 * w + rr + 2.0) {
+            r.add(CEM_RULES[10], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+    }
+    let seg_poly = |t: &[P], a: P, b: P| town::geom::poly_gap(t, &[a, b]);
+    for t in &pl.tombs {
+        if pl.walks.iter().any(|&(a, b, w)| seg_poly(t, a, b) < 0.5 * w + 1.0 || contains(t, a) || contains(t, b)) {
+            r.add(CEM_RULES[0], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+        if t.iter().any(|&q| depth(&pl.boundary, q) <= 0.0) {
+            r.add(CEM_RULES[1], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+        if t.iter().any(|&q| !contains(&pk.pts, q)) {
+            r.add(CEM_RULES[2], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+    }
+    // Doors reached: a 2.5-ft grid inside the boundary (and the gate's gap), off the tombs and what
+    // blocks the way, from just inside the gate.
+    let (x0, y0, x1, y1) = pl.boundary.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    const C: f64 = 2.5;
+    let (nx, ny) = (((x1 - x0) / C) as usize + 3, ((y1 - y0) / C) as usize + 3);
+    let cell = |p: P| -> Option<usize> {
+        let (i, j) = (((p[0] - x0) / C).floor() as i64 + 1, ((p[1] - y0) / C).floor() as i64 + 1);
+        (i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize)
+    };
+    let mid = |k: usize| [x0 + ((k % nx) as f64 - 0.5) * C, y0 + ((k / nx) as f64 - 0.5) * C];
+    let blockers: Vec<(P, f64)> = pl.props.iter().filter(|p| worldgen::battlemap::info(p.2 as u16).blocks_move).map(|p| (p.0, foot(p.2, p.4))).collect();
+    let open: Vec<bool> = (0..nx * ny)
+        .map(|k| {
+            let p = mid(k);
+            (contains(&pl.boundary, p) || dist(p, pl.gate) < 0.5 * pl.gap)
+                && !pl.tombs.iter().any(|t| contains(t, p) || depth(t, p) > 0.0)
+                && !blockers.iter().any(|&(q, rr)| dist(p, q) < rr)
+        })
+        .collect();
+    let mut seen = vec![false; nx * ny];
+    if let Some(s0) = cell(add(pl.gate, mul(pl.inward, 1.5))).filter(|&k| open[k]) {
+        let mut q = VecDeque::from([s0]);
+        seen[s0] = true;
+        while let Some(k) = q.pop_front() {
+            let (x, y) = ((k % nx) as i64, (k / nx) as i64);
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (a, b) = (x + dx, y + dy);
+                if a < 0 || b < 0 || a >= nx as i64 || b >= ny as i64 {
+                    continue;
+                }
+                let n = b as usize * nx + a as usize;
+                if !seen[n] && open[n] {
+                    seen[n] = true;
+                    q.push_back(n);
+                }
+            }
+        }
+    }
+    for t in &pl.tombs {
+        let door = lerp(t[0], t[1], 0.5);
+        let out = sub(door, town::geom::mean(t));
+        let front = add(door, mul(out, 2.0 / len(out).max(1e-9)));
+        if !cell(front).is_some_and(|k| seen[k]) {
+            r.add(CEM_RULES[3], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+    }
+    let ks: Vec<(P, f64)> = pl.props.iter().filter(|p| p.2 == Kind::Kurgan).map(|p| (p.0, town::cemetery::KURGAN_R * p.4 as f64)).collect();
+    for a in 0..ks.len() {
+        for b in a + 1..ks.len() {
+            if dist(ks[a].0, ks[b].0) < ks[a].1 + ks[b].1 {
+                r.add(CEM_RULES[4], 1.0, format!("{here}: at {}", at(ks[a].0)));
+            }
+        }
+    }
+    if g <= 1 && !pl.walks.is_empty() && !pl.props.iter().any(|p| p.2 == Kind::Lychgate && dist(p.0, pl.gate) < 2.0) {
+        r.add(CEM_RULES[5], 1.0, here.clone());
+    }
+    let fi = town::catalog::index_of("tomb").map(|f| f as u16);
+    for t in &pl.tombs {
+        let Some(b) = l.buildings.iter().find(|b| b.func == fi && b.poly.len() == t.len() && b.poly.iter().zip(t).all(|(p, q)| dist(*p, *q) < 0.01)) else {
+            r.add(CEM_RULES[6], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+            continue;
+        };
+        let id = format!("b:{li}:{}", b.id);
+        let lv = interior::generate_id(world, t0, &id).and_then(|it| it.levels.get(it.entry_level).cloned());
+        let chamber = lv.as_ref().is_some_and(|lv| lv.rooms.iter().any(|q| q.kind == "tomb chamber"));
+        if !chamber {
+            r.add(CEM_RULES[7], 1.0, format!("{here}: {id}"));
+        } else if lv.is_some_and(|lv| lv.furniture.iter().any(|f| f.kind == "sarcophagus")) {
+            r.tally(&format!("{}: tombs with a sarcophagus", groups[g]), 1);
+        }
+    }
+}
+
+// R5 towns
+/// `district_edits`' counts, in order.
+const DISTRICT_COUNTS: [&str; 16] = [
+    "district edits",
+    "district edits refused",
+    "patches in no district or two after a district edit",
+    "patches not in the district they were put in",
+    "district labels outside their district",
+    "districts emptied with a label left, or with patches and none",
+    "untouched districts with their id, name, kind or patches changed",
+    "district edits giving other districts with the walls off",
+    "new districts not named as asked",
+    "renamed buildings laid out anew",
+    "renames kept with their id",
+    "renames carried",
+    "renames carried to another function",
+    "renames reported lost",
+    "renames lost without a report",
+    "district ids reused after one was emptied",
+];
+
+/// Districts drawn by hand (`patches[].district`), in up to `PLACES` towns (default 8) of four
+/// districts or more: a patch into a neighbour's district, into a far one, two into a new named
+/// one, and every patch of a small district moved out; each with the walls as generated and the
+/// other way. A patch is in one district after, where it was put; the label of a changed one is on
+/// it, an emptied one has none; the others are as generated (id, name, kind, patches) and the walls
+/// change none. Then a renamed business's patch rerolled, the castle's keep renamed and its patch
+/// rerolled, and a noted home's patch made empty: each rename and note is kept with its id, carried
+/// (`renames_carried`, to the same function) or reported (`renames_lost`), never lost silently.
+fn district_edits(base: &World, t0: &T0, r: &mut Report) {
+    use serde_json::{Value, json};
+    r.counts(&DISTRICT_COUNTS);
+    let places: usize = std::env::var("PLACES").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let with = |w: &World, ci: usize, edit: Option<worldgen::world::TownEdit>| {
+        let mut file = w.file.clone();
+        if let Some(e) = edit {
+            file.edits.towns.insert(town::wards::key(ci), e);
+        }
+        World::new(file).unwrap()
+    };
+    let qi_of = |d: &Value| d["id"].as_str().and_then(|s| s.rsplit(':').next()).and_then(|q| q.parse::<usize>().ok());
+    let summary = |plan: &Value| -> Vec<(String, String, String, Vec<u64>)> {
+        plan["districts"].as_array().into_iter().flatten().map(|d| (d["id"].as_str().unwrap_or("").to_string(), d["name"].as_str().unwrap_or("").to_string(), d["kind"].as_str().unwrap_or("").to_string(), d["patches"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect())).collect()
+    };
+    let mut done = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town) {
+        if done >= places {
+            break;
+        }
+        let Ok(plan) = town::wards::plan_json(base, t0, ci) else { continue };
+        let ds = summary(&plan);
+        if ds.len() < 4 {
+            continue;
+        }
+        done += 1;
+        let g = town::layout(base, t0, ci);
+        let n = ds.len();
+        let pats: Vec<&Value> = plan["patches"].as_array().unwrap().iter().collect();
+        let dq = |p: u64| pats.iter().find(|x| x["patch"].as_u64() == Some(p)).and_then(|x| qi_of(&x["district"]));
+        let nbs = |p: u64| pats.iter().find(|x| x["patch"].as_u64() == Some(p)).map(|x| x["neighbours"].as_array().unwrap().iter().filter_map(Value::as_u64).collect::<Vec<_>>()).unwrap_or_default();
+        let did = |q: usize| format!("d:{ci}:{q}");
+        // (name, request patches, where each should be after, a district to come out empty)
+        let mut cases: Vec<(&str, Vec<Value>, Vec<(u64, usize)>, Option<usize>)> = Vec::new();
+        let placed: Vec<(u64, usize)> = pats.iter().filter_map(|x| Some((x["patch"].as_u64()?, dq(x["patch"].as_u64()?)?))).filter(|(_, q)| ds[*q].3.len() >= 2).collect();
+        if let Some((p, b)) = placed.iter().find_map(|&(p, a)| nbs(p).into_iter().filter_map(dq).find(|&b| b != a).map(|b| (p, b))) {
+            cases.push(("into a neighbour's", vec![json!({ "patch": p, "district": did(b) })], vec![(p, b)], None));
+        }
+        if let Some((p, c)) = placed.iter().find_map(|&(p, a)| {
+            let near: Vec<usize> = nbs(p).into_iter().filter_map(dq).collect();
+            (0..n).rev().find(|&c| c != a && !near.contains(&c) && !ds[c].3.is_empty()).map(|c| (p, c))
+        }) {
+            cases.push(("into a far one", vec![json!({ "patch": p, "district": did(c) })], vec![(p, c)], None));
+        }
+        if let (Some(&(p1, a)), Some(&(p2, _))) = (placed.first(), placed.iter().rev().find(|x| x.1 != placed[0].1)) {
+            let _ = a;
+            cases.push(("two into a new one", vec![json!({ "patch": p1, "district": "Checked Ward" }), json!({ "patch": p2, "district": "checked ward" })], vec![(p1, n), (p2, n)], None));
+        }
+        if let Some(e) = (0..n).find(|&e| (1..=4).contains(&ds[e].3.len()) && ds[e].3.iter().all(|&m| nbs(m).into_iter().filter_map(dq).any(|q| q != e))) {
+            let to: Vec<(u64, usize)> = ds[e].3.iter().map(|&m| (m, nbs(m).into_iter().filter_map(dq).find(|&q| q != e).unwrap())).collect();
+            cases.push(("every patch moved out", to.iter().map(|&(m, q)| json!({ "patch": m, "district": did(q) })).collect(), to, Some(e)));
+        }
+        // (R5 towns: a new district emptied, then another made: a new id, not the emptied one's.)
+        if let Some(&(p1, _)) = placed.first() {
+            let step = |w: &World, d: &str| -> Option<Option<worldgen::world::TownEdit>> {
+                let req: town::wards::TownRequest = serde_json::from_value(json!({ "patches": [{ "patch": p1, "district": d }] })).ok()?;
+                town::wards::change(w, t0, ci, &req).ok().map(|x| x.0)
+            };
+            let got = step(base, "Checked Ward").flatten().and_then(|e1| {
+                let w1 = with(base, ci, Some(e1));
+                let w2 = with(base, ci, step(&w1, "auto")?);
+                let w3 = with(base, ci, step(&w2, "Later Ward")??.into());
+                let plan3 = town::wards::plan_json(&w3, t0, ci).ok()?;
+                plan3["patches"].as_array()?.iter().find(|x| x["patch"].as_u64() == Some(p1)).and_then(|x| x["district"]["id"].as_str().map(str::to_string))
+            });
+            r.tally("district ids checked after one was emptied", 1);
+            if got.as_deref() != Some(did(n + 1).as_str()) {
+                r.add("district ids reused after one was emptied", 1.0, format!("#{ci}: patch {p1} in {got:?}, not {}", did(n + 1)));
+            }
+        }
+        let walled = plan["walls"]["built"].as_bool().unwrap_or(false);
+        for (name, req, want, emptied) in cases {
+            let tag = format!("#{ci} {name}");
+            let mut outs: Vec<Vec<(String, String, String, Vec<u64>)>> = Vec::new();
+            for walls in [None, Some(!walled)] {
+                let mut rq = json!({ "patches": req });
+                if let Some(w) = walls {
+                    rq["walls"] = json!(w);
+                }
+                r.tally("district edits", 1);
+                let req: town::wards::TownRequest = serde_json::from_value(rq).unwrap();
+                let edit = match town::wards::change(base, t0, ci, &req) {
+                    Ok((Some(e), _)) => e,
+                    Ok((None, _)) => {
+                        r.add("district edits refused", 1.0, format!("{tag}: no edit"));
+                        continue;
+                    }
+                    Err(why) => {
+                        r.add("district edits refused", 1.0, format!("{tag}: {why}"));
+                        continue;
+                    }
+                };
+                let w = with(base, ci, Some(edit));
+                let (plan2, l) = (town::wards::plan_json(&w, t0, ci).unwrap(), town::layout(&w, t0, ci));
+                let d2 = summary(&plan2);
+                let tag = format!("{tag} walls {}", if walls.is_some() { "toggled" } else { "as generated" });
+                // One district each.
+                let mut count: BTreeMap<u64, usize> = BTreeMap::new();
+                for (_, _, _, m) in &d2 {
+                    for &p in m {
+                        *count.entry(p).or_default() += 1;
+                    }
+                }
+                for (p, _) in placed.iter().chain(&want) {
+                    let k = count.get(p).copied().unwrap_or(0);
+                    if k != 1 {
+                        r.add("patches in no district or two after a district edit", 1.0, format!("{tag}: patch {p} in {k}"));
+                    }
+                }
+                if count.values().any(|&k| k > 1) {
+                    r.add("patches in no district or two after a district edit", 1.0, format!("{tag}: a patch in two"));
+                }
+                for &(p, q) in &want {
+                    if !d2.get(q).is_some_and(|d| d.3.contains(&p)) {
+                        r.add("patches not in the district they were put in", 1.0, format!("{tag}: patch {p} not in d:{ci}:{q}"));
+                    }
+                }
+                if name == "two into a new one" && (d2.get(n).is_none_or(|d| d.1 != "Checked Ward") || l.quarters.get(n).is_none_or(|q| q.name != "Checked Ward") || d2.len() != n + 1) {
+                    r.add("new districts not named as asked", 1.0, format!("{tag}: {:?}", d2.get(n).map(|d| &d.1)));
+                }
+                // Labels: on a changed district, none on an emptied one.
+                for (qi, q) in l.quarters.iter().enumerate() {
+                    let changed = plan2["districts"][qi]["changed"] == true || plan2["districts"][qi]["by_hand"] == true;
+                    if q.patches.is_empty() != q.label.is_empty() || (Some(qi) == emptied && !q.patches.is_empty()) {
+                        r.add("districts emptied with a label left, or with patches and none", 1.0, format!("{tag}: d:{ci}:{qi} {} patches, {} label points", q.patches.len(), q.label.len()));
+                    }
+                    if changed && !q.label.is_empty() {
+                        let mid = q.label[q.label.len() / 2];
+                        let off = q.patches.iter().map(|poly| if contains(poly, mid) { 0.0 } else { poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| seg_dist(mid, *a, *b)).fold(f64::MAX, f64::min) }).fold(f64::MAX, f64::min);
+                        if off > 15.0 {
+                            r.add("district labels outside their district", off, format!("{tag}: d:{ci}:{qi} label {off:.0} ft out at {}", at(mid)));
+                        }
+                    }
+                    // The rest as generated (their labels too, with the walls as generated: one
+                    // over a park moves off its middle as the park is laid out).
+                    if qi < n && !changed && (d2[qi] != ds[qi] || g.quarters.get(qi).is_none_or(|o| o.name != q.name || o.kind != q.kind || (walls.is_none() && o.label != q.label))) {
+                        r.add("untouched districts with their id, name, kind or patches changed", 1.0, format!("{tag}: d:{ci}:{qi} {:?} -> {:?}", ds[qi], d2[qi]));
+                    }
+                }
+                outs.push(d2);
+            }
+            if outs.len() == 2 && outs[0] != outs[1] {
+                r.add("district edits giving other districts with the walls off", 1.0, format!("{tag}: districts differ"));
+            }
+        }
+        // Renames and notes kept when a patch is laid out anew.
+        let corner: BTreeMap<u64, P> = plan["corners"].as_array().unwrap().iter().map(|c| (c["corner"].as_u64().unwrap(), [c["at"][0].as_f64().unwrap(), c["at"][1].as_f64().unwrap()])).collect();
+        let patch_of = |p: P| pats.iter().find(|x| contains(&x["corners"].as_array().unwrap().iter().filter_map(|v| corner.get(&v.as_u64()?).copied()).collect::<Vec<_>>(), p)).and_then(|x| x["patch"].as_u64());
+        let castle = town::catalog::index_of("castle").map(|c| c as u16);
+        let business = g.buildings.iter().find(|b| b.func.is_some() && b.func != castle && b.keep.is_none() && patch_of(centroid(&b.poly)).is_some_and(|p| pats.iter().any(|x| x["patch"].as_u64() == Some(p) && x["in_town"] == true)));
+        let keep = g.buildings.iter().find(|b| b.keep.is_some());
+        let home = g.buildings.iter().find(|b| b.func.is_none() && b.structure == town::Structure::Roofed && patch_of(centroid(&b.poly)).is_some_and(|p| pats.iter().any(|x| x["patch"].as_u64() == Some(p) && x["in_town"] == true && x["ward"] == "common")));
+        let mut f2: Vec<(&str, &town::Building, Value, bool)> = Vec::new();
+        for (what, b, note) in [("a renamed business rerolled", business, false), ("the castle's keep renamed, rerolled", keep, false), ("a noted home's patch made empty", home, true)] {
+            let Some(b) = b else { continue };
+            let Some(p) = patch_of(centroid(&b.poly)) else { continue };
+            let req = if note { json!({ "patches": [{ "patch": p, "ward": "empty" }] }) } else { json!({ "patches": [{ "patch": p, "reroll": true }] }) };
+            f2.push((what, b, req, note));
+        }
+        for (what, b, req, note) in f2 {
+            let tag = format!("#{ci} {what}");
+            let key = format!("b:{ci}:{}", b.id);
+            let mut file = base.file.clone();
+            if note {
+                file.edits.notes.insert(key.clone(), worldgen::world::Note { text: "Checked note".into(), tags: Vec::new() });
+            } else {
+                file.edits.renames.insert(key.clone(), "Checked Name".into());
+            }
+            let w1 = World::new(file).unwrap();
+            let req: town::wards::TownRequest = serde_json::from_value(req).unwrap();
+            let Ok((edit, rep)) = town::wards::change(&w1, t0, ci, &req) else { continue };
+            let after = town::layout(&with(&w1, ci, edit), t0, ci);
+            r.tally("renamed buildings laid out anew", 1);
+            let listed = |k: &str, field: &str| rep[k].as_array().into_iter().flatten().find(|x| x[field] == key.as_str()).cloned();
+            if after.buildings.iter().any(|x| x.id == b.id) {
+                r.tally("renames kept with their id", 1);
+            } else if let Some(c) = listed("renames_carried", "from") {
+                r.tally("renames carried", 1);
+                let to: u32 = c["to"].as_str().and_then(|s| s.rsplit(':').next()).and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
+                let nb = after.buildings.iter().find(|x| x.id == to);
+                let ok = nb.is_some_and(|x| x.func == b.func || (b.keep.is_some() && x.keep.is_some()));
+                if !ok {
+                    r.add("renames carried to another function", 1.0, format!("{tag}: {key} -> {to}"));
+                }
+            } else if listed("renames_lost", "id").is_some() {
+                r.add("renames reported lost", 1.0, format!("{tag}: {key}"));
+            } else {
+                r.add("renames lost without a report", 1.0, format!("{tag}: {key} at {}", at(centroid(&b.poly))));
+            }
+        }
+    }
+}
+
+// R5 towns (M16b): squares, parks and gates (`town::places`).
+
+const PLACE_COUNTS: [&str; 8] = [
+    "places sharing an id",
+    "places unnamed",
+    "place labels over a wall or building",
+    "place ids moved or gone after an unrelated patch edit",
+    "place ids moved or gone with the walls toggled",
+    "generated place names changed by an edit elsewhere",
+    "gates listed while the town is unwalled",
+    "unrelated patch edits refused",
+];
+
+/// `places`: per tier, the squares, parks and gates with ids and names; that no two share an id,
+/// every one is named, no label lies over a wall or building, an edit to a patch none of them
+/// stands on moves none of their ids, nor do the walls toggled (gates aside: only while walled).
+/// Towns and up, `PLACES` of them (default 12); a few towns' places printed per tier.
+fn places(base: &World, t0: &T0, r: &mut Report) {
+    use serde_json::json;
+    use worldgen::town::places::{Place, label_blocked, of};
+    r.counts(&PLACE_COUNTS);
+    let most: usize = std::env::var("PLACES").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+    let mut shown: HashMap<&str, usize> = HashMap::new();
+    let tiers = ["village", "town", "city", "metropolis"];
+    let mut done = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town) {
+        if done >= most {
+            break;
+        }
+        done += 1;
+        let tier = tiers[t0.settlements[ci].tier as usize];
+        let l = town::layout(base, t0, ci);
+        let ps = of(base, t0, &l);
+        for k in ["square", "park", "gate"] {
+            r.tally(&format!("{tier}: {k}s"), ps.iter().filter(|p| p.kind == k).count());
+        }
+        r.tally(&format!("{tier}: labels"), ps.iter().filter(|p| !p.label.is_empty()).count());
+        r.tally(&format!("{tier}: towns"), 1);
+        let n = shown.entry(tier).or_default();
+        if *n < 2 {
+            *n += 1;
+            let list: Vec<String> = ps.iter().map(|p| format!("{} {} ({})", p.id, p.name, p.sort)).collect();
+            say!("    {tier} {ci}: {}", list.join("; "));
+        }
+        let mut ids: Vec<&str> = ps.iter().map(|p| p.id.as_str()).collect();
+        ids.sort();
+        for w in ids.windows(2).filter(|w| w[0] == w[1]) {
+            r.add("places sharing an id", 1.0, format!("{ci}: {}", w[0]));
+        }
+        for p in &ps {
+            if p.name.trim().is_empty() {
+                r.add("places unnamed", 1.0, format!("{ci}: {}", p.id));
+            }
+            if label_blocked(&l, &p.label) {
+                r.add("place labels over a wall or building", 1.0, format!("{ci}: {} {}", p.id, p.name));
+            }
+        }
+        let gates_off = |l: &Layout, ps: &[Place]| l.walls.is_empty() && ps.iter().any(|p| p.kind == "gate");
+        if gates_off(&l, &ps) {
+            r.add("gates listed while the town is unwalled", 1.0, format!("{ci}"));
+        }
+        // Each of `ps` (but those `skip` keeps out) by its id in `now`, where it was.
+        let kept = |now: &[Place], skip: &dyn Fn(&Place) -> bool, label: &str, tag: &str, r: &mut Report| {
+            for p in ps.iter().filter(|p| !skip(p)) {
+                match now.iter().find(|q| q.id == p.id) {
+                    Some(q) if dist(q.at, p.at) <= 40.0 && q.kind == p.kind => {
+                        if q.name != p.name {
+                            r.add("generated place names changed by an edit elsewhere", 1.0, format!("{ci} {tag}: {} {} -> {}", p.id, p.name, q.name));
+                        }
+                    }
+                    Some(q) => r.add(label, dist(q.at, p.at), format!("{ci} {tag}: {} moved {:.0} ft", p.id, dist(q.at, p.at))),
+                    None => r.add(label, 1.0, format!("{ci} {tag}: {} {} gone", p.id, p.name)),
+                }
+            }
+        };
+        let Ok(plan) = town::wards::plan_json(base, t0, ci) else { continue };
+        // A patch built on lots none of them stands on, nor any square at its corners, farthest
+        // from the centre among the inner ones.
+        let corner_of = |p: &Place| p.id.rsplit(':').next().and_then(|s| s.parse::<u64>().ok());
+        let used_corners: Vec<u64> = ps.iter().filter(|p| p.kind == "square").filter_map(corner_of).collect();
+        let far = plan["patches"].as_array().into_iter().flatten().filter(|x| {
+            let p = x["patch"].as_u64().unwrap_or(0) as u32;
+            matches!(x["ward"].as_str(), Some("common" | "craft" | "merchant" | "noble" | "slum")) && x["in_town"] == true
+                && !ps.iter().any(|q| q.patch == Some(p))
+                && !x["corners"].as_array().into_iter().flatten().filter_map(|c| c.as_u64()).any(|c| used_corners.contains(&c))
+        }).max_by(|a, b| {
+            let c0 = [plan["center"][0].as_f64().unwrap_or(0.0), plan["center"][1].as_f64().unwrap_or(0.0)];
+            let d = |x: &serde_json::Value| dist([x["at"][0].as_f64().unwrap_or(0.0), x["at"][1].as_f64().unwrap_or(0.0)], c0);
+            d(a).total_cmp(&d(b))
+        }).and_then(|x| Some((x["patch"].as_u64()?, if x["ward"] == "noble" { "common" } else { "noble" })));
+        if let Some((p, to)) = far {
+            let req: town::wards::TownRequest = serde_json::from_value(json!({ "patches": [{ "patch": p, "ward": to }] })).unwrap();
+            match town::wards::change(base, t0, ci, &req) {
+                Ok((Some(e), _)) => {
+                    let l2 = town::wards::with_edit(base, t0, ci, &e);
+                    // (A road's cemetery may come or go as the town's commons change.)
+                    kept(&of(base, t0, &l2), &|q| q.id.contains(":r"), "place ids moved or gone after an unrelated patch edit", &format!("patch {p} to {to}"), r);
+                }
+                Ok((None, _)) => r.add("unrelated patch edits refused", 1.0, format!("{ci}: patch {p}: no change")),
+                Err(e) => r.add("unrelated patch edits refused", 1.0, format!("{ci}: patch {p}: {e}")),
+            }
+        }
+        let walled = plan["walls"]["built"].as_bool().unwrap_or(false);
+        let req: town::wards::TownRequest = serde_json::from_value(json!({ "walls": !walled })).unwrap();
+        if let Ok((Some(e), _)) = town::wards::change(base, t0, ci, &req) {
+            let l2 = town::wards::with_edit(base, t0, ci, &e);
+            let now = of(base, t0, &l2);
+            if gates_off(&l2, &now) {
+                r.add("gates listed while the town is unwalled", 1.0, format!("{ci} walls toggled"));
+            }
+            kept(&now, &|q| q.kind == "gate" || q.id.contains(":r"), "place ids moved or gone with the walls toggled", "walls toggled", r);
+        }
+    }
+}
+
+// R5 towns
+/// Walls drawn by hand round patches (M18): per tier up to 3 towns, a ring round 3-6 patches
+/// near the middle, one round the whole old town (its own walls taken down if it has them), an
+/// open line across it. Rules (each should be 0): a road, approach or main street crossing with
+/// no gate; a ring with no way in; a building cut by a hand wall; a ring not closed; the town's
+/// own walls on or off changing a hand wall. Then gate counts.
+fn handwalls(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::handwall;
+    use worldgen::world::{Created, Edits, WorldFile};
+    const RULES: [&str; 5] = ["crossing with no gate", "ring with no way in", "building cut by a hand wall", "ring not closed", "hand wall changed by town walls on/off"];
+    r.counts(&RULES);
+    r.counts(&["hand walls refused"]);
+    let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let n = t0.settlements.len();
+    let mut towns: Vec<usize> = Vec::new();
+    for tier in [Tier::Town, Tier::City, Tier::Metropolis] {
+        towns.extend((0..n).filter(|&i| t0.settlements[i].tier == tier).take(3));
+    }
+    // (The towns with walls, taken down for the ring round the old town; toggled for the last rule.)
+    let toggle = |ci: usize, on: bool| town::wards::change(base, t0, ci, &serde_json::from_str(&format!(r#"{{"walls":{on}}}"#)).unwrap()).ok().and_then(|x| x.0);
+    let mut off = base.file.edits.clone();
+    for &ci in &towns {
+        let walled = town::wards::plan_json(base, t0, ci).is_ok_and(|p| p["walls"]["built"] == true);
+        if walled && let Some(e) = toggle(ci, false) {
+            off.towns.insert(town::wards::key(ci), e);
+        }
+    }
+    let w1 = World::new(WorldFile { edits: off.clone(), ..base.file.clone() }).unwrap();
+    // (case label, town, wall, main crossings, sides with no street)
+    let mut cases: Vec<(String, usize, Created, Vec<P>)> = Vec::new();
+    let mut bare: HashMap<String, Vec<(P, P)>> = HashMap::new();
+    for &ci in &towns {
+        let s = &t0.settlements[ci];
+        let Ok(plan) = town::wards::plan_json(&w1, t0, ci) else { continue };
+        let patches: Vec<&serde_json::Value> = plan["patches"].as_array().unwrap().iter().filter(|p| p["in_town"] == true).collect();
+        let num = |p: &serde_json::Value| p["patch"].as_u64().unwrap() as usize;
+        let at = |p: &serde_json::Value| [p["at"][0].as_f64().unwrap(), p["at"][1].as_f64().unwrap()];
+        let Some(first) = patches.iter().min_by(|a, b| dist(at(a), [s.x, s.y]).total_cmp(&dist(at(b), [s.x, s.y]))) else { continue };
+        let want = 3 + ci % 4;
+        let mut few = vec![num(first)];
+        let mut k = 0;
+        while few.len() < want && k < few.len() {
+            let p = patches.iter().find(|p| num(p) == few[k]).unwrap();
+            for nb in p["neighbours"].as_array().unwrap().iter().filter_map(|v| v.as_u64()).map(|v| v as usize) {
+                if few.len() < want && !few.contains(&nb) && patches.iter().any(|q| num(q) == nb) {
+                    few.push(nb);
+                }
+            }
+            k += 1;
+        }
+        let all: Vec<usize> = patches.iter().map(|p| num(p)).collect();
+        for (label, set) in [("ring round patches", few), ("ring round the old town", all)] {
+            match handwall::around_patches(&w1, t0, ci, &set, false) {
+                Ok(ring) => {
+                    let c = Created { kind: "wall".into(), pts: ring.pts.clone(), gates: ring.gates.clone(), closed: true, ..Default::default() };
+                    let main = ring.crossings.iter().filter(|x| x.main).map(|x| x.at).collect();
+                    r.tally(&format!("{label}: side streets closed"), ring.crossings.iter().filter(|x| !x.gate && !x.main).count());
+                    let name = format!("{label} #{ci} ({} patches)", set.len());
+                    let m = ring.pts.len();
+                    bare.insert(name.clone(), ring.bare.iter().map(|&i| (ring.pts[i], ring.pts[(i + 1) % m])).collect());
+                    cases.push((name, ci, c, main));
+                }
+                Err(e) => r.add("hand walls refused", 0.0, format!("{label} #{ci}: {e}")),
+            }
+        }
+        // (An open line across it, the first way round that stays out of the water.)
+        let half = 0.6 * town::reach(s).min(1200.0);
+        for j in 0..16 {
+            let ang = ((ci + j) % 16) as f64 * std::f64::consts::PI / 16.0;
+            let d = [ang.cos() * half, ang.sin() * half];
+            let mut c = Created { kind: "wall".into(), x: s.x, y: s.y, pts: vec![sub([s.x, s.y], d), add([s.x, s.y], d)], ..Default::default() };
+            c.id = "c:0".into();
+            if j == 15 || worldgen::agent::works_spot(&w1, t0, &c, "c:0", None).is_ok() {
+                cases.push((format!("open line #{ci}"), ci, c, Vec::new()));
+                break;
+            }
+        }
+    }
+    // Checked like a new one (`works_spot`); those it takes go in the world together.
+    let mut kept: Vec<(String, usize, Created, Vec<P>)> = Vec::new();
+    for (label, ci, mut c, main) in cases {
+        let k = c.pts.len() as f64;
+        (c.x, c.y) = (c.pts.iter().map(|q| q[0]).sum::<f64>() / k, c.pts.iter().map(|q| q[1]).sum::<f64>() / k);
+        c.id = format!("c:{}", off.created.len() + kept.len());
+        match c.check().and_then(|_| worldgen::agent::works_spot(&w1, t0, &c, &c.id, None)) {
+            Err(e) => {
+                r.add("hand walls refused", 0.0, format!("{label}: {e}"));
+                continue;
+            }
+            // (Taken away with it: `remove_in_way`.)
+            Ok(s) => {
+                let kind = label.split(" #").next().unwrap();
+                r.tally(&format!("{kind}: buildings in its way (remove_in_way)"), s.in_way.len());
+                let sides = bare.get(&label).cloned().unwrap_or_default();
+                for (id, at) in &s.in_way {
+                    if kind != "open line" && !sides.iter().any(|&(a, q)| seg_dist(*at, a, q) < 40.0) {
+                        r.add(&format!("{kind}: in its way off a side with no street"), 0.0, format!("{label}: {id} at ({:.0}, {:.0})", at[0], at[1]));
+                    }
+                }
+                for (id, at) in s.in_way {
+                    off.buildings.insert(id, worldgen::world::BuildingEdit { at, removed: true, ..Default::default() });
+                }
+            }
+        }
+        kept.push((label, ci, c, main));
+    }
+    let mut e3: Edits = off.clone();
+    e3.created.extend(kept.iter().map(|k| k.2.clone()));
+    let w3 = World::new(WorldFile { edits: e3.clone(), ..base.file.clone() }).unwrap();
+    let mut t3 = T0::from_bytes(&t0.to_bytes()).unwrap();
+    t3.apply_edits(&w3);
+    let first = n + t3.base_pois + off.created.len();
+    let look = |l: &Layout| format!("{:?}", (&l.walls, &l.towers, &l.gate_towers));
+    let mut looks: Vec<String> = Vec::new();
+    for (k, (label, ci, c, main)) in kept.iter().enumerate() {
+        let l = town::layout(&w3, &t3, first + k);
+        looks.push(look(&l));
+        let gates = handwall::gates_of(&l);
+        let kind = label.split(" #").next().unwrap();
+        r.tally(&format!("{kind}: walls"), 1);
+        r.tally(&format!("{kind}: gates"), gates.len());
+        r.value(&format!("{kind}: gates each"), gates.len() as f64, label.clone());
+        // (A gate's two towers as far apart as a generated gate's on a straight wall: 52 ft.)
+        let gt = &l.gate_towers;
+        for k in 1..gt.len() {
+            let d = dist(gt[k - 1], gt[k]);
+            if d < 60.0 {
+                r.measure(&format!("{kind}: gate towers apart (ft), least"), true, d, format!("{label} at ({:.0}, {:.0})", gt[k][0], gt[k][1]));
+            }
+        }
+        let mut crossings = handwall::road_crossings(&w3, &t3, &c.pts, c.closed);
+        crossings.extend(main.iter().copied());
+        r.tally(&format!("{kind}: road/approach/main crossings"), crossings.len());
+        for q in &crossings {
+            // (None in the water, where the wall is broken.)
+            if !gates.iter().any(|g| dist(*g, *q) < 65.0) && l.walls.iter().any(|w| w.windows(2).any(|s| seg_dist(*q, s[0], s[1]) < 30.0)) {
+                r.add("crossing with no gate", 0.0, format!("{label} at ({:.0}, {:.0})", q[0], q[1]));
+            }
+        }
+        if c.closed {
+            if gates.is_empty() {
+                r.add("ring with no way in", 0.0, label.clone());
+            }
+            let m = c.pts.len();
+            let ring: f64 = (0..m).map(|i| dist(c.pts[i], c.pts[(i + 1) % m])).sum();
+            // (Every 10 ft of it on dry ground: on a wall piece or in a gate.)
+            let (x0, y0) = c.pts.iter().fold((f64::MAX, f64::MAX), |a, p| (a.0.min(p[0]), a.1.min(p[1])));
+            let (x1, y1) = c.pts.iter().fold((f64::MIN, f64::MIN), |a, p| (a.0.max(p[0]), a.1.max(p[1])));
+            let shore = town::Shore::new(&w3, &t3, [x0, y0, x1, y1]);
+            let mut short = 0.0;
+            for i in 0..m {
+                let (a, b) = (c.pts[i], c.pts[(i + 1) % m]);
+                let k = (dist(a, b) / 10.0).ceil().max(1.0) as usize;
+                for j in 0..k {
+                    let p = lerp(a, b, (j as f64 + 0.5) / k as f64);
+                    let q = worldgen::lod::rivers::clear_of_rivers(&t3.rivers, p[0], p[1], 6.0, t3.cell_ft);
+                    let wet = shore.wet(p) || (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01;
+                    // (In a gate: between its towers, round the bend where one stands on a corner.)
+                    let gt = &l.gate_towers;
+                    let in_gate = (1..gt.len()).any(|k| dist(gt[k - 1], gt[k]) < 60.0 && dist(p, gt[k - 1]) + dist(p, gt[k]) < 128.0);
+                    let laid = l.walls.iter().any(|w| w.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 6.0)) || gates.iter().any(|g| dist(*g, p) < 32.0) || in_gate;
+                    if !wet && !laid {
+                        short += dist(a, b) / k as f64;
+                    }
+                }
+            }
+            if short > 40.0 {
+                r.add("ring not closed", short, format!("{label}: {short:.0} ft of {ring:.0} missing"));
+            }
+        }
+        // A building of its town the wall stands on (half its width, 4.5 ft, less a little).
+        let town_l = town::layout(&w3, &t3, *ci);
+        for b in &town_l.buildings {
+            let m = b.poly.len();
+            let hit = l.walls.iter().any(|w| {
+                w.windows(2).any(|s| contains(&b.poly, s[0]) || (0..m).any(|i| seg_dist(b.poly[i], s[0], s[1]) < 4.0 || seg_dist(s[0], b.poly[i], b.poly[(i + 1) % m]) < 4.0 || segs_cross(s[0], s[1], b.poly[i], b.poly[(i + 1) % m])))
+            });
+            if hit {
+                let on_bare = bare.get(label).is_some_and(|s| s.iter().any(|&(a, q)| b.poly.iter().any(|p| seg_dist(*p, a, q) < 8.0)));
+                r.add(if on_bare { "building cut (a side with no street)" } else { "building cut by a hand wall" }, 0.0, format!("{label}: b:{ci}:{}", b.id));
+            }
+        }
+    }
+    // The towns' own walls toggled: each hand wall the same.
+    let mut e4 = e3.clone();
+    for &ci in &towns {
+        let now = town::wards::plan_json(&w3, &t3, ci).is_ok_and(|p| p["walls"]["built"] == true);
+        let w = World::new(WorldFile { edits: e3.clone(), ..base.file.clone() }).unwrap();
+        if let Ok((Some(e), _)) = town::wards::change(&w, &t3, ci, &serde_json::from_str(&format!(r#"{{"walls":{}}}"#, !now)).unwrap()) {
+            e4.towns.insert(town::wards::key(ci), e);
+        }
+    }
+    let w4 = World::new(WorldFile { edits: e4, ..base.file.clone() }).unwrap();
+    for (k, (label, ..)) in kept.iter().enumerate() {
+        if look(&town::layout(&w4, &t3, first + k)) != looks[k] {
+            r.add("hand wall changed by town walls on/off", 0.0, label.clone());
+        }
+    }
+    let _ = toggle;
+}
+
+fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
+    let (d1, d2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
+    let (d3, d4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+/// Gates and towers put in a town's own wall by hand (M18b, `edit_town walls: {…}`): per tier, up
+
+/// A refusal's reason whole, for a tally: its ids and corner numbers as `…`/`N`, what it says in
+/// brackets left out.
+fn reason(why: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth = 0i32;
+    for w in why.split_whitespace() {
+        let open = w.starts_with('(');
+        if open {
+            depth += 1;
+        }
+        let shut = w.ends_with(')') || w.ends_with("),") || w.ends_with(").");
+        if depth == 0 {
+            let bare = w.trim_end_matches([',', '.', ':', ';']);
+            let id = bare.split(':').count() == 3 && bare.split(':').skip(1).all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit()));
+            let after_corner = out.last().is_some_and(|p| matches!(p.as_str(), "corner" | "corners" | "and")) && bare.bytes().all(|c| c.is_ascii_digit());
+            out.push(if id { format!("{}:…", bare.split(':').next().unwrap()) } else if after_corner { "N".into() } else { w.to_string() });
+        }
+        if shut && depth > 0 {
+            depth -= 1;
+        }
+    }
+    out.join(" ").trim_end_matches([':', ',']).to_string()
+}
+/// to 3 walled towns each get 2 gates and 3 towers, then lose one generated gate and one tower;
+/// one generated gate renamed first. Rules (each 0): a hand gate with no way through (no track
+/// from it, or one over a building), a hand gate not in the group's gatehouse form (a bent one may
+/// fall back to a square tower, tallied), a hand tower over a building, street or another tower,
+/// other `t:`/`gt:` ids moved or renames lost, walls off then on losing them.
+fn wallgates(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::gatehouse;
+    use worldgen::town::wallgates::{GATE_TOWER_ID, HAND_TOWER_ID, OTHER_TOWER_ID};
+    const RULES: [&str; 8] = [
+        "building by a gate taken out nearer the wall than the town's",
+        "hand gate with no way through",
+        "hand gate's track along the wall",
+        "hand gate not in the group's form",
+        "hand tower over a building, street or tower",
+        "other ids moved",
+        "renames lost",
+        "walls off/on losing them",
+    ];
+    const FORMS: [&str; 5] = ["square tower", "twin drums", "arched", "bent", "log"];
+    r.counts(&RULES);
+    let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let n = t0.settlements.len();
+    let ask = |w: &World, ci: usize, j: &str| town::wards::change(w, t0, ci, &serde_json::from_str(j).unwrap());
+    let with = |w: &World, ci: usize, e: Option<worldgen::world::TownEdit>| {
+        let mut f = w.file.clone();
+        match e {
+            Some(e) => f.edits.towns.insert(town::wards::key(ci), e),
+            None => f.edits.towns.remove(&town::wards::key(ci)),
+        };
+        World::new(f).unwrap()
+    };
+    let label_of = |tn: &str, ci: usize, v: u64| format!("{tn} #{ci} gate {v}");
+    let added_pts = |g: &[(String, P, String)], added: &[usize]| -> Vec<P> { g.iter().filter(|x| added.iter().any(|v| x.0.ends_with(&format!(":{v}")))).map(|x| x.1).collect() };
+    let towers_of = |l: &town::Layout| -> Vec<(usize, P, bool)> { worldgen::interior::towers(l).into_iter().enumerate().map(|(k, t)| (l.tower_id(k), t.0, t.2)).collect() };
+    let gates_of = |w: &World, l: &town::Layout| -> Vec<(String, P, String)> { town::places::of(w, t0, l).into_iter().filter(|p| p.kind == "gate").map(|p| (p.id, p.at, p.name)).collect() };
+    for tier in [Tier::Town, Tier::City, Tier::Metropolis] {
+        let towns: Vec<usize> = (0..n).filter(|&i| t0.settlements[i].tier == tier && town::wards::plan_json(base, t0, i).is_ok_and(|p| p["walls"]["built"] == true)).take(3).collect();
+        let tn = format!("{tier:?}");
+        for ci in towns {
+            let plan = town::wards::plan_json(base, t0, ci).unwrap();
+            let corners = plan["corners"].as_array().unwrap();
+            let wall: Vec<(usize, P, bool)> = corners.iter().filter(|c| c["wall"] == true).map(|c| (c["corner"].as_u64().unwrap() as usize, [c["at"][0].as_f64().unwrap(), c["at"][1].as_f64().unwrap()], c["gate"] == true)).collect();
+            let gen_gates: Vec<usize> = wall.iter().filter(|c| c.2).map(|c| c.0).collect();
+            if gen_gates.len() < 2 {
+                r.tally(&format!("{tn}: towns with under 2 gates (skipped)"), 1);
+                continue;
+            }
+            // A generated gate renamed (kept through everything).
+            let mut f = base.file.clone();
+            let kept = gen_gates[1];
+            f.edits.renames.insert(format!("gt:{ci}:{kept}"), "Basilisk Gate".into());
+            let mut w = World::new(f).unwrap();
+            let l0 = town::layout(&w, t0, ci);
+            let (t_before, g_before) = (towers_of(&l0), gates_of(&w, &l0));
+            // Two gates in, tried corner by corner, spread round the wall.
+            let mut added: Vec<usize> = Vec::new();
+            let step = (wall.len() / 10).max(1);
+            for k in (0..wall.len()).step_by(step).chain(0..wall.len()) {
+                if added.len() >= 2 {
+                    break;
+                }
+                let v = wall[k].0;
+                if wall[k].2 || added.contains(&v) {
+                    continue;
+                }
+                let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"gates_add":[{v}]}}}}"#)) else { continue };
+                for x in rep["wall"]["refused"].as_array().into_iter().flatten() {
+                    let why = x["why"].as_str().unwrap_or("");
+                    r.tally(&format!("gates refused: {}", reason(why)), 1);
+                }
+                if rep["wall"]["gates_added"].as_array().is_some_and(|a| !a.is_empty()) {
+                    added.push(v);
+                    w = with(&w, ci, e);
+                }
+            }
+            r.tally(&format!("{tn}: hand gates added"), added.len());
+            // (How far the wall bends at each gate: generated and by hand.)
+            let at_of = |v: u64| corners.iter().find(|c| c["corner"].as_u64() == Some(v)).map(|c| [c["at"][0].as_f64().unwrap(), c["at"][1].as_f64().unwrap()]);
+            for c in corners.iter().filter(|c| c["wall"] == true) {
+                let v = c["corner"].as_u64().unwrap();
+                let hand = added.contains(&(v as usize));
+                if !(hand || c["gate"] == true) {
+                    continue;
+                }
+                let nb = &c["wall_next"];
+                let (Some(a), Some(p), Some(b)) = (nb[0].as_u64().and_then(at_of), at_of(v), nb[1].as_u64().and_then(at_of)) else { continue };
+                let (u, w) = (sub(a, p), sub(b, p));
+                let cos = (u[0] * w[0] + u[1] * w[1]) / (dist(a, p) * dist(b, p)).max(1e-9);
+                let bend = 180.0 - cos.clamp(-1.0, 1.0).acos().to_degrees();
+                let who = if hand { "hand" } else { "generated" };
+                r.measure(&format!("{tn}: wall's bend at a {who} gate (deg), most"), false, bend, label_of(&tn, ci, v));
+                if bend > 20.0 {
+                    r.tally(&format!("{tn}: {who} gates on a bend over 20 deg"), 1);
+                }
+                r.tally(&format!("{tn}: {who} gates looked at for bends"), 1);
+            }
+            // Three towers along the longest sides that take one.
+            let mut sides: Vec<(f64, usize, usize)> = Vec::new();
+            for (chain_k, c) in wall.iter().enumerate() {
+                let next = &wall[(chain_k + 1) % wall.len()];
+                let d = dist(c.1, next.1);
+                sides.push((d, c.0, next.0));
+            }
+            sides.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let mut towers_added = 0;
+            for &(_, a, b) in &sides {
+                if towers_added >= 3 {
+                    break;
+                }
+                let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"towers_add":[[{a},{b},0.5]]}}}}"#)) else { continue };
+                for x in rep["wall"]["refused"].as_array().into_iter().flatten() {
+                    let why = x["why"].as_str().unwrap_or("");
+                    r.tally(&format!("towers refused: {}", reason(why)), 1);
+                }
+                if rep["wall"]["towers_added"].as_array().is_some_and(|a| !a.is_empty()) {
+                    towers_added += 1;
+                    w = with(&w, ci, e);
+                }
+            }
+            r.tally(&format!("{tn}: hand towers added"), towers_added);
+            // One generated gate out, one generated tower down.
+            let gone_gate = gen_gates[0];
+            let mut gate_out = false;
+            if let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"gates_remove":[{gone_gate}]}}}}"#)) {
+                if rep["wall"]["gates_removed"].as_array().is_some_and(|a| !a.is_empty()) {
+                    gate_out = true;
+                    w = with(&w, ci, e);
+                }
+            }
+            let gone_tower = t_before.iter().find(|t| !t.2 && t.0 < HAND_TOWER_ID as usize && t_before.iter().all(|g| !g.2 || dist(g.1, t.1) > 80.0)).map(|t| t.0);
+            if let Some(id) = gone_tower
+                && let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"towers_remove":["t:{ci}:{id}"]}}}}"#))
+                && rep["wall"]["towers_removed"].as_array().is_some_and(|a| !a.is_empty())
+            {
+                w = with(&w, ci, e);
+            }
+            let l = town::layout(&w, t0, ci);
+            let (t_after, g_after) = (towers_of(&l), gates_of(&w, &l));
+            let label = |what: &str| format!("{tn} #{ci} {what}");
+            // The gate taken out: within 150 ft of it, no building nearer the wall than the town's
+            // buildings kept there with the gate (its least), nor on the ground the gate kept clear
+            // (40 ft round it; `clear_of`). (Castles aside: their own curtains.)
+            if let Some(gone) = wall.iter().find(|c| c.0 == gone_gate).map(|c| c.1)
+                && gate_out
+            {
+                let wall_of = |l: &town::Layout, poly: &[P]| l.walls.iter().flat_map(|w| w.windows(2)).map(|t| seg_poly(t[0], t[1], poly)).fold(f64::MAX, f64::min);
+                let near = |b: &&town::Building| b.ward != Ward::Castle && b.poly.iter().any(|p| dist(*p, gone) < 150.0);
+                let keep = l0.buildings.iter().filter(near).map(|b| wall_of(&l0, &b.poly)).fold(f64::MAX, f64::min);
+                if keep < f64::MAX {
+                    r.measure("wall clearance by a generated gate (ft, its buildings within 150 ft), least", true, keep, label(&format!("gate {gone_gate}")));
+                }
+                for b in l.buildings.iter().filter(near) {
+                    let d = wall_of(&l, &b.poly);
+                    let held = b.poly.iter().any(|p| dist(*p, gone) < 40.0) || contains(&b.poly, gone);
+                    r.measure("building by a gate taken out: off the wall (ft), least", true, d, label(&format!("gate {gone_gate} b:{ci}:{}", b.id)));
+                    if d < keep - 0.5 || held {
+                        let why = if held { "on the gate's ground".to_string() } else { format!("{d:.0} ft off the wall, the town's {keep:.0}") };
+                        r.add("building by a gate taken out nearer the wall than the town's", 1.0, label(&format!("gate {gone_gate} b:{ci}:{}: {why}", b.id)));
+                    }
+                }
+            }
+            // Hand gates: a way through, the group's form.
+            let houses = gatehouse::houses(&l);
+            for &v in &added {
+                let Some((_, gp, _)) = g_after.iter().find(|g| g.0 == format!("gt:{ci}:{v}")) else {
+                    r.add("hand gate with no way through", 1.0, label(&format!("gate {v} not built")));
+                    continue;
+                };
+                let way = l.roads.iter().find(|x| x.1 == 2 && x.0.first().is_some_and(|p| dist(*p, *gp) < 2.0));
+                match way {
+                    None => r.add("hand gate with no way through", 1.0, label(&format!("gate {v}: no track out"))),
+                    Some((pts, _, wd)) => {
+                        r.measure("way out (ft), longest", false, pts.windows(2).map(|s| dist(s[0], s[1])).sum(), label(&format!("gate {v}")));
+                        let over = l.buildings.iter().find(|b| {
+                            let m = b.poly.len();
+                            pts.windows(2).skip(1).any(|s| b.poly.iter().any(|q| seg_dist(*q, s[0], s[1]) < 0.5 * wd - 1.0) || (0..m).any(|i| seg_dist(lerp(s[0], s[1], 0.5), b.poly[i], b.poly[(i + 1) % m]) < 0.5 * wd - 1.0))
+                        });
+                        if let Some(b) = over {
+                            r.add("hand gate with no way through", 1.0, label(&format!("gate {v}: track over b:{ci}:{}", b.id)));
+                        }
+                        // (Past its first 70 ft straight out: its edge 25 ft or more off the wall's
+                        // outer face, but where it joins a road already there.)
+                        let half_wall = 0.5 * l.wall_style.thickness();
+                        let mut run = 0.0;
+                        let mut worst: Option<(f64, P)> = None;
+                        for sg in pts.windows(2) {
+                            let d = dist(sg[0], sg[1]);
+                            let steps = (d / 4.0).ceil().max(1.0) as usize;
+                            for j in 0..steps {
+                                let q = lerp(sg[0], sg[1], j as f64 / steps as f64);
+                                let at = run + d * j as f64 / steps as f64;
+                                if at < 72.0 {
+                                    continue;
+                                }
+                                let by_road = l.roads.iter().filter(|x| !std::ptr::eq(&x.0, pts)).any(|x| x.0.windows(2).any(|t| seg_dist(q, t[0], t[1]) < 0.5 * x.2 + 0.5 * wd + 4.0));
+                                let gap = l.walls.iter().flat_map(|w| w.windows(2)).map(|t| seg_dist(q, t[0], t[1])).fold(f64::MAX, f64::min) - half_wall - 0.5 * wd;
+                                if !by_road && gap < 25.0 && worst.is_none_or(|w| gap < w.0) {
+                                    worst = Some((gap, q));
+                                }
+                            }
+                            run += d;
+                        }
+                        if let Some((gap, q)) = worst {
+                            r.add("hand gate's track along the wall", 1.0, label(&format!("gate {v}: {gap:.0} ft off the wall at ({:.0}, {:.0})", q[0], q[1])));
+                        }
+                    }
+                }
+                match houses.iter().find(|h| dist(lerp(h.a, h.b, 0.5), *gp) < 20.0) {
+                    None => r.add("hand gate not in the group's form", 1.0, label(&format!("gate {v}: no gatehouse"))),
+                    Some(h) => {
+                        r.measure("hand gate towers apart (ft), least", true, dist(h.a, h.b), label(&format!("gate {v}")));
+                        r.tally(&format!("{tn}: hand gatehouses {}", FORMS[h.form as usize]), 1);
+                        let want = l.wall_style.gatehouse;
+                        if h.form != want {
+                            if FORMS[want as usize] == "bent" && FORMS[h.form as usize] == "square tower" {
+                                r.tally("bent hand gates fallen back to a square tower", 1);
+                            } else {
+                                r.add("hand gate not in the group's form", 1.0, label(&format!("gate {v}: {} not {}", FORMS[h.form as usize], FORMS[want as usize])));
+                            }
+                        }
+                    }
+                }
+            }
+            for h in houses.iter().filter(|h| !added_pts(&g_after, &added).iter().any(|p| dist(lerp(h.a, h.b, 0.5), *p) < 20.0)) {
+                r.measure("generated gate towers apart (ft), least", true, dist(h.a, h.b), label("generated gate"));
+            }
+            // Hand towers: clear of buildings, streets crossing the wall and other towers.
+            let all = worldgen::interior::towers(&l);
+            for (k, &(id, p, _)) in t_after.iter().enumerate() {
+                if !(HAND_TOWER_ID as usize..GATE_TOWER_ID as usize).contains(&id) {
+                    continue;
+                }
+                let r0 = all[k].1;
+                let over_b = l.buildings.iter().find(|b| {
+                    let m = b.poly.len();
+                    (0..m).any(|i| seg_dist(p, b.poly[i], b.poly[(i + 1) % m]) < r0 - 1.0)
+                });
+                let over_t = t_after.iter().enumerate().find(|(j, t)| *j != k && dist(t.1, p) < r0 + all[*j].1);
+                let over_s = l.roads.iter().filter(|x| x.1 != 3).find(|x| x.0.windows(2).any(|s| seg_dist(p, s[0], s[1]) < r0 + 0.5 * x.2 - 2.0));
+                if let Some(b) = over_b {
+                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over b:{ci}:{}", b.id)));
+                } else if let Some((_, t)) = over_t {
+                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over t:{ci}:{} ({:.0} ft apart; it stood {:.0} ft off before)", t.0, dist(t.1, p), t_before.iter().find(|b| b.0 == t.0).map_or(-1.0, |b| dist(b.1, t.1)))));
+                } else if over_s.is_some() {
+                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over a road class {}", over_s.unwrap().1)));
+                }
+            }
+            // Ids: every tower but those the edits took, where it stood; every gate but the one taken out.
+            let added_at: Vec<P> = added.iter().filter_map(|v| wall.iter().find(|c| c.0 == *v).map(|c| c.1)).collect();
+            let gone_at = wall.iter().find(|c| c.0 == gone_gate).map(|c| c.1).unwrap_or([0.0; 2]);
+            // (Moved: along the wall's run; a curtain bowed anew may carry a tower out from it.)
+            let runs = &l.hand_wall.runs;
+            let along = |a: P, b: P| match (town::wallgates::run_place(runs, a), town::wallgates::run_place(runs, b)) {
+                (Some(x), Some(y)) if x.0 == y.0 => (x.1 - y.1).abs(),
+                _ => dist(a, b),
+            };
+            for &(id, p, gate) in &t_before {
+                let meant = Some(id) == gone_tower || added_at.iter().any(|a| dist(*a, p) < 90.0) || (gate && dist(gone_at, p) < 40.0);
+                match t_after.iter().find(|t| t.0 == id) {
+                    Some(t) if along(t.1, p) > 60.0 => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} moved {:.0} ft along the wall", along(t.1, p)))),
+                    Some(t) if dist(t.1, p) > 1.0 => {
+                        r.tally("towers shifted (their curtain bowed anew)", 1);
+                        r.measure("tower shifted by a curtain bowed anew (ft), most", false, dist(t.1, p), label(&format!("t:{ci}:{id}")));
+                    }
+                    None if !meant => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} gone (gate tower {gate}, {:.0} ft from the gate out; nearest now {:?})", dist(gone_at, p), t_after.iter().map(|t| (t.0, dist(t.1, p).round(), t.2)).min_by(|a, b| a.1.total_cmp(&b.1))))),
+                    _ => {}
+                }
+            }
+            for (id, p, _) in &g_before {
+                if *id == format!("gt:{ci}:{gone_gate}") {
+                    continue;
+                }
+                match g_after.iter().find(|g| g.0 == *id) {
+                    Some(g) if dist(g.1, *p) > 1.0 => r.add("other ids moved", 1.0, label(&format!("{id} moved"))),
+                    None => r.add("other ids moved", 1.0, label(&format!("{id} gone"))),
+                    _ => {}
+                }
+            }
+            if t_after.iter().any(|t| t.0 >= OTHER_TOWER_ID as usize) {
+                r.add("other ids moved", 1.0, label(&format!("{} towers matched none", t_after.iter().filter(|t| t.0 >= OTHER_TOWER_ID as usize).count())));
+            }
+            if !g_after.iter().any(|g| g.0 == format!("gt:{ci}:{kept}")) || w.file.edits.renames.get(&format!("gt:{ci}:{kept}")).is_none_or(|n| n != "Basilisk Gate") {
+                r.add("renames lost", 1.0, label(&format!("gt:{ci}:{kept}")));
+            }
+            r.tally(&format!("{tn}: towers before"), t_before.len());
+            r.tally(&format!("{tn}: towers after"), t_after.len());
+            // Walls off, then on: the same towers and gates.
+            let w2 = ask(&w, ci, r#"{"walls":false}"#).map(|(e, _)| with(&w, ci, e)).ok();
+            let w3 = w2.and_then(|w2| ask(&w2, ci, r#"{"walls":true}"#).map(|(e, _)| with(&w2, ci, e)).ok());
+            match w3 {
+                None => r.add("walls off/on losing them", 1.0, label("toggle refused")),
+                Some(w3) => {
+                    let l3 = town::layout(&w3, t0, ci);
+                    let (t3, g3) = (towers_of(&l3), gates_of(&w3, &l3));
+                    let ids = |t: &[(usize, P, bool)]| t.iter().map(|x| x.0).collect::<Vec<_>>();
+                    let gids = |g: &[(String, P, String)]| g.iter().map(|x| (x.0.clone(), x.2.clone())).collect::<Vec<_>>();
+                    if ids(&t3) != ids(&t_after) || gids(&g3) != gids(&g_after) {
+                        r.add("walls off/on losing them", 1.0, label(&format!("towers {} -> {}, gates {} -> {}", t_after.len(), t3.len(), g_after.len(), g3.len())));
+                    }
+                }
+            }
+        }
+    }
+}
+
+// R5 towns
+/// Castle pieces (M6): a castle drawn by hand (`create_feature castle`, 400 x 300 ft) beside a
+/// site drawn before it; its keep made a library and renamed, a yard building given a new trade,
+/// one taken away, one given storeys; then the earlier site deleted, then taken out of the list
+/// (the castle's layout number moves): the edits stay on the same castle. The same castle in
+/// ruins: the keep's function and name set, storeys refused. A castle's keep in a generated town
+/// takes `update_building` as before. The rules (each should be 0) are the edits not standing.
+fn castle_pieces(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::agent::{self, BuildingChange};
+    use worldgen::town::pieces;
+    use worldgen::world::{Created, WorldFile};
+    const RULES: [&str; 8] = [
+        "piece edit refused",
+        "keep's function or name not as edited",
+        "yard building's edit not standing",
+        "other pieces changed by the edits",
+        "edits not on the same castle after an earlier site went",
+        "ruined keep took storeys or lost its function or name",
+        "generated castle's keep refused or not changed",
+        "id not told apart (wrong refusal)",
+    ];
+    r.counts(&RULES);
+    let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let n = t0.settlements.len();
+    let first = n + t0.base_pois;
+    let key = |b: &town::Building| b.func.map_or("-", |f| town::catalog::CATALOG[f as usize].key);
+    // A spot for the castle: off a town, clear of buildings, roads and water.
+    let mut spot: Option<Created> = None;
+    'find: for s in t0.settlements.iter().take(40) {
+        for j in 0..8 {
+            let a = j as f64 * std::f64::consts::FRAC_PI_4;
+            let at = [s.x + 2600.0 * a.cos(), s.y + 2600.0 * a.sin()];
+            let poly = vec![[at[0] - 200.0, at[1] - 150.0], [at[0] + 200.0, at[1] - 150.0], [at[0] + 200.0, at[1] + 150.0], [at[0] - 200.0, at[1] + 150.0]];
+            let c = Created { id: "c:1".into(), kind: "castle".into(), x: at[0], y: at[1], name: "Candlekeep".into(), poly, ..Default::default() };
+            if c.check().is_ok() && agent::works_spot(base, t0, &c, "c:1", None).is_ok_and(|w| w.in_way.is_empty()) {
+                spot = Some(c);
+                break 'find;
+            }
+        }
+    }
+    let Some(castle) = spot else {
+        r.add("piece edit refused", 0.0, "no spot for a castle".into());
+        return;
+    };
+    let tower = Created { id: "c:0".into(), kind: "tower".into(), x: castle.x + 3000.0, y: castle.y, name: "Earlier Tower".into(), ..Default::default() };
+    let world_of = |created: Vec<Created>| {
+        let mut e = base.file.edits.clone();
+        e.created = created;
+        let w = World::new(WorldFile { edits: e, ..base.file.clone() }).unwrap();
+        let mut t = T0::from_bytes(&t0.to_bytes()).unwrap();
+        t.apply_edits(&w);
+        town::forget_from(first);
+        (w, t)
+    };
+    for ruin in [false, true] {
+        let label = if ruin { "ruined castle" } else { "castle" };
+        let mut c = castle.clone();
+        c.structure = ruin.then(|| "ruin".to_string());
+        let (w1, t1) = world_of(vec![tower.clone(), c.clone()]);
+        let li = first + 1;
+        let l1 = town::layout(&w1, &t1, li);
+        let Some(ki) = pieces::keep_index(&l1) else {
+            r.add("piece edit refused", 0.0, format!("{label}: no keep"));
+            continue;
+        };
+        let yard: Vec<u32> = l1.buildings.iter().enumerate().filter(|(i, _)| *i != ki).map(|(_, b)| b.id).collect();
+        r.tally(&format!("{label}s: buildings"), l1.buildings.len());
+        let kid = format!("b:{li}:{}", l1.buildings[ki].id);
+        let change = |func: Option<&str>, floors: Option<u8>| BuildingChange { func: func.map(str::to_string), floors, ..Default::default() };
+        // (keep: a library, renamed; yard 0: a temple; yard 1: taken away; yard 2: 3 storeys.)
+        let mut asks: Vec<(String, BuildingChange, Option<&str>, bool)> = vec![(kid.clone(), change(Some("library"), None), Some("The Great Library"), false)];
+        if let Some(&y) = yard.first() {
+            asks.push((format!("b:{li}:{y}"), change(Some("temple"), None), None, false));
+        }
+        if let Some(&y) = yard.get(1) {
+            asks.push((format!("b:{li}:{y}"), BuildingChange::default(), None, true));
+        }
+        if let Some(&y) = yard.get(2).filter(|_| !ruin) {
+            asks.push((format!("b:{li}:{y}"), change(None, Some(3)), None, false));
+        }
+        for (id, ch, name, remove) in &asks {
+            let Some(p) = pieces::piece_of(&w1, &t1, id) else {
+                r.add("piece edit refused", 0.0, format!("{label} {id}: not a piece ({})", pieces::not_generated(&w1, &t1, id)));
+                continue;
+            };
+            let e = if *remove { pieces::piece_removal(&p).map(Some) } else { pieces::piece_edit(&w1, &p, ch, *name) };
+            match e {
+                Ok(Some(e)) => drop(c.pieces.insert(p.key.clone(), e)),
+                Ok(None) => r.add("piece edit refused", 0.0, format!("{label} {id}: no change")),
+                Err(e) => r.add("piece edit refused", 0.0, format!("{label} {id}: {e}")),
+            }
+        }
+        // (A ruin's keep takes no storeys; the keep can't be taken away.)
+        if let Some(p) = pieces::piece_of(&w1, &t1, &kid) {
+            if ruin != pieces::piece_edit(&w1, &p, &change(None, Some(4)), None).is_err() {
+                r.add("ruined keep took storeys or lost its function or name", 0.0, format!("{label}: storeys on the keep {}", if ruin { "taken" } else { "refused" }));
+            }
+            if pieces::piece_removal(&p).is_ok() {
+                r.add("piece edit refused", 0.0, format!("{label}: the keep was taken away"));
+            }
+        }
+        let names: Vec<String> = l1.buildings.iter().map(|b| format!("{:?}", (b.id, &b.poly, b.func, &b.name, b.floors, b.structure))).collect();
+        let edited = |l: &Layout, li: usize, when: &str, r: &mut Report| {
+            let rule = if when.is_empty() { "" } else { "edits not on the same castle after an earlier site went" };
+            let k = pieces::keep_index(l).map(|i| &l.buildings[i]);
+            if !k.is_some_and(|b| key(b) == "library" && b.name.as_deref() == Some("The Great Library") && (b.structure == town::Structure::Ruin) == ruin) {
+                r.add(if rule.is_empty() { "keep's function or name not as edited" } else { rule }, 0.0, format!("{label}{when}: keep {:?}", k.map(|b| (key(b), &b.name, b.structure))));
+            }
+            if ruin && k.is_some_and(|b| b.floors != l1.buildings[ki].floors) {
+                r.add("ruined keep took storeys or lost its function or name", 0.0, format!("{label}{when}: keep storeys {:?}", k.map(|b| b.floors)));
+            }
+            let b = |y: Option<&u32>| y.and_then(|&y| l.building_index(y as usize)).map(|i| &l.buildings[i]);
+            let bad_yard = (yard.first().is_some() && !b(yard.first()).is_some_and(|b| key(b) == "temple"))
+                || (yard.get(1).is_some() && b(yard.get(1)).is_some())
+                || (!ruin && yard.get(2).is_some() && !b(yard.get(2)).is_some_and(|b| b.floors == 3));
+            if bad_yard {
+                r.add(if rule.is_empty() { "yard building's edit not standing" } else { rule }, 0.0, format!("{label}{when} (L{li})"));
+            }
+            for (o, was) in l1.buildings.iter().zip(&names) {
+                if o.id as usize == ki || yard.iter().take(3).any(|y| *y == o.id) {
+                    continue;
+                }
+                let now = l.building_index(o.id as usize).map(|i| &l.buildings[i]);
+                if now.is_none_or(|b| format!("{:?}", (b.id, &b.poly, b.func, &b.name, b.floors, b.structure)) != *was) {
+                    r.add("other pieces changed by the edits", 0.0, format!("{label}{when}: b:{li}:{}", o.id));
+                }
+            }
+            r.tally(&format!("{label}s: pieces checked"), 1);
+        };
+        let (w2, t2) = world_of(vec![tower.clone(), c.clone()]);
+        edited(&town::layout(&w2, &t2, li), li, "", r);
+        let gone = Created { removed: true, ..tower.clone() };
+        let (w3, t3) = world_of(vec![gone, c.clone()]);
+        edited(&town::layout(&w3, &t3, li), li, " (tower deleted)", r);
+        // (The earlier site out of the list: the castle is laid out one place earlier.)
+        let (w4, t4) = world_of(vec![c.clone()]);
+        let l4 = town::layout(&w4, &t4, first);
+        edited(&l4, first, " (tower out of the list)", r);
+        let k4 = format!("b:{first}:{}", l1.buildings[ki].id);
+        if !pieces::piece_of(&w4, &t4, &k4).is_some_and(|p| p.keep() && p.castle == "c:1") {
+            r.add("edits not on the same castle after an earlier site went", 0.0, format!("{label}: {k4} not the keep of c:1"));
+        }
+    }
+    // Ids told apart: the tower's, a hand castle's missing building, no such place.
+    let (w, t) = world_of(vec![tower.clone(), castle.clone()]);
+    for (id, want) in [(format!("b:{first}:0"), "a tower made by hand"), (format!("b:{}:999", first + 1), "has no building 999"), (format!("b:{}:0", town::layout_count(&t) + 5), "there is no place"), ("c:1".to_string(), "a site made by hand")] {
+        let got = agent::building_edit(&w, &t, &id, &BuildingChange::default()).err().unwrap_or_default();
+        if !got.contains(want) {
+            r.add("id not told apart (wrong refusal)", 0.0, format!("{id}: {got}"));
+        }
+    }
+    town::forget_from(first);
+    // A generated castle's keep (in a town, else a village or a site) takes update_building.
+    let mut tried = 0;
+    let mut per: HashMap<&str, usize> = HashMap::new();
+    for li in 0..first {
+        let tier = if li < n { t0.settlements[li].tier.name() } else { "site" };
+        let l = town::layout(base, t0, li);
+        let Some(ki) = pieces::keep_index(&l) else { continue };
+        *per.entry(tier).or_default() += 1;
+        if per[tier] > 2 {
+            continue;
+        }
+        let id = format!("b:{li}:{}", l.buildings[ki].id);
+        tried += 1;
+        let ok = agent::building_edit(base, t0, &id, &BuildingChange { func: Some("library".into()), ..Default::default() }).and_then(|e| {
+            let mut ed = base.file.edits.clone();
+            ed.buildings.insert(id.clone(), e.ok_or("no change")?);
+            let w = World::new(WorldFile { edits: ed, ..base.file.clone() }).unwrap();
+            let l = town::layout(&w, t0, li);
+            let now = l.building_index(l.buildings[ki].id as usize).map(|i| key(&l.buildings[i]));
+            if now == Some("library") { Ok(()) } else { Err(format!("now {now:?}")) }
+        });
+        if let Err(e) = ok {
+            r.add("generated castle's keep refused or not changed", 0.0, format!("{id} ({}): {e}", if li < n { t0.settlements[li].tier.name() } else { "site" }));
+        }
+    }
+    r.tally("generated castles' keeps changed", tried);
+    for (tier, k) in per {
+        r.tally(&format!("generated keeps: in a {tier}"), k);
+    }
+    town::forget_from(0);
+}
+
+/// R5 towns (114a): a steppe town's roofs (every steppe town and city, not a site): by material and
+/// shape, and the rule (0): clay tile or shingle on a home, a shop or a workshop.
+fn steppe_roofs(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["steppe towns", "roofed buildings", "clay tile or shingle on homes, shops, workshops"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town || l.culture % 5 != 4 {
+            continue;
+        }
+        r.add("steppe towns", 0.0, format!("seed {} layout {li} ({:?})", world.file.seed, l.tier));
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed) {
+            let k = town::roof::look(&l, b);
+            let (m, s) = (town::roof::MATERIALS[k.material as usize], town::roof::SHAPES[k.shape as usize]);
+            r.tally("roofed buildings", 1);
+            r.tally(&format!("  roofs {m} {s}"), 1);
+            let f = b.func.map(|f| &town::catalog::CATALOG[f as usize]);
+            let grand = f.is_some_and(|f| matches!(f.category, "faith & death" | "civic & military" | "guilds & underworld") || matches!(f.key, "library" | "bank" | "auction_house" | "theater" | "arena" | "bathhouse" | "bards_college" | "observatory" | "arcane_academy"));
+            if !grand && matches!(m, "clay_tile" | "shingle") {
+                r.add("clay tile or shingle on homes, shops, workshops", 0.0, format!("seed {} b:{li}:{} {}", world.file.seed, b.id, f.map_or("home", |f| f.key)));
+            }
+            if grand {
+                r.tally(&format!("  grand {m} {s}"), 1);
+            }
+        }
+    }
+}
+
+/// R5 towns (114a): steppe towns' round felt halls (`town::roof::hall_ring`: the town hall,
+/// temples, inns): built and fallen back to rectangles (why), their sizes; the rules (each 0): a
+/// hall over another building, a road or a wall; a hall's interior with squares cut off from its
+/// door or missing a piece its use needs. Doors facing a street within reach (as a yurt's); the
+/// roofs (`steppe_roofs`).
+fn steppe(ctx: &mut Ctx, r: &mut Report) {
+    use town::roof::{FeltUse, HallRefused};
+    steppe_roofs(ctx, r);
+    steppe_gaps(ctx, r);
+    r.counts(&["felt halls built", "  halls", "  temples", "  inns", "fell back: lot too small", "fell back: a castle's or a ruin"]);
+    r.counts(&["halls over another building", "halls over a road", "halls over a wall", "doors within 30 degrees of a street or square", "doors toward the centre (no street in reach)", "doors off their street"]);
+    r.counts(&["interiors with squares cut off from the door", "interiors missing a piece", "interiors not one room on one storey", "interiors not built again from their design"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let mut listed = 0;
+    let cross = |a: P, b: P, c: P, d: P| {
+        let o = |p: P, q: P, s: P| (q[0] - p[0]) * (s[1] - p[1]) - (q[1] - p[1]) * (s[0] - p[0]);
+        o(a, b, c) * o(a, b, d) < 0.0 && o(c, d, a) * o(c, d, b) < 0.0
+    };
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town || l.culture % 5 != 4 {
+            continue;
+        }
+        for b in l.buildings.iter() {
+            let Some(key) = b.func.map(|f| town::catalog::CATALOG[f as usize].key) else { continue };
+            let Some(u) = FeltUse::of_key(key) else { continue };
+            let id = format!("b:{li}:{}", b.id);
+            let tag = format!("seed {} {id} ({})", world.file.seed, u.name());
+            if town::roof::felt_built(b).is_none() {
+                match town::roof::hall_refused(&l, b) {
+                    Some(HallRefused::Small) => {
+                        let o = town::geom::obb(&b.poly);
+                        r.add("fell back: lot too small", 0.0, format!("{tag}: {:.0} x {:.0} ft", o.long, o.short));
+                    }
+                    Some(HallRefused::Pieces) => r.add("fell back: a castle's or a ruin", 0.0, tag.clone()),
+                    None => {}
+                }
+                continue;
+            }
+            r.tally("felt halls built", 1);
+            r.tally(["  halls", "  temples", "  inns"][u as usize], 1);
+            let n = b.poly.len();
+            let c = b.poly.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n as f64, a[1] + p[1] / n as f64]);
+            let rad = libm::hypot(b.poly[0][0] - c[0], b.poly[0][1] - c[1]);
+            r.value(&format!("{} across (ft)", u.name()), 2.0 * rad, tag.clone());
+            // Over another building, a road, a wall.
+            let edges = |p: &[P]| (0..p.len()).map(move |k| (p[k], p[(k + 1) % p.len()])).collect::<Vec<_>>();
+            let mine = edges(&b.poly);
+            let hit = l.buildings.iter().filter(|o| o.id != b.id && o.structure == town::Structure::Roofed && libm::hypot(o.poly[0][0] - c[0], o.poly[0][1] - c[1]) < 400.0).find(|o| {
+                o.poly.iter().any(|p| town::geom::contains(&b.poly, *p))
+                    || b.poly.iter().any(|p| town::geom::contains(&o.poly, *p))
+                    || edges(&o.poly).iter().any(|e| mine.iter().any(|m| cross(m.0, m.1, e.0, e.1)))
+            });
+            if let Some(o) = hit {
+                r.add("halls over another building", 0.0, format!("{tag}: b:{li}:{}", o.id));
+            }
+            let road = l.roads.iter().find(|(pts, _, w)| pts.windows(2).any(|s| mine.iter().any(|m| cross(m.0, m.1, s[0], s[1])) || b.poly.iter().any(|p| town::geom::seg_dist(*p, s[0], s[1]) < 0.5 * w - 0.5)));
+            if let Some((_, class, w)) = road {
+                r.add("halls over a road", 0.0, format!("{tag}: class {class}, {w:.0} ft"));
+            }
+            if l.walls.iter().any(|w| w.windows(2).any(|s| b.poly.iter().any(|p| town::geom::seg_dist(*p, s[0], s[1]) < 3.0) || mine.iter().any(|m| cross(m.0, m.1, s[0], s[1])))) {
+                r.add("halls over a wall", 0.0, tag.clone());
+            }
+            // The door: its street (as `town::yurt_door` looks for it).
+            let door = [0.5 * (b.poly[0][0] + b.poly[1][0]), 0.5 * (b.poly[0][1] + b.poly[1][1])];
+            let ang = libm::atan2(door[1] - c[1], door[0] - c[0]).to_degrees();
+            let reach = 70.0 + (rad - 15.0).max(0.0);
+            let mut near: Option<(f64, P)> = None;
+            for w in l.roads.iter().map(|w| &w.0).chain(l.streets.iter()).chain(l.plazas.iter().map(|p| &p.pts)) {
+                for e in w.windows(2) {
+                    let ab = [e[1][0] - e[0][0], e[1][1] - e[0][1]];
+                    let t = (((c[0] - e[0][0]) * ab[0] + (c[1] - e[0][1]) * ab[1]) / (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12)).clamp(0.0, 1.0);
+                    let q = [e[0][0] + ab[0] * t, e[0][1] + ab[1] * t];
+                    let d = libm::hypot(q[0] - c[0], q[1] - c[1]);
+                    if d <= reach && near.is_none_or(|b| d < b.0) {
+                        near = Some((d, q));
+                    }
+                }
+            }
+            let off = |a: f64, b: f64| ((a - b + 540.0) % 360.0 - 180.0).abs();
+            match near {
+                Some((_, q)) => {
+                    let to = libm::atan2(q[1] - c[1], q[0] - c[0]).to_degrees();
+                    if off(ang, to) <= 30.0 {
+                        r.tally("doors within 30 degrees of a street or square", 1);
+                    } else {
+                        r.add("doors off their street", off(ang, to), format!("{tag}: {:.0} degrees off", off(ang, to)));
+                    }
+                }
+                None => r.add("doors toward the centre (no street in reach)", 0.0, tag.clone()),
+            }
+            // Inside: one round room on one storey, every square not under a piece reached from the door.
+            let Some(it) = interior::generate_id(world, t0, &id) else {
+                r.add("interiors not one room on one storey", 0.0, format!("{tag}: none"));
+                continue;
+            };
+            let room = ["felt hall", "felt sanctuary", "felt common room"][u as usize];
+            let lv = &it.levels[it.entry_level.min(it.levels.len() - 1)];
+            let Some(ri) = lv.rooms.iter().position(|q| q.kind == room).filter(|_| it.levels.len() == 1 && lv.rooms.iter().filter(|q| q.squares > 0).count() == 1) else {
+                r.add("interiors not one room on one storey", 0.0, format!("{tag}: {} levels, rooms {:?}", it.levels.len(), lv.rooms.iter().map(|q| q.kind).collect::<Vec<_>>()));
+                continue;
+            };
+            let (nx, ny) = (it.nx, it.ny);
+            let mut blocked = vec![false; nx * ny];
+            for f in lv.furniture.iter().filter(|f| f.blocks_move) {
+                for j in f.y as usize..(f.y + f.h) as usize {
+                    for i in f.x as usize..(f.x + f.w) as usize {
+                        blocked[j * nx + i] = true;
+                    }
+                }
+            }
+            let walk = |k: usize| lv.cells[k] == ri as i16 && !blocked[k];
+            let start = lv.doors.iter().find(|d| d.kind == "front").and_then(|d| {
+                let (x, y) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize);
+                let pair = if d.a[0] == d.b[0] { [(x - 1, y), (x, y)] } else { [(x, y - 1), (x, y)] };
+                pair.into_iter().filter(|&(i, j)| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).map(|(i, j)| j as usize * nx + i as usize).find(|&k| walk(k))
+            });
+            let mut seen = vec![false; nx * ny];
+            let mut stack: Vec<usize> = start.into_iter().collect();
+            while let Some(k) = stack.pop() {
+                if seen[k] {
+                    continue;
+                }
+                seen[k] = true;
+                let (i, j) = (k % nx, k / nx);
+                for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                    if a < nx && b < ny && walk(b * nx + a) && !seen[b * nx + a] {
+                        stack.push(b * nx + a);
+                    }
+                }
+            }
+            let cut = (0..nx * ny).filter(|&k| walk(k) && !seen[k]).count();
+            if cut > 0 || start.is_none() {
+                r.add("interiors with squares cut off from the door", cut as f64, format!("{tag}: {cut} squares cut off{}", if start.is_none() { ", no way in" } else { "" }));
+            }
+            let needs: &[&str] = match u {
+                FeltUse::Hall => &["yurt_hearth", "low_dais", "chair_of_office", "bench"],
+                FeltUse::Temple => &["yurt_hearth", "altar", "brazier", "floor_cushion"],
+                FeltUse::Inn => &["yurt_hearth", "counter", "table", "yurt_pallet"],
+            };
+            let missing: Vec<&str> = needs.iter().copied().filter(|k| !lv.furniture.iter().any(|f| f.kind == *k)).collect();
+            if !missing.is_empty() {
+                r.add("interiors missing a piece", 0.0, format!("{tag}: no {}", missing.join(", ")));
+            }
+            for f in &lv.furniture {
+                r.tally(&format!("  {} pieces: {}", u.name(), f.kind), 1);
+            }
+            // (As a design builds it again: the same, and within the designer's rules.)
+            if let Ok((d, _)) = interior::design::design_of(world, t0, &id, false) {
+                let (built, problems) = interior::design::problems(world, t0, &id, &d).unwrap();
+                let (x, y) = (serde_json::to_string(&built).unwrap(), serde_json::to_string(&it).unwrap());
+                if x != y && std::env::var("DIFF").is_ok() {
+                    let k = x.bytes().zip(y.bytes()).position(|(a, b)| a != b).unwrap_or(0);
+                    eprintln!("{tag}: built {} / generated {}", &x[k.saturating_sub(150)..(k + 80).min(x.len())], &y[k.saturating_sub(150)..(k + 80).min(y.len())]);
+                }
+                if !problems.is_empty() || x != y {
+                    r.add("interiors not built again from their design", 0.0, format!("{tag}: {problems:?}"));
+                }
+            }
+            if listed < 12 || u == FeltUse::Hall {
+                listed += 1;
+                r.add("felt halls listed", 0.0, format!("{tag} at {:.0},{:.0}, {:.0} ft across, door {ang:.0}, {} pieces", c[0], c[1], 2.0 * rad, lv.furniture.len()));
+            }
+        }
+    }
+}
+
+/// R5 towns (114-115 fix): steppe towns' buildings against their neighbours: footprints overlapping
+/// another's (rule, 0), those within 1 ft of another building (against the base's count), and round
+/// ones (a yurt, a felt hall, a shrine) within 2 ft of another (a felt hall or yurt keeps a yard).
+fn steppe_gaps(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["footprints overlapping another building's", "buildings within 1 ft of another", "round buildings within 2 ft of another"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town || l.culture % 5 != 4 {
+            continue;
+        }
+        let bs: Vec<&town::Building> = l.buildings.iter().filter(|b| b.poly.len() >= 3).collect();
+        let boxes: Vec<[f64; 4]> = bs.iter().map(|b| bbox(&b.poly)).collect();
+        for i in 0..bs.len() {
+            let (mut over, mut near) = (None, None);
+            for j in 0..bs.len() {
+                let (a, b) = (boxes[i], boxes[j]);
+                if i == j || a[0] > b[2] + 1.0 || b[0] > a[2] + 1.0 || a[1] > b[3] + 1.0 || b[1] > a[3] + 1.0 {
+                    continue;
+                }
+                if poly_overlap(&shrink(&bs[i].poly, 0.15), &shrink(&bs[j].poly, 0.15)) {
+                    over = Some(j);
+                }
+                let n = bs[j].poly.len();
+                let d = (0..n).map(|k| seg_poly(bs[j].poly[k], bs[j].poly[(k + 1) % n], &bs[i].poly)).fold(f64::MAX, f64::min);
+                if d < 2.0 && near.is_none_or(|(_, e)| d < e) {
+                    near = Some((j, d));
+                }
+            }
+            let round = bs[i].poly.len() == town::roof::ROUND_SIDES || bs[i].poly.len() == town::roof::HALL_SIDES;
+            let tag = |j: usize| format!("seed {} b:{li}:{} ({} sides) by b:{li}:{} ({} sides)", world.file.seed, bs[i].id, bs[i].poly.len(), bs[j].id, bs[j].poly.len());
+            if let Some(j) = over.filter(|&j| j > i) {
+                r.add("footprints overlapping another building's", 0.0, tag(j));
+            }
+            if let Some((j, d)) = near {
+                if d < 1.0 {
+                    r.tally("buildings within 1 ft of another", 1);
+                }
+                if round {
+                    let (c, w) = (centroid(&bs[i].poly), world.params().width_mi * 5280.0);
+                    let h = world.params().height_mi * 5280.0;
+                    r.add("round buildings within 2 ft of another", d, format!("{}: {d:.2} ft (fx {:.5} fy {:.5})", tag(j), c[0] / w, c[1] / h));
+                }
+            }
+        }
+    }
+}
+
+// R5 towns (114)
+/// A prop's footprint (ft along its turn, across) as this check reads it, apart from the generator's.
+fn horse_foot(kind: Kind, at: P, rot: f32, scale: f32) -> Option<[P; 4]> {
+    let (l, w) = match kind {
+        // (As drawn: its sprite 2 squares nose to tail, its middle a foot ahead of where it stands.)
+        Kind::Horse => (9.8, 2.7),
+        Kind::HitchingRail => (10.0, 1.2),
+        Kind::WaterTrough => (6.8, 2.8),
+        Kind::Haystack => (7.2, 7.2),
+        Kind::Cart => (11.5, 5.5),
+        _ => return None,
+    };
+    let (l, w) = (l * scale as f64, w * scale as f64);
+    let u = [libm::cos(rot as f64), libm::sin(rot as f64)];
+    let at = if kind == Kind::Horse { add(at, mul(u, scale as f64)) } else { at };
+    let (a, b) = (mul(u, 0.5 * l), mul([-u[1], u[0]], 0.5 * w));
+    Some([sub(sub(at, a), b), sub(add(at, a), b), add(add(at, a), b), add(sub(at, a), b)])
+}
+
+/// Whether two convex outlines overlap (separating axes; touching is not).
+fn boxes_cross(a: &[P], b: &[P]) -> bool {
+    for q in [a, b] {
+        for k in 0..q.len() {
+            let e = sub(q[(k + 1) % q.len()], q[k]);
+            let ax = [-e[1], e[0]];
+            let pr = |r: &[P]| r.iter().fold((f64::MAX, f64::MIN), |s, p| (s.0.min(dot(*p, ax)), s.1.max(dot(*p, ax))));
+            let ((a0, a1), (b0, b1)) = (pr(a), pr(b));
+            if a0 >= b1 || b0 >= a1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn seg_rect(a: P, b: P, w: f64) -> [P; 4] {
+    let l = dist(a, b).max(1e-9);
+    let u = mul(sub(b, a), 1.0 / l);
+    let n = mul([-u[1], u[0]], 0.5 * w);
+    [sub(a, n), sub(b, n), add(b, n), add(a, n)]
+}
+
+const HORSE_RULES: [&str; 9] = [
+    "R Formal parks left in steppe towns",
+    "R horse parks not by hand outside steppe towns",
+    "R props overlapping props",
+    "R props over a fence",
+    "R props on a way in or in a gate",
+    "R fences across a way in",
+    "R horses outside a corral or the market ground",
+    "R props outside the park",
+    "R battlemap park squares beyond cover",
+];
+
+/// Horse parks (114): how many per steppe town, what they hold, the rules (each 0) on the plan; on the
+/// battlemap, props and fence laid against planned and the ground; a park patch set to one by hand.
+fn horseparks(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&HORSE_RULES);
+    r.counts(&["parks with under 2 corrals", "battlemap: horse props planned", "battlemap: horse props laid", "hand horse parks refused", "hand horse parks not laid"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let size = world.geom.tile_size_ft(world.geom.max_level);
+    let mut cams = 0;
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let mut look: Vec<(String, town::Park, worldgen::town::horses::Plan)> = Vec::new();
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town {
+            continue;
+        }
+        let steppe = l.culture % 5 == 4;
+        let tier = format!("{:?}", l.tier);
+        if steppe {
+            r.tally(&format!("steppe towns ({tier})"), 1);
+        }
+        for pk in &l.parks {
+            let here = format!("L{li} at {}", at(centroid(&pk.pts)));
+            if steppe && pk.kind == town::ParkKind::Formal {
+                r.add(HORSE_RULES[0], 1.0, here.clone());
+            }
+            if pk.kind != town::ParkKind::Horses {
+                if steppe {
+                    r.tally(&format!("steppe parks kept: {}", pk.kind.name()), 1);
+                }
+                continue;
+            }
+            if !steppe {
+                r.add(HORSE_RULES[1], 1.0, here.clone());
+            }
+            r.tally(&format!("horse parks ({tier})"), 1);
+            let Some(pl) = town::horses::plan(pk) else { continue };
+            check_horse_park(pk, &pl, &here, r);
+            if look.len() < 10 {
+                look.push((here.clone(), pk.clone(), pl.clone()));
+            }
+            if cams < 4 {
+                let c = centroid(&pk.pts);
+                cams += 1;
+                say!("    camera {here}: fx {:.6} fy {:.6}", c[0] / mw, c[1] / mh);
+            }
+        }
+    }
+    // A park patch set to horses by hand (not a steppe town), walls as they are.
+    let mut tried = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town && t0.settlements[i].culture % 5 != 4) {
+        if tried >= 2 {
+            break;
+        }
+        let Ok(plan) = town::wards::plan_json(world, t0, ci) else { continue };
+        let pick = plan["patches"].as_array().unwrap().iter().find(|p| p["in_town"] == true && p.get("park_refused").is_none() && !matches!(p["ward"].as_str(), Some("plaza" | "castle" | "temple"))).and_then(|p| p["patch"].as_u64());
+        let Some(p) = pick else { continue };
+        tried += 1;
+        let json = format!(r#"{{"patches":[{{"patch":{p},"ward":"park","park":"horses"}}]}}"#);
+        let Ok((Some(edit), _)) = town::wards::change(world, t0, ci, &serde_json::from_str(&json).unwrap()) else {
+            r.add("hand horse parks refused", 1.0, format!("#{ci} patch {p}"));
+            continue;
+        };
+        let mut file = world.file.clone();
+        file.edits.towns.insert(town::wards::key(ci), edit);
+        let w2 = World::new(file).unwrap();
+        let l = town::layout(&w2, t0, ci);
+        let at_p = plan["patches"].as_array().unwrap().iter().find(|q| q["patch"].as_u64() == Some(p)).map(|q| [q["at"][0].as_f64().unwrap(), q["at"][1].as_f64().unwrap()]).unwrap();
+        match l.parks.iter().find(|pk| pk.kind == town::ParkKind::Horses && dist(centroid(&pk.pts), at_p) < 200.0) {
+            Some(pk) => {
+                r.tally("hand horse parks", 1);
+                let here = format!("hand #{ci} patch {p}");
+                if let Some(pl) = town::horses::plan(pk) {
+                    check_horse_park(pk, &pl, &here, r);
+                }
+                let c = centroid(&pk.pts);
+                say!("    camera {here}: fx {:.6} fy {:.6}", c[0] / mw, c[1] / mh);
+            }
+            None => r.add("hand horse parks not laid", 1.0, format!("#{ci} patch {p}")),
+        }
+    }
+    for (here, pk, pl) in &look {
+        let b = pk.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let (mut laid, mut fence, mut dirt, mut squares, mut far) = (0usize, 0.0f64, 0usize, 0usize, 0usize);
+        for ky in k(b[1])..=k(b[3]) {
+            for kx in k(b[0])..=k(b[2]) {
+                let c = ctx.chunk(kx, ky);
+                let (ox, oy) = (kx as f64 * size, ky as f64 * size);
+                for o in &c.objects {
+                    let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+                    if contains(&pk.pts, p) && matches!(o.kind, Kind::Horse | Kind::HitchingRail | Kind::WaterTrough | Kind::Haystack | Kind::Cart) {
+                        laid += 1;
+                    }
+                    // (Anything else, or more than planned: what the battlemap's guarantee added.)
+                    if contains(&pk.pts, p) && !pl.props.iter().any(|q| q.2 == o.kind && dist(q.0, p) < 0.5) {
+                        let f = horse_foot(o.kind, p, o.rot, o.scale).unwrap_or_else(|| {
+                            let r = c.info(o).radius as f64 * o.scale as f64 * SQUARE_FT;
+                            [add(p, [-r, -r]), add(p, [r, -r]), add(p, [r, r]), add(p, [-r, r])]
+                        });
+                        let over = pl.props.iter().filter_map(|q| horse_foot(q.2, q.0, q.1, q.4)).any(|g| boxes_cross(&f, &g));
+                        let fenced = pl.fences().iter().any(|&(a, e)| boxes_cross(&f, &seg_rect(a, e, 0.8)));
+                        r.add("battlemap: props added on a horse park", 0.0, format!("{here}: {} at {}{}{}", c.name(o), at(p), if over { ", over a planned prop" } else { "" }, if fenced { ", over a fence" } else { "" }));
+                    }
+                }
+                for s in c.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Fence && s.pts.len() >= 2) {
+                    let f = |q: [f32; 2]| [ox + q[0] as f64 * SQUARE_FT, oy + q[1] as f64 * SQUARE_FT];
+                    let (a, e) = (f(s.pts[0]), f(s.pts[1]));
+                    if contains(&pk.pts, lerp(a, e, 0.5)) {
+                        fence += dist(a, e);
+                    }
+                }
+                // (The guarantee's rise in each 16-square cell: an auction block (a dais), else a knoll.)
+                for s in c.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Dais && !s.pts.is_empty()) {
+                    if contains(&pk.pts, [ox + s.pts[0][0] as f64 * SQUARE_FT, oy + s.pts[0][1] as f64 * SQUARE_FT]) {
+                        r.tally("battlemap: daises (auction blocks)", 1);
+                    }
+                }
+                let inside = |q: usize| contains(&pk.pts, [ox + ((q % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((q / SQ) as f64 + 0.5) * SQUARE_FT]) && c.building[q] == 0;
+                if let Some(low) = (0..SQ * SQ).filter(|&q| inside(q)).map(|q| c.tier[q]).min() {
+                    r.tally("battlemap: park squares raised", (0..SQ * SQ).filter(|&q| inside(q) && c.tier[q] > low).count());
+                }
+                let gap = worldgen::battlemap::cover_distance(&c);
+                for q in 0..SQ * SQ {
+                    let p = [ox + ((q % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    if contains(&pk.pts, p) && c.water_level[q] <= c.height[q] && gap[q] > worldgen::battlemap::cover_gap(&c, q) {
+                        far += 1;
+                    }
+                    if contains(&pk.pts, p) && c.building[q] == 0 {
+                        squares += 1;
+                        dirt += (c.surface[q] == Surface::Dirt) as usize;
+                    }
+                }
+            }
+        }
+        let planned = pl.props.len();
+        let want: f64 = pl.fences().iter().map(|(a, e)| dist(*a, *e)).sum();
+        r.tally("battlemap: horse props planned", planned);
+        r.tally("battlemap: horse props laid", laid);
+        r.tally("battlemap: fence ft planned", want as usize);
+        r.tally("battlemap: fence ft laid", fence as usize);
+        r.tally("battlemap: park squares", squares);
+        r.tally("battlemap: dirt squares", dirt);
+        if far > 0 {
+            r.add("R battlemap park squares beyond cover", far as f64, format!("{here}: {far}"));
+        }
+        if laid < planned || fence + 1.0 < want {
+            r.add("battlemap: parks short of props or fence", 0.0, format!("{here}: props {laid}/{planned}, fence {fence:.0}/{want:.0} ft"));
+        }
+    }
+}
+
+fn check_horse_park(pk: &town::Park, pl: &town::horses::Plan, here: &str, r: &mut Report) {
+    use town::horses::{GATE_FT, WAY_HALF};
+    let nc = pl.corrals.len();
+    r.tally(&format!("parks with {nc} corrals"), 1);
+    if nc < 2 {
+        r.add("parks with under 2 corrals", 0.0, format!("{here}: {nc}, {:.0} sq ft", area(&pk.pts).abs()));
+    }
+    let fences = pl.fences();
+    let fence_boxes: Vec<[P; 4]> = fences.iter().map(|&(a, b)| seg_rect(a, b, 0.8)).collect();
+    let way_boxes: Vec<[P; 4]> = pl.ways.iter().filter(|w| dist(w.0, w.1) > 0.5).map(|&(a, b, _)| seg_rect(a, b, 2.0 * WAY_HALF)).collect();
+    // (A gate's opening: its gap, 2 ft either side of the fence.)
+    let gate_boxes: Vec<[P; 4]> = pl
+        .corrals
+        .iter()
+        .map(|c| {
+            let (a, b) = (c.pts[c.side], c.pts[(c.side + 1) % 4]);
+            let u = mul(sub(b, a), 1.0 / dist(a, b));
+            seg_rect(sub(c.gate, mul(u, 0.5 * GATE_FT)), add(c.gate, mul(u, 0.5 * GATE_FT)), 4.0)
+        })
+        .collect();
+    let props: Vec<(Kind, [P; 4])> = pl.props.iter().filter_map(|&(at, rot, kind, _, sc)| horse_foot(kind, at, rot, sc).map(|f| (kind, f))).collect();
+    for (kind, _) in &props {
+        r.tally(&format!("props: {}", format!("{kind:?}").to_lowercase()), 1);
+    }
+    for (i, (ka, fa)) in props.iter().enumerate() {
+        for (kb, fb) in props.iter().skip(i + 1) {
+            if boxes_cross(fa, fb) {
+                r.add(HORSE_RULES[2], 1.0, format!("{here}: {ka:?} and {kb:?} at {}", at(centroid(fa))));
+            }
+        }
+        if fence_boxes.iter().any(|f| boxes_cross(f, fa)) {
+            r.add(HORSE_RULES[3], 1.0, format!("{here}: {ka:?} at {}", at(centroid(fa))));
+        }
+        if way_boxes.iter().chain(&gate_boxes).any(|f| boxes_cross(f, fa)) {
+            r.add(HORSE_RULES[4], 1.0, format!("{here}: {ka:?} at {}", at(centroid(fa))));
+        }
+        if !fa.iter().all(|&p| contains(&pk.pts, p)) {
+            r.add(HORSE_RULES[7], 1.0, format!("{here}: {ka:?} at {}", at(centroid(fa))));
+        }
+        if *ka == Kind::Horse {
+            let pen = pl.corrals.iter().position(|c| fa.iter().all(|&p| contains(&c.pts, p)));
+            let market = fa.iter().all(|&p| contains(&pk.pts, p)) && !pl.corrals.iter().any(|c| boxes_cross(&c.pts, fa));
+            match (pen, market) {
+                (Some(_), _) => r.tally("horses in corrals", 1),
+                (None, true) => r.tally("horses on the market ground (tied, led)", 1),
+                _ => r.add(HORSE_RULES[6], 1.0, format!("{here}: at {}", at(centroid(fa)))),
+            }
+        }
+    }
+    for (k, c) in pl.corrals.iter().enumerate() {
+        let n = props.iter().filter(|(kd, f)| *kd == Kind::Horse && f.iter().all(|&p| contains(&c.pts, p))).count();
+        r.value("horses a corral", n as f64, format!("{here} corral {k}"));
+        let (w, d) = (dist(c.pts[0], c.pts[1]), dist(c.pts[0], c.pts[3]));
+        r.value("corral ft (along x in)", w * d, format!("{here} corral {k}: {w:.0} x {d:.0}"));
+        for kd in [Kind::WaterTrough, Kind::Haystack] {
+            if !props.iter().any(|(x, f)| *x == kd && f.iter().all(|&p| contains(&c.pts, p))) {
+                r.add(&format!("corrals with no {}", format!("{kd:?}").to_lowercase()), 0.0, format!("{here} corral {k}"));
+            }
+        }
+    }
+    for (a, b) in &fences {
+        if way_boxes.iter().any(|w| boxes_cross(w, &seg_rect(*a, *b, 0.8))) {
+            r.add(HORSE_RULES[5], 1.0, format!("{here}: fence at {}", at(lerp(*a, *b, 0.5))));
         }
     }
 }

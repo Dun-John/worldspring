@@ -28,6 +28,8 @@ interface KindStyle {
   /** Cities and up: the symbol always shows (other labels keep off it), the name beside it,
    * right or left, where it fits. */
   keep?: boolean;
+  /** Shown only once renamed by hand (a town's gates). */
+  renamed?: boolean;
 }
 
 type BuildingHit = Extract<Hit, { kind: 'building' }>;
@@ -98,6 +100,17 @@ const STYLES: Record<string, KindStyle> = {
   region: { ...REGION, fill: '#4e4038' },
   district: { size: 12, fill: '#6b3f2a', spacing: 3, upper: true, minPx: 160, maxPx: 3200, prio: 25 },
 };
+
+/** A town's squares, parks, cemeteries and gates (`town::places`): as districts, smaller, nearer. */
+const TOWN_PLACE: Record<string, KindStyle> = {
+  square: { size: 11, fill: '#6b3f2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 24 },
+  park: { size: 11, fill: '#3f5a2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 23 },
+  cemetery: { size: 11, fill: '#3f5a2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 23 },
+  gate: { size: 11, fill: '#5a4330', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 22, renamed: true },
+};
+
+/** A curved label's halo (px), round each letter. */
+const STROKE_W = 3;
 
 const FONT = ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif'];
 
@@ -260,8 +273,10 @@ export class Labels {
     for (const d of list) {
       if (this.items.some((it) => it.f.id === d.id) || d.path.length < 2) continue;
       const mid = d.path[Math.floor(d.path.length / 2)];
-      const f: Feature = { id: d.id, kind: 'district', name: renames[d.id] ?? d.name, x: mid[0], y: mid[1], angle: 0, extent_ft: pathLength(d.path) / 0.7, detail: `${d.kind} district` };
-      this.items.push({ f, orig: d.name, style: STYLES.district, text: null, path: d.path, glyphs: null });
+      const place = TOWN_PLACE[d.kind];
+      const kind = place ? 'town_place' : 'district';
+      const f: Feature = { id: d.id, kind, name: renames[d.id] ?? d.name, x: mid[0], y: mid[1], angle: 0, extent_ft: pathLength(d.path) / 0.7, detail: place ? d.kind : `${d.kind} district` };
+      this.items.push({ f, orig: d.name, style: place ?? STYLES.district, text: null, path: d.path, glyphs: null });
     }
     this.sort();
     this.lastZoom = NaN;
@@ -291,6 +306,8 @@ export class Labels {
     let added = 0;
     for (const h of hits) {
       if (this.placeHits.has(h.id) || !h.category) continue;
+      // (A cemetery's tombs are seen as roofs, not pinned: a pin and a name would hide them.)
+      if (/^tomb\b/i.test(h.function ?? '')) continue;
       const [color, glyph, minPx, prio] = PLACE[h.category] ?? ['#57534e', '●', 14, 20];
       this.placeHits.set(h.id, h);
       const f: Feature = { id: h.id, kind: 'place', name: buildingName(h, renames), x: h.x, y: h.y, angle: 0, extent_ft: PLACE_EXTENT_FT, detail: h.function };
@@ -511,7 +528,7 @@ export class Labels {
     const [sx, sy] = cam.worldToScreen(f.x, f.y);
     const reach = px;
     const near = sx > -reach - margin && sy > -reach - margin && sx < cam.width + reach + margin && sy < cam.height + reach + margin;
-    let show = near && px >= style.minPx && px <= style.maxPx && (!!it.glyphs || mayCreate);
+    let show = near && px >= style.minPx && px <= style.maxPx && (!!it.glyphs || mayCreate) && !(style.renamed && f.name === it.orig);
     let created = false;
     if (show && !it.glyphs) {
       it.glyphs = this.createGlyphs(it);
@@ -531,8 +548,16 @@ export class Labels {
       // (A road's box holds its letters, then the halos behind them, one each.)
       const glyphs = (it.glyphs.children as Text[]).slice(0, it.glyphW!.length);
       const widths = it.glyphW!;
-      const total = widths.reduce((a, b) => a + b, 0) + style.spacing * (glyphs.length - 1);
+      let total = widths.reduce((a, b) => a + b, 0) + style.spacing * (glyphs.length - 1);
       const lenPx = (it.pathLen ??= pathLength(path)) * cam.ppf;
+      // (A name a little long for its line set tight: letters closer by their halo, no spacing.)
+      let tight = 0;
+      let spacing = style.spacing;
+      if (total > lenPx * 1.1) {
+        tight = STROKE_W;
+        spacing = 0;
+        total -= glyphs.length * tight + style.spacing * (glyphs.length - 1);
+      }
       if (total > lenPx * 1.1) show = false;
       else {
         // A road's name at its middle, else slid along it (either way, a few name lengths) to
@@ -556,9 +581,10 @@ export class Labels {
           }
           const pos = it.road ? (d: number) => alongCum(p, p === path ? it.cum! : (it.rcum ??= cumulative(p)), d) : (d: number) => along(p, d);
           const at: [number, number, number][] = [];
-          const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+          // (Each letter's own box: a slanting name's whole frame would keep off much that it misses.)
+          const gb: Box[] = [];
           glyphs.forEach((g, k) => {
-            const sk = (s + widths[k] / 2) / cam.ppf;
+            const sk = (s + (widths[k] - tight) / 2) / cam.ppf;
             const [wx, wy, a] = pos(sk);
             let [lx, ly] = [wx, wy];
             if (it.road) {
@@ -572,16 +598,15 @@ export class Labels {
               at.push([lx, ly, ang]);
             } else at.push([wx, wy, a]);
             const [gx, gy] = cam.worldToScreen(lx, ly);
-            box[0] = Math.min(box[0], gx - r);
-            box[1] = Math.min(box[1], gy - r);
-            box[2] = Math.max(box[2], gx + r);
-            box[3] = Math.max(box[3], gy + r);
-            s += widths[k] + style.spacing;
+            gb.push([gx - r, gy - r, gx + r, gy + r]);
+            s += widths[k] - tight + spacing;
           });
-          if (it.road && (box[2] < 0 || box[3] < 0 || box[0] > cam.width || box[1] > cam.height)) continue;
-          if (boxes.hits(box)) continue;
+          if (it.road && gb.every((b) => b[2] < 0 || b[3] < 0 || b[0] > cam.width || b[1] > cam.height)) continue;
+          if (gb.some((b) => boxes.hits(b))) continue;
+          // (A park quarter's name is lettered as a park's, its kind "park": a district by its id, `d:`.)
+          if ((f.kind === 'district' || f.id.startsWith('d:')) && this.nearPlace(gb, cam, style.size)) continue;
           show = true;
-          boxes.add(box);
+          for (const b of gb) boxes.add(b);
           it.at = at;
           const all = it.glyphs.children as Text[];
           all.forEach((g, k) => {
@@ -598,6 +623,30 @@ export class Labels {
     return created;
   }
 
+  /** Whether a park's or a cemetery's name (lettered later, being of lower priority) would sit on or
+   * beside these letters of a district's: the district's then gives way, so one place has one name
+   * (a horse park filling its quarter, say). */
+  private nearPlace(gb: Box[], cam: Camera, size: number): boolean {
+    const r = 1.5 * size;
+    for (const o of this.items) {
+      if (o.f.kind !== 'town_place' || o.f.id.startsWith('d:') || !o.path || (o.f.detail !== 'park' && o.f.detail !== 'cemetery')) continue;
+      const px = o.f.extent_ft * cam.ppf;
+      if (px < o.style.minPx || px > o.style.maxPx) continue;
+      const len = (o.pathLen ??= pathLength(o.path));
+      // (Or anywhere over the place itself: a park's name runs along a short line through its middle, so
+      // within one and a half of its extents of that, or 250 ft: a horse park is 300-400 ft across.)
+      const [mx, my] = cam.worldToScreen(...(along(o.path, len / 2).slice(0, 2) as [number, number]));
+      const reach = Math.max(1.5 * px, 250 * cam.ppf) + r;
+      if (gb.some((b) => Math.hypot((b[0] + b[2]) / 2 - mx, (b[1] + b[3]) / 2 - my) < reach)) return true;
+      for (let k = 0; k <= 4; k++) {
+        const [wx, wy] = along(o.path, (len * k) / 4);
+        const [x, y] = cam.worldToScreen(wx, wy);
+        if (gb.some((b) => x > b[0] - r && y > b[1] - r && x < b[2] + r && y < b[3] + r)) return true;
+      }
+    }
+    return false;
+  }
+
   private createGlyphs(it: Placed): Container {
     const { f, style } = it;
     const label = style.upper ? f.name.toUpperCase() : f.name;
@@ -609,7 +658,7 @@ export class Labels {
       fontStyle: style.italic ? ('italic' as const) : ('normal' as const),
       fontWeight: style.bold ? ('bold' as const) : ('normal' as const),
     };
-    const stroke = { color: '#efe6cf', width: 3, join: 'round' as const };
+    const stroke = { color: '#efe6cf', width: STROKE_W, join: 'round' as const };
     const textStyle = new TextStyle({ ...opts, stroke });
     if (it.road) {
       // A road's letters sit beside it, each in full ink with every letter's halo behind all of them (a halo drawn with
@@ -734,11 +783,11 @@ export class Labels {
 
   /** Drop a town's district labels and business pins (it was laid out anew: asked for again). */
   forgetTown(layout: number) {
-    const mine = (id: string) => id.startsWith(`d:${layout}:`) || id.startsWith(`b:${layout}:`);
+    const mine = (id: string) => [`d:${layout}:`, `b:${layout}:`, `sq:${layout}:`, `gt:${layout}:`].some((p) => id.startsWith(p));
     let n = 0;
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k];
-      if (!mine(it.f.id) || (it.f.kind !== 'district' && !this.placeHits.has(it.f.id))) continue;
+      if (!mine(it.f.id) || (it.f.kind !== 'district' && it.f.kind !== 'town_place' && !this.placeHits.has(it.f.id))) continue;
       this.unletter(it);
       this.items.splice(k, 1);
       n++;
@@ -750,9 +799,10 @@ export class Labels {
     }
   }
 
-  /** Drop the business pins of these buildings (changed or taken away: asked for again). */
-  forgetPlaces(ids: Iterable<string>) {
-    const gone = new Set(ids);
+  /** Drop the business pins of these buildings (changed or taken away: asked for again). One
+   * place's all, when `ids` is a prefix (`b:<layout>:`) given as a string. */
+  forgetPlaces(ids: Iterable<string> | string) {
+    const gone = new Set(typeof ids === 'string' ? [...this.placeHits.keys()].filter((id) => id.startsWith(ids)) : ids);
     let n = 0;
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k];

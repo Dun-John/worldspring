@@ -61,6 +61,12 @@ pub(super) struct Changes {
     pub close: BTreeMap<usize, bool>,
     /// Parks laid out as a formal garden or a common, set by hand.
     pub park: BTreeMap<usize, ParkKind>,
+    /// (R5 towns) Patches put in another district, and the districts made by hand (by name, in
+    /// the order made: `districts`).
+    pub district: BTreeMap<usize, super::districts::Target>,
+    pub districts: Vec<String>,
+    /// (R5 towns, M18b) Gates and towers of the town's wall set by hand (`wallgates`).
+    pub wall: super::wallgates::WallChanges,
 }
 
 impl Changes {
@@ -172,6 +178,13 @@ const AT_CLOSE: &str = "a temple's close is at that corner: its houses face the 
 
 /// Why a garden can't be set on a patch.
 const NOT_PARK: &str = "only a park's patch is laid out as a garden: give it the park ward first";
+/// Why a patch outside the town's districts (a farm's, open country) takes none.
+const OUTSIDE_DISTRICT: &str = "a district holds the town's patches only: this one is open country, in no district";
+
+/// Whether patch `p` is in one of the town's districts as generated (in the town or its sprawl).
+fn in_a_district(plan: &TownPlan, p: usize) -> bool {
+    plan.quarters.iter().any(|(_, m)| m.contains(&p))
+}
 
 /// Why a close set on a temple's patch isn't laid out.
 const NO_ROOM: &str = "no room for a close there: the temple and churchyard must fit, with houses along at least 65% of the block's streets";
@@ -250,8 +263,9 @@ fn merge_ok(plan: &TownPlan, ward: &[Option<Ward>], p: usize, q: usize) -> Resul
 /// The changes a town edit makes to its plan (`center`: the town's, world ft), and the parts of
 /// it set aside (why).
 pub(super) fn changes(plan: &TownPlan, e: &TownEdit, center: P) -> (Changes, Vec<String>) {
-    let mut ch = Changes { walls: e.walls, ..Default::default() };
+    let mut ch = Changes { walls: e.walls, districts: e.districts.clone(), ..Default::default() };
     let mut aside = Vec::new();
+    ch.wall = super::wallgates::resolve(plan, &e.wall, center, &mut aside);
     let local = |p: [f64; 2]| sub(p, center);
     for c in &e.corners {
         match corner_ok(plan, c.v as usize, local(c.from), local(c.to)) {
@@ -294,6 +308,18 @@ pub(super) fn changes(plan: &TownPlan, e: &TownEdit, center: P) -> (Changes, Vec
         match pe.park.as_deref().map(parse_park) {
             Some(Ok(k)) => {
                 ch.park.insert(p, k);
+            }
+            Some(Err(why)) => aside.push(format!("patch {p}: {why}")),
+            None => {}
+        }
+        match pe.district.as_deref().map(|d| if !in_a_district(plan, p) { Err(OUTSIDE_DISTRICT.to_string()) } else { super::districts::parse(plan, d) }) {
+            Some(Ok(t)) => {
+                if let super::districts::Target::Named(n) = &t
+                    && !ch.districts.contains(n)
+                {
+                    ch.districts.push(n.clone());
+                }
+                ch.district.insert(p, t);
             }
             Some(Err(why)) => aside.push(format!("patch {p}: {why}")),
             None => {}
@@ -395,7 +421,7 @@ pub fn edit_of<'a>(world: &'a World, t0: &T0, index: usize) -> Option<&'a TownEd
 }
 
 /// A hash of the world and a town edit.
-fn hash_edit(world: &World, e: &TownEdit) -> u64 {
+pub(super) fn hash_edit(world: &World, e: &TownEdit) -> u64 {
     let mut h = Fnv64::default();
     h.write(&world.hash.to_le_bytes());
     for c in &e.corners {
@@ -419,6 +445,17 @@ fn hash_edit(world: &World, e: &TownEdit) -> u64 {
         h.write(&[p.close.map_or(2, |c| c as u8)]);
         h.write(p.park.as_deref().unwrap_or("-").as_bytes());
         h.write(&[0xff]);
+        // (R5 towns: only when set, so an edit without districts hashes as it did.)
+        if let Some(d) = &p.district {
+            h.write(&[0xfa]);
+            h.write(d.as_bytes());
+            h.write(&[0xff]);
+        }
+    }
+    for d in &e.districts {
+        h.write(&[0xf9]);
+        h.write(d.as_bytes());
+        h.write(&[0xff]);
     }
     h.write(&[e.walls.map_or(2, |w| w as u8), 0xfe]);
     for q in &e.squares {
@@ -429,6 +466,8 @@ fn hash_edit(world: &World, e: &TownEdit) -> u64 {
         h.write(q.kind.as_bytes());
         h.write(&[0xff]);
     }
+    // (R5 towns, M18b: only when set.)
+    super::wallgates::hash(&mut h, &e.wall);
     h.finish()
 }
 
@@ -490,6 +529,22 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
             near(cell(centroid(&ring))).find(|&g| {
                 let o = lot(&generated.buildings[g]);
                 !used[g] && o.len() == ring.len() && (0..ring.len()).any(|r| (0..ring.len()).all(|k| dist(o[k], ring[(k + r) % ring.len()]) < 0.01))
+            })
+        });
+        // (R5 towns, 115: a lot that stood as generated under a yurt, sized and set by its id and
+        // household: `yurts::ring`, its lot kept in `Layout::yurts`.)
+        let hit = hit.or_else(|| {
+            let y = generated.yurts.iter().find(|y| y.lot.len() == b.poly.len() && same(&y.lot, &b.poly))?;
+            generated.buildings.iter().position(|o| o.id == y.id).filter(|&g| !used[g])
+        });
+        // (R5 towns: a lot that stood as generated under a felt hall, its ring about the lot's widest
+        // middle, `roof::hall_ring`.)
+        let hit = hit.or_else(|| {
+            let c = super::roof::hall_centre(&b.poly);
+            near(cell(c)).find(|&g| {
+                let o = &generated.buildings[g].poly;
+                let n = o.len() as f64;
+                !used[g] && o.len() == super::roof::HALL_SIDES && dist(o.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]), c) < 0.01
             })
         });
         match hit {
@@ -556,7 +611,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
         .buildings
         .iter()
         .zip(&used)
-        .filter(|(b, u)| !**u && !super::rural::windmill(b))
+        .filter(|(b, u)| !**u && !super::rural::windmill(b) && !super::cemetery::is_tomb(b))
         .filter_map(|(b, _)| b.func.map(|f| (f as usize, centroid(&b.poly), b.id, b.name.clone(), b.ward == Ward::Castle)))
         .collect();
     // (Nearest pairs first, so each takes its own patch's before a neighbour's.)
@@ -790,6 +845,10 @@ pub fn changed_rects(a: &Layout, b: &Layout) -> Vec<[f64; 4]> {
     let things = |l: &Layout| {
         let mut out: Vec<(u64, Vec<P>)> = Vec::new();
         let mut add = |tag: u8, extra: f64, pts: &[P]| {
+            // (An emptied district has no label: nothing to draw.)
+            if pts.is_empty() {
+                return;
+            }
             let mut h = Fnv64::default();
             h.write(&[tag]);
             h.write(&extra.to_le_bytes());
@@ -915,12 +974,9 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
     let (squares, closes) = super::squares::spots(&plan, &ch, &ward, &group, &|p| built.contains(&p));
     let world_pt = |p: P| round1(add(p, center));
     let listed = |p: usize| plan.mesh.faces[p].len() >= 3 && plan.face_ok[p] && !plan.wet[p] && (p < plan.n_inner || plan.ward[p].is_some() || ward[p].is_some());
-    let mut district: FastMap<usize, usize> = FastMap::default();
-    for (qi, (_, members)) in plan.quarters.iter().enumerate() {
-        for &m in members {
-            district.insert(m, qi);
-        }
-    }
+    // (R5 towns: the districts as drawn by hand.)
+    let quarters = super::districts::of(&plan, &ch);
+    let district = super::districts::membership(&quarters);
     let edit_for = |p: usize| e.and_then(|e| e.patches.iter().find(|x| x.p as usize == p));
     let mut patches = Vec::new();
     let mut corner_used = vec![false; mesh.pos.len()];
@@ -941,7 +997,7 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         }
         if let Some(&qi) = district.get(&p) {
             let id = format!("d:{index}:{qi}");
-            v["district"] = json!({ "name": world.file.edits.renames.get(&id).cloned().unwrap_or_else(|| plan.quarters[qi].0.name.clone()), "id": id });
+            v["district"] = json!({ "name": super::districts::name_now(world, index, qi, &quarters[qi].0.name), "id": id });
         }
         if group[p] != usize::MAX && group[p] != p {
             v["lots_like"] = json!(group[p]);
@@ -981,6 +1037,10 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         if ward[p] == Some(Ward::Park) && ch.park.contains_key(&p) {
             v["park_by_hand"] = json!(true);
         }
+        // (R5 towns: a cemetery the town lays beside a road out on an outskirts' patch.)
+        if ward[p] != Some(Ward::Park) && parks.get(&p) == Some(&ParkKind::Cemetery) {
+            v["cemetery_by_road"] = json!(true);
+        }
         if ward[p] != Some(Ward::Park)
             && plan.ward[p] != Some(Ward::Park)
             && let Some(why) = plan.park_refused[p]
@@ -996,12 +1056,20 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         }
         patches.push(v);
     }
-    let gate = |v: usize| plan.gates.contains(&v);
-    let wall: Vec<bool> = {
-        let mut w = vec![false; mesh.pos.len()];
-        for (chain, _, _) in &plan.wall_runs {
-            for &v in chain {
-                w[v] = true;
+    // (R5 towns, M18b: gates put in or taken out by hand.)
+    let gate = |v: usize| {
+        let (put, out) = super::wallgates::corner_marks(e, v);
+        (plan.gates.contains(&v) && !out) || put
+    };
+    // (R5 towns, M18c: each wall corner's neighbours along the wall, null at an open run's end.)
+    let wall: Vec<Option<[Option<usize>; 2]>> = {
+        let mut w = vec![None; mesh.pos.len()];
+        for (chain, closed, _) in &plan.wall_runs {
+            let n = chain.len();
+            for (i, &v) in chain.iter().enumerate() {
+                let prev = if i > 0 { Some(chain[i - 1]) } else if *closed && n > 2 { Some(chain[n - 1]) } else { None };
+                let next = if i + 1 < n { Some(chain[i + 1]) } else if *closed && n > 2 { Some(chain[0]) } else { None };
+                w[v] = Some([prev, next]);
             }
         }
         w
@@ -1019,8 +1087,17 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             if gate(v) {
                 c["gate"] = json!(true);
             }
-            if wall[v] {
+            match super::wallgates::corner_marks(e, v) {
+                (true, _) => c["gate_by_hand"] = json!(true),
+                (_, true) => c["gate_removed"] = json!(true),
+                _ => {}
+            }
+            if let Some(nb) = wall[v] {
                 c["wall"] = json!(true);
+                c["wall_next"] = json!(nb);
+                if super::wallgates::tower_down(world, t0, index, e, v, world_pt(mesh.pos[v])) {
+                    c["tower_removed"] = json!(true);
+                }
             }
             if super::squares::junction(&plan, &ward, &group, v) {
                 if super::squares::at_close(&plan, v, &closes) {
@@ -1041,15 +1118,29 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             c
         })
         .collect();
+    let mut walls_json = json!({ "built": ch.walls.unwrap_or(plan.walled), "generated": plan.walled });
+    if let Some(h) = super::wallgates::plan_json(world, t0, index, e) {
+        walls_json["by_hand"] = h;
+    }
     Ok(json!({
         "layout": index,
         "center": round1(center),
         "max_move_ft": crate::core::round(plan.spacing),
-        "walls": { "built": ch.walls.unwrap_or(plan.walled), "generated": plan.walled },
+        "walls": walls_json,
         "edited": e.is_some(),
         "patches": patches,
         "corners": corners,
+        "districts": quarters.iter().enumerate().map(|(qi, (q, m, touched))| {
+            let mut d = json!({ "id": format!("d:{index}:{qi}"), "name": super::districts::name_now(world, index, qi, &q.name), "kind": q.kind.name(), "patches": m });
+            if qi >= plan.quarters.len() {
+                d["by_hand"] = json!(true);
+            } else if *touched {
+                d["changed"] = json!(true);
+            }
+            d
+        }).collect::<Vec<_>>(),
         "set_aside": aside,
+        "places": super::places::plan_json(world, t0, index),
     }))
 }
 
@@ -1126,6 +1217,10 @@ pub struct PatchRequest {
     /// A park's patch laid out as a garden (`PARK_KINDS`) or "auto".
     #[serde(default)]
     pub park: Option<String>,
+    /// (R5 towns) The district it goes in: a district's id (`d:<layout>:<n>`), a name (a new
+    /// district, or the one of that name) or "auto".
+    #[serde(default)]
+    pub district: Option<String>,
     #[serde(default)]
     pub as_generated: bool,
 }
@@ -1146,12 +1241,17 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     let center = [s.x, s.y];
     let local = |p: [f64; 2]| sub(p, center);
     let world_pt = |p: P| add(p, center);
-    let mut e = edit_of(world, t0, index).cloned().unwrap_or_default();
+    // (R5 towns: an edit kept for its emptied districts alone, changing nothing, still holds their ids.)
+    let kept = || world.file.edits.towns.get(&key(index)).filter(|e| !e.districts.is_empty() && dist(e.at, center) <= TownEdit::SAME_AT_FT);
+    let mut e = edit_of(world, t0, index).or_else(kept).cloned().unwrap_or_default();
     // Keep only what still applies (a stale part would be set aside anyway).
     let (ch, _) = changes(&plan, &e, center);
     let mut moves: BTreeMap<usize, P> = ch.moves.iter().copied().collect();
+    // (R5 towns: the districts and patches as they stand, for what the change moves.)
+    let (districts_before, moves_before) = (super::districts::of(&plan, &ch), ch.moves.clone());
     e.patches.retain(|pe| patch_here(&plan, pe.p as usize, local(pe.at)).is_ok());
     e.squares.retain(|se| square_here(&plan, se.v as usize, local(se.at)).is_ok() && parse_square(&se.kind).is_ok());
+    super::wallgates::keep_live(&plan, center, &mut e.wall);
     match req.reset.as_deref() {
         None => {}
         Some("all") => {
@@ -1159,11 +1259,16 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             e.patches.clear();
             e.walls = None;
             e.squares.clear();
+            e.wall = Default::default();
         }
         Some("corners") => moves.clear(),
         Some("patches") => e.patches.clear(),
         Some("squares") => e.squares.clear(),
-        Some(r) => return Err(format!("reset: all, corners, patches or squares, not {r}")),
+        Some("walls") => {
+            e.walls = None;
+            e.wall = Default::default();
+        }
+        Some(r) => return Err(format!("reset: all, corners, patches, squares or walls, not {r}")),
     }
     let mut asked: Vec<usize> = Vec::new();
     // Corners one by one.
@@ -1304,6 +1409,14 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             }
             Some(_) => return Err(format!("patch {p}: close: true, false or \"auto\"")),
         }
+        if let Some(d) = &pr.district {
+            if !in_a_district(&plan, p) && d.trim() != "auto" {
+                return Err(format!("patch {p}: {OUTSIDE_DISTRICT}"));
+            }
+            let mut d = super::districts::resolve(world, &plan, index, &mut e, p, d).map_err(|why| format!("patch {p}: {why}"))?;
+            std::mem::swap(&mut e.patches[k].district, &mut d);
+        }
+        let pe = &mut e.patches[k];
         match pr.park.as_deref() {
             None => {}
             Some("auto") => pe.park = None,
@@ -1366,11 +1479,17 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
         e.squares.push(SquareEdit { v: sr.corner, at: q64(world_pt(plan.mesh.pos[v])), kind: sr.kind.clone() });
     }
     e.squares.sort_by_key(|se| se.v);
+    let mut wall_asked = None;
     match &req.walls {
         None => {}
         Some(Value::Bool(b)) => e.walls = (*b != plan.walled).then_some(*b),
         Some(Value::String(a)) if a == "auto" => e.walls = None,
-        Some(_) => return Err("walls: true, false or \"auto\"".into()),
+        // (R5 towns, M18b: gates and towers by hand.)
+        Some(v @ Value::Object(_)) => {
+            e.corners = moves.iter().filter(|(v, to)| dist(plan.mesh.pos[**v], **to) > 0.05).map(|(&v, &to)| CornerMove { v: v as u32, from: q64(world_pt(plan.mesh.pos[v])), to: q64(world_pt(to)) }).collect();
+            wall_asked = Some(super::wallgates::request(world, t0, index, &plan, center, &mut e, v)?);
+        }
+        Some(_) => return Err("walls: true, false, \"auto\" or {built, gates_add, gates_remove, towers_add, towers_remove}".into()),
     }
     // The edit as it now stands; merges checked once every ward is set.
     e.at = q64(center);
@@ -1401,6 +1520,8 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     }
     e.patches.retain(|pe| !pe.is_noop());
     e.patches.sort_by_key(|pe| pe.p);
+    // (R5 towns: a district made by hand that no patch is in any more stays in the list, empty, so
+    // its id is never another's (its rename stays its own); the edit is kept for it alone.)
     let (ch, aside) = changes(&plan, &e, center);
     if let Some(why) = aside.first() {
         return Err(why.clone());
@@ -1462,7 +1583,30 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     if !unmerged.is_empty() {
         report["unmerged"] = json!(unmerged);
     }
-    Ok(((!e.is_noop()).then_some(e), report))
+    if let Some(a) = wall_asked {
+        report["wall"] = super::wallgates::report(world, t0, index, &before, &after, &mut e, a);
+    }
+    // (R5 towns) Patches put in another district, and renames and notes carried or lost.
+    {
+        let now = super::districts::of(&plan, &ch);
+        let (was, is) = (super::districts::membership(&districts_before), super::districts::membership(&now));
+        let mut ps: Vec<usize> = was.keys().chain(is.keys()).copied().collect();
+        ps.sort();
+        ps.dedup();
+        let id = |q: Option<&usize>| q.map(|q| format!("d:{index}:{q}"));
+        let moved: Vec<Value> = ps.iter().filter(|p| was.get(p) != is.get(p)).map(|&p| json!({ "patch": p, "from": id(was.get(&p)), "to": id(is.get(&p)) })).collect();
+        if !moved.is_empty() {
+            report["districts_changed"] = json!(moved);
+        }
+        let (carried, lost) = super::carry::renames(world, index, center, &before, &after, &moved_mesh(&plan, &moves_before), &mesh, 1.5 * plan.spacing);
+        if !carried.is_empty() {
+            report["renames_carried"] = json!(carried.iter().map(|(a, b, n)| json!({ "from": format!("b:{index}:{a}"), "to": format!("b:{index}:{b}"), "name": n })).collect::<Vec<_>>());
+        }
+        if !lost.is_empty() {
+            report["renames_lost"] = json!(lost.iter().map(|(a, n)| json!({ "id": format!("b:{index}:{a}"), "name": n })).collect::<Vec<_>>());
+        }
+    }
+    Ok(((!e.is_noop() || !e.districts.is_empty()).then_some(e), report))
 }
 
 /// `change` as JSON: `{edit, report}` or `{error}` (for the app's worker).

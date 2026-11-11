@@ -500,6 +500,53 @@ pub struct TownEdit {
     /// Squares where streets meet, set by hand.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub squares: Vec<SquareEdit>,
+    /// (R5 towns) Districts made by hand, by name, in the order they were made: each is district
+    /// `d:<layout>:<generated count + k>` (`town::districts`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub districts: Vec<String>,
+    /// (R5 towns, M18b) Gates and towers put in or taken out of the town's own wall
+    /// (`town::wallgates`).
+    #[serde(default, skip_serializing_if = "WallEdit::is_empty")]
+    pub wall: WallEdit,
+}
+
+/// Gates and towers of a town's own wall set by hand, by the plan's corners: gates put in at a
+/// wall corner or taken out (`at`: where the corner was planned), towers put up (each with its
+/// `t:` number) and taken down (by `t:` number).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct WallEdit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates_add: Vec<WallCorner>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates_remove: Vec<WallCorner>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub towers_add: Vec<HandTower>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub towers_remove: Vec<u32>,
+}
+
+impl WallEdit {
+    pub fn is_empty(&self) -> bool {
+        self.gates_add.is_empty() && self.gates_remove.is_empty() && self.towers_add.is_empty() && self.towers_remove.is_empty()
+    }
+}
+
+/// A corner of a town's wall (`v`, the plan's vertex; `at` where it was planned, world ft).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct WallCorner {
+    pub v: u32,
+    pub at: [f64; 2],
+}
+
+/// A tower put up by hand on a town's wall, `t:<layout>:<id>`: `f` of the way from wall corner
+/// `v` (planned at `at`) to its neighbour on the wall `w`.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HandTower {
+    pub id: u32,
+    pub v: u32,
+    pub w: u32,
+    pub f: f64,
+    pub at: [f64; 2],
 }
 
 /// A square set by hand at a corner where streets meet (`v`, the plan's vertex; `at` where it was
@@ -540,6 +587,10 @@ pub struct PatchEdit {
     pub close: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park: Option<String>,
+    /// (R5 towns) The district it is put in: a generated one's id (`d:<layout>:<q>`) or the name
+    /// of one made by hand (`TownEdit::districts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub district: Option<String>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -556,7 +607,7 @@ pub const LOT_SIZES: [&str; 4] = ["small", "medium", "large", "huge"];
 pub const SQUARE_KINDS: [&str; 4] = ["crossroads", "well", "fountain", "green"];
 
 /// How a park can be laid out by hand (`town::ParkKind`).
-pub const PARK_KINDS: [&str; 2] = ["formal", "common"];
+pub const PARK_KINDS: [&str; 4] = ["formal", "common", "cemetery", "horses"];
 
 impl TownEdit {
     /// How far (ft) a town, corner or patch may stand from where its edit says it was planned.
@@ -564,13 +615,13 @@ impl TownEdit {
 
     /// Whether it changes nothing.
     pub fn is_noop(&self) -> bool {
-        self.corners.is_empty() && self.patches.iter().all(PatchEdit::is_noop) && self.walls.is_none() && self.squares.is_empty()
+        self.corners.is_empty() && self.patches.iter().all(PatchEdit::is_noop) && self.walls.is_none() && self.squares.is_empty() && self.wall.is_empty()
     }
 }
 
 impl PatchEdit {
     pub fn is_noop(&self) -> bool {
-        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0 && self.close.is_none() && self.park.is_none()
+        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0 && self.close.is_none() && self.park.is_none() && self.district.is_none()
     }
 }
 
@@ -835,7 +886,8 @@ pub struct Created {
     /// Buildings lining the inside of a castle's curtain (default true).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yard_buildings: Option<bool>,
-    /// A wall's line (world ft), 2–64 corners, at most `WALL_MAX_FT` long.
+    /// A wall's line (world ft), 2–64 corners, at most `WALL_MAX_FT` long (a ring: 3–256,
+    /// `WALL_RING_MAX_FT`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pts: Vec<[f64; 2]>,
     /// A wall's corners that are gates (indices into `pts`); more gates come where roads and
@@ -855,6 +907,32 @@ pub struct Created {
     /// Deleted (kept in the list so later sites keep their place).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
+    /// (R5 towns) A castle's pieces changed by hand, kept with the castle (not by its layout
+    /// number, which moves when an earlier site is deleted): `keep` for its keep (wherever it
+    /// stands), else a yard building's id in the castle's layout (`b:<layout>:<id>`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pieces: BTreeMap<String, CastlePiece>,
+}
+
+/// (R5 towns) One of a castle's pieces changed by hand (`Created::pieces`): its looks, function
+/// and storeys as a town building's edit (`BuildingEdit`, without a footprint: `at` its middle as
+/// built, a yard building's edit held only while one stands there), and its name.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CastlePiece {
+    #[serde(flatten)]
+    pub edit: BuildingEdit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl CastlePiece {
+    /// The key of the castle's keep in `Created::pieces`.
+    pub const KEEP: &'static str = "keep";
+
+    /// Whether it changes nothing.
+    pub fn is_noop(&self) -> bool {
+        self.edit.is_noop() && self.name.is_none()
+    }
 }
 
 /// A non-player character. Every field is optional on the way in, so a partial entry from an
@@ -946,6 +1024,13 @@ pub const CASTLE_MAX_FT: f64 = 600.0;
 pub const CASTLE_MIN_FT: f64 = 80.0;
 /// Longest a wall may be (ft).
 pub const WALL_MAX_FT: f64 = 3000.0;
+/// (R5 towns, M18) Longest a closed wall (a ring) may be (ft): round a city's old town or upper
+/// city, or a metropolis' whole old town (17,500-19,900 ft round).
+pub const WALL_RING_MAX_FT: f64 = 24000.0;
+/// Most corners of a wall's line, open and closed (a ring round patches takes their corners:
+/// `town::handwall::RING_MAX_CORNERS`).
+pub const WALL_MAX_CORNERS: usize = 64;
+pub const WALL_RING_MAX_CORNERS: usize = 256;
 /// How far a castle's or wall's layout reaches past its outline (towers stand astride it).
 pub const WORKS_MARGIN_FT: f64 = 40.0;
 
@@ -1012,7 +1097,7 @@ impl Created {
         if !CREATABLE.contains(&self.kind.as_str()) {
             return Err(format!("kind must be one of {}", CREATABLE.join(", ")));
         }
-        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed;
+        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
         match self.kind.as_str() {
             "building" if works => return Err("gate, keep, yard_buildings, pts, gates and closed are for castles and walls".into()),
             "building" => return self.check_building(),
@@ -1148,6 +1233,15 @@ impl Created {
         {
             return Err(format!("structure must be one of {}", STRUCTURES.join(", ")));
         }
+        for (k, piece) in &self.pieces {
+            if k != CastlePiece::KEEP && k.parse::<u32>().is_err() {
+                return Err(format!("pieces: {k} is neither keep nor a building's number"));
+            }
+            if !piece.edit.poly.is_empty() {
+                return Err("a castle's pieces keep their footprints: redraw the castle instead".into());
+            }
+            piece.edit.check()?;
+        }
         Ok(())
     }
 
@@ -1157,12 +1251,13 @@ impl Created {
         if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() {
             return Err("a wall takes its line (pts), gates and closed".into());
         }
-        if !self.poly.is_empty() || self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || self.structure.is_some() {
+        if !self.poly.is_empty() || self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || self.structure.is_some() || !self.pieces.is_empty() {
             return Err("poly, gate, keep, yard_buildings and structure are for castles: a wall has a line (pts) and gates".into());
         }
         let p = &self.pts;
-        if p.len() < 2 || p.len() > 64 || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
-            return Err("a wall's line needs 2–64 corners".into());
+        let (most, longest) = if self.closed { (WALL_RING_MAX_CORNERS, WALL_RING_MAX_FT) } else { (WALL_MAX_CORNERS, WALL_MAX_FT) };
+        if p.len() < 2 || p.len() > most || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
+            return Err(if self.closed { format!("a closed wall's line needs 3–{most} corners") } else { format!("a wall's line needs 2–{most} corners (a closed one up to {WALL_RING_MAX_CORNERS})") });
         }
         if self.closed && p.len() < 3 {
             return Err("a closed wall needs at least 3 corners".into());
@@ -1174,13 +1269,13 @@ impl Created {
             return Err("a wall's corners must be at least 10 ft apart".into());
         }
         let length: f64 = (0..sides).map(side).sum();
-        if length > WALL_MAX_FT {
-            return Err(format!("a wall is at most {WALL_MAX_FT} ft long (this is {length:.0})"));
+        if length > longest {
+            return Err(if self.closed { format!("a closed wall is at most {longest} ft round (this is {length:.0})") } else { format!("a wall is at most {longest} ft long (this is {length:.0}; a closed one up to {WALL_RING_MAX_FT})") });
         }
         if self.closed && !simple(p) {
             return Err("a closed wall must not cross itself".into());
         }
-        if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > WALL_MAX_FT) {
+        if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > longest.min(0.5 * WALL_RING_MAX_FT)) {
             return Err("a wall's corners must lie round its point".into());
         }
         if self.gates.iter().any(|g| *g as usize >= n) {

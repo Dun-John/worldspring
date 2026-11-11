@@ -16,7 +16,7 @@
 //!  .. site polygons (levels >= SITE_MIN_LEVEL): n u32, n_verts u32, starts u32[n + 1],
 //!     attrs u32[n] (kind | ward << 8 | floors (to 15) << 16 | roof material (`town::roof`, to 15)
 //!     << 20 | has-function << 24 | (a plain building) roof colour variant 0-4 << 29; kind 0 building,
-//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard, 6 deck: bridge or pier, 7 monument,
+//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard (a cemetery's plot too), 6 deck: bridge or pier, 7 monument,
 //!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
 //!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed, 24 a castle's wet moat, 25 its
@@ -24,11 +24,17 @@
 //!     its drawbridge's deck, 20 a headstone, 22 a churchyard's wall,
 //!     23 a windmill's sails (a village's plots: the battlemap only); a park's raised features as
 //!     monuments; all of a park's in the tile holding its middle; a ruin's plan as 28 its floor,
-//!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4),
+//!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4), 32 a town wall's
+//!     bastion (`town::Layout::bastions`: flank, face, point, face, flank, the curtain's corner),
+//!     33 a cemetery's kurgan (R5 towns: a circle of its diameter, 12 points, `town::cemetery`),
 //!     verts f32[n_verts * 2] (tile units).
 //!     A polygon belongs to
 //!     the tile containing its centroid.
-//!  .. site lines: the line layout, vertices (x, y, width ft, kind: 0 wall, 1 tower).
+//!  .. site lines: the line layout, vertices (x, y, width ft, kind: 0 wall, 1 tower, 2 steps, 3 square tower).
+//!  .. site looks (item 104): the line layout again, a line for each site line with its points
+//!     (x, y, a, b): a wall's a its `WallStyle::code` (group, stone, material), a tower's a its
+//!     `WallStyle::code` with its shape (round, square, D, octagon) and b the way a D faces (an
+//!     octagon's or a square's sides run), radians; 0, 0 for the rest (`town::wallside::plan_looks`).
 
 use crate::World;
 use crate::core::tile::{HALO, PADDED, TILE_N, TILE_SAMPLES, TileKey};
@@ -272,6 +278,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
     let mut attrs: Vec<u32> = Vec::new();
     let mut verts: Vec<f32> = Vec::new();
     let mut lines: Vec<Vec<[f64; 4]>> = Vec::new();
+    let mut looks: Vec<Vec<[f64; 4]>> = Vec::new();
     if key.level >= SITE_MIN_LEVEL {
         let owns = |p: [f64; 2]| p[0] >= ox && p[0] < ox + size && p[1] >= oy && p[1] < oy + size;
         // (A park's polygons all belong to the tile holding the park's middle, so they are drawn in
@@ -337,7 +344,27 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     continue;
                 }
                 whole.set(Some(true));
+                // R5 towns (114): a horse park's trodden ground and its corrals' fences.
+                if pk.kind == crate::town::ParkKind::Horses {
+                    crate::town::horses::plan_polys(pk, &mut push);
+                    whole.set(None);
+                    continue;
+                }
                 let lay = crate::battlemap::park_layout(pk, crate::battlemap::land_biome(t0, pc), l.tier >= crate::t0::settle::Tier::City, world.stream("battlemap"));
+                // R5 towns: a cemetery's plot as a graveyard (its grave marks the tiles' own), its yews' crowns.
+                if pk.kind == crate::town::ParkKind::Cemetery {
+                    push(&pk.pts, 5);
+                    for &(at, _, _, _, scale) in lay.props.iter().filter(|p| p.2 == crate::battlemap::Kind::Yew) {
+                        let r = crate::battlemap::info(crate::battlemap::Kind::Yew as u16).radius as f64 * crate::battlemap::SQUARE_FT * scale as f64;
+                        push(&crate::town::geom::circle(at, 0.85 * r, 8), 14);
+                    }
+                    // R5 towns: its kurgans, round mounds the plan draws (kind 33).
+                    for &(at, _, _, _, scale) in lay.props.iter().filter(|p| p.2 == crate::battlemap::Kind::Kurgan) {
+                        push(&crate::town::geom::circle(at, crate::town::cemetery::KURGAN_R * scale as f64, 12), 33);
+                    }
+                    whole.set(None);
+                    continue;
+                }
                 for (pts, w) in &lay.paths {
                     for q in pts.windows(2) {
                         let d = crate::town::geom::sub(q[1], q[0]);
@@ -405,6 +432,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
             let detailed = key.level >= BUILDING_MIN_LEVEL || l.tier == crate::t0::settle::Tier::Village;
             if detailed {
+                // R5 towns (115): the yurts' trodden ground and pens, under the buildings.
+                crate::town::yurts::plan_polys(&l, &mut push);
                 for b in &l.buildings {
                     // v63 underground: a ruin as its broken walls, rubble and floor (`battlemap::ruin_plan`).
                     if b.structure == crate::town::Structure::Ruin {
@@ -425,6 +454,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     let attr = kind | (b.ward as u32) << 8 | (b.floors.min(15) as u32) << 16 | (k.material as u32 & 15) << 20 | (b.func.is_some() as u32) << 24;
                     // (A plain building's colour variant in bits 29-31; a keep's pieces use them for their tops.)
                     let plain = attr | (k.shade as u32) << 29;
+                    // (R5 towns, 115: a yurt's felt (piece code 11; its shade the felt, `yurts::felt`).)
+                    let plain = if k.shape == crate::town::roof::Shape::Round && b.poly.len() == crate::town::roof::ROUND_SIDES && crate::town::yurts::is_steppe_home(&l, b) { plain | 11 << 25 } else { plain };
+                    // (R5 towns, 114: a felt hall's too, in a light felt: cream, off-white or warm cream by its id.)
+                    let plain = if k.shape == crate::town::roof::Shape::Round && crate::town::roof::felt_built(b).is_some() { (plain & !(7 << 29)) | 11 << 25 | [0u32, 1, 3][b.id as usize % 3] << 29 } else { plain };
                     // A keep of pieces: each piece (convex, outlined), its towers over its body;
                     // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
                     // forebuilding, 5 wing) and how it is topped (bits 29-31: `town::keep_tops`, its
@@ -532,6 +565,19 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         whole.set(None);
                         continue;
                     }
+                    // (R5 towns, 114: a felt hall's roof as a yurt's: its felt, an inner ring where the
+                    // girth rope runs (outlined in the same felt) and the crown over the smoke hole
+                    // (piece code 12).)
+                    if k.shape == crate::town::roof::Shape::Round && crate::town::roof::felt_built(b).is_some() {
+                        use crate::town::geom::{add, centroid, mul, sub};
+                        let c = centroid(&b.poly);
+                        whole.set(Some(owns(c)));
+                        push(&b.poly, plain);
+                        push(&b.poly.iter().map(|&p| add(c, mul(sub(p, c), 0.62))).collect::<Vec<[f64; 2]>>(), plain);
+                        push(&b.poly.iter().map(|&p| add(c, mul(sub(p, c), 0.2))).collect::<Vec<[f64; 2]>>(), (plain & !(15 << 25)) | 12 << 25);
+                        whole.set(None);
+                        continue;
+                    }
                     push(&b.poly, plain);
                     // A keep's round corner towers (as the battlemap draws them), standing a
                     // little proud of its walls; each tile keeps the ones it owns.
@@ -560,8 +606,20 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 crate::town::village::plan_ticks(&l, &mut push);
                 crate::town::rural::plan_ticks(&l, &mut push);
             }
+            // A town wall's bastions (item 104, `Layout::bastions`): each its ground inside its walls, as 32
+            // (the walls round it are in `l.walls`).
+            for q in &l.bastions {
+                push(q, 32);
+            }
+            // (Its width by what it is built of, item 104: stone 9 ft, a palisade 5, rammed earth 12.)
+            let ww = match l.wall_style.material {
+                crate::town::wallstyle::Material::Stone => 9.0,
+                crate::town::wallstyle::Material::Palisade => 5.0,
+                crate::town::wallstyle::Material::Earth => 12.0,
+            };
             for w in &l.walls {
-                lines.push(w.iter().map(|p| [p[0], p[1], 9.0, 0.0]).collect());
+                let ww = if l.wall_style_at(w[w.len() / 2]).material == l.wall_style.material { ww } else { 9.0 };
+                lines.push(w.iter().map(|p| [p[0], p[1], ww, 0.0]).collect());
             }
             for t in &l.towers {
                 // (A square tower: a stroke as wide as it, along its sides.)
@@ -584,6 +642,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 let w = if gate { 30.0 } else { 22.0 };
                 lines.push(vec![[t[0], t[1], w, 1.0], [t[0] + 0.01, t[1], w, 1.0]]);
             }
+            // (Each wall's and tower's look, item 104: the lines' looks after them.)
+            crate::town::wallside::plan_looks(&l, &lines, &mut looks);
             // Flights of steps: hatched ink (style 2) along each axis, over the street's whole width.
             for ax in crate::town::stairs::axes(&l.stairs) {
                 lines.push(vec![[ax.a[0], ax.a[1], ax.width, 2.0], [ax.b[0], ax.b[1], ax.width, 2.0]]);
@@ -603,7 +663,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
     for v in &verts {
         out.extend_from_slice(&v.to_le_bytes());
     }
+    // (The looks: a line for each site line, at the same points, owned the same way.)
+    looks.extend(lines[looks.len()..].iter().map(|w| w.iter().map(|p| [p[0], p[1], 0.0, 0.0]).collect::<Vec<_>>()));
     out.extend_from_slice(&pack_lines(ox, oy, size, lines.into_iter()));
+    out.extend_from_slice(&pack_lines(ox, oy, size, looks.into_iter()));
     out
 }
 

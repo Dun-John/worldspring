@@ -8,7 +8,7 @@
 // generator (dry land, clear of walls and drawn buildings; the town's own buildings in the way
 // can go with it).
 import type { Graphics } from 'pixi.js';
-import { CASTLE_MAX_FT, CASTLE_MIN_FT, WALL_MAX_FT, type Created } from '../gen/protocol';
+import { CASTLE_MAX_FT, CASTLE_MIN_FT, WALL_MAX_FT, WALL_RING_MAX_FT, type Created } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import type { Pt } from './build';
@@ -227,7 +227,8 @@ export class WorksTool implements PointerTool {
       return;
     }
     if (c.length >= max) return this.host.hint(`At most ${max} corners: ${ring ? 'click the first corner' : 'double-click or press Enter'} to finish`);
-    if (!this.castleMode && c.length && wallLen([...c, p], false) > WALL_MAX_FT) return this.host.hint(`A wall is at most ${WALL_MAX_FT} ft long`);
+    const most = ring ? WALL_RING_MAX_FT : WALL_MAX_FT;
+    if (!this.castleMode && c.length && wallLen([...c, p], ring) > most) return this.host.hint(ring ? `A closed wall is at most ${most} ft round` : `A wall is at most ${most} ft long`);
     c.push(p);
     if (c.length === 1)
       this.host.hint(

@@ -2,6 +2,7 @@
 // plus the terrain payload layout (mirrors crates/worldgen/src/payload.rs).
 import { ruinPlanFill } from './ruinPlan';
 import type { PreparedChunk } from './battlePrep';
+import { codeMaterial, codeShape, codeStone } from './wallcode';
 
 export type Wind = 'belts' | 'from_west' | 'from_east';
 
@@ -142,13 +143,30 @@ export interface Created {
   in_building?: string;
   way?: string;
   removed?: boolean;
+  /** A castle's pieces changed by hand (`worldgen::world::CastlePiece`), by `keep` or a yard
+   * building's number (`b:<layout>:<number>`). */
+  pieces?: Record<string, CastlePiece>;
 }
+
+/** One of a castle's pieces changed by hand: a building's edit (`at` its middle as built; no
+ * footprint) and its name. */
+/** The answer of `bedit` for a castle's piece: its castle's `c:` id, its key in `pieces`, the
+ * keep or not, and its edit as it is then (null: as generated). */
+export interface PieceEdit {
+  castle: string;
+  key: string;
+  keep: boolean;
+  edit: CastlePiece | null;
+}
+export type CastlePiece = Omit<BuildingEdit, 'poly'> & { name?: string };
 
 /** Widest a castle may be and narrowest (ft), longest a wall (`worldgen::world`), how far past
  * its outline a castle's or wall's layout reaches (`WORKS_MARGIN_FT`). */
 export const CASTLE_MAX_FT = 600;
 export const CASTLE_MIN_FT = 80;
 export const WALL_MAX_FT = 3000;
+/** Longest a closed wall (a ring) may be, ft round (`worldgen::world::WALL_RING_MAX_FT`). */
+export const WALL_RING_MAX_FT = 24000;
 export const WORKS_MARGIN_FT = 40;
 
 export type RoofStyle = 'hip' | 'battlements' | 'cone';
@@ -179,6 +197,11 @@ export const ROOF_SHADES = [
   [0x6e5a44, 0x7a6a56, 0x86684a, 0x94744e, 0x8a6a56], // plank: dark, grey, brown, warm, rosy
   [0xb6b3aa, 0xbdb399, 0xc4baa7, 0xcbc1ae, 0xbdac96], // whitewash: cool, cream, lime, bright, sand
 ];
+/** Felt for a round roof (`Roof.shade` 0-4): cream, off-white, grey, warm cream, dusty grey (a felt hall's). */
+export const FELT = [0xc9bea6, 0xc4bdad, 0xaea595, 0xc2b394, 0xa39a88];
+/** A yurt's felt (`Roof.shade` 0-7, R5 towns 115 `town::yurts::felt`): cream, off-white, grey, warm cream, dusty
+ * grey, smoke-browned, cream (with a red band), pale (with a sooty crown). */
+export const YURT_FELT = [0xd3c6a6, 0xe0dccf, 0xa9a192, 0xcdb88f, 0xb5ad9d, 0x8a6843, 0xd0c3a2, 0xdcd6c6];
 /** A roof material's colour in a variant (0-4; bad values: the usual). */
 export const roofRgb = (material: number, shade = 2): number => ROOF_SHADES[material]?.[shade] ?? ROOF_MATERIAL_RGB[material] ?? ROOF_MATERIAL_RGB[3];
 /** Roof shapes by id (`worldgen::town::roof::SHAPES`, append-only). */
@@ -283,7 +306,9 @@ export interface Plateau {
 export interface TownEdit {
   at: [number, number];
   corners?: { v: number; from: [number, number]; to: [number, number] }[];
-  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number; close?: boolean; park?: string }[];
+  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number; close?: boolean; park?: string; district?: string }[];
+  /** Districts made by hand, in the order made (a patch's `district` may name one). */
+  districts?: string[];
   walls?: boolean;
   squares?: { v: number; at: [number, number]; kind: string }[];
 }
@@ -298,7 +323,15 @@ export type LotSize = (typeof LOT_SIZES)[number];
 export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const;
 export type SquareKind = (typeof SQUARE_KINDS)[number];
 /** How a park can be laid out (`worldgen::world::PARK_KINDS`). */
-export const PARK_KINDS = ['formal', 'common'] as const;
+export const PARK_KINDS = ['formal', 'common', 'cemetery', 'horses'] as const;
+/** A horse park's marks on the plan (`town::horses::plan_polys`): [rgb, alpha] by the variant. */
+const HORSE_PARK_PLAN: [[number, number, number], number][] = [
+  [[0.33, 0.23, 0.14], 0.95],
+  [[0.56, 0.56, 0.34], 0.85],
+  [[0.38, 0.25, 0.16], 0.9],
+  [[0.86, 0.74, 0.4], 0.95],
+  [[0.42, 0.31, 0.2], 0.9],
+];
 export type ParkKind = (typeof PARK_KINDS)[number];
 
 /** A patch of a town as the ward editor sees it (`town::wards::plan_json`): its corners (plan
@@ -341,7 +374,14 @@ export interface TownCorner {
   /** On the water or a river: it never moves. */
   pinned?: boolean;
   gate?: boolean;
+  /** A gate put in here by hand, or a generated one taken out. */
+  gate_by_hand?: boolean;
+  gate_removed?: boolean;
+  /** On the town's wall, and its neighbours along it (null at an open wall's end). */
   wall?: boolean;
+  /** The generated tower standing at this corner was taken down by hand. */
+  tower_removed?: boolean;
+  wall_next?: [number | null, number | null];
   /** Streets meet here: a square can open. */
   junction?: boolean;
   /** Streets meet here but no square can open, and why. */
@@ -353,18 +393,47 @@ export interface TownCorner {
   square_generated?: SquareKind | 'none';
 }
 
+/** A district in the plan (`get_town_plan`'s `districts`). */
+export interface TownDistrict {
+  id: string;
+  name: string;
+  kind: string;
+  patches: number[];
+  by_hand?: boolean;
+  changed?: boolean;
+}
+
+/** The gates and towers of a town's wall set by hand (`walls.by_hand` of the plan). */
+export interface TownWallsByHand {
+  gates_added: { corner: number; id: string; name?: string | null; refused?: string }[];
+  gates_removed: number[];
+  towers_added: { id: string; corners: [number, number]; f: number }[];
+  towers_removed: string[];
+}
+
 /** A town's plan for the ward editor (Ask op `townplan`). */
 export interface TownPlan {
   layout: number;
   center: [number, number];
   /** How far a corner may go from where it was planned. */
   max_move_ft: number;
-  walls: { built: boolean; generated: boolean };
+  walls: { built: boolean; generated: boolean; by_hand?: TownWallsByHand };
   edited: boolean;
   patches: TownPatch[];
+  /** The town's districts (a hand-made one: `by_hand`; one changed by a patch moved in or out: `changed`). */
+  districts?: TownDistrict[];
   corners: TownCorner[];
   /** What of the town's edit no longer applies. */
   set_aside: string[];
+}
+
+/** Gates and towers by corner (`wallgates::request`): a tower by two corners and where between (f), or one corner. */
+export interface TownWallsRequest {
+  built?: boolean;
+  gates_add?: number[];
+  gates_remove?: number[];
+  towers_add?: (number | [number, number] | [number, number, number])[];
+  towers_remove?: (number | string)[];
 }
 
 /** A change asked of a town (`town::wards::TownRequest`). */
@@ -372,9 +441,9 @@ export interface TownRequest {
   moves?: { corner: number; to?: [number, number]; by?: [number, number]; as_generated?: boolean }[];
   equalize?: number[];
   relax?: { at: [number, number]; radius_ft: number; amount?: number };
-  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; park?: ParkKind | 'auto'; as_generated?: boolean }[];
+  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; park?: ParkKind | 'auto'; district?: string; as_generated?: boolean }[];
   squares?: { corner: number; kind: SquareKind | 'none' | 'auto' }[];
-  walls?: boolean | 'auto';
+  walls?: boolean | 'auto' | TownWallsRequest;
   reset?: 'all' | 'corners' | 'patches' | 'squares';
 }
 
@@ -383,6 +452,14 @@ export interface TownReport {
   corners: { asked: number; moved: number; part_way: number; stayed: number };
   buildings: { before: number; after: number; added: number; taken_away: number };
   walls: { built: boolean; towers: number; gates: number };
+  /** What a gate or tower asked for came to (only when one was asked). */
+  wall?: {
+    gates_added?: { corner: number; id: string; name?: string; towers?: string[]; way_out_ft?: number; built?: boolean }[];
+    gates_removed?: { corner: number; id: string; name?: string }[];
+    towers_added?: { id: string; x_ft: number; y_ft: number }[];
+    towers_removed?: string[];
+    refused?: { gate_add?: number; gate_remove?: number; tower_add?: unknown; tower_remove?: unknown; why: string }[];
+  };
   /** Its open spaces' kinds (quays aside), and its parks'. */
   squares: string[];
   parks: ParkKind[];
@@ -390,6 +467,12 @@ export interface TownReport {
   rects: Rect[];
   functions_lost?: string[];
   unmerged?: number[];
+  /** Patches that changed district (`from`/`to` are district ids). */
+  districts_changed?: { patch: number; from: string; to: string }[];
+  /** A renamed or noted building gone, handed to the new one that does its work (move the name and note). */
+  renames_carried?: { from: string; to: string; name: string }[];
+  /** A renamed building gone with no successor: its name stays on the old id. */
+  renames_lost?: { id: string; name: string }[];
 }
 
 /** A generated building changed by hand (`worldgen::world::BuildingEdit`): `at` is its middle
@@ -875,6 +958,24 @@ export interface SiteGeometry {
   ink: RiverGeometry | null;
 }
 
+/** A wall's stone as the plan fills it (towers, bastions): granite, limestone, sandstone, rose brick, mud brick,
+ * then timber and rammed earth. The same tones as `tileink.frag`'s wall core. */
+const STONE_TONE: [number, number, number][] = [
+  [0.66, 0.71, 0.78],
+  [0.86, 0.8, 0.65],
+  [0.9, 0.72, 0.42],
+  [0.82, 0.52, 0.47],
+  [0.86, 0.64, 0.52],
+  [0.55, 0.39, 0.24],
+  [0.8, 0.72, 0.56],
+];
+
+/** A tone a third of the way to its own grey (a bastion's broad fill, beside its wall's narrow core). */
+const calm = ([r, g, b]: [number, number, number]): [number, number, number] => {
+  const y = 0.3 * r + 0.59 * g + 0.11 * b;
+  return [r + (y - r) * 0.35, g + (y - g) * 0.35, b + (y - b) * 0.35];
+};
+
 // Fill colours by ward (buildings), then plaza, field, block. Watabou-ish muted browns.
 const WARD_RGB: [number, number, number][] = [
   [0.62, 0.56, 0.5], // plaza (unused for buildings)
@@ -892,11 +993,237 @@ const WARD_RGB: [number, number, number][] = [
   [0.6, 0.62, 0.5], // park
 ];
 
-export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): SiteGeometry | null {
+/** How much larger than built a wall tower's shape is drawn on the plan, so that a D, an octagon or a square
+ * reads beside the curtain from far out (a gate's towers, already wide, as built). */
+const PLAN_TOWER = 1.4;
+/** A D tower's flat back on the plan: this far (ft) behind its middle, past the curtain's inner face (a stone
+ * curtain's half is 4.5 ft), so its square corners show inside the wall and its round face outside. */
+const PLAN_D_BACK = 8;
+
+/** A wall tower's footprint on the plan (tile units): a D (flat back, round face out along `ang`), an octagon or a
+ * square (sides along `ang`) of radius `r` (ft), as `wallstyle::footprint` lays it. */
+function towerPoly(x: number, y: number, r: number, ang: number, shape: number, ftTile: number): number[] {
+  const [ux, uy] = [Math.cos(ang), Math.sin(ang)];
+  const at = (a: number, b: number) => [x + (ux * a - uy * b) / ftTile, y + (uy * a + ux * b) / ftTile];
+  const out: number[] = [];
+  if (shape === 2) {
+    out.push(...at(-PLAN_D_BACK, -r));
+    for (let k = 0; k <= 12; k++) {
+      const t = -Math.PI / 2 + (Math.PI * k) / 12;
+      out.push(...at(r * Math.cos(t), r * Math.sin(t)));
+    }
+    out.push(...at(-PLAN_D_BACK, r));
+  } else if (shape === 3) {
+    const rc = r / Math.cos(Math.PI / 8);
+    for (let k = 0; k < 8; k++) {
+      const t = Math.PI / 8 + (Math.PI * 2 * k) / 8;
+      out.push(...at(rc * Math.cos(t), rc * Math.sin(t)));
+    }
+  } else out.push(...at(-r, -r), ...at(r, -r), ...at(r, r), ...at(-r, r));
+  return out;
+}
+
+/** A village's headstone tick on the plan (`town::village::PLAN_HEADSTONE`). */
+const PLAN_HEADSTONE = 20;
+
+/** Plan kind of a town graveyard's grave mark (not from the generator). */
+const GRAVE_KIND = 0xfd;
+
+/** Ear-clip triangulation of a simple polygon's `m` corners from `first` in `verts` (local corner indices;
+ * m - 2 triangles). A degenerate ring falls back to the fan. */
+function earClip(verts: Float32Array, first: number, m: number): number[][] {
+  const P = (i: number) => [verts[(first + i) * 2], verts[(first + i) * 2 + 1]];
+  let area = 0;
+  for (let i = 0; i < m; i++) {
+    const [a, b] = [P(i), P((i + 1) % m)];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  const sgn = area >= 0 ? 1 : -1;
+  const cross = (a: number[], b: number[], c: number[]) => ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) * sgn;
+  const idx = Array.from({ length: m }, (_, i) => i);
+  const out: number[][] = [];
+  while (idx.length > 3) {
+    let cut = -1;
+    for (let k = 0; k < idx.length && cut < 0; k++) {
+      const [ia, ib, ic] = [idx[(k + idx.length - 1) % idx.length], idx[k], idx[(k + 1) % idx.length]];
+      const [a, b, c] = [P(ia), P(ib), P(ic)];
+      if (cross(a, b, c) <= 0) continue;
+      let ok = true;
+      for (const j of idx) {
+        if (j === ia || j === ib || j === ic) continue;
+        const p = P(j);
+        if (cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) cut = k;
+    }
+    if (cut < 0) cut = 0;
+    out.push([idx[(cut + idx.length - 1) % idx.length], idx[cut], idx[(cut + 1) % idx.length]]);
+    idx.splice(cut, 1);
+  }
+  out.push([idx[0], idx[1], idx[2]]);
+  return out;
+}
+
+/** Roadmap 5 cemeteries: rows of grave marks across each graveyard (plan kind 5) that has none of its own (a
+ * village's churchyards and shrine yards get theirs from `town::village::plan_ticks`): pale ticks 3.4 by 1.5 ft
+ * across the rows, side by side as graves lie (a little over life size, to read at near zoom; lost in the plot's
+ * green farther out), 5 ft apart in rows 8 ft apart, the rows square to the plot's longest side, 3.5 ft in from
+ * its edges, off any roofed building in it (a mausoleum, a tomb house) and from under a tree's crown (a yew's,
+ * plan kind 14), a walk left across the rows of a plot over 40 ft long. A pure function of the plot's corners
+ * (tile units, `tileFt` ft a side). */
+function withGraveRows(polys: TileSitePolys, tileFt: number): TileSitePolys {
+  const n = polys.attrs.length;
+  const kindOf = (i: number) => polys.attrs[i] & 0xff;
+  const ring = (i: number): [number, number][] => {
+    const out: [number, number][] = [];
+    for (let k = polys.starts[i]; k < polys.starts[i + 1]; k++) out.push([polys.verts[k * 2] * tileFt, polys.verts[k * 2 + 1] * tileFt]);
+    return out;
+  };
+  const inside = (p: [number, number], q: [number, number][]) => {
+    let c = false;
+    for (let a = 0, b = q.length - 1; a < q.length; b = a++) {
+      if (q[a][1] > p[1] !== q[b][1] > p[1] && p[0] < ((q[b][0] - q[a][0]) * (p[1] - q[a][1])) / (q[b][1] - q[a][1]) + q[a][0]) c = !c;
+    }
+    return c;
+  };
+  const edgeDist = (p: [number, number], q: [number, number][]) => {
+    let best = Infinity;
+    for (let a = 0, b = q.length - 1; a < q.length; b = a++) {
+      const [dx, dy] = [q[a][0] - q[b][0], q[a][1] - q[b][1]];
+      const t = Math.max(0, Math.min(1, ((p[0] - q[b][0]) * dx + (p[1] - q[b][1]) * dy) / (dx * dx + dy * dy || 1)));
+      best = Math.min(best, Math.hypot(p[0] - q[b][0] - dx * t, p[1] - q[b][1] - dy * t));
+    }
+    return best;
+  };
+  const centroid = (q: [number, number][]): [number, number] => [q.reduce((s, p) => s + p[0], 0) / q.length, q.reduce((s, p) => s + p[1], 0) / q.length];
+  let ticks: [number, number][] | null = null;
+  let roofed: [number, number][][] | null = null;
+  const marks: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    if (kindOf(i) !== 5 || polys.starts[i + 1] - polys.starts[i] < 3) continue;
+    ticks ??= Array.from({ length: n }, (_, j) => j)
+      .filter((j) => kindOf(j) === PLAN_HEADSTONE)
+      .map((j) => centroid(ring(j)));
+    roofed ??= Array.from({ length: n }, (_, j) => j)
+      .filter((j) => kindOf(j) === 0 || kindOf(j) === 14)
+      .map(ring);
+    const q = ring(i);
+    if (ticks.some((t) => inside(t, q))) continue;
+    // The longest side: the rows run along it.
+    let [ux, uy, best] = [1, 0, 0];
+    for (let a = 0, b = q.length - 1; a < q.length; b = a++) {
+      const d = Math.hypot(q[a][0] - q[b][0], q[a][1] - q[b][1]);
+      if (d > best) [ux, uy, best] = [(q[a][0] - q[b][0]) / d, (q[a][1] - q[b][1]) / d, d];
+    }
+    const [o0, o1] = q[0];
+    const along = q.map(([x, y]) => (x - o0) * ux + (y - o1) * uy);
+    const across = q.map(([x, y]) => -(x - o0) * uy + (y - o1) * ux);
+    const [u0, u1, w0, w1] = [Math.min(...along), Math.max(...along), Math.min(...across), Math.max(...across)];
+    if (u1 - u0 < 8 || w1 - w0 < 8 || (u1 - u0) * (w1 - w0) > 4e6) continue;
+    const inPlot = roofed.filter((b) => inside(centroid(b), q));
+    const walk = u1 - u0 > 40 ? (u0 + u1) / 2 : NaN;
+    // (Rows and marks centred in the plot, so the margins match on both sides.)
+    const [rows, cols] = [Math.floor((w1 - w0 - 7) / 8), Math.floor((u1 - u0 - 7 - 1.5) / 5)];
+    const [s0, x0] = [(w0 + w1) / 2 - (rows * 8) / 2, (u0 + u1) / 2 - (cols * 5) / 2];
+    for (let r = 0; r <= rows; r++) {
+      for (let c = 0; c <= cols; c++) {
+        const [u, w] = [x0 + c * 5, s0 + r * 8];
+        if (Math.abs(u - walk) < 4) continue;
+        const p: [number, number] = [o0 + u * ux - w * uy, o1 + u * uy + w * ux];
+        if (!inside(p, q) || edgeDist(p, q) < 3.5) continue;
+        if (inPlot.some((b) => inside(p, b) || edgeDist(p, b) < 3)) continue;
+        const [hx, hy, nx, ny] = [ux * 1.0, uy * 1.0, -uy * 2.0, ux * 2.0];
+        marks.push([p[0] - hx - nx, p[1] - hy - ny, p[0] + hx - nx, p[1] + hy - ny, p[0] + hx + nx, p[1] + hy + ny, p[0] - hx + nx, p[1] - hy + ny].map((v) => v / tileFt));
+      }
+    }
+  }
+  if (!marks.length) return polys;
+  const starts = Array.from(polys.starts);
+  const attrs = Array.from(polys.attrs);
+  const verts = Array.from(polys.verts);
+  for (const m of marks) {
+    attrs.push(GRAVE_KIND);
+    verts.push(...m);
+    starts.push(starts[starts.length - 1] + 4);
+  }
+  return { starts: new Uint32Array(starts), attrs: new Uint32Array(attrs), verts: new Float32Array(verts) };
+}
+
+/** Plan kind of a D, octagonal or square wall tower's footprint (not from the generator; the stone in its ward byte). */
+const TOWER_KIND = 0xfe;
+
+/**
+ * Settlement fills and ink for one tile. `looks` (`TerrainPayload.siteLooks`) and `tileFt` (the tile's side in ft)
+ * give the plan the walls' look by culture group: a stone wall's ink tinted by its stone, a palisade or rammed
+ * earth wall by its material (else guessed from its width), D, octagonal and square towers as their shapes
+ * (round ones stay dots). Without them (an older payload) the old drawing.
+ */
+export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks?: TileRivers, tileFt = 0): SiteGeometry | null {
+  const useLooks = !!looks && tileFt > 0 && looks.verts.length === lines.verts.length;
+  // (Each tower line in a shape of its own is a polygon instead of a dot: its centre, radius, facing, shape, stone.)
+  const shapes: { starts: number; verts: number[]; stone: number }[] = [];
+  const skip = new Set<number>();
+  if (useLooks) {
+    for (let l = 0; l + 1 < lines.starts.length; l++) {
+      const v = lines.starts[l];
+      if (lines.verts[v * 4 + 3] !== 1) continue;
+      const code = looks!.verts[v * 4 + 2];
+      const shape = codeShape(code);
+      // (A palisade's or an earth wall's square gate towers too: log towers, in their material's tone.)
+      const mat = codeMaterial(code);
+      if (!shape || (mat !== 0 && shape !== 1)) continue;
+      const [x, y, w] = [lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2]];
+      const r = w < 25 ? (w / 2) * PLAN_TOWER : w / 2;
+      shapes.push({ starts: 0, verts: towerPoly(x, y, r, looks!.verts[v * 4 + 3], shape, tileFt), stone: mat === 1 ? 5 : mat === 2 ? 6 : codeStone(code) });
+      skip.add(l);
+    }
+    // (A bastion takes the look of the wall line nearest it: its stone, in its ward byte + 1.)
+    const wallLooks: [number, number, number][] = [];
+    for (let l = 0; l + 1 < lines.starts.length; l++) {
+      const v = lines.starts[l];
+      if (lines.verts[v * 4 + 3] !== 0) continue;
+      const code = looks!.verts[v * 4 + 2];
+      if (code > 0) for (let k = v; k < lines.starts[l + 1]; k++) wallLooks.push([lines.verts[k * 4], lines.verts[k * 4 + 1], code]);
+    }
+    let bastions: Uint32Array | null = null;
+    if (wallLooks.length) {
+      bastions = new Uint32Array(polys.attrs);
+      for (let i = 0; i < bastions.length; i++) {
+        if ((bastions[i] & 0xff) !== 32) continue;
+        let [cx, cy] = [0, 0];
+        const m = polys.starts[i + 1] - polys.starts[i];
+        for (let k = polys.starts[i]; k < polys.starts[i + 1]; k++) [cx, cy] = [cx + polys.verts[k * 2] / m, cy + polys.verts[k * 2 + 1] / m];
+        let best = Infinity;
+        let code = 0;
+        for (const w of wallLooks) {
+          const d = (w[0] - cx) ** 2 + (w[1] - cy) ** 2;
+          if (d < best) [best, code] = [d, w[2]];
+        }
+        const mat = codeMaterial(code);
+        bastions[i] |= ((mat === 1 ? 5 : mat === 2 ? 6 : codeStone(code)) + 1) << 8;
+      }
+    }
+    if (bastions) polys = { starts: polys.starts, attrs: bastions, verts: polys.verts };
+    if (shapes.length) {
+      const starts = Array.from(polys.starts);
+      const attrs = Array.from(polys.attrs);
+      const verts = Array.from(polys.verts);
+      for (const sh of shapes) {
+        attrs.push(TOWER_KIND | (sh.stone << 8));
+        verts.push(...sh.verts);
+        starts.push(starts[starts.length - 1] + sh.verts.length / 2);
+      }
+      polys = { starts: new Uint32Array(starts), attrs: new Uint32Array(attrs), verts: new Float32Array(verts) };
+    }
+  }
+  if (tileFt > 0) polys = withGraveRows(polys, tileFt);
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === 33 || kind === TOWER_KIND;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -916,7 +1243,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       const material = (attr >> 20) & 15;
       let rgb: [number, number, number];
       let a = 1;
-      if (kind === 1) rgb = [0.86, 0.82, 0.71];
+      if (kind === TOWER_KIND) rgb = STONE_TONE[Math.min(ward, STONE_TONE.length - 1)];
+      else if (kind === 1) rgb = [0.86, 0.82, 0.71];
       else if (kind === 2) {
         // Fields: alternate crop tints.
         const k = i % 3;
@@ -928,10 +1256,10 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         rgb = [0.7, 0.67, 0.6];
         a = 0.55;
       } else if (kind === 5) {
-        // A graveyard (an open-air plot): inked round, its grass the land's own (no fill, so it matches
-        // the biome's ground round it; its headstones and wall mark it).
-        rgb = [0.6, 0.66, 0.47];
-        a = 0;
+        // A graveyard or cemetery (an open-air plot): inked round, a muted green over the land's own
+        // ground, its rows of grave marks over it (`withGraveRows`, or a village's own ticks).
+        rgb = [0.5, 0.6, 0.42];
+        a = 0.55;
       } else if (kind === 6) rgb = [0.55, 0.4, 0.26];
       else if (kind === 7) rgb = [0.72, 0.69, 0.62];
       else if (kind === 8) {
@@ -942,6 +1270,22 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
+      // Roadmap 5 horse parks (`town::horses::PLAN_FENCE`, kind 34, the mark in the ward byte) over the
+      // park's trodden ground (a camp clearing's, kind 8); not inked: a corral's post-and-rail fence (0),
+      // a bold line of dark timber; a corral's ground (1) a shade greener; a horse (2) a dark bay bar; a
+      // haystack (3) a straw round; a hitching rail or a cart (4) a timber tick.
+      else if (kind === 34) {
+        [rgb, a] = HORSE_PARK_PLAN[ward] ?? HORSE_PARK_PLAN[0];
+      }
+      // A kurgan mound (kind 33): a low grassy barrow, a shade darker than a cemetery plot, lightly inked.
+      else if (kind === 33) {
+        rgb = [0.44, 0.52, 0.3];
+        a = 0.6;
+      }
+      // A town wall's bastion (`payload.rs` kind 32): a stone platform, outlined (its faces are the town
+      // wall's lines), in its wall's stone calmed toward grey: a broad fill reads louder than the curtain's
+      // narrow core in the same tone.
+      else if (kind === 32) rgb = ward ? calm(STONE_TONE[Math.min(ward - 1, STONE_TONE.length - 1)]) : [0.76, 0.73, 0.65];
       else if (kind === 12) rgb = [0.85, 0.81, 0.69];
       else if (kind === 13) {
         rgb = [0.42, 0.55, 0.33];
@@ -958,6 +1302,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       // v63 countryside: a village's headstones and a churchyard's low wall (`town::village::plan_polys`;
       // the green's and churchyard's grass is the land's own, its crofts seen on the battlemap only).
       else if (kind === 20) rgb = [0.74, 0.73, 0.69];
+      // A town graveyard's grave marks (`withGraveRows`): pale stone on its green.
+      else if (kind === GRAVE_KIND) rgb = [0.9, 0.9, 0.82];
       else if (kind === 22) rgb = [0.62, 0.6, 0.55];
       // A windmill's sails (`town::rural::plan_ticks`), over its roof.
       else if (kind === 23) rgb = [0.88, 0.84, 0.74];
@@ -971,7 +1317,15 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         // (9) down the hall's roof.
         const piece = ((attr >>> 25) & 15) - 1;
         const top = (attr >>> 29) & 3;
-        if (piece === 7) rgb = [0.36, 0.6, 0.53];
+        // R5 towns (115): a yurt (10) its felt (`YURT_FELT`, by the shade bits), softened toward its ward's paper.
+        if (piece === 10) {
+          const base = WARD_RGB[ward] ?? WARD_RGB[6];
+          const m = YURT_FELT[(attr >>> 29) & 7] ?? YURT_FELT[0];
+          rgb = [0, 1, 2].map((c) => 0.7 * (((m >> (16 - 8 * c)) & 255) / 255) + 0.3 * base[c]) as [number, number, number];
+        }
+        // (R5 towns, 114: a felt hall's crown, 12, its wooden ring dark over the smoke hole.)
+        else if (piece === 11) rgb = [0.38, 0.29, 0.21];
+        else if (piece === 7) rgb = [0.36, 0.6, 0.53];
         else if (piece === 8) rgb = [0.86, 0.8, 0.66];
         else if (piece === 9) {
           rgb = [0, 0, 0];
@@ -998,10 +1352,16 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       const inkEdge = (j: number) => ink && (j >= 8 || ((inks >> j) & 1) !== 0);
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
+      // A plot (kind 5) is often concave: ear-clipped, so no wedge crosses its notches (a fan would).
+      const ears = kind === 5 && m > 3 ? earClip(polys.verts, s0, m) : null;
       for (let k = 1; k + 1 < m; k++) {
-        const corners = [s0, s0 + k, s0 + k + 1];
+        const t = ears ? ears[k - 1] : [0, k, k + 1];
+        const corners = [s0 + t[0], s0 + t[1], s0 + t[2]];
         // Which edges are real, by the corner opposite each.
-        const real = [inkEdge(k), k + 1 === m - 1 && inkEdge(m - 1), k === 1 && inkEdge(0)];
+        const side = (x: number, y: number) => (Math.abs(x - y) === 1 ? inkEdge(Math.min(x, y)) : Math.abs(x - y) === m - 1 && inkEdge(m - 1));
+        const real = ears
+          ? [side(t[1], t[2]), side(t[2], t[0]), side(t[0], t[1])]
+          : [inkEdge(k), k + 1 === m - 1 && inkEdge(m - 1), k === 1 && inkEdge(0)];
         for (let c = 0; c < 3; c++) {
           pos[v * 2] = polys.verts[corners[c] * 2];
           pos[v * 2 + 1] = polys.verts[corners[c] * 2 + 1];
@@ -1014,15 +1374,34 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
     }
     fill = { pos, color, edge, index };
   }
-  // Ink: walls and towers from the line section (building outlines are inked by the fill).
+  // Ink: walls and towers from the line section (building outlines are inked by the fill). A town wall
+  // by its width (`payload.rs`, item 104): a palisade's (5 ft) timber brown, rammed earth's (12) tan, both
+  // inked along their sides (tileink styles 5, 6); stone's ink.
   const lineVerts = lines.verts.length / 4;
+  // With the looks, the material and stone come from the style code: a stone's style carries its stone + 1 in
+  // sixteenths after its number (none for limestone, today's ink), a palisade is 5 and rammed earth 6.
+  const styleOf = (v: number) => {
+    const kind = lines.verts[v * 4 + 3];
+    const w = lines.verts[v * 4 + 2];
+    if (useLooks && (kind === 0 || kind === 1 || kind === 3)) {
+      const code = looks!.verts[v * 4 + 2];
+      if (kind === 0 && code > 0) {
+        if (codeMaterial(code) === 1) return 5;
+        if (codeMaterial(code) === 2) return 6;
+      }
+      const stone = codeMaterial(code) === 0 && code > 0 ? codeStone(code) : 1;
+      return kind + 1 + (stone === 1 || stone > 4 ? 0 : (stone + 1) / 16);
+    }
+    return kind === 0 && w === 5 ? 5 : kind === 0 && w === 12 ? 6 : kind + 1;
+  };
   const starts: number[] = [];
   const out = new Float32Array(lineVerts * 4);
   let o = 0;
   for (let l = 0; l + 1 < lines.starts.length; l++) {
+    if (skip.has(l)) continue;
     starts.push(o / 4);
     for (let v = lines.starts[l]; v < lines.starts[l + 1]; v++) {
-      out.set([lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2], lines.verts[v * 4 + 3] + 1], o);
+      out.set([lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2], styleOf(v)], o);
       o += 4;
     }
   }
@@ -1146,6 +1525,14 @@ export interface TerrainPayload {
   roads: TileRivers;
   sitePolys: TileSitePolys;
   siteLines: TileRivers;
+  /**
+   * Each site line's look (item 104; `payload.rs` "site looks"), in the same layout as `siteLines`, line
+   * for line and point for point: (x, y, a, b). A wall's a its style code (`town::wallstyle::WallStyle::code`:
+   * group, stone, material), a tower's a its style code with its shape (round, square, D, octagon) and b
+   * the way a D faces (an octagon's or a square's sides run), radians; 0, 0 for the rest. Absent from an
+   * older payload.
+   */
+  siteLooks?: TileRivers;
 }
 
 const TERRAIN_MAGIC = 0x5445_5252;
@@ -1180,7 +1567,8 @@ export function parseTerrain(buf: ArrayBuffer): TerrainPayload {
     attrs: new Uint32Array(buf, polyAttrs, nPolys),
     verts: new Float32Array(buf, polyVerts, nPolyVerts * 2),
   };
-  const [siteLines] = lines(polyVerts + nPolyVerts * 8);
+  const [siteLines, looksOffset] = lines(polyVerts + nPolyVerts * 8);
+  const siteLooks = looksOffset + 8 <= buf.byteLength ? lines(looksOffset)[0] : undefined;
   return {
     level: dv.getUint32(4, true),
     x: dv.getUint32(8, true),
@@ -1196,6 +1584,7 @@ export function parseTerrain(buf: ArrayBuffer): TerrainPayload {
     roads,
     sitePolys,
     siteLines,
+    siteLooks,
   };
 }
 

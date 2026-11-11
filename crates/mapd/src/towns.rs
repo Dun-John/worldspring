@@ -1,6 +1,6 @@
 //! MCP tools for the ward editor (`Edits.towns`): a town's plan (its patches and their corners)
 //! read, and changed: corners moved, patches given another ward, lot size, merge or roll, a
-//! temple's close, a park's garden, squares where streets meet, walls up or down
+//! temple's close, a park's garden, a district, squares where streets meet, walls up or down
 //! (`worldgen::town::wards`).
 
 use serde_json::{Value, json};
@@ -18,14 +18,14 @@ pub fn list() -> Vec<Value> {
         json!({
             "name": "get_town_plan",
             "title": "A town's wards",
-            "description": "A town's or city's plan as the ward editor sees it: its patches (each a ward cut into lots: patch number, middle, corners, ward, ward_generated when set by hand, district, neighbours, lots, merged_with, reroll, close when a temple's patch has an open close round the temple, close_generated when set by hand, close_refused: why one can't be set there or the one set isn't built, park: how a park's patch is laid out (formal or common), park_by_hand when that was set by hand, park_refused: why the patch can't be made a park, ward_planned: park for a park's patch built on as a common ward's, too small once its streets were cut) and their corners (number, where it stands, planned when moved, pinned on water or a river, gate, wall, junction where three streets or more meet so a square can open, square_refused where they meet but none can, square: the square there (crossroads, well, fountain or green) and square_ft how far out it is cut, square_generated when set by hand), max_move_ft (how far a corner may go from where it was laid out), the walls, and any part of its edit set aside. within limits it to the patches whose middle is in a rectangle.",
+            "description": "A town's or city's plan as the ward editor sees it: its patches (each a ward cut into lots: patch number, middle, corners, ward, ward_generated when set by hand, district, neighbours, lots, merged_with, reroll, close when a temple's patch has an open close round the temple, close_generated when set by hand, close_refused: why one can't be set there or the one set isn't built, park: how a park's patch is laid out (formal or common), park_by_hand when that was set by hand, park_refused: why the patch can't be made a park, ward_planned: park for a park's patch built on as a common ward's, too small once its streets were cut) and their corners (number, where it stands, planned when moved, pinned on water or a river, gate, wall, junction where three streets or more meet so a square can open, square_refused where they meet but none can, square: the square there (crossroads, well, fountain or green) and square_ft how far out it is cut, square_generated when set by hand), districts (id, name, kind, patches; by_hand for one made by hand, changed when its patches or their wards were changed by hand), max_move_ft (how far a corner may go from where it was laid out), the walls, and any part of its edit set aside. within limits it to the patches whose middle is in a rectangle.",
             "inputSchema": schema(json!({ "id": town, "within": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0_ft, y0_ft, x1_ft, y1_ft]" } }), &["id"]),
             "annotations": { "readOnlyHint": true },
         }),
         json!({
             "name": "edit_town",
             "title": "Lay out a town anew",
-            "description": "Change a town's or city's layout (as the ward editor does): move patch corners (moves: {corner, to [x_ft, y_ft] | by [dx_ft, dy_ft] | as_generated}), pull patches toward regular shapes (equalize: patch numbers), smooth corners round a point (relax: {at, radius_ft, amount 0-1}), set patches (patches: {patch, ward, lots, merge_with a neighbour or \"none\", reroll: true for a new roll (a park's: laid out another way), close: true to keep a temple's patch as an open close round the temple or false to build it up, park: formal or common for a park's patch, as_generated}; \"auto\" puts a field back), open or close squares where streets meet (squares: {corner, kind: crossroads, well, fountain, green, none or auto}; only at a junction), put walls up or take them down (walls: true, false or \"auto\"), or put it back (reset: all, corners, patches or squares). Corners go only as far as keeps every patch round them convex: the reply says how many went all the way. Only the patches touched are built again; buildings that come out as they were keep their ids, new ones get new ids, and a business the town loses goes to a new building where one fits, else to the nearest home about a patch away (functions_lost lists the rest). dry_run reports without changing anything.",
+            "description": "Change a town's or city's layout (as the ward editor does): move patch corners (moves: {corner, to [x_ft, y_ft] | by [dx_ft, dy_ft] | as_generated}), pull patches toward regular shapes (equalize: patch numbers), smooth corners round a point (relax: {at, radius_ft, amount 0-1}), set patches (patches: {patch, ward, lots, merge_with a neighbour or \"none\", reroll: true for a new roll (a park's: laid out another way), close: true to keep a temple's patch as an open close round the temple or false to build it up, park: formal or common for a park's patch, district: a district's id, a name, or \"auto\", as_generated}; \"auto\" puts a field back), open or close squares where streets meet (squares: {corner, kind: crossroads, well, fountain, green, none or auto}; only at a junction), put walls up or take them down (walls: true, false or \"auto\"), put gates and towers in the wall or take them out (walls: {gates_add, gates_remove, towers_add, towers_remove}), or put it back (reset: all, corners, patches, squares or walls). Corners go only as far as keeps every patch round them convex: the reply says how many went all the way. Only the patches touched are built again; buildings that come out as they were keep their ids, new ones get new ids, and a business the town loses goes to a new building where one fits, else to the nearest home about a patch away (functions_lost lists the rest). A building renamed or noted that the change takes away hands its name and note to the new building on its patch with the same function (a castle's to the new keep): renames_carried lists them, renames_lost those with none. districts_changed lists the patches put in another district. dry_run reports without changing anything.",
             "inputSchema": schema(json!({
                 "id": town,
                 "moves": { "type": "array", "items": { "type": "object", "properties": { "corner": { "type": "integer" }, "to": pt, "by": pt, "as_generated": { "type": "boolean" } }, "required": ["corner"] } },
@@ -38,15 +38,16 @@ pub fn list() -> Vec<Value> {
                     "merge_with": { "description": "A neighbouring patch whose district (ward and lots) it joins, with no street between; or \"none\"" },
                     "reroll": { "type": "boolean" },
                     "close": { "description": "A temple's patch: true opens a close round its temple (open ground with the temple, a cross before it and a hedged churchyard behind it, the houses round it kept), false builds it up; or \"auto\". Only where the town has its temple on that patch and no square opens at its corners" },
-                    "park": { "type": "string", "enum": ([PARK_KINDS.as_slice(), &["auto"]].concat()), "description": "A park's patch (ward park): a formal garden (cross walks, a fountain in the middle, hedged parterres, statues, topiary, benches) or a common (winding gravel paths to a hub, a pond, clumps of trees, a gazebo or bandstand on a rise); auto: formal by the castle and the nobles, a common elsewhere" },
+                    "park": { "type": "string", "enum": ([PARK_KINDS.as_slice(), &["auto"]].concat()), "description": "A park's patch (ward park): a formal garden (cross walks, a fountain in the middle, hedged parterres, statues, topiary, benches) or a common (winding gravel paths to a hub, a pond, clumps of trees, a gazebo or bandstand on a rise) or a cemetery (a low wall or hedge, walks, rows of graves by the culture: headstones, cairns, yews and a lychgate, tomb-houses, domed tombs or kurgans) or horses (fenced corrals of horses, a trodden market ground, hitching rails, troughs, carts); auto: formal by the castle and the nobles (horses in a steppe town), a common elsewhere" },
+                    "district": { "type": "string", "description": "The district it goes in: a district's id (d:<layout>:<n>, any patch to any district, apart or not), a name (the district of that name, else a new district so named, after the generated ones: every other district keeps its id), or \"auto\" (as generated). A district's kind follows its wards once its patches change; rename_feature renames it" },
                     "as_generated": { "type": "boolean" },
                 }, "required": ["patch"] } },
                 "squares": { "type": "array", "items": { "type": "object", "properties": {
                     "corner": { "type": "integer", "description": "A corner where three streets or more meet (junction in get_town_plan)" },
                     "kind": { "type": "string", "enum": ([SQUARE_KINDS.as_slice(), &["none", "auto"]].concat()), "description": "The square opened there (the blocks' corners round it cut back), none for no square, auto as generated" },
                 }, "required": ["corner", "kind"] } },
-                "walls": { "description": "true, false or \"auto\" (as generated). Gates stay where the roads come in; a wall taken down leaves a street round the town" },
-                "reset": { "type": "string", "enum": ["all", "corners", "patches", "squares"] },
+                "walls": { "description": "true, false or \"auto\" (as generated; a wall taken down leaves a street round the town), or {built: true|false|\"auto\", gates_add: [corner], gates_remove: [corner], towers_add: [[corner, next corner, f 0.05-0.95] | corner whose tower was taken down], towers_remove: [corner | \"t:<layout>:<n>\"]} by the wall's corners (get_town_plan: wall: true). A gate put in gets the town's gatehouse, id gt:<layout>:<corner> and a name, and a track out to the nearest road or the open country (refused, with why, where there is none, on the water, at the wall's end, a castle's curtain, under 80 ft from another gate, or sides under 56 ft); one taken out closes the wall (its road and main street stop short). A tower is refused within 20 ft of another or of a gate, or over a building or a street crossing the wall. Other towers and gates keep their ids. The reply's wall lists gates_added (id, name, way_out_ft, towers), gates_removed, towers_added, towers_removed and refused (why)" },
+                "reset": { "type": "string", "enum": ["all", "corners", "patches", "squares", "walls"] },
                 "dry_run": { "type": "boolean", "default": false },
             }), &["id"]),
         }),
@@ -111,11 +112,21 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     let key = wards::key(li);
     let reply = report.clone();
+    // (R5 towns: renames and notes go with the buildings that take their place.)
+    let carried: Vec<(String, String)> = report["renames_carried"].as_array().into_iter().flatten().filter_map(|c| Some((c["from"].as_str()?.to_string(), c["to"].as_str()?.to_string()))).collect();
     app.edit("agent", 0, move |e| {
         match edit {
             Some(t) => e.towns.insert(key, t),
             None => e.towns.remove(&key),
         };
+        for (from, to) in carried {
+            if let Some(n) = e.renames.remove(&from) {
+                e.renames.insert(to.clone(), n);
+            }
+            if let Some(n) = e.notes.remove(&from) {
+                e.notes.insert(to, n);
+            }
+        }
         Ok(reply)
     })
     .await

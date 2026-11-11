@@ -57,6 +57,15 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let mut props: Vec<super::Prop> = Vec::new();
     // A castle's or wall's works (local): built on a layout of their own, then taken from it.
     let mut works = scratch(index);
+    // (Its walls as the nearest settlement builds them, neither rich nor poor: item 104.)
+    let near = |s: &&crate::t0::settle::Settlement| (s.x - center[0]) * (s.x - center[0]) + (s.y - center[1]) * (s.y - center[1]);
+    if let Some(s) = t0.settlements.iter().min_by(|a, b| near(a).total_cmp(&near(b))) {
+        works.wall_style = super::wallstyle::WallStyle::with(s.culture % 5, false, false, s.seed);
+    }
+    // (R5 towns, M18: a wall in or round a town as that town builds its own, rich or poor.)
+    if p.kind == PoiKind::Wall && let Some(s) = super::handwall::town_of_wall(t0, center) {
+        works.wall_style = super::wallstyle::WallStyle::of(s);
+    }
     let created = poi.checked_sub(t0.base_pois).and_then(|k| world.file.edits.created.get(k));
     // Uphill (unit, local): passages run into the hill.
     let uphill = |q: P| {
@@ -266,7 +275,8 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             plazas.push(rect(at(20.0, 88.0), dir, 70.0, 40.0));
         }
     }
-    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, mut square_towers, mut mottes, mut moats, .. } = works;
+    super::wallstyle::shape_rest(&mut works, [0.0, 0.0]);
+    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, mut square_towers, mut tower_forms, wall_style, mut mottes, mut moats, .. } = works;
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     let reach = |q: &P, r: f64| [[q[0] - r, q[1] - r], [q[0] + r, q[1] + r]];
     let tower_reach = towers.iter().flat_map(|t| reach(t, 11.0)).chain(gate_towers.iter().flat_map(|t| reach(t, 15.0)));
@@ -297,6 +307,9 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     for t in &mut square_towers {
         t.0 = add(t.0, center);
     }
+    for t in &mut tower_forms {
+        t.0 = add(t.0, center);
+    }
     for m in &mut mottes {
         m.at = add(m.at, center);
     }
@@ -313,11 +326,13 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let mut l = Layout {
         walls,
         towers,
-        plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard }).chain(baileys.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Bailey })).collect(),
+        plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard, spot: super::places::Spot::None }).chain(baileys.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Bailey, spot: super::places::Spot::None })).collect(),
         buildings,
         gate_towers,
         castles,
         square_towers,
+        tower_forms,
+        wall_style,
         mottes,
         moats,
         bbox: if bb[0] <= bb[2] { bb } else { [center[0] - 40.0, center[1] - 40.0, center[0] + 40.0, center[1] + 40.0] },
@@ -334,6 +349,10 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     // (A building drawn by hand keeps its outline.)
     if p.kind != PoiKind::Building {
         super::round_off(&mut l, None);
+    }
+    // (R5 towns: a hand castle's pieces as changed by hand.)
+    if let Some(c) = created.filter(|c| c.kind == "castle") {
+        super::pieces::apply(world, t0, c, &mut l);
     }
     l
 }
@@ -663,10 +682,15 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
     // Each crossing is a gate (a corner within 20 ft of it is made one instead), at least
     // 60 ft from the gate before it.
     let sides = if c.closed { n } else { n - 1 };
+    // (A ring: only lanes through it, not along it: `handwall::ring_cuts`.)
+    let ring_cuts = c.closed.then(|| super::handwall::ring_cuts(&corners.iter().map(|q| q.0).collect::<Vec<_>>(), &lanes));
     let mut line: Vec<(P, bool)> = Vec::new();
     for i in 0..sides {
         let (a, b) = (corners[i].0, corners[(i + 1) % n].0);
-        let mut cuts: Vec<f64> = lanes.iter().filter_map(|&(p, q)| crossing(a, b, p, q)).collect();
+        let mut cuts: Vec<f64> = match &ring_cuts {
+            Some(r) => r[i].clone(),
+            None => lanes.iter().filter_map(|&(p, q)| crossing(a, b, p, q)).collect(),
+        };
         cuts.sort_by(f64::total_cmp);
         line.push(corners[i]);
         let len_ab = dist(a, b);
@@ -695,7 +719,9 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
             k += 1;
         }
     }
-    let (pieces, towers, gate_towers) = wall_pieces(&line, c.closed);
+    let (mut pieces, mut towers, mut gate_towers) = wall_pieces(&line, c.closed, l.wall_style.spacing);
+    // (R5 towns, M18: a gate on a bend as wide as one on a straight wall.)
+    super::wallgates::spread_gates(&line, c.closed, &mut pieces, &mut towers, &mut gate_towers);
     l.walls = pieces;
     l.towers = towers;
     l.gate_towers = gate_towers;
@@ -718,4 +744,14 @@ fn crossing(a: P, b: P, p: P, q: P) -> Option<f64> {
     let ap = sub(p, a);
     let (t, u) = (cross(ap, s) / d, cross(ap, r) / d);
     ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
+}
+
+/// (R5 towns, M18) The gates a wall drawn by hand would be built with (world ft), its middle
+/// where `agent::works_spot` puts it.
+pub(super) fn wall_gates(world: &World, t0: &T0, c: &crate::world::Created) -> Vec<P> {
+    let (x0, y0, x1, y1) = c.pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, q| (b.0.min(q[0]), b.1.min(q[1]), b.2.max(q[0]), b.3.max(q[1])));
+    let center = [0.5 * (x0 + x1), 0.5 * (y0 + y1)];
+    let mut l = scratch(0);
+    wall_site(world, t0, c, center, &mut l);
+    super::handwall::gates_of(&l).into_iter().map(|g| add(g, center)).collect()
 }

@@ -117,6 +117,9 @@ pub const URBAN_PATH: u8 = 12;
 /// A village's toft and croft, a manor's or a shrine's yard (`town::village`): the ground's own,
 /// grass for forest floor, no wild scatter.
 pub const URBAN_CROFT: u8 = 13;
+/// A tower's open floor inside its ring of wall, and its door (item 104, `town::wallstyle::raster`):
+/// stone underfoot, open to the sky on the battlemap.
+pub const URBAN_TOWER_FLOOR: u8 = 14;
 /// Wall-walk and tower-top heights above the ground (ft).
 const WALL_FT: f32 = 20.0;
 const TOWER_FT: f32 = 30.0;
@@ -220,6 +223,16 @@ pub enum Kind {
     WattleFence = 76,
     Beehive = 77,
     Anvil = 78,
+    // R5 towns: a cemetery's (`town::cemetery`).
+    Cairn = 100,
+    StandingStone = 101,
+    Yew = 102,
+    Lychgate = 103,
+    Kurgan = 104,
+    TombSlab = 105,
+    // R5 towns: a steppe town's horse pens and market (`town::horses`).
+    Horse = 106,
+    HitchingRail = 107,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -346,9 +359,12 @@ const KINDS: [Kind; 63] = [
 ];
 
 /// Kinds past `CATALOG`, with explicit ids (each lane's range, `docs/lane-common.md`).
-static MORE: [&[(Kind, KindInfo)]; 1] = [
+static MORE: [&[(Kind, KindInfo)]; 3] = [
     // v63 castles
     &kitchen::KINDS,
+    // R5 towns
+    &crate::town::cemetery::KINDS,
+    &crate::town::horses::KINDS,
 ];
 
 fn more() -> impl Iterator<Item = &'static (Kind, KindInfo)> {
@@ -489,9 +505,14 @@ pub struct VectorShape {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeKind {
-    /// Curtain wall segment, then `[flags, 0]` (`WALL_BARE_A`, `WALL_BARE_B`, `WALL_RUINED`).
+    /// Curtain wall segment, then `[flags, side]` (`WALL_BARE_A`, `WALL_BARE_B`, `WALL_RUINED`; side 1
+    /// where the outside of the town, or of the castle, is left of a to b, -1 right, 0 unknown:
+    /// `town::wallside`), then `[style, 0]` (`town::wallstyle::WallStyle::code`).
     Wall = 0,
-    /// Wall or gate tower: its centre, then `[flags, 0]` (`WALL_GATE`, `WALL_RUINED`).
+    /// Wall or gate tower: its centre, then `[flags, angle]` (`WALL_GATE`, `WALL_RUINED`, `WALL_SQUARE`;
+    /// the way a square's or an octagon's sides run, the way a D faces out, radians), then `[style, form]`
+    /// (`WallStyle::code` with its shape: round, square, D, octagon; a gate tower's gatehouse form as
+    /// on its `Gate`, 0 for the rest). A square or arched gate tower's half is drawn by its `Gate`.
     Tower = 1,
     /// Bridge or pier deck outline, its first edge along the span; size is the style (0 pier,
     /// 1 timber bridge, 2 stone bridge, 3 old stone bridge).
@@ -514,8 +535,12 @@ pub enum ShapeKind {
     /// the depth of a tread); size is the width it covers (squares). Every chunk it crosses has
     /// it: the ground draws the treads square across it.
     Stairs = 8,
-    /// A gatehouse over the passage between two gate towers: their centres; size is the style
-    /// (0 standing, 1 a ruin's).
+    /// A gatehouse over the passage between two gate towers: their centres, then `[style, form]`
+    /// (`WallStyle::code`; `gatehouse::House::code`, 1 + `Gatehouse`, 0 none), then `[side, exit]` (1
+    /// where the town lies on the side of +y when the first tower's way to the second is +x, i.e.
+    /// cross(second - first, inward) > 0, else -1; a bent
+    /// entrance's way out: 1 past the second tower, -1 past the first, 0 none); size is 0 standing, 1
+    /// a ruin's.
     Gate = 9,
     /// A palace forecourt's low garden wall: a straight stretch of it; size is its thickness.
     GardenWall = 10,
@@ -544,6 +569,11 @@ pub enum ShapeKind {
     /// A dry ditch's bank, inked along its top: the two ends of a stretch of it, the way down into
     /// the ditch (a unit vector; `[0, 0]` none), then `[bank, 0]` (1: its outer bank behind it).
     DitchBank = 19,
+    // R5 towns
+    /// A star-angled wall's bastion (`Layout::bastions`): its outline, the flank's foot on the curtain,
+    /// the flank's tip, the point, the other flank's tip and foot, the corner it stands in place of;
+    /// then `[style, 0]` (`WallStyle::code`). `size` is its walls' width (squares).
+    Bastion = 20,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
@@ -594,14 +624,19 @@ fn part_code(kind: crate::town::PartKind) -> u8 {
 /// each other along one stretch) and the walls running on from them opposite ways (a castle's
 /// outer and inner gates are not one gatehouse). Paired in order, each with its nearest; a pure function of the
 /// layout, so every chunk finds the same.
-fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
+pub(crate) fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
+    gateways_on(&l.walls, towers)
+}
+
+/// `gateways` along `walls` (a town's as laid, standing or not).
+pub(crate) fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
     let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
     // Which way the wall runs from each gate tower, where a stretch of it ends there.
     let away: Vec<Option<[f64; 2]>> = gates
         .iter()
         .map(|&g| {
             let at = |p: [f64; 2]| (p[0] - g[0]) * (p[0] - g[0]) + (p[1] - g[1]) * (p[1] - g[1]) < 0.25;
-            l.walls.iter().filter(|w| w.len() >= 2).find_map(|w| {
+            walls.iter().filter(|w| w.len() >= 2).find_map(|w| {
                 let n = w.len();
                 if at(w[0]) {
                     Some([w[1][0] - g[0], w[1][1] - g[1]])
@@ -1148,6 +1183,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut dressing: Vec<([f64; 2], f32, Kind, u8)> = Vec::new();
     // Temples' churchyards in closes (their headstones are the close's dressing).
     let mut churchyards: Vec<Vec<[f64; 2]>> = Vec::new();
+    // (R5 towns: the squares of cemeteries' links from their roads, kept up a bank like their walks.)
+    let mut cem_links: Vec<usize> = Vec::new();
     // The capital's palace's court's squares (halo-indexed): a lawn, nothing added on it but what it
     // sets out.
     let mut court_h = vec![false; HS * HS];
@@ -1254,7 +1291,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         (i0, j0, i1, j1)
     };
     let overlaps = |b: (f64, f64, f64, f64)| b.2 >= hx0 && b.0 <= hx0 + span && b.3 >= hy0 && b.1 <= hy0 + span;
+    // (R5 towns, 114: whether every town round the chunk is a steppe one, `steppe_only`.)
+    let (mut steppe_any, mut steppe_all) = (false, true);
     for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
+        if l.culture % 5 == 4 {
+            steppe_any = true;
+        } else {
+            steppe_all = false;
+        }
         let stamp = |poly: &[[f64; 2]], val: u8, urb_h: &mut Vec<u8>| {
             let b = bbox(poly);
             if !overlaps(b) {
@@ -1301,6 +1345,38 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             yards.push(y.clone());
         }
         crate::town::village::stamp(&l, &mut |poly, val| stamp(poly, val, &mut urb_h));
+        // R5 towns (115): bare trodden earth round a steppe town's yurts, on ground nothing else
+        // claims (a street, a square, a park stamped after it wins).
+        // (A pen's ground and a cart's trodden too, a little past them so no square they reach keeps
+        // its grass; a village's croft under them trodden as well.)
+        let yurt_props: Vec<[[f64; 2]; 4]> = l.props.iter().filter(|p| matches!(p.kind, Kind::Cart | Kind::Haystack) && l.yurts.iter().any(|y| crate::town::geom::contains(&y.lot, p.at))).map(|p| crate::town::horses::foot(p.kind, p.at, p.rot, p.scale)).collect();
+        let grow = |b: [[f64; 2]; 4]| {
+            let m = crate::town::geom::mean(&b);
+            b.map(|q| {
+                let d = crate::town::geom::sub(q, m);
+                crate::town::geom::add(m, crate::town::geom::mul(d, 1.0 + 3.6 / crate::town::geom::len(d).max(1e-9)))
+            })
+        };
+        let pens: Vec<[[f64; 2]; 4]> = l.yurts.iter().filter_map(|y| y.pen.map(|p| p.pts)).chain(yurt_props).map(grow).collect();
+        for poly in l.yurts.iter().map(|y| y.trodden.as_slice()).chain(pens.iter().map(|p| p.as_slice())) {
+            let b = bbox(poly);
+            if !overlaps(b) {
+                continue;
+            }
+            let (i0, j0, i1, j1) = range(b);
+            if i1 < 0.0 || j1 < 0.0 {
+                continue;
+            }
+            for j in j0..=j1 as usize {
+                for i in i0..=i1 as usize {
+                    let h = j * HS + i;
+                    if (urb_h[h] == 0 || urb_h[h] == URBAN_CROFT) && crate::town::geom::contains(poly, center(i, j)) {
+                        urb_h[h] = URBAN_YARD;
+                    }
+                }
+            }
+        }
+        let steppe_from = features.len();
         for pl in &l.plazas {
             use crate::town::PlazaKind as K;
             let p = &pl.pts;
@@ -1402,6 +1478,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
+        // (R5 towns, 114: a steppe town's squares raise no planted trees, a dark crown on the dust: a
+        // dais in a planter's place.)
+        if l.culture % 5 == 4 {
+            for f in features[steppe_from..].iter_mut().filter(|f| f.2 == PlazaFeature::Planter) {
+                f.2 = PlazaFeature::Dais;
+            }
+        }
         // Parks: a lawn (a formal garden's mown), gravel paths and rounds on it; its pond, stream
         // and raised tier, round features raised a tier and what it sets out (laid out whole by
         // every chunk it reaches, so they agree).
@@ -1410,8 +1493,58 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if !overlaps((b.0 - 20.0, b.1 - 20.0, b.2 + 20.0, b.3 + 20.0)) {
                 continue;
             }
+            // R5 towns (114): a horse park's ground trodden bare (a camp's clearing's), its corrals'
+            // fences the countryside's (`town::rural`), what it sets out (`town::horses`, cover enough
+            // for the guarantee; its knolls as on open ground).
+            if let Some(hp) = crate::town::horses::plan(pk) {
+                stamp(&pk.pts, URBAN_YARD, &mut urb_h);
+                // (Its squares marked, `HORSE_PARK_MARK`: the guarantee's rise there an auction block.)
+                let (i0, j0, i1, j1) = range(b);
+                if i1 >= 0.0 && j1 >= 0.0 {
+                    for j in j0..=j1 as usize {
+                        for i in i0..=i1 as usize {
+                            if crate::town::geom::contains(&pk.pts, center(i, j)) {
+                                park_h[j * HS + i] |= HORSE_PARK_MARK;
+                            }
+                        }
+                    }
+                }
+                park_keep.extend(hp.keep());
+                park_props.extend(hp.props.iter().copied());
+                continue;
+            }
             let pb = land_biome(t0, crate::town::geom::centroid(&pk.pts));
             let lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
+            // R5 towns: a cemetery's ground is a churchyard's (its rows its own, nothing added), its
+            // walks gravel, what it sets out on it (`town::cemetery`).
+            if pk.kind == crate::town::ParkKind::Cemetery {
+                stamp(&pk.pts, URBAN_GRAVEYARD, &mut urb_h);
+                churchyards.push(pk.pts.clone());
+                // (A foot and a half wider than drawn: a slanting walk stays a ribbon once the ground
+                // smooths its squares.)
+                for (a, e, half) in lay.paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 1.5))) {
+                    let (i0, j0, i1, j1) = range((a[0].min(e[0]) - half, a[1].min(e[1]) - half, a[0].max(e[0]) + half, a[1].max(e[1]) + half));
+                    if i1 < 0.0 || j1 < 0.0 {
+                        continue;
+                    }
+                    for j in j0..=j1 as usize {
+                        for i in i0..=i1 as usize {
+                            let h = j * HS + i;
+                            // (Its link from the road over open ground outside, `cemetery::Plan::link`.)
+                            let inside = crate::town::geom::contains(&pk.pts, center(i, j));
+                            if ((urb_h[h] == URBAN_GRAVEYARD && inside) || (urb_h[h] == 0 && road_h[h] == 0 && !inside)) && crate::town::geom::seg_dist(center(i, j), a, e) < half {
+                                urb_h[h] = URBAN_PATH;
+                                if !inside {
+                                    cem_links.push(h);
+                                }
+                            }
+                        }
+                    }
+                }
+                park_keep.extend(lay.keep.iter().copied());
+                park_props.extend(lay.props.iter().copied());
+                continue;
+            }
             stamp(&pk.pts, URBAN_PARK, &mut urb_h);
             park_biomes.push(pb);
             let (i0, j0, i1, j1) = range(b);
@@ -1813,7 +1946,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             for j in j0..=j1 as usize {
                 for i in i0..=i1 as usize {
                     let h = j * HS + i;
-                    if bld_h[h] != 0 || hw[h] > hh[h] || urb_h[h] == URBAN_TOWER {
+                    if bld_h[h] != 0 || hw[h] > hh[h] || urb_h[h] == URBAN_TOWER || urb_h[h] == URBAN_TOWER_FLOOR {
                         continue;
                     }
                     // Every square the drawn wall or tower touches stands on it.
@@ -1832,18 +1965,46 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         };
-        for t in &l.towers {
-            raise(*t, *t, 11.0, URBAN_TOWER, TOWER_FT, l.square_tower(*t), &mut urb_h, &mut hh, &mut lift);
+        // Towers (item 104): each a ring of wall in its shape round an open floor, a door through it on
+        // the town side (`wallstyle::raster`, on the global lattice: every chunk lays the same).
+        // (Every tower's ring first: one standing into another's floor walls it there.)
+        let (gx0, gy0) = (crate::core::round(hx0 / SQUARE_FT) as i64, crate::core::round(hy0 / SQUARE_FT) as i64);
+        let rasters: Vec<crate::town::wallstyle::Raster> = crate::interior::towers(&l)
+            .iter()
+            .filter(|&&(t, r, _)| {
+                let reach = r * std::f64::consts::SQRT_2 + 2.0;
+                overlaps((t[0] - reach, t[1] - reach, t[0] + reach, t[1] + reach))
+            })
+            .map(|&(t, r, gate)| crate::town::wallstyle::tower_raster(&l, t, r, gate, SQUARE_FT).1)
+            .chain(crate::town::gatehouse::rasters(&crate::town::gatehouse::houses(&l), SQUARE_FT))
+            .collect();
+        for ring in [true, false] {
+            for ras in &rasters {
+                for (q, &v) in ras.cells.iter().enumerate().filter(|c| *c.1 != 0 && (*c.1 == crate::town::wallstyle::RING) == ring) {
+                    let (i, j) = (ras.i0 + (q % ras.nx) as i64 - gx0, ras.j0 + (q / ras.nx) as i64 - gy0);
+                    if i < 0 || j < 0 || i >= HS as i64 || j >= HS as i64 {
+                        continue;
+                    }
+                    let h = j as usize * HS + i as usize;
+                    if bld_h[h] != 0 || hw[h] > hh[h] || urb_h[h] == URBAN_TOWER || urb_h[h] == URBAN_TOWER_FLOOR {
+                        continue;
+                    }
+                    if v == crate::town::wallstyle::RING {
+                        urb_h[h] = URBAN_TOWER;
+                        hh[h] = ground_h[h] + TOWER_FT;
+                        lift[h] = hh[h] - ground_h[h];
+                    } else {
+                        urb_h[h] = URBAN_TOWER_FLOOR;
+                    }
+                }
+            }
         }
-        for t in &l.gate_towers {
-            raise(*t, *t, 15.0, URBAN_TOWER, TOWER_FT, None, &mut urb_h, &mut hh, &mut lift);
-        }
-        for &(t, gate) in &l.extra_towers {
-            raise(t, t, if gate { 15.0 } else { 11.0 }, URBAN_TOWER, TOWER_FT, if gate { None } else { l.square_tower(t) }, &mut urb_h, &mut hh, &mut lift);
-        }
+        // (Each as thick as it is built (item 104: a palisade thinner, rammed earth thicker), and never
+        // so thin that a square's corner lets a diagonal through.)
         for w in &l.walls {
             for seg in w.windows(2) {
-                raise(seg[0], seg[1], 4.0, URBAN_WALL, WALL_FT, None, &mut urb_h, &mut hh, &mut lift);
+                let half = (0.5 * l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5)).thickness()).max(2.1);
+                raise(seg[0], seg[1], half, URBAN_WALL, WALL_FT, None, &mut urb_h, &mut hh, &mut lift);
             }
         }
         // A palace's forecourt: its low garden wall, the gate's piers (`interior::FORE_WALL_FT`,
@@ -1864,25 +2025,47 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let bare = |p: [f64; 2], wi: usize| {
             !towers.iter().any(|t| near(p, t.0, t.1 + 1.0)) && !l.walls.iter().enumerate().any(|(k, w)| k != wi && (near(p, w[0], 1.0) || near(p, w[w.len() - 1], 1.0)))
         };
+        // (Which side of each wall is outside: `town::wallside`, on a wall's flags point.)
+        let outward = crate::town::wallside::outward(&l);
         for (wi, w) in l.walls.iter().enumerate() {
             let n = w.len();
             for (k, seg) in w.windows(2).enumerate() {
                 if owns([0.5 * (seg[0][0] + seg[1][0]), 0.5 * (seg[0][1] + seg[1][1])]) {
                     let ends = if k == 0 && bare(seg[0], wi) { WALL_BARE_A } else { 0 } | if k + 2 == n && bare(seg[1], wi) { WALL_BARE_B } else { 0 };
-                    let flags = [(ends | ruin_bit) as f32, 0.0];
-                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (8.0 / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags] });
+                    let flags = [(ends | ruin_bit) as f32, outward[wi]];
+                    let ws = l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5));
+                    let style = ws.code(crate::town::wallstyle::TowerShape::Round) as f32;
+                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (ws.thickness() / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags, [style, 0.0]] });
                 }
             }
         }
+        crate::town::wallside::bastions(&l, &owns, &local, &mut shapes);
+        let houses = crate::town::gatehouse::houses(&l);
         for &(t, r, gate) in &towers {
             if owns(t) {
-                // (A square tower: its flag, and the way its sides run as an angle.)
-                let square = if gate { None } else { l.square_tower(t) };
-                let flags = match square {
-                    Some(u) => [(WALL_SQUARE | ruin_bit) as f32, libm::atan2(u[1], u[0]) as f32],
-                    None => [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0],
+                // (A square tower: its flag, and the way its sides run as an angle; a D's the way it faces,
+                // an octagon's the way its sides run. Then its style: `WallStyle::code` with its shape.)
+                use crate::town::wallstyle::TowerShape;
+                // (A gate tower: its gatehouse's form after the style, `gatehouse::House::code`.)
+                let house = if gate { crate::town::gatehouse::of_tower(&houses, t) } else { None };
+                let (shape, u, r) = match house {
+                    Some((h, second)) => {
+                        let (s, u, r, _) = h.tower(second);
+                        (s, u, r)
+                    }
+                    None if gate => (TowerShape::Round, [1.0, 0.0], r),
+                    None => {
+                        let (s, u) = l.tower_form(t);
+                        (s, u, r)
+                    }
                 };
-                shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t), flags] });
+                let flags = match shape {
+                    TowerShape::Square => [(WALL_SQUARE | if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, libm::atan2(u[1], u[0]) as f32],
+                    TowerShape::Round => [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0],
+                    _ => [ruin_bit as f32, libm::atan2(u[1], u[0]) as f32],
+                };
+                let style = [l.wall_style_at(t).code(shape) as f32, house.map_or(0.0, |h| h.0.code())];
+                shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t), flags, style] });
             }
         }
         for &(a, b) in &fore_walls {
@@ -1910,7 +2093,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for (g, h) in gateways(&l, &towers) {
             gates.push((g, h));
             if owns([0.5 * (g[0] + h[0]), 0.5 * (g[1] + h[1])]) {
-                shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h)] });
+                let style = l.wall_style_at(g).code(crate::town::wallstyle::TowerShape::Round) as f32;
+                // (Its form, the side the town is on and a bent entrance's way out: `gatehouse::House`.)
+                let (form, side, exit) = crate::town::gatehouse::of_tower(&houses, g)
+                    .map_or((0.0, 0.0, 0.0), |(o, _)| (o.code(), if crate::town::geom::cross(crate::town::geom::sub(h, g), o.n) >= 0.0 { 1.0 } else { -1.0 }, o.exit as f32));
+                shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h), [style, form], [side, exit]] });
             }
         }
         // Deck style: 0 pier, 1 a village or town's timber bridge, 2 a city's stone bridge, 3 an
@@ -2218,7 +2405,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Micro-relief never lifts or digs a road bed, a building, a street, a field or the ground
     // at a way underground.
     let protected: Vec<bool> =
-        (0..HS * HS).map(|h| road_h[h] != 0 || bld_h[h] != 0 || in_town[h] || ent_h[h] || matches!(urb_h[h], URBAN_STREET | URBAN_PLAZA | URBAN_WALL | URBAN_TOWER | URBAN_FIELD | URBAN_YARD)).collect();
+        (0..HS * HS).map(|h| road_h[h] != 0 || bld_h[h] != 0 || in_town[h] || ent_h[h] || matches!(urb_h[h], URBAN_STREET | URBAN_PLAZA | URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR | URBAN_FIELD | URBAN_YARD)).collect();
     for h in 0..HS * HS {
         if protected[h] {
             hh[h] = road_bed[h];
@@ -2506,12 +2693,15 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // to a square beside it: it stops at the edge, but where the step is a raised feature's.)
     let on_feature = |h: usize| features.iter().any(|f| crate::town::geom::dist(center(h % HS, h / HS), f.0) <= f.1);
     let cliff = |h: usize| [1, HS].iter().any(|&o| [h + o, h - o].iter().any(|&nh| (hh[nh] - hh[h]).abs() > 2.75 && !on_feature(nh)));
+    // (R5 towns: a cemetery's walks stay whole: its ground is levelled to the bed later, its tombs
+    // stand by its walks.)
+    let in_yard = |h: usize| churchyards.iter().any(|y| crate::town::geom::contains(y, center(h % HS, h / HS))) || cem_links.contains(&h);
     let urban: Vec<u8> = (0..n)
         .map(|k| {
             let h = (k / SQ + 1) * HS + k % SQ + 1;
             match urb_h[h] {
                 _ if ent_h[h] => URBAN_ENTRANCE,
-                URBAN_PATH if hw[h] > hh[h] || cliff(h) => URBAN_PARK,
+                URBAN_PATH if hw[h] > hh[h] || (cliff(h) && !in_yard(h)) => URBAN_PARK,
                 u => u,
             }
         })
@@ -2602,7 +2792,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
-                URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
+                URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR => chunk.surface[k] = Surface::Rock,
                 URBAN_PATH => chunk.surface[k] = Surface::Gravel,
                 // (A formal garden's lawn is mown grass, whatever grows round the town; a common's is
                 // the ground of the land round its middle, whatever the shore beside it.)
@@ -2655,7 +2845,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 chunk.urban[k] == URBAN_PLAZA
                     && bailey_kind[h(0, 0)] & 3 != 0
                     && bailey_kind[h(0, 0)] & 4 == 0
-                    && (-1..=1).all(|dy| (-1..=1).all(|dx| !matches!(urb_h[h(dx, dy)], URBAN_WALL | URBAN_TOWER) && bailey_kind[h(dx, dy)] & 4 == 0))
+                    && (-1..=1).all(|dy| (-1..=1).all(|dx| !matches!(urb_h[h(dx, dy)], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR) && bailey_kind[h(dx, dy)] & 4 == 0))
             })
             .collect()
     };
@@ -2839,8 +3029,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         let k = y as usize * SQ + x as usize;
         let wet_ok = matches!(kind, Kind::Reeds | Kind::Footbridge);
-        let gravel_ok = matches!(kind, Kind::Fountain | Kind::GardenStatue | Kind::Footbridge);
-        if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || (!wet_ok && chunk.water_level[k] > chunk.height[k]) || !(chunk.urban[k] == URBAN_PARK || (gravel_ok && chunk.urban[k] == URBAN_PATH)) {
+        let gravel_ok = matches!(kind, Kind::Fountain | Kind::GardenStatue | Kind::Footbridge | Kind::Lychgate);
+        // (R5 towns: a cemetery's on its graveyard ground.)
+        let lawn = chunk.urban[k] == URBAN_PARK || chunk.urban[k] == URBAN_GRAVEYARD || chunk.urban[k] == URBAN_YARD;
+        if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || (!wet_ok && chunk.water_level[k] > chunk.height[k]) || !(lawn || (gravel_ok && chunk.urban[k] == URBAN_PATH)) {
             continue;
         }
         let o = Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: false };
@@ -2908,7 +3100,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let keep_off: Vec<bool> = (0..n)
         .map(|k| {
             let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
-            let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER);
+            let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR);
             let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
             (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy)))
                 || in_gate(p, 2.5)
@@ -2992,6 +3184,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &park, &bailey);
+    // R5 towns (114): a steppe town's stone daises (its squares', a horse park's, the guarantee's
+    // there) are banks of earth trodden by hooves (`PlazaFeature::Mound`).
+    if steppe_any && steppe_all {
+        for s in chunk.structures.iter_mut().filter(|s| s.kind == ShapeKind::Dais && s.size == PlazaFeature::Dais as u8 as f32) {
+            s.size = PlazaFeature::Mound as u8 as f32;
+        }
+    }
     // A bench the guarantee put in a park is one of the park's, facing its nearest path, or the
     // middle of the gravel round it stands at; one out on the lawn, more than 12 ft from either, is a
     // shrub instead. Its flowerbeds lie square to a formal garden's axis.
@@ -3037,7 +3236,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             raised.iter().any(|&(c, r2)| (x - c[0]) * (x - c[0]) + (y - c[1]) * (y - c[1]) <= r2)
         };
         let cut: Vec<usize> = (0..n)
-            .filter(|&k| chunk.urban[k] == URBAN_PATH)
+            .filter(|&k| chunk.urban[k] == URBAN_PATH && !churchyard.get(k).is_some_and(|&y| y))
             .filter(|&k| {
                 let (x, y) = (k % SQ, k / SQ);
                 [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
@@ -3161,7 +3360,7 @@ fn touches_square(o: &Object, hit: impl Fn(usize) -> bool) -> bool {
 
 /// Whether an object's footprint touches a wall or tower square (it would be drawn over them).
 fn on_wall(urban: &[u8], o: &Object) -> bool {
-    touches_square(o, |k| matches!(urban[k], URBAN_WALL | URBAN_TOWER))
+    touches_square(o, |k| matches!(urban[k], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR))
 }
 
 /// Objects put down and taken away by hand (`Edits::objects`, `Edits::cleared`): generated
@@ -3178,11 +3377,13 @@ fn roof_byte(b: &crate::town::Building, battlements: bool) -> u8 {
     style | b.tint.map_or(0, |t| (t + 1) << 2)
 }
 
-/// A roof's look as packed (`town::roof::look`): material id, shape id | 0x10 smoke-darkened |
+/// A roof's look as packed (`town::roof::look`): material id | 0x80 a steppe home's yurt (R5 towns,
+/// 115: its colour variant then its felt, `town::yurts::felt`), shape id | 0x10 smoke-darkened |
 /// colour variant << 5, weathering 0-255.
 fn look_bytes(l: &crate::town::Layout, b: &crate::town::Building) -> [u8; 3] {
     let k = crate::town::roof::look(l, b);
-    [k.material as u8, k.shape as u8 | if k.smoke { 0x10 } else { 0 } | k.shade << 5, k.wear]
+    let yurt = k.shape == crate::town::roof::Shape::Round && b.poly.len() == crate::town::roof::ROUND_SIDES && crate::town::yurts::is_steppe_home(l, b);
+    [k.material as u8 | if yurt { 0x80 } else { 0 }, k.shape as u8 | if k.smoke { 0x10 } else { 0 } | k.shade << 5, k.wear]
 }
 
 fn apply_edits(c: &mut Chunk, e: &crate::world::Edits, ox: f64, oy: f64) {
@@ -4032,6 +4233,9 @@ fn place_in(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, kind_of: &dyn Fn(&C
 /// lawns' room (`lawn_room`) while nothing has been raised since it was worked out.
 /// Whether anything was raised.
 #[allow(clippy::too_many_arguments)]
+/// A horse park's squares in the parks' marks (`enforce`'s `park`; R5 towns, 114).
+const HORSE_PARK_MARK: u8 = 32;
+
 fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room: &mut Option<Vec<u8>>) -> bool {
     let raised = raise_on(c, cells, rng, gsx, gsy, sea, shaped, park, bailey, room);
     if raised {
@@ -4072,10 +4276,15 @@ fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64,
     // Paved ground (streets, plazas) gets a round built feature (a dais, a fountain, a
     // planter, a market cross) clear of stalls and props, rather than a knoll.
     if good.is_empty() && !town.is_empty() {
-        let free = |c: &Chunk, k: usize| placeable(c, k) && interior(k) && (matches!(c.urban[k], URBAN_STREET | URBAN_PLAZA) || (garden(k) && c.urban[k] == URBAN_PARK));
+        // (R5 towns, 114: a horse park's trodden ground an auction block, a dais, not a knoll.)
+        let hs: Vec<bool> = if park.iter().any(|&p| p & HORSE_PARK_MARK != 0) { park.iter().enumerate().map(|(k, &p)| p & HORSE_PARK_MARK != 0 && c.urban[k] == URBAN_YARD).collect() } else { Vec::new() };
+        let horses = |k: usize| hs.get(k).is_some_and(|&h| h);
+        let free = |c: &Chunk, k: usize| placeable(c, k) && interior(k) && (matches!(c.urban[k], URBAN_STREET | URBAN_PLAZA) || (garden(k) && c.urban[k] == URBAN_PARK) || horses(k));
         let kind = |k: usize, r: f64, rng: &mut Pcg32| {
             // (A castle's yard: a raised planter, in a garden yard now and then a fountain.)
-            if yard(k) != 0 {
+            if horses(k) {
+                PlazaFeature::Dais
+            } else if yard(k) != 0 {
                 if yard(k) == 2 && r >= 1.5 && rng.next_f64() < 0.3 { PlazaFeature::Fountain } else { PlazaFeature::Planter }
             } else if garden(k) {
                 if r < 1.5 || rng.next_f64() < 0.7 { PlazaFeature::Planter } else { PlazaFeature::Fountain }
@@ -4425,6 +4634,8 @@ pub enum PlazaFeature {
     Planter = 2,
     /// A market cross on a stepped round plinth.
     Cross = 3,
+    /// A low bank of trodden earth, hoof-worn round its edge (a steppe town's dais: R5 towns, 114).
+    Mound = 4,
 }
 
 /// How a market fills its square: half-extents (ft, ranges) of the part round the well it keeps
@@ -5220,7 +5431,8 @@ fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes
                 out.push((at, 0.0, Kind::MarketCross, [0, 2][rng.below(2) as usize]));
             }
             if let Some(g) = on(crate::town::Structure::Open).filter(|g| g.len() == 4) {
-                // A hedge round the churchyard 3 ft out, with a gap for its gate on the temple's side.
+                // A hedge round the churchyard 3 ft out (a steppe town's stones), with a gap for its gate
+                // on the temple's side.
                 let gc = centroid(g);
                 let mid = |e: usize| lerp(g[e], g[(e + 1) % 4], 0.5);
                 let gate = (0..4).min_by(|&a, &b| dist(mid(a), tc).total_cmp(&dist(mid(b), tc))).unwrap_or(0);
@@ -5234,7 +5446,9 @@ fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes
                         }
                         let d = sub(q, gc);
                         let p = add(q, mul(d, 3.0 / len(d).max(1e-9)));
-                        out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, Kind::Bush, rng.below(4) as u8));
+                        // (R5 towns, 114: a steppe town's a ring of stones, no hedge, as its cemetery's.)
+                        let edge = if l.culture % 5 == 4 { Kind::RockSmall } else { Kind::Bush };
+                        out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, edge, rng.below(4) as u8));
                     }
                 }
                 // Headstones in rows square to the churchyard, a path kept from its gate across.

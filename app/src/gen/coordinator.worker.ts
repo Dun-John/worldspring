@@ -304,7 +304,7 @@ function sendTile(id: string) {
   const rivers = buildRiverGeometry(r.rivers);
   const transfer: Transferable[] = [tex.buffer, biome.buffer];
   const roads = buildRiverGeometry(r.roads);
-  const sites = buildSiteGeometry(r.sitePolys, r.siteLines);
+  const sites = buildSiteGeometry(r.sitePolys, r.siteLines, r.siteLooks, geom ? geom.domain_ft / 2 ** r.level : 0);
   for (const g of [rivers, roads, sites?.ink]) if (g) transfer.push(g.a.buffer, g.b.buffer, g.corner.buffer, g.w.buffer, g.q.buffer, g.index.buffer);
   if (sites?.fill) transfer.push(sites.fill.pos.buffer, sites.fill.color.buffer, sites.fill.edge.buffer, sites.fill.index.buffer);
   post(

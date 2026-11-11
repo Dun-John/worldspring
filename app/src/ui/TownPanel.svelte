@@ -1,11 +1,11 @@
 <script lang="ts">
   // Edit › Streets: the town in view laid out anew by hand (the ward editor). Its patches are drawn
   // over the map; a corner dragged, or the brushes, move them (applied on release); a patch
-  // picked can be given another ward, lot size, joined to a neighbour's district or laid out
+  // picked can be given another ward, lot size, joined to a neighbour's district or put in another (or a new one by name) or laid out
   // again, a temple's kept as a close round it, a park's laid out as a formal garden or a common; a
   // corner where streets meet picked can be given a square; the town's walls put up or taken down.
   // Each change is one step to undo.
-  import { LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS, type LotSize, type ParkKind, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWard } from '../gen/protocol';
+  import { LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS, type LotSize, type ParkKind, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWallsRequest, type TownWard } from '../gen/protocol';
   import { SQUARE_COLOURS, WARD_COLOURS, type TownMode } from '../editor/town';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -28,6 +28,8 @@
     busy: boolean;
     /** Close enough to see the patches. */
     near: boolean;
+    /** Why the last gate or tower asked for was refused. */
+    wallWhy?: string;
     peek?: boolean;
     onMode: (m: TownMode) => void;
     onChange: (req: TownRequest, what: string) => void;
@@ -35,7 +37,7 @@
     onZoomIn: () => void;
   }
 
-  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, peek = false, onMode, onChange, onMerge, onZoomIn }: Props = $props();
+  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn }: Props = $props();
 
   const MODES: { key: TownMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
@@ -63,10 +65,14 @@
     empty: 'Open ground',
   };
   const LOT_LABEL: Record<LotSize, string> = { small: 'Small', medium: 'Medium', large: 'Large', huge: 'Huge' };
-  const PARK_LABEL: Record<ParkKind, string> = { formal: 'Formal garden', common: 'Common' };
+  const PARK_LABEL: Record<ParkKind, string> = { formal: 'Formal garden', common: 'Common', cemetery: 'Cemetery', horses: 'Horse market' };
+  // (On the buttons: five side by side fit the panel only short.)
+  const PARK_SHORT: Record<ParkKind, string> = { formal: 'Formal', common: 'Common', cemetery: 'Cemetery', horses: 'Horses' };
   const PARK_HINT: Record<ParkKind, string> = {
     formal: 'cross walks, a fountain, hedged beds, statues and topiary',
     common: 'winding paths, a pond, trees, a gazebo or a bandstand',
+    cemetery: "graves in rows, tombs and a lychgate by the town's culture",
+    horses: 'fenced corrals of horses, a trodden market ground, hitching rails, troughs and carts',
   };
   const SQUARE_LABEL: Record<SquareKind | 'none', string> = {
     crossroads: 'Widened crossroads',
@@ -75,6 +81,21 @@
     green: 'Small green',
     none: 'No square',
   };
+  // The wall at the picked corner (R5 towns, M18c): a gate, towers, and the hand towers touching it.
+  const byHand = $derived(plan?.walls.by_hand);
+  const onWall = $derived(!!corner?.wall && !!plan?.walls.built);
+  // Map north is up, and world y grows southward (as drawn).
+  const compass = (dx: number, dy: number) => ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'][((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8];
+  const sides = $derived.by(() => {
+    if (!plan || !corner?.wall_next) return [];
+    return corner.wall_next.flatMap((w) => {
+      const o = w === null ? undefined : plan.corners.find((c) => c.corner === w);
+      return o ? [{ corner: o.corner, dir: compass(o.at[0] - corner.at[0], o.at[1] - corner.at[1]), ft: Math.hypot(o.at[0] - corner.at[0], o.at[1] - corner.at[1]) }] : [];
+    });
+  });
+  const handTowers = $derived(byHand && corner ? byHand.towers_added.filter((t) => t.corners.includes(corner.corner)) : []);
+  const gateRefused = $derived(byHand?.gates_added.find((g) => corner && g.corner === corner.corner)?.refused);
+  const walls = (w: TownWallsRequest, what: string) => onChange({ walls: w }, what);
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
   const ft = (v: number) => `${Math.round(v).toLocaleString('en')} ft`;
 
@@ -82,6 +103,33 @@
   const brush = $derived(mode !== 'select' && mode !== 'equalize');
   const generatedWard = $derived(selected ? (selected.ward_generated ?? selected.ward) : 'empty');
   const set = (req: TownRequest['patches'], what: string) => selected && onChange({ patches: req }, what);
+  let naming = $state(false);
+  let newName = $state('');
+  const districtList = $derived((plan?.districts ?? []).filter((d) => d.patches.length > 0 || d.id === selected?.district?.id));
+  function pickDistrict(e: Event) {
+    const el = e.currentTarget as HTMLSelectElement;
+    const v = el.value;
+    if (!selected) return;
+    if (v === '@new') {
+      naming = true;
+      el.value = selected.district?.id ?? '';
+      return;
+    }
+    naming = false;
+    set([{ patch: selected.patch, district: v === '@auto' ? 'auto' : v }], 'district');
+  }
+  function makeDistrict() {
+    const n = newName.trim().slice(0, 80);
+    if (!n || !selected) return;
+    set([{ patch: selected.patch, district: n }], 'district');
+    naming = false;
+    newName = '';
+  }
+  // (A different patch picked: the name box closes.)
+  $effect(() => {
+    selected?.patch;
+    naming = false;
+  });
   const generatedSquare = $derived(corner ? (corner.square_generated ?? corner.square ?? 'none') : 'none');
 </script>
 
@@ -131,13 +179,33 @@
             {/each}
           </select>
         </label>
+        {#if selected.in_town && plan.districts?.length}
+          <div class="ws-field">
+            <label for="town-district">District</label>
+            <select id="town-district" class="ws-input" value={selected.district?.id ?? ''} disabled={busy} onchange={pickDistrict}>
+              {#if !selected.district}<option value="" disabled>None</option>{/if}
+              {#each districtList as d (d.id)}
+                <option value={d.id}>{d.name || 'Unnamed'} ({d.kind}){d.by_hand ? ' · by hand' : ''}</option>
+              {/each}
+              <option value="@auto">As generated</option>
+              <option value="@new">New district…</option>
+            </select>
+            {#if naming}
+              <div class="row">
+                <input class="ws-input grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
+                <button class="ws-btn" disabled={busy || !newName.trim()} onclick={makeDistrict}>Make</button>
+                <button class="ws-btn" disabled={busy} onclick={() => (naming = false)}>Cancel</button>
+              </div>
+            {/if}
+          </div>
+        {/if}
         {#if selected.ward === 'park'}
           <div class="ws-field">
             Laid out as
             <div class="ws-seg" role="radiogroup" aria-label="Laid out as">
               <button class:on={!selected.park_by_hand} aria-pressed={!selected.park_by_hand} disabled={busy} onclick={() => set([{ patch: selected.patch, park: 'auto' }], 'park')} title="As the town has it: formal by the castle and the nobles, a common elsewhere">Auto</button>
               {#each PARK_KINDS as k (k)}
-                <button class:on={!!selected.park_by_hand && selected.park === k} aria-pressed={!!selected.park_by_hand && selected.park === k} disabled={busy} onclick={() => set([{ patch: selected.patch, park: k }], 'park')}>{PARK_LABEL[k]}</button>
+                <button class:on={!!selected.park_by_hand && selected.park === k} aria-pressed={!!selected.park_by_hand && selected.park === k} disabled={busy} onclick={() => set([{ patch: selected.patch, park: k }], 'park')} title={PARK_LABEL[k]}>{PARK_SHORT[k]}</button>
               {/each}
             </div>
             {#if selected.park}<span class="ws-muted">{PARK_LABEL[selected.park]}: {PARK_HINT[selected.park]}</span>{/if}
@@ -192,8 +260,40 @@
               <button class="ws-btn" disabled={busy} onclick={() => onChange({ squares: [{ corner: corner.corner, kind: 'auto' }] }, 'square')}><Icon name="reset" size={16} /> As generated</button>
             </div>
           {/if}
-        {:else}
+        {:else if !onWall}
           <div class="ws-hint">No square opens here: {corner.square_refused ?? 'it needs three streets or more meeting between built-up patches, inside the walls and off the water'}.</div>
+        {/if}
+        {#if onWall}
+          <div class="ws-hint"><b>Wall here</b>{corner.gate_by_hand ? ' · a gate put in by hand' : corner.gate_removed ? ' · its gate taken out' : corner.gate ? ' · a gate' : ''}</div>
+          <div class="row">
+            {#if corner.gate}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ gates_remove: [corner.corner] }, 'gate')}>Remove gate</button>
+            {:else}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ gates_add: [corner.corner] }, 'gate')}>Gate here</button>
+            {/if}
+            {#if !corner.tower_removed}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_remove: [corner.corner] }, 'tower')}>Remove tower</button>
+            {:else}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_add: [corner.corner] }, 'tower')}>Tower back</button>
+            {/if}
+          </div>
+          <div class="row">
+            {#each sides as s (s.corner)}
+              <button class="ws-btn" disabled={busy} title="A tower midway along the wall to corner {s.corner}" onclick={() => walls({ towers_add: [[corner.corner, s.corner, 0.5]] }, 'tower')}>Tower to the {s.dir}, {ft(s.ft)}</button>
+            {/each}
+          </div>
+          {#each handTowers as t (t.id)}
+            <div class="row">
+              <span class="grow ws-muted">Hand tower {t.id.split(':')[2]} on {t.corners.join('–')}</span>
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_remove: [t.id] }, 'tower')}>Remove</button>
+            </div>
+          {/each}
+          {#if gateRefused}
+            <div class="ws-hint">The gate set here isn't built: {gateRefused}.</div>
+          {/if}
+          {#if wallWhy}
+            <div class="ws-hint">{wallWhy}</div>
+          {/if}
         {/if}
       </section>
     {/if}

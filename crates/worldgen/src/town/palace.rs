@@ -242,10 +242,11 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
     }
     let mut homes: Vec<usize> = Vec::new();
     for (k, b) in l.buildings.iter().enumerate() {
-        if b.id == p.id || gone.contains(&b.id) || dist(centroid(&b.poly), c0) > reach + 200.0 {
+        if b.id == p.id || dist(centroid(&b.poly), c0) > reach + 200.0 {
             continue;
         }
-        if takes(b) {
+        // (A lot another took in before it is that one's ground: kept clear as any other building.)
+        if takes(b) && !gone.contains(&b.id) {
             homes.push(k);
         } else {
             block_out(&b.poly, &mut free);
@@ -984,9 +985,12 @@ pub(super) fn gardens(site: &Site, l: &mut Layout, off: P) {
             })
             .collect();
         let key = crate::core::rng::hash2(0x9a4c_6a7d, id as i64, 0x67);
-        let mut pk = super::park(site, &local(&q), super::ParkKind::Formal, fronts, key);
+        // (R5 towns, 114: a steppe palace's horse lines in place of its garden.)
+        let kind = if l.culture % 5 == 4 { super::ParkKind::Horses } else { super::ParkKind::Formal };
+        let mut pk = super::park(site, &local(&q), kind, fronts, key);
         pk.pts = q;
         pk.ground.origin = add(pk.ground.origin, off);
+        pk.spot = super::places::Spot::Garden(id);
         l.parks.push(pk);
     }
 }

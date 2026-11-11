@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -136,7 +136,7 @@ export class GenClient {
   /** A generated building's edit with `change` made (`{func, floors, poly, roof, tint, structure}`;
    * an empty string or `auto` goes back to as generated), or `{remove: true}`: the edit (null: as
    * generated) or why not; null if the generator could not answer. */
-  buildingEdit(id: string, change: object): Promise<{ edit: BuildingEdit | null } | { error: string } | null> {
+  buildingEdit(id: string, change: object): Promise<{ edit: BuildingEdit | null } | { piece: PieceEdit } | { error: string } | null> {
     return this.ask({ op: 'bedit', id, change: JSON.stringify(change) }).then((j) => JSON.parse(j));
   }
 

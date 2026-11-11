@@ -208,6 +208,10 @@ pub(super) fn shape_all(l: &mut Layout, generated: Option<&Layout>) {
         if !(is_temple(b) || shrine) || b.structure != Structure::Roofed || b.ward == Ward::Castle || !b.parts.is_empty() {
             continue;
         }
+        // (R5 towns: a steppe temple a round felt hall where its lot holds one, `town::round_off`.)
+        if super::roof::hall_ring(l, b).is_some() {
+            continue;
+        }
         let Some((p0, q0)) = shape(&b.poly, false, shrine) else { continue };
         let Some((p1, q1)) = shape(&b.poly, true, shrine) else { continue };
         // (Each way's door end: the body's first edge's middle.)

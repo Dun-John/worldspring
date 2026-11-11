@@ -2,7 +2,8 @@
 // Ink lines owned by a tile (building outlines, town walls, towers) as screen-space capsules.
 // aQ.x = style: 0 outline, 1 wall, 2 tower (a zero-length capsule = a round tower), 3 a flight of
 // steps (hatched across its line, square ends; aW its full width), 4 a square tower (square ends,
-// aW its side, its line its side's length).
+// aW its side, its line its side's length), 5 a palisade and 6 a rammed earth wall (a wall in its
+// material's colour, inked along its sides); a stone wall's or tower's style may carry its stone + 1 in sixteenths after it.
 
 in vec2 aA;
 in vec2 aB;
@@ -29,7 +30,7 @@ void main() {
     vec2 sa = (m * vec3(aA, 1.0)).xy;
     vec2 sb = (m * vec3(aB, 1.0)).xy;
     float style = aQ.x;
-    float minPx = style < 0.5 ? 0.45 : (style < 1.5 ? 1.2 : (style < 2.5 || style > 3.5 ? 2.2 : 0.0));
+    float minPx = style < 0.5 ? 0.45 : (style < 1.5 || style > 4.5 ? 1.2 : (style < 2.5 || style > 3.5 ? 2.2 : 0.0));
     float hw = max(minPx, 0.5 * aW.x * uPpf);
     vec2 dir = sb - sa;
     float len = length(dir);

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, NamedPlaces, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, NamedPlaces, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { MI, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
@@ -1316,7 +1316,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), editGenerated: (h: BuildingHit) => editGenerated(h), saveGenerated: () => saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(build, o), generatedActions: (h: BuildingHit) => generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1535,7 +1535,8 @@
     }
     done();
     const name = works.name.trim() || editing?.name || spot.name;
-    const c: Created = { ...draft, x: spot.x, y: spot.y, name };
+    // (A castle's pieces changed by hand stay through a redraw or new options.)
+    const c: Created = { ...draft, x: spot.x, y: spot.y, name, ...(editing?.pieces ? { pieces: editing.pieces } : {}) };
     const all = { ...(edits.buildings ?? {}) };
     for (const b of spot.in_way) all[b.id] = { at: b.at, removed: true };
     const buildings = spot.in_way.length ? all : edits.buildings;
@@ -1580,6 +1581,12 @@
   let townPatch = $state<number | null>(null);
   /** The corner picked (a square where streets meet), if any: picked instead of a patch. */
   let townCorner = $state<number | null>(null);
+  /** Why the last gate or tower asked for was refused. */
+  let townWallWhy = $state('');
+  $effect(() => {
+    void townCorner;
+    townWallWhy = '';
+  });
   let townMerging = $state(false);
   let townBusy = $state(false);
   /** What the plan shown was read for: the town and its edit. */
@@ -1690,6 +1697,7 @@
   /** A change asked of the town in view: made (one step to undo), or why not. */
   async function townChange(request: TownRequest, what: string) {
     const i = townIndex;
+    townWallWhy = '';
     if (i < 0 || townBusy) return void townTool?.settled();
     townBusy = true;
     const r = await view.gen.townChange(i, request).finally(() => (townBusy = false));
@@ -1699,15 +1707,31 @@
       return void toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
     }
     const key = String(i);
+    townWallWhy = (r.report.wall?.refused ?? []).map((x) => x.why).join('; ');
     if (JSON.stringify(edits.towns?.[key] ?? null) === JSON.stringify(r.edit)) {
       townTool?.settled();
-      return void toast(what === 'corners' ? 'Nothing moved: the patches round those corners must stay convex' : 'Nothing changed');
+      return void toast(what === 'corners' ? 'Nothing moved: the patches round those corners must stay convex' : townWallWhy ? townWallWhy.charAt(0).toUpperCase() + townWallWhy.slice(1) : 'Nothing changed');
     }
     const towns = { ...(edits.towns ?? {}) };
     if (r.edit) towns[key] = r.edit;
     else delete towns[key];
     view.hintTown(key, r.edit, r.report.rects);
-    applyEdits({ ...edits, towns }, { tool: 'edit_town', id: settlements[i]?.id, name: townName ?? undefined, what, ...townReport(r.report) }, 'user');
+    // A renamed or noted building handed on to its successor: name and note move in the same step.
+    let renames = edits.renames;
+    let notes = edits.notes;
+    for (const c of r.report.renames_carried ?? []) {
+      if (renames && c.from in renames) {
+        renames = { ...renames, [c.to]: renames[c.from] };
+        delete renames[c.from];
+      }
+      if (notes && c.from in notes) {
+        notes = { ...notes, [c.to]: notes[c.from] };
+        delete notes[c.from];
+      }
+    }
+    const lost = r.report.renames_lost ?? [];
+    if (lost.length) toast(`Kept on the old id: ${lost.map((l) => l.name).join(', ')}`);
+    applyEdits({ ...edits, towns, ...(renames ? { renames } : {}), ...(notes ? { notes } : {}) }, { tool: 'edit_town', id: settlements[i]?.id, name: townName ?? undefined, what, ...townReport(r.report) }, 'user');
   }
 
   /** What a change did, for its description (`describe`), as an agent's reply has it. */
@@ -1787,7 +1811,35 @@
   /** One of the world's own buildings (not drawn by hand) behind a building id. */
   function generatedBuilding(id: string): boolean {
     const m = /^b:(\d+):(\d+)$/.exec(id);
-    return !!m && Number(m[1]) < firstCreated;
+    return !!m && (Number(m[1]) < firstCreated || castleOfPiece(id) >= 0);
+  }
+
+  /** Where in `edits.created` the castle made by hand is whose keep or yard building a building
+   * id is (-1: it is not one). */
+  function castleOfPiece(id: string): number {
+    const m = /^b:(\d+):\d+$/.exec(id);
+    const k = m ? Number(m[1]) - firstCreated : -1;
+    const c = k >= 0 ? edits.created?.[k] : undefined;
+    return c?.kind === 'castle' && !c.removed ? k : -1;
+  }
+
+  /** `created` with a castle's piece set as the generator answered (null: as generated). */
+  function withPiece(p: PieceEdit): Created[] {
+    return (edits.created ?? []).map((c) => {
+      if (c.id !== p.castle) return c;
+      const { pieces: old, ...rest } = c;
+      const pieces = { ...(old ?? {}) };
+      if (p.edit) pieces[p.key] = p.edit;
+      else delete pieces[p.key];
+      return Object.keys(pieces).length ? { ...rest, pieces } : rest;
+    });
+  }
+
+  /** A building edit's answer in words when it is a refusal (or none), else null. */
+  function refusal(r: unknown): string | null {
+    if (!r) return 'The map could not answer: try again';
+    const e = (r as { error?: string }).error;
+    return e === undefined ? null : e.charAt(0).toUpperCase() + e.slice(1);
   }
 
   /** The world's own buildings with their middle in an area drawn: taken away (one change). */
@@ -1810,9 +1862,31 @@
     return buildFuncs.businesses.find((b) => b.name.toLowerCase() === l)?.key ?? buildFuncs.homes.find((h) => h.name.toLowerCase() === l)?.key ?? 'house';
   }
 
+  /** Whether the castle piece selected has an edit (Restore is offered then only): asked of the
+   * generator, which knows which of the castle's pieces it is (the keep's key is not its id). */
+  let pieceChanged = $state({ id: '', has: false });
+  $effect(() => {
+    const sel = selection;
+    const id = sel?.kind === 'building' ? sel.hit.id : '';
+    const k = id ? castleOfPiece(id) : -1;
+    const own = id.split(':')[2];
+    if (k < 0) return void (pieceChanged = { id: '', has: false });
+    if (edits.created?.[k]?.pieces?.[own]) return void (pieceChanged = { id, has: true });
+    void pieceEdit(id).then((e) => {
+      if (selection === sel) pieceChanged = { id, has: !!e };
+    });
+  });
+
+  /** A castle piece's edit so far (the generator knows which of the castle's pieces it is). */
+  async function pieceEdit(id: string): Promise<BuildingEdit | undefined> {
+    const r = await view.gen.buildingEdit(id, {});
+    return r && 'piece' in r ? (r.piece.edit ?? undefined) : undefined;
+  }
+
   /** Open the build menu on one of the world's own buildings. */
   async function editGenerated(hit: BuildingHit) {
-    const e = edits.buildings?.[hit.id];
+    const k = castleOfPiece(hit.id);
+    const e = k >= 0 ? await pieceEdit(hit.id) : edits.buildings?.[hit.id];
     const settings: BuildSettings = {
       shape: 'rect',
       func: e?.func ?? (await funcKey(hit.function)),
@@ -1852,15 +1926,20 @@
     }
     if (build.ruin !== g.was.ruin) change.structure = build.ruin ? 'ruin' : 'roofed';
     if (poly) change.poly = poly;
+    const name = build.name.trim();
+    const piece = castleOfPiece(id) >= 0;
+    // (A castle's piece keeps its name with its other changes.)
+    if (piece && name) change.name = name;
     const r = await view.gen.buildingEdit(id, change);
     if (buildArmed) buildArmed.tool.pending = null;
-    if (!r) return toast('The map could not answer: try again');
-    if ('error' in r) return toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
+    if (!r || 'error' in r) return toast(refusal(r) ?? '');
     const all = { ...(edits.buildings ?? {}) };
-    if (r.edit) all[id] = r.edit;
-    else delete all[id];
-    const name = build.name.trim();
-    const renamesNext = name ? { ...(edits.renames ?? {}), [id]: name } : edits.renames;
+    if ('edit' in r) {
+      if (r.edit) all[id] = r.edit;
+      else delete all[id];
+    }
+    const created = 'piece' in r ? withPiece(r.piece) : edits.created;
+    const renamesNext = name && !piece ? { ...(edits.renames ?? {}), [id]: name } : edits.renames;
     // Its inside designed by hand: new storeys follow (in the same step); a new footprint sets
     // the design aside (it comes back with the footprint).
     const designed = edits.designs?.[id];
@@ -1868,14 +1947,15 @@
     let aside = '';
     if (designed && (poly || change.structure === 'ruin')) aside = 'Its inside, designed by hand, no longer fits: set aside';
     else if (designed && change.floors !== undefined) ({ designs, aside } = await fitDesign(id, build.floors));
-    applyEdits({ ...edits, buildings: all, renames: renamesNext, designs }, { tool: 'update_building', id, name: name || g.name }, 'user');
+    applyEdits({ ...edits, buildings: all, renames: renamesNext, designs, created }, { tool: 'update_building', id, name: name || g.name }, 'user');
     if (aside) toast(aside);
     genEditing = { name: name || g.name, was: { ...build, name: '' } };
     build.name = '';
     // The info panel and the build menu show it as it is now (a new trade brings a new name).
     const s = selection;
-    const fp = r.edit?.poly;
-    const c = fp?.length ? fp.reduce((a, p) => [a[0] + p[0] / fp.length, a[1] + p[1] / fp.length], [0, 0]) : r.edit ? r.edit.at : null;
+    const fp = 'edit' in r ? r.edit?.poly : undefined;
+    const at = 'piece' in r ? r.piece.edit?.at : r.edit?.at;
+    const c = fp?.length ? fp.reduce((a, p) => [a[0] + p[0] / fp.length, a[1] + p[1] / fp.length], [0, 0]) : at ? at : null;
     const hit = c && (await view.gen.query(c[0], c[1]));
     if (hit?.kind !== 'building' || hit.id !== id) return;
     if (buildEditing === id && genEditing) genEditing = { ...genEditing, name: hitName(hit, edits.renames ?? {}) };
@@ -1890,15 +1970,34 @@
       onEdit: () => void editGenerated(hit),
       onRemove: async () => {
         const r = await view.gen.buildingEdit(id, { remove: true });
-        if (!r || 'error' in r || !r.edit) return toast(r && 'error' in r ? r.error : 'The map could not answer: try again');
-        applyEdits({ ...edits, buildings: { ...(edits.buildings ?? {}), [id]: r.edit } }, { tool: 'remove_buildings', removed: [id], count: 1, name: hitName(hit, renames) }, 'user');
+        if (!r || 'error' in r) return toast(refusal(r) ?? '');
+        const change = { tool: 'remove_buildings', removed: [id], count: 1, name: hitName(hit, renames) };
+        if ('piece' in r) applyEdits({ ...edits, created: withPiece(r.piece) }, change, 'user');
+        else if (r.edit) applyEdits({ ...edits, buildings: { ...(edits.buildings ?? {}), [id]: r.edit } }, change, 'user');
+        else return;
         if (buildEditing === id) ((buildEditing = null), (genEditing = null));
         selection = null;
       },
-      onRestore: edits.buildings?.[id]
-        ? () => {
-            const { [id]: _gone, ...rest } = edits.buildings ?? {};
-            applyEdits({ ...edits, buildings: rest }, { tool: 'restore_building', id }, 'user');
+      onRestore: (castleOfPiece(id) >= 0 ? pieceChanged.id === id && pieceChanged.has : !!edits.buildings?.[id])
+        ? async () => {
+            if (castleOfPiece(id) >= 0) {
+              // (The castle's piece goes back as generated, its name too.)
+              // (A yard building taken away has no keep to be mistaken for: its number is its key.)
+              const k = castleOfPiece(id);
+              const castle = edits.created?.[k];
+              const own = id.split(':')[2];
+              let key = castle?.pieces?.[own] ? own : '';
+              if (!key) {
+                const r = await view.gen.buildingEdit(id, {});
+                if (!r || !('piece' in r)) return toast(refusal(r) ?? '');
+                key = r.piece.key;
+              }
+              if (!castle?.pieces?.[key]) return toast('It is as generated already');
+              applyEdits({ ...edits, created: withPiece({ castle: castle.id, key, keep: key === 'keep', edit: null }) }, { tool: 'restore_building', id }, 'user');
+            } else {
+              const { [id]: _gone, ...rest } = edits.buildings ?? {};
+              applyEdits({ ...edits, buildings: rest }, { tool: 'restore_building', id }, 'user');
+            }
             if (buildEditing === id) ((buildEditing = null), (genEditing = null));
             void view.gen.query(hit.x, hit.y).then((h) => {
               if (h?.kind === 'building' && selection?.kind === 'building' && selection.hit.id === id) selection = { kind: 'building', hit: h };
@@ -2051,18 +2150,20 @@
     const draft = JSON.parse(JSON.stringify(d.draft)) as NonNullable<typeof d.draft>;
     const floors = d.storeysChanged ? d.storeys : null;
     const drawn = floors !== null ? drawnBuilding(d.id) : null;
-    let built: { edit: BuildingEdit | null } | null = null;
+    let built: { edit: BuildingEdit | null } | { piece: PieceEdit } | null = null;
     if (floors !== null && !drawn) {
       const r = await view.gen.buildingEdit(d.id, { floors });
-      if (!r || 'error' in r) return toast(r && 'error' in r ? r.error.charAt(0).toUpperCase() + r.error.slice(1) : 'The map could not answer: try again');
+      if (!r || 'error' in r) return toast(refusal(r) ?? '');
       built = r;
       if (designer !== d) return;
     }
     const e = edits;
     const buildings = { ...(e.buildings ?? {}) };
-    if (built?.edit) buildings[d.id] = built.edit;
-    else if (built) delete buildings[d.id];
-    const created = drawn && floors !== null ? (e.created ?? []).map((x) => (x.id === drawn.id ? { ...x, floors } : x)) : e.created;
+    if (built && 'edit' in built) {
+      if (built.edit) buildings[d.id] = built.edit;
+      else delete buildings[d.id];
+    }
+    const created = built && 'piece' in built ? withPiece(built.piece) : drawn && floors !== null ? (e.created ?? []).map((x) => (x.id === drawn.id ? { ...x, floors } : x)) : e.created;
     // (Levels dug or filled in below: names and places on the others follow them.)
     applyEdits({ ...shiftLevels(e, d.id, d.shift), buildings, created, designs: { ...(e.designs ?? {}), [d.id]: draft } }, { tool: 'set_site_design', id: d.id, name: inside?.name }, 'user');
     d.markSaved();
@@ -3588,6 +3689,7 @@
             merging={townMerging}
             busy={townBusy}
             near={townNear}
+            wallWhy={townWallWhy}
             {peek}
             onMode={(m) => ((townMode = m), (townMerging = false), townTool?.reset())}
             onChange={(req, what) => void townChange(req, what)}

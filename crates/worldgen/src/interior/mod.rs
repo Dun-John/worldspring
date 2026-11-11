@@ -15,10 +15,12 @@
 use serde::Serialize;
 
 pub mod design;
+mod felt;
 pub mod hall;
 pub mod height;
 pub mod hub;
 pub mod shape;
+mod towerplan;
 
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
@@ -301,6 +303,10 @@ enum Arch {
 }
 
 fn arch_of(b: &town::Building) -> Arch {
+    // (R5 towns: a steppe town's round felt hall laid out as a yurt is, `felt`.)
+    if town::roof::felt_built(b).is_some() && round_ish(b) {
+        return Arch::House;
+    }
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
     match key {
         Some("inn" | "caravanserai") => Arch::Inn,
@@ -310,7 +316,7 @@ fn arch_of(b: &town::Building) -> Arch {
         // A tower mill: round floors up a round tower, its own on each (`program`), under a cap.
         Some("windmill") if round_ish(b) => Arch::Tower,
         Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
-        Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs") => Arch::Temple,
+        Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs" | "tomb") => Arch::Temple,
         Some("prison") => Arch::Prison,
         Some("castle" | "barracks" | "gatehouse") => Arch::Keep,
         Some("palace") => Arch::Mansion,
@@ -412,6 +418,10 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
         (House, 0) if top && key == Some("hovel") => p("Ground floor", &[("hearth room", 1.0)], None, false),
         // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room.
         (House, 0) if top && key == Some("yurt") => p("Yurt", &[("yurt", 1.0)], None, false),
+        // (R5 towns: a felt hall's one round room, `felt`.)
+        (House, 0) if top && key == Some(felt::ROOMS[0]) => p("Felt hall", &[(felt::ROOMS[0], 1.0)], None, false),
+        (House, 0) if top && key == Some(felt::ROOMS[1]) => p("Temple", &[(felt::ROOMS[1], 1.0)], None, false),
+        (House, 0) if top && key == Some(felt::ROOMS[2]) => p("Inn", &[(felt::ROOMS[2], 1.0)], None, false),
         (House, 0) if top => sized("Ground floor", &[("main room", 3.0), ("kitchen", 1.5), ("bedroom", 1.5)], Some("bedroom")),
         (House, 0) => p("Ground floor", &[("main room", 3.0), ("kitchen", 1.5)], Some("bedroom"), false),
         (House, _) => p("Upper floor", &[("bedroom", 2.0), ("bedroom", 1.5)], Some("bedroom"), false),
@@ -434,6 +444,8 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
         (Warehouse, _) if trade => p("Living quarters", &[("living room", 1.5), ("bedroom", 1.5)], Some("bedroom"), false),
         (Warehouse, _) => p("Loft", &[("loft storage", 4.0), ("office", 1.0)], Some("loft storage"), false),
         (Temple, 0) if key == Some("shrine") => p("Shrine", &[("shrine", 1.0)], None, false),
+        // R5 towns: a cemetery's tomb (`town::cemetery`), one chamber.
+        (Temple, 0) if key == Some("tomb") => p("Tomb", &[("tomb chamber", 1.0)], None, false),
         (Temple, 0) => p("Sanctuary", &[("nave", 5.0), ("sanctuary", 2.0), ("vestry", 1.0)], None, false),
         (Temple, _) => p("Bell loft", &[("bell loft", 2.0), ("monk's cell", 1.0)], Some("monk's cell"), true),
         (Hall, 0) => {
@@ -516,7 +528,10 @@ pub fn terrace(l: &Layout, b: &town::Building) -> Option<Vec<(P, f64)>> {
     if b.structure != Structure::Roofed || battlements(b).is_some() || b.roof == Some(town::RoofStyle::Cone) || b.poly.len() < 3 {
         return None;
     }
-    match town::roof::look(l, b).shape {
+    let look = town::roof::look(l, b);
+    match look.shape {
+        // (R5 towns, 114: a steppe home's low felt or turf roof is no terrace.)
+        Shape::Flat if l.culture % 5 == 4 && matches!(look.material, town::roof::Material::Hide | town::roof::Material::Turf) => None,
         Shape::Flat => Some(Vec::new()),
         // (The battlemap's domes, `town::roof::domes`; none where the roof is too small for one.)
         Shape::Dome if b.parts.is_empty() => Some(town::roof::domes(&b.poly)),
@@ -829,6 +844,8 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         // A one-room home's: its bed against a wall by the hearth.
         // A yurt's: its own (`furnish_yurt`).
         "yurt" => &[],
+        // (R5 towns: a felt hall's: its own, `felt::furnish`.)
+        "felt hall" | "felt sanctuary" | "felt common room" => &[],
         "hearth room" => &[("bed", Wall(1, 2), 1, 0), ("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0)],
         "main room" | "living room" => &[("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("bench", Wall(2, 1), 1, 0)],
         "shop" => &[("counter", Wall(3, 1), 1, 0), ("shelf", Wall(2, 1), 2, 10), ("display", Center(2, 1), 0, 12)],
@@ -847,6 +864,7 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "oratory" => &[("altar", Wall(2, 1), 1, 0), ("statue", Wall(1, 1), 1, 0)],
         "vestry" => &[("wardrobe", Wall(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("table", Center(1, 1), 1, 0)],
         "crypt" | "ossuary" => &[("sarcophagus", Center(1, 2), 1, 8), ("statue", Wall(1, 1), 1, 0)],
+        "tomb chamber" => &[("sarcophagus", Center(1, 2), 1, 0)],
         "bell loft" => &[("bell", Center(2, 2), 1, 0)],
         "monk's cell" | "cell" | "holding cell" => &[("cot", Wall(1, 2), 1, 0), ("bucket", Wall(1, 1), 1, 0)],
         "great hall" | "mess hall" => &[("long_table", Center(4, 1), 1, 18), ("hearth", Wall(2, 1), 1, 0), ("throne", Wall(1, 1), 1, 0), ("pillar", Wall(1, 1), 0, 16)],
@@ -963,6 +981,8 @@ pub const ROOM_KINDS: &[&str] = &[
     "masterpiece gallery", "job-board room", "trophy hall", "bunk room", "warded vault", "belfry stair", "belfry",
     "stables", "tack room", "snug", "private dining room", "scullery", "best chamber", "innkeeper's quarters",
     "inn yard", "yard gallery", "yurt", "meal floor", "stone floor", "bin floor", "dust floor",
+    // R5 towns
+    "tomb chamber", "felt hall", "felt sanctuary", "felt common room",
 ];
 
 /// A kind of room in a building, by name.
@@ -1883,10 +1903,21 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             score(x).total_cmp(&score(y))
         })
         .unwrap_or(0);
+    // R5 towns: a cemetery's tomb, one chamber on one storey, its door on its footprint's first side
+    // (toward its walk: `town::cemetery`).
+    let tomb = key == Some("tomb");
+    let front = if tomb && b.poly.len() >= 2 {
+        let door = geom::lerp(b.poly[0], b.poly[1], 0.5);
+        (0..4).min_by(|&x, &y| geom::dist(world_at(sides[x][0], sides[x][1]), door).total_cmp(&geom::dist(world_at(sides[y][0], sides[y][1]), door))).unwrap_or(front)
+    } else {
+        front
+    };
 
     // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room
     // on one storey (no cellar, no stairs).
     let yurt = arch == Arch::House && b.parts.is_empty() && round_ish(b);
+    // (R5 towns: a steppe town's round felt hall, one as a yurt is: `felt`.)
+    let felt = town::roof::felt_built(b).filter(|_| yurt);
     // Levels: a cellar, the ground floor and the storeys above; at least two levels (a yurt one).
     let floors = b.floors.max(1) as i8;
     // (A tower mill: its stair up the wall, `mill_stairs`.)
@@ -1927,10 +1958,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if arch == Arch::Keep && (t > 0 || towers.as_ref().is_some_and(|t| !t.is_empty())) && open_roof && !plan.as_ref().is_some_and(|p| p.pieces) {
         zs.push(TOWER_TOP);
     }
-    if yurt {
+    if yurt || tomb {
         zs = vec![0];
     }
-    let entry_level = if yurt { 0 } else { 1 };
+    let entry_level = if yurt || tomb { 0 } else { 1 };
 
     // The stair block: at the back of the building, in the middle of the short side (towers:
     // near the centre), on inside squares. Inns and taverns lay out the ground floor first
@@ -2012,6 +2043,11 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if yurt {
         stairs = [0, 0, 0, 0];
     }
+    // (A tomb's none, a felt hall's (R5 towns): the block a design gives a building without stairs,
+    // `design::stairs_of`.)
+    if tomb || felt.is_some() {
+        stairs = [0, 0, 1, 1];
+    }
 
     // (Furniture stands clear of the outer wall as drawn: in a building laid out by zones (a keep's
     // round tower rooms), off any square its middle line cuts more than a tenth of a square into;
@@ -2032,7 +2068,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let prog = if z == ROOF && roof_terrace.is_some() {
             LevelProgram { name: "Roof terrace", rooms: vec![(TERRACE, 1.0)], filler: None, corridor: false, cells: false, by_size: false }
         } else {
-            program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if yurt { Some("yurt") } else if hovel { Some("hovel") } else { key })
+            program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if yurt { Some(felt.map_or("yurt", felt::room)) } else if hovel { Some("hovel") } else { key })
         };
         // (Laid out by zones, if it holds together: every room in one piece and reached.)
         let laid = plan.as_mut().and_then(|p| p.level(z));
@@ -2073,7 +2109,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             _ => z,
         };
         lvl.z = zf;
-        lvl.has_stairs &= !yurt;
+        lvl.has_stairs &= !yurt && !tomb;
         lvl.name = if z == TOWER_TOP { "Tower tops".to_string() } else { prog.name.to_string() };
         lvl.elevation_ft = b.pad_ft + STOREY_FT * zf as f32;
         if let Some((name, roof, items)) = &hubbed {
@@ -2184,7 +2220,15 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             // turned toward the lane or the centre by `town::round_off`.)
             let mean = mul(b.poly.iter().fold([0.0, 0.0], |a, p| add(a, *p)), 1.0 / b.poly.len() as f64);
             let d = sub(mul(add(b.poly[0], b.poly[1]), 0.5), mean);
-            furnish_yurt(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j));
+            match felt {
+                Some(f) => {
+                    felt::furnish(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j), f);
+                    // (A felt temple's candle stands in its god's look.)
+                    let god = town::temple::god_look(b);
+                    lvl.furniture.iter_mut().filter(|it| it.kind == "candle_stand").for_each(|it| it.variant = Some(god));
+                }
+                None => furnish_yurt(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j)),
+            }
         }
         for &(ri, f, turns, style) in &halls {
             let seed = hash3(world.stream("interior.hall"), town::rng_key(t0, settlement), bi as i64, zf as i64);
@@ -4620,7 +4664,7 @@ pub fn wall_runs(cells: &[i16], rooms: &[Room], nx: usize, ny: usize, doors: &[D
 fn windows(lvl: &mut Level, nx: usize, ny: usize, _ground: bool) {
     let mut out = Vec::new();
     let open = |x: isize, y: isize| {
-        x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny && lvl.cells[y as usize * nx + x as usize] >= 0 && matches!(lvl.rooms[lvl.cells[y as usize * nx + x as usize] as usize].kind, "battlements" | "wall walk" | ROOF_SLOPE | "yurt")
+        x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny && lvl.cells[y as usize * nx + x as usize] >= 0 && matches!(lvl.rooms[lvl.cells[y as usize * nx + x as usize] as usize].kind, "battlements" | "wall walk" | ROOF_SLOPE | "yurt" | "felt hall" | "felt sanctuary" | "felt common room")
     };
     for w in &lvl.walls {
         if !w.exterior || w.arcade {
@@ -5264,7 +5308,8 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         return None;
     }
     let l = town::layout(world, t0, settlement);
-    let (at, r, gate) = *towers(&l).get(k)?;
+    // (`k` is its `t:` number: its place in the list unless the wall was edited by hand.)
+    let (at, r, gate) = *towers(&l).get(l.tower_index(k)?)?;
     let mut rng = Pcg32::new(hash3(world.stream("interior.tower"), town::rng_key(t0, settlement), k as i64, 0x70), 73);
     // The ways the wall runs from here.
     let mut dirs: Vec<P> = Vec::new();
@@ -5287,7 +5332,9 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     }
     // (A square tower's grid along its sides.)
     let square = if gate { None } else { l.square_tower(at) };
-    let u = square.or_else(|| dirs.first().copied()).unwrap_or([1.0, 0.0]);
+    // (A D or an octagon's inside its own outline, its grid the way it faces: `towerplan`.)
+    let shaped = if square.is_some() { None } else { towerplan::outline(&l, at, r, gate) };
+    let u = square.or(shaped.as_ref().map(|s| s.0)).or_else(|| dirs.first().copied()).unwrap_or([1.0, 0.0]);
     let v = [-u[1], u[0]];
     // A square grid centred on the tower (its centre in the middle of a square), reaching three
     // squares of wall walk beyond the tower each side.
@@ -5298,6 +5345,9 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     let in_tower: Vec<bool> = (0..n * n)
         .map(|q| {
             let d = sub(centre(q % n, q / n), at);
+            if let Some((_, poly)) = &shaped {
+                return towerplan::covers(poly, centre(q % n, q / n));
+            }
             if square.is_some() { dot(d, u).abs() <= r && dot(d, v).abs() <= r } else { geom::dist(centre(q % n, q / n), at) <= r + 1.5 }
         })
         .collect();

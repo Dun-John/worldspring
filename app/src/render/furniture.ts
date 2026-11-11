@@ -3208,6 +3208,110 @@ const COATS = [
   { body: [0x7a3a14, 0xb8642a, 0xdc9450], mane: 0xe8d098, legs: 0x9a5222, muzzle: 0x6a3214 },
 ];
 
+/** A horse from above in the frame `at(u, s)` (`s` from the nose end, about `k` squares per half-length, 2 k nose
+ * to tail, centred on `u` = `mid`); `v` 1 bay with a star, 2 dapple grey, 3 chestnut with a blaze (more repeat
+ * the coats). `bend` is how far its head is turned to the side `sd` (the stall's head down at the manger), `rope` a
+ * halter rope's control and end points, `blanket` a felt saddle blanket. */
+export function drawHorse(
+  g: Graphics, at: At, k: number, mid: number, sd: number, light: Light, rnd: () => number, v: number,
+  o: { bend?: number; shadow?: boolean; rope?: [Pt, Pt]; blanket?: boolean } = {},
+) {
+  const { bend = 0.17, shadow = true, rope, blanket } = o;
+  // The horse from above, its head down in the manger: a long head (narrow at the nose, broad at the eyes) with
+  // ears pricked at the poll, the neck under its mane, the barrel, the rump and the tail; hooves showing beside the
+  // neck and behind; its halter tied to the manger.
+  const coat = COATS[(v - 1) % COATS.length];
+  const { U, S } = steps(at);
+  const [c0, c1, c2] = coat.body;
+  const cl = (s: number) => mid + sd * bend * Math.max(0, 1.05 - s) ** 1.4;
+  // (Half widths down it, `s` from the wall in half-stall lengths: the muzzle, the nose, the cheeks and eyes, the
+  // throat at the poll, the neck widening to the shoulders, the barrel, the points of the hips, the rump.)
+  const prof: [number, number][] = [
+    [0.4, 0.056], [0.43, 0.074], [0.48, 0.08], [0.55, 0.074], [0.62, 0.08], [0.7, 0.108], [0.77, 0.126], [0.83, 0.12],
+    [0.89, 0.088], [0.94, 0.1], [1.0, 0.124], [1.07, 0.16], [1.14, 0.2], [1.22, 0.23], [1.32, 0.236], [1.44, 0.232],
+    [1.54, 0.218], [1.64, 0.24], [1.73, 0.25], [1.81, 0.226], [1.87, 0.17], [1.915, 0.09],
+  ];
+  const H = (s: number, a: number, w: number): Pt => at(cl(s) + a * w, s * k);
+  const body = (sc: number, dx: number, dy: number): number[] => {
+    const pts: Pt[] = [H(0.375, 0, 0)];
+    for (const [s, w] of prof) pts.push(H(s, -1, w * sc));
+    pts.push(H(1.89, 0, 0));
+    for (const [s, w] of [...prof].reverse()) pts.push(H(s, 1, w * sc));
+    return pts.flatMap(([x, y]) => [x + dx, y + dy]);
+  };
+  if (shadow) castShadow(g, body(1, 0, 0), light, 0.32);
+  // Legs and hooves under it, showing beside the neck and either side of the tail.
+  for (const [s, a] of [
+    [1.05, -0.17], [1.08, 0.17], [1.9, -0.13], [1.88, 0.13],
+  ]) {
+    const [x, y] = H(s, a, 1);
+    const fore = s < 1.5 ? -1 : 1;
+    g.poly(oval(x, y, 0.052, 0.052, 0, 10)).fill(coat.legs).stroke({ width: LINE, color: INK });
+    const [hx, hy] = H(s + fore * 0.04, a * 1.04, 1);
+    g.poly(oval(hx, hy, 0.036, 0.03, Math.atan2(U[1], U[0]), 10)).fill(0x2e2620).stroke({ width: 0.014, color: INK });
+  }
+  // The tail, hanging behind and swished to one side, strands in it.
+  const tail = [H(1.8, -0.7, 0.08), H(1.92, -0.9, 0.08), H(1.98, sd * 0.2, 0.08), H(2.0, sd * 1.4, 0.08), H(1.94, sd * 1.9, 0.08), H(1.88, sd * 1.2, 0.08), H(1.8, 0.7, 0.08)];
+  g.poly(tail.flat()).fill(coat.mane).stroke({ width: LINE, color: INK, join: 'round' });
+  for (const o of [-0.3, 0.3]) g.moveTo(...H(1.88, o, 0.08)).lineTo(...H(1.97, sd * 0.9 + o, 0.08));
+  g.stroke({ width: 0.012, color: shade(coat.mane, coat.mane > 0x808080 ? 0.75 : 1.8) });
+  g.poly(body(1, 0, 0)).fill(c0).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(body(0.84, light[0] * 0.028, light[1] * 0.028)).fill(c1);
+  g.poly(body(0.45, light[0] * 0.06, light[1] * 0.06)).fill({ color: c2, alpha: 0.4 });
+  if (v === 2) {
+    // Dapples: pale rounds ringed darker over the barrel and rump.
+    for (const [s, a] of [
+      [1.24, -0.45], [1.42, 0.4], [1.62, -0.25], [1.34, 0.02], [1.54, 0.6], [1.72, 0.3],
+    ]) {
+      const [x, y] = H(s, a, 0.22);
+      g.poly(patch(x, y, 0.04, 0.036, rnd, 0.2, 9)).fill({ color: 0xf0ece2, alpha: 0.6 }).stroke({ width: 0.01, color: c0, alpha: 0.6 });
+    }
+  }
+  if (blanket) {
+    // A felt saddle blanket over the back: red, a blue border, a pale diamond in its middle.
+    const felt = (s0: number, s1: number, w: number): number[] => {
+      const pts: Pt[] = [];
+      for (let i = 0; i <= 4; i++) pts.push(H(s0 + ((s1 - s0) * i) / 4, -1, w));
+      for (let i = 4; i >= 0; i--) pts.push(H(s0 + ((s1 - s0) * i) / 4, 1, w));
+      return pts.flat();
+    };
+    g.poly(felt(1.2, 1.64, 0.2)).fill(0xa8443a);
+    g.poly(felt(1.25, 1.59, 0.15)).stroke({ width: 0.03, color: 0x3e5a8a, join: 'round' });
+    g.poly([...H(1.33, 0, 0), ...H(1.42, -1, 0.07), ...H(1.51, 0, 0), ...H(1.42, 1, 0.07)]).fill(0xe6d6b0).stroke({ width: 0.012, color: 0x6a2420 });
+    g.poly(felt(1.2, 1.64, 0.2)).stroke({ width: LINE, color: INK, join: 'round' });
+  }
+  // Forms: the line of the shoulders across the base of the neck, the points of the hips, the muzzle darker.
+  g.moveTo(...H(1.18, -0.85, 0.21)).quadraticCurveTo(...H(1.1, 0, 0), ...H(1.18, 0.85, 0.21));
+  g.moveTo(...H(1.62, -0.9, 0.23)).quadraticCurveTo(...H(1.68, -0.6, 0.23), ...H(1.74, -0.82, 0.23));
+  g.moveTo(...H(1.62, 0.9, 0.23)).quadraticCurveTo(...H(1.68, 0.6, 0.23), ...H(1.74, 0.82, 0.23));
+  g.stroke({ width: 0.014, color: c0, cap: 'round' });
+  const muz: Pt[] = [];
+  for (let i = 0; i <= 6; i++) muz.push(H(0.4 + i * 0.025, -1, 0.06 + (i ? 0.008 : -0.012)));
+  for (let i = 6; i >= 0; i--) muz.push(H(0.4 + i * 0.025, 1, 0.06 + (i ? 0.008 : -0.012)));
+  g.poly(muz.flat()).fill({ color: coat.muzzle, alpha: 0.75 });
+  for (const e of [-1, 1]) g.poly(oval(...H(0.43, e, 0.032), 0.016, 0.01, Math.atan2(S[1], S[0]), 8)).fill(INK);
+  // A white blaze down the chestnut's face, a star on the bay's forehead; the eyes on the sides of the head.
+  if (v === 3) g.poly([...H(0.8, -0.2, 0.12), ...H(0.8, 0.2, 0.12), ...H(0.55, 0.25, 0.074), ...H(0.47, 0.4, 0.074), ...H(0.47, -0.4, 0.074), ...H(0.55, -0.25, 0.074)]).fill(0xf4efe2);
+  if (v === 1) g.poly(patch(...H(0.76, 0, 0), 0.026, 0.022, rnd, 0.2, 8)).fill(0xf4efe2);
+  for (const e of [-1, 1]) g.circle(...H(0.75, e, 0.105), 0.019).fill(INK);
+  // The mane down the crest of the neck, falling to one side, and the forelock between the ears.
+  const mane: Pt[] = [H(0.89, -0.15 * sd, 0.088), H(1.0, -0.12 * sd, 0.124), H(1.1, -0.1 * sd, 0.18), H(1.2, 0, 0.22)];
+  for (const [s, w] of [[1.17, 0.21], [1.1, 0.18], [1.04, 0.14], [0.97, 0.11], [0.91, 0.09]] as const) mane.push(H(s, sd * 0.62, w), H(s - 0.03, sd * 0.36, w));
+  g.poly(mane.flat()).fill(coat.mane).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly([...H(0.9, -0.3, 0.088), ...H(0.9, 0.3, 0.088), ...H(0.8, 0.2, 0.12), ...H(0.77, -0.05, 0.12)]).fill(coat.mane).stroke({ width: 0.012, color: INK, join: 'round' });
+  // The ears pricked forward and out at the poll.
+  for (const e of [-1, 1]) {
+    const ear = [H(0.91, e * 0.04, 1), H(0.85, e * 0.1, 1), H(0.79, e * 0.2, 1), H(0.86, e * 0.19, 1), H(0.93, e * 0.13, 1)];
+    g.poly(ear.flat()).fill(c1).stroke({ width: 0.02, color: INK, join: 'round' });
+    g.poly([...H(0.89, e * 0.1, 1), ...H(0.82, e * 0.18, 1), ...H(0.87, e * 0.17, 1)]).fill(c0);
+  }
+  // The halter: a noseband, a strap behind the ears, a rope to the manger's corner.
+  g.moveTo(...H(0.52, -1, 0.078)).lineTo(...H(0.52, 1, 0.078));
+  g.moveTo(...H(0.93, -1, 0.096)).lineTo(...H(0.93, 1, 0.096));
+  g.stroke({ width: 0.02, color: LEATHER[1] });
+  if (rope) g.moveTo(...H(0.52, sd, 0.078)).quadraticCurveTo(...rope[0], ...rope[1]).stroke({ width: 0.016, color: 0xc8b088, cap: 'round' });
+}
+
 /** Stable stall, its head to the wall: board partitions down both long sides ending in posts, straw on the
  * floor, a manger of hay across the head; empty (a forkful of fresh straw) or a horse seen from above, its head
  * down in the manger, tied to it. */
@@ -3272,87 +3376,10 @@ function stableStall(g: Graphics, f: InteriorItem, light: Light, v: number, rnd:
   }
   g.stroke({ width: 0.014, color: STRAW[0], alpha: 0.8, cap: 'round' });
   if (v === 0) return;
-  // The horse from above, its head down in the manger: a long head (narrow at the nose, broad at the eyes) with
-  // ears pricked at the poll, the neck under its mane, the barrel, the rump and the tail; hooves showing beside the
-  // neck and behind; its halter tied to the manger.
-  const coat = COATS[(v - 1) % COATS.length];
-  const [c0, c1, c2] = coat.body;
+  // The horse from above, its head down in the manger, its halter tied to the manger's corner.
   const sd = v % 2 ? 1 : -1;
   const mid = W / 2;
-  const cl = (s: number) => mid + sd * 0.17 * Math.max(0, 1.05 - s) ** 1.4;
-  // (Half widths down it, `s` from the wall in half-stall lengths: the muzzle, the nose, the cheeks and eyes, the
-  // throat at the poll, the neck widening to the shoulders, the barrel, the points of the hips, the rump.)
-  const prof: [number, number][] = [
-    [0.4, 0.056], [0.43, 0.074], [0.48, 0.08], [0.55, 0.074], [0.62, 0.08], [0.7, 0.108], [0.77, 0.126], [0.83, 0.12],
-    [0.89, 0.088], [0.94, 0.1], [1.0, 0.124], [1.07, 0.16], [1.14, 0.2], [1.22, 0.23], [1.32, 0.236], [1.44, 0.232],
-    [1.54, 0.218], [1.64, 0.24], [1.73, 0.25], [1.81, 0.226], [1.87, 0.17], [1.915, 0.09],
-  ];
-  const H = (s: number, a: number, w: number): Pt => at(cl(s) + a * w, s * k);
-  const body = (sc: number, dx: number, dy: number): number[] => {
-    const pts: Pt[] = [H(0.375, 0, 0)];
-    for (const [s, w] of prof) pts.push(H(s, -1, w * sc));
-    pts.push(H(1.89, 0, 0));
-    for (const [s, w] of [...prof].reverse()) pts.push(H(s, 1, w * sc));
-    return pts.flatMap(([x, y]) => [x + dx, y + dy]);
-  };
-  castShadow(g, body(1, 0, 0), light, 0.32);
-  // Legs and hooves under it, showing beside the neck and either side of the tail.
-  for (const [s, a] of [
-    [1.05, -0.17], [1.08, 0.17], [1.9, -0.13], [1.88, 0.13],
-  ]) {
-    const [x, y] = H(s, a, 1);
-    const fore = s < 1.5 ? -1 : 1;
-    g.poly(oval(x, y, 0.052, 0.052, 0, 10)).fill(coat.legs).stroke({ width: LINE, color: INK });
-    const [hx, hy] = H(s + fore * 0.04, a * 1.04, 1);
-    g.poly(oval(hx, hy, 0.036, 0.03, Math.atan2(U[1], U[0]), 10)).fill(0x2e2620).stroke({ width: 0.014, color: INK });
-  }
-  // The tail, hanging behind and swished to one side, strands in it.
-  const tail = [H(1.8, -0.7, 0.08), H(1.92, -0.9, 0.08), H(1.98, sd * 0.2, 0.08), H(2.0, sd * 1.4, 0.08), H(1.94, sd * 1.9, 0.08), H(1.88, sd * 1.2, 0.08), H(1.8, 0.7, 0.08)];
-  g.poly(tail.flat()).fill(coat.mane).stroke({ width: LINE, color: INK, join: 'round' });
-  for (const o of [-0.3, 0.3]) g.moveTo(...H(1.88, o, 0.08)).lineTo(...H(1.97, sd * 0.9 + o, 0.08));
-  g.stroke({ width: 0.012, color: shade(coat.mane, coat.mane > 0x808080 ? 0.75 : 1.8) });
-  g.poly(body(1, 0, 0)).fill(c0).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly(body(0.84, light[0] * 0.028, light[1] * 0.028)).fill(c1);
-  g.poly(body(0.45, light[0] * 0.06, light[1] * 0.06)).fill({ color: c2, alpha: 0.4 });
-  if (v === 2) {
-    // Dapples: pale rounds ringed darker over the barrel and rump.
-    for (const [s, a] of [
-      [1.24, -0.45], [1.42, 0.4], [1.62, -0.25], [1.34, 0.02], [1.54, 0.6], [1.72, 0.3],
-    ]) {
-      const [x, y] = H(s, a, 0.22);
-      g.poly(patch(x, y, 0.04, 0.036, rnd, 0.2, 9)).fill({ color: 0xf0ece2, alpha: 0.6 }).stroke({ width: 0.01, color: c0, alpha: 0.6 });
-    }
-  }
-  // Forms: the line of the shoulders across the base of the neck, the points of the hips, the muzzle darker.
-  g.moveTo(...H(1.18, -0.85, 0.21)).quadraticCurveTo(...H(1.1, 0, 0), ...H(1.18, 0.85, 0.21));
-  g.moveTo(...H(1.62, -0.9, 0.23)).quadraticCurveTo(...H(1.68, -0.6, 0.23), ...H(1.74, -0.82, 0.23));
-  g.moveTo(...H(1.62, 0.9, 0.23)).quadraticCurveTo(...H(1.68, 0.6, 0.23), ...H(1.74, 0.82, 0.23));
-  g.stroke({ width: 0.014, color: c0, cap: 'round' });
-  const muz: Pt[] = [];
-  for (let i = 0; i <= 6; i++) muz.push(H(0.4 + i * 0.025, -1, 0.06 + (i ? 0.008 : -0.012)));
-  for (let i = 6; i >= 0; i--) muz.push(H(0.4 + i * 0.025, 1, 0.06 + (i ? 0.008 : -0.012)));
-  g.poly(muz.flat()).fill({ color: coat.muzzle, alpha: 0.75 });
-  for (const e of [-1, 1]) g.poly(oval(...H(0.43, e, 0.032), 0.016, 0.01, Math.atan2(S[1], S[0]), 8)).fill(INK);
-  // A white blaze down the chestnut's face, a star on the bay's forehead; the eyes on the sides of the head.
-  if (v === 3) g.poly([...H(0.8, -0.2, 0.12), ...H(0.8, 0.2, 0.12), ...H(0.55, 0.25, 0.074), ...H(0.47, 0.4, 0.074), ...H(0.47, -0.4, 0.074), ...H(0.55, -0.25, 0.074)]).fill(0xf4efe2);
-  if (v === 1) g.poly(patch(...H(0.76, 0, 0), 0.026, 0.022, rnd, 0.2, 8)).fill(0xf4efe2);
-  for (const e of [-1, 1]) g.circle(...H(0.75, e, 0.105), 0.019).fill(INK);
-  // The mane down the crest of the neck, falling to one side, and the forelock between the ears.
-  const mane: Pt[] = [H(0.89, -0.15 * sd, 0.088), H(1.0, -0.12 * sd, 0.124), H(1.1, -0.1 * sd, 0.18), H(1.2, 0, 0.22)];
-  for (const [s, w] of [[1.17, 0.21], [1.1, 0.18], [1.04, 0.14], [0.97, 0.11], [0.91, 0.09]] as const) mane.push(H(s, sd * 0.62, w), H(s - 0.03, sd * 0.36, w));
-  g.poly(mane.flat()).fill(coat.mane).stroke({ width: LINE, color: INK, join: 'round' });
-  g.poly([...H(0.9, -0.3, 0.088), ...H(0.9, 0.3, 0.088), ...H(0.8, 0.2, 0.12), ...H(0.77, -0.05, 0.12)]).fill(coat.mane).stroke({ width: 0.012, color: INK, join: 'round' });
-  // The ears pricked forward and out at the poll.
-  for (const e of [-1, 1]) {
-    const ear = [H(0.91, e * 0.04, 1), H(0.85, e * 0.1, 1), H(0.79, e * 0.2, 1), H(0.86, e * 0.19, 1), H(0.93, e * 0.13, 1)];
-    g.poly(ear.flat()).fill(c1).stroke({ width: 0.02, color: INK, join: 'round' });
-    g.poly([...H(0.89, e * 0.1, 1), ...H(0.82, e * 0.18, 1), ...H(0.87, e * 0.17, 1)]).fill(c0);
-  }
-  // The halter: a noseband, a strap behind the ears, a rope to the manger's corner.
-  g.moveTo(...H(0.52, -1, 0.078)).lineTo(...H(0.52, 1, 0.078));
-  g.moveTo(...H(0.93, -1, 0.096)).lineTo(...H(0.93, 1, 0.096));
-  g.stroke({ width: 0.02, color: LEATHER[1] });
-  g.moveTo(...H(0.52, sd, 0.078)).quadraticCurveTo(...at(mid + sd * 0.24, 0.46 * k), ...at(sd > 0 ? W - 0.16 : 0.16, 0.5 * k - 0.05)).stroke({ width: 0.016, color: 0xc8b088, cap: 'round' });
+  drawHorse(g, at, k, mid, sd, light, rnd, v, { rope: [at(mid + sd * 0.24, 0.46 * k), at(sd > 0 ? W - 0.16 : 0.16, 0.5 * k - 0.05)] });
 }
 
 /** A guild's arms or a town's (`Item::variant` of guild_arms): the field (shade, field, lit), the shield's rim, the

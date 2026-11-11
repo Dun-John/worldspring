@@ -566,8 +566,11 @@ const RAIL_LIT = mix(WOOD[1], WOOD[2], 0.6);
  * over them, inked, lit toward the north-west; the fence's and posts' shadows to the south-east. A
  * post at every corner and free end; none where a chunk cuts it.
  */
-function drawFences(g: Graphics, rs: Run[]) {
-  const every = FT * 6;
+function drawFences(g: Graphics, rs: Run[], bold = false) {
+  // (R5 towns, 114: a horse park's corral or a yurt's pen, drawn a third thicker by the generator, bolder
+  // and darker, its posts closer, so it reads round the trodden ground at a town's battle zoom.)
+  const k = bold ? 2 : 1;
+  const every = FT * (bold ? 5 : 6);
   const posts: [Pt, Run][] = [];
   const seen = new Set<string>();
   const post = (p: Pt, r: Run) => {
@@ -593,22 +596,23 @@ function drawFences(g: Graphics, rs: Run[]) {
     g.moveTo(p[0] + shift, p[1] + shift).lineTo(q[0] + shift, q[1] + shift);
   };
   // Shadows.
-  for (const r of rs) line(r, 0, FT * 0.9);
-  g.stroke({ width: FT * 1.3, color: 0x000000, alpha: 0.15, cap: 'butt' });
-  const pw = FT * 1.45;
+  for (const r of rs) line(r, 0, FT * 0.9 * k);
+  g.stroke({ width: FT * 1.3 * k, color: 0x000000, alpha: bold ? 0.24 : 0.15, cap: 'butt' });
+  const pw = FT * 1.45 * (bold ? 1.3 : 1);
+  const [rail0, lit0] = bold ? [mix(WOOD[0], WOOD[1], 0.05), mix(WOOD[1], WOOD[2], 0.2)] : [RAIL, RAIL_LIT];
   const square = (p: Pt, r: Run, half: number, shift = 0) => {
     const c = (sa: number, sd: number) => [p[0] + (r.ux * sa + r.nx * sd) * half + shift, p[1] + (r.uy * sa + r.ny * sd) * half + shift];
     g.poly([...c(-1, -1), ...c(1, -1), ...c(1, 1), ...c(-1, 1)]);
   };
-  for (const [p, r] of posts) square(p, r, pw * 0.55, FT * 1.1);
-  g.fill({ color: 0x000000, alpha: 0.2 });
+  for (const [p, r] of posts) square(p, r, pw * 0.55, FT * 1.1 * k);
+  g.fill({ color: 0x000000, alpha: bold ? 0.3 : 0.2 });
   // The rails: ink under both, the wood, a lit edge on each.
   // (Butt ends: a rail cut at a chunk's edge carries on next door; corners and free ends have posts.)
-  const rail = FT * 0.5;
-  const apart = FT * 0.5;
+  const rail = FT * 0.5 * k;
+  const apart = FT * 0.5 * (bold ? 1.25 : 1);
   for (const [width, color] of [
-    [rail + 3.4, INK],
-    [rail, RAIL],
+    [rail + 3.4 * k, INK],
+    [rail, rail0],
   ] as const) {
     for (const r of rs) for (const d of [apart, -apart]) line(r, d);
     g.stroke({ width, color, cap: 'butt', join: 'round' });
@@ -617,10 +621,10 @@ function drawFences(g: Graphics, rs: Run[]) {
     const sun = r.lit >= 0 ? 1 : -1;
     for (const d of [apart, -apart]) line(r, d + sun * rail * 0.22);
   }
-  g.stroke({ width: rail * 0.34, color: RAIL_LIT, cap: 'butt' });
+  g.stroke({ width: rail * 0.34, color: lit0, cap: 'butt' });
   // The posts: square tops in ink, the wood, the half toward the light lit.
   for (const [p, r] of posts) square(p, r, pw / 2);
-  g.fill(RAIL).stroke({ width: 1.8, color: INK, join: 'round' });
+  g.fill(rail0).stroke({ width: 1.8 * k, color: INK, join: 'round' });
   for (const [p, r] of posts) {
     const h = pw / 2 - 1.2;
     const c = (sa: number, sd: number) => [p[0] + (r.ux * sa + r.nx * sd) * h, p[1] + (r.uy * sa + r.ny * sd) * h];
@@ -633,7 +637,7 @@ function drawFences(g: Graphics, rs: Run[]) {
     ].reduce((m, q) => ((r.ux * q[0] + r.nx * q[1]) * LX + (r.uy * q[0] + r.ny * q[1]) * LY > (r.ux * m[0] + r.nx * m[1]) * LX + (r.uy * m[0] + r.ny * m[1]) * LY ? q : m));
     g.poly([...c(best[0], best[1]), ...c(-best[0], best[1]), ...c(best[0], -best[1])]);
   }
-  g.fill({ color: RAIL_LIT, alpha: 0.8 });
+  g.fill({ color: lit0, alpha: 0.8 });
 }
 
 /**
@@ -648,7 +652,11 @@ export function drawBounds(g: Graphics, shapes: Shape[], ox = 0, oy = 0, side = 
     [FENCE, drawFences],
   ] as const) {
     const of = shapes.filter((s) => s.kind === kind);
-    if (of.length) draw(g, runs(of, ox, oy, side));
+    // (A corral's fence comes a third thicker than a field's: `rural::CORRAL_DRAWN_FT`.)
+    const bold = kind === FENCE ? of.filter((s) => s.size > 0.19 * PX) : [];
+    const rest = bold.length ? of.filter((s) => s.size <= 0.19 * PX) : of;
+    if (rest.length) draw(g, runs(rest, ox, oy, side));
+    if (bold.length) drawFences(g, runs(bold, ox, oy, side), true);
   }
 }
 

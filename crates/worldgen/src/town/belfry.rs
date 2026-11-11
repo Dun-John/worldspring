@@ -54,7 +54,7 @@ pub(super) fn raise_all(l: &mut Layout, generated: Option<&Layout>) {
         let proud = area(&g.poly).abs() > area(body).abs() + 0.5;
         (of(g).is_some_and(|t| !proud || free(l, b, &t.poly)) && body.len() == b.poly.len() && body.iter().zip(&b.poly).all(|(p, q)| dist(*p, *q) < 0.01)).then(|| (g.poly.clone(), g.parts.clone()))
     };
-    let done: Vec<(usize, Vec<P>, Vec<Part>)> = l.buildings.iter().enumerate().filter(|(_, b)| eligible(b)).filter_map(|(k, b)| was(b).or_else(|| raise(l, b).ok()).map(|(p, q)| (k, p, q))).collect();
+    let done: Vec<(usize, Vec<P>, Vec<Part>)> = l.buildings.iter().enumerate().filter(|(_, b)| eligible(b) && super::roof::hall_ring(l, b).is_none()).filter_map(|(k, b)| was(b).or_else(|| raise(l, b).ok()).map(|(p, q)| (k, p, q))).collect();
     for (k, poly, parts) in done {
         let b = &mut l.buildings[k];
         b.poly = poly;

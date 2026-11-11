@@ -89,6 +89,9 @@ export class TownTool implements PointerTool {
   private planned = new Map<number, Pt>();
   private pinned = new Set<number>();
   private gate = new Set<number>();
+  /** Gates put in by hand, and generated ones taken out. */
+  private gateHand = new Set<number>();
+  private gateOut = new Set<number>();
   /** Squares where streets meet: by corner, their kind and how far out they are cut (ft). */
   private squares = new Map<number, { kind: SquareKind; r: number }>();
   /** Corners where a square can open. */
@@ -125,6 +128,8 @@ export class TownTool implements PointerTool {
     this.planned.clear();
     this.pinned.clear();
     this.gate.clear();
+    this.gateHand.clear();
+    this.gateOut.clear();
     this.squares.clear();
     this.junctions.clear();
     this.faces.clear();
@@ -139,6 +144,8 @@ export class TownTool implements PointerTool {
       this.planned.set(c.corner, c.planned ?? c.at);
       if (c.pinned) this.pinned.add(c.corner);
       if (c.gate) this.gate.add(c.corner);
+      if (c.gate_by_hand) this.gateHand.add(c.corner);
+      if (c.gate_removed) this.gateOut.add(c.corner);
       if (c.square) this.squares.set(c.corner, { kind: c.square, r: c.square_ft ?? 30 });
       if (c.junction) this.junctions.add(c.corner);
     }
@@ -460,10 +467,6 @@ export class TownTool implements PointerTool {
     // The patch picked, outlined; the corner picked, ringed (as wide as its square).
     const picked = sel !== null ? this.faces.get(sel) : undefined;
     if (picked) g.poly(picked.map((v) => this.at(v)).flatMap(scr)).stroke({ width: 3, color: 0xfde047 });
-    if (selCorner !== null && this.pos.has(selCorner)) {
-      const [sx, sy] = scr(this.at(selCorner));
-      g.circle(sx, sy, Math.max(8, (this.squares.get(selCorner)?.r ?? 0) * ppf)).stroke({ width: 3, color: 0xfde047 });
-    }
     // Corners, once patches are big enough to tell them apart: movable ones round, those
     // moved by hand orange, those on the water locked (a grey square).
     if (plan.max_move_ft * ppf >= 40) {
@@ -485,7 +488,19 @@ export class TownTool implements PointerTool {
           g.circle(sx, sy, r + 4.5).stroke({ width: 1.5, color: 0xfde68a, alpha: 1 });
         }
         g.circle(sx, sy, r).fill({ color: w ? ink : moved ? 0xfb923c : 0xffffff, alpha: w ? 0.35 + 0.65 * w : 1 }).stroke({ width: 1, color: 0x1c1917 });
+        // A gate in the wall: a square on the corner (blue when put in by hand, hollow when taken out).
+        if (this.gate.has(v) || this.gateOut.has(v)) {
+          const k = this.gateOut.has(v) ? 6 : 7;
+          g.rect(sx - k, sy - k, 2 * k, 2 * k);
+          if (this.gateOut.has(v)) g.stroke({ width: 2, color: 0x1c1917, alpha: 0.8 });
+          else g.fill({ color: this.gateHand.has(v) ? 0x38bdf8 : 0xfafaf9, alpha: 0.35 }).stroke({ width: 2, color: this.gateHand.has(v) ? 0x0369a1 : 0x1c1917 });
+        }
       }
+    }
+    // (Drawn after the corners so the gate marks show inside it.)
+    if (selCorner !== null && this.pos.has(selCorner)) {
+      const [sx, sy] = scr(this.at(selCorner));
+      g.circle(sx, sy, Math.max(8, (this.squares.get(selCorner)?.r ?? 0) * ppf)).stroke({ width: 3, color: 0xfde047 });
     }
     // Dragging one corner: how far it may go from where it was planned.
     if (this.drag?.kind === 'corner') {
