@@ -1447,6 +1447,15 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if !overlaps((b.0 - 20.0, b.1 - 20.0, b.2 + 20.0, b.3 + 20.0)) {
                 continue;
             }
+            // R5 towns (114): a horse park's ground trodden bare (a camp's clearing's), its corrals'
+            // fences the countryside's (`town::rural`), what it sets out (`town::horses`, cover enough
+            // for the guarantee; its knolls as on open ground).
+            if let Some(hp) = crate::town::horses::plan(pk) {
+                stamp(&pk.pts, URBAN_YARD, &mut urb_h);
+                park_keep.extend(hp.keep());
+                park_props.extend(hp.props.iter().copied());
+                continue;
+            }
             let pb = land_biome(t0, crate::town::geom::centroid(&pk.pts));
             let lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
             // R5 towns: a cemetery's ground is a churchyard's (its rows its own, nothing added), its
@@ -2962,7 +2971,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let wet_ok = matches!(kind, Kind::Reeds | Kind::Footbridge);
         let gravel_ok = matches!(kind, Kind::Fountain | Kind::GardenStatue | Kind::Footbridge | Kind::Lychgate);
         // (R5 towns: a cemetery's on its graveyard ground.)
-        let lawn = chunk.urban[k] == URBAN_PARK || chunk.urban[k] == URBAN_GRAVEYARD;
+        let lawn = chunk.urban[k] == URBAN_PARK || chunk.urban[k] == URBAN_GRAVEYARD || chunk.urban[k] == URBAN_YARD;
         if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || (!wet_ok && chunk.water_level[k] > chunk.height[k]) || !(lawn || (gravel_ok && chunk.urban[k] == URBAN_PATH)) {
             continue;
         }

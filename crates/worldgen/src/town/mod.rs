@@ -410,6 +410,9 @@ pub enum ParkKind {
     Common,
     /// R5 towns: a cemetery (`cemetery`): a low boundary, walks, rows of graves by the culture group.
     Cemetery,
+    /// R5 towns (114): horse pens and a horse market (`horses`): fenced corrals, a trodden market
+    /// ground, hitching rails, troughs (a steppe town's in place of a formal garden).
+    Horses,
 }
 
 impl ParkKind {
@@ -419,11 +422,12 @@ impl ParkKind {
             ParkKind::Formal => "formal",
             ParkKind::Common => "common",
             ParkKind::Cemetery => "cemetery",
+            ParkKind::Horses => "horses",
         }
     }
 
     pub fn parse(name: &str) -> Option<ParkKind> {
-        [ParkKind::Formal, ParkKind::Common, ParkKind::Cemetery].into_iter().find(|k| k.name() == name)
+        [ParkKind::Formal, ParkKind::Common, ParkKind::Cemetery, ParkKind::Horses].into_iter().find(|k| k.name() == name)
     }
 }
 
@@ -3837,6 +3841,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let kind = ch.park.get(&i).copied().unwrap_or(if formal { ParkKind::Formal } else { ParkKind::Common });
                 // (R5 towns: the common picked for a cemetery, `cemetery::inner_pick`.)
                 let kind = if kind == ParkKind::Common && !ch.park.contains_key(&i) && cem_inner == Some(i) { ParkKind::Cemetery } else { kind };
+                // (R5 towns, 114: a steppe town's horse pens and market in place of a formal garden.)
+                let kind = if kind == ParkKind::Formal && !ch.park.contains_key(&i) && s.culture % 5 == 4 { ParkKind::Horses } else { kind };
                 let lines: Vec<(P, f64)> = street_lines(i, &d)
                     .into_iter()
                     .filter(|&(n, off)| {

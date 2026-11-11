@@ -569,6 +569,12 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
             piece_runs(a, b, kind, &|_| true, out);
         }
     }
+    // R5 towns (114): a horse park's corrals, post and rail, a gap at each gate (`horses::bounds`).
+    if l.parks.iter().any(|p| p.kind == super::ParkKind::Horses && hits(bbox(&p.pts), near)) {
+        for (a, b) in super::horses::bounds(l, near) {
+            piece_runs(a, b, RunKind::Fence, &|_| true, out);
+        }
+    }
     // Orchards in rows along their furrows; copses.
     if hits(l.bbox, near) {
         let (trees, _, _, _) = crate::battlemap::greenery(crate::battlemap::land_biome(t0, l.center));

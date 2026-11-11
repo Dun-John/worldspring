@@ -731,7 +731,8 @@ fn battlemap_guarantee() {
                 .filter(|&i| st[i].tier >= Tier::Town)
                 .flat_map(|i| worldgen::town::layout(&ex.world, &ex.t0, i).parks.iter().map(|p| (p.kind, worldgen::town::geom::area(&p.pts).abs(), worldgen::town::geom::centroid(&p.pts))).collect::<Vec<_>>())
                 .collect();
-            for kind in [worldgen::town::ParkKind::Formal, worldgen::town::ParkKind::Common] {
+            // (R5 towns: a horse park's corrals too, 114.)
+            for kind in [worldgen::town::ParkKind::Formal, worldgen::town::ParkKind::Common, worldgen::town::ParkKind::Horses] {
                 let biggest = all.iter().filter(|p| p.0 == kind).max_by(|a, b| a.1.total_cmp(&b.1));
                 if let Some(&(_, _, c)) = biggest {
                     seams.push(sites.len());

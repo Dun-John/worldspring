@@ -93,6 +93,8 @@ const COMMON: [&[&str]; 5] = [
     &["the Commons", "the Pasture", "Common", "Green", "the Horse Meadow"],
 ];
 const FORMAL: [&str; 6] = ["Lord's Garden", "the Queen's Garden", "the Physic Garden", "the Pleasance", "the Knot Garden", "the Rose Garden"];
+/// R5 towns (114): a horse park's names (most of all a steppe town's).
+const HORSES: [&str; 6] = ["Horse Market", "the Horse Lines", "the Horse Pens", "Horse Fair", "the Corrals", "Remount Ground"];
 const CEMETERY: [&[&str]; 5] = [
     &["the Howe Field", "Barrow Yard", "the Old Burying Ground", "Hillside Yard", "Stone Acre"],
     &["the Old Burying Ground", "Hillside Yard", "God's Acre", "Yew Yard", "St Hild's Churchyard"],
@@ -339,6 +341,14 @@ fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
                 c.push(pick(&FORMAL, t).to_string());
                 c.extend(FORMAL.iter().map(|x| x.to_string()));
                 "Garden"
+            }
+            ParkKind::Horses => {
+                if rank == 4 {
+                    c.push("the Khan's Horse Lines".into());
+                }
+                c.push(pick(&HORSES, t).to_string());
+                c.extend(HORSES.iter().map(|x| x.to_string()));
+                "Horse Ground"
             }
             ParkKind::Common => {
                 let w = pick(COMMON[group], t);

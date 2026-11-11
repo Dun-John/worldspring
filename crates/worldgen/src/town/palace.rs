@@ -985,7 +985,9 @@ pub(super) fn gardens(site: &Site, l: &mut Layout, off: P) {
             })
             .collect();
         let key = crate::core::rng::hash2(0x9a4c_6a7d, id as i64, 0x67);
-        let mut pk = super::park(site, &local(&q), super::ParkKind::Formal, fronts, key);
+        // (R5 towns, 114: a steppe palace's horse lines in place of its garden.)
+        let kind = if l.culture % 5 == 4 { super::ParkKind::Horses } else { super::ParkKind::Formal };
+        let mut pk = super::park(site, &local(&q), kind, fronts, key);
         pk.pts = q;
         pk.ground.origin = add(pk.ground.origin, off);
         pk.spot = super::places::Spot::Garden(id);

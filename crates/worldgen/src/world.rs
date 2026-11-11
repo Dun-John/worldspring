@@ -607,7 +607,7 @@ pub const LOT_SIZES: [&str; 4] = ["small", "medium", "large", "huge"];
 pub const SQUARE_KINDS: [&str; 4] = ["crossroads", "well", "fountain", "green"];
 
 /// How a park can be laid out by hand (`town::ParkKind`).
-pub const PARK_KINDS: [&str; 3] = ["formal", "common", "cemetery"];
+pub const PARK_KINDS: [&str; 4] = ["formal", "common", "cemetery", "horses"];
 
 impl TownEdit {
     /// How far (ft) a town, corner or patch may stand from where its edit says it was planned.

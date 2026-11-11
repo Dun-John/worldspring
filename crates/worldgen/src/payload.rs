@@ -344,6 +344,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     continue;
                 }
                 whole.set(Some(true));
+                // R5 towns (114): a horse park's trodden ground and its corrals' fences.
+                if pk.kind == crate::town::ParkKind::Horses {
+                    crate::town::horses::plan_polys(pk, &mut push);
+                    whole.set(None);
+                    continue;
+                }
                 let lay = crate::battlemap::park_layout(pk, crate::battlemap::land_biome(t0, pc), l.tier >= crate::t0::settle::Tier::City, world.stream("battlemap"));
                 // R5 towns: a cemetery's plot as a graveyard (its grave marks the tiles' own), its yews' crowns.
                 if pk.kind == crate::town::ParkKind::Cemetery {
