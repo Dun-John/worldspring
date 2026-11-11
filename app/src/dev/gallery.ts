@@ -16,6 +16,8 @@
 // bridged, in a dungeon's flagstones and again in a cave. `&items=dungeon4` (alone, default 48) shows the dungeon set as the DM
 // sees it in play: portcullises down and raised, locks shut and open, keys in three colours, collapsed walls.
 // `&items=cemetery` (alone; `&panels=`, `&sq=`) shows the cemetery props and a cemetery per culture group.
+// `&items=harbour` (alone; `&sq=`, default 48) shows the harbour batch: boats, bollards, cranes, net racks and buoys on
+// water or a quay, then the vector pieces (breakwater armour, a cog, a lighthouse's lantern) close up and in a harbour.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
@@ -28,6 +30,7 @@ import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../rende
 import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower } from '../render/walls';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
+import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
 
@@ -439,6 +442,12 @@ export async function runGallery(target: HTMLElement) {
     y = cemeteries(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 0, query.get('panels'));
   }
 
+  // The harbour batch (`&items=harbour` alone).
+  if (!only && pick?.includes('harbour')) {
+    head('Harbour: boats and buoys afloat, quay props on paving, then breakwater armour, a cog and a lantern (battlemap)');
+    y = harbour(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
+  }
+
   // The countryside's bounds and sails (`&items=countryside`, or with the fruit tree or water wheel kinds).
   if (pick?.includes('countryside') || only?.includes(62) || only?.includes(63)) {
     head('Countryside: hedgerow, dry-stone wall, fence (two chunks side by side, cut at the line between), windmill sails');
@@ -448,6 +457,133 @@ export async function runGallery(target: HTMLElement) {
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
+}
+
+/** The harbour batch's kinds (until the generator has them: `battlemap::MORE`, R5 M20), with a radius in
+ * squares and a height in feet. */
+const HARBOUR_KINDS: KindInfo[] = (
+  [
+    [140, 'rowboat', 1.4, 3],
+    [141, 'fishing boat', 2.4, 4],
+    [142, 'bollard', 0.3, 2],
+    [143, 'dock crane', 2.2, 16],
+    [144, 'net rack', 1.1, 6],
+    [145, 'buoy', 0.45, 1],
+  ] as const
+).map(([id, name, radius, height_ft]) => ({ id, name, radius, blocks_move: true, blocks_sight: false, cover: 1, difficult: false, height_ft, hazard: null, feature: true }));
+
+const WATER = 0x5e8a8e;
+const QUAY = 0xb4ab96;
+
+/** `&items=harbour`: each harbour kind's four looks on water (boats, buoys) or quay paving (the rest), on the
+ * 5-ft grid, at `sq` px a square; then the vector pieces close up; then a small harbour at a third of that. */
+function harbour(app: Application, catalog: KindInfo[], root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  const kinds = HARBOUR_KINDS.map((k) => catalog.find((c) => c.id === k.id) ?? k);
+  const atlas = buildAtlas(app.renderer, kinds);
+  const k = sq / PX;
+  let y = y0;
+  const grid = (g: Graphics, x0: number, y0: number, w: number, h: number, s: number) => {
+    for (let x = x0 + s; x < x0 + w - 1; x += s) g.moveTo(x, y0).lineTo(x, y0 + h);
+    for (let yy = y0 + s; yy < y0 + h - 1; yy += s) g.moveTo(x0, yy).lineTo(x0 + w, yy);
+    g.stroke({ width: 1, color: 0x000000, alpha: 0.12 });
+  };
+  const label = (s: string, x: number, yy: number) => {
+    if (nolabels) return;
+    const t = new Text({ text: s, style: LABEL });
+    t.position.set(x, yy);
+    root.addChild(t);
+  };
+  let x = 16;
+  let rowH = 0;
+  for (const info of kinds) {
+    const cell = Math.ceil((info.radius * 2 + 0.9) * sq);
+    const w = cell * VARIANTS + 8;
+    if (x + w > width - 16) {
+      x = 16;
+      y += rowH + 26;
+      rowH = 0;
+    }
+    const afloat = info.id === 140 || info.id === 141 || info.id === 145;
+    for (let v = 0; v < VARIANTS; v++) {
+      const [cx, cy] = [x + v * (cell + 2) + cell / 2, y + cell / 2];
+      const g = new Graphics().rect(cx - cell / 2, cy - cell / 2, cell, cell).fill(afloat ? WATER : QUAY);
+      grid(g, cx - cell / 2, cy - cell / 2, cell, cell, sq);
+      root.addChild(g);
+      // (Round shadows only under the small quay props: a crane's or a boat's would want its own shape.)
+      if ((info.id === 142 || info.id === 144) && !OWN_SHADOW.has(info.name)) root.addChild(dropShadow(atlas, info, cx, cy, k));
+      const s = new Sprite(atlas.frames[info.id][v]);
+      s.anchor.set(0.5);
+      s.scale.set(k);
+      s.position.set(cx, cy);
+      root.addChild(s);
+    }
+    label(`${info.id} ${info.name} (r ${info.radius})`, x, y + cell + 2);
+    x += w + 16;
+    rowH = Math.max(rowH, cell + 18);
+  }
+  y += rowH + 30;
+
+  // Close up, at `sq`: armour along a bent line on water, a cog of each look, the lantern lit and dark.
+  const g = new Graphics();
+  root.addChild(g);
+  const panel = (x0: number, w: number, h: number, color: number) => {
+    g.rect(x0, y, w, h).fill(color);
+    grid(g, x0, y, w, h, sq);
+  };
+  const bw = Math.min(width - 32, 14 * sq);
+  panel(16, bw, 6 * sq, WATER);
+  drawBreakwaterArmour(g, [[16 + sq, y + 4 * sq], [16 + bw * 0.45, y + 2.6 * sq], [16 + bw - sq, y + 3.4 * sq]], sq, 9, 1);
+  label('breakwater armour along a polyline (9 ft)', 16, y + 6 * sq + 2);
+  const lx = 16 + bw + 24;
+  panel(lx, 6 * sq, 6 * sq, WATER);
+  for (const [i, lit] of [[0, true], [1, false]] as const) {
+    const [cx, cy] = [lx + 1.5 * sq + i * 3 * sq, y + 3 * sq];
+    g.circle(cx, cy, 1.5 * sq).fill(0x9a9182).stroke({ width: 2 * k, color: 0x1d1a14 });
+    drawLantern(g, cx, cy, 6, sq, lit);
+  }
+  label('lantern on a 15-ft tower top, lit and dark', lx, y + 6 * sq + 2);
+  y += 6 * sq + 30;
+  const cw = Math.min(width - 32, 32 * sq);
+  panel(16, cw, 7 * sq, WATER);
+  drawCog(g, 16 + cw * 0.27, y + 3.5 * sq, 0, 70, sq, 0);
+  drawCog(g, 16 + cw * 0.73, y + 3.5 * sq, Math.PI, 60, sq, 1);
+  label('cog, 70 ft, look 0 (bow east); cog, 60 ft, look 1 (bow west)', 16, y + 7 * sq + 2);
+  y += 7 * sq + 30;
+
+  // A small harbour at a third the scale: quay, a pier of bollards, a breakwater with its light, a cog moored.
+  const s3 = sq / 3;
+  const [W, H] = [Math.floor((width - 32) / s3), 30];
+  const h = new Graphics();
+  root.addChild(h);
+  h.rect(16, y, W * s3, H * s3).fill(WATER);
+  h.rect(16, y + 22 * s3, W * s3, 8 * s3).fill(QUAY);
+  grid(h, 16, y, W * s3, H * s3, s3);
+  const P = (a: number, b: number): [number, number] => [16 + a * s3, y + b * s3];
+  drawBreakwaterArmour(h, [P(2, 22), P(4, 14), P(9, 7), P(17, 4)], s3, 9, 2);
+  const [tx, ty] = P(17, 4);
+  h.circle(tx, ty, 1.5 * s3).fill(0x9a9182).stroke({ width: 2 * k, color: 0x1d1a14 });
+  drawLantern(h, tx, ty, 6, s3);
+  const [cx, cy] = P(36, 19.2);
+  drawCog(h, cx, cy, 0, 72, s3, 0);
+  const put = (id: number, v: number, a: number, b: number, rot = 0) => {
+    const sp = new Sprite(atlas.frames[id][v]);
+    sp.anchor.set(0.5);
+    sp.scale.set(k / 3);
+    sp.rotation = rot;
+    sp.position.set(...P(a, b));
+    root.addChild(sp);
+  };
+  for (let i = 0; i < 6; i++) put(142, i % 4 === 1 ? 1 : 0, 24 + i * 4, 22.4);
+  put(143, 0, 52, 24.5, -Math.PI / 2);
+  put(144, 1, 12, 26);
+  put(144, 0, 12, 28.5);
+  put(140, 0, 22, 19.5, 0.1);
+  put(140, 3, 22.5, 17, -0.15);
+  put(141, 0, 50, 18, Math.PI - 0.1);
+  put(145, 0, 26, 9);
+  put(145, 3, 33, 6);
+  label('a harbour at a third of that: armour and the light on the mole, bollards along the quay, a crane, net racks', 16, y + H * s3 + 2);
+  return y + H * s3 + 30;
 }
 
 /** Field bounds over two chunks' worth of grass (each drawn apart, its pieces cut at its edges, as the
