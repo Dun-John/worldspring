@@ -13,6 +13,15 @@ use crate::tools::{schema, text};
 
 pub fn list() -> Vec<Value> {
     let pt = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 });
+    let tower_ref = json!({ "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }] });
+    let corners = json!({ "type": "array", "items": { "type": "integer", "minimum": 0 } });
+    let walls = json!({ "type": "object", "properties": {
+        "built": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }] },
+        "gates_add": corners.clone(),
+        "gates_remove": corners,
+        "towers_add": { "type": "array", "items": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }] } },
+        "towers_remove": { "type": "array", "items": tower_ref },
+    } });
     let town = json!({ "type": "string", "description": "The town or city (its feature id, as search_features gives it; villages have no wards)" });
     vec![
         json!({
@@ -28,25 +37,25 @@ pub fn list() -> Vec<Value> {
             "description": "Change a town's or city's layout (as the ward editor does): move patch corners (moves: {corner, to [x_ft, y_ft] | by [dx_ft, dy_ft] | as_generated}), pull patches toward regular shapes (equalize: patch numbers), smooth corners round a point (relax: {at, radius_ft, amount 0-1}), set patches (patches: {patch, ward, lots, merge_with a neighbour or \"none\", reroll: true for a new roll (a park's: laid out another way), close: true to keep a temple's patch as an open close round the temple or false to build it up, park: formal or common for a park's patch, district: a district's id, a name, or \"auto\", as_generated}; \"auto\" puts a field back), open or close squares where streets meet (squares: {corner, kind: crossroads, well, fountain, green, none or auto}; only at a junction), put walls up or take them down (walls: true, false or \"auto\"), put gates and towers in the wall or take them out (walls: {gates_add, gates_remove, towers_add, towers_remove}), or put it back (reset: all, corners, patches, squares or walls). Corners go only as far as keeps every patch round them convex: the reply says how many went all the way. Only the patches touched are built again; buildings that come out as they were keep their ids, new ones get new ids, and a business the town loses goes to a new building where one fits, else to the nearest home about a patch away (functions_lost lists the rest). A building renamed or noted that the change takes away hands its name and note to the new building on its patch with the same function (a castle's to the new keep): renames_carried lists them, renames_lost those with none. districts_changed lists the patches put in another district. dry_run reports without changing anything.",
             "inputSchema": schema(json!({
                 "id": town,
-                "moves": { "type": "array", "items": { "type": "object", "properties": { "corner": { "type": "integer" }, "to": pt, "by": pt, "as_generated": { "type": "boolean" } }, "required": ["corner"] } },
-                "equalize": { "type": "array", "items": { "type": "integer" } },
-                "relax": { "type": "object", "properties": { "at": pt, "radius_ft": { "type": "number" }, "amount": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 } }, "required": ["at", "radius_ft"] },
+                "moves": { "type": "array", "items": { "type": "object", "properties": { "corner": { "type": "integer", "minimum": 0 }, "to": pt, "by": pt, "as_generated": { "type": "boolean" } }, "required": ["corner"] } },
+                "equalize": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+                "relax": { "type": "object", "properties": { "at": crate::args::point_schema("The middle: an id, {x_ft, y_ft} or [x_ft, y_ft]"), "radius_ft": { "type": "number", "minimum": 1, "maximum": 5000 }, "amount": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 } }, "required": ["at", "radius_ft"] },
                 "patches": { "type": "array", "items": { "type": "object", "properties": {
-                    "patch": { "type": "integer" },
+                    "patch": { "type": "integer", "minimum": 0 },
                     "ward": { "type": "string", "enum": ([TOWN_WARDS.as_slice(), &["auto"]].concat()), "description": "empty: open ground (for buildings of your own)" },
                     "lots": { "type": "string", "enum": ([LOT_SIZES.as_slice(), &["auto"]].concat()) },
-                    "merge_with": { "description": "A neighbouring patch whose district (ward and lots) it joins, with no street between; or \"none\"" },
+                    "merge_with": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string", "enum": ["none"] }], "description": "A neighbouring patch whose district (ward and lots) it joins, with no street between; or \"none\"" },
                     "reroll": { "type": "boolean" },
-                    "close": { "description": "A temple's patch: true opens a close round its temple (open ground with the temple, a cross before it and a hedged churchyard behind it, the houses round it kept), false builds it up; or \"auto\". Only where the town has its temple on that patch and no square opens at its corners" },
+                    "close": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }], "description": "A temple's patch: true opens a close round its temple (open ground with the temple, a cross before it and a hedged churchyard behind it, the houses round it kept), false builds it up; or \"auto\". Only where the town has its temple on that patch and no square opens at its corners" },
                     "park": { "type": "string", "enum": ([PARK_KINDS.as_slice(), &["auto"]].concat()), "description": "A park's patch (ward park): a formal garden (cross walks, a fountain in the middle, hedged parterres, statues, topiary, benches) or a common (winding gravel paths to a hub, a pond, clumps of trees, a gazebo or bandstand on a rise) or a cemetery (a low wall or hedge, walks, rows of graves by the culture: headstones, cairns, yews and a lychgate, tomb-houses, domed tombs or kurgans) or horses (fenced corrals of horses, a trodden market ground, hitching rails, troughs, carts); auto: formal by the castle and the nobles (horses in a steppe town), a common elsewhere" },
                     "district": { "type": "string", "description": "The district it goes in: a district's id (d:<layout>:<n>, any patch to any district, apart or not), a name (the district of that name, else a new district so named, after the generated ones: every other district keeps its id), or \"auto\" (as generated). A district's kind follows its wards once its patches change; rename_feature renames it" },
                     "as_generated": { "type": "boolean" },
                 }, "required": ["patch"] } },
                 "squares": { "type": "array", "items": { "type": "object", "properties": {
-                    "corner": { "type": "integer", "description": "A corner where three streets or more meet (junction in get_town_plan)" },
+                    "corner": { "type": "integer", "minimum": 0, "description": "A corner where three streets or more meet (junction in get_town_plan)" },
                     "kind": { "type": "string", "enum": ([SQUARE_KINDS.as_slice(), &["none", "auto"]].concat()), "description": "The square opened there (the blocks' corners round it cut back), none for no square, auto as generated" },
                 }, "required": ["corner", "kind"] } },
-                "walls": { "description": "true, false or \"auto\" (as generated; a wall taken down leaves a street round the town), or {built: true|false|\"auto\", gates_add: [corner], gates_remove: [corner], towers_add: [[corner, next corner, f 0.05-0.95] | corner whose tower was taken down], towers_remove: [corner | \"t:<layout>:<n>\"]} by the wall's corners (get_town_plan: wall: true). A gate put in gets the town's gatehouse, id gt:<layout>:<corner> and a name, and a track out to the nearest road or the open country (refused, with why, where there is none, on the water, at the wall's end, a castle's curtain, under 80 ft from another gate, or sides under 56 ft); one taken out closes the wall (its road and main street stop short). A tower is refused within 20 ft of another or of a gate, or over a building or a street crossing the wall. Other towers and gates keep their ids. The reply's wall lists gates_added (id, name, way_out_ft, towers), gates_removed, towers_added, towers_removed and refused (why)" },
+                "walls": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }, walls], "description": "true, false or \"auto\" (as generated; a wall taken down leaves a street round the town), or {built: true|false|\"auto\", gates_add: [corner], gates_remove: [corner], towers_add: [[corner, next corner, f 0.05-0.95] | corner whose tower was taken down], towers_remove: [corner | \"t:<layout>:<n>\"]} by the wall's corners (get_town_plan: wall: true). A gate put in gets the town's gatehouse, id gt:<layout>:<corner> and a name, and a track out to the nearest road or the open country (refused, with why, where there is none, on the water, at the wall's end, a castle's curtain, under 80 ft from another gate, or sides under 56 ft); one taken out closes the wall (its road and main street stop short). A tower is refused within 20 ft of another or of a gate, or over a building or a street crossing the wall. Other towers and gates keep their ids. The reply's wall lists gates_added (id, name, way_out_ft, towers), gates_removed, towers_added, towers_removed and refused (why)" },
                 "reset": { "type": "string", "enum": ["all", "corners", "patches", "squares", "walls"] },
                 "dry_run": { "type": "boolean", "default": false },
             }), &["id"]),
@@ -91,6 +100,10 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
         for k in ["id", "dry_run", "world"] {
             m.remove(k);
         }
+    }
+    // (relax's middle is a place like any other: an id, {x_ft, y_ft} or [x_ft, y_ft].)
+    if let Some(at) = req["relax"].get("at").cloned() {
+        req["relax"]["at"] = json!(crate::args::point(app, "relax.at", &at).await?);
     }
     let req: wards::TownRequest = serde_json::from_value(req).map_err(|e| e.to_string())?;
     let town = id.clone();

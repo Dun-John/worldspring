@@ -20,19 +20,17 @@ fn lives_by_kinds() -> Vec<&'static str> {
 pub fn list() -> Vec<Value> {
     vec![json!({ "name": "create_settlement", "title": "Add a village or town", "description": "Add a village or town at a place without remaking the world: laid out by the world's own village and town generators (streets, buildings, businesses, battlemaps, interiors), joined to the nearest road (a village by a track, a town by a road). Nothing else in the world changes. Inland only: refused in water, in a river, on or near a shore (ports and fishing villages need the world remade), crowding another settlement or site, astride a road, on steep ground, or more than 10 mi from a road, with the reason. Culture and what it lives by are taken from the ground if not given. Returns its id (c:...) and get_feature's details. delete_feature takes it away, and sets aside the edits made in it.", "inputSchema": schema(json!({
         "tier": { "type": "string", "enum": CREATED_SETTLEMENTS },
-        "id": { "type": "string", "description": "A feature to put it at (its position)" },
-        "x_ft": { "type": "number", "description": "Feet east of the map's left edge" },
-        "y_ft": { "type": "number", "description": "Feet south of the map's top edge" },
-        "name": { "type": "string", "description": "If left out, named in its culture's style" },
+        "at": crate::args::point_schema("Where its centre goes: an id (a feature to put it at), {x_ft, y_ft} or [x_ft, y_ft]"),
+        "name": { "type": "string", "minLength": 1, "maxLength": worldgen::world::NAME_MAX, "description": "If left out, named in its culture's style" },
         "culture": { "type": "integer", "minimum": 0, "maximum": 4, "description": "Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 open steppe (default: the nearest settlement's)" },
         "lives_by": { "type": "string", "enum": lives_by_kinds(), "description": "What it lives by (default: from its ground)" },
-    }), &["tier"]) }),
+    }), &["tier", "at"]) }),
     json!({ "name": "update_settlement", "title": "Change a settlement", "description": "Change a settlement's tier, what it lives by, whether it is the realm's capital, or its name (Neverwinter a 2,000-person town, Luskan a fishing village). A village or town added by hand (c:...) changes at once, as a village or town that lives inland (a city, a capital, a port or a fishing village needs the world remade: refused, saying how). One of the world's own changes through a settlement pin in its place in the sketch (replaces: its tier; get_sketch shows it with the settlement's id): stored at once, pending: true, and the world is remade by regenerate (or regenerate: true here). It stays the same place: its layout number, and its names, notes, NPCs and plot points follow it; it is laid out anew, so changes inside it (buildings, streets) are set aside, and its population is drawn in its tier's range. A port or fishing village only on a sea or lake shore (fishing also on a river). Nothing else moves but what its new size changes round it (its roads, its trade).", "inputSchema": schema(json!({
         "id": { "type": "string", "description": "The settlement (a metropolis, city, town or village; c:... for one added by hand)" },
         "tier": { "type": "string", "enum": PIN_TIERS, "description": "Its new size (default: as it is)" },
         "lives_by": { "type": "string", "enum": PIN_KINDS, "description": "What it lives by (default: as it is if its tier stays, else from its land)" },
         "capital": { "type": "boolean", "description": "true: the realm's capital (the world's own settlements only)" },
-        "name": { "type": "string", "description": "Its new name (default: as it is named now)" },
+        "name": { "type": "string", "minLength": 1, "maxLength": worldgen::world::NAME_MAX, "description": "Its new name (default: as it is named now)" },
         "regenerate": { "type": "boolean", "default": false, "description": "One of the world's own: remake the world at once (as regenerate), with the sketch's other pending changes" },
     }), &["id"]), "annotations": { "openWorldHint": false, "idempotentHint": true } }),
     ]
@@ -45,7 +43,9 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "create_settlement" => create(app, a).await.map(text),
         "update_settlement" => update(app, a).await.map(text),
         "delete_feature" => {
-            let id = a["id"].as_str()?.to_string();
+            let ids = crate::args::ids(a).ok()?;
+            let [id] = &ids[..] else { return None };
+            let id = id.clone();
             let k = app.with_edits(|e| e.created.iter().position(|c| c.id == id && !c.removed && c.is_settlement())).flatten()?;
             delete(app, id, k).await.map(text)
         }

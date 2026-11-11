@@ -929,14 +929,14 @@ its name at once. A city, a capital, a port or a fishing village needs the world
 | Parameter | Type | | |
 |---|---|---|---|
 | `tier` | string | required | `village` or `town`. |
-| `id` or `x_ft` + `y_ft` | | required | Where its centre goes. |
+| `at` | a place | required | Where its centre goes: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]` (the old `id`, or `x_ft` + `y_ft`, still work). |
 | `name` | string | optional | If left out, it is named in its culture's style. |
 | `culture` | integer | optional | Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 open steppe. Default: the nearest settlement's. |
 | `lives_by` | string | optional | `river`, `mining`, `fortress`, `market`, `farming`, `lumber`, `herding` or `oasis`. Default: from its ground. |
 
 ```json
-{ "name": "create_settlement", "arguments": { "tier": "village", "x_ft": 2318926, "y_ft": 1121032, "lives_by": "lumber" } }
-{ "name": "create_settlement", "arguments": { "tier": "town", "x_ft": 2318926, "y_ft": 1121032, "name": "Pelbridge", "culture": 1 } }
+{ "name": "create_settlement", "arguments": { "tier": "village", "at": [2318926, 1121032], "lives_by": "lumber" } }
+{ "name": "create_settlement", "arguments": { "tier": "town", "at": { "x_ft": 2318926, "y_ft": 1121032 }, "name": "Pelbridge", "culture": 1 } }
 ```
 > *"Add a logging village up in those hills."* · *"Put a market town between Bornworth and the lake."*
 
@@ -1026,7 +1026,8 @@ world's first `range` or massif: drawn ranges replace the generated mountains ac
 changes features, names and settlements far from it.
 
 ### `update_sketch_stroke`
-`id` and any of the parameters above but `tool`; what is not given stays. Returns the new `id` (and `was`).
+`id` and any of `path`, `at`, `closed`, `radius_mi`, `strength`, `hard`, `biome`, `name`, `kind`, `tier`, `lives_by`,
+`capital`, `wards`, `added` and `replaces` (as above, not `tool`); what is not given stays. Returns the new `id` (and `was`).
 
 ### `delete_sketch_stroke`
 `ids` (or `id`): all or none. A pin taken away takes its settlement with it at `regenerate`: what was made on it is set
@@ -1950,7 +1951,9 @@ and `search_features` take them as other features.
 
 ### `edit_town`
 Change a town's layout. Every field is optional; they apply in this order: `reset`, `moves`, `equalize`,
-`relax`, `patches`, `squares`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`,
+`relax`, `patches`, `squares`, `walls`. `relax.at` is a place (an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`); the arguments
+are checked against the schema as everywhere else (`walls` is a boolean, `"auto"` or an object of `built`, `gates_add`,
+`gates_remove`, `towers_add`, `towers_remove`). The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`,
 and the ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
 `gates`), `squares` (the kinds of its open spaces, quays aside), `parks` (how each is laid out), `functions_lost`, `unmerged` (merges dropped because
 a ward no longer allows them), `districts_changed` (`patch`, `from`, `to`: district ids), `renames_carried` (`from`,

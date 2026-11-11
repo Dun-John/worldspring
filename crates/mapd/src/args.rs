@@ -20,6 +20,7 @@ const PLACE_TOOLS: &[&str] = &[
     "render_view",
     "focus_view",
     "create_feature",
+    "create_settlement",
     "ground_heights",
     "shape_ground",
 ];

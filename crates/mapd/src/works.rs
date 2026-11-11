@@ -15,7 +15,7 @@ const SQUARE_FT: f64 = 5.0;
 pub fn props() -> Value {
     let pt = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 });
     json!({
-        "poly": { "type": "array", "items": pt, "description": format!("A castle's outline: corners [x_ft, y_ft] in order, convex (3-32), {CASTLE_MIN_FT} to {CASTLE_MAX_FT} ft across. Its curtain wall stands just inside it") },
+        "poly": { "type": "array", "items": pt, "minItems": 3, "maxItems": 32, "description": format!("A castle's outline: corners [x_ft, y_ft] in order, convex (3-32), {CASTLE_MIN_FT} to {CASTLE_MAX_FT} ft across. Its curtain wall stands just inside it") },
         "rect": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "width_ft": { "type": "number" }, "depth_ft": { "type": "number" }, "angle_deg": { "type": "number", "default": 0 } }, "required": ["x_ft", "y_ft", "width_ft", "depth_ft"], "description": "Or a castle's outline as a rectangle about its middle (width along angle_deg, clockwise from east)" },
         "gate": { "type": "integer", "minimum": 0, "description": "A castle's gate: the side it is in (from corner gate to the next); else the side facing the nearest road" },
         "keep": { "type": "boolean", "default": true, "description": "A castle's keep (the castle itself, named as the site) in the yard" },
@@ -23,11 +23,11 @@ pub fn props() -> Value {
         "structure": { "type": "string", "enum": STRUCTURES, "description": "A castle roofed (default) or in ruins (broken walls, fallen towers, roofless buildings)" },
         "keep_func": { "type": "string", "description": "What a castle's keep is (else the castle itself): a business (a catalog key as list_names shows them: library, temple, wizard_tower...) or a home; auto: back to the castle. The short form of update_building on the keep" },
         "keep_name": { "type": "string", "description": "The keep's own name (else the castle's); empty: back to the castle's" },
-        "pts": { "type": "array", "items": pt, "description": format!("A wall's line: corners [x_ft, y_ft] in order (2-64), each side at least 10 ft, at most {WALL_MAX_FT} ft in all (closed: 3-256 corners, {WALL_RING_MAX_FT} ft round). Towers stand on its corners and along long runs") },
+        "pts": { "type": "array", "items": pt, "minItems": 2, "maxItems": 256, "description": format!("A wall's line: corners [x_ft, y_ft] in order (2-64), each side at least 10 ft, at most {WALL_MAX_FT} ft in all (closed: 3-256 corners, {WALL_RING_MAX_FT} ft round). Towers stand on its corners and along long runs") },
         "settlement": { "type": "string", "description": "With around_patches: the town (its id) whose patches the wall goes round" },
-        "around_patches": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Instead of pts: a closed wall round these patches of the settlement's plan (get_town_plan), one piece, on their outer edge (the middle of the street round them). Its line is taken from the plan as it stands and kept; give around_patches again to lay it anew after moving corners" },
+        "around_patches": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 1, "maxItems": 256, "description": "Instead of pts: a closed wall round these patches of the settlement's plan (get_town_plan), one piece, on their outer edge (the middle of the street round them). Its line is taken from the plan as it stands and kept; give around_patches again to lay it anew after moving corners" },
         "street_gates": { "type": "boolean", "default": false, "description": "A gate on every street crossing the wall (else side streets are closed: gates come only where a road, an approach or a main street crosses, and a ring with none gets one at its busiest street)" },
-        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "A wall's corners (indices into its line) that are gates; roads, approaches and main streets crossing it get gates of their own" },
+        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "maxItems": 256, "description": "A wall's corners (indices into its line) that are gates; roads, approaches and main streets crossing it get gates of their own" },
         "closed": { "type": "boolean", "default": false, "description": "A wall's last corner joins its first (a ring)" },
         "snap": { "type": "boolean", "default": true, "description": "Snap corners to the 5-ft grid" },
         "remove_in_way": { "type": "boolean", "default": false, "description": "Take away the world's own buildings in its way (else it is refused, naming them)" },

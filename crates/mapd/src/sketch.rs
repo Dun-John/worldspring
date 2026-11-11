@@ -95,7 +95,7 @@ pub fn list() -> Vec<Value> {
     let pending = "Stored at once, but the world is not remade until regenerate (results say pending: true).";
     vec![
         json!({ "name": "get_sketch", "title": "The sketch", "description": "The world's sketch: the strokes that steer generation (land, sea, ranges, massifs, rivers, lakes, biomes, volcanoes, settlement pins, sites, regions, roads), each with its id (sk:..., for update_sketch_stroke and delete_sketch_stroke), its tool, points (ft), and its options (a pin's tier, lives_by, capital, name, added). With changes not regenerated yet, the sketch as they leave it, pending: true, and what changed (added, changed, removed). Ids are kept while other strokes come and go; a changed stroke gets a new one.", "inputSchema": schema(json!({
-            "tool": { "type": "string", "description": "Only strokes of this tool (land, sea, range, river, biome, pin, road, massif, elevation, lake, volcano, site, region)" },
+            "tool": { "type": "string", "enum": ["land", "sea", "range", "river", "biome", "pin", "road", "massif", "elevation", "lake", "volcano", "site", "region"], "description": "Only strokes of this tool" },
             "points": { "type": "boolean", "default": true, "description": "false: each stroke's point count and bounding box instead of its points" },
             "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
         }), &[]), "annotations": ro }),
@@ -113,9 +113,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     if !matches!(name, "get_sketch" | "create_sketch_stroke" | "update_sketch_stroke" | "delete_sketch_stroke" | "regenerate") {
         return None;
     }
-    if let Err(e) = known_args(name, a) {
-        return Some(Err(e));
-    }
     if name != "get_sketch" && crate::batch::active() {
         return Some(Err(format!("{name} can't go in a batch: the sketch is changed (and the world remade) on its own")));
     }
@@ -129,40 +126,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         }
         .map(text),
     )
-}
-
-/// Arguments the tool doesn't have are refused (with a near name when there is one).
-fn known_args(name: &str, a: &Value) -> Result<(), String> {
-    let tools = list();
-    let Some(t) = tools.iter().find(|t| t["name"] == name) else { return Ok(()) };
-    let props = t["inputSchema"]["properties"].as_object().cloned().unwrap_or_default();
-    let Some(args) = a.as_object() else { return Ok(()) };
-    let near = |k: &str| props.keys().find(|p| p.starts_with(k) || k.starts_with(p.as_str()) || edit_distance(p, k) <= 2).cloned();
-    let errs: Vec<String> = args
-        .iter()
-        .filter(|(k, v)| k.as_str() != "world" && !props.contains_key(k.as_str()) && !v.is_null())
-        .map(|(k, _)| match near(k) {
-            Some(p) => format!("{k}: unknown argument (did you mean {p}?)"),
-            None => format!("{k}: unknown argument"),
-        })
-        .take(5)
-        .collect();
-    if errs.is_empty() { Ok(()) } else { Err(errs.join("; ")) }
-}
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for i in 1..=a.len() {
-        let mut prev = row[0];
-        row[0] = i;
-        for j in 1..=b.len() {
-            let cur = row[j];
-            row[j] = (prev + usize::from(a[i - 1] != b[j - 1])).min(row[j] + 1).min(row[j - 1] + 1);
-            prev = cur;
-        }
-    }
-    row[b.len()]
 }
 
 /// The open world (hash, file), and the sketch as its pending changes leave it (or as it is).
