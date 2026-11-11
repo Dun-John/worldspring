@@ -1503,8 +1503,8 @@ A design must keep the rules play mode relies on, the same ones every generated 
   caves, mines, lava tubes open into each other), around props that block movement;
 - props on floor, inside the grid, none on another.
 
-A plan that breaks one is refused with the reasons (`not saved: level 2: 12 squares of the tomb at 30,4 can't be
-reached`). No boss chamber, or one not on the deepest level, is only noted.
+A plan that breaks one is refused with the first five reasons and a count (`not saved: level 2: 12 squares of the tomb at 30,4 can't be
+reached; … (and 6 more)`). No boss chamber, or one not on the deepest level, is only noted.
 
 **The plan** (`get_site_design` gives it; `set_site_design` takes it, or any part of it):
 
@@ -1569,10 +1569,18 @@ level 2: Level 2 · the deep
   in the deepest ones. A missing `up` under a level's `down` and a missing `exit` at the entry are filled in.
 
 ### `get_site_design`
-`id`. Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) as the first content block (JSON)
-and the plan as text in a second content block (a client that reads only the first sees no plan). A
-site's saved design made for a site that stood elsewhere (its way in is not under the design's grid: edits kept for
-another sketch or generator) is set aside: the generated site stands, and the reply says so (`set_aside`).
+| Parameter | Type | | |
+|---|---|---|---|
+| `id` | string | required | The site (`u:<layout>:<k>`) or a building (`b:<layout>:<id>`). |
+| `summary` | boolean | optional | Only the levels, top first, each with its room count and room names (renamed or by kind); no plan text. |
+| `format` | boolean | optional | Also give the full plan-format text (every item kind, door flag and rule) as a last content block. The tool descriptions carry only a short form of it, so `set_site_design` and this tool don't repeat it. |
+
+Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) as the first content block (JSON)
+and the plan as text in a second content block (a client that reads only the first sees no plan). A site nobody has
+designed gives the plan of the generated site there (`designed: false`), to start from. `problems` lists the first
+ten, then "and N more". A site's saved design made for a site that stood elsewhere (its way in is not under the
+design's grid: edits kept for another sketch or generator) is set aside: the generated site stands, and the reply
+says so (`set_aside`).
 
 ### `set_site_design`
 | Parameter | Type | | |
@@ -1955,7 +1963,7 @@ Change a town's layout. Every field is optional; they apply in this order: `rese
 are checked against the schema as everywhere else (`walls` is a boolean, `"auto"` or an object of `built`, `gates_add`,
 `gates_remove`, `towers_add`, `towers_remove`). The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`,
 and the ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
-`gates`), `squares` (the kinds of its open spaces, quays aside), `parks` (how each is laid out), `functions_lost`, `unmerged` (merges dropped because
+`gates`), `squares` (the kinds of its open spaces, quays aside), `parks` (how each is laid out), `patches_changed` (`patch`, `what`: which of `ward`, `lots`, `merge`, `reroll`, `close`, `park`, `corners` changed on it, compared with before the call), `functions_lost`, `unmerged` (merges dropped because
 a ward no longer allows them), `districts_changed` (`patch`, `from`, `to`: district ids), `renames_carried` (`from`,
 `to`, `name`: a building renamed or noted that the change took away hands its name and note to the new building on
 its patch with the same function, a castle's to the new keep), `renames_lost` (`id`, `name`: those with none; the

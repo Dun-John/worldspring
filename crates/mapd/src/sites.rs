@@ -13,7 +13,7 @@ pub fn list() -> Vec<Value> {
     vec![json!({
         "name": "restore_feature",
         "title": "Restore deleted sites",
-        "description": "Bring back sites deleted with delete_feature (a drawn building by either of its ids): id or ids, all or none in one change. Refused, naming what is in the way, when the spot is taken now (by the checks a new one meets). NPCs, plots, notes and a hand design that pointed at it are still there. Returns each site as get_feature does.",
+        "description": "Bring back sites deleted with delete_feature (a drawn building by either of its ids): id or ids, all or none. Refused, naming what is in the way, when the spot is taken now. Notes, NPCs and plots that pointed at it are still there.",
         "inputSchema": schema(crate::args::ids_props("deleted site (c:<n>, or a building's b:<layout>:0)"), &[]),
     })]
 }

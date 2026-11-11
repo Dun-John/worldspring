@@ -58,7 +58,7 @@ pub fn list() -> Vec<Value> {
     vec![json!({
         "name": "batch",
         "title": "Many edits at once",
-        "description": "Run many edit tools (rename_feature, annotate_feature, update_feature, hide_feature, create_feature, create_npc, create_plot, place_objects...) as one change: each step sees what the steps before it did, and the whole batch is saved and shown in the app once. If a step fails, nothing is changed and the error names the step. Each step is {tool, arguments}; the result lists each step's result in order.",
+        "description": "Run many edit tools (rename_feature, create_feature, create_npc, place_objects...) as one change: each step sees the steps before it, and the batch is saved and shown once. If a step fails nothing changes and the error names the step. Each step is {tool, arguments}; the result lists the results in order.",
         "inputSchema": schema(json!({
             "steps": {
                 "type": "array",

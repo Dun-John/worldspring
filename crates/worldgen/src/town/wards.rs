@@ -1244,6 +1244,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     // (R5 towns: an edit kept for its emptied districts alone, changing nothing, still holds their ids.)
     let kept = || world.file.edits.towns.get(&key(index)).filter(|e| !e.districts.is_empty() && dist(e.at, center) <= TownEdit::SAME_AT_FT);
     let mut e = edit_of(world, t0, index).or_else(kept).cloned().unwrap_or_default();
+    let e0 = e.clone();
     // Keep only what still applies (a stale part would be set aside anyway).
     let (ch, _) = changes(&plan, &e, center);
     let mut moves: BTreeMap<usize, P> = ch.moves.iter().copied().collect();
@@ -1573,6 +1574,38 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
         "parks": after.parks.iter().map(|p| p.kind.name()).collect::<Vec<_>>(),
         "rects": changed_rects(&before, &after).iter().map(|r| r.map(crate::core::round)).collect::<Vec<_>>(),
     });
+    // Which patches changed, and what about them (settings and corners; districts are in districts_changed).
+    {
+        let was = moved_mesh(&plan, &moves_before);
+        let mut what: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+        let default = PatchEdit::default();
+        let mut ps: Vec<u32> = e0.patches.iter().chain(&e.patches).map(|pe| pe.p).collect();
+        ps.sort();
+        ps.dedup();
+        for p in ps {
+            let (a, b) = (e0.patches.iter().find(|pe| pe.p == p).unwrap_or(&default), e.patches.iter().find(|pe| pe.p == p).unwrap_or(&default));
+            let list = what.entry(p as usize).or_default();
+            for (name, differs) in [("ward", a.ward != b.ward), ("lots", a.lots != b.lots), ("merge", a.merge_with != b.merge_with), ("reroll", a.reroll != b.reroll), ("close", a.close != b.close), ("park", a.park != b.park)] {
+                if differs {
+                    list.push(name);
+                }
+            }
+        }
+        for (f, vs) in mesh.faces.iter().enumerate() {
+            if vs.iter().any(|&v| v < was.pos.len() && dist(was.pos[v], mesh.pos[v]) > 0.5) {
+                what.entry(f).or_default().push("corners");
+            }
+        }
+        what.retain(|_, w| !w.is_empty());
+        if !what.is_empty() {
+            let n = what.len();
+            let mut list: Vec<Value> = what.iter().take(30).map(|(p, w)| json!({ "patch": p, "what": w })).collect();
+            if n > 30 {
+                list.push(json!(format!("and {} more", n - 30)));
+            }
+            report["patches_changed"] = json!(list);
+        }
+    }
     if !stayed.is_empty() {
         report["corners"]["short"] = json!(stayed.into_iter().take(20).collect::<Vec<_>>());
         report["corners"]["why"] = json!("a corner goes only as far as keeps every patch round it convex");

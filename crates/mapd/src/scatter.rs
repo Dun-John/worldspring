@@ -31,9 +31,9 @@ pub fn list() -> Vec<Value> {
     let kind = json!({ "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }], "description": "A built-in kind (id or name) or sprite (s:<asset> or name)" });
     let kinds = json!({ "type": "array", "items": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }] }, "description": "Only these kinds" });
     let mut within = crate::args::area_schema("[x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}; only a circle takes generated objects", 640.0);
-    within["oneOf"][2]["properties"]["kinds"] = kinds.clone();
+    within["oneOf"][1]["properties"]["kinds"] = kinds.clone();
     let mut restore_within = crate::args::area_schema("Clears touching a box, polygon or circle", 640.0);
-    restore_within["oneOf"][2]["properties"]["kinds"] = kinds.clone();
+    restore_within["oneOf"][1]["properties"]["kinds"] = kinds.clone();
     let ids = crate::args::ids_props("id");
     let mut remove = ids.clone();
     if let Some(m) = remove.as_object_mut() {

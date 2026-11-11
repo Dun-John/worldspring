@@ -36,10 +36,10 @@ pub fn list() -> Vec<Value> {
     }
     let mut create = props();
     if let Some(m) = create.as_object_mut() {
-        m.insert("near".into(), crate::args::point_schema("Instead of a footprint: the nearest clear spot for width_ft x depth_ft, fronting a street"));
+        m.insert("near".into(), crate::args::point_schema("Instead of a footprint: the nearest clear spot for width_ft x depth_ft on a street"));
         m.insert("width_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: along the street" }));
         m.insert("depth_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400 }));
-        m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way (removed lists them; restore_building brings them back unless a drawn building now stands there)" }));
+        m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way" }));
     }
     let mut check = props();
     if let Some(m) = check.as_object_mut() {
@@ -52,11 +52,11 @@ pub fn list() -> Vec<Value> {
         m.insert("within".into(), crate::args::area_schema("Buildings whose middle lies inside: [x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}", 1.0e6));
     }
     vec![
-        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares. It gets an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). Refusals name what is in the way; clear: true takes away the world's own buildings there. check_building_spot tests a spot first.", "inputSchema": schema(create, &[]) }),
-        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>), or a piece of a castle made by hand (its keep or a yard building, b:<layout>:<id>; not its footprint): footprint (checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; auto goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
+        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares. It gets an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). Refusals name what is in the way; clear: true takes away the world's own buildings. check_building_spot tests first.", "inputSchema": schema(create, &[]) }),
+        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building drawn by hand (c:<n>), one of the world's own (b:<layout>:<id>), or a hand-made castle's keep or yard building: footprint (checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; auto goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
         json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not: blockers (what, id, where) and nearest_clear, the footprint moved to the nearest clear spot.", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away the world's own buildings (delete_feature does drawn ones): by id or ids (b:<layout>:<id>) or every one whose middle lies inside within. Others keep their ids. restore_building brings them back.", "inputSchema": schema(remove, &[]) }),
-        json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and any update_building change (its name stays as renamed). Refused, nothing changing, when one would come back under a building drawn by hand: delete_feature that first.", "inputSchema": schema(crate::args::ids_props("building id"), &[]) }),
+        json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and update_building changes (its name stays). Refused when one would come back under a drawn building: delete_feature that first.", "inputSchema": schema(crate::args::ids_props("building id"), &[]) }),
     ]
 }
 

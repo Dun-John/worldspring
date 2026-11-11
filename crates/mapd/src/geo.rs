@@ -14,13 +14,13 @@ const SNAP_FT: f64 = 60.0;
 
 pub fn list() -> Vec<Value> {
     vec![
-        json!({ "name": "nearest", "title": "Nearest coast, cliff, river, road, flat or highest", "description": "The nearest coast, cliff, river, road or flat ground to a place, or the highest ground (its point, elevation_ft and the rise above the place), within within_mi (default 5, at most 25): its point, distance, direction and what it is. found is false where there is none; for cliff and flat the search is not exhaustive (the note says what was measured). Thresholds: MCP.md.", "inputSchema": schema(crate::tools::merge(at_props(), json!({
+        json!({ "name": "nearest", "title": "Nearest coast, cliff, river, road, flat or highest", "description": "The nearest coast, cliff, river, road or flat ground to a place, or the highest ground, within within_mi (default 5, at most 25): its point, distance, direction and what it is. found is false where there is none; cliff and flat searches are not exhaustive. Thresholds: MCP.md.", "inputSchema": schema(crate::tools::merge(at_props(), json!({
             "what": { "type": "string", "enum": ["coast", "cliff", "river", "road", "flat", "highest"] },
             "within_mi": { "type": "number", "minimum": 0.1, "maximum": NEAREST_MAX_MI, "default": NEAREST_DEFAULT_MI },
         })), &["what"]) }),
         json!({ "name": "road_point", "title": "A point along a road", "description": "A point at_mi or fraction along a road: road (an rd: id or a road's name) from one end (from: a place near it; default the first), or from and to along the road route takes. Returns x_ft, y_ft, heading_deg and the stretch there; past the length is refused with it.", "inputSchema": schema(json!({
             "road": { "type": "string", "description": "An rd: id, or the name of a drawn or renamed road" },
-            "from": point_schema("An end of the road (a place near it), or where a route starts: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]"),
+            "from": point_schema("An end of the road (a place near it), or where a route starts"),
             "to": point_schema("Where a route ends (instead of road)"),
             "at_mi": { "type": "number", "minimum": 0 },
             "fraction": { "type": "number", "minimum": 0, "maximum": 1 },

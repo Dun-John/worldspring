@@ -29,7 +29,7 @@ fn place_props() -> Value {
         "level": { "type": "integer", "minimum": 0, "description": "Level inside a building or site (0 lowest)" },
         "x_ft": { "type": "number", "description": "A point to stand at" },
         "y_ft": { "type": "number" },
-        "at": crate::args::point_schema("Instead of location, x_ft and y_ft: an id (the location) or {x_ft, y_ft} / [x_ft, y_ft] (the point)"),
+        "at": crate::args::point_schema("Instead of location, x_ft, y_ft: an id (the location) or a point"),
     })
 }
 

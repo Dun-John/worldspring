@@ -22,10 +22,10 @@ use crate::tools::{schema, text};
 const MAX_READ_FT: f64 = 200.0;
 
 pub fn list() -> Vec<Value> {
-    let pt = crate::args::point_schema("A point (world ft)");
+    let pt = crate::args::point_schema("A point: {x_ft, y_ft} or [x_ft, y_ft] (world ft)");
     let at = crate::args::point_schema("A place (id, point or [x, y] in ft)");
     vec![
-        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground with a round brush: raise, lower, smooth, or restore toward the generated ground (plateaus stay). A dab (at, radius_ft) or a stroke (path, width_ft). Buildings, streets and walls follow it. A stroke reaches at most 48 blocks of 80 ft, a world holds 1500. Returns the blocks changed and the ground's range before and after (ft).", "inputSchema": schema(json!({
+        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground with a round brush: raise, lower, smooth, or restore toward the generated ground (plateaus stay). A dab (at, radius_ft) or a stroke (path, width_ft); buildings, streets and walls follow. At most 48 blocks of 80 ft a stroke, 1500 a world. Returns the blocks changed and the ground's range (ft).", "inputSchema": schema(json!({
             "mode": { "type": "string", "enum": ["raise", "lower", "smooth", "restore"] },
             "at": at,
             "radius_ft": { "type": "number", "minimum": 2.5, "maximum": 200, "default": 15, "description": "A dab's radius" },
@@ -35,7 +35,7 @@ pub fn list() -> Vec<Value> {
             "hardness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "0 soft to 1 hard" },
             "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
         }), &["mode"]) }),
-        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: the ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Give poly (at most 48 points, spanning at most 1280 ft) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes that plateau. Returns its id (h:...).", "inputSchema": schema(json!({
+        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: the ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Give poly (at most 48 points, 1280 ft across) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes it. Returns its id (h:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A plateau to change (h:...)" },
             "poly": { "type": "array", "minItems": 3, "items": pt },
             "around": { "type": "string", "description": "A building, tower or site (its footprint)" },
@@ -45,7 +45,7 @@ pub fn list() -> Vec<Value> {
             "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0 },
         }), &[]) }),
         json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
-        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square of the box radius_ft (at most 200) round a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square within radius_ft (at most 200) of a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
     ]
 }
 

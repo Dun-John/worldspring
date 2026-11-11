@@ -56,19 +56,13 @@ const EXTRA_KEYS: &[(&str, &str)] = &[];
 
 /// The `at` / point schema: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`.
 pub fn point_schema(description: &str) -> Value {
-    json!({
-        "description": description,
-        "oneOf": [
-            { "type": "string" },
-            { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["x_ft", "y_ft"] },
-            { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
-        ],
-    })
+    // (One compact type: the forms are in the description; `point` says what is wrong with a bad one.)
+    json!({ "description": description, "type": ["string", "object", "array"] })
 }
 
 /// The `at` property of the tools in `PLACE_TOOLS`.
 pub fn at_props() -> Value {
-    json!({ "at": point_schema("A place (ft from the map's top-left, x east, y south)") })
+    json!({ "at": point_schema("A place: an id, a name, {x_ft, y_ft} or [x_ft, y_ft]") })
 }
 
 /// `field: rule, got X` (X as JSON, cut short).
@@ -260,8 +254,7 @@ pub fn area_schema(description: &str, max_radius_ft: f64) -> Value {
     json!({
         "description": description,
         "oneOf": [
-            { "type": "array", "title": "a box [x0, y0, x1, y1]", "items": num, "minItems": 4, "maxItems": 4 },
-            { "type": "array", "title": "a polygon [[x, y], ...]", "items": { "type": "array", "items": num, "minItems": 2, "maxItems": 2 }, "minItems": 3 },
+            { "type": "array", "title": "a box [x0, y0, x1, y1] or a polygon [[x, y], ...]", "minItems": 3 },
             { "type": "object", "title": "a circle {at, radius_ft}", "properties": {
                 "at": point_schema("The middle"),
                 "x_ft": num, "y_ft": num,
@@ -484,7 +477,7 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
     }
     let types = types_of(s);
     if !types.is_empty() && !types.iter().any(|t| is_type(t, v)) {
-        let rule = types.iter().map(|t| type_name(t)).collect::<Vec<_>>().join(" or ");
+        let rule = if types == ["string", "object", "array"] { "an id, {x_ft, y_ft} or [x_ft, y_ft]".to_string() } else { types.iter().map(|t| type_name(t)).collect::<Vec<_>>().join(" or ") };
         errs.push(bad(name, &rule, v));
         return;
     }
@@ -584,7 +577,14 @@ pub async fn point(app: &Shared, field: &str, v: &Value) -> Result<[f64; 2], Str
                 .with(move |ex| worldgen::agent::position(&ex.world, &ex.t0, &id).ok_or_else(|| no_such(&ex.world, &ex.t0, &id)))
                 .await;
         }
-        Value::Object(o) => (o.get("x_ft").and_then(Value::as_f64), o.get("y_ft").and_then(Value::as_f64)),
+        Value::Object(o) => {
+            for k in ["x_ft", "y_ft"] {
+                if !o.contains_key(k) {
+                    return Err(format!("{field}.{k}: required"));
+                }
+            }
+            (o.get("x_ft").and_then(Value::as_f64), o.get("y_ft").and_then(Value::as_f64))
+        }
         Value::Array(a) if a.len() == 2 => (a[0].as_f64(), a[1].as_f64()),
         _ => return Err(bad(field, FORMS, v)),
     };

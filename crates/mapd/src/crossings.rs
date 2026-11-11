@@ -11,11 +11,11 @@ use crate::tools::{listed, schema, text};
 pub fn list() -> Vec<Value> {
     vec![
         json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries) with id, kind, ends, width, length, material, name and notes. Returns {items, found}; limit (default 200) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), drawn on the battlemap. 10 to 2000 ft long (a ferry at least 68), 5 to 40 ft wide. With id, changes that crossing (fields left out stay). Returns its id (v:...) and the river's banks there; an end in the water is refused.", "inputSchema": schema(json!({
+        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), 10 to 2000 ft long (a ferry at least 68), 5 to 40 ft wide. With id, changes that crossing. Returns its id (v:...) and the river's banks there; an end in the water is refused.", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A crossing to change" },
             "kind": { "type": "string", "enum": ["bridge", "ford", "ferry"] },
-            "from": crate::args::point_schema("One bank: an id, {x_ft, y_ft} or [x_ft, y_ft] (world ft)"),
-            "to": crate::args::point_schema("The other bank: an id, {x_ft, y_ft} or [x_ft, y_ft] (world ft); the crossing is 10 to 2000 ft long (a ferry at least 68)"),
+            "from": crate::args::point_schema("One bank (a place)"),
+            "to": crate::args::point_schema("The other bank (a place); the crossing"),
             "width_ft": { "type": "number", "minimum": 5, "maximum": 40, "default": 12, "description": "Deck, ford or raft width" },
             "material": { "type": "string", "enum": ["timber", "stone"] },
         }), &[]) }),
