@@ -44,10 +44,13 @@
     /** What was last added here (a settlement, or a pin that placed none), which Take back takes
      * away again. */
     added?: string | null;
+    /** Take the one last added away again (a settlement whose remake made it). */
     onTakeBack?: () => void;
+    /** The strip after a placement is done with. */
+    onDone?: () => void;
   }
 
-  let { armed, peek = false, onPlace, onCancel, onTowns, playing = false, seconds = null, note = null, added = null, onTakeBack }: Props = $props();
+  let { armed, peek = false, onPlace, onCancel, onTowns, playing = false, seconds = null, note = null, added = null, onTakeBack, onDone }: Props = $props();
 
   type Group = 'Settlements' | 'Underground' | 'On the surface';
 
@@ -120,12 +123,23 @@
 </script>
 
 <div class="sites">
-  {#if added && onTakeBack}
+  {#if added && !armed}
     <div class="towns added">
       <Icon name="check" size={16} />
       <span class="grow">{added}</span>
-      <button class="ws-btn" onclick={onTakeBack} disabled={playing} title={playing ? 'Stop playing to remake the world' : 'Make the world again without it'}>Take back</button>
+      {#if onTakeBack}<button class="ws-btn quiet" onclick={onTakeBack} disabled={playing} title={playing ? 'Stop playing to remake the world' : 'Make the world again without it'}>Take back</button>{/if}
+      <button class="ws-btn" onclick={place} title="Place another {choice.label.toLowerCase()}">Place another</button>
+      {#if onDone}<button class="ws-btn quiet" onclick={onDone}>Done</button>{/if}
     </div>
+  {/if}
+  {#if peek && tier && !armed}
+    <!-- Phones, folded: the chosen settlement's options beside Place. -->
+    <div class="ws-seg" role="radiogroup" aria-label="Settlement size">
+      {#each CHOICES.filter((c) => c.tier) as c (c.key)}<button class:on={pick === c.key} onclick={() => choose(c.key)}>{c.label}{#if c.tier !== 'village' && c.tier !== 'town'}<span class="remade" aria-label="(remakes the world)">↻</span>{/if}</button>{/each}
+    </div>
+    <select class="ws-input" bind:value={livesBy} aria-label="Lives by">
+      {#each PIN_KINDS as [k, label] (k)}<option value={k} disabled={needsShore(k)}>{label === 'From its land' ? 'Lives by: from its land' : label}{needsShore(k) ? ' (on a shore: needs a remake)' : ''}</option>{/each}
+    </select>
   {/if}
   {#if !peek}
     {#each ['Settlements', 'Underground', 'On the surface'] as group (group)}
@@ -293,6 +307,9 @@
     gap: 8px;
     color: var(--ink-2);
     font-size: 12px;
+  }
+  .towns.added {
+    flex-wrap: wrap;
   }
   .remade {
     margin-left: 3px;

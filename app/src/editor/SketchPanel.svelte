@@ -45,7 +45,7 @@
     ['lake', 'lake', 'Lake', 'K', 'Draw round a lake. It drains from its lowest shore, or into a river drawn out of it.'],
     ['biome', 'leaf', 'Biome', 'B', 'Paint a biome over the land.'],
     ['volcano', 'volcano', 'Volcano', 'V', 'Click to place a volcano. The Volcanoes setting adds more: set it to None for only yours.'],
-    ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size. Edit › Places adds one without opening the sketch.'],
+    ['pin', 'castle', 'Settlement', 'T', 'Settlement pin: planned before the world is made; changes remake it. Click to place one of the chosen size. Edit › Places adds one without opening the sketch; a settlement’s card changes one.'],
     ['site', 'ruin', 'Planned site', 'D', 'Click to plan a ruin, tower, camp, inn, cave, mine or way underground. Planned sites stay through new settings. For one right away, with its size, levels and theme, use Edit › Places.'],
     ['region', 'tag', 'Name', 'N', 'Type a name, then click what it names: a region, mountains, a lake, an island or a sea (names in one region share it out). Or draw round a region of your own. To rename something already on the map, click it, then its name.'],
     ['road', 'road', 'Road', 'O', 'Draw a road along its way: it follows your line, round water, and joins the settlements at its ends and beside it. No road: draw across the planned roads you don’t want. To have only the roads you draw, set Roads to Only drawn in World › Generate.'],

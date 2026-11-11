@@ -38,9 +38,11 @@
     actions?: Snippet;
     /** A question before work would be dropped, shown over the body. */
     ask?: Snippet;
+    /** Settlement changes waiting for a remake: how many, and the one button that makes them. */
+    waiting?: { n: number; run: () => void; busy?: boolean; title?: string } | null;
     children: Snippet<[boolean]>;
   }
-  let { title, icon, tabs, tab, onTab, onClose, back, actions, ask, children }: Props = $props();
+  let { title, icon, tabs, tab, onTab, onClose, back, actions, ask, waiting = null, children }: Props = $props();
 
   const peek = $derived(shell.phone ? shell.snap === 'peek' : shell.collapsed);
 
@@ -151,6 +153,12 @@
       {@const hint = tabs.find((t) => t.key === tab)?.hint}
       {#if hint && !peek}<div class="ws-hint sub">{hint}</div>{/if}
     {/if}
+    {#if waiting && waiting.n > 0}
+      <div class="waiting" role="status">
+        <span>{waiting.n} {waiting.n === 1 ? 'change waits' : 'changes wait'} for a remake</span>
+        <button class="ws-btn primary" disabled={waiting.busy} onclick={waiting.run} title={waiting.title}><Icon name="rotate-cw" size={16} /> Remake the world</button>
+      </div>
+    {/if}
   </div>
   {#if ask}<div class="ask">{@render ask()}</div>{/if}
   <div class="body">
@@ -185,6 +193,17 @@
     align-items: center;
     gap: 6px;
     padding: 6px 6px 4px 10px;
+  }
+  .waiting {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px 6px 10px;
+    font-size: 12px;
+  }
+  .waiting span {
+    flex: 1;
+    min-width: 0;
   }
   .title {
     flex: 1;

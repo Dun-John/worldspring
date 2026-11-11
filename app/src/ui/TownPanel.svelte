@@ -114,8 +114,9 @@
   const reshaping = $derived(reshape.find((m) => m.key === mode));
   let reshapeOpen = $state(false);
   let resetOpen = $state(false);
-  const gateCount = $derived(plan?.corners.filter((c) => c.gate).length ?? 0);
-  const towerCount = $derived(plan ? plan.corners.filter((c) => c.wall && !c.tower_removed).length + (plan.walls.by_hand?.towers_added.length ?? 0) : 0);
+  // (As the generator built them, when the plan says: gate towers apart.)
+  const gateCount = $derived(plan?.walls.gates ?? plan?.corners.filter((c) => c.gate).length ?? 0);
+  const towerCount = $derived(plan ? (plan.walls.towers ?? plan.corners.filter((c) => c.wall && !c.tower_removed).length + (plan.walls.by_hand?.towers_added.length ?? 0)) : 0);
   const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : one.endsWith('ch') ? 'es' : 's'}`;
   let renaming = $state<string | null>(null);
   let renameTo = $state('');

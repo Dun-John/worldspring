@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -221,6 +221,13 @@ export class GenClient {
    * sent before); null if it could not answer. */
   made(): Promise<MadeSettlement[] | null> {
     return this.ask({ op: 'made' }).then((j) => JSON.parse(j) as MadeSettlement[] | null);
+  }
+
+  /** One of the world's own settlements as its sketch pin would take it: its layout, the pin that
+   * made it (stroke index), tier now and as placed, what it lives by (a pin kind), name, the pin's
+   * spot, capital, and whether a port or fishing village may stand there; null if no answer. */
+  settlementFacts(id: string): Promise<SettlementFacts | { error: string } | null> {
+    return this.ask({ op: 'settlefacts', id }).then((j) => JSON.parse(j));
   }
 
   /** Whether a village or town (`kind`; `id`: its created id) can be added at (x, y), with the

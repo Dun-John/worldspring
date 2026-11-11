@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, NamedPlaces, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
-  import { MI, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
+  import { MI, PIN_KINDS, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
@@ -31,7 +31,7 @@
   import MovesMenu from './ui/MovesMenu.svelte';
   import type { Move } from './render/InteriorLayer';
   import InfoPanel from './ui/InfoPanel.svelte';
-  import { CULTURES, type SettleAsk, type SettlePlan } from './ui/SettlementEdit.svelte';
+  import { CULTURES, type SettleAsk, type SettlePlan, type WaitAsk } from './ui/SettlementEdit.svelte';
   import Gazetteer from './ui/Gazetteer.svelte';
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
@@ -260,7 +260,8 @@
   const notes = $derived(edits.notes ?? {});
   const npcs = $derived(edits.npcs ?? {});
   const plots = $derived(edits.plots ?? {});
-  const settlements = $derived(overlay ? overlay.features.filter((f) => SETTLEMENT_KINDS.includes(f.kind)) : []);
+  // (The world's own: those added by hand at once are created sites, after them.)
+  const settlements = $derived(overlay ? overlay.features.filter((f) => SETTLEMENT_KINDS.includes(f.kind) && !f.id.startsWith('c:')) : []);
   // Layout indices: settlements, then points of interest (same order as T0), then created sites.
   const sites = $derived(overlay ? overlay.features.filter((f) => SITE_KINDS.includes(f.kind) && !f.id.startsWith('c:')) : []);
   /** The layout index of the first created site, as the generator counts it. */
@@ -423,14 +424,20 @@
 
   function undo(step?: Step) {
     const s = undoHistory.takeUndo(step);
-    if (s) applyEdits(withOps(s.inverse), { tool: 'undo', label: `Undid: ${s.label}` }, 'user', { record: false });
+    if (s?.undo) {
+      s.undo();
+      toast(`Undid: ${s.label}`);
+    } else if (s) applyEdits(withOps(s.inverse), { tool: 'undo', label: `Undid: ${s.label}` }, 'user', { record: false });
     // (Past the history, the settlement last added: always asked, since it remakes the world.)
     else if (!step && added) takeBack(true);
   }
 
   function redo() {
     const s = undoHistory.takeRedo();
-    if (s) applyEdits(withOps(s.ops), { tool: 'redo', label: `Redid: ${s.label}` }, 'user', { record: false });
+    if (s?.redo) {
+      s.redo();
+      toast(`Redid: ${s.label}`);
+    } else if (s) applyEdits(withOps(s.ops), { tool: 'redo', label: `Redid: ${s.label}` }, 'user', { record: false });
   }
 
   /** mapd keeps this tab's changes on its disk (`sync.keeps`), as last heard. */
@@ -1000,6 +1007,8 @@
       // (Take back belongs to the world it was offered in: another world, or this one drawn
       // otherwise, drops it.)
       if (added && !isAddedWorld(added)) clearAdded();
+      // (So do settlement changes waiting for a remake of another world.)
+      if (waiting && waiting.key !== waitKey(world)) waiting = null;
       genSeconds = Math.max(1, Math.round((performance.now() - started) / 1000));
       store('ui.genSeconds', String(genSeconds));
     } catch (e) {
@@ -1126,7 +1135,8 @@
 
   function enterSketch() {
     if (busy || playOn) return;
-    sketcher.load($state.snapshot(world.sketch?.strokes ?? []));
+    // (With the settlement changes waiting for a remake: generating the sketch makes them.)
+    sketcher.load(waitingSketch());
     sketchSize = mapSize(world.params);
     const layer = view.enterSketch(sketcher);
     if (!layer) return;
@@ -1198,7 +1208,7 @@
 
   /** The sketch being drawn differs from the world's (strokes not generated yet). */
   function sketchDirty(): boolean {
-    return sketchOn && JSON.stringify($state.snapshot(sketcher.strokes)) !== JSON.stringify(world.sketch?.strokes ?? []);
+    return sketchOn && JSON.stringify($state.snapshot(sketcher.strokes)) !== JSON.stringify(waitingSketch());
   }
 
   function leaveSketch() {
@@ -2667,13 +2677,20 @@
     applyEdits({ ...edits, created: [...(edits.created ?? []), site] }, { tool: 'create_settlement', id: nid, kind: st.tier, name: site.name }, 'user');
     const f = overlay?.features.find((g) => g.id === nid);
     if (f) selection = { kind: 'feature', feature: f };
+    placedName = site.name;
     placeNote = null;
   }
 
   /** The next click on the map puts `c` there (`move`: the village or town added by hand, of that
    * id, goes there instead). */
+  /** What Places added at once last (its strip: Place another, Done), else null. */
+  let placedName = $state<string | null>(null);
+  /** The remake's Added whose Places strip was put away (Done). */
+  let addedDone = $state.raw<Added | null>(null);
+
   function armPlace(c: SiteChoice, label = 'site', move: string | null = null) {
     disarmPlace();
+    placedName = null;
     placeLabel = label;
     placeMove = move;
     // A settlement's ring: about how far it reaches, at a middling size for its tier.
@@ -2683,7 +2700,8 @@
       const b = container.getBoundingClientRect();
       ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
     };
-    const instant = isInstant(c);
+    // (A pin moved waits for a remake: no spot check of a village added at once.)
+    const instant = isInstant(c) && !(move && !move.startsWith('c:'));
     const tool: PointerTool = {
       down: () => true,
       move: (x, y) => reach && showRing(x, y),
@@ -2740,6 +2758,9 @@
     stroke: number;
     /** The changes right after it came (Undo back to them still counts as untouched). */
     editsAfter: Edits;
+    /** A remake with settlement changes that waited for it (Take back has them wait again), not
+     * a settlement added. */
+    changes?: Waiting[];
   }
   let added = $state.raw<Added | null>(null);
 
@@ -2864,7 +2885,7 @@
     const a = r.a;
     const moved = () => {
       clearAdded();
-      toast('The world has changed since: erase the settlement in World › Sketch');
+      toast(a?.changes ? 'The world has changed since: make the changes again on the settlements’ cards' : 'The world has changed since: erase the settlement in World › Sketch');
     };
     if (a && !isAddedWorld(a)) return moved();
     if (!worldShown) return;
@@ -2890,6 +2911,8 @@
     const restore = untouched && editCount - n0 === remapCount;
     const m = restore ? null : (lastFollowed as Followed | null);
     if (restore) applyEdits(a!.editsBefore!, { tool: 'reanchor', label: `Took back ${r.name}` }, 'user', { record: false, quiet: true });
+    // (Changes that waited for the remake taken back wait again.)
+    if (a?.changes) waiting = { key: waitKey(world), list: a.changes };
     const count = (n: number) => `${n} ${n === 1 ? 'change' : 'changes'}`;
     const what = m?.removed && on ? madeWords(on) : '';
     // (Not put back as they were: what was set aside with it, what the remake kept or set aside,
@@ -2918,6 +2941,177 @@
     return () => void removeSettlement({ id, li, name, stroke, a: null });
   }
 
+  // Settlement changes waiting for a remake (the world's own, and those made by a pin): each is a
+  // pin in the sketch as mapd's `update_settlement` stores it (in place of the settlement's own
+  // pin, else one that `replaces` it), kept here until one remake makes them all.
+
+  /** A settlement change waiting for a remake: the pin it is to have, in place of stroke `index`
+   * of the world's sketch (null: added), and the settlement it is for. */
+  type Waiting = { id: string; name: string; index: number | null; pin: Stroke };
+  /** The changes waiting, for the world they were made on (`waitKey`): another drops them. */
+  let waiting = $state.raw<{ key: string; list: Waiting[] } | null>(null);
+  const waitKey = (w: WorldFile) => JSON.stringify([w.seed, w.params, w.gen_version, w.sketch ?? null]);
+  const waitingList = $derived(waiting && worldShown && waiting.key === waitKey(world) ? waiting.list : []);
+
+  /** The world's sketch with the changes waiting made. */
+  function waitingSketch(): Stroke[] {
+    const strokes = ($state.snapshot(world.sketch?.strokes ?? []) as Stroke[]).slice();
+    const more: Stroke[] = [];
+    for (const w of waitingList) {
+      if (w.index !== null && w.index < strokes.length) strokes[w.index] = w.pin;
+      else more.push(w.pin);
+    }
+    return [...strokes, ...more];
+  }
+
+  /** Settlement `id`'s change waiting set to `to` (null: none waits), as one Undo step. */
+  function putWaiting(id: string, to: Waiting | null, label: string) {
+    const was = waitingList.find((w) => w.id === id) ?? null;
+    const set = (v: Waiting | null) => {
+      const rest = waitingList.filter((w) => w.id !== id);
+      const list = v ? [...rest, v] : rest;
+      waiting = list.length ? { key: waitKey(world), list } : null;
+    };
+    set(to);
+    const step: Step = { label, author: 'user', ops: [], inverse: [], undo: () => set(was), redo: () => set(to) };
+    undoHistory.push(step);
+    toast(label, () => undo(step));
+  }
+
+  /** The selected settlement as its pin would take it (the world's own and pin-made ones). */
+  let cardFacts = $state.raw<{ id: string; f: SettlementFacts } | null>(null);
+  $effect(() => {
+    const sel = selection;
+    void overlay;
+    if (sel?.kind !== 'feature' || !SETTLEMENT_KINDS.includes(sel.feature.kind) || sel.feature.id.startsWith('c:')) return;
+    const id = sel.feature.id;
+    void view.gen.settlementFacts(id).then((r) => {
+      if (selection?.kind === 'feature' && selection.feature.id === id) cardFacts = r && !('error' in r) ? { id, f: r } : null;
+    });
+  });
+
+  /** A pin's options compared: what `to` changes from `from`, in words ("a city, the capital"). */
+  function waitWords(from: { tier: string; kind: string; capital: boolean; at: [number, number] }, to: Stroke): string {
+    const parts: string[] = [];
+    if (to.tier && to.tier !== from.tier) parts.push(`a ${to.tier}`);
+    if ((to.kind ?? '') !== from.kind) parts.push(to.kind ? `living by ${(PIN_KINDS.find(([k]) => k === to.kind)?.[1] ?? to.kind).toLowerCase()}` : 'living from its land');
+    if (!!to.capital !== from.capital) parts.push(to.capital ? 'the realm’s capital' : 'not the capital');
+    if (Math.hypot(to.pts[0][0] - from.at[0], to.pts[0][1] - from.at[1]) > 1) parts.push('moved');
+    return parts.join(', ');
+  }
+
+  /** What the settlement's pin is now (its own, else as the world placed it), to compare with. */
+  function pinBase(f: SettlementFacts): { tier: string; kind: string; capital: boolean; at: [number, number] } {
+    const own = f.pin !== null ? world.sketch?.strokes?.[f.pin] : undefined;
+    return own ? { tier: own.tier ?? f.tier, kind: own.kind ?? '', capital: !!own.capital, at: own.pts[0] } : { tier: f.tier, kind: f.kind, capital: f.capital, at: f.spot };
+  }
+
+  /** Change one of the world's own settlements, or one made by a pin: its pin, waiting for a
+   * remake (as mapd's `update_settlement`); one Undo step. An error in words, else null. */
+  async function waitChange(id: string, ask: { tier?: PinTier; lives_by?: string; capital?: boolean; at?: [number, number] }): Promise<string | null> {
+    if (playOn) return 'Stop playing to change it: it remakes the world';
+    const f = cardFacts?.id === id ? cardFacts.f : await view.gen.settlementFacts(id).then((r) => (r && !('error' in r) ? r : null));
+    if (!f) return 'The map could not answer: try again';
+    if (ask.lives_by === 'port' && !f.port_ok) return 'A port stands on a sea or lake shore: this one is inland';
+    if (ask.lives_by === 'fishing' && !f.fishing_ok) return 'A fishing village stands on a shore or a river: this one has neither';
+    const now = waitingList.find((w) => w.id === id);
+    const own = f.pin !== null ? ($state.snapshot(world.sketch?.strokes?.[f.pin]) as Stroke | undefined) : undefined;
+    // (In place of the world's own: as it was placed, and as it is named now.)
+    const s: Stroke = now ? { ...now.pin } : own ? { ...own } : { ...pinStroke(f.spot, { tier: f.tier, kind: f.kind as PinKind, capital: f.capital }), replaces: f.planned, name: nameOf(id) };
+    if (ask.tier) {
+      s.tier = ask.tier;
+      // (What it lives by stays while the new tier allows it: a port is no village's, a fishing
+      // village no town's; else it is from its land.)
+      const k = s.kind ?? '';
+      if ((k === 'port' && ask.tier === 'village') || (k === 'fishing' && ask.tier !== 'village')) delete s.kind;
+    }
+    if (ask.lives_by !== undefined) {
+      if (ask.lives_by) s.kind = ask.lives_by;
+      else delete s.kind;
+      if (ask.lives_by === 'fishing' && s.tier !== 'village') return 'A fishing settlement is a village: make it a village first';
+      if (ask.lives_by === 'port' && s.tier === 'village') return 'A port is a town or bigger: make it a town first';
+    }
+    if (ask.capital !== undefined) {
+      if (ask.capital) s.capital = true;
+      else delete s.capital;
+    }
+    if (ask.at) s.pts = [[Math.round(ask.at[0]), Math.round(ask.at[1])]];
+    const name = nameOf(id);
+    const what = waitWords(pinBase(f), s);
+    if (!what) {
+      // (Back as it is: nothing waits.)
+      if (now) putWaiting(id, null, `${name}: back as it is`);
+      return null;
+    }
+    if (now && JSON.stringify(now.pin) === JSON.stringify(s)) return null;
+    putWaiting(id, { id, name, index: f.pin, pin: s }, `${name}: ${what} (waits for a remake)`);
+    return null;
+  }
+
+  /** A pin-made or the world's own settlement moved: its pin, at (x, y), waiting for a remake. */
+  async function waitMove(id: string, x: number, y: number) {
+    const f = cardFacts?.id === id ? cardFacts.f : null;
+    const near = (overlay?.features ?? []).find((g) => g.id !== id && SETTLEMENT_KINDS.includes(g.kind) && Math.hypot(g.x - x, g.y - y) < 3 * MI);
+    if (near) return toast(`Too close to ${near.name}: keep settlements 3 miles apart`);
+    const pins = world.sketch?.strokes ?? [];
+    if (pins.some((p, i) => p.tool === 'pin' && i !== f?.pin && Math.hypot(p.pts[0][0] - x, p.pts[0][1] - y) < 3 * MI)) return toast('Too close to a settlement placed by hand: keep them 3 miles apart');
+    const e = await waitChange(id, { at: [x, y] });
+    if (e) toast(e);
+    else reselectFeature(id);
+  }
+
+  /** The Dock's bar while settlement changes wait for a remake. */
+  const waitBar = $derived(
+    waitingList.length ? { n: waitingList.length, run: () => void remakeWaiting(), busy: busy || playOn, title: playOn ? 'Stop playing to remake the world' : `Remake the world with them${genSeconds ? ` (about ${genSeconds} s)` : ''}` } : null,
+  );
+
+  /** Remake the world with the settlement changes waiting (asked first when it has changes, as
+   * any remake is); Take back makes it again as it was. */
+  async function remakeWaiting() {
+    if (playOn) return toast('Stop playing to remake the world');
+    if (busy || !waitingList.length) return;
+    if (sketchDirty() || designer?.dirty) return sketchDirty() ? ask('sketch', () => void remakeWaiting(), false) : ask('design', () => void remakeWaiting());
+    const list = waitingList;
+    const next: WorldFile = { ...($state.snapshot(world) as WorldFile), sketch: { strokes: waitingSketch() } };
+    const run = async () => {
+      if (playOn || busy) return toast(playOn ? 'Stop playing to remake the world' : 'The world is being made: try again');
+      clearAdded();
+      const before = $state.snapshot(world) as WorldFile;
+      const sel = selection?.kind === 'feature' ? selection.feature.id : null;
+      const n0 = editCount;
+      if (!(await generate({ ...before, sketch: next.sketch }, { confirmed: true, quiet: true }))) return;
+      waiting = null;
+      const m = lastFollowed as Followed | null;
+      const count = (n: number) => `${n} ${n === 1 ? 'change' : 'changes'}`;
+      const kept = m ? (m.parked ? ` Kept ${count(m.kept)}; ${count(m.parked)} set aside: their places came out differently.` : ` Kept ${count(m.kept)} with the remade world.`) : '';
+      const missing = (overlay?.conflicts ?? []).filter((c) => c.message.includes('no settlement placed')).map((c) => c.message);
+      const said = playSaid(lastCarried);
+      const names = list.map((w) => w.name);
+      const who = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
+      const text = `Remade the world with the changes to ${who}.${missing.length ? ` ${missing.join('; ')}.` : ''}${kept}${said ? ` ${said}` : ''}`;
+      offerTakeBack({
+        name: `the changes to ${who}`,
+        text,
+        seed: before.seed,
+        params: JSON.stringify(before.params),
+        sketchBefore: before.sketch,
+        sketchAfter: JSON.stringify(world.sketch ?? null),
+        editsBefore: editCount - n0 === remapCount ? (before.edits ?? {}) : null,
+        count: editCount,
+        parked: m?.parked ?? 0,
+        toast: 0,
+        id: null,
+        li: -1,
+        stroke: -1,
+        editsAfter: edits,
+        changes: list,
+      });
+      if (sel) reselectFeature(sel);
+    };
+    if (remakeOf(next)) ask('regen', () => void run());
+    else await run();
+  }
+
   /** Create a site near (x, y), where the generator allows (dry land, out of rivers), named
    * locally unless a name was given; then select it. */
   async function createSite(c: SiteChoice, x: number, y: number) {
@@ -2942,6 +3136,7 @@
     applyEdits({ ...edits, created: [...(edits.created ?? []), site] }, { tool: 'create_feature', id, kind: c.kind === 'entrance' ? (c.under ?? 'dungeon').replace(/_/g, ' ') : c.kind.replace(/_/g, ' '), name: site.name }, 'user');
     const f = overlay?.features.find((g) => g.id === id);
     if (f) selection = { kind: 'feature', feature: f };
+    placedName = site.name;
   }
 
   /** The info panel's actions for a created site: hide or show it, delete it, go down into its
@@ -3064,6 +3259,7 @@
   /** Put the village or town added by hand `id` at (x, y) where the generator allows: its id,
    * name, notes, NPCs and plots kept, the changes made inside it set aside. One step. */
   async function moveSettlement(id: string, x: number, y: number) {
+    if (!id.startsWith('c:')) return void waitMove(id, x, y);
     const now = $state.snapshot(edits) as Edits;
     const old = now.created ?? [];
     const k = old.findIndex((c) => c.id === id && !c.removed);
@@ -3118,6 +3314,7 @@
   function settleCard(f: Feature) {
     if (!SETTLEMENT_KINDS.includes(f.kind)) return null;
     const c = f.id.startsWith('c:') ? edits.created?.find((x) => x.id === f.id && !x.removed) : undefined;
+    const fx = !c && cardFacts?.id === f.id ? cardFacts.f : null;
     const lives = f.detail?.split(', pop.')[0] ?? null;
     return {
       made: !!c,
@@ -3128,8 +3325,48 @@
       name: c?.name ?? f.name,
       plan: (a: SettleAsk) => planSettlement(f.id, a),
       apply: applySettlement,
-      onMove: c ? () => startMove(f.id) : undefined,
+      onMove: c ? () => startMove(f.id) : fx?.pin != null ? () => startPinMove(f.id) : undefined,
+      ...(fx ? ownCard(f.id, fx) : {}),
     };
+  }
+
+  /** The Settlement block's part for one of the world's own or a pin-made settlement: as its pin
+   * would have it, with the change waiting for a remake. */
+  function ownCard(id: string, fx: SettlementFacts) {
+    const w = waitingList.find((x) => x.id === id);
+    const base = pinBase(fx);
+    const name = nameOf(id);
+    return {
+      own: {
+        tier: w?.pin.tier ?? fx.tier,
+        livesBy: w ? (w.pin.kind ?? '') : base.kind,
+        capital: w ? !!w.pin.capital : base.capital,
+        portOk: fx.port_ok,
+        fishingOk: fx.fishing_ok,
+        waiting: w ? waitWords(base, w.pin) : null,
+        byPin: fx.pin !== null,
+      },
+      wait: (a: WaitAsk) => waitChange(id, a),
+      onCancel: w ? () => putWaiting(id, null, `${name}: change cancelled`) : undefined,
+      onSketch: fx.pin !== null ? () => showInSketch(fx) : undefined,
+      onRemake: w ? () => void remakeWaiting() : undefined,
+    };
+  }
+
+  /** Move the settlement made by pin `id`: the next click puts its pin there (it waits for a
+   * remake). */
+  function startPinMove(id: string) {
+    const fx = cardFacts?.id === id ? cardFacts.f : null;
+    if (!fx) return;
+    const tier = (waitingList.find((x) => x.id === id)?.pin.tier ?? fx.tier) as PinTier;
+    armPlace({ kind: tier, settlement: { tier, livesBy: '', capital: false, wards: '' } }, nameOf(id), id);
+  }
+
+  /** World › Sketch at a pin-made settlement's pin. */
+  function showInSketch(fx: SettlementFacts) {
+    const at = waitingList.find((x) => x.index === fx.pin)?.pin.pts[0] ?? world.sketch?.strokes?.[fx.pin!]?.pts[0] ?? fx.spot;
+    go('world', 'sketch');
+    flyToSize(at[0], at[1], 12 * MI);
   }
 
   // The notebook: NPCs and plot points (the user's and agents').
@@ -3969,6 +4206,7 @@
 
   {#if cardSheet && selection}
     <Dock
+      waiting={waitBar}
       title="Place"
       icon="pin"
       onClose={() => ((selection = null), (shell.card = false))}
@@ -3980,6 +4218,7 @@
     </Dock>
   {:else if shell.section === 'world'}
     <Dock
+      waiting={waitBar}
       title="World"
       icon="globe"
       tabs={[
@@ -4058,6 +4297,7 @@
     </Dock>
   {:else if shell.section === 'edit'}
     <Dock
+      waiting={waitBar}
       title="Edit"
       icon="pencil"
       tabs={[
@@ -4092,8 +4332,9 @@
             playing={playOn}
             seconds={genSeconds}
             note={placeNote}
-            added={added ? (added.id ? `Added ${added.name}.` : 'The pin placed no settlement.') : null}
-            onTakeBack={() => takeBack()}
+            added={added && !added.changes && added !== addedDone ? (added.id ? `Added ${added.name}.` : 'The pin placed no settlement.') : placedName ? `Added ${placedName}.` : null}
+            onTakeBack={added && !added.changes && added !== addedDone ? () => takeBack() : undefined}
+            onDone={() => ((placedName = null), (addedDone = added))}
           />
         {:else if buildOn}
           <BuildPanel
@@ -4201,6 +4442,7 @@
     </Dock>
   {:else if shell.section === 'notes'}
     <Dock
+      waiting={waitBar}
       title="Notes"
       icon="book"
       tabs={[
@@ -4276,13 +4518,19 @@
       {/snippet}
     </Dock>
   {:else if shell.section === 'play'}
-    <Dock title="Play" icon="pawn" onClose={() => go(null)} actions={stopPlaying} ask={shell.ask ? askBar : undefined}>
+    <Dock waiting={waitBar} title="Play" icon="pawn" onClose={() => go(null)} actions={stopPlaying} ask={shell.ask ? askBar : undefined}>
       {#snippet children(peek)}
         <PlayPanel {play} version={playVersion} {peek} />
       {/snippet}
     </Dock>
   {:else if shell.ask}
     <div class="asking">{@render askBar()}</div>
+  {:else if waitBar}
+    <!-- (No panel open: the changes waiting for a remake keep their bar, over the map.) -->
+    <div class="waitbar ws-panel" role="status">
+      <span>{waitBar.n} {waitBar.n === 1 ? 'change waits' : 'changes wait'} for a remake</span>
+      <button class="ws-btn primary" disabled={waitBar.busy} onclick={waitBar.run} title={waitBar.title}><Icon name="rotate-cw" size={16} /> Remake the world</button>
+    </div>
   {/if}
 
   {#if selection && !shell.phone}
@@ -4411,7 +4659,11 @@
       ]}
       onChoose={(v) => q.choose(v === 'yes')}
     >
-      <p>The world is made again without it{genSeconds ? ` (about ${genSeconds} s)` : ''}; towns and roads near it may move back.</p>
+      {#if q.r.a?.changes}
+        <p>The world is made again as it was before{genSeconds ? ` (about ${genSeconds} s)` : ''}; the changes wait for a remake again.</p>
+      {:else}
+        <p>The world is made again without it{genSeconds ? ` (about ${genSeconds} s)` : ''}; towns and roads near it may move back.</p>
+      {/if}
       {#if own || layout}
         <p>What was made on it stays in Notes, set aside as “Deleted: {q.r.name}”: {madeWords(q.on!)}.{layout ? ' Its building changes and designed interiors are set aside too.' : ''}</p>
       {/if}
@@ -4579,6 +4831,20 @@
     max-width: calc(100vw - 32px);
     padding: 6px 6px 6px 12px;
     font-size: 13px;
+  }
+  .waitbar {
+    position: fixed;
+    top: calc(12px + var(--bar-h, 44px) + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: var(--z-menu);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 12px;
+    max-width: calc(100vw - 24px);
+    box-sizing: border-box;
+    font-size: 12px;
   }
   .asking {
     position: fixed;

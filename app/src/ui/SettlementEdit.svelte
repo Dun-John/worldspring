@@ -9,6 +9,13 @@
    * why it can't be made, or that it changes nothing. */
   export type SettlePlan = { edits: Edits; change: Change; set_aside: number; by: Record<string, number>; count: number } | { error: string } | { unchanged: true };
 
+  /** One of the world's own settlements, or one made by a pin, as its pin would have it (with the
+   * change waiting for a remake, if any): tier, what it lives by (a pin kind, '' from its land),
+   * capital, whether a port or fishing village may stand there, and the change waiting in words. */
+  export type SettleOwn = { tier: string; livesBy: string; capital: boolean; portOk: boolean; fishingOk: boolean; waiting: string | null; byPin: boolean };
+  /** A change to one of those: it waits for a remake. */
+  export type WaitAsk = { tier?: 'village' | 'town' | 'city' | 'metropolis'; lives_by?: string; capital?: boolean };
+
   /** The cultures, as the card names them (`town::culture::NAMES`). */
   export const CULTURES = ['North', 'West', 'South', 'Dry', 'Steppe'];
 </script>
@@ -16,7 +23,8 @@
 <script lang="ts">
   // A settlement card's Settlement block: its culture, changed at once for every settlement; tier,
   // what it lives by and name for a village or town added by hand (at once, laid out anew); what
-  // the world's own are, their changes waiting on a remake (next). A line says what a change
+  // the world's own and pin-made ones: tier, living and capital through their pin, waiting for a
+  // remake (the Dock's bar makes them all at once). A line says what a change
   // sets aside before it is made; it is asked only when something would be.
   import { PIN_KINDS } from '../editor/sketcher';
   import Icon from './Icon.svelte';
@@ -35,10 +43,20 @@
     name: string;
     plan: (ask: SettleAsk) => Promise<SettlePlan>;
     apply: (p: Extract<SettlePlan, { edits: Edits }>) => void;
-    /** Move it (added by hand): the next click puts it there. */
+    /** Move it (added by hand, or its pin): the next click puts it there. */
     onMove?: () => void;
+    /** The world's own or pin-made: as its pin would have it (null: not known yet). */
+    own?: SettleOwn | null;
+    /** Change its pin (waits for a remake): an error in words, else null. */
+    wait?: (ask: WaitAsk) => Promise<string | null>;
+    /** Drop the change waiting. */
+    onCancel?: () => void;
+    /** Made by a pin: show it in World › Sketch. */
+    onSketch?: () => void;
+    /** Remake the world with every change waiting. */
+    onRemake?: () => void;
   }
-  let { made, tier, livesBy, capital, culture, name, plan, apply, onMove }: Props = $props();
+  let { made, tier, livesBy, capital, culture, name, plan, apply, onMove, own = null, wait, onCancel, onSketch, onRemake }: Props = $props();
 
   /** A change worked out that sets something aside, waiting for Apply (raw: its edits are the
    * world's, plain data to clone and save). */
@@ -91,6 +109,20 @@
     else apply(p);
   }
 
+  /** A change waiting for a remake: its pin changed, or why not. */
+  async function waitFor(ask: WaitAsk) {
+    if (busy || !wait) return;
+    note = null;
+    busy = true;
+    const e = await wait(ask);
+    busy = false;
+    if (e) note = e;
+  }
+
+  const TIERS = ['village', 'town', 'city', 'metropolis'] as const;
+  /** Why a living can't be had here (null: it can). */
+  const notHere = (k: string) => (k === 'port' && own && !own.portOk ? 'needs a shore' : k === 'fishing' && own && !own.fishingOk ? 'needs a shore or river' : null);
+
   function rename() {
     const n = draft.trim();
     if (n && n !== name) void change({ name: n }, 'Renamed.');
@@ -99,7 +131,7 @@
 </script>
 
 <div class="settle">
-  <div class="ws-label">Settlement</div>
+  <div class="ws-label">Settlement{#if own?.waiting}<span class="pend" title="Changed: it waits for a remake of the world">pending</span>{/if}</div>
   <label class="row">
     <span class="key">Culture</span>
     <select
@@ -152,11 +184,74 @@
       </div>
     {/if}
     <div class="muted">Added by hand: these change at once (Undo puts them back). A new tier, living or culture lays it out anew.</div>
+  {:else if own}
+    <div class="row">
+      <span class="key">Tier</span>
+      <div class="ws-seg four" role="radiogroup" aria-label="Tier">
+        {#each TIERS as t (t)}
+          <button role="radio" aria-checked={own.tier === t} class:on={own.tier === t} disabled={busy} onclick={() => own.tier !== t && void waitFor({ tier: t })}>{cap(t)}</button>
+        {/each}
+      </div>
+    </div>
+    <label class="row">
+      <span class="key">Lives by</span>
+      <select
+        class="ws-input"
+        value={own.livesBy}
+        disabled={busy}
+        onchange={(e) => {
+          const to = e.currentTarget.value;
+          e.currentTarget.value = own.livesBy;
+          void waitFor({ lives_by: to });
+        }}
+      >
+        {#each PIN_KINDS as [k, label] (k)}
+          {@const why = notHere(k)}
+          <option value={k} disabled={!!why}>{label}{why ? ` (${why})` : ''}</option>
+        {/each}
+      </select>
+    </label>
+    {#if !own.portOk}<div class="muted">{own.fishingOk ? 'A port needs a sea or lake shore: this one is inland (fishing works on its river).' : 'Port and Fishing need a sea or lake shore (fishing a river too): this one has neither.'}</div>{/if}
+    <label class="row">
+      <span class="key">Capital</span>
+      <span class="grow">The realm’s capital</span>
+      <input
+        type="checkbox"
+        class="ws-switch"
+        checked={own.capital}
+        disabled={busy}
+        onchange={(e) => {
+          const to = e.currentTarget.checked;
+          e.currentTarget.checked = own.capital;
+          void waitFor({ capital: to });
+        }}
+      />
+    </label>
+    {#if own.byPin}
+      <div class="row">
+        <span class="key"></span>
+        {#if onMove}<button class="ws-btn" onclick={onMove} title="Click the map where its pin goes: it waits for a remake"><Icon name="move" size={16} /> Move</button>{/if}
+        {#if onSketch}<button class="ws-btn" onclick={onSketch} title="Open World › Sketch at its pin"><Icon name="sketch" size={16} /> Show in Sketch</button>{/if}
+      </div>
+    {/if}
+    {#if own.waiting}
+      <div class="note">
+        <span>Waits for a remake: {own.waiting}. One remake makes every change waiting.</span>
+        <span class="btns">
+          {#if onCancel}<button class="ws-btn quiet" onclick={onCancel} title="Drop this change: it stays as it is">Cancel</button>{/if}
+          {#if onRemake}<button class="ws-btn primary" onclick={onRemake}><Icon name="rotate-cw" size={16} /> Remake the world</button>{/if}
+        </span>
+      </div>
+    {/if}
+    <div class="muted">
+      {own.byPin ? 'Placed by a pin in the sketch' : 'One of the world’s own'}: culture changes at once; tier, living and capital wait for one remake.{own.byPin
+        ? ''
+        : ' It can’t be deleted; hide it instead (⋯).'}
+    </div>
   {:else}
     <div class="row"><span class="key">Tier</span><span>{cap(tier)}</span></div>
     <div class="row"><span class="key">Lives by</span><span>{cap(livesBy ?? 'its land')}</span></div>
     <div class="row"><span class="key">Capital</span><span>{capital ? 'The realm’s capital' : 'No'}</span></div>
-    <div class="muted">Culture changes at once. Tier, living and capital need the world remade: coming next. The world’s own settlements can’t be deleted; hide one instead (⋯ › Hide from the map).</div>
   {/if}
   {#if note}<div class="note bad">{note}</div>{/if}
   {#if pending}
@@ -201,6 +296,19 @@
     flex: 1;
     min-width: 0;
   }
+  .grow {
+    flex: 1;
+  }
+  .pend {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
   .muted {
     color: var(--ink-3);
     font-size: 12px;
@@ -217,7 +325,18 @@
   .note.bad {
     color: var(--danger, var(--ink));
   }
+  .four {
+    flex: 1;
+    min-width: 0;
+  }
+  .four button {
+    flex: 1;
+    min-width: 0;
+    padding: 0 4px;
+    font-size: 12px;
+  }
   .btns {
+    flex-wrap: wrap;
     display: flex;
     justify-content: flex-end;
     gap: 4px;

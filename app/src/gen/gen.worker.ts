@@ -97,6 +97,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                     ? c.under_search_json(a.q, a.filters)
                                     : a.op === 'made'
                                     ? c.made_json()
+                                    : a.op === 'settlefacts'
+                                    ? c.settlement_facts_json(a.id)
                                     : a.op === 'madespot'
                                       ? c.settlement_spot_json(a.kind, a.id, a.x, a.y)
                                       : a.op === 'setaside'

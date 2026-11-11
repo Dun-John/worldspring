@@ -10,6 +10,10 @@ export interface Step {
   author: string;
   ops: EditOp[];
   inverse: EditOp[];
+  /** A step outside the edits (a settlement change waiting for a remake): what undoes and redoes
+   * it (its ops are empty). */
+  undo?: () => void;
+  redo?: () => void;
 }
 
 /** Whether an object has a key (without listing a field of thousands of them). */

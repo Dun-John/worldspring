@@ -453,7 +453,8 @@ export interface TownPlan {
   center: [number, number];
   /** How far a corner may go from where it was planned. */
   max_move_ft: number;
-  walls: { built: boolean; generated: boolean; by_hand?: TownWallsByHand };
+  /** `towers`: the wall's towers as built now, gate towers (`gate_towers`) apart; `gates` as built. */
+  walls: { built: boolean; generated: boolean; towers?: number; gate_towers?: number; gates?: number; by_hand?: TownWallsByHand };
   edited: boolean;
   patches: TownPatch[];
   /** The town's districts (a hand-made one: `by_hand`; one changed by a patch moved in or out: `changed`). */
@@ -710,6 +711,8 @@ export type Ask =
   | { op: 'made' }
   /** Whether a village or town can be added there (`t0::made::spot`), with what it would be. */
   | { op: 'madespot'; kind: string; id: string; x: number; y: number }
+  /** One of the world's own settlements as its sketch pin would take it (`agent::settlement_facts`). */
+  | { op: 'settlefacts'; id: string }
   /** Edits with those of the villages and towns added by hand that they remove, move or lay out
    * anew set aside (`t0::made::set_aside_changed`; `old`: the created sites before, JSON). */
   | { op: 'setaside'; old: string; edits: string }
@@ -750,6 +753,23 @@ export interface Remade {
 /** A village or town added by hand, as the generator has it (`made_json`): its layout index,
  * `reach` (its layout's), `built` (built-up radius), `rect` (all its battlemaps change over: the
  * pad and the track) and its track's points (ft) from its edge to the road. */
+/** One of the world's own settlements as its sketch pin would take it (`agent::settlement_facts`). */
+export interface SettlementFacts {
+  layout: number;
+  /** The pin's stroke that made it (else null: generated). */
+  pin: number | null;
+  tier: 'metropolis' | 'city' | 'town' | 'village';
+  /** The tier it was placed at (a pin replacing it says so). */
+  planned: 'metropolis' | 'city' | 'town' | 'village';
+  /** What it lives by (a pin kind). */
+  kind: string;
+  name: string;
+  spot: [number, number];
+  capital: boolean;
+  port_ok: boolean;
+  fishing_ok: boolean;
+}
+
 export interface MadeSettlement {
   id: string;
   layout: number;
