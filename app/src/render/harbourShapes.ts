@@ -124,7 +124,7 @@ export function drawCog(g: Graphics, x: number, y: number, dir: number, lengthFt
   framed(g, x, y, dir, sq, (w) => {
     const L = (lengthFt / 2) * FT;
     const B = L * 0.34;
-    const hull = look === 1 ? [0x5e4430, 0x7a5638, 0x96704a] : [0x56402e, 0x70543a, 0x8c6c48];
+    const hull = look === 1 ? [0x74553a, 0x93694a, 0xad825a] : [0x6e5238, 0x8a6a48, 0xa68454];
     const deck = [0x8a6a44, 0xae8a5c, 0xc8a676];
     const shadow = (pts: number[], d: number, a = 0.24) => g.poly(pts.map((p, i) => p + (i % 2 ? sy : sx) * d)).fill({ color: 0x000000, alpha: a });
     // Its shadow on the water, the rudder and the bowsprit.

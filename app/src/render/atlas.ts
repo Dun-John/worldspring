@@ -4676,10 +4676,10 @@ function boatShell(g: Graphics, L: number, B: number, tr: number, tones: readonl
   const side = (paint === null ? 0.3 : 0.42) * FT;
   const cap = 0.3 * FT;
   g.poly(hullPts(L, B, tr)).fill(paint ?? tones[1]).stroke({ width: OUT, color: INK, join: 'round' });
-  if (paint !== null) g.poly(hullPts(L - side * 0.6, B - side * 0.45, tr)).fill(shade(paint, 0.86));
+  if (paint !== null) g.poly(hullPts(L - side * 0.6, B - side * 0.45, tr)).fill(shade(paint, 0.94));
   g.poly(hullPts(L - side * 1.3, B - side, tr)).fill(tones[2]);
   const [Li, Bi] = [L - (side + cap) * 1.3, B - side - cap];
-  g.poly(hullPts(Li, Bi, tr * 0.95)).fill(shade(tones[1], 0.66)).stroke({ width: 1.2, color: INK, join: 'round' });
+  g.poly(hullPts(Li, Bi, tr * 0.95)).fill(shade(tones[1], 0.84)).stroke({ width: 1.2, color: INK, join: 'round' });
   g.poly(hullPts(Li - 0.32 * FT, Bi - 0.28 * FT, tr * 0.9, 0.16 * FT, 0.14 * FT)).fill(tones[1]);
   // The cap's lit north edge.
   const mid = hullPts(L - side * 1.3 - cap * 0.6, B - side - cap * 0.5, tr);
@@ -4874,9 +4874,10 @@ function fishingBoat(g: Graphics, r: number, rnd: () => number, v: number) {
     g.stroke({ width: 1.8, color: shade(ROPE, 0.6), cap: 'round' });
     basketOf(g, -Li * 0.2, Bi * 0.6, 0.62 * FT, 'fish', rnd);
   }
-  g.circle(mx, 0, 0.46 * FT).fill(tones[1]).stroke({ width: LINE, color: INK });
-  g.circle(mx - 1, -1, 0.3 * FT).fill(shade(tones[2], 1.04));
-  g.circle(mx - 1, -1, 0.14 * FT).stroke({ width: 1, color: tones[0], alpha: 0.8 });
+  g.circle(mx, 0, 0.78 * FT).fill(tones[1]).stroke({ width: OUT, color: INK });
+  g.circle(mx - 1, -1, 0.56 * FT).fill(shade(tones[2], 1.06)).stroke({ width: 1.6, color: tones[0] });
+  g.circle(mx, 0, 0.26 * FT).fill(tones[0]).stroke({ width: LINE, color: INK });
+  g.circle(mx - 1.5, -1.5, 0.1 * FT).fill(tones[3]);
 }
 
 /** Bollard on a quay, seen from above (about 1.5 ft across): cast iron, its cap lit on the north-west and
@@ -4884,22 +4885,7 @@ function fishingBoat(g: Graphics, r: number, rnd: () => number, v: number) {
  * coiled by it (v1); a weathered timber post, its end grain and a split (v2); dressed stone, worn (v3). */
 function bollard(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
-  const R = 0.72 * FT;
-  if (v === 2) {
-    const s = 0.62 * FT;
-    bevel(g, -s, -s, s, s, 1.8, GREY_WOOD, LINE);
-    for (const k of [0.62, 0.32]) g.circle(-0.5, -0.5, s * k).stroke({ width: 1.1, color: shade(GREY_WOOD[0], 1.05), alpha: 0.8 });
-    g.moveTo(s * 0.2, -s * 0.1).lineTo(s * 0.62, -s * 0.5).lineTo(s * 0.78, -s * 0.82).stroke({ width: 1.3, color: INK, cap: 'round', join: 'round' });
-    return;
-  }
-  if (v === 3) {
-    const t = STONE[0];
-    g.poly(blob(0, 0, R * 1.02, 12, 0.06, rnd)).fill(t[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    g.circle(-1.4, -1.4, R * 0.78).fill(t[2]);
-    g.poly(oval(-R * 0.35, -R * 0.38, R * 0.3, R * 0.2, -0.6, 10)).fill(t[3]);
-    g.moveTo(R * 0.55, R * 0.1).lineTo(R * 0.25, R * 0.35).stroke({ width: 1.2, color: t[0], cap: 'round' });
-    return;
-  }
+  const R = 0.95 * FT;
   if (v === 1) {
     // The line: a loop round the post, two parts running off east, the slack coiled to the south-east.
     const rope = (draw: () => void, w: number) => {
@@ -4910,13 +4896,23 @@ function bollard(g: Graphics, r: number, rnd: () => number, v: number) {
     };
     ropeCoil(g, 1.3 * FT, 1.85 * FT, 0.85 * FT);
     rope(() => g.moveTo(0.4 * FT, R * 0.6).quadraticCurveTo(1.6 * FT, R * 0.9, 1.9 * FT, 1.2 * FT), 2.6);
-    rope(() => g.circle(0, 0, R * 1.12), 2.8);
     rope(() => g.moveTo(R * 1.0, -R * 0.4).quadraticCurveTo(2.2 * FT, -0.4 * FT, 2.9 * FT, 0.3 * FT), 2.6);
   }
-  g.circle(0, 0, R).fill(IRON[1]).stroke({ width: LINE, color: INK });
-  g.circle(-1.3, -1.3, R * 0.8).fill(IRON[2]);
-  g.circle(-R * 0.25, -R * 0.25, R * 0.3).fill(IRON[3]);
-  g.circle(-R * 0.3, -R * 0.32, R * 0.12).fill(0xc4c8cc);
+  // Every post: a wide foot ring, a round cap with a pale rim and a groove, its top lit on the north-west.
+  const [foot, cap, rim, top] = v === 2 ? [GREY_WOOD[0], GREY_WOOD[1], GREY_WOOD[3], GREY_WOOD[2]] : v === 3 ? [STONE[0][0], STONE[0][1], STONE[0][3], STONE[0][2]] : [IRON[0], IRON[2], IRON[3], IRON[1]];
+  g.circle(0, 0, R * 1.3).fill(foot).stroke({ width: LINE, color: INK });
+  g.circle(0, 0, R).fill(cap).stroke({ width: LINE, color: INK });
+  g.circle(-1.2, -1.2, R * 0.86).stroke({ width: 2, color: rim, alpha: 0.9 });
+  g.circle(0.8, 0.8, R * 0.62).fill(top).stroke({ width: 1.4, color: shade(foot, 0.8) });
+  g.circle(-R * 0.22, -R * 0.24, R * 0.2).fill(rim);
+  if (v === 1) g.circle(0, 0, R * 1.12).stroke({ width: 2.8, color: ROPE });
+  if (v === 2) g.moveTo(R * 0.15, -R * 0.1).lineTo(R * 0.55, -R * 0.55).stroke({ width: 1.6, color: INK, cap: 'round' });
+  if (v === 3) {
+    // An iron mooring ring let into the stone.
+    g.circle(R * 0.62, R * 0.62, R * 0.28).stroke({ width: 3.4, color: INK });
+    g.circle(R * 0.62, R * 0.62, R * 0.28).stroke({ width: 1.8, color: IRON[2] });
+  }
+  void rnd;
 }
 
 /** Dock crane, its jib out toward +x (about 22 ft over all): two sill beams crossed under a square post on
@@ -4942,11 +4938,11 @@ function dockCrane(g: Graphics, r: number, rnd: () => number, v: number) {
   for (const s of [-1, 1]) bevel(g, px + s * wl - 0.25 * FT, wy - 0.75 * FT, px + s * wl + 0.25 * FT, wy + 0.75 * FT, 1.2, tones, LINE);
   g.roundRect(px - wl + 0.25 * FT, wy - wr, (wl - 0.25 * FT) * 2, wr * 2, wr * 0.5).fill(tones[1]).stroke({ width: LINE, color: INK });
   g.rect(px - wl * 0.6, wy - wr + 1.2, wl * 1.2, wr * 2 - 2.4).fill(ROPE);
-  for (let k = 0; k < 6; k++) {
-    const x = px - wl * 0.6 + ((k + 0.5) * wl * 1.2) / 6;
+  for (let k = 0; k < 3; k++) {
+    const x = px - wl * 0.6 + ((k + 0.5) * wl * 1.2) / 3;
     g.moveTo(x - 1, wy - wr + 1.5).lineTo(x + 1, wy + wr - 1.5);
   }
-  g.stroke({ width: 1.2, color: shade(ROPE, 0.6) });
+  g.stroke({ width: 1.6, color: shade(ROPE, 0.6) });
   g.rect(px - wl * 0.6, wy - wr + 1.2, wl * 1.2, wr * 0.55).fill({ color: 0xffffff, alpha: 0.22 });
   const crank = (draw: () => void) => {
     draw();
@@ -4962,9 +4958,9 @@ function dockCrane(g: Graphics, r: number, rnd: () => number, v: number) {
   const [tx, lx] = [9.4 * FT, 8.8 * FT];
   const sling = (R: number) => {
     for (const a of [0.6, 2.2, 3.7, 5.3]) g.moveTo(lx, 0).lineTo(lx + Math.cos(a) * R, Math.sin(a) * R);
-    g.stroke({ width: 2.6, color: INK, cap: 'round' });
+    g.stroke({ width: 4, color: INK, cap: 'round' });
     for (const a of [0.6, 2.2, 3.7, 5.3]) g.moveTo(lx, 0).lineTo(lx + Math.cos(a) * R, Math.sin(a) * R);
-    g.stroke({ width: 1.3, color: ROPE, cap: 'round' });
+    g.stroke({ width: 2, color: ROPE, cap: 'round' });
   };
   if (v === 0) {
     barrel(g, lx, 0, 1.1 * FT, rnd);
@@ -4982,11 +4978,7 @@ function dockCrane(g: Graphics, r: number, rnd: () => number, v: number) {
       g.poly(oval(cx, cy, 0.8 * FT, 0.55 * FT, a, 14)).fill(0xc8b080).stroke({ width: LINE, color: INK, join: 'round' });
       g.poly(oval(cx - 2, cy - 2, 0.45 * FT, 0.28 * FT, a, 10)).fill(0xe0cca0);
     }
-    for (let k = -2; k <= 2; k++) {
-      g.moveTo(lx + k * 0.42 * FT - 1.1 * FT, -1.1 * FT).lineTo(lx + k * 0.42 * FT + 1.1 * FT, 1.1 * FT);
-      g.moveTo(lx + k * 0.42 * FT + 1.1 * FT, -1.1 * FT).lineTo(lx + k * 0.42 * FT - 1.1 * FT, 1.1 * FT);
-    }
-    g.stroke({ width: 1.2, color: shade(NET[0], 0.7), alpha: 0.85 });
+    g.poly(oval(lx, 0, 1.25 * FT, 1.0 * FT, 0, 16)).stroke({ width: 2.2, color: shade(NET[0], 0.7) });
   }
   // The post (the jib over it), the block at the jib's tip.
   bevel(g, px - 0.78 * FT, -0.78 * FT, px + 0.78 * FT, 0.78 * FT, 2.4, tones, OUT);
@@ -5000,25 +4992,25 @@ function dockCrane(g: Graphics, r: number, rnd: () => number, v: number) {
   };
   const [j0, j1] = [0.95 * FT, 0.3 * FT];
   const jy = (x: number) => j0 + ((j1 - j0) * (x - px)) / (tx - px);
-  for (let k = 0; k < 4; k++) {
-    const [a, b] = [px + ((k + 0.5) * (tx - px)) / 4.4, px + ((k + 1.5) * (tx - px)) / 4.4];
+  for (let k = 0; k < 2; k++) {
+    const [a, b] = [px + (0.4 + k * 1.9) * ((tx - px) / 4), px + (2.0 + k * 1.9) * ((tx - px) / 4)];
     g.moveTo(a, -jy(a)).lineTo(b, jy(b));
   }
-  g.stroke({ width: 0.24 * FT + 2.4, color: INK, cap: 'round' });
-  for (let k = 0; k < 4; k++) {
-    const [a, b] = [px + ((k + 0.5) * (tx - px)) / 4.4, px + ((k + 1.5) * (tx - px)) / 4.4];
+  g.stroke({ width: 0.34 * FT + 2.4, color: INK, cap: 'butt' });
+  for (let k = 0; k < 2; k++) {
+    const [a, b] = [px + (0.4 + k * 1.9) * ((tx - px) / 4), px + (2.0 + k * 1.9) * ((tx - px) / 4)];
     g.moveTo(a, -jy(a)).lineTo(b, jy(b));
   }
-  g.stroke({ width: 0.24 * FT, color: shade(tones[1], 0.9), cap: 'round' });
+  g.stroke({ width: 0.34 * FT, color: shade(tones[1], 0.95), cap: 'butt' });
   for (const sgn of [-1, 1]) beam(px - 1.4 * FT, sgn * j0, tx, sgn * j1, 0.4 * FT);
-  for (const x of [px + 2.6 * FT, px + 6.6 * FT, px + 10.6 * FT]) {
-    g.rect(x - 0.15 * FT, -jy(x), 0.3 * FT, jy(x) * 2).fill(tones[2]).stroke({ width: LINE, color: INK });
+  for (const x of [px + 2.8 * FT, px + 7.4 * FT]) {
+    g.rect(x - 0.2 * FT, -jy(x), 0.4 * FT, jy(x) * 2).fill(tones[2]).stroke({ width: LINE, color: INK });
   }
   g.roundRect(tx - 0.65 * FT, -0.62 * FT, 1.2 * FT, 1.24 * FT, 0.3 * FT).fill(tones[2]).stroke({ width: LINE, color: INK });
   g.rect(tx - 0.45 * FT, -0.12 * FT, 0.8 * FT, 0.24 * FT).fill(IRON[0]);
   if (v === 3) {
-    g.moveTo(tx + 0.5 * FT, 0.6 * FT).quadraticCurveTo(tx + 1.1 * FT, 0.9 * FT, tx + 0.8 * FT, 0.2 * FT).stroke({ width: 4.4, color: INK, cap: 'round' });
-    g.moveTo(tx + 0.5 * FT, 0.6 * FT).quadraticCurveTo(tx + 1.1 * FT, 0.9 * FT, tx + 0.8 * FT, 0.2 * FT).stroke({ width: 2.2, color: IRON[3], cap: 'round' });
+    g.circle(tx + 0.9 * FT, 0, 0.42 * FT).stroke({ width: 0.3 * FT + 2.6, color: INK });
+    g.circle(tx + 0.9 * FT, 0, 0.42 * FT).stroke({ width: 0.3 * FT, color: IRON[3] });
   }
 }
 
@@ -5031,6 +5023,8 @@ function netRack(g: Graphics, r: number, rnd: () => number, v: number) {
   const tones = v === 3 ? GREY_WOOD : WOOD;
   const [X, top, foot] = [4.3 * FT, -1.4 * FT, 1.9 * FT];
   const nets: [number, number, number][] = [[[-3.8, 3.8, NET[0]]], [[-3.9, -0.1, NET[1]], [0.15, 3.9, NET[2]]], [[-3.8, 1.1, NET[3]]], [[-3.8, 3.8, 0x857a58]]][v] as [number, number, number][];
+  // A soft crescent under the net, on the side away from the light, no wider than the rack.
+  g.poly(oval(0.5 * FT, top + 1.5 * FT, X + 0.2 * FT, 1.2 * FT, 0, 24)).fill({ color: 0x000000, alpha: 0.14 });
   for (const s of [-1, 1]) {
     g.poly(oval(s * X + 2, foot + 1, 0.5 * FT, 0.24 * FT, 0, 10)).fill({ color: 0x000000, alpha: 0.28 });
     g.moveTo(s * X, foot).lineTo(s * X, top).stroke({ width: 0.5 * FT + 2.8, color: INK, cap: 'round' });

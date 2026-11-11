@@ -510,7 +510,7 @@ function harbour(app: Application, catalog: KindInfo[], root: Container, y0: num
       grid(g, cx - cell / 2, cy - cell / 2, cell, cell, sq);
       root.addChild(g);
       // (Round shadows only under the small quay props: a crane's or a boat's would want its own shape.)
-      if ((info.id === 142 || info.id === 144) && !OWN_SHADOW.has(info.name)) root.addChild(dropShadow(atlas, info, cx, cy, k));
+      if (info.id === 142 && !OWN_SHADOW.has(info.name)) root.addChild(dropShadow(atlas, info, cx, cy, k));
       const s = new Sprite(atlas.frames[info.id][v]);
       s.anchor.set(0.5);
       s.scale.set(k);
