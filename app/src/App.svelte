@@ -45,7 +45,8 @@
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { belowGround } from './editor/site/model';
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
-  import { CrossingTool, crossingOf, crossingProblem, defaultCross, type CrossSettings } from './editor/crossing';
+  import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from './editor/crossing';
+  import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from './editor/harbour';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
   import type { BuildMode } from './ui/BuildPanel.svelte';
@@ -298,7 +299,7 @@
   let namedAsk = 0;
   // (A road's rename or hiding is asked for by the map, which letters it and hands the answer on: `view.onNamed`.
   // Here only a crossing's name, a crossing put down or taken away, and a new overlay.)
-  const namedKey = $derived(JSON.stringify([Object.entries(renames).filter(([k]) => k.startsWith('v:')), (edits.hidden ?? []).filter((h) => h.startsWith('v:')), edits.crossings]));
+  const namedKey = $derived(JSON.stringify([Object.entries(renames).filter(([k]) => k.startsWith('v:') || k.startsWith('q:')), (edits.hidden ?? []).filter((h) => h.startsWith('v:') || h.startsWith('q:')), edits.crossings, edits.wharves]));
   $effect(() => {
     const o = overlay;
     void namedKey;
@@ -313,6 +314,7 @@
   const namedFeatures = $derived<Feature[]>([
     ...(named?.roads ?? []).map(({ id, generated, bbox: [x0, y0, x1, y1] }) => ({ id, kind: 'road', name: generated, x: (x0 + x1) / 2, y: (y0 + y1) / 2, angle: 0, extent_ft: Math.max(x1 - x0, y1 - y0, 300) / 1.4, detail: 'road' })),
     ...(named?.crossings ?? []).map((c) => ({ id: c.id, kind: 'crossing', name: c.generated, x: c.x, y: c.y, angle: 0, extent_ft: Math.max(c.length_ft, 200), detail: c.generated })),
+    ...(named?.wharves ?? []).map((c) => ({ id: c.id, kind: 'wharf', name: c.generated, x: c.x, y: c.y, angle: 0, extent_ft: Math.max(c.length_ft, 200), detail: c.generated })),
   ]);
   const searchOverlay = $derived.by<Overlay | null>(() => {
     const hidden = new Set(edits.hidden ?? []);
@@ -1296,7 +1298,7 @@
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
     const buildTool =
-      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
+      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
     view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? townTool ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
@@ -1434,7 +1436,7 @@
   /** One of the world's own being changed: its name, and the menu's choices as it was opened
    * (only what differs from them is changed). */
   let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool; clear: ClearAreaTool; works: WorksTool } | null = null;
+  let buildArmed: { tool: BuildTool; cross: CrossingTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool } | null = null;
   /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
    * own buildings. */
   let buildMode = $state<BuildMode>('building');
@@ -1447,6 +1449,9 @@
   let cross = $state<CrossSettings>(defaultCross());
   /** The crossing put down by hand being changed (its id). */
   let crossEditing = $state<string | null>(null);
+  let harbour = $state<HarbourSettings>(defaultHarbour());
+  /** The quay, pier or breakwater picked (its id). */
+  let harbourPicked = $state<string | null>(null);
 
   /** The building drawn by hand behind an id: its created id, or its building id (`b:<layout>:0`). */
   function drawnBuilding(id: string): Created | null {
@@ -1532,6 +1537,15 @@
       pick: pickCrossing,
       hint: (t) => toast(t),
     });
+    const harbourTool = new HarbourTool({
+      settings: () => harbour,
+      edits: () => edits,
+      picked: () => harbourPicked,
+      islet: (at) => void harbourIslet(at),
+      wharf: (a, b) => void harbourWharf(a, b),
+      pick: (id) => (harbourPicked = id),
+      hint: (t) => toast(t),
+    });
     const clear = new ClearAreaTool({
       shape: () => clearShape,
       drawn: (poly) => void clearArea(poly),
@@ -1550,7 +1564,7 @@
       },
       hint: (t) => toast(t),
     });
-    buildArmed = { tool, cross: crossTool, clear, works: worksTool };
+    buildArmed = { tool, cross: crossTool, harbour: harbourTool, clear, works: worksTool };
   }
 
   /** A castle or wall drawn by hand, by its created id. */
@@ -1822,6 +1836,7 @@
     buildEditing = null;
     genEditing = null;
     crossEditing = null;
+    harbourPicked = null;
   }
 
   function setBuildMode(m: BuildMode) {
@@ -1831,18 +1846,57 @@
     buildEditing = null;
     genEditing = null;
     crossEditing = null;
+    harbourPicked = null;
     buildArmed?.cross.reset();
+    buildArmed?.harbour.reset();
     syncTool();
   }
 
-  /** Both banks clicked: a new crossing there, or the one being changed moved there. */
-  function crossPlaced(a: Pt, b: Pt) {
+  /** The shops standing on a crossing now (their created ids). */
+  const shopsOn = (id: string): Created[] => (edits.created ?? []).filter((c) => c.on === id && !c.removed && c.kind === 'building');
+
+  /** `edits.created` with the shops on crossing `id` taken away (they stay in the list, removed). */
+  const withoutShops = (id: string): Created[] => (edits.created ?? []).map((c) => (c.on === id && !c.removed && c.kind === 'building' ? { ...c, removed: true } : c));
+
+  /** `created` with shops laid along bridge `c` (`id`) as the menu's depth says; or why not. */
+  async function withShops(id: string, c: Crossing, created: Created[]): Promise<Created[] | string> {
+    const r = await view.gen.bridgeLots(c, { depth: cross.shopDepth, frontage: SHOP_FRONT_FT });
+    if (!r) return 'The map could not answer: try again';
+    if ('error' in r) return r.error.replace(/^shops: /, '').replace(/^./, (x) => x.toUpperCase());
+    const out = [...created];
+    for (const lot of r.lots) {
+      const x = lot.poly.reduce((s, p) => s + p[0], 0) / lot.poly.length;
+      const y = lot.poly.reduce((s, p) => s + p[1], 0) / lot.poly.length;
+      out.push({ id: `c:${out.length}`, kind: 'building', x, y, name: '', poly: lot.poly, floors: 2, func: lot.func, on: id });
+    }
+    return out;
+  }
+
+  /** Both banks clicked: a new crossing there, or the one being changed moved there; a bridge
+   * with its shops (laid out again if it had them) as one change. */
+  async function crossPlaced(a: Pt, b: Pt) {
     const c: Crossing = crossingOf(cross, a, b);
+    const withShopsOn = cross.shops && c.kind === 'bridge';
+    if (withShopsOn) c.width = Math.max(c.width, shopsWidth(cross.shopDepth));
     const problem = crossingProblem(c);
     if (problem) return toast(problem);
     const editing = crossEditing && edits.crossings?.[crossEditing] ? crossEditing : null;
     const id = editing ?? newObjectId('v');
-    applyEdits({ ...edits, crossings: { ...(edits.crossings ?? {}), [id]: c } }, { tool: 'place_crossing', id, kind: c.kind, changed: !!editing }, 'user');
+    const next: Edits = { ...edits, crossings: { ...(edits.crossings ?? {}), [id]: c } };
+    const had = editing ? shopsOn(editing).length > 0 : false;
+    if (withShopsOn || had) {
+      let created: Created[] | string = edits.created ?? [];
+      if (editing && had && withShopsOn) {
+        const r = await view.gen.followBridge(id, c, edits.crossings?.[id], created);
+        created = !r ? 'The map could not answer: try again' : 'error' in r ? r.error : r.created;
+      } else {
+        if (had) created = withoutShops(id);
+        if (withShopsOn) created = await withShops(id, c, created);
+      }
+      if (typeof created === 'string') return toast(created);
+      next.created = created;
+    }
+    applyEdits(next, { tool: 'place_crossing', id, kind: c.kind, changed: !!editing }, 'user');
   }
 
   /** A crossing put down earlier was clicked: the menu shows it, to change or take away. */
@@ -1850,17 +1904,39 @@
     const c = edits.crossings?.[id];
     if (!c) return;
     crossEditing = id;
-    cross = { kind: c.kind, width: c.width, material: c.material ?? 'timber' };
+    const shops = shopsOn(id);
+    // (Their depth as they stand: the first one's short side across the deck.)
+    const poly = shops[0]?.poly;
+    const depth = poly && poly.length >= 4 ? Math.min(Math.hypot(poly[1][0] - poly[0][0], poly[1][1] - poly[0][1]), Math.hypot(poly[2][0] - poly[1][0], poly[2][1] - poly[1][1])) : cross.shopDepth;
+    cross = { kind: c.kind, width: c.width, material: c.material ?? 'timber', shops: shops.length > 0, shopDepth: Math.max(10, Math.min(18, Math.round(depth))) };
   }
 
-  /** The crossing being changed gets the menu's kind, width and material (its ends stay). */
-  function saveCrossing() {
-    const c = crossEditing ? edits.crossings?.[crossEditing] : null;
-    if (!c || !crossEditing) return;
+  /** The crossing being changed gets the menu's kind, width and material (its ends stay); its
+   * shops follow it, or go (the toggle off) or come (on). */
+  async function saveCrossing() {
+    const id = crossEditing;
+    const c = id ? edits.crossings?.[id] : null;
+    if (!c || !id) return;
     const next: Crossing = crossingOf(cross, c.a, c.b);
+    const withShopsOn = cross.shops && next.kind === 'bridge';
+    if (withShopsOn) next.width = Math.max(next.width, shopsWidth(cross.shopDepth));
     const problem = crossingProblem(next);
     if (problem) return toast(problem);
-    applyEdits({ ...edits, crossings: { ...(edits.crossings ?? {}), [crossEditing]: next } }, { tool: 'place_crossing', id: crossEditing, kind: next.kind, changed: true }, 'user');
+    const out: Edits = { ...edits, crossings: { ...(edits.crossings ?? {}), [id]: next } };
+    const had = shopsOn(id).length > 0;
+    if (withShopsOn || had) {
+      let created: Created[] | string = edits.created ?? [];
+      if (had && withShopsOn) {
+        const r = await view.gen.followBridge(id, next, c, created);
+        created = !r ? 'The map could not answer: try again' : 'error' in r ? r.error : r.created;
+      } else {
+        if (had) created = withoutShops(id);
+        if (withShopsOn) created = await withShops(id, next, created);
+      }
+      if (typeof created === 'string') return toast(created);
+      out.created = created;
+    }
+    applyEdits(out, { tool: 'place_crossing', id, kind: next.kind, changed: true }, 'user');
   }
 
   function removeCrossing() {
@@ -1869,7 +1945,49 @@
     if (!id || !c) return;
     const { [id]: _gone, ...rest } = edits.crossings ?? {};
     crossEditing = null;
-    applyEdits({ ...edits, crossings: rest }, { tool: 'remove_crossings', ids: [id], kind: c.kind }, 'user');
+    // (Its shops go with it.)
+    applyEdits({ ...edits, crossings: rest, ...(shopsOn(id).length ? { created: withoutShops(id) } : {}) }, { tool: 'remove_crossings', ids: [id], kind: c.kind }, 'user');
+  }
+
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  /** An islet clicked: raised there (the generator says where one can stand). */
+  async function harbourIslet(at: Pt) {
+    const key = newObjectId('h');
+    const r = await view.gen.islet(key, at[0], at[1], harbour.radius, harbour.rise);
+    if (!r) return toast('The map could not answer: try again');
+    if ('error' in r) return toast(cap(r.error));
+    applyEdits({ ...edits, plateaus: { ...(edits.plateaus ?? {}), [key]: r.plateau } }, { tool: 'raise_islet', id: key, changed: false }, 'user');
+  }
+
+  /** A quay, pier or breakwater dragged: checked (its root on the bank, a lighthouse's place), then
+   * put down with its lighthouse as one change. */
+  async function harbourWharf(a: Pt, b: Pt) {
+    const w = wharfOf(harbour, a, b);
+    const problem = wharfProblem(w);
+    if (problem) return toast(problem);
+    const lighthouse = w.kind === 'breakwater' && harbour.lighthouse;
+    const r = await view.gen.wharfCheck(w, lighthouse);
+    if (!r) return toast('The map could not answer: try again');
+    if ('error' in r) return toast(cap(r.error));
+    const id = newObjectId('q');
+    const next: Edits = { ...edits, wharves: { ...(edits.wharves ?? {}), [id]: w } };
+    if (r.lighthouse) {
+      const l = r.lighthouse;
+      const created = edits.created ?? [];
+      next.created = [...created, { id: `c:${created.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, floors: 3, func: 'lighthouse', on: id }];
+    }
+    applyEdits(next, { tool: 'place_wharf', id, kind: w.kind, changed: false, lighthouse: !!r.lighthouse }, 'user');
+  }
+
+  /** The wharf picked is taken away, its lighthouse with it. */
+  function removeWharf() {
+    const id = harbourPicked;
+    const w = id ? edits.wharves?.[id] : null;
+    if (!id || !w) return;
+    const { [id]: _gone, ...rest } = edits.wharves ?? {};
+    harbourPicked = null;
+    applyEdits({ ...edits, wharves: rest, ...(shopsOn(id).length ? { created: withoutShops(id) } : {}) }, { tool: 'remove_wharves', ids: [id], kind: w.kind }, 'user');
   }
 
   /** One of the world's own buildings (not drawn by hand) behind a building id. */
@@ -3420,6 +3538,7 @@
       const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
       cross = { ...cross, kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
     },
+    buildHarbour: () => setBuildMode('harbour'),
     buildWorks: (m) => setBuildMode(m),
     buildShape: (k) => {
       if (buildMode === 'castle' && k !== 'tower') return void (works.castleShape = k);
@@ -3798,6 +3917,9 @@
             onMode={setBuildMode}
             onCrossSave={saveCrossing}
             onCrossRemove={removeCrossing}
+            onHarbourRemove={removeWharf}
+            bind:harbour
+            {harbourPicked}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 0.5)) })}
           />
         {:else if townOn}

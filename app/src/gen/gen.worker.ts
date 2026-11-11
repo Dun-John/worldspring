@@ -67,7 +67,13 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                     ? c.parents_json()
                     : a.op === 'spot'
                       ? c.creation_spot_json(a.kind, a.under, a.id, a.x, a.y)
-                      : a.op === 'building'
+                      : a.op === 'bridgelots'
+                        ? c.bridge_lots_json(a.input)
+                        : a.op === 'islet'
+                          ? c.islet_json(a.key, a.x, a.y, a.radius, a.rise)
+                          : a.op === 'wharfcheck'
+                            ? c.wharf_check_json(a.wharf, a.lighthouse)
+                            : a.op === 'building'
                         ? c.building_spot_json(JSON.stringify(a.poly), a.func, a.id)
                         : a.op === 'funcs'
                           ? building_funcs_json()

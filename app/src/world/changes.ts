@@ -28,6 +28,7 @@ export function changeList(e: Edits | undefined): string[] {
       [n(e.towns), 'town re-planned', 'towns re-planned'],
       [n(e.ground), 'patch of ground shaped', 'patches of ground shaped'],
       [n(e.plateaus), 'plateau', 'plateaus'],
+      [n(e.wharves), 'quay, pier or breakwater', 'quays, piers and breakwaters'],
     ] as [number, string, string][]
   )
     .filter(([k]) => k > 0)

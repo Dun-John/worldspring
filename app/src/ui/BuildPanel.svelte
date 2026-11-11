@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type BuildMode = 'building' | 'castle' | 'wall' | 'crossing' | 'clear';
+  export type BuildMode = 'building' | 'castle' | 'wall' | 'crossing' | 'harbour' | 'clear';
 </script>
 
 <script lang="ts">
@@ -10,9 +10,10 @@
   // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
   // Castle: an outline (a rectangle or a convex polygon), then the side its gate is in; Wall: a
   // line of corners (a ring if closed), gates on the corners clicked twice.
-  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial } from '../gen/protocol';
+  import { CROSSING_WIDTH, NARROW_CROSSING_MAX, WHARF_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial, type WharfKind } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
-  import type { CrossSettings } from '../editor/crossing';
+  import { SHOP_DEPTH_RANGE, shopsWidth, type CrossSettings } from '../editor/crossing';
+  import { ISLET_RADIUS, ISLET_RISE, type HarbourSettings, type HarbourKind } from '../editor/harbour';
   import type { ClearShape } from '../editor/clearArea';
   import type { WorksSettings } from '../editor/works';
   import Icon from './Icon.svelte';
@@ -33,6 +34,9 @@
     cross: CrossSettings;
     /** The crossing picked (what it is), else putting new ones down. */
     crossEditing: string | null;
+    harbour: HarbourSettings;
+    /** The wharf picked (its id), else drawing new ones. */
+    harbourPicked: string | null;
     /** Whether the map is close enough to draw on. */
     near: boolean;
     /** Only the shapes (the panel is folded down). */
@@ -43,6 +47,7 @@
     onWorksSave: () => void;
     onCrossSave: () => void;
     onCrossRemove: () => void;
+    onHarbourRemove: () => void;
     /** Fly in close enough to draw. */
     onZoomIn: () => void;
   }
@@ -57,6 +62,8 @@
     clearShape = $bindable(),
     cross = $bindable(),
     crossEditing,
+    harbour = $bindable(),
+    harbourPicked,
     near,
     peek = false,
     onSave,
@@ -65,6 +72,7 @@
     onWorksSave,
     onCrossSave,
     onCrossRemove,
+    onHarbourRemove,
     onZoomIn,
   }: Props = $props();
 
@@ -78,8 +86,26 @@
     { key: 'stone', label: 'Old stone', look: 'An old stone bridge on piers, mossy and worn, walked like a road.' },
   ];
   const kindLook = $derived(cross.kind === 'bridge' ? (MATERIALS.find((m) => m.key === cross.material)?.look ?? '') : (KINDS.find((k) => k.key === cross.kind)?.look ?? ''));
-  const widthMin = CROSSING_WIDTH[0];
-  const widthMax = CROSSING_WIDTH[1];
+  const widthMax = $derived(cross.kind === 'bridge' ? CROSSING_WIDTH[1] : NARROW_CROSSING_MAX);
+  // (A bridge with shops is wide enough for its rows and the lane between.)
+  const widthMin = $derived(cross.kind === 'bridge' && cross.shops ? Math.min(widthMax, shopsWidth(cross.shopDepth)) : CROSSING_WIDTH[0]);
+  function shopsOn(on: boolean) {
+    cross = { ...cross, shops: on, width: on ? Math.max(cross.width, shopsWidth(cross.shopDepth)) : cross.width };
+  }
+  function shopDepth(d: number) {
+    cross = { ...cross, shopDepth: d, width: Math.max(cross.width, shopsWidth(d)) };
+  }
+
+  const HARBOUR: { key: HarbourKind; label: string; icon: IconName; look: string }[] = [
+    { key: 'islet', label: 'Islet', icon: 'mountain', look: 'Click in a river, lake or the sea: a rock islet rises there. A building, tower or castle may stand on it.' },
+    { key: 'quay', label: 'Quay', icon: 'wall', look: 'Drag along a shore: paving to the dry side, the water behind it filled in.' },
+    { key: 'pier', label: 'Pier', icon: 'bridge', look: 'Drag from the bank out over the water: a deck on piles.' },
+    { key: 'breakwater', label: 'Breakwater', icon: 'waves', look: 'Drag from the bank out into the water: a stone mole, with a lighthouse at its tip if you like.' },
+  ];
+  function harbourKind(k: HarbourKind) {
+    harbour = { ...harbour, kind: k, width: k === 'islet' ? harbour.width : WHARF_WIDTH[k as WharfKind][2] };
+  }
+  const wharfRange = $derived(harbour.kind === 'islet' ? null : WHARF_WIDTH[harbour.kind]);
 
   const SHAPES: { key: BuildShape; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'rect', label: 'Rectangle', icon: 'square', kbd: 'R', hint: 'Drag from corner to corner.' },
@@ -95,6 +121,7 @@
     { key: 'castle', label: 'Castle', icon: 'castle', title: 'Draw a castle: its walls, gate, keep and yard' },
     { key: 'wall', label: 'Wall', icon: 'wall', title: 'Draw a wall with towers and gates' },
     { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
+    { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
     { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
   ];
 
@@ -230,7 +257,63 @@
           <button class="ws-icon-btn" onclick={() => (cross.width = Math.min(widthMax, cross.width + 1))} disabled={cross.width >= widthMax} aria-label="Wider"><Icon name="plus" size={16} /></button>
         </div>
       </div>
+      {#if cross.kind === 'bridge'}
+        <label class="switch"><span class="grow">Shops on the deck</span><input type="checkbox" class="ws-switch" checked={cross.shops} onchange={(e) => shopsOn(e.currentTarget.checked)} /></label>
+        {#if cross.shops}
+          <label class="slider">
+            <span>Shop depth</span><output>{cross.shopDepth} ft</output>
+            <input type="range" min={SHOP_DEPTH_RANGE[0]} max={SHOP_DEPTH_RANGE[1]} step="1" value={cross.shopDepth} oninput={(e) => shopDepth(Number(e.currentTarget.value))} />
+          </label>
+          <div class="ws-hint">A row of shops down each side, a lane of at least 14 ft between. One undo takes the bridge and its shops away; changing the bridge lays them out again.</div>
+        {/if}
+      {/if}
       {#if crossEditing}<button class="ws-btn primary block" onclick={onCrossSave}>Save changes</button>{/if}
+    {/if}
+  {:else if mode === 'harbour'}
+    {#if harbourPicked}
+      <div class="editing">
+        <span class="grow">Picked the <b>{harbourPicked}</b></span>
+        <button class="ws-btn" onclick={onHarbourRemove} title="Take it away"><Icon name="trash" size={16} /> Remove</button>
+        <button class="ws-btn" onclick={onDone}>Done</button>
+      </div>
+    {/if}
+    <div class="ws-seg" role="radiogroup" aria-label="Harbour">
+      {#each HARBOUR as h (h.key)}
+        <button class:on={harbour.kind === h.key} aria-pressed={harbour.kind === h.key} onclick={() => harbourKind(h.key)} title={h.label}>{h.label}</button>
+      {/each}
+    </div>
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to put one down.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    {#if !peek}
+      <div class="ws-hint">{HARBOUR.find((h) => h.key === harbour.kind)?.look}</div>
+      {#if harbour.kind === 'islet'}
+        <label class="slider">
+          <span>Radius</span><output>{harbour.radius} ft</output>
+          <input type="range" min={ISLET_RADIUS[0]} max={ISLET_RADIUS[1]} step="5" bind:value={harbour.radius} />
+        </label>
+        <label class="slider">
+          <span>Rise over the water</span><output>{harbour.rise} ft</output>
+          <input type="range" min={ISLET_RISE[0]} max={ISLET_RISE[1]} step="1" bind:value={harbour.rise} />
+        </label>
+      {:else if wharfRange}
+        <label class="slider">
+          <span>Width</span><output>{harbour.width} ft</output>
+          <input type="range" min={wharfRange[0]} max={wharfRange[1]} step="1" bind:value={harbour.width} />
+        </label>
+        {#if harbour.kind === 'pier'}
+          <div class="ws-seg" role="radiogroup" aria-label="Built of">
+            <button class:on={harbour.material === 'timber'} aria-pressed={harbour.material === 'timber'} onclick={() => (harbour = { ...harbour, material: 'timber' })}>Timber</button>
+            <button class:on={harbour.material === 'stone'} aria-pressed={harbour.material === 'stone'} onclick={() => (harbour = { ...harbour, material: 'stone' })}>Stone</button>
+          </div>
+        {/if}
+        {#if harbour.kind === 'breakwater'}
+          <label class="switch"><span class="grow">Lighthouse at its tip</span><input type="checkbox" class="ws-switch" bind:checked={harbour.lighthouse} /></label>
+        {/if}
+      {/if}
     {/if}
   {:else}
   {#if editing}
@@ -327,6 +410,28 @@
 </div>
 
 <style>
+  .slider {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    font-size: 12px;
+  }
+  .slider output {
+    font: 11px var(--mono);
+    color: var(--ink-2);
+  }
+  .slider input {
+    grid-column: 1 / 3;
+    width: 100%;
+    margin: 0;
+  }
+  .switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
   .build {
     display: flex;
     flex-direction: column;
@@ -380,12 +485,14 @@
     outline: 2px solid var(--ink);
     outline-offset: 2px;
   }
-  /* Five modes side by side: each its icon over its word. */
+  /* Six modes side by side: each its icon over its word. */
   .modes > button {
     flex-direction: column;
     gap: 0;
     padding: 4px 2px;
-    font-size: 12px;
+    font-size: 11px;
+    min-width: 0;
+    padding-inline: 1px;
   }
   .switch {
     display: flex;

@@ -536,7 +536,9 @@ export interface Crossing {
 }
 
 /** Limits on a crossing (`Crossing::WIDTH`, `LENGTH`; a ferry needs room for two 24-ft jetties). */
-export const CROSSING_WIDTH: [number, number] = [5, 40];
+export const CROSSING_WIDTH: [number, number] = [5, 80];
+/** A ford's or a ferry's widest (a bridge goes to `CROSSING_WIDTH[1]`). */
+export const NARROW_CROSSING_MAX = 40;
 export const CROSSING_LENGTH: [number, number] = [10, 2000];
 export const FERRY_MIN_FT = 68;
 
@@ -676,6 +678,13 @@ export type Ask =
   /** The generated buildings with their middle inside a polygon (`agent::generated_buildings_in`). */
   | { op: 'bin'; poly: [number, number][] }
   | { op: 'works'; site: Created }
+  /** Shop lots along a bridge, or its shops laid out again after a change (`wharf::shop_lots`,
+   * `Edits::follow_crossing`; `input` JSON). */
+  | { op: 'bridgelots'; input: string }
+  /** A hand islet round a point (`wharf::islet_at`). */
+  | { op: 'islet'; key: string; x: number; y: number; radius: number; rise: number }
+  /** Whether a wharf can be put down, with its lighthouse (`wharf::root_problem`). */
+  | { op: 'wharfcheck'; wharf: string; lighthouse: boolean }
   /** An underground site as a design (the one given, else its own), changed by `action`, with
    * what it builds and its problems (`under::design::design_json`). */
   | { op: 'design'; id: string; design?: string; action?: string }
@@ -917,6 +926,8 @@ export interface NamedPlaces {
   roads: (NamedRoad & { bbox: [number, number, number, number]; generated: string })[];
   /** `name`: given, else `generated` ("Stone bridge", "Ford", "Ferry"); x, y its middle. */
   crossings: { id: string; name: string; generated: string; x: number; y: number; length_ft: number }[];
+  /** The same for quays, piers and breakwaters (`q:`). */
+  wharves?: { id: string; name: string; generated: string; x: number; y: number; length_ft: number }[];
 }
 
 export interface Geom {

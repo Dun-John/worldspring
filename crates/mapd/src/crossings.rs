@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 use worldgen::roadids::crossing_json;
 use worldgen::wharf;
-use worldgen::world::{Created, Crossing, CrossingKind, CrossingMaterial, Edits};
+use worldgen::world::{Crossing, CrossingKind, CrossingMaterial, Edits};
 
 use crate::Shared;
 use crate::notebook::new_id;
@@ -100,24 +100,8 @@ async fn end(app: &Shared, a: &Value, k: &str) -> Result<Option<[f64; 2]>, Strin
     }
 }
 
-/// Shop rows along a bridge: how deep, how long each lot, how wide the lane between.
-#[derive(Clone, Copy)]
-struct Rows {
-    depth: f64,
-    frontage: f64,
-    lane: f64,
-    /// `lane_ft` was given (else the lane is whatever the bridge's width leaves between the rows).
-    lane_given: bool,
-}
-
-impl Rows {
-    fn width(&self) -> f64 {
-        self.lane + 2.0 * self.depth
-    }
-}
-
 /// The `shops` argument: not given, `false` (`Some(None)`: take them off), or the rows.
-fn shops_arg(a: &Value) -> Result<Option<Option<Rows>>, String> {
+fn shops_arg(a: &Value) -> Result<Option<Option<wharf::Rows>>, String> {
     let get = |o: &Value, k: &str, d: f64, r: std::ops::RangeInclusive<f64>| -> Result<f64, String> {
         match &o[k] {
             Value::Null => Ok(d),
@@ -127,7 +111,7 @@ fn shops_arg(a: &Value) -> Result<Option<Option<Rows>>, String> {
     match &a["shops"] {
         Value::Null => Ok(None),
         Value::Bool(false) => Ok(Some(None)),
-        v => Ok(Some(Some(Rows {
+        v => Ok(Some(Some(wharf::Rows {
             depth: get(v, "depth_ft", wharf::SHOP_DEPTH_FT, 10.0..=30.0)?,
             frontage: get(v, "frontage_ft", wharf::SHOP_FRONT_FT, 12.0..=40.0)?,
             lane: get(v, "lane_ft", wharf::SHOP_LANE_FT, 10.0..=30.0)?,
@@ -149,35 +133,6 @@ fn retire_shops(e: &mut Edits, id: &str) -> Vec<String> {
 /// The ids of the shops (buildings drawn on) bridge `id` now.
 fn live_shops(e: &Edits, id: &str) -> Vec<String> {
     e.created.iter().filter(|c| c.on.as_deref() == Some(id) && !c.removed && c.kind == "building").map(|c| c.id.clone()).collect()
-}
-
-/// Shops along bridge `c` (`id`) as `rows` say: each a drawn building `on` it, in a trade by turns. Their ids, or why not.
-fn lay_shops(e: &mut Edits, id: &str, c: &Crossing, rows: Rows) -> Result<Vec<String>, String> {
-    if c.kind != CrossingKind::Bridge {
-        return Err(format!("shops: only a bridge has them (this is a {})", c.kind.name()));
-    }
-    if c.width + 1e-9 < rows.width() {
-        return Err(format!("shops: rows {} ft deep either side of a lane {} ft wide need width_ft {} or more, this one is {}", rows.depth, rows.lane, rows.width(), c.width));
-    }
-    // The lane between the rows: as asked, else what the width leaves. The deck keeps `bridge_lane` clear down its middle (no building stands on it).
-    let lane = if rows.lane_given { rows.lane } else { (c.width - 2.0 * rows.depth).max(rows.lane) };
-    let kept = wharf::bridge_lane(c, wharf::SHOP_DEPTH_FT);
-    if kept > lane + 1e-9 {
-        return Err(format!("shops: a {} ft wide bridge keeps {kept} ft clear down its middle (width_ft less {}): rows {} ft deep with a lane of {lane} ft would stand on it; give lane_ft {kept} or more, or a narrower width_ft", c.width, 2.0 * wharf::SHOP_DEPTH_FT, rows.depth));
-    }
-    let lots = wharf::bridge_lots(c, lane, rows.depth, rows.frontage);
-    if lots.is_empty() {
-        return Err(format!("shops: a bridge {} ft long has no room for a row (20 ft are left clear at each end: it needs {} ft or more)", c.length().round(), rows.frontage + 2.0 * wharf::END_CLEAR_FT));
-    }
-    const TRADES: [&str; 6] = ["general_store", "tailor", "apothecary", "cobbler", "jeweler", "cartographer"];
-    let mut out = Vec::new();
-    for (k, lot) in lots.into_iter().enumerate() {
-        let m = worldgen::town::geom::centroid(&lot);
-        let cid = format!("c:{}", e.created.len());
-        e.created.push(Created { id: cid.clone(), kind: "building".into(), x: m[0], y: m[1], poly: lot, floors: Some(2), func: Some(TRADES[k % TRADES.len()].into()), on: Some(id.to_string()), ..Default::default() });
-        out.push(cid);
-    }
-    Ok(out)
 }
 
 /// Each new shop checked as a building (named for its trade): one that cannot stand is retired. The ones skipped, with why.
@@ -279,7 +234,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
                     "crossing": crossing_json(e, &eid, &c),
                 });
                 match rows {
-                    Some(r) if live_shops(e, &eid).is_empty() => out["shops"] = json!(lay_shops(e, &eid, &c, r)?),
+                    Some(r) if live_shops(e, &eid).is_empty() => out["shops"] = json!(wharf::lay_shops(e, &eid, &c, r)?),
                     Some(_) => out["shops"] = json!(live_shops(e, &eid)),
                     None if shops.is_some() => out["shops_retired"] = json!(retire_shops(e, &eid)),
                     None => {}
@@ -315,7 +270,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         match shops {
             Some(Some(r)) => {
                 let gone = retire_shops(e, &id);
-                v["shops"] = json!(lay_shops(e, &id, &c, r)?);
+                v["shops"] = json!(wharf::lay_shops(e, &id, &c, r)?);
                 if !gone.is_empty() {
                     v["shops_retired"] = json!(gone);
                 }

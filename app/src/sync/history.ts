@@ -95,6 +95,12 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         const n = Array.isArray(change.ids) ? change.ids.length : 1;
         return n === 1 ? `took away a ${String(change.kind ?? 'crossing')}` : `took away ${n} crossings`;
       }
+      case 'raise_islet':
+        return `${change.changed ? 'changed' : 'raised'} an islet`;
+      case 'place_wharf':
+        return `${change.changed ? 'changed' : 'put down'} a ${String(change.kind ?? 'wharf')}${change.lighthouse ? ' with a lighthouse' : ''}`;
+      case 'remove_wharves':
+        return `took away a ${String(change.kind ?? 'wharf')}`;
       case 'upload_sprite':
         return `sprite “${String(change.name ?? id)}”`;
       case 'remove_sprite':

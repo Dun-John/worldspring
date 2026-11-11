@@ -47,6 +47,8 @@ export interface KeyContext {
   buildShape(s: BuildShape): void;
   /** Crossings (again: the next kind). */
   buildCross(): void;
+  /** Islets, quays, piers and breakwaters. */
+  buildHarbour(): void;
   /** Castles or walls. */
   buildWorks(m: 'castle' | 'wall'): void;
   buildFinish(): void;
@@ -147,6 +149,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   ];
   for (const [key, s, label] of shapes) out.push({ keys: [key], label, group: 'Build', when: edit('build'), run: () => k.buildShape(s) });
   out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when: edit('build'), run: () => k.buildCross() });
+  out.push({ keys: ['H'], label: 'Harbour (islet, quay, pier, breakwater)', group: 'Build', when: edit('build'), run: () => k.buildHarbour() });
   out.push({ keys: ['K'], label: 'Castle', group: 'Build', when: edit('build'), run: () => k.buildWorks('castle') });
   out.push({ keys: ['W'], label: 'Wall', group: 'Build', when: edit('build'), run: () => k.buildWorks('wall') });
   out.push(

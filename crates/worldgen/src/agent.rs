@@ -1647,6 +1647,9 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     if let Some(c) = edits.crossings.get(id) {
         return Some(crate::roadids::crossing_mid(c));
     }
+    if let Some(w) = edits.wharves.get(id) {
+        return Some(crate::wharf::mid(w));
+    }
     // A level is where its site is; a room at its middle.
     if let Some((site, li, ri)) = split_room_id(id) {
         let it = crate::interior::generate_id(world, t0, site)?;
@@ -1777,6 +1780,9 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
     }
     if let Some(c) = world.file.edits.crossings.get(id) {
         return Some(crate::roadids::crossing_generated(c));
+    }
+    if let Some(w) = world.file.edits.wharves.get(id) {
+        return Some(crate::wharf::generated_name(w));
     }
     if id.starts_with("rd:") {
         let i = crate::roadids::road_index(t0, id)?;
@@ -2804,6 +2810,7 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
             }
         }
         v.extend(edits.crossings.iter().map(|(id, c)| name_entry(world, id.clone(), "crossing", crate::roadids::crossing_generated(c), Some(crate::roadids::crossing_mid(c)), false)));
+        v.extend(edits.wharves.iter().map(|(id, w)| name_entry(world, id.clone(), "wharf", crate::wharf::generated_name(w), Some(crate::wharf::mid(w)), false)));
         // (R5 towns: squares, parks and gates are in their towns' layouts.)
         if matches!(kind, Some("square" | "park" | "gate")) {
             v.extend((0..t0.settlements.len()).chain(t0.made.iter().map(|m| t0.settlements.len() + m.poi)).filter(|&i| town::settlement(t0, i).is_some_and(|s| s.tier >= crate::t0::settle::Tier::Town)).flat_map(|li| layout_names(world, t0, li)));

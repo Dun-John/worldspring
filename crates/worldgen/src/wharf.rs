@@ -177,6 +177,64 @@ pub fn bridge_lots(c: &crate::world::Crossing, lane: f64, depth: f64, frontage: 
     out
 }
 
+/// Shop rows along a bridge: how deep, how long each lot, how wide the lane between.
+#[derive(Clone, Copy, Debug)]
+pub struct Rows {
+    pub depth: f64,
+    pub frontage: f64,
+    pub lane: f64,
+    /// `lane_ft` was given (else the lane is whatever the bridge's width leaves between the rows).
+    pub lane_given: bool,
+}
+
+impl Rows {
+    pub fn width(&self) -> f64 {
+        self.lane + 2.0 * self.depth
+    }
+
+    /// The default rows.
+    pub fn standard() -> Rows {
+        Rows { depth: SHOP_DEPTH_FT, frontage: SHOP_FRONT_FT, lane: SHOP_LANE_FT, lane_given: false }
+    }
+}
+
+/// The trades shops take by turns along a bridge.
+pub const TRADES: [&str; 6] = ["general_store", "tailor", "apothecary", "cobbler", "jeweler", "cartographer"];
+
+/// The shop lots along bridge `c` as `rows` say, each with its trade (by turns), or why not (the rules mapd's
+/// `place_crossing shops` and the app's Crossing mode share).
+pub fn shop_lots(c: &crate::world::Crossing, rows: Rows) -> Result<Vec<(Vec<P>, &'static str)>, String> {
+    if c.kind != crate::world::CrossingKind::Bridge {
+        return Err(format!("shops: only a bridge has them (this is a {})", c.kind.name()));
+    }
+    if c.width + 1e-9 < rows.width() {
+        return Err(format!("shops: rows {} ft deep either side of a lane {} ft wide need width_ft {} or more, this one is {}", rows.depth, rows.lane, rows.width(), c.width));
+    }
+    // The lane between the rows: as asked, else what the width leaves. The deck keeps `bridge_lane` clear down its middle (no building stands on it).
+    let lane = if rows.lane_given { rows.lane } else { (c.width - 2.0 * rows.depth).max(rows.lane) };
+    let kept = bridge_lane(c, SHOP_DEPTH_FT);
+    if kept > lane + 1e-9 {
+        return Err(format!("shops: a {} ft wide bridge keeps {kept} ft clear down its middle (width_ft less {}): rows {} ft deep with a lane of {lane} ft would stand on it; give lane_ft {kept} or more, or a narrower width_ft", c.width, 2.0 * SHOP_DEPTH_FT, rows.depth));
+    }
+    let lots = bridge_lots(c, lane, rows.depth, rows.frontage);
+    if lots.is_empty() {
+        return Err(format!("shops: a bridge {} ft long has no room for a row (20 ft are left clear at each end: it needs {} ft or more)", c.length().round(), rows.frontage + 2.0 * END_CLEAR_FT));
+    }
+    Ok(lots.into_iter().enumerate().map(|(k, lot)| (lot, TRADES[k % TRADES.len()])).collect())
+}
+
+/// Shops along bridge `c` (`id`) as `rows` say: each a drawn building `on` it, in a trade by turns. Their ids, or why not.
+pub fn lay_shops(e: &mut crate::world::Edits, id: &str, c: &crate::world::Crossing, rows: Rows) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for (lot, trade) in shop_lots(c, rows)? {
+        let m = geom::centroid(&lot);
+        let cid = format!("c:{}", e.created.len());
+        e.created.push(crate::world::Created { id: cid.clone(), kind: "building".into(), x: m[0], y: m[1], poly: lot, floors: Some(2), func: Some(trade.into()), on: Some(id.to_string()), ..Default::default() });
+        out.push(cid);
+    }
+    Ok(out)
+}
+
 /// What a drawn building `on` stands on (`Created::on`): its deck's level (ft) and centre line
 /// (world ft, the side its door faces). `v:<id>` a hand bridge (`battlemap::hand_deck_top`),
 /// `q:<id>` a pier or breakwater (`level`, along its first to last point). `None` when there is
@@ -324,4 +382,24 @@ pub fn lighthouse_lot(w: &Wharf) -> Option<Vec<P>> {
     let c = geom::sub(tip, geom::mul(u, r + 2.0));
     let c = [crate::core::round(c[0] * 2.0) * 0.5, crate::core::round(c[1] * 2.0) * 0.5];
     Some(geom::circle(c, r, 16))
+}
+
+/// A wharf's name before renames ("Quay", "Pier", "Breakwater").
+pub fn generated_name(w: &Wharf) -> String {
+    let n = w.kind.name();
+    format!("{}{}", n[..1].to_uppercase(), &n[1..])
+}
+
+/// A wharf's middle: halfway along its path (by length).
+pub fn mid(w: &Wharf) -> P {
+    let half = 0.5 * w.length();
+    let mut run = 0.0;
+    for s in w.pts.windows(2) {
+        let d = geom::dist(s[0], s[1]);
+        if run + d >= half && d > 0.0 {
+            return geom::lerp(s[0], s[1], (half - run) / d);
+        }
+        run += d;
+    }
+    w.pts.first().copied().unwrap_or([0.0, 0.0])
 }

@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -125,6 +125,27 @@ export class GenClient {
    * name for it; null if the generator could not answer. */
   buildingSpot(poly: [number, number][], func: string | undefined, id: string): Promise<{ x: number; y: number; name: string } | { error: string; short?: string } | null> {
     return this.ask({ op: 'building', poly, func, id }).then((j) => JSON.parse(j));
+  }
+
+  /** Shop lots along a bridge (`rows` ft; lane absent: what the width leaves), or why not. */
+  bridgeLots(crossing: Crossing, rows: { depth: number; frontage: number; lane?: number } | null): Promise<{ lots: { poly: [number, number][]; func: string }[] } | { error: string } | null> {
+    return this.ask({ op: 'bridgelots', input: JSON.stringify({ crossing, rows }) }).then((j) => JSON.parse(j));
+  }
+
+  /** The created sites with the shops on crossing `id` laid out again on its new ends and width
+   * (`old`: it as it was), as the generator does for agents; the whole list. */
+  followBridge(id: string, crossing: Crossing, old: Crossing | undefined, created: Created[]): Promise<{ created: Created[] } | { error: string } | null> {
+    return this.ask({ op: 'bridgelots', input: JSON.stringify({ crossing, follow: { id, old, created } }) }).then((j) => JSON.parse(j));
+  }
+
+  /** A hand islet round a point: its plateau and the water it stands in, or why not. */
+  islet(key: string, x: number, y: number, radius: number, rise: number): Promise<{ plateau: Plateau; water: { kind: string; id: string | null; name: string | null; depth_ft: number } } | { error: string } | null> {
+    return this.ask({ op: 'islet', key, x, y, radius, rise }).then((j) => JSON.parse(j));
+  }
+
+  /** Whether a wharf can be put down (a breakwater's lighthouse too, when asked): why not, or its lighthouse. */
+  wharfCheck(wharf: Wharf, lighthouse: boolean): Promise<{ error: string } | { lighthouse?: { poly: [number, number][]; x: number; y: number; name: string } } | null> {
+    return this.ask({ op: 'wharfcheck', wharf: JSON.stringify(wharf), lighthouse }).then((j) => JSON.parse(j));
   }
 
   /** A generated building's edit with `change` made (`{func, floors, poly, roof, tint, structure}`;

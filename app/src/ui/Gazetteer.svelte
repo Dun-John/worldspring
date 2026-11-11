@@ -67,7 +67,7 @@
 
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
-    { key: 'land', label: 'Land', kinds: ['continent', 'island', 'range', 'peak', 'pass', 'volcano', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'blight', 'ashlands', 'region', 'salt_flat', 'road', 'crossing'] },
+    { key: 'land', label: 'Land', kinds: ['continent', 'island', 'range', 'peak', 'pass', 'volcano', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'blight', 'ashlands', 'region', 'salt_flat', 'road', 'crossing', 'wharf'] },
     { key: 'settlements', label: 'Settlements', kinds: SETTLEMENT_KINDS },
     { key: 'sites', label: 'Sites', kinds: SITE_KINDS },
   ];

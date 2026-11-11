@@ -1200,6 +1200,19 @@ export class MapView {
         rects.push(box);
       }
     }
+    // Quays, piers and breakwaters built by hand: the battlemaps and site tiles along them (a quay
+    // fills in water behind it, a breakwater is a raised strip: a margin of their width and 60 ft).
+    const qv = prev.wharves ?? {};
+    const qn = next.wharves ?? {};
+    if (qv !== qn) for (const id of keys('wharves', qv, qn)) {
+      const [a, b] = [qv[id], qn[id]];
+      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
+      for (const w of [a, b]) {
+        if (!w) continue;
+        const r = (w.width ?? 20) + 60;
+        rects.push([Math.min(...w.pts.map((q) => q[0])) - r, Math.min(...w.pts.map((q) => q[1])) - r, Math.max(...w.pts.map((q) => q[0])) + r, Math.max(...w.pts.map((q) => q[1])) + r]);
+      }
+    }
     let reenter = pieceHere && this.interior?.interior.id !== this.designing;
     // Ground shaped by hand: the battlemaps over it, and every building that may stand on it
     // (a building rides on the ground under its corners: 160 ft takes in the largest).

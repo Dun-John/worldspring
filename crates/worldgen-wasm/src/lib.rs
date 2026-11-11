@@ -13,6 +13,8 @@ use worldgen::t0::T0;
 pub struct Ctx {
     world: World,
     t0: Option<T0>,
+    /// The world as given (an executor for a check needing terrain squares reads its own copy).
+    json: String,
 }
 
 #[wasm_bindgen]
@@ -22,7 +24,7 @@ impl Ctx {
         let world = World::from_json(world_json).map_err(|e| JsError::new(&e))?;
         // (A new world: the names of the last one's places are not its own.)
         worldgen::agent::set_place_names("[]");
-        Ok(Ctx { world, t0: None })
+        Ok(Ctx { world, t0: None, json: world_json.to_string() })
     }
 
     /// World geometry (map size, levels, tile layout) as JSON.
@@ -224,6 +226,91 @@ impl Ctx {
         match &self.t0 {
             Some(t0) => worldgen::agent::building_spot_json(&self.world, t0, &poly, func.as_deref(), id),
             None => "null".into(),
+        }
+    }
+
+    /// Shop lots for a crossing (`{crossing, rows?: {depth, frontage, lane?}}` JSON) as `wharf::shop_lots` lays them:
+    /// `{lots: [{poly, func}]}` or `{error}`; with `follow: {id, old, created}` the shops on crossing `id` laid out again
+    /// as `Edits::follow_crossing` does: `{created}` (the whole list).
+    pub fn bridge_lots_json(&self, input: &str) -> String {
+        use worldgen::wharf;
+        #[derive(serde::Deserialize)]
+        struct Rows {
+            depth: f64,
+            frontage: f64,
+            lane: Option<f64>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Follow {
+            id: String,
+            old: Option<worldgen::world::Crossing>,
+            created: Vec<worldgen::world::Created>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Input {
+            crossing: worldgen::world::Crossing,
+            rows: Option<Rows>,
+            follow: Option<Follow>,
+        }
+        let Ok(i) = serde_json::from_str::<Input>(input) else { return r#"{"error":"bad crossing"}"#.into() };
+        let (mw, mh) = (self.world.geom.map_w_ft, self.world.geom.map_h_ft);
+        if let Some(p) = i.crossing.problem(mw, mh) {
+            return serde_json::json!({ "error": p }).to_string();
+        }
+        if let Some(f) = i.follow {
+            let mut e = worldgen::world::Edits::default();
+            e.created = f.created;
+            e.crossings.insert(f.id.clone(), i.crossing);
+            e.follow_crossing(&f.id, f.old.as_ref());
+            return serde_json::json!({ "created": e.created }).to_string();
+        }
+        let r = i.rows.map_or_else(wharf::Rows::standard, |r| wharf::Rows { depth: r.depth, frontage: r.frontage, lane: r.lane.unwrap_or(wharf::SHOP_LANE_FT), lane_given: r.lane.is_some() });
+        match wharf::shop_lots(&i.crossing, r) {
+            Ok(l) => serde_json::json!({ "lots": l.into_iter().map(|(poly, func)| serde_json::json!({ "poly": poly, "func": func })).collect::<Vec<_>>() }).to_string(),
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
+    }
+
+    /// A hand islet round (x, y) (`wharf::islet_at`): `{plateau, water: {kind, name, depth_ft}}` or `{error}`.
+    pub fn islet_json(&self, key: &str, x: f64, y: f64, radius: f64, rise: f64) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        match worldgen::wharf::islet_at(&self.world, t0, key, [x, y], radius, rise) {
+            Ok((p, w)) => serde_json::json!({ "plateau": p, "water": { "kind": w.kind, "id": w.id, "name": w.name, "depth_ft": w.depth_ft } }).to_string(),
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
+    }
+
+    /// Whether a wharf (`Wharf` JSON) can be put down: `{}` with, for a breakwater asked to have one (`lighthouse`), its
+    /// lighthouse as `{poly, x, y, name}`; or `{error}` (`Wharf::problem`, `wharf::root_problem`, `building_spot`).
+    pub fn wharf_check_json(&mut self, wharf: &str, lighthouse: bool) -> String {
+        use worldgen::wharf;
+        let Ok(w) = serde_json::from_str::<worldgen::world::Wharf>(wharf) else { return r#"{"error":"bad wharf"}"#.into() };
+        if let Some(p) = w.problem(self.world.geom.map_w_ft, self.world.geom.map_h_ft) {
+            return serde_json::json!({ "error": p }).to_string();
+        }
+        let Some(t0) = self.t0.take() else { return "null".into() };
+        let Ok(mut world) = World::from_json(&self.json) else {
+            self.t0 = Some(t0);
+            return r#"{"error":"no world"}"#.into();
+        };
+        // (The wharf stands in the world it is checked in, as mapd checks a lighthouse once the wharf is down.)
+        world.file.edits.wharves.insert("q:new".into(), w.clone());
+        let mut ex = worldgen::pipeline::Executor::from_parts(world, t0);
+        let root = wharf::root_problem(&mut ex, &w);
+        let spot = if root.is_none() && lighthouse && w.kind == worldgen::world::WharfKind::Breakwater {
+            wharf::lighthouse_lot(&w).map(|poly| {
+                let skip = worldgen::agent::spot_skip(&ex.world, &ex.t0, "c:new");
+                worldgen::agent::building_spot(&ex.world, &ex.t0, &poly, Some("lighthouse"), "c:new", skip).map(|(p, name)| serde_json::json!({ "poly": poly, "x": p[0], "y": p[1], "name": name }))
+            })
+        } else {
+            None
+        };
+        self.t0 = Some(ex.t0);
+        match (root, spot) {
+            (Some(p), _) => serde_json::json!({ "error": p }).to_string(),
+            (None, Some(Err(e))) => serde_json::json!({ "error": format!("lighthouse: {e}") }).to_string(),
+            (None, Some(Ok(l))) => serde_json::json!({ "lighthouse": l }).to_string(),
+            (None, None) => "{}".into(),
         }
     }
 

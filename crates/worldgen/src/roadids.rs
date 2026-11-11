@@ -326,7 +326,15 @@ pub fn named_json(world: &World, t0: &T0) -> Value {
             json!({ "id": id, "name": e.renames.get(id).cloned().unwrap_or_else(|| generated.clone()), "generated": generated, "x": crate::core::round(m[0]), "y": crate::core::round(m[1]), "length_ft": crate::core::round(c.length()) })
         })
         .collect();
-    json!({ "labels": labels, "roads": roads, "crossings": crossings })
+    let wharves: Vec<Value> = e
+        .wharves
+        .iter()
+        .map(|(id, w)| {
+            let (m, generated) = (crate::wharf::mid(w), crate::wharf::generated_name(w));
+            json!({ "id": id, "name": e.renames.get(id).cloned().unwrap_or_else(|| generated.clone()), "generated": generated, "x": crate::core::round(m[0]), "y": crate::core::round(m[1]), "length_ft": crate::core::round(w.length()) })
+        })
+        .collect();
+    json!({ "labels": labels, "roads": roads, "crossings": crossings, "wharves": wharves })
 }
 
 /// The stretches renamed alike, each name once: its stretches in order along the road (ends

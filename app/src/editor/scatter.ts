@@ -73,7 +73,7 @@ export interface ScatterHost {
   hint(text: string): void;
 }
 
-export function newObjectId(prefix: 'o' | 'x' | 'v' | 'h'): string {
+export function newObjectId(prefix: 'o' | 'x' | 'v' | 'h' | 'q'): string {
   const b = new Uint8Array(8);
   crypto.getRandomValues(b);
   return `${prefix}:${[...b].map((x) => '0123456789abcdefghijklmnopqrstuvwxyz'[x % 36]).join('')}`;

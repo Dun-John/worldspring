@@ -3,7 +3,7 @@
 // crossing put down earlier picks it (to change or take away) when nothing is being placed.
 // Escape drops the first click. Right-drag pans meanwhile.
 import type { Graphics } from 'pixi.js';
-import { CROSSING_LENGTH, CROSSING_WIDTH, FERRY_MIN_FT, type Crossing, type CrossingKind, type CrossingMaterial, type Edits } from '../gen/protocol';
+import { CROSSING_LENGTH, CROSSING_WIDTH, FERRY_MIN_FT, NARROW_CROSSING_MAX, type Crossing, type CrossingKind, type CrossingMaterial, type Edits } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 
@@ -16,9 +16,22 @@ export interface CrossSettings {
   width: number;
   /** A bridge's (kept while another kind is picked). */
   material: CrossingMaterial;
+  /** A bridge's shops along its deck. */
+  shops: boolean;
+  /** How deep each shop is (ft). */
+  shopDepth: number;
 }
 
-export const defaultCross = (): CrossSettings => ({ kind: 'bridge', width: 12, material: 'timber' });
+export const defaultCross = (): CrossSettings => ({ kind: 'bridge', width: 12, material: 'timber', shops: false, shopDepth: SHOP_DEPTH_FT });
+
+/** Shop rows (`wharf::SHOP_*`): each lot 20 ft along the deck, 10 to 18 deep either side of a lane of at least 14 ft
+ * (a deeper row would stand on the lane the deck keeps clear). */
+export const SHOP_DEPTH_FT = 18;
+export const SHOP_DEPTH_RANGE: [number, number] = [10, 18];
+export const SHOP_FRONT_FT = 20;
+export const SHOP_LANE_FT = 14;
+/** The narrowest bridge that holds rows `depth` deep (ft). */
+export const shopsWidth = (depth: number) => SHOP_LANE_FT + 2 * depth;
 
 /** A crossing from the menu's choices: a bridge of old stone says so, timber and the other
  * kinds carry no material (as the world file keeps them). */
@@ -36,7 +49,8 @@ export function crossingProblem(c: Crossing): string | null {
   const min = c.kind === 'ferry' ? FERRY_MIN_FT : CROSSING_LENGTH[0];
   if (len < min) return `A ${c.kind} is at least ${min} ft long: click farther apart`;
   if (len > CROSSING_LENGTH[1]) return `A ${c.kind} is at most ${CROSSING_LENGTH[1]} ft long`;
-  if (!(c.width >= CROSSING_WIDTH[0] && c.width <= CROSSING_WIDTH[1])) return `Width: ${CROSSING_WIDTH[0]} to ${CROSSING_WIDTH[1]} ft`;
+  const max = c.kind === 'bridge' ? CROSSING_WIDTH[1] : NARROW_CROSSING_MAX;
+  if (!(c.width >= CROSSING_WIDTH[0] && c.width <= max)) return `Width: ${CROSSING_WIDTH[0]} to ${max} ft for a ${c.kind}`;
   return null;
 }
 
