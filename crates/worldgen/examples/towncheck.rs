@@ -7280,6 +7280,7 @@ fn steppe_roofs(ctx: &mut Ctx, r: &mut Report) {
 fn steppe(ctx: &mut Ctx, r: &mut Report) {
     use town::roof::{FeltUse, HallRefused};
     steppe_roofs(ctx, r);
+    steppe_gaps(ctx, r);
     r.counts(&["felt halls built", "  halls", "  temples", "  inns", "fell back: lot too small", "fell back: a castle's or a ruin"]);
     r.counts(&["halls over another building", "halls over a road", "halls over a wall", "doors within 30 degrees of a street or square", "doors toward the centre (no street in reach)", "doors off their street"]);
     r.counts(&["interiors with squares cut off from the door", "interiors missing a piece", "interiors not one room on one storey", "interiors not built again from their design"]);
@@ -7438,11 +7439,60 @@ fn steppe(ctx: &mut Ctx, r: &mut Report) {
     }
 }
 
+/// R5 towns (114-115 fix): steppe towns' buildings against their neighbours: footprints overlapping
+/// another's (rule, 0), those within 1 ft of another building (against the base's count), and round
+/// ones (a yurt, a felt hall, a shrine) within 2 ft of another (a felt hall or yurt keeps a yard).
+fn steppe_gaps(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["footprints overlapping another building's", "buildings within 1 ft of another", "round buildings within 2 ft of another"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town || l.culture % 5 != 4 {
+            continue;
+        }
+        let bs: Vec<&town::Building> = l.buildings.iter().filter(|b| b.poly.len() >= 3).collect();
+        let boxes: Vec<[f64; 4]> = bs.iter().map(|b| bbox(&b.poly)).collect();
+        for i in 0..bs.len() {
+            let (mut over, mut near) = (None, None);
+            for j in 0..bs.len() {
+                let (a, b) = (boxes[i], boxes[j]);
+                if i == j || a[0] > b[2] + 1.0 || b[0] > a[2] + 1.0 || a[1] > b[3] + 1.0 || b[1] > a[3] + 1.0 {
+                    continue;
+                }
+                if poly_overlap(&shrink(&bs[i].poly, 0.15), &shrink(&bs[j].poly, 0.15)) {
+                    over = Some(j);
+                }
+                let n = bs[j].poly.len();
+                let d = (0..n).map(|k| seg_poly(bs[j].poly[k], bs[j].poly[(k + 1) % n], &bs[i].poly)).fold(f64::MAX, f64::min);
+                if d < 2.0 && near.is_none_or(|(_, e)| d < e) {
+                    near = Some((j, d));
+                }
+            }
+            let round = bs[i].poly.len() == town::roof::ROUND_SIDES || bs[i].poly.len() == town::roof::HALL_SIDES;
+            let tag = |j: usize| format!("seed {} b:{li}:{} ({} sides) by b:{li}:{} ({} sides)", world.file.seed, bs[i].id, bs[i].poly.len(), bs[j].id, bs[j].poly.len());
+            if let Some(j) = over.filter(|&j| j > i) {
+                r.add("footprints overlapping another building's", 0.0, tag(j));
+            }
+            if let Some((j, d)) = near {
+                if d < 1.0 {
+                    r.tally("buildings within 1 ft of another", 1);
+                }
+                if round {
+                    let (c, w) = (centroid(&bs[i].poly), world.params().width_mi * 5280.0);
+                    let h = world.params().height_mi * 5280.0;
+                    r.add("round buildings within 2 ft of another", d, format!("{}: {d:.2} ft (fx {:.5} fy {:.5})", tag(j), c[0] / w, c[1] / h));
+                }
+            }
+        }
+    }
+}
+
 // R5 towns (114)
 /// A prop's footprint (ft along its turn, across) as this check reads it, apart from the generator's.
 fn horse_foot(kind: Kind, at: P, rot: f32, scale: f32) -> Option<[P; 4]> {
     let (l, w) = match kind {
-        Kind::Horse => (6.0, 2.3),
+        // (As drawn: its sprite 2 squares nose to tail, its middle a foot ahead of where it stands.)
+        Kind::Horse => (9.8, 2.7),
         Kind::HitchingRail => (10.0, 1.2),
         Kind::WaterTrough => (6.8, 2.8),
         Kind::Haystack => (7.2, 7.2),
@@ -7451,6 +7501,7 @@ fn horse_foot(kind: Kind, at: P, rot: f32, scale: f32) -> Option<[P; 4]> {
     };
     let (l, w) = (l * scale as f64, w * scale as f64);
     let u = [libm::cos(rot as f64), libm::sin(rot as f64)];
+    let at = if kind == Kind::Horse { add(at, mul(u, scale as f64)) } else { at };
     let (a, b) = (mul(u, 0.5 * l), mul([-u[1], u[0]], 0.5 * w));
     Some([sub(sub(at, a), b), sub(add(at, a), b), add(add(at, a), b), add(sub(at, a), b)])
 }
@@ -7600,6 +7651,16 @@ fn horseparks(ctx: &mut Ctx, r: &mut Report) {
                     if contains(&pk.pts, lerp(a, e, 0.5)) {
                         fence += dist(a, e);
                     }
+                }
+                // (The guarantee's rise in each 16-square cell: an auction block (a dais), else a knoll.)
+                for s in c.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Dais && !s.pts.is_empty()) {
+                    if contains(&pk.pts, [ox + s.pts[0][0] as f64 * SQUARE_FT, oy + s.pts[0][1] as f64 * SQUARE_FT]) {
+                        r.tally("battlemap: daises (auction blocks)", 1);
+                    }
+                }
+                let inside = |q: usize| contains(&pk.pts, [ox + ((q % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((q / SQ) as f64 + 0.5) * SQUARE_FT]) && c.building[q] == 0;
+                if let Some(low) = (0..SQ * SQ).filter(|&q| inside(q)).map(|q| c.tier[q]).min() {
+                    r.tally("battlemap: park squares raised", (0..SQ * SQ).filter(|&q| inside(q) && c.tier[q] > low).count());
                 }
                 let gap = worldgen::battlemap::cover_distance(&c);
                 for q in 0..SQ * SQ {

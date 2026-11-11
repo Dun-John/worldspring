@@ -2193,7 +2193,12 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             let mean = mul(b.poly.iter().fold([0.0, 0.0], |a, p| add(a, *p)), 1.0 / b.poly.len() as f64);
             let d = sub(mul(add(b.poly[0], b.poly[1]), 0.5), mean);
             match felt {
-                Some(f) => felt::furnish(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j), f),
+                Some(f) => {
+                    felt::furnish(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j), f);
+                    // (A felt temple's candle stands in its god's look.)
+                    let god = town::temple::god_look(b);
+                    lvl.furniture.iter_mut().filter(|it| it.kind == "candle_stand").for_each(|it| it.variant = Some(god));
+                }
                 None => furnish_yurt(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j)),
             }
         }

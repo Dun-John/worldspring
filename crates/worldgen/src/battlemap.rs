@@ -1369,6 +1369,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
+        let steppe_from = features.len();
         for pl in &l.plazas {
             use crate::town::PlazaKind as K;
             let p = &pl.pts;
@@ -1470,6 +1471,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
+        // (R5 towns, 114: a steppe town's squares raise no planted trees, a dark crown on the dust: a
+        // dais in a planter's place.)
+        if l.culture % 5 == 4 {
+            for f in features[steppe_from..].iter_mut().filter(|f| f.2 == PlazaFeature::Planter) {
+                f.2 = PlazaFeature::Dais;
+            }
+        }
         // Parks: a lawn (a formal garden's mown), gravel paths and rounds on it; its pond, stream
         // and raised tier, round features raised a tier and what it sets out (laid out whole by
         // every chunk it reaches, so they agree).
@@ -1483,6 +1491,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // for the guarantee; its knolls as on open ground).
             if let Some(hp) = crate::town::horses::plan(pk) {
                 stamp(&pk.pts, URBAN_YARD, &mut urb_h);
+                // (Its squares marked, `HORSE_PARK_MARK`: the guarantee's rise there an auction block.)
+                let (i0, j0, i1, j1) = range(b);
+                if i1 >= 0.0 && j1 >= 0.0 {
+                    for j in j0..=j1 as usize {
+                        for i in i0..=i1 as usize {
+                            if crate::town::geom::contains(&pk.pts, center(i, j)) {
+                                park_h[j * HS + i] |= HORSE_PARK_MARK;
+                            }
+                        }
+                    }
+                }
                 park_keep.extend(hp.keep());
                 park_props.extend(hp.props.iter().copied());
                 continue;
@@ -4197,6 +4216,9 @@ fn place_in(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, kind_of: &dyn Fn(&C
 /// lawns' room (`lawn_room`) while nothing has been raised since it was worked out.
 /// Whether anything was raised.
 #[allow(clippy::too_many_arguments)]
+/// A horse park's squares in the parks' marks (`enforce`'s `park`; R5 towns, 114).
+const HORSE_PARK_MARK: u8 = 32;
+
 fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room: &mut Option<Vec<u8>>) -> bool {
     let raised = raise_on(c, cells, rng, gsx, gsy, sea, shaped, park, bailey, room);
     if raised {
@@ -4237,10 +4259,15 @@ fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64,
     // Paved ground (streets, plazas) gets a round built feature (a dais, a fountain, a
     // planter, a market cross) clear of stalls and props, rather than a knoll.
     if good.is_empty() && !town.is_empty() {
-        let free = |c: &Chunk, k: usize| placeable(c, k) && interior(k) && (matches!(c.urban[k], URBAN_STREET | URBAN_PLAZA) || (garden(k) && c.urban[k] == URBAN_PARK));
+        // (R5 towns, 114: a horse park's trodden ground an auction block, a dais, not a knoll.)
+        let hs: Vec<bool> = if park.iter().any(|&p| p & HORSE_PARK_MARK != 0) { park.iter().enumerate().map(|(k, &p)| p & HORSE_PARK_MARK != 0 && c.urban[k] == URBAN_YARD).collect() } else { Vec::new() };
+        let horses = |k: usize| hs.get(k).is_some_and(|&h| h);
+        let free = |c: &Chunk, k: usize| placeable(c, k) && interior(k) && (matches!(c.urban[k], URBAN_STREET | URBAN_PLAZA) || (garden(k) && c.urban[k] == URBAN_PARK) || horses(k));
         let kind = |k: usize, r: f64, rng: &mut Pcg32| {
             // (A castle's yard: a raised planter, in a garden yard now and then a fountain.)
-            if yard(k) != 0 {
+            if horses(k) {
+                PlazaFeature::Dais
+            } else if yard(k) != 0 {
                 if yard(k) == 2 && r >= 1.5 && rng.next_f64() < 0.3 { PlazaFeature::Fountain } else { PlazaFeature::Planter }
             } else if garden(k) {
                 if r < 1.5 || rng.next_f64() < 0.7 { PlazaFeature::Planter } else { PlazaFeature::Fountain }
@@ -5385,7 +5412,8 @@ fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes
                 out.push((at, 0.0, Kind::MarketCross, [0, 2][rng.below(2) as usize]));
             }
             if let Some(g) = on(crate::town::Structure::Open).filter(|g| g.len() == 4) {
-                // A hedge round the churchyard 3 ft out, with a gap for its gate on the temple's side.
+                // A hedge round the churchyard 3 ft out (a steppe town's stones), with a gap for its gate
+                // on the temple's side.
                 let gc = centroid(g);
                 let mid = |e: usize| lerp(g[e], g[(e + 1) % 4], 0.5);
                 let gate = (0..4).min_by(|&a, &b| dist(mid(a), tc).total_cmp(&dist(mid(b), tc))).unwrap_or(0);
@@ -5399,7 +5427,9 @@ fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes
                         }
                         let d = sub(q, gc);
                         let p = add(q, mul(d, 3.0 / len(d).max(1e-9)));
-                        out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, Kind::Bush, rng.below(4) as u8));
+                        // (R5 towns, 114: a steppe town's a ring of stones, no hedge, as its cemetery's.)
+                        let edge = if l.culture % 5 == 4 { Kind::RockSmall } else { Kind::Bush };
+                        out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, edge, rng.below(4) as u8));
                     }
                 }
                 // Headstones in rows square to the churchyard, a path kept from its gate across.

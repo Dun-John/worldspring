@@ -4370,6 +4370,8 @@ fn quarters(s: &Settlement, q: &QuarterInput) -> Vec<(Quarter, Vec<usize>)> {
             K::Bridge => format!("Bridge {noun}"),
             K::Gate => format!("{dir} Gate"),
             K::Bank => format!("Riverbank {noun}"),
+            // (R5 towns, 114: a steppe town's park quarter after its horse park, no garden.)
+            K::Park if culture % 5 == 4 => format!("Horse {noun}"),
             K::Park => format!("Garden {noun}"),
             K::Sprawl => format!("Outer {noun}"),
             K::Regular => format!("{} {noun}", namer.word(culture, 1, 2)),

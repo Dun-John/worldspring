@@ -382,6 +382,9 @@ pub const HALL_SIDES: usize = 24;
 
 /// The least a round felt hall's radius (ft): 30 ft across.
 pub const HALL_LEAST_R: f64 = 15.0;
+/// The yard a felt hall keeps to its lot's sides (ft): a neighbour's roof, its ink and shadow, then
+/// never seem to butt into its wall.
+pub const HALL_YARD_FT: f64 = 3.0;
 
 /// What a steppe town's round felt hall is for: its hall (the town hall), a temple, an inn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -455,7 +458,7 @@ fn hall_radius(l: &Layout, b: &Building, u: FeltUse) -> f64 {
 
 /// A steppe town's round felt hall's ring (`FeltUse`): on footprint `b.poly` (its lot) a ring of
 /// `HALL_SIDES` about the lot's widest middle, as big as its use and wealth want (`hall_radius`)
-/// and the lot holds (half a foot inside its sides), wound as the lot is; or as built, the ring it
+/// and the lot holds (`HALL_YARD_FT` inside its sides), wound as the lot is; or as built, the ring it
 /// stands on. `None` where it can't be one (`hall_refused`): a lot that holds no ring 30 ft across
 /// keeps the building rectangular under a felt roof.
 pub fn hall_ring(l: &Layout, b: &Building) -> Option<Vec<P>> {
@@ -467,7 +470,7 @@ pub fn hall_ring(l: &Layout, b: &Building) -> Option<Vec<P>> {
         return Some(b.poly.clone());
     }
     let (c, clear) = widest(&b.poly);
-    let r = hall_radius(l, b, u).min(clear - 0.5);
+    let r = hall_radius(l, b, u).min(clear - HALL_YARD_FT);
     if r < HALL_LEAST_R {
         return None;
     }

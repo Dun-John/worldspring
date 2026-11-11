@@ -37,6 +37,9 @@ pub struct Pen {
 /// A yurt's radius range (ft): 14 to 24 ft across.
 pub const LEAST_R: f64 = 7.0;
 pub const MOST_R: f64 = 12.0;
+/// The yard a yurt keeps to its lot's sides where the lot allows (ft): a neighbour's roof, its ink and
+/// shadow, then never seem to touch its wall.
+pub const YARD_FT: f64 = 3.0;
 /// How far the trodden ground reaches past a yurt's wall (ft), and how much further at its door.
 pub const TRODDEN_FT: f64 = 3.0;
 pub const TRODDEN_DOOR_FT: f64 = 5.0;
@@ -55,8 +58,8 @@ pub fn is_steppe_home(l: &Layout, b: &Building) -> bool {
 }
 
 /// A yurt's ring on its lot (`roof::round_footprint` about the lot's widest middle): 14-24 ft across by
-/// its household's wealth and a hash of its id, as its lot allows (1.5 ft of yard to the lot's sides,
-/// at least `LEAST_R`).
+/// its household's wealth and a hash of its id, as its lot allows (`YARD_FT` of yard to the lot's
+/// sides, at least `LEAST_R`).
 pub fn ring(l: &Layout, b: &Building) -> Option<Vec<P>> {
     let u = unit(hash3(l.roof_seed, b.id as i64, KEY, 1));
     let (lo, hi) = match roof::wealth(b) {
@@ -65,14 +68,15 @@ pub fn ring(l: &Layout, b: &Building) -> Option<Vec<P>> {
         _ => (9.5, MOST_R),
     };
     let want = lo + (hi - lo) * u;
-    roof::round_footprint_sized(&b.poly, &|clear| want.min(clear - 1.5).max(LEAST_R))
+    roof::round_footprint_sized(&b.poly, &|clear| want.min(clear - YARD_FT).max(LEAST_R))
 }
 
 /// A yurt's felt (`roof::Look::shade` 0-7, `app/src/gen/protocol.ts` `FELT`): 0 cream, 1 off-white,
 /// 2 grey, 3 warm cream, 4 dusty grey, 5 smoke-browned, 6 cream with a red band, 7 off-white with a
 /// sooty crown; `u` a unit hash.
 pub fn felt(u: f64) -> u8 {
-    const W: [(u8, u32); 8] = [(0, 3), (1, 3), (2, 2), (3, 2), (4, 2), (5, 2), (6, 1), (7, 1)];
+    // (A quarter visibly mixed: a red band on 1 in 6, smoke-browned and sooty ones common.)
+    const W: [(u8, u32); 8] = [(0, 3), (1, 2), (2, 2), (3, 2), (4, 1), (5, 3), (6, 3), (7, 2)];
     let total: u32 = W.iter().map(|w| w.1).sum();
     let mut t = u * total as f64;
     for &(s, w) in &W {
@@ -286,13 +290,13 @@ fn extra(l: &Layout, site: Option<&Site>, i: usize, lot: &[P], what: u8, placed:
     let id = l.buildings[i].id;
     let h = |k: i64| unit(hash3(l.roof_seed, id as i64, KEY, k));
     let edge_gap = |p: P| (0..lot.len()).map(|e| seg_dist(p, lot[e], lot[(e + 1) % lot.len()])).fold(f64::MAX, f64::min);
-    // (How far the ring may be drawn up toward its door, still 1.5 ft inside its lot.)
+    // (How far the ring may be drawn up toward its door, still `YARD_FT` inside its lot.)
     let mut slack = 0.0;
     while slack < 10.0 {
         let t = slack + 0.5;
         if ring0.iter().all(|&p| {
             let q = add(p, mul(n, t));
-            contains(lot, q) && edge_gap(q) >= 1.5
+            contains(lot, q) && edge_gap(q) >= YARD_FT
         }) {
             slack = t;
         } else {

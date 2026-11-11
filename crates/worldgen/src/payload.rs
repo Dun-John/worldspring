@@ -456,6 +456,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     let plain = attr | (k.shade as u32) << 29;
                     // (R5 towns, 115: a yurt's felt (piece code 11; its shade the felt, `yurts::felt`).)
                     let plain = if k.shape == crate::town::roof::Shape::Round && b.poly.len() == crate::town::roof::ROUND_SIDES && crate::town::yurts::is_steppe_home(&l, b) { plain | 11 << 25 } else { plain };
+                    // (R5 towns, 114: a felt hall's too, in a light felt: cream, off-white or warm cream by its id.)
+                    let plain = if k.shape == crate::town::roof::Shape::Round && crate::town::roof::felt_built(b).is_some() { (plain & !(7 << 29)) | 11 << 25 | [0u32, 1, 3][b.id as usize % 3] << 29 } else { plain };
                     // A keep of pieces: each piece (convex, outlined), its towers over its body;
                     // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
                     // forebuilding, 5 wing) and how it is topped (bits 29-31: `town::keep_tops`, its

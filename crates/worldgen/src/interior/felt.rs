@@ -215,12 +215,49 @@ pub(super) fn furnish(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free:
                     it.back = Some(back_side);
                     lvl.furniture.push(it);
                 }
+                // (R5 towns, 114 fix: the clan's standards either side of it, a rug before it.)
+                let sides = if across_x { [(x - 1, y), (x + dw, y)] } else { [(x, y - 1), (x, y + dh)] };
+                for (i, j) in sides {
+                    if free(&held, i, j) {
+                        put(lvl, &mut held, "standing_banner", i, j, 1, 1, back_side, None);
+                        undo(lvl, &mut held);
+                    }
+                }
+                let front = match back_side {
+                    0 => (x + dw / 2 - 1, y + dh),
+                    1 => (x - 2, y + dh / 2 - 1),
+                    2 => (x + dw / 2 - 1, y - 2),
+                    _ => (x + dw, y + dh / 2 - 1),
+                };
+                if fits(&held, front.0, front.1, 2, 2) {
+                    put(lvl, &mut held, "rug", front.0, front.1, 2, 2, back_side, None);
+                }
                 break;
+            }
+            // Painted chests by the wall at the sides.
+            let mut chests = 0;
+            for &(i, j) in &rim {
+                let a = from_door(i, j);
+                if chests < 2 && a > 1.3 && a < 2.0 && free(&held, i, j) && left(i, j) == (chests == 0) {
+                    put(lvl, &mut held, "painted_chest", i, j, 1, 1, out_of(i, j, 1, 1), None);
+                    if !undo(lvl, &mut held) {
+                        chests += 1;
+                    }
+                }
             }
             // Benches round the wall.
             along_wall(lvl, &mut held, "bench", None, &|_, _| true);
+            // Cushions round the hearth for those without a bench, every other square, off the way in.
+            for &(i, j) in &sq {
+                let p = [i as f64 + 0.5 - c[0], j as f64 + 0.5 - c[1]];
+                let r = geom::len(p);
+                if free(&held, i, j) && !rim_sq(i, j) && geom::cross(dn, p).abs() >= 0.75 && (i + j) % 2 == 0 && r > 1.6 && r < 2.9 {
+                    put(lvl, &mut held, "floor_cushion", i, j, 1, 1, out_of(i, j, 1, 1) ^ 2, None);
+                }
+            }
         }
         FeltUse::Temple => {
+            let mut offerings: Vec<(isize, isize)> = Vec::new();
             // The altar against the wall across from the door, a brazier each side.
             let (aw, ah) = if across_x { (2, 1) } else { (1, 2) };
             for (w, h) in [(aw, ah), (1, 1)] {
@@ -236,6 +273,22 @@ pub(super) fn furnish(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free:
                         undo(lvl, &mut held);
                     }
                 }
+                // (R5 towns, 114 fix: candle stands beyond the braziers; offerings in jars before the
+                // altar's corners, set down after the mats.)
+                let outer = if across_x { [(x - 2, y), (x + w + 1, y)] } else { [(x, y - 2), (x, y + h + 1)] };
+                for (i, j) in outer {
+                    if free(&held, i, j) {
+                        put(lvl, &mut held, "candle_stand", i, j, 1, 1, back_side, None);
+                        undo(lvl, &mut held);
+                    }
+                }
+                let (fx, fy) = match back_side {
+                    0 => ([x - 1, x + w], [y + h, y + h]),
+                    1 => ([x - 1, x - 1], [y - 1, y + h]),
+                    2 => ([x - 1, x + w], [y - 1, y - 1]),
+                    _ => ([x + w, x + w], [y - 1, y + h]),
+                };
+                offerings = vec![(fx[0], fy[0]), (fx[1], fy[1])];
                 break;
             }
             // Painted chests by the wall at the sides.
@@ -255,6 +308,13 @@ pub(super) fn furnish(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free:
                 let row = if across_x { j } else { i };
                 if free(&held, i, j) && !rim_sq(i, j) && geom::cross(dn, p).abs() >= 0.75 && row % 2 == 0 && geom::len(p) > 1.6 {
                     put(lvl, &mut held, "floor_cushion", i, j, 1, 1, back_side, None);
+                }
+            }
+            // (The offerings once the mats are down, where a square is left.)
+            for (i, j) in offerings {
+                if free(&held, i, j) && !rim_sq(i, j) {
+                    put(lvl, &mut held, "water_jar", i, j, 1, 1, back_side, None);
+                    undo(lvl, &mut held);
                 }
             }
         }
@@ -285,6 +345,20 @@ pub(super) fn furnish(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free:
                     }
                 }
             }
+            // (R5 towns, 114 fix: a keg rack in the serving corner too.)
+            if counter {
+                'keg: for &(i, j) in &rim {
+                    for (a, b) in [(i + 1, j), (i, j + 1)] {
+                        if band(i, j, hand) && band(a, b, hand) && free(&held, i, j) && free(&held, a, b) && rim.contains(&(a, b)) {
+                            let (x, y, w, hh) = (i.min(a), j.min(b), (i - a).abs() + 1, (j - b).abs() + 1);
+                            put(lvl, &mut held, "keg_rack", x, y, w, hh, out_of(x, y, w, hh), None);
+                            if !undo(lvl, &mut held) {
+                                break 'keg;
+                            }
+                        }
+                    }
+                }
+            }
             let mut barrels = 0;
             for &(i, j) in &rim {
                 if counter && barrels < 3 && band(i, j, hand) && free(&held, i, j) {
@@ -310,9 +384,12 @@ pub(super) fn furnish(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free:
                     continue;
                 }
                 tables += 1;
+                // (A bench along two sides of each (R5 towns, 114 fix: an inn's, unlike a temple's
+                // mats), a cushion on the others.)
                 for (k, (di, dj)) in STEPS.into_iter().enumerate() {
                     if free(&held, i + di, j + dj) {
-                        put(lvl, &mut held, "floor_cushion", i + di, j + dj, 1, 1, [2u8, 3, 0, 1][k], None);
+                        let seat = if (k + tables) % 2 == 0 { "bench" } else { "floor_cushion" };
+                        put(lvl, &mut held, seat, i + di, j + dj, 1, 1, [2u8, 3, 0, 1][k], None);
                     }
                 }
                 for dj in -2..=2isize {

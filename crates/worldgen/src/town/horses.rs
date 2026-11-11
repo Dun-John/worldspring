@@ -71,8 +71,9 @@ pub const HORSE_SCALE: f32 = 1.35;
 /// A prop's footprint (ft along its turn, across), at size 1.
 pub fn size(kind: Kind) -> (f64, f64) {
     match kind {
-        // (A horse set out at `HORSE_SCALE`: about 8.4 by 3.2 ft.)
-        Kind::Horse => (6.2, 2.4),
+        // (A horse as its sprite draws it, nose to tail and its tail swished: 2 squares by about
+        // 0.55, its middle `HORSE_AHEAD` ahead of where it stands; at `HORSE_SCALE` 13.5 by 3.7 ft.)
+        Kind::Horse => (10.0, 2.8),
         Kind::HitchingRail => (10.4, 1.4),
         Kind::WaterTrough => (7.0, 3.0),
         Kind::Haystack => (7.6, 7.6),
@@ -90,8 +91,14 @@ fn boxed(c: P, u: P, l: f64, w: f64) -> [P; 4] {
 pub fn foot(kind: Kind, at: P, rot: f32, scale: f32) -> [P; 4] {
     let (l, w) = size(kind);
     let r = rot as f64;
-    boxed(at, [libm::cos(r), libm::sin(r)], l * scale as f64, w * scale as f64)
+    let u = [libm::cos(r), libm::sin(r)];
+    let at = if kind == Kind::Horse { add(at, mul(u, HORSE_AHEAD * scale as f64)) } else { at };
+    boxed(at, u, l * scale as f64, w * scale as f64)
 }
+
+/// How far ahead of where a horse stands its drawn middle lies (ft at size 1): the sprite runs from its
+/// nose 1.19 squares ahead to its tail 0.81 behind (`app/src/render/atlas.ts` `horse`).
+pub const HORSE_AHEAD: f64 = 1.0;
 
 /// A segment as a box `w` ft wide.
 pub fn seg_box(a: P, b: P, w: f64) -> [P; 4] {
@@ -617,13 +624,37 @@ pub fn bounds(l: &Layout, near: [f64; 4]) -> Vec<(P, P)> {
 /// clearing's, kind 8).
 pub const PLAN_FENCE: u32 = 34;
 
-/// A horse park on the town's plan: its trodden ground, the corrals' fences as thin lines.
+/// Its marks' variants on the plan (`PLAN_FENCE` with the variant in the ward byte, `app/src/gen/protocol.ts`):
+/// a corral's ground, a horse, a haystack, a hitching rail (the fence itself 0).
+pub const PLAN_CORRAL: u32 = PLAN_FENCE | 1 << 8;
+pub const PLAN_HORSE: u32 = PLAN_FENCE | 2 << 8;
+pub const PLAN_HAY: u32 = PLAN_FENCE | 3 << 8;
+pub const PLAN_RAIL: u32 = PLAN_FENCE | 4 << 8;
+
+/// A horse park on the town's plan, as the cemetery's grave rows and the formal garden's hedges read
+/// at town zoom: its trodden ground, the corrals' ground a shade greener, their fences bold, a mark
+/// for each horse, haystack and cart, the hitching rails as ticks along the market ground.
 pub fn plan_polys(pk: &Park, push: &mut dyn FnMut(&[P], u32)) {
     let Some(pl) = plan(pk) else { return };
     push(&pk.pts, 8);
+    for cr in &pl.corrals {
+        push(&cr.pts, PLAN_CORRAL);
+    }
     for (a, b) in pl.fences() {
         if dist(a, b) > 0.5 {
-            push(&seg_box(a, b, 1.6), PLAN_FENCE);
+            push(&seg_box(a, b, 3.0), PLAN_FENCE);
+        }
+    }
+    for &(at, rot, kind, _, _) in &pl.props {
+        let u = [libm::cos(rot as f64), libm::sin(rot as f64)];
+        match kind {
+            // (Drawn a little over their size, to read at town zoom: a horse a dark bar, a haystack a
+            // straw-coloured round, a rail or a cart a timber tick.)
+            Kind::Horse => push(&boxed(add(at, mul(u, 1.3)), u, 9.0, 3.4), PLAN_HORSE),
+            Kind::Haystack => push(&super::geom::circle(at, 3.8, 8), PLAN_HAY),
+            Kind::HitchingRail => push(&boxed(at, u, 10.4, 2.0), PLAN_RAIL),
+            Kind::Cart => push(&boxed(at, u, 10.0, 5.0), PLAN_RAIL),
+            _ => {}
         }
     }
 }
