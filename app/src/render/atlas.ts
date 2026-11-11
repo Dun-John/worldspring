@@ -4570,6 +4570,8 @@ function horse(g: Graphics, r: number, rnd: () => number, v: number) {
   // Drawn in squares: the stall's frame has the nose at small `s`, so `s` runs toward the tail (-x here).
   g.scale.set(PX);
   const at = (u: number, s: number): [number, number] => [1.19 - s, u];
+  // (R5 towns, 114: a dark rim round body, neck and head, so a horse reads on the trodden dirt.)
+  g.ellipse(-0.06, 0, 0.74, 0.31).ellipse(0.74, 0, 0.5, 0.17).fill({ color: 0x24190f, alpha: 0.6 });
   drawHorse(g, at, 1, 0, v === 2 ? -1 : 1, [-0.7071, -0.7071], rnd, v === 3 ? 2 : v + 1, { bend: 0, shadow: false, blanket: v === 3 });
 }
 
@@ -4582,7 +4584,8 @@ const GREY_WOOD = [0x5e5a52, 0x8a857a, 0xaaa496, 0xc8c2b2];
 function hitchingRail(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
   const tones = v === 2 ? GREY_WOOD : WOOD;
-  const [L, T, P, ph] = [4.2 * FT, 0.26 * FT, 4.0 * FT, 0.5 * FT];
+  // (R5 towns, 114: stout enough to read at a town's battle zoom.)
+  const [L, T, P, ph] = [4.2 * FT, 0.38 * FT, 4.0 * FT, 0.64 * FT];
   if (v === 2) for (const x of [-P, P]) footGrass(g, x + 0.3 * FT, ph + 2, 0.45 * FT, rnd);
   g.roundRect(-L, -T, L * 2, T * 2, T * 0.7).fill(tones[1]).stroke({ width: OUT, color: INK, join: 'round' });
   g.roundRect(-L + 2, -T + 1.2, L * 2 - 4, T * 0.62, T * 0.3).fill(tones[2]);

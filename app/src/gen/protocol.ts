@@ -1288,7 +1288,10 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
           const base = WARD_RGB[ward] ?? WARD_RGB[6];
           const m = YURT_FELT[(attr >>> 29) & 7] ?? YURT_FELT[0];
           rgb = [0, 1, 2].map((c) => 0.7 * (((m >> (16 - 8 * c)) & 255) / 255) + 0.3 * base[c]) as [number, number, number];
-        } else if (piece === 7) rgb = [0.36, 0.6, 0.53];
+        }
+        // (R5 towns, 114: a felt hall's crown, 12, its wooden ring dark over the smoke hole.)
+        else if (piece === 11) rgb = [0.38, 0.29, 0.21];
+        else if (piece === 7) rgb = [0.36, 0.6, 0.53];
         else if (piece === 8) rgb = [0.86, 0.8, 0.66];
         else if (piece === 9) {
           rgb = [0, 0, 0];

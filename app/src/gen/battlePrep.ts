@@ -683,6 +683,15 @@ function roofMesh(roofs: Roof[]): ColorMesh {
       g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
+    // (R5 towns, 114: a steppe home's low felt or turf roof, no parapet.)
+    if (!roof.cone && roof.shape === FLAT && (roof.material === HIDE || roof.material === TURF)) {
+      const parts = roofParts(roof.pts).map((p) => p.pts);
+      for (const part of parts) lowRoof(g, part, tint, roof.material === TURF);
+      if (roof.smoke) smoke(g, parts[0], 0.28);
+      if (parts.length > 1) for (const part of parts) g.outline(part, INK_LINE, ROOF_INK);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
+      continue;
+    }
     if (!roof.cone && flat) {
       flatRoof(g, roof.pts, tint);
       if (roof.smoke) smoke(g, roof.pts, 0.2);
@@ -696,8 +705,11 @@ function roofMesh(roofs: Roof[]): ColorMesh {
       const hand = roof.tint >= 0 && roof.tint < ROOF_TINTS.length && roof.shade === 2;
       const yurt = !hand && roof.yurt;
       const felts = yurt ? YURT_FELT : FELT;
-      const felt = hand ? tint : felts[roof.shade] ?? felts[0];
-      roundRoof(g, round, felt, yurt ? FELT_BAND[roof.shade] ?? null : null, yurt && (roof.shade === 7 || roof.shade === 5));
+      // (R5 towns, 114: a felt hall, temple or inn, its ring wider than any yurt's, a yurt's roof scaled up.)
+      const hall = !hand && !yurt && ringRadius(round) > HALL_RING;
+      const felt = hand ? tint : hall ? HALL_FELT[roof.shade] ?? HALL_FELT[0] : felts[roof.shade] ?? felts[0];
+      if (hall) hallRoof(g, round, felt);
+      else roundRoof(g, round, felt, yurt ? FELT_BAND[roof.shade] ?? null : null, yurt && (roof.shade === 7 || roof.shade === 5));
       if (roof.smoke) smoke(g, round, 0.5);
       g.outline(round, INK_OUT, ROOF_INK);
       yurtDoor(g, round, felt);
@@ -722,6 +734,9 @@ const GABLE = 1;
 const CONE = 2;
 const DOME = 3;
 const FLAT = 4;
+/** Roof materials (`ROOF_MATERIALS`): turf, hide (felt). */
+const TURF = 4;
+const HIDE = 9;
 const ROUND = 5;
 
 /** A palace's court among its pieces (`battlemap::COURT_PART`); a manor's cross wing and main range
@@ -1416,6 +1431,163 @@ function roundRoof(g: MeshBuilder, ring: number[], felt: number, band: number | 
   g.outline(circle(cx, cy, rc, 16), INK_LINE, ROOF_INK);
 }
 
+/** A low, nearly flat roof of felt or turf over a convex footprint (a steppe home's: R5 towns, 114): the felt
+ * (turf) patterned whole, a soft rolled edge lit on its NW sides and shaded on its SE ones, a faint hump along
+ * the ridge; felt held down by ropes across it weighted with stones at the eaves, turf tufted with grass;
+ * a small smoke hole with its flap. */
+function lowRoof(g: MeshBuilder, pts: number[], tint: number, turf: boolean) {
+  const m = pts.length / 2;
+  const { cx, cy, ux, uy, lo, hi, halfW, rx, ry } = frame(pts);
+  const [ox, oy] = [pts[0], pts[1]];
+  const uv = (x: number, y: number): [number, number] => [g.seed + ((x - ox) * ux + (y - oy) * uy) / FT, (-(x - ox) * uy + (y - oy) * ux) / FT];
+  const w = Math.min(0.8 * FT, halfW * 0.28);
+  const inner = inset(pts, w);
+  g.patch(pts, uv, tint);
+  if (inner) {
+    const osg = signedArea(pts) > 0 ? 1 : -1;
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % m;
+      const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]];
+      const l = Math.hypot(bx - ax, by - ay) || 1;
+      const out = (osg * (by - ay) - osg * (bx - ax)) / l / Math.SQRT2;
+      g.poly([ax, ay, bx, by, inner[j * 2], inner[j * 2 + 1], inner[i * 2], inner[i * 2 + 1]], shadeHex(tint, out < -0.3 ? 1.12 : out > 0.3 ? 0.8 : 0.94), 0.85);
+    }
+    // (The hump: the half toward the SE a shade darker.)
+    const [nx, ny] = [-uy, ux];
+    const lit = nx + ny < 0 ? 1 : -1;
+    const [t0, t1] = [lo + w, hi - w];
+    if (t1 > t0 && halfW > 2 * w) {
+      const side = (s: number) => [rx + ux * t0 + nx * s, ry + uy * t0 + ny * s, rx + ux * t1 + nx * s, ry + uy * t1 + ny * s];
+      const [a, b] = [side(0), side(-lit * (halfW - w))];
+      g.poly([a[0], a[1], a[2], a[3], b[2], b[3], b[0], b[1]], 0x000000, 0.08);
+      g.line(a[0], a[1], a[2], a[3], 0.03 * PX, shadeHex(tint, 0.82), 0.7);
+    }
+  }
+  if (turf) {
+    // (Grass tufts over it, a few bare patches.)
+    let seed = (Math.round(cx * 3.1) * 73856093) ^ (Math.round(cy * 1.7) * 19349663);
+    const rnd = () => {
+      seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) | 0;
+      return ((seed ^ (seed >>> 13)) >>> 0) / 4294967296;
+    };
+    const k = Math.min(14, Math.max(3, Math.round(((hi - lo) * halfW) / (12 * FT * FT))));
+    for (let q = 0; q < k; q++) {
+      const [a, b] = [lo + w + rnd() * Math.max(0, hi - lo - 2 * w), (rnd() * 2 - 1) * Math.max(0, halfW - w * 1.5)];
+      const [x, y] = [rx + ux * a - uy * b, ry + uy * a + ux * b];
+      const h = (0.5 + rnd() * 0.4) * FT;
+      for (const dx of [-0.7, 0, 0.7]) g.line(x + dx * h * 0.25, y, x + dx * h * 0.7, y - h * (dx === 0 ? 1.1 : 0.8), 0.03 * PX, q % 2 ? 0x6f7f42 : 0x5d6e38, 1);
+    }
+  } else {
+    // (Ropes across the felt, a stone weighting each end.)
+    const [nx, ny] = [-uy, ux];
+    const len = hi - lo;
+    const count = len > 22 * FT ? 3 : len > 11 * FT ? 2 : 1;
+    for (let q = 0; q < count; q++) {
+      const t = lo + (len * (q + 1)) / (count + 1);
+      const [px, py] = [rx + ux * t, ry + uy * t];
+      const [c0, c1] = chord(pts, px, py, nx, ny, cx, cy, halfW * 4);
+      if (c1 - c0 < 2 * FT) continue;
+      const [ax, ay, bx, by] = [px + nx * (c0 + 0.3 * FT), py + ny * (c0 + 0.3 * FT), px + nx * (c1 - 0.3 * FT), py + ny * (c1 - 0.3 * FT)];
+      g.line(ax, ay, bx, by, 0.06 * PX, 0x4a3d31, 1);
+      for (const [sx, sy] of [
+        [ax, ay],
+        [bx, by],
+      ]) {
+        g.poly(circle(sx + 0.15 * FT, sy + 0.15 * FT, 0.55 * FT, 8), 0x000000, 0.25);
+        g.poly(circle(sx, sy, 0.55 * FT, 8), 0x8f877a);
+        g.outline(circle(sx, sy, 0.55 * FT, 8), INK_LINE, ROOF_INK);
+      }
+    }
+  }
+  // (A small smoke hole a little off the middle, its flap.)
+  if (halfW > 3 * FT) {
+    const [sx, sy] = [rx + ux * (lo + (hi - lo) * 0.42), ry + uy * (lo + (hi - lo) * 0.42)];
+    const s = 0.8 * FT;
+    const sq = [sx - ux * s + uy * s, sy - uy * s - ux * s, sx + ux * s + uy * s, sy + uy * s - ux * s, sx + ux * s - uy * s, sy + uy * s + ux * s, sx - ux * s - uy * s, sy - uy * s + ux * s];
+    g.poly(sq, 0x2e2822);
+    g.outline(sq, INK_LINE, ROOF_INK);
+    g.poly([sq[0], sq[1], sq[2], sq[3], sx + uy * s * 0.2, sy - ux * s * 0.2], shadeHex(tint, 0.85));
+  }
+}
+
+/** A round roof's middle radius. */
+function ringRadius(ring: number[]): number {
+  const n = ring.length / 2;
+  let [cx, cy, r] = [0, 0, 0];
+  for (let i = 0; i < n; i++) [cx, cy] = [cx + ring[i * 2] / n, cy + ring[i * 2 + 1] / n];
+  for (let i = 0; i < n; i++) r += Math.hypot(ring[i * 2] - cx, ring[i * 2 + 1] - cy) / n;
+  return r;
+}
+
+/** Past this radius a round felt roof is a felt hall's (yurts are 7-12 ft across the middle; halls 15-35). */
+const HALL_RING = 13 * FT;
+/** A felt hall's felt (`Roof.shade` 0-4): the yurts' cream, off-white, warm cream, banded cream, dusty grey. */
+const HALL_FELT = [YURT_FELT[0], YURT_FELT[1], YURT_FELT[3], YURT_FELT[6], YURT_FELT[4]];
+
+/** A felt hall's roof (a temple's, a town hall's, an inn's: R5 towns, 114): a yurt's scaled up. Felt in wide
+ * panels round it, lit from the NW; every roof pole showing through as a line from the crown to the eaves; a
+ * darker felt skirt at the eaves with a madder band, tied down by ropes; two girth ropes; the crown a big
+ * wooden ring with its spokes over the smoke hole, a felt flap folded half over it, soot round it. */
+function hallRoof(g: MeshBuilder, ring: number[], felt: number) {
+  const n = ring.length / 2;
+  let [cx, cy] = [0, 0];
+  for (let i = 0; i < n; i++) [cx, cy] = [cx + ring[i * 2] / n, cy + ring[i * 2 + 1] / n];
+  const r = ringRadius(ring);
+  const per = Math.max(1, Math.round(n / 12));
+  for (let i = 0; i < n; i++) {
+    const [ax, ay, bx, by] = [ring[i * 2], ring[i * 2 + 1], ring[((i + 1) % n) * 2], ring[((i + 1) % n) * 2 + 1]];
+    const [mx, my] = [(ax + bx) / 2 - cx, (ay + by) / 2 - cy];
+    const t = -(mx + my) / (Math.hypot(mx, my) || 1) / Math.SQRT2;
+    const panel = Math.floor(i / per) % 2 ? 0.93 : 1;
+    const c = shadeHex(felt, (t > 0.2 ? 1.08 : t > -0.55 ? 0.98 : 0.84) * panel);
+    g.tri(g.vert(ax, ay, c, 1), g.vert(bx, by, c, 1), g.vert(cx, cy, c, 1));
+  }
+  const rc = Math.max(r * 0.17, 2.2 * FT);
+  const at = (i: number, f: number): [number, number] => [cx + (ring[(i % n) * 2] - cx) * f, cy + (ring[(i % n) * 2 + 1] - cy) * f];
+  const ringAt = (f: number) => {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) out.push(...at(i, f));
+    return out;
+  };
+  // (The skirt of darker felt at the eaves, a madder band along it.)
+  for (let i = 0; i < n; i++) {
+    g.poly([...at(i, 0.84), ...at(i + 1, 0.84), ...at(i + 1, 1), ...at(i, 1)], shadeHex(felt, 0.82));
+    g.poly([...at(i, 0.88), ...at(i + 1, 0.88), ...at(i + 1, 0.94), ...at(i, 0.94)], 0x9a3d2c);
+  }
+  // (The poles under the felt, each a line from the crown to the eaves; seams between the panels darker.)
+  const pole = shadeHex(felt, 0.72);
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = at(i, rc / r + 0.03);
+    const [bx, by] = at(i, 0.84);
+    g.line(ax, ay, bx, by, (i % per ? 0.035 : 0.06) * PX, i % per ? pole : shadeHex(felt, 0.6), 1);
+  }
+  // (Ropes down over the skirt at every panel's seam, and two girth ropes.)
+  for (let i = 0; i < n; i += per) {
+    const [ax, ay] = at(i, 0.8);
+    const [bx, by] = at(i, 1.0);
+    g.line(ax, ay, bx, by, 0.07 * PX, 0x4a3d31, 1);
+  }
+  for (const f of [0.44, 0.7, 0.84]) g.outline(ringAt(f), (f === 0.84 ? 0.05 : 0.08) * PX, 0x4a3d31);
+  // The crown: soot round it, the wooden ring, its spokes over the dark smoke hole, a felt flap half over it.
+  g.poly(circle(cx, cy, rc * 1.7, 20), shadeHex(felt, 0.78));
+  const wood = 0x8a6a48;
+  g.poly(circle(cx, cy, rc, 20), wood);
+  g.poly(circle(cx, cy, rc * 0.74, 20), 0x2e2822);
+  for (let k = 0; k < 8; k++) {
+    const t = (k / 8) * Math.PI;
+    const [dx, dy] = [Math.cos(t) * rc * 0.8, Math.sin(t) * rc * 0.8];
+    g.line(cx - dx, cy - dy, cx + dx, cy + dy, 0.04 * PX, wood, 1);
+  }
+  const flap: number[] = [];
+  for (let k = 0; k <= 10; k++) {
+    const t = Math.PI * 0.25 + (k / 10) * Math.PI;
+    flap.push(cx + Math.cos(t) * rc * 0.98, cy + Math.sin(t) * rc * 0.98);
+  }
+  g.poly(flap, shadeHex(felt, 0.9));
+  g.outline(flap, INK_LINE, ROOF_INK);
+  g.outline(circle(cx, cy, rc, 20), INK_OUT, ROOF_INK);
+}
+
 /** A yurt's door on the ring's first side (`town::round_off` turns the ring so that side faces the nearest
  * lane or the camp's middle): a small painted panel under a felt hood, through the rim, inked; drawn over
  * the eaves' ink. */
@@ -1429,13 +1601,18 @@ function yurtDoor(g: MeshBuilder, ring: number[], felt: number) {
   const [ox, oy] = [(ex - cx) / l, (ey - cy) / l];
   const [tx, ty] = [-oy, ox];
   // (R5 towns: a felt hall's door, on a ring past a yurt's 15 ft, the bigger with it: double at 35 ft.)
-  const k = 1 + Math.max(0, l - 15 * FT) / (20 * FT);
+  // (R5 towns, 114: a felt hall's grows faster, as wide as a cart at 40 ft across, with a painted frame.)
+  const hall = l > HALL_RING;
+  const k = hall ? Math.min(2.6, 1.3 + (l - HALL_RING) / (9 * FT)) : 1 + Math.max(0, l - 15 * FT) / (20 * FT);
   const [w, out, ins] = [1.6 * FT * k, 1.1 * FT * k, 1.4 * FT * k];
   const at = (a: number, b: number) => [ex + tx * a + ox * b, ey + ty * a + oy * b];
   const hood = [...at(-w, -ins), ...at(w, -ins), ...at(w, out), ...at(-w, out)];
+  if (hall) g.poly([...at(-w, -ins + 0.6 * FT), ...at(w + 0.6 * FT, -ins + 0.6 * FT), ...at(w + 0.6 * FT, out + 0.6 * FT), ...at(-w, out + 0.6 * FT)], 0x000000, 0.25);
   g.poly(hood, shadeHex(felt, 0.9));
+  if (hall) g.poly([...at(-w * 0.72, -ins * 0.3), ...at(w * 0.72, -ins * 0.3), ...at(w * 0.72, out), ...at(-w * 0.72, out)], 0xc49a3a);
   g.poly([...at(-w * 0.6, -ins * 0.2), ...at(w * 0.6, -ins * 0.2), ...at(w * 0.6, out), ...at(-w * 0.6, out)], 0x8a4a32);
-  g.outline(hood, INK_LINE, ROOF_INK);
+  if (hall) g.line(...(at(0, -ins * 0.2) as [number, number]), ...(at(0, out) as [number, number]), 0.04 * PX, 0x4a2a1a, 1);
+  g.outline(hood, hall ? INK_OUT : INK_LINE, ROOF_INK);
 }
 
 /** A smithy's (kiln's, still's) chimney on its ridge `at` of the way along, and the soot round it. */

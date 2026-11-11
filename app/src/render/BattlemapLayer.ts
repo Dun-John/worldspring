@@ -1286,6 +1286,7 @@ function drawDais(g: Graphics, s: Shape) {
   const r = Math.hypot(dx, dy) || PX;
   const a = Math.atan2(dy, dx);
   const kind = Math.round(s.size / PX);
+  if (kind === 4) return drawMound(g, cx, cy, r, a);
   // Steps: three curved treads out from the rim.
   for (let k = 2; k >= 0; k--) {
     const ro = r + PX * 0.28 * (k + 1);
@@ -1333,6 +1334,66 @@ function drawDais(g: Graphics, s: Shape) {
     g.moveTo(cx, cy).lineTo(cx + PX * 2.2, cy + PX * 2.2).stroke({ width: PX * 0.3, color: 0x000000, alpha: 0.28 });
     g.rect(cx - PX * 0.2, cy - PX * 0.2, PX * 0.4, PX * 0.4).fill(0xd8d1c2).stroke({ width: 1.5, color: ROOF_INK });
     g.rect(cx - PX * 0.45, cy - PX * 0.09, PX * 0.9, PX * 0.18).fill(0xd8d1c2).stroke({ width: 1.2, color: ROOF_INK });
+  }
+}
+
+/**
+ * A steppe town's dais (`size` 4, R5 towns 114): a low bank of the trodden ground's own earth, uneven
+ * round its foot, its top lit toward the north-west and its far slope shaded, hoof prints worn round
+ * its edge, a rutted way up where a dais has its steps, a few tufts of grass where hooves don't reach.
+ */
+function drawMound(g: Graphics, cx: number, cy: number, r: number, a: number) {
+  let seed = (Math.round(cx * 5.3) * 73856093) ^ (Math.round(cy * 2.9) * 19349663);
+  const rnd = () => {
+    seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) | 0;
+    return ((seed ^ (seed >>> 13)) >>> 0) / 4294967296;
+  };
+  const [p1, p2, sq] = [rnd() * 6.28, rnd() * 6.28, 0.86 + rnd() * 0.12];
+  // (An uneven round, a little long across the way up.)
+  const blob = (x: number, y: number, rr: number, n = 22) => {
+    const pts: number[] = [];
+    for (let k = 0; k < n; k++) {
+      const t = (k / n) * Math.PI * 2;
+      const w = rr * (1 + 0.08 * Math.sin(3 * t + p1) + 0.05 * Math.cos(5 * t + p2));
+      const [u, v] = [Math.cos(t) * w, Math.sin(t) * w * sq];
+      pts.push(x + u * Math.cos(a) - v * Math.sin(a), y + u * Math.sin(a) + v * Math.cos(a));
+    }
+    return pts;
+  };
+  const R = r * 1.08;
+  // Its shadow to the south-east, the foot's dark band, the slope, the sunlit top.
+  g.poly(blob(cx + PX * 0.28, cy + PX * 0.34, R)).fill({ color: 0x3e2a18, alpha: 0.32 });
+  g.poly(blob(cx, cy, R * 1.04)).fill(0x6e5034);
+  g.poly(blob(cx, cy, R * 0.96)).fill(0x8a6844).stroke({ width: 1.6, color: 0x4e3824, alpha: 0.6 });
+  g.poly(blob(cx - R * 0.07, cy - R * 0.08, R * 0.74)).fill(0xa07c54);
+  g.poly(blob(cx - R * 0.12, cy - R * 0.14, R * 0.5)).fill({ color: 0xb48f63, alpha: 0.7 });
+  // The way up: a worn, paler tongue down to the foot, two ruts in it.
+  const [ux, uy, vx, vy] = [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a)];
+  const at = (al: number, ac: number): [number, number] => [cx + ux * al + vx * ac, cy + uy * al + vy * ac];
+  const wd = Math.min(PX * 0.7, R * 0.35);
+  g.poly([...at(R * 0.35, -wd * 0.8), ...at(R * 1.12, -wd), ...at(R * 1.12, wd), ...at(R * 0.35, wd * 0.8)]).fill({ color: 0xa8845a, alpha: 0.85 });
+  for (const c of [-0.4, 0.4]) g.moveTo(...at(R * 0.4, wd * c)).lineTo(...at(R * 1.1, wd * c * 1.15));
+  g.stroke({ width: 1.4, color: 0x5e4329, alpha: 0.6 });
+  // Hoof prints round the edge, in pairs, thicker by the way up.
+  for (let k = 0; k < 30; k++) {
+    const t = rnd() * Math.PI * 2;
+    const d = R * (0.82 + rnd() * 0.26);
+    const [hx, hy] = [cx + Math.cos(t) * d, cy + Math.sin(t) * d * sq];
+    const hr = PX * (0.07 + rnd() * 0.03);
+    g.moveTo(hx + hr, hy).arc(hx, hy, hr, 0, Math.PI * 1.3);
+    g.moveTo(hx + PX * 0.2 + hr, hy + PX * 0.1).arc(hx + PX * 0.2, hy + PX * 0.1, hr, 0.3, Math.PI * 1.5);
+  }
+  g.stroke({ width: 1.3, color: 0x4a3420, alpha: 0.75 });
+  // Tufts of grass on the top and the slope's far side.
+  for (let k = 0; k < 7; k++) {
+    const t = rnd() * Math.PI * 2;
+    const d = R * (k < 3 ? rnd() * 0.45 : 0.6 + rnd() * 0.3);
+    const [tx, ty] = [cx + Math.cos(t) * d, cy + Math.sin(t) * d * sq];
+    const h = PX * (0.16 + rnd() * 0.1);
+    for (const dx of [-0.6, 0, 0.6]) g.moveTo(tx + dx * h * 0.3, ty).lineTo(tx + dx * h * 0.8, ty - h * (dx === 0 ? 1.15 : 0.85));
+    g.stroke({ width: 2.4, color: 0x3e4a22, cap: 'round' });
+    for (const dx of [-0.6, 0, 0.6]) g.moveTo(tx + dx * h * 0.3, ty).lineTo(tx + dx * h * 0.8, ty - h * (dx === 0 ? 1.15 : 0.85));
+    g.stroke({ width: 1.2, color: k % 2 ? 0x7f8f42 : 0x6c7c38, cap: 'round' });
   }
 }
 

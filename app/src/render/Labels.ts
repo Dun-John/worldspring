@@ -501,7 +501,8 @@ export class Labels {
           gb.push([gx - r, gy - r, gx + r, gy + r]);
           s += widths[k] - tight + spacing;
         });
-        show = !gb.some((b) => boxes.hits(b)) && !(f.kind === 'district' && this.nearPlace(gb, cam, style.size));
+        // (A park quarter's name is lettered as a park's, its kind "park": a district by its id, `d:`.)
+        show = !gb.some((b) => boxes.hits(b)) && !((f.kind === 'district' || f.id.startsWith('d:')) && this.nearPlace(gb, cam, style.size));
         if (show) {
           for (const b of gb) boxes.add(b);
           it.at = at;
@@ -523,10 +524,15 @@ export class Labels {
   private nearPlace(gb: Box[], cam: Camera, size: number): boolean {
     const r = 1.5 * size;
     for (const o of this.items) {
-      if (o.f.kind !== 'town_place' || !o.path || (o.f.detail !== 'park' && o.f.detail !== 'cemetery')) continue;
+      if (o.f.kind !== 'town_place' || o.f.id.startsWith('d:') || !o.path || (o.f.detail !== 'park' && o.f.detail !== 'cemetery')) continue;
       const px = o.f.extent_ft * cam.ppf;
       if (px < o.style.minPx || px > o.style.maxPx) continue;
       const len = (o.pathLen ??= pathLength(o.path));
+      // (Or anywhere over the place itself: a park's name runs along a short line through its middle, so
+      // within one and a half of its extents of that, or 250 ft: a horse park is 300-400 ft across.)
+      const [mx, my] = cam.worldToScreen(...(along(o.path, len / 2).slice(0, 2) as [number, number]));
+      const reach = Math.max(1.5 * px, 250 * cam.ppf) + r;
+      if (gb.some((b) => Math.hypot((b[0] + b[2]) / 2 - mx, (b[1] + b[3]) / 2 - my) < reach)) return true;
       for (let k = 0; k <= 4; k++) {
         const [wx, wy] = along(o.path, (len * k) / 4);
         const [x, y] = cam.worldToScreen(wx, wy);
