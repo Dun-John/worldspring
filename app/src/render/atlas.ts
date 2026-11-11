@@ -5,6 +5,7 @@
 // Frames are addressed by kind id and variant, so generated art can replace them later.
 import { Container, Graphics, Rectangle, Texture, type Renderer } from 'pixi.js';
 import type { KindInfo } from '../gen/client';
+import { drawHorse } from './furniture';
 
 /** Atlas resolution: pixels per 5-ft square. */
 export const PX = 64;
@@ -4561,127 +4562,15 @@ function tombSlab(g: Graphics, r: number, rnd: () => number, v: number) {
 
 // Roadmap 5 steppe towns: a horse park's horses and hitching rails.
 
-/** A horse's coats, by look: [shade, coat, lit, mane and tail, muzzle, legs]: bay (black points), chestnut (flaxen
- * mane), dappled grey, black. */
-const COATS = [
-  [0x4e2818, 0x713c22, 0x925632, 0x1e1a18, 0x2a2220, 0x26201c],
-  [0x8a4e2e, 0xb86a3a, 0xcc8c5a, 0xe2cc94, 0x8a5032, 0xa05c34],
-  [0x8e8c86, 0xaeaca4, 0xcecbc2, 0x625e5a, 0x6e6a66, 0x7a7670],
-  [0x3c3638, 0x4e484c, 0x6c666c, 0x262224, 0x302c2e, 0x2c282a],
-];
-/** A horse's outline from above, nose toward +x: [x, half width], in feet along its spine: a broad rump and
- * barrel, shoulders narrowing into a neck, a short deep head. */
-const HORSE: [number, number][] = [
-  [-3.0, 0], [-2.95, 0.6], [-2.78, 1.0], [-2.5, 1.22], [-2.05, 1.28], [-1.55, 1.22], [-0.95, 1.32], [-0.35, 1.3], [0.1, 1.14], [0.45, 0.9],
-  [0.75, 0.7], [1.15, 0.56], [1.55, 0.5], [1.82, 0.56], [2.05, 0.74], [2.35, 0.8], [2.7, 0.68], [3.0, 0.56], [3.28, 0.5], [3.47, 0.38], [3.56, 0],
-];
-const NOSE = 3.56;
-function horseHalf(x: number): number {
-  for (let i = 1; i < HORSE.length; i++) {
-    const [x0, h0] = HORSE[i - 1];
-    const [x1, h1] = HORSE[i];
-    if (x <= x1) return h0 + ((h1 - h0) * (x - x0)) / (x1 - x0);
-  }
-  return 0;
-}
-
-/** Horse, standing, seen from above, its nose toward +x (about 8 ft nose to tail): a broad barrel and rump
- * split by the croup's groove, the hooves just showing at its four corners, a neck tapering from the shoulders
- * under a mane lying to the north, a short deep head with two big pricked ears, a forelock, eyes and dark
- * nostrils, the tail hanging out behind; shaded along the south, lit along the north. Bay with black points
- * and a star (v0), chestnut with a flaxen mane, a blaze and white hind socks, its head turned (v1), dappled
- * grey under a red and blue felt saddle blanket (v2), black, head turned the other way (v3). */
+/** Horse, standing, seen from above, its nose toward +x (about 8 ft nose to tail): the stable stall's horse
+ * (`drawHorse` in furniture.ts) with its head and neck straight forward: bay with a star (v0), dapple grey (v1),
+ * chestnut with a flaxen mane and a blaze (v2), the dapple grey under a red felt saddle blanket (v3). */
 function horse(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
-  const [dark, coat, light, mane, muzzle, legs] = COATS[v];
-  const bend = [0, -0.4, 0.15, 0.32][v];
-  const spine = (x: number) => (x > 0.7 ? bend * ((x - 0.7) / (NOSE - 0.7)) ** 2 : 0);
-  const at = (x: number, k: number): [number, number] => [x * FT, (spine(x) + k * horseHalf(x)) * FT];
-  const xs: number[] = [];
-  for (let x = -3.0; x < NOSE; x += 0.08) xs.push(x);
-  xs.push(NOSE);
-  const side = (k: (x: number) => number, from: number, to: number) => xs.filter((x) => x >= from && x <= to).map((x) => at(x, k(x)));
-  const band = (from: number, to: number, k0: (u: number) => number, k1: (u: number) => number) => {
-    const u = (x: number) => (x - from) / (to - from);
-    return [...side((x) => k0(u(x)), from, to), ...side((x) => k1(u(x)), from, to).reverse()].flat();
-  };
-  const outline = [...side(() => -1, -4, 4), ...side(() => 1, -4, 4).reverse()].flat();
-  // Legs: the hooves just showing past the body at its four corners, one diagonal pair stepping forward.
-  const step = [0.22, -0.18, 0.12, -0.24][v];
-  for (const [x0, s, hind] of [[0.45, -1, 0], [0.45, 1, 0], [-2.5, -1, 1], [-2.5, 1, 1]] as const) {
-    const x = x0 + (s * (hind ? -1 : 1) > 0 ? step : -step * 0.4);
-    const h = horseHalf(x);
-    const [x1, y1] = [(x + (hind ? -0.14 : 0.14)) * FT, s * (h + 0.3) * FT];
-    const leg = () => g.moveTo(x * FT, s * (h - 0.4) * FT).lineTo(x1, y1);
-    leg();
-    g.stroke({ width: 0.46 * FT + 2 * LINE, color: INK, cap: 'round' });
-    leg();
-    g.stroke({ width: 0.46 * FT, color: v === 1 && hind ? 0xeee8da : legs, cap: 'round' });
-    g.poly(oval(x1, y1 + s * 0.04 * FT, 0.2 * FT, 0.12 * FT, 0, 10)).fill(shade(legs, v === 1 ? 0.5 : 0.7));
-  }
-  // The tail, hanging out behind the rump, swished a little to one side.
-  const sw = [0.25, -0.2, 0.35, -0.3][v];
-  const tail = [
-    -2.8, -0.28, -3.35, -0.4 + sw * 0.3, -3.85, -0.34 + sw * 0.8, -4.1, -0.08 + sw, -3.98, 0.08 + sw * 0.9, -4.12, 0.26 + sw, -3.8, 0.38 + sw * 0.7, -3.3, 0.36 + sw * 0.3, -2.8, 0.28,
-  ].map((p) => p * FT);
-  g.poly(tail).fill(mane).stroke({ width: LINE, color: INK, join: 'round' });
-  g.moveTo(-3.1 * FT, 0.02 * FT).quadraticCurveTo(-3.6 * FT, sw * 0.4 * FT, -3.9 * FT, (sw + 0.1) * FT).stroke({ width: 1.2, color: shade(mane, v === 1 ? 0.8 : 1.6), cap: 'round' });
-  // The body, neck and head as one shape: shaded along the south, lit along the north.
-  g.poly(outline).fill(coat);
-  g.poly(band(-2.95, NOSE - 0.05, () => 1, (u) => 1 - 0.42 * Math.sqrt(Math.sin(Math.PI * u)))).fill(dark);
-  g.poly(band(-2.8, 0.75, (u) => -0.82 + 0.1 * (1 - Math.sin(Math.PI * u)), (u) => -0.82 + 0.5 * Math.sin(Math.PI * u))).fill({ color: light, alpha: 0.9 });
-  g.poly(band(2.0, NOSE - 0.15, () => -0.72, (u) => -0.72 + 0.6 * Math.sin(Math.PI * u))).fill({ color: light, alpha: 0.85 });
-  if (v === 2) {
-    // Dapples: soft darker rings with pale middles over the rump and barrel.
-    for (let i = 0; i < 11; i++) {
-      const x = -2.7 + rnd() * 3.1;
-      const y = (rnd() - 0.5) * 1.3 * horseHalf(x);
-      const s = (0.16 + rnd() * 0.1) * FT;
-      g.circle(x * FT, y * FT, s).fill({ color: shade(coat, 0.86), alpha: 0.6 });
-      g.circle(x * FT - 0.5, y * FT - 0.5, s * 0.55).fill({ color: light, alpha: 0.7 });
-    }
-  }
-  // The muzzle a shade darker; the croup's groove down the rump.
-  g.poly(oval((NOSE - 0.22) * FT, spine(NOSE - 0.22) * FT, 0.22 * FT, 0.36 * FT, 0, 12)).fill({ color: muzzle, alpha: 0.75 });
-  g.moveTo(-2.95 * FT, 0).quadraticCurveTo(-2.55 * FT, 0.02 * FT, -2.05 * FT, -0.05 * FT).stroke({ width: LINE * 0.8, color: shade(dark, 0.85), cap: 'round' });
-  if (v === 0) g.poly([2.22, 0, 2.4, -0.14, 2.58, 0, 2.4, 0.14].map((p, i) => (i % 2 ? p + spine(2.4) : p) * FT)).fill(0xeee8da);
-  if (v === 1) g.poly(band(2.15, NOSE - 0.08, (u) => -0.34 + 0.12 * u, (u) => 0.34 - 0.12 * u)).fill(0xeee8da);
-  if (v === 2) {
-    // A felt saddle blanket over the back: red, a blue border, a pale ram's-horn mark in its middle.
-    const [b0, b1] = [-1.45, 0.3];
-    const felt = band(b0, b1, () => -1.1, () => 1.1);
-    g.poly(felt).fill(0xa8443a);
-    g.poly(band(b0 + 0.18, b1 - 0.18, () => -0.84, () => 0.84)).stroke({ width: 0.2 * FT, color: 0x3e5a8a, join: 'round' });
-    g.poly(band(b0, b1, () => 1.1, () => 0.72)).fill({ color: 0x6a2420, alpha: 0.45 });
-    const cx = ((b0 + b1) / 2) * FT;
-    g.poly([cx - 0.4 * FT, 0, cx, -0.4 * FT, cx + 0.4 * FT, 0, cx, 0.4 * FT]).fill(0xe6d6b0).stroke({ width: 1.2, color: 0x6a2420 });
-    g.poly([cx - 0.16 * FT, 0, cx, -0.16 * FT, cx + 0.16 * FT, 0, cx, 0.16 * FT]).fill(0x3e5a8a);
-    g.poly(felt).stroke({ width: LINE, color: INK, join: 'round' });
-  }
-  g.poly(outline).stroke({ width: OUT, color: INK, join: 'round' });
-  // The mane along the crest of the neck, lying a little to the north, its north edge in locks.
-  const crest: number[] = [];
-  const locks: number[] = [];
-  let i = 0;
-  for (let x = 0.55; x <= 1.96; x += 0.1) {
-    const t = Math.min(1, (2.0 - x) / 0.3, (x - 0.45) / 0.35);
-    crest.push(...at(x, 0.14 * t));
-    locks.push(...at(x, -(0.34 + (i++ % 2 ? 0.06 : 0.22)) * t));
-  }
-  const pairs = (a: number[]) => Array.from({ length: a.length / 2 }, (_, k) => [a[k * 2], a[k * 2 + 1]]);
-  g.poly([...crest, ...pairs(locks).reverse().flat()]).fill(mane).stroke({ width: LINE, color: INK, join: 'round' });
-  g.moveTo(...at(0.9, -0.14)).quadraticCurveTo(...at(1.4, -0.28), ...at(1.85, -0.16)).stroke({ width: 1.2, color: shade(mane, v === 1 ? 0.82 : 1.6), cap: 'round' });
-  // Two big ears pricked forward and out from the poll, dark inside; a forelock between them; eyes, nostrils.
-  const [px, py] = at(1.98, 0);
-  const tilt = Math.atan(bend * 0.3);
-  for (const s of [-1, 1]) {
-    const a = s * 0.55 + tilt;
-    leaf(g, px - 0.14 * FT, py + s * 0.34 * FT, a, 1.1 * FT, 0.4 * FT, s < 0 ? light : coat, 0.42);
-    g.poly(oval(px - 0.14 * FT + Math.cos(a) * 0.45 * FT, py + s * 0.34 * FT + Math.sin(a) * 0.45 * FT, 0.22 * FT, 0.08 * FT, a, 8)).fill({ color: shade(dark, 0.7), alpha: 0.8 });
-  }
-  leaf(g, px + 0.02 * FT, py, tilt, 0.55 * FT, 0.18 * FT, mane, 0.4);
-  for (const s of [-1, 1]) g.circle(...at(2.38, s * 0.82), 1.8).fill(INK);
-  for (const s of [-1, 1]) g.moveTo(...at(NOSE - 0.18, s * 0.6)).lineTo(...at(NOSE - 0.06, s * 0.38)).stroke({ width: 1.5, color: INK, cap: 'round' });
+  // Drawn in squares: the stall's frame has the nose at small `s`, so `s` runs toward the tail (-x here).
+  g.scale.set(PX);
+  const at = (u: number, s: number): [number, number] => [1.19 - s, u];
+  drawHorse(g, at, 1, 0, v === 2 ? -1 : 1, [-0.7071, -0.7071], rnd, v === 3 ? 2 : v + 1, { bend: 0, shadow: false, blanket: v === 3 });
 }
 
 /** Weathered wood: [dark, mid, light, sunlit]. */
