@@ -501,7 +501,7 @@ export class Labels {
           gb.push([gx - r, gy - r, gx + r, gy + r]);
           s += widths[k] - tight + spacing;
         });
-        show = !gb.some((b) => boxes.hits(b));
+        show = !gb.some((b) => boxes.hits(b)) && !(f.kind === 'district' && this.nearPlace(gb, cam, style.size));
         if (show) {
           for (const b of gb) boxes.add(b);
           it.at = at;
@@ -515,6 +515,25 @@ export class Labels {
     }
     if (it.glyphs) it.glyphs.visible = show;
     return created;
+  }
+
+  /** Whether a park's or a cemetery's name (lettered later, being of lower priority) would sit on or
+   * beside these letters of a district's: the district's then gives way, so one place has one name
+   * (a horse park filling its quarter, say). */
+  private nearPlace(gb: Box[], cam: Camera, size: number): boolean {
+    const r = 1.5 * size;
+    for (const o of this.items) {
+      if (o.f.kind !== 'town_place' || !o.path || (o.f.detail !== 'park' && o.f.detail !== 'cemetery')) continue;
+      const px = o.f.extent_ft * cam.ppf;
+      if (px < o.style.minPx || px > o.style.maxPx) continue;
+      const len = (o.pathLen ??= pathLength(o.path));
+      for (let k = 0; k <= 4; k++) {
+        const [wx, wy] = along(o.path, (len * k) / 4);
+        const [x, y] = cam.worldToScreen(wx, wy);
+        if (gb.some((b) => x > b[0] - r && y > b[1] - r && x < b[2] + r && y < b[3] + r)) return true;
+      }
+    }
+    return false;
   }
 
   private createGlyphs(it: Placed): Container {

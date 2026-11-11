@@ -1361,7 +1361,7 @@ function roundOutline(roof: Roof): number[] | null {
 }
 
 /** A round roof's felt band (R5 towns, 115: `FELT_BAND`, by `Roof.shade`): none, or its colour. */
-const FELT_BAND: (number | null)[] = [null, null, null, null, null, null, 0x9a4a3a, null];
+const FELT_BAND: (number | null)[] = [null, null, null, null, null, null, 0xa63e2c, null];
 
 /** A low round roof (a yurt's, whatever its material: felt over the poles): a wedge per side in three
  * flat tones lit from the NW (shaded SE), faint seams along every other pole, two rope bands round it,
@@ -1392,11 +1392,14 @@ function roundRoof(g: MeshBuilder, ring: number[], felt: number, band: number | 
   // smoke-browned or old one.)
   if (band !== null) {
     for (let i = 0; i < n; i++) {
-      const [a0, a1, b0, b1] = [at(i, 0.6), at(i + 1, 0.6), at(i + 1, 0.72), at(i, 0.72)];
+      const [a0, a1, b0, b1] = [at(i, 0.56), at(i + 1, 0.56), at(i + 1, 0.76), at(i, 0.76)];
       g.poly([...a0, ...a1, ...b0, ...b1], band);
     }
   }
-  if (sooty) g.poly(circle(cx, cy, rc * 1.9, 16), shadeHex(felt, 0.74));
+  if (sooty) {
+    g.poly(circle(cx, cy, rc * 2.6, 16), shadeHex(felt, 0.72));
+    g.poly(circle(cx, cy, rc * 1.8, 16), shadeHex(felt, 0.55));
+  }
   // (Two girth ropes, dark hemp, following the sides.)
   for (const f of [0.52, 0.8]) {
     const band: number[] = [];

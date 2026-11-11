@@ -352,6 +352,9 @@ function drawRoofs(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: S
 
 // A yurt's (`roomShapes.yurtRing`): rugs on its felt floor, its lattice wall, its painted door.
 const MADDER = 0x8e4c38;
+/** R5 towns (114): the round felt's colour by the room, so a felt temple, hall and inn tell apart:
+ * a sanctuary's sky blue, a hall's moss green, the rest madder. */
+const ROOM_FELT: Record<string, number> = { 'felt sanctuary': 0x46597a, 'felt hall': 0x5f6338 };
 const RUG_OCHRE = 0xb89048;
 const PAINT = 0x985a44;
 const WILLOW = 0xa0805a;
@@ -379,7 +382,7 @@ function band(cx: number, cy: number, u: Pt, l: number, w: number): number[] {
 /** A yurt's rugs, under the grid: a felt rug laid across from the door under the chests, the big round
  * felt rug round the hearth (madder, an ochre border, a ring of lozenges; bare earth under the fire),
  * and a dark felt runner in from the door over its edge. */
-function yurtRugs(g: Graphics, ring: { c: Pt; r: number; south: Pt }, door: { a: Pt; b: Pt } | null) {
+function yurtRugs(g: Graphics, ring: { c: Pt; r: number; south: Pt }, door: { a: Pt; b: Pt } | null, felt = MADDER) {
   const [cx, cy] = ring.c;
   const seed = Math.round(cx * 97 + cy * 31);
   let dd: Pt = ring.south;
@@ -398,7 +401,7 @@ function yurtRugs(g: Graphics, ring: { c: Pt; r: number; south: Pt }, door: { a:
   g.poly(band(cx - dd[0] * bd, cy - dd[1] * bd, t, Math.min(1.5, ring.r) - 0.16, 0.54)).stroke({ width: 0.02, color: RUG_OCHRE });
   // The round felt.
   g.poly(hand(cx, cy, ro, seed)).fill(RUG_OCHRE).stroke({ width: LINE_W, color: INK, join: 'round' });
-  g.poly(hand(cx, cy, ro - 0.09, seed + 1)).fill(MADDER);
+  g.poly(hand(cx, cy, ro - 0.09, seed + 1)).fill(felt);
   g.poly(hand(cx, cy, ro - 0.16, seed + 2)).stroke({ width: 0.018, color: 0x5a3424 });
   const rm = (ro - 0.16 + ri) / 2;
   const n = Math.max(6, Math.round((Math.PI * 2 * rm) / 0.42));
@@ -1167,7 +1170,8 @@ export class InteriorLayer {
     // A yurt: its rugs on the felt under the grid, its lattice wall, its door.
     const ring = this.underground ? null : yurtRing(it, this.level);
     if (sp) {
-      drawShapedFloors(g, sp, lv, colorOf, floorPattern, ring ? () => yurtRugs(g, ring, drawnDoorsOf(it, this.level)?.find((_, k) => lv.doors[k].kind === 'front') ?? null) : undefined);
+      const felt = ROOM_FELT[lv.rooms.find((r) => YURT_ROOMS.has(r.kind))?.kind ?? ''] ?? MADDER;
+      drawShapedFloors(g, sp, lv, colorOf, floorPattern, ring ? () => yurtRugs(g, ring, drawnDoorsOf(it, this.level)?.find((_, k) => lv.doors[k].kind === 'front') ?? null, felt) : undefined);
     } else if (!this.underground) {
       // Floors; their texture (planks along x on wood, flagstone joints on stone); the 5-ft grid.
       for (let j = 0; j < ny; j++) {
@@ -1497,7 +1501,9 @@ export class InteriorLayer {
       if (this.tile && (r.kind === 'sewer tunnel' || r.kind === 'service passage')) return;
       const text = new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 });
       this.labels.addChild(text);
-      this.labelSpots.push({ text, x: r.center[0], y: r.center[1], min: Math.sqrt(r.squares) });
+      // (A round felt room's name below its hearth, halfway to the wall: R5 towns, 114.)
+      const below = YURT_ROOMS.has(r.kind) ? 0.5 * Math.sqrt(r.squares / Math.PI) + 0.5 : 0;
+      this.labelSpots.push({ text, x: r.center[0], y: r.center[1] + below, min: Math.sqrt(r.squares) });
     });
   }
 

@@ -198,7 +198,7 @@ export const ROOF_SHADES = [
 export const FELT = [0xc9bea6, 0xc4bdad, 0xaea595, 0xc2b394, 0xa39a88];
 /** A yurt's felt (`Roof.shade` 0-7, R5 towns 115 `town::yurts::felt`): cream, off-white, grey, warm cream, dusty
  * grey, smoke-browned, cream (with a red band), pale (with a sooty crown). */
-export const YURT_FELT = [0xd3c6a6, 0xe0dccf, 0xa9a192, 0xcdb88f, 0xb5ad9d, 0x96805f, 0xd0c3a2, 0xdcd6c6];
+export const YURT_FELT = [0xd3c6a6, 0xe0dccf, 0xa9a192, 0xcdb88f, 0xb5ad9d, 0x8a6843, 0xd0c3a2, 0xdcd6c6];
 /** A roof material's colour in a variant (0-4; bad values: the usual). */
 export const roofRgb = (material: number, shade = 2): number => ROOF_SHADES[material]?.[shade] ?? ROOF_MATERIAL_RGB[material] ?? ROOF_MATERIAL_RGB[3];
 /** Roof shapes by id (`worldgen::town::roof::SHAPES`, append-only). */
@@ -321,6 +321,14 @@ export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const
 export type SquareKind = (typeof SQUARE_KINDS)[number];
 /** How a park can be laid out (`worldgen::world::PARK_KINDS`). */
 export const PARK_KINDS = ['formal', 'common', 'cemetery', 'horses'] as const;
+/** A horse park's marks on the plan (`town::horses::plan_polys`): [rgb, alpha] by the variant. */
+const HORSE_PARK_PLAN: [[number, number, number], number][] = [
+  [[0.33, 0.23, 0.14], 0.95],
+  [[0.56, 0.56, 0.34], 0.85],
+  [[0.38, 0.25, 0.16], 0.9],
+  [[0.86, 0.74, 0.4], 0.95],
+  [[0.42, 0.31, 0.2], 0.9],
+];
 export type ParkKind = (typeof PARK_KINDS)[number];
 
 /** A patch of a town as the ward editor sees it (`town::wards::plan_json`): its corners (plan
@@ -1228,11 +1236,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
-      // Roadmap 5 horse parks (`town::horses::PLAN_FENCE`, kind 34): a corral's post-and-rail fence, a thin
-      // line of weathered timber over the park's trodden ground (a camp clearing's, kind 8); not inked.
+      // Roadmap 5 horse parks (`town::horses::PLAN_FENCE`, kind 34, the mark in the ward byte) over the
+      // park's trodden ground (a camp clearing's, kind 8); not inked: a corral's post-and-rail fence (0),
+      // a bold line of dark timber; a corral's ground (1) a shade greener; a horse (2) a dark bay bar; a
+      // haystack (3) a straw round; a hitching rail or a cart (4) a timber tick.
       else if (kind === 34) {
-        rgb = [0.42, 0.31, 0.2];
-        a = 0.85;
+        [rgb, a] = HORSE_PARK_PLAN[ward] ?? HORSE_PARK_PLAN[0];
       }
       // A kurgan mound (kind 33): a low grassy barrow, a shade darker than a cemetery plot, lightly inked.
       else if (kind === 33) {
