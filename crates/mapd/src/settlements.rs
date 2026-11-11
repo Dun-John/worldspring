@@ -181,7 +181,7 @@ async fn delete(app: &Shared, id: String, k: usize) -> Result<Value, String> {
         }
         let mut reply = json!({ "tool": "delete_feature", "deleted": [v], "id": id, "set_aside": n });
         if any || n > 0 {
-            reply["note"] = json!("what was made inside it (names, notes, buildings, NPCs' places, plot points) is set aside, moved off its layout number; restore_feature brings the settlement back, not those");
+            reply["note"] = json!("what was made inside it (names, notes, buildings, NPCs' places, plot points) is set aside, moved off its layout number; restore_feature brings the settlement back with them");
         }
         Ok(reply)
     })
@@ -198,23 +198,22 @@ async fn restore(app: &Shared, id: String, k: usize) -> Result<Value, String> {
         .with(move |ex| made::spot(&ex.world, &ex.t0, &probe.kind, &probe.id, [probe.x, probe.y]).map(|_| ()).map_err(|e| format!("{} can't be restored, its place is taken: {e}", probe.id)))
         .await?;
     let id2 = id.clone();
+    let first = first_created(app).await?;
     let change = move |e: &mut worldgen::world::Edits| {
         let c = e.created.get(k).cloned().filter(|c| c.id == id2 && c.removed).ok_or_else(|| format!("{id2} is not deleted"))?;
         if let Some(o) = e.existing_site(&c, [c.x, c.y]) {
             return Err(format!("{id2} can't be restored, its place is taken: {} is the same site", o.id));
         }
         e.created[k].removed = false;
-        Ok(json!({ "tool": "restore_feature", "id": id2 }))
+        let back = made::restore(e, k, first);
+        Ok(json!({ "tool": "restore_feature", "id": id2, "brought_back": back }))
     };
-    if crate::batch::active() {
-        app.edit("agent", 0, change).await?;
-    } else {
-        app.edit_now("agent", 0, change).await?;
-    }
+    let r = if crate::batch::active() { app.edit("agent", 0, change).await? } else { app.edit_now("agent", 0, change).await? };
     drop(_hold);
     let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(|| "restored, but it could not be read back".to_string())).await?;
     v["tool"] = json!("restore_feature");
-    v["note"] = json!("what was set aside when it was deleted (names, notes, buildings, NPCs' places, plot points) is not brought back");
+    v["brought_back"] = r["brought_back"].clone();
+    v["note"] = json!("what was set aside when it was deleted (names, notes, buildings, NPCs' places, plot points) is brought back where it still fits (brought_back counts them); what was set aside before, by a move or a change of what lays it out, stays set aside");
     Ok(v)
 }
 

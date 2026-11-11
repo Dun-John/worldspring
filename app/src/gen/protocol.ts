@@ -123,6 +123,9 @@ export interface Created {
   /** A village or town added without a remake: its naming culture and what it lives by. */
   culture?: number;
   lives_by?: string;
+  /** A deleted village or town: the layout number its edits were set aside under (a restore
+   * brings them back). */
+  aside?: number;
   /** A building drawn by hand (`worldgen::world::Created`): its footprint (world ft), storeys,
    * what it is (a business key or a home), roof, roof colour and structure. */
   poly?: [number, number][];
@@ -714,6 +717,9 @@ export type Ask =
    * it set aside (`town::culture::change`; nothing changed in the worker); without `culture`, the
    * culture it is laid out in now. */
   | { op: 'setculture'; layout: number; culture?: number; edits: string }
+  /** Edits with deleted village or town `id` restored, if its spot is free, and what was set aside
+   * when it was deleted brought back where it fits (`t0::made::restore`). */
+  | { op: 'restoremade'; id: string; edits: string }
   /** The fingerprints a remake of this world needs (`t0::remap::prints_before`; `edits` JSON). */
   | { op: 'remakeprints'; edits: string; played: number[] }
   /** Edits made on the world before following their places into this one, remade
@@ -758,6 +764,10 @@ export interface MadeSettlement {
   /** The link's road class (`RoadClass`: 2 a village's track, 1 a town's road) and bed width (ft). */
   class: number;
   width: number;
+  /** Its culture (0 north … 4 steppe) and what it lives by (`SettleKind::name`): a change to
+   * either lays it out anew. */
+  culture: number;
+  lives: string;
 }
 
 /** A name to rename (`worldgen::agent::name_entry`): `generated` is the name before renames. */

@@ -6,7 +6,7 @@ import type { Edits } from '../gen/protocol';
 import { PARKED_LAYOUT } from '../sync/ops';
 import { removedKind, setAside } from '../ui/gazetteer';
 
-export type AsideField = 'renames' | 'notes' | 'hidden' | 'designs' | 'buildings' | 'towns' | 'npcs' | 'plots';
+export type AsideField = 'renames' | 'notes' | 'hidden' | 'designs' | 'buildings' | 'towns' | 'cultures' | 'npcs' | 'plots';
 
 /** One thing kept: its field and key (an NPC's or plot's own id), and the place id it names. */
 export interface AsideEntry {
@@ -50,6 +50,7 @@ export function asideList(e: Edits): AsideGroup[] {
   for (const k of Object.keys(e.designs ?? {})) if (isAside(k)) add('designs', k, k);
   for (const k of Object.keys(e.buildings ?? {})) if (isAside(k)) add('buildings', k, k);
   for (const k of Object.keys(e.towns ?? {})) if (Number(k) >= PARKED_LAYOUT) add('towns', k, `t:${k}`);
+  for (const k of Object.keys(e.cultures ?? {})) if (Number(k) >= PARKED_LAYOUT) add('cultures', k, `t:${k}`);
   for (const [k, n] of Object.entries(e.npcs ?? {})) if (n.location && isAside(n.location.id)) add('npcs', k, n.location.id);
   for (const [k, p] of Object.entries(e.plots ?? {})) for (const a of p.anchors ?? []) if (isAside(a)) add('plots', k, a);
   return [...groups.values()];
@@ -90,6 +91,8 @@ export function asideWhat(x: AsideEntry, e: Edits): string {
       return 'A building changed';
     case 'towns':
       return 'Streets re-planned';
+    case 'cultures':
+      return 'Laid out in another culture';
     case 'npcs':
       return `NPC here: ${e.npcs![x.key].name || 'unnamed'}`;
     case 'plots':
@@ -112,6 +115,7 @@ export function forgetAside(e: Edits, entries: AsideEntry[]): Edits {
   out.designs = drop(e.designs, keys('designs'));
   out.buildings = drop(e.buildings, keys('buildings'));
   out.towns = drop(e.towns, keys('towns'));
+  out.cultures = drop(e.cultures, keys('cultures'));
   const hidden = new Set(keys('hidden'));
   if (hidden.size) out.hidden = (e.hidden ?? []).filter((h) => !hidden.has(h));
   const npcs = new Set(keys('npcs'));

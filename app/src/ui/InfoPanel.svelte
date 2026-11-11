@@ -4,6 +4,8 @@
   import type { Npc, Plot } from '../gen/protocol';
   import { hitName, kindIcon, kindLabel, type Selection } from './gazetteer';
   import Icon from './Icon.svelte';
+  import SettlementEdit from './SettlementEdit.svelte';
+  import type { ComponentProps } from 'svelte';
 
   type Note = { text: string; tags?: string[] };
   type Ref = { id: string; name: string };
@@ -59,12 +61,15 @@
     onRestore?: () => void;
     /** A settlement added from Edit › Places: take it away again (the world is remade without it). */
     onUnsettle?: () => void;
+    /** A settlement: its Settlement block (culture; tier, living, name and move for one added by
+     * hand). */
+    settle?: ComponentProps<typeof SettlementEdit> | null;
     /** In a phone's sheet (which has its own frame and close). */
     docked?: boolean;
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, noteKey = (id: string) => id, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, streets = null, onStreets, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, onUnsettle, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, noteKey = (id: string) => id, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, streets = null, onStreets, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, onUnsettle, settle = null, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
@@ -160,10 +165,10 @@
           <div class="menu ws-panel" role="menu">
             <button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), startEdit())} title="Change its name"><Icon name="pencil" size={16} /> Rename</button>
             {#if onHide}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onHide(!hidden))} title={hidden ? 'Show its label and list it in search again' : 'Hide its label and leave it out of search'}><Icon name={hidden ? 'eye' : 'eye-off'} size={16} /> {hidden ? 'Show on the map' : 'Hide from the map'}</button>{/if}
-            {#if onDelete}<button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} role="menuitem" onclick={() => (confirmDelete ? onDelete() : (confirmDelete = true))} title="Remove this site from the world"><Icon name="trash" size={16} /> {confirmDelete ? 'Delete for good?' : 'Delete'}</button>{/if}
+            {#if onDelete}<button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} role="menuitem" onclick={() => (confirmDelete ? onDelete() : (confirmDelete = true))} title={settle ? 'Take it off the map (Notes › Gazetteer › Set aside restores it)' : 'Remove this site from the world'}><Icon name="trash" size={16} /> {confirmDelete ? (settle ? 'Delete it?' : 'Delete for good?') : 'Delete'}</button>{/if}
             {#if onRestore}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onRestore())} title="Undo every change made to it: what it is, storeys, roof, footprint"><Icon name="reset" size={16} /> As generated</button>{/if}
             {#if onRemove}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onRemove())} title="Take it away, leaving open ground to build on (Undo brings it back)"><Icon name="trash" size={16} /> Remove</button>{/if}
-            {#if onUnsettle}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onUnsettle())} title="Make the world again without it. What was made on it is set aside in Notes"><Icon name="trash" size={16} /> Remove (remakes the world)</button>{/if}
+            {#if onUnsettle}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onUnsettle())} title="Make the world again without it (a remake). What was made on it is set aside in Notes"><Icon name="trash" size={16} /> Delete</button>{/if}
           </div>
         {/if}
       </div>
@@ -192,6 +197,7 @@
         <div class="muted">{mi(b.x)} mi E, {mi(b.y)} mi S</div>
       {/if}
     </div>
+    {#if settle}<SettlementEdit {...settle} />{/if}
     {#if placesHere.length}
       <div class="here">
         <div class="sub">

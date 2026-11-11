@@ -52,6 +52,18 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `${change.hidden === false ? 'showed' : 'hid'} ${nameOf(id)}`;
       case 'delete_feature':
         return `deleted ${nameOf(id)}`;
+      case 'restore_feature':
+        return `restored ${String(change.name ?? nameOf(id))}`;
+      case 'update_settlement': {
+        // (What it was changed in: its culture, tier, living or name; and what that set aside.)
+        const what = [change.culture && `${String(change.culture)} culture`, change.kind && `a ${String(change.kind)}`, change.lives_by && `living by ${String(change.lives_by).replace(/_/g, ' ')}`, change.renamed && `named “${String(change.renamed)}”`].filter(Boolean).join(', ');
+        const aside = Number(change.set_aside ?? 0);
+        return `${String(change.name ?? nameOf(id))}: ${what || 'changed'}${aside ? ` (${aside} ${aside === 1 ? 'change' : 'changes'} inside set aside)` : ''}`;
+      }
+      case 'move_settlement': {
+        const aside = Number(change.set_aside ?? 0);
+        return `moved ${String(change.name ?? nameOf(id))}${aside ? ` (${aside} ${aside === 1 ? 'change' : 'changes'} inside set aside)` : ''}`;
+      }
       case 'create_npc':
         return `new NPC “${String(change.name ?? id)}”`;
       case 'update_npc':

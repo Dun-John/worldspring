@@ -204,7 +204,7 @@ pub fn created_detail(c: &crate::world::Created) -> String {
         };
         return format!("created wall ({}{} ft{gates})", if c.closed { "a ring, " } else { "" }, length.round());
     }
-    let mut s = if c.kind == "village" { "village (added by hand)".to_string() } else { format!("created {}", c.kind.replace('_', " ")) };
+    let mut s = if c.kind == "village" || c.kind == "town" { format!("{} (added by hand)", c.kind) } else { format!("created {}", c.kind.replace('_', " ")) };
     if let Some(u) = &c.under {
         s += &format!(" over a {}", u.replace('_', " "));
     }

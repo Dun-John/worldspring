@@ -103,6 +103,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                         ? c.set_aside_changed_json(a.old, a.edits)
                                         : a.op === 'setculture'
                                         ? c.set_culture_json(a.layout, a.culture, a.edits)
+                                        : a.op === 'restoremade'
+                                        ? c.restore_made_json(a.id, a.edits)
                                         : a.op === 'remakeprints'
                                           ? c.remake_prints_json(a.edits, new Uint32Array(a.played))
                                           : a.op === 'follow'

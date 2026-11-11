@@ -1036,6 +1036,10 @@ pub struct Created {
     /// Deleted (kept in the list so later sites keep their place).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
+    /// (R5 122) A deleted village or town: the layout number the edits made in it were set aside
+    /// under (`t0::made::set_aside_changed`), for a restore to bring them back (`t0::made::restore`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aside: Option<usize>,
     /// (R5 M20) A drawn building standing on a structure put down by hand: a bridge's deck
     /// (`v:<id>`) or a pier or breakwater (`q:<id>`). Its ground floor is at that deck's level,
     /// with no cellar; it follows its bridge (`Edits::follow_crossing`).

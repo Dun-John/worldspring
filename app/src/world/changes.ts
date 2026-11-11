@@ -26,6 +26,7 @@ export function changeList(e: Edits | undefined): string[] {
       [n(e.crossings), 'crossing', 'crossings'],
       [n(e.buildings), 'building changed', 'buildings changed'],
       [n(e.towns), 'town re-planned', 'towns re-planned'],
+      [n(e.cultures), 'settlement in another culture', 'settlements in another culture'],
       [n(e.ground), 'patch of ground shaped', 'patches of ground shaped'],
       [n(e.plateaus), 'plateau', 'plateaus'],
       [n(e.wharves), 'quay, pier or breakwater', 'quays, piers and breakwaters'],

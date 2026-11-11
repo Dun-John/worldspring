@@ -31,6 +31,7 @@
   import MovesMenu from './ui/MovesMenu.svelte';
   import type { Move } from './render/InteriorLayer';
   import InfoPanel from './ui/InfoPanel.svelte';
+  import { CULTURES, type SettleAsk, type SettlePlan } from './ui/SettlementEdit.svelte';
   import Gazetteer from './ui/Gazetteer.svelte';
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
@@ -1290,6 +1291,8 @@
   let placeArmed = $state(false);
   /** What is being placed ("crypt"), for the banner over the map. */
   let placeLabel = $state('site');
+  /** The village or town added by hand being moved (its id), else null: one being placed. */
+  let placeMove = $state<string | null>(null);
   let placeTool: PointerTool | null = null;
   /** "Pick on map" (where an NPC is), waiting for its click. */
   let pickTool: PointerTool | null = null;
@@ -2639,12 +2642,12 @@
 
   /** Ask the generator whether a village or town can go under the pointer (at most one question
    * in flight; the last answer wins). */
-  function checkSpot(c: SiteChoice, x: number, y: number) {
+  function checkSpot(c: SiteChoice, x: number, y: number, id = `c:${(edits.created ?? []).length}`) {
     const now = performance.now();
     if (now - spotAt < 120) return;
     spotAt = now;
     const seq = ++spotSeq;
-    void view.gen.settlementSpot(c.settlement!.tier, `c:${(edits.created ?? []).length}`, x, y).then((r) => {
+    void view.gen.settlementSpot(c.settlement!.tier, id, x, y).then((r) => {
       if (seq === spotSeq && placeArmed) placeNote = r && 'error' in r ? sentence(r.error) : null;
     });
   }
@@ -2667,10 +2670,12 @@
     placeNote = null;
   }
 
-  /** The next click on the map puts `c` there. */
-  function armPlace(c: SiteChoice, label = 'site') {
-    placeLabel = label;
+  /** The next click on the map puts `c` there (`move`: the village or town added by hand, of that
+   * id, goes there instead). */
+  function armPlace(c: SiteChoice, label = 'site', move: string | null = null) {
     disarmPlace();
+    placeLabel = label;
+    placeMove = move;
     // A settlement's ring: about how far it reaches, at a middling size for its tier.
     const reach = c.settlement ? SETTLEMENT_REACH_FT[c.settlement.tier] : 0;
     const showRing = (x: number, y: number) => {
@@ -2684,14 +2689,14 @@
       move: (x, y) => reach && showRing(x, y),
       hover: (x, y) => {
         if (reach) showRing(x, y);
-        if (instant) checkSpot(c, x, y);
+        if (instant) checkSpot(c, x, y, move ?? undefined);
       },
       leave: () => ((ring = null), (placeNote = null)),
       hoverFollows: true,
       cancel: () => disarmPlace(),
       up: (x, y) => {
         disarmPlace();
-        void (c.settlement ? (isInstant(c) ? createSettlement(c, x, y) : addSettlement(c, x, y)) : createSite(c, x, y));
+        void (move ? moveSettlement(move, x, y) : c.settlement ? (isInstant(c) ? createSettlement(c, x, y) : addSettlement(c, x, y)) : createSite(c, x, y));
       },
     };
     placeTool = tool;
@@ -2701,6 +2706,7 @@
   }
 
   function disarmPlace() {
+    placeMove = null;
     placeNote = null;
     placeTool = null;
     placeArmed = false;
@@ -2819,7 +2825,7 @@
   /** A settlement to take away again: its feature id (null: the pin placed none), layout number,
    * name and pin's stroke; `a` when it is the one last added (Take back: its changes can be put
    * back as they were). */
-  type Removal = { id: string | null; li: number; name: string; stroke: number; a: Added | null };
+  type Removal = { id: string | null; li: number; name: string; stroke: number; a: Added | null; card?: boolean };
 
   /** The question before a settlement is taken away: what was made on it, and whether the world
    * has other changes a remake may set aside. */
@@ -2890,9 +2896,9 @@
     // and those set aside when it was added.)
     const said = restore
       ? ''
-      : `${what ? ` Set aside in Notes, as “Removed: ${r.name}”: ${what}.` : ''}${m?.kept ? ` Kept ${count(m.kept)} with the remade world.` : ''}${m?.parked ? ` ${count(m.parked)} set aside: their places came out differently.` : ''}${a?.parked ? ` ${count(a.parked)} set aside when it was added stay aside: others were made since.` : ''}`;
+      : `${what ? ` Set aside in Notes, as “Deleted: ${r.name}”: ${what}.` : ''}${m?.kept ? ` Kept ${count(m.kept)} with the remade world.` : ''}${m?.parked ? ` ${count(m.parked)} set aside: their places came out differently.` : ''}${a?.parked ? ` ${count(a.parked)} set aside when it was added stay aside: others were made since.` : ''}`;
     const played = playSaid(lastCarried);
-    toast(`${a ? 'Took back' : 'Removed'} ${r.name}.${said}${played ? ` ${played}` : ''}`, undefined, said || played ? { ms: 12_000 } : {});
+    toast(`${a && !r.card ? 'Took back' : 'Deleted'} ${r.name}.${said}${played ? ` ${played}` : ''}`, undefined, said || played ? { ms: 12_000 } : {});
   }
 
   /** Take back the settlement last added (`confirm`: always asked, as from Undo). */
@@ -2907,7 +2913,7 @@
     const li = settlements.findIndex((f) => f.id === id);
     const stroke = li < 0 ? undefined : overlay?.added?.find(([l]) => l === li)?.[1];
     if (stroke === undefined) return undefined;
-    if (added?.id === id) return () => takeBack(true);
+    if (added?.id === id) return () => void removeSettlement({ id, li: added!.li, name: added!.name, stroke: added!.stroke, a: added, card: true }, true);
     const name = renames[id] ?? settlements[li].name;
     return () => void removeSettlement({ id, li, name, stroke, a: null });
   }
@@ -2982,6 +2988,150 @@
     };
   }
 
+  /** A settlement card's change worked out (not made): its culture (any settlement, through
+   * `setCulture`), or a village or town added by hand given another tier, living or name (its
+   * changes inside set aside as mapd's `update_made` does: `setAside`). */
+  async function planSettlement(id: string, ask: SettleAsk): Promise<SettlePlan> {
+    const name = nameOf(id);
+    const count = editCount;
+    const now = $state.snapshot(edits) as Edits;
+    const unanswered = { error: 'The map could not answer: try again' };
+    if (ask.culture !== undefined) {
+      const li = layoutIndexOf(id);
+      if (li < 0) return { error: 'It is not on the map now' };
+      const r = await view.gen.setCulture(li, ask.culture, now);
+      if (!r) return unanswered;
+      if ('error' in r) return { error: sentence(r.error) };
+      if (r.unchanged || !r.edits) return { unchanged: true };
+      const n = r.set_aside ?? 0;
+      return { edits: r.edits, change: { tool: 'update_settlement', id, name, culture: CULTURES[ask.culture], set_aside: n }, set_aside: n, by: r.set_aside_by ?? {}, count };
+    }
+    const old = now.created ?? [];
+    const k = old.findIndex((c) => c.id === id && !c.removed);
+    if (k < 0) return { error: 'It was deleted meanwhile' };
+    const c: Created = { ...old[k] };
+    if (ask.tier) c.kind = ask.tier;
+    if (ask.lives_by) c.lives_by = ask.lives_by;
+    const to = ask.name?.trim();
+    if (to !== undefined) {
+      if (!to) return { error: 'Give it a name' };
+      c.name = to;
+    }
+    // (A name given wins over a rename made before, as in mapd.)
+    const renamed = to !== undefined && now.renames?.[id] !== undefined;
+    if (c.kind === old[k].kind && c.lives_by === old[k].lives_by && c.name === old[k].name && !renamed) return { unchanged: true };
+    if (c.kind !== old[k].kind) {
+      const spot = await view.gen.settlementSpot(c.kind, id, c.x, c.y);
+      if (!spot) return unanswered;
+      if ('error' in spot) return { error: `A ${c.kind} won’t fit here: ${spot.error}` };
+    }
+    const next: Edits = { ...now, created: old.map((x, i) => (i === k ? c : x)) };
+    if (renamed) {
+      const { [id]: _, ...rest } = now.renames!;
+      next.renames = rest;
+    }
+    const r = await view.gen.setAside(old, next);
+    if (!r) return unanswered;
+    if ('error' in r) return { error: sentence(r.error) };
+    const change: Change = { tool: 'update_settlement', id, name, set_aside: r.moved };
+    if (ask.tier) change.kind = ask.tier;
+    if (ask.lives_by) change.lives_by = ask.lives_by;
+    if (to !== undefined) change.renamed = to;
+    return { edits: r.edits, change, set_aside: r.moved, by: r.by ?? {}, count };
+  }
+
+  /** Make a settlement card's change, worked out by `planSettlement` (unless others came since). */
+  function applySettlement(p: Extract<SettlePlan, { edits: Edits }>) {
+    if (p.count !== editCount) return toast('The world changed meanwhile: try again');
+    applyEdits(p.edits, p.change, 'user');
+    reselectFeature(String(p.change.id));
+  }
+
+  /** The card of a settlement shown anew (its tier or name may have changed). */
+  function reselectFeature(id: string) {
+    const f = overlay?.features.find((g) => g.id === id);
+    if (f) selection = { kind: 'feature', feature: f };
+  }
+
+  /** Move the village or town added by hand `id`: the next click puts it there (its ring and the
+   * spot check, itself left out). */
+  function startMove(id: string) {
+    const c = edits.created?.find((x) => x.id === id && !x.removed);
+    if (!c || (c.kind !== 'village' && c.kind !== 'town')) return;
+    armPlace({ kind: c.kind, settlement: { tier: c.kind, livesBy: '', capital: false, wards: '' } }, nameOf(id), id);
+  }
+
+  /** Put the village or town added by hand `id` at (x, y) where the generator allows: its id,
+   * name, notes, NPCs and plots kept, the changes made inside it set aside. One step. */
+  async function moveSettlement(id: string, x: number, y: number) {
+    const now = $state.snapshot(edits) as Edits;
+    const old = now.created ?? [];
+    const k = old.findIndex((c) => c.id === id && !c.removed);
+    if (k < 0) return toast('It was deleted meanwhile');
+    const spot = await view.gen.settlementSpot(old[k].kind, id, x, y);
+    if (!spot) return toast('The map could not answer: try again');
+    if ('error' in spot) return toast(sentence(spot.error));
+    const next: Edits = { ...now, created: old.map((c, i) => (i === k ? { ...c, x: spot.x, y: spot.y } : c)) };
+    const r = await view.gen.setAside(old, next);
+    if (!r || 'error' in r) return toast(r ? sentence(r.error) : 'The map could not answer: try again');
+    applyEdits(r.edits, { tool: 'move_settlement', id, name: nameOf(id), set_aside: r.moved }, 'user');
+    reselectFeature(id);
+  }
+
+  /** The villages and towns added by hand and deleted, for the Gazetteer (what comes back). */
+  const removedMade = $derived(
+    (edits.created ?? [])
+      .filter((c) => c.removed && (c.kind === 'village' || c.kind === 'town'))
+      .map((c) => {
+        const n = asideGroups.find((g) => g.key === `layout:${c.aside}`)?.entries.length ?? 0;
+        return { id: c.id, name: renames[c.id] ?? c.name, what: `${c.kind}${n ? ` · brings back ${n} ${n === 1 ? 'change' : 'changes'} set aside` : ''}` };
+      }),
+  );
+
+  /** Restore the deleted village or town `id` where it was (if the spot is still free), with
+   * what was set aside when it was deleted. One step. */
+  async function restoreSettlement(id: string) {
+    const name = nameOf(id);
+    const r = await view.gen.restoreMade(id, $state.snapshot(edits) as Edits);
+    if (!r) return toast('The map could not answer: try again');
+    if ('error' in r) return toast(`Can’t restore ${name}: ${r.error}`);
+    applyEdits(r.edits, { tool: 'restore_feature', id, name, brought_back: r.back }, 'user');
+  }
+
+  /** The culture of the selected settlement as it is laid out now (asked of the generator). */
+  let cardCulture = $state<{ id: string; culture: number } | null>(null);
+  $effect(() => {
+    const sel = selection;
+    void edits;
+    if (sel?.kind !== 'feature' || !SETTLEMENT_KINDS.includes(sel.feature.kind)) return;
+    const id = sel.feature.id;
+    const li = layoutIndexOf(id);
+    if (li < 0) return;
+    void view.gen.setCulture(li, undefined, $state.snapshot(edits) as Edits).then((r) => {
+      const k = r && 'from' in r ? CULTURES.findIndex((c) => c.toLowerCase() === r.from) : -1;
+      if (selection?.kind === 'feature' && selection.feature.id === id) cardCulture = k >= 0 ? { id, culture: k } : null;
+    });
+  });
+
+  /** The selected settlement's Settlement block (culture for all; tier, living, name and Move
+   * for a village or town added by hand). */
+  function settleCard(f: Feature) {
+    if (!SETTLEMENT_KINDS.includes(f.kind)) return null;
+    const c = f.id.startsWith('c:') ? edits.created?.find((x) => x.id === f.id && !x.removed) : undefined;
+    const lives = f.detail?.split(', pop.')[0] ?? null;
+    return {
+      made: !!c,
+      tier: c?.kind ?? f.kind,
+      livesBy: c ? (c.lives_by ?? null) : lives,
+      capital: !!f.detail?.endsWith(', capital'),
+      culture: cardCulture?.id === f.id ? cardCulture.culture : null,
+      name: c?.name ?? f.name,
+      plan: (a: SettleAsk) => planSettlement(f.id, a),
+      apply: applySettlement,
+      onMove: c ? () => startMove(f.id) : undefined,
+    };
+  }
+
   // The notebook: NPCs and plot points (the user's and agents').
   let notebookFocus = $state<{ tab: NotesTab; id: string | null; seq: number; reveal?: boolean }>({ tab: 'npcs', id: null, seq: 0 });
 
@@ -3034,6 +3184,10 @@
 
   /** A settlement's or site's layout index (else -1): what is in its buildings counts as there. */
   function layoutIndexOf(id: string): number {
+    // (A village or town added by hand is among `settlements` too, as a feature: its layout is
+    // its created one.)
+    const made = id.startsWith('c:') ? (edits.created ?? []).findIndex((x) => x.id === id) : -1;
+    if (made >= 0) return firstCreated + made;
     const n = settlements.length;
     const i = settlements.findIndex((f) => f.id === id);
     if (i >= 0) return i;
@@ -4091,6 +4245,12 @@
               aside={asideGroups}
               asideWhat={(x) => asideWhat(x, edits)}
               onForget={(entries, label) => applyEdits(forgetAside(edits, entries), { tool: 'forget_aside', label }, 'user')}
+              removed={removedMade}
+              onRestoreRemoved={(id) => void restoreSettlement(id)}
+              removedAt={(n) => {
+                const c = edits.created?.find((x) => x.removed && x.aside === n);
+                return c ? (renames[c.id] ?? c.name) : null;
+              }}
             />
           {/if}
         {:else}
@@ -4160,8 +4320,11 @@
           ? createdActions(sel.hit.id)
           : sel.kind === 'building' && generatedBuilding(sel.hit.id)
             ? generatedActions(sel.hit)
-            : {}}
+            : sel.kind === 'feature' && SETTLEMENT_KINDS.includes(sel.feature.kind)
+              ? { hidden: placeHidden.includes(sel.feature.id), onHide: (hide: boolean) => setHidden(sel.feature.id, hide) }
+              : {}}
       onUnsettle={sel.kind === 'feature' ? unsettleAction(sel.feature.id) : undefined}
+      settle={sel.kind === 'feature' ? settleCard(sel.feature) : null}
       streets={sel.kind === 'feature' ? streetsCard(sel.feature) : undefined}
       onStreets={sel.kind === 'feature' ? () => openStreets(sel.feature) : undefined}
       onFly={() => selection && flyToSelection(selection)}
@@ -4192,7 +4355,8 @@
   />
   {#if placeArmed}
     <div class="banner" role="status">
-      <Icon name="pin" size={16} /> {shell.phone ? 'Tap' : 'Click'} the map to place the {placeLabel}
+      <Icon name="pin" size={16} /> {shell.phone ? 'Tap' : 'Click'} the map {placeMove ? `where ${placeLabel} goes` : `to place the ${placeLabel}`}
+      {#if placeMove && placeNote}<span class="why">{placeNote}</span>{/if}
       <button class="ws-btn" onclick={disarmPlace}>Cancel</button>
     </div>
   {/if}
@@ -4234,7 +4398,7 @@
   {/if}
   {#if removeAsk}
     {@const q = removeAsk}
-    {@const verb = q.r.a ? 'Take back' : 'Remove'}
+    {@const verb = q.r.a && !q.r.card ? 'Take back' : 'Delete'}
     {@const kind = (q.r.id && featureById.get(q.r.id)?.kind) || 'village'}
     {@const own = q.on ? q.on.notes + q.on.npcs + q.on.plots + q.on.names : 0}
     {@const layout = q.on ? q.on.buildings + q.on.designs + q.on.towns : 0}
@@ -4249,7 +4413,7 @@
     >
       <p>The world is made again without it{genSeconds ? ` (about ${genSeconds} s)` : ''}; towns and roads near it may move back.</p>
       {#if own || layout}
-        <p>What was made on it stays in Notes, set aside as “Removed: {q.r.name}”: {madeWords(q.on!)}.{layout ? ' Its building changes and designed interiors are set aside too.' : ''}</p>
+        <p>What was made on it stays in Notes, set aside as “Deleted: {q.r.name}”: {madeWords(q.on!)}.{layout ? ' Its building changes and designed interiors are set aside too.' : ''}</p>
       {/if}
       {#if q.tokens}<p>{q.tokens} play {q.tokens === 1 ? 'token in it waits' : 'tokens in it wait'} outside.</p>{/if}
       {#if q.others}<p class="ws-muted">Changes to towns and sites that come out differently are set aside. Undo starts afresh.</p>{/if}
@@ -4370,6 +4534,12 @@
     border-radius: 999px;
     box-shadow: var(--shadow-lg);
     white-space: nowrap;
+  }
+  .banner .why {
+    font-size: 12px;
+    opacity: 0.85;
+    white-space: normal;
+    max-width: min(320px, calc(100vw - 220px));
   }
   .chip {
     position: fixed;

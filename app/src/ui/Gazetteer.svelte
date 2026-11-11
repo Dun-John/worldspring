@@ -62,8 +62,13 @@
     asideWhat?: (x: AsideEntry) => string;
     /** Delete entries kept on places no longer on the map (one step). */
     onForget?: (entries: AsideEntry[], label: string) => void;
+    /** The villages and towns added by hand and deleted: restored where they were (`what`: what
+     * comes back with them), and the set-aside layout a deleted one's changes went to, by number. */
+    removed?: { id: string; name: string; what: string }[];
+    onRestoreRemoved?: (id: string) => void;
+    removedAt?: (layout: number) => string | null;
   }
-  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow, aside = [], asideWhat = () => '', onForget = () => {} }: Props = $props();
+  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow, aside = [], asideWhat = () => '', onForget = () => {}, removed = [], onRestoreRemoved = () => {}, removedAt = () => null }: Props = $props();
 
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
@@ -94,14 +99,20 @@
   let withNotes = $state(false);
   /** Only what is kept on places no longer on the map. */
   let showAside = $state(false);
-  const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0));
+  const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0) + removed.length);
   // (Nothing left to show: back to the names.)
   $effect(() => {
     if (!asideN && showAside) showAside = false;
   });
   /** A place no longer on the map, as listed: its name then, else what it was. */
   const asideName = (g: AsideGroup, i: number) =>
-    g.id ? placeName(g.id) : `A town or site set aside${aside.filter((x) => !x.id).length > 1 ? ` (${aside.slice(0, i + 1).filter((x) => !x.id).length})` : ''}`;
+    g.id ? placeName(g.id) : removedGroup(g) ?? `A town or site set aside${aside.filter((x) => !x.id).length > 1 ? ` (${aside.slice(0, i + 1).filter((x) => !x.id).length})` : ''}`;
+  /** A set-aside layout a deleted village or town's changes went to: "Deleted: <name>". */
+  function removedGroup(g: AsideGroup): string | null {
+    const n = /^layout:(\d+)$/.exec(g.key)?.[1];
+    const name = n === undefined ? null : removedAt(Number(n));
+    return name ? `Deleted: ${name}` : null;
+  }
   /** The place whose page is open. */
   let current = $state<string | null>(null);
   let confirmDelete = $state(false);
@@ -517,12 +528,23 @@
     {#if !showAside}<input class="ws-input" type="search" placeholder={withNotes ? 'Find notes…' : 'Find a name or note…'} bind:value={q} aria-label="Find a name or note" />{/if}
     <div class="bar">
       <button class="ws-chip" class:on={withNotes} aria-pressed={withNotes} onclick={() => ((withNotes = !withNotes), (showAside = false))} title="Only the places you wrote notes on"><Icon name="note" size={12} /> With notes ({Object.keys(notes).length})</button>
-      {#if asideN}<button class="ws-chip" class:on={showAside} aria-pressed={showAside} onclick={() => ((showAside = !showAside), (withNotes = false))} title="What you made on places no longer on the map">Set aside ({asideN})</button>{/if}
+      {#if asideN}<button class="ws-chip" class:on={showAside} aria-pressed={showAside} onclick={() => ((showAside = !showAside), (withNotes = false))} title="Places deleted, and what you made on places no longer on the map">Set aside ({asideN})</button>{/if}
       {#if !withNotes && !showAside}<button class="ws-chip" class:on={showHidden} aria-pressed={showHidden} onclick={() => (showHidden = !showHidden)} title="Names hidden from both maps">Show hidden</button>{/if}
       {#if here}<button class="ws-chip here" onclick={() => openPage(here.id)} title="{here.name}: its name and your note on it"><Icon name="pin" size={12} /> <span>{here.name}</span></button>{/if}
     </div>
     {#if showAside}
-      <div class="hint">Made on towns and sites that came out differently or were taken away: kept in the world, shown nowhere on the map. Delete what you no longer need (Undo brings it back).</div>
+      {#if removed.length}
+        <div class="ws-label">Deleted settlements</div>
+        <ul class="list aside">
+          {#each removed as r (r.id)}
+            <li class="row">
+              <span class="grow what" title={r.what}><b>{r.name}</b> <span class="muted">{r.what}</span></span>
+              <button class="ws-btn quiet" onclick={() => onRestoreRemoved(r.id)} title="Put it back where it was, with what was set aside when it was deleted"><Icon name="reset" size={14} /> Restore</button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      {#if aside.length}<div class="hint">Made on towns and sites that came out differently or were taken away: kept in the world, shown nowhere on the map. Delete what you no longer need (Undo brings it back).</div>{/if}
       <ul class="list aside">
         {#each aside as g, i (g.key)}
           {@const name = asideName(g, i)}
@@ -714,6 +736,10 @@
   }
   .aside .row {
     align-items: center;
+  }
+  .aside .muted {
+    color: var(--ink-3);
+    font-size: 12px;
   }
   .nname:first-letter {
     text-transform: uppercase;

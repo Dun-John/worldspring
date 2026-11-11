@@ -406,7 +406,7 @@ impl Ctx {
                 let track: Vec<[f64; 2]> = m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect();
                 Some(serde_json::json!({
                     "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
-                    "x": s.x, "y": s.y, "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
+                    "x": s.x, "y": s.y, "culture": s.culture, "lives": s.kind.name(), "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
                     "rect": r.map(|v| v.round()), "track": track, "class": m.class as u8, "width": m.class.width_ft(),
                 }))
             })
@@ -443,8 +443,35 @@ impl Ctx {
             Ok(v) => v,
             Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
         };
-        let moved = worldgen::t0::made::set_aside_changed(&old, &mut edits, t0.settlements.len() + t0.base_pois);
-        serde_json::json!({ "edits": edits, "moved": moved }).to_string()
+        let by = worldgen::t0::made::set_aside_changed_by_field(&old, &mut edits, t0.settlements.len() + t0.base_pois);
+        let moved: usize = by.iter().map(|a| a.1).sum();
+        let by: serde_json::Map<String, serde_json::Value> = by.iter().filter(|a| a.1 > 0).map(|a| (a.0.to_string(), a.1.into())).collect();
+        serde_json::json!({ "edits": edits, "moved": moved, "by": by }).to_string()
+    }
+
+    /// `edits` (JSON) with the deleted village or town `id` (a `c:<n>`) restored where it was, if
+    /// its spot is still free (`t0::made::spot`), and what was set aside when it was deleted
+    /// brought back where it fits (`t0::made::restore`): `{edits, back}`, or `{error}`.
+    pub fn restore_made_json(&self, id: &str, edits: &str) -> String {
+        use worldgen::t0::made;
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let Some(k) = edits.created.iter().position(|c| c.id == id && c.removed && c.is_settlement()) else {
+            return serde_json::json!({ "error": format!("{id} is not a deleted village or town") }).to_string();
+        };
+        let c = edits.created[k].clone();
+        if let Err(e) = made::spot(&self.world, t0, &c.kind, &c.id, [c.x, c.y]) {
+            return serde_json::json!({ "error": format!("its place is taken: {e}") }).to_string();
+        }
+        if let Some(o) = edits.existing_site(&c, [c.x, c.y]) {
+            return serde_json::json!({ "error": format!("its place is taken: {} is the same site", o.name) }).to_string();
+        }
+        edits.created[k].removed = false;
+        let back = made::restore(&mut edits, k, t0.settlements.len() + t0.base_pois);
+        serde_json::json!({ "edits": edits, "back": back }).to_string()
     }
 
     /// `edits` (JSON) with settlement layout `layout` laid out in culture `culture` (0-4;

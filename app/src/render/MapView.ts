@@ -110,6 +110,7 @@ function createdDetail(c: Created): string {
     const g = c.gates?.length ?? 0;
     return `created wall (${c.closed ? 'a ring, ' : ''}${Math.round(wallLength(c.pts ?? [], !!c.closed))} ft${g === 1 ? ', a gate' : g ? `, ${g} gates` : ''})`;
   }
+  if (isMade(c)) return `${c.kind} (added by hand)`;
   const opts = [c.theme && words(c.theme), c.size, c.levels && `${c.levels} level${c.levels === 1 ? '' : 's'}`].filter(Boolean);
   return `created ${words(c.kind)}${c.under ? ` over a ${words(c.under)}` : ''}${opts.length ? ` (${opts.join(', ')})` : ''}`;
 }
@@ -1297,6 +1298,24 @@ export class MapView {
       this.labels?.forgetTown(t.index);
       this.placesRect = null;
       this.placesEpoch++;
+    }
+    // The world's own settlements laid out in another culture (`Edits.cultures`): all they reach,
+    // as a town re-planned; their district labels, business pins and an open building anew.
+    const pk = prev.cultures ?? {};
+    const nk = next.cultures ?? {};
+    if (pk !== nk) for (const key of keys('cultures', pk, nk)) {
+      if (pk[key] === nk[key]) continue;
+      const li = Number(key);
+      const f = this.baseOverlay?.features.filter((g) => ['metropolis', 'city', 'town', 'village'].includes(g.kind))[li];
+      if (!f) continue;
+      const r = 2.3 * 12 * Math.sqrt(Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0)) + 200;
+      rects.push([f.x - r, f.y - r, f.x + r, f.y + r]);
+      this.districtsAsked.delete(li);
+      this.labels?.forgetTown(li);
+      this.labels?.forgetPlaces(`b:${li}:`);
+      this.placesRect = null;
+      this.placesEpoch++;
+      if (here && new RegExp(`^(?:[lr]:)?[btuk]:${li}:`).test(here) && here !== this.designing) reenter = true;
     }
     // Their business pins: dropped, and asked for again (as they are now).
     if (replaced.length) {

@@ -231,7 +231,7 @@ export class GenClient {
 
   /** `edits` with the edits made in each village or town added by hand that they remove, move or
    * lay out anew (from `old`, the created sites before) set aside, as the generator would. */
-  setAside(old: Created[], edits: Edits): Promise<{ edits: Edits; moved: number } | { error: string } | null> {
+  setAside(old: Created[], edits: Edits): Promise<{ edits: Edits; moved: number; by: Record<string, number> } | { error: string } | null> {
     return this.ask({ op: 'setaside', old: JSON.stringify(old), edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
   }
 
@@ -241,6 +241,12 @@ export class GenClient {
    * culture already. Without `culture`: `{from}`, the culture it is laid out in now. */
   setCulture(layout: number, culture: number | undefined, edits: Edits): Promise<CultureChange | { error: string } | null> {
     return this.ask({ op: 'setculture', layout, culture, edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
+  }
+
+  /** `edits` with the deleted village or town `id` restored where it was (if its spot is still
+   * free) and what was set aside when it was deleted brought back where it fits (`back`). */
+  restoreMade(id: string, edits: Edits): Promise<{ edits: Edits; back: number } | { error: string } | null> {
+    return this.ask({ op: 'restoremade', id, edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
   }
 
   /** The fingerprints of the world's own layouts a remake must find alike to keep what is made on

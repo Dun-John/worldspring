@@ -471,9 +471,14 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
             }
         }
     }
-    // Other settlements (the world's own and those added by hand) and sites.
+    // Other settlements (the world's own and those added by hand; not itself, when it is moved
+    // or restored) and sites.
     let n = t0.settlements.len();
+    let own = world.file.edits.created.iter().position(|c| c.id == id).map(|k| n + t0.base_pois + k);
     for li in 0..town::layout_count(t0) {
+        if Some(li) == own {
+            continue;
+        }
         if let Some(o) = town::settlement(t0, li) {
             if dist([o.x, o.y], at) < town::reach(o) + reach + SETTLEMENT_GAP_FT {
                 return Err("that is too near another settlement".to_string());
@@ -573,6 +578,11 @@ pub fn set_aside(edits: &mut crate::world::Edits, li: usize) -> usize {
 
 /// `set_aside`, with how many entries moved in each field.
 pub fn set_aside_by_field(edits: &mut crate::world::Edits, li: usize) -> [(&'static str, usize); 8] {
+    set_aside_to(edits, li).1
+}
+
+/// `set_aside_by_field`, with the layout number they were moved to.
+fn set_aside_to(edits: &mut crate::world::Edits, li: usize) -> (usize, [(&'static str, usize); 8]) {
     use crate::world::{PARKED_LAYOUT, layout_in_id};
     let parked = |id: &str| layout_in_id(id).filter(|&l| l >= PARKED_LAYOUT);
     let mut ids: Vec<&str> = edits.renames.keys().chain(edits.notes.keys()).chain(edits.designs.keys()).chain(edits.buildings.keys()).map(String::as_str).collect();
@@ -615,16 +625,82 @@ pub fn set_aside_by_field(edits: &mut crate::world::Edits, li: usize) -> [(&'sta
             n[7] += 1;
         }
     }
-    let f = ["renames", "notes", "hidden", "designs", "buildings", "towns", "npcs", "plots"];
-    std::array::from_fn(|k| (f[k], n[k]))
+    (to, std::array::from_fn(|k| (ASIDE_FIELDS[k], n[k])))
 }
+
+/// The fields `set_aside_by_field` counts, in its order.
+pub const ASIDE_FIELDS: [&str; 8] = ["renames", "notes", "hidden", "designs", "buildings", "towns", "npcs", "plots"];
 
 /// After `edits.created` changed from `old` (`first`: the first created layout index), sets
 /// aside (`set_aside`) the edits of each village or town added by hand that was removed, moved
 /// or changed in what lays it out (its kind, culture or what it lives by; a new name lays out
 /// nothing anew). How many entries moved.
 pub fn set_aside_changed(old: &[Created], edits: &mut crate::world::Edits, first: usize) -> usize {
+    set_aside_changed_by_field(old, edits, first).iter().map(|a| a.1).sum()
+}
+
+/// `set_aside_changed`, with how many entries moved in each field. A village or town deleted
+/// keeps the layout number its edits went to (`Created.aside`), for `restore`.
+pub fn set_aside_changed_by_field(old: &[Created], edits: &mut crate::world::Edits, first: usize) -> [(&'static str, usize); 8] {
     let lays = |c: &Created| (c.removed, c.kind.clone(), c.x.to_bits(), c.y.to_bits(), c.culture, c.lives_by.clone());
     let gone: Vec<usize> = old.iter().enumerate().filter(|(k, c)| c.is_settlement() && !c.removed && edits.created.get(*k).is_none_or(|d| lays(d) != lays(c))).map(|(k, _)| k).collect();
-    gone.into_iter().map(|k| set_aside(edits, first + k)).sum()
+    let mut n = [0; 8];
+    for k in gone {
+        let (to, by) = set_aside_to(edits, first + k);
+        let moved: usize = by.iter().map(|a| a.1).sum();
+        for (j, a) in by.iter().enumerate() {
+            n[j] += a.1;
+        }
+        if let Some(c) = edits.created.get_mut(k).filter(|c| c.removed) {
+            c.aside = (moved > 0).then_some(to);
+        }
+    }
+    std::array::from_fn(|k| (ASIDE_FIELDS[k], n[k]))
+}
+
+/// Brings back what was set aside when the village or town at `k` in `edits.created` (`first`:
+/// the first created layout index) was deleted (`Created.aside`): each entry whose place in its
+/// layout is free again (one made there since stays). Call it as the settlement is restored; it
+/// is laid out as it was, so the ids fit. How many entries came back.
+pub fn restore(edits: &mut crate::world::Edits, k: usize, first: usize) -> usize {
+    let Some(from) = edits.created.get_mut(k).and_then(|c| c.aside.take()) else { return 0 };
+    let li = first + k;
+    let mut n = 0;
+    fn back<V>(m: &mut std::collections::BTreeMap<String, V>, from: usize, li: usize, n: &mut usize) {
+        let keys: Vec<(String, String)> = m.keys().filter_map(|k| relaid(k, from, li).map(|to| (k.clone(), to))).filter(|(_, to)| !m.contains_key(to)).collect();
+        for (k, to) in keys {
+            let v = m.remove(&k).expect("a key just listed");
+            m.insert(to, v);
+            *n += 1;
+        }
+    }
+    back(&mut edits.renames, from, li, &mut n);
+    back(&mut edits.notes, from, li, &mut n);
+    back(&mut edits.designs, from, li, &mut n);
+    back(&mut edits.buildings, from, li, &mut n);
+    if !edits.towns.contains_key(&li.to_string())
+        && let Some(t) = edits.towns.remove(&from.to_string())
+    {
+        edits.towns.insert(li.to_string(), t);
+        n += 1;
+    }
+    let hidden: Vec<String> = edits.hidden.iter().filter(|h| relaid(h, from, li).is_some()).cloned().collect();
+    for h in hidden {
+        edits.hidden.remove(&h);
+        edits.hidden.insert(relaid(&h, from, li).expect("a mark of the layout"));
+        n += 1;
+    }
+    for l in edits.npcs.values_mut().filter_map(|v| v.location.as_mut()) {
+        if let Some(id) = relaid(&l.id, from, li) {
+            l.id = id;
+            n += 1;
+        }
+    }
+    for a in edits.plots.values_mut().flat_map(|p| p.anchors.iter_mut()) {
+        if let Some(id) = relaid(a, from, li) {
+            *a = id;
+            n += 1;
+        }
+    }
+    n
 }

@@ -40,7 +40,7 @@ export function unnamed(id: string): string {
   const w = WAS_ID.exec(id);
   if (w) return `${cap(a(kindLabel(w[3])))} of version ${w[1]}`;
   const k = removedKind(id);
-  if (k) return `Removed: ${a(kindLabel(k))}`;
+  if (k) return `Deleted: ${a(kindLabel(k))}`;
   if (setAside(id)) return 'Set aside when the world was remade or upgraded';
   const f = FEATURE_ID.exec(id);
   return f ? `No longer on the map: ${a(kindLabel(f[1]))}` : id;
@@ -51,7 +51,7 @@ export function unnamed(id: string): string {
 export const listedName = (id: string, renames: Record<string, string>, fallback: () => string): string => {
   const w = WAS_ID.exec(id);
   if (w) return renames[id] ? `${renames[id]} (version ${w[1]})` : unnamed(id);
-  return removedKind(id) ? (renames[id] ? `Removed: ${renames[id]}` : unnamed(id)) : (renames[id] ?? fallback());
+  return removedKind(id) ? (renames[id] ? `Deleted: ${renames[id]}` : unnamed(id)) : (renames[id] ?? fallback());
 };
 /** Kinds of sites (`worldgen::agent::SITE_KINDS`): those not created by hand are the points of
  * interest, whose order gives their layout indices after the settlements'. The last three are
