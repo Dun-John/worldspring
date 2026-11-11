@@ -5373,6 +5373,14 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         r.tally(&format!("{}: material {}", GROUPS[g], MATERIALS[st.material as usize]), 1);
         r.tally(&format!("{}: bastions placed", GROUPS[g]), l.bastions.len());
         r.tally(&format!("{}: bastions dropped", GROUPS[g]), l.bastions_dropped as usize);
+        // (Each bastion's faces (flank tip to point), flanks, and how far its point stands out from the curtain's
+        // corner it replaced: ft.)
+        for q in l.bastions.iter().filter(|q| q.len() == 6) {
+            let at = format!("L{li} ({:.0}, {:.0})", q[5][0], q[5][1]);
+            r.value("bastion face ft", dist(q[1], q[2]).max(dist(q[2], q[3])), at.clone());
+            r.value("bastion flank ft", dist(q[0], q[1]).max(dist(q[3], q[4])), at.clone());
+            r.value("bastion point out from the curtain ft", dist(q[2], q[5]), at);
+        }
         // Listed: settlements, up to 3 a group.
         if li >= ns || listed[g] >= 3 {
             continue;
@@ -5413,6 +5421,7 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
     // Every gate of the places listed walked through on the battlemap.
     for (li, l) in to_walk {
         gate_walks(ctx, &l, li, r);
+        bastion_walks(ctx, &l, li, r);
     }
     // The battlemap round each tower of the places checked.
     for (li, l) in to_check {
@@ -5692,6 +5701,59 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
         r.tally("gates walked through on the battlemap", 1);
         if let Some(why) = why {
             r.add("gate passages not walkable end to end on the battlemap", 1.0, format!("L{li} {} at {}: {why}", FORMS[h.form as usize], at(m)));
+        }
+    }
+}
+
+/// Each bastion's top walked on the battlemap: every open square inside its outline reached from the
+/// town (from the open back, by the ramp), and the props on it counted.
+fn bastion_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
+    for q in l.bastions.iter().filter(|q| q.len() == 6) {
+        let b = bbox(q);
+        let w = ctx.window([b[0] - 30.0, b[1] - 30.0, b[2] + 30.0, b[3] + 30.0]);
+        let v = q[5];
+        let o = sub(q[2], v);
+        let o = mul(o, 1.0 / len(o).max(1e-9));
+        let centre = |k: usize| [w.ox + ((k % w.nx) as f64 + 0.5) * SQUARE_FT, w.oy + ((k / w.nx) as f64 + 0.5) * SQUARE_FT];
+        let from = sub(v, mul(o, 8.0));
+        let Some(a) = (0..w.nx * w.ny).filter(|&k| !w.block[k]).min_by(|&x, &y| dist(centre(x), from).total_cmp(&dist(centre(y), from))) else { continue };
+        let reach = dist(q[2], v) + 30.0;
+        let mut seen = vec![false; w.nx * w.ny];
+        let mut todo = VecDeque::from([a]);
+        seen[a] = true;
+        while let Some(k) = todo.pop_front() {
+            let (x, y) = ((k % w.nx) as i64, (k / w.nx) as i64);
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= w.nx as i64 || ny >= w.ny as i64 {
+                    continue;
+                }
+                let n = ny as usize * w.nx + nx as usize;
+                if !seen[n] && !w.block[n] && dist(centre(n), v) <= reach {
+                    seen[n] = true;
+                    todo.push_back(n);
+                }
+            }
+        }
+        let top: Vec<usize> = (0..w.nx * w.ny).filter(|&k| contains(q, centre(k)) && !w.block[k]).collect();
+        let shut: Vec<usize> = top.iter().copied().filter(|&k| !seen[k]).collect();
+        r.tally("bastion tops walked on the battlemap", 1);
+        r.tally("bastion top squares open", top.len());
+        if !shut.is_empty() {
+            let far = shut.iter().map(|&k| dist(centre(k), q[2])).fold(0.0, f64::max);
+            r.add("bastion top squares not reached from the town", shut.len() as f64, format!("L{li} at {}: {} ft from its point at most", at(q[2]), far.round()));
+        }
+        for (p, name) in &w.objects {
+            if contains(q, *p) {
+                r.tally(&format!("bastion props: {name}"), 1);
+            }
+        }
+        let laid = town::wallside::bastion_props(q, l.wall_style_at(centroid(q)).thickness());
+        for p in &laid {
+            r.tally(&format!("bastion props laid out: {:?}", p.kind), 1);
+            if !w.objects.iter().any(|(o, _)| dist(*o, p.at) < 0.5) {
+                r.add("bastion props laid out but not on the battlemap", 1.0, format!("L{li} {:?} at {}", p.kind, at(p.at)));
+            }
         }
     }
 }

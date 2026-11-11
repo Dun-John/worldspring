@@ -233,6 +233,9 @@ pub enum Kind {
     // R5 towns: a steppe town's horse pens and market (`town::horses`).
     Horse = 106,
     HitchingRail = 107,
+    // R5 towns: a star wall's bastion (`town::wallside::bastion_props`).
+    Ballista = 108,
+    ShotStones = 109,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -359,12 +362,13 @@ const KINDS: [Kind; 63] = [
 ];
 
 /// Kinds past `CATALOG`, with explicit ids (each lane's range, `docs/lane-common.md`).
-static MORE: [&[(Kind, KindInfo)]; 3] = [
+static MORE: [&[(Kind, KindInfo)]; 4] = [
     // v63 castles
     &kitchen::KINDS,
     // R5 towns
     &crate::town::cemetery::KINDS,
     &crate::town::horses::KINDS,
+    &crate::town::wallside::KINDS,
 ];
 
 fn more() -> impl Iterator<Item = &'static (Kind, KindInfo)> {
@@ -1301,6 +1305,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut park_meta: Vec<ParkMeta> = Vec::new();
     // Camps' clearings, levelled (outline, height ft).
     let mut yards: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
+    // (Star walls' bastions over the chunk: the guarantee adds nothing on their tops, which have their own props.)
+    let mut bastion_tops: Vec<Vec<[f64; 2]>> = Vec::new();
     // A shell keep's motte: the ground raised to its top round the keep, easing down to the ground
     // round it (never lowered); a gravel path up it to the shell's gate (`Motte::way`).
     // Castles' baileys: grass (squares marked).
@@ -1427,6 +1433,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for y in &l.yards {
             stamp(&y.0, URBAN_YARD, &mut urb_h);
             yards.push(y.clone());
+        }
+        // A star wall's bastions: their terreplein packed earth (no scatter on it; the walls round it
+        // are raised over its edge below).
+        for q in l.bastions.iter().filter(|q| overlaps(bbox(q))) {
+            stamp(q, URBAN_YARD, &mut urb_h);
+            bastion_tops.push(q.clone());
         }
         crate::town::village::stamp(&l, &mut |poly, val| stamp(poly, val, &mut urb_h));
         // R5 towns (115): bare trodden earth round a steppe town's yurts, on ground nothing else
@@ -2198,6 +2210,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
         props.extend(l.props.iter().copied());
+        for q in l.bastions.iter().filter(|q| overlaps(bbox(q))) {
+            props.extend(crate::town::wallside::bastion_props(q, l.wall_style_at(crate::town::geom::centroid(q)).thickness()));
+        }
         for m in &l.monuments {
             statues.push(crate::town::geom::centroid(m));
         }
@@ -3254,6 +3269,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 || court_h[(y as usize + 1) * HS + x as usize + 1]
                 || chunk.urban[k] == URBAN_PATH
                 || chunk.surface[k] == Surface::Stairs
+                || bastion_tops.iter().any(|q| crate::town::geom::contains(q, p))
                 || park_keep.iter().any(|&(a, b, r)| crate::town::geom::seg_dist(p, a, b) < r + 2.5)
                 || bailey_kind[(y as usize + 1) * HS + x as usize + 1] & 4 != 0
                 || (bailey_kind[(y as usize + 1) * HS + x as usize + 1] & 3 != 0 && bailey_ways.iter().any(|&(a, b)| crate::town::geom::seg_dist(p, a, b) < 8.0))

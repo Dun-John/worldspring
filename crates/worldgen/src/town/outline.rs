@@ -7,10 +7,11 @@
 use super::geom::*;
 
 /// A bastion's flanks stand this far from its corner along each curtain, as long as this out from it,
-/// and its point this much further out than the flanks (ft, at full size; `SHRINK` the smaller try).
-pub const FLANK_AT: f64 = 36.0;
-pub const FLANK_FT: f64 = 22.0;
-pub const POINT_FT: f64 = 36.0;
+/// and its point this far out from the corner (ft, at full size; `SHRINK` the smaller try): faces
+/// about 40-55 ft long (the user, 2026-11-11: half what they were).
+pub const FLANK_AT: f64 = 26.0;
+pub const FLANK_FT: f64 = 12.0;
+pub const POINT_FT: f64 = 38.0;
 const SHRINK: f64 = 0.7;
 /// A wall turning more than this (degrees) at a corner may take a bastion, but not one turning by more
 /// than `BASTION_SPIKE` (a spike: the town's paved strips reach past its point).
@@ -123,7 +124,7 @@ pub fn bastions(pieces: &mut [Vec<P>], towers: &mut Vec<P>, gates: &[P], most: u
             }
             let (f1, f2) = (sub(j.v, mul(u1, s)), add(j.v, mul(u2, s)));
             let (g1, g2) = (add(f1, mul(n1, FLANK_FT * k)), add(f2, mul(n2, FLANK_FT * k)));
-            let tip = add(j.v, mul(o, FLANK_FT * k + POINT_FT * k + s * 0.3));
+            let tip = add(j.v, mul(o, POINT_FT * k));
             let poly = vec![f1, g1, tip, g2, f2, j.v];
             // (Clear of the rest of the wall, its towers and the bastions already laid.)
             let edges = [(f1, g1), (g1, tip), (tip, g2), (g2, f2)];

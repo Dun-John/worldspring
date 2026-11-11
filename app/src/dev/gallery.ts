@@ -27,7 +27,7 @@ import type { DoorState } from '../play/state';
 import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/itemGroups';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
-import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower } from '../render/walls';
+import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, topGrid } from '../render/walls';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
@@ -433,7 +433,7 @@ export async function runGallery(target: HTMLElement) {
   // Town walls by culture group (`&items=townwalls` alone; `&ruins=1` all ruined).
   if (!only && (!pick || pick.includes('townwalls'))) {
     head('Town walls by culture group: curtain, corner and wall towers, gatehouse; a ruin; a star bastion (battlemap)');
-    y = townWalls(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 16, query.has('ruins'), query.get('panels'));
+    y = townWalls(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 16, query.has('ruins'), query.get('panels'), app, catalog);
   }
 
   // Cemeteries: their props and one laid out per culture group (`&items=cemetery` alone).
@@ -726,7 +726,7 @@ const wallStyle = (group: number, shape: number, material: number, merlons: numb
  * at `sq` px a square: per look a stretch of curtain turning at a corner tower, a wall tower along it and the
  * gatehouse (the town to the south, open country to the north); a ruined run; a star bastion. `ruins` draws
  * every panel ruined. Returns the y below it. */
-function townWalls(root: Container, y0: number, width: number, nolabels: boolean, sq: number, ruins: boolean, picks: string | null): number {
+function townWalls(root: Container, y0: number, width: number, nolabels: boolean, sq: number, ruins: boolean, picks: string | null, app: Application, catalog: KindInfo[]): number {
   // (Tower shapes: round, square, D, octagon; materials: stone, palisade, earth; merlons: broad, square,
   // swallowtail, stepped, stakes, rounded; stones: granite, limestone, sandstone, rose brick, mud brick, timber,
   // earth; gatehouses: square tower, twin drums, arched, bent, log.)
@@ -757,7 +757,7 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
   const rowY = (r: number) => Array.from({ length: r }, (_, i) => rowH(i)).reduce((a, b) => a + b, y0);
   const shape = (kind: number, size: number, pts: number[]): Shape => ({ kind, size, pts });
   const P = (x: number, y: number) => [x * PX, y * PX];
-  const place = (g: Graphics, ox: number, oy: number, w: number, h: number, label: string, sc = sq) => {
+  const place = (g: Container, ox: number, oy: number, w: number, h: number, label: string, sc = sq) => {
     const panel = new Container();
     const clip = new Graphics().rect(0, 0, w * PX, h * PX).fill(0xffffff);
     panel.addChild(g, clip);
@@ -804,27 +804,58 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
   });
   const rows = Math.ceil(slots.length / per);
   const y = rowY(rows) + 10;
-  // A star bastion (West, limestone) at a corner of the town (to the south-east): f1, g1, tip, g2, f2, the corner.
+  // A star bastion (West, limestone) at a corner of the town (to the south-east): f1, g1, tip, g2, f2, the corner, as
+  // `town::outline::bastions` lays one at full size (flanks 26 ft from the corner and 12 ft long, the point 38 ft
+  // out); on its top the props `town::wallside::bastion_props` sets out: a ballista aimed out, its shot, a crate,
+  // barrels.
   if (shown.has(9)) {
     const BW = 31;
+    const panel = new Container();
     const g = new Graphics();
     g.rect(0, 0, BW * PX, BH * PX).fill(GRASS);
     g.rect(14 * PX, 11 * PX, (BW - 14) * PX, (BH - 11) * PX).fill(PAVING);
     const code = wallStyle(1, 0, 0, 1, 1, 1) * PX;
+    const d = 38 / 5 / Math.SQRT2;
     const ring: [number, number][] = [
       [BW + 1, 11],
-      [21.2, 11],
-      [21.2, 6.6],
-      [4.27, 1.27],
-      [9.6, 18.2],
-      [14, 18.2],
+      [19.2, 11],
+      [19.2, 8.6],
+      [14 - d, 11 - d],
+      [11.6, 16.2],
+      [14, 16.2],
       [14, BH + 1],
     ];
     const poly = [ring[1], ring[2], ring[3], ring[4], ring[5], [14, 11]].flatMap(([x, yy]) => P(x, yy));
-    drawBastion(g, shape(20, 0, [...poly, code, 0]));
-    drawWalls(g, ring.slice(0, -1).map(([x, yy], i) => shape(0, 12 * (PX / 5), [...P(x, yy), ...P(...ring[i + 1]), (ruins ? 4 : 0) * PX, 0, code, 0])));
+    const bastion = shape(20, 0, [...poly, code, 0]);
+    drawBastion(g, bastion);
+    const grid = new Graphics();
+    topGrid(grid, bastion);
+    // (Its props as battlemap objects, between its top and its curtain, as the battlemap layers them.)
+    const props = new Container();
+    const more: KindInfo[] = [
+      { id: 108, name: 'ballista', radius: 0.75, blocks_move: true, blocks_sight: false, cover: 1, difficult: false, height_ft: 5, hazard: null, feature: true },
+      { id: 109, name: 'shot stones', radius: 0.45, blocks_move: false, blocks_sight: false, cover: 1, difficult: true, height_ft: 2, hazard: null, feature: true },
+    ];
+    const kinds = [...catalog, ...more.filter((m) => !catalog.some((c) => c.id === m.id))];
+    const atlas = buildAtlas(app.renderer, kinds);
+    const put = (id: number, v: number, x: number, y: number, rot = 0) => {
+      const inf = kinds.find((k) => k.id === id)!;
+      if (inf.height_ft >= 1.5) props.addChild(dropShadow(atlas, inf, x * PX, y * PX, 1));
+      const sp = new Sprite(atlas.frames[id][v % looks(id)]);
+      sp.anchor.set(0.5);
+      sp.position.set(x * PX, y * PX);
+      sp.rotation = rot;
+      props.addChild(sp);
+    };
+    put(108, 0, 14 - 2.83, 11 - 2.83, -0.75 * Math.PI);
+    put(109, 0, 13.2, 8.6, 0.4);
+    put(34, 1, 17.6, 9.7, 0.3);
+    put(33, 2, 12.5, 14.5);
+    const walls = new Graphics();
+    drawWalls(walls, ring.slice(0, -1).map(([x, yy], i) => shape(0, 8 * (PX / 5), [...P(x, yy), ...P(...ring[i + 1]), (ruins ? 4 : 0) * PX, 0, code, 0])));
+    panel.addChild(g, grid, props, walls);
     const [bx, by] = where(9);
-    place(g, bx, by, BW, BH, '9 West rich: a star bastion at a corner (its faces wall, its platform paved)', starSq);
+    place(panel, bx, by, BW, BH, '9 West rich: a star bastion at a corner (earth top, a ramp up from the town; a ballista, shot, a crate, barrels)', starSq);
   }
   return y;
 }

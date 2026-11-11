@@ -6,6 +6,7 @@
 import { Container, Graphics, Rectangle, Texture, type Renderer } from 'pixi.js';
 import type { KindInfo } from '../gen/client';
 import { drawHorse } from './furniture';
+import { ballista, shotStones } from './fortProps';
 
 /** Atlas resolution: pixels per 5-ft square. */
 export const PX = 64;
@@ -5224,6 +5225,9 @@ const DRAW: Record<number, Draw> = {
   // Roadmap 5 steppe towns' horse parks.
   106: horse,
   107: hitchingRail,
+  // Roadmap 5 star walls' bastions (`fortProps.ts`).
+  108: ballista,
+  109: shotStones,
   // Roadmap 5 harbours (M20).
   140: rowboat,
   141: fishingBoat,

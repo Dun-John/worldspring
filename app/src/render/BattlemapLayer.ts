@@ -952,7 +952,7 @@ export class BattlemapLayer {
     // its deck and grid, and the stub shown when play raises it, each on their own (shown by door
     // state). Chunks without one draw their structures in one piece.
     const drawbridges = c.shapes.filter((s) => s.kind === 18);
-    const lowKind = (k: number) => k === 0 || k === 20 || isBound(k);
+    const lowKind = (k: number) => k === 0 || isBound(k);
     const highKind = (k: number) => k === 4 || (k >= 10 && k <= 12);
     // (Gatehouses go under the towers but over every chunk's walls (`gateG`): a curtain owned by the next
     // chunk would otherwise end on top of its gate block. The walls still learn from them which way the
@@ -975,15 +975,18 @@ export class BattlemapLayer {
     });
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1 || s.kind === SAILS));
     const gateG = gates.length ? drawStructures(gates) : null;
+    // A star bastion's earth top: over the flat objects, under the low ones (its props) and its curtain (drawn over its edge).
+    const bastionG = new Graphics();
+    for (const s of c.shapes) if (s.kind === 20) drawBastion(bastionG, s);
     const gateGridG = new Graphics();
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
     const walkGridG = new Graphics();
     const topGridG = new Graphics();
     const pathGridG = new Graphics();
-    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 9 ? gateGridG : s.kind === 13 ? pathGridG : walkGridG, s);
+    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 9 ? gateGridG : s.kind === 13 || s.kind === 20 ? pathGridG : walkGridG, s);
     for (const gr of [gridG, walkGridG, topGridG, pathGridG, gateGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
-    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, gateG, gateGridG, towerG, topGridG]) {
+    for (const part of [roofMesh, bastionG, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, gateG, gateGridG, towerG, topGridG]) {
       if (!part) continue;
       this.prewarm(part);
       yield;
@@ -992,7 +995,7 @@ export class BattlemapLayer {
       const holder = new Container();
       holder.addChild(o);
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
-      if (i === 0) holder.addChild(daisG, pathGridG);
+      if (i === 0) holder.addChild(bastionG, daisG, pathGridG);
       if (i === 2) {
         holder.addChild(structG);
         for (const b of bridges) holder.addChild(b.deck);
@@ -1139,7 +1142,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail']);
+const TURNED = new Set(['ballista', 'market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1260,8 +1263,6 @@ function drawStructures(shapes: Shape[], ox = 0, oy = 0, gates = shapes.filter((
   const bounds = shapes.filter((s) => isBound(s.kind));
   if (bounds.length) drawBounds(g, bounds, ox, oy);
   for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
-  // (A star bastion's platform under its curtain, which is drawn over its edge.)
-  for (const s of shapes) if (s.kind === 20) drawBastion(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls, gates);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);

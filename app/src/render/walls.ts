@@ -911,54 +911,156 @@ function earthWalls(g: Graphics, segs: Seg[]) {
   blocks(g, fallen, stoneTone(segs[0].rnd));
 }
 
+/** Packed earth on a bastion's top: dark, mid, light (three close matte tones). */
+const EARTH_TOP = [0x8d7658, 0xa68e6a, 0xbca57f];
+/** The ramp up onto a bastion from the town (`town::wallside::RAMP_FT`, `RAMP_HALF`): ft out from the corner, half
+ * its width. */
+const RAMP_FT = 10;
+const RAMP_HALF = 5;
+
+/** A bastion's ramp (px): its foot along the open back (on either side of the corner `v`), its head out along the
+ * middle line: foot on one side, the corner, foot on the other side, head, head. */
+export function bastionRamp(pts: number[]): number[] {
+  const [vx, vy] = [pts[10], pts[11]];
+  let [ox, oy] = [pts[4] - vx, pts[5] - vy];
+  const lo = Math.hypot(ox, oy) || 1;
+  [ox, oy] = [ox / lo, oy / lo];
+  const [sx, sy] = [-oy, ox];
+  const [hw, len] = [RAMP_HALF * FT, RAMP_FT * FT];
+  // (Where the ramp's side, `side` of the middle line, meets the back edge on that side: v to f1 or v to f2.)
+  const foot = (side: number): [number, number] => {
+    for (const f of [0, 8]) {
+      const [dx, dy] = [pts[f] - vx, pts[f + 1] - vy];
+      const lat = dx * sx + dy * sy;
+      if (lat * side <= 0) continue;
+      const t = Math.min(1, hw / Math.abs(lat));
+      return [vx + dx * t, vy + dy * t];
+    }
+    return [vx + sx * hw * side, vy + sy * hw * side];
+  };
+  const [a, b] = [foot(-1), foot(1)];
+  return [...a, vx, vy, ...b, vx + ox * len + sx * hw, vy + oy * len + sy * hw, vx + ox * len - sx * hw, vy + oy * len - sy * hw];
+}
+
 /**
- * A star bastion's platform (`Layout::bastions`: f1, g1, tip, g2, f2, the corner, px, then its style): a work of
- * stone, a tone apart from the ground. Inside its curtain (drawn over its edge by `drawWalls`) the walk steps down
- * a sloping bank, lit on the faces toward the light and shaded away from it, to the flat terreplein inside, whose
- * edge is inked and coped; a few big joints of paving square to the tip.
+ * A star bastion's top (`Layout::bastions`: f1, g1, tip, g2, f2, the corner, px, then its style): an earth terreplein
+ * (packed dirt, a worn track across it, a few stones), held up along its open back by a low stone revetment that
+ * casts its shadow on the town, with a ramp cut up into it from the town at the corner. Its curtain (drawn over its
+ * edge by `drawWalls`) keeps its walk and merlons; its props (a ballista, shot, crates) are battlemap objects.
  */
 export function drawBastion(g: Graphics, s: Shape) {
   const pts = s.pts.slice(0, 12);
   use(lookOf(s, 12));
-  const hull = pts.slice(0, 10);
-  const n = pts.length / 2;
-  let [cx, cy] = [0, 0];
-  for (let i = 0; i < n; i++) [cx, cy] = [cx + pts[i * 2] / n, cy + pts[i * 2 + 1] / n];
-  const [tx, ty] = [pts[4], pts[5]];
-  const [vx, vy] = [cx - tx, cy - ty];
-  const lv = Math.hypot(vx, vy) || 1;
-  // (How far the bank runs in from the curtain, held to a share of the work's depth.)
-  const edge = Math.min(FT * 6, lv * 0.12);
-  const bank = Math.min(FT * 4.5, lv * 0.14);
-  const out = inset(hull, edge);
-  const inner = inset(hull, edge + bank);
-  g.poly(pts).fill(ST[1]);
-  g.poly(inner).fill(mix(ST[1], ST[2], 0.75));
-  const quad = (i: number) => {
-    const j = (i + 1) % 5;
-    return [out[i * 2], out[i * 2 + 1], out[j * 2], out[j * 2 + 1], inner[j * 2], inner[j * 2 + 1], inner[i * 2], inner[i * 2 + 1]];
+  const rnd = rngAt(pts[4], pts[5]);
+  const [vx, vy] = [pts[10], pts[11]];
+  let [ox, oy] = [pts[4] - vx, pts[5] - vy];
+  const depth = Math.hypot(ox, oy) || 1;
+  [ox, oy] = [ox / depth, oy / depth];
+  const [sx, sy] = [-oy, ox];
+  const at = (a: number, l: number): [number, number] => [vx + ox * a + sx * l, vy + oy * a + sy * l];
+  // The earth, and a few broad patches of it lighter and darker (no lines across it).
+  g.poly(pts).fill(EARTH_TOP[1]);
+  const patch = (cx: number, cy: number, r: number, tone: number, alpha: number) => {
+    const n = 9;
+    const q: number[] = [];
+    for (let k = 0; k < n; k++) {
+      const t = (k / n) * Math.PI * 2;
+      const rr = r * (0.75 + rnd() * 0.4);
+      q.push(cx + Math.cos(t) * rr * 1.3, cy + Math.sin(t) * rr);
+    }
+    g.poly(q).fill({ color: tone, alpha });
   };
-  const faces: number[][][] = [[], []];
+  for (let k = 0; k < 3; k++) {
+    const [px, py] = at(depth * (0.35 + rnd() * 0.4), (rnd() - 0.5) * depth * 0.5);
+    patch(px, py, FT * (3 + rnd() * 2.5), k === 0 ? EARTH_TOP[0] : EARTH_TOP[2], k === 0 ? 0.35 : 0.45);
+  }
+  // A worn track from the ramp's head toward the point, lighter.
+  const [t0x, t0y] = at(RAMP_FT * FT, 0);
+  const [t1x, t1y] = at(depth * 0.72, (rnd() - 0.5) * FT * 2);
+  g.moveTo(t0x, t0y).quadraticCurveTo((t0x + t1x) / 2 + sx * FT, (t0y + t1y) / 2 + sy * FT, t1x, t1y).stroke({ width: FT * 3.2, color: EARTH_TOP[2], alpha: 0.55, cap: 'round' });
+  // Shadow of the curtain's parapet on the earth, along the faces away from the light.
   for (let i = 0; i < 4; i++) {
-    const [mx, my] = [(hull[i * 2] + hull[(i + 1) * 2]) / 2, (hull[i * 2 + 1] + hull[(i + 1) * 2 + 1]) / 2];
-    faces[lit(mx - cx, my - cy) > 0.05 ? 0 : 1].push(quad(i));
+    const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[i * 2 + 2], pts[i * 2 + 3]];
+    const [mx, my] = [(ax + bx) / 2 - vx, (ay + by) / 2 - vy];
+    if (lit(mx, my) < 0.1) continue;
+    const l = Math.hypot(bx - ax, by - ay) || 1;
+    let [nx, ny] = [-(by - ay) / l, (bx - ax) / l];
+    if (nx * mx + ny * my > 0) [nx, ny] = [-nx, -ny];
+    const w = s.size / 2 + FT * 1.2;
+    g.poly([ax, ay, bx, by, bx + nx * w, by + ny * w, ax + nx * w, ay + ny * w]).fill({ color: EARTH_TOP[0], alpha: 0.3 });
   }
-  for (const q of faces[0]) g.poly(q);
-  g.fill(ST[2]);
-  for (const q of faces[1]) g.poly(q);
-  g.fill(mix(ST[1], PLUM, 0.3));
-  // The terreplein's edge: a coping line, inked, lit where it faces the light.
-  for (let i = 0; i < 4; i++) g.moveTo(inner[i * 2], inner[i * 2 + 1]).lineTo(inner[(i + 1) * 2], inner[(i + 1) * 2 + 1]);
-  g.stroke({ width: OUT * 0.9, color: INK, cap: 'round', join: 'round' });
-  for (const q of faces[0]) g.moveTo(q[6], q[7]).lineTo(q[4], q[5]);
-  g.stroke({ width: FT * 0.5, color: ST[3], alpha: 0.9, cap: 'round' });
-  // A few big joints of its paving, square to the face at the tip.
-  for (let k = 1; k < 4; k++) {
-    const [px, py] = [tx + vx * 0.3 * k, ty + vy * 0.3 * k];
-    g.moveTo(px - (vy / lv) * lv * 0.3, py + (vx / lv) * lv * 0.3).lineTo(px + (vy / lv) * lv * 0.3, py - (vx / lv) * lv * 0.3);
+  // A few stones in the earth.
+  for (let k = 0; k < 4; k++) {
+    const [px, py] = at(depth * (0.3 + rnd() * 0.5), (rnd() - 0.5) * depth * 0.7);
+    if (!inside(pts, px, py)) continue;
+    const r = FT * (0.35 + rnd() * 0.25);
+    g.ellipse(px, py, r * 1.2, r).fill(ST[2]).stroke({ width: LINE * 0.8, color: INK });
   }
-  g.stroke({ width: LINE, color: ST[0], alpha: 0.7 });
+  // The ramp: the cut's floor, its treads square to the way up, lit on their upper edge; the cut's side toward the
+  // light shades the floor beside it.
+  const ramp = bastionRamp(pts);
+  g.poly(ramp).fill(mix(EARTH_TOP[1], EARTH_TOP[0], 0.45));
+  const hw = RAMP_HALF * FT;
+  const [fa, fb] = [ramp.slice(0, 2), ramp.slice(4, 6)];
+  // (Which foot stands on the back edge from the corner to f1, which on the one to f2.)
+  const onF1 = Math.abs((fa[0] - vx) * (pts[1] - vy) - (fa[1] - vy) * (pts[0] - vx)) < Math.abs((fb[0] - vx) * (pts[1] - vy) - (fb[1] - vy) * (pts[0] - vx));
+  const [foot1, foot2] = onF1 ? [fa, fb] : [fb, fa];
+  const footAx = (p: number[]) => (p[0] - vx) * ox + (p[1] - vy) * oy;
+  const start = Math.min(footAx(fa), footAx(fb));
+  for (let a = start + FT * 2.4; a < RAMP_FT * FT - FT * 0.5; a += FT * 2.4) {
+    // (Clipped to the ramp: its sides, and the back edges near its foot.)
+    const lat = (side: number) => {
+      const f = side < 0 ? fa : fb;
+      const fAx = footAx(f);
+      if (a >= fAx) return side * hw;
+      const r = Math.max(0, a) / Math.max(1e-6, fAx);
+      return side * hw * r;
+    };
+    const [l0, l1] = [lat(-1), lat(1)];
+    if (l1 - l0 < FT) continue;
+    g.moveTo(...at(a, l0 + FT * 0.3)).lineTo(...at(a, l1 - FT * 0.3));
+  }
+  g.stroke({ width: LINE, color: INK, alpha: 0.75, cap: 'round' });
+  for (let a = start + FT * 2.4; a < RAMP_FT * FT - FT * 0.5; a += FT * 2.4) {
+    g.moveTo(...at(a + FT * 0.35, -hw * 0.55)).lineTo(...at(a + FT * 0.35, hw * 0.55));
+  }
+  g.stroke({ width: FT * 0.4, color: EARTH_TOP[2], alpha: 0.7, cap: 'round' });
+  // The revetment: a stone coping along the open back and down the ramp's sides (the earth stands up behind it),
+  // its shadow on the town where it faces away from the light, inked on its outer edge.
+  const cope = FT * 1.5;
+  const runs: [number, number, number, number][] = [
+    [pts[8], pts[9], foot2[0], foot2[1]],
+    [foot1[0], foot1[1], pts[0], pts[1]],
+    [fb[0], fb[1], ramp[6], ramp[7]],
+    [fa[0], fa[1], ramp[8], ramp[9]],
+  ];
+  const [cx, cy] = at(depth * 0.55, 0);
+  runs.forEach(([ax, ay, bx, by], idx) => {
+    const l = Math.hypot(bx - ax, by - ay);
+    if (l < FT * 0.5) return;
+    // (Into the earth: toward the top's middle for the back; away from the ramp's middle line for its sides.)
+    let [nx, ny] = [-(by - ay) / l, (bx - ax) / l];
+    const away = idx >= 2 ? Math.sign(((ax + bx) / 2 - vx) * sx + ((ay + by) / 2 - vy) * sy) : 0;
+    const [rx, ry] = idx >= 2 ? [sx * away, sy * away] : [cx - ax, cy - ay];
+    if (nx * rx + ny * ry < 0) [nx, ny] = [-nx, -ny];
+    // (Its shadow out over the lower ground, where the face looks away from the light.)
+    if (-(nx * LX + ny * LY) < 0.2) g.poly([ax, ay, bx, by, bx - nx * FT * 1.6, by - ny * FT * 1.6, ax - nx * FT * 1.6, ay - ny * FT * 1.6]).fill({ color: PLUM, alpha: 0.22 });
+    const band = [ax, ay, bx, by, bx + nx * cope, by + ny * cope, ax + nx * cope, ay + ny * cope];
+    g.poly(band).fill(nx * LX + ny * LY < 0 ? ST[2] : ST[1]);
+    g.moveTo(ax + nx * cope, ay + ny * cope).lineTo(bx + nx * cope, by + ny * cope).stroke({ width: LINE * 0.75, color: ST[0], alpha: 0.8 });
+    g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: LINE, color: INK, cap: 'round' });
+  });
   use(null);
+}
+
+/** Whether (x, y) falls inside a polygon of flat px pairs. */
+function inside(q: number[], x: number, y: number): boolean {
+  let hit = false;
+  for (let i = 0, j = q.length / 2 - 1; i < q.length / 2; j = i++) {
+    const [xi, yi, xj, yj] = [q[i * 2], q[i * 2 + 1], q[j * 2], q[j * 2 + 1]];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
 }
 
 /**
@@ -2222,8 +2324,16 @@ export function banner(g: Graphics, x: number, y: number) {
 
 /** The 5-ft grid over a wall's walk or a tower's top (shown with the ground's): lines on the square
  * boundaries, clipped to the walk (a quad) or the top (a round); over a court's gravel walk too, as
- * faint as the ground's own. None over a forecourt's low wall, piers or gate. */
+ * faint as the ground's own; over a bastion's earth top. None over a forecourt's low wall, piers or gate. */
 export function topGrid(g: Graphics, s: Shape) {
+  if (s.kind === 20) {
+    // A bastion's top, as two halves either side of its middle line (each convex): f1, g1, tip, v and v, tip, g2, f2.
+    const p = s.pts;
+    gridIn(g, [p[0], p[1], p[2], p[3], p[4], p[5], p[10], p[11]]);
+    gridIn(g, [p[10], p[11], p[4], p[5], p[6], p[7], p[8], p[9]]);
+    g.stroke({ width: 1, color: INK, alpha: 0.32, pixelLine: true });
+    return;
+  }
   if (s.kind === 13) {
     if (s.pts.length < 8) return;
     gridIn(g, s.pts.slice(0, 8));
