@@ -40,6 +40,7 @@ pub mod rural;
 // R5 towns
 pub mod cemetery;
 pub mod horses;
+pub mod yurts;
 // R5 towns: districts drawn by hand, and renames kept when a patch is laid out anew.
 mod districts;
 pub mod places;
@@ -306,6 +307,9 @@ pub struct Layout {
     /// on in pieces (`temple::shape_all`), a monastery's own lot and those it took in (`palace::merge`).
     /// What of it the building leaves open is its own: no other building's door opens onto it.
     pub grounds: Vec<(u32, Vec<P>)>,
+    /// R5 towns (115): a steppe town's yurts, by building id: the lot each stands on, its trodden
+    /// ground, a pen beside some (`yurts::finish`; their horses, carts and haystacks in `props`).
+    pub yurts: Vec<yurts::Yurt>,
     /// The settlement's culture (a site's: the nearest settlement's), its roofs' seed and age
     /// (base weathering, 0-255): `roof::look`.
     pub culture: u8,
@@ -639,6 +643,7 @@ impl Layout {
             stairs: Vec::new(),
             close_room: Vec::new(),
             forecourts: Vec::new(),
+            yurts: Vec::new(),
             grounds: Vec::new(),
             culture: 0,
             roof_seed: 0,
@@ -1950,6 +1955,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
 /// (`roof::round_footprint`), if it is still roofed round there; the rest of its lot is open ground.
 /// Last, once every other building stands, so theirs are as they were.
 pub(crate) fn round_off(l: &mut Layout, site: Option<&Site>) {
+    let mut found: Vec<(usize, Vec<P>)> = Vec::new();
     for i in 0..l.buildings.len() {
         let b = &l.buildings[i];
         let hand = b.shape.is_some() || b.roof.is_some();
@@ -1958,17 +1964,24 @@ pub(crate) fn round_off(l: &mut Layout, site: Option<&Site>) {
         }
         // (R5 towns: a steppe town's hall, temple or inn a round felt hall of one storey, `roof::hall_ring`.)
         let hall = roof::hall_ring(l, b);
-        let Some(poly) = hall.clone().or_else(|| roof::round_footprint(&b.poly)) else { continue };
+        // (R5 towns, 115: a steppe home's yurt sized by its wealth and lot, `yurts::ring`.)
+        let yurt = hall.is_none() && yurts::is_steppe_home(l, b);
+        let Some(poly) = hall.clone().or_else(|| if yurt { yurts::ring(l, b) } else { roof::round_footprint(&b.poly) }) else { continue };
         let mut round = b.clone();
         round.poly = poly;
         if roof::look(l, &round).shape == roof::Shape::Round {
-            let ring = yurt_door(l, i, round.poly, site);
+            let lot = l.buildings[i].poly.clone();
+            let ring = yurt_door(l, i, round.poly, &lot, site, None);
             l.buildings[i].poly = ring;
             if hall.is_some() {
                 l.buildings[i].floors = 1;
             }
+            if yurt {
+                found.push((i, lot));
+            }
         }
     }
+    yurts::finish(l, site, found);
 }
 
 /// How far a yurt looks for a lane to face (ft from its middle to the lane's nearest point).
@@ -1983,7 +1996,9 @@ pub const YURT_CLEAR_FT: f64 = 10.0;
 /// a hash of the layout and the building's id; the nearest side whose outside is clear of other roofs
 /// if that one is shut in. Carried by the ring's order alone: `interior::furnish_yurt` and the
 /// battlemap's roof (`battlePrep.yurtDoor`) both take the door from side 0.
-fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, site: Option<&Site>) -> Vec<P> {
+/// `lot`: the ground it stands on; `aim`: a point to face in place of the nearest lane's (R5 towns, 115:
+/// a cluster's shared lane, `yurts::finish`), its swing then a quarter.
+pub(crate) fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, lot: &[P], site: Option<&Site>, aim: Option<P>) -> Vec<P> {
     let m = ring.len();
     let c = centroid(&ring);
     // (R5 towns: a felt hall's reach as far past its wall as a yurt's, its door swung less.)
@@ -2003,15 +2018,15 @@ fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, site: Option<&Site>) -> Vec
             }
         }
     }
-    let aim = best.map(|b| b.1).filter(|q| dist(*q, c) > 1.0).unwrap_or(l.center);
+    let forced = aim.filter(|q| dist(*q, c) > 1.0);
+    let aim = forced.or(best.map(|b| b.1).filter(|q| dist(*q, c) > 1.0)).unwrap_or(l.center);
     let to = if dist(aim, c) > 1.0 { sub(aim, c) } else { [0.0, 1.0] };
-    let swing = signed(hash2(hash2(l.roof_seed, l.buildings[i].id as i64, 0x7975), 1, 0)) * if hall { 0.25 } else { 1.0 } * YURT_SWING.to_radians();
+    let swing = signed(hash2(hash2(l.roof_seed, l.buildings[i].id as i64, 0x7975), 1, 0)) * if hall || forced.is_some() { 0.25 } else { 1.0 } * YURT_SWING.to_radians();
     let a = libm::atan2(to[1], to[0]) + swing;
     let want = [libm::cos(a), libm::sin(a)];
     let mid = |e: usize| lerp(ring[e], ring[(e + 1) % m], 0.5);
     // (Open ground out to `out` ft from the side: under no other roof or ground of another's lot, on no water.)
     let me = l.buildings[i].id;
-    let lot = l.buildings[i].poly.clone();
     let open = |e: usize, out: f64| {
         let d = sub(mid(e), c);
         let n = mul(d, 1.0 / len(d).max(1e-9));
@@ -2019,7 +2034,7 @@ fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, site: Option<&Site>) -> Vec
         [0.25, 0.5, 0.75, 1.0].iter().flat_map(|&t| [-5.0, -2.5, 0.0, 2.5, 5.0].map(|w| (t, w))).all(|(t, w)| {
             let p = add(add(mid(e), mul(n, out * t)), mul([-n[1], n[0]], w));
             !l.buildings.iter().enumerate().any(|(k, o)| k != i && o.structure == Structure::Roofed && dist(o.poly[0], c) < 400.0 && contains(&o.poly, p))
-                && !l.grounds.iter().any(|g| g.0 != me && dist(g.1[0], c) < 400.0 && !on_lot(&g.1, &lot) && contains(&g.1, p))
+                && !l.grounds.iter().any(|g| g.0 != me && dist(g.1[0], c) < 400.0 && !on_lot(&g.1, lot) && contains(&g.1, p))
                 && !site.is_some_and(|s| s.wet(sub(p, s.center)))
         })
     };

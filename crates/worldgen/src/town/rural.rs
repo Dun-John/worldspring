@@ -575,6 +575,12 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
             piece_runs(a, b, RunKind::Fence, &|_| true, out);
         }
     }
+    // R5 towns (115): the small pens beside some yurts, post and rail, a gap at each gate.
+    if l.yurts.iter().any(|y| y.pen.is_some()) && hits(l.bbox, near) {
+        for (a, b) in super::yurts::fences(l, near) {
+            piece_runs(a, b, RunKind::Fence, &|_| true, out);
+        }
+    }
     // Orchards in rows along their furrows; copses.
     if hits(l.bbox, near) {
         let (trees, _, _, _) = crate::battlemap::greenery(crate::battlemap::land_biome(t0, l.center));

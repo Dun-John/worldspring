@@ -194,6 +194,11 @@ export const ROOF_SHADES = [
   [0x6e5a44, 0x7a6a56, 0x86684a, 0x94744e, 0x8a6a56], // plank: dark, grey, brown, warm, rosy
   [0xb6b3aa, 0xbdb399, 0xc4baa7, 0xcbc1ae, 0xbdac96], // whitewash: cool, cream, lime, bright, sand
 ];
+/** Felt for a round roof (`Roof.shade` 0-4): cream, off-white, grey, warm cream, dusty grey (a felt hall's). */
+export const FELT = [0xc9bea6, 0xc4bdad, 0xaea595, 0xc2b394, 0xa39a88];
+/** A yurt's felt (`Roof.shade` 0-7, R5 towns 115 `town::yurts::felt`): cream, off-white, grey, warm cream, dusty
+ * grey, smoke-browned, cream (with a red band), pale (with a sooty crown). */
+export const YURT_FELT = [0xd3c6a6, 0xe0dccf, 0xa9a192, 0xcdb88f, 0xb5ad9d, 0x96805f, 0xd0c3a2, 0xdcd6c6];
 /** A roof material's colour in a variant (0-4; bad values: the usual). */
 export const roofRgb = (material: number, shade = 2): number => ROOF_SHADES[material]?.[shade] ?? ROOF_MATERIAL_RGB[material] ?? ROOF_MATERIAL_RGB[3];
 /** Roof shapes by id (`worldgen::town::roof::SHAPES`, append-only). */
@@ -1269,7 +1274,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
         // (9) down the hall's roof.
         const piece = ((attr >>> 25) & 15) - 1;
         const top = (attr >>> 29) & 3;
-        if (piece === 7) rgb = [0.36, 0.6, 0.53];
+        // R5 towns (115): a yurt (10) its felt (`YURT_FELT`, by the shade bits), softened toward its ward's paper.
+        if (piece === 10) {
+          const base = WARD_RGB[ward] ?? WARD_RGB[6];
+          const m = YURT_FELT[(attr >>> 29) & 7] ?? YURT_FELT[0];
+          rgb = [0, 1, 2].map((c) => 0.7 * (((m >> (16 - 8 * c)) & 255) / 255) + 0.3 * base[c]) as [number, number, number];
+        } else if (piece === 7) rgb = [0.36, 0.6, 0.53];
         else if (piece === 8) rgb = [0.86, 0.8, 0.66];
         else if (piece === 9) {
           rgb = [0, 0, 0];

@@ -432,6 +432,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
             let detailed = key.level >= BUILDING_MIN_LEVEL || l.tier == crate::t0::settle::Tier::Village;
             if detailed {
+                // R5 towns (115): the yurts' trodden ground and pens, under the buildings.
+                crate::town::yurts::plan_polys(&l, &mut push);
                 for b in &l.buildings {
                     // v63 underground: a ruin as its broken walls, rubble and floor (`battlemap::ruin_plan`).
                     if b.structure == crate::town::Structure::Ruin {
@@ -452,6 +454,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     let attr = kind | (b.ward as u32) << 8 | (b.floors.min(15) as u32) << 16 | (k.material as u32 & 15) << 20 | (b.func.is_some() as u32) << 24;
                     // (A plain building's colour variant in bits 29-31; a keep's pieces use them for their tops.)
                     let plain = attr | (k.shade as u32) << 29;
+                    // (R5 towns, 115: a yurt's felt (piece code 11; its shade the felt, `yurts::felt`).)
+                    let plain = if k.shape == crate::town::roof::Shape::Round && b.poly.len() == crate::town::roof::ROUND_SIDES && crate::town::yurts::is_steppe_home(&l, b) { plain | 11 << 25 } else { plain };
                     // A keep of pieces: each piece (convex, outlined), its towers over its body;
                     // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
                     // forebuilding, 5 wing) and how it is topped (bits 29-31: `town::keep_tops`, its

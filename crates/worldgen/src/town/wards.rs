@@ -531,6 +531,12 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
                 !used[g] && o.len() == ring.len() && (0..ring.len()).any(|r| (0..ring.len()).all(|k| dist(o[k], ring[(k + r) % ring.len()]) < 0.01))
             })
         });
+        // (R5 towns, 115: a lot that stood as generated under a yurt, sized and set by its id and
+        // household: `yurts::ring`, its lot kept in `Layout::yurts`.)
+        let hit = hit.or_else(|| {
+            let y = generated.yurts.iter().find(|y| y.lot.len() == b.poly.len() && same(&y.lot, &b.poly))?;
+            generated.buildings.iter().position(|o| o.id == y.id).filter(|&g| !used[g])
+        });
         // (R5 towns: a lot that stood as generated under a felt hall, its ring about the lot's widest
         // middle, `roof::hall_ring`.)
         let hit = hit.or_else(|| {

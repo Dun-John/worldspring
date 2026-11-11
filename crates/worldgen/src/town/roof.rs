@@ -114,7 +114,7 @@ fn role(b: &Building) -> Role {
 }
 
 /// Wealth 0 poor, 1 middling, 2 rich: the ward's, a home's kind nudging it.
-fn wealth(b: &Building) -> u8 {
+pub(crate) fn wealth(b: &Building) -> u8 {
     if b.func.is_none() {
         match b.residential {
             0 | 5 => return 0,
@@ -329,6 +329,9 @@ pub fn look(l: &Layout, b: &Building) -> Look {
             FlatClay => pick(h(13), &[(2u8, 1), (3, 1)]),
             _ => 3,
         },
+        // (R5 towns, 115: a yurt's felt, off-white to smoke-browned, a few banded or crowned dark:
+        // `yurts::felt`.)
+        None if culture == 4 && shape == Round && b.poly.len() == ROUND_SIDES && role == Role::Home => super::yurts::felt(h(14)),
         None => pick(h(11), &[(0u8, 1), (1, 3), (2, 8), (3, 3), (4, 1)]),
     };
     Look { material, shape, wear: wear.clamp(0.0, 255.0) as u8, smoke, shade }
@@ -342,6 +345,14 @@ pub const ROUND_SIDES: usize = 16;
 /// wound as the lot is; `None` on a lot under about 19 ft across (no round roof there: `look`).
 /// The walls, the interior and the roof all follow it (`super::round_off`).
 pub fn round_footprint(lot: &[P]) -> Option<Vec<P>> {
+    // (A yard round it where the lot allows: about 6 ft to the lot's sides, at least 18 ft across,
+    // at most 30.)
+    round_footprint_sized(lot, &|clear| (clear - 6.0).clamp(9.0, 15.0))
+}
+
+/// `round_footprint` with its radius from the lot's clearance about its widest middle (ft) by `size`
+/// (R5 towns, 115: a yurt's, `yurts::ring`).
+pub fn round_footprint_sized(lot: &[P], size: &dyn Fn(f64) -> f64) -> Option<Vec<P>> {
     if lot.len() < 3 {
         return None;
     }
@@ -349,9 +360,7 @@ pub fn round_footprint(lot: &[P]) -> Option<Vec<P>> {
     if clear - 0.5 < 9.0 {
         return None;
     }
-    // (A yard round it where the lot allows: about 6 ft to the lot's sides, at least 18 ft across,
-    // at most 30.)
-    let r = (clear - 6.0).clamp(9.0, 15.0);
+    let r = size(clear);
     let u = super::geom::obb(lot).axis;
     let mut out: Vec<P> = (0..ROUND_SIDES)
         .map(|k| {

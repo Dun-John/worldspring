@@ -1338,6 +1338,37 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             yards.push(y.clone());
         }
         crate::town::village::stamp(&l, &mut |poly, val| stamp(poly, val, &mut urb_h));
+        // R5 towns (115): bare trodden earth round a steppe town's yurts, on ground nothing else
+        // claims (a street, a square, a park stamped after it wins).
+        // (A pen's ground and a cart's trodden too, a little past them so no square they reach keeps
+        // its grass; a village's croft under them trodden as well.)
+        let yurt_props: Vec<[[f64; 2]; 4]> = l.props.iter().filter(|p| matches!(p.kind, Kind::Cart | Kind::Haystack) && l.yurts.iter().any(|y| crate::town::geom::contains(&y.lot, p.at))).map(|p| crate::town::horses::foot(p.kind, p.at, p.rot, p.scale)).collect();
+        let grow = |b: [[f64; 2]; 4]| {
+            let m = crate::town::geom::mean(&b);
+            b.map(|q| {
+                let d = crate::town::geom::sub(q, m);
+                crate::town::geom::add(m, crate::town::geom::mul(d, 1.0 + 3.6 / crate::town::geom::len(d).max(1e-9)))
+            })
+        };
+        let pens: Vec<[[f64; 2]; 4]> = l.yurts.iter().filter_map(|y| y.pen.map(|p| p.pts)).chain(yurt_props).map(grow).collect();
+        for poly in l.yurts.iter().map(|y| y.trodden.as_slice()).chain(pens.iter().map(|p| p.as_slice())) {
+            let b = bbox(poly);
+            if !overlaps(b) {
+                continue;
+            }
+            let (i0, j0, i1, j1) = range(b);
+            if i1 < 0.0 || j1 < 0.0 {
+                continue;
+            }
+            for j in j0..=j1 as usize {
+                for i in i0..=i1 as usize {
+                    let h = j * HS + i;
+                    if (urb_h[h] == 0 || urb_h[h] == URBAN_CROFT) && crate::town::geom::contains(poly, center(i, j)) {
+                        urb_h[h] = URBAN_YARD;
+                    }
+                }
+            }
+        }
         for pl in &l.plazas {
             use crate::town::PlazaKind as K;
             let p = &pl.pts;
@@ -3310,11 +3341,13 @@ fn roof_byte(b: &crate::town::Building, battlements: bool) -> u8 {
     style | b.tint.map_or(0, |t| (t + 1) << 2)
 }
 
-/// A roof's look as packed (`town::roof::look`): material id, shape id | 0x10 smoke-darkened |
+/// A roof's look as packed (`town::roof::look`): material id | 0x80 a steppe home's yurt (R5 towns,
+/// 115: its colour variant then its felt, `town::yurts::felt`), shape id | 0x10 smoke-darkened |
 /// colour variant << 5, weathering 0-255.
 fn look_bytes(l: &crate::town::Layout, b: &crate::town::Building) -> [u8; 3] {
     let k = crate::town::roof::look(l, b);
-    [k.material as u8, k.shape as u8 | if k.smoke { 0x10 } else { 0 } | k.shade << 5, k.wear]
+    let yurt = k.shape == crate::town::roof::Shape::Round && b.poly.len() == crate::town::roof::ROUND_SIDES && crate::town::yurts::is_steppe_home(l, b);
+    [k.material as u8 | if yurt { 0x80 } else { 0 }, k.shape as u8 | if k.smoke { 0x10 } else { 0 } | k.shade << 5, k.wear]
 }
 
 fn apply_edits(c: &mut Chunk, e: &crate::world::Edits, ox: f64, oy: f64) {
