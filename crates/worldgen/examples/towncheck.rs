@@ -4128,7 +4128,7 @@ fn fields_rows(l: &Layout, t0: &T0, tag: &str, r: &mut Report) {
             rural::battle(l, t0, rect, &|_| false, &mut bt);
             r.measure("runs in a chunk (most, of the 900 a chunk holds)", false, bt.runs.len() as f64, format!("{tag} block ({bx},{by})"));
             for &(a, e, kind) in &bt.runs {
-                if kind == rural::RunKind::Fence {
+                if matches!(kind, rural::RunKind::Fence | rural::RunKind::Corral) {
                     continue;
                 }
                 let m = (dist(a, e) / 1.25).ceil().max(1.0) as usize;

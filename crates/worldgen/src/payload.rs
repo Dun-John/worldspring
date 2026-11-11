@@ -565,6 +565,19 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         whole.set(None);
                         continue;
                     }
+                    // (R5 towns, 114: a felt hall's roof as a yurt's: its felt, an inner ring where the
+                    // girth rope runs (outlined in the same felt) and the crown over the smoke hole
+                    // (piece code 12).)
+                    if k.shape == crate::town::roof::Shape::Round && crate::town::roof::felt_built(b).is_some() {
+                        use crate::town::geom::{add, centroid, mul, sub};
+                        let c = centroid(&b.poly);
+                        whole.set(Some(owns(c)));
+                        push(&b.poly, plain);
+                        push(&b.poly.iter().map(|&p| add(c, mul(sub(p, c), 0.62))).collect::<Vec<[f64; 2]>>(), plain);
+                        push(&b.poly.iter().map(|&p| add(c, mul(sub(p, c), 0.2))).collect::<Vec<[f64; 2]>>(), (plain & !(15 << 25)) | 12 << 25);
+                        whole.set(None);
+                        continue;
+                    }
                     push(&b.poly, plain);
                     // A keep's round corner towers (as the battlemap draws them), standing a
                     // little proud of its walls; each tile keeps the ones it owns.

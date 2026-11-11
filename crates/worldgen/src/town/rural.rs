@@ -27,9 +27,14 @@ pub enum RunKind {
     HedgeRow,
     DryWall,
     Fence,
+    /// A horse park's corral or a yurt's pen: a fence drawn bolder (R5 towns, 114).
+    Corral,
     /// A cemetery's gate pier: a dry-stone wall's short, thicker stretch (`cemetery::bounds`).
     Pier,
 }
+
+/// A corral's fence's thickness as the battlemap draws it (ft; its squares as a fence's).
+const CORRAL_DRAWN_FT: f64 = 1.05;
 
 impl RunKind {
     /// Its thickness (ft) as drawn.
@@ -37,7 +42,7 @@ impl RunKind {
         match self {
             RunKind::Hedge | RunKind::HedgeRow => 3.5,
             RunKind::DryWall => 3.75,
-            RunKind::Fence => 0.8,
+            RunKind::Fence | RunKind::Corral => 0.8,
             RunKind::Pier => 6.0,
         }
     }
@@ -572,13 +577,13 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     // R5 towns (114): a horse park's corrals, post and rail, a gap at each gate (`horses::bounds`).
     if l.parks.iter().any(|p| p.kind == super::ParkKind::Horses && hits(bbox(&p.pts), near)) {
         for (a, b) in super::horses::bounds(l, near) {
-            piece_runs(a, b, RunKind::Fence, &|_| true, out);
+            piece_runs(a, b, RunKind::Corral, &|_| true, out);
         }
     }
     // R5 towns (115): the small pens beside some yurts, post and rail, a gap at each gate.
     if l.yurts.iter().any(|y| y.pen.is_some()) && hits(l.bbox, near) {
         for (a, b) in super::yurts::fences(l, near) {
-            piece_runs(a, b, RunKind::Fence, &|_| true, out);
+            piece_runs(a, b, RunKind::Corral, &|_| true, out);
         }
     }
     // Orchards in rows along their furrows; copses.
@@ -663,14 +668,16 @@ pub fn shapes(b: &Battle, ox: f64, oy: f64, out: &mut Vec<VectorShape>) {
         let sk = match kind {
             RunKind::Hedge | RunKind::HedgeRow => ShapeKind::Hedge,
             RunKind::DryWall | RunKind::Pier => ShapeKind::DryWall,
-            RunKind::Fence => ShapeKind::Fence,
+            RunKind::Fence | RunKind::Corral => ShapeKind::Fence,
         };
+        // (A corral's fence drawn a third thicker: `countryside.ts` makes it bolder.)
+        let ft = if kind == RunKind::Corral { CORRAL_DRAWN_FT } else { kind.ft() };
         // (A field's hedge's third point (1, 0): drawn the cheaper way, `countryside.ts`.)
         let mut pts = vec![local(a), local(e)];
         if kind == RunKind::HedgeRow {
             pts.push([1.0, 0.0]);
         }
-        out.push(VectorShape { kind: sk, size: (kind.ft() / SQUARE_FT) as f32, pts });
+        out.push(VectorShape { kind: sk, size: (ft / SQUARE_FT) as f32, pts });
     }
     for &(c, a, r, pale) in &b.sails {
         out.push(VectorShape { kind: ShapeKind::Sails, size: (SAIL_FT / SQUARE_FT) as f32, pts: vec![local(c), [a as f32, (r / SQUARE_FT) as f32], [pale as u8 as f32, 0.0]] });
@@ -721,7 +728,7 @@ pub fn mark(b: &Battle, ox: f64, oy: f64, edges: &mut [u8]) {
 /// fence's are not).
 pub fn cover(b: &Battle, ox: f64, oy: f64, yard: &mut [u8]) {
     each_square(b, ox, oy, &mut |k, kind| {
-        if kind != RunKind::Fence {
+        if !matches!(kind, RunKind::Fence | RunKind::Corral) {
             yard[k] |= 8;
         }
     });

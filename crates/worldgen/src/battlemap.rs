@@ -1291,7 +1291,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         (i0, j0, i1, j1)
     };
     let overlaps = |b: (f64, f64, f64, f64)| b.2 >= hx0 && b.0 <= hx0 + span && b.3 >= hy0 && b.1 <= hy0 + span;
+    // (R5 towns, 114: whether every town round the chunk is a steppe one, `steppe_only`.)
+    let (mut steppe_any, mut steppe_all) = (false, true);
     for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
+        if l.culture % 5 == 4 {
+            steppe_any = true;
+        } else {
+            steppe_all = false;
+        }
         let stamp = |poly: &[[f64; 2]], val: u8, urb_h: &mut Vec<u8>| {
             let b = bbox(poly);
             if !overlaps(b) {
@@ -3174,6 +3181,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &park, &bailey);
+    // R5 towns (114): a steppe town's stone daises (its squares', a horse park's, the guarantee's
+    // there) are banks of earth trodden by hooves (`PlazaFeature::Mound`).
+    if steppe_any && steppe_all {
+        for s in chunk.structures.iter_mut().filter(|s| s.kind == ShapeKind::Dais && s.size == PlazaFeature::Dais as u8 as f32) {
+            s.size = PlazaFeature::Mound as u8 as f32;
+        }
+    }
     // A bench the guarantee put in a park is one of the park's, facing its nearest path, or the
     // middle of the gravel round it stands at; one out on the lawn, more than 12 ft from either, is a
     // shrub instead. Its flowerbeds lie square to a formal garden's axis.
@@ -4617,6 +4631,8 @@ pub enum PlazaFeature {
     Planter = 2,
     /// A market cross on a stepped round plinth.
     Cross = 3,
+    /// A low bank of trodden earth, hoof-worn round its edge (a steppe town's dais: R5 towns, 114).
+    Mound = 4,
 }
 
 /// How a market fills its square: half-extents (ft, ranges) of the part round the well it keeps

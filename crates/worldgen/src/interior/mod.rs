@@ -516,7 +516,10 @@ pub fn terrace(l: &Layout, b: &town::Building) -> Option<Vec<(P, f64)>> {
     if b.structure != Structure::Roofed || battlements(b).is_some() || b.roof == Some(town::RoofStyle::Cone) || b.poly.len() < 3 {
         return None;
     }
-    match town::roof::look(l, b).shape {
+    let look = town::roof::look(l, b);
+    match look.shape {
+        // (R5 towns, 114: a steppe home's low felt or turf roof is no terrace.)
+        Shape::Flat if l.culture % 5 == 4 && matches!(look.material, town::roof::Material::Hide | town::roof::Material::Turf) => None,
         Shape::Flat => Some(Vec::new()),
         // (The battlemap's domes, `town::roof::domes`; none where the roof is too small for one.)
         Shape::Dome if b.parts.is_empty() => Some(town::roof::domes(&b.poly)),

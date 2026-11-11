@@ -240,6 +240,14 @@ pub fn look(l: &Layout, b: &Building) -> Look {
                 (pick(u0, &[(Hide, 7), (Thatch, 3)]), Round)
             } else if hall_ring(l, b).is_some() {
                 (Hide, Round)
+            } else if role == Role::Home && b.ward != Ward::Castle {
+                // (R5 towns, 114: a home not on a ring low and nearly flat under felt or turf.)
+                let m = match rich {
+                    0 => pick(u0, &[(Hide, 5), (Turf, 5)]),
+                    1 => pick(u0, &[(Hide, 6), (Turf, 4)]),
+                    _ => pick(u0, &[(Hide, 8), (Turf, 2)]),
+                };
+                (m, Flat)
             } else {
                 let glaze = if city && rich == 2 { 3 } else { 0 };
                 let m = match role {
