@@ -180,7 +180,7 @@ fn destination(t0: &T0, l: &Layout, g: P) -> Option<String> {
 /// The town's squares, parks and gates, with their ids, generated names and labels. A place
 /// the town as generated has keeps its name from there, whatever is edited round it.
 pub fn of(world: &crate::World, t0: &T0, l: &Layout) -> Vec<Place> {
-    if l.site || t0.settlements.get(l.index as usize).is_none() {
+    if l.site || super::settlement(t0, l.index as usize).is_none() {
         return Vec::new();
     }
     let g = super::generated_layout(world, t0, l.index as usize);
@@ -194,7 +194,7 @@ pub fn of(world: &crate::World, t0: &T0, l: &Layout) -> Vec<Place> {
 /// `of` with the names in `fixed` (by id) given and kept from the others.
 fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
     let li = l.index;
-    let Some(s) = t0.settlements.get(li as usize).filter(|_| !l.site) else { return Vec::new() };
+    let Some(s) = super::settlement(t0, li as usize).filter(|_| !l.site) else { return Vec::new() };
     let group = (s.culture % 5) as usize;
     let culture = s.culture as usize;
     let roll = |tag: i64, n: i64, k: i64| unit(hash3(s.seed ^ 0x5a1e_7c3d, tag, n, k));
@@ -426,8 +426,8 @@ fn clear_at(l: &Layout, near: &[usize], walls: &[(P, P)], p: P) -> bool {
 /// Where the map draws the town's name (ft, x0 y0 x1 y1): from its point rightward, its letters
 /// about 20 ft apart (the label's width at zoom -0.5), a little over its height.
 fn name_box(t0: &T0, li: usize) -> [f64; 4] {
-    let s = &t0.settlements[li];
-    let fs = t0.extra.as_ref().map(|x| &x.overlay.features);
+    let Some(s) = super::settlement(t0, li) else { return [0.0; 4] };
+    let fs = t0.extra.as_ref().map(|x| &x.overlay.features).filter(|_| li < t0.settlements.len());
     let n = fs.and_then(|fs| fs.iter().filter(|f| matches!(f.kind, "metropolis" | "city" | "town" | "village")).nth(li)).map_or(10, |f| f.name.chars().count());
     [s.x - 25.0, s.y - 18.0, s.x + 20.0 * n as f64 + 30.0, s.y + 18.0]
 }
@@ -609,7 +609,7 @@ pub fn find(world: &crate::World, t0: &T0, id: &str) -> Option<(std::rc::Rc<Layo
     if !matches!(parts.next(), Some("sq" | "gt")) {
         return None;
     }
-    let li = parts.next()?.parse::<usize>().ok().filter(|&li| li < t0.settlements.len())?;
+    let li = parts.next()?.parse::<usize>().ok().filter(|&li| super::is_settlement(t0, li))?;
     let l = super::layout(world, t0, li);
     let p = of(world, t0, &l).into_iter().find(|p| p.id == id)?;
     Some((l, p))
@@ -650,7 +650,7 @@ pub fn detail(world: &crate::World, t0: &T0, id: &str) -> Option<serde_json::Val
 
 /// The town's squares, parks and gates for `get_town_plan`.
 pub fn plan_json(world: &crate::World, t0: &T0, index: usize) -> serde_json::Value {
-    if index >= t0.settlements.len() {
+    if !super::is_settlement(t0, index) {
         return serde_json::json!([]);
     }
     let l = super::layout(world, t0, index);
@@ -664,7 +664,7 @@ pub fn search(world: &crate::World, t0: &T0, q: &str, kind: Option<&str>, limit:
     if q.len() < 3 || limit == 0 || kind.is_some_and(|k| !matches!(k, "square" | "park" | "gate")) {
         return out;
     }
-    for li in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= Tier::Town) {
+    for li in (0..t0.settlements.len()).chain(t0.made.iter().map(|m| t0.settlements.len() + m.poi)).filter(|&i| super::settlement(t0, i).is_some_and(|s| s.tier >= Tier::Town)) {
         let l = super::layout(world, t0, li);
         for p in of(world, t0, &l) {
             if kind.is_some_and(|k| k != p.kind) || (!include_hidden && world.file.edits.hidden.contains(&p.id)) || !name_now(world, &p).to_lowercase().contains(q) {

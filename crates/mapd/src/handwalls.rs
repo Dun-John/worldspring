@@ -26,7 +26,7 @@ pub async fn line(app: &Shared, a: &Value, c: &mut Created) -> Result<Option<Map
     let ring = app
         .worker
         .with(move |ex| {
-            let i = agent::layout_of(&ex.world, &ex.t0, &sid).filter(|&l| l < ex.t0.settlements.len()).ok_or_else(|| format!("{sid} is not a settlement"))?;
+            let i = agent::layout_of(&ex.world, &ex.t0, &sid).filter(|&l| worldgen::town::is_settlement(&ex.t0, l)).ok_or_else(|| format!("{sid} is not a settlement"))?;
             handwall::around_patches(&ex.world, &ex.t0, i, &patches, all).map(|r| (r, sid))
         })
         .await?;

@@ -551,7 +551,7 @@ fn place_of(world: &World, t0: &T0, li: usize) -> (Value, Option<String>) {
     let (s, site) = whereabouts(world, t0, li);
     let generated = t0.settlements.len() + t0.base_pois;
     let drawn = li >= generated && world.file.edits.created.get(li - generated).is_some_and(|c| c.kind == "building");
-    let own = if li < t0.settlements.len() || drawn { s.clone() } else { site.unwrap_or(Value::Null) };
+    let own = if town::is_settlement(t0, li) || drawn { s.clone() } else { site.unwrap_or(Value::Null) };
     let name = own["name"].as_str().or_else(|| s["name"].as_str()).map(str::to_string);
     (s, name)
 }
@@ -562,7 +562,7 @@ fn building_blocker(world: &World, t0: &T0, l: &town::Layout, b: &town::Building
     let at = geom::centroid(&b.poly);
     let drawn = if li >= generated { world.file.edits.created.get(li - generated).filter(|c| c.kind == "building").map(|c| c.id.clone()) } else { None };
     // (A building a town edit added, id from `NEW_ID` up, is taken away like the others: `remove_buildings` names it too.)
-    let removable = li < generated;
+    let removable = li < generated || town::is_settlement(t0, li);
     let (settlement, place) = if full { place_of(world, t0, li) } else { (Value::Null, None) };
     let id = Some(drawn.unwrap_or_else(|| format!("b:{li}:{}", b.id)));
     Blocker { id, name: Some(building_name(world, l, b)), function: Some(b.label().to_string()), settlement, place, removable, ..Blocker::plain("building", at) }
@@ -2784,7 +2784,7 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
         v.extend(edits.crossings.iter().map(|(id, c)| name_entry(world, id.clone(), "crossing", crate::roadids::crossing_generated(c), Some(crate::roadids::crossing_mid(c)), false)));
         // (R5 towns: squares, parks and gates are in their towns' layouts.)
         if matches!(kind, Some("square" | "park" | "gate")) {
-            v.extend((0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= crate::t0::settle::Tier::Town).flat_map(|li| layout_names(world, t0, li)));
+            v.extend((0..t0.settlements.len()).chain(t0.made.iter().map(|m| t0.settlements.len() + m.poi)).filter(|&i| town::settlement(t0, i).is_some_and(|s| s.tier >= crate::t0::settle::Tier::Town)).flat_map(|li| layout_names(world, t0, li)));
         }
         v
     };

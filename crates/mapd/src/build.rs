@@ -254,6 +254,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     if ids.is_empty() && within.is_none() {
         return Err("give id, ids or within".into());
     }
+    let asked = ids.clone();
     let edits = app
         .worker
         .with(move |ex| {
@@ -263,7 +264,11 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
             ids.sort();
             ids.dedup();
             let pieces = crate::works::piece_removals(ex, &mut ids)?;
-            Ok((ids.into_iter().enumerate().map(|(i, id)| agent::building_removal(&ex.world, &ex.t0, &id).map(|e| (id, e)).map_err(|m| if single { format!("id: {m}") } else { format!("{}: {m}", crate::args::item(false, i)) })).collect::<Result<Vec<_>, String>>()?, pieces))
+            Ok((ids.into_iter().map(|id| agent::building_removal(&ex.world, &ex.t0, &id).map(|e| (id.clone(), e)).map_err(|m| match asked.iter().position(|x| *x == id) {
+                Some(_) if single => format!("id: {m}"),
+                Some(i) => format!("{}: {m}", crate::args::item(false, i)),
+                None => format!("{id}: {m}"),
+            })).collect::<Result<Vec<_>, String>>()?, pieces))
         })
         .await?;
     let (edits, pieces) = edits;
@@ -289,7 +294,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     .await
 }
 
-/// Some of the world's own buildings back as generated (all or none).
+/// Some of the world's own buildings back as generated (all or none), castle pieces too.
 async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, String> {
     // (R5 towns: a castle made by hand keeps its pieces' edits itself, restored one at a time.)
     if ids.len() == 1 {
@@ -297,6 +302,44 @@ async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, 
             return Ok(v);
         }
     }
+    // A list with castle pieces: those that are pieces are told apart first (and found taken away,
+    // else the whole call is refused); the buildings are restored together, then the pieces one by one.
+    let ids2 = ids.clone();
+    let is_piece: Vec<Option<String>> = app
+        .worker
+        .with(move |ex| {
+            Ok(ids2
+                .iter()
+                .enumerate()
+                .map(|(i, id)| match worldgen::town::pieces::piece_of(&ex.world, &ex.t0, id) {
+                    None => Ok(None),
+                    Some(p) if ex.world.file.edits.created.iter().any(|c| c.id == p.castle && c.pieces.contains_key(&p.key)) => Ok(Some(id.clone())),
+                    Some(_) => Err(format!("{}: {id} is as built already", crate::args::item(single, i))),
+                })
+                .collect::<Result<Vec<_>, String>>()?)
+        })
+        .await?;
+    if is_piece.iter().any(Option::is_some) {
+        let at: Vec<usize> = (0..ids.len()).filter(|&i| is_piece[i].is_none()).collect();
+        let mut out = Vec::new();
+        if !at.is_empty() {
+            let rest: Vec<String> = at.iter().map(|&i| ids[i].clone()).collect();
+            out.push(restore_buildings(app, rest, single, at).await?);
+        }
+        for id in is_piece.into_iter().flatten() {
+            if let Some(v) = crate::works::restore_piece(app, &id).await? {
+                out.push(v);
+            }
+        }
+        return Ok(json!({ "tool": "restore_building", "ids": ids, "restored": out }));
+    }
+    let at = (0..ids.len()).collect();
+    restore_buildings(app, ids, single, at).await
+}
+
+/// `restore` for buildings the world generated: `at` are the places of `ids` in what was asked
+/// for (for the errors).
+async fn restore_buildings(app: &Shared, ids: Vec<String>, single: bool, at: Vec<usize>) -> Result<Value, String> {
     // The check and the restore happen under one hold of the gate, so nothing can be placed in between.
     let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
     let ids2 = ids.clone();
@@ -304,7 +347,7 @@ async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, 
     let ids2 = ids.clone();
     let change = move |e: &mut worldgen::world::Edits| {
         if let Some((i, id)) = ids2.iter().enumerate().find(|(_, id)| !e.buildings.contains_key(*id)) {
-            return Err(format!("{}: {id} is as generated already", crate::args::item(single, i)));
+            return Err(format!("{}: {id} is as generated already", crate::args::item(single, at[i])));
         }
         for id in &ids2 {
             e.buildings.remove(id);

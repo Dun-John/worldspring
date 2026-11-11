@@ -983,7 +983,9 @@ impl Builder<'_> {
                 Tier::Town => 12.0,
                 Tier::Village => 5.0,
             } * 5280.0;
-            let mut detail = format!("{} {}, pop. {}", s.kind.name(), s.tier.name(), fmt_thousands(s.population as f64));
+            let (lives, tier) = (s.kind.name(), s.tier.name());
+            // ("river town" is a town already.)
+            let mut detail = format!("{}{}, pop. {}", lives, if lives.ends_with(tier) { String::new() } else { format!(" {tier}") }, fmt_thousands(s.population as f64));
             if s.capital {
                 detail.push_str(", capital");
             }

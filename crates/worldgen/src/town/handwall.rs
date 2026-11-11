@@ -50,7 +50,7 @@ pub struct Ring {
 /// for patches not on the plan, a set in more than one piece, patches meeting only at a corner,
 /// a side on the town's own standing wall, or more than `RING_MAX_CORNERS` corners.
 pub fn around_patches(world: &World, t0: &T0, index: usize, patches: &[usize], street_gates: bool) -> Result<Ring, String> {
-    let s = t0.settlements.get(index).ok_or("not a settlement")?;
+    let s = super::settlement(t0, index).ok_or("not a settlement")?;
     if s.tier < Tier::Town {
         return Err("a village has no patches: give the wall's line (pts)".into());
     }
@@ -432,7 +432,7 @@ fn cut(a: P, b: P, p: P, q: P) -> Option<f64> {
 /// The settlement a wall drawn by hand at `center` stands in or round (within its reach): its
 /// walls are built in that town's style.
 pub fn town_of_wall<'a>(t0: &'a T0, center: P) -> Option<&'a Settlement> {
-    t0.settlements.iter().filter(|s| dist([s.x, s.y], center) <= super::reach(s)).min_by(|a, b| dist([a.x, a.y], center).total_cmp(&dist([b.x, b.y], center)))
+    t0.settlements.iter().chain(t0.made.iter().map(|m| &m.s)).filter(|s| dist([s.x, s.y], center) <= super::reach(s)).min_by(|a, b| dist([a.x, a.y], center).total_cmp(&dist([b.x, b.y], center)))
 }
 
 /// Why a castle's or wall's line is refused where it meets the walls of layout `l`: the wall's id

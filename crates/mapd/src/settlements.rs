@@ -49,6 +49,18 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
             let k = app.with_edits(|e| e.created.iter().position(|c| c.id == id && !c.removed && c.is_settlement())).flatten()?;
             delete(app, id, k).await.map(text)
         }
+        "restore_feature" => {
+            let ids = crate::args::ids(a).ok()?;
+            let removed = |e: &worldgen::world::Edits, id: &String| e.created.iter().position(|c| &c.id == id && c.removed && c.is_settlement());
+            let ks: Vec<Option<usize>> = app.with_edits(|e| ids.iter().map(|id| removed(e, id)).collect()).unwrap_or_default();
+            if !ks.iter().any(Option::is_some) {
+                return None;
+            }
+            if ids.len() != 1 {
+                return Some(Err("restore_feature: a deleted village or town is restored on its own (one id per call), apart from other sites".into()));
+            }
+            restore(app, ids[0].clone(), ks[0]?).await.map(text)
+        }
         _ => return None,
     })
 }
@@ -137,10 +149,72 @@ async fn delete(app: &Shared, id: String, k: usize) -> Result<Value, String> {
         let old = e.created.clone();
         let c = e.created.get_mut(k).filter(|c| c.id == id && !c.removed).ok_or_else(|| format!("{id} was deleted meanwhile"))?;
         c.removed = true;
+        let (name, kind) = (c.name.clone(), c.kind.clone());
+        // What pointed at it (the same account `delete_feature` gives for other created sites).
+        let li = first + k;
+        let here = |x: &str| x == id || worldgen::world::layout_in_id(x) == Some(li);
+        let mut left = serde_json::Map::new();
+        let npcs: Vec<&String> = e.npcs.iter().filter(|(_, n)| n.location.as_ref().is_some_and(|l| here(&l.id))).map(|(k, _)| k).collect();
+        let plots: Vec<&String> = e.plots.iter().filter(|(_, p)| p.anchors.iter().any(|x| here(x))).map(|(k, _)| k).collect();
+        if !npcs.is_empty() {
+            left.insert("npcs".into(), json!(npcs));
+        }
+        if !plots.is_empty() {
+            left.insert("plots".into(), json!(plots));
+        }
+        if e.notes.keys().any(|k| here(k)) {
+            left.insert("notes".into(), json!(true));
+        }
+        if e.designs.keys().any(|k| here(k)) {
+            left.insert("design".into(), json!(true));
+        }
+        let renames = e.renames.keys().filter(|k| here(k)).count();
+        if renames > 0 {
+            left.insert("renames".into(), json!(renames));
+        }
         let n = made::set_aside_changed(&old, e, first);
-        Ok(json!({ "tool": "delete_feature", "id": id, "set_aside": n }))
+        let mut v = json!({ "id": id, "kind": kind, "name": name });
+        let any = !left.is_empty();
+        if any {
+            v["left_pointing"] = Value::Object(left);
+        }
+        let mut reply = json!({ "tool": "delete_feature", "deleted": [v], "id": id, "set_aside": n });
+        if any || n > 0 {
+            reply["note"] = json!("what was made inside it (names, notes, buildings, NPCs' places, plot points) is set aside, moved off its layout number; restore_feature brings the settlement back, not those");
+        }
+        Ok(reply)
     })
     .await
+}
+
+/// `restore_feature` for a deleted village or town: the spot must be free by the checks a new one
+/// meets; what was set aside when it was deleted stays set aside.
+async fn restore(app: &Shared, id: String, k: usize) -> Result<Value, String> {
+    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let c = app.with_edits(move |e| e.created.get(k).cloned()).flatten().ok_or_else(|| format!("{id} is not a created settlement"))?;
+    let (probe, id) = (c.clone(), c.id.clone());
+    app.worker
+        .with(move |ex| made::spot(&ex.world, &ex.t0, &probe.kind, &probe.id, [probe.x, probe.y]).map(|_| ()).map_err(|e| format!("{} can't be restored, its place is taken: {e}", probe.id)))
+        .await?;
+    let id2 = id.clone();
+    let change = move |e: &mut worldgen::world::Edits| {
+        let c = e.created.get(k).cloned().filter(|c| c.id == id2 && c.removed).ok_or_else(|| format!("{id2} is not deleted"))?;
+        if let Some(o) = e.existing_site(&c, [c.x, c.y]) {
+            return Err(format!("{id2} can't be restored, its place is taken: {} is the same site", o.id));
+        }
+        e.created[k].removed = false;
+        Ok(json!({ "tool": "restore_feature", "id": id2 }))
+    };
+    if crate::batch::active() {
+        app.edit("agent", 0, change).await?;
+    } else {
+        app.edit_now("agent", 0, change).await?;
+    }
+    drop(_hold);
+    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(|| "restored, but it could not be read back".to_string())).await?;
+    v["tool"] = json!("restore_feature");
+    v["note"] = json!("what was set aside when it was deleted (names, notes, buildings, NPCs' places, plot points) is not brought back");
+    Ok(v)
 }
 
 /// What an `update_settlement` asks: tier, lives_by, capital and name, each if given.
