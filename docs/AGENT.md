@@ -64,6 +64,7 @@ pace.
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
 | `v:<id>` | A crossing put down by hand: a bridge, ford or ferry; takes a name and notes like a feature. |
+| `q:<id>` | A quay, pier or breakwater put down by hand. |
 | `rd:<8 hex>` | A road stretch, made from its two ends: the same across every edit that leaves the roads as generated; renamed and annotated like a feature. |
 | `h:<id>`, `g:<x>:<y>` | A plateau or pit; a block of ground brushed by hand (80 ft square, block indices). |
 
@@ -117,6 +118,8 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `remove_buildings` | Take away buildings of the world's own, by `id`/`ids` or every one with its middle inside `within` (a polygon, box or circle: a ward to clear); every other building keeps its id. |
 | `restore_building` | Put the world's own buildings back as generated (`id` or `ids`). |
 | `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12; a bridge's `material` `timber` (default) or `stone`): a bridge's deck clear of the water (timber planks, or old stone on piers), a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id, the river it crosses and both banks there (an end in the water is refused). |
+| `raise_islet` | A rock islet in a river, lake or the sea (`at`, `radius_ft` 10-200, `rise_ft` 1-30; water at most 120 ft deep): a building, tower or castle may stand on it. With `id` (`h:`), changes one; `delete_plateau` takes it away. |
+| `place_wharf`, `list_wharves`, `remove_wharves` | A quay, pier or breakwater (`q:`) along a `path` (a pier's or breakwater's first point on the bank); a breakwater may carry a `lighthouse`. `place_crossing` takes `shops` on a bridge up to 80 ft wide: they follow it and go with it. |
 | `list_crossings`, `remove_crossings` | The crossings put down by hand (`{items, found}`, `limit` 200 by default); take some away by `id` or `ids`. |
 | `shape_ground` | Shape a battlemap's ground with a round brush, a dab (`at`, `radius_ft`) or a stroke (`path`, `width_ft`): `raise` or `lower` (`height_ft`, `hardness`), `smooth` or `restore` (`strength`). Dry ground lowered never sinks below the water beside it. Returns the blocks changed and the lowest and highest ground under it before and after. |
 | `set_plateau`, `delete_plateau` | A plateau or pit: a `poly` (or `outline`), or `around` a building, tower or site (its footprint grown by `margin_ft`), at `level_ft` above the sea or `rise_ft` above the ground there, with an `edge_ft` slope (0: a sheer cliff). With `id`, changes one; buildings on it stand at its level. |
@@ -152,7 +155,8 @@ Edits are layered over the generated world. The world file is seed + parameters 
 | `crossings` | Crossings put down by hand, by `v:<id>`: kind (bridge, ford, ferry), ends `a` and `b` (ft), width; a bridge of old stone has `material: "stone"` (none: timber). |
 | `buildings` | The world's own buildings changed or taken away, by `b:<layout>:<id>`: `at` (its middle as generated; the change is set aside if another building stands at that id after the town is laid out anew), `removed`, `func`, `floors`, `poly`, `roof`, `tint`, `structure`. |
 | `ground` | Ground brushed by hand, by block (`g:XXXXX:YYYYY`, block indices zero-padded, x first): one string per 16 × 16 squares of height change in tenths of a foot. |
-| `plateaus` | Plateaus and pits, by `h:<id>`: `pts` (the outline, ft), `level` (ft, the world's datum: above the sea plus the sea's level), `edge` (ft, absent: sheer). |
+| `plateaus` | Plateaus and pits, by `h:<id>`: `pts` (the outline, ft), `level` (ft, the world's datum: above the sea plus the sea's level), `edge` (ft, absent: sheer), `kind` (`islet` for a rock islet; absent: a plateau). |
+| `wharves` | Quays, piers and breakwaters, by `q:<id>`: `kind`, `pts` (ft), `width`, `material` (absent: timber). |
 | `towns` | Towns laid out anew, by layout number: `at` (the town's centre; the edit is set aside if the town is laid out elsewhere), `corners` (`{v, from, to}`: a patch corner moved from where it was planned), `patches` (`{p, at, ward, lots, merge_with, reroll, close}`), `walls`, `squares` (`{v, at, kind}`: a square set where streets meet at corner `v`, planned at `at`; `kind` crossroads, well, fountain, green or none). Building changes (`buildings`) apply on top of it. |
 
 Edits don't change the world's hash, and created sites use the same generators as the world's own. Objects

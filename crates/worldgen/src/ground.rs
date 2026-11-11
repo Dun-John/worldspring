@@ -741,12 +741,13 @@ pub fn islet_for(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0: &cra
     let still = t0.sample_water(at[0], at[1]);
     let river = t0.rivers.crossing_level(at, at, 0.0, t0.cell_ft, &crate::lod::rivers::CrossingCache::default()).map_or(crate::t0::hydro::DRY, |(z, _)| z as f32);
     let water = still.max(river);
-    if water <= crate::t0::hydro::DRY || (water as f64) <= t0.ground_at(at[0], at[1], 5.0) {
-        return Err("an islet stands in the water: that place is dry land".into());
+    // (A river's channel is water whatever the valley's ground there: it never dips below the water.)
+    if water <= crate::t0::hydro::DRY || ((water as f64) <= t0.ground_at(at[0], at[1], 5.0) && river <= crate::t0::hydro::DRY) {
+        return Err(format!("at: ({:.0}, {:.0}) is on dry land: an islet stands in a river, lake or the sea", at[0], at[1]));
     }
-    let depth = water as f64 - t0.ground_at(at[0], at[1], 5.0);
+    let depth = (water as f64 - t0.ground_at(at[0], at[1], 5.0)).max(0.0);
     if depth > ISLET_MAX_DEPTH_FT {
-        return Err(format!("the water there is {depth:.0} ft deep: an islet stands in water {ISLET_MAX_DEPTH_FT:.0} ft deep at most"));
+        return Err(format!("at: the water there is {depth:.0} ft deep: at most {ISLET_MAX_DEPTH_FT:.0}"));
     }
     let pts = islet_ring(stream(0x15_1e7, key), at, radius_ft);
     let p = Plateau { pts, level: (crate::core::round((water as f64 + rise_ft) * 10.0) * 0.1) as f32, edge: ISLET_EDGE_FT, kind: PlateauKind::Islet };

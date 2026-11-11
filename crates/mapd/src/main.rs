@@ -12,6 +12,7 @@ mod crossings;
 mod design;
 mod geo;
 mod ground;
+mod harbour;
 mod handwalls;
 mod mcp;
 mod notebook;

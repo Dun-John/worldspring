@@ -19,7 +19,7 @@ pub fn list() -> Vec<Value> {
             "which": { "type": "string", "enum": ["objects", "clears", "both"], "default": "both" },
             "limit": limit_prop(200, 2000),
         }), &[]) }),
-        json!({ "name": "list_plateaus", "title": "Plateaus and brushed ground", "description": "Plateaus and pits (h:) with outline, level and edge, and brushed ground blocks (g:) with place and size, world-wide. Returns {items, found}.", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(100, 1000) }), &[]) }),
+        json!({ "name": "list_plateaus", "title": "Plateaus and brushed ground", "description": "Plateaus, pits and rock islets (h:; what plateau or islet) with outline, level and edge, and brushed ground blocks (g:) with place and size, world-wide. Returns {items, found}.", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(100, 1000) }), &[]) }),
         json!({ "name": "list_designs", "title": "Designed sites and buildings", "description": "Underground sites (u:) and buildings (b:) with a design made by hand: id, name, what, levels, place. Returns {items, found}.", "inputSchema": schema(json!({ "within": within, "limit": limit_prop(100, 1000) }), &[]) }),
     ]
 }
@@ -123,7 +123,7 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                 let b = bbox(&p.pts);
                 let mid = worldgen::town::geom::centroid(&p.pts);
                 if hits(mid, &p.pts) {
-                    items.push(json!({ "id": id, "what": "plateau", "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts }));
+                    items.push(json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts }));
                 }
             }
             let side = ground::BLOCK as f64 * battlemap::SQUARE_FT;

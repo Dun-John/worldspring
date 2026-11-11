@@ -545,16 +545,19 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     // On dry land, clear of buildings, roads and walls; its point is the footprint's middle.
     if reshaped || creating {
         let (cid, poly, func) = (c.id.clone(), c.poly.clone(), c.func.clone());
-        let (p, name, gone) = app
+        let (p, name, gone, on) = app
             .worker
             .with(move |ex| {
                 let skip = agent::spot_skip(&ex.world, &ex.t0, &cid);
+                // (R5 M20: wholly on a hand bridge's deck, a pier or a breakwater: the building stands on it, at its level.)
+                let on = worldgen::wharf::deck_under(&ex.world, &poly).and_then(|(on, lane)| lane.is_none().then_some(on));
                 if clear {
-                    return agent::building_spot_clearing(&ex.world, &ex.t0, &poly, func.as_deref(), &cid, skip);
+                    return agent::building_spot_clearing(&ex.world, &ex.t0, &poly, func.as_deref(), &cid, skip).map(|s| (s.0, s.1, s.2, on));
                 }
-                agent::building_spot(&ex.world, &ex.t0, &poly, func.as_deref(), &cid, skip).map(|s| (s.0, s.1, Vec::new()))
+                agent::building_spot(&ex.world, &ex.t0, &poly, func.as_deref(), &cid, skip).map(|s| (s.0, s.1, Vec::new(), on))
             })
             .await?;
+        c.on = on;
         if clear {
             removed = gone;
         }
@@ -571,11 +574,13 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         json!({ "x_ft": x.round(), "y_ft": y.round(), "ft": ft.round(), "why": why })
     });
     let tool = if creating { "create_building" } else { "update_building" };
-    let reply = json!({ "tool": tool, "id": c.id, "kind": "building", "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
-    let cid = c.id.clone();
+    let mut reply = json!({ "tool": tool, "id": c.id, "kind": "building", "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
+    if let Some(on) = &c.on {
+        reply["on"] = json!(on);
+    }
+    let (cid, on_say) = (c.id.clone(), c.on.clone());
     // (A new footprint of a building drawn by hand: the entrances made in it follow its middle; `b:<layout>:0` is its building id.)
     let host = if reshaped && !creating { app.worker.with({ let cid = cid.clone(); move |ex| Ok(agent::layout_of(&ex.world, &ex.t0, &cid).map(|li| format!("b:{li}:0"))) }).await? } else { None };
-    let mut reply = reply;
     let removed_json = json!(removed.iter().map(|r| r.to_json()).collect::<Vec<_>>());
     let app2 = app.clone();
     let change = app.edit("agent", 0, move |e| {
@@ -626,6 +631,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             }
             if let Some(m) = moved {
                 v["moved"] = m;
+            }
+            if let Some(on) = on_say {
+                v["on"] = json!(on);
             }
             if !out.is_empty() {
                 v["entrances_out"] = json!(out);

@@ -54,7 +54,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   `id` is not its subject also takes the old `id`, or `x_ft` and `y_ft`, beside its other arguments.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
   says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`). Every list tool has a
-  `limit` (defaults: `list_names`, `list_children`, `list_sprites`, `list_crossings` and `list_objects` 200, `list_npcs`,
+  `limit` (defaults: `list_names`, `list_children`, `list_sprites`, `list_crossings`, `list_wharves` and `list_objects` 200, `list_npcs`,
   `list_plots`, `list_plateaus`, `list_designs` and `list_streets` 100, `search_features` 25, `features_near` and `list_roads` 50; `list_children` cuts each of its lists
   and gives the full counts in `found`). A `limit` out of range is refused. Results are compact JSON (no
   indentation), and `render_view` sends a JPEG of 1,024 px unless asked for more.
@@ -66,7 +66,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   name and place), `create_plot` (the same title), `place_objects` (new objects: the same kind within 0.5 ft with the
   same turn, scale and any variant given; those ids come back under `existing`), `remove_objects` with `points` (a
   point already cleared there: its clear comes back under `existing`), `place_crossing` (a crossing with both ends within
-  5 ft of an existing one's, either way round; another kind, material or width is refused, naming it), `set_plateau`
+  5 ft of an existing one's, either way round; another kind, material or width is refused, naming it), `raise_islet` (an islet there with the same radius, within 5 ft; another rise is refused, naming it), `place_wharf` (a wharf of the same kind with every point within 5 ft; another width or material is refused, naming it), `set_plateau`
   without `id` (an outline within 1 ft at every corner of an existing one; another level or edge is refused, naming it) and `upload_sprite` (the same picture again: `existing: true`, and
   `replaced` says what name and rules it had; a picture has one name and rules, the last upload's). To make a second
   one on purpose, give it another name, title or place. A change that was made but could not be saved to disk is not
@@ -88,7 +88,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects`, `list_streets` (`get_town_plan`: a box) |
 | Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
 | A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` and `update_fortification` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
-| A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `create_feature` (wall), `update_fortification` |
+| A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `place_wharf`, `create_feature` (wall), `update_fortification` |
+| Rock and water | `radius_ft`, `rise_ft` (an islet's top over the water), `lighthouse` (a breakwater's), `shops` (a bridge's: `true` or `{depth_ft, frontage_ft, lane_ft}`) | | `raise_islet`, `place_wharf`, `place_crossing` |
 | One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `restore_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
 | Notes | `notes` on features and NPCs, `text` on plot points | the other one | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
 | A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `blocks_move`, `cover` 0 to 3, `size` | `upload_sprite` |
@@ -146,7 +147,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `o:<id>` | `o:4f0x2kq9` | A battlemap object put down by hand |
 | `x:<id>` | `x:9a1b7c3d` | Generated battlemap objects taken away (a clear) |
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
-| `h:<id>` | `h:d470a78s` | A plateau or pit (ground shaped by hand) |
+| `h:<id>` | `h:d470a78s` | A plateau, pit or rock islet (ground shaped by hand; an islet says `what: "islet"`) |
+| `q:<id>` | `q:7d0kx3ab` | A quay, pier or breakwater put down by hand (`place_wharf`); a lighthouse or shops stand on it as drawn buildings (`c:`) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 | `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
 | `was:<version>:<id>` | `was:57:village:5fde5f79` | A settlement or site of a world upgraded from that generator version to one that makes every town and site anew (58): its name, note, hidden mark, NPCs' and plot points' places are kept here; it names nothing |
@@ -688,6 +690,8 @@ and, but for an `entrance`, streets and squares (a bare `entrance` may sit in a 
 65 ft for a `tower`, 55 for a `camp` and a `mine`, 120 for a `waystation`, 115 for a `ruin`, 12 for a `cave` and a `lava_tube`, 10 for an `entrance`.
 The refusal names what is in the way and where, and the nearest clear spot: `that overlaps Dragonspear Castle (c:5), at (x, y); the nearest clear spot
 is (x, y), 140 ft away`. In a built-up area with none within 400 ft, mapd looks on to 1,500 ft (a few seconds) and says where the nearest is, or that there is none (put it outside the built-up area); for a `tower` it adds that `create_building` with `func: wizard_tower` and `clear: true` makes one there. The same-site rule above comes first: asking again for a site that stands is that site, not a refusal.
+
+On a rock islet (`raise_islet`) a `tower`, `castle` or `wall` stays where it was asked, with no `moved`.
 
 A site asked for in a river or within 150 ft of one is put on the bank (a camp's clearing is also kept inside its
 battlemap chunk). When that moves it more than 5 ft the result says so: `moved: {x_ft, y_ft, ft, why}`.
@@ -1351,7 +1355,9 @@ where a street is within 300 ft, on the grid when unturned, off squares.
 | `width_ft`, `depth_ft` | number | with `near` | The lot along the street and back from it, 10–400 ft. |
 | `clear` | boolean | optional | Default false. Take away the world's own (generated) buildings that overlap the footprint, in the same change (`remove_buildings` does the same by id; `restore_building` brings them back, unless a building drawn by hand now stands over one: it is refused then, naming both). Buildings drawn by hand in the way are still refused, naming them (`delete_feature` one first); streets, walls, squares, roads and water refuse as ever. With `near`: the nearest lot clear of everything but the world's own buildings, fronting a street as without it. |
 
-Returns the site as `get_feature` does, plus `building` (its building id), `moved: {x_ft, y_ft, ft, why}` when
+A footprint wholly on a hand bridge's deck (off its lane), a pier or a breakwater stands on it: the reply says `on: "v:…"` or `on: "q:…"`, its floor is the deck's level and it has no cellar. Over a bridge's lane it is refused (`that is on the lane of bridge v:… (keep 24 ft clear down its middle)`). On a rock islet it is an ordinary building.
+
+Returns the site as `get_feature` does, plus `building` (its building id), `on`, `moved: {x_ft, y_ft, ft, why}` when
 the footprint snapped to the grid (or its point set where it fits) put it more than 5 ft from where it was asked
 (not with `near`, which picks a lot by design), and with `clear` `removed: [{id, name, function}]` (the buildings
 taken away, with their names and trades; absent when none stood there). The same call again returns the
@@ -1463,6 +1469,11 @@ stepping stones, a ferry jetties out from each end with a raft between. The ends
 name and notes like a feature (`rename_feature`, `annotate_feature`, `get_feature` with its `v:` id); a named one is
 found by `search_features` (kind `crossing`) and listed in Notes › Gazetteer (nothing is lettered on the map).
 
+A bridge up to 80 ft wide may carry **shops**: rows of houses and shops (drawn buildings, `c:<n>`, standing `on` the
+bridge) along both sides of its deck, a lane left clear down the middle and 20 ft clear at each end. They are made with
+the bridge (`shops`), follow it when its ends or width change, and are retired when it is removed. See *Shops on Wyrm's
+Crossing* under Recipes.
+
 ### `list_crossings`
 Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the list). Returns `{items, found}`: `{id, kind, from, to, width_ft, length_ft, material?, name, notes?}` (`name`: as given, else
 `Timber bridge`, `Stone bridge`, `Ford` or `Ferry`).
@@ -1472,19 +1483,44 @@ Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the li
 |---|---|---|---|
 | `kind` | string | required for a new one | `bridge`, `ford` or `ferry`. |
 | `from`, `to` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required for a new one | The banks (on the map). The length between them is 10–2,000 ft (a ferry at least 68). |
-| `width_ft` | number | optional | Deck, ford or raft width, 5–40 (default 12). |
+| `width_ft` | number | optional | Deck, ford or raft width, 5–80 (a ford or ferry at most 40; default 12; with `shops`: rows and lane, 50). |
 | `material` | string | optional | A bridge's: `timber` (default) or `stone`. |
+| `shops` | boolean or object | optional | A bridge's shops: `true`, or `{depth_ft, frontage_ft, lane_ft}`: rows `depth_ft` deep (10–30, default 18) of lots `frontage_ft` along the deck (12–40, 20) either side of a lane `lane_ft` wide (10–30, 14, or what the width leaves). A new bridge's width then defaults to `lane + 2 · depth` (50); a narrower one is refused, and so is a lane narrower than the deck keeps clear (`width_ft` less 36). `false` takes the shops off. Only a bridge has them (a ford or ferry is refused), and one long enough for a row (`frontage + 40` ft). |
 | `id` | string | optional | A crossing to change (`v:…`): only the fields given change. Without it, a crossing with both ends within 5 ft of an existing one's (either way round) is that one: `existing: true`; a different kind, material or width is refused (give its id to change it). |
 
 Returns `{tool, id, kind, changed, crossing}` (`changed: true` when an `id` was given; `existing: true` for the same
-crossing again) and where the banks are: `river` `{id, name, width_ft, banks}` (the river it crosses, its width there,
+crossing again), `shops` (the ids of the shops made; `shops_skipped` `[{id, why}]` lists a lot a building cannot stand on, such as one over another building, left out) and where the banks are: `river` `{id, name, width_ft, banks}` (the river it crosses, its width there,
 and the two bank points across it there, the one on `from`'s side first; `id`/`name` null for a stream too small to be
 named; `river: null` when none is within 1,000 ft), `from_bank_ft` and `to_bank_ft` (how far each end lies beyond its
 bank), and `note` when both ends are on the same side. An end more than 5 ft into the water is refused (a fixed tolerance, whatever the width):
 `from: (x, y) is in the water of The Red River (river:f32acc5b), 419 ft wide there: its bank on that side is at about (x, y)`.
 
+A bridge's shops follow it. Changing a bridge's ends or width (`id`) lays its shops out again on the new deck, each side in order, keeping their ids, as deep and as long as they were: `shops_relaid` lists them, `shops_retired` those left without a lot. `shops` with an `id` replaces the shops: the old ones are in `shops_retired`, the new ones in `shops`.
+
 ### `remove_crossings`
-`id` or `ids` (`v:…`; all or none). A mistake names the id's place in the list (`ids[1]: no crossing v:zz`; a single `id` is `id: …`).
+`id` or `ids` (`v:…`; all or none); a bridge's shops are retired with it (`shops_retired`). A mistake names the id's place in the list (`ids[1]: no crossing v:zz`; a single `id` is `id: …`).
+
+## Quays, piers and breakwaters
+
+Water's-edge works put down by hand (`q:<id>`), drawn on the battlemap and the three finest zooms. A **quay** is paved ground along a shore: its line is the water's edge and the paving reaches `width_ft` to the dry side (found once, from the ground at the middle of each side), the water inside it raised above the water. A **pier** is a deck over the water, lifted flat like a bridge's, with bollards along it. A **breakwater** is a raised strip of rubble (always stone), armoured along its wet sides. A pier or breakwater starts on the bank. A building may stand on a pier's deck or a breakwater (`create_building` says `on: "q:…"`), and a breakwater may carry a lighthouse at its tip.
+
+### `place_wharf`
+| Parameter | Type | | |
+|---|---|---|---|
+| `kind` | string | required for a new one | `quay`, `pier` or `breakwater`. |
+| `path` | `[[x_ft, y_ft], …]` | required for a new one | 2 to 16 points (each an id, point or `[x, y]`), each side at least 10 ft, 2,000 ft in all. A pier's or breakwater's first point is on the bank: more than 5 ft into the water is refused. |
+| `width_ft` | number | optional | A quay 10–60 (default 20), a pier 6–30 (10), a breakwater 12–60 (24). |
+| `material` | string | optional | A pier's or quay's: `timber` (default) or `stone`. A breakwater is stone. |
+| `lighthouse` | boolean | optional | A breakwater's: a 3-storey `lighthouse` building at its tip, `on` it (a round tower at most 9 ft in radius, set back from the last point). `false` retires it. |
+| `id` | string | optional | A wharf to change (`q:…`): only the fields given change; its kind cannot. A new `path` retires the buildings on it (a lighthouse is built again at the new tip). Without it, a wharf of the same kind with every point within 5 ft of an existing one's (a quay either way round) is that one: `existing: true`; another width or material is refused, naming it. |
+
+Returns `{tool, id, kind, changed, wharf, river | water, bank_ft?}`: `wharf` is `{id, kind, path, width_ft, length_ft, material?, level_ft?, buildings?}` (`level_ft`: the top, above the sea, where there is water under it); `river` `{id, name, width_ft, banks}` and `bank_ft` (how far `path[0]` is from the bank) when a river is within 300 ft, else `water` `{kind, id, name}` (`null`: no water under it); `buildings` the lighthouse made, `retired` and `left_pointing` what was retired. A pier starting in the water is refused, naming the bank: `path[0]: (x, y) is in the water of Shadow Lake (lake:b4da59db): a pier starts on the bank: the nearest dry ground is at about (x, y)` (in a river: `… 419 ft wide there: a pier starts on the bank, at about (x, y)`). A lighthouse that cannot stand (something in the way) refuses a new breakwater, naming what; nothing is put down.
+
+### `list_wharves`
+`within` (a box, a polygon or a circle) and `limit` (1 to 2000, default 200). Returns `{items, found}`: `{id, kind, path, width_ft, length_ft, material?, level_ft?, buildings?}`.
+
+### `remove_wharves`
+`id` or `ids` (`q:…`; all or none). The buildings on them are retired in the same change: `buildings` `[{id, name}]`, and `left_pointing` says what still points at them (NPCs, plots, notes), as `delete_feature` does.
 
 ## Underground sites designed by hand
 
@@ -2059,6 +2095,7 @@ How it applies:
   settlements stand) don't change, nor does `get_feature`'s `stairs` (the flights as generated); `get_battlemap`
   has the steps as drawn.
 - Limits: a stroke reaches at most 48 blocks; a world holds 1,500 blocks and 256 plateaus.
+- **Rock islets** are plateaus of kind `islet` (`raise_islet`): a rough ring of 12 to 20 corners, its top a few feet over the water of a river, lake or the sea, easing down over 6 ft, drawn as bare rock with a gravel rim. A building, tower or castle may stand on one (`create_feature` and `create_building` accept it, with no `moved`), as on the world's own islets (cities and metropolises on rivers and coasts). `delete_plateau` takes one away.
 
 ### `shape_ground`
 A round brush, or a stroke along `path` (not both: `at` and `path` together are refused). `raise` and `lower` move each square by up to `height_ft` (full out to `hardness` of the radius,
@@ -2081,6 +2118,15 @@ does). The reply: `blocks` changed, `squares` under the brush, the lowest and hi
 
 ```json
 { "name": "shape_ground", "arguments": { "mode": "raise", "at": "b:0:2", "radius_ft": 25, "height_ft": 8 } }
+```
+
+### `raise_islet`
+A rock islet standing in water. `at` (an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`: in a river's channel, a lake or the sea), `radius_ft` (10–200, default 30), `rise_ft` (1–30, default 5: its top over the water there) and `id` (`h:…`, to change one: what is not given stays, the ring following the id). The outline is made from the id, so the same radius and place give the same ring. Without `id`, an islet whose ring for this place and radius lies within 5 ft at every corner of an existing one's is that one: `existing: true`; another rise is refused, naming it.
+
+Returns `{tool, id, changed, level_ft, water: {kind, id, name, depth_ft}, poly, bbox}` (`level_ft` above the sea; `water.kind` `river`, `lake` or `sea`). Refused: `at: (x, y) is on dry land: an islet stands in a river, lake or the sea`; `at: the water there is 172 ft deep: at most 120`; the plateau limit (256 in a world). `list_plateaus` lists islets (`what: "islet"`).
+
+```json
+{ "name": "raise_islet", "arguments": { "at": [3124704, 3868520], "radius_ft": 130, "rise_ft": 6 } }
 ```
 
 ### `set_plateau`
@@ -2106,7 +2152,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 
 ### `list_plateaus`
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
-`{id: "h:...", what: "plateau", level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
+`{id: "h:...", what: "plateau" (or "islet"), level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
 block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 
@@ -2179,6 +2225,14 @@ Asked for any of these, say so rather than looking for a tool:
 **Encounter design**
 > *"Get the battlemap at the bridge south of Gatewatch, describe the cover and elevation for an ambush by six
 > bandits, and show it to me."*
+
+**Wyrm's Rock: a castle on an islet**
+> *"In the Red River, raise an islet 130 ft across and 6 ft over the water, put a castle on it and name it Wyrm's Rock. Put a pier out from the south bank and a quay in front of the castle's gate."*
+> Steps: `raise_islet` (`at` a point in the channel, `radius_ft` 130), `create_feature` (`kind: "castle"`, a `rect` of at least 80 ft across on the islet, `name`), `place_wharf` (`kind: "pier"`, `path` from the bank), `place_wharf` (`kind: "quay"`).
+
+**Shops on Wyrm's Crossing**
+> *"Build a stone bridge over the Red River, bank to bank, with a row of shops down each side, then widen it to 60 ft."*
+> Steps: `place_crossing` (`kind: "bridge"`, `material: "stone"`, `from` and `to` 20 ft beyond the banks, `shops: true`: the reply lists the shops); then `place_crossing` with that `id` and `width_ft: 60` (`shops_relaid`). The shops are drawn buildings (`c:<n>`): `update_building` and `rename_feature` change them like any other.
 
 **Renaming a region**
 > *"Rename the Katsei Mountains to the Ashen Teeth and rename every village inside them to fit."*

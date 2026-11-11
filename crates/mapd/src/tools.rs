@@ -81,6 +81,7 @@ pub fn list() -> Value {
         a.extend(crate::works::list());
         a.extend(crate::crossings::list());
         a.extend(crate::ground::list());
+        a.extend(crate::harbour::list());
         a.extend(crate::design::list());
         a.extend(crate::reads::list());
         a.extend(crate::streets::list());
@@ -109,17 +110,17 @@ pub fn list() -> Value {
 /// Tools that only read (or look): `readOnlyHint`.
 const READS: &[&str] = &[
     "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch",
+    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch",
 ];
 /// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
 const DESTRUCTIVE: &[&str] = &[
-    "delete_feature", "delete_npc", "delete_plot", "delete_plateau", "remove_objects", "remove_buildings", "remove_crossings", "reset_site_design", "set_site_design", "edit_town", "batch",
+    "delete_feature", "delete_npc", "delete_plot", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "reset_site_design", "set_site_design", "edit_town", "batch",
 ];
 /// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
 /// `focus_view` and the creates that return what is already there.
 const IDEMPOTENT: &[&str] = &[
     "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_npc",
-    "update_npc", "place_npc", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
+    "update_npc", "place_npc", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
 ];
 
 /// A tool's hints by name, one table for every tool (so a tool in any module gets them): reads say `readOnlyHint` and
@@ -242,6 +243,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::ground::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::harbour::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::design::call(app, name, &a).await {

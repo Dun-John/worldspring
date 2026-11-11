@@ -2,7 +2,8 @@
 
 use serde_json::{Value, json};
 use worldgen::roadids::crossing_json;
-use worldgen::world::{Crossing, CrossingKind, CrossingMaterial};
+use worldgen::wharf;
+use worldgen::world::{Created, Crossing, CrossingKind, CrossingMaterial, Edits};
 
 use crate::Shared;
 use crate::notebook::new_id;
@@ -11,13 +12,15 @@ use crate::tools::{listed, schema, text};
 pub fn list() -> Vec<Value> {
     vec![
         json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries) with id, kind, ends, width, length, material, name and notes. Returns {items, found}; limit (default 200) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), 10 to 2000 ft long (a ferry at least 68), 5 to 80 ft wide (a ford or ferry at most 40). With id, changes that crossing. Returns its id (v:...) and the river's banks there; an end in the water is refused.", "inputSchema": schema(json!({
+        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), 10-2000 ft long (a ferry 68+), 5-80 ft wide (a ford or ferry 40 at most); a bridge may carry shops. With id, changes that crossing. Returns its id (v:...), shops and the river's banks; an end in the water is refused.", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A crossing to change" },
             "kind": { "type": "string", "enum": ["bridge", "ford", "ferry"] },
             "from": crate::args::point_schema("One bank (a place)"),
             "to": crate::args::point_schema("The other bank (a place); the crossing"),
             "width_ft": { "type": "number", "minimum": 5, "maximum": 80, "default": 12, "description": "Deck, ford or raft width (a ford or ferry at most 40)" },
             "material": { "type": "string", "enum": ["timber", "stone"] },
+            "shops": { "type": ["boolean", "object"], "description": "A bridge's shops: true or {depth_ft, frontage_ft, lane_ft}; false takes them off", "properties": {
+                "depth_ft": { "type": "number", "minimum": 10, "maximum": 30 }, "frontage_ft": { "type": "number", "minimum": 12, "maximum": 40 }, "lane_ft": { "type": "number", "minimum": 10, "maximum": 30 } } },
         }), &[]) }),
         json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id or ids (v:..., all or none).", "inputSchema": schema(crate::args::ids_props("crossing id"), &[]) }),
     ]
@@ -97,6 +100,133 @@ async fn end(app: &Shared, a: &Value, k: &str) -> Result<Option<[f64; 2]>, Strin
     }
 }
 
+/// Shop rows along a bridge: how deep, how long each lot, how wide the lane between.
+#[derive(Clone, Copy)]
+struct Rows {
+    depth: f64,
+    frontage: f64,
+    lane: f64,
+    /// `lane_ft` was given (else the lane is whatever the bridge's width leaves between the rows).
+    lane_given: bool,
+}
+
+impl Rows {
+    fn width(&self) -> f64 {
+        self.lane + 2.0 * self.depth
+    }
+}
+
+/// The `shops` argument: not given, `false` (`Some(None)`: take them off), or the rows.
+fn shops_arg(a: &Value) -> Result<Option<Option<Rows>>, String> {
+    let get = |o: &Value, k: &str, d: f64, r: std::ops::RangeInclusive<f64>| -> Result<f64, String> {
+        match &o[k] {
+            Value::Null => Ok(d),
+            v => v.as_f64().filter(|x| r.contains(x)).ok_or_else(|| format!("shops.{k}: {} to {}", r.start(), r.end())),
+        }
+    };
+    match &a["shops"] {
+        Value::Null => Ok(None),
+        Value::Bool(false) => Ok(Some(None)),
+        v => Ok(Some(Some(Rows {
+            depth: get(v, "depth_ft", wharf::SHOP_DEPTH_FT, 10.0..=30.0)?,
+            frontage: get(v, "frontage_ft", wharf::SHOP_FRONT_FT, 12.0..=40.0)?,
+            lane: get(v, "lane_ft", wharf::SHOP_LANE_FT, 10.0..=30.0)?,
+            lane_given: !v["lane_ft"].is_null(),
+        }))),
+    }
+}
+
+/// Retire the shops on bridge `id`: their ids.
+fn retire_shops(e: &mut Edits, id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for c in e.created.iter_mut().filter(|c| c.on.as_deref() == Some(id) && !c.removed && c.kind == "building") {
+        c.removed = true;
+        out.push(c.id.clone());
+    }
+    out
+}
+
+/// The ids of the shops (buildings drawn on) bridge `id` now.
+fn live_shops(e: &Edits, id: &str) -> Vec<String> {
+    e.created.iter().filter(|c| c.on.as_deref() == Some(id) && !c.removed && c.kind == "building").map(|c| c.id.clone()).collect()
+}
+
+/// Shops along bridge `c` (`id`) as `rows` say: each a drawn building `on` it, in a trade by turns. Their ids, or why not.
+fn lay_shops(e: &mut Edits, id: &str, c: &Crossing, rows: Rows) -> Result<Vec<String>, String> {
+    if c.kind != CrossingKind::Bridge {
+        return Err(format!("shops: only a bridge has them (this is a {})", c.kind.name()));
+    }
+    if c.width + 1e-9 < rows.width() {
+        return Err(format!("shops: rows {} ft deep either side of a lane {} ft wide need width_ft {} or more, this one is {}", rows.depth, rows.lane, rows.width(), c.width));
+    }
+    // The lane between the rows: as asked, else what the width leaves. The deck keeps `bridge_lane` clear down its middle (no building stands on it).
+    let lane = if rows.lane_given { rows.lane } else { (c.width - 2.0 * rows.depth).max(rows.lane) };
+    let kept = wharf::bridge_lane(c, wharf::SHOP_DEPTH_FT);
+    if kept > lane + 1e-9 {
+        return Err(format!("shops: a {} ft wide bridge keeps {kept} ft clear down its middle (width_ft less {}): rows {} ft deep with a lane of {lane} ft would stand on it; give lane_ft {kept} or more, or a narrower width_ft", c.width, 2.0 * wharf::SHOP_DEPTH_FT, rows.depth));
+    }
+    let lots = wharf::bridge_lots(c, lane, rows.depth, rows.frontage);
+    if lots.is_empty() {
+        return Err(format!("shops: a bridge {} ft long has no room for a row (20 ft are left clear at each end: it needs {} ft or more)", c.length().round(), rows.frontage + 2.0 * wharf::END_CLEAR_FT));
+    }
+    const TRADES: [&str; 6] = ["general_store", "tailor", "apothecary", "cobbler", "jeweler", "cartographer"];
+    let mut out = Vec::new();
+    for (k, lot) in lots.into_iter().enumerate() {
+        let m = worldgen::town::geom::centroid(&lot);
+        let cid = format!("c:{}", e.created.len());
+        e.created.push(Created { id: cid.clone(), kind: "building".into(), x: m[0], y: m[1], poly: lot, floors: Some(2), func: Some(TRADES[k % TRADES.len()].into()), on: Some(id.to_string()), ..Default::default() });
+        out.push(cid);
+    }
+    Ok(out)
+}
+
+/// Each new shop checked as a building (named for its trade): one that cannot stand is retired. The ones skipped, with why.
+async fn vet_shops(app: &Shared, ids: &[String]) -> Result<Vec<Value>, String> {
+    let list: Vec<(String, Vec<[f64; 2]>, Option<String>)> = app
+        .with_edits(|e| e.created.iter().filter(|c| ids.contains(&c.id) && c.name.is_empty()).map(|c| (c.id.clone(), c.poly.clone(), c.func.clone())).collect())
+        .unwrap_or_default();
+    let checked = app
+        .worker
+        .with(move |ex| {
+            Ok(list
+                .into_iter()
+                .map(|(id, poly, func)| {
+                    let skip = worldgen::agent::spot_skip(&ex.world, &ex.t0, &id);
+                    let r = worldgen::agent::building_spot(&ex.world, &ex.t0, &poly, func.as_deref(), &id, skip).map(|s| s.1);
+                    (id, r)
+                })
+                .collect::<Vec<_>>())
+        })
+        .await?;
+    if checked.iter().all(|(_, r)| r.is_ok()) {
+        let names: Vec<(String, String)> = checked.into_iter().filter_map(|(i, r)| r.ok().map(|n| (i, n))).collect();
+        app.edit("agent", 0, move |e| {
+            for (i, n) in names {
+                if let Some(c) = e.created.iter_mut().find(|c| c.id == i) {
+                    c.name = n;
+                }
+            }
+            Ok(json!({}))
+        })
+        .await?;
+        return Ok(Vec::new());
+    }
+    let skipped: Vec<Value> = checked.iter().filter_map(|(i, r)| r.as_ref().err().map(|why| json!({ "id": i, "why": why }))).collect();
+    app.edit("agent", 0, move |e| {
+        for (i, r) in checked {
+            if let Some(c) = e.created.iter_mut().find(|c| c.id == i) {
+                match r {
+                    Ok(n) => c.name = n,
+                    Err(_) => c.removed = true,
+                }
+            }
+        }
+        Ok(json!({}))
+    })
+    .await?;
+    Ok(skipped)
+}
+
 async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     let kind = match a["kind"].as_str() {
         None => None,
@@ -112,6 +242,8 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         Some(m) => return Err(format!("material: timber or stone, not {m}")),
     };
     let (from, to, width) = (end(app, a, "from").await?, end(app, a, "to").await?, a["width_ft"].as_f64());
+    let shops = shops_arg(a)?;
+    let rows = shops.flatten();
     let id = a["id"].as_str().map(str::to_string);
     // A repeat of a crossing already there is reported by `edit` below whatever its ends stand in.
     let repeat = match (&id, kind, from, to) {
@@ -134,17 +266,25 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         // The same crossing again (a script run twice): one of that kind with both ends within 5 ft of this one's, either way round.
         if let (None, Some(k), Some(f), Some(t)) = (&id, kind, from, to) {
             let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 5.0;
-            if let Some((eid, c)) = e.crossings.iter().find(|(_, c)| (near(c.a, f) && near(c.b, t)) || (near(c.a, t) && near(c.b, f))) {
+            let hit = e.crossings.iter().find(|(_, c)| (near(c.a, f) && near(c.b, t)) || (near(c.a, t) && near(c.b, f))).map(|(i, c)| (i.clone(), c.clone()));
+            if let Some((eid, c)) = hit {
                 let differs = c.kind != k || (k == CrossingKind::Bridge && material.is_some_and(|m| m != c.material)) || width.is_some_and(|w| (w - c.width).abs() > 1e-6);
                 if differs {
                     let m = if c.kind == CrossingKind::Bridge { format!("{:?}", c.material).to_lowercase() } else { "timber".to_string() };
                     return Err(format!("{eid} already joins these banks (a {}, {m}, {} ft): give its id to change it", c.kind.name(), c.width));
                 }
-                return Ok(json!({
+                let mut out = json!({
                     "tool": "place_crossing", "id": eid, "kind": c.kind.name(), "changed": false, "existing": true,
                     "note": "a crossing of this kind between these ends was already there: nothing was added (give its id to change it)",
-                    "crossing": crossing_json(e, eid, c),
-                }));
+                    "crossing": crossing_json(e, &eid, &c),
+                });
+                match rows {
+                    Some(r) if live_shops(e, &eid).is_empty() => out["shops"] = json!(lay_shops(e, &eid, &c, r)?),
+                    Some(_) => out["shops"] = json!(live_shops(e, &eid)),
+                    None if shops.is_some() => out["shops_retired"] = json!(retire_shops(e, &eid)),
+                    None => {}
+                }
+                return Ok(out);
             }
         }
         let (id, mut c) = match id {
@@ -154,9 +294,10 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             None => {
                 let (Some(kind), Some(a), Some(b)) = (kind, from, to) else { return Err("a new crossing needs kind, from and to".into()) };
-                (new_id("v"), Crossing { kind, a, b, width: 12.0, material: CrossingMaterial::Timber })
+                (new_id("v"), Crossing { kind, a, b, width: rows.filter(|_| kind == CrossingKind::Bridge).map_or(12.0, |r| r.width()), material: CrossingMaterial::Timber })
             }
         };
+        let was = changed.then(|| c.clone());
         if let Some(k) = kind {
             c.kind = k;
         }
@@ -170,10 +311,43 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         }
         let out = crossing_json(e, &id, &c);
         e.crossings.insert(id.clone(), c.clone());
-        Ok(json!({ "tool": "place_crossing", "id": id, "kind": c.kind.name(), "changed": changed, "crossing": out }))
+        let mut v = json!({ "tool": "place_crossing", "id": id, "kind": c.kind.name(), "changed": changed, "crossing": out });
+        match shops {
+            Some(Some(r)) => {
+                let gone = retire_shops(e, &id);
+                v["shops"] = json!(lay_shops(e, &id, &c, r)?);
+                if !gone.is_empty() {
+                    v["shops_retired"] = json!(gone);
+                }
+            }
+            Some(None) => v["shops_retired"] = json!(retire_shops(e, &id)),
+            // (The shops follow their bridge: laid out again on its new ends and width, or retired.)
+            None if changed => {
+                let moved = e.follow_crossing(&id, was.as_ref());
+                let (gone, laid): (Vec<String>, Vec<String>) = moved.into_iter().partition(|m| e.created.iter().any(|c| &c.id == m && c.removed));
+                if !laid.is_empty() {
+                    v["shops_relaid"] = json!(laid);
+                }
+                if !gone.is_empty() {
+                    v["shops_retired"] = json!(gone);
+                }
+            }
+            None => {}
+        }
+        Ok(v)
     })
     .await?;
     banks(app, &mut v).await?;
+    // The new shops are checked as buildings (what stands on the bridge's ends or crosses it); one that cannot stand is dropped.
+    let fresh: Vec<String> = v["shops"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect();
+    if !fresh.is_empty() {
+        let skipped = vet_shops(app, &fresh).await?;
+        if !skipped.is_empty() {
+            let out: Vec<&str> = skipped.iter().filter_map(|s| s["id"].as_str()).collect();
+            v["shops"] = json!(fresh.iter().filter(|f| !out.contains(&f.as_str())).collect::<Vec<_>>());
+            v["shops_skipped"] = json!(skipped);
+        }
+    }
     Ok(v)
 }
 
@@ -186,10 +360,16 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
                 return Err(format!("{}: no crossing {id}", crate::args::item(single, i)));
             }
         }
+        let mut gone = Vec::new();
         for id in &ids {
             e.crossings.remove(id);
+            gone.extend(e.follow_crossing(id, None));
         }
-        Ok(json!({ "tool": "remove_crossings", "ids": ids }))
+        let mut v = json!({ "tool": "remove_crossings", "ids": ids });
+        if !gone.is_empty() {
+            v["shops_retired"] = json!(gone);
+        }
+        Ok(v)
     })
     .await
 }
