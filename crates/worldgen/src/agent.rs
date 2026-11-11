@@ -1556,6 +1556,32 @@ pub fn layout_of(world: &World, t0: &T0, id: &str) -> Option<usize> {
     }
 }
 
+/// One of the world's own settlements as its sketch pin would take it (M10, `update_settlement`
+/// and the app's card): its layout, the pin that made it (a stroke index), its tier now and as
+/// placed, what it lives by (a `PIN_KINDS` key), its name now, its cell centre (the pin's spot),
+/// capital, and whether a port or a fishing village may stand there (sea or lake within reach,
+/// as a pin needs; fishing also on a river).
+pub fn settlement_facts(world: &World, t0: &T0, id: &str) -> Result<Value, String> {
+    use crate::t0::settle::SettleKind;
+    let li = layout_of(world, t0, id).filter(|&li| li < t0.settlements.len()).ok_or_else(|| format!("id: a settlement (a metropolis, city, town or village; search_features finds them), got {id:?}"))?;
+    let s = &t0.settlements[li];
+    let name = world.file.edits.renames.get(id).cloned().or_else(|| t0.extra.as_ref()?.overlay.features.iter().find(|f| f.id == id).map(|f| f.name.clone())).unwrap_or_default();
+    let gw = t0.height.w;
+    let spot = [(s.cell % gw) as f64 * t0.cell_ft, (s.cell / gw) as f64 * t0.cell_ft];
+    let wet = (1..=4).any(|r| {
+        (0..24).any(|q| {
+            let ang = core::f64::consts::TAU * q as f64 / 24.0;
+            let d = 0.4 * r as f64 * t0.cell_ft;
+            t0.sample_lake(spot[0] + d * libm::cos(ang), spot[1] + d * libm::sin(ang)).1 >= 0.5
+        })
+    });
+    let shore = wet || s.coastal || matches!(s.kind, SettleKind::Port | SettleKind::Fishing);
+    Ok(json!({
+        "layout": li, "pin": s.pin, "tier": s.tier.name(), "planned": s.planned.name(), "kind": crate::world::PIN_KINDS[s.kind as usize],
+        "name": name, "spot": spot, "capital": s.capital, "port_ok": shore, "fishing_ok": shore || s.river,
+    }))
+}
+
 /// The feature id of layout `li` (a settlement or site).
 pub fn feature_of_layout(world: &World, t0: &T0, li: usize) -> Option<String> {
     let n = t0.settlements.len();

@@ -1165,6 +1165,13 @@ impl T0 {
                 out.extend_from_slice(&v.to_le_bytes());
             }
         }
+        // Settlements as planned (optional, after the ferries): count, then per settlement the
+        // tier (u8) and population (u32) it was planned with (a pin in place of one names that tier).
+        out.extend_from_slice(&(self.settlements.len() as u32).to_le_bytes());
+        for s in &self.settlements {
+            out.push(s.planned as u8);
+            out.extend_from_slice(&s.planned_pop.to_le_bytes());
+        }
         out
     }
 
@@ -1248,7 +1255,7 @@ impl T0 {
                 seed,
                 culture,
                 pin: (pin != u32::MAX).then_some(pin),
-                // (Only generating reads them: nothing is routed again from a loaded world.)
+                // (As placed, when the blob has them: read at its end.)
                 planned: settle::Tier::from_u8(tier),
                 planned_pop: population,
                 isolated: flags & 0x80 != 0,
@@ -1287,6 +1294,14 @@ impl T0 {
                     *x = f64::from_le_bytes(take(8)?.try_into().unwrap());
                 }
                 sea_ferries.push(ferries::SeaFerry::new([v[0], v[1]], [v[2], v[3]]));
+            }
+        }
+        if let Ok(b) = take(4)
+            && u32::from_le_bytes(b.try_into().unwrap()) as usize == settlements.len()
+        {
+            for s in &mut settlements {
+                s.planned = settle::Tier::from_u8(take(1)?[0]);
+                s.planned_pop = u32::from_le_bytes(take(4)?.try_into().unwrap());
             }
         }
         let map_w = (w - 1) as f64 * cell_ft;

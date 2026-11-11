@@ -1127,7 +1127,10 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             c
         })
         .collect();
-    let mut walls_json = json!({ "built": ch.walls.unwrap_or(plan.walled), "generated": plan.walled });
+    // (The towers as built along the wall now, gate towers apart: `interior::towers`.)
+    let towers = crate::interior::towers(&now);
+    let gate_towers = towers.iter().filter(|t| t.2).count();
+    let mut walls_json = json!({ "built": ch.walls.unwrap_or(plan.walled), "generated": plan.walled, "towers": towers.len() - gate_towers, "gate_towers": gate_towers, "gates": now.gates.len() });
     if let Some(h) = super::wallgates::plan_json(world, t0, index, e) {
         walls_json["by_hand"] = h;
     }

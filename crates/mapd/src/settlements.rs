@@ -6,7 +6,6 @@
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::t0::made;
-use worldgen::t0::settle::SettleKind;
 use worldgen::world::{CREATED_SETTLEMENTS, Created, PIN_KINDS, PIN_TIERS};
 
 use crate::Shared;
@@ -276,31 +275,17 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     let wid = id.clone();
     let lives = ask.lives_by.clone();
-    // The settlement: its layout, pin, tier as placed, kind, name, cell centre, and a shore check.
-    let (li, pin, tier, planned, kind, name, spot, capital, shore) = app
-        .worker
-        .with(move |ex| {
-            let (w, t0) = (&ex.world, &ex.t0);
-            let li = agent::layout_of(w, t0, &wid).filter(|&li| li < t0.settlements.len()).ok_or_else(|| format!("id: a settlement (a metropolis, city, town or village; search_features finds them), got {wid:?}"))?;
-            let s = &t0.settlements[li];
-            let name = w.file.edits.renames.get(&wid).cloned().or_else(|| t0.extra.as_ref()?.overlay.features.iter().find(|f| f.id == wid).map(|f| f.name.clone())).unwrap_or_default();
-            let gw = t0.height.w;
-            let spot = [(s.cell % gw) as f64 * t0.cell_ft, (s.cell / gw) as f64 * t0.cell_ft];
-            // (A port or fishing village needs sea or lake within reach of its spot, as a pin does.)
-            let shore = match lives.as_deref() {
-                Some(k @ ("port" | "fishing")) => {
-                    let wet = (1..=4).any(|r| (0..24).any(|q| {
-                        let ang = std::f64::consts::TAU * q as f64 / 24.0;
-                        let d = 0.4 * r as f64 * t0.cell_ft;
-                        t0.sample_lake(spot[0] + d * ang.cos(), spot[1] + d * ang.sin()).1 >= 0.5
-                    }));
-                    wet || s.coastal || matches!(s.kind, SettleKind::Port | SettleKind::Fishing) || (k == "fishing" && s.river)
-                }
-                _ => true,
-            };
-            Ok((li, s.pin, s.tier.name().to_string(), s.planned.name().to_string(), PIN_KINDS[s.kind as usize].to_string(), name, spot, s.capital, shore))
-        })
-        .await?;
+    // The settlement: its layout, pin, tier as placed, kind, name, cell centre, and a shore check
+    // (`agent::settlement_facts`, as the app's card has them).
+    let f = app.worker.with(move |ex| agent::settlement_facts(&ex.world, &ex.t0, &wid)).await?;
+    let st = |k: &str| f[k].as_str().unwrap_or_default().to_string();
+    let (li, pin, tier, planned, kind, name, capital) = (f["layout"].as_u64().unwrap_or(0) as usize, f["pin"].as_u64(), st("tier"), st("planned"), st("kind"), st("name"), f["capital"] == json!(true));
+    let spot = [f["spot"][0].as_f64().unwrap_or(0.0), f["spot"][1].as_f64().unwrap_or(0.0)];
+    let shore = match lives.as_deref() {
+        Some("port") => f["port_ok"] == json!(true),
+        Some("fishing") => f["fishing_ok"] == json!(true),
+        _ => true,
+    };
     if !shore {
         return Err(format!("lives_by: a port or fishing village stands on a sea or lake shore (fishing also on a river): {name} is inland. Leave lives_by out, or give another (river, mining, fortress, market, farming, lumber, herding, oasis)"));
     }

@@ -124,7 +124,7 @@ pub struct Settlement {
     /// The sketch stroke that pinned it, if any.
     pub pin: Option<u32>,
     /// The tier and population it was planned with (`roads::link_edges` and `route` read these, so
-    /// the economy's re-tiering routes nothing again; a loaded world has its final ones here).
+    /// the economy's re-tiering routes nothing again; a pin in place of one names this tier).
     pub planned: Tier,
     pub planned_pop: u32,
     /// Part of an isolated realm (`place_realms`): its walled town or city, or one of its hidden

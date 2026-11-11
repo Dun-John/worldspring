@@ -414,6 +414,16 @@ impl Ctx {
         serde_json::Value::Array(list).to_string()
     }
 
+    /// One of the world's own settlements as its sketch pin would take it
+    /// (`agent::settlement_facts`), or `{error}`.
+    pub fn settlement_facts_json(&self, id: &str) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        match worldgen::agent::settlement_facts(&self.world, t0, id) {
+            Ok(v) => v.to_string(),
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
+    }
+
     /// Whether a village or town (`kind`; `id` its `c:<n>`) can be added at (x, y) without
     /// remaking the world (`t0::made::spot`): `{x, y, name, culture, lives_by}` as
     /// `create_settlement` makes it (from the ground), or `{error}`.
