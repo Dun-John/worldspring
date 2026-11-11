@@ -1254,7 +1254,8 @@ const TOWER_KIND = 0xfe;
  * (0 none, 1 the run turns left there, 2 right, 3 shallow; end A + 4 * end B): the shader draws a joined end's cap without its
  * rim except on the outside of the bend. A ring (first point = last) joins at its seam too.
  */
-function joinWallInk(g: RiverGeometry, starts: number[], v: Float32Array): void {
+function joinWallInk(g: RiverGeometry, starts: number[], v: Float32Array, ft: number, towers: number[][]): void {
+  const CUT = 24; // (ft from the tile's edge: a run's end there is probably where the tile cuts it, its neighbour carries on)
   const isWall = (i: number) => {
     const st = v[i * 4 + 3];
     return (st >= 1 && st < 2) || st === 5 || st === 6;
@@ -1267,17 +1268,35 @@ function joinWallInk(g: RiverGeometry, starts: number[], v: Float32Array): void 
     if (dot > 0.94 * Math.hypot(ux, uy) * Math.hypot(wx, wy)) return 3;
     return cr > 0 ? 1 : 2;
   };
-  // (Pieces of a run that are lines of their own join where their end points meet: end point -> [end vertex, the vertex beside it].)
-  const key = (i: number) => `${Math.round(v[i * 4] * 2)},${Math.round(v[i * 4 + 1] * 2)}`;
-  const ends = new Map<string, number[][]>();
+  // (Vertices are tile fractions; `ft` is the tile's side. Pieces of a run that are lines of their own join where end points
+  // meet, within 1.5 ft: end vertex -> the other end's vertex beside it. An end that meets a wall's side (a T), lies under a
+  // tower or gate, or is where the tile cuts the run (outside, or near its edge) has no visible cap: code 3, bare.)
+  const X = (i: number) => v[i * 4] * ft;
+  const Y = (i: number) => v[i * 4 + 1] * ft;
+  const ends: { i: number; beside: number }[] = [];
+  const sides: number[][] = [];
   for (let l = 0; l + 1 < starts.length; l++) {
     const [v0, v1] = [starts[l], starts[l + 1]];
     if (v1 - v0 < 2 || !isWall(v0)) continue;
-    for (const e of [[v0, v0 + 1], [v1 - 1, v1 - 2]]) ends.set(key(e[0]), [...(ends.get(key(e[0])) ?? []), e]);
+    ends.push({ i: v0, beside: v0 + 1 }, { i: v1 - 1, beside: v1 - 2 });
+    for (let i = v0; i + 1 < v1; i++) sides.push([i, i + 1]);
   }
+  const TOL = 1.5;
   const mate = (e: number, beside: number) => {
-    const m = (ends.get(key(e)) ?? []).filter((o) => o[0] !== e);
-    return m.length === 1 && m[0][1] !== beside ? m[0][1] : -1;
+    const m = ends.filter((o) => o.i !== e && Math.hypot(X(o.i) - X(e), Y(o.i) - Y(e)) < TOL);
+    return m.length === 1 && m[0].beside !== beside ? m[0].beside : -1;
+  };
+  const bare = (e: number) => {
+    const [x, y] = [X(e), Y(e)];
+    if (x < CUT || y < CUT || x > ft - CUT || y > ft - CUT) return true;
+    if (towers.some(([tx, ty, r]) => Math.hypot(tx - x, ty - y) < r + 1)) return true;
+    if (ends.some((o) => o.i !== e && Math.hypot(X(o.i) - x, Y(o.i) - y) < TOL)) return true;
+    return sides.some(([p, q]) => {
+      if (p === e || q === e) return false;
+      const [dx, dy] = [X(q) - X(p), Y(q) - Y(p)];
+      const t = Math.max(0, Math.min(1, ((x - X(p)) * dx + (y - Y(p)) * dy) / Math.max(dx * dx + dy * dy, 1e-6)));
+      return Math.hypot(X(p) + dx * t - x, Y(p) + dy * t - y) < TOL;
+    });
   };
   let s = 0;
   for (let l = 0; l + 1 < starts.length; l++) {
@@ -1288,8 +1307,8 @@ function joinWallInk(g: RiverGeometry, starts: number[], v: Float32Array): void 
       let code = 0;
       if (wall) {
         const [ma, mb] = [i > v0 || ring ? -1 : mate(i, i + 1), i + 2 < v1 || ring ? -1 : mate(i + 1, i)];
-        const a = i > v0 ? turn(i - 1, i, i + 1) : ring ? turn(v1 - 2, i, i + 1) : ma >= 0 ? turn(ma, i, i + 1) : 0;
-        const b = i + 2 < v1 ? turn(i, i + 1, i + 2) : ring ? turn(i, i + 1, v0 + 1) : mb >= 0 ? turn(i, i + 1, mb) : 0;
+        const a = i > v0 ? turn(i - 1, i, i + 1) : ring ? turn(v1 - 2, i, i + 1) : ma >= 0 ? turn(ma, i, i + 1) : bare(i) ? 3 : 0;
+        const b = i + 2 < v1 ? turn(i, i + 1, i + 2) : ring ? turn(i, i + 1, v0 + 1) : mb >= 0 ? turn(i, i + 1, mb) : bare(i + 1) ? 3 : 0;
         code = a + 4 * b;
       }
       for (let c = 0; c < 4; c++) g.q[(s * 4 + c) * 2 + 1] = code;
@@ -1554,7 +1573,19 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
   }
   starts.push(o / 4);
   const ink = buildRiverGeometry({ starts: new Uint32Array(starts), verts: out.subarray(0, o) });
-  if (ink) joinWallInk(ink, starts, out.subarray(0, o));
+  if (ink && tileFt > 0) {
+    // (Towers and gates, as centre and radius in ft: wall ends under them need no cap.)
+    const towers: number[][] = [];
+    for (let l = 0; l + 1 < lines.starts.length; l++) {
+      const v = lines.starts[l];
+      const k = lines.verts[v * 4 + 3];
+      if (k !== 1 && k !== 3) continue;
+      const e = lines.starts[l + 1] - 1;
+      const [x, y] = [(lines.verts[v * 4] + lines.verts[e * 4]) / 2, (lines.verts[v * 4 + 1] + lines.verts[e * 4 + 1]) / 2];
+      towers.push([x * tileFt, y * tileFt, lines.verts[v * 4 + 2] / 2]);
+    }
+    joinWallInk(ink, starts, out.subarray(0, o), tileFt, towers);
+  }
   if (!fill && !ink) return null;
   return { fill, ink };
 }
