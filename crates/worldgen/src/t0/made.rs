@@ -568,6 +568,11 @@ fn relaid(id: &str, from: usize, to: usize) -> Option<String> {
 /// in the file and resolve nowhere. What is kept under its own `c:` id stays. Walls drawn by
 /// hand are not keyed to it (they read the towns they reach afresh). How many entries moved.
 pub fn set_aside(edits: &mut crate::world::Edits, li: usize) -> usize {
+    set_aside_by_field(edits, li).iter().map(|a| a.1).sum()
+}
+
+/// `set_aside`, with how many entries moved in each field.
+pub fn set_aside_by_field(edits: &mut crate::world::Edits, li: usize) -> [(&'static str, usize); 8] {
     use crate::world::{PARKED_LAYOUT, layout_in_id};
     let parked = |id: &str| layout_in_id(id).filter(|&l| l >= PARKED_LAYOUT);
     let mut ids: Vec<&str> = edits.renames.keys().chain(edits.notes.keys()).chain(edits.designs.keys()).chain(edits.buildings.keys()).map(String::as_str).collect();
@@ -575,7 +580,7 @@ pub fn set_aside(edits: &mut crate::world::Edits, li: usize) -> usize {
     ids.extend(edits.npcs.values().filter_map(|n| n.location.as_ref().map(|l| l.id.as_str())));
     ids.extend(edits.plots.values().flat_map(|p| p.anchors.iter().map(String::as_str)));
     let to = ids.into_iter().filter_map(parked).chain(edits.towns.keys().filter_map(|k| k.parse::<usize>().ok()).filter(|&l| l >= PARKED_LAYOUT)).max().map_or(PARKED_LAYOUT, |m| m + 1);
-    let mut n = 0;
+    let mut n = [0; 8];
     fn rekey<V>(m: &mut std::collections::BTreeMap<String, V>, li: usize, to: usize, n: &mut usize) {
         let keys: Vec<String> = m.keys().filter(|k| relaid(k, li, to).is_some()).cloned().collect();
         for k in keys {
@@ -584,33 +589,34 @@ pub fn set_aside(edits: &mut crate::world::Edits, li: usize) -> usize {
             *n += 1;
         }
     }
-    rekey(&mut edits.renames, li, to, &mut n);
-    rekey(&mut edits.notes, li, to, &mut n);
-    rekey(&mut edits.designs, li, to, &mut n);
-    rekey(&mut edits.buildings, li, to, &mut n);
+    rekey(&mut edits.renames, li, to, &mut n[0]);
+    rekey(&mut edits.notes, li, to, &mut n[1]);
+    rekey(&mut edits.designs, li, to, &mut n[3]);
+    rekey(&mut edits.buildings, li, to, &mut n[4]);
     if let Some(t) = edits.towns.remove(&li.to_string()) {
         edits.towns.insert(to.to_string(), t);
-        n += 1;
+        n[5] += 1;
     }
     let hidden: Vec<String> = edits.hidden.iter().filter(|h| relaid(h, li, to).is_some()).cloned().collect();
     for h in hidden {
         edits.hidden.remove(&h);
         edits.hidden.insert(relaid(&h, li, to).expect("a mark of the layout"));
-        n += 1;
+        n[2] += 1;
     }
     for l in edits.npcs.values_mut().filter_map(|v| v.location.as_mut()) {
         if let Some(id) = relaid(&l.id, li, to) {
             l.id = id;
-            n += 1;
+            n[6] += 1;
         }
     }
     for a in edits.plots.values_mut().flat_map(|p| p.anchors.iter_mut()) {
         if let Some(id) = relaid(a, li, to) {
             *a = id;
-            n += 1;
+            n[7] += 1;
         }
     }
-    n
+    let f = ["renames", "notes", "hidden", "designs", "buildings", "towns", "npcs", "plots"];
+    std::array::from_fn(|k| (f[k], n[k]))
 }
 
 /// After `edits.created` changed from `old` (`first`: the first created layout index), sets

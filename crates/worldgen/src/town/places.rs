@@ -195,8 +195,9 @@ pub fn of(world: &crate::World, t0: &T0, l: &Layout) -> Vec<Place> {
 fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
     let li = l.index;
     let Some(s) = super::settlement(t0, li as usize).filter(|_| !l.site) else { return Vec::new() };
-    let group = (s.culture % 5) as usize;
-    let culture = s.culture as usize;
+    // (The layout's culture: one changed by hand, R5 121.)
+    let group = (l.culture % 5) as usize;
+    let culture = l.culture as usize;
     let roll = |tag: i64, n: i64, k: i64| unit(hash3(s.seed ^ 0x5a1e_7c3d, tag, n, k));
     let namer = |tag: i64, n: i64| Namer::new(hash3(s.seed, tag, n, 0x91ac));
     let district = |p: P| l.quarters.iter().position(|q| q.patches.iter().any(|poly| contains(poly, p)));

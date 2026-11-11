@@ -2505,6 +2505,7 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     let _ = t0;
     json!({
         "tier": l.tier.name(),
+        "culture": town::culture::NAMES[l.culture as usize % 5],
         "buildings": l.buildings.len(),
         "walled": !l.walls.is_empty(),
         "districts": l.quarters.iter().enumerate().map(|(qi, q)| json!({ "id": format!("d:{}:{qi}", l.index), "name": world.file.edits.renames.get(&format!("d:{}:{qi}", l.index)).cloned().unwrap_or_else(|| q.name.clone()), "kind": q.kind.name() })).collect::<Vec<_>>(),

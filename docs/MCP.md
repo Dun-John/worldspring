@@ -926,8 +926,8 @@ same settlement at the same place returns that one, with `"existing": true`.
 
 `delete_feature` takes it away. The changes made in it (its buildings' edits, its town laid out anew, names, notes,
 hidden marks, NPCs' places and plot points in it) are set aside, as when the world is remade: they stay in the file
-and resolve nowhere. The result's `set_aside` counts them. `update_settlement` changes its tier, what it lives by or
-its name at once. A city, a capital, a port or a fishing village needs the world remade: a settlement pin
+and resolve nowhere. The result's `set_aside` counts them. `update_settlement` changes its tier, what it lives by,
+its culture or its name at once. A city, a capital, a port or a fishing village needs the world remade: a settlement pin
 (`create_sketch_stroke`) and `regenerate`.
 
 | Parameter | Type | | |
@@ -945,7 +945,18 @@ its name at once. A city, a capital, a port or a fishing village needs the world
 > *"Add a logging village up in those hills."* · *"Put a market town between Bornworth and the lake."*
 
 ### `update_settlement`
-Changes a settlement's tier, what it lives by, whether it is the realm's capital, or its name.
+Changes a settlement's tier, what it lives by, whether it is the realm's capital, its name or its culture.
+
+- **Culture**, for every settlement (the world's own and those added by hand), changes at once with no remake: it
+  is laid out anew in that culture, as if generated so (its streets, buildings, roofs, walls, yurts and felt halls,
+  parks, cemeteries and generated names of districts, squares, gates and buildings), in the same place: no road,
+  neighbour or other settlement moves. Its own name, notes, NPCs and plot points stay on it; the changes made inside
+  it (buildings, its town plan, designs underground, names, notes and marks on what is in it, NPCs and plot points
+  placed there) are set aside: they stay in the file and resolve nowhere (`set_aside` counts them, `set_aside_by` by
+  field). Changed back, it is laid out as generated again (what was set aside stays aside). For one of the world's
+  own, give `culture` on its own (tier, lives_by, capital and name go through a pin and `regenerate`); for one added
+  by hand, with any of the others. The result gives `culture` and `from` (names), `feature` (`get_feature`'s details:
+  `layout.culture`), `pending: false`; asked again, `unchanged: true`.
 
 - **A village or town added by hand** (`c:...`) changes at once, with no remake: a village becomes a town or the
   other way, or it lives by something else (inland kinds only). It is laid out anew, so the changes made inside it
@@ -973,14 +984,17 @@ Changes a settlement's tier, what it lives by, whether it is the realm's capital
 | `lives_by` | string | optional | As a pin's. Default: as it is when its tier stays or still fits the new one (a port is no village's, a fishing village no town's), else from its land; `economy` in the result says which. |
 | `capital` | boolean | optional | `true`: the realm's capital (the world's own only). |
 | `name` | string | optional | Its new name. |
+| `culture` | string or integer | optional | `north` (0), `west` (1), `south` (2), `dry` (3) or `steppe` (4): at once, as above. |
 | `regenerate` | boolean | optional | The world's own: remake the world at once (default false). |
 
 ```json
 { "name": "update_settlement", "arguments": { "id": "town:1a2b3c4d", "tier": "village", "lives_by": "fishing" } }
 { "name": "update_settlement", "arguments": { "id": "village:5e6f7a8b", "tier": "town", "name": "Neverwinter", "regenerate": true } }
 { "name": "update_settlement", "arguments": { "id": "c:2", "tier": "town" } }
+{ "name": "update_settlement", "arguments": { "id": "city:54167bdf", "culture": "steppe" } }
 ```
-> *"Luskan is only a fishing village."* · *"Make Neverwinter a town of two thousand."*
+> *"Luskan is only a fishing village."* · *"Make Neverwinter a town of two thousand."* · *"Lay Hollywell out as a
+> steppe city."*
 
 ## The sketch and `regenerate`
 

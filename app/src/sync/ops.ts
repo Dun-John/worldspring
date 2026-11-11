@@ -26,6 +26,7 @@ export const EDIT_FIELDS: Record<string, Shape> = {
   ground: 'map',
   plateaus: 'map',
   wharves: 'map',
+  cultures: 'map',
 };
 
 /** Layout numbers from here up are changes set aside when the world was remade (`PARKED_LAYOUT`
@@ -45,6 +46,7 @@ export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plot
   designs: 'keys',
   buildings: 'keys',
   towns: 'towns',
+  cultures: 'towns',
   npcs: 'npcs',
   plots: 'plots',
 };

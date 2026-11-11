@@ -703,7 +703,7 @@ fn base_towers(world: &World, t0: &T0, index: usize, e: &TownEdit) -> Rc<Vec<(P,
         wall: WallEdit::default(),
         ..e.clone()
     };
-    let fp = super::wards::hash_edit(world, &be);
+    let fp = super::wards::hash_in(world, t0, index, &be);
     if let Some(t) = BASE.with(|c| c.borrow().get(&(index as u32)).filter(|x| x.0 == fp).map(|x| x.1.clone())) {
         return t;
     }

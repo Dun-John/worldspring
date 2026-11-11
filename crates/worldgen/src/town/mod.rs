@@ -40,6 +40,7 @@ pub mod fields;
 pub mod rural;
 // R5 towns
 pub mod cemetery;
+pub mod culture;
 pub mod horses;
 pub mod yurts;
 // R5 towns: districts drawn by hand, and renames kept when a patch is laid out anew.
@@ -832,6 +833,11 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         Some(t) => crate::core::rng::hash2(fp, t as i64, 0x70e5),
         None => fp,
     };
+    // (R5 121: laid out in another culture, its buildings' edits are applied anew.)
+    let fp = match culture::mark(world, t0, index) {
+        0 => fp,
+        c => hash2(fp, c, 0xc017),
+    };
     if let Some(l) = EDITED.with(|c| c.borrow().get(&key).filter(|e| e.0 == fp).map(|e| e.1.clone())) {
         return l;
     }
@@ -1023,6 +1029,7 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         if c.0 == world.hash { c.1.get(&key).cloned() } else { None }
     }) && wall_kept(world, t0, index)
         && raised_kept(world, t0, index)
+        && culture_kept(world, t0, index, &l)
     {
         return l;
     }
@@ -1142,6 +1149,12 @@ fn wall_kept(world: &World, t0: &T0, index: usize) -> bool {
     })
 }
 
+/// Whether a cached layout `l` of one of the world's own settlements is in the culture it is laid
+/// out in now (`Edits.cultures`, R5 121: changed, or changed back).
+fn culture_kept(world: &World, t0: &T0, index: usize, l: &Layout) -> bool {
+    index >= t0.settlements.len() || culture::of(world, t0, index) == Some(l.culture)
+}
+
 /// Forget cached layouts from `index` on (`forget_from(0)`: all of them).
 pub fn forget_from(index: usize) {
     CACHE.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
@@ -1198,7 +1211,12 @@ pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
     if index >= layout_count(t0) {
         return 0;
     }
-    let mut l = (*generated_layout(world, t0, index)).clone();
+    // (In the culture it was generated in: a culture changed by hand follows its place to the
+    // remade world's number, as its other edits do, so it is no part of what the place is.)
+    let mut l = match culture::override_of(world, t0, index) {
+        Some(_) => generate_in(world, t0, index, &t0.settlements[index], None, None),
+        None => (*generated_layout(world, t0, index)).clone(),
+    };
     l.index = 0;
     crate::core::hash::fnv64(format!("{l:?}").as_bytes())
 }
@@ -1923,7 +1941,12 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
 /// layout's (`wards::inherit`).
 /// `survey`: every street judged for steps, towns' too (`stairs::survey`).
 fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::world::TownEdit>, survey: Option<&mut Vec<stairs::Profile>>) -> Layout {
-    let s = settlement(t0, index).expect("layout of a settlement");
+    let s = culture::settlement(world, t0, index).expect("layout of a settlement");
+    generate_in(world, t0, index, &s, edit, survey)
+}
+
+/// `generate_with` settlement `s` (layout `index`'s, in the culture it is laid out in).
+fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Option<&crate::world::TownEdit>, survey: Option<&mut Vec<stairs::Profile>>) -> Layout {
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
     let (site, road_ends, mut rng) = prepare(world, t0, index);
@@ -1936,7 +1959,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         village(&site, s, r, &road_ends, &mut rng, &mut l);
     } else {
         let plan = match edit {
-            Some(_) => wards::plan(world, index, || plan_town(&site, s, r, &road_ends, &mut rng)),
+            Some(_) => wards::plan(world, index, s.culture, || plan_town(&site, s, r, &road_ends, &mut rng)),
             None => Rc::new(plan_town(&site, s, r, &road_ends, &mut rng)),
         };
         let mut ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
@@ -2404,10 +2427,10 @@ fn prepare<'a>(world: &World, t0: &'a T0, index: usize) -> (Site<'a>, Vec<(P, u8
 
 /// A town's plan (kept by `wards::plan`), without building it; `None` for a village or a site.
 fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownPlan>> {
-    let s = settlement(t0, index).filter(|s| s.tier >= Tier::Town)?;
-    Some(wards::plan(world, index, || {
+    let s = culture::settlement(world, t0, index).filter(|s| s.tier >= Tier::Town)?;
+    Some(wards::plan(world, index, s.culture, || {
         let (site, road_ends, mut rng) = prepare(world, t0, index);
-        plan_town(&site, s, urban_radius(s.tier, s.population), &road_ends, &mut rng)
+        plan_town(&site, &s, urban_radius(s.tier, s.population), &road_ends, &mut rng)
     }))
 }
 

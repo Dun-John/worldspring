@@ -5148,3 +5148,62 @@ fn harbour_ground() {
     }
     assert!(towers >= 1, "no islet tower checked");
 }
+
+// R5 121
+
+/// One of the world's own settlements laid out in another culture (`Edits.cultures`,
+/// `town::culture`) moves nothing else: T0 and the layouts round it stay byte for byte; it is
+/// laid out anew in that culture (a cached copy as a fresh one); the edits inside it are set
+/// aside while its own name stays; asking again changes nothing; and changed back it is laid out
+/// as before. Its fingerprint for a remake (`layout_print`) is its generated one.
+#[test]
+fn a_culture_change_moves_nothing_else() {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::{self, culture};
+    use worldgen::world::{BuildingEdit, PARKED_LAYOUT};
+    let file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
+    let mut ex = Executor::new(World::new(file.clone()).unwrap());
+    let li = (0..ex.t0.settlements.len()).find(|&i| ex.t0.settlements[i].tier == Tier::Town && ex.t0.settlements[i].culture != 4).expect("a town not of the steppe");
+    let was = ex.t0.settlements[li].culture;
+    let laid = |ex: &Executor, i: usize| format!("{:?}", *town::layout(&ex.world, &ex.t0, i));
+    let at = |ex: &Executor, i: usize| match town::settlement(&ex.t0, i) {
+        Some(s) => [s.x, s.y],
+        None => [ex.t0.pois[i - ex.t0.settlements.len()].x, ex.t0.pois[i - ex.t0.settlements.len()].y],
+    };
+    let here = at(&ex, li);
+    let mut near: Vec<usize> = (0..town::layout_count(&ex.t0)).filter(|&i| i != li).collect();
+    near.sort_by(|&a, &b| geom_dist(at(&ex, a), here).total_cmp(&geom_dist(at(&ex, b), here)).then(a.cmp(&b)));
+    near.truncate(12);
+    near.extend(town::sites_in(&ex.t0, li));
+    let (bytes0, laid0) = (ex.t0.to_bytes(), laid(&ex, li));
+    let others0: Vec<String> = near.iter().map(|&i| laid(&ex, i)).collect();
+    let print0 = town::layout_print(&ex.world, &ex.t0, li);
+
+    // Its own name and a building changed inside it, then the culture changed.
+    let fid = worldgen::agent::feature_of_layout(&ex.world, &ex.t0, li).expect("its feature");
+    let b0 = town::layout(&ex.world, &ex.t0, li).buildings[0].poly.clone();
+    let mut e = ex.world.file.edits.clone();
+    e.renames.insert(fid.clone(), "Keepsake".into());
+    e.buildings.insert(format!("b:{li}:0"), BuildingEdit { at: b0.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / b0.len() as f64, a[1] + p[1] / b0.len() as f64]), removed: true, ..Default::default() });
+    let c = culture::change(&mut e, &ex.t0, li, 4).unwrap();
+    assert!(!c.unchanged && c.from == was && c.to == 4 && c.aside == vec![("buildings", 1)], "{c:?}");
+    assert!(e.renames.get(&fid).is_some_and(|n| n == "Keepsake") && e.buildings.keys().all(|k| k.starts_with(&format!("b:{PARKED_LAYOUT}:"))), "its name moved or a building edit stayed");
+    assert_eq!(e.cultures.get(&li.to_string()), Some(&4));
+    ex.world.file.edits = e.clone();
+    let l = town::layout(&ex.world, &ex.t0, li);
+    assert!(l.culture == 4 && !l.yurts.is_empty() && laid(&ex, li) != laid0, "not laid out anew in the steppe's culture (yurts and all)");
+    let fresh = Executor::new(World::new(WorldFile { edits: e.clone(), ..file.clone() }).unwrap());
+    assert!(fresh.t0.to_bytes() == bytes0 && ex.t0.to_bytes() == bytes0, "T0 changed");
+    assert_eq!(laid(&fresh, li), laid(&ex, li), "the cached layout is not the one laid out afresh");
+    for (k, &i) in near.iter().enumerate() {
+        assert!(laid(&ex, i) == others0[k] && laid(&fresh, i) == others0[k], "layout {i} changed with layout {li}'s culture");
+    }
+    assert_eq!(town::layout_print(&ex.world, &ex.t0, li), print0, "the remake's fingerprint follows the culture");
+
+    // Again: nothing; back: as it was generated.
+    assert!(culture::change(&mut e, &ex.t0, li, 4).unwrap().unchanged);
+    let c = culture::change(&mut e, &ex.t0, li, was).unwrap();
+    assert!(!c.unchanged && c.aside.is_empty() && e.cultures.is_empty(), "{c:?}");
+    ex.world.file.edits = e;
+    assert_eq!(laid(&ex, li), laid0, "changed back, it is not laid out as before");
+}

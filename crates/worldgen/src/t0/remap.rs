@@ -48,6 +48,7 @@ pub const LAYOUT_ID_FIELDS: &[(&str, IdsIn)] = &[
     ("designs", IdsIn::Keys),
     ("buildings", IdsIn::Keys),
     ("towns", IdsIn::Towns),
+    ("cultures", IdsIn::Towns),
     ("npcs", IdsIn::Npcs),
     ("plots", IdsIn::Plots),
 ];
@@ -208,6 +209,7 @@ fn each_id(edits: &Edits, mut f: impl FnMut(&str)) {
             "designs" => edits.designs.keys().for_each(|k| f(k)),
             "buildings" => edits.buildings.keys().for_each(|k| f(k)),
             "towns" => edits.towns.keys().for_each(|k| f(&format!("t:{k}"))),
+            "cultures" => edits.cultures.keys().for_each(|k| f(&format!("t:{k}"))),
             "npcs" => edits.npcs.values().filter_map(|n| n.location.as_ref()).for_each(|l| f(&l.id)),
             "plots" => edits.plots.values().flat_map(|p| &p.anchors).for_each(|k| f(k)),
             _ => unreachable!("a layout-id field each_id doesn't read"),
@@ -236,6 +238,7 @@ fn renamed(edits: &Edits, mut rename: impl FnMut(&str, bool) -> String) -> (Edit
     out.designs = rekey(&edits.designs, false, &mut to);
     out.buildings = rekey(&edits.buildings, false, &mut to);
     out.towns = rekey(&edits.towns, true, &mut to);
+    out.cultures = rekey(&edits.cultures, true, &mut to);
     for n in out.npcs.values_mut() {
         if let Some(l) = n.location.as_mut() {
             l.id = to(&l.id, false);

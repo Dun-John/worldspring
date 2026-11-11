@@ -35,6 +35,7 @@ function renamed(edits: Edits, rename: (id: string, bare?: boolean) => string): 
   if (edits.designs) out.designs = rekeyed(edits.designs);
   if (edits.buildings) out.buildings = rekeyed(edits.buildings);
   if (edits.towns) out.towns = rekeyed(edits.towns, true);
+  if (edits.cultures) out.cultures = rekeyed(edits.cultures, true);
   if (edits.npcs)
     out.npcs = Object.fromEntries(
       Object.entries(edits.npcs).map(([k, v]) => {

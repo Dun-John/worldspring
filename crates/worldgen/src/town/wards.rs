@@ -369,16 +369,17 @@ pub(super) fn moved_mesh(plan: &TownPlan, moves: &[(usize, P)]) -> Mesh {
 // it builds the town again without planning it again.
 
 thread_local! {
-    static PLANS: RefCell<(u64, FastMap<u32, Rc<TownPlan>>)> = RefCell::new((0, FastMap::default()));
+    static PLANS: RefCell<(u64, FastMap<u32, (u8, Rc<TownPlan>)>)> = RefCell::new((0, FastMap::default()));
     static TOWNS: RefCell<FastMap<u32, (u64, Rc<Layout>)>> = RefCell::new(FastMap::default());
 }
 
-/// A town's plan, made once per world (`make`) and kept.
-pub(super) fn plan(world: &World, index: usize, make: impl FnOnce() -> TownPlan) -> Rc<TownPlan> {
+/// A town's plan, made once per world and culture (`make`; `culture`: the one it is laid out
+/// in, R5 121) and kept.
+pub(super) fn plan(world: &World, index: usize, culture: u8, make: impl FnOnce() -> TownPlan) -> Rc<TownPlan> {
     let key = index as u32;
     if let Some(p) = PLANS.with(|c| {
         let c = c.borrow();
-        if c.0 == world.hash { c.1.get(&key).cloned() } else { None }
+        if c.0 == world.hash { c.1.get(&key).filter(|p| p.0 == culture).map(|p| p.1.clone()) } else { None }
     }) {
         return p;
     }
@@ -389,7 +390,7 @@ pub(super) fn plan(world: &World, index: usize, make: impl FnOnce() -> TownPlan)
             c.0 = world.hash;
             c.1.clear();
         }
-        c.1.insert(key, p.clone());
+        c.1.insert(key, (culture, p.clone()));
     });
     p
 }
@@ -471,9 +472,17 @@ pub(super) fn hash_edit(world: &World, e: &TownEdit) -> u64 {
     h.finish()
 }
 
+/// `hash_edit` for town `index`, with the culture it is laid out in when changed (R5 121).
+pub(super) fn hash_in(world: &World, t0: &T0, index: usize, e: &TownEdit) -> u64 {
+    match super::culture::mark(world, t0, index) {
+        0 => hash_edit(world, e),
+        c => crate::core::rng::hash2(hash_edit(world, e), c, 0xc017),
+    }
+}
+
 /// A hash of the world and the town edit that applies to layout `index`, if any.
 pub fn fingerprint(world: &World, t0: &T0, index: usize) -> Option<u64> {
-    edit_of(world, t0, index).map(|e| hash_edit(world, e))
+    edit_of(world, t0, index).map(|e| hash_in(world, t0, index, e))
 }
 
 /// Layout `index` as its town edit lays it out, if one applies.
@@ -484,7 +493,7 @@ pub(super) fn edited(world: &World, t0: &T0, index: usize) -> Option<Rc<Layout>>
 /// Town `index` laid out with edit `e` (whatever `Edits.towns` holds: a change tried first).
 pub fn with_edit(world: &World, t0: &T0, index: usize, e: &TownEdit) -> Rc<Layout> {
     let key = index as u32;
-    let fp = hash_edit(world, e);
+    let fp = hash_in(world, t0, index, e);
     if let Some(l) = TOWNS.with(|c| c.borrow().get(&key).filter(|x| x.0 == fp).map(|x| x.1.clone())) {
         return l;
     }

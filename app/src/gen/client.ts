@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -233,6 +233,14 @@ export class GenClient {
    * lay out anew (from `old`, the created sites before) set aside, as the generator would. */
   setAside(old: Created[], edits: Edits): Promise<{ edits: Edits; moved: number } | { error: string } | null> {
     return this.ask({ op: 'setaside', old: JSON.stringify(old), edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
+  }
+
+  /** `edits` with settlement `layout` laid out in `culture` (0 north, 1 west, 2 south, 3 dry,
+   * 4 steppe) and the edits keyed to its layout set aside (`set_aside`, by field `set_aside_by`), to
+   * show before it is applied (as one change, through `applyEdits`); `unchanged` when it is in that
+   * culture already. Without `culture`: `{from}`, the culture it is laid out in now. */
+  setCulture(layout: number, culture: number | undefined, edits: Edits): Promise<CultureChange | { error: string } | null> {
+    return this.ask({ op: 'setculture', layout, culture, edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
   }
 
   /** The fingerprints of the world's own layouts a remake must find alike to keep what is made on

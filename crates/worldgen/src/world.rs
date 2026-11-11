@@ -425,6 +425,11 @@ pub struct Edits {
     /// water, or a deck over it (`wharf`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub wharves: BTreeMap<String, Wharf>,
+    /// The world's own settlements laid out in another culture (`<layout>` → 0 north, 1 west,
+    /// 2 south, 3 dry, 4 steppe), applied where a settlement is laid out (`town::culture`); a
+    /// village or town added by hand keeps its own in `Created::culture`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cultures: BTreeMap<String, u8>,
 }
 
 /// A generated building changed by hand: removed, or given another function, storeys,
@@ -1636,6 +1641,7 @@ impl Edits {
                 "ground" => self.ground = std::mem::take(&mut part.ground),
                 "plateaus" => self.plateaus = std::mem::take(&mut part.plateaus),
                 "wharves" => self.wharves = std::mem::take(&mut part.wharves),
+                "cultures" => self.cultures = std::mem::take(&mut part.cultures),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1671,6 +1677,7 @@ impl Edits {
                 "ground" => patch(&mut self.ground, p)?,
                 "plateaus" => patch(&mut self.plateaus, p)?,
                 "wharves" => patch(&mut self.wharves, p)?,
+                "cultures" => patch(&mut self.cultures, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1681,7 +1688,7 @@ impl Edits {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty()
-            && self.wharves.is_empty()
+            && self.wharves.is_empty() && self.cultures.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1758,6 +1765,7 @@ impl Edits {
             "ground" => Some(one(&mut self.ground, op, field, &key)),
             "plateaus" => Some(one(&mut self.plateaus, op, field, &key)),
             "wharves" => Some(one(&mut self.wharves, op, field, &key)),
+            "cultures" => Some(one(&mut self.cultures, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -1862,6 +1870,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("ground", Shape::Map),
     ("plateaus", Shape::Map),
     ("wharves", Shape::Map),
+    ("cultures", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

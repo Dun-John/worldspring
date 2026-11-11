@@ -447,6 +447,36 @@ impl Ctx {
         serde_json::json!({ "edits": edits, "moved": moved }).to_string()
     }
 
+    /// `edits` (JSON) with settlement layout `layout` laid out in culture `culture` (0-4;
+    /// `town::culture::change`: the world's own through `Edits.cultures`, one added by hand its
+    /// `Created.culture`) and the edits keyed to its layout set aside: `{edits, from, to,
+    /// unchanged, set_aside, set_aside_by: {field: n}}` (cultures by name), or `{error}`.
+    /// Changes nothing here: the app applies `edits` as one change. Without `culture`: `{from}`,
+    /// the culture it is laid out in now.
+    pub fn set_culture_json(&self, layout: u32, culture: Option<u8>, edits: &str) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let li = layout as usize;
+        let Some(to) = culture else {
+            let now = worldgen::town::culture::override_in(&edits, t0, li).or_else(|| worldgen::town::settlement(t0, li).map(|s| s.culture));
+            return match now {
+                Some(c) => serde_json::json!({ "from": worldgen::town::culture::NAMES[c as usize % 5] }).to_string(),
+                None => serde_json::json!({ "error": format!("layout {li}: not a settlement") }).to_string(),
+            };
+        };
+        match worldgen::town::culture::change(&mut edits, t0, li, to) {
+            Ok(c) => {
+                let mut v = c.to_json();
+                v["edits"] = serde_json::to_value(&edits).unwrap_or_default();
+                v.to_string()
+            }
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
+    }
+
     /// The fingerprints a remake of this world needs (`t0::remap::prints_before`): of the layouts
     /// `edits` (JSON) name and `played` (a play session's), below the first created one, as
     /// `[[layout, print]…]`; `null` before T0 or for edits that don't read.

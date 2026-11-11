@@ -292,6 +292,9 @@ export interface Edits {
   buildings?: Record<string, BuildingEdit>;
   /** `<layout>` → a town laid out anew by hand (the ward editor). */
   towns?: Record<string, TownEdit>;
+  /** `<layout>` → one of the world's own settlements laid out in another culture (0 north, 1 west,
+   * 2 south, 3 dry, 4 steppe; `worldgen::town::culture`). One added by hand keeps it in `Created.culture`. */
+  cultures?: Record<string, number>;
   /** `g:XXXXX:YYYYY` → 16 × 16 squares of ground brushed by hand (`worldgen::ground::GroundBlock`:
    * tenths of a foot, row-major, as base64url zigzag-delta varints, a 0 delta followed by a byte
    * counting further zeros). Block indices zero-padded, x first. */
@@ -595,6 +598,12 @@ export interface DesignProblem {
 }
 
 /** A design with the site it builds and its problems (Ask op `design`). */
+/** A settlement's culture changed (`setculture`, `town::culture::Changed`): the edits to apply,
+ * the cultures by name (`north`, `west`, `south`, `dry`, `steppe`), and the edits inside it set
+ * aside, by field (`buildings`, `towns`, `designs`, `renames`, `notes`, `hidden`, `npcs`, `plots`).
+ * Without a culture asked, only `from`. */
+export type CultureChange = { from: string; to?: string; unchanged?: boolean; set_aside?: number; set_aside_by?: Record<string, number>; edits?: Edits };
+
 export type DesignReply = { design: SiteDesign; interior: Interior; problems: DesignProblem[]; set_aside?: boolean } | { error: string };
 
 /** What the designer offers (`worldgen::under::design::catalog_json`). */
@@ -701,6 +710,10 @@ export type Ask =
   /** Edits with those of the villages and towns added by hand that they remove, move or lay out
    * anew set aside (`t0::made::set_aside_changed`; `old`: the created sites before, JSON). */
   | { op: 'setaside'; old: string; edits: string }
+  /** Edits with settlement `layout` laid out in `culture` (0 north … 4 steppe) and the edits inside
+   * it set aside (`town::culture::change`; nothing changed in the worker); without `culture`, the
+   * culture it is laid out in now. */
+  | { op: 'setculture'; layout: number; culture?: number; edits: string }
   /** The fingerprints a remake of this world needs (`t0::remap::prints_before`; `edits` JSON). */
   | { op: 'remakeprints'; edits: string; played: number[] }
   /** Edits made on the world before following their places into this one, remade
