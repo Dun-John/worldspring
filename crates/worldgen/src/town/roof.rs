@@ -288,8 +288,17 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     // stone or weatherboard.
     let (material, shape) = if key == "windmill" {
         (if matches!(culture, 2 | 3) { Whitewash } else if culture == 4 { Plank } else { pick(u0, &[(Plank, 4), (Slate, 3), (Shingle, 3)]) }, Cone)
+    } else if matches!(key, "watchtower" | "lighthouse") {
+        // (R5 M20: an islet's watchtower and a breakwater's lighthouse round towers under a slate cone.)
+        (Slate, Cone)
     } else {
         (material, shape)
+    };
+    // (R5 M20: a house on a bridge's deck roofed in tile or slate, never in a timber-toned thatch,
+    // shingle, plank, turf or hide that reads as the deck under it.)
+    let material = match material {
+        Thatch | Shingle | Plank | Turf | Hide if b.deck.is_some() => if u2 < 0.5 { ClayTile } else { Slate },
+        m => m,
     };
     // (Hand-set: a material, else the old tint; a shape, else the old roof style.)
     let material = b.material.and_then(Material::from_u8).or_else(|| b.tint.and_then(|t| TINT_MATERIAL.get(t as usize).copied())).unwrap_or(material);

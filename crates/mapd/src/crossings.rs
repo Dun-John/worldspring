@@ -215,6 +215,19 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         dry_end(app, "from", from, tol).await?;
         dry_end(app, "to", to, tol).await?;
     }
+    // Shops only on a bridge over water (`wharf::shops_problem`): its ends as given, else as they stand.
+    if rows.is_some() {
+        let ends = match (from, to) {
+            (Some(f), Some(t)) => Some((f, t)),
+            _ => id.as_ref().and_then(|i| app.with_edits(|e| e.crossings.get(i).map(|c| (from.unwrap_or(c.a), to.unwrap_or(c.b)))).flatten()),
+        };
+        if let Some((a, b)) = ends {
+            let c = Crossing { kind: CrossingKind::Bridge, a, b, width: 50.0, material: CrossingMaterial::Timber };
+            if let Some(p) = app.worker.with(move |ex| Ok(wharf::shops_problem(&ex.t0, &c))).await? {
+                return Err(p);
+            }
+        }
+    }
     let [w, h] = app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await?;
     let mut v = app.edit("agent", 0, move |e| {
         let changed = id.is_some();

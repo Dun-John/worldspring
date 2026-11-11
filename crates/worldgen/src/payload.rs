@@ -451,12 +451,15 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 };
                 push(&poly, 9);
             }
+            // (R5 M20: a metropolis's lined bridge in pale stone (7), its houses' roofs reading over it as
+            // the city's others do.)
             for d in l.bridges.iter().chain(&l.piers) {
-                push(d, 6);
+                push(d, if l.lined.as_ref().is_some_and(|(deck, _)| deck == d) { 7 } else { 6 });
             }
             // R5 M20: a big port's breakwater, made ground (45).
+            // (Its ramp onto the bank with it: the made ground the ground shaper lifts there.)
             for m in &l.moles {
-                for p in m.polys() {
+                for p in m.polys().into_iter().chain(m.ramp().into_iter().map(|r| r.0)) {
                     push(&p, 45);
                 }
             }
@@ -612,6 +615,14 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         continue;
                     }
                     push(&b.poly, plain);
+                    // (R5 M20: a lighthouse's lamp, a warm disc on its cone's top (piece code 13).)
+                    if crate::town::harbour::is_lighthouse(b) {
+                        use crate::town::geom::{add, centroid, mul, sub};
+                        let c = centroid(&b.poly);
+                        whole.set(Some(owns(c)));
+                        push(&b.poly.iter().map(|&p| add(c, mul(sub(p, c), 0.4))).collect::<Vec<[f64; 2]>>(), attr | 13 << 25);
+                        whole.set(None);
+                    }
                     // A keep's round corner towers (as the battlemap draws them), standing a
                     // little proud of its walls; each tile keeps the ones it owns.
                     if let Some(t) = crate::interior::battlements(b)

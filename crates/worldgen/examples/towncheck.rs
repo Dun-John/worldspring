@@ -5869,7 +5869,8 @@ fn ports(ctx: &mut Ctx, r: &mut Report) {
                     n += 1;
                     if c.water_level[q] >= c.height[q] {
                         wet += 1;
-                    } else if c.urban[q] != worldgen::battlemap::URBAN_PLAZA {
+                    // (A town street run onto its root is paved too.)
+                    } else if !matches!(c.urban[q], worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET) {
                         unpaved += 1;
                     }
                 }
@@ -5915,7 +5916,10 @@ fn ports(ctx: &mut Ctx, r: &mut Report) {
                     let (i, j) = (((p[0] - win.ox) / SQUARE_FT).floor(), ((p[1] - win.oy) / SQUARE_FT).floor());
                     (i >= 0.0 && j >= 0.0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize)
                 };
-                let Some(start) = idx(door).filter(|&a| !h[a].is_nan()) else { return false };
+                // (The door's outside square in the interior's grid, which need not line up with the
+                // battlemap's: an open battlemap square at it or touching it.)
+                let near = [[0.0, 0.0], [-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]].map(|d: [f64; 2]| idx(add(door, mul(d, 0.25 * SQUARE_FT))));
+                let Some(start) = near.into_iter().flatten().find(|&a| !h[a].is_nan()) else { return false };
                 let mut seen = vec![false; nx * ny];
                 let mut queue = VecDeque::from([start]);
                 seen[start] = true;

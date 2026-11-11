@@ -177,6 +177,19 @@ pub fn bridge_lots(c: &crate::world::Crossing, lane: f64, depth: f64, frontage: 
     out
 }
 
+/// Whether a crossing from `a` to `b` (world ft) has water under it: a river's channel or standing
+/// water somewhere along its middle (T0, every 5 ft from a tenth of the way to nine tenths). A
+/// bridge with shops must (`shops_problem`).
+pub fn crosses_water(t0: &T0, a: P, b: P) -> bool {
+    let n = (geom::dist(a, b) / 5.0).ceil().max(1.0) as usize;
+    (0..=n).any(|k| wetness(t0, geom::lerp(a, b, 0.1 + 0.8 * k as f64 / n as f64)) > 0.0)
+}
+
+/// Why bridge `c` can't carry shops where it stands (no water under it), if so.
+pub fn shops_problem(t0: &T0, c: &crate::world::Crossing) -> Option<String> {
+    (!crosses_water(t0, c.a, c.b)).then(|| format!("shops: a bridge with shops must cross water, and none is under this one from ({:.0}, {:.0}) to ({:.0}, {:.0}): put its ends on the two banks", c.a[0], c.a[1], c.b[0], c.b[1]))
+}
+
 /// Shop rows along a bridge: how deep, how long each lot, how wide the lane between.
 #[derive(Clone, Copy, Debug)]
 pub struct Rows {

@@ -1502,6 +1502,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
         }
         // (R5 towns, 114: a felt hall's crown, 12, its wooden ring dark over the smoke hole.)
         else if (piece === 11) rgb = [0.38, 0.29, 0.21];
+        // (R5 M20: a lighthouse's lamp (13), a warm light on its slate cone.)
+        else if (piece === 12) rgb = [0.93, 0.78, 0.4];
         else if (piece === 7) rgb = [0.36, 0.6, 0.53];
         else if (piece === 8) rgb = [0.86, 0.8, 0.66];
         else if (piece === 9) {

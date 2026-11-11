@@ -522,13 +522,13 @@ fn moor(site: &Site, s: &Settlement, big: bool, l: &mut Layout) {
         let u = mul(sub(t, r), 1.0 / pl.max(1e-9));
         let half_w = 0.5 * dist(l.piers[i][0], l.piers[i][3]);
         let (blen, beam) = kind.size();
-        // (Bow out or in, along the pier, on either side, a little way along.)
+        // (Bow out or in, along the pier, on either side, a little way along; 4 ft off its edge planks.)
         let bow = if unit(h ^ 2) < 0.5 { 0.0 } else { std::f64::consts::PI };
         let first = if unit(h ^ 3) < 0.5 { 1.0 } else { -1.0 };
         'tries: for along in [0.6, 0.8, 0.4] {
             let m = (along * pl).clamp(0.5 * blen + 6.0, (pl - 0.5 * blen - 2.0).max(0.5 * blen + 6.0));
             for side in [first, -first] {
-                let at = add(add(r, mul(u, m)), mul([-u[1], u[0]], side * (half_w + 0.5 * beam + 2.5)));
+                let at = add(add(r, mul(u, m)), mul([-u[1], u[0]], side * (half_w + 0.5 * beam + 4.0)));
                 let rot = (libm::atan2(u[1], u[0]) + bow) as f32;
                 if place(
                     Moored {

@@ -224,6 +224,7 @@ fn main() {
         let mut walls = Tally::default();
         let mut towers = Tally::default();
         let mut buildings = Tally::default();
+        let mut afloat = Tally::default();
         let mut fields = Tally::default();
         let mut streets = Tally::default();
         let mut through = Tally::default();
@@ -257,12 +258,20 @@ fn main() {
                     towers.add(1.0, tw, format!("{name}: tower in the river at ({:.0}, {:.0})", tw[0], tw[1]));
                 }
             }
+            // (R5 M20: a house on a bridge's or pier's deck, an islet's watchtower and a breakwater's
+            // lighthouse stand over the water on purpose.)
             for b in &l.buildings {
                 let o = outline(&b.poly);
                 let n = o.iter().filter(|p| wet(**p, 2.0)).count();
                 if n > 0 {
                     let c = centroid(&b.poly);
-                    buildings.add(n as f64, c, format!("{name}: building {:?} ({}/{} points wet) at ({:.0}, {:.0})", b.func, n, o.len(), c[0], c[1]));
+                    let (tower, light) = (worldgen::town::is_watchtower(b), worldgen::town::harbour::is_lighthouse(b));
+                    if b.deck.is_some() || tower || light {
+                        let what = if tower { "islet watchtower" } else if light { "lighthouse" } else { "house on a deck" };
+                        afloat.add(n as f64, c, format!("{name}: {what} ({}/{} points wet) at ({:.0}, {:.0})", n, o.len(), c[0], c[1]));
+                    } else {
+                        buildings.add(n as f64, c, format!("{name}: building {:?} ({}/{} points wet) at ({:.0}, {:.0})", b.func, n, o.len(), c[0], c[1]));
+                    }
                 }
             }
             for f in &l.fields {
@@ -589,6 +598,7 @@ fn main() {
             (&mut walls, "wall runs in a river", "walls_in_river"),
             (&mut towers, "towers in a river", "towers_in_river"),
             (&mut buildings, "buildings over water", "buildings_over_water"),
+            (&mut afloat, "buildings over water on purpose (decks, islet towers, lighthouses)", "buildings_afloat"),
             (&mut fields, "fields over a river", "fields_over_river"),
             (&mut streets, "streets over a river with no bridge", "streets_unbridged"),
             (&mut through, "approaches through the town (its districts)", "approaches_through_town"),

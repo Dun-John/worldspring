@@ -257,6 +257,10 @@ impl Ctx {
         if let Some(p) = i.crossing.problem(mw, mh) {
             return serde_json::json!({ "error": p }).to_string();
         }
+        // (Shops only on a bridge over water.)
+        if let Some(p) = self.t0.as_ref().and_then(|t0| wharf::shops_problem(t0, &i.crossing)) {
+            return serde_json::json!({ "error": p }).to_string();
+        }
         if let Some(f) = i.follow {
             let mut e = worldgen::world::Edits::default();
             e.created = f.created;

@@ -310,7 +310,10 @@ export class Labels {
       if (/^tomb\b/i.test(h.function ?? '')) continue;
       const [color, glyph, minPx, prio] = PLACE[h.category] ?? ['#57534e', '●', 14, 20];
       this.placeHits.set(h.id, h);
-      const f: Feature = { id: h.id, kind: 'place', name: buildingName(h, renames), x: h.x, y: h.y, angle: 0, extent_ft: PLACE_EXTENT_FT, detail: h.function };
+      // (A lone round tower, an islet's watchtower or a breakwater's lighthouse, is about a pin across at
+      // street zoom: its pin stands just east of it, so the pin doesn't hide it.)
+      const beside = /^(watchtower|lighthouse)$/i.test(h.function ?? '') ? h.size_ft / 2 + 10 : 0;
+      const f: Feature = { id: h.id, kind: 'place', name: buildingName(h, renames), x: h.x + beside, y: h.y, angle: 0, extent_ft: PLACE_EXTENT_FT, detail: h.function };
       // Bigger buildings win ties within a category.
       const style: KindStyle = { size: 11, fill: color, spacing: 0, minPx, maxPx: 1e9, prio: prio + Math.min(0.9, h.size_ft / 400), pin: true, badge: { color, glyph } };
       this.items.push({ f, orig: buildingName(h, {}), style, text: null });
