@@ -12,12 +12,30 @@ export type FromMapd =
   | { type: 'welcome'; client: number }
   | { type: 'world'; world: WorldFile }
   | { type: 'ops'; ops: EditOp[]; change: Change; author: string }
-  | { type: 'render'; id: number; x: number; y: number; size: number }
+  | { type: 'render'; id: number; x: number; y: number; size: number; width_px?: number; format?: 'jpeg' | 'png' }
   | { type: 'focus'; x: number; y: number; size: number }
   | { type: 'follow'; following: boolean; refused?: EditOp[] }
   | { type: 'resync' }
   | { type: 'saved' }
   | { type: 'error'; message: string };
+
+/** A screenshot scaled to `width` px across (3:2, never enlarged) and encoded as a JPEG (quality 0.85) or PNG data URL. */
+async function encodeShot(url: string, width = 1024, format: 'jpeg' | 'png' = 'jpeg'): Promise<string> {
+  const img = await createImageBitmap(await (await fetch(url)).blob());
+  const w = Math.min(width, img.width);
+  const h = Math.round((w * img.height) / img.width);
+  if (format === 'png' && w === img.width) return url;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('no canvas');
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, w, h);
+  g.drawImage(img, 0, 0, w, h);
+  img.close();
+  return format === 'png' ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85);
+}
 
 /** mapd's socket: same origin when mapd serves the app, else the default port on this machine. */
 function socketUrl(): string | null {
@@ -182,7 +200,7 @@ export class MapdSync {
     } else if (m.type === 'saved') this.onSaveError(null);
     else if (m.type === 'render') {
       try {
-        this.send({ type: 'answer', id: m.id, png: await this.onRender(m.x, m.y, m.size) });
+        this.send({ type: 'answer', id: m.id, image: await encodeShot(await this.onRender(m.x, m.y, m.size), m.width_px, m.format) });
       } catch (err) {
         this.send({ type: 'answer', id: m.id, error: String(err) });
       }

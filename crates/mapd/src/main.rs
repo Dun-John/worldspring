@@ -5,15 +5,20 @@
 //! `cargo run --release -p mapd -- [--port 7777] [--dir worlds] [--app app/dist]`
 //! Any MCP client, e.g. `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`
 
+mod args;
 mod batch;
 mod build;
 mod crossings;
 mod design;
+mod geo;
 mod ground;
 mod mcp;
 mod notebook;
+mod reads;
 mod scatter;
+mod sites;
 mod store;
+mod streets;
 mod tools;
 mod towns;
 mod worker;
@@ -62,6 +67,13 @@ pub struct AppState {
     pub gate: tokio::sync::Mutex<()>,
     /// A save failed: the open world has changes only in memory (saved again shortly).
     pub unsaved: AtomicBool,
+    /// How many changes to the open world have been made (a call that made one raised it).
+    pub changes: AtomicU64,
+    /// This session's `create_building` calls that gave `near`: (world hash, the arguments as canonical JSON)
+    /// and the site made (id, middle), the last 500: an identical call is a repeat.
+    pub near_calls: std::sync::Mutex<Vec<((u64, String), (String, [f64; 2]))>>,
+    /// Why the last save failed (for the warning an agent gets).
+    pub save_error: std::sync::Mutex<String>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -150,6 +162,7 @@ impl AppState {
                 return Ok(change);
             }
             file.edits = edits.clone();
+            self.changes.fetch_add(1, Ordering::Relaxed);
             (*hash, edits, ops, change, Store::text(file))
         };
         let saved = text.and_then(|t| self.store.write(hash, &t));
@@ -165,9 +178,16 @@ impl AppState {
             }
             Err(e) => {
                 self.unsaved.store(true, Ordering::Relaxed);
+                *self.save_error.lock().unwrap() = e.to_string();
                 eprintln!("mapd: could not save: {e}");
                 self.send(json!({ "type": "error", "message": format!("could not save to disk: {e}"), "world": hex(hash), "from": from }));
-                Err(format!("the change was made, but could not be saved to disk: {e}. mapd keeps it and tries again every few seconds"))
+                // The change stands: a success that says so (an error would invite a repeat, and a second copy).
+                let mut change = change;
+                if change.is_object() {
+                    change["saved"] = json!(false);
+                    change["warning"] = json!(format!("made, but not yet saved to disk ({e}): mapd keeps it and saves it again every few seconds; don't repeat this call"));
+                }
+                Ok(change)
             }
         }
     }
@@ -485,7 +505,10 @@ async fn main() {
         tabs: Mutex::new(HashMap::new()),
         dist: dist.join("index.html").exists().then(|| dist.clone()),
         gate: tokio::sync::Mutex::new(()),
+        changes: AtomicU64::new(0),
+        near_calls: std::sync::Mutex::new(Vec::new()),
         unsaved: AtomicBool::new(false),
+        save_error: std::sync::Mutex::new(String::new()),
     });
     // After a failed save, try again every few seconds (the changes are kept in memory).
     let retry = app.clone();

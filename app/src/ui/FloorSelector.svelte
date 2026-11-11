@@ -27,6 +27,7 @@
   <div class="head">
     <div class="name" title={state.name}>{state.name}</div>
     <div class="ws-muted level" title={state.id.startsWith('w:') ? 'The sewers run on wherever you look; tap a ladder, grate or shaft for the ways on' : undefined}>{current?.name ?? ''}</div>
+    {#if current?.way}<div class="ws-muted level" title="The way to {current.way.replace(/^(up|down) to /, '')} on this level">{current.way}</div>{/if}
   </div>
   <div class="levels" role="radiogroup">
     {#each order as l (l.i)}

@@ -1163,7 +1163,9 @@ pub fn site(world: &World, t0: &T0, id: &str, d: &SiteDesign) -> Option<Interior
     if !fits(world, t0, l, k, d) {
         return super::generate(world, t0, l, k);
     }
-    Some(d.build(id, l as u32, k as u32, &world.file.edits.sprites))
+    let mut it = d.build(id, l as u32, k as u32, &world.file.edits.sprites);
+    crate::sitelinks::dress(world, t0, l, &mut it);
+    Some(it)
 }
 
 /// Site `id` as a design: the one saved (if made for this site, `fits`), else (or with

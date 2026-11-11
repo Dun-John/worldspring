@@ -6,7 +6,8 @@
 //! layouts are also reachable by those; buildings are `b:<layout>:<i>`, districts
 //! `d:<layout>:<q>`, wall towers `t:<layout>:<k>`, underground sites `u:`/`w:`/`k:`, created
 //! sites `c:<n>`; a site's levels and rooms (for renaming) `l:<site>:<level>` and
-//! `r:<site>:<level>:<room>`, levels counted from the bottom. NPCs (`n:<id>`) and plot points (`p:<id>`) are authored, never generated;
+//! `r:<site>:<level>:<room>`, levels counted from the bottom; road stretches `rd:<8 hex>`
+//! (`roadids`) and crossings put down by hand `v:<id>`. NPCs (`n:<id>`) and plot points (`p:<id>`) are authored, never generated;
 //! they come with the places they are tied to.
 
 use std::borrow::Cow;
@@ -14,6 +15,7 @@ use std::borrow::Cow;
 use serde_json::{Value, json};
 
 use crate::World;
+use crate::core::hash::FastMap;
 use crate::t0::T0;
 use crate::t0::features::{Feature, SITE_RADIUS_FT, Shape};
 use crate::town::{self, geom};
@@ -23,6 +25,36 @@ type P = [f64; 2];
 const MI: f64 = 5280.0;
 const SETTLEMENT_KINDS: [&str; 4] = ["metropolis", "city", "town", "village"];
 const SITE_KINDS: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+
+thread_local! {
+    /// The settlements and sites of the overlay as `(id, kind, name)` in its order, for a T0 read
+    /// without the overlay (the browser's workers): `set_place_names`.
+    static PLACES: std::cell::RefCell<Vec<(String, &'static str, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Gives a T0 that has no overlay (`t0.extra` None) the names and ids of the settlements and
+/// sites, as JSON `[{id, kind, name}]` in the overlay's order (other kinds are ignored). With
+/// the overlay at hand these are not used.
+pub fn set_place_names(json: &str) {
+    let v: Vec<Value> = serde_json::from_str(json).unwrap_or_default();
+    let list = v
+        .iter()
+        .filter_map(|f| {
+            let k = f["kind"].as_str()?;
+            let kind = SETTLEMENT_KINDS.iter().chain(SITE_KINDS.iter()).copied().find(|x| *x == k)?;
+            Some((f["id"].as_str()?.to_string(), kind, f["name"].as_str()?.to_string()))
+        })
+        .collect();
+    PLACES.with(|p| *p.borrow_mut() = list);
+}
+
+/// The overlay's settlements and sites as `(id, kind)`: its own, or `set_place_names`'s.
+fn place_ids(t0: &T0) -> Vec<(String, &'static str)> {
+    match &t0.extra {
+        Some(e) => e.overlay.features.iter().filter(|f| SETTLEMENT_KINDS.contains(&f.kind) || SITE_KINDS.contains(&f.kind)).map(|f| (f.id.clone(), f.kind)).collect(),
+        None => PLACES.with(|p| p.borrow().iter().map(|(i, k, _)| (i.clone(), *k)).collect()),
+    }
+}
 
 fn mi(ft: f64) -> f64 {
     (ft / MI * 10.0).round() / 10.0
@@ -58,9 +90,15 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
     out
 }
 
+/// A feature other than `id` that has the name `name` (as renamed), if any: its id.
+pub fn same_named(world: &World, t0: &T0, name: &str, id: &str) -> Option<String> {
+    let n = name.trim();
+    (!n.is_empty()).then(|| features(world, t0).into_iter().find(|f| f.id != id && f.name.trim().eq_ignore_ascii_case(n)).map(|f| f.id)).flatten()
+}
+
 /// Each feature's shape, in `features` order: the overlay's own; a created site is a point (a
 /// building reaches to its footprint's farthest corner).
-fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
+pub(crate) fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
     let mut out: Vec<Cow<Shape>> = match t0.extra.as_ref().map(|e| &e.overlay) {
         Some(o) => o.features.iter().enumerate().map(|(i, f)| o.shapes.get(i).map(Cow::Borrowed).unwrap_or(Cow::Owned(Shape::Point { at: [f.x, f.y], radius_ft: 0.0 }))).collect(),
         None => Vec::new(),
@@ -100,6 +138,9 @@ fn poly_extent(polys: &[&[P]]) -> Value {
 
 /// The extent of anything with an id: a feature, a settlement, a building, a district.
 fn extent_of(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     match (id.split(':').next()?, nums.as_slice()) {
         ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| poly_extent(&[&b.poly])),
@@ -176,6 +217,115 @@ pub fn created_detail(c: &crate::world::Created) -> String {
 /// inside the map, stepped out of river channels (as generated sites are); with a name for it
 /// (the nearest settlement's naming culture's), seeded by its id. The app and mapd both place sites through this.
 pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2]) -> Result<([f64; 2], String), String> {
+    creation_spot_with(world, t0, kind, under, id, p, Overlap::Refuse)
+}
+
+/// What `creation_spot_with` does about what stands where the site would.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Overlap {
+    /// Refuse, naming the blocker with its id and where it is, and the nearest clear spot.
+    Refuse,
+    /// Refuse in a person's words: no ids, no points in world ft (the app).
+    RefuseShort,
+    /// No check (an entrance in a building).
+    Skip,
+}
+
+/// How far a point site of `kind` reaches from its point (ft): the largest extent of what `town::sites::generate` lays out
+/// (tower and its annex, camp ring and cart, the inn, stables and yard of a waystation, a ruin's shells, a mine's shed and yard).
+pub fn site_reach(kind: &str) -> f64 {
+    match kind {
+        "tower" => 65.0,
+        "camp" => 55.0,
+        "waystation" => 120.0,
+        "ruin" => 115.0,
+        "mine" => 55.0,
+        "cave" | "lava_tube" => 12.0,
+        _ => 10.0,
+    }
+}
+
+/// What a site of `kind` at `p` stands on that it must not: buildings, castles and walls, and (all but a bare entrance, which may sit in a
+/// street or a square) streets and squares; the one nearest `p`, with the nearest clear spot's move.
+fn site_overlap(world: &World, t0: &T0, kind: &str, p: P) -> Option<(Blocker, Option<P>)> {
+    let disc = geom::circle(p, site_reach(kind), 16);
+    let free = kind == "entrance";
+    let (found, _) = spot_blockers(world, t0, &disc, None, false).ok()?;
+    let b = found.into_iter().filter(|b| matches!(b.what, "building" | "wall") || (!free && matches!(b.what, "street" | "square"))).min_by(|a, b| geom::dist(a.at, p).total_cmp(&geom::dist(b.at, p)))?;
+    Some((b, nearest_clear(world, t0, &disc, None, "", None, false).map(|r| r.1)))
+}
+
+/// Where an entrance taken out of its building may stand: the spot nearest `from` (the building's middle) that a free-standing entrance
+/// may take (`creation_spot`: dry, clear of buildings, castles and walls; a street or a square is fine), on 5-ft steps to 100 ft.
+pub fn entrance_out_spot(world: &World, t0: &T0, from: P) -> Option<P> {
+    let mut offsets: Vec<(i32, i32)> = (-20..=20).flat_map(|i| (-20..=20).map(move |j| (i, j))).filter(|&(i, j)| i * i + j * j <= 400).collect();
+    offsets.sort_by_key(|&(i, j)| (i * i + j * j, i, j));
+    offsets.into_iter().find_map(|(i, j)| {
+        let q = [from[0] + 5.0 * i as f64, from[1] + 5.0 * j as f64];
+        creation_spot_with(world, t0, "entrance", None, "", q, Overlap::Refuse).ok().filter(|(r, _)| geom::dist(*r, q) < 1.0).map(|(r, _)| r)
+    })
+}
+
+/// `creation_spot`, with `overlap` saying what to do about what stands there.
+pub fn creation_spot_with(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2], overlap: Overlap) -> Result<([f64; 2], String), String> {
+    creation_spot_inner(world, t0, kind, under, id, p, overlap, true)
+}
+
+/// The nearest spot beyond the 400 ft `nearest_clear` covers where a site of `kind` may stand (rings 150 ft apart out to 1,500 ft, points 150 ft apart round
+/// each): the move from `p`. What stands in the way (buildings, walls; all but an entrance also streets and squares) is gathered once with
+/// bounding boxes, so only the points clear of it go through the full check.
+fn farther_clear(world: &World, t0: &T0, kind: &str, p: P) -> Option<P> {
+    let reach = site_reach(kind) + 2.0;
+    let region = [p[0] - 1500.0 - reach, p[1] - 1500.0 - reach, p[0] + 1500.0 + reach, p[1] + 1500.0 + reach];
+    let near = |b: [f64; 4]| b[2] >= region[0] && b[0] <= region[2] && b[3] >= region[1] && b[1] <= region[3];
+    let free = kind == "entrance";
+    let mut areas: Vec<([f64; 4], Vec<P>)> = Vec::new();
+    let mut lines: Vec<([f64; 4], P, P, f64)> = Vec::new();
+    for l in town::layouts_near(world, t0, region) {
+        let plazas = l.plazas.iter().filter(|q| !free && q.kind != town::PlazaKind::Bailey).map(|q| &q.pts);
+        for pts in l.buildings.iter().map(|b| &b.poly).chain(plazas) {
+            let bb = bbox(pts);
+            if near(bb) {
+                areas.push((bb, pts.clone()));
+            }
+        }
+        let streets = l.roads.iter().filter(|_| !free).map(|(pts, _, w)| (pts, 0.5 * w));
+        for (pts, half) in streets.chain(l.walls.iter().map(|w| (w, 4.5))) {
+            for s in pts.windows(2) {
+                let b = bbox(s);
+                let bb = [b[0] - half, b[1] - half, b[2] + half, b[3] + half];
+                if near(bb) {
+                    lines.push((bb, s[0], s[1], half));
+                }
+            }
+        }
+    }
+    let hits = |a: [f64; 4], b: [f64; 4]| a[2] >= b[0] && a[0] <= b[2] && a[3] >= b[1] && a[1] <= b[3];
+    let mut r = 450.0;
+    while r <= 1500.0 {
+        let n = ((std::f64::consts::TAU * r / 150.0) as usize).max(12);
+        for k in 0..n {
+            let a = std::f64::consts::TAU * k as f64 / n as f64;
+            let q = [crate::core::round(p[0] + r * libm::cos(a)), crate::core::round(p[1] + r * libm::sin(a))];
+            let disc = inner_of(&geom::circle(q, site_reach(kind), 16));
+            let db = bbox(&disc);
+            let blocked = areas.iter().any(|(b, pts)| hits(*b, db) && polys_overlap(&disc, pts)) || lines.iter().any(|(b, s0, s1, half)| hits(*b, db) && poly_seg_dist(&disc, *s0, *s1) < *half);
+            if blocked {
+                continue;
+            }
+            if let Ok((s, _)) = creation_spot_inner(world, t0, kind, None, "", q, Overlap::Refuse, false)
+                && geom::dist(s, q) < 1.0
+            {
+                return Some([q[0] - p[0], q[1] - p[1]]);
+            }
+        }
+        r += 150.0;
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn creation_spot_inner(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2], overlap: Overlap, farther: bool) -> Result<([f64; 2], String), String> {
     use crate::t0::names::{NameKind, Namer};
     use crate::under::UnderKind;
     if p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft {
@@ -192,6 +342,28 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
     // Sea or lake as the map draws the shore (`town::Shore`, as the site is then built).
     if town::Shore::new(world, t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]).wet(p) {
         return Err("that place is under water: pick dry land".to_string());
+    }
+    if overlap != Overlap::Skip {
+        if let Some((b, near)) = site_overlap(world, t0, kind, p) {
+            let short = overlap == Overlap::RefuseShort;
+            let what = if short { b.short() } else { b.message(false) };
+            let ft = |d: P| crate::core::round(geom::len(d));
+            return Err(match near {
+                Some(d) if short => format!("{what}; the nearest clear spot is {} ft away", ft(d)),
+                Some(d) => format!("{what}; the nearest clear spot is ({}, {}), {} ft away", crate::core::round(p[0] + d[0]), crate::core::round(p[1] + d[1]), ft(d)),
+                None => {
+                    // Built over: a tower can be a building (its ground cleared), anything else goes outside the built-up area.
+                    let far = if farther && !short { farther_clear(world, t0, kind, p) } else { None };
+                    let tower = if kind == "tower" { "; for a tower here, create_building with func wizard_tower and clear: true takes away what is in the way" } else { "" };
+                    match far {
+                        Some(d) if short => format!("{what}; no clear spot within 400 ft, the nearest is {} ft away{tower}", ft(d)),
+                        Some(d) => format!("{what}; no clear spot within 400 ft, the nearest is ({}, {}), {} ft away{tower}", crate::core::round(p[0] + d[0]), crate::core::round(p[1] + d[1]), ft(d)),
+                        None if farther && !short => format!("{what}; no clear spot within 1,500 ft (the area is built up): put it outside the built-up area{tower}"),
+                        None => format!("{what}; no clear spot within 400 ft"),
+                    }
+                }
+            });
+        }
     }
     let culture = t0.settlements.iter().min_by(|a, b| (a.x - p[0]).hypot(a.y - p[1]).total_cmp(&(b.x - p[0]).hypot(b.y - p[1]))).map(|s| s.culture as usize).unwrap_or(0);
     let nk = match (kind, under.and_then(UnderKind::parse)) {
@@ -231,25 +403,233 @@ fn bbox(pts: &[P]) -> [f64; 4] {
     pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
-/// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
-/// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
-/// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
-/// and in a settlement its id; a drawn building's own layout is all of it). With its point
-/// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
-/// culture, seeded by its id (else what it is: "House").
-pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
-    building_spot_on(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip)
+/// The most blockers `spot_blockers` lists (a longer scan is cut and says so).
+const BLOCKER_CAP: usize = 300;
+
+/// One thing in the way of a footprint (`spot_blockers`).
+#[derive(Clone, Debug)]
+pub struct Blocker {
+    /// `building`, `square`, `street`, `wall`, `road`, `water` or `river`.
+    pub what: &'static str,
+    /// A building's (`b:<layout>:<id>`, or `c:<n>` when drawn by hand), a hand-drawn wall's `c:` id, a road's `rd:` id, a river's.
+    pub id: Option<String>,
+    pub name: Option<String>,
+    /// A building's trade or home.
+    pub function: Option<String>,
+    /// `{id, name}` of the settlement it lies in, or null.
+    pub settlement: Value,
+    /// The name of the layout it lies in (a settlement or a site), for the messages.
+    pub place: Option<String>,
+    /// Where it is: for a building its middle, for a square, street, wall or road the point of it nearest the footprint's middle.
+    pub at: P,
+    /// A street's, wall's or road's width, ft.
+    pub width: Option<f64>,
+    /// A square's, street's or road's kind; water's: `sea` or `lake`.
+    pub kind: Option<&'static str>,
+    /// One of the world's own buildings (`clear` takes it away).
+    pub removable: bool,
 }
 
-/// `building_spot` with the shore over an area that holds `poly`.
-fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
-    use crate::core::rng::Pcg32;
-    if poly.len() < 3 {
-        return Err("a building needs at least 3 corners".to_string());
+impl Blocker {
+    fn plain(what: &'static str, at: P) -> Blocker {
+        Blocker { what, id: None, name: None, function: None, settlement: Value::Null, place: None, at, width: None, kind: None, removable: false }
     }
-    if poly.iter().any(|p| p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft) {
-        return Err("that place is off the map".to_string());
+
+    /// The refusal for it. With `clear`: what a building that stays is told.
+    pub fn message(&self, clear: bool) -> String {
+        self.text(clear, false)
     }
+
+    /// The refusal for a person: no ids, no world-ft points.
+    pub fn short(&self) -> String {
+        let t = self.text(false, true);
+        let mut cs = t.chars();
+        cs.next().map(|f| f.to_uppercase().chain(cs).collect()).unwrap_or(t)
+    }
+
+    fn text(&self, clear: bool, short: bool) -> String {
+        let at = if short { String::new() } else { format!(" at ({}, {})", crate::core::round(self.at[0]), crate::core::round(self.at[1])) };
+        let of = self.place.as_deref().map(|p| format!(" of {p}")).unwrap_or_default();
+        let id = self.id.as_deref().unwrap_or_default();
+        let with_id = if short || id.is_empty() { String::new() } else { format!(" ({id})") };
+        match self.what {
+            "water" => format!("that is in {}: draw it on dry land", if self.kind == Some("lake") { "a lake" } else { "the sea" }),
+            "river" => match &self.name {
+                Some(n) => format!("that is in the river {n}{with_id}: draw it on the bank"),
+                None => "that is in a river: draw it on the bank".to_string(),
+            },
+            "building" => {
+                let inn = self.place.as_deref().map(|p| format!(" in {p}")).unwrap_or_default();
+                let mut m = format!("that overlaps {}{with_id}{inn}{}", self.name.as_deref().unwrap_or("a building"), at.replacen(" at", ", at", 1));
+                if clear && !self.removable {
+                    m += &format!("; it is drawn by hand: delete_feature {id} first");
+                }
+                m
+            }
+            "square" if self.kind == Some("yard") => format!("that is on the yard{of}{at}"),
+            "square" => format!("that is on a square ({}){of}{at}", self.kind.unwrap_or("square")),
+            "street" => {
+                let k = self.kind.unwrap_or("street");
+                let w = crate::core::round(self.width.unwrap_or(0.0));
+                let what = match k {
+                    "main street" => "the main street".to_string(),
+                    "approach road" => "an approach road".to_string(),
+                    _ => "a street".to_string(),
+                };
+                format!("that is on {what} ({w} ft wide){of}{at}")
+            }
+            "wall" if self.id.is_some() => format!("that is on the wall {}{with_id}{at}", self.name.as_deref().unwrap_or("")),
+            "wall" => format!(
+                "that is on {}wall{}{at}",
+                self.place.as_deref().map(|p| format!("{p}'s ")).unwrap_or_else(|| "a ".to_string()),
+                if self.place.is_some() { "" } else { " of a settlement" }
+            ),
+            _ => {
+                let k = self.kind.unwrap_or("road");
+                let k = if k.starts_with("king") { "King's road" } else { k };
+                format!("that is on the {k}{}{at}", if id.is_empty() || short { String::new() } else { format!(" {id}") })
+            }
+        }
+    }
+
+    /// `{what, id?, name?, function?, settlement?, at: [x, y], width_ft?, kind?}`, points in whole ft.
+    pub fn to_json(&self) -> Value {
+        let mut v = json!({ "what": self.what, "at": [crate::core::round(self.at[0]), crate::core::round(self.at[1])] });
+        for (k, o) in [("id", &self.id), ("name", &self.name), ("function", &self.function)] {
+            if let Some(s) = o {
+                v[k] = json!(s);
+            }
+        }
+        if !self.settlement.is_null() {
+            v["settlement"] = self.settlement.clone();
+        }
+        if let Some(w) = self.width {
+            v["width_ft"] = json!(crate::core::round(w));
+        }
+        if let Some(k) = self.kind {
+            v["kind"] = json!(k);
+        }
+        v
+    }
+}
+
+/// One of the world's own buildings taken away by `clear` (as `remove_buildings` does): its id, name, trade and where its edit is.
+#[derive(Clone, Debug)]
+pub struct Removal {
+    pub id: String,
+    pub name: String,
+    pub function: String,
+    pub at: P,
+}
+
+impl Removal {
+    /// `{id, name, function}` (the one shape of a removal in every reply).
+    pub fn to_json(&self) -> Value {
+        json!({ "id": self.id, "name": self.name, "function": self.function })
+    }
+}
+
+/// The removals the buildings in `found` that `clear` takes away come to (each with where its edit is: the building as generated).
+pub fn removals(world: &World, t0: &T0, found: &[Blocker]) -> Vec<Removal> {
+    let mut bases: FastMap<usize, std::rc::Rc<town::Layout>> = FastMap::default();
+    let mut out = Vec::new();
+    for b in found.iter().filter(|b| b.removable) {
+        let Some(id) = b.id.clone() else { continue };
+        let Some((li, bi)) = generated_building(t0, &id) else { continue };
+        let base = bases.entry(li).or_insert_with(|| town::base_layout(world, t0, li));
+        if let Some(g) = base.building(bi as usize) {
+            out.push(Removal { id, name: b.name.clone().unwrap_or_default(), function: b.function.clone().unwrap_or_default(), at: geom::centroid(&g.poly) });
+        }
+    }
+    out
+}
+
+/// The layout `li`'s settlement (`{id, name}` or null) and its own name for a message (a building drawn by hand is named by its settlement).
+fn place_of(world: &World, t0: &T0, li: usize) -> (Value, Option<String>) {
+    let (s, site) = whereabouts(world, t0, li);
+    let generated = t0.settlements.len() + t0.base_pois;
+    let drawn = li >= generated && world.file.edits.created.get(li - generated).is_some_and(|c| c.kind == "building");
+    let own = if li < t0.settlements.len() || drawn { s.clone() } else { site.unwrap_or(Value::Null) };
+    let name = own["name"].as_str().or_else(|| s["name"].as_str()).map(str::to_string);
+    (s, name)
+}
+
+fn building_blocker(world: &World, t0: &T0, l: &town::Layout, b: &town::Building, full: bool) -> Blocker {
+    let li = l.index as usize;
+    let generated = t0.settlements.len() + t0.base_pois;
+    let at = geom::centroid(&b.poly);
+    let drawn = if li >= generated { world.file.edits.created.get(li - generated).filter(|c| c.kind == "building").map(|c| c.id.clone()) } else { None };
+    // (A building a town edit added, id from `NEW_ID` up, is taken away like the others: `remove_buildings` names it too.)
+    let removable = li < generated;
+    let (settlement, place) = if full { place_of(world, t0, li) } else { (Value::Null, None) };
+    let id = Some(drawn.unwrap_or_else(|| format!("b:{li}:{}", b.id)));
+    Blocker { id, name: Some(building_name(world, l, b)), function: Some(b.label().to_string()), settlement, place, removable, ..Blocker::plain("building", at) }
+}
+
+/// The point on the segments nearest `c`.
+fn near_on(segs: &[(P, P)], c: P) -> P {
+    let mut best = (f64::MAX, c);
+    for &(a, b) in segs {
+        let u = geom::sub(b, a);
+        let t = (geom::dot(geom::sub(c, a), u) / geom::dot(u, u).max(1e-9)).clamp(0.0, 1.0);
+        let p = geom::add(a, geom::mul(u, t));
+        let d = geom::dist(p, c);
+        if d < best.0 {
+            best = (d, p);
+        }
+    }
+    best.1
+}
+
+fn plaza_kind(k: town::PlazaKind) -> &'static str {
+    use town::PlazaKind as K;
+    match k {
+        K::Market | K::MarketSparse | K::MarketDay => "market",
+        K::Civic => "civic",
+        K::Quay => "quay",
+        K::Green => "green",
+        K::Yard => "yard",
+        K::TempleClose => "temple close",
+        K::WellSquare => "well",
+        K::FountainSquare => "fountain",
+        K::Crossroads => "crossroads",
+        K::Bailey => "bailey",
+    }
+}
+
+fn street_kind(class: u8) -> &'static str {
+    match class {
+        0..=2 => "approach road",
+        3 => "street",
+        _ => "main street",
+    }
+}
+
+/// A footprint shrunk a foot toward its middle, so walls may touch.
+fn inner_of(poly: &[P]) -> Vec<P> {
+    let c = geom::centroid(poly);
+    poly.iter().map(|p| geom::lerp(*p, c, 1.0 / geom::dist(*p, c).max(1.0))).collect()
+}
+
+/// Whether the scan may stop: not collecting, and the last thing found is one that stays in the way.
+fn enough(all: bool, clear: bool, out: &[Blocker]) -> bool {
+    out.len() > BLOCKER_CAP || (!all && out.last().is_some_and(|b| !(clear && b.removable)))
+}
+
+/// `scan_raw` cut to `BLOCKER_CAP`: the blockers and whether there were more (a scan that stops at the first blocker has more only when
+/// `clear` is on and over the cap of the world's own buildings stand in the way).
+fn scan_spot(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Option<(usize, Option<u32>)>, all: bool, clear: bool, full: bool) -> (Vec<Blocker>, bool) {
+    let mut out = scan_raw(world, t0, shore, poly, skip, all, clear, full);
+    let more = out.len() > BLOCKER_CAP;
+    out.truncate(BLOCKER_CAP);
+    (out, more)
+}
+
+/// What is in the way of `poly` (a footprint, world ft, 3 corners or more, on the map). `all`: every blocker, else the first one (with
+/// `clear`, the world's own buildings before it are listed too). `full`: ids, names of places and settlements (slower; the hunt for a
+/// spot leaves them out). Stops a blocker past `BLOCKER_CAP`.
+fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Option<(usize, Option<u32>)>, all: bool, clear: bool, full: bool) -> Vec<Blocker> {
+    let mut out: Vec<Blocker> = Vec::new();
     let c = geom::centroid(poly);
     // Corners, the middle and every 10 ft along the walls must be dry: sea or lake as the map
     // draws the shore (`town::Shore`; not the ground under sea level: a beach just inside the
@@ -260,46 +640,169 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
         let n = (geom::dist(a, b) / 10.0).ceil().max(1.0) as usize;
         probes.extend((0..n).map(|s| geom::lerp(a, b, s as f64 / n as f64)));
     }
+    let (mut wet, mut river) = (false, false);
     for p in &probes {
-        if shore.wet(*p) {
-            return Err("that is in the water: draw it on dry land".to_string());
+        if !wet && shore.wet(*p) {
+            wet = true;
+            let sea = world.params().sea_level_ft + 1.0;
+            out.push(Blocker { kind: Some(if (t0.sample_water(p[0], p[1]) as f64) <= sea { "sea" } else { "lake" }), ..Blocker::plain("water", *p) });
+            if !all {
+                return out;
+            }
         }
-        let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);
-        if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 {
-            return Err("that is in a river: draw it on the bank".to_string());
-        }
-    }
-    let (x0, y0) = poly.iter().fold((f64::MAX, f64::MAX), |a, p| (a.0.min(p[0]), a.1.min(p[1])));
-    let (x1, y1) = poly.iter().fold((f64::MIN, f64::MIN), |a, p| (a.0.max(p[0]), a.1.max(p[1])));
-    // A foot in from every side, so walls may touch.
-    let inner: Vec<P> = poly.iter().map(|p| geom::lerp(*p, c, 1.0 / geom::dist(*p, c).max(1.0))).collect();
-    for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
-        let own = skip.filter(|s| s.0 == l.index as usize).map(|s| s.1);
-        if own == Some(None) {
-            continue;
-        }
-        if let Some(b) = l.buildings.iter().find(|b| Some(Some(b.id)) != own && polys_overlap(&inner, &b.poly)) {
-            return Err(format!("that overlaps {}", building_name(world, &l, b)));
-        }
-        // (A castle's bailey may be built on.)
-        if l.plazas.iter().any(|p| p.kind != town::PlazaKind::Bailey && polys_overlap(&inner, &p.pts)) {
-            return Err(format!("that is on {}", if l.site { "the yard" } else { "a square (a market, quay or green)" }));
-        }
-        let streets = l.roads.iter().map(|(pts, _, w)| (pts, 0.5 * w)).chain(l.walls.iter().map(|w| (w, 4.5)));
-        for (pts, half) in streets {
-            if pts.windows(2).any(|s| poly_seg_dist(&inner, s[0], s[1]) < half) {
-                return Err("that is on a street or a wall".to_string());
+        if !river {
+            if shore.in_river(*p) {
+                river = true;
+                let named = if full { river_at(world, t0, *p, 8.0) } else { None };
+                out.push(Blocker { id: named.as_ref().and_then(|r| r.id.clone()), name: named.and_then(|r| r.name), ..Blocker::plain("river", *p) });
+                if !all {
+                    return out;
+                }
             }
         }
     }
+    let [x0, y0, x1, y1] = bbox(poly);
+    let inner = inner_of(poly);
+    for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
+        let li = l.index as usize;
+        let own = skip.filter(|s| s.0 == li).map(|s| s.1);
+        if own == Some(None) {
+            continue;
+        }
+        let place = |world: &World| if full { place_of(world, t0, li) } else { (Value::Null, None) };
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && polys_overlap(&inner, &b.poly)) {
+            out.push(building_blocker(world, t0, &l, b, full));
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+        // (A castle's bailey may be built on.)
+        for pl in l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Bailey && polys_overlap(&inner, &p.pts)) {
+            let (settlement, place) = place(world);
+            // (The point of the square nearest the footprint's middle: that, when it is inside.)
+            let edges: Vec<(P, P)> = (0..pl.pts.len()).map(|i| (pl.pts[i], pl.pts[(i + 1) % pl.pts.len()])).collect();
+            let at = if geom::contains(&pl.pts, c) { c } else { near_on(&edges, c) };
+            out.push(Blocker { settlement, place, kind: Some(plaza_kind(pl.kind)), ..Blocker::plain("square", at) });
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+        let streets = l.roads.iter().map(|(pts, class, w)| (pts, 0.5 * w, Some(*class))).chain(l.walls.iter().map(|w| (w, 4.5, None)));
+        for (pts, half, class) in streets {
+            if !pts.windows(2).any(|s| poly_seg_dist(&inner, s[0], s[1]) < half) {
+                continue;
+            }
+            let hit: Vec<(P, P)> = pts.windows(2).filter(|s| poly_seg_dist(&inner, s[0], s[1]) < half).map(|s| (s[0], s[1])).collect();
+            let (settlement, place) = place(world);
+            let at = near_on(&hit, c);
+            let created = if class.is_none() && li >= t0.settlements.len() + t0.base_pois { world.file.edits.created.get(li - t0.settlements.len() - t0.base_pois) } else { None };
+            out.push(match class {
+                Some(k) => Blocker { settlement, place, width: Some(2.0 * half), kind: Some(street_kind(k)), ..Blocker::plain("street", at) },
+                None => {
+                    let (id, name) = (created.map(|c| c.id.clone()), created.map(|c| c.name.clone()));
+                    Blocker { settlement, place, width: Some(2.0 * half), id, name, ..Blocker::plain("wall", at) }
+                }
+            });
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+    }
+    let mut roads: Vec<(u32, f64, P)> = Vec::new();
     for (ri, k) in t0.roads.segments_near([x0, y0, x1, y1], 40.0) {
         let rc = &t0.roads.roads[ri as usize];
         let half = 0.5 * rc.class.width_ft();
         let pts: Vec<P> = (0..=16).map(|j| rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p).collect();
-        if pts.windows(2).any(|s| poly_seg_dist(&inner, s[0], s[1]) < half) {
-            return Err("that is on a road".to_string());
+        let hit: Vec<(P, P)> = pts.windows(2).filter(|s| poly_seg_dist(&inner, s[0], s[1]) < half).map(|s| (s[0], s[1])).collect();
+        if hit.is_empty() {
+            continue;
+        }
+        let at = near_on(&hit, c);
+        let d = geom::dist(at, c);
+        match roads.iter_mut().find(|r| r.0 == ri) {
+            Some(r) if r.1 <= d => {}
+            Some(r) => (r.1, r.2) = (d, at),
+            None => roads.push((ri, d, at)),
+        }
+        if !all {
+            break;
         }
     }
+    if !roads.is_empty() {
+        let ids = if full { crate::roadids::road_ids(t0) } else { Vec::new() };
+        for (ri, _, at) in roads {
+            let rc = &t0.roads.roads[ri as usize];
+            let id = ids.get(ri as usize).cloned();
+            out.push(Blocker { id, kind: Some(crate::roadids::class_name(rc.class)), width: Some(rc.class.width_ft()), ..Blocker::plain("road", at) });
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+fn spot_precheck(world: &World, poly: &[P]) -> Result<(), String> {
+    if poly.len() < 3 {
+        return Err("a building needs at least 3 corners".to_string());
+    }
+    if poly.iter().any(|p| p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft) {
+        return Err("that place is off the map".to_string());
+    }
+    Ok(())
+}
+
+/// Everything in the way of a footprint: water, rivers, buildings, squares, streets, walls and the world's roads, each with what it is,
+/// its id, name and trade (a building's), its settlement and where it is (`Blocker`), in the order `building_spot` finds them (the
+/// first one is its refusal). `skip`: as for `building_spot`. `clear`: the world's own buildings (`removable` set) are listed too, to be
+/// left out by the caller. At most 300, the flag saying there were more; `Err` for a footprint with fewer than 3 corners or off the map.
+/// Public so that other tools (sites) can name what stands where they are asked to go.
+pub fn spot_blockers(world: &World, t0: &T0, poly: &[P], skip: Option<(usize, Option<u32>)>, clear: bool) -> Result<(Vec<Blocker>, bool), String> {
+    spot_precheck(world, poly)?;
+    Ok(scan_spot(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, skip, true, clear, true))
+}
+
+/// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
+/// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
+/// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
+/// and in a settlement its id; a drawn building's own layout is all of it). With its point
+/// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
+/// culture, seeded by its id (else what it is: "House"). A refusal names what is in the way,
+/// where (`spot_blockers` lists them all).
+pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
+    spot_check(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip, false, true).map(|s| (s.0, s.1))
+}
+
+/// `building_spot` with the world's own buildings in the way taken to be taken away (`create_building clear`): also the ones that are.
+pub fn building_spot_clearing(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String, Vec<Removal>), String> {
+    spot_check(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip, true, true)
+}
+
+/// `building_spot` with the shore over an area that holds `poly`; `clear`: the world's own buildings do not block (they are returned);
+/// `full`: refusals with ids and places (the hunt for a spot leaves them out).
+fn spot_check(
+    world: &World, t0: &T0, shore: &town::Shore, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>, clear: bool, full: bool,
+) -> Result<(P, String, Vec<Removal>), String> {
+    spot_precheck(world, poly)?;
+    let (found, more) = scan_spot(world, t0, shore, poly, skip, false, clear, full);
+    if let Some(b) = found.iter().find(|b| !(clear && b.removable)) {
+        return Err(b.message(clear));
+    }
+    if more {
+        return Err(too_many());
+    }
+    Ok((geom::centroid(poly), spot_name(world, t0, poly, func, id), removals(world, t0, &found)))
+}
+
+/// What `clear` says to a footprint over more of the world's buildings than a scan holds.
+pub fn too_many() -> String {
+    format!("that would take away more than {BLOCKER_CAP} of the world's buildings: ask for a smaller footprint")
+}
+
+/// The name a building put on `poly` gets: its trade's in the nearest settlement's culture, seeded by its id (else what it is: "House").
+pub fn spot_name(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str) -> String {
+    use crate::core::rng::Pcg32;
+    let c = geom::centroid(poly);
     let name = match func.and_then(town::catalog::index_of) {
         Some(fi) => {
             let f = &town::catalog::CATALOG[fi];
@@ -314,8 +817,88 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
         }
     };
     let mut cs = name.chars();
-    let name = cs.next().map(|f| f.to_uppercase().chain(cs).collect()).unwrap_or(name);
-    Ok((c, name))
+    cs.next().map(|f| f.to_uppercase().chain(cs).collect()).unwrap_or(name)
+}
+
+/// The footprint `poly` moved (not turned) to the nearest clear spot: tried on 5-ft steps outward by distance to 400 ft. Returns the moved
+/// corners, the move `[dx, dy]` and (with `clear`) the world's own buildings it then stands on; `None` when there is none.
+pub fn nearest_clear(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>, clear: bool) -> Option<(Vec<P>, P, Vec<Removal>)> {
+    const REACH: f64 = 400.0;
+    spot_precheck(world, poly).ok()?;
+    enum Obst {
+        Area([f64; 4], Vec<P>),
+        Line([f64; 4], P, P, f64),
+    }
+    let bb = bbox(poly);
+    let region = [bb[0] - REACH - 2.0, bb[1] - REACH - 2.0, bb[2] + REACH + 2.0, bb[3] + REACH + 2.0];
+    let generated = t0.settlements.len() + t0.base_pois;
+    let mut obst: Vec<Obst> = Vec::new();
+    let near = |b: [f64; 4]| b[2] >= region[0] && b[0] <= region[2] && b[3] >= region[1] && b[1] <= region[3];
+    let pad = |b: [f64; 4], h: f64| [b[0] - h, b[1] - h, b[2] + h, b[3] + h];
+    for l in town::layouts_near(world, t0, region) {
+        let li = l.index as usize;
+        let own = skip.filter(|s| s.0 == li).map(|s| s.1);
+        if own == Some(None) {
+            continue;
+        }
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated)) {
+            let bb = bbox(&b.poly);
+            if near(bb) {
+                obst.push(Obst::Area(bb, b.poly.clone()));
+            }
+        }
+        for p in l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Bailey) {
+            let bb = bbox(&p.pts);
+            if near(bb) {
+                obst.push(Obst::Area(bb, p.pts.clone()));
+            }
+        }
+        let lines = l.roads.iter().map(|(pts, _, w)| (pts, 0.5 * w)).chain(l.walls.iter().map(|w| (w, 4.5)));
+        for (pts, half) in lines {
+            for s in pts.windows(2) {
+                let bb = pad(bbox(s), half);
+                if near(bb) {
+                    obst.push(Obst::Line(bb, s[0], s[1], half));
+                }
+            }
+        }
+    }
+    for (ri, k) in t0.roads.segments_near(region, 40.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        let half = 0.5 * rc.class.width_ft();
+        let pts: Vec<P> = (0..=16).map(|j| rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p).collect();
+        for s in pts.windows(2) {
+            obst.push(Obst::Line(pad(bbox(s), half), s[0], s[1], half));
+        }
+    }
+    let inner = inner_of(poly);
+    let steps = (REACH / 5.0) as i32;
+    let mut offsets: Vec<(i32, i32)> = (-steps..=steps)
+        .flat_map(|i| (-steps..=steps).map(move |j| (i, j)))
+        .filter(|&(i, j)| (i, j) != (0, 0) && i * i + j * j <= steps * steps)
+        .collect();
+    offsets.sort_by_key(|&(i, j)| (i * i + j * j, i, j));
+    let shore = town::Shore::new(world, t0, region);
+    let mid = geom::centroid(&inner);
+    for (i, j) in offsets {
+        let d = [i as f64 * 5.0, j as f64 * 5.0];
+        let shifted: Vec<P> = inner.iter().map(|p| geom::add(*p, d)).collect();
+        let sb = bbox(&shifted);
+        let hit = obst.iter().any(|o| match o {
+            Obst::Area(b, q) => b[2] >= sb[0] && b[0] <= sb[2] && b[3] >= sb[1] && b[1] <= sb[3] && polys_overlap(&shifted, q),
+            Obst::Line(b, p, q, half) => b[2] >= sb[0] && b[0] <= sb[2] && b[3] >= sb[1] && b[1] <= sb[3] && poly_seg_dist(&shifted, *p, *q) < *half,
+        });
+        // Water and rivers: the middle first, so that a footprint at sea or in a river does not run every spot through the full check.
+        let m = geom::add(mid, d);
+        if hit || shore.wet(m) || shore.in_river(m) {
+            continue;
+        }
+        let moved: Vec<P> = poly.iter().map(|p| geom::add(*p, d)).collect();
+        if let Ok((_, _, gone)) = spot_check(world, t0, &shore, &moved, func, id, skip, clear, false) {
+            return Some((moved, d, gone));
+        }
+    }
+    None
 }
 
 /// The nearest clear spot for a `width` × `depth` ft building near `near` (world ft): turned
@@ -323,6 +906,11 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
 /// one within 300 ft, on the 5-ft grid when unturned; tried outward ring by ring to 400 ft.
 /// Returns the footprint, its point and its name (`building_spot`).
 pub fn find_spot(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: Option<&str>, id: &str) -> Result<(Vec<P>, P, String), String> {
+    find_spot_clearing(world, t0, near, width, depth, func, id, false).map(|s| (s.0, s.1, s.2))
+}
+
+/// `find_spot`; with `clear`, the world's own buildings do not block (the ones it stands on are returned: take them away with it).
+pub fn find_spot_clearing(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: Option<&str>, id: &str, clear: bool) -> Result<(Vec<P>, P, String, Vec<Removal>), String> {
     if !(10.0..=400.0).contains(&width) || !(10.0..=400.0).contains(&depth) {
         return Err("width_ft and depth_ft: 10 to 400".into());
     }
@@ -371,12 +959,149 @@ pub fn find_spot(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: 
             }
             let poly = town::rect(c, dir, width, depth);
             tried += 1;
-            if let Ok((p, name)) = building_spot_on(world, t0, &shore, &poly, func, id, None) {
-                return Ok((poly, p, name));
+            if let Ok((p, name, gone)) = spot_check(world, t0, &shore, &poly, func, id, None, clear, false) {
+                return Ok((poly, p, name, gone));
             }
         }
     }
     Err(format!("no clear spot for a {width} × {depth} ft building within 400 ft of that place ({tried} tried)"))
+}
+
+/// The runs of `pts` that lie inside the area (`inside`), cut where the line crosses its edge (found by bisection), whole ft.
+fn clip_runs(pts: &[P], inside: &dyn Fn(P) -> bool) -> Vec<Vec<P>> {
+    let rnd = |p: P| [crate::core::round(p[0]), crate::core::round(p[1])];
+    let mut runs: Vec<Vec<P>> = Vec::new();
+    let mut cur: Vec<P> = Vec::new();
+    let Some(&first) = pts.first() else { return runs };
+    let mut last = (first, inside(first));
+    if last.1 {
+        cur.push(rnd(first));
+    }
+    for &p in &pts[1..] {
+        let n = (geom::dist(last.0, p) / 20.0).ceil().max(1.0) as usize;
+        let from = last.0;
+        for s in 1..=n {
+            let m = if s == n { p } else { geom::lerp(from, p, s as f64 / n as f64) };
+            let mi = inside(m);
+            if mi != last.1 {
+                let (mut a, mut b) = (last.0, m);
+                for _ in 0..12 {
+                    let mid = geom::lerp(a, b, 0.5);
+                    if inside(mid) == last.1 {
+                        a = mid;
+                    } else {
+                        b = mid;
+                    }
+                }
+                if last.1 {
+                    cur.push(rnd(a));
+                    runs.push(std::mem::take(&mut cur));
+                } else {
+                    cur.push(rnd(b));
+                }
+            }
+            if mi && s == n {
+                cur.push(rnd(p));
+            }
+            last = (m, mi);
+        }
+    }
+    runs.push(cur);
+    runs.retain(|r| r.len() >= 2);
+    for r in &mut runs {
+        r.dedup();
+    }
+    runs.retain(|r| r.len() >= 2);
+    runs
+}
+
+/// The streets, walls, squares and world roads in an area (`list_streets`): each layout (settlement or site) in `rect` gives its streets
+/// (`{what: street, settlement, width_ft, kind, pts}`), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and
+/// squares (`square`, whole: `kind`, `pts`), then the world's roads (`road`: `id` rd:, `class`, `pts`); lines are cut to the area
+/// (`inside` tells which points are in it), points in whole ft.
+pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> bool) -> Vec<Value> {
+    let mut out = Vec::new();
+    let generated = t0.settlements.len() + t0.base_pois;
+    let pts_json = |r: &Vec<P>| json!(r.iter().map(|p| json!([p[0], p[1]])).collect::<Vec<_>>());
+    for l in town::layouts_near(world, t0, rect) {
+        let li = l.index as usize;
+        let (s, site) = whereabouts(world, t0, li);
+        let mut head = json!({ "settlement": s });
+        if li >= t0.settlements.len()
+            && li < generated + world.file.edits.created.len()
+            && site.as_ref().is_some_and(|v| !v.is_null())
+            && place_of(world, t0, li).1 != s["name"].as_str().map(str::to_string)
+        {
+            head["site"] = site.unwrap_or(Value::Null);
+        }
+        let with = |what: &str, extra: Value| {
+            let mut v = head.clone();
+            v["what"] = json!(what);
+            for (k, x) in extra.as_object().cloned().unwrap_or_default() {
+                v[k] = x;
+            }
+            v
+        };
+        for (pts, class, w) in &l.roads {
+            for r in clip_runs(pts, inside) {
+                out.push(with("street", json!({ "width_ft": crate::core::round(*w), "kind": street_kind(*class), "pts": pts_json(&r) })));
+            }
+        }
+        let created = if li >= generated { world.file.edits.created.get(li - generated) } else { None };
+        for w in &l.walls {
+            for r in clip_runs(w, inside) {
+                let mut x = json!({ "width_ft": 9, "pts": pts_json(&r) });
+                if let Some(c) = created {
+                    x["id"] = json!(c.id);
+                    x["name"] = json!(c.name);
+                }
+                out.push(with("wall", x));
+            }
+        }
+        for p in l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Bailey) {
+            // (Touches the area: a corner or its middle in it, an edge running through it, or the area's middle on the square.)
+            let outline: Vec<P> = p.pts.iter().chain(p.pts.first()).copied().collect();
+            let mid = [0.5 * (rect[0] + rect[2]), 0.5 * (rect[1] + rect[3])];
+            if p.pts.iter().any(|q| inside(*q)) || inside(geom::centroid(&p.pts)) || !clip_runs(&outline, inside).is_empty() || (inside(mid) && geom::contains(&p.pts, mid)) {
+                let pts: Vec<P> = p.pts.iter().map(|q| [crate::core::round(q[0]), crate::core::round(q[1])]).collect();
+                out.push(with("square", json!({ "kind": plaza_kind(p.kind), "pts": pts_json(&pts) })));
+            }
+        }
+    }
+    // The roads as the blocker check sees them (`rc.eval` along each stretch, not the coarse `roadids::line`), the stretches near the area
+    // joined where they follow each other.
+    let ids = crate::roadids::road_ids(t0);
+    let mut near: Vec<(u32, u32)> = t0.roads.segments_near(rect, 0.0);
+    near.sort_unstable();
+    near.dedup();
+    let mut at = 0;
+    while at < near.len() {
+        let ri = near[at].0;
+        let rc = &t0.roads.roads[ri as usize];
+        let mut line: Vec<P> = Vec::new();
+        let mut last = u32::MAX;
+        while at < near.len() && near[at].0 == ri {
+            let k = near[at].1;
+            if line.is_empty() || k != last.wrapping_add(1) {
+                for r in clip_runs(&std::mem::take(&mut line), inside) {
+                    out.push(road_json(&ids, ri, rc, &r));
+                }
+            }
+            let from = if line.is_empty() { 0 } else { 1 };
+            line.extend((from..=16).map(|j| rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p));
+            last = k;
+            at += 1;
+        }
+        for r in clip_runs(&line, inside) {
+            out.push(road_json(&ids, ri, rc, &r));
+        }
+    }
+    out
+}
+
+fn road_json(ids: &[String], ri: u32, rc: &crate::lod::roads::RoadCurve, r: &[P]) -> Value {
+    let pts = r.iter().map(|p| json!([p[0], p[1]])).collect::<Vec<_>>();
+    json!({ "what": "road", "id": ids[ri as usize], "class": crate::roadids::class_name(rc.class), "width_ft": rc.class.width_ft(), "pts": pts })
 }
 
 /// Generated buildings (not drawn by hand) whose middle lies inside `poly` (world ft), as they
@@ -640,6 +1365,9 @@ pub fn generated_buildings_in_json(world: &World, t0: &T0, poly: &[P]) -> String
 
 /// The edit that takes generated building `id` away.
 pub fn building_removal(world: &World, t0: &T0, id: &str) -> Result<crate::world::BuildingEdit, String> {
+    if let Some((k, ..)) = drawn_pair(world, t0, id) {
+        return Err(if world.file.edits.created[k].removed { format!("{id} is already deleted (restore_feature brings it back)") } else { format!("{id} is drawn by hand: delete_feature deletes it") });
+    }
     let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (buildings drawn by hand are deleted with delete_feature)"))?;
     let base = town::base_layout(world, t0, li);
     let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
@@ -678,14 +1406,41 @@ pub fn building_funcs_json() -> String {
     json!({ "businesses": businesses, "homes": homes }).to_string()
 }
 
-/// `building_spot` as JSON: `{x, y, name}` or `{error}`.
+/// `building_spot` as JSON: `{x, y, name}` or `{error, short}` (`short`: what to tell a person, with no ids or world-ft points).
 pub fn building_spot_json(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str) -> String {
     let skip = spot_skip(world, t0, id);
     match building_spot(world, t0, poly, func, id, skip) {
         Ok((q, name)) => json!({ "x": q[0], "y": q[1], "name": name }),
-        Err(e) => json!({ "error": e }),
+        Err(e) => {
+            let short = spot_blockers(world, t0, poly, skip, false).ok().and_then(|(v, _)| v.into_iter().next()).map(|b| b.short()).unwrap_or_else(|| e.clone());
+            json!({ "error": e, "short": short })
+        }
     }
     .to_string()
+}
+
+/// Whether the world's own buildings `ids` (taken away or changed by edits) may come back: none may lie under a building drawn by hand.
+/// `Err` names the first that would, and the drawn building to delete first.
+pub fn restore_clash(world: &World, t0: &T0, ids: &[String]) -> Result<(), String> {
+    let generated = t0.settlements.len() + t0.base_pois;
+    for id in ids {
+        let Some((li, bi)) = generated_building(t0, id) else { continue };
+        // (Taken away or changed by `update_building`: the generated footprint is what comes back.)
+        if !world.file.edits.buildings.contains_key(id) {
+            continue;
+        }
+        let Some(poly) = town::base_layout(world, t0, li).building(bi as usize).map(|g| g.poly.clone()) else { continue };
+        let inner = inner_of(&poly);
+        for l in town::layouts_near(world, t0, bbox(&poly)) {
+            let drawn = (l.index as usize >= generated).then(|| world.file.edits.created.get(l.index as usize - generated)).flatten().filter(|c| c.kind == "building");
+            if let Some(c) = drawn
+                && l.buildings.iter().any(|b| polys_overlap(&inner, &b.poly))
+            {
+                return Err(format!("{id} would come back under {} (drawn by hand): delete_feature {} first", c.id, c.id));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether two polygons share any area (or one holds the other).
@@ -709,13 +1464,29 @@ fn poly_seg_dist(poly: &[P], a: P, b: P) -> f64 {
     poly.iter().map(|p| geom::seg_dist(*p, a, b)).chain(to_edges).fold(f64::MAX, f64::min)
 }
 
-/// `creation_spot` as JSON: `{x, y, name}` or `{error}`.
+/// `creation_spot` as JSON: `{x, y, name}` or `{error}`. The kind `settlement` (the app's land check for a settlement put down by hand) has no overlap check.
 pub fn creation_spot_json(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2]) -> String {
-    match creation_spot(world, t0, kind, under, id, p) {
+    let overlap = if kind == "settlement" { Overlap::Skip } else { Overlap::RefuseShort };
+    match creation_spot_with(world, t0, kind, under, id, p, overlap) {
         Ok((q, name)) => json!({ "x": q[0], "y": q[1], "name": name }),
         Err(e) => json!({ "error": e }),
     }
     .to_string()
+}
+
+/// The created site a layout id was deleted with: `b:<layout>:..`, `d:`, `t:`, `u:`, `k:`, `w:`, `l:`
+/// and `r:` ids of a site whose `c:` entry is removed (layout numbers stay, so the ids are retired).
+pub fn deleted_with(world: &World, t0: &T0, id: &str) -> Option<String> {
+    let k = crate::world::layout_in_id(id)?.checked_sub(t0.settlements.len() + t0.base_pois)?;
+    world.file.edits.created.get(k).filter(|c| c.removed).map(|c| c.id.clone())
+}
+
+/// What to say of an id that was deleted: a created site (`c:<n>`) or what lay in its layout.
+pub fn deleted_note(world: &World, t0: &T0, id: &str) -> Option<String> {
+    if let Some(cid) = deleted_with(world, t0, id) {
+        return Some(format!("{id} was deleted with {cid} (restore_feature brings it back)"));
+    }
+    world.file.edits.created.iter().any(|c| c.id == id && c.removed).then(|| format!("{id} was deleted (restore_feature brings it back)"))
 }
 
 /// The layout index of a settlement or site feature (by overlay order; created sites follow
@@ -724,12 +1495,12 @@ pub fn layout_of(world: &World, t0: &T0, id: &str) -> Option<usize> {
     if let Some(k) = world.file.edits.created.iter().position(|c| c.id == id) {
         return Some(t0.settlements.len() + t0.base_pois + k);
     }
-    let fs = &t0.extra.as_ref()?.overlay.features;
-    let f = fs.iter().find(|f| f.id == id)?;
-    if SETTLEMENT_KINDS.contains(&f.kind) {
-        fs.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.kind)).position(|g| g.id == id)
-    } else if SITE_KINDS.contains(&f.kind) {
-        fs.iter().filter(|g| SITE_KINDS.contains(&g.kind)).position(|g| g.id == id).map(|k| t0.settlements.len() + k)
+    let fs = place_ids(t0);
+    let f = fs.iter().find(|f| f.0 == id)?;
+    if SETTLEMENT_KINDS.contains(&f.1) {
+        fs.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.1)).position(|g| g.0 == id)
+    } else if SITE_KINDS.contains(&f.1) {
+        fs.iter().filter(|g| SITE_KINDS.contains(&g.1)).position(|g| g.0 == id).map(|k| t0.settlements.len() + k)
     } else {
         None
     }
@@ -741,19 +1512,59 @@ pub fn feature_of_layout(world: &World, t0: &T0, li: usize) -> Option<String> {
     if li >= n + t0.base_pois {
         return world.file.edits.created.get(li - n - t0.base_pois).map(|c| c.id.clone());
     }
-    let fs = &t0.extra.as_ref()?.overlay.features;
+    let fs = place_ids(t0);
     if li < n {
-        fs.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.kind)).nth(li).map(|f| f.id.clone())
+        fs.into_iter().filter(|g| SETTLEMENT_KINDS.contains(&g.1)).nth(li).map(|f| f.0)
     } else {
-        fs.iter().filter(|g| SITE_KINDS.contains(&g.kind)).nth(li - n).map(|f| f.id.clone())
+        fs.into_iter().filter(|g| SITE_KINDS.contains(&g.1)).nth(li - n).map(|f| f.0)
     }
 }
 
-fn name_of(world: &World, t0: &T0, id: &str) -> Option<String> {
+pub fn name_of(world: &World, t0: &T0, id: &str) -> Option<String> {
     if let Some(n) = world.file.edits.renames.get(id) {
         return Some(n.clone());
     }
-    features(world, t0).into_iter().find(|f| f.id == id).map(|f| f.name)
+    features(world, t0).into_iter().find(|f| f.id == id).map(|f| f.name).or_else(|| place_name(t0, id))
+}
+
+/// A settlement's or site's generated name from `set_place_names`, when T0 has no overlay.
+fn place_name(t0: &T0, id: &str) -> Option<String> {
+    if t0.extra.is_some() {
+        return None;
+    }
+    PLACES.with(|p| p.borrow().iter().find(|f| f.0 == id).map(|f| f.2.clone()))
+}
+
+/// A created entrance's building as `{id, name}`, and whether it still has the way down (a building gone, ruined or
+/// without a cellar leaves a plain surface opening).
+fn in_building_json(world: &World, t0: &T0, c: &crate::world::Created) -> Value {
+    let id = c.in_building.clone().unwrap_or_default();
+    let name = building_label(world, t0, &id);
+    let mut v = json!({ "id": id, "name": name });
+    if crate::sitelinks::host_of(world, t0, c).is_none() {
+        v["standing"] = json!(false);
+        v["note"] = json!("that building is gone, or has no cellar now: the entrance shows as an opening on the surface");
+    }
+    v
+}
+
+/// Building `id`'s (`b:<layout>:<n>`) name as `get_feature` gives it: renamed, its own, else its trade. A building taken away keeps the name it
+/// had as generated.
+pub fn building_label(world: &World, t0: &T0, id: &str) -> Option<String> {
+    let (li, bi) = crate::sitelinks::parse_building(id).filter(|(li, _)| *li < town::layout_count(t0))?;
+    let l = town::layout(world, t0, li);
+    if let Some(b) = l.building(bi) {
+        return Some(building_name(world, &l, b));
+    }
+    let l = town::base_layout(world, t0, li);
+    l.building(bi).map(|b| building_name(world, &l, b))
+}
+
+/// The id of the level of building `host` whose way down leads to the site of layout `el` (`u:<el>:0`), if it has one.
+pub fn way_down_level(world: &World, t0: &T0, host: &str, el: usize) -> Option<String> {
+    let it = crate::interior::generate_id(world, t0, host)?;
+    let to = format!("u:{el}:0");
+    it.levels.iter().position(|lv| lv.links.iter().any(|k| k.to == to)).map(|li| format!("l:{}:{li}", it.id))
 }
 
 /// A building's display name (renamed, its own, or its trade).
@@ -764,6 +1575,9 @@ fn building_name(world: &World, l: &town::Layout, b: &town::Building) -> String 
 
 /// Where an id is (ft), for features, buildings, districts, towers, underground sites.
 pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     let edits = &world.file.edits;
     // An NPC is where they were placed; a plot point at its first place.
     if let Some(n) = edits.npcs.get(id) {
@@ -775,6 +1589,13 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     }
     if let Some(p) = edits.plots.get(id) {
         return p.anchors.iter().filter(|a| !is_authored(a)).find_map(|a| position(world, t0, a));
+    }
+    // A road stretch halfway along; a crossing put down by hand at its middle.
+    if id.starts_with("rd:") {
+        return crate::roadids::road_index(t0, id).map(|i| crate::roadids::midpoint(&t0.roads.roads[i]));
+    }
+    if let Some(c) = edits.crossings.get(id) {
+        return Some(crate::roadids::crossing_mid(c));
     }
     // A level is where its site is; a room at its middle.
     if let Some((site, li, ri)) = split_room_id(id) {
@@ -869,7 +1690,10 @@ pub fn place(world: &World, t0: &T0, id: &str) -> Option<Value> {
 }
 
 /// Any id's display name: a feature, building, district, NPC or plot (else null).
-fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
+pub fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     let edits = &world.file.edits;
     if let Some(n) = edits.npcs.get(id) {
         return Some(n.name.clone());
@@ -886,6 +1710,9 @@ fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
 /// A place's name before renames (a building's own name or its trade, a level's or room's
 /// generated name, a tower's or way underground's label, a feature's overlay name).
 fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     if let Some((site, li, ri)) = split_room_id(id) {
         let it = crate::interior::generate_id(world, t0, site)?;
         let lv = it.levels.get(li)?;
@@ -893,6 +1720,15 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
             Some(ri) => lv.rooms.get(ri).map(|r| r.kind.to_string()),
             None => Some(lv.name.clone()),
         };
+    }
+    if let Some(c) = world.file.edits.crossings.get(id) {
+        return Some(crate::roadids::crossing_generated(c));
+    }
+    if id.starts_with("rd:") {
+        let i = crate::roadids::road_index(t0, id)?;
+        let r = &t0.roads.roads[i];
+        let fs = features(world, t0);
+        return r.stroke.and_then(|s| crate::roadids::drawn_road(world, t0, &fs, s)).map(|f| fs[f].name.clone());
     }
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     match (id.split(':').next(), nums.as_slice()) {
@@ -902,12 +1738,16 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
         (Some("t"), [li, k]) if *li < town::layout_count(t0) => {
             crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| format!("{} {}", if t.2 { "Gate tower" } else { "Wall tower" }, k + 1))
         }
-        (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| cap(e.kind.name())),
+        (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k)
+            .map(|e| crate::sitelinks::dungeon_name(world, t0, *li).unwrap_or_else(|| cap(e.kind.name()))),
         (Some("k"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).filter(|b| crate::interior::has_deep_dungeon(b)).map(|_| "Deep dungeons".into()),
         (Some("w"), [li, ..]) if *li < town::layout_count(t0) => crate::interior::generate_id(world, t0, id).map(|it| it.name.unwrap_or_else(|| it.function.to_string())),
         _ => match world.file.edits.created.iter().find(|c| c.id == id) {
             Some(c) => Some(c.name.clone()),
-            None => t0.extra.as_ref()?.overlay.features.iter().find(|f| f.id == id).map(|f| f.name.clone()),
+            None => match &t0.extra {
+                Some(e) => e.overlay.features.iter().find(|f| f.id == id).map(|f| f.name.clone()),
+                None => place_name(t0, id),
+            },
         },
     }
 }
@@ -970,7 +1810,7 @@ fn layout_ref(world: &World, t0: &T0, li: usize) -> Value {
 
 /// Where something in layout `li` is: the settlement (the layout's own, or the one its site
 /// stands in; `{id, name}` or null), and for a site's layout the site (`{id, name}`).
-fn whereabouts(world: &World, t0: &T0, li: usize) -> (Value, Option<Value>) {
+pub(crate) fn whereabouts(world: &World, t0: &T0, li: usize) -> (Value, Option<Value>) {
     if li < t0.settlements.len() {
         return (layout_ref(world, t0, li), None);
     }
@@ -1143,22 +1983,157 @@ fn places_removed(world: &World) -> Vec<Value> {
 /// Named features (and, from three letters, districts and businesses) matching a query, by
 /// their current names, each with its extent.
 pub fn search(world: &World, t0: &T0, q: &str, kind: Option<&str>, limit: usize, include_hidden: bool) -> Value {
-    let ql = q.trim().to_lowercase();
-    let hidden = &world.file.edits.hidden;
+    search_with(world, t0, &SearchOpts { query: q.to_string(), kind: kind.map(str::to_string), tag: None, in_notes: false, hidden: include_hidden, within: None, under: None }, limit)
+}
+
+/// What `search_with` looks for: `query` in names (and notes with `in_notes`), `kind`, and only features
+/// whose notes carry `tag`.
+#[derive(Default)]
+pub struct SearchOpts {
+    pub query: String,
+    pub kind: Option<String>,
+    pub tag: Option<String>,
+    pub in_notes: bool,
+    pub hidden: bool,
+    /// Only features with a point inside, or an extent overlapping (each hit says which: `inside`).
+    pub within: Option<crate::geoquery::Region>,
+    /// Underground sites too (`undersearch`), kept by these filters (None: not searched).
+    pub under: Option<crate::undersearch::UnderOpts>,
+}
+
+pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Value {
+    let ql = o.query.trim().to_lowercase();
+    let (kind, include_hidden) = (o.kind.as_deref(), o.hidden);
+    let edits = &world.file.edits;
+    let hidden = &edits.hidden;
+    let tag = o.tag.as_deref().map(str::to_lowercase);
     let shapes = shapes(world, t0);
-    let mut out: Vec<Value> = features(world, t0)
-        .into_iter()
-        .zip(&shapes)
-        .filter(|(f, _)| (ql.is_empty() || f.name.to_lowercase().contains(&ql)) && kind.is_none_or(|k| f.kind == k) && (include_hidden || !hidden.contains(&f.id)))
-        .take(limit)
-        .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
-        .collect();
-    if ql.len() >= 3 && out.len() < limit && kind.is_none_or(|k| matches!(k, "building" | "district")) {
-        for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), None, include_hidden) {
-            out.push(hit_json(world, t0, &h));
+    let fs = features(world, t0);
+    let mut out: Vec<Value> = Vec::new();
+    if tag.is_none() {
+        out = fs
+            .iter()
+            .zip(&shapes)
+            .filter(|(f, _)| (ql.is_empty() || f.name.to_lowercase().contains(&ql)) && kind.is_none_or(|k| f.kind == k) && (include_hidden || !hidden.contains(&f.id)))
+            .take(limit)
+            .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
+            .collect();
+        if ql.len() >= 3 && out.len() < limit && kind.is_none_or(|k| matches!(k, "building" | "district")) {
+            for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), o.within.as_ref().map(|r| r.bbox()), include_hidden) {
+                out.push(hit_json(world, t0, &h));
+            }
+        }
+        // Towers that were renamed (a tower has no name of its own to search until it has one).
+        if (!ql.is_empty() || kind == Some("tower")) && out.len() < limit && kind.is_none_or(|k| k == "tower") {
+            for (id, name) in edits.renames.iter().filter(|(id, n)| id.starts_with("t:") && n.to_lowercase().contains(&ql) && (include_hidden || !hidden.contains(*id))) {
+                if out.len() < limit && let Some(v) = tower_hit(world, t0, id, name) {
+                    out.push(v);
+                }
+            }
+        }
+        // Road stretches renamed and crossings named (only those given a name).
+        if (!ql.is_empty() || matches!(kind, Some("road" | "crossing"))) && out.len() < limit {
+            out.extend(crate::roadids::search_hits(world, t0, &ql, kind, include_hidden, limit - out.len()));
+        }
+        // Sites below ground: by name, renamed levels and rooms, kind and theme words, what is on them.
+        if let Some(u) = &o.under
+            && kind.is_none_or(|k| k == "underground")
+            && (!ql.is_empty() || kind.is_some() || u.narrows())
+            && out.len() < limit
+        {
+            let mut u = u.clone();
+            u.hidden = include_hidden;
+            if u.within.is_none() {
+                u.within = o.within.clone();
+            }
+            out.extend(crate::undersearch::search_underground(world, t0, &ql, &u).into_iter().take(limit - out.len()));
         }
     }
+    // Notes: their tags, and with `in_notes` their words.
+    if tag.is_some() || (o.in_notes && !ql.is_empty()) {
+        let seen: Vec<String> = out.iter().filter_map(|v| v["id"].as_str().map(str::to_string)).collect();
+        let road_ids: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
+        for (id, n) in &edits.notes {
+            if out.len() >= limit || seen.contains(id) || (!include_hidden && hidden.contains(id)) {
+                continue;
+            }
+            if tag.as_ref().is_some_and(|t| !n.tags.iter().any(|x| x.to_lowercase() == *t)) {
+                continue;
+            }
+            let found = if tag.is_some() && ql.is_empty() { true } else { (o.in_notes && n.text.to_lowercase().contains(&ql)) || name_any(world, t0, id).is_some_and(|nm| nm.to_lowercase().contains(&ql)) };
+            if !found {
+                continue;
+            }
+            let v = if id.starts_with("rd:") {
+                let ids = road_ids.get_or_init(|| crate::roadids::road_ids(t0));
+                match crate::roadids::road_hit(world, t0, ids, &fs, id) {
+                    Some(v) => v,
+                    None => continue,
+                }
+            } else if let Some((f, s)) = fs.iter().zip(&shapes).find(|(f, _)| f.id == *id) {
+                json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) })
+            } else if let Some(g) = get(world, t0, id) {
+                let mut v = json!({ "id": id, "kind": g["kind"], "name": g["name"], "x_ft": g["x_ft"], "y_ft": g["y_ft"], "settlement": g["settlement"] });
+                if let Some(e) = g.get("extent") {
+                    v["extent"] = e.clone();
+                }
+                v
+            } else {
+                continue;
+            };
+            if kind.is_none_or(|k| v["kind"] == k) {
+                out.push(v);
+            }
+        }
+    }
+    if let Some(rg) = &o.within {
+        let at: std::collections::HashMap<&str, usize> = fs.iter().enumerate().map(|(i, f)| (f.id.as_str(), i)).collect();
+        let ids: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
+        out.retain_mut(|v| {
+            let id = v["id"].as_str().unwrap_or("");
+            let inside = match (v["x_ft"].as_f64(), v["y_ft"].as_f64()) {
+                (Some(x), Some(y)) if rg.contains([x, y]) => Some("point"),
+                _ if id.starts_with("rd:") => {
+                    let ids = ids.get_or_init(|| crate::roadids::road_ids(t0));
+                    ids.iter().position(|r| r == id).filter(|&i| rg.hits_line(&t0.roads.roads[i].pts)).map(|_| "extent")
+                }
+                _ => match at.get(id) {
+                    Some(&i) => shapes.get(i).filter(|s| rg.overlaps(s)).map(|_| "extent"),
+                    None => v["extent"]["bbox_ft"].as_array().and_then(|b| {
+                        let b: Vec<f64> = b.iter().filter_map(Value::as_f64).collect();
+                        let q = rg.bbox();
+                        (b.len() == 4 && b[2] >= q[0] && b[0] <= q[2] && b[3] >= q[1] && b[1] <= q[3] && (rg.contains([b[0], b[1]]) || rg.contains([b[2], b[3]]) || rg.contains([b[0], b[3]]) || rg.contains([b[2], b[1]]) || (b[0] <= rg.middle()[0] && rg.middle()[0] <= b[2] && b[1] <= rg.middle()[1] && rg.middle()[1] <= b[3]))).then_some("extent")
+                    }),
+                },
+            };
+            if let Some(w) = inside {
+                v["inside"] = json!(w);
+            }
+            inside.is_some()
+        });
+        // Nearest the area's middle first (a hit with no point sorts last).
+        let mid = rg.middle();
+        let key = |v: &Value| match (v["x_ft"].as_f64(), v["y_ft"].as_f64()) {
+            (Some(x), Some(y)) => town::geom::dist([x, y], mid),
+            _ => f64::MAX,
+        };
+        out.sort_by(|a, b| key(a).total_cmp(&key(b)));
+    }
     json!({ "results": out })
+}
+
+/// A renamed wall or gate tower (`t:<layout>:<k>`) as a search hit.
+fn tower_hit(world: &World, t0: &T0, id: &str, name: &str) -> Option<Value> {
+    let n: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
+    let (li, k) = (*n.first()?, *n.get(1)?);
+    if li >= town::layout_count(t0) {
+        return None;
+    }
+    let l = town::layout(world, t0, li);
+    let (at, _, gate) = *crate::interior::towers(&l).get(k)?;
+    let mut v = json!({ "id": id, "kind": "tower", "name": name, "function": if gate { "Gate tower" } else { "Wall tower" }, "x_ft": at[0].round(), "y_ft": at[1].round() });
+    set_whereabouts(world, t0, &mut v, li);
+    Some(v)
 }
 
 /// A district or building found in a layout, with its extent.
@@ -1166,6 +2141,10 @@ fn hit_json(world: &World, t0: &T0, h: &crate::gazetteer::Hit) -> Value {
     let mut v = with_rename(world, serde_json::to_value(h).unwrap_or(Value::Null));
     if let Some(e) = v["id"].as_str().and_then(|id| extent_of(world, t0, id)) {
         v["extent"] = e;
+    }
+    // The settlement as `get_feature` gives it ({id, name}; a layout's number is not an id).
+    if let Some(li) = v["settlement"].as_u64() {
+        set_whereabouts(world, t0, &mut v, li as usize);
     }
     v
 }
@@ -1227,6 +2206,12 @@ pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: 
 /// it (the regions it lies in, the nearest settlements, roads; a settlement's districts and
 /// notable buildings; a building's floors; an underground site's levels).
 pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
+    if id.starts_with("rd:") || world.file.edits.crossings.contains_key(id) {
+        return way_json(world, t0, id);
+    }
     let fs = features(world, t0);
     // (A building taken away: where it stood, while its place is in the world.)
     let here = || crate::world::layout_in_id(id).is_some_and(|li| li < town::layout_count(t0));
@@ -1263,6 +2248,12 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
             v["sites"] = json!(sites_json(world, t0, li, false));
         } else {
             v["settlement"] = whereabouts(world, t0, li).0;
+            // (A created site's ways underground, as its settlement's sites list has them; an entrance in a building says which.)
+            v["underground"] = json!(l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer).map(|e| format!("u:{li}:{}", e.id)).collect::<Vec<_>>());
+            if let Some(c) = crate::sitelinks::created_of(world, t0, li).filter(|c| c.in_building.is_some()) {
+                v["in_building"] = in_building_json(world, t0, c);
+                v["way"] = json!(if crate::sitelinks::trapdoor(c) { "trapdoor" } else { "stairs" });
+            }
         }
     } else if head == "b" && nums.len() == 2 && nums[0] < town::layout_count(t0) {
         let l = town::layout(world, t0, nums[0]);
@@ -1318,6 +2309,11 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
                 })
                 .collect();
         }
+        // The ways down from its cellar: the sites of the entrances made in it (`create_feature in_building`).
+        let down = crate::sitelinks::entrances_in(world, t0, nums[0], nums[1]);
+        if !down.is_empty() {
+            v["underground"] = json!(down.iter().map(|(el, _)| format!("u:{el}:0")).collect::<Vec<_>>());
+        }
         v["structure"] = json!(match b.structure {
             town::Structure::Roofed => "roofed",
             town::Structure::Open => "open",
@@ -1358,6 +2354,9 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
             v["settlement"] = whereabouts(world, t0, li).0;
         }
     }
+    if world.file.edits.designs.contains_key(id) {
+        v["designed"] = json!(true);
+    }
     let (npcs, plots) = authored_at(world, t0, &[id.to_string()]);
     v["npcs"] = json!(npcs);
     v["plots"] = json!(plots);
@@ -1365,6 +2364,41 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
 }
 
 /// A settlement's or site's layout: districts, notable buildings, ways underground.
+/// A road stretch (`rd:`) or a crossing put down by hand (`v:`) for `get_feature`: what
+/// `roadids` says of it, with its notes, whether hidden, the settlements nearest and (a
+/// crossing) the river it crosses.
+fn way_json(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    // Computed once for the call: every road lookup below reads them.
+    let fs = features(world, t0);
+    let generated: Option<String>;
+    let mut v = match world.file.edits.crossings.get(id) {
+        Some(c) => {
+            let mut v = crate::roadids::crossing_json(&world.file.edits, id, c);
+            v["crossing"] = v["kind"].take();
+            v["kind"] = json!("crossing");
+            let m = crate::roadids::crossing_mid(c);
+            v["x_ft"] = json!(m[0].round());
+            v["y_ft"] = json!(m[1].round());
+            v["river"] = river_at(world, t0, m, 0.5 * c.length() + 500.0).map_or(Value::Null, |r| r.json(Some(m)));
+            generated = Some(crate::roadids::crossing_generated(c));
+            v
+        }
+        None => {
+            let ids = crate::roadids::road_ids(t0);
+            let v = crate::roadids::road_json(world, t0, &ids, &fs, id)?;
+            let r = &t0.roads.roads[ids.iter().position(|x| x == id)?];
+            generated = r.stroke.and_then(|s| crate::roadids::drawn_road(world, t0, &fs, s)).map(|f| fs[f].name.clone());
+            v
+        }
+    };
+    let p = [v["x_ft"].as_f64().unwrap_or(0.0), v["y_ft"].as_f64().unwrap_or(0.0)];
+    v["generated"] = json!(generated);
+    v["hidden"] = json!(is_hidden(world, t0, id));
+    v["notes"] = note_of(world, t0, id);
+    v["nearest_settlements"] = json!(nearest_settlements(&fs, p, id, 3));
+    Some(v)
+}
+
 fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     let notable: Vec<Value> = l
         .buildings
@@ -1446,6 +2480,9 @@ fn interior_summary(world: &World, it: &crate::interior::Interior) -> Value {
 /// Children of a feature: a settlement's districts and businesses, a district's businesses, a
 /// building's or underground site's levels and rooms, a region's settlements and sites.
 pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    if deleted_note(world, t0, id).is_some() {
+        return None;
+    }
     let head = id.split(':').next().unwrap_or("");
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     if let Some(li) = layout_of(world, t0, id) {
@@ -1497,8 +2534,20 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
     Some(json!({ "places": inside }))
 }
 
-/// What is at a point: the ground, the regions, the nearest settlements, the building or
-/// district or site there, and named features nearby (a tenth of their size away, 2 to 10 mi).
+/// The water of a lake or sea at a point: the smallest named body there (id, name).
+pub(crate) fn water_body_at(world: &World, t0: &T0, q: P) -> Option<(String, String)> {
+    let fs = features(world, t0);
+    let shapes = shapes(world, t0);
+    fs.iter()
+        .zip(&shapes)
+        .filter(|(f, s)| matches!(f.kind, "lake" | "salt_lake" | "sea" | "ocean" | "bay") && { let b = s.bbox(); q[0] >= b[0] && q[0] <= b[2] && q[1] >= b[1] && q[1] <= b[3] } && s.distance(q).0 == 0.0)
+        .min_by(|a, b| a.1.area_sq_ft().total_cmp(&b.1.area_sq_ft()))
+        .map(|(f, _)| (f.id.clone(), f.name.clone()))
+}
+
+/// What is at a point (on T0 ground; `geoquery::describe` adds the battlemap's): the regions, the
+/// nearest settlements, the building or district or site there, and named features nearby (a tenth
+/// of their size away, 2 to 10 mi).
 pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
     let fs = features(world, t0);
     let shapes = shapes(world, t0);
@@ -1576,7 +2625,7 @@ fn name_entry(world: &World, id: String, kind: &str, generated: String, p: Optio
 /// The names in a settlement's or site's layout: its districts, businesses, wall and gate
 /// towers, ways underground (sewer grates aside) and keeps' deep dungeons.
 pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
-    if li >= town::layout_count(t0) {
+    if li >= town::layout_count(t0) || li.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.removed) {
         return Vec::new();
     }
     let l = town::layout(world, t0, li);
@@ -1586,13 +2635,16 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     }
     for b in l.buildings.iter().filter(|b| b.func.is_some()) {
         let generated = b.name.clone().unwrap_or_else(|| b.label().to_string());
-        out.push(name_entry(world, format!("b:{li}:{}", b.id), "building", generated, Some(geom::centroid(&b.poly)), true));
+        let mut v = name_entry(world, format!("b:{li}:{}", b.id), "building", generated, Some(geom::centroid(&b.poly)), true);
+        v["function"] = json!(b.label());
+        out.push(v);
     }
     for (k, (at, _, gate)) in crate::interior::towers(&l).into_iter().enumerate() {
         out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
     }
     for e in l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer) {
-        out.push(name_entry(world, format!("u:{li}:{}", e.id), "underground", cap(e.kind.name()), Some(e.at), true));
+        let name = crate::sitelinks::dungeon_name(world, t0, li).unwrap_or_else(|| cap(e.kind.name()));
+        out.push(name_entry(world, format!("u:{li}:{}", e.id), "underground", name, Some(e.at), true));
     }
     for b in l.buildings.iter().filter(|b| crate::interior::has_deep_dungeon(b)) {
         out.push(name_entry(world, format!("k:{li}:{}", b.id), "underground", "Deep dungeons".into(), Some(geom::centroid(&b.poly)), true));
@@ -1603,6 +2655,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
             let Some(b) = cl.building(0) else { continue };
             let hidden = is_hidden(world, t0, &id);
             let mut v = name_entry(world, id, "building", b.name.clone().unwrap_or_else(|| b.label().to_string()), Some(geom::centroid(&b.poly)), true);
+            v["function"] = json!(b.label());
             if hidden {
                 v["hidden"] = json!(true);
             }
@@ -1614,6 +2667,9 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
 
 /// The names in a building or site: each level, then its rooms (ids `l:` and `r:`).
 pub fn site_names(world: &World, t0: &T0, site: &str) -> Option<Vec<Value>> {
+    if deleted_with(world, t0, site).is_some() {
+        return None;
+    }
     let it = crate::interior::generate_id(world, t0, site)?;
     let mut out = Vec::new();
     for (li, lv) in it.levels.iter().enumerate() {
@@ -1640,8 +2696,11 @@ pub fn names_json(world: &World, t0: &T0, scope: &str) -> String {
 /// feature (natural ones, settlements, sites, created sites). `kind` keeps only that kind.
 pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, settlement: Option<&str>) -> Result<Value, String> {
     let list = if let Some(site) = within {
-        site_names(world, t0, site).ok_or_else(|| format!("not a building or site with levels: {site}"))?
+        site_names(world, t0, site).ok_or_else(|| deleted_note(world, t0, site).unwrap_or_else(|| format!("not a building or site with levels: {site}")))?
     } else if let Some(s) = settlement {
+        if let Some(n) = deleted_note(world, t0, s) {
+            return Err(n);
+        }
         let li = layout_of(world, t0, s).ok_or_else(|| format!("not a settlement or site: {s}"))?;
         let mut v = layout_names(world, t0, li);
         // A settlement's sites (by their own ids; a drawn business is also among the buildings).
@@ -1656,8 +2715,23 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
     } else {
         let edits = &world.file.edits;
         let fs = t0.extra.as_ref().map(|e| e.overlay.features.as_slice()).unwrap_or_default();
+        let fs_all = features(world, t0);
         let mut v: Vec<Value> = fs.iter().map(|f| name_entry(world, f.id.clone(), f.kind, f.name.clone(), Some([f.x, f.y]), false)).collect();
         v.extend(edits.created.iter().filter(|c| !c.removed).map(|c| name_entry(world, c.id.clone(), &c.kind, c.name.clone(), Some([c.x, c.y]), false)));
+        // Road stretches someone renamed (not every stretch: list_roads has their ids), and the
+        // crossings put down by hand.
+        if edits.renames.keys().any(|k| k.starts_with("rd:")) {
+            for (i, id) in crate::roadids::road_ids(t0).into_iter().enumerate().filter(|(_, id)| edits.renames.contains_key(id)) {
+                let r = &t0.roads.roads[i];
+                let generated = r.stroke.and_then(|s| crate::roadids::drawn_road(world, t0, &fs_all, s)).map(|f| fs_all[f].name.clone()).unwrap_or_default();
+                let mut ent = name_entry(world, id, "road", generated.clone(), Some(crate::roadids::midpoint(r)), false);
+                if generated.is_empty() {
+                    ent["generated"] = Value::Null;
+                }
+                v.push(ent);
+            }
+        }
+        v.extend(edits.crossings.iter().map(|(id, c)| name_entry(world, id.clone(), "crossing", crate::roadids::crossing_generated(c), Some(crate::roadids::crossing_mid(c)), false)));
         v
     };
     Ok(json!({ "names": list.into_iter().filter(|v| kind.is_none_or(|k| v["kind"] == k)).collect::<Vec<_>>() }))
@@ -1667,8 +2741,8 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
 // Routes over the road network.
 
 /// The road graph: nodes (settlement `S(i)` or a junction by rounded position) and edges
-/// (road length, ft).
-fn road_graph(world: &World, t0: &T0) -> (Vec<P>, Vec<Vec<(usize, f64)>>, Vec<Option<usize>>) {
+/// (the node reached, road length in ft, the stretch in `t0.roads.roads`).
+fn road_graph(world: &World, t0: &T0) -> (Vec<P>, Vec<Vec<(usize, f64, usize)>>, Vec<Option<usize>>) {
     let mut nodes: Vec<P> = Vec::new();
     let mut town_of: Vec<Option<usize>> = Vec::new();
     let mut key: std::collections::BTreeMap<(i64, i64), usize> = Default::default();
@@ -1691,22 +2765,22 @@ fn road_graph(world: &World, t0: &T0) -> (Vec<P>, Vec<Vec<(usize, f64)>>, Vec<Op
             nodes.len() - 1
         })
     };
-    let mut edges: Vec<(usize, usize, f64)> = Vec::new();
-    for r in &t0.roads.roads {
+    let mut edges: Vec<(usize, usize, f64, usize)> = Vec::new();
+    for (i, r) in t0.roads.roads.iter().enumerate() {
         if r.pts.len() < 2 {
             continue;
         }
         let a = node(r.pts[0], &mut nodes, &mut town_of);
         let b = node(*r.pts.last().unwrap(), &mut nodes, &mut town_of);
         if a != b {
-            edges.push((a, b, *r.s.last().unwrap_or(&0.0)));
+            edges.push((a, b, *r.s.last().unwrap_or(&0.0), i));
         }
     }
     let _ = world;
     let mut adj = vec![Vec::new(); nodes.len()];
-    for (a, b, w) in edges {
-        adj[a].push((b, w));
-        adj[b].push((a, w));
+    for (a, b, w, i) in edges {
+        adj[a].push((b, w, i));
+        adj[b].push((a, w, i));
     }
     (nodes, adj, town_of)
 }
@@ -1719,7 +2793,7 @@ fn roads_from(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     // Follow junctions on to the next settlement.
     let mut seen = vec![false; adj.len()];
     seen[n] = true;
-    let mut stack: Vec<(usize, f64)> = adj[n].clone();
+    let mut stack: Vec<(usize, f64)> = adj[n].iter().map(|&(k, w, _)| (k, w)).collect();
     while let Some((m, d)) = stack.pop() {
         if seen[m] {
             continue;
@@ -1729,7 +2803,7 @@ fn roads_from(world: &World, t0: &T0, li: usize) -> Vec<Value> {
             let fid = feature_of_layout(world, t0, t);
             out.push(json!({ "id": fid, "name": fid.as_deref().and_then(|f| name_of(world, t0, f)), "road_mi": mi(d) }));
         } else {
-            stack.extend(adj[m].iter().map(|&(k, w)| (k, d + w)));
+            stack.extend(adj[m].iter().map(|&(k, w, _)| (k, d + w)));
         }
     }
     out
@@ -1741,71 +2815,66 @@ fn roads_from(world: &World, t0: &T0, li: usize) -> Vec<Value> {
 /// place and a radius, ft) of the place, ending at `settlement` (a layout), of `class` (king's
 /// road, road, track), or drawn only; at most `limit`, longest first.
 pub fn roads(world: &World, t0: &T0, near: Option<(P, f64)>, settlement: Option<usize>, class: Option<&str>, drawn_only: bool, limit: usize) -> Value {
-    use crate::t0::roads::RoadClass;
-    let class_name = |c: RoadClass| ["king's road", "road", "track"][c as usize];
+    use crate::roadids::{class_name, drawn_road, end_json, town_at};
     let want = class.map(|c| c.to_lowercase().replace('_', " ").replace("kings", "king's"));
     let fs = features(world, t0);
-    let road_feature = |stroke: u32| {
-        let name = world.file.sketch.strokes.get(stroke as usize)?.name.as_deref()?.trim().to_string();
-        fs.iter().find(|f| f.kind == "road" && f.name == name).or_else(|| {
-            // (Renamed: the feature made from the stroke, by its course.)
-            let first = t0.roads.roads.iter().find(|r| r.stroke == Some(stroke))?.pts[0];
-            let shapes = shapes(world, t0);
-            fs.iter().zip(shapes.iter()).filter(|(f, _)| f.kind == "road").min_by(|a, b| a.1.distance(first).0.total_cmp(&b.1.distance(first).0)).map(|(f, _)| f)
-        })
-    };
-    // A road's end: the settlement it reaches (as `road_graph` decides), else its point.
-    let town_at = |p: P| {
-        t0.settlements
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| geom::dist([s.x, s.y], p) < town::reach(s) + 3_000.0)
-            .min_by(|a, b| geom::dist([a.1.x, a.1.y], p).total_cmp(&geom::dist([b.1.x, b.1.y], p)))
-            .map(|(i, _)| i)
-    };
-    let end_json = |p: P| match town_at(p).and_then(|i| feature_of_layout(world, t0, i)) {
-        Some(id) => json!({ "id": id, "name": name_of(world, t0, &id) }),
-        None => json!({ "x_ft": p[0].round(), "y_ft": p[1].round() }),
-    };
-    let keep = |r: &crate::lod::roads::RoadCurve| {
+    let ids = crate::roadids::road_ids(t0);
+    let rs = &t0.roads.roads;
+    let keep = |i: usize| {
+        let r = &rs[i];
         r.pts.len() >= 2
             && (!drawn_only || r.stroke.is_some())
             && want.as_deref().is_none_or(|w| w == class_name(r.class))
             && near.is_none_or(|(p, rad)| r.pts.iter().any(|q| geom::dist(*q, p) <= rad))
-            && settlement.is_none_or(|li| [r.pts[0], *r.pts.last().unwrap()].iter().any(|&e| town_at(e) == Some(li)))
+            && settlement.is_none_or(|li| [r.pts[0], *r.pts.last().unwrap()].iter().any(|&e| town_at(t0, e) == Some(li)))
     };
-    // Named roads: their pieces' ends that reach settlements, in order along the line drawn.
+    // Named roads: drawn in the sketch (their pieces' ends that reach settlements, in order
+    // along the line drawn), then stretches renamed alike.
     let mut named = Vec::new();
     let mut seen: Vec<u32> = Vec::new();
-    for r in t0.roads.roads.iter().filter(|r| keep(r)) {
+    for i in (0..rs.len()).filter(|&i| keep(i)) {
+        let r = &rs[i];
         let Some(st) = r.stroke.filter(|s| !seen.contains(s)) else { continue };
         seen.push(st);
-        let Some(f) = road_feature(st) else { continue };
+        let Some(f) = drawn_road(world, t0, &fs, st).map(|k| &fs[k]) else { continue };
         let line = &world.file.sketch.strokes[st as usize].pts;
         let along = |p: P| (0..line.len()).min_by(|&a, &b| geom::dist(line[a], p).total_cmp(&geom::dist(line[b], p))).unwrap_or(0);
-        let pieces: Vec<&crate::lod::roads::RoadCurve> = t0.roads.roads.iter().filter(|q| q.stroke == Some(st)).collect();
-        let mut towns: Vec<(usize, usize)> = pieces.iter().flat_map(|q| [q.pts[0], *q.pts.last().unwrap()]).filter_map(|e| town_at(e).map(|t| (along(e), t))).collect();
+        let pieces: Vec<usize> = (0..rs.len()).filter(|&q| rs[q].stroke == Some(st)).collect();
+        let mut towns: Vec<(usize, usize)> = pieces.iter().flat_map(|&q| [rs[q].pts[0], *rs[q].pts.last().unwrap()]).filter_map(|e| town_at(t0, e).map(|t| (along(e), t))).collect();
         towns.sort();
         towns.dedup_by_key(|t| t.1);
         let via: Vec<Value> = towns.iter().filter_map(|&(_, t)| feature_of_layout(world, t0, t)).map(|id| json!({ "id": id, "name": name_of(world, t0, &id) })).collect();
+        let mut by_along: Vec<(usize, usize)> = pieces.iter().map(|&q| (along(rs[q].pts[0]).min(along(*rs[q].pts.last().unwrap())), q)).collect();
+        by_along.sort();
         named.push(json!({
             "id": f.id,
             "name": name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone()),
-            "class": class_name(pieces.iter().map(|q| q.class).min().unwrap_or(r.class)),
-            "length_mi": mi(pieces.iter().map(|q| *q.s.last().unwrap_or(&0.0)).sum()),
+            "class": class_name(pieces.iter().map(|&q| rs[q].class).min().unwrap_or(r.class)),
+            "length_mi": mi(pieces.iter().map(|&q| *rs[q].s.last().unwrap_or(&0.0)).sum()),
             "settlements": via,
+            "stretches": by_along.iter().map(|&(_, q)| ids[q].clone()).collect::<Vec<_>>(),
         }));
     }
-    let mut list: Vec<&crate::lod::roads::RoadCurve> = t0.roads.roads.iter().filter(|r| keep(r)).collect();
-    list.sort_by(|a, b| b.s.last().unwrap_or(&0.0).total_cmp(a.s.last().unwrap_or(&0.0)));
+    named.extend(crate::roadids::renamed_groups(world, t0, &ids, &keep));
+    let mut list: Vec<usize> = (0..rs.len()).filter(|&i| keep(i)).collect();
+    list.sort_by(|&a, &b| rs[b].s.last().unwrap_or(&0.0).total_cmp(rs[a].s.last().unwrap_or(&0.0)).then_with(|| ids[a].cmp(&ids[b])));
     let total = list.len();
     let roads: Vec<Value> = list
         .iter()
         .take(limit)
-        .map(|r| {
-            let mut v = json!({ "class": class_name(r.class), "length_mi": mi(*r.s.last().unwrap_or(&0.0)), "from": end_json(r.pts[0]), "to": end_json(*r.pts.last().unwrap()) });
-            if let Some(f) = r.stroke.and_then(road_feature) {
-                v["road"] = json!(name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone()));
+        .map(|&i| {
+            let r = &rs[i];
+            let mut v = json!({ "id": ids[i], "class": class_name(r.class), "length_mi": mi(*r.s.last().unwrap_or(&0.0)), "from": end_json(world, t0, r.pts[0]), "to": end_json(world, t0, *r.pts.last().unwrap()) });
+            if let Some(n) = world.file.edits.renames.get(&ids[i]) {
+                v["name"] = json!(n);
+            }
+            if let Some(f) = r.stroke.and_then(|s| drawn_road(world, t0, &fs, s)).map(|k| &fs[k]) {
+                let n = name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone());
+                if v["name"].is_null() {
+                    v["name"] = json!(n);
+                }
+                v["road"] = json!(n);
+                v["road_id"] = json!(f.id);
             } else if r.stroke.is_some() {
                 v["drawn"] = json!(true);
             }
@@ -1813,6 +2882,62 @@ pub fn roads(world: &World, t0: &T0, near: Option<(P, f64)>, settlement: Option<
         })
         .collect();
     json!({ "named": named, "roads": roads, "count": total, "shown": roads.len() })
+}
+
+/// Shortest ways over the road graph from node `a` (stopping at `b`): distance, previous node and
+/// the road reached by, per node.
+fn dijkstra(adj: &[Vec<(usize, f64, usize)>], n: usize, a: usize, b: usize) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
+    let mut dist = vec![f64::MAX; n];
+    let mut prev = vec![usize::MAX; n];
+    let mut via_road = vec![usize::MAX; n];
+    let mut heap = std::collections::BTreeSet::new();
+    dist[a] = 0.0;
+    heap.insert(((0.0f64).to_bits(), a));
+    while let Some((dk, u)) = heap.pop_first() {
+        let du = f64::from_bits(dk);
+        if du > dist[u] {
+            continue;
+        }
+        if u == b {
+            break;
+        }
+        for &(v, w, ri) in &adj[u] {
+            if du + w < dist[v] {
+                dist[v] = du + w;
+                prev[v] = u;
+                via_road[v] = ri;
+                heap.insert(((du + w).to_bits(), v));
+            }
+        }
+    }
+    (dist, prev, via_road)
+}
+
+/// The stretches (indices in `t0.roads.roads`, each with whether it is walked as listed) a route
+/// between two points takes along roads, in order; None where roads do not join them (or
+/// `route` would go overland).
+pub fn route_stretches(world: &World, t0: &T0, from: P, to: P) -> Option<Vec<(usize, bool)>> {
+    let (nodes, adj, _) = road_graph(world, t0);
+    let nearest = |p: P| (0..nodes.len()).min_by(|&a, &b| geom::dist(nodes[a], p).total_cmp(&geom::dist(nodes[b], p)));
+    let (a, b) = (nearest(from)?, nearest(to)?);
+    let (dist, prev, via_road) = dijkstra(&adj, nodes.len(), a, b);
+    if dist[b] == f64::MAX {
+        return None;
+    }
+    let total = dist[b] + geom::dist(nodes[a], from) + geom::dist(nodes[b], to);
+    if total >= geom::dist(from, to) * 2.5 + 2.0 * MI {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut k = b;
+    while prev[k] != usize::MAX {
+        let r = &t0.roads.roads[via_road[k]];
+        let at = nodes[prev[k]];
+        out.push((via_road[k], geom::dist(r.pts[0], at) <= geom::dist(*r.pts.last().unwrap(), at)));
+        k = prev[k];
+    }
+    out.reverse();
+    Some(out)
 }
 
 /// A route between two ids or points: by road where the road network joins them, else
@@ -1824,30 +2949,10 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
     let mut road = None;
     if let (Some(a), Some(b)) = (nearest(from), nearest(to)) {
         let (da, db) = (geom::dist(nodes[a], from), geom::dist(nodes[b], to));
-        // Dijkstra.
-        let mut dist = vec![f64::MAX; nodes.len()];
-        let mut prev = vec![usize::MAX; nodes.len()];
-        let mut heap = std::collections::BTreeSet::new();
-        dist[a] = 0.0;
-        heap.insert(((0.0f64).to_bits(), a));
-        while let Some((dk, u)) = heap.pop_first() {
-            let du = f64::from_bits(dk);
-            if du > dist[u] {
-                continue;
-            }
-            if u == b {
-                break;
-            }
-            for &(v, w) in &adj[u] {
-                if du + w < dist[v] {
-                    dist[v] = du + w;
-                    prev[v] = u;
-                    heap.insert(((du + w).to_bits(), v));
-                }
-            }
-        }
+        let (dist, prev, via_road) = dijkstra(&adj, nodes.len(), a, b);
         if dist[b] < f64::MAX {
             let mut via = Vec::new();
+            let mut used = Vec::new();
             let mut k = b;
             while k != usize::MAX {
                 if let Some(t) = town_of[k]
@@ -1855,13 +2960,52 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
                 {
                     via.push(json!({ "id": fid, "name": name_of(world, t0, &fid) }));
                 }
+                if via_road[k] != usize::MAX {
+                    used.push(via_road[k]);
+                }
                 k = prev[k];
             }
             via.reverse();
+            used.reverse();
+            // The stretches in order (id, name if any, class, length), and the named roads
+            // followed (runs of stretches of one name joined).
+            let ids = crate::roadids::road_ids(t0);
+            let fs = features(world, t0);
+            let mut stretches = Vec::new();
+            let mut follows: Vec<Value> = Vec::new();
+            for &ri in &used {
+                let r = &t0.roads.roads[ri];
+                let len = *r.s.last().unwrap_or(&0.0);
+                let name = crate::roadids::stretch_name(world, t0, &fs, &ids[ri], r);
+                let mut sv = json!({ "id": ids[ri], "class": crate::roadids::class_name(r.class), "length_mi": mi(len) });
+                if let Some(n) = &name {
+                    sv["name"] = json!(n);
+                    match follows.last_mut().filter(|f| f["name"] == json!(n) && f["last"] == json!(stretches.len() - 1)) {
+                        Some(f) => {
+                            f["ft"] = json!(f["ft"].as_f64().unwrap_or(0.0) + len);
+                            f["last"] = json!(stretches.len());
+                        }
+                        None => follows.push(json!({ "name": n, "ft": len, "last": stretches.len() })),
+                    }
+                }
+                stretches.push(sv);
+            }
+            let follows: Vec<Value> = follows.into_iter().map(|f| json!({ "name": f["name"], "length_mi": mi(f["ft"].as_f64().unwrap_or(0.0)) })).collect();
             let total = dist[b] + da + db;
             // Worth it only if not far longer than going straight across.
             if total < straight * 2.5 + 2.0 * MI {
-                road = Some(json!({ "distance_mi": mi(total), "off_road_mi": mi(da + db), "via": via }));
+                // A long way lists its first 50 stretches (`follows` stays whole).
+                let found = stretches.len();
+                stretches.truncate(50);
+                let mut r = json!({ "distance_mi": mi(total), "off_road_mi": mi(da + db), "via": via, "stretches": stretches, "follows": follows });
+                if found > 50 {
+                    r["stretches_found"] = json!(found);
+                    r["truncated"] = json!(true);
+                }
+                if total > 1.5 * straight && straight > 0.0 {
+                    r["note"] = json!(format!("the road way is {:.1} times the straight line ({} mi): a long detour", total / straight, mi(straight)));
+                }
+                road = Some(r);
             }
         }
     }
@@ -1872,6 +3016,110 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
         "by_road": road,
         "travel": travel(by),
         "direction": compass(from, to),
+    })
+}
+
+// ---------------------------------------------------------------------------------------
+// Rivers' banks.
+
+/// A river near a point: the nearest point of its finest curve, its width and banks there,
+/// and its feature (a river big enough to be named).
+pub struct RiverAt {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub width_ft: f64,
+    /// The middle of the channel nearest the point, and the unit normal across it there.
+    pub center: P,
+    pub across: P,
+    /// From the point to the middle of the channel (ft).
+    pub dist_ft: f64,
+}
+
+impl RiverAt {
+    /// Whether the point asked about is in the water.
+    pub fn in_water(&self) -> bool {
+        self.dist_ft < 0.5 * self.width_ft
+    }
+
+    /// The two banks across the channel (ft): on the `across` side, then the other.
+    pub fn banks(&self) -> [P; 2] {
+        let h = 0.5 * self.width_ft;
+        [[self.center[0] + self.across[0] * h, self.center[1] + self.across[1] * h], [self.center[0] - self.across[0] * h, self.center[1] - self.across[1] * h]]
+    }
+
+    /// The bank on `p`'s side, `beyond` ft out of the water, and how far `p` is from the bank
+    /// (ft; negative: in the water).
+    pub fn bank_of(&self, p: P, beyond: f64) -> (P, f64) {
+        let side = if (p[0] - self.center[0]) * self.across[0] + (p[1] - self.center[1]) * self.across[1] >= 0.0 { 1.0 } else { -1.0 };
+        let h = 0.5 * self.width_ft + beyond;
+        let b = [self.center[0] + side * self.across[0] * h, self.center[1] + side * self.across[1] * h];
+        let along = (p[0] - self.center[0]) * self.across[0] * side + (p[1] - self.center[1]) * self.across[1] * side;
+        (b, along - 0.5 * self.width_ft)
+    }
+
+    /// {id, name, width_ft, banks}: with `from`, the bank on its side first.
+    pub fn json(&self, from: Option<P>) -> Value {
+        let mut b = self.banks();
+        if let Some(p) = from
+            && (p[0] - self.center[0]) * self.across[0] + (p[1] - self.center[1]) * self.across[1] < 0.0
+        {
+            b.swap(0, 1);
+        }
+        let r = |p: P| [p[0].round(), p[1].round()];
+        json!({ "id": self.id, "name": self.name, "width_ft": self.width_ft.round(), "banks": [r(b[0]), r(b[1])] })
+    }
+}
+
+/// The river nearest `p` whose water comes within `range_ft` of it (by its finest curve, as
+/// battlemaps draw it), else None.
+pub fn river_at(world: &World, t0: &T0, p: P, range_ft: f64) -> Option<RiverAt> {
+    let net = &t0.rivers;
+    let cell = t0.cell_ft;
+    // (Distance to the water's edge, river, segment, t, steps.)
+    let mut best: Option<(f64, usize, usize, f64, usize)> = None;
+    for (ri, k) in net.segments_near(p[0] - range_ft, p[1] - range_ft, p[0] + range_ft, p[1] + range_ft, 0.0) {
+        let (r, k) = (&net.rivers[ri as usize], k as usize);
+        let n = ((r.s[k + 1] - r.s[k]) / 20.0).ceil().clamp(8.0, 2000.0) as usize;
+        for j in 0..=n {
+            let t = j as f64 / n as f64;
+            let c = r.eval(k, t, 2.5, cell);
+            let d = geom::dist(c.p, p) - 0.5 * c.w;
+            if best.is_none_or(|b| d < b.0) {
+                best = Some((d, ri as usize, k, t, n));
+            }
+        }
+    }
+    let (_, ri, k, t0_, n) = best?;
+    let r = &net.rivers[ri];
+    // Finer about the best sample.
+    let (mut bt, mut bd) = (t0_, f64::MAX);
+    for j in -10..=10 {
+        let t = (t0_ + j as f64 / (10.0 * n as f64)).clamp(0.0, 1.0);
+        let d = geom::dist(r.eval(k, t, 2.5, cell).p, p);
+        if d < bd {
+            (bt, bd) = (t, d);
+        }
+    }
+    let c = r.eval(k, bt, 2.5, cell);
+    if bd - 0.5 * c.w > range_ft {
+        return None;
+    }
+    let eps = (2.0 / (r.s[k + 1] - r.s[k]).max(1.0)).min(0.05);
+    let (a, b) = (r.eval(k, (bt - eps).max(0.0), 2.5, cell).p, r.eval(k, (bt + eps).min(1.0), 2.5, cell).p);
+    let tl = geom::dist(a, b).max(1e-9);
+    let across = [-(b[1] - a[1]) / tl, (b[0] - a[0]) / tl];
+    // Its feature: the named river whose course passes nearest.
+    let feature = t0.extra.as_ref().and_then(|e| {
+        let o = &e.overlay;
+        (0..o.features.len().min(o.shapes.len())).filter(|&i| o.features[i].kind == "river").map(|i| (o.shapes[i].distance(c.p).0, i)).filter(|&(d, _)| d <= (2.0 * cell).max(c.w)).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, i)| &o.features[i])
+    });
+    Some(RiverAt {
+        id: feature.map(|f| f.id.clone()),
+        name: feature.map(|f| world.file.edits.renames.get(&f.id).cloned().unwrap_or_else(|| f.name.clone())),
+        width_ft: c.w,
+        center: c.p,
+        across,
+        dist_ft: bd,
     })
 }
 

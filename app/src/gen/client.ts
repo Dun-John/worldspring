@@ -1,10 +1,11 @@
 // Main-thread handle to the coordinator worker.
 import type { PreparedChunk } from './battlePrep';
 import { EDIT_FIELDS } from '../sync/ops';
+import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -128,7 +129,7 @@ export class GenClient {
 
   /** Whether a building drawn by hand can stand there (`id`: its created id), its point and a
    * name for it; null if the generator could not answer. */
-  buildingSpot(poly: [number, number][], func: string | undefined, id: string): Promise<{ x: number; y: number; name: string } | { error: string } | null> {
+  buildingSpot(poly: [number, number][], func: string | undefined, id: string): Promise<{ x: number; y: number; name: string } | { error: string; short?: string } | null> {
     return this.ask({ op: 'building', poly, func, id }).then((j) => JSON.parse(j));
   }
 
@@ -185,6 +186,20 @@ export class GenClient {
   /** A settlement's named districts, for labels. */
   districts(settlement: number): Promise<DistrictLabel[]> {
     return this.ask({ op: 'districts', settlement }).then((j) => (JSON.parse(j) as DistrictLabel[] | null) ?? []);
+  }
+
+  /** The roads someone named and the crossings put down by hand (labels, search, gazetteer). */
+  named(): Promise<NamedPlaces> {
+    return this.ask({ op: 'named' }).then((j) => (JSON.parse(j) as NamedPlaces | null) ?? { labels: [], roads: [], crossings: [] });
+  }
+
+  /** Underground sites matching a search (`filters`: kinds, levels_min/max, rect, near, radius_ft, limit). */
+  searchUnder(q: string, filters: object): Promise<UnderResult> {
+    // (None while the world is being made again; an error, `{error}`, as none.)
+    return this.ask({ op: 'under', q, filters: JSON.stringify(filters) }).then((j) => {
+      const r = JSON.parse(j) as Partial<UnderResult> | null;
+      return { items: r?.items ?? [], found: r?.found ?? 0, truncated: !!r?.truncated };
+    });
   }
 
   private ask(ask: Ask): Promise<string> {

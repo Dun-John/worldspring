@@ -4,7 +4,7 @@
 // priority. Layout is greedy collision avoidance, highest priority first. Town districts
 // arrive later (once a layout exists) and are lettered along a curved baseline.
 import { Container, Graphics, Text, TextStyle } from 'pixi.js';
-import type { DistrictLabel, Feature, Hit } from '../gen/protocol';
+import type { DistrictLabel, Feature, Hit, NamedPlaces } from '../gen/protocol';
 import { buildingName } from '../ui/gazetteer';
 import type { Camera } from './camera';
 
@@ -52,6 +52,9 @@ const WATER = '#2f5367';
 const LAND = '#46512f';
 
 const REGION: KindStyle = { size: 13, fill: LAND, spacing: 2, italic: true, minPx: 90, maxPx: 1600, prio: 40, rotate: true };
+
+/** Half the width of a named road's line on screen (px), for lettering it beside the line. */
+const ROAD_HALF_PX = 2;
 
 const STYLES: Record<string, KindStyle> = {
   continent: { size: 28, fill: INK, spacing: 12, upper: true, bold: true, minPx: 300, maxPx: 4000, prio: 100, rotate: true },
@@ -152,6 +155,13 @@ interface Placed {
   glyphs?: Container | null;
   /** Baseline length (ft). */
   pathLen?: number;
+  /** A named road's line: lettered upright whichever way it runs, each letter turned to the
+   * road over its own width (not to the line's every bend). */
+  road?: boolean;
+  /** A road's line reversed, and arc lengths along both (made when first needed). */
+  rpath?: [number, number][];
+  cum?: number[];
+  rcum?: number[];
   /** Letter widths (px), measured once: measuring text is not free. */
   glyphW?: number[];
   /** Letter positions (world ft) and angles from the last layout, for panning. */
@@ -176,6 +186,27 @@ function along(path: [number, number][], s: number): [number, number, number] {
     s -= l;
   }
   return [path[0][0], path[0][1], 0];
+}
+
+/** Arc length at each point of a polyline. */
+function cumulative(path: [number, number][]): number[] {
+  const out = [0];
+  for (let k = 1; k < path.length; k++) out.push(out[k - 1] + Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]));
+  return out;
+}
+
+/** `along` for long lines: the segment found by bisecting `cum` (from `cumulative`). */
+function alongCum(path: [number, number][], cum: number[], s: number): [number, number, number] {
+  let [lo, hi] = [1, path.length - 1];
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (cum[m] < s) lo = m + 1;
+    else hi = m;
+  }
+  const [[ax, ay], [bx, by]] = [path[lo - 1], path[lo]];
+  const l = cum[lo] - cum[lo - 1];
+  const t = l > 0 ? Math.min(1, Math.max(0, (s - cum[lo - 1]) / l)) : 0;
+  return [ax + (bx - ax) * t, ay + (by - ay) * t, Math.atan2(by - ay, bx - ax)];
 }
 
 const pathLength = (path: [number, number][]) => path.slice(1).reduce((acc, p, k) => acc + Math.hypot(p[0] - path[k][0], p[1] - path[k][1]), 0);
@@ -236,6 +267,25 @@ export class Labels {
     this.lastZoom = NaN;
   }
 
+  /** The roads someone named (stretches named alike joined end to end), lettered along their
+   * lines in the road style, once each at the middle: these replace the ones before. */
+  setRoads(list: NamedPlaces['labels']) {
+    for (let k = this.items.length - 1; k >= 0; k--) {
+      if (!this.items[k].road) continue;
+      this.unletter(this.items[k]);
+      this.items.splice(k, 1);
+    }
+    for (const r of list) {
+      if (r.pts.length < 2) continue;
+      const len = pathLength(r.pts);
+      const [x, y] = along(r.pts, len / 2);
+      const f: Feature = { id: r.id, kind: 'road', name: r.name, x, y, angle: 0, extent_ft: len, detail: 'road' };
+      this.items.push({ f, orig: r.name, style: STYLES.road, text: null, path: r.pts, pathLen: len, glyphs: null, road: true });
+    }
+    this.sort();
+    this.lastZoom = NaN;
+  }
+
   /** Add businesses as pins (names from `renames` where edited); already known ones are kept. */
   addPlaces(hits: BuildingHit[], renames: Record<string, string>) {
     let added = 0;
@@ -253,6 +303,16 @@ export class Labels {
       this.sort();
       this.lastZoom = NaN;
     }
+  }
+
+  /** Labels kept from view while inside a building or site (entrances in a building: `MapView.inBuilding`). */
+  private inside: Set<string> | null = null;
+
+  /** Inside a building or site: the labels in `ids` are hidden (null: none, outside). */
+  setInside(ids: Set<string> | null) {
+    if (ids === this.inside) return;
+    this.inside = ids;
+    this.lastZoom = NaN;
   }
 
   /** Show or hide the business pins. */
@@ -284,8 +344,9 @@ export class Labels {
     } else {
       for (const it of this.shown) {
         if (it.glyphs?.visible && it.at) {
+          const n = it.at.length;
           it.glyphs.children.forEach((g, k) => {
-            const [sx, sy] = cam.worldToScreen(it.at![k][0], it.at![k][1]);
+            const [sx, sy] = cam.worldToScreen(it.at![k % n][0], it.at![k % n][1]);
             g.position.set(sx, sy);
           });
         }
@@ -322,7 +383,7 @@ export class Labels {
     const dotAt: [number, number][] = [];
     for (const it of band) {
       const { f, style } = it;
-      if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f)) continue;
+      if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f) || this.inside?.has(f.id)) continue;
       const px = f.extent_ft * ppf;
       if (px < style.minPx || px > style.maxPx) continue;
       const [sx, sy] = cam.worldToScreen(f.x, f.y);
@@ -337,7 +398,7 @@ export class Labels {
     }
     for (const it of band) {
       const { f, style } = it;
-      if ((style.badge && !this.placesOn) || this.hidden.has(f.id) || this.conceal?.(f)) continue;
+      if ((style.badge && !this.placesOn) || this.hidden.has(f.id) || this.conceal?.(f) || this.inside?.has(f.id)) continue;
       if (style.keep) {
         // The name right of the symbol, or else left, below or above it, or none.
         let placed = false;
@@ -454,39 +515,82 @@ export class Labels {
     let created = false;
     if (show && !it.glyphs) {
       it.glyphs = this.createGlyphs(it);
-      it.glyphW = (it.glyphs.children as Text[]).map((g) => g.width);
+      it.glyphW = (it.glyphs.children as Text[]).slice(it.road ? it.glyphs.children.length / 2 : 0).map((g) => g.width);
+      // (A road's letters as close as in one text, as a sketch road's name: each letter's
+      // own outline and slant padding taken off.)
+      if (it.road && it.glyphW.length > 1) {
+        const whole = this.letter(f.name, style);
+        const n = it.glyphW.length;
+        const excess = (it.glyphW.reduce((a, b) => a + b, 0) + style.spacing * (n - 1) - whole.width) / n;
+        whole.destroy();
+        if (excess > 0) it.glyphW = it.glyphW.map((w) => Math.max(1, w - excess));
+      }
       created = true;
     }
     if (show && it.glyphs) {
-      const glyphs = it.glyphs.children as Text[];
+      // (A road's box holds its letters, then the halos behind them, one each.)
+      const glyphs = (it.glyphs.children as Text[]).slice(0, it.glyphW!.length);
       const widths = it.glyphW!;
       const total = widths.reduce((a, b) => a + b, 0) + style.spacing * (glyphs.length - 1);
       const lenPx = (it.pathLen ??= pathLength(path)) * cam.ppf;
       if (total > lenPx * 1.1) show = false;
       else {
-        let s = (lenPx - total) / 2;
-        const at: [number, number, number][] = [];
-        const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
-        glyphs.forEach((g, k) => {
-          const [wx, wy, a] = along(path, (s + widths[k] / 2) / cam.ppf);
-          at.push([wx, wy, a]);
-          const [gx, gy] = cam.worldToScreen(wx, wy);
-          const r = style.size * 0.6 + pad;
-          box[0] = Math.min(box[0], gx - r);
-          box[1] = Math.min(box[1], gy - r);
-          box[2] = Math.max(box[2], gx + r);
-          box[3] = Math.max(box[3], gy + r);
-          s += widths[k] + style.spacing;
-        });
-        show = !boxes.hits(box);
-        if (show) {
+        // A road's name at its middle, else slid along it (either way, a few name lengths) to
+        // the first place on screen clear of other labels; lettered the way that reads upright.
+        const mid = (lenPx - total) / 2;
+        const starts = [mid];
+        if (it.road) {
+          const step = total + 6 * style.size;
+          for (let k = 1; k <= 8; k++) for (const s of [mid - k * step, mid + k * step]) if (s >= 0 && s <= lenPx - total) starts.push(s);
+        }
+        const half = style.size / cam.ppf;
+        const r = style.size * 0.6 + pad;
+        show = false;
+        for (const s0 of starts) {
+          let [p, s] = [path, s0];
+          if (it.road) {
+            const cum = (it.cum ??= cumulative(path));
+            const [ax] = alongCum(path, cum, s / cam.ppf);
+            const [bx] = alongCum(path, cum, (s + total) / cam.ppf);
+            if (bx < ax) [p, s] = [(it.rpath ??= [...path].reverse()), lenPx - total - s0];
+          }
+          const pos = it.road ? (d: number) => alongCum(p, p === path ? it.cum! : (it.rcum ??= cumulative(p)), d) : (d: number) => along(p, d);
+          const at: [number, number, number][] = [];
+          const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+          glyphs.forEach((g, k) => {
+            const sk = (s + widths[k] / 2) / cam.ppf;
+            const [wx, wy, a] = pos(sk);
+            let [lx, ly] = [wx, wy];
+            if (it.road) {
+              const [x0, y0] = pos(Math.max(0, sk - half));
+              const [x1, y1] = pos(sk + half);
+              const ang = Math.atan2(y1 - y0, x1 - x0);
+              // Beside the road, on the side above the reading direction: the road's half-width and half a letter's height out.
+              const off = (ROAD_HALF_PX + 0.5 * style.size) / cam.ppf;
+              lx += Math.sin(ang) * off;
+              ly -= Math.cos(ang) * off;
+              at.push([lx, ly, ang]);
+            } else at.push([wx, wy, a]);
+            const [gx, gy] = cam.worldToScreen(lx, ly);
+            box[0] = Math.min(box[0], gx - r);
+            box[1] = Math.min(box[1], gy - r);
+            box[2] = Math.max(box[2], gx + r);
+            box[3] = Math.max(box[3], gy + r);
+            s += widths[k] + style.spacing;
+          });
+          if (it.road && (box[2] < 0 || box[3] < 0 || box[0] > cam.width || box[1] > cam.height)) continue;
+          if (boxes.hits(box)) continue;
+          show = true;
           boxes.add(box);
           it.at = at;
-          glyphs.forEach((g, k) => {
-            const [gx, gy] = cam.worldToScreen(at[k][0], at[k][1]);
+          const all = it.glyphs.children as Text[];
+          all.forEach((g, k) => {
+            const j = k % at.length;
+            const [gx, gy] = cam.worldToScreen(at[j][0], at[j][1]);
             g.position.set(gx, gy);
-            g.rotation = at[k][2];
+            g.rotation = at[j][2];
           });
+          break;
         }
       }
     }
@@ -498,15 +602,29 @@ export class Labels {
     const { f, style } = it;
     const label = style.upper ? f.name.toUpperCase() : f.name;
     const box = new Container();
-    const textStyle = new TextStyle({
+    const opts = {
       fontFamily: FONT,
       fontSize: style.size,
       fill: style.fill,
-      fontStyle: style.italic ? 'italic' : 'normal',
-      fontWeight: style.bold ? 'bold' : 'normal',
-      stroke: { color: '#efe6cf', width: 3, join: 'round' },
-    });
-    for (const ch of label) box.addChild(new Text({ text: ch, style: textStyle, anchor: 0.5, resolution: 2 }));
+      fontStyle: style.italic ? ('italic' as const) : ('normal' as const),
+      fontWeight: style.bold ? ('bold' as const) : ('normal' as const),
+    };
+    const stroke = { color: '#efe6cf', width: 3, join: 'round' as const };
+    const textStyle = new TextStyle({ ...opts, stroke });
+    if (it.road) {
+      // A road's letters sit beside it, each in full ink with every letter's halo behind all of them (a halo drawn with
+      // its own letter ate its neighbour's edge, so the thin ink went pale).
+      const ink = new TextStyle(opts);
+      const halo = new TextStyle({ ...opts, fill: '#efe6cf', stroke });
+      box.sortableChildren = true;
+      for (const [st, z] of [[ink, 1], [halo, 0]] as const) {
+        for (const ch of label) {
+          const t = new Text({ text: ch, style: st, anchor: 0.5, resolution: 2 });
+          t.zIndex = z;
+          box.addChild(t);
+        }
+      }
+    } else for (const ch of label) box.addChild(new Text({ text: ch, style: textStyle, anchor: 0.5, resolution: 2 }));
     this.container.addChild(box);
     return box;
   }

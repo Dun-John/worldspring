@@ -1,16 +1,31 @@
 <script lang="ts">
   // The search box: the notebook's people and plot points, notes written on places, named
   // places on the map, and districts and named businesses (from the settlement layouts) as
-  // they arrive, in groups. "Only in view" (a chip over the results) keeps to the current view.
-  // ↑/↓ move through the results, Enter opens one.
+  // they arrive, in groups, and underground sites (by name, renamed levels and rooms, kind and
+  // theme words, what is attached to them). Chips over the results: "Only in view" or "Near
+  // here" keep to the view or round its middle; while underground sites are listed, kind and
+  // depth chips narrow them. ↑/↓ move through the results, Enter opens one; Tab reaches the chips.
   import type { Npc, Overlay, PlaceInfo, Plot } from '../gen/protocol';
-  import { hitName, kindLabel, listedName, removedKind, searchFeatures, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
+  import { hitName, kindIcon, kindLabel, listedName, removedKind, searchFeatures, SETTLEMENT_KINDS, UNDER_DEPTHS, UNDER_KINDS, underIcon, underTarget, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection, type UnderAttached, type UnderHit, type UnderResult } from './gazetteer';
   import { roleOf, parseLoc, type Token } from '../play/state';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
   type Found = BuildingHit | DistrictHit;
-  type Row = { key: string; group: string; icon: IconName; name: string; sub: string; pick: () => void };
+  /** A result row; `indent` (with `last`): attached to the site row above it, `wrap`: a sub line
+   * on up to two lines (underground sites: what matched, then where). */
+  type Row = { key: string; group: string; icon: IconName; name: string; sub: string; pick: () => void; indent?: boolean; last?: boolean; wrap?: boolean };
+  type Place = '' | 'view' | 'near';
+
+  /** "Near here": round the view's middle, this far (ft: 5 mi, a morning's walk). */
+  const NEAR_FT = 5 * 5280;
+  /** Underground sites listed at most (the chips narrow the rest), and asked for. The kind and
+   * depth chips filter here, at once, so the chip row can show every kind and depth found (an
+   * ask narrowed by them would hide the others); past the ask's cut the count says "+". */
+  const UNDER_MAX = 8;
+  const UNDER_ASK = 300;
+  /** Things attached to a site listed under it at most. */
+  const ATTACHED_MAX = 3;
 
   interface Props {
     overlay: Overlay;
@@ -39,24 +54,45 @@
     onToken?: (id: string) => void;
     /** The level names of a building or site (the floor picker's), null if unknown. */
     levelNames?: (id: string) => Promise<string[] | null>;
+    /** Underground sites matching a search (`GenClient.searchUnder`). */
+    searchUnder?: (q: string, filters: object) => Promise<UnderResult>;
+    /** Open an underground site at a place of it (`underTarget`: the site, a level or a room). */
+    onUnder?: (id: string) => void;
+    /** Something is typed in the box (or it is cleared). */
+    onType?: () => void;
+    /** A settlement's or site's layout index by its feature id (-1 if none). */
+    /** A layout's settlement (its own, or the one its site stands in) and site, as `{id, name}`. */
   }
-  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote, tokens, onToken, levelNames }: Props = $props();
+  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote, tokens, onToken, levelNames, searchUnder, onUnder, onType }: Props = $props();
 
   let q = $state('');
   let open = $state(false);
   let active = $state(0);
   let buildings = $state<Found[]>([]);
   let searching = $state(false);
-  let local = $state(readLocal());
+  let under = $state<UnderHit[]>([]);
+  /** Underground sites the last answer found in all (`under` holds the first UNDER_ASK). */
+  let underFound = $state(0);
+  let place = $state<Place>(readPlace());
   let rect = $state<Rect | null>(null);
+  /** Near here: the middle of the view (a circle of NEAR_FT, as the underground search takes it; `rect` is its square). */
+  let nearMid = $state<[number, number] | null>(null);
+  const inNear = (x: number, y: number) => !nearMid || Math.hypot(x - nearMid[0], y - nearMid[1]) <= NEAR_FT;
+  /** Kind chips on (the index's kind names) and the depth chip (an `UNDER_DEPTHS` index). */
+  let kinds = $state<string[]>([]);
+  let depth = $state<number | null>(null);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let token = 0;
+  let box: HTMLDivElement | undefined = $state();
+  let input_: HTMLInputElement | undefined = $state();
 
-  function readLocal(): boolean {
+  function readPlace(): Place {
     try {
-      return localStorage.getItem('search.inView') === '1';
+      const p = localStorage.getItem('search.place');
+      if (p === 'view' || p === 'near') return p;
+      return localStorage.getItem('search.inView') === '1' ? 'view' : '';
     } catch {
-      return false;
+      return '';
     }
   }
 
@@ -69,6 +105,8 @@
   $effect.pre(() => {
     if (namesOf === resolve) return;
     [namesOf, names, asked] = [resolve, {}, new Set()];
+    // (Another world: what was found in the last one can't be picked.)
+    [under, underFound, buildings] = [[], 0, []];
   });
   function placeName(id: string): string {
     if (removedKind(id)) return listedName(id, renames, () => unnamed(id));
@@ -83,6 +121,12 @@
       });
     }
     return names[id] ?? '…';
+  }
+
+  /** A note's title: its place's name; never a raw id (or the "…" while it is looked up): the note's first words. */
+  function noteTitle(id: string, text: string): string {
+    const nm = placeName(id);
+    return nm && nm !== '…' && nm !== id ? nm : clip(text.replace(/\s+/g, ' ').trim(), 40) || 'Note';
   }
 
   /** Where a token is: the surface, or its building or site and level. */
@@ -122,7 +166,7 @@
     return `${from ? '…' : ''}${text.slice(from, from + 70).replace(/\s+/g, ' ')}${text.length > from + 70 ? '…' : ''}`;
   };
 
-  const rows = $derived.by<Row[]>(() => {
+  const found = $derived.by<Row[]>(() => {
     const t = needle;
     if (!t) return [];
     const out: Row[] = [];
@@ -145,14 +189,27 @@
     const noteRows = Object.entries(notes)
       .filter(([id, n]) => has(n.text, t) || (n.tags ?? []).some((g) => has(g, t)) || has(placeName(id), t))
       .slice(0, 5);
-    for (const [id, n] of noteRows) out.push({ key: `note:${id}`, group: 'Notes', icon: 'note', name: placeName(id), sub: snippet(n.text, t) || (n.tags ?? []).join(', '), pick: () => onNote(id) });
+    for (const [id, n] of noteRows) out.push({ key: `note:${id}`, group: 'Notes', icon: 'note', name: noteTitle(id, n.text), sub: snippet(n.text, t) || (n.tags ?? []).join(', '), pick: () => onNote(id) });
     const places = new Set<string>();
-    for (const f of searchFeatures(overlay, q, 12, local && rect ? rect : undefined)) {
+    const placeHits = searchFeatures(overlay, q, nearMid ? 60 : 12, rect ?? undefined).filter((g) => inNear(g.x, g.y)).slice(0, 12);
+    for (const f of placeHits) {
       const town = inTown(f.id);
       places.add(f.id);
-      out.push({ key: f.id, group: 'Places', icon: 'pin', name: renames[f.id] ?? f.name, sub: `${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, pick: () => onSelect({ kind: 'feature', feature: f }) });
+      // (Two places with one name are told apart by where: the building an entrance is in, else the nearest named place.)
+      const same = placeHits.some((g) => g.id !== f.id && (renames[g.id] ?? g.name) === (renames[f.id] ?? f.name));
+      const apart = !same ? '' : (underShown.find((h) => h.site?.id === f.id)?.in_building?.name ?? nearOf(f.x, f.y));
+      const sub = [`${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, apart && (apart.startsWith('near ') ? apart : `in ${apart}`)].filter(Boolean).join(' · ');
+      out.push({ key: f.id, group: 'Places', icon: /^(rd|v):/.test(f.id) ? kindIcon(f.kind) : 'pin', name: renames[f.id] ?? f.name, sub, pick: () => onSelect({ kind: 'feature', feature: f }) });
     }
-    for (const b of buildings) {
+    const dupSub = subDuplicates(underShown.slice(0, UNDER_MAX));
+    for (const h of underShown.slice(0, UNDER_MAX)) {
+      out.push({ key: `under:${h.id}`, group: 'Underground', icon: underIcon(h.site_kind), name: underTitle(h), sub: underSub(h, dupSub), pick: () => onUnder?.(underTarget(h)), wrap: true });
+      // (Once each: an NPC placed on the site and on one of its levels is one NPC.)
+      const seen = new Set<string>();
+      const list = h.attached.filter((a) => !seen.has(`${a.what}:${a.id}`) && !!seen.add(`${a.what}:${a.id}`) && attachedMatched(h, a)).slice(0, ATTACHED_MAX);
+      list.forEach((a, i) => out.push({ ...attachedRow(h, a), last: i === list.length - 1 }));
+    }
+    for (const b of buildings.filter((g) => inNear(g.x, g.y))) {
       // A building drawn by hand is its site: listed once, under Places, and hidden with it.
       const site = b.kind === 'building' ? drawnOf(b.id) : null;
       if (site && (places.has(site) || !overlay.features.some((f) => f.id === site))) continue;
@@ -167,39 +224,240 @@
     }
     return out;
   });
-  const groups = $derived([...new Set(rows.map((r) => r.group))].map((g) => ({ g, rows: rows.filter((r) => r.group === g) })));
+  /** Where an underground site is: the site it lies under, else its settlement, else the named
+   * place nearest. */
+  function underPlace(h: UnderHit): string {
+    // (Under an entrance in a building: "under The Lucky Shield, Waterdeep"; under a free-standing entrance of its own name, no "under ..": the title says it.)
+    if (h.in_building?.name) return `under ${renames[h.in_building.id] ?? h.in_building.name}${h.settlement ? `, ${renames[h.settlement.id] ?? h.settlement.name}` : ''}`;
+    if (h.site && h.site.name === h.name) return '';
+    return h.site ? `under ${renames[h.site.id] ?? h.site.name}` : h.settlement ? `in ${renames[h.settlement.id] ?? h.settlement.name}` : nearOf(h.x_ft, h.y_ft);
+  }
+  /** A site with no name of its own ("Crypt") is titled by its place: "Crypt under The Lost Halls". */
+  const ownName = (h: UnderHit) => h.name !== h.generated || h.site_kind === 'sewer' || !!h.in_building || h.site?.name === h.name;
+  const underTitle = (h: UnderHit) => (ownName(h) ? h.name : [h.name, underPlace(h)].filter(Boolean).join(' '));
+
+  /** The parts of an underground site's sub line, what is different first: what matched (a level,
+   * room, NPC, plot or note), the kind (not when the query, a chip or the title says it), the
+   * theme, the levels, where it is (unless its title says so). */
+  function subParts(h: UnderHit): { what: string; kind: string; theme: string; levels: string; where: string } {
+    const m = h.match;
+    const said = m && m.what !== 'name' && m.what !== 'kind' && m.what !== 'theme' ? m.what : '';
+    const what = !m || !said ? '' : said === 'note' ? `note: ${snippet(m.text, needle)}` : `${said === 'npc' ? 'NPC' : said}: ${m.text}`;
+    // (The theme alone when it says the kind: "ice cave", not "cave · ice cave".)
+    const theme = h.theme_name && h.theme_name !== h.site_kind && h.site_kind !== 'sewer' ? h.theme_name : '';
+    const word = h.site_kind;
+    const kindSaid = needle.includes(word) || kinds.includes(word) || theme.split(' ').includes(word) || (!ownName(h) && underTitle(h).toLowerCase().includes(word));
+    const kind = kindSaid ? '' : h.site_kind === 'sewer' ? 'sewers' : word;
+    // (A city's sewers are named after it.)
+    const where = !ownName(h) || (h.site_kind === 'sewer' && h.name === h.generated) ? '' : underPlace(h);
+    return { what, kind, theme, levels: `${h.levels} level${h.levels === 1 ? '' : 's'}`, where };
+  }
+  const subKey = (h: UnderHit) => `${underTitle(h)}|${Object.values(subParts(h)).join('|')}`;
+  /** Sub lines of the listed sites that would read the same as another's (by `subKey`). */
+  const subDuplicates = (list: UnderHit[]) => {
+    const n = new Map<string, number>();
+    for (const h of list) n.set(subKey(h), (n.get(subKey(h)) ?? 0) + 1);
+    return (h: UnderHit) => (n.get(subKey(h)) ?? 0) > 1;
+  };
+
+  /** An underground site's sub line (`dup`: it reads the same as a neighbour's, so the settlement
+   * or region is added), what is attached to it and was not matched at the end ("1 NPC, 1 note"),
+   * how far when near here. */
+  function underSub(h: UnderHit, dup: (h: UnderHit) => boolean): string {
+    const p = subParts(h);
+    const town = h.settlement ? `in ${renames[h.settlement.id] ?? h.settlement.name}` : '';
+    const region = dup(h) ? (town && !p.where.includes(town) ? town : p.where ? '' : nearOf(h.x_ft, h.y_ft)) : '';
+    const far = h.distance_ft === undefined ? '' : h.distance_ft < 528 ? 'here' : `${(h.distance_ft / 5280).toFixed(1)} mi`;
+    const rest = new Set<string>();
+    const count = { npc: 0, plot: 0, note: 0 };
+    for (const a of h.attached) {
+      if (attachedMatched(h, a) || rest.has(`${a.what}:${a.id}`)) continue;
+      rest.add(`${a.what}:${a.id}`);
+      count[a.what]++;
+    }
+    const attached = (['npc', 'plot', 'note'] as const)
+      .filter((k) => count[k])
+      .map((k) => `${count[k]} ${k === 'npc' ? 'NPC' : k}${count[k] === 1 ? '' : 's'}`)
+      .join(', ');
+    // (Where it is always said, the nearest settlement if nothing else; first when another listed site has its title, so a clipped line keeps it.)
+    const at = [p.where, region].filter(Boolean).join(' · ') || town || settledNear(h.x_ft, h.y_ft);
+    const first = sameTitle(h) ? [at] : [];
+    return [...first, p.what, p.kind, p.theme, p.levels, first.length ? '' : at, far, h.hidden ? 'hidden' : '', attached].filter(Boolean).join(' · ');
+  }
+
+  /** Whether another listed underground site has `h`'s title. */
+  function sameTitle(h: UnderHit): boolean {
+    const t = underTitle(h).toLowerCase();
+    return underShown.slice(0, UNDER_MAX).some((g) => g.id !== h.id && underTitle(g).toLowerCase() === t);
+  }
+
+  /** The settlement nearest a point within 3 mi, as "near …"; else "in the wilds". */
+  function settledNear(x: number, y: number): string {
+    let [best, bestD] = ['', 3 * 5280];
+    for (const g of overlay.features) {
+      const d = SETTLEMENT_KINDS.includes(g.kind) ? Math.hypot(g.x - x, g.y - y) : Infinity;
+      if (d < bestD) [best, bestD] = [renames[g.id] ?? g.name, d];
+    }
+    return best ? `near ${best}` : 'in the wilds';
+  }
+
+  /** Whether the query matched something attached to a site (or the level or room it is on): only
+   * those are listed under the site. */
+  function attachedMatched(h: UnderHit, a: UnderAttached): boolean {
+    const ms = h.matches?.length ? h.matches : h.match ? [h.match] : [];
+    const direct = a.what === 'note' ? has(a.text, needle) : has(a.name, needle);
+    return (
+      direct ||
+      ms.some((m) => {
+        if (m.what === 'npc' || m.what === 'plot') return m.what === a.what && m.id === a.id;
+        if (m.what === 'note') return a.what === 'note' && m.id === a.at;
+        return (m.what === 'level' || m.what === 'room') && m.id === a.at;
+      })
+    );
+  }
+
+  /** The named place nearest a point (within 3 mi; not seas or land masses), as "near …". */
+  function nearOf(x: number, y: number): string {
+    let best = '';
+    let bestD = 3 * 5280;
+    for (const g of overlay.features) {
+      if (['ocean', 'sea', 'continent', 'island', 'range'].includes(g.kind)) continue;
+      const d = Math.hypot(g.x - x, g.y - y);
+      if (d < bestD) [best, bestD] = [renames[g.id] ?? g.name, d];
+    }
+    return best && `near ${best}`;
+  }
+
+  /** A note, NPC or plot point on an underground site, listed under it: a note opens its place,
+   * an NPC or plot point the notebook. */
+  function attachedRow(h: UnderHit, a: UnderAttached): Row {
+    // "on Hall of Bones": the level or room it is on, else the site.
+    const on = `on ${a.at !== h.id && /^[lr]:/.test(a.at) ? placeName(a.at) : ownName(h) ? h.name : 'the site'}`;
+    const base = { key: `under:${h.id}:${a.what}:${a.id}:${a.at}`, group: 'Underground', indent: true };
+    if (a.what === 'npc') return { ...base, icon: 'user', name: a.name ?? '', sub: `NPC ${on}`, pick: () => onNpc(a.id) };
+    if (a.what === 'plot') return { ...base, icon: 'scroll', name: a.name ?? '', sub: `plot ${on}`, pick: () => onPlot(a.id) };
+    return { ...base, icon: 'note', name: clip((a.text ?? '').replace(/\s+/g, ' '), 60), sub: `note ${on}`, pick: () => onUnder?.(underTarget({ ...h, match: { what: 'note', id: a.at, text: '' } })) };
+  }
+
+  /** Text cut to about `n` characters, at a word. */
+  function clip(text: string, n: number): string {
+    if (text.length <= n) return text;
+    const cut = text.slice(0, n);
+    const sp = cut.lastIndexOf(' ');
+    return `${(sp > n / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, '')}…`;
+  }
+
+  const band = (h: UnderHit, i: number) => h.levels >= UNDER_DEPTHS[i][1] && h.levels <= (UNDER_DEPTHS[i][2] ?? Infinity);
+  /** The underground hits the kind and depth chips keep. */
+  const underShown = $derived(under.filter((h) => (!kinds.length || kinds.includes(h.site_kind)) && (depth === null || band(h, depth))).map((h, i) => [h, i] as const).sort(([a, i], [b, j]) => underRank(a) - underRank(b) || i - j).map(([h]) => h));
+  /** Best first: a name hit (a renamed site's), a level, room or what is attached, then a site
+   * with a name of its own that only the kind or theme matched, then the rest. */
+  function underRank(h: UnderHit): number {
+    const w = h.match?.what;
+    return w === 'name' ? 0 : w === 'kind' || w === 'theme' || !w ? (ownName(h) ? 2 : 3) : 1;
+  }
+  /** Kind and depth chips: every kind and depth, in a fixed order, whenever underground sites are
+   * found; those with no site among them are dimmed and off, and so is a lone one (it can
+   * narrow nothing) unless it is on. */
+  const kindHas = $derived(UNDER_KINDS.map(([, k]) => under.some((h) => h.site_kind === k)));
+  const depthHas = $derived(UNDER_DEPTHS.map((_, i) => under.some((h) => band(h, i))));
+  const kindOk = (i: number) => kinds.includes(UNDER_KINDS[i][1]) || (kindHas[i] && kindHas.filter(Boolean).length > 1);
+  const depthOk = (i: number) => depth === i || (depthHas[i] && depthHas.filter(Boolean).length > 1);
+  const chipsOn = $derived(kinds.length > 0 || depth !== null);
+  /** Underground sites past the ask's cut (how many of them the chips keep is not known). */
+  const beyond = $derived(Math.max(0, underFound - under.length));
+  /** The more the chips could narrow the sites listed: two kinds or depths among them. */
+  const narrowable = $derived(new Set(underShown.map((h) => h.site_kind)).size > 1 || UNDER_DEPTHS.filter((_, i) => underShown.some((h) => band(h, i))).length > 1);
+
+  // The groups (with a kind or depth chip on, Underground first: the chip is about it) and the
+  // rows in that order (↑/↓ walk them as shown).
+  const groups = $derived.by(() => {
+    const list = [...new Set(found.map((r) => r.group))].map((g) => ({ g, rows: found.filter((r) => r.group === g) }));
+    return chipsOn ? [...list.filter((x) => x.g === 'Underground'), ...list.filter((x) => x.g !== 'Underground')] : list;
+  });
+  const rows = $derived(groups.flatMap((x) => x.rows));
+  /** A group's count for its header: its rows (not what is attached); all the sites found underground. */
+  const count = (g: string, list: Row[]) => (g === 'Underground' ? `${underShown.length + (chipsOn ? 0 : beyond)}${chipsOn && beyond ? '+' : ''}` : `${list.filter((r) => !r.indent).length}`);
 
   function input() {
     open = true;
     active = 0;
-    rect = local ? viewRect() : null;
-    clearTimeout(timer);
     buildings = [];
-    const query = q.trim();
-    if (query.length < 3) return;
-    const mine = ++token;
-    // A plain copy: reactive state can't be posted to a worker.
-    const area = rect ? ([...rect] as Rect) : undefined;
-    timer = setTimeout(async () => {
-      searching = true;
-      const res = await searchBuildings(query, area);
-      if (mine === token) buildings = res;
-      searching = false;
-    }, 300);
+    onType?.();
+    // (The underground list stays until the new answer lands; the kind and depth chips last
+    // while the query is edited, those the new answer has nothing for switch off.)
+    if (!q.trim()) [kinds, depth] = [[], null];
+    run(300);
   }
 
-  function toggleLocal() {
-    local = !local;
+  /** Ask for buildings and underground sites (after `delay` ms; a stale answer is dropped). */
+  function run(delay: number) {
+    const v = viewRect();
+    const mid: [number, number] = [(v[0] + v[2]) / 2, (v[1] + v[3]) / 2];
+    // A plain copy: reactive state can't be posted to a worker.
+    nearMid = place === 'near' ? mid : null;
+    rect = place === 'view' ? [v[0], v[1], v[2], v[3]] : place === 'near' ? [mid[0] - NEAR_FT, mid[1] - NEAR_FT, mid[0] + NEAR_FT, mid[1] + NEAR_FT] : null;
+    clearTimeout(timer);
+    const mine = ++token;
+    const query = q.trim();
+    if (query.length < 3) {
+      [buildings, under, underFound, searching, kinds, depth] = [[], [], 0, false, [], null];
+      return;
+    }
+    const area = rect ? ([...rect] as Rect) : undefined;
+    const filters = { ...(place === 'view' ? { rect: area } : place === 'near' ? { near: mid, radius_ft: NEAR_FT } : {}), limit: UNDER_ASK };
+    timer = setTimeout(() => {
+      searching = true;
+      let left = searchUnder ? 2 : 1;
+      const done = () => {
+        if (mine === token && !--left) searching = false;
+      };
+      void searchBuildings(query, area).then((res) => {
+        if (mine === token) buildings = res;
+        done();
+      });
+      if (searchUnder)
+        void searchUnder(query, filters).then((res) => {
+          if (mine !== token) return done();
+          [under, underFound] = [res.items, res.found];
+          kinds = kinds.filter((k) => under.some((h) => h.site_kind === k));
+          if (depth !== null && !under.some((h) => band(h, depth!))) depth = null;
+          done();
+        });
+    }, delay);
+  }
+
+  function setPlace(p: Place) {
+    place = place === p ? '' : p;
     try {
-      localStorage.setItem('search.inView', local ? '1' : '0');
+      localStorage.setItem('search.place', place);
     } catch {
       // Private mode: the choice just isn't remembered.
     }
-    if (q.trim()) input();
+    if (q.trim()) run(0);
+  }
+
+  function toggleKind(k: string) {
+    kinds = kinds.includes(k) ? kinds.filter((x) => x !== k) : [...kinds, k];
+    active = 0;
+  }
+
+  function setDepth(i: number) {
+    depth = depth === i ? null : i;
+    active = 0;
+  }
+
+  /** Focus left the search (box, chips and results) altogether: close the list. */
+  function focusOut(e: FocusEvent) {
+    if (box?.contains(e.relatedTarget as Node | null)) return;
+    setTimeout(() => {
+      if (!box?.contains(document.activeElement)) open = false;
+    }, 150);
   }
 
   function pick(r: Row) {
     open = false;
+    [kinds, depth] = [[], null];
     (document.activeElement as HTMLElement | null)?.blur();
     r.pick();
   }
@@ -223,15 +481,19 @@
   const placeholder = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? 'Search places, people, notes… ⌘K' : 'Search places, people, notes…';
 </script>
 
-<div class="search">
+{#snippet chip(label: string, on: boolean, toggle: () => void, title?: string, off = false)}
+  <button class="ws-chip" class:on class:dim={off} disabled={off} aria-pressed={on} onclick={toggle} {title}>{#if on}<Icon name="check" size={12} />{/if}{label}</button>
+{/snippet}
+
+<div class="search" bind:this={box} onfocusout={focusOut}>
   <input
+    bind:this={input_}
     id="map-search"
     type="search"
     {placeholder}
     bind:value={q}
     oninput={input}
     onfocus={() => (open = true)}
-    onblur={() => setTimeout(() => (open = false), 150)}
     onkeydown={key}
     aria-label="Search the map, people and notes"
     aria-expanded={open && !!needle}
@@ -242,20 +504,50 @@
   {#if open && needle}
     <!-- (Pressing in the list keeps the box focused, so it stays open for the click.) -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="results" id="search-results" role="listbox" tabindex="-1" onmousedown={(e) => e.preventDefault()}>
-      <div class="chips"><button class="ws-chip" class:on={local} aria-pressed={local} onclick={toggleLocal}>Only in view</button></div>
+    <div
+      class="results"
+      id="search-results"
+      role="listbox"
+      tabindex="-1"
+      onmousedown={(e) => e.preventDefault()}
+      onkeydown={(e) => {
+        if (e.key === 'Escape') (input_?.focus(), e.stopPropagation());
+      }}
+    >
+      <!-- Chips in groups, a line each (a phone scrolls it sideways): where (always), then every kind and depth while underground sites are found. -->
+      <div class="chips" role="group" aria-label="Narrow the results">
+        <div class="cg" role="group" aria-label="Where">
+          <span class="cl" aria-hidden="true">Where</span>
+          {@render chip('Only in view', place === 'view', () => setPlace('view'))}
+          {@render chip('Near here', place === 'near', () => setPlace('near'), 'Within 5 miles of the middle of the view')}
+        </div>
+        {#if under.length}
+          <div class="cg" role="group" aria-label="Kind">
+            <span class="cl" aria-hidden="true">Kind</span>
+            {#each UNDER_KINDS as [label, k], i (k)}{@render chip(label, kinds.includes(k), () => toggleKind(k), undefined, !kindOk(i))}{/each}
+          </div>
+          <div class="cg" role="group" aria-label="Depth">
+            <span class="cl" aria-hidden="true">Depth</span>
+            {#each UNDER_DEPTHS as [label], i (label)}{@render chip(label, depth === i, () => setDepth(i), undefined, !depthOk(i))}{/each}
+          </div>
+        {/if}
+      </div>
       {#each groups as { g, rows: list } (g)}
-        <div class="group">{g}</div>
+        <div class="group">{g}<span class="count">{count(g, list)}</span></div>
         {#each list as r (r.key)}
           {@const i = rows.indexOf(r)}
-          <button class="row" class:active={i === active} role="option" aria-selected={i === active} onclick={() => pick(r)} onmouseenter={() => (active = i)}>
+          <button class="row" class:indent={r.indent} class:last={r.last} class:wrap={r.wrap} class:active={i === active} role="option" aria-selected={i === active} onclick={() => pick(r)} onmouseenter={() => (active = i)}>
             <Icon name={r.icon} size={16} />
             <span class="text"><span class="name">{r.name}</span><span class="sub">{r.sub}</span></span>
           </button>
         {/each}
+        {#if g === 'Underground' && underShown.length + (chipsOn ? 0 : beyond) > UNDER_MAX}
+          <div class="note">{underShown.length - UNDER_MAX + (chipsOn ? 0 : beyond)}{chipsOn && beyond ? '+' : ''} more underground{narrowable ? ': narrow them with the chips' : ': type more to narrow them'}</div>
+        {/if}
       {/each}
-      {#if searching}<div class="note">Searching buildings…</div>{/if}
-      {#if !searching && !rows.length && needle.length >= 3}<div class="note">Nothing found{local ? ' in view' : ''}</div>{/if}
+      {#if under.length && !underShown.length}<div class="note">No underground sites with these chips</div>{/if}
+      {#if searching}<div class="note">Searching…</div>{/if}
+      {#if !searching && !rows.length && needle.length >= 3}<div class="note">Nothing found{place === 'view' ? ' in view' : place === 'near' ? ' near here' : ''}</div>{/if}
       {#if !rows.length && needle.length < 3}<div class="note">Keep typing…</div>{/if}
     </div>
   {/if}
@@ -299,10 +591,70 @@
     box-shadow: var(--shadow-lg);
   }
   .chips {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
     padding: 2px 10px 6px;
     border-bottom: 1px solid var(--line-faint);
   }
+  .cg {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .cg :global(.ws-chip) {
+    flex: none;
+  }
+  .cg :global(.ws-chip.dim) {
+    opacity: 0.4;
+  }
+  .cl {
+    flex: none;
+    min-width: 3.4em;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-2);
+  }
+  /* Off chips stand out from the panel, on ones are filled (and ticked). */
+  .chips :global(.ws-chip:not(.on)) {
+    background: var(--paper-solid);
+    border-color: var(--line-soft);
+  }
+  .row.indent {
+    position: relative;
+    padding-left: 36px;
+    min-height: 32px;
+  }
+  /* Attached rows hang off their site row's icon. */
+  .row.indent::before {
+    content: '';
+    position: absolute;
+    left: 20px;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    border-left: 1px solid var(--line-soft);
+  }
+  .row.indent.last::before {
+    bottom: 50%;
+    border-bottom: 1px solid var(--line-soft);
+    border-bottom-left-radius: 4px;
+  }
+  .row.indent:not(.last)::after {
+    content: '';
+    position: absolute;
+    left: 20px;
+    top: 50%;
+    width: 10px;
+    border-top: 1px solid var(--line-soft);
+  }
   .group {
+    display: flex;
+    justify-content: space-between;
     padding: 6px 12px 2px;
     font-size: 11px;
     text-transform: uppercase;
@@ -344,7 +696,17 @@
   .sub {
     font-size: 12px;
     font-style: italic;
-    color: var(--ink-3);
+    color: var(--ink-2);
+  }
+  .row.wrap .sub {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+  }
+  .count {
+    font-variant-numeric: tabular-nums;
   }
   .note {
     padding: 4px 12px;

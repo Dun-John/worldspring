@@ -700,6 +700,12 @@ export type Move =
   | { kind: 'site'; label: string; to: string; from: string; at: [number, number] };
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** A way's label in the moves list: "Stairs down to Undermountain" for "stairs down to the dungeon" when the
+ * site has a name, else its own ("Trapdoor to the sewers · <name>" for other named ways). */
+const wayLabel = (item: string, named?: string) => {
+  const m = named ? /^(.*\b(?:up|down)) to the .+$/.exec(item) : null;
+  return m ? `${cap(m[1])} to ${named}` : cap(item) + (named ? ` · ${named}` : '');
+};
 
 /** Squares from the world's corner, wrapped every 256 sewer sections (96 squares each). */
 const wrap = (v: number) => (((Math.round(v) % (256 * 96)) + 256 * 96) % (256 * 96));
@@ -727,13 +733,37 @@ export function setUndergroundGrid(on: boolean) {
   undergroundGrid = on;
 }
 
+/** How long a room picked from the search pulses (s). */
+const PICK_PULSE_S = 2.4;
+/** How much bigger than its square a way to another named site is drawn (a cellar's way down to a dungeon, the
+ * dungeon's way back up): the generator leaves its eight neighbours free for it. */
+const WAY_SCALE = 1.7;
+/** The same against a wall or another room (the dungeon's way in, as generated): less, to stay off the wall. */
+const WAY_SCALE_TIGHT = 1.35;
+/** The ways' arrows: a darker warm tan than the stairs' cream (`wayArrow`). */
+const WAY_ARROW = 0xb08654;
+
 export class InteriorLayer {
   /** The world's renames, for level and room names (`l:`/`r:` ids); set by `MapView`. */
   static names: Record<string, string> = {};
+  /** Other sites' names by id, for the ways to them (a dungeon's from its entrance, a building's); set by `MapView`.
+   * The renames (`names`) come first. */
+  static ways: Record<string, string> = {};
   /** The renderer furniture and props are drawn into the item atlas with (`MapView`, the gallery);
    * without one they are drawn as vector paths. */
   static renderer: Renderer | null = null;
+  /** The room picked from the search (`r:<site>:<level>:<room>`), outlined for the DM; set by `MapView.markRoom`. */
+  static picked: string | null = null;
+  /** When its outline started to pulse (ms; 0: not yet, the camera still on its way in): for a
+   * moment, then it stays. */
+  static pickedAt = 0;
   readonly container = new Container();
+  /** The picked room's outline (grid units, like the plan). */
+  private readonly pickedRoom = new Graphics();
+  /** The picked room's name over it (screen space, always shown), its spot (grid) and room. */
+  private readonly pickedName = new Container();
+  private pickedSpot: [number, number] | null = null;
+  private pickedRi = -1;
   private readonly dim = new Sprite(Texture.WHITE);
   private readonly plan = new Container();
   /** What is in the hand (`setGhost`), over the plan (which every draw rebuilds). */
@@ -741,7 +771,7 @@ export class InteriorLayer {
   private ghostKey = '';
   private readonly labels = new Container();
   private level = 0;
-  private labelSpots: { text: Text; x: number; y: number; min: number }[] = [];
+  private labelSpots: { text: Text; x: number; y: number; min: number; ri?: number }[] = [];
   /** NPCs placed here, drawn for the DM only (screen space, like the labels). */
   private readonly marks = new Container();
   private npcs: NpcMarker[] = [];
@@ -784,7 +814,7 @@ export class InteriorLayer {
     this.dim.visible = !peek && !ghost && !tile;
     this.labels.visible = !peek && !ghost;
     this.marks.visible = !peek && !ghost && !style.player;
-    this.container.addChild(this.dim, this.plan, this.ghostLayer, this.labels, this.marks);
+    this.container.addChild(this.dim, this.plan, this.pickedRoom, this.ghostLayer, this.labels, this.pickedName, this.marks);
     this.level = Math.max(0, Math.min(interior.levels.length - 1, start ?? interior.entry_level));
     // Light from the NW of the screen, in grid axes, rounded to 45 degrees so items lit alike share
     // one look in the item atlas.
@@ -859,11 +889,12 @@ export class InteriorLayer {
     const out: Move[] = [];
     const at = this.toWorld(i + 0.5, j + 0.5);
     const level = (li: number, dir: 'up' | 'down', what?: string): Move => ({ kind: 'level', label: `${cap(what ?? `go ${dir}`)} to ${this.levelName(li)}`, level: li, from: it.id, at });
-    const item = itemAt(lv, i, j);
-    const link = lv.links?.find((k) => k.x === i && k.y === j);
+    const near = this.wayNear(lv, gx, gy);
+    const item = near ?? itemAt(lv, i, j);
+    const link = near ? this.wayLink(lv, near) : lv.links?.find((k) => k.x === i && k.y === j);
     // (A renamed site goes by its name.)
-    const named = link && InteriorLayer.names[link.to];
-    if (link) out.push({ kind: 'site', label: cap(item?.name ?? 'follow the way through') + (named ? ` · ${named}` : ''), to: link.to, from: it.id, at });
+    const named = link && InteriorLayer.siteName(link.to);
+    if (link) out.push({ kind: 'site', label: wayLabel(item?.name ?? 'follow the way through', named), to: link.to, from: it.id, at });
     if (item && !link) {
       if (item.kind === 'exit') out.push({ kind: 'surface', label: `Up to the surface (${item.name.toLowerCase()})`, at });
       // Ways up and down within the site: the level above or below has its pair here.
@@ -947,7 +978,7 @@ export class InteriorLayer {
     const it = this.interior;
     const [sx, sy] = cam.worldToScreen(it.origin[0], it.origin[1]);
     const s = SQUARE_FT * cam.ppf;
-    for (const c of [this.plan, this.ghostLayer]) {
+    for (const c of [this.plan, this.pickedRoom, this.ghostLayer]) {
       c.position.set(sx, sy);
       c.rotation = Math.atan2(it.axis[1], it.axis[0]);
       c.scale.set(s);
@@ -982,7 +1013,16 @@ export class InteriorLayer {
       const [lx, ly] = cam.worldToScreen(w[0], w[1]);
       l.text.position.set(lx, ly);
       // Only rooms big enough on screen get a label.
-      l.text.visible = l.min * s > 70;
+      l.text.visible = l.min * s > 70 && l.ri !== this.pickedRi;
+    }
+    this.placeWays(cam, s);
+    if (this.pickedSpot) {
+      this.pickedName.position.set(...cam.worldToScreen(...this.toWorld(...this.pickedSpot)));
+      this.pickedName.rotation = -cam.turn;
+      // (Three slow beats, from and back to full, once its squares are big enough to see.)
+      if (!InteriorLayer.pickedAt && s >= 12) InteriorLayer.pickedAt = performance.now();
+      const t = InteriorLayer.pickedAt ? (performance.now() - InteriorLayer.pickedAt) / 1000 : PICK_PULSE_S;
+      this.pickedRoom.alpha = t < PICK_PULSE_S ? 0.45 + 0.55 * Math.cos((t * Math.PI * 2) / 1.6) ** 2 : 1;
     }
     for (const m of this.markSpots) {
       const w = this.toWorld(m.x, m.y);
@@ -1027,6 +1067,52 @@ export class InteriorLayer {
       this.marks.addChild(node);
       this.markSpots.push({ node, x: gx + n * 1.2, y: gy });
     }
+  }
+
+  /** Mark the picked room (`InteriorLayer.picked`) if it is on this level: a soft gold wash
+   * over its squares, a gold line (on a dark one) round its edges that border another room or
+   * none, and its name over it. */
+  drawPicked() {
+    const g = this.pickedRoom.clear();
+    this.pickedName.removeChildren().forEach((c) => c.destroy());
+    [this.pickedSpot, this.pickedRi] = [null, -1];
+    const m = /^r:(.+):(\d+):(\d+)$/.exec(InteriorLayer.picked ?? '');
+    if (!m || m[1] !== this.interior.id || Number(m[2]) !== this.level || this.peek || this.ghost || this.style.player) return;
+    const ri = Number(m[3]);
+    const { nx, ny } = this.interior;
+    const lv = this.interior.levels[this.level];
+    const cells = lv?.cells;
+    if (!cells || !lv.rooms[ri]) return;
+    const at = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && cells[j * nx + i] === ri;
+    let first: [number, number] | null = null;
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++)
+        if (at(i, j)) {
+          g.rect(i, j, 1, 1);
+          first ??= [i + 0.5, j + 0.5];
+        }
+    g.fill({ color: 0xf5c04a, alpha: 0.2 });
+    // (A stroke uses up its path: the edges are traced once per line.)
+    const edges = () => {
+      for (let j = 0; j < ny; j++)
+        for (let i = 0; i < nx; i++) {
+          if (!at(i, j)) continue;
+          if (!at(i, j - 1)) g.moveTo(i, j).lineTo(i + 1, j);
+          if (!at(i, j + 1)) g.moveTo(i, j + 1).lineTo(i + 1, j + 1);
+          if (!at(i - 1, j)) g.moveTo(i, j).lineTo(i, j + 1);
+          if (!at(i + 1, j)) g.moveTo(i + 1, j).lineTo(i + 1, j + 1);
+        }
+    };
+    edges();
+    g.stroke({ width: 0.42, color: 0x2a1f14, alpha: 0.6, cap: 'square' });
+    edges();
+    g.stroke({ width: 0.22, color: 0xf6c453, cap: 'square' });
+    if (!first) return;
+    const c = lv.rooms[ri].center;
+    this.pickedSpot = at(Math.floor(c[0]), Math.floor(c[1])) ? [c[0], c[1]] : first;
+    this.pickedRi = ri;
+    const style = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 14, fontStyle: 'italic', fontWeight: 'bold', fill: '#fcd56a', stroke: { color: '#2a1f14', width: 4, join: 'round' } });
+    this.pickedName.addChild(new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 }));
   }
 
   /** World ft of a grid point. */
@@ -1152,6 +1238,7 @@ export class InteriorLayer {
     this.labels.removeChildren().forEach((c) => c.destroy());
     this.labelSpots = [];
     this.drawMarks();
+    this.drawPicked();
     if (this.underground && !keep) this.drawUnderground(lv);
     if (this.ghost) return;
     let g = new Graphics();
@@ -1497,8 +1584,9 @@ export class InteriorLayer {
       if (this.tile && (r.kind === 'sewer tunnel' || r.kind === 'service passage')) return;
       const text = new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 });
       this.labels.addChild(text);
-      this.labelSpots.push({ text, x: r.center[0], y: r.center[1], min: Math.sqrt(r.squares) });
+      this.labelSpots.push({ text, x: r.center[0], y: r.center[1], min: Math.sqrt(r.squares), ri });
     });
+    this.wayLabels(lv);
   }
 
   /** Under a hall's height left open on this level (`OPEN_BELOW`), the nearest level below with a
@@ -1929,6 +2017,7 @@ export class InteriorLayer {
   /** Everything an item's look depends on: what it is and its size; underground also the light, the
    * wall it is set against and its scatter variant. */
   private itemKey(f: InteriorItem): string {
+    if (this.isWay(f)) return `way:${this.underground ? 'u' : 'b'}:${f.kind}:${f.w}x${f.h}:${this.light.map((v) => Math.round(v * 100)).join(',')}:${this.lookOf(f)}:q${this.wayTurn()}:${this.wayScale(f)}`;
     const base = `${f.kind}:${f.w}x${f.h}`;
     const light = this.light.map((v) => Math.round(v * 100)).join(',');
     const shared = this.sharedKind(f.kind);
@@ -2297,6 +2386,7 @@ export class InteriorLayer {
   }
 
   private drawItem(g: Graphics, f: InteriorItem) {
+    if (this.drawWay(g, f)) return;
     const { x, y, w, h, kind } = f;
     if (TERRAIN_KINDS.has(kind) || SPAN_KINDS.has(kind)) return this.drawTerrain(g, f);
     if (kind === 'key') return keyGlyph(g, x + 0.5, y + 0.5, lockColor(this.lookOf(f)));
@@ -2554,8 +2644,193 @@ export class InteriorLayer {
     }
   }
 
-  levelInfo(): { name: string; z: number }[] {
-    return this.interior.levels.map((l: InteriorLevel, li) => ({ name: this.levelName(li), z: l.z }));
+  levelInfo(): { name: string; z: number; way?: string }[] {
+    return this.interior.levels.map((l: InteriorLevel, li) => ({ name: this.levelName(li), z: l.z, ...this.levelWay(l) }));
+  }
+
+  /** A site's name for the ways to it: as renamed, else as `ways` has it. */
+  static siteName(id: string): string | undefined {
+    return InteriorLayer.names[id] ?? InteriorLayer.ways[id];
+  }
+
+  /** The items that are ways to another named kind of site: in a building, down to a site underground
+   * (`u:`); underground, back up to a building (`b:`). */
+  private wayItems: Map<InteriorItem, number> | null = null;
+
+  private isWay(f: InteriorItem): boolean {
+    return this.wayScale(f) > 0;
+  }
+
+  /** How much bigger a way is drawn (0: not a way): less unless its eight neighbours are floor of its room. */
+  private wayScale(f: InteriorItem): number {
+    if (!this.wayItems) {
+      this.wayItems = new Map();
+      const { nx, ny } = this.interior;
+      const to = this.underground ? 'b:' : 'u:';
+      for (const lv of this.interior.levels) {
+        for (const k of lv.links ?? []) {
+          if (!k.to.startsWith(to)) continue;
+          const f = lv.furniture.find((f) => f.x === k.x && f.y === k.y && f.w === 1 && f.h === 1);
+          if (!f) continue;
+          const room = lv.cells[f.y * nx + f.x];
+          let open = true;
+          for (let j = f.y - 1; j <= f.y + 1; j++) for (let i = f.x - 1; i <= f.x + 1; i++) open &&= i >= 0 && j >= 0 && i < nx && j < ny && lv.cells[j * nx + i] === room;
+          this.wayItems.set(f, open ? WAY_SCALE : WAY_SCALE_TIGHT);
+        }
+      }
+    }
+    return this.wayItems.get(f) ?? 0;
+  }
+
+  /** The link of way item `f` on level `lv`. */
+  private wayLink(lv: InteriorLevel, f: InteriorItem) {
+    return lv.links?.find((k) => k.x === f.x && k.y === f.y);
+  }
+
+  /** The way item drawn over grid point (gx, gy) on `lv` (it is drawn bigger than its square), if any. */
+  private wayNear(lv: InteriorLevel, gx: number, gy: number): InteriorItem | undefined {
+    return lv.furniture.find((f) => Math.abs(gx - f.x - 0.5) < this.wayScale(f) / 2 && Math.abs(gy - f.y - 0.5) < this.wayScale(f) / 2);
+  }
+
+  /** Draw a way to another site bigger than its square, about its middle: a cellar's stairs down as the
+   * underground stairs down (framed, steps and arrow), a dungeon's way up to a cellar as the stairs up, the rest as
+   * they are; the arrow toned (`wayArrow`). False for other items. */
+  private drawingWay = false;
+
+  private drawWay(g: Graphics, f: InteriorItem): boolean {
+    if (this.drawingWay || !this.isWay(f)) return false;
+    const [cx, cy] = [f.x + 0.5, f.y + 0.5];
+    this.drawingWay = true;
+    // (Bigger about its middle, and turned by quarters so its arrow runs as near the screen's up and down as it can.)
+    const [q, k] = [this.wayTurn(), this.wayScale(f)];
+    const [cos, sin] = [[1, 0], [0, 1], [-1, 0], [0, -1]][q];
+    const [a, b, c, d] = [k * cos, k * sin, -k * sin, k * cos];
+    g.save().setTransform(a, b, c, d, cx - (a * cx + c * cy), cy - (b * cx + d * cy));
+    try {
+      if (f.kind === 'link_down' && !this.underground) drawUnderProp(g, { ...f, kind: 'down' }, this.light, this.lookOf(f), [0, -1]);
+      // (The way back up into a cellar as the stone stairs up, not the way out to daylight: as plain to see as the way down.)
+      else if (f.kind === 'exit' && this.underground) drawUnderProp(g, { ...f, kind: 'up' }, this.light, this.lookOf(f), [0, -1]);
+      else this.drawItem(g, f);
+      this.wayArrow(g, f);
+    } finally {
+      g.restore();
+      this.drawingWay = false;
+    }
+    return true;
+  }
+
+  /** A way's arrow over its drawing's own pale one: a darker warm tan with a thin ink outline, pointing the way you go (a
+   * way down's along its square's y, down its steps; a way up's against it, up them; `wayTurn` brings that y to the
+   * screen's down). None on a trapdoor (none drawn). */
+  private wayArrow(g: Graphics, f: InteriorItem) {
+    const down = f.kind === 'link_down' || f.kind === 'down';
+    if (!down && f.kind !== 'exit' && f.kind !== 'up') return;
+    const { x, y } = f;
+    const [t0, t1, head, tip] = down ? [0.26, 0.66, 0.54, 0.68] : [0.72, 0.3, 0.42, 0.28];
+    for (const [w, color] of [[0.096, INK], [0.06, WAY_ARROW]]) {
+      g.moveTo(x + 0.5, y + t0).lineTo(x + 0.5, y + t1).moveTo(x + 0.38, y + head).lineTo(x + 0.5, y + tip).lineTo(x + 0.62, y + head);
+      g.stroke({ width: w, color, cap: 'round', join: 'round' });
+    }
+  }
+
+  /** Labels for the ways to other sites on `lv` ("Down to Undermountain", "Up to The Lucky Shield") and, in a
+   * cellar with such a way, for its stairs up ("Up to the ground floor"), so the two read apart; each with the
+   * squares its drawing covers. `marks`: every way, link and stair block drawn on `lv`, for the labels to keep
+   * nearer their own. Placed each frame by `placeWays`. */
+  private waySpots: { text: Text; rect: number[] }[] = [];
+  private wayMarks: number[][] = [];
+
+  private wayLabels(lv: InteriorLevel) {
+    this.waySpots = [];
+    this.wayMarks = [];
+    const style = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 12, fontWeight: 'bold', fill: '#fde68a', stroke: { color: '#2a1f14', width: 3, join: 'round' } });
+    const add = (text: string, rect: number[]) => {
+      const t = new Text({ text, style, anchor: 0.5, resolution: 2 });
+      this.labels.addChild(t);
+      this.waySpots.push({ text: t, rect });
+    };
+    for (const f of lv.furniture) {
+      if (!this.isWay(f)) continue;
+      const link = this.wayLink(lv, f);
+      const named = link && InteriorLayer.siteName(link.to);
+      const h = this.wayScale(f) / 2;
+      add(named ? `${this.underground ? 'Up' : 'Down'} to ${named}` : cap(f.name), [f.x + 0.5 - h, f.y + 0.5 - h, f.x + 0.5 + h, f.y + 0.5 + h]);
+    }
+    const ways = this.waySpots.length;
+    for (const k of lv.links ?? []) if (!this.waySpots.some((w) => w.rect[0] < k.x + 0.5 && k.x + 0.5 < w.rect[2] && w.rect[1] < k.y + 0.5 && k.y + 0.5 < w.rect[3])) this.wayMarks.push([k.x, k.y, k.x + 1, k.y + 1]);
+    const [sx, sy, sw, sh] = this.interior.stairs;
+    if (!lv.has_stairs || this.underground) return;
+    const above = this.interior.levels[this.level + 1];
+    if (ways && lv.z < 0 && above?.has_stairs) add(above.z === 0 ? 'Up to the ground floor' : `Up to ${this.levelName(this.level + 1)}`, [sx, sy, sx + sw, sy + sh]);
+    else this.wayMarks.push([sx, sy, sx + sw, sy + sh]);
+  }
+
+  /** Each way's label against its drawing on screen (below, else above, right or left: the first side nearer its
+   * own drawing than any other way, link or stair block, with room to spare), shown once its squares are big
+   * enough to see; a room's label that would sit on the drawing or that label moves to the drawing's other side. */
+  private placeWays(cam: Camera, s: number) {
+    // (Worked out on the screen as seen, the view turned or not: the labels' layer turns with the view.)
+    const [c, n] = [Math.cos(cam.turn), Math.sin(cam.turn)];
+    const seen = (x: number, y: number): [number, number] => [x * c - y * n, x * n + y * c];
+    const back = (x: number, y: number): [number, number] => [x * c + y * n, -x * n + y * c];
+    const box = (x: number, y: number, hw: number, hh: number) => [x - hw, y - hh, x + hw, y + hh];
+    const hits = (p: number[], q: number[]) => p[0] < q[2] && q[0] < p[2] && p[1] < q[3] && q[1] < p[3];
+    const gap = (p: number[], q: number[]) => Math.hypot(Math.max(0, q[0] - p[2], p[0] - q[2]), Math.max(0, q[1] - p[3], p[1] - q[3]));
+    // (A drawing's squares as a box on the screen.)
+    const onScreen = (r: number[]) => {
+      const pts = [[r[0], r[1]], [r[2], r[1]], [r[0], r[3]], [r[2], r[3]]].map(([x, y]) => seen(...cam.worldToScreen(...this.toWorld(x, y))));
+      return [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+    };
+    const drawn = this.waySpots.map((w) => onScreen(w.rect));
+    const marks = [...drawn, ...this.wayMarks.map(onScreen)];
+    const placed: number[][] = [];
+    this.waySpots.forEach((w, i) => {
+      const t = w.text;
+      t.rotation = -cam.turn;
+      t.visible = s > 16;
+      if (!t.visible) return;
+      const own = drawn[i];
+      const others = marks.filter((_, j) => j !== i);
+      const [hw, hh, pad] = [t.width / 2, t.height / 2, 3];
+      const [mx, my] = [(own[0] + own[2]) / 2, (own[1] + own[3]) / 2];
+      const sides = [[mx, own[3] + pad + hh], [mx, own[1] - pad - hh], [own[2] + pad + hw, my], [own[0] - pad - hw, my]];
+      const rated = sides.map(([x, y], side) => {
+        const lb = box(x, y, hw, hh);
+        const mine = gap([x, y, x, y], own);
+        const theirs = Math.min(Infinity, ...others.map((o) => gap([x, y, x, y], o)));
+        const room = Math.min(Infinity, ...[...others, ...placed].map((o) => gap(lb, o)));
+        return { x, y, side, lb, ok: theirs > mine && room > 0, room, lead: theirs - mine };
+      });
+      const ok = rated.filter((r) => r.ok);
+      const pick = ok.find((r) => r.room >= t.height) ?? ok.sort((a, b) => b.room - a.room)[0] ?? rated.sort((a, b) => b.lead - a.lead)[0];
+      t.position.set(...back(pick.x, pick.y));
+      placed.push(pick.lb);
+      // (A room's label on the drawing or its label: to the drawing's other side.)
+      const [ox, oy] = sides[pick.side ^ 1];
+      for (const l of this.labelSpots) {
+        const lt = l.text;
+        if (!lt.visible) continue;
+        const [lx, ly] = seen(lt.x, lt.y);
+        if (![own, pick.lb].some((m) => hits(m, box(lx, ly, lt.width / 2 + 4, lt.height / 2 + 2)))) continue;
+        const [ax, ay] = pick.side < 2 ? [ox, oy + (pick.side === 0 ? -1 : 1) * (lt.height / 2 - hh)] : [ox + (pick.side === 2 ? -1 : 1) * (lt.width / 2 - hw), oy];
+        lt.position.set(...back(ax, ay));
+      }
+    });
+  }
+
+  /** Quarter turns (0-3) that bring a way's drawn arrow (along its square's y) nearest the screen's up and down
+   * (the world's y), with the view not turned. */
+  private wayTurn(): number {
+    const it = this.interior;
+    const q = Math.round(Math.atan2(-it.axis[1], it.across[1]) / (Math.PI / 2));
+    return ((q % 4) + 4) % 4;
+  }
+
+  /** The way to another site on level `l`, for the level picker ("up to The Lucky Shield"). */
+  private levelWay(l: InteriorLevel): { way?: string } {
+    const to = this.underground ? 'b:' : 'u:';
+    const k = l.links?.find((k) => k.to.startsWith(to) && InteriorLayer.siteName(k.to));
+    return k ? { way: `${this.underground ? 'up' : 'down'} to ${InteriorLayer.siteName(k.to)}` } : {};
   }
 
   /** A level's name, as renamed (`l:<site>:<level>`). */

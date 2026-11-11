@@ -189,6 +189,11 @@ export class Sewers {
     for (const s of this.sections.values()) s.layer?.redraw();
   }
 
+  /** Redraw the search's picked room on every section (`InteriorLayer.drawPicked`). */
+  drawPicked() {
+    for (const s of this.sections.values()) s.layer?.drawPicked();
+  }
+
   destroy() {
     this.dead = true;
     for (const s of this.sections.values()) s.layer?.destroy();

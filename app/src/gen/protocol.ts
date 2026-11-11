@@ -138,6 +138,9 @@ export interface Created {
   pts?: [number, number][];
   gates?: number[];
   closed?: boolean;
+  /** An entrance in a building's cellar (`b:<layout>:<id>`) and the way down there (`stairs` or `trapdoor`). */
+  in_building?: string;
+  way?: string;
   removed?: boolean;
 }
 
@@ -535,6 +538,10 @@ export type Ask =
   /** `rect` (x0, y0, x1, y1 ft) limits the search to that area. */
   | { op: 'search'; q: string; rect?: [number, number, number, number] }
   | { op: 'districts'; settlement: number }
+  /** The roads someone named and the crossings put down by hand (`roadids::named_json`). */
+  | { op: 'named' }
+  /** Underground sites by name, kind, theme and what is attached (`undersearch::search_json`; `filters` JSON). */
+  | { op: 'under'; q: string; filters: string }
   | { op: 'inview'; rect: [number, number, number, number] }
   /** `b:<settlement>:<building>` or `t:<settlement>:<tower>`. */
   | { op: 'interior'; id: string }
@@ -720,6 +727,25 @@ export interface DistrictLabel {
   kind: string;
   /** Label baseline (world ft), left to right. */
   path: [number, number][];
+}
+
+/** A road someone named: its stretches (`rd:` ids, in order along it) named alike and meeting
+ * end to end; `id` is the first. */
+export interface NamedRoad {
+  id: string;
+  ids: string[];
+  name: string;
+  length_ft: number;
+}
+
+/** The roads someone named and the crossings put down by hand (`worldgen::roadids::named_json`). */
+export interface NamedPlaces {
+  /** What the map letters (hidden stretches left out): each road's line (world ft). */
+  labels: (NamedRoad & { pts: [number, number][] })[];
+  /** Every named road, hidden ones too, with its box (x0, y0, x1, y1 ft). */
+  roads: (NamedRoad & { bbox: [number, number, number, number]; generated: string })[];
+  /** `name`: given, else `generated` ("Stone bridge", "Ford", "Ferry"); x, y its middle. */
+  crossings: { id: string; name: string; generated: string; x: number; y: number; length_ft: number }[];
 }
 
 export interface Geom {
@@ -1086,7 +1112,9 @@ export type ToGen =
   | { type: 'ask'; id: number; ask: Ask }
   /** Some of the edits' fields, each whole (a JSON object): `Ctx::set_edit_fields`; then
    * entries of others (`{field: EditsPatch}`): `Ctx::patch_edits`. */
-  | { type: 'edits'; json: string | null; patch: string | null };
+  | { type: 'edits'; json: string | null; patch: string | null }
+  /** The overlay's settlements and sites (`[{id, kind, name}]`) for a T0 loaded without it: `Ctx::set_place_names`. */
+  | { type: 'places'; json: string };
 
 export type FromGen =
   | { type: 'inited'; t0: ArrayBuffer | null; overlay: string | null; ms: number }

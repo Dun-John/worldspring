@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 use worldgen::battlemap::{SQ, SQUARE_FT};
-use worldgen::core::tile::{HALO, PADDED, TileKey};
-use worldgen::ground::{self, Brush, Plateau, Shaper, Stroke};
+use worldgen::core::tile::TileKey;
+use worldgen::geoquery::Squares;
+use worldgen::ground::{self, Brush, Plateau, Stroke};
 use worldgen::pipeline::Executor;
 use worldgen::town::geom;
 use worldgen::world::Edits;
@@ -21,30 +22,30 @@ use crate::tools::{schema, text};
 const MAX_READ_FT: f64 = 200.0;
 
 pub fn list() -> Vec<Value> {
-    let pt = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x_ft, y_ft]" });
-    let at = json!({ "description": "A place: an id, {x_ft, y_ft} or [x_ft, y_ft] (or give x_ft and y_ft, or id, beside the other arguments)" });
+    let pt = crate::args::point_schema("A point (world ft)");
+    let at = crate::args::point_schema("A place (id, point or [x, y] in ft)");
     vec![
-        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground by hand, as a round brush: raise or lower it (by up to height_ft in the middle, fading to the rim by hardness), smooth it (each square toward the mean of its neighbours, by strength) or put it back toward the ground as generated (brushed changes only: plateaus stay). A dab at a place (at, radius_ft) or a stroke along a path (path, width_ft); each square takes the stroke's strongest touch, so a path over itself doesn't pile up. Buildings, streets, roads and walls ride on the shaped ground; dry ground lowered never sinks below the water beside it; city streets made to climb steeply enough (0.15, and 0.03 more than before) are drawn as steps. A stroke reaches at most 48 blocks of 80 ft, a world holds 1500. Returns the blocks changed and the ground's lowest and highest under the brush before and after (ft above the sea).", "inputSchema": schema(json!({
+        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground with a round brush: raise, lower, smooth, or restore toward the generated ground (plateaus stay). A dab (at, radius_ft) or a stroke (path, width_ft). Buildings, streets and walls follow it. A stroke reaches at most 48 blocks of 80 ft, a world holds 1500. Returns the blocks changed and the ground's range before and after (ft).", "inputSchema": schema(json!({
             "mode": { "type": "string", "enum": ["raise", "lower", "smooth", "restore"] },
             "at": at,
-            "radius_ft": { "type": "number", "description": "A dab's radius, 2.5 to 200 (default 15)" },
-            "path": { "type": "array", "items": pt, "description": "A stroke's points (world ft)" },
-            "width_ft": { "type": "number", "description": "A stroke's width, 5 to 400 (default 30)" },
-            "height_ft": { "type": "number", "description": "Raise and lower: at most this far, 0 to 50 (default 5, one tier)" },
-            "hardness": { "type": "number", "minimum": 0, "maximum": 1, "description": "0 soft (fades from the middle) to 1 hard (full to the rim); default 0.5" },
-            "strength": { "type": "number", "minimum": 0, "maximum": 1, "description": "Smooth and restore: how far toward their goal; default 0.5" },
+            "radius_ft": { "type": "number", "minimum": 2.5, "maximum": 200, "default": 15, "description": "A dab's radius" },
+            "path": { "type": "array", "minItems": 1, "items": pt, "description": "A stroke's points (world ft)" },
+            "width_ft": { "type": "number", "minimum": 5, "maximum": 400, "default": 30, "description": "A stroke's width" },
+            "height_ft": { "type": "number", "minimum": 0, "maximum": 50, "default": 5, "description": "Raise and lower by up to this" },
+            "hardness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "0 soft to 1 hard" },
+            "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
         }), &["mode"]) }),
-        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau (or a pit): the ground inside an outline levelled at one height, easing back to the ground round it over edge_ft (0: a sheer cliff at the outline). Give the outline (world ft, at most 48 points kept, spanning at most 1280 ft) or around: a building, tower or site whose footprint, grown by margin_ft, is the outline (a castle on a cliff). The level is level_ft above the sea, or rise_ft above the ground at the outline's middle (default 10; below zero digs a pit); a plateau inside another (a terrace) goes on top of it. Buildings on it stand at its level. With id, changes that plateau (fields left out stay). Returns its id (h:...).", "inputSchema": schema(json!({
+        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: the ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Give poly (at most 48 points, spanning at most 1280 ft) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes that plateau. Returns its id (h:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A plateau to change (h:...)" },
-            "outline": { "type": "array", "items": pt },
-            "around": { "type": "string", "description": "A building (b:...), tower (t:...) or site whose footprint makes the outline" },
-            "margin_ft": { "type": "number", "description": "How far round the footprint (default 10)" },
-            "level_ft": { "type": "number", "description": "Its level, ft above the sea" },
-            "rise_ft": { "type": "number", "description": "Or its level above the ground at the outline's middle (default 10)" },
-            "edge_ft": { "type": "number", "description": "The slope round it, 0 (sheer) to 60 ft (default 0)" },
+            "poly": { "type": "array", "minItems": 3, "items": pt },
+            "around": { "type": "string", "description": "A building, tower or site (its footprint)" },
+            "margin_ft": { "type": "number", "minimum": 0, "maximum": 200, "default": 10, "description": "How far round the footprint" },
+            "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Its level, ft above the sea" },
+            "rise_ft": { "type": "number", "minimum": -ground::MAX_SHIFT_FT, "maximum": ground::MAX_SHIFT_FT, "default": 10 },
+            "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0 },
         }), &[]) }),
-        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...).", "inputSchema": schema(json!({ "id": { "type": "string" }, "ids": { "type": "array", "items": { "type": "string" } } }), &[]) }),
-        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on every 5-ft square of the box reaching radius_ft (at most 200) east, west, north and south of a place: as generated and as shaped by hand (rows north to south, columns west to east, from origin: the first square's middle); squares under water; the plateaus and brushed blocks there. The battlemap draws a little relief on top (knolls, hollows) and levels road beds.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "description": "Default 25" } }), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
+        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square of the box radius_ft (at most 200) round a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
     ]
 }
 
@@ -57,90 +58,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "ground_heights" => heights(app, a).await.map(text),
         _ => return None,
     })
-}
-
-/// The ground as generated over a box of squares (global indices, inclusive), with the water
-/// over each: read as a battlemap reads them (square centres are odd samples of the finest tiles).
-struct Squares {
-    gx0: i64,
-    gy0: i64,
-    w: i64,
-    h: i64,
-    g: Vec<f32>,
-    hw: Vec<f32>,
-}
-
-impl Squares {
-    fn read(ex: &mut Executor, gx0: i64, gy0: i64, gx1: i64, gy1: i64) -> Squares {
-        let geom = ex.world.geom.clone();
-        let lvl = geom.max_level;
-        let sq = SQ as i64;
-        let (w, h) = (gx1 - gx0 + 1, gy1 - gy0 + 1);
-        let (mut g, mut hw) = (vec![0f32; (w * h) as usize], vec![0f32; (w * h) as usize]);
-        for ty in gy0.div_euclid(sq)..=gy1.div_euclid(sq) {
-            for tx in gx0.div_euclid(sq)..=gx1.div_euclid(sq) {
-                let tile = ex.terrain(TileKey::surface(lvl, tx as u32, ty as u32));
-                for gy in (ty * sq).max(gy0)..=((ty + 1) * sq - 1).min(gy1) {
-                    for gx in (tx * sq).max(gx0)..=((tx + 1) * sq - 1).min(gx1) {
-                        let (i, j) = ((gx - tx * sq) as usize, (gy - ty * sq) as usize);
-                        let c = (2 * j + 1 + HALO) * PADDED + 2 * i + 1 + HALO;
-                        let (x, y) = ((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT);
-                        let k = ((gy - gy0) * w + gx - gx0) as usize;
-                        g[k] = tile.padded[c];
-                        hw[k] = ex.t0.sample_water(x, y).max(tile.river_water[c]);
-                    }
-                }
-            }
-        }
-        Squares { gx0, gy0, w, h, g, hw }
-    }
-
-    /// The squares round a box of world ft (and `pad` squares more), clamped to the map.
-    fn round(ex: &mut Executor, b: [f64; 4], pad: i64) -> Squares {
-        let geom = &ex.world.geom;
-        let (mx, my) = ((geom.map_w_ft / SQUARE_FT).ceil() as i64, (geom.map_h_ft / SQUARE_FT).ceil() as i64);
-        let sq = |v: f64| (v / SQUARE_FT).floor() as i64;
-        let (gx0, gy0) = ((sq(b[0]) - pad).clamp(0, mx - 1), (sq(b[1]) - pad).clamp(0, my - 1));
-        let (gx1, gy1) = ((sq(b[2]) + pad).clamp(gx0, mx - 1), (sq(b[3]) + pad).clamp(gy0, my - 1));
-        Squares::read(ex, gx0, gy0, gx1, gy1)
-    }
-
-    fn at(&self, gx: i64, gy: i64) -> Option<usize> {
-        let (i, j) = (gx - self.gx0, gy - self.gy0);
-        (i >= 0 && j >= 0 && i < self.w && j < self.h).then_some((j * self.w + i) as usize)
-    }
-
-    fn rect(&self) -> [f64; 4] {
-        [self.gx0 as f64 * SQUARE_FT, self.gy0 as f64 * SQUARE_FT, (self.gx0 + self.w) as f64 * SQUARE_FT, (self.gy0 + self.h) as f64 * SQUARE_FT]
-    }
-
-    /// Each square's ground shaped by `edits`.
-    fn shaped(&self, edits: &Edits) -> Vec<f32> {
-        match Shaper::new(edits, self.rect(), SQUARE_FT) {
-            None => self.g.clone(),
-            Some(s) => (0..self.g.len()).map(|k| s.at_square(self.gx0 + k as i64 % self.w, self.gy0 + k as i64 / self.w, self.g[k], self.hw[k]).0).collect(),
-        }
-    }
-}
-
-/// A point from an array, or a place (an id or {x_ft, y_ft}).
-async fn point_of(app: &Shared, v: &Value) -> Result<[f64; 2], String> {
-    if let Some(p) = v.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()) {
-        return match p[..] {
-            [x, y] if x.is_finite() && y.is_finite() => Ok([x, y]),
-            _ => Err("a point is [x_ft, y_ft]".into()),
-        };
-    }
-    crate::tools::place(app, v).await
-}
-
-/// The place a call gives: `at`, else `x_ft`/`y_ft` or `id` beside its other arguments.
-async fn place_of(app: &Shared, a: &Value) -> Result<[f64; 2], String> {
-    if a["at"].is_null() {
-        crate::tools::place(app, a).await
-    } else {
-        point_of(app, &a["at"]).await
-    }
 }
 
 /// An optional number: absent (or null) is `None`, anything else must be a finite number.
@@ -175,12 +92,15 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
         Some("restore") => Brush::Restore,
         m => return Err(format!("mode: raise, lower, smooth or restore, not {}", m.unwrap_or("nothing"))),
     };
+    if !a["path"].is_null() && !a["at"].is_null() {
+        return Err("at and path: give one".into());
+    }
     let (path, radius) = if a["path"].is_null() {
-        (vec![place_of(app, a).await?], num(a, "radius_ft", 15.0)?)
+        (vec![crate::args::place(app, a).await?], num(a, "radius_ft", 15.0)?)
     } else {
         let mut path = Vec::new();
-        for p in a["path"].as_array().ok_or("path: a list of [x_ft, y_ft]")? {
-            path.push(point_of(app, p).await?);
+        for (i, p) in a["path"].as_array().ok_or("path: a list of [x_ft, y_ft]")?.iter().enumerate() {
+            path.push(crate::args::point(app, &format!("path[{i}]"), p).await?);
         }
         if path.is_empty() {
             return Err("path: at least one point".into());
@@ -188,10 +108,6 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
         (path, num(a, "width_ft", 30.0)? * 0.5)
     };
     let (height, hardness, strength) = (num(a, "height_ft", 5.0)?, num(a, "hardness", 0.5)?, num(a, "strength", 0.5)?);
-    // Checked here as `stamp_brush` checks them, before any ground is read.
-    if !(2.5..=200.0).contains(&radius) || !(0.0..=50.0).contains(&height) {
-        return Err("radius_ft 2.5 to 200 (width_ft 5 to 400), height_ft 0 to 50".into());
-    }
     let b = path.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0] - radius), b[1].min(p[1] - radius), b[2].max(p[0] + radius), b[3].max(p[1] + radius)]);
     // The squares the brush reaches (their middles within it), as `stamp_brush` finds them: too
     // many blocks are refused before any ground is read.
@@ -358,10 +274,10 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         (v, _) => v.as_f64().filter(|e| (0.0..=ground::MAX_EDGE_FT as f64).contains(e)).ok_or("edge_ft: 0 to 60")?,
     };
     // The outline: given, round a footprint, or the one it has.
-    let outline: Option<Vec<[f64; 2]>> = if let Some(o) = a["outline"].as_array() {
+    let outline: Option<Vec<[f64; 2]>> = if let Some(o) = a["poly"].as_array() {
         let mut pts = Vec::new();
-        for p in o {
-            pts.push(point_of(app, p).await?);
+        for (i, p) in o.iter().enumerate() {
+            pts.push(crate::args::point(app, &format!("poly[{i}]"), p).await?);
         }
         Some(pts)
     } else if let Some(around) = a["around"].as_str() {
@@ -431,6 +347,29 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             (None, None) => unreachable!("an outline or a plateau"),
         };
+        // The same outline again (a script run twice): that plateau, nothing added.
+        if !changed
+            && let Some((eid, ep)) = e.plateaus.iter().find(|(_, q)| q.pts.len() == p.pts.len() && q.pts.iter().zip(&p.pts).all(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) <= 1.0))
+        {
+            // A rise is from the ground without that plateau (the new level above took the matched one into account).
+            let level = match (level_ft, rise) {
+                (Some(_), _) | (None, None) => p.level as f64,
+                (None, Some(r)) => {
+                    let mut o2 = Edits { ground: e.ground.clone(), plateaus: e.plateaus.clone(), ..Default::default() };
+                    o2.plateaus.remove(eid);
+                    squares.shaped(&o2)[0] as f64 + r
+                }
+            };
+            let tol = if level_ft.is_some() { 0.15 } else { 1.0 };
+            if (level_ft.is_some() || rise.is_some()) && (ep.level as f64 - level).abs() > tol || edge_arg.is_some() && (ep.edge - p.edge).abs() > 1e-4 {
+                return Err(format!("{eid} has this outline: give its id to change it"));
+            }
+            return Ok(json!({
+                "tool": "set_plateau", "id": eid, "changed": false, "existing": true,
+                "note": "a plateau with this outline was already there: nothing was added (give its id to change it)",
+                "level_ft": round1(ep.level - sea as f32), "edge_ft": ep.edge, "points": ep.pts.len(),
+            }));
+        }
         let b = p.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
         let reply = json!({
             "tool": "set_plateau", "id": id, "changed": changed,
@@ -444,16 +383,16 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
-    let mut ids: Vec<String> = a["ids"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    ids.extend(a["id"].as_str().map(str::to_string));
-    ids.sort();
-    ids.dedup();
-    if ids.is_empty() {
-        return Err("give id or ids (h:...)".into());
-    }
+    let ids = crate::args::ids(a)?;
+    let single = a["ids"].is_null();
     app.edit("agent", 0, move |e| {
+        for (i, id) in ids.iter().enumerate() {
+            if !e.plateaus.contains_key(id) {
+                return Err(format!("{}: no plateau {id}", crate::args::item(single, i)));
+            }
+        }
         for id in &ids {
-            e.plateaus.remove(id).ok_or_else(|| format!("no plateau {id}"))?;
+            e.plateaus.remove(id);
         }
         Ok(json!({ "tool": "delete_plateau", "ids": ids }))
     })
@@ -461,11 +400,8 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 async fn heights(app: &Shared, a: &Value) -> Result<Value, String> {
-    let c = place_of(app, a).await?;
+    let c = crate::args::place(app, a).await?;
     let r = num(a, "radius_ft", 25.0)?;
-    if !(0.0..=MAX_READ_FT).contains(&r) {
-        return Err(format!("radius_ft: 0 to {MAX_READ_FT}"));
-    }
     app.worker
         .run(move |g| {
             let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;

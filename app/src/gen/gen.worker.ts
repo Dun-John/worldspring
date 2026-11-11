@@ -44,6 +44,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
     } else if (m.type === 'edits') {
       if (m.json) ctx?.set_edit_fields(m.json);
       if (m.patch) ctx?.patch_edits(m.patch);
+    } else if (m.type === 'places') {
+      ctx?.set_place_names(m.json);
     } else if (m.type === 'ask') {
       if (!ctx) throw new Error('worker not initialized');
       const [a, c] = [m.ask, ctx];
@@ -85,7 +87,11 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                 ? c.town_plan_json(a.layout)
                                 : a.op === 'townchange'
                                   ? c.town_change_json(a.layout, a.request)
-                                  : c.districts_json(a.settlement);
+                                  : a.op === 'named'
+                                    ? c.named_json()
+                                    : a.op === 'under'
+                                    ? c.under_search_json(a.q, a.filters)
+                                    : c.districts_json(a.settlement);
       let json = 'null';
       try {
         json = answer();

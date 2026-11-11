@@ -1320,11 +1320,16 @@ pub fn has_deep_dungeon(b: &town::Building) -> bool {
     b.structure == Structure::Roofed && arch_of(b) == Arch::Keep && geom::area(&b.poly).abs() >= 150.0 * SQUARE_FT * SQUARE_FT
 }
 
+/// Whether a roofed building has a cellar (all do but a yurt).
+pub fn has_cellar(b: &town::Building) -> bool {
+    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b))
+}
+
 /// The ways from a cellar to other sites: a trapdoor down into the sewers (on the street side),
 /// stairs down to a keep's deep dungeons (in the middle of the far end). Which ones it should
 /// have (their names), put on the free floor of `lvl` (the deepest level below ground; fewer if
 /// there is none; none without a level).
-fn cellar_links(mut lvl: Option<&mut Level>, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, stairs: [usize; 4]) -> Vec<&'static str> {
+fn cellar_links(mut lvl: Option<&mut Level>, world: &World, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, stairs: [usize; 4], designed: bool) -> Vec<&'static str> {
     let (nx, ny) = (sh.nx, sh.ny);
     let grid = |p: P| {
         let d = sub(p, sh.origin);
@@ -1339,8 +1344,16 @@ fn cellar_links(mut lvl: Option<&mut Level>, t0: &T0, l: &Layout, b: &town::Buil
     }
     if has_deep_dungeon(b) {
         want.push("the stairs down to the deep dungeons");
-        if let Some(lvl) = lvl {
+        if let Some(lvl) = lvl.as_deref_mut() {
             place_link(lvl, nx, ny, stairs, [nx as f64 * 0.5, ny as f64 * 0.5], "link_down", "stairs down to the deep dungeons", format!("k:{}:{}", l.index, b.id));
+        }
+    }
+    // (Entrances made in this building: stairs or a trapdoor down to each one's site.)
+    for (el, c) in crate::sitelinks::entrances_in(world, t0, l.index as usize, b.id as usize) {
+        let (item, name, wanted) = crate::sitelinks::way_down(c.under_kind().unwrap_or(crate::under::UnderKind::Dungeon), crate::sitelinks::trapdoor(c));
+        want.push(wanted);
+        if let Some(lvl) = lvl.as_deref_mut() {
+            crate::sitelinks::place_way(lvl, nx, ny, stairs, grid([c.x, c.y]), item, name, format!("u:{el}:0"), designed);
         }
     }
     want
@@ -2208,7 +2221,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             p.clear_tops(&mut lvl);
         }
         if z == -1 {
-            cellar_links(Some(&mut lvl), t0, l, b, &sh, stairs);
+            cellar_links(Some(&mut lvl), world, t0, l, b, &sh, stairs, false);
         }
         // (A guild's arms in its own look; a thieves' guild hangs none.)
         match arms_look(key) {

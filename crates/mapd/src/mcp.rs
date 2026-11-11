@@ -64,7 +64,7 @@ async fn one(app: &Shared, req: Value, session: &mut Option<String>) -> Option<V
         "tools/call" => {
             let name = req["params"]["name"].as_str().unwrap_or("").to_string();
             let args = req["params"].get("arguments").cloned().unwrap_or(json!({}));
-            println!("mapd: tool {name} {args}");
+            println!("mapd: tool {name} {}", log_args(&args));
             // (In its own task: a client that hangs up can't stop an edit halfway.)
             let app = app.clone();
             let done = tokio::spawn(async move { crate::tools::call(&app, &name, args).await }).await;
@@ -79,4 +79,20 @@ async fn one(app: &Shared, req: Value, session: &mut Option<String>) -> Option<V
         Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
         Err((code, message)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
     })
+}
+
+/// A call's arguments for the log: `data_base64` values (sprites, up to 16 MB) as their length, the whole cut to 300 characters.
+fn log_args(args: &Value) -> String {
+    fn lean(v: &Value) -> Value {
+        match v {
+            Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), if k == "data_base64" { json!(format!("<{} chars>", x.as_str().map_or(0, str::len))) } else { lean(x) })).collect()),
+            Value::Array(a) => Value::Array(a.iter().map(lean).collect()),
+            _ => v.clone(),
+        }
+    }
+    let s = lean(args).to_string();
+    match s.char_indices().nth(300) {
+        Some((i, _)) => format!("{}... ({} chars)", &s[..i], s.len()),
+        None => s,
+    }
 }
