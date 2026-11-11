@@ -1195,8 +1195,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Ground shaped by hand, applied as heights are read (so whatever stands on the ground
     // follows it); `plat_w` is the plateaus' weight per halo square (they are kept flat), `moved`
     // where the shaping changed the ground (the slope is measured on the shaped ground there).
-    let shaper = crate::ground::Shaper::new(&world.file.edits, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT], SQUARE_FT);
+    let shaper = crate::ground::Shaper::new(&world.file.edits, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT], SQUARE_FT);
     let (mut plat_w, mut moved) = if shaper.is_some() { (vec![0f32; HS * HS], vec![false; HS * HS]) } else { (Vec::new(), Vec::new()) };
+    // R5 M20: what the shaping makes of each halo square (an islet's rock, a quay's made ground;
+    // empty when nothing here is either).
+    let mut look_h = vec![crate::ground::Look::Ground; if shaper.as_ref().is_some_and(|s| s.has_looks()) { HS * HS } else { 0 }];
     // (A river's channel stays as the river carved it: a link crosses it on a bridge or a ford.)
     let base_at = |x: f64, y: f64, c: usize| made.as_ref().filter(|_| tile.river_water[c] <= tile.padded[c]).map_or(tile.padded[c], |m| m.at(x, y, tile.padded[c]));
     for j in -1..=SQ as i64 {
@@ -1209,6 +1212,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if let Some(s) = &shaper {
                 (hh[h], plat_w[h]) = s.at_square(gsx + i, gsy + j, hh[h], hw[h]);
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
+                if !look_h.is_empty() && plat_w[h] >= 0.5 {
+                    look_h[h] = s.look_at_square(gsx + i, gsy + j);
+                }
             }
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
             if road_h[h] == 0
@@ -2196,6 +2202,47 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             statues.push(crate::town::geom::centroid(m));
         }
     }
+    // R5 M20: quays and breakwaters built by hand: their made ground paved (a quay's with cargo
+    // along it); a pier's deck over the water at one flat level, as a hand bridge's.
+    for (_, w) in crate::wharf::near(world, [hx0, hy0, hx0 + span, hy0 + span]) {
+        use crate::world::WharfKind;
+        if w.kind == WharfKind::Pier {
+            let top = crate::wharf::level(w, t0);
+            let stone = w.material == crate::world::CrossingMaterial::Stone;
+            for d in crate::wharf::decks(w) {
+                let b = bbox(&d);
+                let (i0, j0, i1, j1) = range(b);
+                if !overlaps(b) || i1 < 0.0 || j1 < 0.0 {
+                    continue;
+                }
+                for j in j0..=j1 as usize {
+                    for i in i0..=i1 as usize {
+                        let h = j * HS + i;
+                        if hh[h] < top - 0.5 && crate::town::geom::contains(&d, center(i, j)) {
+                            lift[h] += top - hh[h];
+                            hh[h] = top;
+                            road_h[h] = 0x80 | 3;
+                            urb_h[h] = URBAN_DECK;
+                        }
+                    }
+                }
+                if owns(crate::town::geom::centroid(&d)) {
+                    shapes.push(VectorShape { kind: ShapeKind::Deck, size: if stone { 3.0 } else { 0.0 }, pts: d.iter().map(local).collect() });
+                }
+            }
+            continue;
+        }
+        if w.kind == WharfKind::Quay {
+            for strip in crate::wharf::strips(w, t0).iter().filter(|p| p.len() == 4 && overlaps(bbox(p))) {
+                quay_cargo(strip, seed, &mut stalls);
+            }
+        }
+    }
+    for h in (0..look_h.len()).filter(|&h| look_h[h] == crate::ground::Look::Made) {
+        if urb_h[h] == 0 && hh[h] >= hw[h] {
+            urb_h[h] = URBAN_PLAZA;
+        }
+    }
     // Crossings put down by hand (`Edits::crossings`) near this chunk, over whatever is there:
     // a bridge's planks wherever the ground is below its deck, a ford's bed brought up to
     // wading depth, a ferry's jetties and raft (with the generated ferries' below).
@@ -2868,6 +2915,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             match mark {
                 // A castle's bailey, a village's green, a croft and pasture keep the biome's own ground;
                 // a path up a motte is gravel, a town's plaza paved.
+                // (R5 M20: a quay's or breakwater's top is paved, in a village too.)
+                URBAN_PLAZA if look_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&crate::ground::Look::Made) => chunk.surface[k] = Surface::Cobble,
                 URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
                 URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {}
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
@@ -2891,6 +2940,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 URBAN_PARK if park_ix[(k / SQ + 1) * HS + k % SQ + 1] != 0 => {
                     chunk.surface[k] = surface_for(park_biomes[park_ix[(k / SQ + 1) * HS + k % SQ + 1] as usize - 1], slope[k]);
                 }
+                // (R5 M20: an islet drawn by hand is bare rock, gravel at its rim.)
+                0 => match look_h.get((k / SQ + 1) * HS + k % SQ + 1) {
+                    Some(crate::ground::Look::Rock { rim: false }) => chunk.surface[k] = Surface::Rock,
+                    Some(crate::ground::Look::Rock { rim: true }) => chunk.surface[k] = Surface::Gravel,
+                    _ => {}
+                },
                 _ => {}
             }
         }

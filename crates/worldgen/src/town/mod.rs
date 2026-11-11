@@ -791,6 +791,8 @@ thread_local! {
     static EDITED: RefCell<FastMap<u32, (u64, Rc<Layout>)>> = RefCell::new(FastMap::default());
     /// What each wall drawn by hand read when its layout was built (`WallDeps`), by layout index.
     static WALLS: RefCell<FastMap<u32, WallDeps>> = RefCell::new(FastMap::default());
+    /// The islets a created site's layout read (`raised_fp`) when it was built, by layout index.
+    static RAISED: RefCell<FastMap<u32, u64>> = RefCell::new(FastMap::default());
 }
 
 /// What a cached wall layout was built from: the towns it reached, the fingerprint of their
@@ -1004,6 +1006,7 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         let c = c.borrow();
         if c.0 == world.hash { c.1.get(&key).cloned() } else { None }
     }) && wall_kept(world, t0, index)
+        && raised_kept(world, t0, index)
     {
         return l;
     }
@@ -1019,6 +1022,7 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
             c.0 = world.hash;
             c.1.clear();
             WALLS.with(|w| w.borrow_mut().clear());
+            RAISED.with(|r| r.borrow_mut().clear());
         }
         c.1.insert(key, l.clone());
     });
@@ -1026,7 +1030,42 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         Some(d) => drop(w.borrow_mut().insert(key, d)),
         None => drop(w.borrow_mut().remove(&key)),
     });
+    let raised = raised_fp(world, t0, index);
+    RAISED.with(|r| match raised {
+        Some(fp) => drop(r.borrow_mut().insert(key, fp)),
+        None => drop(r.borrow_mut().remove(&key)),
+    });
     l
+}
+
+/// A hash of the islets drawn by hand round a created site (its reach and what it was drawn
+/// with: `town::Shore` reads them as dry land); `None` for any other layout, which reads none.
+fn raised_fp(world: &World, t0: &T0, index: usize) -> Option<u64> {
+    let poi = index.checked_sub(t0.settlements.len()).filter(|&p| p >= t0.base_pois && p < t0.pois.len())?;
+    let p = &t0.pois[poi];
+    let r = sites::SITE_REACH_FT + 50.0;
+    let mut rect = [p.x - r, p.y - r, p.x + r, p.y + r];
+    if let Some(c) = world.file.edits.created.get(poi - t0.base_pois) {
+        for q in c.pts.iter().chain(&c.poly) {
+            rect = [rect[0].min(q[0] - 50.0), rect[1].min(q[1] - 50.0), rect[2].max(q[0] + 50.0), rect[3].max(q[1] + 50.0)];
+        }
+    }
+    let mut h = 0;
+    for (pts, level, _) in crate::ground::islets_in(&world.file.edits, rect) {
+        h = hash2(h, level.to_bits() as i64, pts.len() as i64);
+        for q in pts {
+            h = hash2(h, q[0].to_bits() as i64, q[1].to_bits() as i64);
+        }
+    }
+    Some(h)
+}
+
+/// Whether the cached layout of `index` read the islets drawn by hand that are there now
+/// (`raised_fp`; edits that change only them don't forget sites, so the cache checks).
+fn raised_kept(world: &World, t0: &T0, index: usize) -> bool {
+    let key = index as u32;
+    let Some(was) = RAISED.with(|r| r.borrow().get(&key).copied()) else { return true };
+    raised_fp(world, t0, index) == Some(was)
 }
 
 /// The wall drawn by hand that layout `index` is, if it is one.
@@ -1078,6 +1117,7 @@ fn wall_kept(world: &World, t0: &T0, index: usize) -> bool {
 pub fn forget_from(index: usize) {
     CACHE.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
     WALLS.with(|w| w.borrow_mut().retain(|&k, _| (k as usize) < index));
+    RAISED.with(|r| r.borrow_mut().retain(|&k, _| (k as usize) < index));
     EDITED.with(|c| c.borrow_mut().retain(|&k, _| (k as usize) < index));
     wards::forget_from(index);
 }
@@ -1100,6 +1140,7 @@ pub fn forget_created(old: &[crate::world::Created], new: &[crate::world::Create
     }
     CACHE.with(|c| c.borrow_mut().1.retain(|k, _| !gone.contains(k)));
     WALLS.with(|w| w.borrow_mut().retain(|k, _| !gone.contains(k)));
+    RAISED.with(|r| r.borrow_mut().retain(|k, _| !gone.contains(k)));
     EDITED.with(|c| c.borrow_mut().retain(|k, _| !gone.contains(k)));
     wards::forget(&gone);
 }
@@ -1344,6 +1385,8 @@ pub struct Shore<'a> {
     plan: std::cell::OnceCell<PlanGround<'a>>,
     /// The rivers' curve samples, shared by every `in_river`.
     rivers: crate::lod::rivers::ClearCache,
+    /// Islets drawn by hand meeting the area (`ground::islets_in`): dry land in the water.
+    islets: Vec<(Vec<P>, f32, [f64; 4])>,
 }
 
 impl<'a> Shore<'a> {
@@ -1359,7 +1402,8 @@ impl<'a> Shore<'a> {
             })
             .collect();
         let lattice_ft = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new(), rivers: Default::default() }
+        let islets = crate::ground::islets_in(&world.file.edits, rect);
+        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new(), rivers: Default::default(), islets }
     }
 
     /// The drawn ground at `p` (world ft), without its fine detail.
@@ -1371,14 +1415,27 @@ impl<'a> Shore<'a> {
         if pad > 0.0 { g + plan.depth(p[0], p[1]) * pad } else { g }
     }
 
-    /// Whether `p` is in a river channel or within 2 ft of its water.
+    /// Whether `p` is on an islet drawn by hand, above the water there.
+    pub fn on_islet(&self, p: P) -> bool {
+        self.islets.iter().any(|(pts, level, b)| {
+            p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3] && geom::contains(pts, p) && *level > self.t0.sample_water(p[0], p[1]) + 0.5
+        })
+    }
+
+    /// Whether `p` is in a river channel or within 2 ft of its water (not on an islet in it).
     pub fn in_river(&self, p: P) -> bool {
+        if !self.islets.is_empty() && self.on_islet(p) {
+            return false;
+        }
         let q = crate::lod::rivers::clear_of_rivers_with(&self.t0.rivers, p[0], p[1], 2.0, self.t0.cell_ft, &self.rivers);
         (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01
     }
 
-    /// Standing water at `p` (world ft).
+    /// Standing water at `p` (world ft); an islet drawn by hand is dry.
     pub fn wet(&self, p: P) -> bool {
+        if !self.islets.is_empty() && self.on_islet(p) {
+            return false;
+        }
         let level = self.t0.sample_water(p[0], p[1]);
         level > crate::t0::hydro::DRY && level as f64 > self.ground(p)
     }

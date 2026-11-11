@@ -3663,6 +3663,132 @@ fn ground_edits(base: &World) {
         assert!(c.water_level[k] > c.height[k] || dug.water_level[k] <= dug.height[k], "lowering flooded square ({}, {}) of {key:?}", k % SQ, k / SQ);
     }
     ex.world.file.edits = Edits::default();
+
+    // R5 M20: an islet, a breakwater and a quay built by hand on a shore. The islet's top is dry
+    // rock at its level, and a building may stand on it; the breakwater's made ground is dry and
+    // paved out over the water; the quay's strip is paved. Terrain samples never see them, seams
+    // hold bit for bit, they survive JSON and edit ops, and cleared, the chunks are as generated.
+    use worldgen::agent;
+    use worldgen::world::{Wharf, WharfKind};
+    let wet = |c: &Chunk, k2: usize| c.water_level[k2] > c.height[k2];
+    assert!(!serde_json::to_string(&ground::plateau_for(&pit, 10.0, 0.0).unwrap()).unwrap().contains("kind"), "a plateau's file changed");
+    // Shores: the first dry square of a row with 80 ft of open water east of it, rows 100 ft apart.
+    let (key, shores) = settlements
+        .iter()
+        .map(|s| TileKey::surface(lvl, (s.x / size) as u32, (s.y / size) as u32))
+        .find_map(|k| {
+            let c = ex.battlemap(k);
+            let mut rows: Vec<usize> = Vec::new();
+            for j in 10..SQ - 10 {
+                if rows.last().is_some_and(|&r| j < r / SQ + 20) {
+                    continue;
+                }
+                if let Some(k2) = (10..SQ - 30).map(|i| j * SQ + i).find(|&k2| !wet(&c, k2) && c.building[k2] == 0 && (1..=16).all(|d| wet(&c, k2 + d))) {
+                    rows.push(k2);
+                }
+            }
+            (rows.len() >= 3).then_some((k, rows))
+        })
+        .expect("a shore with three rows of open water");
+    let plain_c = pack(&mut ex, key);
+    let plain_padded = ex.terrain(key).padded.clone();
+    let near = [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)].map(|(dx, dy)| TileKey::surface(lvl, (key.x as i32 + dx) as u32, (key.y as i32 + dy) as u32));
+    let plain_near: Vec<Vec<u8>> = near.iter().map(|&k| pack(&mut ex, k).0).collect();
+    let fine = |p: [f64; 2]| TileKey::surface(lvl, (p[0] / size) as u32, (p[1] / size) as u32);
+    let at = |k2: usize| centre(&key, k2 % SQ, k2 / SQ);
+    // The islet: 45 ft out from the first shore that T0 has under water there.
+    let (islet_k2, islet_at, islet) = shores
+        .iter()
+        .find_map(|&k2| {
+            let p = [at(k2)[0] + 45.0, at(k2)[1]];
+            ground::islet_for("h:isle", p, 18.0, 6.0, &ex.t0).ok().map(|i| (k2, p, i))
+        })
+        .expect("an islet off the shore");
+    assert!(islet.kind == ground::PlateauKind::Islet && (12..=20).contains(&islet.pts.len()), "an islet's outline");
+    let foot = |c: [f64; 2]| vec![[c[0] - 6.0, c[1] - 6.0], [c[0] + 6.0, c[1] - 6.0], [c[0] + 6.0, c[1] + 6.0], [c[0] - 6.0, c[1] + 6.0]];
+    assert!(agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).is_err(), "a building in the water before the islet");
+    let others: Vec<usize> = shores.iter().copied().filter(|&k2| k2 != islet_k2).collect();
+    let (b_at, q_at) = (at(others[0]), at(others[1]));
+    let breakwater = Wharf { kind: WharfKind::Breakwater, pts: vec![[b_at[0] - 10.0, b_at[1]], [b_at[0] + 60.0, b_at[1]]], width: 15.0, material: Default::default() };
+    let quay = Wharf { kind: WharfKind::Quay, pts: vec![[q_at[0] + 2.5, q_at[1] - 30.0], [q_at[0] + 2.5, q_at[1] + 30.0]], width: 15.0, material: Default::default() };
+    for w in [&breakwater, &quay] {
+        assert!(w.problem(g.map_w_ft, g.map_h_ft).is_none(), "a {}: {:?}", w.kind.name(), w.problem(g.map_w_ft, g.map_h_ft));
+    }
+    let mut e = Edits::default();
+    e.plateaus.insert("h:isle".into(), islet.clone());
+    e.wharves.insert("q:bw".into(), breakwater.clone());
+    e.wharves.insert("q:quay".into(), quay.clone());
+    let json = serde_json::to_string(&e).unwrap();
+    assert_eq!(serde_json::from_str::<Edits>(&json).unwrap(), e, "an islet or wharves changed on a JSON round trip");
+    let mut by_ops = Edits::default();
+    for op in Edits::default().diff(&e) {
+        by_ops.apply(&op).unwrap();
+    }
+    assert_eq!(by_ops, e, "an islet or wharves changed through edit ops");
+    ex.world.file.edits = e;
+    let built = pack(&mut ex, key);
+    assert!(built.0 != plain_c.0, "the shore's chunk is unchanged with an islet and wharves");
+    assert_eq!(ex.terrain(key).padded, plain_padded, "terrain samples changed with an islet and wharves");
+    let c = &built.1;
+    // The islet: dry rock at its level over its middle.
+    let mut top = 0;
+    for k2 in 0..SQ * SQ {
+        let (i, j) = (k2 % SQ, k2 / SQ);
+        if geom_dist(centre(&key, i, j), islet_at) > 0.5 * 18.0 * 0.82 {
+            continue;
+        }
+        let h = (j + 1) * HS + i + 1;
+        assert!(!wet(c, k2), "islet square ({i}, {j}) of {key:?} is under water");
+        assert!((c.halo_height[h] - c.roof_lift[h] - islet.level).abs() <= 0.1, "islet square ({i}, {j}) at {} on an islet at {}", c.halo_height[h] - c.roof_lift[h], islet.level);
+        assert!(c.surface[k2] == battlemap::Surface::Rock, "islet square ({i}, {j}) is {:?}, not rock", c.surface[k2]);
+        top += 1;
+    }
+    assert!(top >= 8, "too few squares on the islet's top ({top})");
+    agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).expect("a building on the islet");
+    // The breakwater: made ground, dry and paved, out over the water.
+    let mut made = 0;
+    for k2 in 0..SQ * SQ {
+        let p = centre(&key, k2 % SQ, k2 / SQ);
+        if (p[1] - b_at[1]).abs() > 0.5 * breakwater.width - 3.0 || p[0] < b_at[0] + 10.0 || p[0] > b_at[0] + 55.0 {
+            continue;
+        }
+        assert!(!wet(c, k2), "breakwater square {p:?} is under water");
+        assert!(c.urban[k2] == battlemap::URBAN_PLAZA && c.surface[k2] == battlemap::Surface::Cobble, "breakwater square {p:?} is not paved ({:?})", c.surface[k2]);
+        made += 1;
+    }
+    assert!(made >= 8, "too few squares on the breakwater ({made})");
+    // The quay: its strip paved, on one side of its line.
+    let paved = (0..SQ * SQ)
+        .filter(|&k2| {
+            let p = centre(&key, k2 % SQ, k2 / SQ);
+            (p[1] - q_at[1]).abs() < 27.0 && (p[0] - q_at[0] - 2.5).abs() < quay.width && !wet(c, k2) && c.urban[k2] == battlemap::URBAN_PLAZA && c.surface[k2] == battlemap::Surface::Cobble
+        })
+        .count();
+    assert!(paved >= 20, "too few paved squares on the quay ({paved})");
+    // Seams with the four chunks round it.
+    for (q, &k) in near.iter().enumerate() {
+        let n = ex.battlemap(k);
+        match q {
+            0 => ring(c, &n, true),
+            1 => ring(&n, c, true),
+            2 => ring(c, &n, false),
+            _ => ring(&n, c, false),
+        }
+    }
+    // The finest tile under the islet draws it, its samples for its children as generated.
+    let tk = fine(islet_at);
+    let shaped_tile = ex.terrain_packed(tk);
+    ex.world.file.edits = Edits::default();
+    let plain_tile = ex.terrain_packed(tk);
+    let samples = 48..48 + PADDED * PADDED * 4;
+    assert!(shaped_tile != plain_tile, "tile {tk:?} doesn't show the islet");
+    assert!(shaped_tile[samples.clone()] == plain_tile[samples], "tile {tk:?}'s samples changed with the islet");
+    // Cleared: as generated, byte for byte.
+    assert!(pack(&mut ex, key).0 == plain_c.0, "the shore's chunk differs once the islet and wharves are cleared");
+    for (q, &k) in near.iter().enumerate() {
+        assert!(pack(&mut ex, k).0 == plain_near[q], "chunk {k:?} differs once the islet and wharves are cleared");
+    }
+    assert!(agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).is_err(), "a building in the water once the islet is gone");
 }
 
 fn geom_dist(a: [f64; 2], b: [f64; 2]) -> f64 {

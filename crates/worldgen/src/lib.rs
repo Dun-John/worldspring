@@ -21,6 +21,7 @@ pub mod t0;
 pub mod sitelinks;
 pub mod under;
 pub mod undersearch;
+pub mod wharf;
 pub mod world;
 
 pub use world::{World, WorldFile, WorldParams};

@@ -152,7 +152,7 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
         .edit("agent", 0, move |e| {
             let under: Vec<usize> = under.iter().filter_map(|&(gx, gy)| squares.at(gx, gy)).collect();
             let pick = |v: Vec<f32>| under.iter().map(|&k| v[k]).collect::<Vec<f32>>();
-            let before = pick(squares.shaped(e));
+            let before = pick(squares.shaped(e, None));
             // (A neighbour off the map reads the nearest square on it: `squares` holds the
             // brush's box and a square round it, clamped to the map.)
             let height_of = |gx: i64, gy: i64| -> f64 {
@@ -161,7 +161,7 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
             };
             let stroke = Stroke { mode, path: &path2, radius_ft: radius, height_ft: height, hardness, strength };
             let changed = ground::stamp_brush(&mut e.ground, &stroke, &height_of)?;
-            let after = pick(squares.shaped(e));
+            let after = pick(squares.shaped(e, None));
             let name = match mode {
                 Brush::Raise => "raise",
                 Brush::Lower => "lower",
@@ -330,7 +330,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         }
         let mut others = Edits { ground: e.ground.clone(), plateaus: e.plateaus.clone(), ..Default::default() };
         others.plateaus.remove(&id);
-        let here = squares.shaped(&others)[0] as f64;
+        let here = squares.shaped(&others, None)[0] as f64;
         let level = match (level_ft, rise, &old) {
             (Some(l), _, _) => l + sea,
             (None, Some(r), _) => here + r,
@@ -340,7 +340,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         let p = match (&outline, &old) {
             (Some(o), _) => ground::plateau_for(o, level, edge)?,
             (None, Some(p)) => {
-                let p = Plateau { pts: p.pts.clone(), level: ((level * 10.0).round() * 0.1) as f32, edge: edge as f32 };
+                let p = Plateau { pts: p.pts.clone(), level: ((level * 10.0).round() * 0.1) as f32, edge: edge as f32, kind: p.kind };
                 if let Some(err) = p.problem() {
                     return Err(err);
                 }
@@ -358,7 +358,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
                 (None, Some(r)) => {
                     let mut o2 = Edits { ground: e.ground.clone(), plateaus: e.plateaus.clone(), ..Default::default() };
                     o2.plateaus.remove(eid);
-                    squares.shaped(&o2)[0] as f64 + r
+                    squares.shaped(&o2, None)[0] as f64 + r
                 }
             };
             let tol = if level_ft.is_some() { 0.15 } else { 1.0 };
@@ -411,7 +411,7 @@ async fn heights(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             let sea = ex.world.params().sea_level_ft as f32;
             let s = Squares::round(ex, [c[0] - r, c[1] - r, c[0] + r, c[1] + r], 0);
-            let shaped = s.shaped(&ex.world.file.edits);
+            let shaped = s.shaped(&ex.world.file.edits, Some(&ex.t0));
             let rows = |v: &[f32]| (0..s.h).map(|j| (0..s.w).map(|i| round1(v[(j * s.w + i) as usize] - sea)).collect::<Vec<_>>()).collect::<Vec<_>>();
             let wet: Vec<[i64; 2]> = (0..s.g.len()).filter(|&k| s.hw[k] > shaped[k]).map(|k| [k as i64 % s.w, k as i64 / s.w]).collect();
             let rect = s.rect();

@@ -477,6 +477,9 @@ impl<'a> Open<'a> {
         if self.shore.wet(w) {
             return true;
         }
+        if self.shore.on_islet(w) {
+            return false;
+        }
         let c = crate::lod::rivers::clear_of_rivers_with(&self.t0.rivers, w[0], w[1], margin, self.t0.cell_ft, &self.rivers);
         (c.0 - w[0]).abs() + (c.1 - w[1]).abs() > 0.01
     }

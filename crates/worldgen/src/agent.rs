@@ -333,7 +333,9 @@ fn creation_spot_inner(world: &World, t0: &T0, kind: &str, under: Option<&str>, 
     if p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft {
         return Err("that place is off the map".to_string());
     }
-    let (x, y) = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 150.0, t0.cell_ft);
+    // (On an islet drawn by hand it stays where it was put: the islet is its ground.)
+    let on_islet = !world.file.edits.plateaus.is_empty() && town::Shore::new(world, t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]).on_islet(p);
+    let (x, y) = if on_islet { (p[0], p[1]) } else { crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 150.0, t0.cell_ft) };
     let mut p = [x, y];
     if kind == "camp" {
         // A camp's clearing lies within one battlemap chunk (so it is levelled to the ground
@@ -1296,7 +1298,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             return Err(format!("that is in the water: {}", if castle { "draw it on dry land" } else { "end the wall at the shore" }));
         }
         let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);
-        if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 {
+        if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 && !shore.on_islet(*p) {
             return Err(format!("that is in a river: {}", if castle { "draw it on the bank" } else { "end the wall at the bank" }));
         }
     }

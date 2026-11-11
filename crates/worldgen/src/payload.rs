@@ -195,7 +195,7 @@ pub fn shaped_heights(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) 
     let s = world.geom.spacing_ft(key.level);
     let (gx0, gy0) = (key.x as i64 * TILE_N as i64, key.y as i64 * TILE_N as i64);
     let (lo, hi) = (|g: i64| (g - 1) as f64 * s, |g: i64| (g + TILE_SAMPLES as i64) as f64 * s);
-    let sh = crate::ground::Shaper::new(&world.file.edits, [lo(gx0), lo(gy0), hi(gx0), hi(gy0)], s.max(crate::battlemap::SQUARE_FT))?;
+    let sh = crate::ground::Shaper::new(&world.file.edits, t0, [lo(gx0), lo(gy0), hi(gx0), hi(gy0)], s.max(crate::battlemap::SQUARE_FT))?;
     let r = sh.reach();
     // The samples (-1 to TILE_SAMPLES, tile-local) inside the reach.
     let span = |a: f64, b: f64, g0: i64| ((crate::core::ceil(a / s) as i64 - g0).max(-1), (crate::core::floor(b / s) as i64 - g0).min(TILE_SAMPLES as i64));
@@ -296,6 +296,24 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             starts.push((verts.len() / 2) as u32);
             attrs.push(attr);
         };
+        // R5 M20: islets drawn by hand (44, rock), quays' and breakwaters' made ground (45, stone)
+        // and piers' decks (6).
+        for (pts, _, _) in crate::ground::islets_in(&world.file.edits, [ox, oy, ox + size, oy + size]) {
+            push(&pts, 44);
+        }
+        for (_, w) in crate::wharf::near(world, [ox, oy, ox + size, oy + size]) {
+            if w.kind == crate::world::WharfKind::Pier {
+                if key.level >= BUILDING_MIN_LEVEL {
+                    for d in crate::wharf::decks(w) {
+                        push(&d, 6);
+                    }
+                }
+            } else {
+                for strip in crate::wharf::strips(w, t0) {
+                    push(&strip, 45);
+                }
+            }
+        }
         // Network roads over rivers: a deck where each road crosses a river (the battlemap
         // draws the full bridge).
         if key.level >= BUILDING_MIN_LEVEL {

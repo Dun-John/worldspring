@@ -421,6 +421,10 @@ pub struct Edits {
     /// Plateaus and pits drawn by hand (`h:<id>`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plateaus: BTreeMap<String, crate::ground::Plateau>,
+    /// Quays, piers and breakwaters built by hand (`q:<id>`): made ground along or out into the
+    /// water, or a deck over it (`wharf`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub wharves: BTreeMap<String, Wharf>,
 }
 
 /// A generated building changed by hand: removed, or given another function, storeys,
@@ -711,6 +715,101 @@ impl Crossing {
         }
         if !self.width.is_finite() || !Self::WIDTH.contains(&self.width) {
             return Some(format!("width: {:.0} to {:.0} ft", Self::WIDTH.start(), Self::WIDTH.end()));
+        }
+        None
+    }
+}
+
+/// A quay, a pier or a breakwater built by hand (`q:<id>`), along `pts` (world ft, 2 to
+/// `MAX_PTS` points). A quay's line is its water edge: paving reaches `width` ft from it to the
+/// dry side, and the water inside that strip is filled in (made ground behind a stone face). A
+/// pier and a breakwater run from `pts[0]` on the bank out over the water: a pier a deck
+/// (`material`), a breakwater a raised strip of rubble, always stone (`crate::wharf`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Wharf {
+    pub kind: WharfKind,
+    pub pts: Vec<[f64; 2]>,
+    #[serde(default = "wharf_width")]
+    pub width: f64,
+    #[serde(default, skip_serializing_if = "CrossingMaterial::is_timber")]
+    pub material: CrossingMaterial,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WharfKind {
+    Quay,
+    Pier,
+    Breakwater,
+}
+
+fn wharf_width() -> f64 {
+    20.0
+}
+
+impl WharfKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            WharfKind::Quay => "quay",
+            WharfKind::Pier => "pier",
+            WharfKind::Breakwater => "breakwater",
+        }
+    }
+
+    /// Widths (ft) one may have.
+    pub fn widths(self) -> std::ops::RangeInclusive<f64> {
+        match self {
+            WharfKind::Quay => 10.0..=60.0,
+            WharfKind::Pier => 6.0..=30.0,
+            WharfKind::Breakwater => 12.0..=60.0,
+        }
+    }
+
+    /// The width (ft) when none is given.
+    pub fn default_width(self) -> f64 {
+        match self {
+            WharfKind::Quay => 20.0,
+            WharfKind::Pier => 10.0,
+            WharfKind::Breakwater => 24.0,
+        }
+    }
+}
+
+impl Wharf {
+    pub const MAX_PTS: usize = 16;
+    /// Each side at least this long (ft), and the whole line at most `MAX_LENGTH_FT`.
+    pub const MIN_SIDE_FT: f64 = 10.0;
+    pub const MAX_LENGTH_FT: f64 = 2000.0;
+
+    /// Length (ft) along its points.
+    pub fn length(&self) -> f64 {
+        self.pts.windows(2).map(|s| crate::core::sqrt((s[1][0] - s[0][0]) * (s[1][0] - s[0][0]) + (s[1][1] - s[0][1]) * (s[1][1] - s[0][1]))).sum()
+    }
+
+    /// Why it can't be built, if so: points off the map or not finite, too few or many, a side
+    /// too short, too long in all, too narrow or wide for its kind.
+    pub fn problem(&self, map_w_ft: f64, map_h_ft: f64) -> Option<String> {
+        let n = self.pts.len();
+        if !(2..=Self::MAX_PTS).contains(&n) {
+            return Some(format!("a {} has 2 to {} points, not {n}", self.kind.name(), Self::MAX_PTS));
+        }
+        let on = |p: &[f64; 2]| p[0].is_finite() && p[1].is_finite() && (0.0..map_w_ft).contains(&p[0]) && (0.0..map_h_ft).contains(&p[1]);
+        if !self.pts.iter().all(on) {
+            return Some("every point must be on the map".into());
+        }
+        for (k, s) in self.pts.windows(2).enumerate() {
+            let d = crate::core::sqrt((s[1][0] - s[0][0]) * (s[1][0] - s[0][0]) + (s[1][1] - s[0][1]) * (s[1][1] - s[0][1]));
+            if d < Self::MIN_SIDE_FT {
+                return Some(format!("side {} is {d:.0} ft: each side at least {:.0} ft", k + 1, Self::MIN_SIDE_FT));
+            }
+        }
+        let len = self.length();
+        if len > Self::MAX_LENGTH_FT {
+            return Some(format!("a {} is at most {:.0} ft long (this one is {len:.0})", self.kind.name(), Self::MAX_LENGTH_FT));
+        }
+        let w = self.kind.widths();
+        if !self.width.is_finite() || !w.contains(&self.width) {
+            return Some(format!("a {}'s width: {:.0} to {:.0} ft", self.kind.name(), w.start(), w.end()));
         }
         None
     }
@@ -1465,6 +1564,7 @@ impl Edits {
                 "towns" => self.towns = std::mem::take(&mut part.towns),
                 "ground" => self.ground = std::mem::take(&mut part.ground),
                 "plateaus" => self.plateaus = std::mem::take(&mut part.plateaus),
+                "wharves" => self.wharves = std::mem::take(&mut part.wharves),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1499,6 +1599,7 @@ impl Edits {
                 "towns" => patch(&mut self.towns, p)?,
                 "ground" => patch(&mut self.ground, p)?,
                 "plateaus" => patch(&mut self.plateaus, p)?,
+                "wharves" => patch(&mut self.wharves, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1509,6 +1610,7 @@ impl Edits {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty()
+            && self.wharves.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1584,6 +1686,7 @@ impl Edits {
             "towns" => Some(one(&mut self.towns, op, field, &key)),
             "ground" => Some(one(&mut self.ground, op, field, &key)),
             "plateaus" => Some(one(&mut self.plateaus, op, field, &key)),
+            "wharves" => Some(one(&mut self.wharves, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -1687,6 +1790,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("towns", Shape::Map),
     ("ground", Shape::Map),
     ("plateaus", Shape::Map),
+    ("wharves", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

@@ -293,17 +293,37 @@ export interface Edits {
    * tenths of a foot, row-major, as base64url zigzag-delta varints, a 0 delta followed by a byte
    * counting further zeros). Block indices zero-padded, x first. */
   ground?: Record<string, string>;
-  /** `h:<id>` → a plateau or pit drawn by hand. */
+  /** `h:<id>` → a plateau or pit drawn by hand (or a rock islet: `kind`). */
   plateaus?: Record<string, Plateau>;
+  /** `q:<id>` → a quay, pier or breakwater built by hand. */
+  wharves?: Record<string, Wharf>;
 }
 
 /** A flat top or a pit (`worldgen::ground::Plateau`): ground inside `pts` (world ft) eases to
- * `level` (ft); outside, back to the ground over `edge` ft (absent or 0: a sheer step). */
+ * `level` (ft); outside, back to the ground over `edge` ft (absent or 0: a sheer step). An
+ * `islet` is rock standing out of the water (its outline made from a centre and radius). */
 export interface Plateau {
   pts: [number, number][];
   level: number;
   edge?: number;
+  kind?: 'plateau' | 'islet';
 }
+
+export type WharfKind = 'quay' | 'pier' | 'breakwater';
+
+/** A quay, pier or breakwater built by hand (`worldgen::world::Wharf`), along `pts` (world ft, 2 to
+ * 16 points, each side ≥ 10 ft, ≤ 2,000 ft in all). A quay's line is its water edge, its paving
+ * `width` ft to the dry side; a pier or breakwater runs from `pts[0]` on the bank out over the
+ * water. `width` absent: 20; `material` (a pier's) absent: timber; a breakwater is stone. */
+export interface Wharf {
+  kind: WharfKind;
+  pts: [number, number][];
+  width?: number;
+  material?: CrossingMaterial;
+}
+
+/** Widths (ft) by kind (`WharfKind::widths`) and the width a new one gets. */
+export const WHARF_WIDTH: Record<WharfKind, [number, number, number]> = { quay: [10, 60, 20], pier: [6, 30, 10], breakwater: [12, 60, 24] };
 
 /** A town's layout changed by hand (`worldgen::world::TownEdit`): `at` is the town's centre (the
  * edit is set aside if the town is laid out elsewhere); corners of its patches moved (`v` the
@@ -1293,7 +1313,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === 33 || kind === TOWER_KIND;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === 33 || kind === 44 || kind === 45 || kind === TOWER_KIND;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -1369,6 +1389,10 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       else if (kind === 24) rgb = [0.3, 0.45, 0.57];
       else if (kind === 25) rgb = [0.6, 0.48, 0.33];
       else if (kind === 26) rgb = [0.55, 0.4, 0.25];
+      // R5 M20: an islet drawn by hand (44) bare rock; a quay's or breakwater's made ground (45)
+      // paving stone.
+      else if (kind === 44) rgb = [0.6, 0.57, 0.5];
+      else if (kind === 45) rgb = [0.74, 0.71, 0.64];
       // v63 countryside: a village's headstones and a churchyard's low wall (`town::village::plan_polys`;
       // the green's and churchyard's grass is the land's own, its crofts seen on the battlemap only).
       else if (kind === 20) rgb = [0.74, 0.73, 0.69];

@@ -399,8 +399,9 @@ impl Squares {
     }
 
     /// Each square's ground shaped by `edits`.
-    pub fn shaped(&self, edits: &Edits) -> Vec<f32> {
-        match Shaper::new(edits, self.rect(), SQUARE_FT) {
+    /// (Quays and breakwaters only with `t0`.)
+    pub fn shaped(&self, edits: &Edits, t0: Option<&crate::t0::T0>) -> Vec<f32> {
+        match Shaper::build(edits, t0, self.rect(), SQUARE_FT) {
             None => self.g.clone(),
             Some(s) => (0..self.g.len()).map(|k| s.at_square(self.gx0 + k as i64 % self.w, self.gy0 + k as i64 / self.w, self.g[k], self.hw[k]).0).collect(),
         }
@@ -417,7 +418,7 @@ impl Patch {
     /// The squares within `half_ft` of `c` each way.
     fn read(ex: &mut Executor, c: P, half_ft: f64) -> Patch {
         let s = Squares::round(ex, [c[0] - half_ft, c[1] - half_ft, c[0] + half_ft, c[1] + half_ft], 0);
-        let h = s.shaped(&ex.world.file.edits);
+        let h = s.shaped(&ex.world.file.edits, Some(&ex.t0));
         Patch { s, h }
     }
 
