@@ -1622,7 +1622,8 @@ fn interiors(ctx: &mut Ctx, keeps: bool, r: &mut Report) {
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
         let buckets = building_buckets(&l);
-        let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && (!keeps || is_keep(b))).map(|b| format!("b:{li}:{}", b.id)).collect();
+        // (R5 towns: a steppe town's round felt halls checked by `steppe`.)
+        let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && (!keeps || is_keep(b)) && town::roof::felt_built(b).is_none()).map(|b| format!("b:{li}:{}", b.id)).collect();
         if !keeps {
             ids.extend((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}")));
         }
@@ -5460,7 +5461,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 23] = ["castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 24] = ["steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5477,7 +5478,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && modes == ["yurts"] {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["steppe"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -5508,6 +5509,7 @@ fn main() {
                 "yurts" => yurts(&mut ctx, &mut r),
                 "villages" => villages(&mut ctx, &mut r),
                 "walls" => walls(&mut ctx, &mut r),
+                "steppe" => steppe(&mut ctx, &mut r),
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "handwalls" => handwalls(&mut ctx, &mut r),
                 "wallgates" => wallgates(&mut ctx, &mut r),
@@ -7003,4 +7005,198 @@ fn castle_pieces(ctx: &mut Ctx, r: &mut Report) {
         r.tally(&format!("generated keeps: in a {tier}"), k);
     }
     town::forget_from(0);
+}
+
+/// R5 towns (114a): a steppe town's roofs (every steppe town and city, not a site): by material and
+/// shape, and the rule (0): clay tile or shingle on a home, a shop or a workshop.
+fn steppe_roofs(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["steppe towns", "roofed buildings", "clay tile or shingle on homes, shops, workshops"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town || l.culture % 5 != 4 {
+            continue;
+        }
+        r.add("steppe towns", 0.0, format!("seed {} layout {li} ({:?})", world.file.seed, l.tier));
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed) {
+            let k = town::roof::look(&l, b);
+            let (m, s) = (town::roof::MATERIALS[k.material as usize], town::roof::SHAPES[k.shape as usize]);
+            r.tally("roofed buildings", 1);
+            r.tally(&format!("  roofs {m} {s}"), 1);
+            let f = b.func.map(|f| &town::catalog::CATALOG[f as usize]);
+            let grand = f.is_some_and(|f| matches!(f.category, "faith & death" | "civic & military" | "guilds & underworld") || matches!(f.key, "library" | "bank" | "auction_house" | "theater" | "arena" | "bathhouse" | "bards_college" | "observatory" | "arcane_academy"));
+            if !grand && matches!(m, "clay_tile" | "shingle") {
+                r.add("clay tile or shingle on homes, shops, workshops", 0.0, format!("seed {} b:{li}:{} {}", world.file.seed, b.id, f.map_or("home", |f| f.key)));
+            }
+            if grand {
+                r.tally(&format!("  grand {m} {s}"), 1);
+            }
+        }
+    }
+}
+
+/// R5 towns (114a): steppe towns' round felt halls (`town::roof::hall_ring`: the town hall,
+/// temples, inns): built and fallen back to rectangles (why), their sizes; the rules (each 0): a
+/// hall over another building, a road or a wall; a hall's interior with squares cut off from its
+/// door or missing a piece its use needs. Doors facing a street within reach (as a yurt's); the
+/// roofs (`steppe_roofs`).
+fn steppe(ctx: &mut Ctx, r: &mut Report) {
+    use town::roof::{FeltUse, HallRefused};
+    steppe_roofs(ctx, r);
+    r.counts(&["felt halls built", "  halls", "  temples", "  inns", "fell back: lot too small", "fell back: a castle's or a ruin"]);
+    r.counts(&["halls over another building", "halls over a road", "halls over a wall", "doors within 30 degrees of a street or square", "doors toward the centre (no street in reach)", "doors off their street"]);
+    r.counts(&["interiors with squares cut off from the door", "interiors missing a piece", "interiors not one room on one storey", "interiors not built again from their design"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let mut listed = 0;
+    let cross = |a: P, b: P, c: P, d: P| {
+        let o = |p: P, q: P, s: P| (q[0] - p[0]) * (s[1] - p[1]) - (q[1] - p[1]) * (s[0] - p[0]);
+        o(a, b, c) * o(a, b, d) < 0.0 && o(c, d, a) * o(c, d, b) < 0.0
+    };
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town || l.culture % 5 != 4 {
+            continue;
+        }
+        for b in l.buildings.iter() {
+            let Some(key) = b.func.map(|f| town::catalog::CATALOG[f as usize].key) else { continue };
+            let Some(u) = FeltUse::of_key(key) else { continue };
+            let id = format!("b:{li}:{}", b.id);
+            let tag = format!("seed {} {id} ({})", world.file.seed, u.name());
+            if town::roof::felt_built(b).is_none() {
+                match town::roof::hall_refused(&l, b) {
+                    Some(HallRefused::Small) => {
+                        let o = town::geom::obb(&b.poly);
+                        r.add("fell back: lot too small", 0.0, format!("{tag}: {:.0} x {:.0} ft", o.long, o.short));
+                    }
+                    Some(HallRefused::Pieces) => r.add("fell back: a castle's or a ruin", 0.0, tag.clone()),
+                    None => {}
+                }
+                continue;
+            }
+            r.tally("felt halls built", 1);
+            r.tally(["  halls", "  temples", "  inns"][u as usize], 1);
+            let n = b.poly.len();
+            let c = b.poly.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n as f64, a[1] + p[1] / n as f64]);
+            let rad = libm::hypot(b.poly[0][0] - c[0], b.poly[0][1] - c[1]);
+            r.value(&format!("{} across (ft)", u.name()), 2.0 * rad, tag.clone());
+            // Over another building, a road, a wall.
+            let edges = |p: &[P]| (0..p.len()).map(move |k| (p[k], p[(k + 1) % p.len()])).collect::<Vec<_>>();
+            let mine = edges(&b.poly);
+            let hit = l.buildings.iter().filter(|o| o.id != b.id && o.structure == town::Structure::Roofed && libm::hypot(o.poly[0][0] - c[0], o.poly[0][1] - c[1]) < 400.0).find(|o| {
+                o.poly.iter().any(|p| town::geom::contains(&b.poly, *p))
+                    || b.poly.iter().any(|p| town::geom::contains(&o.poly, *p))
+                    || edges(&o.poly).iter().any(|e| mine.iter().any(|m| cross(m.0, m.1, e.0, e.1)))
+            });
+            if let Some(o) = hit {
+                r.add("halls over another building", 0.0, format!("{tag}: b:{li}:{}", o.id));
+            }
+            let road = l.roads.iter().find(|(pts, _, w)| pts.windows(2).any(|s| mine.iter().any(|m| cross(m.0, m.1, s[0], s[1])) || b.poly.iter().any(|p| town::geom::seg_dist(*p, s[0], s[1]) < 0.5 * w - 0.5)));
+            if let Some((_, class, w)) = road {
+                r.add("halls over a road", 0.0, format!("{tag}: class {class}, {w:.0} ft"));
+            }
+            if l.walls.iter().any(|w| w.windows(2).any(|s| b.poly.iter().any(|p| town::geom::seg_dist(*p, s[0], s[1]) < 3.0) || mine.iter().any(|m| cross(m.0, m.1, s[0], s[1])))) {
+                r.add("halls over a wall", 0.0, tag.clone());
+            }
+            // The door: its street (as `town::yurt_door` looks for it).
+            let door = [0.5 * (b.poly[0][0] + b.poly[1][0]), 0.5 * (b.poly[0][1] + b.poly[1][1])];
+            let ang = libm::atan2(door[1] - c[1], door[0] - c[0]).to_degrees();
+            let reach = 70.0 + (rad - 15.0).max(0.0);
+            let mut near: Option<(f64, P)> = None;
+            for w in l.roads.iter().map(|w| &w.0).chain(l.streets.iter()).chain(l.plazas.iter().map(|p| &p.pts)) {
+                for e in w.windows(2) {
+                    let ab = [e[1][0] - e[0][0], e[1][1] - e[0][1]];
+                    let t = (((c[0] - e[0][0]) * ab[0] + (c[1] - e[0][1]) * ab[1]) / (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12)).clamp(0.0, 1.0);
+                    let q = [e[0][0] + ab[0] * t, e[0][1] + ab[1] * t];
+                    let d = libm::hypot(q[0] - c[0], q[1] - c[1]);
+                    if d <= reach && near.is_none_or(|b| d < b.0) {
+                        near = Some((d, q));
+                    }
+                }
+            }
+            let off = |a: f64, b: f64| ((a - b + 540.0) % 360.0 - 180.0).abs();
+            match near {
+                Some((_, q)) => {
+                    let to = libm::atan2(q[1] - c[1], q[0] - c[0]).to_degrees();
+                    if off(ang, to) <= 30.0 {
+                        r.tally("doors within 30 degrees of a street or square", 1);
+                    } else {
+                        r.add("doors off their street", off(ang, to), format!("{tag}: {:.0} degrees off", off(ang, to)));
+                    }
+                }
+                None => r.add("doors toward the centre (no street in reach)", 0.0, tag.clone()),
+            }
+            // Inside: one round room on one storey, every square not under a piece reached from the door.
+            let Some(it) = interior::generate_id(world, t0, &id) else {
+                r.add("interiors not one room on one storey", 0.0, format!("{tag}: none"));
+                continue;
+            };
+            let room = ["felt hall", "felt sanctuary", "felt common room"][u as usize];
+            let lv = &it.levels[it.entry_level.min(it.levels.len() - 1)];
+            let Some(ri) = lv.rooms.iter().position(|q| q.kind == room).filter(|_| it.levels.len() == 1 && lv.rooms.iter().filter(|q| q.squares > 0).count() == 1) else {
+                r.add("interiors not one room on one storey", 0.0, format!("{tag}: {} levels, rooms {:?}", it.levels.len(), lv.rooms.iter().map(|q| q.kind).collect::<Vec<_>>()));
+                continue;
+            };
+            let (nx, ny) = (it.nx, it.ny);
+            let mut blocked = vec![false; nx * ny];
+            for f in lv.furniture.iter().filter(|f| f.blocks_move) {
+                for j in f.y as usize..(f.y + f.h) as usize {
+                    for i in f.x as usize..(f.x + f.w) as usize {
+                        blocked[j * nx + i] = true;
+                    }
+                }
+            }
+            let walk = |k: usize| lv.cells[k] == ri as i16 && !blocked[k];
+            let start = lv.doors.iter().find(|d| d.kind == "front").and_then(|d| {
+                let (x, y) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize);
+                let pair = if d.a[0] == d.b[0] { [(x - 1, y), (x, y)] } else { [(x, y - 1), (x, y)] };
+                pair.into_iter().filter(|&(i, j)| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).map(|(i, j)| j as usize * nx + i as usize).find(|&k| walk(k))
+            });
+            let mut seen = vec![false; nx * ny];
+            let mut stack: Vec<usize> = start.into_iter().collect();
+            while let Some(k) = stack.pop() {
+                if seen[k] {
+                    continue;
+                }
+                seen[k] = true;
+                let (i, j) = (k % nx, k / nx);
+                for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                    if a < nx && b < ny && walk(b * nx + a) && !seen[b * nx + a] {
+                        stack.push(b * nx + a);
+                    }
+                }
+            }
+            let cut = (0..nx * ny).filter(|&k| walk(k) && !seen[k]).count();
+            if cut > 0 || start.is_none() {
+                r.add("interiors with squares cut off from the door", cut as f64, format!("{tag}: {cut} squares cut off{}", if start.is_none() { ", no way in" } else { "" }));
+            }
+            let needs: &[&str] = match u {
+                FeltUse::Hall => &["yurt_hearth", "low_dais", "chair_of_office", "bench"],
+                FeltUse::Temple => &["yurt_hearth", "altar", "brazier", "floor_cushion"],
+                FeltUse::Inn => &["yurt_hearth", "counter", "table", "yurt_pallet"],
+            };
+            let missing: Vec<&str> = needs.iter().copied().filter(|k| !lv.furniture.iter().any(|f| f.kind == *k)).collect();
+            if !missing.is_empty() {
+                r.add("interiors missing a piece", 0.0, format!("{tag}: no {}", missing.join(", ")));
+            }
+            for f in &lv.furniture {
+                r.tally(&format!("  {} pieces: {}", u.name(), f.kind), 1);
+            }
+            // (As a design builds it again: the same, and within the designer's rules.)
+            if let Ok((d, _)) = interior::design::design_of(world, t0, &id, false) {
+                let (built, problems) = interior::design::problems(world, t0, &id, &d).unwrap();
+                let (x, y) = (serde_json::to_string(&built).unwrap(), serde_json::to_string(&it).unwrap());
+                if x != y && std::env::var("DIFF").is_ok() {
+                    let k = x.bytes().zip(y.bytes()).position(|(a, b)| a != b).unwrap_or(0);
+                    eprintln!("{tag}: built {} / generated {}", &x[k.saturating_sub(150)..(k + 80).min(x.len())], &y[k.saturating_sub(150)..(k + 80).min(y.len())]);
+                }
+                if !problems.is_empty() || x != y {
+                    r.add("interiors not built again from their design", 0.0, format!("{tag}: {problems:?}"));
+                }
+            }
+            if listed < 12 || u == FeltUse::Hall {
+                listed += 1;
+                r.add("felt halls listed", 0.0, format!("{tag} at {:.0},{:.0}, {:.0} ft across, door {ang:.0}, {} pieces", c[0], c[1], 2.0 * rad, lv.furniture.len()));
+            }
+        }
+    }
 }
