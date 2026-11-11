@@ -241,7 +241,7 @@
       <button class="ws-btn" onclick={() => ((memory.touched = false), onCancel())}>Cancel</button>
     </div>
   {:else}
-    <button class="ws-btn primary block" onclick={place} disabled={!!tier && !instant && playing} title={tier && !instant && playing ? 'Stop playing to remake the world' : undefined}
+    <button class="ws-btn block" class:primary={memory.touched} onclick={place} disabled={!memory.touched || (!!tier && !instant && playing)} title={tier && !instant && playing ? 'Stop playing to remake the world' : !memory.touched ? 'Pick a type above first' : undefined}
       ><Icon name="pin" size={16} /> Place {peek ? `a ${choice.label.toLowerCase()}` : 'on map'}</button
     >
   {/if}
@@ -288,10 +288,13 @@
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 10px 10px 8px;
+    padding: 10px 10px 28px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+  .scroll > :global(*) {
+    flex: none;
   }
   .foot {
     flex: none;

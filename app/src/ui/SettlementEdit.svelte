@@ -63,10 +63,6 @@
   let pending = $state.raw<{ what: string; p: Extract<SettlePlan, { edits: Edits }> } | null>(null);
   let note = $state<string | null>(null);
   let busy = $state(false);
-  let draft = $state('');
-  $effect(() => {
-    draft = name;
-  });
 
   /** Inland livings (a village or town added by hand stands away from the shore). */
   const INLAND = PIN_KINDS.filter(([k]) => k && k !== 'port' && k !== 'fishing') as [string, string][];
@@ -123,11 +119,6 @@
   /** Why a living can't be had here (null: it can). */
   const notHere = (k: string) => (k === 'port' && own && !own.portOk ? 'needs a shore' : k === 'fishing' && own && !own.fishingOk ? 'needs a shore or river' : null);
 
-  function rename() {
-    const n = draft.trim();
-    if (n && n !== name) void change({ name: n }, 'Renamed.');
-    else draft = name;
-  }
 </script>
 
 <div class="settle">
@@ -172,10 +163,6 @@
         {#if !livesBy}<option value="">From its land</option>{/if}
         {#each INLAND as [k, label] (k)}<option value={k}>{label}</option>{/each}
       </select>
-    </label>
-    <label class="row">
-      <span class="key">Name</span>
-      <input class="ws-input" bind:value={draft} maxlength={80} onkeydown={(e) => e.key === 'Enter' && e.currentTarget.blur()} onblur={rename} aria-label="Its name" />
     </label>
     {#if onMove}
       <div class="row">
@@ -236,10 +223,9 @@
     {/if}
     {#if own.waiting}
       <div class="note">
-        <span>Waits for a remake: {own.waiting}. One remake makes every change waiting.</span>
+        <span>Pending: waits for a remake ({own.waiting}). The bar above remakes the world.</span>
         <span class="btns">
           {#if onCancel}<button class="ws-btn quiet" onclick={onCancel} title="Drop this change: it stays as it is">Cancel</button>{/if}
-          {#if onRemake}<button class="ws-btn primary" onclick={onRemake}><Icon name="rotate-cw" size={16} /> Remake the world</button>{/if}
         </span>
       </div>
     {/if}
