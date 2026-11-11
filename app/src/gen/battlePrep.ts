@@ -1409,7 +1409,9 @@ function yurtDoor(g: MeshBuilder, ring: number[], felt: number) {
   // (Outward, and along the rim.)
   const [ox, oy] = [(ex - cx) / l, (ey - cy) / l];
   const [tx, ty] = [-oy, ox];
-  const [w, out, ins] = [1.6 * FT, 1.1 * FT, 1.4 * FT];
+  // (R5 towns: a felt hall's door, on a ring past a yurt's 15 ft, the bigger with it: double at 35 ft.)
+  const k = 1 + Math.max(0, l - 15 * FT) / (20 * FT);
+  const [w, out, ins] = [1.6 * FT * k, 1.1 * FT * k, 1.4 * FT * k];
   const at = (a: number, b: number) => [ex + tx * a + ox * b, ey + ty * a + oy * b];
   const hood = [...at(-w, -ins), ...at(w, -ins), ...at(w, out), ...at(-w, out)];
   g.poly(hood, shadeHex(felt, 0.9));

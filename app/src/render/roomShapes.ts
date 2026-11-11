@@ -1174,10 +1174,13 @@ function planOf(it: Interior, level: number): { plan: ShapedPlan | null; doors: 
 
 /** A yurt's ring (a level holding a yurt, drawn inside one outline): its middle and mean radius (the
  * wall's line, grid units), and the way south on the map (unit, grid axes). Null for the rest. */
+/** A yurt's room, and (R5 towns) a steppe town's round felt hall's (`interior::felt::ROOMS`). */
+export const YURT_ROOMS = new Set(['yurt', 'felt hall', 'felt sanctuary', 'felt common room']);
+
 export function yurtRing(it: Interior, level: number): { c: Pt; r: number; south: Pt } | null {
   const lv = it.levels[level];
   const o = it.outlines;
-  if (!lv || !o || o.length !== 1 || o[0].length < 8 || !lv.rooms.some((r) => r.kind === 'yurt')) return null;
+  if (!lv || !o || o.length !== 1 || o[0].length < 8 || !lv.rooms.some((r) => YURT_ROOMS.has(r.kind))) return null;
   const n = o[0].length;
   const c: Pt = [o[0].reduce((a, p) => a + p[0], 0) / n, o[0].reduce((a, p) => a + p[1], 0) / n];
   const r = o[0].reduce((a, p) => a + Math.hypot(p[0] - c[0], p[1] - c[1]), 0) / n;

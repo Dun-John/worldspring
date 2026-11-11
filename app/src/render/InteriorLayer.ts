@@ -18,7 +18,7 @@ import { DIST_PAD } from './rockDistance';
 import { underLook } from './underTheme';
 import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TERRAIN_CHANNEL, underField, type UnderField } from './underField';
 import { nearestWall, wallDistance, type WallDistance } from './wallField';
-import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
+import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, YURT_ROOMS, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import undergroundFragment from './shaders/underground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
 
@@ -222,7 +222,7 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   if (kind === TERRACE) return PLASTER;
   if (kind === 'stands') return 0x8a7a64;
   // (A yurt's felt floor: no joints.)
-  if (kind === 'yurt') return FELT_FLOOR;
+  if (YURT_ROOMS.has(kind)) return FELT_FLOOR;
   if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall", 'side chapel', 'shrine', 'chapter house', 'cloister walk', 'refectory', 'arcade', 'strongroom', 'warded vault', 'trophy hall'].includes(kind))
     return 0x9d978c;
   return 0xa87a4f;
