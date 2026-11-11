@@ -31,6 +31,9 @@
     /** Select a place (and frame it). */
     onShow: (id: string) => void;
     onRename: (id: string, name: string) => void;
+    /** A settlement: whether its Streets can be opened, and why not or what for. */
+    streets?: { ok: boolean; why: string } | null;
+    onStreets?: () => void;
     onFly: () => void;
     onClose: () => void;
     /** Go inside the selected building (resolves false if it can't be entered). */
@@ -61,7 +64,7 @@
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, noteKey = (id: string) => id, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, onUnsettle, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, noteKey = (id: string) => id, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, streets = null, onStreets, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, onUnsettle, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
@@ -137,7 +140,7 @@
       <!-- svelte-ignore a11y_autofocus -->
       <input class="ws-input rename" bind:value={draft} onkeydown={key} onblur={commit} autofocus aria-label="New name" />
     {:else}
-      <button class="name" title="Rename" onclick={startEdit}>{name}<span class="pen"><Icon name="pencil" size={13} /></span></button>
+      <button class="name" title="Rename" onclick={startEdit}>{name}<span class="pen"><Icon name="pencil" size={13} /><span class="word">Rename</span></span></button>
     {/if}
     {#if !docked}<button class="ws-icon-btn" onclick={onClose} aria-label="Close" title="Close (Esc)"><Icon name="x" /></button>{/if}
   </div>
@@ -147,13 +150,15 @@
     <button class="ws-btn" onclick={onFly}><Icon name="target" size={16} /> Go to</button>
     {#if selection.kind === 'building'}<button class="ws-btn" onclick={enter}><Icon name="enter" size={16} /> Enter</button>{/if}
     {#if onGoIn && selection.kind === 'feature'}<button class="ws-btn" onclick={onGoIn}><Icon name="enter" size={16} /> Enter</button>{/if}
+    {#if streets && onStreets}<button class="ws-btn" onclick={onStreets} disabled={!streets.ok} title={streets.why}><Icon name="wards" size={16} /> Streets</button>{#if !streets.ok}<span class="muted why">{streets.why}</span>{/if}{/if}
     {#if onDown}<button class="ws-btn" onclick={onDown} title="Into the site underground"><Icon name="stairs" size={16} /> Go down</button>{/if}
     {#if onEdit}<button class="ws-btn" onclick={onEdit} title="Change what it is, its storeys and roof, or draw it again"><Icon name="pencil" size={16} /> Edit</button>{/if}
-    {#if onHide || onDelete || onRemove || onUnsettle}
+    {#if true}
       <div class="more-wrap">
         <button class="ws-icon-btn" onclick={() => ((more = !more), (confirmDelete = false))} aria-label="More" aria-expanded={more}><Icon name="more" /></button>
         {#if more}
           <div class="menu ws-panel" role="menu">
+            <button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), startEdit())} title="Change its name"><Icon name="pencil" size={16} /> Rename</button>
             {#if onHide}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onHide(!hidden))} title={hidden ? 'Show its label and list it in search again' : 'Hide its label and leave it out of search'}><Icon name={hidden ? 'eye' : 'eye-off'} size={16} /> {hidden ? 'Show on the map' : 'Hide from the map'}</button>{/if}
             {#if onDelete}<button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} role="menuitem" onclick={() => (confirmDelete ? onDelete() : (confirmDelete = true))} title="Remove this site from the world"><Icon name="trash" size={16} /> {confirmDelete ? 'Delete for good?' : 'Delete'}</button>{/if}
             {#if onRestore}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onRestore())} title="Undo every change made to it: what it is, storeys, roof, footprint"><Icon name="reset" size={16} /> As generated</button>{/if}
@@ -268,6 +273,10 @@
   }
   .pen {
     display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: normal;
     margin-left: 6px;
     color: var(--ink-3);
     opacity: 0;

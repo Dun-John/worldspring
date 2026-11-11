@@ -52,7 +52,7 @@
       <button class="ws-btn primary" onclick={onCommit} disabled={blocked} title={blocked ? 'Fix the problems marked ✕ first' : ''}>Save</button>
     {:else if ask.kind !== 'remade' && (ask.kind !== 'sketch' || ask.generate !== false)}
       {#if remake === 'newworld'}<button class="ws-btn" onclick={onSave} title="Keep this world and its changes in the Library, then generate">Save to Library, then generate</button>{/if}
-      <button class="ws-btn primary" onclick={onCommit} title={about}>Generate</button>
+      <button class="ws-btn primary" onclick={onCommit} title={about}>{ask.kind === 'regen' ? 'Remake' : 'Generate'}</button>
     {/if}
   </div>
 </div>

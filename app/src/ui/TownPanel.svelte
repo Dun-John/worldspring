@@ -35,9 +35,12 @@
     onChange: (req: TownRequest, what: string) => void;
     onMerge: () => void;
     onZoomIn: () => void;
+    /** "Change town" is waiting for a click on the map. */
+    picking?: boolean;
+    onChangeTown: () => void;
   }
 
-  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn }: Props = $props();
+  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn, picking = false, onChangeTown }: Props = $props();
 
   const MODES: { key: TownMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
@@ -134,9 +137,10 @@
 </script>
 
 <div class="town">
-  {#if !peek && name}
+  {#if !peek}
     <div class="head">
-      <span class="grow"><b>{name}</b>{#if plan?.edited}<span class="ws-muted"> · laid out by hand</span>{/if}</span>
+      <span class="grow">{#if name}<b>{name}</b>{:else}<span class="ws-muted">No town in view</span>{/if}{#if plan?.edited}<span class="ws-muted"> · laid out by hand</span>{/if}</span>
+      <button class="ws-btn quiet" class:on={picking} aria-pressed={picking} onclick={onChangeTown} title="Then click a town on the map">{picking ? 'Click a town…' : 'Change town'}</button>
     </div>
   {/if}
   <div class="ws-seg modes" role="radiogroup" aria-label="Tool">

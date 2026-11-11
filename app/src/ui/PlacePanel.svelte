@@ -53,7 +53,7 @@
 
   /** The choices: what each makes (`Created` kind, and what lies beneath). */
   const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; tier?: PinTier; group: Group; look: string }[] = [
-    { key: 'village', label: 'Village', icon: 'home', kind: 'settlement', tier: 'village', group: 'Settlements', look: 'A few dozen to a few hundred souls. Added at once; a capital remakes the world' },
+    { key: 'village', label: 'Village', icon: 'home', kind: 'settlement', tier: 'village', group: 'Settlements', look: 'A few dozen to a few hundred souls. Added at once' },
     { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand. Added at once; a capital remakes the world' },
     { key: 'city', label: 'City', icon: 'castle', kind: 'settlement', tier: 'city', group: 'Settlements', look: 'Thousands, walled, with sewers below' },
     { key: 'metropolis', label: 'Metropolis', icon: 'wards', kind: 'settlement', tier: 'metropolis', group: 'Settlements', look: 'Tens of thousands: a great city' },
@@ -77,7 +77,6 @@
   let theme = $state('');
   let name = $state('');
   let livesBy = $state<PinKind | ''>('');
-  let capital = $state(false);
   let wards = $state('');
 
   const choice = $derived(CHOICES.find((c) => c.key === pick)!);
@@ -85,9 +84,10 @@
   const underKind = $derived(pick === 'ruin' ? ruinUnder : choice.kind === 'entrance' ? choice.under! : ['cave', 'mine', 'lava_tube'].includes(pick) ? pick : null);
   const themes = $derived(underKind ? THEMES[underKind] : []);
   const tier = $derived(choice.tier);
-  /** A village or town goes in at once unless it is to be a capital (realms need the remake). */
-  const instant = $derived((tier === 'village' || tier === 'town') && !capital);
-  const livesKinds = $derived(instant ? PIN_KINDS.filter(([k]) => k !== 'port' && k !== 'fishing') : PIN_KINDS);
+  /** A village or town goes in at once; a city or metropolis remakes the world. */
+  const instant = $derived(tier === 'village' || tier === 'town');
+  /** A shore needs the remake (a pin in World › Sketch): these are shown, but off, for a village or town. */
+  const needsShore = (k: string) => instant && (k === 'port' || k === 'fishing');
   const remakes = $derived(seconds ? `Remakes the world round it (about ${seconds} s)` : 'Remakes the world round it');
 
   const label = (key: string) => key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
@@ -101,7 +101,7 @@
     if (tier) {
       if (playing && !instant) return;
       const lb = instant && (livesBy === 'port' || livesBy === 'fishing') ? '' : livesBy;
-      const c: SiteChoice = { kind: 'settlement', settlement: { tier, livesBy: lb, capital, wards: instant || tier === 'village' ? '' : wards } };
+      const c: SiteChoice = { kind: 'settlement', settlement: { tier, livesBy: lb, capital: false, wards: instant || tier === 'village' ? '' : wards } };
       if (name.trim()) c.name = name.trim();
       onPlace(c, choice.label.toLowerCase());
       return;
@@ -142,16 +142,18 @@
           >
         {/each}
       </div>
+      {#if group === 'Settlements'}
+        <div class="ws-hint">Village and town are added at once. City and metropolis (↻) remake the world round them.{#if tier && !instant} Port and fishing need a shore, so a village or town cannot have them.{/if}</div>
+      {/if}
     {/each}
     <div class="ws-hint">{choice.look}</div>
     {#if tier}
       <label class="ws-field">
         Lives by
         <select class="ws-input" bind:value={livesBy}>
-          {#each livesKinds as [k, label] (k)}<option value={k}>{label}</option>{/each}
+          {#each PIN_KINDS as [k, label] (k)}<option value={k} disabled={needsShore(k)}>{label}{needsShore(k) ? ' (on a shore: needs a remake)' : ''}</option>{/each}
         </select>
       </label>
-      <label class="switch"><span class="grow">The realm's capital</span><input type="checkbox" class="ws-switch" bind:checked={capital} /></label>
       {#if tier !== 'village' && !instant}
         <input class="ws-input" placeholder="District names, central first (optional)" bind:value={wards} aria-label="District names, separated by commas" />
       {/if}
@@ -210,6 +212,7 @@
       </div>
     {/if}
   {/if}
+  <div class="foot">
   {#if armed}
     <div class="armed">
       <span class="grow">{note ?? `Click on the map to place the ${choice.label.toLowerCase()}`}</span>
@@ -220,6 +223,7 @@
       ><Icon name="pin" size={16} /> Place {peek ? `a ${choice.label.toLowerCase()}` : 'on map'}</button
     >
   {/if}
+  </div>
 </div>
 
 <style>
@@ -256,6 +260,15 @@
     border-color: var(--line);
     color: var(--accent-ink);
   }
+  .foot {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 6px 0 2px;
+    background: var(--paper-solid);
+  }
   .grow {
     flex: 1;
     min-width: 0;
@@ -287,11 +300,6 @@
   }
   .tile.on .remade {
     color: inherit;
-  }
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 8px;
   }
   .armed {
     display: flex;

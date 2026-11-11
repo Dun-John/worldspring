@@ -100,10 +100,10 @@
     ['none', 'No road'],
   ];
   const TIERS: [PinTier, string][] = [
-    ['metropolis', 'Metropolis'],
-    ['city', 'City'],
-    ['town', 'Town'],
     ['village', 'Village'],
+    ['town', 'Town'],
+    ['city', 'City'],
+    ['metropolis', 'Metropolis'],
   ];
   const VOLCANOES: [VolcanoKind, string][] = [
     ['strato', 'Cone'],

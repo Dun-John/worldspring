@@ -506,6 +506,11 @@ export class MapView {
     return this.battle;
   }
 
+  /** Whether layout `index` is a town (with streets to edit), not a village or a site. */
+  hasTown(index: number): boolean {
+    return this.towns.some((t) => t.index === index);
+  }
+
   /** The town (layout index) whose patches lie round (x, y): the nearest within 2.3 of its
    * radii (its farms and sprawl), else -1. Villages have none. */
   townAt(x: number, y: number): number {

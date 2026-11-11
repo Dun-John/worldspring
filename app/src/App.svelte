@@ -1672,7 +1672,10 @@
   let townAsked = 0;
   const townSelected = $derived(townPlan?.patches.find((p) => p.patch === townPatch) ?? null);
   const townCornerPicked = $derived(townPlan?.corners.find((c) => c.corner === townCorner) ?? null);
-  const townName = $derived(townIndex >= 0 && settlements[townIndex] ? (renames[settlements[townIndex].id] ?? settlements[townIndex].name) : null);
+  const townName = $derived.by(() => {
+    const f = townIndex >= 0 ? layoutFeature(townIndex) : null;
+    return f ? (renames[f.id] ?? f.name) : null;
+  });
   const townNear = $derived(!!townPlan && townPlan.max_move_ft / (hud?.ftPerPx ?? 99) >= 40);
 
   function armTown() {
@@ -1696,6 +1699,19 @@
     townRead = '';
   }
 
+  /** A settlement card's Streets button: null (not a settlement), or whether its layout can be edited. */
+  function streetsCard(f: Feature): { ok: boolean; why: string } | null {
+    const li = layoutIndexOf(f.id);
+    if (li < 0 || !(li < settlements.length || (li >= firstCreated && (f.kind === 'village' || f.kind === 'town')))) return null;
+    if (!view.hasTown(li)) return { ok: false, why: 'Villages grow along their roads' };
+    return { ok: true, why: 'Lay out its streets, walls and wards' };
+  }
+
+  function openStreets(f: Feature) {
+    void choose({ kind: 'feature', feature: f }, true);
+    go('edit', 'town');
+  }
+
   function disarmTown() {
     townTool = null;
     townMerging = false;
@@ -1703,11 +1719,31 @@
     townCorner = null;
   }
 
-  // The town in view (by the middle of the map), while the tab is open.
+  /** The town the selection is (its layout index), else -1: a village has no streets to edit, so it is none. */
+  function selectedTown(s: Selection | null): number {
+    if (s?.kind !== 'feature') return -1;
+    const li = layoutIndexOf(s.feature.id);
+    return li >= 0 && view.hasTown(li) ? li : -1;
+  }
+  /** "Change town" was pressed: the next click on the map picks the town. */
+  let townPicking = $state(false);
+  $effect(() => {
+    if (!townOn) townPicking = false;
+  });
+
+  // The town edited, while the tab is open: the selected settlement's, else the one at the middle of the
+  // map as seen (above a phone's sheet, not under it).
   $effect(() => {
     const c = hud?.center;
+    void overlay;
+    const s = selection;
+    const top = shell.sheetTop;
     if (!townOn || !c || townBusy) return;
-    const i = view.townAt(c.x, c.y);
+    let i = selectedTown(s);
+    if (i < 0) {
+      const dy = shell.phone && Number.isFinite(top) ? ((top - window.innerHeight) / 2) * (hud?.ftPerPx ?? 0) : 0;
+      i = view.townAt(c.x, c.y + dy);
+    }
     if (i !== untrack(() => townIndex)) {
       townIndex = i;
       townPatch = null;
@@ -2919,7 +2955,7 @@
           ? { onEdit: () => editWorks(id) }
           : {};
     const hiddenNow = placeHidden.includes(id);
-    const under = !['tower', 'camp', 'waystation', 'building', 'castle', 'wall'].includes(c.kind);
+    const under = !['tower', 'camp', 'waystation', 'building', 'castle', 'wall', 'village', 'town'].includes(c.kind);
     return {
       ...drawn,
       hidden: hiddenNow,
@@ -3425,6 +3461,13 @@
   }
 
   async function pick(x: number, y: number, sx: number, sy: number) {
+    if (townOn && townPicking) {
+      townPicking = false;
+      const f = layoutFeature(view.townAt(x, y));
+      if (f) void choose({ kind: 'feature', feature: f }, false);
+      else toast('No town there');
+      return;
+    }
     if (townOn && townTool) return townPick(x, y);
     view.markRoom(null);
     const seq = ++selectSeq;
@@ -3866,7 +3909,7 @@
       tabs={[
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a town, ruin, dungeon, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, bridges and fords; clear a town’s own buildings.' },
-        { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the town in view (U)', hint: 'Re-plan the town in view: its streets, wards, lots and walls.' },
+        { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the selected town or the one in view (U)', hint: 'Re-plan the selected town, or the one in view: its streets, wards, lots and walls.' },
         { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
         { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap outdoors: place, brush, erase, or upload your own.' },
         {
@@ -3940,6 +3983,8 @@
             onChange={(req, what) => void townChange(req, what)}
             onMerge={() => (townMerging = !townMerging)}
             onZoomIn={townZoomIn}
+            picking={townPicking}
+            onChangeTown={() => (townPicking = !townPicking)}
           />
         {:else if groundOn}
           <GroundPanel
@@ -4112,6 +4157,8 @@
             ? generatedActions(sel.hit)
             : {}}
       onUnsettle={sel.kind === 'feature' ? unsettleAction(sel.feature.id) : undefined}
+      streets={sel.kind === 'feature' ? streetsCard(sel.feature) : undefined}
+      onStreets={sel.kind === 'feature' ? () => openStreets(sel.feature) : undefined}
       onFly={() => selection && flyToSelection(selection)}
       onClose={() => (selection = null)}
       onEnter={async () => {
