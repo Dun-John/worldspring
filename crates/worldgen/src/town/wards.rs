@@ -531,6 +531,16 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
                 !used[g] && o.len() == ring.len() && (0..ring.len()).any(|r| (0..ring.len()).all(|k| dist(o[k], ring[(k + r) % ring.len()]) < 0.01))
             })
         });
+        // (R5 towns: a lot that stood as generated under a felt hall, its ring about the lot's widest
+        // middle, `roof::hall_ring`.)
+        let hit = hit.or_else(|| {
+            let c = super::roof::hall_centre(&b.poly);
+            near(cell(c)).find(|&g| {
+                let o = &generated.buildings[g].poly;
+                let n = o.len() as f64;
+                !used[g] && o.len() == super::roof::HALL_SIDES && dist(o.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]), c) < 0.01
+            })
+        });
         match hit {
             Some(g) => {
                 used[g] = true;

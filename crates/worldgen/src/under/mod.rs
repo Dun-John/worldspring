@@ -734,7 +734,8 @@ pub fn sewer_link_of(t0: &T0, l: &Layout, b: &town::Building) -> Option<P> {
     if l.site || l.tier < crate::t0::settle::Tier::City {
         return None;
     }
-    if b.structure != Structure::Roofed {
+    // (R5 towns: nor a steppe town's round felt hall, of one storey with no cellar.)
+    if b.structure != Structure::Roofed || town::roof::felt_built(b).is_some() {
         return None;
     }
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);

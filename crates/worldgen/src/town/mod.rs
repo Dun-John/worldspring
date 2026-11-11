@@ -1952,12 +1952,17 @@ pub(crate) fn round_off(l: &mut Layout, site: Option<&Site>) {
         if b.structure != Structure::Roofed || hand || !b.parts.is_empty() || b.keep.is_some() || roof::look(l, b).shape != roof::Shape::Round {
             continue;
         }
-        let Some(poly) = roof::round_footprint(&b.poly) else { continue };
+        // (R5 towns: a steppe town's hall, temple or inn a round felt hall of one storey, `roof::hall_ring`.)
+        let hall = roof::hall_ring(l, b);
+        let Some(poly) = hall.clone().or_else(|| roof::round_footprint(&b.poly)) else { continue };
         let mut round = b.clone();
         round.poly = poly;
         if roof::look(l, &round).shape == roof::Shape::Round {
             let ring = yurt_door(l, i, round.poly, site);
             l.buildings[i].poly = ring;
+            if hall.is_some() {
+                l.buildings[i].floors = 1;
+            }
         }
     }
 }
@@ -1977,22 +1982,26 @@ pub const YURT_CLEAR_FT: f64 = 10.0;
 fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, site: Option<&Site>) -> Vec<P> {
     let m = ring.len();
     let c = centroid(&ring);
+    // (R5 towns: a felt hall's reach as far past its wall as a yurt's, its door swung less.)
+    let hall = m == roof::HALL_SIDES;
+    let reach = if hall { YURT_LANE_REACH + (dist(ring[0], c) - 15.0).max(0.0) } else { YURT_LANE_REACH };
     let mut best: Option<(f64, P)> = None;
-    let ways = l.roads.iter().map(|r| &r.0).chain(l.streets.iter());
+    // (A felt hall's: a square's edge too.)
+    let ways = l.roads.iter().map(|r| &r.0).chain(l.streets.iter()).chain(l.plazas.iter().filter(|_| hall).map(|p| &p.pts));
     for w in ways {
         for e in w.windows(2) {
             let ab = sub(e[1], e[0]);
             let t = (dot(sub(c, e[0]), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
             let q = add(e[0], mul(ab, t));
             let d = dist(c, q);
-            if d <= YURT_LANE_REACH && best.is_none_or(|b| d < b.0) {
+            if d <= reach && best.is_none_or(|b| d < b.0) {
                 best = Some((d, q));
             }
         }
     }
     let aim = best.map(|b| b.1).filter(|q| dist(*q, c) > 1.0).unwrap_or(l.center);
     let to = if dist(aim, c) > 1.0 { sub(aim, c) } else { [0.0, 1.0] };
-    let swing = signed(hash2(hash2(l.roof_seed, l.buildings[i].id as i64, 0x7975), 1, 0)) * YURT_SWING.to_radians();
+    let swing = signed(hash2(hash2(l.roof_seed, l.buildings[i].id as i64, 0x7975), 1, 0)) * if hall { 0.25 } else { 1.0 } * YURT_SWING.to_radians();
     let a = libm::atan2(to[1], to[0]) + swing;
     let want = [libm::cos(a), libm::sin(a)];
     let mid = |e: usize| lerp(ring[e], ring[(e + 1) % m], 0.5);

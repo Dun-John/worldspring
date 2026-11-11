@@ -1781,7 +1781,8 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
         }
     }
     // (Generated ones; a design may have no cellar, a yurt has one storey.)
-    let yurt = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|r| r.kind == "yurt") && !it.levels[0].has_stairs && it.levels[0].windows.is_empty();
+    // (R5 towns: a steppe town's round felt hall, as a yurt.)
+    let yurt = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|r| matches!(r.kind, "yurt" | "felt hall" | "felt sanctuary" | "felt common room")) && !it.levels[0].has_stairs && it.levels[0].windows.is_empty();
     // (R5 towns: a cemetery's tomb, one chamber on one storey.)
     let tomb = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|r| r.kind == "tomb chamber") && !it.levels[0].has_stairs;
     assert!(it.levels.len() >= 2 || yurt || tomb || world.file.edits.designs.contains_key(id), "{tag}: only {} level", it.levels.len());

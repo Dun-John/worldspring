@@ -231,26 +231,34 @@ pub fn look(l: &Layout, b: &Building) -> Look {
                 (m, Flat)
             }
         }
-        // Steppe: low hide/felt and thatch, round roofs on small homes (on a ring their lot holds:
-        // `round_footprint`).
+        // Steppe: low felt (hide), thatch and plank, round roofs on small homes (on a ring their lot
+        // holds: `round_footprint`) and on the town's felt halls (its hall, temples, inns:
+        // `hall_ring`); no clay tile or shingle; glazed tile on some temples and halls of a rich city.
         _ => {
             let ring = || b.poly.len() == ROUND_SIDES || round_footprint(&b.poly).is_some();
             if role == Role::Home && small && (compact || u2 < 0.5) && ring() {
                 (pick(u0, &[(Hide, 7), (Thatch, 3)]), Round)
+            } else if hall_ring(l, b).is_some() {
+                (Hide, Round)
             } else {
+                let glaze = if city && rich == 2 { 3 } else { 0 };
                 let m = match role {
-                    Role::Sacred => pick(u0, &[(GlazedTile, 4), (Copper, 3), (Hide, 3)]),
-                    Role::Civic => pick(u0, &[(Shingle, 3), (GlazedTile, 3), (Hide, 2), (ClayTile, 2)]),
+                    // (A monastery, a mausoleum, catacombs as they were.)
+                    Role::Sacred if !matches!(key, "temple" | "shrine") => pick(u0, &[(GlazedTile, 4), (Copper, 3), (Hide, 3)]),
+                    Role::Sacred => pick(u0, &[(Hide, 5), (Plank, 2), (GlazedTile, glaze + 1)]),
+                    Role::Civic => pick(u0, &[(Hide, 4), (Plank, 3), (Thatch, 1), (GlazedTile, glaze)]),
                     Role::Working => pick(u0, &[(Plank, 5), (Thatch, 3), (Hide, 2)]),
                     _ => match rich {
                         0 => pick(u0, &[(Hide, 5), (Thatch, 5)]),
-                        1 => pick(u0, &[(Thatch, 6), (Hide, 2), (Shingle, 2)]),
-                        _ => pick(u0, &[(Shingle, 4), (Thatch, 3), (ClayTile, 3)]),
+                        1 => pick(u0, &[(Thatch, 5), (Hide, 3), (Plank, 2)]),
+                        _ => pick(u0, &[(Hide, 4), (Plank, 4), (Thatch, 2)]),
                     },
                 };
-                let shape = if temple && compact {
+                // (A shrine, a mausoleum, a tomb round where its lot holds a ring; a temple too big
+                // for its lot's ring hipped or gabled; a monastery's or mausoleum's dome as it was.)
+                let shape = if temple && compact && key != "temple" {
                     Dome
-                } else if role == Role::Sacred && u1 < 0.5 && ring() {
+                } else if role == Role::Sacred && key != "temple" && u1 < 0.5 && ring() {
                     Round
                 } else {
                     pick(u1, &[(Hip, 6), (Gable, 4)])
@@ -271,7 +279,7 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     // over it with the sails): lime-washed in the south and the dry lands, else tarred boards,
     // stone or weatherboard.
     let (material, shape) = if key == "windmill" {
-        (if matches!(culture, 2 | 3) { Whitewash } else { pick(u0, &[(Plank, 4), (Slate, 3), (Shingle, 3)]) }, Cone)
+        (if matches!(culture, 2 | 3) { Whitewash } else if culture == 4 { Plank } else { pick(u0, &[(Plank, 4), (Slate, 3), (Shingle, 3)]) }, Cone)
     } else {
         (material, shape)
     };
@@ -356,6 +364,122 @@ pub fn round_footprint(lot: &[P]) -> Option<Vec<P>> {
         out.reverse();
     }
     Some(out)
+}
+
+// R5 towns: a steppe town's round felt halls.
+
+/// Sides of a round felt hall's footprint (`hall_ring`): more than a yurt's, being bigger.
+pub const HALL_SIDES: usize = 24;
+
+/// The least a round felt hall's radius (ft): 30 ft across.
+pub const HALL_LEAST_R: f64 = 15.0;
+
+/// What a steppe town's round felt hall is for: its hall (the town hall), a temple, an inn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeltUse {
+    Hall,
+    Temple,
+    Inn,
+}
+
+impl FeltUse {
+    pub fn of_key(key: &str) -> Option<FeltUse> {
+        match key {
+            "town_hall" => Some(FeltUse::Hall),
+            "temple" => Some(FeltUse::Temple),
+            "inn" => Some(FeltUse::Inn),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        ["hall", "temple", "inn"][self as usize]
+    }
+}
+
+/// Why a steppe town's hall, temple or inn stands rectangular under a felt roof (`hall_refused`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HallRefused {
+    /// Its lot holds no ring of radius `HALL_LEAST_R` (a temple then shaped on its lot as
+    /// elsewhere, a city's hall raised with its belfry).
+    Small,
+    /// A castle's, a keep, or not roofed (a ruin).
+    Pieces,
+}
+
+/// A building's use as a round felt hall where it could be one: in a steppe town or city (not a
+/// village, not a site), roofed, of one piece, not a castle's; its shape not set by hand.
+fn felt_candidate(l: &Layout, b: &Building) -> Option<FeltUse> {
+    let u = FeltUse::of_key(CATALOG[b.func? as usize].key)?;
+    (l.culture % 5 == 4 && !l.site && l.tier >= crate::t0::settle::Tier::Town && b.shape.is_none() && b.roof.is_none()).then_some(u)
+}
+
+/// Why steppe building `b` of layout `l`, a hall, temple or inn, is no round felt hall (`None`
+/// when it is one, or isn't such a building).
+pub fn hall_refused(l: &Layout, b: &Building) -> Option<HallRefused> {
+    felt_candidate(l, b)?;
+    if hall_ring(l, b).is_some() {
+        return None;
+    }
+    Some(if b.structure != Structure::Roofed || b.keep.is_some() || b.ward == Ward::Castle { HallRefused::Pieces } else { HallRefused::Small })
+}
+
+/// A felt hall as built (`town::round_off`): a hall's, temple's or inn's ring of `HALL_SIDES`, of
+/// one piece; its use. What the interior and the checks know one by.
+pub fn felt_built(b: &Building) -> Option<FeltUse> {
+    let u = FeltUse::of_key(CATALOG[b.func? as usize].key)?;
+    (b.poly.len() == HALL_SIDES && b.parts.is_empty() && b.structure == Structure::Roofed).then_some(u)
+}
+
+/// The radius a felt hall wants (ft): by its use and the town's wealth (its ward's), a city's a
+/// little bigger, a few feet either way by the building's hash: a hall 48-70 ft across, a temple
+/// 40-62, an inn 32-52.
+fn hall_radius(l: &Layout, b: &Building, u: FeltUse) -> f64 {
+    let rich = ward_wealth(b.ward) as usize;
+    let base = match u {
+        FeltUse::Hall => [24.0, 27.0, 31.0][rich],
+        FeltUse::Temple => [20.0, 23.0, 27.0][rich],
+        FeltUse::Inn => [16.0, 19.0, 22.0][rich],
+    };
+    let city = if l.tier >= crate::t0::settle::Tier::City { 2.0 } else { 0.0 };
+    base + city + 2.0 * (unit(hash3(l.roof_seed, b.id as i64, 21, 0x6665_6c74)) - 0.5) * 2.0
+}
+
+/// A steppe town's round felt hall's ring (`FeltUse`): on footprint `b.poly` (its lot) a ring of
+/// `HALL_SIDES` about the lot's widest middle, as big as its use and wealth want (`hall_radius`)
+/// and the lot holds (half a foot inside its sides), wound as the lot is; or as built, the ring it
+/// stands on. `None` where it can't be one (`hall_refused`): a lot that holds no ring 30 ft across
+/// keeps the building rectangular under a felt roof.
+pub fn hall_ring(l: &Layout, b: &Building) -> Option<Vec<P>> {
+    let u = felt_candidate(l, b)?;
+    if b.structure != Structure::Roofed || !b.parts.is_empty() || b.keep.is_some() || b.ward == Ward::Castle || b.poly.len() < 3 {
+        return None;
+    }
+    if b.poly.len() == HALL_SIDES {
+        return Some(b.poly.clone());
+    }
+    let (c, clear) = widest(&b.poly);
+    let r = hall_radius(l, b, u).min(clear - 0.5);
+    if r < HALL_LEAST_R {
+        return None;
+    }
+    let ax = super::geom::obb(&b.poly).axis;
+    let mut out: Vec<P> = (0..HALL_SIDES)
+        .map(|k| {
+            let a = std::f64::consts::TAU * (k as f64 + 0.5) / HALL_SIDES as f64;
+            let (co, si) = (libm::cos(a), libm::sin(a));
+            [c[0] + r * (co * ax[0] - si * ax[1]), c[1] + r * (co * ax[1] + si * ax[0])]
+        })
+        .collect();
+    if super::geom::area(&b.poly) < 0.0 {
+        out.reverse();
+    }
+    Some(out)
+}
+
+/// Where a felt hall on lot `lot` stands (its ring's middle, `hall_ring`): for a town laid out anew to
+/// know the ring a lot was given (`wards::inherit`).
+pub fn hall_centre(lot: &[P]) -> P {
+    widest(lot).0
 }
 
 /// Where a domed roof's domes stand (world ft): each its middle and its drum's radius, all inside the

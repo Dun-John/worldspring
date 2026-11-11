@@ -15,6 +15,7 @@
 use serde::Serialize;
 
 pub mod design;
+mod felt;
 pub mod hall;
 pub mod hub;
 pub mod shape;
@@ -290,6 +291,10 @@ enum Arch {
 }
 
 fn arch_of(b: &town::Building) -> Arch {
+    // (R5 towns: a steppe town's round felt hall laid out as a yurt is, `felt`.)
+    if town::roof::felt_built(b).is_some() && round_ish(b) {
+        return Arch::House;
+    }
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
     match key {
         Some("inn" | "caravanserai") => Arch::Inn,
@@ -401,6 +406,10 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
         (House, 0) if top && key == Some("hovel") => p("Ground floor", &[("hearth room", 1.0)], None, false),
         // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room.
         (House, 0) if top && key == Some("yurt") => p("Yurt", &[("yurt", 1.0)], None, false),
+        // (R5 towns: a felt hall's one round room, `felt`.)
+        (House, 0) if top && key == Some(felt::ROOMS[0]) => p("Felt hall", &[(felt::ROOMS[0], 1.0)], None, false),
+        (House, 0) if top && key == Some(felt::ROOMS[1]) => p("Temple", &[(felt::ROOMS[1], 1.0)], None, false),
+        (House, 0) if top && key == Some(felt::ROOMS[2]) => p("Inn", &[(felt::ROOMS[2], 1.0)], None, false),
         (House, 0) if top => sized("Ground floor", &[("main room", 3.0), ("kitchen", 1.5), ("bedroom", 1.5)], Some("bedroom")),
         (House, 0) => p("Ground floor", &[("main room", 3.0), ("kitchen", 1.5)], Some("bedroom"), false),
         (House, _) => p("Upper floor", &[("bedroom", 2.0), ("bedroom", 1.5)], Some("bedroom"), false),
@@ -820,6 +829,8 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         // A one-room home's: its bed against a wall by the hearth.
         // A yurt's: its own (`furnish_yurt`).
         "yurt" => &[],
+        // (R5 towns: a felt hall's: its own, `felt::furnish`.)
+        "felt hall" | "felt sanctuary" | "felt common room" => &[],
         "hearth room" => &[("bed", Wall(1, 2), 1, 0), ("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0)],
         "main room" | "living room" => &[("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("bench", Wall(2, 1), 1, 0)],
         "shop" => &[("counter", Wall(3, 1), 1, 0), ("shelf", Wall(2, 1), 2, 10), ("display", Center(2, 1), 0, 12)],
@@ -956,7 +967,7 @@ pub const ROOM_KINDS: &[&str] = &[
     "stables", "tack room", "snug", "private dining room", "scullery", "best chamber", "innkeeper's quarters",
     "inn yard", "yard gallery", "yurt", "meal floor", "stone floor", "bin floor", "dust floor",
     // R5 towns
-    "tomb chamber",
+    "tomb chamber", "felt hall", "felt sanctuary", "felt common room",
 ];
 
 /// A kind of room in a building, by name.
@@ -1877,6 +1888,8 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room
     // on one storey (no cellar, no stairs).
     let yurt = arch == Arch::House && b.parts.is_empty() && round_ish(b);
+    // (R5 towns: a steppe town's round felt hall, one as a yurt is: `felt`.)
+    let felt = town::roof::felt_built(b).filter(|_| yurt);
     // Levels: a cellar, the ground floor and the storeys above; at least two levels (a yurt one).
     let floors = b.floors.max(1) as i8;
     // (A tower mill: its stair up the wall, `mill_stairs`.)
@@ -2002,8 +2015,9 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if yurt {
         stairs = [0, 0, 0, 0];
     }
-    // (A tomb's none: the block a design gives a building without stairs, `design::stairs_of`.)
-    if tomb {
+    // (A tomb's none, a felt hall's (R5 towns): the block a design gives a building without stairs,
+    // `design::stairs_of`.)
+    if tomb || felt.is_some() {
         stairs = [0, 0, 1, 1];
     }
 
@@ -2026,7 +2040,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let prog = if z == ROOF && roof_terrace.is_some() {
             LevelProgram { name: "Roof terrace", rooms: vec![(TERRACE, 1.0)], filler: None, corridor: false, cells: false, by_size: false }
         } else {
-            program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if yurt { Some("yurt") } else if hovel { Some("hovel") } else { key })
+            program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if yurt { Some(felt.map_or("yurt", felt::room)) } else if hovel { Some("hovel") } else { key })
         };
         // (Laid out by zones, if it holds together: every room in one piece and reached.)
         let laid = plan.as_mut().and_then(|p| p.level(z));
@@ -2178,7 +2192,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             // turned toward the lane or the centre by `town::round_off`.)
             let mean = mul(b.poly.iter().fold([0.0, 0.0], |a, p| add(a, *p)), 1.0 / b.poly.len() as f64);
             let d = sub(mul(add(b.poly[0], b.poly[1]), 0.5), mean);
-            furnish_yurt(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j));
+            match felt {
+                Some(f) => felt::furnish(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j), f),
+                None => furnish_yurt(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j)),
+            }
         }
         for &(ri, f, turns, style) in &halls {
             let seed = hash3(world.stream("interior.hall"), town::rng_key(t0, settlement), bi as i64, zf as i64);
@@ -4613,7 +4630,7 @@ pub fn wall_runs(cells: &[i16], rooms: &[Room], nx: usize, ny: usize, doors: &[D
 fn windows(lvl: &mut Level, nx: usize, ny: usize, _ground: bool) {
     let mut out = Vec::new();
     let open = |x: isize, y: isize| {
-        x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny && lvl.cells[y as usize * nx + x as usize] >= 0 && matches!(lvl.rooms[lvl.cells[y as usize * nx + x as usize] as usize].kind, "battlements" | "wall walk" | ROOF_SLOPE | "yurt")
+        x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny && lvl.cells[y as usize * nx + x as usize] >= 0 && matches!(lvl.rooms[lvl.cells[y as usize * nx + x as usize] as usize].kind, "battlements" | "wall walk" | ROOF_SLOPE | "yurt" | "felt hall" | "felt sanctuary" | "felt common room")
     };
     for w in &lvl.walls {
         if !w.exterior || w.arcade {
