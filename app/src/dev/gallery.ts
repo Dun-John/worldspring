@@ -833,8 +833,8 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
     // (Its props as battlemap objects, between its top and its curtain, as the battlemap layers them.)
     const props = new Container();
     const more: KindInfo[] = [
-      { id: 108, name: 'ballista', radius: 0.75, blocks_move: true, blocks_sight: false, cover: 1, difficult: false, height_ft: 5, hazard: null, feature: true },
-      { id: 109, name: 'shot stones', radius: 0.45, blocks_move: false, blocks_sight: false, cover: 1, difficult: true, height_ft: 2, hazard: null, feature: true },
+      { id: 108, name: 'ballista', radius: 1.0, blocks_move: true, blocks_sight: false, cover: 1, difficult: false, height_ft: 5, hazard: null, feature: true },
+      { id: 109, name: 'shot stones', radius: 0.55, blocks_move: false, blocks_sight: false, cover: 1, difficult: true, height_ft: 2, hazard: null, feature: true },
     ];
     const kinds = [...catalog, ...more.filter((m) => !catalog.some((c) => c.id === m.id))];
     const atlas = buildAtlas(app.renderer, kinds);

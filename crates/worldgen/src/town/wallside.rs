@@ -83,10 +83,10 @@ pub(crate) const KINDS: [(crate::battlemap::Kind, crate::battlemap::KindInfo); 2
         KindInfo { id: id as u16, name, radius, blocks_move, blocks_sight: false, cover, difficult, height_ft, hazard: None, feature: true }
     }
     [
-        // (A light bolt thrower on a wheeled frame, about 7 ft long along its turn, aimed along +x.)
-        (Kind::Ballista, k(Kind::Ballista, "ballista", 0.75, true, 1, false, 5.0)),
+        // (A field bolt thrower on its trestle, about 10 ft long along its turn, aimed along +x.)
+        (Kind::Ballista, k(Kind::Ballista, "ballista", 1.0, true, 1, false, 5.0)),
         // (A heap of dressed round stones, its own and a trebuchet's.)
-        (Kind::ShotStones, k(Kind::ShotStones, "shot stones", 0.45, false, 1, true, 2.0)),
+        (Kind::ShotStones, k(Kind::ShotStones, "shot stones", 0.55, false, 1, true, 2.0)),
     ]
 };
 
@@ -94,7 +94,7 @@ pub(crate) const KINDS: [(crate::battlemap::Kind, crate::battlemap::KindInfo); 2
 /// bastion's open back (the corner it replaced) and runs this far out along its middle line, this
 /// wide (ft; `render/walls.ts` `drawBastion` draws the same).
 pub const RAMP_FT: f64 = 10.0;
-pub const RAMP_HALF: f64 = 5.0;
+pub const RAMP_HALF: f64 = 6.5;
 
 /// A bastion's frame (`Layout::bastions`: f1, g1, tip, g2, f2, the corner `v`): `v`, the way out to
 /// its point (unit), and square to it.
@@ -192,19 +192,26 @@ pub fn bastion_props(q: &[P], thick: f64) -> Vec<super::Prop> {
     };
     // The ballista: as near the point as it fits, on its middle line rather than off it, shutting off
     // no square of the top (the best few tried in turn).
-    let rb = reach(Kind::Ballista, 1.0);
-    let mut tries: Vec<(f64, P)> = spots.iter().filter(|t| fits(t.2, rb, 1.0, &laid)).map(|t| (t.0 - 0.7 * t.1.abs(), t.2)).collect();
-    tries.sort_by(|x, y| y.0.total_cmp(&x.0));
-    if let Some(p) = tries.iter().take(60).map(|t| t.1).find(|&p| !cuts_off(p, rb)) {
-        out.push(super::Prop { at: p, rot, kind: Kind::Ballista, variant: (roll & 3) as u8, scale: 1.0 });
+    // (A field ballista, about 10 ft long, where it fits; on a top too small for one a lighter one, down to
+    // two thirds of that.)
+    let found = [1.0, 0.9, 0.8, 0.75, 0.65].into_iter().find_map(|k: f64| {
+        let rb = reach(Kind::Ballista, k);
+        let mut tries: Vec<(f64, P)> = spots.iter().filter(|t| fits(t.2, rb, 1.0, &laid)).map(|t| (t.0 - 0.7 * t.1.abs(), t.2)).collect();
+        tries.sort_by(|x, y| y.0.total_cmp(&x.0));
+        tries.iter().take(60).map(|t| t.1).find(|&p| !cuts_off(p, rb)).map(|p| (p, k, rb))
+    });
+    if let Some((p, k, rb)) = found {
+        out.push(super::Prop { at: p, rot, kind: Kind::Ballista, variant: (roll & 3) as u8, scale: k as f32 });
         laid.push((p, rb));
         // Its shot as near beside it as fits (the side by the roll).
-        let rs = reach(Kind::ShotStones, 1.0);
+        // (A smaller heap where a full one has no room.)
         let side = if roll >> 8 & 1 == 0 { 1.0 } else { -1.0 };
-        if let Some(c) = best(rs, 1.0, &laid, &|_, lt, c| -dist(c, p) + 0.3 * side * lt.signum()) {
-            if dist(c, p) < rb + rs + 10.0 {
-                out.push(super::Prop { at: c, rot: rot + 0.7, kind: Kind::ShotStones, variant: (roll >> 4 & 3) as u8, scale: 1.0 });
+        for k in [1.0, 0.8] {
+            let rs = reach(Kind::ShotStones, k);
+            if let Some(c) = best(rs, 1.0, &laid, &|_, lt, c| -dist(c, p) + 0.3 * side * lt.signum()).filter(|&c| dist(c, p) < rb + rs + 10.0) {
+                out.push(super::Prop { at: c, rot: rot + 0.7, kind: Kind::ShotStones, variant: (roll >> 4 & 3) as u8, scale: k as f32 });
                 laid.push((c, rs));
+                break;
             }
         }
     }

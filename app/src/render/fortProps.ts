@@ -42,7 +42,7 @@ function beam(g: Graphics, ax: number, ay: number, bx: number, by: number, w: nu
 
 /** A bolt along x from `x0` to `x1` at `y`: shaft, iron head forward, fletching at the back. */
 function bolt(g: Graphics, x0: number, x1: number, y: number, r: number) {
-  const w = r * 0.045;
+  const w = r * 0.05;
   g.moveTo(x0, y).lineTo(x1, y).stroke({ width: w * 2 + LINE, color: INK, cap: 'round' });
   g.moveTo(x0, y).lineTo(x1, y).stroke({ width: w * 2, color: WOOD[2], cap: 'round' });
   g.poly([x1 - r * 0.02, y - r * 0.06, x1 + r * 0.14, y, x1 - r * 0.02, y + r * 0.06]).fill(IRON[1]).stroke({ width: LINE * 0.75, color: INK, join: 'round' });
@@ -50,7 +50,7 @@ function bolt(g: Graphics, x0: number, x1: number, y: number, r: number) {
 }
 
 /**
- * A light ballista from above, aimed along +x (about 7 ft long): its trestle and feet, the stock with its slider,
+ * A field ballista from above, aimed along +x (about 10 ft long, its radius 5 ft): its trestle and feet, the stock with its slider,
  * the iron-banded torsion frame and its two rope skeins, the arms swept back and the bowstring to the claw, a
  * windlass at the back. Looks: 0 and 2 a bolt laid, 1 and 3 unloaded with spare bolts on the ground beside it;
  * 2 and 3 drawn (the string back on the claw).
@@ -61,46 +61,47 @@ export function ballista(g: Graphics, r: number, rnd: () => number, v: number) {
   const loaded = v % 2 === 0;
   // The trestle: a crossbar under the stock on two splayed legs, each on its foot block.
   for (const s of [-1, 1]) {
-    beam(g, -r * 0.05, 0, -r * 0.42, s * r * 0.62, r * 0.13, WOOD);
-    g.roundRect(-r * 0.54, s * r * 0.62 - r * 0.09, r * 0.24, r * 0.18, r * 0.04).fill(WOOD[0]).stroke({ width: LINE, color: INK });
+    beam(g, -r * 0.05, 0, -r * 0.42, s * r * 0.62, r * 0.15, WOOD);
+    g.roundRect(-r * 0.56, s * r * 0.62 - r * 0.1, r * 0.28, r * 0.2, r * 0.04).fill(WOOD[0]).stroke({ width: LINE, color: INK });
   }
-  beam(g, -r * 0.1, -r * 0.5, -r * 0.1, r * 0.5, r * 0.12, WOOD);
+  beam(g, -r * 0.1, -r * 0.5, -r * 0.1, r * 0.5, r * 0.14, WOOD);
   // Spare bolts on the ground (unloaded looks).
   if (!loaded) for (const y of [r * 0.78, r * 0.88]) bolt(g, -r * 0.55, r * 0.25 + rnd() * r * 0.06, y, r);
   // The stock along the middle, the slider in its groove.
-  beam(g, -r * 0.88, 0, r * 0.62, 0, r * 0.2, WOOD, OUT);
+  beam(g, -r * 0.9, 0, r * 0.64, 0, r * 0.26, WOOD, OUT);
   g.moveTo(-r * 0.7, 0).lineTo(r * 0.55, 0).stroke({ width: LINE * 0.8, color: WOOD[0] });
   const claw = drawn ? -r * 0.58 : r * 0.08;
   g.roundRect(claw - r * 0.08, -r * 0.08, r * 0.2, r * 0.16, r * 0.03).fill(IRON[1]).stroke({ width: LINE, color: INK });
   // The windlass at the back: a drum across with its spokes.
-  beam(g, -r * 0.8, -r * 0.24, -r * 0.8, r * 0.24, r * 0.1, WOOD);
+  beam(g, -r * 0.8, -r * 0.26, -r * 0.8, r * 0.26, r * 0.13, WOOD);
   for (const s of [-1, 1]) {
-    g.moveTo(-r * 0.8, s * r * 0.24).lineTo(-r * 0.8, s * r * 0.36).stroke({ width: r * 0.06 + LINE, color: INK, cap: 'round' });
-    g.moveTo(-r * 0.8, s * r * 0.24).lineTo(-r * 0.8, s * r * 0.36).stroke({ width: r * 0.06, color: WOOD[2], cap: 'round' });
+    g.moveTo(-r * 0.8, s * r * 0.26).lineTo(-r * 0.8, s * r * 0.4).stroke({ width: r * 0.08 + LINE, color: INK, cap: 'round' });
+    g.moveTo(-r * 0.8, s * r * 0.26).lineTo(-r * 0.8, s * r * 0.4).stroke({ width: r * 0.08, color: WOOD[2], cap: 'round' });
   }
   // The arms, swept back from the frame, and the string from their tips to the claw.
   const [ax, tipX, tipY] = [r * 0.42, drawn ? r * 0.12 : r * 0.24, r * 0.86];
-  g.moveTo(tipX, -tipY).lineTo(claw, 0).lineTo(tipX, tipY).stroke({ width: LINE * 0.9, color: ROPE[0], join: 'round' });
+  g.moveTo(tipX, -tipY).lineTo(claw, 0).lineTo(tipX, tipY).stroke({ width: LINE * 1.6, color: INK, join: 'round' });
+  g.moveTo(tipX, -tipY).lineTo(claw, 0).lineTo(tipX, tipY).stroke({ width: LINE * 0.9, color: ROPE[1], join: 'round' });
   for (const s of [-1, 1]) {
-    const pts = [ax, s * r * 0.3, ax + r * 0.06, s * r * 0.58, tipX + r * 0.04, s * tipY, tipX - r * 0.06, s * (tipY - r * 0.05), ax - r * 0.1, s * r * 0.58, ax - r * 0.08, s * r * 0.3];
-    g.poly(pts).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    g.moveTo(ax + r * 0.01, s * r * 0.34).lineTo(tipX, s * (tipY - r * 0.06)).stroke({ width: r * 0.035, color: WOOD[2], alpha: 0.85, cap: 'round' });
-    g.circle(tipX, s * tipY, r * 0.04).fill(IRON[1]).stroke({ width: LINE * 0.7, color: INK });
+    const pts = [ax + r * 0.02, s * r * 0.3, ax + r * 0.1, s * r * 0.58, tipX + r * 0.07, s * tipY, tipX - r * 0.08, s * (tipY - r * 0.06), ax - r * 0.13, s * r * 0.58, ax - r * 0.1, s * r * 0.3];
+    g.poly(pts).fill(WOOD[1]).stroke({ width: OUT, color: INK, join: 'round' });
+    g.moveTo(ax - r * 0.02, s * r * 0.34).lineTo(tipX - r * 0.02, s * (tipY - r * 0.08)).stroke({ width: r * 0.05, color: WOOD[2], alpha: 0.85, cap: 'round' });
+    g.circle(tipX, s * tipY, r * 0.055).fill(IRON[1]).stroke({ width: LINE * 0.7, color: INK });
   }
   // The torsion frame across the stock: a box banded with iron, a rope skein in each half.
-  g.roundRect(ax - r * 0.14, -r * 0.36, r * 0.28, r * 0.72, r * 0.04).fill(WOOD[0]).stroke({ width: OUT, color: INK });
+  g.roundRect(ax - r * 0.17, -r * 0.4, r * 0.34, r * 0.8, r * 0.05).fill(WOOD[0]).stroke({ width: OUT, color: INK });
   for (const s of [-1, 1]) {
-    g.circle(ax, s * r * 0.19, r * 0.1).fill(ROPE[0]).stroke({ width: LINE, color: INK });
-    g.circle(ax - r * 0.025, s * r * 0.19 - r * 0.025, r * 0.055).fill(ROPE[1]);
+    g.circle(ax, s * r * 0.2, r * 0.12).fill(ROPE[0]).stroke({ width: LINE, color: INK });
+    g.circle(ax - r * 0.03, s * r * 0.2 - r * 0.03, r * 0.065).fill(ROPE[1]);
   }
-  for (const y of [-r * 0.36, 0, r * 0.36]) g.rect(ax - r * 0.15, y - r * 0.025, r * 0.3, r * 0.05).fill(IRON[0]);
-  g.moveTo(ax - r * 0.13, -r * 0.34).lineTo(ax + r * 0.13, -r * 0.34).stroke({ width: LINE * 0.8, color: IRON[2], alpha: 0.8 });
+  for (const y of [-r * 0.4, 0, r * 0.4]) g.rect(ax - r * 0.18, y - r * 0.03, r * 0.36, r * 0.06).fill(IRON[0]);
+  g.moveTo(ax - r * 0.15, -r * 0.37).lineTo(ax + r * 0.15, -r * 0.37).stroke({ width: LINE * 0.8, color: IRON[2], alpha: 0.8 });
   // The bolt laid on the stock.
   if (loaded) bolt(g, claw + r * 0.1, r * 0.82, 0, r);
 }
 
 /**
- * A pile of round shot stones (about 4 ft across): a ring of stones on the ground and fewer on them, each lit to
+ * A pile of round shot stones (about 5 ft across): a ring of stones on the ground and fewer on them, each lit to
  * the upper left. Looks: the heap's stones and how they lie; 3 in a low timber crib.
  */
 export function shotStones(g: Graphics, r: number, rnd: () => number, v: number) {

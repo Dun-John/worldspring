@@ -669,6 +669,70 @@ function outsides(segs: Seg[], gates: Shape[] = []): number[] {
 /** Where the light falls on a segment's side `side` (+1 its +n). */
 const sideLit = (s: Seg, side: number) => lit(-s.uy * side, s.ux * side);
 
+/** A segment's end where the next run goes on from it (neither end bare): on its `inner` side (+1 its +n, the
+ * turn's inside) a line `d` across it stops `k * |d|` short of the end (the mitre with the next run's). */
+interface Mitre {
+  k: number;
+  inner: number;
+}
+/** A turn's outer corner: round the joint at (x, y) from angle `t0` through `sweep`; `lit` for each half (the
+ * first segment's, the second's) whether that side is the one whose parapet shades the walk. */
+interface Corner {
+  x: number;
+  y: number;
+  t0: number;
+  sweep: number;
+  lit: [boolean, boolean];
+}
+
+/** Where runs of a curtain meet end to end (`segs`, each joint once): each segment's ends' mitres (`[A, B]`)
+ * and the outer corners round the joints. */
+function mitres(segs: Seg[]): { cut: (Mitre | null)[][]; corners: Corner[] } {
+  const cut: (Mitre | null)[][] = segs.map(() => [null, null]);
+  const corners: Corner[] = [];
+  const end = (s: Seg, e: number) => (e ? [s.x1, s.y1] : [s.x0, s.y0]);
+  const litSide = (s: Seg) => (lit(-s.uy, s.ux) > 0 ? 1 : -1);
+  segs.forEach((s, i) => {
+    for (const e of [0, 1]) {
+      if (e ? s.bareB : s.bareA) continue;
+      const [x, y] = end(s, e);
+      for (let j = 0; j < segs.length && !cut[i][e]; j++) {
+        const t = segs[j];
+        for (const f of [0, 1]) {
+          if (j === i || (f ? t.bareB : t.bareA)) continue;
+          const [tx, ty] = end(t, f);
+          if (Math.abs(tx - x) + Math.abs(ty - y) >= 2) continue;
+          // (Into the joint along s, away from it along t.)
+          const [ix, iy] = e ? [s.ux, s.uy] : [-s.ux, -s.uy];
+          const [ox, oy] = f ? [-t.ux, -t.uy] : [t.ux, t.uy];
+          const [cr, dt] = [ix * oy - iy * ox, ix * ox + iy * oy];
+          if (dt < -0.97) continue;
+          const k = Math.abs(cr) / (1 + dt);
+          const inner = -s.uy * ox + s.ux * oy > 0 ? 1 : -1;
+          cut[i][e] = { k, inner };
+          if (i < j && k > 0.02) {
+            const innerT = t.uy * ix - t.ux * iy > 0 ? 1 : -1;
+            const t0 = Math.atan2(s.ux * -inner, -s.uy * -inner);
+            const t1 = Math.atan2(t.ux * -innerT, -t.uy * -innerT);
+            corners.push({ x, y, t0, sweep: Math.atan2(Math.sin(t1 - t0), Math.cos(t1 - t0)), lit: [litSide(s) === -inner, litSide(t) === -innerT] });
+          }
+          break;
+        }
+      }
+    }
+  });
+  return { cut, corners };
+}
+
+/** An annulus's sector round (x, y) from `r0` to `r1`, angle `t0` through `sweep`, as flat px pairs. */
+function sector(x: number, y: number, r0: number, r1: number, t0: number, sweep: number): number[] {
+  const n = Math.max(2, Math.ceil(Math.abs(sweep) / 0.12));
+  const q: number[] = [];
+  for (let k = 0; k <= n; k++) q.push(x + Math.cos(t0 + (sweep * k) / n) * r1, y + Math.sin(t0 + (sweep * k) / n) * r1);
+  for (let k = n; k >= 0; k--) q.push(x + Math.cos(t0 + (sweep * k) / n) * r0, y + Math.sin(t0 + (sweep * k) / n) * r0);
+  return q;
+}
+
 /**
  * Stone curtains: a soft shadow, ink and the stone body (round joints where no end is bare), a flagged walk
  * down the middle, a parapet with merlons along each side, the shade of the parapet facing the light across
@@ -706,13 +770,24 @@ function stoneWalls(g: Graphics, segs: Seg[]) {
   }
   joints((x, y) => g.circle(x, y, segs[0].half - PARAPET));
   g.fill(WK);
-  for (const s of segs) {
+  // (Where runs turn, the inner parapets mitred, the outer one carried round the joint: `mitres`.)
+  const { cut, corners } = mitres(segs);
+  const lim = (s: Seg, i: number, e: number, base: number, d: number) => {
+    const m = cut[i][e];
+    return m && Math.sign(d) === m.inner ? base + (e ? -1 : 1) * Math.abs(d) * m.k : base;
+  };
+  segs.forEach((s, i) => {
     const w = s.half - PARAPET;
+    const [lo, hi] = [lim(s, i, 0, 0, (cut[i][0]?.inner ?? 1) * s.half), lim(s, i, 1, s.l, (cut[i][1]?.inner ?? 1) * s.half)];
     for (let a = s.rnd() * FT * 2; a < s.l; a += FT * (2.4 + s.rnd() * 1.4)) {
-      g.moveTo(...s.at(a, -w)).lineTo(...s.at(a + (s.rnd() - 0.5) * FT * 0.4, w));
-      if (s.rnd() < 0.3) g.moveTo(...s.at(a, 0)).lineTo(...s.at(a + FT * (1.6 + s.rnd()), (s.rnd() - 0.5) * FT * 0.3));
+      const b = a + (s.rnd() - 0.5) * FT * 0.4;
+      if (a > lo && b > lo && a < hi && b < hi) g.moveTo(...s.at(a, -w)).lineTo(...s.at(b, w));
+      if (s.rnd() < 0.3) {
+        const [c, d] = [a + FT * (1.6 + s.rnd()), (s.rnd() - 0.5) * FT * 0.3];
+        if (a > lo && c < hi) g.moveTo(...s.at(a, 0)).lineTo(...s.at(c, d));
+      }
     }
-  }
+  });
   g.stroke({ width: 1.3, color: ST[0], alpha: 0.6 });
   if (brick()) {
     // Rose brick: a few bold light courses along the walk, their joints staggered.
@@ -724,29 +799,46 @@ function stoneWalls(g: Graphics, segs: Seg[]) {
     }
     g.stroke({ width: LINE * 0.8, color: ST[3], alpha: 0.85 });
   }
-  for (const s of segs) {
+  segs.forEach((s, i) => {
     const w = s.half - PARAPET;
     // The parapet on the side the light comes from shades the walk beside it.
     const side = lit(-s.uy, s.ux) > 0 ? 1 : -1;
-    g.poly([...s.at(0, side * w), ...s.at(s.l, side * w), ...s.at(s.l, side * (w - FT * 0.6)), ...s.at(0, side * (w - FT * 0.6))]);
+    const [d0, d1] = [side * w, side * (w - FT * 0.6)];
+    g.poly([...s.at(lim(s, i, 0, 0, d0), d0), ...s.at(lim(s, i, 1, s.l, d0), d0), ...s.at(lim(s, i, 1, s.l, d1), d1), ...s.at(lim(s, i, 0, 0, d1), d1)]);
+  });
+  for (const c of corners) {
+    const w = segs[0].half - PARAPET;
+    if (c.lit[0]) g.poly(sector(c.x, c.y, w - FT * 0.6, w, c.t0, c.sweep / 2));
+    if (c.lit[1]) g.poly(sector(c.x, c.y, w - FT * 0.6, w, c.t0 + c.sweep / 2, c.sweep / 2));
   }
   g.fill({ color: PLUM, alpha: 0.25 });
   // Each parapet one band of coping (lit on its edge toward the light), the crenels notches
   // through it (a ruin's wider, merlons gone), inked along the walk.
   const crenels: number[][] = [];
   const fallen: number[][] = [];
-  for (const s of segs) {
+  segs.forEach((s, i) => {
     const [a0, a1] = [s.bareA ? FT * 3 : 0, s.bareB ? s.l - FT * 3 : s.l];
-    if (a1 <= a0) continue;
+    if (a1 <= a0) return;
     for (const side of [-1, 1]) {
       const [d0, d1] = [side * (s.half - PARAPET), side * s.half];
-      g.poly([...s.at(a0, d0), ...s.at(a1, d0), ...s.at(a1, d1), ...s.at(a0, d1)]).fill(ST[2]);
+      const [p0, p1, q0, q1] = [lim(s, i, 0, a0, d0), lim(s, i, 1, a1, d0), lim(s, i, 0, a0, d1), lim(s, i, 1, a1, d1)];
+      if (Math.min(p1, q1) <= Math.max(p0, q0)) continue;
+      g.poly([...s.at(p0, d0), ...s.at(p1, d0), ...s.at(q1, d1), ...s.at(q0, d1)]).fill(ST[2]);
       const toLight = lit(-s.uy * side, s.ux * side) > 0;
       const e = toLight ? d1 - side * FT * 0.3 : d0 + side * FT * 0.3;
-      g.moveTo(...s.at(a0, e)).lineTo(...s.at(a1, e)).stroke({ width: FT * 0.3, color: ST[3], alpha: 0.8 });
-      crenelRun(s.at, a0, a1, d0, d1, s.rnd, crenels, s.ruined, fallen);
-      g.moveTo(...s.at(a0, d0)).lineTo(...s.at(a1, d0));
+      g.moveTo(...s.at(lim(s, i, 0, a0, e), e)).lineTo(...s.at(lim(s, i, 1, a1, e), e)).stroke({ width: FT * 0.3, color: ST[3], alpha: 0.8 });
+      crenelRun(s.at, Math.max(p0, q0), Math.min(p1, q1), d0, d1, s.rnd, crenels, s.ruined, fallen);
+      g.moveTo(...s.at(p0, d0)).lineTo(...s.at(p1, d0));
     }
+  });
+  // The outer parapet round each turn's joint, its coping and merlons carried on round.
+  for (const c of corners) {
+    const [r0, r1] = [segs[0].half - PARAPET, segs[0].half];
+    g.poly(sector(c.x, c.y, r0, r1, c.t0, c.sweep)).fill(ST[2]);
+    const rm = (r0 + r1) / 2;
+    const dir = Math.sign(c.sweep);
+    const at: At = (a, d) => [c.x + Math.cos(c.t0 + (dir * a) / rm) * d, c.y + Math.sin(c.t0 + (dir * a) / rm) * d];
+    crenelRun(at, 0, Math.abs(c.sweep) * rm, r0, r1, rngAt(c.x * 1.7, c.y * 1.3), crenels);
   }
   g.stroke({ width: brick() ? 2.6 : 1.8, color: INK, join: 'miter' });
   crenelFill(g, crenels);
@@ -912,11 +1004,13 @@ function earthWalls(g: Graphics, segs: Seg[]) {
 }
 
 /** Packed earth on a bastion's top: dark, mid, light (three close matte tones). */
-const EARTH_TOP = [0x8d7658, 0xa68e6a, 0xbca57f];
+const EARTH_TOP = [0xa48d6a, 0xbca580, 0xd0bc96];
 /** The ramp up onto a bastion from the town (`town::wallside::RAMP_FT`, `RAMP_HALF`): ft out from the corner, half
  * its width. */
 const RAMP_FT = 10;
-const RAMP_HALF = 5;
+const RAMP_HALF = 6.5;
+/** How deep the level landings at the ramp's foot and head are (ft). */
+const RAMP_LAND = 3;
 
 /** A bastion's ramp (px): its foot along the open back (on either side of the corner `v`), its head out along the
  * middle line: foot on one side, the corner, foot on the other side, head, head. */
@@ -972,7 +1066,7 @@ export function drawBastion(g: Graphics, s: Shape) {
   };
   for (let k = 0; k < 3; k++) {
     const [px, py] = at(depth * (0.35 + rnd() * 0.4), (rnd() - 0.5) * depth * 0.5);
-    patch(px, py, FT * (3 + rnd() * 2.5), k === 0 ? EARTH_TOP[0] : EARTH_TOP[2], k === 0 ? 0.35 : 0.45);
+    patch(px, py, FT * (3 + rnd() * 2.5), k === 0 ? EARTH_TOP[0] : EARTH_TOP[2], k === 0 ? 0.3 : 0.45);
   }
   // A worn track from the ramp's head toward the point, lighter.
   const [t0x, t0y] = at(RAMP_FT * FT, 0);
@@ -987,7 +1081,7 @@ export function drawBastion(g: Graphics, s: Shape) {
     let [nx, ny] = [-(by - ay) / l, (bx - ax) / l];
     if (nx * mx + ny * my > 0) [nx, ny] = [-nx, -ny];
     const w = s.size / 2 + FT * 1.2;
-    g.poly([ax, ay, bx, by, bx + nx * w, by + ny * w, ax + nx * w, ay + ny * w]).fill({ color: EARTH_TOP[0], alpha: 0.3 });
+    g.poly([ax, ay, bx, by, bx + nx * w, by + ny * w, ax + nx * w, ay + ny * w]).fill({ color: EARTH_TOP[0], alpha: 0.2 });
   }
   // A few stones in the earth.
   for (let k = 0; k < 4; k++) {
@@ -996,10 +1090,9 @@ export function drawBastion(g: Graphics, s: Shape) {
     const r = FT * (0.35 + rnd() * 0.25);
     g.ellipse(px, py, r * 1.2, r).fill(ST[2]).stroke({ width: LINE * 0.8, color: INK });
   }
-  // The ramp: the cut's floor, its treads square to the way up, lit on their upper edge; the cut's side toward the
-  // light shades the floor beside it.
+  // The ramp: a flight of stone steps cut up into the earth from the town, a level landing at its foot (on the
+  // town's ground) and at its head (on the top); each step's nose inked, lit on its tread, its riser's shade below.
   const ramp = bastionRamp(pts);
-  g.poly(ramp).fill(mix(EARTH_TOP[1], EARTH_TOP[0], 0.45));
   const hw = RAMP_HALF * FT;
   const [fa, fb] = [ramp.slice(0, 2), ramp.slice(4, 6)];
   // (Which foot stands on the back edge from the corner to f1, which on the one to f2.)
@@ -1007,27 +1100,49 @@ export function drawBastion(g: Graphics, s: Shape) {
   const [foot1, foot2] = onF1 ? [fa, fb] : [fb, fa];
   const footAx = (p: number[]) => (p[0] - vx) * ox + (p[1] - vy) * oy;
   const start = Math.min(footAx(fa), footAx(fb));
-  for (let a = start + FT * 2.4; a < RAMP_FT * FT - FT * 0.5; a += FT * 2.4) {
-    // (Clipped to the ramp: its sides, and the back edges near its foot.)
-    const lat = (side: number) => {
-      const f = side < 0 ? fa : fb;
-      const fAx = footAx(f);
-      if (a >= fAx) return side * hw;
-      const r = Math.max(0, a) / Math.max(1e-6, fAx);
-      return side * hw * r;
-    };
-    const [l0, l1] = [lat(-1), lat(1)];
+  const [len, land, cope] = [RAMP_FT * FT, RAMP_LAND * FT, FT * 1.3];
+  // (The landing at the foot: flags on the town's ground along the ramp's foot.)
+  const below = [...fa, vx, vy, ...fb, fb[0] - ox * land, fb[1] - oy * land, fa[0] - ox * land, fa[1] - oy * land];
+  g.poly(below).fill(ST[2]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.moveTo(...at(start - land * 0.5, -hw)).lineTo(...at(start - land * 0.5, hw)).stroke({ width: LINE * 0.7, color: ST[0], alpha: 0.7 });
+  // (The landing at the head: flags level with the top.)
+  const above = [...at(len, -hw), ...at(len, hw), ...at(len + land, hw), ...at(len + land, -hw)];
+  g.poly(above).fill(ST[2]);
+  g.moveTo(...at(len + land * 0.5, -hw + cope)).lineTo(...at(len + land * 0.5, hw - cope)).stroke({ width: LINE * 0.7, color: ST[0], alpha: 0.7 });
+  g.poly(above).stroke({ width: LINE, color: INK, join: 'round' });
+  // (The flight: its floor, then each step's riser shade, lit tread and inked nose, clipped to the ramp: its sides,
+  // and the back edges near its foot.)
+  g.poly(ramp).fill(ST[1]);
+  const lat = (a: number, side: number) => {
+    const f = side < 0 ? fa : fb;
+    const fAx = footAx(f);
+    if (a >= fAx) return side * (hw - cope);
+    return side * Math.max(0, (hw * Math.max(0, a)) / Math.max(1e-6, fAx) - cope);
+  };
+  const pitch = (len - start) / Math.max(3, Math.round((len - start) / (FT * 2)));
+  const steps: number[] = [];
+  for (let a = start + pitch; a < len - FT * 0.3; a += pitch) steps.push(a);
+  for (const a of steps) {
+    const [l0, l1] = [lat(a, -1), lat(a, 1)];
     if (l1 - l0 < FT) continue;
-    g.moveTo(...at(a, l0 + FT * 0.3)).lineTo(...at(a, l1 - FT * 0.3));
+    g.poly([...at(a, l0), ...at(a, l1), ...at(a - FT * 0.55, l1), ...at(a - FT * 0.55, l0)]);
   }
-  g.stroke({ width: LINE, color: INK, alpha: 0.75, cap: 'round' });
-  for (let a = start + FT * 2.4; a < RAMP_FT * FT - FT * 0.5; a += FT * 2.4) {
-    g.moveTo(...at(a + FT * 0.35, -hw * 0.55)).lineTo(...at(a + FT * 0.35, hw * 0.55));
+  g.fill({ color: PLUM, alpha: 0.3 });
+  for (const a of steps) {
+    const [l0, l1] = [lat(a, -1), lat(a, 1)];
+    if (l1 - l0 < FT) continue;
+    g.moveTo(...at(a + FT * 0.3, l0 + FT * 0.2)).lineTo(...at(a + FT * 0.3, l1 - FT * 0.2));
   }
-  g.stroke({ width: FT * 0.4, color: EARTH_TOP[2], alpha: 0.7, cap: 'round' });
+  g.stroke({ width: FT * 0.35, color: ST[3], alpha: 0.8, cap: 'round' });
+  for (const a of steps) {
+    const [l0, l1] = [lat(a, -1), lat(a, 1)];
+    if (l1 - l0 < FT) continue;
+    g.moveTo(...at(a, l0)).lineTo(...at(a, l1));
+  }
+  g.moveTo(...at(len, -hw)).lineTo(...at(len, hw));
+  g.stroke({ width: LINE, color: INK, cap: 'round' });
   // The revetment: a stone coping along the open back and down the ramp's sides (the earth stands up behind it),
-  // its shadow on the town where it faces away from the light, inked on its outer edge.
-  const cope = FT * 1.5;
+  // its shadow on the town where it faces away from the light, inked on both edges.
   const runs: [number, number, number, number][] = [
     [pts[8], pts[9], foot2[0], foot2[1]],
     [foot1[0], foot1[1], pts[0], pts[1]],
@@ -1038,17 +1153,18 @@ export function drawBastion(g: Graphics, s: Shape) {
   runs.forEach(([ax, ay, bx, by], idx) => {
     const l = Math.hypot(bx - ax, by - ay);
     if (l < FT * 0.5) return;
-    // (Into the earth: toward the top's middle for the back; away from the ramp's middle line for its sides.)
+    // (Into the earth: toward the top's middle for the back; into the ramp from its sides.)
     let [nx, ny] = [-(by - ay) / l, (bx - ax) / l];
-    const away = idx >= 2 ? Math.sign(((ax + bx) / 2 - vx) * sx + ((ay + by) / 2 - vy) * sy) : 0;
+    const away = idx >= 2 ? -Math.sign(((ax + bx) / 2 - vx) * sx + ((ay + by) / 2 - vy) * sy) : 0;
     const [rx, ry] = idx >= 2 ? [sx * away, sy * away] : [cx - ax, cy - ay];
     if (nx * rx + ny * ry < 0) [nx, ny] = [-nx, -ny];
-    // (Its shadow out over the lower ground, where the face looks away from the light.)
-    if (-(nx * LX + ny * LY) < 0.2) g.poly([ax, ay, bx, by, bx - nx * FT * 1.6, by - ny * FT * 1.6, ax - nx * FT * 1.6, ay - ny * FT * 1.6]).fill({ color: PLUM, alpha: 0.22 });
+    // (The back's shadow out over the town where it looks away from the light; a side's is the riser shade.)
+    if (idx < 2 && -(nx * LX + ny * LY) < 0.2) g.poly([ax, ay, bx, by, bx - nx * FT * 1.2, by - ny * FT * 1.2, ax - nx * FT * 1.2, ay - ny * FT * 1.2]).fill({ color: PLUM, alpha: 0.16 });
     const band = [ax, ay, bx, by, bx + nx * cope, by + ny * cope, ax + nx * cope, ay + ny * cope];
-    g.poly(band).fill(nx * LX + ny * LY < 0 ? ST[2] : ST[1]);
-    g.moveTo(ax + nx * cope, ay + ny * cope).lineTo(bx + nx * cope, by + ny * cope).stroke({ width: LINE * 0.75, color: ST[0], alpha: 0.8 });
+    g.poly(band).fill(nx * LX + ny * LY < 0 ? ST[2] : mix(ST[1], ST[2], 0.4));
     g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: LINE, color: INK, cap: 'round' });
+    if (idx >= 2) g.moveTo(ax + nx * cope, ay + ny * cope).lineTo(bx + nx * cope, by + ny * cope).stroke({ width: LINE, color: INK, cap: 'round' });
+    else g.moveTo(ax + nx * cope, ay + ny * cope).lineTo(bx + nx * cope, by + ny * cope).stroke({ width: LINE * 0.75, color: ST[0], alpha: 0.8 });
   });
   use(null);
 }
