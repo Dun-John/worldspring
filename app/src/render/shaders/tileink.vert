@@ -18,6 +18,7 @@ flat out float vHalf;
 flat out float vFade;
 flat out float vStyle;
 flat out float vPpf;
+flat out float vJoin;
 
 uniform mat3 uProjectionMatrix;
 uniform mat3 uWorldTransformMatrix;
@@ -46,6 +47,7 @@ void main() {
     // Steps as paved streets do (class 3 on roads).
     vFade = style < 0.5 ? smoothstep(0.04, 0.12, uPpf) : (style > 2.5 && style < 3.5 ? 1.0 - smoothstep(6.0, 14.0, 1.0 / uPpf) : 1.0);
     vStyle = style;
+    vJoin = aQ.y;
     vPpf = uPpf;
     gl_Position = vec4((uProjectionMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
     if (vFade <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);

@@ -1267,6 +1267,18 @@ function joinWallInk(g: RiverGeometry, starts: number[], v: Float32Array): void 
     if (dot > 0.94 * Math.hypot(ux, uy) * Math.hypot(wx, wy)) return 3;
     return cr > 0 ? 1 : 2;
   };
+  // (Pieces of a run that are lines of their own join where their end points meet: end point -> [end vertex, the vertex beside it].)
+  const key = (i: number) => `${Math.round(v[i * 4] * 2)},${Math.round(v[i * 4 + 1] * 2)}`;
+  const ends = new Map<string, number[][]>();
+  for (let l = 0; l + 1 < starts.length; l++) {
+    const [v0, v1] = [starts[l], starts[l + 1]];
+    if (v1 - v0 < 2 || !isWall(v0)) continue;
+    for (const e of [[v0, v0 + 1], [v1 - 1, v1 - 2]]) ends.set(key(e[0]), [...(ends.get(key(e[0])) ?? []), e]);
+  }
+  const mate = (e: number, beside: number) => {
+    const m = (ends.get(key(e)) ?? []).filter((o) => o[0] !== e);
+    return m.length === 1 && m[0][1] !== beside ? m[0][1] : -1;
+  };
   let s = 0;
   for (let l = 0; l + 1 < starts.length; l++) {
     const [v0, v1] = [starts[l], starts[l + 1]];
@@ -1275,8 +1287,9 @@ function joinWallInk(g: RiverGeometry, starts: number[], v: Float32Array): void 
     for (let i = v0; i + 1 < v1; i++) {
       let code = 0;
       if (wall) {
-        const a = i > v0 ? turn(i - 1, i, i + 1) : ring ? turn(v1 - 2, i, i + 1) : 0;
-        const b = i + 2 < v1 ? turn(i, i + 1, i + 2) : ring ? turn(i, i + 1, v0 + 1) : 0;
+        const [ma, mb] = [i > v0 || ring ? -1 : mate(i, i + 1), i + 2 < v1 || ring ? -1 : mate(i + 1, i)];
+        const a = i > v0 ? turn(i - 1, i, i + 1) : ring ? turn(v1 - 2, i, i + 1) : ma >= 0 ? turn(ma, i, i + 1) : 0;
+        const b = i + 2 < v1 ? turn(i, i + 1, i + 2) : ring ? turn(i, i + 1, v0 + 1) : mb >= 0 ? turn(i, i + 1, mb) : 0;
         code = a + 4 * b;
       }
       for (let c = 0; c < 4; c++) g.q[(s * 4 + c) * 2 + 1] = code;
