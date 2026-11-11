@@ -357,8 +357,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             // (A square where streets meet need not be convex: drawn as triangles.)
             // (A castle's bailey is its block's, not paved.)
             for p in l.plazas.iter().filter(|p| l.tier != crate::t0::settle::Tier::Village && !p.kind.is_lawn() && p.kind != crate::town::PlazaKind::Bailey) {
+                // (R5 item 123: a steppe town's squares are trodden dirt, as its yurts' ground.)
+                let code = if crate::town::yurts::dirt_squares(&l) { 8 } else { 1 };
                 for tri in ears(&p.pts) {
-                    push(&tri, 1);
+                    push(&tri, code);
                 }
             }
             // Parks as their battlemaps lay them out (the lawn is the ground, as a green's): gravel

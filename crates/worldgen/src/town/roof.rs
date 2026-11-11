@@ -240,33 +240,21 @@ pub fn look(l: &Layout, b: &Building) -> Look {
                 (pick(u0, &[(Hide, 7), (Thatch, 3)]), Round)
             } else if hall_ring(l, b).is_some() {
                 (Hide, Round)
-            } else if role == Role::Home && b.ward != Ward::Castle {
-                // (R5 towns, 114: a home not on a ring low and nearly flat under felt or turf.)
-                let m = match rich {
-                    0 => pick(u0, &[(Hide, 5), (Turf, 5)]),
-                    1 => pick(u0, &[(Hide, 6), (Turf, 4)]),
-                    _ => pick(u0, &[(Hide, 8), (Turf, 2)]),
-                };
-                (m, Flat)
             } else {
-                let glaze = if city && rich == 2 { 3 } else { 0 };
+                // (R5 item 123: ordinary roofs as before 114, the European hip and gable; the felt halls above.)
                 let m = match role {
-                    // (A monastery, a mausoleum, catacombs as they were.)
-                    Role::Sacred if !matches!(key, "temple" | "shrine") => pick(u0, &[(GlazedTile, 4), (Copper, 3), (Hide, 3)]),
-                    Role::Sacred => pick(u0, &[(Hide, 5), (Plank, 2), (GlazedTile, glaze + 1)]),
-                    Role::Civic => pick(u0, &[(Hide, 4), (Plank, 3), (Thatch, 1), (GlazedTile, glaze)]),
+                    Role::Sacred => pick(u0, &[(GlazedTile, 4), (Copper, 3), (Hide, 3)]),
+                    Role::Civic => pick(u0, &[(Shingle, 3), (GlazedTile, 3), (Hide, 2), (ClayTile, 2)]),
                     Role::Working => pick(u0, &[(Plank, 5), (Thatch, 3), (Hide, 2)]),
                     _ => match rich {
                         0 => pick(u0, &[(Hide, 5), (Thatch, 5)]),
-                        1 => pick(u0, &[(Thatch, 5), (Hide, 3), (Plank, 2)]),
-                        _ => pick(u0, &[(Hide, 4), (Plank, 4), (Thatch, 2)]),
+                        1 => pick(u0, &[(Thatch, 6), (Hide, 2), (Shingle, 2)]),
+                        _ => pick(u0, &[(Shingle, 4), (Thatch, 3), (ClayTile, 3)]),
                     },
                 };
-                // (A shrine, a mausoleum, a tomb round where its lot holds a ring; a temple too big
-                // for its lot's ring hipped or gabled; a monastery's or mausoleum's dome as it was.)
-                let shape = if temple && compact && key != "temple" {
+                let shape = if temple && compact {
                     Dome
-                } else if role == Role::Sacred && key != "temple" && u1 < 0.5 && ring() {
+                } else if role == Role::Sacred && u1 < 0.5 && ring() {
                     Round
                 } else {
                     pick(u1, &[(Hip, 6), (Gable, 4)])
@@ -287,7 +275,7 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     // over it with the sails): lime-washed in the south and the dry lands, else tarred boards,
     // stone or weatherboard.
     let (material, shape) = if key == "windmill" {
-        (if matches!(culture, 2 | 3) { Whitewash } else if culture == 4 { Plank } else { pick(u0, &[(Plank, 4), (Slate, 3), (Shingle, 3)]) }, Cone)
+        (if matches!(culture, 2 | 3) { Whitewash } else { pick(u0, &[(Plank, 4), (Slate, 3), (Shingle, 3)]) }, Cone)
     } else if matches!(key, "watchtower" | "lighthouse") {
         // (R5 M20: an islet's watchtower and a breakwater's lighthouse round towers under a slate cone.)
         (Slate, Cone)

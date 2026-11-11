@@ -1275,6 +1275,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut fld_h = vec![0u8; HS * HS];
     // A village's green per halo square (1; 0 elsewhere): its cover is the green's own (`enforce`).
     let mut green_h = vec![0u8; HS * HS];
+    // (R5 item 123: squares of a steppe town or one with yurts, packed dirt, not cobbles.)
+    let mut dirt_sq = vec![false; HS * HS];
     // Ground kept clear round a way underground (its own ground stays: graveyard grass, ruin
     // dirt, street cobbles).
     let mut ent_h = vec![false; HS * HS];
@@ -1523,6 +1525,21 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // round it as it is.
             let lawn = pl.kind.is_lawn() && l.tier >= crate::t0::settle::Tier::Town;
             stamp(p, if lawn { URBAN_PARK } else { URBAN_PLAZA }, &mut urb_h);
+            if !lawn && pl.kind != K::Bailey && crate::town::yurts::dirt_squares(&l) {
+                let b = bbox(p);
+                if overlaps(b) {
+                    let (i0, j0, i1, j1) = range(b);
+                    if i1 >= 0.0 && j1 >= 0.0 {
+                        for j in j0..=j1 as usize {
+                            for i in i0..=i1 as usize {
+                                if crate::town::geom::contains(p, center(i, j)) {
+                                    dirt_sq[j * HS + i] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if pl.kind == K::Green && !lawn {
                 stamp(p, 1, &mut green_h);
             }
@@ -3034,6 +3051,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 URBAN_PLAZA if look_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&crate::ground::Look::Made) => chunk.surface[k] = Surface::Cobble,
                 URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
                 URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {}
+                URBAN_PLAZA if dirt_sq[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Dirt,
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
                 // (Not at the mouth of a way underground on the flight: it keeps the street.)
                 URBAN_STREET if chunk.urban[k] == URBAN_STREET && stair_h.as_ref().is_some_and(|s| s[(k / SQ + 1) * HS + k % SQ + 1]) => chunk.surface[k] = Surface::Stairs,

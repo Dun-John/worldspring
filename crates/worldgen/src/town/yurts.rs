@@ -517,6 +517,12 @@ pub fn fences(l: &Layout, near: [f64; 4]) -> Vec<(P, P)> {
 
 /// The yurts on the town's plan: their trodden ground (a camp clearing's, kind 8), their pens' fences
 /// (`horses::PLAN_FENCE`).
+/// Whether a town's squares are packed dirt, not cobbles (R5 item 123): a steppe town, or any town with
+/// yurts, of town size or more (a village's squares are never paved).
+pub fn dirt_squares(l: &Layout) -> bool {
+    l.tier >= crate::t0::settle::Tier::Town && (l.culture % 5 == 4 || !l.yurts.is_empty())
+}
+
 pub fn plan_polys(l: &Layout, push: &mut dyn FnMut(&[P], u32)) {
     for y in &l.yurts {
         push(&y.trodden, 8);
