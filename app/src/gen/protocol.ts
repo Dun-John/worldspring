@@ -150,6 +150,9 @@ export interface Created {
   in_building?: string;
   way?: string;
   removed?: boolean;
+  /** A drawn building on a deck put down by hand: a bridge (`v:<id>`) or a pier or breakwater
+   * (`q:<id>`); its ground floor at the deck's level, no cellar (R5 M20). */
+  on?: string;
   /** A castle's pieces changed by hand (`worldgen::world::CastlePiece`), by `keep` or a yard
    * building's number (`b:<layout>:<number>`). */
   pieces?: Record<string, CastlePiece>;
@@ -1246,6 +1249,43 @@ function withGraveRows(polys: TileSitePolys, tileFt: number): TileSitePolys {
 const TOWER_KIND = 0xfe;
 
 /**
+ * A wall run drawn as one band: the capsule of each piece of a polyline has a round end with its own outline, which
+ * across a joint reads as a bead. Each wall piece's `q.y` (unused by `tileink` otherwise) carries a joint code per end
+ * (0 none, 1 the run turns left there, 2 right, 3 shallow; end A + 4 * end B): the shader draws a joined end's cap without its
+ * rim except on the outside of the bend. A ring (first point = last) joins at its seam too.
+ */
+function joinWallInk(g: RiverGeometry, starts: number[], v: Float32Array): void {
+  const isWall = (i: number) => {
+    const st = v[i * 4 + 3];
+    return (st >= 1 && st < 2) || st === 5 || st === 6;
+  };
+  // (3: a shallow bend, the cap bare all round; 1 or 2: a sharp left or right turn, rim kept on its outside.)
+  const turn = (a: number, b: number, c: number) => {
+    const [ux, uy, wx, wy] = [v[b * 4] - v[a * 4], v[b * 4 + 1] - v[a * 4 + 1], v[c * 4] - v[b * 4], v[c * 4 + 1] - v[b * 4 + 1]];
+    const cr = ux * wy - uy * wx;
+    const dot = ux * wx + uy * wy;
+    if (dot > 0.94 * Math.hypot(ux, uy) * Math.hypot(wx, wy)) return 3;
+    return cr > 0 ? 1 : 2;
+  };
+  let s = 0;
+  for (let l = 0; l + 1 < starts.length; l++) {
+    const [v0, v1] = [starts[l], starts[l + 1]];
+    const wall = v1 - v0 > 1 && isWall(v0);
+    const ring = wall && v1 - v0 > 3 && v[v0 * 4] === v[(v1 - 1) * 4] && v[v0 * 4 + 1] === v[(v1 - 1) * 4 + 1];
+    for (let i = v0; i + 1 < v1; i++) {
+      let code = 0;
+      if (wall) {
+        const a = i > v0 ? turn(i - 1, i, i + 1) : ring ? turn(v1 - 2, i, i + 1) : 0;
+        const b = i + 2 < v1 ? turn(i, i + 1, i + 2) : ring ? turn(i, i + 1, v0 + 1) : 0;
+        code = a + 4 * b;
+      }
+      for (let c = 0; c < 4; c++) g.q[(s * 4 + c) * 2 + 1] = code;
+      s++;
+    }
+  }
+}
+
+/**
  * Settlement fills and ink for one tile. `looks` (`TerrainPayload.siteLooks`) and `tileFt` (the tile's side in ft)
  * give the plan the walls' look by culture group: a stone wall's ink tinted by its stone, a palisade or rammed
  * earth wall by its material (else guessed from its width), D, octagonal and square towers as their shapes
@@ -1501,6 +1541,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
   }
   starts.push(o / 4);
   const ink = buildRiverGeometry({ starts: new Uint32Array(starts), verts: out.subarray(0, o) });
+  if (ink) joinWallInk(ink, starts, out.subarray(0, o));
   if (!fill && !ink) return null;
   return { fill, ink };
 }

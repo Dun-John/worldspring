@@ -276,7 +276,7 @@ fn yard_ok(g: &Ground, l: &Layout, yard: &[P]) -> bool {
 
 fn new_building(site: &Site, poly: Vec<P>, ward: Ward, func: Option<usize>, structure: Structure) -> Building {
     let pad = site.pad(&poly);
-    Building { poly, ward, func: func.map(|f| f as u16), residential: 1, name: None, floors: 1, pad_ft: pad, structure, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None }
+    Building { poly, ward, func: func.map(|f| f as u16), residential: 1, name: None, floors: 1, pad_ft: pad, structure, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None }
 }
 
 /// The share of a village's crofts hedged (the rest fenced), by the land round it.

@@ -100,6 +100,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             id: 0,
             parts: Vec::new(),
             keep: None,
+            deck: None,
         });
     };
     match p.kind {
@@ -246,9 +247,21 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             // Drawn by hand: one building, as the world file has it.
             if let Some(c) = created {
                 let poly: Vec<P> = c.poly.iter().map(|q| sub(*q, center)).collect();
-                if poly.len() >= 3 {
-                    let pad_ft = Open::new(world, t0, center, &c.poly).pad(&poly);
-                    buildings.push(drawn(c, poly, pad_ft, &mut rng, t0, center));
+                // (R5 M20: on a deck put down by hand, at its level, with no cellar; none once
+                // the deck is gone.)
+                match c.on.as_deref() {
+                    Some(on) => {
+                        if let Some((top, line)) = crate::wharf::deck_of(world, t0, on).filter(|_| poly.len() >= 3) {
+                            let mut b = drawn(c, poly, top, &mut rng, t0, center);
+                            b.deck = Some(line);
+                            buildings.push(b);
+                        }
+                    }
+                    None if poly.len() >= 3 => {
+                        let pad_ft = Open::new(world, t0, center, &c.poly).pad(&poly);
+                        buildings.push(drawn(c, poly, pad_ft, &mut rng, t0, center));
+                    }
+                    None => {}
                 }
             }
         }
@@ -384,6 +397,7 @@ fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, 
         id: 0,
         parts: Vec::new(),
         keep: None,
+        deck: None,
     };
     apply_looks(&mut b, c.roof.as_deref(), c.tint.as_deref(), c.structure.as_deref());
     apply_roof(&mut b, c.material.as_deref(), c.shape.as_deref(), c.shade);

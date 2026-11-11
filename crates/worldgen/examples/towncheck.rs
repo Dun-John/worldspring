@@ -4908,7 +4908,7 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
         let castle = if !l.castles.is_empty() || l.buildings.iter().any(|b| b.ward == Ward::Castle) { "C" } else { "-" };
         // (Without the keep's mark, nor an empty list of forecourts or grounds, so that the hashes
         // compare with trees from before them.)
-        let mut text = format!("{l:?}").replace(", grounds: [] }", " }").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }").replace(", wheels: [] }", " }").replace(", crofts: [] }", " }");
+        let mut text = format!("{l:?}").replace(", lined: None }", " }").replace(", deck: None }", " }").replace(", grounds: [] }", " }").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }").replace(", wheels: [] }", " }").replace(", crofts: [] }", " }");
         for k in ["Great", "Hall", "L", "T", "Shell", "Plain"] {
             text = text.replace(&format!(", keep: Some({k}) }}"), " }");
         }
@@ -5774,6 +5774,15 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
         "bridges over an islet",
         "deck squares over an islet wet",
         "deck squares over an islet stepped (> 1 ft)",
+        "metropolises",
+        "lined bridges",
+        "bridge houses",
+        "bridge houses with a cellar",
+        "bridge houses with a level below the deck",
+        "bridge houses with the front door off the lane",
+        "bridge houses off the deck level (> 0.5 ft)",
+        "lined lane squares wet or built on",
+        "lined lane steps (> 1 ft)",
     ]);
     let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
     let islets: Vec<_> = worldgen::t0::islets::islets(&ctx.ex.t0).to_vec();
@@ -5843,6 +5852,91 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
                 r.add("deck squares over an islet stepped (> 1 ft)", (hi - lo) as f64, format!("{tag} bridge {i}: {lo:.1} to {hi:.1} ft"));
             }
         }
+    }
+    // R5 M20: lined bridges. Every house's pad against the deck squares just outside its walls
+    // (on the span, not under a building), and the lane down the middle walked end to end.
+    for si in 0..ctx.ex.t0.settlements.len() {
+        if ctx.ex.t0.settlements[si].tier != worldgen::t0::settle::Tier::Metropolis {
+            continue;
+        }
+        r.tally("metropolises", 1);
+        let l = town::layout(&ctx.ex.world, &ctx.ex.t0, si);
+        // (Its longest bridge, landings and all: over 148 ft, it may span 120 ft of water.)
+        let longest = l.bridges.iter().map(|d| dist(d[0], d[1]).max(dist(d[1], d[2]))).fold(0.0, f64::max);
+        say!("  metropolis L{si}: longest bridge {longest:.0} ft{}", if l.lined.is_some() { ", lined" } else { "" });
+        let Some((deck, level)) = l.lined.clone() else { continue };
+        let houses: Vec<&town::Building> = l.buildings.iter().filter(|b| b.deck.is_some()).collect();
+        let (a, b) = (lerp(deck[0], deck[3], 0.5), lerp(deck[1], deck[2], 0.5));
+        let tag = format!("L{si} span {:.0} ft at {}", dist(a, b), at(lerp(a, b, 0.5)));
+        r.add("lined bridges", houses.len() as f64, format!("{tag}: {} houses, level {level:.1}", houses.len()));
+        r.tally("bridge houses", houses.len());
+        let bb = bbox(&deck);
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let mut chunks: Vec<(f64, f64, Rc<Chunk>)> = Vec::new();
+        for ky in k(bb[1] - 10.0)..=k(bb[3] + 10.0) {
+            for kx in k(bb[0] - 10.0)..=k(bb[2] + 10.0) {
+                chunks.push((kx as f64 * size, ky as f64 * size, ctx.chunk(kx, ky)));
+            }
+        }
+        let squares = |f: &mut dyn FnMut(P, &Chunk, usize)| {
+            for (cx, cy, c) in &chunks {
+                for q in 0..SQ * SQ {
+                    let p = [cx + ((q % SQ) as f64 + 0.5) * SQUARE_FT, cy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    if contains(&deck, p) {
+                        f(p, c, q);
+                    }
+                }
+            }
+        };
+        let mut worst = 0.0f64;
+        for h in &houses {
+            if interior::has_cellar(h) {
+                r.add("bridge houses with a cellar", 1.0, format!("{tag} b:{si}:{}", h.id));
+            }
+            // (Its interior: every level at the deck or above, the front door on the lane's side.)
+            if let Some(it) = interior::generate(&ctx.ex.world, &ctx.ex.t0, si, h.id as usize) {
+                if it.levels.iter().any(|v| v.z < 0) {
+                    r.add("bridge houses with a level below the deck", 1.0, format!("{tag} b:{si}:{}", h.id));
+                }
+                let door = it.levels.get(it.entry_level).and_then(|v| v.doors.iter().find(|d| d.kind == "front"));
+                let off = door.map_or(f64::MAX, |d| {
+                    let m = [0.5 * (d.a[0] + d.b[0]) as f64, 0.5 * (d.a[1] + d.b[1]) as f64];
+                    let w = add(it.origin, add(mul(it.axis, m[0] * SQUARE_FT), mul(it.across, m[1] * SQUARE_FT)));
+                    seg_dist(w, a, b)
+                });
+                if off > 15.0 {
+                    r.add("bridge houses with the front door off the lane", off, format!("{tag} b:{si}:{} {off:.0} ft from the lane's middle", h.id));
+                }
+            }
+            let mut gap = 0.0f64;
+            squares(&mut |p, c, q| {
+                let near = (0..h.poly.len()).any(|e| seg_dist(p, h.poly[e], h.poly[(e + 1) % h.poly.len()]) < 4.0) && !contains(&h.poly, p);
+                if near && c.building[q] == 0 {
+                    gap = gap.max(((c.height[q] - h.pad_ft) as f64).abs());
+                }
+            });
+            worst = worst.max(gap);
+            if gap > 0.5 {
+                r.add("bridge houses off the deck level (> 0.5 ft)", gap, format!("{tag} b:{si}:{} {gap:.2} ft", h.id));
+            }
+        }
+        r.measure("bridge house |pad - deck| (worst)", false, worst, tag.clone());
+        // The lane: squares within 4 ft of the centre line.
+        let mut lane: Vec<(f64, f32)> = Vec::new();
+        squares(&mut |p, c, q| {
+            if seg_dist(p, a, b) < 4.0 {
+                if c.water_level[q] >= c.height[q] || c.building[q] != 0 {
+                    r.add("lined lane squares wet or built on", 1.0, format!("{tag} at {}", at(p)));
+                }
+                lane.push((dot(sub(p, a), sub(b, a)) / dist(a, b), c.height[q]));
+            }
+        });
+        lane.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let step = lane.windows(2).map(|w| (w[1].1 - w[0].1).abs()).fold(0.0f32, f32::max);
+        if step > 1.0 {
+            r.add("lined lane steps (> 1 ft)", step as f64, format!("{tag}: {step:.1} ft"));
+        }
+        say!("  lined bridge {tag}: {} houses, level {level:.1}, worst |pad - deck| {worst:.2}, lane step {step:.2}", houses.len());
     }
 }
 

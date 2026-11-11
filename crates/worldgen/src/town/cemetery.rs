@@ -876,6 +876,7 @@ pub(super) fn raise(site: &Site, l: &mut Layout, generated: Option<&Layout>) {
                 id,
                 parts: Vec::new(),
                 keep: None,
+                deck: None,
             });
         }
     }

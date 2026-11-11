@@ -351,7 +351,7 @@ fn windmills(site: &Site, s: &Settlement, l: &mut Layout) {
         }
         let ward = if village { catalog::Ward::Rural } else { catalog::Ward::Farm };
         let floors = 3 + (unit(h ^ 3) < 0.5) as u8;
-        l.buildings.push(Building { poly, ward, func: Some(func as u16), residential: 1, name: None, floors, pad_ft: site.pad(&local), structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None });
+        l.buildings.push(Building { poly, ward, func: Some(func as u16), residential: 1, name: None, floors, pad_ft: site.pad(&local), structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None, deck: None });
         id += 1;
         placed.push(c);
     }

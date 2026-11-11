@@ -1078,20 +1078,26 @@ fn hand_crossing(c: &crate::world::Crossing, t0: &T0) -> (CrossingShape, f32) {
         K::Ferry => (ShapeKind::Ferry, [c.a[0] + u[0] * JETTY_FT, c.a[1] + u[1] * JETTY_FT], [c.b[0] - u[0] * JETTY_FT, c.b[1] - u[1] * JETTY_FT]),
     };
     let raft = (kind == ShapeKind::Ferry).then(|| raft_on(a, b, c.width));
-    let mut top = f32::MIN;
-    if kind == ShapeKind::RoadBridge {
-        let river = t0.rivers.crossing_level(c.a, c.b, 0.0, t0.cell_ft, &crate::lod::rivers::CrossingCache::default());
-        let n = (c.length() / 10.0).ceil().max(1.0) as usize;
-        let at = |k: usize| [c.a[0] + (c.b[0] - c.a[0]) * k as f64 / n as f64, c.a[1] + (c.b[1] - c.a[1]) * k as f64 / n as f64];
-        let still = (0..=n).map(|k| at(k)).map(|p| t0.sample_water(p[0], p[1])).fold(crate::t0::hydro::DRY, f32::max);
-        let water = river.map_or(still, |(z, _)| still.max(z as f32));
-        top = if water > crate::t0::hydro::DRY {
-            water + DECK_CLEARANCE_FT
-        } else {
-            t0.ground_at(c.a[0], c.a[1], 5.0).min(t0.ground_at(c.b[0], c.b[1], 5.0)) as f32
-        };
-    }
+    let top = if kind == ShapeKind::RoadBridge { hand_deck_top(c, t0) } else { f32::MIN };
     (CrossingShape { kind, a, b, size: c.width, raft, dropped: false, stone: c.material == crate::world::CrossingMaterial::Stone }, top)
+}
+
+/// A bridge's deck level (ft) between `a` and `b` (a hand bridge's, R5 M20 a lined bridge's):
+/// `DECK_CLEARANCE_FT` over the highest water under it (rivers, lakes, the sea), else level with
+/// the lower end. A pure function of the world, so every chunk and the plan find the same.
+pub fn deck_top(a: [f64; 2], b: [f64; 2], t0: &T0) -> f32 {
+    let river = t0.rivers.crossing_level(a, b, 0.0, t0.cell_ft, &crate::lod::rivers::CrossingCache::default());
+    let len = crate::core::sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
+    let n = (len / 10.0).ceil().max(1.0) as usize;
+    let at = |k: usize| [a[0] + (b[0] - a[0]) * k as f64 / n as f64, a[1] + (b[1] - a[1]) * k as f64 / n as f64];
+    let still = (0..=n).map(|k| at(k)).map(|p| t0.sample_water(p[0], p[1])).fold(crate::t0::hydro::DRY, f32::max);
+    let water = river.map_or(still, |(z, _)| still.max(z as f32));
+    if water > crate::t0::hydro::DRY { water + DECK_CLEARANCE_FT } else { t0.ground_at(a[0], a[1], 5.0).min(t0.ground_at(b[0], b[1], 5.0)) as f32 }
+}
+
+/// A hand bridge's deck level (`deck_top` from bank to bank): where its shops stand (R5 M20).
+pub fn hand_deck_top(c: &crate::world::Crossing, t0: &T0) -> f32 {
+    deck_top(c.a, c.b, t0)
 }
 
 /// Bridge decks that overlap (a road crossing a meander twice, two roads at a confluence)
@@ -1383,7 +1389,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let overlaps = |b: (f64, f64, f64, f64)| b.2 >= hx0 && b.0 <= hx0 + span && b.3 >= hy0 && b.1 <= hy0 + span;
     // (R5 towns, 114: whether every town round the chunk is a steppe one, `steppe_only`.)
     let (mut steppe_any, mut steppe_all) = (false, true);
-    // (R5 M20: town bridges' decks over an islet and their flat level.)
+    // (R5 M20: town bridges' decks over an islet and their flat level; lined bridges' spans.)
     let mut islet_decks: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
     for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
         if l.culture % 5 == 4 {
@@ -1439,6 +1445,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             for isl in crate::t0::islets::near(t0, [b.0, b.1, b.2, b.3]).filter(|i| crate::town::geom::poly_gap(d, &i.pts) < 1.0) {
                 islet_decks.push((d.clone(), isl.level.max(isl.water + DECK_CLEARANCE_FT)));
             }
+        }
+        // (R5 M20: a lined bridge's span, flat at its level, `Layout::lined`.)
+        if let Some((d, top)) = l.lined.as_ref().filter(|(d, _)| overlaps(bbox(d))) {
+            islet_decks.push((d.clone(), *top));
         }
         for y in &l.yards {
             stamp(&y.0, URBAN_YARD, &mut urb_h);
@@ -1998,7 +2008,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 for i in i0..=i1 as usize {
                     if crate::town::geom::contains(&b.poly, center(i, j)) && !court.as_ref().is_some_and(|q| crate::town::geom::contains(q, center(i, j))) {
                         if id == 0 {
-                            pad += crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft);
+                            // (R5 M20: a building on a deck stands at the deck's level.)
+                            if b.deck.is_none() {
+                                pad += crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft);
+                            }
                             refs.push((l.index, b.id));
                             let battlements = crate::interior::battlements(b);
                             // (A castle's keep with no pieces: its top in the high two bits.)

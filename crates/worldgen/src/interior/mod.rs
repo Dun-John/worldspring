@@ -1010,7 +1010,8 @@ pub fn generate(world: &World, t0: &T0, settlement: usize, building: usize) -> O
         return None;
     }
     // Its floors ride on ground shaped by hand, as its roof does on the battlemap.
-    let shift = crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft);
+    // (R5 M20: on a deck, at the deck's level.)
+    let shift = if b.deck.is_some() { 0.0 } else { crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft) };
     let moved;
     let b = if shift != 0.0 {
         moved = town::Building { pad_ft: b.pad_ft + shift, ..b.clone() };
@@ -1358,10 +1359,11 @@ pub fn has_deep_dungeon(b: &town::Building) -> bool {
     b.structure == Structure::Roofed && arch_of(b) == Arch::Keep && geom::area(&b.poly).abs() >= 150.0 * SQUARE_FT * SQUARE_FT
 }
 
-/// Whether a roofed building has a cellar (all do but a yurt).
+/// Whether a roofed building has a cellar (all do but a yurt, an islet's watchtower and one on a
+/// deck over the water).
 pub fn has_cellar(b: &town::Building) -> bool {
-    // (An islet's watchtower stands on rock in the water.)
-    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b)) && !b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "watchtower")
+    // (An islet's watchtower stands on rock in the water; R5 M20: a shop on a deck over it.)
+    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b)) && !b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "watchtower") && b.deck.is_none()
 }
 
 /// The ways from a cellar to other sites: a trapdoor down into the sewers (on the street side),
@@ -1919,6 +1921,12 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     } else {
         front
     };
+    // R5 M20: a building on a deck over the water opens on the deck's lane: the side nearest its
+    // centre line.
+    let front = match b.deck {
+        Some([a, e]) => (0..4).min_by(|&x, &y| geom::seg_dist(world_at(sides[x][0], sides[x][1]), a, e).total_cmp(&geom::seg_dist(world_at(sides[y][0], sides[y][1]), a, e))).unwrap_or(front),
+        None => front,
+    };
 
     // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room
     // on one storey (no cellar, no stairs).
@@ -1968,7 +1976,12 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if yurt || tomb {
         zs = vec![0];
     }
-    let entry_level = if yurt || tomb { 0 } else { 1 };
+    // (No cellar under a watchtower on its islet's rock, or R5 M20 a building on a deck.)
+    let no_cellar = !yurt && !tomb && !has_cellar(b);
+    if no_cellar {
+        zs.retain(|&z| z != -1);
+    }
+    let entry_level = if yurt || tomb || no_cellar { 0 } else { 1 };
 
     // The stair block: at the back of the building, in the middle of the short side (towers:
     // near the centre), on inside squares. Inns and taverns lay out the ground floor first

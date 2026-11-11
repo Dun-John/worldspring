@@ -470,6 +470,9 @@ impl Blocker {
                 }
                 m
             }
+            // (R5 M20: a footprint on a hand bridge's deck over its lane.)
+            "lane" if short => "that is on the bridge's lane: keep its middle clear".to_string(),
+            "lane" => format!("that is on the lane of bridge {id} (keep {:.0} ft clear down its middle){at}", self.width.unwrap_or(0.0)),
             "square" if self.kind == Some("yard") => format!("that is on the yard{of}{at}"),
             "square" => format!("that is on a square ({}){of}{at}", self.kind.unwrap_or("square")),
             "street" => {
@@ -644,7 +647,16 @@ fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Optio
         let n = (geom::dist(a, b) / 10.0).ceil().max(1.0) as usize;
         probes.extend((0..n).map(|s| geom::lerp(a, b, s as f64 / n as f64)));
     }
-    let (mut wet, mut river) = (false, false);
+    // R5 M20: wholly on a hand bridge's deck, it stands over the water (clear of the lane).
+    let deck = crate::wharf::deck_under(world, poly);
+    if let Some((id, Some(lane))) = &deck {
+        out.push(Blocker { id: Some(id.clone()), width: Some(*lane), ..Blocker::plain("lane", c) });
+        if !all {
+            return out;
+        }
+    }
+    let on_deck = deck.is_some();
+    let (mut wet, mut river) = (on_deck, on_deck);
     for p in &probes {
         if !wet && shore.wet(*p) {
             wet = true;
@@ -766,7 +778,8 @@ pub fn spot_blockers(world: &World, t0: &T0, poly: &[P], skip: Option<(usize, Op
     Ok(scan_spot(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, skip, true, clear, true))
 }
 
-/// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
+/// Where a building drawn by hand may stand: on the map, on dry land out of river channels (or
+/// R5 M20 wholly on a hand bridge's deck, off its lane: `wharf::deck_under`, then `on` it),
 /// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
 /// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
 /// and in a settlement its id; a drawn building's own layout is all of it). With its point
@@ -1440,7 +1453,14 @@ pub fn building_funcs_json() -> String {
 pub fn building_spot_json(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str) -> String {
     let skip = spot_skip(world, t0, id);
     match building_spot(world, t0, poly, func, id, skip) {
-        Ok((q, name)) => json!({ "x": q[0], "y": q[1], "name": name }),
+        Ok((q, name)) => {
+            let mut v = json!({ "x": q[0], "y": q[1], "name": name });
+            // (R5 M20: on a hand bridge's deck, the bridge it stands on: `Created::on`.)
+            if let Some((on, None)) = crate::wharf::deck_under(world, poly) {
+                v["on"] = json!(on);
+            }
+            v
+        }
         Err(e) => {
             let short = spot_blockers(world, t0, poly, skip, false).ok().and_then(|(v, _)| v.into_iter().next()).map(|b| b.short()).unwrap_or_else(|| e.clone());
             json!({ "error": e, "short": short })

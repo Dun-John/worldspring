@@ -2559,6 +2559,7 @@ fn agent_edits_guarantee() {
     ward_edits(&base, &t0);
     ward_castles_by_the_wall(&base, &t0);
     ground_edits(&base);
+    bridge_shops(&base);
     let sea = base.params().sea_level_ft;
     // Dry open land two miles from a town, clear of every layout.
     let spot = (0..t0.settlements.len() * 8)
@@ -3745,6 +3746,11 @@ fn ground_edits(base: &World) {
     }
     assert!(top >= 8, "too few squares on the islet's top ({top})");
     agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).expect("a building on the islet");
+    // (S3: and a castle drawn on it.)
+    let keep = worldgen::world::Created { id: "c:98".into(), kind: "castle".into(), poly: vec![[islet_at[0] - 8.0, islet_at[1] - 8.0], [islet_at[0] + 8.0, islet_at[1] - 8.0], [islet_at[0] + 8.0, islet_at[1] + 8.0], [islet_at[0] - 8.0, islet_at[1] + 8.0]], ..Default::default() };
+    if let Err(e) = agent::works_spot(&ex.world, &ex.t0, &keep, "c:98", None) {
+        panic!("a castle on the islet refused: {e}");
+    }
     // The breakwater: made ground, dry and paved, out over the water.
     let mut made = 0;
     for k2 in 0..SQ * SQ {
@@ -3789,6 +3795,109 @@ fn ground_edits(base: &World) {
         assert!(pack(&mut ex, k).0 == plain_near[q], "chunk {k:?} differs once the islet and wharves are cleared");
     }
     assert!(agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).is_err(), "a building in the water once the islet is gone");
+}
+
+/// R5 M20: shops on a bridge put down by hand over a river, clear of every layout. Its lots
+/// (`wharf::bridge_lots`) are refused before the bridge and accepted on it (`on` the bridge),
+/// its lane refused; a shop drawn there stands at the deck's level with no cellar, its front door
+/// on the lane, on dry squares of the battlemap with the lane open round it at the deck's level;
+/// it follows its bridge (laid out again when it is widened, removed with it).
+fn bridge_shops(base: &World) {
+    use worldgen::battlemap::{HS, SQ, SQUARE_FT};
+    use worldgen::world::{Created, Crossing, CrossingKind};
+    use worldgen::{agent, interior, town, wharf};
+    let mut ex = Executor::new(World::new(base.file.clone()).unwrap());
+    let (g, first) = (ex.world.geom.clone(), ex.t0.settlements.len() + ex.t0.base_pois);
+    // A river 50-150 ft wide, its banks found from its middle across its way; a 50-ft bridge
+    // from 10 ft up one bank to 10 ft up the other.
+    let cell = ex.t0.cell_ft;
+    let bridge = ex
+        .t0
+        .rivers
+        .rivers
+        .iter()
+        .flat_map(|r| (0..r.segments()).map(move |k| (r.eval(k, 0.5, 5.0, cell).p, (r.eval(k, 0.45, 5.0, cell), r.eval(k, 0.55, 5.0, cell)))))
+        .filter(|(_, (a, _))| (50.0..150.0).contains(&a.w))
+        .filter(|(p, _)| p[0] > 2000.0 && p[1] > 2000.0 && p[0] < g.map_w_ft - 2000.0 && p[1] < g.map_h_ft - 2000.0)
+        .filter(|(p, _)| town::layouts_near(&ex.world, &ex.t0, [p[0] - 600.0, p[1] - 600.0, p[0] + 600.0, p[1] + 600.0]).is_empty())
+        .find_map(|(p, (a, b))| {
+            let d = [b.p[0] - a.p[0], b.p[1] - a.p[1]];
+            let dl = (d[0] * d[0] + d[1] * d[1]).sqrt();
+            let n = [-d[1] / dl, d[0] / dl];
+            let s = town::Shore::new(&ex.world, &ex.t0, [p[0] - 200.0, p[1] - 200.0, p[0] + 200.0, p[1] + 200.0]);
+            let bank = |sign: f64| (0..60).map(|k| k as f64 * 5.0).find(|t| { let q = [p[0] + n[0] * sign * t, p[1] + n[1] * sign * t]; !s.wet(q) && !s.in_river(q) }).map(|t| [p[0] + n[0] * sign * (t + 10.0), p[1] + n[1] * sign * (t + 10.0)]);
+            let c = Crossing { kind: CrossingKind::Bridge, a: bank(-1.0)?, b: bank(1.0)?, width: 50.0, material: Default::default() };
+            (c.length() >= 90.0 && c.length() <= 300.0).then_some(c)
+        })
+        .expect("a river to bridge");
+    assert!(bridge.problem(g.map_w_ft, g.map_h_ft).is_none(), "a 50-ft bridge: {:?}", bridge.problem(g.map_w_ft, g.map_h_ft));
+    assert!(Crossing { kind: CrossingKind::Ford, ..bridge.clone() }.problem(g.map_w_ft, g.map_h_ft).is_some(), "a 50-ft ford was let through");
+    assert!(wharf::bridge_lots(&Crossing { kind: CrossingKind::Ford, ..bridge.clone() }, 14.0, 18.0, 20.0).is_empty(), "shops on a ford");
+    let lots = wharf::bridge_lots(&bridge, wharf::SHOP_LANE_FT, wharf::SHOP_DEPTH_FT, wharf::SHOP_FRONT_FT);
+    assert!(lots.len() >= 4 && lots.len() % 2 == 0, "{} lots on a {:.0}-ft bridge", lots.len(), bridge.length());
+    // In the middle of the river: the lot nearest it.
+    let mid = [0.5 * (bridge.a[0] + bridge.b[0]), 0.5 * (bridge.a[1] + bridge.b[1])];
+    let lot = lots.iter().min_by(|p, q| geom_dist(town::geom::centroid(p), mid).total_cmp(&geom_dist(town::geom::centroid(q), mid))).unwrap().clone();
+    let u = [(bridge.b[0] - bridge.a[0]) / bridge.length(), (bridge.b[1] - bridge.a[1]) / bridge.length()];
+    let lane_foot: Vec<[f64; 2]> = [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]].iter().map(|o| [mid[0] + u[0] * o[0] - u[1] * o[1], mid[1] + u[1] * o[0] + u[0] * o[1]]).collect();
+    let set = |ex: &mut Executor, e: worldgen::world::Edits| {
+        let old = std::mem::replace(&mut ex.world.file.edits, e).created;
+        ex.t0.apply_edits(&ex.world);
+        town::forget_created(&old, &ex.world.file.edits.created, first);
+    };
+    assert!(agent::building_spot(&ex.world, &ex.t0, &lot, None, "c:0", None).is_err(), "a shop in the river before the bridge");
+    let mut e = ex.world.file.edits.clone();
+    e.crossings.insert("v:shops".into(), bridge.clone());
+    set(&mut ex, e.clone());
+    let (at, _) = agent::building_spot(&ex.world, &ex.t0, &lot, Some("tailor"), "c:0", None).unwrap_or_else(|m| panic!("a shop on the bridge refused: {m}"));
+    assert_eq!(wharf::deck_under(&ex.world, &lot), Some(("v:shops".to_string(), None)), "the shop is not on the bridge");
+    match agent::building_spot(&ex.world, &ex.t0, &lane_foot, None, "c:0", None) {
+        Ok(_) => panic!("a building on the bridge's lane"),
+        Err(m) => assert!(m.contains("lane of bridge v:shops"), "the lane's refusal: {m}"),
+    }
+    e.created.push(Created { id: "c:0".into(), kind: "building".into(), x: at[0], y: at[1], name: String::new(), poly: lot.clone(), func: Some("tailor".into()), floors: Some(2), on: Some("v:shops".into()), ..Default::default() });
+    set(&mut ex, e.clone());
+    let top = worldgen::battlemap::hand_deck_top(&bridge, &ex.t0);
+    let li = agent::layout_of(&ex.world, &ex.t0, "c:0").expect("the shop's layout");
+    let l = town::layout(&ex.world, &ex.t0, li);
+    let b = l.buildings.first().expect("the shop");
+    assert!((b.pad_ft - top).abs() < 0.01 && b.deck.is_some() && !interior::has_cellar(b), "the shop: pad {} on a deck at {top}, cellar {}", b.pad_ft, interior::has_cellar(b));
+    let inside = interior::generate(&ex.world, &ex.t0, li, 0).expect("the shop's interior");
+    assert!(inside.levels.iter().all(|v| v.z >= 0) && inside.levels[inside.entry_level].z == 0, "the shop has a level below its deck");
+    let ground = &inside.levels[inside.entry_level];
+    let door = ground.doors.iter().find(|d| d.kind == "front").expect("the shop's front door");
+    let dm = [0.5 * (door.a[0] + door.b[0]) as f64, 0.5 * (door.a[1] + door.b[1]) as f64];
+    let dw = [inside.origin[0] + (inside.axis[0] * dm[0] + inside.across[0] * dm[1]) * SQUARE_FT, inside.origin[1] + (inside.axis[1] * dm[0] + inside.across[1] * dm[1]) * SQUARE_FT];
+    let line = |p: [f64; 2]| town::geom::seg_dist(p, bridge.a, bridge.b);
+    assert!(line(dw) < 0.5 * wharf::SHOP_LANE_FT + 3.0, "the shop's door is {:.1} ft off the lane's middle, not on the lane", line(dw));
+    // On the battlemap: built on, dry, the lane beside it open at the deck's level.
+    let size = g.tile_size_ft(g.max_level);
+    let m = town::geom::centroid(&lot);
+    let key = TileKey::surface(g.max_level, (m[0] / size) as u32, (m[1] / size) as u32);
+    let c = ex.battlemap(key);
+    let k2 = |p: [f64; 2]| ((p[1] - key.y as f64 * size) / SQUARE_FT) as usize * SQ + ((p[0] - key.x as f64 * size) / SQUARE_FT) as usize;
+    assert!(c.building[k2(m)] != 0, "no building at the shop's middle");
+    let mut lane_sq = 0;
+    for q in 0..SQ * SQ {
+        let p = [key.x as f64 * size + ((q % SQ) as f64 + 0.5) * SQUARE_FT, key.y as f64 * size + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+        if line(p) < 0.5 * wharf::SHOP_LANE_FT - 2.0 && town::geom::dist(p, m) < 20.0 {
+            let h = (q / SQ + 1) * HS + q % SQ + 1;
+            assert!(c.water_level[q] < c.height[q] && c.building[q] == 0 && (c.halo_height[h] - top).abs() <= 0.5, "lane square {p:?}: {} on a deck at {top}", c.halo_height[h]);
+            lane_sq += 1;
+        }
+    }
+    assert!(lane_sq >= 4, "too few lane squares by the shop ({lane_sq})");
+    // Widened: laid out again on it; taken away: gone with it.
+    let wide = Crossing { width: 70.0, ..bridge.clone() };
+    e.crossings.insert("v:shops".into(), wide.clone());
+    assert_eq!(e.follow_crossing("v:shops", Some(&bridge)), vec!["c:0".to_string()], "the shop didn't follow its bridge");
+    set(&mut ex, e.clone());
+    assert!(e.created[0].poly != lot && !e.created[0].removed && wharf::deck_under(&ex.world, &e.created[0].poly) == Some(("v:shops".to_string(), None)), "the shop laid out again off its widened bridge");
+    let l = town::layout(&ex.world, &ex.t0, li);
+    assert!(l.buildings.first().is_some_and(|b| b.poly == e.created[0].poly), "the shop's layout kept its old lot");
+    e.crossings.remove("v:shops");
+    e.follow_crossing("v:shops", Some(&wide));
+    assert!(e.created[0].removed, "the shop stayed when its bridge went");
 }
 
 fn geom_dist(a: [f64; 2], b: [f64; 2]) -> f64 {

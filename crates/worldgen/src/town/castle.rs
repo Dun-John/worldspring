@@ -1982,6 +1982,7 @@ fn place_keep<G: Ground>(
                     id: 0,
                     parts,
                     keep: Some(kind),
+                    deck: None,
                 };
                 return Some((b, motte));
             }
@@ -2052,6 +2053,7 @@ fn place_keep<G: Ground>(
                     id: 0,
                     parts,
                     keep: Some(KeepKind::Plain),
+                    deck: None,
                 };
                 return Some((b, None));
             }
@@ -2178,6 +2180,7 @@ fn ranges<G: Ground>(
                     id: 0,
                     parts: Vec::new(),
                     keep: None,
+                    deck: None,
                 });
                 sides.push(e);
                 t += length + gap;
@@ -2319,6 +2322,7 @@ fn yard_buildings<G: Ground>(
             id: 0,
             parts: Vec::new(),
             keep: None,
+            deck: None,
         });
         placed += 1;
     }

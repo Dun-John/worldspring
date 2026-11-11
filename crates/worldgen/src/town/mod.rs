@@ -100,6 +100,9 @@ pub struct Building {
     /// A castle's keep (`castle::place_keep`), of the kind it was laid out as: the castle itself,
     /// whatever its outline (with its pieces or redrawn by hand) or storeys.
     pub keep: Option<KeepKind>,
+    /// (R5 M20) Standing on a deck over the water (a hand bridge's or pier's shop, a lined
+    /// bridge's house): the deck's centre line (world ft), which its door faces. No cellar.
+    pub deck: Option<[P; 2]>,
 }
 
 /// A piece of a building's footprint (`Building::parts`).
@@ -323,6 +326,9 @@ pub struct Layout {
     /// v63 countryside: water mills' wheels (middle, the way the mill's wall runs, the mill to its left;
     /// `rural`).
     pub wheels: Vec<(P, P)>,
+    /// R5 M20: a metropolis's lined bridge (`lined_bridge`): its widened span over the water (a
+    /// deck, also in `bridges`) and the one flat level (ft) it and the houses on it stand at.
+    pub lined: Option<(Vec<P>, f32)>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -651,6 +657,7 @@ impl Layout {
             moats: Vec::new(),
             crofts: Vec::new(),
             wheels: Vec::new(),
+            lined: None,
         }
     }
 
@@ -1039,7 +1046,8 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
 }
 
 /// A hash of the islets drawn by hand round a created site (its reach and what it was drawn
-/// with: `town::Shore` reads them as dry land); `None` for any other layout, which reads none.
+/// with: `town::Shore` reads them as dry land), and of the deck a drawn building stands on
+/// (`Created::on`); `None` for any other layout, which reads none.
 fn raised_fp(world: &World, t0: &T0, index: usize) -> Option<u64> {
     let poi = index.checked_sub(t0.settlements.len()).filter(|&p| p >= t0.base_pois && p < t0.pois.len())?;
     let p = &t0.pois[poi];
@@ -1051,6 +1059,18 @@ fn raised_fp(world: &World, t0: &T0, index: usize) -> Option<u64> {
         }
     }
     let mut h = 0;
+    // (R5 M20: and the deck a drawn building stands on: its level and line.)
+    if let Some(on) = world.file.edits.created.get(poi - t0.base_pois).and_then(|c| c.on.as_deref()) {
+        match crate::wharf::deck_of(world, t0, on) {
+            Some((top, line)) => {
+                h = hash2(h, top.to_bits() as i64, 0x0d3c);
+                for q in line {
+                    h = hash2(h, q[0].to_bits() as i64, q[1].to_bits() as i64);
+                }
+            }
+            None => h = hash2(h, 0x0d3c, 1),
+        }
+    }
     for (pts, level, _) in crate::ground::islets_in(&world.file.edits, rect) {
         h = hash2(h, level.to_bits() as i64, pts.len() as i64);
         for q in pts {
@@ -1996,6 +2016,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for c in &mut l.crofts {
         c.pts.iter_mut().for_each(tw);
     }
+    if let Some((d, _)) = &mut l.lined {
+        d.iter_mut().for_each(tw);
+    }
     // Temples on their lots in pieces (world ft, so that a town laid out anew shapes them alike), a shrine
     // shut in a block's middle moved first to a home with a way out.
     if edit.is_none() {
@@ -2037,6 +2060,20 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
     }
+    // R5 M20: the houses on a lined bridge, after every other building (an edited town with the
+    // same lined bridge keeps them as generated, ids and all).
+    match edit {
+        Some(_) if l.lined.is_some() && generated_layout(world, t0, index).lined == l.lined => {
+            let generated = generated_layout(world, t0, index);
+            for h in generated.buildings.iter().filter(|b| b.deck.is_some()) {
+                let at = l.buildings.partition_point(|b| b.id < h.id);
+                if l.buildings.get(at).is_none_or(|b| b.id != h.id) && l.buildings.iter().all(|b| poly_gap(&b.poly, &h.poly) > 0.5) {
+                    l.buildings.insert(at, h.clone());
+                }
+            }
+        }
+        _ => bridge_houses(index, &mut l),
+    }
     // R5 M20: the watchtowers on its islets, after every other building (an edited town keeps
     // them as generated, ids and all, where they stand clear of its bridges).
     match edit {
@@ -2073,7 +2110,87 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
 /// home, a shrine; of one piece, its shape not set by hand) stands on the ring its lot holds
 /// (`roof::round_footprint`), if it is still roofed round there; the rest of its lot is open ground.
 /// Last, once every other building stands, so theirs are as they were.
-/// Whether `b` is an islet's watchtower (`catalog` "watchtower").
+/// R5 M20: a lined bridge's span (ft): its width, a 24-ft lane between rows of houses 16 ft deep;
+/// the least water it spans; how far it reaches onto each bank.
+const LINED_WIDTH_FT: f64 = 56.0;
+const LINED_ROW_FT: f64 = 16.0;
+const LINED_MIN_WATER_FT: f64 = 120.0;
+const LINED_BANK_FT: f64 = 5.0;
+
+/// R5 M20: a metropolis's lined bridge. In 1 of 2 metropolises with a main street's bridge over
+/// at least `LINED_MIN_WATER_FT` of water, the longest such gets a second deck over the water
+/// part only (`LINED_WIDTH_FT` wide, `LINED_BANK_FT` onto each bank, so the landings and the bank
+/// streets stay as they are), at one flat level: the highest water under it + 4 ft
+/// (`battlemap::deck_top`). It goes in `bridges` (local, after the street's own) and `lined`.
+/// None over one of the world's islets. `over`: (water spanned, the crossing, the street's way,
+/// water ahead, water behind) per main street's bridge.
+fn lined_bridge(site: &Site, s: &Settlement, over: &[(f64, P, P, f64, f64)], l: &mut Layout) {
+    if s.tier != Tier::Metropolis || unit(hash2(0x11e3_b51d, s.seed as i64, 0)) >= 0.5 {
+        return;
+    }
+    let Some(&(_, p, u, wf, wb)) = over.iter().filter(|o| o.0 >= LINED_MIN_WATER_FT).max_by(|x, y| x.0.total_cmp(&y.0)) else { return };
+    let span = wf + wb + 2.0 * LINED_BANK_FT;
+    let c = add(p, mul(u, 0.5 * (wf - wb)));
+    let deck = rect(c, u, span, LINED_WIDTH_FT);
+    let (a, b) = (add(add(c, mul(u, -0.5 * span)), site.center), add(add(c, mul(u, 0.5 * span)), site.center));
+    let world_deck: Vec<P> = deck.iter().map(|&q| add(q, site.center)).collect();
+    let bb = deck.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, q| [r[0].min(q[0] + site.center[0]), r[1].min(q[1] + site.center[1]), r[2].max(q[0] + site.center[0]), r[3].max(q[1] + site.center[1])]);
+    if crate::t0::islets::near(site.t0, bb).any(|i| poly_gap(&world_deck, &i.pts) < 10.0) {
+        return;
+    }
+    let level = crate::battlemap::deck_top(a, b, site.t0);
+    l.bridges.push(deck.clone());
+    l.lined = Some((deck, level));
+}
+
+/// R5 M20: the houses along both sides of a lined bridge (`Layout::lined`, world ft by now): lots
+/// 18-24 ft along it and `LINED_ROW_FT` deep against its outer edges, 10 ft clear at each end,
+/// 2-3 storeys, shops and homes, their ground floors at the deck's level (`Building::deck`: no
+/// cellar, the door on the lane). Lots meeting another building are left empty. Ids follow
+/// every other building's.
+fn bridge_houses(index: usize, l: &mut Layout) {
+    let Some((deck, level)) = l.lined.clone() else { return };
+    if deck.len() != 4 {
+        return;
+    }
+    const SHOPS: [&str; 8] = ["tailor", "jeweler", "cobbler", "apothecary", "general_store", "fishmonger", "butcher", "weaver"];
+    let (a, b) = (lerp(deck[0], deck[3], 0.5), lerp(deck[1], deck[2], 0.5));
+    let span = dist(a, b);
+    let u = mul(sub(b, a), 1.0 / span.max(1e-9));
+    let v = [-u[1], u[0]];
+    let mut id = l.buildings.iter().map(|b| b.id + 1).max().unwrap_or(0);
+    let mut out: Vec<Building> = Vec::new();
+    for (side, sign) in [(0i64, 1.0), (1, -1.0)] {
+        let across = sign * (0.5 * LINED_WIDTH_FT - 0.5 * LINED_ROW_FT);
+        let mut t = 10.0;
+        let mut k = 0i64;
+        while t < span - 10.0 {
+            // (Side by side along the row: they share their walls.)
+            let h = hash3(0x11e3_40a5, index as i64, side, k);
+            let front = (18.0 + 6.0 * unit(h)).min(span - 10.0 - t);
+            k += 1;
+            if front < 14.0 {
+                break;
+            }
+            let m = add(add(a, mul(u, t + 0.5 * front)), mul(v, across));
+            t += front;
+            let mut poly = rect(m, u, front, LINED_ROW_FT);
+            if area(&poly) < 0.0 {
+                poly.reverse();
+            }
+            if l.buildings.iter().any(|o| poly_gap(&o.poly, &poly) < 0.5) {
+                continue;
+            }
+            let func = (unit(h ^ 5) < 0.6).then(|| catalog::index_of(SHOPS[(unit(h ^ 7) * SHOPS.len() as f64) as usize % SHOPS.len()])).flatten();
+            let floors = 2 + (unit(h ^ 3) < 0.5) as u8;
+            out.push(Building { poly, ward: Ward::Merchant, func: func.map(|f| f as u16), residential: 1, name: None, floors, pad_ft: level, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None, deck: Some([a, b]) });
+            id += 1;
+        }
+    }
+    l.buildings.extend(out);
+}
+
+/// Whether `b` is an islet's watchtower (`catalog` "watchtower")./// Whether `b` is an islet's watchtower (`catalog` "watchtower").
 pub fn is_watchtower(b: &Building) -> bool {
     b.func.is_some_and(|f| CATALOG[f as usize].key == "watchtower")
 }
@@ -2101,7 +2218,7 @@ fn islet_towers(t0: &T0, index: usize, l: &mut Layout) {
             continue;
         }
         let floors = 2 + (unit(h ^ 3) < 0.5) as u8;
-        l.buildings.push(Building { poly, ward: Ward::Docks, func: Some(func as u16), residential: 1, name: None, floors, pad_ft: isl.level, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None });
+        l.buildings.push(Building { poly, ward: Ward::Docks, func: Some(func as u16), residential: 1, name: None, floors, pad_ft: isl.level, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None, deck: None });
         id += 1;
     }
 }
@@ -3317,6 +3434,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
 
     // Bridges: the river vertex back on the bank-to-bank line, and the deck along it.
     let mut bridge_streets: Vec<(Vec<P>, bool)> = Vec::new();
+    // (R5 M20: the main streets' bridges with their water's extent, for the lined bridge.)
+    let mut over_water: Vec<(f64, P, P, f64, f64)> = Vec::new();
     for &((a, v, b), main) in &plan.bridged {
         mesh.pos[v] = river_crossing(site, mesh.pos[a], mesh.pos[b]);
         bridge_streets.push((vec![mesh.pos[a], mesh.pos[v], mesh.pos[b]], main));
@@ -3338,11 +3457,17 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         let (fwd, back) = (site.dry_reach(pts[1], u, width, 1.0, fwd - 14.0) + 14.0, site.dry_reach(pts[1], u, width, -1.0, back - 14.0) + 14.0);
         let c = add(pts[1], mul(u, 0.5 * (fwd - back)));
         l.bridges.push(rect(c, u, fwd + back, width));
+        if *main {
+            let (wf, wb) = (site.dry_reach(pts[1], u, 0.0, 1.0, 0.0), site.dry_reach(pts[1], u, 0.0, -1.0, 0.0));
+            over_water.push((wf + wb, pts[1], u, wf, wb));
+        }
         pieces.bridge((a, v, b), pts, if *main { 18.0 } else { 12.0 }, (!main).then_some(l.roads.len()));
         if !main {
             l.roads.push((pts.clone(), 4, 12.0));
         }
     }
+
+    lined_bridge(site, s, &over_water, l);
 
     // Materialise: patches, walls, gates and streets as points.
     let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
@@ -4925,7 +5050,7 @@ fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, wa
                 continue;
             }
             let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
+            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
         }
     }
 }
@@ -5088,7 +5213,7 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout, out: &mut Vec
             let house = rect(add(add(a, mul(u, 0.5 * w + 6.0)), mul(inward, 0.5 * dp + 6.0)), u, w, dp);
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
-                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
+                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
                 housed = true;
             }
         }
@@ -5473,7 +5598,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
-            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
+            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
         }
     }
     // Big functions first so they get the big lots.

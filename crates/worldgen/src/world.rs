@@ -693,7 +693,9 @@ fn crossing_width() -> f64 {
 
 impl Crossing {
     /// Widths (ft) a crossing may have, and its length.
-    pub const WIDTH: std::ops::RangeInclusive<f64> = 5.0..=40.0;
+    pub const WIDTH: std::ops::RangeInclusive<f64> = 5.0..=80.0;
+    /// (R5 M20) The widest a ford or a ferry may be (a bridge to `WIDTH`'s end, to carry shops).
+    pub const NARROW_MAX: f64 = 40.0;
     pub const LENGTH: std::ops::RangeInclusive<f64> = 10.0..=2000.0;
 
     /// Length (ft), from a to b.
@@ -713,8 +715,9 @@ impl Crossing {
         if len < min || len > *Self::LENGTH.end() {
             return Some(format!("a {} is {min:.0} to {:.0} ft long (this one is {len:.0})", self.kind.name(), Self::LENGTH.end()));
         }
-        if !self.width.is_finite() || !Self::WIDTH.contains(&self.width) {
-            return Some(format!("width: {:.0} to {:.0} ft", Self::WIDTH.start(), Self::WIDTH.end()));
+        let max = if self.kind == CrossingKind::Bridge { *Self::WIDTH.end() } else { Self::NARROW_MAX };
+        if !self.width.is_finite() || self.width < *Self::WIDTH.start() || self.width > max {
+            return Some(format!("width: {:.0} to {max:.0} ft for a {}", Self::WIDTH.start(), self.kind.name()));
         }
         None
     }
@@ -1028,6 +1031,11 @@ pub struct Created {
     /// Deleted (kept in the list so later sites keep their place).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
+    /// (R5 M20) A drawn building standing on a structure put down by hand: a bridge's deck
+    /// (`v:<id>`) or a pier or breakwater (`q:<id>`). Its ground floor is at that deck's level,
+    /// with no cellar; it follows its bridge (`Edits::follow_crossing`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<String>,
     /// (R5 towns) A castle's pieces changed by hand, kept with the castle (not by its layout
     /// number, which moves when an earlier site is deleted): `keep` for its keep (wherever it
     /// stands), else a yard building's id in the castle's layout (`b:<layout>:<id>`).
@@ -1473,6 +1481,69 @@ fn simple(p: &[[f64; 2]]) -> bool {
 }
 
 impl Edits {
+    /// (R5 M20) Shops follow their bridge: the drawn buildings `on` crossing `id` once it has
+    /// changed (`old`: it as it was, if known). Gone, or no longer a bridge: they are removed.
+    /// Its ends or width changed: they are laid out again on it (`wharf::bridge_lots`, as deep
+    /// and as long as they were), each side's in order along it; those left without a lot are
+    /// removed. Returns the ids of the shops changed.
+    pub fn follow_crossing(&mut self, id: &str, old: Option<&Crossing>) -> Vec<String> {
+        use crate::wharf;
+        let shops: Vec<usize> = (0..self.created.len()).filter(|&k| self.created[k].on.as_deref() == Some(id) && !self.created[k].removed && self.created[k].kind == "building").collect();
+        if shops.is_empty() {
+            return Vec::new();
+        }
+        let new = self.crossings.get(id).filter(|c| c.kind == CrossingKind::Bridge && c.width.is_finite() && c.length() >= 1.0).cloned();
+        let mut changed = Vec::new();
+        let Some(new) = new else {
+            for k in shops {
+                self.created[k].removed = true;
+                changed.push(self.created[k].id.clone());
+            }
+            return changed;
+        };
+        if old.is_some_and(|o| o.a == new.a && o.b == new.b && o.width == new.width && o.kind == new.kind) {
+            return changed;
+        }
+        let was = old.filter(|o| o.length() >= 1.0).unwrap_or(&new);
+        let (len, u) = (was.length(), [(was.b[0] - was.a[0]) / was.length(), (was.b[1] - was.a[1]) / was.length()]);
+        let frame = |p: [f64; 2]| {
+            let d = [p[0] - was.a[0], p[1] - was.a[1]];
+            (d[0] * u[0] + d[1] * u[1], -d[0] * u[1] + d[1] * u[0])
+        };
+        let extent = |poly: &[[f64; 2]]| {
+            let (mut a, mut c) = ((f64::MAX, f64::MIN), (f64::MAX, f64::MIN));
+            for &p in poly {
+                let (x, y) = frame(p);
+                (a, c) = ((a.0.min(x), a.1.max(x)), (c.0.min(y), c.1.max(y)));
+            }
+            (a.1 - a.0, c.1 - c.0, 0.5 * (a.0 + a.1), 0.5 * (c.0 + c.1))
+        };
+        let first = extent(&self.created[shops[0]].poly);
+        let (frontage, depth) = if first.0.is_finite() && first.0 >= 8.0 && first.1 >= 8.0 && len >= 1.0 { (first.0, first.1) } else { (wharf::SHOP_FRONT_FT, wharf::SHOP_DEPTH_FT) };
+        let lots = wharf::bridge_lots(&new, wharf::bridge_lane(&new, depth), depth, frontage);
+        let per_side = lots.len() / 2;
+        let mut sides: [Vec<(f64, usize)>; 2] = [Vec::new(), Vec::new()];
+        for &k in &shops {
+            let e = extent(&self.created[k].poly);
+            sides[(e.3 < 0.0) as usize].push((e.2, k));
+        }
+        for (s, list) in sides.iter_mut().enumerate() {
+            list.sort_by(|p, q| p.0.total_cmp(&q.0));
+            for (n, &(_, k)) in list.iter().enumerate() {
+                let c = &mut self.created[k];
+                match lots.get(s * per_side + n).filter(|_| n < per_side) {
+                    Some(lot) => {
+                        let m = crate::town::geom::centroid(lot);
+                        (c.poly, c.x, c.y) = (lot.clone(), m[0], m[1]);
+                    }
+                    None => c.removed = true,
+                }
+                changed.push(c.id.clone());
+            }
+        }
+        changed
+    }
+
     /// `next` replacing these edits whole, keeping listed entries' places (`created`: later ids
     /// are indices): the entries `next` lacks stay, marked removed, as the ops that make it leave
     /// them wherever they are applied (the app's `keepPlaces`).

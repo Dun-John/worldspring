@@ -82,6 +82,7 @@ pub(super) fn tower_house<G: Ground>(site: &G, patch: &[P], l: &Layout, walls: &
                 shade: None,
                 id: 0,
                 keep: Some(KeepKind::Plain),
+                deck: None,
             });
         }
     }
