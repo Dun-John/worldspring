@@ -139,6 +139,7 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
     SiteDesign {
         kind: BUILDING.into(),
         theme: None,
+        look: 0,
         origin: it.origin,
         axis: it.axis,
         nx: it.nx as u16,
@@ -227,6 +228,8 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
         paths: Vec::new(),
         rim: Vec::new(),
         links: Vec::new(),
+        floor: String::new(),
+        ramps: Vec::new(),
     };
     if !lv.roof {
         windows(&mut level, nx, ny, lv.z == 0);
@@ -267,6 +270,7 @@ pub fn build(world: &World, d: &SiteDesign, t0: &T0, l: &Layout, settlement: usi
         function: b.label(),
         theme: None,
         stone: 0,
+        look: 0,
         origin: sh.origin,
         axis: sh.u,
         across: sh.v,
@@ -371,7 +375,8 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
                     if let Some(w) = why
                         && bad.is_none()
                     {
-                        bad = Some(((i, j), format!("the {} at {i},{j} {w}", f.name)));
+                        let sq = if (i, j) == (f.x as usize, f.y as usize) { String::new() } else { format!(" (at its square {i},{j})") };
+                        bad = Some(((i, j), format!("the {} at {},{} {w}{sq}", f.name, f.x, f.y)));
                     }
                     if platform {
                         under[k] = true;

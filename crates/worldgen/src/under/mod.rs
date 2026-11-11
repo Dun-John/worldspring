@@ -31,6 +31,8 @@ use serde::Serialize;
 
 pub mod design;
 pub mod surface;
+mod boss;
+pub use boss::PERILS;
 mod grow;
 mod kit;
 mod plan;
@@ -641,8 +643,25 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     let surface = t0.sample(e.at[0], e.at[1], 20.0) as f32;
     let caves = (age, hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, 0xb4ea));
     let mut it = site(t0, &l, e.kind, format!("u:{layout}:{k}"), (layout as u32, k as u32), frame, depth, Some(entry.1 * nx + entry.0), surface, (theme, s * s), caves, &mut rng)?;
+    if e.kind == UnderKind::Cave {
+        it.look = look_of(t0, e.at);
+    }
     crate::sitelinks::dress(world, t0, layout, &mut it);
     Some(it)
+}
+
+/// A cave's look from the surface biome at its mouth (`Interior::look`): 1 green (rainforest, temperate forest, jungle,
+/// swamp), 2 dry (deserts, savanna, salt flat), 3 cold (tundra, taiga), 0 today's rock (the rest).
+pub fn look_of(t0: &T0, at: [f64; 2]) -> u8 {
+    use crate::t0::biome::Biome;
+    let (w, h) = (t0.biome.w, t0.biome.h);
+    let (i, j) = (((at[0] / t0.cell_ft).round().max(0.0) as usize).min(w - 1), ((at[1] / t0.cell_ft).round().max(0.0) as usize).min(h - 1));
+    match Biome::from_u8((t0.biome.get(i, j) & 0xff) as u8) {
+        Biome::TemperateRainforest | Biome::TemperateForest | Biome::Jungle | Biome::Swamp => 1,
+        Biome::HotDesert | Biome::ColdDesert | Biome::Savanna | Biome::SaltFlat => 2,
+        Biome::Tundra | Biome::Taiga => 3,
+        _ => 0,
+    }
 }
 
 /// The sewers under section (`sx`, `sy`) of the world (`SEWER_SECTION_FT` squares), id
@@ -891,6 +910,8 @@ fn site(
             let (first, lk) = locks.get_or_insert_with(|| (d, Locks::new(size, rng)));
             guard(&mut p, &mut plans[*first..], nx, ny, d, depth, lk, rng);
         }
+        // (Raised floors reached without a climb before water and a chasm keep every square reached.)
+        p.ramp_ledges(ny);
         if !p.water.is_empty() {
             // (Its planner's water, once the locks and keys are in: off doorways, every square still reached.)
             p.reserve_doors();
@@ -914,7 +935,10 @@ fn site(
                 p.put(item("stone_bridge", x0.min(x1), y0.min(y1), x0.abs_diff(x1) + 1, y0.abs_diff(y1) + 1));
             }
         }
+        p.theme = theme.key;
         furnish(&mut p, nx, ny, kind, rng);
+        // (Every raised floor reached without a climb.)
+        p.ramp_ledges(ny);
         arrive = p.down.or(arrive);
         plans.push(p);
     }
@@ -936,6 +960,7 @@ fn site(
         function: kind.name(),
         theme: (!matches!(kind, UnderKind::Sewer | UnderKind::KeepDungeon)).then_some(theme.key),
         stone: 0,
+        look: 0,
         origin: f.origin,
         axis: f.axis,
         across: f.across,

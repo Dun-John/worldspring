@@ -16,6 +16,7 @@ use serde::Serialize;
 
 pub mod design;
 pub mod hall;
+pub mod height;
 pub mod hub;
 pub mod shape;
 
@@ -42,6 +43,9 @@ pub struct Interior {
     /// A city's sewers: the walkway's stonework (`under::sewer_stone`), 0 for the rest.
     #[serde(skip_serializing_if = "no_stone")]
     pub stone: u8,
+    /// A cave's look from the biome at its mouth (`under::look_of`): 0 rock, 1 green, 2 dry, 3 cold.
+    #[serde(skip_serializing_if = "no_stone")]
+    pub look: u8,
     /// World position (ft) of grid corner (0, 0); grid x runs along `axis`, grid y along
     /// `across` (both unit vectors).
     pub origin: [f64; 2],
@@ -112,6 +116,14 @@ pub struct Level {
     /// keep's deep dungeons, ladders up into cellars): each has a link back on the other side.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// Floor height per square (`height`; underground sites): one character per square (row-major, nx x ny),
+    /// `'0'` + its height above `elevation_ft` in half feet (`'5'` a 2.5-ft dais, `':'` 5 ft, `'D'` 10 ft); empty
+    /// where the whole level is flat. A rise of up to `height::STEP_FT` is a step, more a sheer edge (`Floor::sheer`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub floor: String,
+    /// Ramp squares (indices into `cells`): rubble slopes joining two floors, at a height between them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ramps: Vec<u32>,
 }
 
 /// A way from a square of one site to another site (`to`: its id).
@@ -2237,6 +2249,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         name: b.name.clone(),
         theme: None,
         stone: 0,
+        look: 0,
         function: b.label(),
         origin,
         axis: u,
@@ -4519,7 +4532,7 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
         }
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);
-    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), rim: Vec::new(), links: Vec::new() }
+    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), rim: Vec::new(), links: Vec::new(), floor: String::new(), ramps: Vec::new() }
 }
 
 /// Wall runs: every square edge between different rooms (or a room and the outside) that is not
@@ -5387,6 +5400,7 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         name: None,
         theme: None,
         stone: 0,
+        look: 0,
         function: if gate { "Gate tower" } else { "Wall tower" },
         origin,
         axis: u,

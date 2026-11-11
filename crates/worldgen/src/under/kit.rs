@@ -128,7 +128,7 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("altar", "altar", 2, true, 3.5, None),
     ("chest", "chest", 1, true, 2.5, None),
     ("hoard", "treasure hoard", 1, false, 2.0, None),
-    ("dais", "dais and throne", 1, false, 2.5, None),
+    ("dais", "dais", 0, false, 2.5, None),
     ("table", "table", 1, true, 3.0, None),
     ("cot", "cot", 0, false, 1.5, None),
     ("crate", "crates", 1, true, 4.0, None),
@@ -215,6 +215,24 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("stepping_stone", "stepping stones", 0, false, 0.0, Some("difficult terrain")),
     // (A dwarven hall's stone bridge: dressed slabs over a chasm, walked like floor; the chasm is laid round it.)
     ("stone_bridge", "stone bridge", 0, false, 0.0, None),
+    // R5 underground (item 117: boss chambers, `boss`). Raised floors (`interior::height::RAISING`, by their height)
+    // and the ramps up to them (`RAMPS`); a throne stands on a dais only in a ruler's theme.
+    ("throne", "throne", 1, true, 5.0, None),
+    ("platform", "raised platform", 0, false, 5.0, None),
+    ("balcony", "gallery", 0, false, 10.0, None),
+    ("scaffold", "scaffolding", 0, false, 10.0, None),
+    ("steps", "stone steps", 0, false, 0.0, None),
+    ("climb_ladder", "ladder", 0, false, 0.0, None),
+    ("wall_stub", "broken wall", 2, true, 6.0, None),
+    ("fallen_column", "fallen column", 1, false, 3.0, Some("difficult terrain")),
+    ("arcane_workbench", "arcane workbench", 1, true, 3.0, None),
+    ("arcane_focus", "arcane focus", 1, true, 4.0, Some("arcane: its power is the DM's")),
+    ("bone_mound", "bone mound", 1, false, 3.0, Some("difficult terrain")),
+    ("totem", "totem", 1, true, 8.0, None),
+    ("chair_of_office", "chief's seat", 1, true, 4.0, None),
+    ("cracked_floor", "cracked floor", 0, false, 0.0, Some("hidden (DC 14 Perception): gives way under a creature, 10 ft fall, 1d6 bludgeoning (DC 13 Dex to leap clear)")),
+    // (Item 117 slice 2: a boss chamber's hazard, 1x1.)
+    ("flooded_pit", "flooded pit", 0, false, 0.0, Some("hidden (DC 13 Perception): murky water over a 10-ft shaft; DC 12 Athletics to climb out")),
 ];
 
 /// Items that lie on the floor under a span: water, chasms, rubble slopes.
@@ -447,6 +465,8 @@ pub(crate) fn furnish(p: &mut Plan, nx: usize, ny: usize, kind: UnderKind, rng: 
     if let Some(d) = p.down {
         p.taken[d] = true;
     }
+    // (The boss chamber's second way in, before any room takes its doorway's squares.)
+    super::boss::side_door(p, nx, ny, rng);
     // (A mine's rails and ore carts are its planner's, `themes::mine`.)
     let rooms: Vec<(i16, &'static str)> = p.rooms.iter().enumerate().map(|(i, r)| (i as i16, r.kind)).collect();
     for (ri, rkind) in rooms {
@@ -566,83 +586,12 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
     }
 }
 
-/// Pillars in rows, a dais and throne at the far end from the way in, a hoard beside it,
-/// braziers; caves get bones and a hoard instead of masonry.
+/// A built site's: a tactical layout and its theme's centrepiece (`boss::built`); a cave's, lava tube's or mine's: its
+/// natural set (`boss::wild`). Either may get hazards and a second way in.
 pub(crate) fn boss_chamber(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usize], kind: UnderKind, rng: &mut Pcg32) {
-    let dist = p.distances(p.up, ny, None);
-    let far = squares.iter().copied().max_by_key(|&k| dist[k]).unwrap_or(squares[0]);
-    let (fx, fy) = (far % nx, far / nx);
-    let built = !matches!(kind, UnderKind::Cave | UnderKind::LavaTube);
-    if built {
-        // The dais against the far end.
-        for (dx, dy) in [(0isize, 0isize), (-1, 0), (0, -1), (-1, -1), (-2, 0), (0, -2), (-2, -1), (-1, -2), (1, 0), (0, 1)] {
-            let (x, y) = (fx as isize + dx, fy as isize + dy);
-            if x >= 0 && y >= 0 && p.place(item("dais", x as usize, y as usize, 3, 2), Some(ri), ny) {
-                break;
-            }
-        }
-        if kind != UnderKind::Mine {
-            let (x0, y0) = (squares.iter().map(|k| k % nx).min().unwrap_or(0), squares.iter().map(|k| k / nx).min().unwrap_or(0));
-            let (x1, y1) = (squares.iter().map(|k| k % nx).max().unwrap_or(0), squares.iter().map(|k| k / nx).max().unwrap_or(0));
-            if x1 >= x0 + 5 && y1 >= y0 + 5 {
-                let mut x = x0 + 2;
-                while x + 2 <= x1 {
-                    for y in [y0 + 1, y1 - 1] {
-                        p.place(item("pillar", x, y, 1, 1), Some(ri), ny);
-                    }
-                    x += 3;
-                }
-            }
-        }
-        for _ in 0..30 {
-            let k = squares[rng.below(squares.len() as u32) as usize];
-            if p.place(item("brazier", k % nx, k / nx, 1, 1), Some(ri), ny) && rng.next_f64() < 0.4 {
-                break;
-            }
-        }
-        // Banners on the walls, a ritual circle on the floor.
-        let edge: Vec<usize> = squares.iter().copied().filter(|&k| neighbours(k, nx, ny).any(|m| p.cells[m] != ri)).collect();
-        let mut banners = 0;
-        for _ in 0..20 {
-            if banners >= 3 || edge.is_empty() {
-                break;
-            }
-            let k = edge[rng.below(edge.len() as u32) as usize];
-            if p.place(item("banner", k % nx, k / nx, 1, 1), Some(ri), ny) {
-                banners += 1;
-            }
-        }
-        if kind != UnderKind::Mine {
-            for _ in 0..20 {
-                let k = squares[rng.below(squares.len() as u32) as usize];
-                if p.place(item("glyph", k % nx, k / nx, 2, 2), Some(ri), ny) {
-                    break;
-                }
-            }
-        }
-    } else {
-        for _ in 0..8 {
-            let k = squares[rng.below(squares.len() as u32) as usize];
-            let what = ["bones", "skeleton", "stalagmite", "boulder", if kind == UnderKind::LavaTube { "vent" } else { "pool" }][rng.below(5) as usize];
-            let (w, h) = match what {
-                "boulder" => (2, 2),
-                "skeleton" => (1, 2),
-                _ => (1, 1),
-            };
-            p.place(item(what, k % nx, k / nx, w, h), Some(ri), ny);
-        }
-    }
-    // The hoard, as near the far end as fits.
-    let mut near: Vec<usize> = squares.to_vec();
-    near.sort_by_key(|&k| (k % nx).abs_diff(fx) + (k / nx).abs_diff(fy));
-    let mut put = 0;
-    for k in near {
-        if put >= 2 {
-            break;
-        }
-        if p.place(item(if put == 0 { "hoard" } else { "chest" }, k % nx, k / nx, 1, 1), Some(ri), ny) {
-            put += 1;
-        }
+    match kind {
+        UnderKind::Cave | UnderKind::LavaTube | UnderKind::Mine => super::boss::wild(p, nx, ny, ri, squares, kind, rng),
+        _ => super::boss::built(p, nx, ny, ri, squares, rng),
     }
 }
 
@@ -691,7 +640,7 @@ fn reach(p: &Plan, ny: usize, start: usize, shut: &dyn Fn((usize, usize)) -> boo
 }
 
 /// The floor's parts with the `shut` doors closed: a label per square (u32::MAX rock) and how many.
-fn parts(p: &Plan, ny: usize, shut: &dyn Fn((usize, usize)) -> bool) -> (Vec<u32>, u32) {
+pub(crate) fn parts(p: &Plan, ny: usize, shut: &dyn Fn((usize, usize)) -> bool) -> (Vec<u32>, u32) {
     let mut label = vec![u32::MAX; p.cells.len()];
     let mut n = 0;
     for s in 0..p.cells.len() {
@@ -1193,9 +1142,11 @@ impl Ground {
         Ground { nx, ny: n / nx, cells, start, free, blocked, east, south, locked }
     }
 
-    /// A level being laid out.
+    /// A level being laid out (no step over a sheer edge, up or down, where it has raised floors).
     pub(crate) fn of_plan(p: &Plan) -> Ground {
-        let step = |a: usize, b: usize| if !p.passable(a, b) { 0 } else if p.locks.contains_key(&(a, b)) { 2 } else { 1 };
+        let high = p.rooms.iter().any(|r| r.raise > crate::interior::height::STEP_FT).then(|| p.floor(p.cells.len() / p.nx));
+        let sheer = |a: usize, b: usize| high.as_ref().is_some_and(|f| f.sheer(a, b) != 0.0);
+        let step = |a: usize, b: usize| if !p.passable(a, b) || sheer(a, b) { 0 } else if p.locks.contains_key(&(a, b)) { 2 } else { 1 };
         let free = (0..p.cells.len()).map(|k| p.cells[k] >= 0 && !p.taken[k]).collect();
         let mut locked: Vec<usize> = p.locks.keys().flat_map(|&(a, b)| [a, b]).collect();
         locked.sort_unstable();

@@ -4,11 +4,12 @@
 // surface shows through only faintly; caves get rough, chamfered rock edges. Geometry is in
 // the interior's own 5-ft grid units; the container maps them to the screen every frame.
 import { BufferImageSource, Container, Geometry, GlProgram, Graphics, Mesh, RenderTexture, Shader, Sprite, Text, TextStyle, Texture, UniformGroup, type Renderer } from 'pixi.js';
+import { floorFt, lipOf } from '../gen/floor';
 import { OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type InteriorLevel } from '../gen/protocol';
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
-import { drawFurniture, drawUnderProp, IN_RING, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
+import { columnTones, drawFurniture, drawUnderProp, IN_RING, stoneColumn, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -26,7 +27,10 @@ const SQUARE_FT = 5;
 /** Underground props drawn against the wall beside them (their look depends on its side). */
 export const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
 /** Underground props with a back against a wall (a dais's throne; a collapsed wall, the wall it fell from). */
-export const BACKED = new Set(['dais', 'collapsed_wall']);
+export const BACKED = new Set(['dais', 'collapsed_wall', 'throne', 'steps', 'climb_ladder', 'arcane_workbench']);
+/** Underground props sharing a building furniture kind's name but drawn their own way below ground (a boss's stone
+ * throne); in a building, still the furniture. */
+const OWN_BELOW = new Set(['throne']);
 /** A prop on a curving wall: the wall's point (grid), the turn from north to its rock side, that turn
  * as one of 16 steps, and the light for its look drawn unturned. */
 interface WallAnchor {
@@ -70,12 +74,13 @@ const SHARED: Record<string, string> = {
   chest: 'chest', barrel: 'barrel', crate: 'crate', table: 'table', rug: 'rug', altar: 'altar', statue: 'statue', pillar: 'pillar',
   cage: 'cage', rack: 'rack', weapon_rack: 'weapon_rack', cot: 'cot', sarcophagus: 'sarcophagus', winch: 'winch', trapdoor: 'trapdoor',
   bookshelf: 'bookcase', desk: 'desk', long_table: 'long_table', vat: 'vat', anvil: 'anvil', forge: 'forge', hearth: 'hearth', keg_rack: 'keg_rack',
+  chair_of_office: 'chair_of_office',
 };
 /** The kind a building's furniture or an underground prop is drawn as with the furniture's drawing
  * (in a building: everything but the indoor props, drawn as underground); none for the rest. */
 export function sharedKind(kind: string, underground: boolean): string | undefined {
   if (underground) return SHARED[kind];
-  return VARIED.has(kind) || !UNDER_DRAWN.has(kind) ? kind : undefined;
+  return VARIED.has(kind) || !UNDER_DRAWN.has(kind) || OWN_BELOW.has(kind) ? kind : undefined;
 }
 /** Props scattered differently per placement: one of four variants, picked by position. */
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
@@ -855,6 +860,8 @@ export class InteriorLayer {
     // the floor, the bridges over them are vector.)
     if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) return false;
     if (TERRAIN_KINDS.has(f.kind) || SPAN_KINDS.has(f.kind)) return false;
+    // (A boss chamber's platform and galleries are raised floor, drawn by the floor heights: `underField` `liftField`.)
+    if (f.kind === 'platform' || f.kind === 'balcony') return false;
     // (A key is for the DM's eyes only.)
     if (this.style.player && f.kind === 'key') return false;
     // Marks where a tunnel leaves the section: the next section is drawn on from there.
@@ -1151,7 +1158,10 @@ export class InteriorLayer {
     } else if (onStairs) {
       object = { name: 'stairs', cover: COVER[0], notes: 'difficult terrain' };
     }
-    const elev = lv.elevation_ft + lv.rooms[room].raise_ft;
+    // (At a lip: the drop beside it and the cover its edge gives from below.)
+    const lip = lipOf(lv, it.nx, it.ny, i, j);
+    if (lip) object = object ? { ...object, cover: `${object.cover}; ${lip.cover}`, notes: [object.notes, lip.note].filter(Boolean).join(' · ') } : { name: 'lip', cover: lip.cover, notes: lip.note };
+    const elev = lv.elevation_ft + floorFt(lv, it.nx, it.ny, i, j);
     return { elevationFt: Math.round(elev - this.sea), tier: Math.floor((elev - this.sea) / 5), surface: `${this.roomName(this.level, room)} (${this.levelName(this.level)})`, object };
   }
 
@@ -1179,7 +1189,7 @@ export class InteriorLayer {
     this.freeUnder();
     let f = this.fields.get(this.level);
     if (!f) this.fields.set(this.level, (f = underField(it, this.level)));
-    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain, dist } = f;
+    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain, dist, lift } = f;
     // Built sites keep square corners: walls measured from the squares, the field unsmoothed.
     const square = SQUARE_SITES.has(it.function);
     const fieldSrc = new BufferImageSource({ resource: data, width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: square ? 'nearest' : 'linear', addressMode: 'clamp-to-edge' });
@@ -1189,6 +1199,8 @@ export class InteriorLayer {
     const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? nx * FIELD_RES : 1, height: cave ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Water, chasms and rubble slopes (a blank texel when there are none).
     const terrainSrc = new BufferImageSource({ resource: terrain ?? new Uint8Array(4), width: terrain ? nx * FIELD_RES : 1, height: terrain ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    // Ledges and steps: the edges between floor heights (a blank texel when it is flat).
+    const liftSrc = new BufferImageSource({ resource: lift?.data ?? new Uint8Array(4), width: lift ? nx * lift.res : 1, height: lift ? ny * lift.res : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // How far the rock lies from the floor (hatched beside the walls, faded out beyond).
     const distSrc = new BufferImageSource({ resource: dist, width: (nx + 2 * DIST_PAD) * FIELD_RES, height: (ny + 2 * DIST_PAD) * FIELD_RES, format: 'r8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // A site is drawn past its grid, so its rock fades out round it; sewer sections meet edge to edge.
@@ -1196,12 +1208,14 @@ export class InteriorLayer {
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
     // The site's stone: wall style and palette by its theme (sewers: wet brick).
-    const look = underLook(it.function, it.theme);
+    const look = underLook(it.function, it.theme, it.look);
     const uniforms = new UniformGroup({
       uTheme: { value: look.style, type: 'f32' },
       uStone: { value: new Float32Array(look.stone), type: 'vec3<f32>' },
       uCoping: { value: new Float32Array(look.coping), type: 'vec3<f32>' },
       uRock: { value: new Float32Array(look.rock), type: 'vec3<f32>' },
+      uLook: { value: look.feel, type: 'f32' },
+      uTint: { value: new Float32Array(look.tint), type: 'vec3<f32>' },
       uGrow: { value: grow, type: 'f32' },
       uN: { value: new Float32Array([nx, ny]), type: 'vec2<f32>' },
       uPad: { value: pad, type: 'f32' },
@@ -1219,13 +1233,14 @@ export class InteriorLayer {
       uShapeCount: { value: shapeCount, type: 'f32' },
       uCaverns: { value: cave ? 1 : 0, type: 'f32' },
       uHasTerrain: { value: terrain ? 1 : 0, type: 'f32' },
+      uHasLift: { value: lift ? 1 : 0, type: 'f32' },
     });
-    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uTerrain: terrainSrc, uDist: distSrc, uNoise: noiseSource(), under: uniforms } });
+    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uTerrain: terrainSrc, uLift: liftSrc, uDist: distSrc, uNoise: noiseSource(), under: uniforms } });
     const mesh = new Mesh({ geometry: quad(), shader });
     mesh.position.set(-grow, -grow);
     mesh.scale.set(nx + 2 * grow, ny + 2 * grow);
     this.plan.addChild(mesh);
-    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc, terrainSrc, distSrc], shader, mesh, level: this.level };
+    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc, terrainSrc, liftSrc, distSrc], shader, mesh, level: this.level };
   }
 
   private draw() {
@@ -2016,6 +2031,11 @@ export class InteriorLayer {
 
   /** Everything an item's look depends on: what it is and its size; underground also the light, the
    * wall it is set against and its scatter variant. */
+  /** A built site's columns' tones (`stoneColumn`), from its stone (`underLook`). */
+  private columnTones(): number[] {
+    return columnTones(underLook(this.interior.function, this.interior.theme).stone);
+  }
+
   private itemKey(f: InteriorItem): string {
     if (this.isWay(f)) return `way:${this.underground ? 'u' : 'b'}:${f.kind}:${f.w}x${f.h}:${this.light.map((v) => Math.round(v * 100)).join(',')}:${this.lookOf(f)}:q${this.wayTurn()}:${this.wayScale(f)}`;
     const base = `${f.kind}:${f.w}x${f.h}`;
@@ -2026,7 +2046,8 @@ export class InteriorLayer {
       const back = ORIENTED.has(shared) ? this.backSide(g).join(',') : '';
       const fit = this.ringFit(f);
       const ring = fit ? `:y${[fit.c[0] - f.x, fit.c[1] - f.y, fit.r].map((v) => v.toFixed(2)).join(',')}` : '';
-      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}`;
+      const stone = this.underground && f.kind === 'pillar' ? `:s${this.columnTones().join(',')}` : '';
+      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}${stone}`;
     }
     const turned = this.wallAnchor(f);
     const wall = turned ? `t${turned.step}` : ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
@@ -2392,6 +2413,8 @@ export class InteriorLayer {
     if (kind === 'key') return keyGlyph(g, x + 0.5, y + 0.5, lockColor(this.lookOf(f)));
     const c = itemColor(kind);
     const inset = 0.08;
+    // A built site's columns, in its own stone.
+    if (this.underground && kind === 'pillar') return stoneColumn(g, f, this.light, this.columnTones());
     // Building furniture, and underground props that share its drawing.
     const shared = this.sharedKind(kind);
     if (shared) {

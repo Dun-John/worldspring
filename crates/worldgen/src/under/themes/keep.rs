@@ -91,7 +91,7 @@ pub(crate) fn keep(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     }
     if last {
         g.cap = ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng);
+        boss = boss_room(&mut p, &mut g, ny, area, rng);
     }
     finish(&mut p, ny, passage, cw, last, boss, &pools, &pillared);
     p
@@ -161,7 +161,7 @@ pub(crate) fn undercroft(nx: usize, ny: usize, arrive: usize, last: bool, theme:
     let have = rooms(&p, passage);
     g.grow(&mut p, &specs, target.saturating_sub(have), false, rng);
     g.cap = ROOMS_MAX;
-    let boss = if last { boss_room(&mut p, &mut g, ny, rng) } else { None };
+    let boss = if last { boss_room(&mut p, &mut g, ny, 0.0, rng) } else { None };
     finish(&mut p, ny, passage, cw, last, boss, &pools, &pillared);
     p
 }

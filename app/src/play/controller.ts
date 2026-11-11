@@ -14,7 +14,8 @@ import { settle, type Carried, type Carry } from './carry';
 import { forgetRehosted } from './rehosted';
 import { hasImage, loadSession, putImage, saveSession } from './session';
 import { apply, emptyState, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
-import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
+import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, rulerTerrain, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
+import { floorOf } from '../gen/floor';
 
 export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog';
 
@@ -488,7 +489,23 @@ export class PlayController implements PointerTool {
     const [za, zb] = [height(r.a), height(r.b)];
     const [dx, dy] = [r.b[0] - r.a[0], r.b[1] - r.a[1]];
     const dist = r.free ? Math.hypot(dx, dy) : gridDistance(dx, dy, g.measure);
-    return rulerLabel(dist, za === null || zb === null ? null : zb - za, g);
+    const label = rulerLabel(dist, za === null || zb === null ? null : zb - za, g);
+    const crossed = here && !r.free ? this.rulerCrossed(here, r) : '';
+    return crossed ? `${label}\n${crossed}` : label;
+  }
+
+  /** The climbs and difficult squares along a ruler inside a site (`rulerTerrain`), kept while the ruler stays. */
+  private crossedMemo = { key: '', text: '' };
+  private rulerCrossed(here: Place, r: Ruler): string {
+    if (!here.sewers && !(here.it && isUnderground(here.it.id))) return '';
+    const key = `${r.loc}|${here.level}|${r.a}|${r.b}`;
+    if (this.crossedMemo.key !== key) {
+      const grid = this.gridOf(here);
+      const lv = here.it?.levels[here.level];
+      const floor = here.it && lv ? floorOf(lv, here.it.nx, here.it.ny) : null;
+      this.crossedMemo = { key, text: grid ? rulerTerrain(measure(r.a, r.b, this.state.grid).squares, grid, floor) : '' };
+    }
+    return this.crossedMemo.text;
   }
 
   /** The height (ft above the sea) of the ground or floor under a square of the place in view:

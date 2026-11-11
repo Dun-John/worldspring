@@ -618,6 +618,8 @@ export interface Interior {
   /** A city's sewers: the walkway's stonework (`under::sewer_stone`: bits 0-1 brick, dressed flags,
    * rubble; bit 2 warm stone). */
   stone?: number;
+  /** A cave's look from the biome at its mouth (`under::look_of`): 1 green, 2 dry, 3 cold; absent for rock. */
+  look?: number;
   /** World ft of grid corner (0, 0); grid x runs along `axis`, y along `across`. */
   origin: [number, number];
   axis: [number, number];
@@ -675,6 +677,12 @@ export interface InteriorLevel {
   /** Ways to other sites (cellar trapdoors, stairs to deep dungeons, sewer ladders): the
    * square and the site's id; the other site has a way straight back. */
   links?: { x: number; y: number; to: string }[];
+  /** Floor height per square (underground sites; `interior::height`): a character per square (row-major), its
+   * code - 48 the height above `elevation_ft` in half feet; absent where the level is flat. Read it with
+   * `gen/floor.ts`. */
+  floor?: string;
+  /** Ramp squares (indices into `cells`): rubble slopes joining two floors, at a height between them. */
+  ramps?: number[];
 }
 
 export interface InteriorItem {

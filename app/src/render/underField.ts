@@ -3,6 +3,7 @@
 // terrain (water, chasms, rubble slopes) likewise.
 // Pure data, so a city's sewer sections can be prepared in a worker (`underField.worker.ts`)
 // while the view moves.
+import { floorEdges, floorFt, floorOf } from '../gen/floor';
 import type { Interior, InteriorLevel } from '../gen/protocol';
 import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
 import { rockDistance } from './rockDistance';
@@ -48,7 +49,27 @@ export interface UnderField {
   terrain: Uint8Array | null;
   /** Squares to the nearest floor (`rockDistance`: r8, `DIST_PAD` squares past the grid each way). */
   dist: Uint8Array;
+  /** Ledges and steps (`liftField`), else null. */
+  lift: Lift | null;
 }
+
+/** The edges between floor heights (`liftField`): (nx * res) x (ny * res), RGBA: signed distance to the nearest
+ * edge (squares, + on its high side; 128 + d * LIFT_SCALE), its rise (ft / LIFT_FT), how strongly it is drawn (0
+ * on ramps, rising to 1 within RAMP_TAPER of one, so the way up reads); a on and a texel round ramps 1 + 254 t, t how
+ * far up it (0 at the lower floor's edge; g there the ramp's rise), else 0. Rock stays rock: cave ledges
+ * open onto their floors in the generator (`cave::open_ledges`), so a ledge's drop is a floor-to-floor edge. */
+export interface Lift {
+  data: Uint8Array;
+  res: number;
+}
+
+/** The lift field's distances: to +-LIFT_REACH squares, LIFT_SCALE a square. */
+const LIFT_REACH = 2;
+const LIFT_SCALE = 63.5;
+/** How far (squares) a cliff tapers away beside a ramp. */
+const RAMP_TAPER = 0.4;
+/** The highest rise it tells apart (ft). */
+const LIFT_FT = 20;
 
 /** Underground terrain kinds, by their channel in `UnderField.terrain`. */
 export const TERRAIN_CHANNEL: Record<string, number> = { water_shallow: 0, water_deep: 1, chasm: 2, rubble_slope: 3 };
@@ -64,7 +85,7 @@ export function roughness(site: string): number {
 
 /** Floor material for the shader: 0 cave rock, 1 basalt, 2 mine earth, 3 sewer brick,
  * 4 flagstones, 5 boss flagstones, 6 the cult's flagstones, 7 marble, 8 hewn blocks, 9 ice, 10 the cult's dark ring flagstones,
- * 11 (v63 underground) crypt flagstones. Flagstones (4-6, 10, 11) take their stone from the site's theme (`underTheme.ts`). */
+ * 11 (v63 underground) crypt flagstones, 12 a sunken arena's packed sand (`sunkenPits`). Flagstones (4-6, 10, 11) take their stone from the site's theme (`underTheme.ts`). */
 export function materialOf(site: string, kind: string, theme?: string): number {
   if (kind === 'ring corridor') return 10;
   if (kind === 'sewer tunnel' || kind === 'service passage') return 3;
@@ -79,6 +100,44 @@ export function materialOf(site: string, kind: string, theme?: string): number {
   if (site === 'mine') return 2;
   if (site === 'crypt' || site === 'catacombs') return 11;
   return 4;
+}
+
+/** A boss chamber's sunken arena (`under::boss`: most of its floor raised round a pit at the level's own height):
+ * the pit's squares (4 or more together at the bottom, so not the doorway's square), 1 where the floor is the
+ * fighting pit's packed sand (the shader's material 12). */
+function sunkenPits(lv: InteriorLevel, nx: number, ny: number): Uint8Array {
+  const out = new Uint8Array(nx * ny);
+  if (!floorOf(lv, nx, ny)) return out;
+  for (let r = 0; r < lv.rooms.length; r++) {
+    if (lv.rooms[r].kind !== 'boss chamber') continue;
+    let all = 0;
+    let raised = 0;
+    for (let k = 0; k < nx * ny; k++) {
+      if (lv.cells[k] !== r) continue;
+      all++;
+      if (floorFt(lv, nx, ny, k % nx, Math.floor(k / nx)) > 3) raised++;
+    }
+    if (raised * 5 <= all * 2) continue;
+    const low = (k: number) => lv.cells[k] === r && !out[k] && floorFt(lv, nx, ny, k % nx, Math.floor(k / nx)) < 0.5;
+    const seen = new Uint8Array(nx * ny);
+    for (let k0 = 0; k0 < nx * ny; k0++) {
+      if (seen[k0] || !low(k0)) continue;
+      const part = [k0];
+      seen[k0] = 1;
+      for (let n = 0; n < part.length; n++) {
+        const k = part[n];
+        const i = k % nx;
+        for (const m of [i > 0 ? k - 1 : -1, i + 1 < nx ? k + 1 : -1, k - nx, k + nx]) {
+          if (m >= 0 && m < nx * ny && !seen[m] && low(m)) {
+            seen[m] = 1;
+            part.push(m);
+          }
+        }
+      }
+      if (part.length >= 4) for (const k of part) out[k] = 1;
+    }
+  }
+  return out;
 }
 
 /** Separable Gaussian blur of a w × h field (outside counts as 0). */
@@ -380,6 +439,7 @@ export function underField(it: Interior, level: number): UnderField {
     }
   }
   const cells = new Uint8Array(nx * ny * 4);
+  const sand = sunkenPits(lv, nx, ny);
   const { index, shapes: slots, caverns } = shapeIndex(lv, nx, ny);
   let anyRaised = false;
   for (let j = 0; j < ny; j++) {
@@ -388,14 +448,14 @@ export function underField(it: Interior, level: number): UnderField {
       const r = lv.cells[k];
       if (r < 0) continue;
       const room = lv.rooms[r];
-      cells[k * 4] = room.shape === CAVERN ? 0 : materialOf(it.function, room.kind, it.theme);
+      cells[k * 4] = room.shape === CAVERN ? 0 : sand[k] ? 12 : materialOf(it.function, room.kind, it.theme);
       cells[k * 4 + 1] = index[k];
       cells[k * 4 + 2] = (r * 37) & 255;
       cells[k * 4 + 3] = 255;
       // Floors that follow lines (sewers under streets) are painted from the lines below; shaped
       // rooms from their shapes; anything else fills its squares.
       const square = (!paths.length || room.kind !== LINE_ROOM) && fromSquares(index[k]);
-      const lift = Math.min(1, room.raise_ft / 10);
+      const lift = Math.min(1, floorFt(lv, nx, ny, i, j) / LIFT_FT);
       if (lift > 0) anyRaised = true;
       for (let y = j * R; y < (j + 1) * R; y++) {
         const o = (y + off) * w + off;
@@ -504,7 +564,208 @@ export function underField(it: Interior, level: number): UnderField {
   }
   // How far the rock lies from the floor (hatched beside the walls, fading out beyond).
   const dist = rockDistance(f1, w, h, R, rim, nx, ny, (i, j) => lv.cells[j * nx + i] >= 0 && !fromSquares(index[j * nx + i]));
-  return { w: tw, h: th, pad, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level), dist };
+  return { w: tw, h: th, pad, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level), dist, lift: liftField(it, level) };
+}
+
+/**
+ * Ledges and steps (`UnderField.lift`): every edge between floor heights (`floorEdges`; ramps have none) as a signed
+ * distance field, so the shader inks the high side's lip along it, the cliff face below it (as wide as the drop is
+ * high) and the shadow beyond. Built sites measure square by square (Chebyshev: square corners, at 8 texels a
+ * square); natural rock by the straight distance, blurred as its walls are (4 a square). Null where it is flat and
+ * in sewers.
+ */
+function liftField(it: Interior, level: number): Lift | null {
+  const lv = it.levels[level];
+  const { nx, ny } = it;
+  if (lv.paths?.length) return null;
+  const f = floorOf(lv, nx, ny);
+  if (!f) return null;
+  const { v, h } = floorEdges(f, lv);
+  // (Only rubble slopes are drawn as slopes; steps and ladders are plain ramps, under their own sprites.)
+  const rubble = new Uint8Array(nx * ny);
+  for (const g of lv.furniture) if (g.kind === 'rubble_slope') for (let y = g.y; y < Math.min(ny, g.y + g.h); y++) for (let x = g.x; x < Math.min(nx, g.x + g.w); x++) rubble[y * nx + x] = 1;
+  const slope = (k: number) => f.ramp[k] && rubble[k] === 1;
+  // (i, j, 1 on the line x = i over row j / 0 on y = j over column i, rise: the east or south side's minus the other's,
+  // the west or north side's height.)
+  const segs: [number, number, number, number, number][] = [];
+  for (let j = 0; j < ny; j++) for (let i = 0; i <= nx; i++) if (v[j * (nx + 1) + i]) segs.push([i, j, 1, v[j * (nx + 1) + i], f.ft[j * nx + i - 1]]);
+  for (let j = 0; j <= ny; j++) for (let i = 0; i < nx; i++) if (h[j * nx + i]) segs.push([i, j, 0, h[j * nx + i], f.ft[(j - 1) * nx + i]]);
+  const square = SQUARE_SITES.has(it.function);
+  const R = square ? 8 : 4;
+  const [w, hh] = [nx * R, ny * R];
+  if (!segs.length && !f.ramp.some((r) => r)) return null;
+  const best = new Float32Array(w * hh).fill(Infinity);
+  const dist = new Float32Array(w * hh);
+  const rise = new Float32Array(w * hh);
+  for (const [i, j, vert, r, ft0] of segs) {
+    const [x0, y0] = [i - LIFT_REACH, j - LIFT_REACH];
+    const [x1, y1] = vert ? [i + LIFT_REACH, j + 1 + LIFT_REACH] : [i + 1 + LIFT_REACH, j + LIFT_REACH];
+    for (let ty = Math.max(0, Math.floor(y0 * R)); ty < Math.min(hh, Math.ceil(y1 * R)); ty++) {
+      for (let tx = Math.max(0, Math.floor(x0 * R)); tx < Math.min(w, Math.ceil(x1 * R)); tx++) {
+        const [px, py] = [(tx + 0.5) / R, (ty + 0.5) / R];
+        const [perp, a, a0] = vert ? [px - i, py, j] : [py - j, px, i];
+        const over = Math.max(0, a0 - a, a - a0 - 1);
+        const d = square ? Math.max(Math.abs(perp), over) : Math.hypot(perp, over);
+        // (Ties go to the edge alongside: past an edge's end its side may not be the texel's.)
+        const key = d + 1e-3 * over;
+        const k = ty * w + tx;
+        if (d >= LIFT_REACH || key >= best[k]) continue;
+        best[k] = key;
+        // (Its side: a floor texel's by its own square's height where that is the edge's high or low floor, so one
+        // past the edge's end, on a floor of the low side's height, is never taken for the high side; else by the line.
+        // Taken for the high side, it would carry that side over its whole floor (below), and where that met the low
+        // side, out of reach of any edge, a lip was drawn across the floor with no drop.)
+        const s = Math.min(ny - 1, Math.floor(py)) * nx + Math.min(nx - 1, Math.floor(px));
+        let high = perp > 0 === r > 0;
+        if (lv.cells[s] >= 0 && !f.ramp[s]) {
+          if (f.ft[s] >= Math.max(ft0, ft0 + r)) high = true;
+          else if (f.ft[s] <= Math.min(ft0, ft0 + r)) high = false;
+        }
+        dist[k] = high ? d : -d;
+        rise[k] = Math.abs(r);
+      }
+    }
+  }
+  // Texels out of reach take their square's side (so no edge shows inside a floor): a square's from its middle texel
+  // where that is in reach, else from the floor of the same height it joins (4 ways), then the rock from what is
+  // beside it; else low.
+  const sq = new Int8Array(nx * ny);
+  const todo: number[] = [];
+  for (let k = 0; k < nx * ny; k++) {
+    const t = (Math.floor(k / nx) * R + (R >> 1)) * w + (k % nx) * R + (R >> 1);
+    if (best[t] < Infinity) {
+      sq[k] = dist[t] > 0 ? 1 : -1;
+      todo.push(k);
+    }
+  }
+  for (const floors of [true, false]) {
+    const queue = floors ? todo : Array.from(sq.keys()).filter((k) => sq[k]);
+    for (let q = 0; q < queue.length; q++) {
+      const k = queue[q];
+      const [i, j] = [k % nx, Math.floor(k / nx)];
+      for (const m of [i > 0 ? k - 1 : -1, i + 1 < nx ? k + 1 : -1, j > 0 ? k - nx : -1, j + 1 < ny ? k + nx : -1]) {
+        if (m < 0 || sq[m]) continue;
+        if (floors ? lv.cells[k] >= 0 && lv.cells[m] >= 0 && f.ft[m] === f.ft[k] : lv.cells[m] < 0) {
+          sq[m] = sq[k];
+          queue.push(m);
+        }
+      }
+    }
+  }
+  for (let k = 0; k < w * hh; k++) if (best[k] === Infinity) dist[k] = (sq[Math.floor(Math.floor(k / w) / R) * nx + Math.floor((k % w) / R)] || -1) * LIFT_REACH;
+  // Ramps: no lip, and the cliff beside one tapers to it (0 on the ramp, 1 from RAMP_TAPER squares off it), so it
+  // ends cleanly where the way up starts. (Unblurred: the taper is the soft part.)
+  const strength = new Float32Array(w * hh).fill(1);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      if (!f.ramp[j * nx + i]) continue;
+      for (let ty = Math.max(0, Math.floor((j - RAMP_TAPER) * R)); ty < Math.min(hh, Math.ceil((j + 1 + RAMP_TAPER) * R)); ty++) {
+        for (let tx = Math.max(0, Math.floor((i - RAMP_TAPER) * R)); tx < Math.min(w, Math.ceil((i + 1 + RAMP_TAPER) * R)); tx++) {
+          const [px, py] = [(tx + 0.5) / R, (ty + 0.5) / R];
+          const d = Math.hypot(Math.max(0, i - px, px - i - 1), Math.max(0, j - py, py - j - 1));
+          const k = ty * w + tx;
+          strength[k] = Math.min(strength[k], Math.min(1, d / RAMP_TAPER));
+        }
+      }
+    }
+  }
+  // Ramps, so the shader draws each as a slope: how far up it a texel is (a, 1 + 254 t: t 0 on the edge it meets the
+  // lower floor at, 1 on the higher's; spread a texel past the ramp, so filtering inside it reads only ramp texels),
+  // and on it (g) the rise between its two floors, its low 3 bits the way up (one of eight, 45 degrees each from +x,
+  // y down; one per run of ramp squares), read exactly by texelFetch (off by at most 0.6 ft as a rise).
+  const segsOf = (i: number, j: number, k: number) => {
+    const out: [number, number, number, number, number][] = [];
+    for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const [a, b] = [i + di, j + dj];
+      if (a < 0 || b < 0 || a >= nx || b >= ny) continue;
+      const m = b * nx + a;
+      if (lv.cells[m] < 0 || f.ramp[m] || f.ft[m] === f.ft[k]) continue;
+      // (The side shared with that square, and that square's height.)
+      const [x0, y0] = [di > 0 ? i + 1 : i, dj > 0 ? j + 1 : j];
+      out.push([x0, y0, di ? x0 : x0 + 1, dj ? y0 : y0 + 1, f.ft[m]]);
+    }
+    return out;
+  };
+  const rampSides: [number, number, number, number, number, number][] = [];
+  for (let k = 0; k < nx * ny; k++) if (slope(k)) for (const sg of segsOf(k % nx, Math.floor(k / nx), k)) rampSides.push([...sg, f.ft[k]]);
+  const rampT = new Float32Array(w * hh).fill(-1);
+  const rampCode = new Uint8Array(w * hh);
+  const onRamp = new Uint8Array(w * hh);
+  // (Each run: its way up from the sides it meets higher floors on, less those it meets lower ones on; its rise.)
+  const runCode = new Uint8Array(nx * ny);
+  const seen = new Uint8Array(nx * ny);
+  for (let k0 = 0; k0 < nx * ny; k0++) {
+    if (!f.ramp[k0] || seen[k0]) continue;
+    const run = [k0];
+    seen[k0] = 1;
+    let [vx, vy, lo, hi] = [0, 0, Infinity, -Infinity];
+    for (let r = 0; r < run.length; r++) {
+      const k = run[r];
+      const [i, j] = [k % nx, Math.floor(k / nx)];
+      for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        const [a, b] = [i + di, j + dj];
+        if (a < 0 || b < 0 || a >= nx || b >= ny) continue;
+        const m = b * nx + a;
+        if (lv.cells[m] < 0) continue;
+        if (f.ramp[m]) {
+          if (!seen[m]) {
+            seen[m] = 1;
+            run.push(m);
+          }
+          continue;
+        }
+        const sgn = Math.sign(f.ft[m] - f.ft[k]);
+        [vx, vy] = [vx + sgn * di, vy + sgn * dj];
+        if (sgn < 0) lo = Math.min(lo, f.ft[m]);
+        if (sgn > 0) hi = Math.max(hi, f.ft[m]);
+      }
+    }
+    const way = (Math.round(Math.atan2(vy, vx) / (Math.PI / 4)) + 8) % 8;
+    const riseFt = lo < Infinity && hi > -Infinity ? hi - lo : lo < Infinity || hi > -Infinity ? 2 * Math.abs(f.ft[k0] - (lo < Infinity ? lo : hi)) : 0;
+    const code = Math.min(248, Math.round((riseFt / LIFT_FT) * 255 / 8) * 8) + way;
+    for (const k of run) runCode[k] = code;
+  }
+  if (rampSides.length) {
+    const segDist = (px: number, py: number, s: number[]) => Math.hypot(px - Math.min(Math.max(px, s[0]), s[2]), py - Math.min(Math.max(py, s[1]), s[3]));
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        if (!slope(j * nx + i)) continue;
+        const near = rampSides.filter((s) => s[0] >= i - 3 && s[2] <= i + 4 && s[1] >= j - 3 && s[3] <= j + 4);
+        for (let ty = Math.max(0, j * R - 1); ty < Math.min(hh, (j + 1) * R + 1); ty++) {
+          for (let tx = Math.max(0, i * R - 1); tx < Math.min(w, (i + 1) * R + 1); tx++) {
+            const [px, py] = [(tx + 0.5) / R, (ty + 0.5) / R];
+            let [dLo, dHi] = [Infinity, Infinity];
+            for (const s of near) {
+              const d = segDist(px, py, s);
+              if (s[4] < s[5]) dLo = Math.min(dLo, d);
+              if (s[4] > s[5]) dHi = Math.min(dHi, d);
+            }
+            if (dLo === Infinity && dHi === Infinity) continue;
+            const k = ty * w + tx;
+            const inside = tx >= i * R && tx < (i + 1) * R && ty >= j * R && ty < (j + 1) * R;
+            if (!inside && onRamp[k]) continue;
+            if (inside) onRamp[k] = 1;
+            rampT[k] = dHi === Infinity ? 1 : dLo === Infinity ? 0 : dLo / (dLo + dHi);
+            if (inside) rampCode[k] = runCode[j * nx + i];
+          }
+        }
+      }
+    }
+  }
+  let [dd, rr]: Float32Array[] = [dist, rise];
+  if (!square) {
+    const sigma = 0.36 * R;
+    [dd, rr] = [blur(dist, w, hh, sigma), blur(rise, w, hh, sigma)];
+  }
+  const data = new Uint8Array(w * hh * 4);
+  for (let k = 0; k < w * hh; k++) {
+    data[k * 4] = Math.max(1, Math.min(255, Math.round(128 + dd[k] * LIFT_SCALE)));
+    data[k * 4 + 1] = Math.min(255, Math.round((rr[k] / LIFT_FT) * 255));
+    data[k * 4 + 2] = Math.round(strength[k] * 255);
+    if (rampT[k] >= 0) data[k * 4 + 3] = 1 + Math.round(rampT[k] * 254);
+    if (onRamp[k]) data[k * 4 + 1] = rampCode[k];
+  }
+  return { data, res: R };
 }
 
 /** Terrain's masks (`UnderField.terrain`): each kind's squares, spread into the rock next to

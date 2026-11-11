@@ -1330,12 +1330,29 @@ level 2: Level 2 · the deep
   (shelves, beds, hearths, statues, altars, things hung on a wall; others ignore it); left out, it finds its
   wall. `variant` picks one of its looks; left out, it is picked by position. The options come after the square,
   in any order.
+- `+items:` and `-items:` change the list without replacing it (underground sites and building interiors alike): `+items:`
+  adds the pieces given; `-items:` removes the piece of that kind whose top-left square is x,y (a size, if written, must
+  match as well). The match is by kind and top-left square only: `back` and `variant` written in a `-items:` piece don't
+  count. A `-items:` piece that matches nothing is an error naming it, with the nearest pieces of its kind. An empty
+  `+items:`/`-items:` (or an empty piece between `;`) is refused. Underground, the way in (`exit`) and a way `up` under a
+  `down` can't be removed (they would be put back, so the edit is refused); the way in always stays at the entry, and a
+  way up follows the way down above it.
+  Same entries as `items:`; several `+`/`-` lines (and an `items:`) in one block apply in the order written:
+  `+items: well 3,0 2x2` / `-items: barrel 9,4; table 4,0`. `items:` alone still replaces the whole level's list.
+- Where a level's floor isn't flat, `get_site_design` adds under its `grid:` a `heights:` legend (`1=5 ft; 2=10 ft; /=ramp`)
+  and a `height grid:` (one character per square, `.` at floor level or rock, `/` a ramp). It is a read-out:
+  `set_site_design` ignores it. Heights come from a room's `+5`/`+10` and the raising items `platform` (5 ft),
+  `balcony` and `scaffold` (10 ft) and `dais`; `steps`, `climb_ladder` and `rubble_slope` are the ramps that join two
+  heights (a rise of more than 3 ft between squares with no ramp is a sheer edge: a climb up). A design with floor
+  reachable only by such a climb is refused, naming the square and its height (`level 1: 9 squares of the junction
+  at 2,7 (10 ft up) can be reached only by climbing a sheer edge`). All the new kinds, `back` included, read back as written.
 - Only what the text gives changes: a level block with only `items:` replaces only that level's items.
 - The header's `<n> levels` adds levels below the deepest (new ones start as rock: give their grids) or fills
   in the deepest ones. A missing `up` under a level's `down` and a missing `exit` at the entry are filled in.
 
 ### `get_site_design`
-`id`. Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) and the plan as text. A
+`id`. Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) as the first content block (JSON)
+and the plan as text in a second content block (a client that reads only the first sees no plan). A
 site's saved design made for a site that stood elsewhere (its way in is not under the design's grid: edits kept for
 another sketch or generator) is set aside: the generated site stands, and the reply says so (`set_aside`).
 
@@ -1346,13 +1363,20 @@ another sketch or generator) is set aside: the generated site stands, and the re
 | `text` | string | required | The plan, or the parts to change. |
 | `furnish` | boolean | optional | Fill rooms with no props from their kind's kit (a boss chamber gets its dais, pillars and hoard). |
 | `fit_shapes` | boolean | optional | Fit the squares of rooms given a shape to it, as the designer does (squares outside it go to rock, a building's to the room beside it); one that can't be fitted without breaking a rule stays as written and is drawn square. The reply's `fit_shapes` lists those, with why, and any items fitting took away (on a square left empty, in the rock underground, in a doorway moved, or across two rooms). |
-| `dry_run` | boolean | optional | Check it and return what would be saved, without saving. |
+| `dry_run` | boolean | optional | Check it and return what would change (the diff and the check), without saving. |
 
 ```json
 { "name": "set_site_design", "arguments": { "id": "u:168:0", "text": "site · 3 levels\nlevel 2\nitems: up 12,9; down 30,8\nlevel 3: Level 3 · the vault\nrooms: a=landing; b=boss chamber\ngrid:\n…\ndoors: auto", "furnish": true } }
 ```
 > *"Dig a third level under the Fallen Shrine's crypt: a landing under a new stair from level 2, a flooded
 > vault beyond it as the boss chamber, furnished."*
+
+**The reply says what changed, not the whole plan** (`get_site_design` has that): `changes`, by level, with only what is
+there: `items_added`, `items_removed`, `squares_changed` (count and the rooms' letters), `rooms_changed` (a room's kind,
+raise or shape), `doors_added`, `doors_removed`, `heights_changed` (count and the first squares, `2,7: 0 -> 10 ft`),
+`renamed`, a building's `stairs`; `"no changes"` if none; and the check's `verdict` and `problems`. The same reply, brief,
+when saved. With `dry_run` nothing is saved and the same diff comes wrapped: `{"dry_run": true, "would_save": {"changes": {…},
+"verdict": …, "problems": […]}}` (a saved reply is the bare object). A refused plan is an error with the reasons.
 
 ### `reset_site_design`
 `id`: the site (or a building's interior) as generated again.
@@ -1601,6 +1625,9 @@ level -1: Cellar
 { "name": "set_site_design", "arguments": { "id": "b:23:70", "text": "level 0\ndoors: 4,2 e; 2,4 s front; 1,4 s back" } }
 ```
 > *"Give the house by the well a back door out of its main room."*
+
+A building's `a=room+5` raises have no `heights:` read-out and no climb check (those are underground only); the diff
+shows them only as `rooms_changed`.
 
 ## Towns laid out anew (the ward editor)
 

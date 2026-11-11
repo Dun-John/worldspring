@@ -126,7 +126,7 @@ pub(crate) fn bandit(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     };
     if last && boss.is_none() {
         g.cap = crate::under::grow::ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng);
+        boss = boss_room(&mut p, &mut g, ny, area, rng);
     }
     finish(&mut p, ny, passage, 1, last, boss, &[], &[]);
     p

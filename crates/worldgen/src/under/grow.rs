@@ -112,9 +112,15 @@ pub(crate) struct Grower {
     /// Grow towards the whole level (bigger sites fill their grid): most tries aim at a random square and grow from
     /// the open piece nearest it, out of its side facing it.
     pub(crate) spread: bool,
+    /// A big boss chamber's size drawn ahead (`boss_size`), when its planner keeps rock for it (`RESERVE`).
+    pub(crate) boss: Option<(usize, usize)>,
     nx: usize,
     ny: usize,
 }
+
+/// A planner's mark on rock kept for the boss chamber while the rest grows (`fits` takes it for floor; `boss_room`
+/// makes it rock again). Past every room index, as cult's halo (`spanned` reads both as rock).
+pub(crate) const RESERVE: i16 = i16::MAX - 1;
 
 /// Rooms a level may have (a design's text names them by `design::SYMBOLS`), and while growing (some left for the
 /// boss chamber).
@@ -136,7 +142,7 @@ struct Place {
 
 impl Grower {
     pub(crate) fn new(nx: usize, ny: usize, passage: i16, axis: Option<usize>) -> Grower {
-        Grower { pieces: Vec::new(), axis, passage, cap: usize::MAX, spread: false, nx, ny }
+        Grower { pieces: Vec::new(), axis, passage, cap: usize::MAX, spread: false, boss: None, nx, ny }
     }
 
     /// Whether a box's template squares all lie on rock inside the ring of rock round the level.
@@ -599,10 +605,33 @@ pub(crate) fn flood_room(p: &mut Plan, ny: usize, room: i16, (shallow, deep): (f
     }
 }
 
+/// A medium or bigger site's boss chamber (`area` ≥ 1: how much more ground than a medium site it covers), across
+/// the wall its door is in and deep away from it: 9 or 11 by 10-12 squares on a medium site, by 14-16 on a large
+/// one. None on small sites (their chambers keep the old 5-9 squares a side).
+pub(crate) fn boss_size(area: f64, rng: &mut Pcg32) -> Option<(usize, usize)> {
+    (area >= 1.0).then(|| (9 + 2 * rng.below(2) as usize, 10 + rng.below(3) as usize + 4 * (area >= 1.3) as usize))
+}
+
+/// The sizes a big boss chamber (`boss_size`) is tried at, biggest first, down to 8 x 10 (an apse, then plain).
+pub(crate) fn boss_sizes((a, d): (usize, usize)) -> Vec<(Template, usize, usize)> {
+    let mut out = vec![(Template::Apse, a, d), (Template::Rect, a, d)];
+    for (a2, d2) in [(a, d - 2), (a - 2, d), (a - 2, d - 2), (9, 10), (8, 10)] {
+        if a2 >= 8 && d2 >= 10 && !out.iter().any(|q| (q.1, q.2) == (a2, d2)) && a2 * d2 < a * d {
+            out.push((Template::Rect, a2, d2));
+        }
+    }
+    out
+}
+
 /// The boss chamber grown off the open piece farthest from the arrival that has room for it (an apse at its far end),
-/// closed to more growth.
-pub(crate) fn boss_room(p: &mut Plan, g: &mut Grower, ny: usize, rng: &mut Pcg32) -> Option<i16> {
+/// closed to more growth. On medium and bigger sites (`area`) first a big one (`boss_size`), the biggest that fits
+/// off any piece at least 3/5 as far as the farthest; then, or on small sites, the old sizes. A planner's `RESERVE`
+/// marks (rock kept for it, `reserve`) are rock again first.
+pub(crate) fn boss_room(p: &mut Plan, g: &mut Grower, ny: usize, area: f64, rng: &mut Pcg32) -> Option<i16> {
     let nx = p.nx;
+    for c in p.cells.iter_mut().filter(|c| **c == RESERVE) {
+        *c = -1;
+    }
     let dist = p.distances(p.up, ny, None);
     let mut order: Vec<(i32, usize)> = (0..g.pieces.len())
         .filter(|&i| g.pieces[i].open || g.pieces[i].room == g.passage)
@@ -613,7 +642,22 @@ pub(crate) fn boss_room(p: &mut Plan, g: &mut Grower, ny: usize, rng: &mut Pcg32
         })
         .collect();
     order.sort_by_key(|&(d, i)| (std::cmp::Reverse(d), i));
+    let big = g.boss.or_else(|| boss_size(area, rng));
     let (a, d) = (7 + 2 * rng.below(2) as usize, 7 + rng.below(3) as usize);
+    if let Some(big) = big {
+        let far = order.first().map_or(0, |q| q.0);
+        for (t, a, d) in boss_sizes(big) {
+            for &(_, i) in order.iter().take_while(|q| q.0 * 5 >= far * 3) {
+                for side in Side::ALL {
+                    let mirror = !matches!(side, Side::N | Side::S) && g.centred(i);
+                    if let Some(&b) = g.deck(p, i, side, BOSS, t, a, d, 0, mirror).first() {
+                        g.pieces[b].open = false;
+                        return Some(g.pieces[b].room);
+                    }
+                }
+            }
+        }
+    }
     for (_, i) in order {
         for side in Side::ALL {
             for (t, a, d) in [(Template::Apse, a, d), (Template::Rect, 7, 7), (Template::Rect, 5, 6)] {

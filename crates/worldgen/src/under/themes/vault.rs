@@ -60,7 +60,7 @@ pub(crate) fn vault(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     let mut boss = None;
     if last {
         g.cap = ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng).or_else(|| {
+        boss = boss_room(&mut p, &mut g, ny, area, rng).or_else(|| {
             let b = dead_end(&p, ny)?;
             p.rooms[b as usize].kind = BOSS;
             Some(b)

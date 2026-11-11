@@ -1998,7 +1998,8 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
 /// M6: every underground site opens where its entrance is on the surface, has at least two
 /// levels joined by a way down and a way up on the same square, can be walked end to end
 /// (around blocking furniture), and ends in one boss chamber on its deepest level that is a
-/// dead end (nothing else on the level is reached through it). Sewers match the streets above:
+/// dead end (nothing else on the level is reached through it) apart from at most one side way in
+/// (a door, secret or not, or an arch on a natural level). Sewers match the streets above:
 /// their tunnels lie under paved streets, and the streets over dry ground have sewer beneath.
 /// Each site generates within 300 ms.
 #[test]
@@ -2128,11 +2129,12 @@ fn underground_guarantee() {
             let seen = flood(lv, nx, ny, start, &|q| blocks[q]);
             let lost = (0..nx * ny).filter(|&q| lv.cells[q] >= 0 && !blocks[q] && !seen[q]).count();
             assert_eq!(lost, 0, "{tag} {}: {lost} squares unreachable", lv.name);
+            r5_no_climb(tag, lv, nx, ny, start);
             if li2 > 0 {
                 start = at(lv, "down")[0];
             }
         }
-        // One boss chamber, on the deepest level, a dead end.
+        // One boss chamber, on the deepest level, a dead end apart from one side way at most.
         let boss: Vec<(usize, usize)> = it.levels.iter().enumerate().flat_map(|(li2, lv)| lv.rooms.iter().enumerate().filter(|(_, r)| r.kind == worldgen::under::BOSS && r.squares > 0).map(move |(ri, _)| (li2, ri))).collect();
         assert_eq!(boss.len(), 1, "{tag}: {} boss chambers", boss.len());
         let (bl, br) = boss[0];
@@ -2143,6 +2145,9 @@ fn underground_guarantee() {
         let seen = flood(deep, nx, ny, up, &|q| deep.cells[q] == br as i16);
         let cut = (0..nx * ny).filter(|&q| deep.cells[q] >= 0 && deep.cells[q] != br as i16 && !seen[q]).count();
         assert_eq!(cut, 0, "{tag}: {cut} squares are reached only through the boss chamber");
+        // (Its doors: a built level's way in and one more; a natural level's way in is open floor, so one.)
+        let ways = deep.doors.iter().filter(|d| d.rooms.contains(&(br as i16))).count();
+        assert!(ways <= if deep.natural { 1 } else { 2 }, "{tag}: {ways} doors into the boss chamber");
         // Locked doors open in order: each key reached without its lock, every square in the end.
         let order = worldgen::under::design::key_order(it);
         assert!(order.is_empty(), "{tag}: keys out of order: {order:?}");
@@ -4296,6 +4301,38 @@ fn dwarven_crag_seams() {
         }
     }
     assert!(found > 0, "no dwarven hall gate with a crag in seeds 1 and 3");
+}
+
+// R5 underground
+
+/// Every floor square of a site's level is reached from `start` without climbing a sheer edge (`interior::height`: up
+/// by ramps or steps, down by anything), around blocking furniture, between rooms through doors (any step on a natural
+/// level). Called by `underground_guarantee` on every level.
+fn r5_no_climb(tag: &str, lv: &worldgen::interior::Level, nx: usize, ny: usize, start: usize) {
+    use worldgen::interior::height;
+    assert!(lv.floor.is_empty() || lv.floor.len() == nx * ny, "{tag} {}: {} floor heights for {} squares", lv.name, lv.floor.len(), nx * ny);
+    let f = height::of_level(lv, nx);
+    let blocks = worldgen::under::blocked_squares(&lv.furniture, nx, ny);
+    let door = |a: usize, b: usize| {
+        let (ia, ja, ib, jb) = ((a % nx) as f32, (a / nx) as f32, (b % nx) as f32, (b / nx) as f32);
+        let (p, q) = if ja == jb { ([ia.max(ib), ja], [ia.max(ib), ja + 1.0]) } else { ([ia, ja.max(jb)], [ia + 1.0, ja.max(jb)]) };
+        lv.doors.iter().any(|d| (d.a == p && d.b == q) || (d.a == q && d.b == p))
+    };
+    let mut seen = vec![false; nx * ny];
+    let mut stack = vec![start];
+    seen[start] = true;
+    while let Some(k) = stack.pop() {
+        let (i, j) = (k % nx, k / nx);
+        for q in [(i > 0).then(|| k - 1), (i + 1 < nx).then(|| k + 1), (j > 0).then(|| k - nx), (j + 1 < ny).then(|| k + nx)].into_iter().flatten() {
+            if seen[q] || lv.cells[q] < 0 || blocks[q] || f.sheer(k, q) > 0.0 || (!lv.natural && lv.cells[q] != lv.cells[k] && !door(k, q)) {
+                continue;
+            }
+            seen[q] = true;
+            stack.push(q);
+        }
+    }
+    let lost: Vec<usize> = (0..nx * ny).filter(|&q| lv.cells[q] >= 0 && !blocks[q] && !seen[q]).collect();
+    assert!(lost.is_empty(), "{tag} {}: {} squares reached only by a climb (first at {}, {})", lv.name, lost.len(), lost[0] % nx, lost[0] / nx);
 }
 
 // R5 mcp

@@ -3,12 +3,12 @@
 // floor field (rock walls roughened by noise in caves and mines, near-straight dressed stone in
 // built sites), a lit inked rim where the wall meets the floor, deep textured rock beyond,
 // ambient occlusion and NW-light shadows on the floor, floors by material (cave rock, basalt,
-// mine earth, sewer brick, flagstones), animated sewage or lava channels, ledges as smooth
-// contours with their shadows, terrain (water with slow ripples, chasms, rubble slopes), and the
+// mine earth, sewer brick, flagstones), animated sewage or lava channels, ledges and steps (an
+// inked lip, a hatched cliff face, a shadow below), terrain (water with slow ripples, chasms, rubble slopes), and the
 // 5-ft grid.
 //
 // uField: 4 texels per square, linear: r floor (blurred mask), g liquid (blurred), b raised
-//         floor (blurred, raise / 10 ft), a the way sewage runs (`flowAngle` in underField.ts). Built sites (uSquare): nearest, the floor unblurred;
+//         floor (blurred, raise / 20 ft), a the way sewage runs (`flowAngle` in underField.ts). Built sites (uSquare): nearest, the floor unblurred;
 //         their walls are measured from the squares instead, keeping square corners.
 // uCells: one texel per square, nearest: r material, g shape (0 none, a shaped room's slot + 1
 //         in uShapes, 255 a cavern breaking in), b variation (a sewer's brick: foam), a floor.
@@ -21,6 +21,11 @@
 // uTerrain: terrain (`kit::TERRAIN`), linear, 4 texels per square: r water (shallow, and under
 //         deep water), g deep water, b chasm, a rubble slope; each blurred, spread into the rock
 //         beside it (so it meets the walls). Read only where uHasTerrain.
+// uLift: ledges and steps (`liftField` in underField.ts), linear, 8 texels a square in built sites
+//         (else 4, blurred as the walls): r the signed distance to the nearest edge between floor
+//         heights (squares, + on its high side, 128 + 63.5 d), g its rise (/ 20 ft), b how strongly it
+//         is drawn (0 on ramps, tapering up within 0.4 sq of one), a on and by ramps 1 + 254 t (t how
+//         far up the ramp, 0 at its low floor; its rise in g there; 0 elsewhere). Read only where uHasLift.
 // uDist: squares to the nearest floor (`rockDistance.ts`), linear, 4 texels per square, DIST_PAD
 //         squares past the grid each way, DIST_MAX at 1: the rock is hatched beside the walls by
 //         it and fades out beyond (one fetch; the walls themselves come from the fields above).
@@ -36,6 +41,7 @@ uniform highp sampler2D uCells;
 uniform highp sampler2D uShapes;
 uniform highp sampler2D uCave;
 uniform highp sampler2D uTerrain;
+uniform highp sampler2D uLift;
 uniform highp sampler2D uDist;
 
 uniform vec2 uN;
@@ -57,6 +63,7 @@ uniform float uPad;
 uniform float uShapeCount;
 uniform float uCaverns;
 uniform float uHasTerrain;
+uniform float uHasLift;
 // Squares the quad is drawn past the grid each way (a site's, so its rock fades out round it;
 // sewer sections meet edge to edge: 0).
 uniform float uGrow;
@@ -69,11 +76,28 @@ uniform float uTheme;
 uniform vec3 uStone;
 uniform vec3 uCoping;
 uniform vec3 uRock;
+// A cave's look (`underTheme.ts`): 0 none, 1 green, 2 dry, 3 cold, 4 ice; and its cast on the floors.
+uniform float uLook;
+uniform vec3 uTint;
 
 const vec3 INK = vec3(0.10, 0.085, 0.07);
 
 // Squares a pixel (set first thing in `main`, for the functions below).
 float gPx;
+// How much of this pixel is a ramp (`ledges`): the rubble slope's dust and stones thin out over it.
+float gRamp = 0.0;
+// A built site's raised floors: the dressed stone their faces are cut from, in one flat tone (the
+// floor's own flags would carry their joints and light and dark stones down the face).
+vec3 gFace = vec3(0.5);
+// How much of this pixel is a built ledge's face or its shadow (`ledgeEdge`): there the wall's shade
+// is lifted as on the gallery's top (else a gallery by the wall has its face in the wall's cast
+// shadow, near black, and the drop reads as a trough).
+float gLedge = 0.0;
+// How far `d` (squares to the wall) is a true distance here, 0-1: the floor field's slope is too flat for it
+// out in a wide floor's middle.
+float gTrue = 1.0;
+// How much of this pixel `terrain` covers (water, a chasm, a slope): 0 where it has none.
+float gTerr = 0.0;
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -126,8 +150,10 @@ const float DIST_MAX = 8.0;
 // (nearest centre), from hashes alone: one noise lookup, for the tone.
 vec3 hatchedRock(vec2 p, float depth, float px, out float cut, out float ra) {
     cut = 0.0;
-    vec3 c = uRock * (0.92 + 0.16 * vnoise(p * 0.55));
-    vec3 inkc = mix(INK, uRock, 0.18);
+    // (Ice rock flat: one pale tone, no mottling.)
+    vec3 c = uLook > 3.5 ? uRock : uRock * (0.92 + 0.16 * vnoise(p * 0.55));
+    // (Ice rock is inked in a deep blue-grey, not black.)
+    vec3 inkc = uLook > 3.5 ? vec3(0.36, 0.48, 0.6) : mix(INK, uRock, 0.18);
     // (The flat tone only close to the wall, ragged per cluster, so the rock is never paler than the ground.)
     float toneA = 0.55;
     float inkA = 0.0;
@@ -192,7 +218,10 @@ vec3 hatchedRock(vec2 p, float depth, float px, out float cut, out float ra) {
     }
     // (Too fine to draw: their tone.)
     inkA = max(inkA, (1.0 - sharp) * 2.0 * hw / GAP * dens * 0.45);
-    ra = mix(toneA, 0.7, inkA);
+    // (Ice: the pale tone solid over the whole rock, so the dark ground dimmed below never shows through
+    // between the rooms as smoky dark stone.)
+    if (uLook > 3.5) toneA = 0.88;
+    ra = mix(toneA, max(toneA, 0.7), inkA);
     return mix(c, inkc, inkA);
 }
 
@@ -256,7 +285,9 @@ float apseIn(vec2 p, vec2 lo, vec2 hi) {
     float r = min(sz.x * 0.5, sz.y - 1.0);
     if (r < 1.0) return boxIn(p, lo, hi);
     float rect = boxIn(p, vec2(lo.x, lo.y + r), hi);
-    float end = min(ellipseIn(p - vec2(lo.x + sz.x * 0.5, lo.y + r), vec2(sz.x * 0.5, r)), lo.y + r - p.y);
+    // (The whole ellipse, cut only by the box's far side: cut along its middle as well, the seam
+    // where it meets the rectangle read as a wall, and drew a band of wall shade across the room.)
+    float end = min(ellipseIn(p - vec2(lo.x + sz.x * 0.5, lo.y + r), vec2(sz.x * 0.5, r)), hi.y - p.y);
     return max(rect, end);
 }
 
@@ -415,6 +446,13 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         c = vec3(0.74, 0.84, 0.90) * (0.88 + 0.16 * fbm(p * 0.5));
         c = mix(c, vec3(0.50, 0.64, 0.78), seam(vnoise(p * 1.3 + 2.0), 0.02));
         c += vec3(0.15) * smoothstep(0.94, 0.99, vnoise(p * 8.0));
+    } else if (mat == 12) {
+        // A fighting pit's packed sand (a boss chamber's sunken arena): pale earthy tan, paler and
+        // yellower than the stone round it, in a few big soft shapes: raked paler here, trodden a
+        // little darker and browner there (three close flat tones, no grain).
+        c = vec3(0.63, 0.57, 0.46);
+        c = mix(c, vec3(0.56, 0.49, 0.39), smoothstep(0.5, 0.66, vnoise(p * 0.32 + 5.0)) * 0.9);
+        c = mix(c, vec3(0.69, 0.63, 0.52), smoothstep(0.6, 0.72, vnoise(p * 0.45 + 17.0)) * 0.7);
     } else {
         // Flagstones laid to the squares: one stone a square, or a square split in two along its
         // half line (which way and whether, by square). Boss chambers darker, crypts dusty.
@@ -443,6 +481,91 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         c = mix(c, INK * 1.6, mortar * 0.35);
     }
     return c;
+}
+
+// A cave's biome on its floor: a few big flat patches (moss, drifted sand, frost); the green look's roots
+// are `caveRoots`. `d`: squares from the wall, `n`: the wall's normal.
+vec3 cave_look(vec3 col, vec2 p, float d, vec2 n) {
+    if (uLook < 1.5) {
+        col = mix(col, vec3(0.40, 0.50, 0.30), smoothstep(0.58, 0.62, vnoise(p * 0.2 + 31.0)) * 0.7);
+    } else if (uLook < 2.5) {
+        // (The noise turned off the squares and its lattice bent, so a drift's edge never runs straight.)
+        vec2 dq = mat2(0.8, 0.6, -0.6, 0.8) * p * 0.17 + 0.32 * vec2(sin(p.y * 0.61 + 1.3), sin(p.x * 0.53 + 4.1));
+        float drift = vnoise(dq + 7.0) + 0.3 * (1.0 - smoothstep(0.0, 1.6, d));
+        col = mix(col, vec3(0.82, 0.72, 0.52), smoothstep(0.655, 0.705, drift) * 0.72);
+    } else {
+        float frost = vnoise(p * 0.19 + 13.0) + 0.3 * (1.0 - smoothstep(0.0, 1.4, d));
+        col = mix(col, vec3(0.8, 0.87, 0.92), smoothstep(0.64, 0.68, frost) * 0.7);
+    }
+    return col;
+}
+
+// A tapered stroke from `a` (half width `ra`) to `b` (`rb`): signed distance, squares.
+float taperSeg(vec2 p, vec2 a, vec2 b, float ra, float rb) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - mix(ra, rb, h);
+}
+
+// The green look's roots: a few a room, crawling out of the wall and along the floor's edge as the sprites
+// draw them: a main root 1.8-2.8 squares long in three slightly crooked strokes, slanting off along the
+// wall and tapering to a point, one side root reaching out over the floor, one diving back into the rock
+// and a short one; flat mid brown inside a thin ink line (the sprites' `LINE_W`), a little wavy. One a cell
+// (5 squares) at most, rooted on the wall by the cell's point (so each is whole or not there at all); the
+// cells round are looked at too. Measured in the wall's frame here: `d` out from it (true only within
+// a square or so of a rough wall, where the field still slopes: so they keep to that band), along it
+// from the foot of the cell's point.
+vec3 caveRoots(vec3 col, vec2 p, float d, vec2 n, float px) {
+    // (Only by a wall: away from one the field is flat, `n` none and `d` no longer a distance.)
+    if (d < 0.0 || d > 2.3 || gTrue < 0.01 || dot(n, n) < 0.5) return col;
+    vec2 t = vec2(-n.y, n.x);
+    float aa = max(px * 0.7, 1e-4);
+    float lw = max(0.025, 0.9 * px);
+    float dist = 9.0;
+    vec2 base = floor(p / 5.0);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 cc = base + vec2(float(i), float(j));
+            float h = hash21(cc + 61.0);
+            if (h < 0.45) continue;
+            vec2 c = (cc + 0.2 + 0.6 * vec2(hash21(cc + 7.0), hash21(cc + 13.0))) * 5.0;
+            vec2 r = p - c;
+            // (The cell's point near the wall here, else no root from it.)
+            if (abs(dot(r, n) - d) > 1.8) continue;
+            vec2 w = vec2(dot(r, t), d);
+            float len = 1.8 + 1.0 * hash21(cc + 19.0);
+            if (length(w) > len + 0.6) continue;
+            // (A little wavy, as drawn by hand.)
+            w += 0.045 * vec2(sin(w.y * 4.1 + h * 23.0), sin(w.x * 3.3 + h * 17.0));
+            float dir = hash21(cc + 31.0) < 0.5 ? -1.0 : 1.0;
+            float seg = len / 3.0;
+            float a0 = dir * (0.8 + 0.3 * hash21(cc + 23.0));
+            float a1 = clamp(a0 + dir * 0.15 + 0.4 * (hash21(cc + 29.0) - 0.5), -1.45, 1.45);
+            float a2 = clamp(a1 + dir * 0.15 + 0.4 * (hash21(cc + 37.0) - 0.5), -1.5, 1.5);
+            vec2 p0 = vec2(0.0, -0.15);
+            vec2 p1 = p0 + seg * vec2(sin(a0), cos(a0));
+            vec2 p2 = p1 + seg * vec2(sin(a1), cos(a1));
+            vec2 p3 = p2 + seg * vec2(sin(a2), cos(a2));
+            float dr = min(taperSeg(w, p0, p1, 0.2, 0.14), min(taperSeg(w, p1, p2, 0.14, 0.085), taperSeg(w, p2, p3, 0.085, 0.015)));
+            // Side roots: out over the floor from the first joint, back into the rock from the second, and
+            // a short one off the first stroke.
+            float s1 = a1 - dir * (0.95 + 0.3 * hash21(cc + 41.0));
+            float s2 = a2 + dir * (0.7 + 0.3 * hash21(cc + 43.0));
+            float s3 = a0 - dir * 0.7;
+            vec2 m0 = mix(p0, p1, 0.55);
+            dr = min(dr, taperSeg(w, p1, p1 + (0.5 + 0.2 * hash21(cc + 47.0)) * vec2(sin(s1), cos(s1)), 0.09, 0.012));
+            dr = min(dr, taperSeg(w, p2, p2 + (0.45 + 0.2 * hash21(cc + 53.0)) * vec2(sin(s2), cos(s2)), 0.07, 0.015));
+            dr = min(dr, taperSeg(w, m0, m0 + 0.34 * vec2(sin(s3), cos(s3)), 0.07, 0.012));
+            dist = min(dist, dr);
+        }
+    }
+    // (Faded out only past where the field is flat: there `d` no longer grows.)
+    float keep = clamp(gTrue * 4.0, 0.0, 1.0);
+    float cover = (1.0 - smoothstep(-aa, aa, dist)) * keep;
+    float inner = (1.0 - smoothstep(-lw - aa, -lw + aa, dist)) * keep;
+    col = mix(col, INK, cover * 0.92);
+    return mix(col, vec3(0.56, 0.41, 0.25), inner);
 }
 
 // Slow ripples on water (0-1): light streaks wavering where two drifting noises cross, and now
@@ -485,7 +608,8 @@ vec3 screeStone(vec3 col, vec2 p, float s, float seed, float cover, float px) {
 // slope, each from its mask's iso-0.5 bank (roughened by noise, more in rock than in dressed stone).
 vec3 terrain(vec3 col, vec2 q, vec2 p, float px) {
     vec4 t = texture(uTerrain, q / uN);
-    if (max(max(t.r, t.g), max(t.b, t.a)) < 0.02) return col;
+    gTerr = max(max(t.r, t.g), max(t.b, t.a));
+    if (gTerr < 0.02) return col;
     float e = 0.25;
     vec4 gx = (texture(uTerrain, (q + vec2(e, 0.0)) / uN) - texture(uTerrain, (q - vec2(e, 0.0)) / uN)) / (2.0 * e);
     vec4 gy = (texture(uTerrain, (q + vec2(0.0, e)) / uN) - texture(uTerrain, (q - vec2(0.0, e)) / uN)) / (2.0 * e);
@@ -542,11 +666,213 @@ vec3 terrain(vec3 col, vec2 q, vec2 p, float px) {
         // big ones at its edge.
         float dr = d.w;
         float cover = smoothstep(-0.25, 0.3, dr);
-        col = mix(col, vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * vnoise(p * 5.0)), cover * 0.3);
-        col = screeStone(col, p + 0.37, 2.6, 9.0, smoothstep(-0.45, 0.1, dr) * 0.3, px);
-        col = screeStone(col, p, 1.5, 0.0, cover * 0.4, px);
+        // (Over a ramp, thinner: its slope drawn under shows through.)
+        float thin = 1.0 - 0.6 * gRamp;
+        col = mix(col, vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * vnoise(p * 5.0)), cover * 0.3 * (1.0 - 0.75 * gRamp));
+        col = screeStone(col, p + 0.37, 2.6, 9.0, smoothstep(-0.45, 0.1, dr) * 0.3 * thin, px);
+        col = screeStone(col, p, 1.5, 0.0, cover * 0.4 * thin, px);
     }
     return col;
+}
+
+// The sprites' outline weights (squares): a shape's outline, a part's.
+const float OUT_W = 0.045;
+const float LINE_W = 0.025;
+
+// `c` stepped in value by `dv`, in the square root of its luminance, so that one step reads alike
+// on pale flags and dark basalt: ledges take their tops (lighter), faces (mid) and shadows (darker)
+// from the theme's own floor tone.
+vec3 valueStep(vec3 c, float dv) {
+    float y = max(dot(c, vec3(0.3, 0.59, 0.11)), 1e-3);
+    float v0 = sqrt(y);
+    float v = clamp(v0 + dv, min(v0, 0.03), max(v0, 0.97));
+    return min(c * (v * v / y), vec3(1.0));
+}
+
+// How dark a floor tone is (1 dark basalt, 0 brown cave rock and paler): on dark floors a ledge's
+// top steps up further and its face and shadow further down, so it reads as boldly as in the caves.
+float darkness(vec3 c) {
+    return 1.0 - smoothstep(0.5, 0.64, sqrt(max(dot(c, vec3(0.3, 0.59, 0.11)), 1e-3)));
+}
+
+// A cliff face `down` squares below its lip (`n`: toward the high side), `faceW` wide, stepped down
+// from `base` (the floor below): a mid tone by how it meets the light, in a few big slanting facets,
+// darker toward its foot; broken rock strokes down the fall line, tapered at both ends, of varied
+// length and spacing, many starting below the lip (so never even rungs). Along the edge by the
+// foot's place (a built edge's x + y; natural rock's the diagonal running most along it).
+vec3 cliffFace(vec3 base, vec2 q, vec2 n, float down, float faceW, float px, float aa) {
+    float toward = dot(n, normalize(uLight));
+    // (The high side toward the light: the face looks away from it, darkest.)
+    // (On a dark floor a step further down, but never so near the ink that its strokes are lost.)
+    float lit = (toward > 0.35 ? -0.2 : toward > -0.35 ? -0.15 : -0.1) - 0.06 * darkness(base);
+    float floorV = 0.36 - sqrt(max(dot(base, vec3(0.3, 0.59, 0.11)), 1e-3));
+    vec2 foot = q + n * down;
+    vec2 t = vec2(-n.y, n.x);
+    float a1 = abs(t.x + t.y);
+    float a2 = abs(t.x - t.y);
+    bool first = uSquare > 0.5 || a1 >= a2;
+    float along = first ? foot.x + foot.y : foot.x - foot.y;
+    float rate = uSquare > 0.5 ? 1.0 : max(max(a1, a2), 0.5);
+    float k = clamp(down / max(faceW, 1e-3), 0.0, 1.0);
+    // Facets: planes of uneven width, slanting down the face.
+    float fu = along / rate / 0.55 + 0.6 * down;
+    float fid = floor(fu + 0.45 * hash21(vec2(floor(fu * 0.5), 5.1)));
+    vec3 fc = valueStep(base, max(lit + 0.05 * (hash21(vec2(fid, 2.9)) - 0.5) - 0.08 * k * k, min(floorV, -0.1)));
+    // Strokes: one in most cells along the edge, at a jittered place, slanting a little.
+    const float GAP = 0.16;
+    float u = along / GAP;
+    float id = floor(u);
+    float h1 = hash21(vec2(id, 7.7));
+    float h2 = hash21(vec2(id, 1.3));
+    float h3 = hash21(vec2(id, 3.1));
+    float h4 = hash21(vec2(id, 9.4));
+    float start = faceW * (h4 < 0.45 ? 0.0 : 0.45 * (h4 - 0.45));
+    float len = faceW * (0.3 + 0.65 * h1);
+    float sAt = (down - start) / max(len, 1e-3);
+    float off = abs((fract(u) - 0.5 - 0.7 * (h2 - 0.5)) * GAP / rate - (h3 - 0.5) * 0.4 * (down - start));
+    float hw = LINE_W * 0.6 * clamp(1.0 - sAt, 0.0, 1.0) * clamp(sAt * 5.0, 0.0, 1.0);
+    float stroke = (1.0 - smoothstep(hw - aa * 0.5, hw + aa * 0.5, off)) * smoothstep(0.15 * px, 0.6 * px, hw) * step(0.3, fract(h3 * 7.13));
+    // (Gone where strokes would crowd within a few pixels, or the face is only a few pixels wide; and
+    // on a step's riser, under 0.15 square: plain, only darker at its foot.)
+    stroke *= smoothstep(2.5, 4.0, GAP / max(px, 1e-5)) * smoothstep(5.0, 9.0, faceW / max(px, 1e-5)) * smoothstep(0.13, 0.17, faceW);
+    return mix(fc, INK, stroke * 0.7);
+}
+
+// A built site's ledge face (a gallery's, a stage's, a sunken arena's wall): a dressed stone wall
+// seen from above, in one flat tone (`gFace`) about the floor's value, lighter where it faces the
+// light and a little darker where it looks away (never near the ink), so the lighter top, the lip,
+// the face and the soft shadow past it read as a walkway's edge dropping to the floor below, not a
+// trough. Its blocks in courses (two on a tall face) in running bond, the joints a darker stone
+// tone, not ink. (Risers under 0.15 square, a dais's or a step's: plain, the lip their only line.)
+vec3 builtFace(vec2 q, vec2 n, float down, float faceW, float px, float aa) {
+    float toward = dot(n, normalize(uLight));
+    float k = clamp(down / max(faceW, 1e-3), 0.0, 1.0);
+    vec3 fc = valueStep(gFace, mix(0.06, -0.03, smoothstep(-0.6, 0.6, toward)) + 0.02 * (1.0 - k));
+    float big = smoothstep(0.13, 0.17, faceW) * smoothstep(6.0, 9.0, faceW / max(px, 1e-5));
+    float courses = faceW > 0.3 ? 2.0 : 1.0;
+    float ck = k * courses;
+    vec2 edge = q + n * down;
+    float u = (edge.x + edge.y) / 0.5 + 0.5 * floor(ck);
+    float hw = max(0.009, 0.5 * px);
+    float dj = abs(fract(u + 0.5) - 0.5) * 0.5;
+    float joint = (1.0 - smoothstep(hw - aa * 0.5, hw + aa * 0.5, dj)) * smoothstep(5.0, 8.0, 0.5 / max(px, 1e-5));
+    float dc = abs(fract(ck + 0.5) - 0.5) * faceW / courses;
+    float course = courses > 1.5 ? 1.0 - smoothstep(hw - aa * 0.5, hw + aa * 0.5, dc) : 0.0;
+    return mix(fc, valueStep(fc, -0.16), max(joint, course) * 0.8 * big);
+}
+
+// How much lighter a raised floor's top is (a value step, `valueStep`), by its height (ft): 2.5 ft
+// a touch, 5 ft clearly, 10 ft more, less a foot above that.
+float topStep(float ft) {
+    return ft > 0.05 ? 0.011 * min(ft, 10.0) + 0.005 * max(ft - 10.0, 0.0) : 0.0;
+}
+
+// The face below a lip (squares), for a drop (ft): 2.5 ft 0.1, 5 ft 0.25, 10 ft 0.5, 20 ft 0.8.
+float faceWidth(float drop) {
+    float w = 0.04 * min(drop, 2.5) + 0.06 * clamp(drop - 2.5, 0.0, 2.5) + 0.05 * clamp(drop - 5.0, 0.0, 5.0) + 0.03 * max(drop - 10.0, 0.0);
+    return min(w, 0.8);
+}
+
+// Ledges and steps (uLift, `l` its texel here), along every edge between floor heights: the high
+// side's lip inked at the sprites' outline weight; the cliff face below it (`cliffFace`), wider the
+// higher the drop; the shadow it casts on the floor below, flat with a soft end, longer and darker
+// for bigger drops, strongest away from the light. Toward a ramp (`l.b` falling to 0 at it) the
+// cliff ends: the lip, at full weight, stops just short of it, the face and shadow narrow to nothing. Natural
+// rock's edges wobble as its walls do; built sites' run straight along the squares. First the top
+// lightened by its height (`hf`, ft; near a natural edge, where the field blurs it, the height a
+// little way off on this pixel's own side), so the faces and shadows step down from the floor's tone.
+vec3 ledgeEdge(vec3 col, vec4 l, vec2 q, vec2 p, float px, float hf) {
+    float r0 = (l.r * 255.0 - 128.0) / 63.5;
+    float dk = darkness(col);
+    if (r0 > 0.3 || r0 < -1.9 || l.b < 0.01) return valueStep(col, topStep(hf) * (1.0 + 0.8 * dk) * (uSquare > 0.5 ? 1.35 : 1.0));
+    // (Toward the high side, from the field's slope.)
+    float e = 0.125;
+    vec2 g = vec2(texture(uLift, (q + vec2(e, 0.0)) / uN).r, texture(uLift, (q + vec2(0.0, e)) / uN).r) - l.r;
+    g *= 255.0 / 63.5 / e;
+    float gl = length(g);
+    vec2 n = gl > 1e-4 ? g / gl : vec2(0.0);
+    float r = r0;
+    if (uSquare < 0.5) {
+        r0 /= max(gl, 0.35);
+        r = r0 + uRough * ((fbm(p * 1.1 + 21.0) - 0.5) * 0.16 + (vnoise(p * 4.3 + 8.0) - 0.5) * 0.05);
+    }
+    if (uSquare < 0.5) hf = field(q + n * (r0 > 0.0 ? 0.7 : -0.7)).b * 20.0;
+    // (Built sites' tops a step lighter again: their floors are darker and busier than cave rock.)
+    float topK = (1.0 + 0.8 * dk) * (uSquare > 0.5 ? 1.35 : 1.0);
+    col = valueStep(col, topStep(hf) * topK);
+    float drop = l.g * 20.0;
+    // (Only where the floor really drops: a crossing with no rise is where two floors of one height meet
+    // far from any edge, e.g. inside a terrace between a lower and a higher floor; no lip there.)
+    float s = l.b * smoothstep(0.1, 0.45, drop);
+    float aa = max(px * 0.7, 1e-4);
+    float down = -r;
+    float faceW = faceWidth(drop) * s;
+    // The shadow on the floor below (fac > 0: the high side lies toward the light).
+    float fac = smoothstep(-0.3, 0.7, dot(n, normalize(uLight)));
+    float shLen = min(0.95, 0.15 + 0.05 * drop) * mix(0.6, 1.0, fac) * s;
+    float shV = min(0.34, 0.12 + 0.015 * drop) * mix(0.55, 1.0, fac) * (1.0 + 0.4 * dk);
+    float sh = smoothstep(-aa, aa, down) * (1.0 - smoothstep(faceW + shLen * 0.55, faceW + shLen, down));
+    // (Built: a short soft shadow on the floor below only, strongest at the face's foot and fading
+    // out, slight where the face is lit; darker than the face but never near the ink.)
+    if (uSquare > 0.5) {
+        shLen = min(0.42, 0.1 + 0.032 * drop) * mix(0.5, 1.0, fac) * s;
+        shV = min(0.13, 0.06 + 0.007 * drop) * mix(0.25, 1.0, fac) * (1.0 + 0.2 * dk);
+        float st = clamp((down - faceW) / max(shLen, 1e-3), 0.0, 1.0);
+        sh = smoothstep(faceW - aa, faceW + aa, down) * (1.0 - st) * (1.0 - st);
+    }
+    vec3 floorCol = col;
+    col = mix(col, valueStep(col, -shV), sh * min(1.0, s * 2.0));
+    float inFace = smoothstep(-aa * 0.5, aa * 0.5, down) * (1.0 - smoothstep(faceW - aa * 0.5, faceW + aa * 0.5, down));
+    if (uSquare > 0.5) gLedge = max(gLedge, max(inFace, sh) * smoothstep(0.12, 0.3, s));
+    if (inFace > 0.0) col = mix(col, uSquare > 0.5 ? builtFace(q, n, -r0, faceW, px, aa) : cliffFace(floorCol, q, n, -r0, faceW, px, aa), inFace);
+    // The lip, at full weight up to just short of a ramp, where it ends (bolder on built sites'
+    // straight edges, which have no rough wall line to carry them).
+    float lw = max(OUT_W * (uSquare > 0.5 ? 1.3 : 1.0), (uSquare > 0.5 ? 1.5 : 1.2) * px);
+    float lip = smoothstep(-aa * 0.5, aa * 0.5, r) * (1.0 - smoothstep(lw - aa * 0.5, lw + aa * 0.5, r));
+    return mix(col, INK, lip * 0.95 * smoothstep(0.12, 0.3, s));
+}
+
+// A ramp (a rubble slope joining two floors; uLift's alpha `t` how far up it, 0 at the lower floor's
+// edge, 1 at the higher's; its own texel's green the rise between them, its low 3 bits the way up):
+// its floor graded from the low floor's tone at its foot to the high one's at its top (`hf`, the
+// blurred height, half-grades it already) and shaded as it meets the light, with short strokes down
+// the fall line from its top edge, broad there and tapering to a point (as the region map's
+// hachures), so which way is up reads at a glance. (One fetch more, of its own texel, exact.)
+vec3 rampSlope(vec3 col, vec4 l, vec2 q, float px, float hf) {
+    float t = clamp((l.a * 255.0 - 1.0) / 254.0, 0.0, 1.0);
+    ivec2 sz = textureSize(uLift, 0);
+    vec4 e = texelFetch(uLift, clamp(ivec2(floor(q / uN * vec2(sz))), ivec2(0), sz - 1), 0);
+    // (A ramp texel's strength is 0; just outside one, only its tone, from the filtered rise.)
+    float own = step(e.b, 0.5 / 255.0);
+    float code = floor(e.g * 255.0 + 0.5);
+    float way = mod(code, 8.0);
+    float rise = mix(l.g, (code - way) / 255.0, own) * 20.0;
+    vec2 dir = vec2(cos(way * 0.7853982), sin(way * 0.7853982));
+    // (Rising toward the light it faces away from it: a little darker.)
+    float shade = -0.04 * dot(dir, normalize(uLight)) * own;
+    vec3 c = valueStep(col, topStep(hf + (t - 0.5) * 0.5 * rise) * (1.0 + 0.8 * darkness(col)) + shade);
+    const float GAP = 0.24;
+    float u = dot(q, vec2(-dir.y, dir.x)) / GAP;
+    float id = floor(u);
+    float h1 = hash21(vec2(id, 4.3));
+    float h2 = hash21(vec2(id, 8.1));
+    float h3 = hash21(vec2(id, 2.2));
+    float len = 0.4 + 0.35 * h1;
+    float sAt = (1.0 - t) / len;
+    float off = (fract(u) - 0.5 - 0.5 * (h2 - 0.5)) * GAP - (h3 - 0.5) * 0.2 * (1.0 - t);
+    float hw = 0.5 * max(0.05, 1.6 * px) * clamp(1.0 - sAt, 0.0, 1.0);
+    float aa = max(px * 0.7, 1e-4);
+    float stroke = (1.0 - smoothstep(hw - aa * 0.5, hw + aa * 0.5, abs(off))) * step(0.2, fract(h3 * 5.31));
+    stroke *= smoothstep(2.0, 0.8, sAt) * smoothstep(3.0, 5.0, GAP / max(px, 1e-5)) * step(0.5, rise) * own;
+    return mix(c, INK, stroke * 0.8);
+}
+
+// The floor's height drawn (`ledgeEdge`), and over a ramp its slope (`rampSlope`).
+vec3 ledges(vec3 col, vec4 l, vec2 q, vec2 p, float px, float hf) {
+    vec3 c = ledgeEdge(col, l, q, p, px, hf);
+    gRamp = step(0.5 / 255.0, l.a) * (1.0 - smoothstep(0.03, 0.2, l.b));
+    if (gRamp > 0.0) c = mix(c, rampSlope(col, l, q, px, hf), gRamp);
+    return c;
 }
 
 void main() {
@@ -563,6 +889,9 @@ void main() {
         return;
     }
     vec4 here = field(q);
+    // Ledges and steps.
+    vec4 lift = vec4(0.5, 0.0, 0.0, 0.0);
+    if (uHasLift > 0.5) lift = texture(uLift, q / uN);
     float d;
     vec2 n;
     if (uSquare > 0.5) {
@@ -572,6 +901,7 @@ void main() {
         float e = 0.25;
         vec2 grad = vec2(field(q + vec2(e, 0.0)).r - field(q - vec2(e, 0.0)).r, field(q + vec2(0.0, e)).r - field(q - vec2(0.0, e)).r) / (2.0 * e);
         d = (here.r - 0.5) / max(length(grad), 0.35);
+        gTrue = smoothstep(0.12, 0.3, length(grad));
         // Rock juts out and bites in (caves); dressed stone stays nearly straight.
         d += uRough * ((fbm(p * 0.8 + 3.0) - 0.5) * 0.75 + (vnoise(p * 3.7) - 0.5) * 0.25 + (vnoise(p * 9.0) - 0.5) * 0.08);
         n = length(grad) > 1e-4 ? normalize(grad) : vec2(0.0);
@@ -619,6 +949,7 @@ void main() {
                 float e = 0.03;
                 vec2 gs = vec2(shapeIn(code, q + vec2(e, 0.0), lo, hi) - shapeIn(code, q - vec2(e, 0.0), lo, hi), shapeIn(code, q + vec2(0.0, e), lo, hi) - shapeIn(code, q - vec2(0.0, e), lo, hi));
                 d = ds;
+                gTrue = 1.0;
                 n = length(gs) > 1e-6 ? normalize(gs) : vec2(0.0);
                 won = slot;
                 look = lk;
@@ -633,6 +964,7 @@ void main() {
             lit = max(lit, smoothstep(0.35, 0.6, texture(uCave, qs / uN).r));
             if (dc > d) {
                 d = dc;
+                gTrue = smoothstep(0.12, 0.3, length(gc));
                 n = length(gc) > 1e-4 ? normalize(gc) : vec2(0.0);
                 won = 255;
                 rough = 1.0;
@@ -657,6 +989,8 @@ void main() {
         float face = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
         // (Natural rock's lip in the site's own rock: caves as they were.)
         vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face * (uRock / vec3(0.29, 0.27, 0.245));
+        // (Ice: a flat pale-blue edge, shaded by the light, in place of the dark rock's.)
+        if (uLook > 3.5) lip = mix(uRock * 1.2, vec3(0.88, 0.94, 0.98), 0.55) * (0.8 + 0.3 * face);
         float edge = rim;
         if (rough < 0.2) {
             // Dressed stone coping on built walls, by the site's style.
@@ -702,17 +1036,25 @@ void main() {
                 // (Packed earth: no joints, lumpy.)
                 cop = uCoping * (0.82 + 0.3 * vnoise(p * 1.6));
             }
-            lip = mix(cop * face, INK, joint * jk);
+            // (Lit, toned down: a pale coping would be the brightest thing in the room.)
+            lip = mix(cop * face * (1.0 - 0.15 * smoothstep(0.7, 1.15, face)), INK, joint * jk);
         }
         col = mix(lip, r, smoothstep(-edge, -edge - 0.12, d));
         if (style == 1 && rough < 0.2) col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 1.6, abs(d + rim))) * 0.75);
-        alpha = ra * (1.0 - smoothstep(2.2, 3.2, depth + cut));
+        // (Ice rock reaches a little farther before it fades, filling the pockets between rooms.)
+        float fade = uLook > 3.5 ? 3.1 : 2.2;
+        alpha = ra * (1.0 - smoothstep(fade, fade + 1.0, depth + cut));
+        // (Dressed coping is solid stone, not see-through as the hatched rock beyond it is: else the
+        // map above showed through a lit wall's top as a pale haze, and round an outer corner as a
+        // smeared wedge.)
+        if (rough < 0.2) alpha = mix(1.0, alpha, smoothstep(-edge, -edge - 0.12, d));
     } else {
         ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
         vec4 cell = texelFetch(uCells, s, 0) * 255.0;
         if (won > 0 && won < 255) {
             // A shaped room's floor, wherever its shape reaches.
-            cell = vec4(look.y, 0.0, look.z, 255.0);
+            // (A sunken arena's sand keeps its squares.)
+            cell = vec4(cell.r > 11.5 && cell.a > 0.5 ? 12.0 : look.y, 0.0, look.z, 255.0);
         } else if (won == 255) {
             cell = vec4(0.0, 255.0, cell.b, 255.0);
         } else if (cell.a < 0.5) {
@@ -735,11 +1077,14 @@ void main() {
             // The cult's floor, a dark red stain spreading here and there.
             col = mix(col, col * vec3(0.86, 0.7, 0.68), smoothstep(0.55, 0.8, vnoise(p * 0.4 + 23.0)) * 0.5 * step(3.5, float(mat)));
         }
+        if (uLook > 0.5 && uLook < 3.5) col = cave_look(col * uTint, p, d, n);
         if (mat <= 2) {
             // Natural floors: uneven rock lit from the NW, loose stones, rubble at the wall foot.
             float b0 = vnoise(p * 0.7);
             vec2 bg = vec2(vnoise(p * 0.7 + vec2(0.12, 0.0)) - b0, vnoise(p * 0.7 + vec2(0.0, 0.12)) - b0);
-            col *= 1.0 + clamp(dot(bg, uLight) * 3.2, -0.15, 0.15);
+            // (Softly: clamped hard, its lit and shaded sides met in straight-edged bands along the noise's lattice.)
+            float rl = dot(bg, uLight) / 0.06;
+            col *= 1.0 + 0.15 * rl / sqrt(1.0 + rl * rl);
             vec2 sc = q * 1.7;
             vec2 cid = floor(sc);
             vec2 off = vec2(hash21(cid), hash21(cid + 7.3)) * 0.6 + 0.2;
@@ -755,18 +1100,24 @@ void main() {
             float rub = smoothstep(0.45, 0.75, vnoise(p * 4.5 + 13.0));
             col = mix(col, mix(col * 0.6, col * 1.2, vnoise(p * 9.0)), foot * rub * 0.8);
         }
-        // Raised floors (ledges): lighter tops, inked lips, shadows below them.
-        float t = here.b;
-        col *= 1.0 + 0.22 * t;
-        float tw = max(fwidth(t), 1e-4);
-        float lips = (1.0 - smoothstep(0.0, tw * 1.5, abs(t - 0.25))) + (1.0 - smoothstep(0.0, tw * 1.5, abs(t - 0.75)));
-        col = mix(col, INK, clamp(lips, 0.0, 1.0) * 0.8);
-        col *= mix(1.0, 0.72, smoothstep(0.1, 0.3, field(q + uLight * 0.35).b - t));
+        // Raised floors: tops lighter by their height; their edges' lips, faces and shadows.
+        float hf = here.b * 20.0;
+        if (uSquare > 0.5) {
+            vec3 boss = uStone * vec3(0.76, 0.71, 0.74);
+            gFace = mat == 7 ? vec3(0.70, 0.68, 0.65) : mat == 10 ? vec3(0.30, 0.28, 0.30) : mat == 5 || mat == 12 ? boss : mat == 9 ? col : uStone * 0.92;
+        }
+        if (uHasLift > 0.5) col = ledges(col, lift, q, p, px, hf);
+        else col = valueStep(col, topStep(hf));
         // Water, chasms, rubble slopes.
         if (uHasTerrain > 0.5) col = terrain(col, q, p, px);
         // Against the walls: ambient occlusion and the shadow cast from the NW.
-        col *= 0.6 + 0.4 * smoothstep(0.0, 0.75, d);
-        col *= mix(0.66, 1.0, smoothstep(0.35, 0.6, lit));
+        // (A built gallery's top, up by the wall's head, keeps only a thin band of it and none of the
+        // wall's cast shadow: else a strip a square wide is all shade and its lighter top is lost.)
+        float up = uSquare > 0.5 ? max(smoothstep(2.0, 8.0, hf), gLedge) : 0.0;
+        col *= mix(0.6 + 0.4 * smoothstep(0.0, 0.75, d), 0.9 + 0.1 * smoothstep(0.0, 0.2, d), up);
+        col *= mix(mix(0.66, 1.0, smoothstep(0.35, 0.6, lit)), 1.0, up);
+        // (Roots over the wall's shade, so they keep their tone; not over water, a chasm or a slope.)
+        if (uLook > 0.5 && uLook < 1.5) col = mix(col, caveRoots(col, p, d, n, px), (1.0 - smoothstep(0.02, 0.3, gTerr)) * (1.0 - gRamp));
         // Liquid down the channel.
         float l = here.g;
         if (uLiquid > 0.5) {

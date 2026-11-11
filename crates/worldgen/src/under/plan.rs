@@ -68,6 +68,11 @@ pub(crate) struct Plan {
     /// A mine's lift shaft, the same on every level (`themes::mine`): its 2 x 2 squares' top-left corner, whether it
     /// lies north of the haulage way (its landing between them), and whether the cage stands at the top (else the foot).
     pub(crate) lift: Option<(usize, bool, bool)>,
+    /// Its site's theme key (`Theme::key`; "" unknown): the boss chamber's centrepiece goes by it (`boss`).
+    pub(crate) theme: &'static str,
+    /// The boss chamber's second way in (`boss::side_door`): its doorway square in the chamber, the square inside that,
+    /// and the chamber's main way in.
+    pub(crate) side_door: Option<(usize, usize, usize)>,
 }
 
 impl Plan {
@@ -100,6 +105,8 @@ impl Plan {
             lock_first: Vec::new(),
             gaps: FastSet::default(),
             lift: None,
+            theme: "",
+            side_door: None,
         }
     }
 
@@ -326,9 +333,13 @@ impl Plan {
                 sum[r as usize][1] += (k / nx) as f64 + 0.5;
             }
         }
-        for (r, s) in rooms.iter_mut().zip(&sum) {
+        for (ri, (r, s)) in rooms.iter_mut().zip(&sum).enumerate() {
             if r.squares > 0 {
                 r.center = [(s[0] / r.squares as f64) as f32, (s[1] / r.squares as f64) as f32];
+                // (A boss chamber's name on open floor, off its props: `boss::label`.)
+                if r.kind == BOSS && let Some(k) = super::boss::label(&self.cells, &self.items, &self.doors, nx, ny, ri as i16, r.center) {
+                    r.center = [(k % nx) as f32 + 0.5, (k / nx) as f32 + 0.5];
+                }
             }
         }
         // Walls on square edges: rock against floor (exterior), and between rooms where no
@@ -391,6 +402,58 @@ impl Plan {
                 k += 1;
             }
         }
-        Level { z, name, elevation_ft, cells: self.cells, rooms, walls, doors, windows: Vec::new(), furniture: self.items, roof: false, has_stairs: false, natural: self.natural, paths: self.paths, rim: self.rim, links: self.links }
+        let (floor, ramps) = crate::interior::height::encode(&self.floor(ny));
+        Level { z, name, elevation_ft, cells: self.cells, rooms, walls, doors, windows: Vec::new(), furniture: self.items, roof: false, has_stairs: false, natural: self.natural, paths: self.paths, rim: self.rim, links: self.links, floor, ramps }
+    }
+}
+
+impl Plan {
+    /// Its floor heights as they stand (`interior::height`).
+    pub(crate) fn floor(&self, ny: usize) -> crate::interior::height::Floor {
+        crate::interior::height::floor(self.nx, ny, &self.cells, &|r| self.rooms[r as usize].raise, &self.items, &|a, b| self.passable(a, b))
+    }
+
+    /// Rubble slopes up to every floor the way in reaches only by climbing a sheer edge (a raised chamber without a
+    /// slope up its joins, or with them taken), one at a time on the free square nearest the way in where the low
+    /// floor meets the high (the high side, else the low): the number laid.
+    pub(crate) fn ramp_ledges(&mut self, ny: usize) -> usize {
+        let (nx, n) = (self.nx, self.nx * ny);
+        if !self.rooms.iter().any(|r| r.raise > crate::interior::height::STEP_FT) {
+            return 0;
+        }
+        let mut laid = 0;
+        loop {
+            let f = self.floor(ny);
+            let blocked = blocked_squares(&self.items, nx, ny);
+            let mut dist = vec![-1i32; n];
+            let mut q = std::collections::VecDeque::from([self.up]);
+            dist[self.up] = 0;
+            while let Some(a) = q.pop_front() {
+                for b in neighbours(a, nx, ny) {
+                    if dist[b] < 0 && !blocked[b] && self.passable(a, b) && f.sheer(a, b) <= 0.0 {
+                        dist[b] = dist[a] + 1;
+                        q.push_back(b);
+                    }
+                }
+            }
+            let mut best: Option<(i32, u8, usize)> = None;
+            for k in 0..n {
+                if self.cells[k] < 0 || blocked[k] || dist[k] >= 0 {
+                    continue;
+                }
+                for r in neighbours(k, nx, ny) {
+                    if dist[r] < 0 || !self.passable(r, k) || f.sheer(r, k) <= 0.0 {
+                        continue;
+                    }
+                    let at = if !self.taken[k] { Some((dist[r], 0, k)) } else if !self.taken[r] && !f.ramp[r] { Some((dist[r], 1, r)) } else { None };
+                    if let Some(c) = at {
+                        best = Some(best.map_or(c, |b| b.min(c)));
+                    }
+                }
+            }
+            let Some((_, _, k)) = best else { return laid };
+            self.put(item("rubble_slope", k % nx, k / nx, 1, 1));
+            laid += 1;
+        }
     }
 }
