@@ -39,20 +39,22 @@
     playing?: boolean;
     /** How long the world took to make last time (s). */
     seconds?: number | null;
+    /** What the pointer is over while placing (why a settlement cannot go there). */
+    note?: string | null;
     /** What was last added here (a settlement, or a pin that placed none), which Take back takes
      * away again. */
     added?: string | null;
     onTakeBack?: () => void;
   }
 
-  let { armed, peek = false, onPlace, onCancel, onTowns, playing = false, seconds = null, added = null, onTakeBack }: Props = $props();
+  let { armed, peek = false, onPlace, onCancel, onTowns, playing = false, seconds = null, note = null, added = null, onTakeBack }: Props = $props();
 
   type Group = 'Settlements' | 'Underground' | 'On the surface';
 
   /** The choices: what each makes (`Created` kind, and what lies beneath). */
   const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; tier?: PinTier; group: Group; look: string }[] = [
-    { key: 'village', label: 'Village', icon: 'home', kind: 'settlement', tier: 'village', group: 'Settlements', look: 'A few dozen to a few hundred souls' },
-    { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand, in districts' },
+    { key: 'village', label: 'Village', icon: 'home', kind: 'settlement', tier: 'village', group: 'Settlements', look: 'A few dozen to a few hundred souls. Added at once; a capital remakes the world' },
+    { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand. Added at once; a capital remakes the world' },
     { key: 'city', label: 'City', icon: 'castle', kind: 'settlement', tier: 'city', group: 'Settlements', look: 'Thousands, walled, with sewers below' },
     { key: 'metropolis', label: 'Metropolis', icon: 'wards', kind: 'settlement', tier: 'metropolis', group: 'Settlements', look: 'Tens of thousands: a great city' },
     { key: 'dungeon', label: 'Dungeon', icon: 'stairs', kind: 'entrance', under: 'dungeon', group: 'Underground', look: 'Stairs down, nothing above' },
@@ -83,6 +85,9 @@
   const underKind = $derived(pick === 'ruin' ? ruinUnder : choice.kind === 'entrance' ? choice.under! : ['cave', 'mine', 'lava_tube'].includes(pick) ? pick : null);
   const themes = $derived(underKind ? THEMES[underKind] : []);
   const tier = $derived(choice.tier);
+  /** A village or town goes in at once unless it is to be a capital (realms need the remake). */
+  const instant = $derived((tier === 'village' || tier === 'town') && !capital);
+  const livesKinds = $derived(instant ? PIN_KINDS.filter(([k]) => k !== 'port' && k !== 'fishing') : PIN_KINDS);
   const remakes = $derived(seconds ? `Remakes the world round it (about ${seconds} s)` : 'Remakes the world round it');
 
   const label = (key: string) => key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
@@ -94,8 +99,9 @@
 
   function place() {
     if (tier) {
-      if (playing) return;
-      const c: SiteChoice = { kind: 'settlement', settlement: { tier, livesBy, capital, wards: tier === 'village' ? '' : wards } };
+      if (playing && !instant) return;
+      const lb = instant && (livesBy === 'port' || livesBy === 'fishing') ? '' : livesBy;
+      const c: SiteChoice = { kind: 'settlement', settlement: { tier, livesBy: lb, capital, wards: instant || tier === 'village' ? '' : wards } };
       if (name.trim()) c.name = name.trim();
       onPlace(c, choice.label.toLowerCase());
       return;
@@ -130,9 +136,9 @@
             class="tile"
             class:on={pick === c.key}
             aria-pressed={pick === c.key}
-            title={c.tier ? (playing ? 'Stop playing to remake the world' : remakes) : undefined}
+            title={c.tier && !(c.tier === 'village' || c.tier === 'town') ? (playing ? 'Stop playing to remake the world' : remakes) : undefined}
             onclick={() => choose(c.key)}
-            ><Icon name={c.icon} size={20} /><span>{c.label}{#if c.tier}<span class="remade" aria-label="(remakes the world)">↻</span>{/if}</span></button
+            ><Icon name={c.icon} size={20} /><span>{c.label}{#if c.tier && c.tier !== 'village' && c.tier !== 'town'}<span class="remade" aria-label="(remakes the world)">↻</span>{/if}</span></button
           >
         {/each}
       </div>
@@ -142,11 +148,11 @@
       <label class="ws-field">
         Lives by
         <select class="ws-input" bind:value={livesBy}>
-          {#each PIN_KINDS as [k, label] (k)}<option value={k}>{label}</option>{/each}
+          {#each livesKinds as [k, label] (k)}<option value={k}>{label}</option>{/each}
         </select>
       </label>
       <label class="switch"><span class="grow">The realm's capital</span><input type="checkbox" class="ws-switch" bind:checked={capital} /></label>
-      {#if tier !== 'village'}
+      {#if tier !== 'village' && !instant}
         <input class="ws-input" placeholder="District names, central first (optional)" bind:value={wards} aria-label="District names, separated by commas" />
       {/if}
     {/if}
@@ -190,7 +196,13 @@
       Name
       <input class="ws-input" bind:value={name} placeholder="Named for you if left empty" />
     </label>
-    {#if tier}
+    {#if tier && instant}
+      <div class="towns">
+        <Icon name="check" size={16} />
+        <span class="grow">Added at once: nothing else moves.{onTowns ? ' Several at once: World › Sketch.' : ''}</span>
+        {#if onTowns}<button class="ws-btn" onclick={onTowns}>Sketch</button>{/if}
+      </div>
+    {:else if tier}
       <div class="towns">
         <Icon name="reset" size={16} />
         <span class="grow">{playing ? 'Stop playing to remake the world.' : `${remakes}: towns and roads near it may move.`}{onTowns ? ' Several at once: World › Sketch.' : ''}</span>
@@ -200,11 +212,11 @@
   {/if}
   {#if armed}
     <div class="armed">
-      <span class="grow">Click on the map to place the {choice.label.toLowerCase()}</span>
+      <span class="grow">{note ?? `Click on the map to place the ${choice.label.toLowerCase()}`}</span>
       <button class="ws-btn" onclick={onCancel}>Cancel</button>
     </div>
   {:else}
-    <button class="ws-btn primary block" onclick={place} disabled={!!tier && playing} title={tier && playing ? 'Stop playing to remake the world' : undefined}
+    <button class="ws-btn primary block" onclick={place} disabled={!!tier && !instant && playing} title={tier && !instant && playing ? 'Stop playing to remake the world' : undefined}
       ><Icon name="pin" size={16} /> Place {peek ? `a ${choice.label.toLowerCase()}` : 'on map'}</button
     >
   {/if}

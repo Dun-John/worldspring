@@ -201,13 +201,6 @@ impl Ctx {
         self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::roadids::named_json(&self.world, t0).to_string())
     }
 
-    /// Fingerprints of layouts as generated (`town::layout_print`, folded to 32 bits), by layout
-    /// index; 0 for one past the last, or before T0.
-    pub fn layout_prints(&self, layouts: Vec<u32>) -> Vec<u32> {
-        let Some(t0) = &self.t0 else { return vec![0; layouts.len()] };
-        layouts.iter().map(|&li| worldgen::town::layout_print(&self.world, t0, li as usize)).map(|h| (h ^ h >> 32) as u32).collect()
-    }
-
     /// The sites standing in settlements (`agent::parents_json`): `{n, base, pairs: [[site layout,
     /// settlement]…]}`, or `null` before T0.
     pub fn parents_json(&self) -> String {
@@ -297,6 +290,110 @@ impl Ctx {
             Some(t0) => worldgen::gazetteer::districts_json(&self.world, t0, settlement as usize),
             None => "[]".into(),
         }
+    }
+
+    /// The villages and towns added by hand (`T0.made`), as JSON: `[{id, layout, tier,
+    /// population, x, y, reach, built, rect, track, class, width}]`, where `reach` is the layout's
+    /// (`town::reach`), `built` the built-up radius, `rect` (x0, y0, x1, y1 ft) all its battlemaps
+    /// change over (the pad, `town::pad_extent`, and the link's bounds + 30 ft: its bed, banks and
+    /// crossings), `track` its link's points `[x, y]` to the road (empty with none), `class` and
+    /// `width` the link's road class and bed width (ft).
+    pub fn made_json(&self) -> String {
+        let Some(t0) = &self.t0 else { return "[]".into() };
+        let edits = &self.world.file.edits.created;
+        let list: Vec<serde_json::Value> = t0
+            .made
+            .iter()
+            .filter_map(|m| {
+                let c = edits.get(m.poi - t0.base_pois)?;
+                let (s, reach) = (&m.s, worldgen::town::reach(&m.s));
+                let pad = worldgen::town::pad_extent(reach);
+                let mut r = [s.x - pad, s.y - pad, s.x + pad, s.y + pad];
+                for p in &m.track {
+                    r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
+                }
+                let track: Vec<[f64; 2]> = m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect();
+                Some(serde_json::json!({
+                    "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
+                    "x": s.x, "y": s.y, "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
+                    "rect": r.map(|v| v.round()), "track": track, "class": m.class as u8, "width": m.class.width_ft(),
+                }))
+            })
+            .collect();
+        serde_json::Value::Array(list).to_string()
+    }
+
+    /// Whether a village or town (`kind`; `id` its `c:<n>`) can be added at (x, y) without
+    /// remaking the world (`t0::made::spot`): `{x, y, name, culture, lives_by}` as
+    /// `create_settlement` makes it (from the ground), or `{error}`.
+    pub fn settlement_spot_json(&self, kind: &str, id: &str, x: f64, y: f64) -> String {
+        use worldgen::t0::made;
+        let Some(t0) = &self.t0 else { return "null".into() };
+        match made::spot(&self.world, t0, kind, id, [x, y]) {
+            Ok(()) => {
+                let culture = made::culture_at(t0, x, y);
+                let lives_by = worldgen::world::PIN_KINDS[made::kind_at(&self.world, t0, x, y, made::tier_of(kind)) as usize];
+                serde_json::json!({ "x": x, "y": y, "name": made::name(&self.world, t0, id, culture), "culture": culture, "lives_by": lives_by }).to_string()
+            }
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
+    }
+
+    /// `edits` (JSON) with the edits of every village or town added by hand that `old_created`
+    /// (JSON, the created sites before) had and `edits` removes, moves or lays out anew set aside
+    /// (`t0::made::set_aside_changed`): `{edits, moved}`, or `{error}`.
+    pub fn set_aside_changed_json(&self, old_created: &str, edits: &str) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let old: Vec<worldgen::world::Created> = match serde_json::from_str(old_created) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let moved = worldgen::t0::made::set_aside_changed(&old, &mut edits, t0.settlements.len() + t0.base_pois);
+        serde_json::json!({ "edits": edits, "moved": moved }).to_string()
+    }
+
+    /// The fingerprints a remake of this world needs (`t0::remap::prints_before`): of the layouts
+    /// `edits` (JSON) name and `played` (a play session's), below the first created one, as
+    /// `[[layout, print]…]`; `null` before T0 or for edits that don't read.
+    pub fn remake_prints_json(&self, edits: &str, played: Vec<u32>) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let Ok(edits) = serde_json::from_str::<worldgen::world::Edits>(edits) else { return "null".into() };
+        let also: Vec<usize> = played.iter().map(|&li| li as usize).collect();
+        serde_json::to_string(&worldgen::t0::remap::prints_before(&self.world, t0, &edits, &also)).expect("serializable")
+    }
+
+    /// Edits made on the world before following their places into this one, remade
+    /// (`t0::remap::follow_into`). `input`: `{edits, before: {features, first_created,
+    /// layout_ids}, was: [[layout, print]…] (remake_prints_json), gone: [{id, name, li}…], played:
+    /// [layout…]}`. Returns `{followed: null | {ops, kept, parked, removed, moved, vanished},
+    /// targets}` (`ops`: what turns `edits` into those followed; `moved`: features' `[old, new]`
+    /// ids; `parked` counts those of `vanished` features, set aside under `gone:` ids, too;
+    /// `targets`: where each of `played` goes, or null), or `{error}`.
+    pub fn follow_json(&self, input: &str) -> String {
+        use worldgen::t0::remap;
+        #[derive(serde::Deserialize)]
+        struct Input {
+            edits: worldgen::world::Edits,
+            before: remap::Places,
+            #[serde(default)]
+            was: Vec<(usize, u32)>,
+            #[serde(default)]
+            gone: Vec<remap::Gone>,
+            #[serde(default)]
+            played: Vec<usize>,
+        }
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let a: Input = match serde_json::from_str(input) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let (followed, targets) = remap::follow_into(&self.world, t0, &a.edits, &a.before, &a.was, &a.gone, &a.played);
+        let followed = followed.map(|f| serde_json::json!({ "ops": a.edits.diff(&f.edits), "kept": f.kept, "parked": f.parked + f.aside, "removed": f.removed, "moved": f.moved, "vanished": f.vanished }));
+        serde_json::json!({ "followed": followed, "targets": targets }).to_string()
     }
 
     /// Generate one terrain tile. `parent` is the parent's padded heights for refined levels.

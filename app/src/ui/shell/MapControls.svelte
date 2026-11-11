@@ -1,6 +1,6 @@
 <script lang="ts">
   // Bottom right, beside the dock: inside a building or site its floor picker, then the map's
-  // own controls: zoom, the whole map, and Layers (the battlemap grid, place names). On phones,
+  // own controls: zoom, the whole map, and Layers (the battlemap grid, place names, sea lanes). On phones,
   // where there is no keyboard: undo and Layers (pinch zooms).
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
@@ -9,12 +9,14 @@
   interface Props {
     grid: boolean;
     places: boolean;
+    seaLanes: boolean;
     /** Zoomed in far enough for the grid to show. */
     battlemap: boolean;
     canUndo: boolean;
     undoLabel: string | null;
     onGrid: (on: boolean) => void;
     onPlaces: (on: boolean) => void;
+    onSeaLanes: (on: boolean) => void;
     onZoom: (d: number) => void;
     onWhole: () => void;
     onUndo: () => void;
@@ -22,7 +24,7 @@
     /** Inside a building or site: the view turned so its plan stands north up. */
     north?: { on: boolean; set: (on: boolean) => void };
   }
-  let { grid, places, battlemap, canUndo, undoLabel, onGrid, onPlaces, onZoom, onWhole, onUndo, floors, north }: Props = $props();
+  let { grid, places, seaLanes, battlemap, canUndo, undoLabel, onGrid, onPlaces, onSeaLanes, onZoom, onWhole, onUndo, floors, north }: Props = $props();
 
   const layers = $derived(shell.menu === 'layers');
 </script>
@@ -51,9 +53,15 @@
           <kbd class="ws-kbd">P</kbd>
           <input type="checkbox" class="ws-switch" checked={places} onchange={(e) => onPlaces(e.currentTarget.checked)} />
         </label>
+        <label class="row">
+          <Icon name="ferry" />
+          <span class="text">Sea lanes<span class="ws-muted">Shipping between ports</span></span>
+          <kbd class="ws-kbd">Shift+L</kbd>
+          <input type="checkbox" class="ws-switch" checked={seaLanes} onchange={(e) => onSeaLanes(e.currentTarget.checked)} />
+        </label>
       </div>
     {/if}
-    <button class="ctl" class:on={layers} onclick={() => (shell.menu = layers ? null : 'layers')} aria-label="Layers" aria-expanded={layers} title="Layers: grid, place names"><Icon name="layers" /></button>
+    <button class="ctl" class:on={layers} onclick={() => (shell.menu = layers ? null : 'layers')} aria-label="Layers" aria-expanded={layers} title="Layers: grid, place names, sea lanes"><Icon name="layers" /></button>
   </div>
   {#if !shell.phone}
     <div class="stack">

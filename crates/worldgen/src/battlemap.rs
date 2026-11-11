@@ -974,6 +974,71 @@ fn raft_on(a: [f64; 2], b: [f64; 2], size: f64) -> ([f64; 2], f64, f64) {
     (at, 1.6 * w, w)
 }
 
+/// The sea ferries' landing stages a chunk sees (`t0::ferries`), as ferries are drawn: from
+/// where the water begins out from each landing (`SeaFerry::shores`: the same in every chunk), a
+/// stage of two jetties end to end (the line between them a mooring), the ferry boat moored
+/// alongside its outer end. `h0`: the chunk's halo corner (world ft).
+fn sea_ferry_shapes(world: &World, t0: &T0, h0: [f64; 2]) -> Vec<CrossingShape> {
+    let size = crate::t0::roads::RoadClass::Track.width_ft().max(12.0);
+    let span = HS as f64 * SQUARE_FT;
+    let mut out = Vec::new();
+    for f in &t0.ferries {
+        let near = |p: [f64; 2], r: f64| p[0] + r >= h0[0] && p[0] - r <= h0[0] + span && p[1] + r >= h0[1] && p[1] - r <= h0[1] + span;
+        if !near(f.a, crate::t0::ferries::SHORE_REACH_FT + 80.0) && !near(f.b, crate::t0::ferries::SHORE_REACH_FT + 80.0) {
+            continue;
+        }
+        let shores = f.shores(world, t0);
+        for (p, q) in [(shores[0], f.b), (shores[1], f.a)] {
+            if !near(p, 2.0 * JETTY_FT + 60.0) {
+                continue;
+            }
+            let u = unit2([q[0] - p[0], q[1] - p[1]]);
+            let along = |t: f64, side: f64| [p[0] + u[0] * t - u[1] * side, p[1] + u[1] * t + u[0] * side];
+            let (a, b) = (along(JETTY_FT - 4.0, 0.0), along(JETTY_FT - 3.5, 0.0));
+            let (_, l, w) = raft_on(a, b, size);
+            let raft = (along(2.0 * JETTY_FT - 3.5 - 0.5 * l, 0.5 * (JETTY_WIDTH_FT + w) + 1.0), l, w);
+            out.push(CrossingShape { kind: ShapeKind::Ferry, a, b, size, raft: Some(raft), dropped: false, stone: false });
+        }
+    }
+    out
+}
+
+/// The sea ferries' tracks over a shelf: from where each land leg ends (`INLAND_FT` back from
+/// its landing on the water's contour) on to the stage where the water begins
+/// (`SeaFerry::shores`), as track squares over the dry ground of the chunk's halo (corner `h0`,
+/// world ft; `hh`, `hw` its ground and water) that have no road yet.
+fn sea_ferry_tracks(world: &World, t0: &T0, h0: [f64; 2], hh: &[f32], hw: &[f32], road_h: &mut [u8]) {
+    use crate::t0::roads::RoadClass;
+    let span = HS as f64 * SQUARE_FT;
+    let half = 0.5 * RoadClass::Track.width_ft();
+    for f in &t0.ferries {
+        for (k, (p, q)) in [(f.a, f.b), (f.b, f.a)].into_iter().enumerate() {
+            let r = crate::t0::ferries::SHORE_REACH_FT + 40.0;
+            if p[0] + r < h0[0] || p[0] - r > h0[0] + span || p[1] + r < h0[1] || p[1] - r > h0[1] + span {
+                continue;
+            }
+            let u = unit2([q[0] - p[0], q[1] - p[1]]);
+            let w = f.shores(world, t0)[k];
+            let a = [p[0] - u[0] * crate::t0::ferries::INLAND_FT, p[1] - u[1] * crate::t0::ferries::INLAND_FT];
+            let len = (w[0] - p[0]) * u[0] + (w[1] - p[1]) * u[1] + crate::t0::ferries::INLAND_FT - 3.0;
+            if len <= crate::t0::ferries::INLAND_FT {
+                continue;
+            }
+            for j in 0..HS {
+                for i in 0..HS {
+                    let h = j * HS + i;
+                    let c = [h0[0] + (i as f64 + 0.5) * SQUARE_FT, h0[1] + (j as f64 + 0.5) * SQUARE_FT];
+                    let (dx, dy) = (c[0] - a[0], c[1] - a[1]);
+                    let (along, across) = (dx * u[0] + dy * u[1], -dx * u[1] + dy * u[0]);
+                    if (0.0..=len).contains(&along) && across.abs() <= half && road_h[h] == 0 && hw[h] + 0.05 < hh[h] {
+                        road_h[h] = RoadClass::Track as u8 + 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A crossing put down by hand as decks (world ft polygons) for the map's site tiles: a
 /// bridge's; a ferry's jetties, raft and rope (a ford has none).
 pub fn hand_decks(c: &crate::world::Crossing) -> Vec<Vec<[f64; 2]>> {
@@ -1117,7 +1182,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut road_h = vec![0u8; HS * HS];
     let mut lift = vec![0f32; HS * HS];
     // Where roads cross rivers, and how (see `RiverCrossing`).
-    let crossings = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces);
+    // Settlements added by hand: their pads and links over the terrain (`t0::made::Ground`), their
+    // links' river crossings as the network's.
+    let made = crate::t0::made::Ground::new(world, t0, [ox - 2.0 * SQUARE_FT, oy - 2.0 * SQUARE_FT, ox + (SQ + 2) as f64 * SQUARE_FT, oy + (SQ + 2) as f64 * SQUARE_FT]);
+    let made_roads = made.as_ref().map_or(Vec::new(), |m| m.pieces());
+    let mut crossings = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces);
+    crossings.extend(crate::lod::roads::river_crossings(&made_roads, &tile.pieces));
     let mut crossing_shapes: Vec<CrossingShape> = crossings.iter().map(|x| crossing_shape(x, tile)).collect();
     merge_bridges(&crossings, &mut crossing_shapes);
     let x_ft = |i: i64| ox + (i as f64 + 0.5) * SQUARE_FT;
@@ -1127,18 +1197,25 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // where the shaping changed the ground (the slope is measured on the shaped ground there).
     let shaper = crate::ground::Shaper::new(&world.file.edits, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT], SQUARE_FT);
     let (mut plat_w, mut moved) = if shaper.is_some() { (vec![0f32; HS * HS], vec![false; HS * HS]) } else { (Vec::new(), Vec::new()) };
+    // (A river's channel stays as the river carved it: a link crosses it on a bridge or a ford.)
+    let base_at = |x: f64, y: f64, c: usize| made.as_ref().filter(|_| tile.river_water[c] <= tile.padded[c]).map_or(tile.padded[c], |m| m.at(x, y, tile.padded[c]));
     for j in -1..=SQ as i64 {
         for i in -1..=SQ as i64 {
             let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
             let c = sidx(i, j);
             let h = (j + 1) as usize * HS + (i + 1) as usize;
-            hh[h] = tile.padded[c];
+            hh[h] = base_at(x, y, c);
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
             if let Some(s) = &shaper {
                 (hh[h], plat_w[h]) = s.at_square(gsx + i, gsy + j, hh[h], hw[h]);
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
             }
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
+            if road_h[h] == 0
+                && let Some(class) = made.as_ref().and_then(|m| m.on_track(x, y))
+            {
+                road_h[h] = class as u8 + 1;
+            }
             // A ford or a ferry leaves the water as it is (wading, or the raft).
             if road_h[h] != 0 && hw[h] > hh[h] && crossings.iter().any(|x| x.kind != CrossingKind::Bridge && x.covers([x_ft(i), y_ft(j)])) {
                 road_h[h] = 0;
@@ -1146,13 +1223,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if road_h[h] != 0 && hw[h] > hh[h] {
                 // The deck carries the road at its own level (its embankments reach the
                 // banks), at least clear of the water.
-                let top = (hw[h] + DECK_CLEARANCE_FT).max(road_level(&tile.roads, [x, y]).unwrap_or(f32::MIN));
+                let top = (hw[h] + DECK_CLEARANCE_FT).max(road_level(&tile.roads, [x, y]).or_else(|| road_level(&made_roads, [x, y])).unwrap_or(f32::MIN));
                 lift[h] = top - hh[h];
                 hh[h] = top;
                 road_h[h] |= 0x80;
             }
         }
     }
+    sea_ferry_tracks(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT], &hh, &hw, &mut road_h);
     // Settlements: buildings (roofs at eave height), streets and plazas, fields.
     let mut bld_h = vec![0u16; HS * HS];
     let mut urb_h = vec![0u8; HS * HS];
@@ -2160,7 +2238,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     // A ferry's jetties and raft are decks too: planks over the water (the raft afloat).
-    for c in crossing_shapes.iter().chain(hand.iter().map(|(c, _)| c)).filter(|c| c.kind == ShapeKind::Ferry) {
+    let sea_ferries = sea_ferry_shapes(world, t0, [hx0, hy0]);
+    for c in crossing_shapes.iter().chain(hand.iter().map(|(c, _)| c)).chain(&sea_ferries).filter(|c| c.kind == ShapeKind::Ferry) {
         let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
         let mut decks: Vec<([f64; 2], f64, f64, f32)> = vec![
             ([c.a[0] - u[0] * 0.5 * JETTY_FT, c.a[1] - u[1] * 0.5 * JETTY_FT], JETTY_FT, JETTY_WIDTH_FT, DECK_CLEARANCE_FT),
@@ -2248,6 +2327,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         shapes.push(VectorShape { kind: c.kind, size: (c.size / SQUARE_FT) as f32, pts });
     }
+    // The sea ferries' landing stages: each drawn by the chunk holding its mooring.
+    for c in sea_ferries.iter().filter(|c| owns(c.a)) {
+        shapes.push(VectorShape { kind: c.kind, size: (c.size / SQUARE_FT) as f32, pts: vec![local(&c.a), local(&c.b), local(&c.raft.expect("a raft").0)] });
+    }
     // Those put down by hand: drawn by the chunk owning their middle; a ford's stones (along
     // its whole line, on water) by each chunk where they fall.
     for (c, _) in &hand {
@@ -2298,10 +2381,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             biome[k] = Biome::from_u8(t0.sample_biome(x, y, t0.biome_warp(x, y))[0]);
             let c = sidx(i as i64, j as i64);
             let h = (j + 1) * HS + i + 1;
-            let plain = || ((tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0, (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0);
+            // (Over a created settlement's pad or track, from the padded heights.)
+            let plain = || match &made {
+                Some(_) => {
+                    let at = |dx: f64, dy: f64, c: usize| base_at(x + dx, y + dy, c);
+                    ((at(2.5, 0.0, c + 1) - at(-2.5, 0.0, c - 1)) as f64 / 5.0, (at(0.0, 2.5, c + PADDED) - at(0.0, -2.5, c - PADDED)) as f64 / 5.0)
+                }
+                None => ((tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0, (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0),
+            };
             let (gx, gy) = match &shaper {
                 Some(s) if [h, h - 1, h + 1, h - HS, h + HS].iter().any(|&q| moved[q]) => {
-                    let at = |dx: f64, dy: f64, c: usize| s.at_point(x + dx, y + dy, tile.padded[c], hw[h]) as f64;
+                    let at = |dx: f64, dy: f64, c: usize| s.at_point(x + dx, y + dy, base_at(x + dx, y + dy, c), hw[h]) as f64;
                     ((at(2.5, 0.0, c + 1) - at(-2.5, 0.0, c - 1)) / 5.0, (at(0.0, 2.5, c + PADDED) - at(0.0, -2.5, c - PADDED)) / 5.0)
                 }
                 _ => plain(),

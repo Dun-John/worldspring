@@ -17,7 +17,9 @@ mod mcp;
 mod notebook;
 mod reads;
 mod scatter;
+mod settlements;
 mod sites;
+mod sketch;
 mod store;
 mod streets;
 mod tools;
@@ -348,6 +350,10 @@ async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
             let cur = app.current();
             let others = app.followers().into_iter().any(|id| id != me);
             app.tabs.lock().unwrap().insert(me, Some(hash));
+            // (A world remade by `regenerate` meanwhile: the tab is told to load it.)
+            if let Some(m) = sketch::redirect(app, hash, take, replace) {
+                return Some(m);
+            }
             if cur != Some(hash) {
                 if others && !take {
                     app.announce();

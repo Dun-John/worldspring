@@ -103,9 +103,10 @@ try {
       await evaluate(v.do);
       await sleep(v.wait ?? 1500);
     }
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 120; i++) {
       await sleep(250);
-      if (await evaluate('window.__map.readiness >= 1 && window.__map.tiles.stats.queuedUploads === 0')) break;
+      // (Battlemap chunks too: until they are all built, the map shows through where one is missing.)
+      if (await evaluate('window.__map.readiness >= 1 && window.__map.tiles.stats.queuedUploads === 0 && !window.__map.battle?.pending && window.__map.lastWants === 0')) break;
     }
     await sleep(400);
     const shot = await send('Page.captureScreenshot', { format: 'png' });

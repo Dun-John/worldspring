@@ -905,6 +905,175 @@ not deleted. Returns the site as `get_feature` does (a building with its `buildi
 ```
 > *"Bring the ruin back."*
 
+### `create_settlement`
+Adds a village or town without remaking the world. It is laid out by the world's own village and town generators
+(streets, buildings, businesses, districts, battlemaps, interiors), its size drawn from its id, and joined to the
+nearest road as the world's own are (a village by a track running in through its middle, a town by a road to its
+edge). Nothing else in the world changes: other settlements, sites, roads and terrain stay as they were. The result
+is `get_feature`'s details with the new `c:<n>` id, plus `culture`, `lives_by`, `population` and `track_ft` (the
+link's length). Its buildings take the world's building tools (`b:<layout>:<id>`), and `get_town_plan`/`edit_town` take a
+town.
+
+Villages and towns are added inland. The call is refused, with the reason, on the edge of the map, in water or a
+river, on or near a shore (ports and fishing villages need the world remade), too near another settlement (half a
+mile of open ground between them) or site, with a road running through it, on steep ground, more than 10 miles
+from a road (the refusal says how far the nearest is, which way, and where), or where water keeps its link from reaching one. Asking again for the
+same settlement at the same place returns that one, with `"existing": true`.
+
+`delete_feature` takes it away. The changes made in it (its buildings' edits, its town laid out anew, names, notes,
+hidden marks, NPCs' places and plot points in it) are set aside, as when the world is remade: they stay in the file
+and resolve nowhere. The result's `set_aside` counts them. `update_settlement` changes its tier, what it lives by or
+its name at once. A city, a capital, a port or a fishing village needs the world remade: a settlement pin
+(`create_sketch_stroke`) and `regenerate`.
+
+| Parameter | Type | | |
+|---|---|---|---|
+| `tier` | string | required | `village` or `town`. |
+| `id` or `x_ft` + `y_ft` | | required | Where its centre goes. |
+| `name` | string | optional | If left out, it is named in its culture's style. |
+| `culture` | integer | optional | Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 open steppe. Default: the nearest settlement's. |
+| `lives_by` | string | optional | `river`, `mining`, `fortress`, `market`, `farming`, `lumber`, `herding` or `oasis`. Default: from its ground. |
+
+```json
+{ "name": "create_settlement", "arguments": { "tier": "village", "x_ft": 2318926, "y_ft": 1121032, "lives_by": "lumber" } }
+{ "name": "create_settlement", "arguments": { "tier": "town", "x_ft": 2318926, "y_ft": 1121032, "name": "Pelbridge", "culture": 1 } }
+```
+> *"Add a logging village up in those hills."* · *"Put a market town between Bornworth and the lake."*
+
+### `update_settlement`
+Changes a settlement's tier, what it lives by, whether it is the realm's capital, or its name.
+
+- **A village or town added by hand** (`c:...`) changes at once, with no remake: a village becomes a town or the
+  other way, or it lives by something else (inland kinds only). It is laid out anew, so the changes made inside it
+  (buildings, its town plan) are set aside (`set_aside` counts them), as `delete_feature` sets them aside; its name,
+  notes, NPCs and plot points stay on it. A city or metropolis, the capital, a port or a fishing village is refused,
+  saying how: `delete_feature` it, put a settlement pin there and `regenerate`. The result is `get_feature`'s details
+  as `create_settlement` gives them.
+- **One of the world's own** changes through a settlement pin in its place in the sketch (`replaces`: the tier it
+  was placed at). The pin is stored at once and the result says `pending: true`; `regenerate` (or `regenerate: true`
+  here) remakes the world. The tier is placed as it would be without the pin, then the pin's settlement takes that
+  one's place and its layout number, so no other settlement of the world moves, though its new size changes what
+  lies round it (its roads, the trade that sizes the others). Its names, notes, NPCs and plot points follow it (to
+  its new id when its tier changes: `now` with `regenerate: true`, or `made` in `regenerate`'s result). It is laid out
+  anew, so the changes made inside it are set aside. Its population is drawn in its tier's range. Its name stays as it
+  is unless `name` is given, and a name given in a pin wins over a rename. A settlement made by a pin already has
+  that pin changed. Asking again changes the same pin. `get_sketch` lists the pin with the settlement's id
+  (`settlement`).
+- A **port** or **fishing village** only on a sea or lake shore (fishing also on a river): refused inland, with the
+  reason. When the remade world can't follow it, `regenerate`'s `conflicts` say so.
+
+| Parameter | Type | | |
+|---|---|---|---|
+| `id` | string | required | The settlement. |
+| `tier` | string | optional | `metropolis`, `city`, `town` or `village` (added by hand: `village` or `town`). |
+| `lives_by` | string | optional | As a pin's. Default: as it is when its tier stays or still fits the new one (a port is no village's, a fishing village no town's), else from its land; `economy` in the result says which. |
+| `capital` | boolean | optional | `true`: the realm's capital (the world's own only). |
+| `name` | string | optional | Its new name. |
+| `regenerate` | boolean | optional | The world's own: remake the world at once (default false). |
+
+```json
+{ "name": "update_settlement", "arguments": { "id": "town:1a2b3c4d", "tier": "village", "lives_by": "fishing" } }
+{ "name": "update_settlement", "arguments": { "id": "village:5e6f7a8b", "tier": "town", "name": "Neverwinter", "regenerate": true } }
+{ "name": "update_settlement", "arguments": { "id": "c:2", "tier": "town" } }
+```
+> *"Luskan is only a fishing village."* · *"Make Neverwinter a town of two thousand."*
+
+## The sketch and `regenerate`
+
+The sketch is the set of strokes that steer generation: land, sea, mountain ranges and massifs, rivers, lakes, painted
+biomes, volcanoes, settlement pins, sites, regions and roads (World › Sketch in the app). It is part of the world, so
+changing it makes another world. The sketch tools store their changes at once (in `<hash>/sketch.json` beside the
+world), but the world is not remade until `regenerate`; their results say `pending: true`, and `get_sketch` says
+whether changes wait. They can't go in a `batch`.
+
+A stroke's id is `sk:` and a hash of the stroke: it stays while other strokes come and go, and a changed stroke gets a
+new one (`update_sketch_stroke` returns it). `index` is its place in the sketch, for reading only.
+
+### `get_sketch`
+The strokes (as the pending changes leave them), each with `id`, `index`, `tool` and its points (`path`, or `at` for a
+pin, volcano, site or region named at a point), and its options: `closed`, `radius_mi`, `strength`, `hard`, `biome`,
+`name`, a road's `kind`, a pin's `tier`, `lives_by`, `capital`, `wards`, `added`, `replaces` and `settlement` (the
+settlement it made, or for a pin not regenerated yet that replaces one, that one's id; `replaces` is the tier the
+generator placed that one at, which can be above the tier it shows: a city placed that grew only to a town says `city`). A stroke changed or added since the
+world was made says so (`pending: "changed"` or `"added"`), and `changes` lists what changed (`added`, `changed`, and
+the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbox` instead of points, `limit`
+(default 100) cuts the list (`{items, found}`).
+
+### `create_sketch_stroke`
+| Parameter | Type | | |
+|---|---|---|---|
+| `tool` | string | required | `land`, `sea` (cut out of land), `range`, `river` (from its first point down), `forest` (a temperate forest painted), `biome`, `road`, `pin` (a settlement). |
+| `path` | `[[x_ft, y_ft], ...]` | all but pins | 2 or more points, 3 or more for an outline; at most 5,000, all on the map. |
+| `at` | a place | pins | `{x_ft, y_ft}`, `[x_ft, y_ft]` or a feature's id. |
+| `closed` | boolean | land, sea, forest, biome | The path is an outline, filled (default true); false: a band brushed along it. |
+| `radius_mi` | number | not pins, roads | Brush half-width, 0.1 to 200 (defaults: land 15, sea 10, range 15, river 3, forest and biome 20). |
+| `strength` | number | range, river | 0 to 1 (default 0.7): a range's height (0.2 hills to 1 high peaks), a river's size. |
+| `hard` | boolean | land, sea, forest, biome | Edges exactly as drawn. |
+| `biome` | string | forest, biome | The biome painted (a biome stroke needs it). |
+| `name` | string | optional | What it makes is called this (up to 80 characters); a road's name (else it has none). |
+| `kind` | string | road | `kings_road`, `road` (default), `track`, or `none` (a line no planned road crosses; no name). |
+| `tier` | string | pins, required | `metropolis`, `city`, `town` or `village`. |
+| `lives_by` | string | pins | `port`, `river`, `mining`, `fortress`, `market`, `farming`, `fishing`, `lumber`, `herding`, `oasis`. Default: from its land. |
+| `capital` | boolean | pins | The realm's capital. |
+| `wards` | `[string]` | pins | Its districts' names, the central one first (up to 24). |
+| `added` | boolean | pins | Beside the world's own settlements (default true, as Edit › Places adds them); false: in place of one of its tier. |
+| `replaces` | string | pins | In place of the world's own settlement at its spot (within 3 mi), changed: the tier the generator placed it at (`get_sketch`'s `replaces`; a city that grew only to a town is placed as a city). Nothing else moves. `update_settlement` makes these pins. |
+
+An option for another tool is refused (`tier: only for pin, got "town"`), as is a point off the map (the message gives
+the map's size). The same stroke again adds nothing and returns `existing: true`. A pin far out at sea (no land within
+25 mi in the world as it is) is stored with a `warning`: `regenerate` would place no settlement there. So is the
+world's first `range` or massif: drawn ranges replace the generated mountains across the whole world, so the remake
+changes features, names and settlements far from it.
+
+### `update_sketch_stroke`
+`id` and any of the parameters above but `tool`; what is not given stays. Returns the new `id` (and `was`).
+
+### `delete_sketch_stroke`
+`ids` (or `id`): all or none. A pin taken away takes its settlement with it at `regenerate`: what was made on it is set
+aside (`gone:...`, as when the app removes a settlement), never handed to a neighbour.
+
+### `regenerate`
+Remakes the world with the pending changes, natively in mapd (a few seconds), with or without the app open. The world's
+changes follow their places, as when the app remakes it: names and notes follow features that moved, changes inside
+settlements and sites follow those laid out the same, and the rest are set aside under ids that name nothing. Names,
+notes, hidden marks, NPCs and plot points on a feature that is gone with nothing in its place are set aside under
+`gone:<n>:<id>` (as a settlement taken away is: `world_overview`'s `places_removed` lists them), and come back to it if a
+later remake brings that feature back (the stroke taken away again). Set-aside changes can be read later in the app
+(Notes › Gazetteer, Set aside) and counted by `places_removed` (name, whether it has a note, NPCs, plot points); no MCP
+tool reads their text, so `vanished` is the place to copy it from. A
+settlement a pin made takes the changes of a vanished one only at its own spot (a quarter of that one's label extent:
+about a mile for a village, 3 for a town), never of one farther off, and a name given in the pin wins over a rename. Tool
+calls made meanwhile wait, and see the world before or the world remade, never a mix. The remade world is saved under
+its new hash (`world`; `was` is the one before). An open map app loads it, asking first when it has work not saved
+(sketch strokes not generated, a site's design, a session being played); an app opened later is told to load it.
+
+Returns `kept` (changes that followed their places to new numbers, or came back to them; the others stayed as they
+were), `set_aside` (of them `removed`: on settlements taken away), `vanished` (features gone with nothing in their
+place that had changes: `{id, kind, name, kept_as, what}`, `what` e.g. `["renamed", "note", "1 NPC"]`, with the changes
+themselves: `renamed_to`, `note` (its text), `hidden`, `other` such as `a building edit`), `moved`
+(features whose changes moved to another), `settlements` and `settlements_before`, `changed` (how much of the map came
+out otherwise: `features_before`, `features_after`, `features_same_id`, `features_renamed` of those, and
+`settlements_in_place`), `gone` (settlements taken away), `made` (the settlement each new or changed pin made:
+`{stroke, id, name}`, `id` null if none was placed), `conflicts` (what the sketch could not follow: `{stroke, message,
+x_ft, y_ft}`) and `seconds`. With nothing pending it does nothing (`regenerated: false`).
+
+A stroke can change the map far from where it is drawn, as in the app: the generator works the whole map at once, so
+heights, rivers, coasts and climate everywhere can come out otherwise, and with them features' ids and names and the
+world's own settlements. The first range (or massif) drawn does most: drawn ranges become the main ones and the
+plates' own are kept at half their height, all over the map. Changes on the places that moved follow them or are set
+aside (`changed` and `vanished` say how much); a pin far from them leaves them as they are.
+
+```json
+{ "name": "create_sketch_stroke", "arguments": { "tool": "range", "path": [[4682158, 2536577], [4708558, 2642177], [4682158, 2747777]], "strength": 0.6, "name": "Greyspine" } }
+{ "name": "create_sketch_stroke", "arguments": { "tool": "pin", "at": [4391758, 2694977], "tier": "city", "capital": true, "name": "Newhold" } }
+{ "name": "create_sketch_stroke", "arguments": { "tool": "road", "path": [[2300000, 1100000], [2500000, 1180000]], "kind": "kings_road", "name": "The High Road" } }
+{ "name": "regenerate", "arguments": {} }
+```
+> *"Make Newhold a city and the capital."* · *"Draw a mountain range along the east coast, then remake the world."*
+
+`create_settlement` adds a village or town with no remake, and `update_settlement` changes one; to change one of the
+world's own, `update_settlement` stores a pin, and `regenerate` makes it.
+
 ## Notebook tools: NPCs and plot points
 
 The DM's notebook holds NPCs (`n:<id>`) and plot points (`p:<id>`). They are written by the user (the app's

@@ -3,7 +3,7 @@
   // sketching), or a site's unsaved design (save it, drop it, or keep designing). And before a
   // world is remade round the changes made on it and its play session (some may be set aside),
   // or left for another world with new settings (they stay with this one: a copy can go to the
-  // Library first).
+  // Library first). Or before a world an agent remade (through mapd) is loaded over work not saved.
   import type { Ask } from './layout.svelte';
 
   interface Props {
@@ -26,7 +26,8 @@
   <div class="text">
     {#if ask.kind === 'sketch'}<b>Your sketch isn't generated yet.</b> Its new strokes would be lost.
     {:else if ask.kind === 'design'}<b>This site's design isn't saved.</b> The changes would be lost.
-    {:else if ask.kind === 'regen'}<b>Remake this world?</b>{/if}
+    {:else if ask.kind === 'regen'}<b>Remake this world?</b>
+    {:else if ask.kind === 'remade'}<b>An agent remade this world.</b> Loading it {ask.drops ?? 'drops the work not saved here'}. Its changes and play session come along.{/if}
     {#if remake === 'regen'}
       {ask.kind === 'sketch' ? 'Generating it remakes this world: towns' : 'Towns'} and roads may move. Places you added, drawn buildings, objects, ground, names, notes, NPCs,
       plots and the play session stay; changes to towns and sites that come out differently are set aside (tokens there wait outside).
@@ -38,7 +39,10 @@
     {/if}
   </div>
   <div class="ws-row buttons">
-    {#if ask.kind === 'regen' || ask.kind === 'newworld'}
+    {#if ask.kind === 'remade'}
+      <button class="ws-btn quiet" onclick={onKeep}>Not now</button>
+      <button class="ws-btn primary" onclick={onCommit}>Load it</button>
+    {:else if ask.kind === 'regen' || ask.kind === 'newworld'}
       <button class="ws-btn quiet" onclick={onKeep}>Cancel</button>
     {:else}
       <button class="ws-btn quiet" onclick={onKeep}>{ask.kind === 'sketch' ? 'Keep sketching' : 'Keep designing'}</button>
@@ -46,7 +50,7 @@
     {/if}
     {#if ask.kind === 'design'}
       <button class="ws-btn primary" onclick={onCommit} disabled={blocked} title={blocked ? 'Fix the problems marked ✕ first' : ''}>Save</button>
-    {:else if ask.kind !== 'sketch' || ask.generate !== false}
+    {:else if ask.kind !== 'remade' && (ask.kind !== 'sketch' || ask.generate !== false)}
       {#if remake === 'newworld'}<button class="ws-btn" onclick={onSave} title="Keep this world and its changes in the Library, then generate">Save to Library, then generate</button>{/if}
       <button class="ws-btn primary" onclick={onCommit} title={about}>Generate</button>
     {/if}

@@ -152,6 +152,8 @@ pub enum PoiKind {
     Castle,
     /// Created only: a wall drawn by hand (its line, `world::Created::pts`).
     Wall,
+    /// Created only: a village or town added without remaking the world (`t0::made`).
+    Settlement,
 }
 
 impl PoiKind {
@@ -168,12 +170,13 @@ impl PoiKind {
             "building" => PoiKind::Building,
             "castle" => PoiKind::Castle,
             "wall" => PoiKind::Wall,
+            "village" | "town" => PoiKind::Settlement,
             _ => PoiKind::Ruin,
         }
     }
 
     pub fn from_u8(v: u8) -> PoiKind {
-        const ALL: [PoiKind; 11] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building, PoiKind::Castle, PoiKind::Wall];
+        const ALL: [PoiKind; 12] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building, PoiKind::Castle, PoiKind::Wall, PoiKind::Settlement];
         ALL[(v as usize).min(ALL.len() - 1)]
     }
 }
@@ -228,6 +231,8 @@ pub struct Ground {
     /// Where the river reasons (but crossings) come from: reason, cell, the cell before it on its river (a
     /// mouth's last land cell; else the cell again) and the river's strength there, 0-1.
     sources: Vec<(Reason, u32, u32, f32)>,
+    /// The land masses: the mainland and the islands (`islands::label`).
+    pub(crate) islands: super::islands::Islands,
 }
 
 impl Ground {
@@ -609,14 +614,15 @@ fn ground(inp: &Inputs) -> Ground {
         bulk[k] = m(&[Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing]);
         industry[k] = m(&[Reason::Ore, Reason::Timber, Reason::Fishing]);
     }
-    Ground { score, base, water: water_at, spring, coastal, lakeside, on_river, harbour, site, food, bulk, industry, sources }
+    let islands = super::islands::label(w, h, cell, inp.land, &inp.hydro.lake_of, inp.biome);
+    Ground { score, base, water: water_at, spring, coastal, lakeside, on_river, harbour, site, food, bulk, industry, sources, islands }
 }
 
 /// What a place lives by: its reason's kind where the place allows, else a cascade on its ground
 /// (`ore`: the ore noise at its cell; `hilly`: hill or mountain ground round it, for a mining
 /// town).
 #[allow(clippy::too_many_arguments)]
-fn kind_of(reason: Reason, tier: Tier, b: Biome, above: f64, ore: f64, is_coast: bool, near_river: bool, on_river: bool, hilly: bool) -> SettleKind {
+pub(crate) fn kind_of(reason: Reason, tier: Tier, b: Biome, above: f64, ore: f64, is_coast: bool, near_river: bool, on_river: bool, hilly: bool) -> SettleKind {
     let from_reason = match reason {
         Reason::Harbour | Reason::Mouth if is_coast => Some(if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }),
         Reason::Outlet | Reason::Confluence | Reason::Head | Reason::Crossing if tier >= Tier::Town && near_river => Some(SettleKind::River),
@@ -728,6 +734,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         (Tier::Town, if none { 0 } else { (villages / 5).max(2) }, 40.0),
         (Tier::Village, villages, 14.0),
     ];
+    // (The world's villages and towns per sq mi: a big island's share.)
+    let density = (villages as f64 / land_area.max(1.0), quota[2].1 as f64 / land_area.max(1.0));
 
     // Roads: a site on a road is better, a junction much better (within a cell of it; and
     // whether on its own cell).
@@ -829,7 +837,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         }
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft, drawn from `seed`.
-        let make = |k: usize, seed: u64, mut x: f64, mut y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
+        // (Of the loop's tier, but for a pin in place of one of another tier: `Pin::replaces`.)
+        let make = |tier: Tier, k: usize, seed: u64, mut x: f64, mut y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
             let (lo, hi) = pop_range(tier);
             let population = (lo * libm::pow(hi / lo, unit(hash3(seed, 0x706f_70, 0, 0)))) as u32;
@@ -944,22 +953,21 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         // drawn (as the sketch's sites are), so taking another stroke away changes none. Those
         // added beside the world's own come after them (`Pin::added`).
         let pinned = |pin: &super::sketch::Pin, out: &[Settlement], conflicts: &mut Vec<super::sketch::Conflict>| {
-            let seed = hash3(world.stream("t0.pin"), (pin.x / 10.0) as i64, (pin.y / 10.0) as i64, tier as i64);
-            let capital = if pinned_capital { pin.capital } else { tier == Tier::Metropolis } && !out.iter().any(|s| s.capital);
-            make(pin.cell, seed, pin.x, pin.y, capital, Some(pin), conflicts)
+            let seed = hash3(world.stream("t0.pin"), (pin.x / 10.0) as i64, (pin.y / 10.0) as i64, pin.tier as i64);
+            let capital = if pinned_capital { pin.capital } else { pin.tier == Tier::Metropolis } && !out.iter().any(|s| s.capital);
+            make(pin.tier, pin.cell, seed, pin.x, pin.y, capital, Some(pin), conflicts)
         };
+        let start = out.len();
         let mut placed = 0;
-        for pin in inp.pins.iter().filter(|p| p.tier == tier && !p.added) {
+        for pin in inp.pins.iter().filter(|p| p.tier == tier && !p.added && p.replaces.is_none()) {
             let s = pinned(pin, &out, conflicts);
             out.push(s);
             placed += 1;
         }
-        for &(_, k) in &cands {
-            if placed >= count {
-                break;
-            }
+        // Whether a settlement of this tier keeps its room from the others at cell `k`.
+        let fits = |out: &[Settlement], k: usize| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
-            let ok = out.iter().all(|s| {
+            out.iter().all(|s| {
                 let (sx, sy) = ((s.cell % w) as f64, (s.cell / w) as f64);
                 let d = crate::core::sqrt((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy));
                 // (One added beside the world's own keeps only the least room round it.)
@@ -968,15 +976,34 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 // (Nothing grows up beside an isolated realm: no town within sight of it.)
                 let need = if s.isolated { need.max(if tier >= Tier::Town { REALM_CLEAR_MI } else { REALM_CLEAR_VILLAGE_MI } * 5280.0 / cell) } else { need };
                 d >= need.max(10.0 * 5280.0 / cell)
-            });
-            if !ok {
+            })
+        };
+        // Each island's share next (`islands::Islands::owed`; its pins count toward it), then the
+        // rest by score.
+        if !none && matches!(tier, Tier::Village | Tier::Town) {
+            let mut put = |out: &mut Vec<Settlement>, k: usize| {
+                let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+                let ok = fits(out, k);
+                if ok {
+                    out.push(make(tier, k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, false, None, conflicts));
+                }
+                ok
+            };
+            placed += island_share(inp, tier, density, &cands, &mut out, count.saturating_sub(placed), &mut put);
+        }
+        for &(_, k) in &cands {
+            if placed >= count {
+                break;
+            }
+            let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+            if !fits(&out, k) {
                 continue;
             }
             let capital = tier == Tier::Metropolis && !pinned_capital && !out.iter().any(|s| s.capital);
-            out.push(make(k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, capital, None, conflicts));
+            out.push(make(tier, k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, capital, None, conflicts));
             placed += 1;
         }
-        for pin in inp.pins.iter().filter(|p| p.tier == tier && p.added) {
+        for pin in inp.pins.iter().filter(|p| p.tier == tier && p.added && p.replaces.is_none()) {
             // (Not on another settlement: drawn on one, it would be laid out over it.)
             if let Some(o) = out.iter().find(|s| crate::core::sqrt((s.x - pin.x) * (s.x - pin.x) + (s.y - pin.y) * (s.y - pin.y)) < 3.0 * 5280.0) {
                 let message = format!("This settlement is within 3 miles of a {}: no settlement placed", o.tier.name());
@@ -986,8 +1013,107 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             let s = pinned(pin, &out, conflicts);
             out.push(s);
         }
+        // A pin in place of one of the world's own settlements (`Pin::replaces`, this tier: the
+        // tier it was placed at) takes its place once the tier is placed as it would be without it,
+        // so no other of the tier moves: the nearest one within 3 mi that no pin made, else (the
+        // world changed round it) it stands beside the others as an added one would.
+        for pin in inp.pins.iter().filter(|p| p.replaces == Some(tier)) {
+            let d = |s: &Settlement| crate::core::sqrt((s.x - pin.x) * (s.x - pin.x) + (s.y - pin.y) * (s.y - pin.y));
+            let at = (start..out.len()).filter(|&i| out[i].pin.is_none() && out[i].tier == tier && d(&out[i]) < 3.0 * 5280.0).min_by(|&a, &b| d(&out[a]).total_cmp(&d(&out[b])));
+            if let Some(i) = at {
+                let was = out.remove(i);
+                let mut s = pinned(pin, &out, conflicts);
+                s.capital = if pinned_capital { pin.capital } else { was.capital } && !out.iter().any(|s| s.capital);
+                // (Routed as the one it stands for, as a town the economy grows or shrinks is: the
+                // roads, and the smaller places by them, stay where they were.)
+                (s.planned, s.planned_pop) = (was.planned, was.planned_pop);
+                out.insert(i, s);
+                continue;
+            }
+            if let Some(o) = out.iter().find(|s| d(s) < 3.0 * 5280.0) {
+                let message = format!("This settlement is within 3 miles of a {}: no settlement placed", o.tier.name());
+                conflicts.push(super::sketch::Conflict { stroke: pin.stroke, message, x: pin.x, y: pin.y });
+                continue;
+            }
+            let s = pinned(pin, &out, conflicts);
+            out.push(s);
+        }
+        if tier == Tier::Village {
+            island_fishing(inp, &mut out[start..]);
+        }
     }
     out
+}
+
+/// Place island `tier`s owed (`islands::Islands::owed`) less those already there, at most
+/// `budget`, island by island by their lowest cells: a small island's village on its most
+/// sheltered shore, a port town first, the rest on the tier's candidates (`cands`, in order), then
+/// on the island's other livable ground by score; never on barren ground. `put` places one where
+/// it keeps its room. How many were placed.
+fn island_share(inp: &Inputs, tier: Tier, density: (f64, f64), cands: &[(f64, usize)], out: &mut Vec<Settlement>, budget: usize, put: &mut dyn FnMut(&mut Vec<Settlement>, usize) -> bool) -> usize {
+    let g = inp.ground.get().expect("ground");
+    let isl = &g.islands;
+    let n = inp.w * inp.h;
+    let seed = inp.world.stream("t0.islands");
+    let owed: Vec<super::islands::Owed> = (0..isl.parts.len() as u32).map(|c| isl.owed(c, seed, density)).collect();
+    let want = |c: u32| if tier == Tier::Village { owed[c as usize].villages } else { owed[c as usize].towns };
+    let mut cells: Vec<Vec<usize>> = vec![Vec::new(); isl.parts.len()];
+    for k in 0..n {
+        if let Some(c) = isl.island_at(k)
+            && want(c) > 0
+            && g.score[k] > 0.0
+            && !super::islands::barren(Biome::from_u8((inp.biome[k] & 0xff) as u8))
+        {
+            cells[c as usize].push(k);
+        }
+    }
+    let mut rank = vec![u32::MAX; n];
+    for (i, &(_, k)) in cands.iter().enumerate() {
+        rank[k] = i as u32;
+    }
+    let mut placed = 0;
+    for c in 0..isl.parts.len() as u32 {
+        let o = owed[c as usize];
+        let mut have = out.iter().filter(|s| s.tier == tier && isl.of[s.cell] == c).count();
+        if have >= want(c) {
+            continue;
+        }
+        let cs = &mut cells[c as usize];
+        cs.sort_by(|&a, &b| rank[a].cmp(&rank[b]).then(g.score[b].total_cmp(&g.score[a])).then(a.cmp(&b)));
+        let shore = |k: usize| g.coastal[k] || g.harbour[k];
+        // (On the shore first: a small island's only village, by its harbour; a port town.)
+        let first_shore = if tier == Tier::Village { o.shore_village } else { o.port_town };
+        if first_shore && have == 0 {
+            let mut by: Vec<usize> = cs.iter().copied().filter(|&k| shore(k)).collect();
+            if tier == Tier::Village {
+                by.sort_by_key(|&k| std::cmp::Reverse(g.site[k][Reason::Harbour as usize]));
+            }
+            if placed >= budget || !by.into_iter().any(|k| put(out, k)) {
+                continue;
+            }
+            (have, placed) = (have + 1, placed + 1);
+        }
+        for &k in cs.iter() {
+            if have >= want(c) || placed >= budget {
+                break;
+            }
+            if put(out, k) {
+                (have, placed) = (have + 1, placed + 1);
+            }
+        }
+    }
+    placed
+}
+
+/// An island's generated villages on the shore live by the sea: by their harbour where it is
+/// sheltered, else by fishing.
+fn island_fishing(inp: &Inputs, placed: &mut [Settlement]) {
+    let g = inp.ground.get().expect("ground");
+    for s in placed.iter_mut().filter(|s| s.tier == Tier::Village && s.pin.is_none() && s.coastal && g.islands.island_at(s.cell).is_some()) {
+        let k = s.cell;
+        s.reason = if g.site[k][Reason::Harbour as usize] as f64 / 255.0 > 0.5 { Reason::Harbour } else { Reason::Fishing };
+        s.kind = kind_of(s.reason, s.tier, Biome::from_u8((inp.biome[k] & 0xff) as u8), inp.height[k] - inp.world.params().sea_level_ft, 0.0, true, false, g.on_river[k], false);
+    }
 }
 
 /// How far (miles) later towns and up keep from any part of an isolated realm, and the king's
@@ -1147,7 +1273,7 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>, kings: Option<&supe
         kings_at(k) >= REALM_KINGS_MI * mi
             && out.iter().all(|s| d_cells(s.cell, k) >= if s.isolated { REALM_CITY_MI + 11.0 } else { REALM_CITY_MI } * mi)
             && banned.iter().all(|&b| d_cells(b, k) >= REALM_BANNED_MI * mi)
-            && inp.pins.iter().all(|q| q.added || crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
+            && inp.pins.iter().all(|q| q.added || q.replaces.is_some() || crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
     };
     // The strongest reason at a site (as `place` weighs it for the tier).
     let reason_at = |k: usize, tier: Tier| {
@@ -1576,7 +1702,68 @@ pub fn snap_to_water(settlements: &mut [Settlement], cell: f64, wet: &dyn Fn(f64
 
 /// Ruins and wizard towers, away from settlements; then cave mouths, mines and lava tubes
 /// (`volcanoes`: T0 cell centre and cone radius ft).
-pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f64, f64)]) -> Vec<Poi> {
+/// Miles from each cell to the nearest of `own`'s settlements or a cell of the world's own roads
+/// (`roads`: route usage per cell, empty with no roads): a two-pass 8-neighbour chamfer, so it
+/// goes by the cells alone.
+fn people_field(inp: &Inputs, own: &[&Settlement], roads: &[u8]) -> Vec<f32> {
+    let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
+    let mut d = vec![f32::MAX; w * h];
+    for s in own {
+        let (i, j) = (((s.x / cell).round().max(0.0) as usize).min(w - 1), ((s.y / cell).round().max(0.0) as usize).min(h - 1));
+        d[j * w + i] = 0.0;
+    }
+    for (k, &u) in roads.iter().enumerate().take(w * h) {
+        if u > 0 {
+            d[k] = 0.0;
+        }
+    }
+    let (a, b) = ((cell / 5280.0) as f32, (cell * std::f64::consts::SQRT_2 / 5280.0) as f32);
+    let relax = |d: &mut [f32], x: usize, y: usize, nx: i64, ny: i64, c: f32| {
+        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+            let v = d[ny as usize * w + nx as usize] + c;
+            if v < d[y * w + x] {
+                d[y * w + x] = v;
+            }
+        }
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let (xi, yi) = (x as i64, y as i64);
+            relax(&mut d, x, y, xi - 1, yi, a);
+            relax(&mut d, x, y, xi, yi - 1, a);
+            relax(&mut d, x, y, xi - 1, yi - 1, b);
+            relax(&mut d, x, y, xi + 1, yi - 1, b);
+        }
+    }
+    for y in (0..h).rev() {
+        for x in (0..w).rev() {
+            let (xi, yi) = (x as i64, y as i64);
+            relax(&mut d, x, y, xi + 1, yi, a);
+            relax(&mut d, x, y, xi, yi + 1, a);
+            relax(&mut d, x, y, xi + 1, yi + 1, b);
+            relax(&mut d, x, y, xi - 1, yi + 1, b);
+        }
+    }
+    d
+}
+
+/// How willing a cave is to open this far (miles) from people: 0.2 at the 2-mi clear zone's edge
+/// rising to 1.0 at 5 mi, 1.0 to 25 mi, falling fast to 0.05 at 35 mi and flat to 50, then 0.6
+/// beyond (the wilds are their own draw, about a fifth of the caves).
+fn cave_pull(mi: f64) -> f64 {
+    const WILD: f64 = 0.6;
+    if mi < 5.0 {
+        0.2 + 0.8 * ((mi - 2.0) / 3.0).clamp(0.0, 1.0)
+    } else if mi <= 25.0 {
+        1.0
+    } else if mi < 50.0 {
+        if mi < 35.0 { 1.0 - 0.95 * (mi - 25.0) / 10.0 } else { 0.05 }
+    } else {
+        WILD
+    }
+}
+
+pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f64, f64)], roads: &[u8]) -> Vec<Poi> {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let p = inp.world.params();
     // Each try draws from its own stream (where it looks, whether it takes the place, the seed),
@@ -1636,11 +1823,12 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
         }
         r
     };
+    let people = people_field(inp, &own, roads);
     let n_caves = ((own.len() as f64) * 0.2 * p.poi_density).round() as usize;
     let n_mines = ((own.len() as f64) * 0.1 * p.poi_density).round() as usize;
     for (kind, count) in [(PoiKind::Cave, n_caves), (PoiKind::Mine, n_mines)] {
         let (mut tries, mut placed) = (0, 0);
-        while placed < count && tries < count * 200 + 200 {
+        while placed < count && tries < count * 600 + 600 {
             tries += 1;
             let mut rng = Pcg32::new(hash3(stream, kind as i64, tries as i64, 0), 23);
             let k = rng.below((w * h) as u32) as usize;
@@ -1660,6 +1848,10 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
                 }
             };
             if !ok || !away(x, y, &out, 2.0 * 5280.0, 5.0 * 5280.0) {
+                continue;
+            }
+            // Caves lean towards people (the try's own draw, so no other try moves).
+            if kind == PoiKind::Cave && rng.next_f64() >= cave_pull(people[k] as f64) {
                 continue;
             }
             out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });

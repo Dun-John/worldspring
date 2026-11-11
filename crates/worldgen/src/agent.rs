@@ -68,7 +68,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
     for c in edits.created.iter().filter(|c| !c.removed) {
         out.push(Feature {
             id: c.id.clone(),
-            kind: SITE_KINDS.iter().copied().find(|k| *k == c.kind).unwrap_or("ruin"),
+            kind: SITE_KINDS.iter().chain(&SETTLEMENT_KINDS).copied().find(|k| *k == c.kind).unwrap_or("ruin"),
             name: c.name.clone(),
             x: c.x,
             y: c.y,
@@ -76,6 +76,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             extent_ft: match c.kind.as_str() {
                 "building" => 0.5 * MI,
                 "castle" | "wall" => (2.0 * c.reach()).max(0.5 * MI),
+                "village" | "town" => if c.kind == "town" { 12.0 * MI } else { 5.0 * MI },
                 _ => 2.0 * MI,
             },
             elev_ft: Some(t0.sample(c.x, c.y, t0.cell_ft).round()),
@@ -107,6 +108,7 @@ pub(crate) fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
         let r = match c.kind.as_str() {
             "building" => c.poly.iter().map(|q| geom::dist(*q, [c.x, c.y])).fold(0.0, f64::max),
             "castle" | "wall" => c.reach() - crate::world::WORKS_MARGIN_FT,
+            "village" | "town" => crate::t0::made::built_radius(world, t0, &c.id),
             _ => SITE_RADIUS_FT,
         };
         out.push(Cow::Owned(Shape::Point { at: [c.x, c.y], radius_ft: r }));
@@ -1115,7 +1117,7 @@ pub fn generated_buildings_in(world: &World, t0: &T0, poly: &[P]) -> Vec<(String
     let mut out = Vec::new();
     for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
         let li = l.index as usize;
-        if li >= t0.settlements.len() + t0.base_pois {
+        if li >= t0.settlements.len() + t0.base_pois && !town::is_settlement(t0, li) {
             continue;
         }
         let base = town::base_layout(world, t0, li);
@@ -1315,7 +1317,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             if !hit {
                 continue;
             }
-            if li >= generated {
+            if li >= generated && !town::is_settlement(t0, li) {
                 let c = geom::centroid(&b.poly);
                 return Err(format!("that crosses b:{li}:{} ({}) at ({:.0}, {:.0})", b.id, building_name(world, &l, b), c[0], c[1]));
             }
@@ -1419,7 +1421,7 @@ pub fn generated_building(t0: &T0, id: &str) -> Option<(usize, u32)> {
     }
     let li: usize = parts.next()?.parse().ok()?;
     let bi: u32 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || li >= t0.settlements.len() + t0.base_pois {
+    if parts.next().is_some() || (li >= t0.settlements.len() + t0.base_pois && !town::is_settlement(t0, li)) {
         return None;
     }
     Some((li, bi))
@@ -1644,7 +1646,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
         }
         ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
-        ("w", [li, sx, sy]) if *li < t0.settlements.len() => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
+        ("w", [li, sx, sy]) if town::is_settlement(t0, *li) => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
         ("sq" | "gt", _) => town::places::find(world, t0, id).map(|x| x.1.at),
         _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
     }
@@ -1811,7 +1813,7 @@ pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use
         layouts.push(t0.settlements.len() + t0.base_pois + k);
     } else if let Some(li) = layout_of(world, t0, id) {
         layouts.push(li);
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             for c in town::sites_in(t0, li) {
                 layouts.push(c);
                 ids.extend(feature_of_layout(world, t0, c));
@@ -1843,7 +1845,7 @@ fn layout_ref(world: &World, t0: &T0, li: usize) -> Value {
 /// Where something in layout `li` is: the settlement (the layout's own, or the one its site
 /// stands in; `{id, name}` or null), and for a site's layout the site (`{id, name}`).
 pub(crate) fn whereabouts(world: &World, t0: &T0, li: usize) -> (Value, Option<Value>) {
-    if li < t0.settlements.len() {
+    if town::is_settlement(t0, li) {
         return (layout_ref(world, t0, li), None);
     }
     (town::parent_of(t0, li).map_or(Value::Null, |si| layout_ref(world, t0, si)), Some(layout_ref(world, t0, li)))
@@ -2275,9 +2277,9 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     if let Some(li) = layout_of(world, t0, id) {
         let l = town::layout(world, t0, li);
         v["layout"] = layout_summary(world, t0, &l);
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             v["roads_to"] = json!(roads_from(world, t0, li));
-            if t0.settlements[li].tier >= crate::t0::settle::Tier::Town {
+            if town::settlement(t0, li).is_some_and(|s| s.tier >= crate::t0::settle::Tier::Town) {
                 v["layout"]["wards_edited"] = json!(town::wards::edit_of(world, t0, li).is_some());
             }
             v["sites"] = json!(sites_json(world, t0, li, false));
@@ -2541,7 +2543,7 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
         let summary = layout_summary(world, t0, &l);
         let mut v = json!({ "districts": summary["districts"], "businesses": [], "underground": summary["underground"] });
         // A settlement's sites too: drawn buildings with a trade among its businesses.
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             for (id, cl) in drawn_businesses(world, t0, li) {
                 let Some(b) = cl.building(0) else { continue };
                 businesses.push(json!({ "id": id, "name": building_name(world, &cl, b), "function": b.label() }));
@@ -2698,7 +2700,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
         out.push(name_entry(world, format!("k:{li}:{}", b.id), "underground", "Deep dungeons".into(), Some(geom::centroid(&b.poly)), true));
     }
     // A settlement's buildings drawn by hand that have a trade, as its businesses.
-    if li < t0.settlements.len() {
+    if town::is_settlement(t0, li) {
         for (id, cl) in drawn_businesses(world, t0, li) {
             let Some(b) = cl.building(0) else { continue };
             let hidden = is_hidden(world, t0, &id);
@@ -2752,7 +2754,7 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
         let li = layout_of(world, t0, s).ok_or_else(|| format!("not a settlement or site: {s}"))?;
         let mut v = layout_names(world, t0, li);
         // A settlement's sites (by their own ids; a drawn business is also among the buildings).
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             for c in town::sites_in(t0, li) {
                 let (Some(id), Some(p)) = (feature_of_layout(world, t0, c), t0.pois.get(c - t0.settlements.len())) else { continue };
                 let generated = generated_name(world, t0, &id).unwrap_or_default();

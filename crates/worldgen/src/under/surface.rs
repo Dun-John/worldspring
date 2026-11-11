@@ -38,7 +38,7 @@ pub fn theme_in(world: &World, t0: &T0, layout: usize, k: usize, kind: UnderKind
 
 /// The style a wild site's way down is drawn in, by its theme (None: as before, by kind).
 pub fn entrance_style(world: &World, t0: &T0, l: &Layout, e: &Entrance) -> Option<u8> {
-    if (l.index as usize) < t0.settlements.len() || !matches!(e.kind, UnderKind::Dungeon | UnderKind::Crypt | UnderKind::Catacombs) {
+    if town::is_settlement(t0, l.index as usize) || !matches!(e.kind, UnderKind::Dungeon | UnderKind::Crypt | UnderKind::Catacombs) {
         return None;
     }
     let ruin = l.buildings.iter().all(|b| b.structure == town::Structure::Ruin);

@@ -214,7 +214,7 @@ fn footprint(ex: &Executor, id: &str) -> Result<Vec<[f64; 2]>, String> {
         }
         _ => {
             let li = agent::layout_of(world, t0, id).ok_or_else(|| format!("{id}: give a building (b:...), a tower (t:...) or a site, or an outline"))?;
-            if li < t0.settlements.len() {
+            if town::is_settlement(t0, li) {
                 return Err(format!("{id} is a settlement: a plateau spans at most {} ft (give an outline, or a building in it)", ground::MAX_PLATEAU_SPAN_FT));
             }
             let l = town::layout(world, t0, li);

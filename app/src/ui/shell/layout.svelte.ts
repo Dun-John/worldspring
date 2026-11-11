@@ -22,14 +22,17 @@ export const SECTIONS: { key: Section; label: string; icon: 'globe' | 'pencil' |
 export type Remake = 'regen' | 'newworld';
 
 /** A question before work would be dropped or moved: new sketch strokes, a site's unsaved
- * design, or a world about to be remade round its changes (or left for another). `proceed`
+ * design, a world about to be remade round its changes (or left for another), or one an agent
+ * remade through mapd, to load (`remade`). `proceed`
  * carries on once it is answered; `generate`: the sketch can be generated, `remake`: what that
  * would do to the changes made. */
 export interface Ask {
-  kind: 'sketch' | 'design' | Remake;
+  kind: 'sketch' | 'design' | 'remade' | Remake;
   proceed: () => void;
   generate?: boolean;
   remake?: Remake | null;
+  /** `remade` (an agent remade the world): what loading it would drop, said in a line. */
+  drops?: string;
 }
 
 const PHONE ='(max-width: 720px) and (min-height: 501px)';

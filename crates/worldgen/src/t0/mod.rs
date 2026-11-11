@@ -7,13 +7,18 @@
 pub mod biome;
 pub mod climate;
 pub mod economy;
+pub mod ferries;
 pub mod erosion;
 pub mod features;
 pub mod flood;
 pub mod hydro;
+pub mod islands;
+pub mod made;
 pub mod names;
 pub mod plates;
+pub mod remap;
 pub mod roads;
+pub mod sealanes;
 pub mod settle;
 pub mod sketch;
 pub mod volcano;
@@ -29,6 +34,10 @@ use volcano::Activity;
 const MAGIC: u32 = 0x5430_4736; // "T0G6"
 /// Height of the bank at the dry edge of a shore cell above the water (ft).
 const SHORE_BANK_FT: f64 = 6.0;
+/// At the sea (a water level at most this, ft: the default sea level), the shore bank's floor
+/// drops away only under this mask (the far side of a cell with a wet corner).
+const SHORE_FLOOR_SEA_FT: f64 = 0.5;
+const SHORE_FLOOR_MASK: f64 = 0.05;
 /// The eroded land's 99.5th percentile on default maps (model units, unit ruggedness): mapped
 /// to 85% of max elevation on every map.
 const Z_REF: f64 = 15.6;
@@ -62,6 +71,12 @@ pub struct T0 {
     pub created: Vec<CreatedSite>,
     /// The sketch's sites (by point of interest) and their options.
     pub sketched: Vec<(usize, CreatedSite)>,
+    /// The settlements created by edits (`made`), by point of interest; removed ones left out.
+    pub made: Vec<made::Made>,
+    /// The sea lanes between ports (`sealanes::lanes`; none with generated roads off).
+    pub sea_lanes: Vec<sealanes::SeaLane>,
+    /// The ferries over the sea to near islands (`ferries`; none with generated roads off).
+    pub ferries: Vec<ferries::SeaFerry>,
     biome_seed: u64,
     /// mips[0] is `height`; each next level is a 2x2 box downsample.
     mips: Vec<Grid<f32>>,
@@ -349,13 +364,15 @@ impl T0 {
         // too coarse for switchbacks to see a narrow valley).
         let planned = |x: f64, y: f64| rivers.valley(ground(x, y), x, y);
         let drawn = roads::drawn(world, w, h, cell);
-        let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, rivers: &rivers, routes: Default::default(), fixed: Default::default() };
+        let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, rivers: &rivers, routes: Default::default(), fixed: Default::default(), masses: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
         // Isolated realms, well off the king's roads between the cities (which no realm changes:
         // they leave realms out), before the towns (nothing grows up beside them).
         let kings = world.file.params.generated_roads.then(|| roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]));
         let economy;
+        // Where the world's own roads run (no added settlement's), for the caves' pull towards people.
+        let mut own_roads: Vec<u8> = Vec::new();
         if let Some(usage) = kings {
             let cities = settlements;
             // (A realm the roads between the towns pass too close to is given up and another site
@@ -388,6 +405,7 @@ impl T0 {
                 *rinp.routes.borrow_mut() = kept;
                 own
             });
+            own_roads = own.as_ref().unwrap_or(&usage).usage.clone();
             settlements = settle::place(&sinp, settlements, &[T::Village], Some(own.as_ref().unwrap_or(&usage)), &mut conflicts);
         } else {
             // Placed without regard to roads (and sized without trade), so drawing one never moves
@@ -444,7 +462,7 @@ impl T0 {
         };
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
-        let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
+        let mut pois = settle::place_pois(&sinp, &settlements, &vents_at, &own_roads);
         // The sketch's sites (after the generated ones, so drawing one moves none of them), seeded
         // by where they were drawn.
         let s_site = world.stream("t0.sketch.site");
@@ -606,6 +624,10 @@ impl T0 {
         for (s, &c) in settlements.iter_mut().zip(&overlay.settlement_cultures) {
             s.culture = c;
         }
+        let mut lanes = sealanes::lanes(&economy.sea_links, &settlements, &land, w, h, cell);
+        sealanes::clip_ports(&mut lanes, &|x, y| t0.sample_water(x, y) as f64 > t0.ground_at(x, y, lattice));
+        t0.sea_lanes = lanes;
+        t0.ferries = network.ferries.clone();
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
@@ -621,7 +643,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -639,6 +661,12 @@ impl T0 {
         t0
     }
 
+    fn with_sea_lanes(mut self, sea_lanes: Vec<sealanes::SeaLane>, ferries: Vec<ferries::SeaFerry>) -> T0 {
+        self.sea_lanes = sea_lanes;
+        self.ferries = ferries;
+        self
+    }
+
     fn with_settlements(mut self, settlements: Vec<settle::Settlement>, pois: Vec<settle::Poi>) -> T0 {
         self.settlements = settlements;
         self.base_pois = pois.len();
@@ -653,7 +681,9 @@ impl T0 {
         self.pois.truncate(self.base_pois);
         self.created.clear();
         self.sketch_sites(world);
-        for c in &world.file.edits.created {
+        // (A settlement's track is kept while it stands where it was routed from.)
+        let was = std::mem::take(&mut self.made);
+        for (k, c) in world.file.edits.created.iter().enumerate() {
             let kind = settle::PoiKind::parse(&c.kind);
             let under = c.under.as_deref().and_then(crate::under::UnderKind::parse);
             let spec = crate::under::SiteSpec {
@@ -662,8 +692,19 @@ impl T0 {
                 theme: c.theme.as_deref().and_then(crate::under::theme).map(|i| i as u8),
             };
             let seed = crate::core::hash::fnv64(c.id.as_bytes()) ^ world.seed;
+            let mut reach = c.reach();
+            if kind == settle::PoiKind::Settlement && !c.removed {
+                let s = made::settlement(world, self, c, seed);
+                reach = crate::town::reach(&s);
+                let kept = was.iter().find(|m| m.s.seed == s.seed && m.s.x == s.x && m.s.y == s.y && m.s.tier == s.tier && m.s.population == s.population);
+                let (track, z) = match kept {
+                    Some(m) => (m.track.clone(), m.z.clone()),
+                    None => made::track(world, self, &s),
+                };
+                self.made.push(made::Made { poi: self.base_pois + k, class: made::link_class(s.tier), s, track, z });
+            }
             self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None });
-            self.created.push(CreatedSite { removed: c.removed, reach: c.reach(), under, spec });
+            self.created.push(CreatedSite { removed: c.removed, reach, under, spec });
         }
     }
 
@@ -852,7 +893,13 @@ impl T0 {
         }
         // A floor (so applying it at every level changes nothing twice) that drops away
         // steeply toward mask 0, where a cell edge with no wet corner has no floor at all.
-        let floor = level as f64 + 0.5 + SHORE_BANK_FT * (0.5 - mask) * 2.0 - 3_000.0 * (1.0 - smoothstep(0.0, 0.3, mask));
+        // At the sea, short of that drop it stays at least just above the water: the ground
+        // between a land cell and a deep sea cell would otherwise dip below the sea on the dry
+        // side of the contour (a dry trench, and a track's bed down in it). (Lakes keep the old
+        // floor: their towns' banks and steps were laid on it.)
+        let sea = level as f64 <= SHORE_FLOOR_SEA_FT;
+        let (lift, drop) = if sea { (smoothstep(0.2, 0.3, mask), smoothstep(0.0, SHORE_FLOOR_MASK, mask)) } else { (1.0, smoothstep(0.0, 0.3, mask)) };
+        let floor = level as f64 + 0.5 + SHORE_BANK_FT * (0.5 - mask) * 2.0 * lift - 3_000.0 * (1.0 - drop);
         h.max(floor)
     }
 
@@ -950,10 +997,77 @@ impl T0 {
         Preview { w, h, rgba, conflicts: s.conflicts }
     }
 
+    /// Where the roads as built cross a river, for region zoom's marks (overlay `bridges`): per
+    /// crossing x, y, the road's unit direction there, its class, kind (`CrossingKind`) and the
+    /// river's width (ft). Found as the battlemap finds them (`RiverNet::crossing_level`), narrowed
+    /// down along the stretch of road that meets the water.
+    pub fn bridge_marks(&self) -> Vec<[f64; 7]> {
+        let cache = crate::lod::rivers::CrossingCache::default();
+        let mut out = Vec::new();
+        for r in &self.roads.roads {
+            let first = out.len();
+            // The places along the road that meet the water, with the road's direction there.
+            let mut hits: Vec<([f64; 2], f64, [f64; 2])> = Vec::new();
+            for pair in r.pts.windows(2) {
+                let mut here = Vec::new();
+                self.narrow_crossing(pair[0], pair[1], &cache, &mut here);
+                let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+                let l = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
+                hits.extend(here.into_iter().map(|(p, w)| (p, w, [dx / l, dy / l])));
+            }
+            // One mark a crossing: a run of hits close together is one, marked at its middle.
+            let mut k = 0;
+            while k < hits.len() {
+                let mut e = k + 1;
+                while e < hits.len() && (hits[e].0[0] - hits[e - 1].0[0]).abs() + (hits[e].0[1] - hits[e - 1].0[1]).abs() < 250.0 {
+                    e += 1;
+                }
+                let (p, _, d) = hits[(k + e - 1) / 2];
+                let w = hits[k..e].iter().fold(0.0f64, |a, h| a.max(h.1));
+                // The road runs along the river (a shallow angle: its wet stretch is long for the river's
+                // width), or the last mark on this road is close: none, rather than a smudge.
+                let run = (hits[e - 1].0[0] - hits[k].0[0]).abs() + (hits[e - 1].0[1] - hits[k].0[1]).abs() + 40.0;
+                let near = out.len() > first && {
+                    let l: &[f64; 7] = &out[out.len() - 1];
+                    (l[0] - p[0]).abs() + (l[1] - p[1]).abs() < 400.0
+                };
+                if run > 2.8 * w + 200.0 || near {
+                    k = e;
+                    continue;
+                }
+                out.push([p[0], p[1], d[0], d[1], r.class as u8 as f64, roads::crossing_kind(r.class, w) as u8 as f64, w]);
+                k = e;
+            }
+        }
+        out
+    }
+
+    fn narrow_crossing(&self, a: [f64; 2], b: [f64; 2], cache: &crate::lod::rivers::CrossingCache, hits: &mut Vec<([f64; 2], f64)>) {
+        let Some((_, w)) = self.rivers.crossing_level(a, b, 0.0, self.cell_ft, cache) else { return };
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        if dx * dx + dy * dy < 40.0 * 40.0 {
+            hits.push(([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])], w));
+            return;
+        }
+        let m = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
+        self.narrow_crossing(a, m, cache, hits);
+        self.narrow_crossing(m, b, cache, hits);
+    }
+
     pub fn overlay_json(&self) -> String {
-        match &self.extra {
+        let o = match &self.extra {
             Some(e) => serde_json::to_string(&e.overlay).expect("serializable"),
             None => "{\"features\":[]}".into(),
+        };
+        match o.strip_suffix('}') {
+            Some(head) => {
+                // (The ferries' water legs are entries of their own, `c` 3.)
+                let (lanes, fer) = (sealanes::overlay_json(&self.sea_lanes), ferries::overlay_entries(self));
+                let lanes = if fer.is_empty() { lanes } else { format!("{}{}{fer}]", &lanes[..lanes.len() - 1], if lanes.len() > 2 { "," } else { "" }) };
+                let bridges = self.bridge_marks().iter().map(|b| format!("[{:.0},{:.0},{:.2},{:.2},{},{},{:.0}]", b[0], b[1], b[2], b[3], b[4], b[5], b[6])).collect::<Vec<_>>().join(",");
+                format!("{head},\"sea_lanes\":{lanes},\"bridges\":[{bridges}]}}")
+            }
+            None => o,
         }
     }
 
@@ -1024,6 +1138,27 @@ impl T0 {
             out.extend_from_slice(&p.y.to_le_bytes());
             out.extend_from_slice(&p.seed.to_le_bytes());
             out.extend_from_slice(&p.stroke.unwrap_or(u32::MAX).to_le_bytes());
+        }
+        // Sea lanes (optional: a blob without them reads as none): count, then per lane: class u8,
+        // flow f32, ends u32 x2, point count u32, then (x, y) f64.
+        out.extend_from_slice(&(self.sea_lanes.len() as u32).to_le_bytes());
+        for l in &self.sea_lanes {
+            out.push(l.class);
+            out.extend_from_slice(&l.flow.to_le_bytes());
+            out.extend_from_slice(&l.ends[0].to_le_bytes());
+            out.extend_from_slice(&l.ends[1].to_le_bytes());
+            out.extend_from_slice(&(l.pts.len() as u32).to_le_bytes());
+            for p in &l.pts {
+                out.extend_from_slice(&p[0].to_le_bytes());
+                out.extend_from_slice(&p[1].to_le_bytes());
+            }
+        }
+        // Sea ferries (optional, after the lanes): count, then per ferry its landings (x, y f64 x2).
+        out.extend_from_slice(&(self.ferries.len() as u32).to_le_bytes());
+        for f in &self.ferries {
+            for v in [f.a[0], f.a[1], f.b[0], f.b[1]] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
         }
         out
     }
@@ -1124,6 +1259,31 @@ impl T0 {
             let stroke = u32::from_le_bytes(take(4)?.try_into().unwrap());
             pois.push(settle::Poi { kind, x, y, seed, stroke: (stroke != u32::MAX).then_some(stroke) });
         }
+        let mut sea_lanes = Vec::new();
+        if let Ok(b) = take(4) {
+            let count = u32::from_le_bytes(b.try_into().unwrap()) as usize;
+            for _ in 0..count {
+                let class = take(1)?[0];
+                let flow = f32::from_le_bytes(take(4)?.try_into().unwrap());
+                let ends = [u32::from_le_bytes(take(4)?.try_into().unwrap()), u32::from_le_bytes(take(4)?.try_into().unwrap())];
+                let npts = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+                let mut pts = Vec::with_capacity(npts);
+                for _ in 0..npts {
+                    pts.push([f64::from_le_bytes(take(8)?.try_into().unwrap()), f64::from_le_bytes(take(8)?.try_into().unwrap())]);
+                }
+                sea_lanes.push(sealanes::SeaLane { pts, class, flow, ends });
+            }
+        }
+        let mut sea_ferries = Vec::new();
+        if let Ok(b) = take(4) {
+            for _ in 0..u32::from_le_bytes(b.try_into().unwrap()) {
+                let mut v = [0.0f64; 4];
+                for x in &mut v {
+                    *x = f64::from_le_bytes(take(8)?.try_into().unwrap());
+                }
+                sea_ferries.push(ferries::SeaFerry::new([v[0], v[1]], [v[2], v[3]]));
+            }
+        }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
         Ok(Self::from_grids(
@@ -1136,7 +1296,8 @@ impl T0 {
             RiverNet::new(curves, map_w, map_h, cell_ft),
             RoadNet::new(road_curves, map_w, map_h, cell_ft),
         )
-        .with_settlements(settlements, pois))
+        .with_settlements(settlements, pois)
+        .with_sea_lanes(sea_lanes, sea_ferries))
     }
 }
 

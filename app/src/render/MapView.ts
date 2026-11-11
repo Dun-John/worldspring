@@ -3,13 +3,16 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
 import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
 import { Labels } from './Labels';
+import { BridgeMarks } from './BridgeMarks';
+import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
+import { MadeTracks } from './MadeTracks';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
@@ -70,6 +73,8 @@ const STAGE_WEIGHT: [string, number][] = [
 
 /** Tile levels that draw site layouts (`payload::SITE_MIN_LEVEL`). */
 const SITE_MIN_LEVEL = 9;
+/** Sea lanes fade out between these many levels before the site plans (`SITE_MIN_LEVEL`). */
+const LANE_FADE: [number, number] = [1.3, 0.4];
 /** How far a created site's layout reaches (`town::sites::SITE_REACH_FT`), with a margin. */
 const SITE_REACH_FT = 260 + 100;
 
@@ -110,10 +115,18 @@ function createdDetail(c: Created): string {
 }
 
 /** A created site as a named feature (as `worldgen::agent::features` lists it). */
-function createdFeature(c: Created): Feature {
-  const extent = c.kind === 'building' ? 0.5 * 5280 : c.kind === 'castle' || c.kind === 'wall' ? Math.max(2 * (siteReach(c) - 100), 0.5 * 5280) : 2 * 5280;
-  return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: extent, detail: createdDetail(c) };
+function createdFeature(c: Created, population?: number): Feature {
+  // (A village or town added by hand: labelled as the world's own of its tier, `features.rs`, its
+  // population in its detail once known, as theirs: the breadcrumbs size a settlement by it.)
+  const extent = c.kind === 'building' ? 0.5 * 5280 : c.kind === 'castle' || c.kind === 'wall' ? Math.max(2 * (siteReach(c) - 100), 0.5 * 5280) : (MADE_EXTENT_MI[c.kind] ?? 2) * 5280;
+  const detail = createdDetail(c) + (isMade(c) && population ? `, pop. ${population.toLocaleString('en-US')}` : '');
+  return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: extent, detail };
 }
+
+/** Label extents (mi) of the villages and towns added by hand, as the world's own have them. */
+const MADE_EXTENT_MI: Record<string, number> = { village: 5, town: 12 };
+/** Created kinds that are settlements added by hand (`world::CREATED_SETTLEMENTS`). */
+const isMade = (c: Created) => c.kind === 'village' || c.kind === 'town';
 
 /** What a created site's layout depends on (not its name, but a drawn building's: it is the
  * building's own). */
@@ -214,7 +227,12 @@ export class MapView {
   /** Renamed features and districts (the world file's edits), for labels that arrive later. */
   renames: Record<string, string> = {};
   /** Settlements (layout order) and which have had their districts asked for. */
-  private towns: { x: number; y: number; r: number; index: number }[] = [];
+  private towns: { x: number; y: number; r: number; index: number; made?: boolean }[] = [];
+  /** The villages and towns added by hand as the generator last had them, their tracks' layer,
+   * and the latest ask for them (an older answer is dropped). */
+  private made: MadeSettlement[] = [];
+  private madeTracks: MadeTracks | null = null;
+  private madeAsk = 0;
   private readonly townHints = new Map<string, { edit: string; rects: Rect[] }>();
   private districtsAsked = new Set<number>();
   /** The last ask for the roads someone named (a later one wins). */
@@ -225,6 +243,13 @@ export class MapView {
   onPlaces: (on: boolean) => void = () => {};
   /** The roads someone named, as asked for after a road was renamed or hidden (the one ask for those: the app's lists use it too). */
   onNamed: (r: NamedPlaces) => void = () => {};
+  /** Sea lanes between ports (Layers): shown or not. */
+  seaLanes = true;
+  onSeaLanes: (on: boolean) => void = () => {};
+  private lanes: SeaLanes | null = null;
+  /** The ferries' water legs: their own layer, shown further in than the lanes. */
+  private ferryLanes: SeaLanes | null = null;
+  private bridgeMarks: BridgeMarks | null = null;
   private placesRect: [number, number, number, number] | null = null;
   /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
   private placesEpoch = 0;
@@ -235,6 +260,9 @@ export class MapView {
   /** Inside a site, a click: the ways on from that square (empty elsewhere) and the screen
    * position, for a menu. */
   onMoves: (moves: Move[], sx: number, sy: number) => void = () => {};
+  /** The features changed outside `setEdits` (the populations of the settlements added by hand,
+   * once the generators have them). */
+  onOverlay: (overlay: Overlay) => void = () => {};
   private tap: { x: number; y: number; t: number } | null = null;
   /** When set, called each frame to drive the camera (benchmarks); input is ignored. */
   driver: ((now: number) => CameraState | null) | null = null;
@@ -527,6 +555,81 @@ export class MapView {
     this.places = on;
     this.labels?.setPlaces(on && !this.interior);
     this.onPlaces(on);
+  }
+
+  setSeaLanes(on: boolean) {
+    this.seaLanes = on;
+    if (this.lanes) this.lanes.on = on;
+    if (this.ferryLanes) this.ferryLanes.on = on;
+    this.onSeaLanes(on);
+  }
+
+  /**
+   * Ask the generator for the villages and towns added by hand as it now has them (after the
+   * edits sent so far): their tracks are drawn, the towns among them get district labels and the
+   * ward editor, and, with `invalidate`, what changed is made again: the site tiles over each
+   * layout's reach, the battlemaps over its pad and track, as it was and as it is.
+   */
+  private refreshMade(invalidate: boolean) {
+    const ask = ++this.madeAsk;
+    const tracks = this.madeTracks;
+    void this.gen.made().then((list) => {
+      if (ask !== this.madeAsk || !list || !tracks || tracks !== this.madeTracks) return;
+      const key = (m: MadeSettlement) => JSON.stringify(m);
+      const was = new Map(this.made.map((m) => [m.id, m]));
+      const now = new Set(list.map((m) => m.id));
+      const changed: MadeSettlement[] = [];
+      for (const m of list) {
+        const o = was.get(m.id);
+        if (o && key(o) === key(m)) continue;
+        changed.push(m);
+        if (o) changed.push(o);
+      }
+      for (const o of this.made) if (!now.has(o.id)) changed.push(o);
+      this.made = list;
+      tracks.set(list);
+      const pops = new Map(list.map((m) => [m.id, m.population]));
+      const stale = (f: Feature) => (f.kind === 'village' || f.kind === 'town') && pops.has(f.id) && !f.detail?.includes(`pop. ${pops.get(f.id)!.toLocaleString('en-US')}`);
+      if (this.overlay?.features.some(stale)) {
+        const created = new Map((this.edits.created ?? []).map((c) => [c.id, c]));
+        this.overlay = { ...this.overlay, features: this.overlay.features.map((f) => (stale(f) && created.has(f.id) ? createdFeature(created.get(f.id)!, pops.get(f.id)) : f)) };
+        this.onOverlay(this.overlay);
+      }
+      this.towns = [...this.towns.filter((t) => !t.made), ...list.filter((m) => m.tier === 'town').map((m) => ({ x: m.x, y: m.y, r: 12 * Math.sqrt(m.population), index: m.layout, made: true }))];
+      for (const m of changed) {
+        this.districtsAsked.delete(m.layout);
+        this.labels?.forgetTown(m.layout);
+      }
+      if (!invalidate || !changed.length) return;
+      this.placesRect = null;
+      this.placesEpoch++;
+      const rects: Rect[] = changed.map((m) => [m.x - m.reach, m.y - m.reach, m.x + m.reach, m.y + m.reach]);
+      const battleRects = changed.map((m) => m.rect);
+      const epoch = ++this.editEpoch;
+      this.gen.setEdits(this.edits, rects, epoch, battleRects);
+      this.tiles?.invalidate(rects, SITE_MIN_LEVEL, epoch);
+      this.battle?.invalidate([...rects, ...battleRects], epoch);
+      this.lastWantKey = '';
+    });
+  }
+
+  /** The villages and towns added by hand as drawn last (for checks): how many, the track
+   * segments drawn and whether the track layer shows. */
+  get madeStats(): { count: number; towns: number; segments: number; visible: boolean; made: MadeSettlement[] } {
+    return { count: this.made.length, towns: this.towns.filter((t) => t.made).length, segments: this.madeTracks?.segments ?? 0, visible: !!this.madeTracks?.container.visible, made: this.made };
+  }
+
+  /** The bridge marks as drawn last (for checks): how many, of how many crossings. */
+  get bridgeStats(): { drawn: number; total: number; visible: boolean } {
+    const b = this.bridgeMarks;
+    return { drawn: b?.drawn ?? 0, total: b?.total ?? 0, visible: !!b?.container.visible };
+  }
+
+  /** The sea lanes as drawn last (for checks): segments, and the strength shown (0: hidden). */
+  get laneStats(): { segments: number; alpha: number; visible: boolean; ferrySegments: number; ferryAlpha: number; ferryVisible: boolean } {
+    const l = this.lanes;
+    const f = this.ferryLanes;
+    return { segments: l?.segments ?? 0, alpha: l?.alpha ?? 0, visible: !!l?.container.visible, ferrySegments: f?.segments ?? 0, ferryAlpha: f?.alpha ?? 0, ferryVisible: !!f?.container.visible };
   }
 
   /** While Places is on at town zoom: ask for the businesses round the view once it has moved
@@ -918,6 +1021,10 @@ export class MapView {
     this.tiles?.destroy();
     this.battle?.destroy();
     this.labels?.destroy();
+    this.lanes?.destroy();
+    this.ferryLanes?.destroy();
+    this.bridgeMarks?.destroy();
+    this.madeTracks?.destroy();
     this.exitBuilding();
     this.peek?.layer.destroy();
     this.peek = null;
@@ -927,6 +1034,13 @@ export class MapView {
     this.overlay = this.baseOverlay = overlay;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
+    this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);
+    this.lanes.on = this.seaLanes;
+    this.ferryLanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2], true);
+    this.ferryLanes.on = this.seaLanes;
+    this.madeTracks = new MadeTracks(this.tiles.riverFrame);
+    this.bridgeMarks = new BridgeMarks(overlay.bridges ?? []);
+    this.made = [];
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
     this.townHints.clear();
@@ -940,8 +1054,13 @@ export class MapView {
       .map((f, index) => ({ x: f.x, y: f.y, r: 12 * Math.sqrt(Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0)), index, kind: f.kind }))
       .filter((t) => t.kind !== 'village');
     this.districtsAsked.clear();
+    this.refreshMade(false);
     const battle = this.makeBattle(geom, catalog);
     this.app.stage.addChild(this.tiles.container);
+    this.app.stage.addChild(this.madeTracks.container);
+    this.app.stage.addChild(this.bridgeMarks.container);
+    this.app.stage.addChild(this.lanes.container);
+    this.app.stage.addChild(this.ferryLanes.container);
     this.app.stage.addChild(battle.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
@@ -979,6 +1098,7 @@ export class MapView {
     const after = next.created ?? [];
     const rects: Rect[] = [];
     let pieceHere = false;
+    let madeChanged = false;
     for (let k = 0; k < Math.max(before.length, after.length); k++) {
       const a = before[k];
       const b = after[k];
@@ -994,6 +1114,12 @@ export class MapView {
       }
       for (const c of [a, b]) {
         if (!c) continue;
+        // (A village or town added by hand: what it redraws comes from the generator, its pad and
+        // track as it has them, once it has the edits: `refreshMade`.)
+        if (isMade(c)) {
+          madeChanged = true;
+          continue;
+        }
         const r = siteReach(c);
         rects.push([c.x - r, c.y - r, c.x + r, c.y + r]);
       }
@@ -1001,7 +1127,7 @@ export class MapView {
     const createdChanged = JSON.stringify(before) !== JSON.stringify(after);
     if (createdChanged) this.createdWays(after);
     if (createdChanged && this.baseOverlay) {
-      const created = after.filter((c) => !c.removed).map(createdFeature);
+      const created = after.filter((c) => !c.removed).map((c) => createdFeature(c, this.made.find((m) => m.id === c.id)?.population));
       this.overlay = { ...this.baseOverlay, features: [...this.baseOverlay.features, ...created] };
       this.labels?.setCreated(created);
     }
@@ -1160,7 +1286,11 @@ export class MapView {
       this.placesRect = null;
       this.placesEpoch++;
     }
-    if (!send) return;
+    // (Asked once the generators have the edits: after they are sent.)
+    if (!send) {
+      if (madeChanged) this.refreshMade(false);
+      return;
+    }
     if (rects.length || battleRects.length) {
       const epoch = ++this.editEpoch;
       this.gen.setEdits(next, rects, epoch, battleRects, changed && { prev, changed }, groundRects);
@@ -1174,6 +1304,7 @@ export class MapView {
     } else {
       this.gen.setEdits(next, [], this.editEpoch, [], changed && { prev, changed });
     }
+    if (madeChanged) this.refreshMade(true);
     if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
   }
 
@@ -1365,6 +1496,13 @@ export class MapView {
         this.gen.want(want);
       }
       const t1 = performance.now();
+      // Sea lanes from the continent to region zoom, gone before the towns' plans show.
+      const level = Math.log2((this.geom!.domain_ft * this.cam.ppf * this.app.renderer.resolution) / TILE_N);
+      this.lanes?.update(this.cam, this.interior ? 0 : laneFade(level, SITE_MIN_LEVEL - LANE_FADE[0], SITE_MIN_LEVEL - LANE_FADE[1]), level);
+      this.ferryLanes?.update(this.cam, this.interior ? 0 : ferryFade(level), level);
+      // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
+      this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
+      this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       if (this.sewers) {
@@ -1483,7 +1621,7 @@ export class MapView {
     const renderer = this.app.renderer;
     const stub = { max_level: 0, domain_ft: 1, sea_level_ft: 0, map_w_ft: 1, map_h_ft: 1 } as Geom;
     const warmTiles = new TileLayer(stub, this.gen);
-    await precompile(renderer, warmTiles.programs);
+    await precompile(renderer, [...warmTiles.programs, seaLaneProgram()]);
     warmTiles.warmup(renderer);
     warmTiles.destroy();
   }

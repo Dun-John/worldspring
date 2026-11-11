@@ -1,0 +1,34 @@
+#version 300 es
+// Sea lane: a ribbon along the lane's line, its corners mitred on the CPU (world-space unit
+// normals scaled by the mitre), widened here to a screen-pixel size by class (dots are drawn in the fragment shader).
+
+in vec2 aP;    // point (ft from the layer's origin)
+in vec2 aN;    // mitred normal (ft-free: unit length times the mitre factor, side included)
+in vec3 aInfo; // (side -1/+1, distance along the line ft, class)
+
+out float vLat;
+out float vS;
+flat out float vHalf;
+
+uniform mat3 uProjectionMatrix;
+uniform mat3 uWorldTransformMatrix;
+uniform mat3 uTransformMatrix;
+uniform float uWidth; // widening when zoomed out
+
+void main() {
+    mat3 m = uWorldTransformMatrix * uTransformMatrix;
+    vec2 p = (m * vec3(aP, 1.0)).xy;
+    // The normal turned with the view (a similarity: its scale divided out).
+    vec2 nt = (m * vec3(aN, 0.0)).xy;
+    float nl = length(nt);
+    float k = length(aN);
+    vec2 n = nl > 1e-12 ? nt / nl * k : vec2(0.0);
+    float cls = aInfo.z;
+    // Dot radii (px): busy 1.9, normal 1.5, quiet 1.25, ferry (3) 1.5; the pad holds the disc and its rim.
+    float hw = (cls < 0.5 ? 1.9 : (cls < 1.5 ? 1.5 : (cls < 2.5 ? 1.25 : 1.5))) * uWidth;
+    float pad = hw + 1.5;
+    vLat = aInfo.x * pad;
+    vS = aInfo.y;
+    vHalf = hw;
+    gl_Position = vec4((uProjectionMatrix * vec3(p + n * pad, 1.0)).xy, 0.0, 1.0);
+}

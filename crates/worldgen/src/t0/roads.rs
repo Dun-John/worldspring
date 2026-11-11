@@ -99,6 +99,8 @@ pub struct Network {
     /// Each isolated realm's routes as found (its town's index, the cells' centres in ft): its
     /// track, then its villages'.
     pub realm_paths: Vec<(usize, Vec<[f64; 2]>)>,
+    /// The ferries over the sea to near islands (`ferries`; their land legs are among `roads`).
+    pub ferries: Vec<super::ferries::SeaFerry>,
 }
 
 /// A stretch's class as planned and as built, the most goods it carries (`economy::Traffic`),
@@ -152,6 +154,8 @@ pub struct Inputs<'a> {
     pub routes: std::cell::RefCell<Vec<(RouteKey, Option<Vec<u32>>)>>,
     /// What `route` needs of the inputs alone, built on its first call.
     pub fixed: std::cell::OnceCell<RouteFixed>,
+    /// Per cell, its land mass (`islands::label`), built on first use: no link crosses the sea.
+    pub masses: std::cell::OnceCell<super::islands::Islands>,
 }
 
 /// The per-cell tables `route` reads, the same for every call on one `Inputs`.
@@ -169,6 +173,10 @@ impl Inputs<'_> {
     /// The drawn roads' routes (found on first use; they depend on no settlement).
     pub fn pre(&self) -> &DrawnRoutes {
         self.pre.get_or_init(|| drawn_routes(self))
+    }
+    /// The land masses (per cell: `of`, `super::islands::NONE` at sea).
+    pub fn masses(&self) -> &super::islands::Islands {
+        self.masses.get_or_init(|| super::islands::label(self.w, self.h, self.cell_ft, self.land, &self.hydro.lake_of, self.biome))
     }
 }
 
@@ -276,7 +284,10 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
     let river_q = super::hydro::river_q(p.river_density);
 
     let edges = links(inp, settlements, &[RoadClass::KingsRoad, RoadClass::Road, RoadClass::Track]);
-    let (_, paths) = route(inp, settlements, &edges);
+    let (_, mut paths) = route(inp, settlements, &edges);
+    // Ferries to near islands: their land legs routed as tracks (`ferries`), each ending at its landing.
+    let ferries = super::ferries::plan(inp, settlements, &paths);
+    let landing: std::collections::BTreeMap<u32, [f64; 2]> = ferries.iter().flat_map(|f| f.legs.iter().map(|(cells, end)| (*cells.last().expect("a leg"), *end))).collect();
     // (A realm's routes are the only ones starting at an isolated place: `links`.)
     let realm_paths: Vec<(usize, Vec<[f64; 2]>)> = paths
         .iter()
@@ -293,6 +304,8 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         .filter(|(_, path, _)| path.first().is_some_and(|&f| settlements.iter().any(|s| s.isolated && s.planned >= Tier::Town && s.cell as u32 == f)))
         .flat_map(|(_, path, _)| path.windows(2).map(|p| (p[0].min(p[1]), p[0].max(p[1]))))
         .collect();
+
+    paths.extend(ferries.iter().flat_map(|f| f.legs.iter().map(|(cells, _)| (RoadClass::Track, cells.clone(), None))));
 
     // --- 3. Segments between junctions (and settlements), from the union of routes: per
     // step, the best class over it and the drawn road it is part of (the first).
@@ -378,7 +391,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         }
         let cities: Vec<(usize, &Settlement)> = settlements.iter().enumerate().filter(|(_, s)| s.tier >= Tier::City).collect();
         let by_tier: Vec<Settlement> = settlements.iter().map(|s| Settlement { planned: s.tier, ..s.clone() }).collect();
-        let pairs = if cities.len() >= 2 { link_edges(&by_tier, &[RoadClass::KingsRoad], w, cell) } else { Vec::new() };
+        let pairs = if cities.len() >= 2 { link_edges(&by_tier, &[RoadClass::KingsRoad], w, cell, None) } else { Vec::new() };
         let mut src_of: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
         for &(a, b, _) in &pairs {
             src_of.entry(a).or_default().push(b);
@@ -470,6 +483,8 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         for (end, c) in [(0, seg[0]), (cells.len() - 1, seg[seg.len() - 1])] {
             if let Some(&s) = at_cell.get(&(c as usize)) {
                 cells[end] = [s.x / cell, s.y / cell];
+            } else if let Some(p) = landing.get(&c) {
+                cells[end] = [p[0] / cell, p[1] / cell];
             }
         }
         // A drawn road keeps to its line wherever that is dry (the cells only found its way).
@@ -496,9 +511,16 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         }
         // A realm village's spur wanders a little more: on flat ground it would run ruler-straight.
         let spur_end = |c: u32| settlements.iter().any(|v| v.isolated && v.planned == Tier::Village && v.cell as u32 == c);
-        if *class == RoadClass::Track && (spur_end(seg[0]) || spur_end(seg[seg.len() - 1])) {
+        let realm_spur = *class == RoadClass::Track && (spur_end(seg[0]) || spur_end(seg[seg.len() - 1]));
+        // So does any long dead end into a settlement (a spur nothing else joins), of any class: its cells
+        // are 1.17 mi, so over flat ground it would otherwise run straight for miles. Roads sway a little less.
+        let dead_end = |c: u32| adj[&c].len() == 1 && at_cell.contains_key(&(c as usize));
+        let length_mi = pts.windows(2).map(|p| dist(p[0], p[1])).sum::<f64>() * cell / 5280.0;
+        let long_spur = stroke.is_none() && length_mi > 5.0 && (dead_end(seg[0]) || dead_end(seg[seg.len() - 1]));
+        if realm_spur || long_spur {
+            let scale = if realm_spur { 1.0 } else { 1.0 - 0.3 * (*class <= RoadClass::Road) as u8 as f64 };
             let seed = crate::core::rng::hash2(inp.world.stream("t0.road.spur"), seg[0] as i64, seg[seg.len() - 1] as i64);
-            meander_spur(&mut pts, &mut wander, seed, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
+            meander_spur(&mut pts, &mut wander, seed, scale, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
         }
         // Bend with the land instead of running ruler-straight across it.
         let seed = crate::core::rng::hash2(inp.world.stream("t0.road.bends"), seg[0] as i64, seg[seg.len() - 1] as i64);
@@ -600,14 +622,17 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
             }
         }
     }
-    Network { roads, crossings, waystations, traffic: traffic_out, realm_paths }
+    Network { roads, crossings, waystations, traffic: traffic_out, realm_paths, ferries: ferries.into_iter().map(|f| f.ferry).collect() }
 }
 
 /// Settlement pairs to join, per class: king's roads join cities, roads join towns and up,
 /// tracks join everything. Each class is a relative-neighbourhood graph (no third place
 /// closer to both ends) plus a minimum spanning tree so its members stay connected.
-fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell: f64) -> Vec<(usize, usize, RoadClass)> {
+/// `mass`: per settlement, its land mass, and the mainland's; links join only those on one (with
+/// `None`, all), and an island's tracks join all its places.
+fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell: f64, mass: Option<(&[u32], u32)>) -> Vec<(usize, usize, RoadClass)> {
     let ns = settlements.len();
+    let one = |a: usize, b: usize| mass.is_none_or(|(m, _)| m[a] == m[b]);
     let d = |a: usize, b: usize| {
         // On the settlements' cells, not where they stand: snapping to water moves a settlement after
         // the previews, which must not reorder the links (the route memo is keyed on their order).
@@ -641,14 +666,14 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell:
         for (ia, &a) in members.iter().enumerate() {
             for &b in &members[ia + 1..] {
                 let dab = d(a, b);
-                if dab < max_link {
+                if dab < max_link && one(a, b) {
                     pairs.push((dab, a, b));
                 }
             }
         }
         pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
         for &(dab, a, b) in &pairs {
-            if members.iter().all(|&c| c == a || c == b || d(a, c).max(d(b, c)) >= dab) {
+            if members.iter().all(|&c| c == a || c == b || !one(a, c) || d(a, c).max(d(b, c)) >= dab) {
                 add(a, b, &mut edges);
             }
         }
@@ -660,20 +685,61 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell:
                 add(a, b, &mut edges);
             }
         }
-        // (A town or city farther than that from any other still has a road, to the nearest.)
+        // (A town or city farther than that from any other still has a road, to the nearest on
+        // its land.)
         if class != RoadClass::Track {
             for &a in &members {
                 if edges.iter().any(|e| e.0 == a || e.1 == a) {
                     continue;
                 }
-                if let Some(&b) = members.iter().filter(|&&b| b != a).min_by(|&&x, &&y| d(a, x).total_cmp(&d(a, y)).then(x.cmp(&y))) {
+                if let Some(&b) = members.iter().filter(|&&b| b != a && one(a, b)).min_by(|&&x, &&y| d(a, x).total_cmp(&d(a, y)).then(x.cmp(&y))) {
                     add(a, b, &mut edges);
                 }
             }
         }
+        if class == RoadClass::Track
+            && let Some((m, mainland)) = mass
+        {
+            island_tracks(&members, m, mainland, &d, &mut edges);
+        }
     }
 
     edges
+}
+
+/// An island's places the links so far leave in more than one group: joined by tracks, the
+/// nearest pair between two groups first, however far (`members`: those on tracks; `mass`: per
+/// settlement, its land mass).
+fn island_tracks(members: &[usize], mass: &[u32], mainland: u32, d: &dyn Fn(usize, usize) -> f64, edges: &mut Vec<(usize, usize, RoadClass)>) {
+    let mut parent: Vec<usize> = (0..mass.len()).collect();
+    fn find(p: &mut [usize], mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    for &(a, b, _) in edges.iter() {
+        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+        parent[ra] = rb;
+    }
+    let on: Vec<usize> = members.iter().copied().filter(|&a| mass[a] != mainland && mass[a] != super::islands::NONE).collect();
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (ia, &a) in on.iter().enumerate() {
+        for &b in &on[ia + 1..] {
+            if mass[a] == mass[b] {
+                pairs.push((d(a, b), a, b));
+            }
+        }
+    }
+    pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+    for (_, a, b) in pairs {
+        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+        if ra != rb {
+            parent[ra] = rb;
+            edges.push((a.min(b), a.max(b), RoadClass::Track));
+        }
+    }
 }
 
 /// The links to route for these classes: the planned ones (`link_edges`) less those a drawn
@@ -688,7 +754,13 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
     let beside: Vec<Vec<usize>> = settlements.iter().map(|s| inp.drawn.iter().enumerate().filter(|(_, d)| d.class.is_some() && line_dist(at(s), &d.pts) <= snap).map(|(i, _)| i).collect()).collect();
     let barriers: Vec<&Drawn> = inp.drawn.iter().filter(|d| d.class.is_none()).collect();
     // With generated roads off, only the drawn roads and their spurs.
-    let planned = if inp.world.file.params.generated_roads { link_edges(settlements, classes, inp.w, inp.cell_ft) } else { Vec::new() };
+    let planned = if inp.world.file.params.generated_roads {
+        let m = inp.masses();
+        let mass: Vec<u32> = settlements.iter().map(|s| m.of[s.cell]).collect();
+        link_edges(settlements, classes, inp.w, inp.cell_ft, Some((&mass, m.mainland)))
+    } else {
+        Vec::new()
+    };
     let mut out: Vec<Link> = planned
         .into_iter()
         .filter(|&(a, b, _)| !beside[a].iter().any(|d| beside[b].contains(d)) && !barriers.iter().any(|d| crosses(at(&settlements[a]), at(&settlements[b]), &d.pts)))
@@ -1115,6 +1187,17 @@ impl Costs {
     }
 }
 
+/// Whether a road may enter cell `k` (as `route` found it; nothing before `route` has run), and
+/// what a step from `i` to its neighbour `nb` (`d` cells) costs per cell of its length, as
+/// `route` costs it but for its wobble (`ferries`' land legs).
+pub(super) fn open_cell(inp: &Inputs, k: usize) -> bool {
+    inp.fixed.get().is_some_and(|f| f.open[k])
+}
+
+pub(super) fn step_cost(inp: &Inputs, i: usize, nb: usize, d: f64) -> f64 {
+    inp.fixed.get().map_or(f64::INFINITY, |f| f.costs.ground(inp, i, nb, d) + f.costs.river(inp, i, nb, &[nb, nb]))
+}
+
 /// The drawn roads' routes: through waypoints along each line, each leg the cheapest way
 /// within `CORRIDOR` cells of its stretch of the line (costing more the farther from it); where
 /// water closes that, within `CORRIDOR_WIDE`, else round it (a conflict says so); else (no way
@@ -1384,8 +1467,11 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                     r * (1.0 + 0.4 * off)
                 };
                 let toward = |cells: &mut dyn Iterator<Item = usize>| cells.map(|k| (d(k), k)).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|m| m.1);
-                let any = toward(&mut (0..outside.len()).filter(|&k| outside[k]));
-                let king = toward(&mut (0..outside.len()).filter(|&k| outside[k] && road_class[k] == RoadClass::KingsRoad as u8));
+                // (On the realm's own land: not to an island's roads across the sea.)
+                let mass = &inp.masses().of;
+                let ours = |k: usize| outside[k] && mass[k] == mass[from];
+                let any = toward(&mut (0..outside.len()).filter(|&k| ours(k)));
+                let king = toward(&mut (0..outside.len()).filter(|&k| ours(k) && road_class[k] == RoadClass::KingsRoad as u8));
                 let natural = match (king, any) {
                     (Some(kc), Some(ac)) if d(kc) <= d(ac) + 15.0 * 5280.0 / cell => Some(kc),
                     _ => any,
@@ -1686,7 +1772,7 @@ fn passable_fn<'a>(inp: &'a Inputs) -> impl Fn(usize) -> bool + 'a {
 /// Sways a realm village's spur (points in cells) sideways by up to about a third of a mile in waves a few
 /// miles long, none at its ends (it leaves the village and joins the track as it did), none where the
 /// ground there is wet or on a switchback leg. Short spurs sway less.
-fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, dry: &dyn Fn(i64, i64) -> bool) {
+fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, scale: f64, dry: &dyn Fn(i64, i64) -> bool) {
     const STEP: f64 = 0.08;
     const TAPER: f64 = 1.0;
     if pts.len() < 2 {
@@ -1719,21 +1805,40 @@ fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, dry: 
             continue;
         }
         // (Not at a corner of the route: the sideways push would fold it.)
-        let (a, m, b) = (rp[i.saturating_sub(20)], rp[i], rp[(i + 20).min(n - 1)]);
-        let (ux, uy, vx, vy) = (m[0] - a[0], m[1] - a[1], b[0] - m[0], b[1] - m[1]);
-        let cos = (ux * vx + uy * vy) / (crate::core::sqrt(ux * ux + uy * uy) * crate::core::sqrt(vx * vx + vy * vy)).max(1e-9);
+        // Looked at over a few lengths, so a turn just past the nearest one still holds it back.
+        let m = rp[i];
+        let mut cos = 1.0f64;
+        for w in [20usize, 40, 70] {
+            let (a, b) = (rp[i.saturating_sub(w)], rp[(i + w).min(n - 1)]);
+            let (ux, uy, vx, vy) = (m[0] - a[0], m[1] - a[1], b[0] - m[0], b[1] - m[1]);
+            cos = cos.min((ux * vx + uy * vy) / (crate::core::sqrt(ux * ux + uy * uy) * crate::core::sqrt(vx * vx + vy * vy)).max(1e-9));
+        }
         let ease = ease * smoothstep(0.9, 0.99, cos);
         if ease <= 0.0 {
             continue;
         }
+        let (a, b) = (rp[i.saturating_sub(20)], rp[(i + 20).min(n - 1)]);
         let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
         let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
-        let off = ease * size * 0.6 * gradient2(seed, s[i] / 2.5, 0.37);
+        let off = ease * size * scale * 0.6 * gradient2(seed, s[i] / 2.5, 0.37);
         for f in [1.0, 0.5] {
             let q = [rp[i][0] - ty / tl * off * f, rp[i][1] + tx / tl * off * f];
             if dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {
                 out[i] = q;
                 break;
+            }
+        }
+    }
+    // Two light passes over the swayed stretches (1-2-1), so no step or corner is sharper than the road's.
+    for _ in 0..2 {
+        let prev = out.clone();
+        for i in 1..n - 1 {
+            if prev[i] == rp[i] && prev[i - 1] == rp[i - 1] && prev[i + 1] == rp[i + 1] {
+                continue;
+            }
+            let q = [0.25 * prev[i - 1][0] + 0.5 * prev[i][0] + 0.25 * prev[i + 1][0], 0.25 * prev[i - 1][1] + 0.5 * prev[i][1] + 0.25 * prev[i + 1][1]];
+            if dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {
+                out[i] = q;
             }
         }
     }

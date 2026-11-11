@@ -624,7 +624,7 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     let made = layout.checked_sub(t0.settlements.len()).and_then(|p| t0.created_site(p));
     let spec = made.map(|c| c.spec).unwrap_or_default();
     // (A ruin: no roof standing over it, out in the wilds.)
-    let ruin = layout >= t0.settlements.len() && l.buildings.iter().all(|b| b.structure == town::Structure::Ruin);
+    let ruin = !town::is_settlement(t0, layout) && l.buildings.iter().all(|b| b.structure == town::Structure::Ruin);
     let age = if made.is_some() { Age::Made } else if ruin { Age::Ruin } else { Age::Living };
     let (size, depth, theme) = resolve(e.kind, spec, ruin, t0.cold_of_layout(world, layout), &mut rng);
     // A temple on wet ground lies sunken, and about 1 in 4 of the rest (unless its maker chose the theme).

@@ -54,6 +54,8 @@ const built = JSON.parse(wasm.default_world_json(424242));
       { id: 'c:3', kind: 'wall', x: x, y: y + 400, name: '', pts: [[x - 300, y + 300], [x + 300, y + 300], [x + 300, y + 500]], gates: [1] },
       // A ruin over a dungeon (keyed by its id).
       { id: 'c:4', kind: 'ruin', x: x - 700, y: y - 500, name: 'Det Ruin', under: 'dungeon' },
+      // A village added without remaking the world, and its track to the nearest road.
+      { id: 'c:5', kind: 'village', x: x + 9000, y: y - 9000, name: 'Det Green' },
     ],
     // Crossings put down by hand, across the sampled tile.
     crossings: {
@@ -83,4 +85,4 @@ for (const worldJson of [wasm.default_world_json(424242), JSON.stringify(sketche
   }
   total += a.length;
 }
-console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, a castle, a wall and a ruin, the world's own buildings edited, crossings, a town laid out anew, a site and a building redesigned`);
+console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, a castle, a wall, a ruin and a village, the world's own buildings edited, crossings, a town laid out anew, a site and a building redesigned`);

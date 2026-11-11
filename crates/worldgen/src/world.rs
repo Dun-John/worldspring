@@ -201,6 +201,8 @@ pub enum SketchTool {
 pub const VOLCANO_KINDS: [&str; 4] = ["strato", "shield", "cinder", "caldera"];
 pub const VOLCANO_ACTIVITY: [&str; 3] = ["active", "dormant", "extinct"];
 
+/// What settlements by the shore live by: never created without a remake.
+pub const SHORE_KINDS: [&str; 2] = ["port", "fishing"];
 /// Pin strokes' kinds (`t0::settle::SettleKind::key`).
 pub const PIN_KINDS: [&str; 10] = ["port", "river", "mining", "fortress", "market", "farming", "fishing", "lumber", "herding", "oasis"];
 /// Site strokes' kinds (as created sites').
@@ -278,6 +280,12 @@ pub struct Stroke {
     /// (smaller ones keep the least room, 10 mi); none is placed within 3 mi of a settlement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub added: bool,
+    /// Pins: in place of the world's own settlement at its spot (within 3 mi), changed: the tier
+    /// that settlement was placed at (`PIN_TIERS`; its `Settlement::planned`). The tier is placed
+    /// as it would be without the pin, then the pin's settlement takes that one's place (and its
+    /// number among them), so no other moves; with none there it stands beside them (as `added`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
     /// Sites: what lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under: Option<String>,
@@ -314,6 +322,7 @@ impl Sketch {
                     return Err("a biome stroke needs a biome name".into());
                 }
                 SketchTool::Pin if !s.tier.as_deref().is_some_and(|t| PIN_TIERS.contains(&t)) => return Err("a pin needs a tier: metropolis, city, town or village".into()),
+                SketchTool::Pin if !s.replaces.as_deref().is_none_or(|t| PIN_TIERS.contains(&t)) => return Err("a pin's replaces is a tier: metropolis, city, town or village".into()),
                 SketchTool::Massif | SketchTool::Elevation | SketchTool::Lake if !s.closed || s.pts.len() < 3 => {
                     return Err("massif, elevation and lake strokes are closed outlines of 3 or more points".into());
                 }
@@ -338,8 +347,11 @@ impl Sketch {
                     _ => return Err("'under' is for ruin sites (dungeon, crypt, catacombs) and entrances (any site)".into()),
                 }
             }
-            if (s.capital || s.added || !s.wards.is_empty()) && s.tool != SketchTool::Pin {
-                return Err("capital, added and wards are for pins".into());
+            if (s.capital || s.added || !s.wards.is_empty() || s.replaces.is_some()) && s.tool != SketchTool::Pin {
+                return Err("capital, added, wards and replaces are for pins".into());
+            }
+            if s.added && s.replaces.is_some() {
+                return Err("a pin is added beside the world's settlements or replaces one of them, not both".into());
             }
             if s.wards.len() > WARDS_MAX || s.name.iter().chain(&s.wards).any(|n| n.chars().count() > NAME_MAX) {
                 return Err(format!("names are at most {NAME_MAX} characters, and a pin names at most {WARDS_MAX} wards"));
@@ -829,7 +841,9 @@ impl Note {
 pub struct Created {
     /// `c:<n>`.
     pub id: String,
-    /// `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube` or `entrance`.
+    /// `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube` or `entrance`; a
+    /// drawn `building`, `castle` or `wall`; or a settlement (`CREATED_SETTLEMENTS`: `village`,
+    /// `town`), added without remaking the world.
     pub kind: String,
     pub x: f64,
     pub y: f64,
@@ -904,6 +918,14 @@ pub struct Created {
     /// The way down in that cellar: `stairs` (default) or `trapdoor`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub way: Option<String>,
+    /// A settlement's naming culture, set where it was put (`t0::made::culture_at`) so a world
+    /// remade round it names it as before; else from its nearest settlement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub culture: Option<u8>,
+    /// What a settlement lives by (`PIN_KINDS` but `port` and `fishing`), set where it was put
+    /// (`t0::made::kind_at`); else from its ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lives_by: Option<String>,
     /// Deleted (kept in the list so later sites keep their place).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
@@ -1016,6 +1038,8 @@ pub const PLOT_STATUSES: [&str; 3] = ["idea", "active", "resolved"];
 
 /// The kinds of site that can be created.
 pub const CREATABLE: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+/// Settlements that can be created without remaking the world (cities keep the remake).
+pub const CREATED_SETTLEMENTS: [&str; 2] = ["village", "town"];
 /// Kinds drawn by hand as a shape (a footprint, an outline, a line), not put at a point.
 pub const DRAWN_KINDS: [&str; 3] = ["building", "castle", "wall"];
 /// Widest a castle may be, corner to corner (ft).
@@ -1094,10 +1118,16 @@ impl Created {
     /// where there is a site underground.
     pub fn check(&self) -> Result<(), String> {
         use crate::under::{MAX_LEVELS, SiteSize, THEMES, UnderKind};
+        if CREATED_SETTLEMENTS.contains(&self.kind.as_str()) {
+            return self.check_settlement();
+        }
         if !CREATABLE.contains(&self.kind.as_str()) {
             return Err(format!("kind must be one of {}", CREATABLE.join(", ")));
         }
-        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
+        if self.culture.is_some() || self.lives_by.is_some() {
+            return Err("culture and lives_by are for villages and towns".into());
+        }
+                let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
         match self.kind.as_str() {
             "building" if works => return Err("gate, keep, yard_buildings, pts, gates and closed are for castles and walls".into()),
             "building" => return self.check_building(),
@@ -1148,6 +1178,31 @@ impl Created {
             }
         }
         Ok(())
+    }
+
+    /// A settlement's options: a culture and what it lives by (not by the shore), nothing else.
+    fn check_settlement(&self) -> Result<(), String> {
+        let shaped = !self.poly.is_empty() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed;
+        let built = self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() || self.structure.is_some();
+        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some();
+        if shaped || built || works || self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() {
+            return Err(format!("a {} takes only a name, culture and lives_by", self.kind));
+        }
+        if let Some(k) = &self.lives_by
+            && !PIN_KINDS.iter().any(|p| p == k && !SHORE_KINDS.contains(p))
+        {
+            let ok: Vec<&str> = PIN_KINDS.iter().copied().filter(|p| !SHORE_KINDS.contains(p)).collect();
+            return Err(format!("lives_by must be one of {}", ok.join(", ")));
+        }
+        if self.culture.is_some_and(|c| c as usize >= crate::t0::names::CULTURES.len()) {
+            return Err(format!("culture: 0 to {}", crate::t0::names::CULTURES.len() - 1));
+        }
+        Ok(())
+    }
+
+    /// Whether this is a settlement added by hand (`CREATED_SETTLEMENTS`).
+    pub fn is_settlement(&self) -> bool {
+        CREATED_SETTLEMENTS.contains(&self.kind.as_str())
     }
 
     /// A building's options: a simple footprint of 3–64 corners near its point, at least
@@ -1599,7 +1654,7 @@ enum Shape {
 
 /// Layout numbers from here up are changes set aside: when the world is remade (a sketch
 /// redrawn), the app moves the keys of a place that came out differently, or is gone, here
-/// (`remapLayouts` in `app/src/editor/reanchor.ts`). They stay in the file and resolve nowhere.
+/// (`t0::remap`). They stay in the file and resolve nowhere.
 pub const PARKED_LAYOUT: usize = 1_000_000;
 
 /// The layout number in a layout-local id (`b:<layout>:…`, `d:`, `t:`, `u:`, `k:`, `w:`, a
@@ -1614,8 +1669,8 @@ pub fn layout_in_id(id: &str) -> Option<usize> {
 }
 
 /// The edit fields and how their entries are keyed (mirrored in `app/src/sync/ops.ts`). A field
-/// whose keys or values hold layout numbers must also join `LAYOUT_ID_FIELDS` there, so a remade
-/// world's places keep them.
+/// whose keys or values hold layout numbers must also join `t0::remap::LAYOUT_ID_FIELDS` (and the
+/// app's mirror), so a remade world's places keep them.
 const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("renames", Shape::Map),
     ("notes", Shape::Map),

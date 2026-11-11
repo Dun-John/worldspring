@@ -65,8 +65,6 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                     ? c.names_json(a.scope)
                     : a.op === 'parents'
                     ? c.parents_json()
-                    : a.op === 'prints'
-                    ? JSON.stringify([...c.layout_prints(new Uint32Array(a.layouts))])
                     : a.op === 'spot'
                       ? c.creation_spot_json(a.kind, a.under, a.id, a.x, a.y)
                       : a.op === 'building'
@@ -91,7 +89,17 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                     ? c.named_json()
                                     : a.op === 'under'
                                     ? c.under_search_json(a.q, a.filters)
-                                    : c.districts_json(a.settlement);
+                                    : a.op === 'made'
+                                    ? c.made_json()
+                                    : a.op === 'madespot'
+                                      ? c.settlement_spot_json(a.kind, a.id, a.x, a.y)
+                                      : a.op === 'setaside'
+                                        ? c.set_aside_changed_json(a.old, a.edits)
+                                        : a.op === 'remakeprints'
+                                          ? c.remake_prints_json(a.edits, new Uint32Array(a.played))
+                                          : a.op === 'follow'
+                                            ? c.follow_json(a.input)
+                                            : c.districts_json(a.settlement);
       let json = 'null';
       try {
         json = answer();

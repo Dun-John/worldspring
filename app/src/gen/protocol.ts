@@ -3,6 +3,7 @@
 import { ruinPlanFill } from './ruinPlan';
 import type { PreparedChunk } from './battlePrep';
 import { codeMaterial, codeShape, codeStone } from './wallcode';
+import type { EditOp } from '../sync/ops';
 
 export type Wind = 'belts' | 'from_west' | 'from_east';
 
@@ -88,6 +89,9 @@ export interface Stroke {
    * tier (it doesn't count toward their number or keep them away; smaller ones keep 10 mi off,
    * and none is placed within 3 mi of a settlement). */
   added?: boolean;
+  /** Pins: in place of the world's own settlement at its spot (within 3 mi), changed: the tier it
+   * was placed at (mapd's `update_settlement` makes these; nothing else moves). */
+  replaces?: 'metropolis' | 'city' | 'town' | 'village';
   /** Sites: beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site). */
   under?: string;
 }
@@ -116,6 +120,9 @@ export interface Created {
   size?: SiteSize;
   levels?: number;
   theme?: string;
+  /** A village or town added without a remake: its naming culture and what it lives by. */
+  culture?: number;
+  lives_by?: string;
   /** A building drawn by hand (`worldgen::world::Created`): its footprint (world ft), storeys,
    * what it is (a business key or a home), roof, roof colour and structure. */
   poly?: [number, number][];
@@ -634,8 +641,6 @@ export type Ask =
   | { op: 'names'; scope: string }
   /** The sites standing in settlements (`agent::parents_json`). */
   | { op: 'parents' }
-  /** Fingerprints of layouts as generated (`town::layout_print`), by layout index. */
-  | { op: 'prints'; layouts: number[] }
   /** Where a site can be created near (x, y), and a name for it (`agent::creation_spot`). */
   | { op: 'spot'; kind: string; under?: string; id: string; x: number; y: number }
   /** Whether a building drawn by hand can stand there, its point and a name
@@ -656,7 +661,59 @@ export type Ask =
   /** A town's plan for the ward editor (`town::wards::plan_json`). */
   | { op: 'townplan'; layout: number }
   /** A town changed as asked, without changing the edits (`town::wards::change_json`). */
-  | { op: 'townchange'; layout: number; request: string };
+  | { op: 'townchange'; layout: number; request: string }
+  /** The villages and towns added by hand (`MadeSettlement`s). */
+  | { op: 'made' }
+  /** Whether a village or town can be added there (`t0::made::spot`), with what it would be. */
+  | { op: 'madespot'; kind: string; id: string; x: number; y: number }
+  /** Edits with those of the villages and towns added by hand that they remove, move or lay out
+   * anew set aside (`t0::made::set_aside_changed`; `old`: the created sites before, JSON). */
+  | { op: 'setaside'; old: string; edits: string }
+  /** The fingerprints a remake of this world needs (`t0::remap::prints_before`; `edits` JSON). */
+  | { op: 'remakeprints'; edits: string; played: number[] }
+  /** Edits made on the world before following their places into this one, remade
+   * (`t0::remap::follow_into`; `input` JSON: `RemakeInput`). */
+  | { op: 'follow'; input: string };
+
+/** What a world remade from a changed sketch needs to move the edits made on the world before
+ * (`follow_json`): the edits, that world's places as its overlay has them, its layouts'
+ * fingerprints (`remakePrints`), the settlements taken away on purpose and a play session's
+ * layouts (`played`). */
+export interface RemakeInput {
+  edits: Edits;
+  before: { features: Feature[]; first_created?: number; layout_ids?: number[] };
+  was: [number, number][];
+  gone: { id: string; name: string; li: number }[];
+  played: number[];
+}
+
+/** The edits followed into the world remade (`followed`: null if nothing moved; `ops` turn the
+ * edits given into them; `kept`, `parked`, `removed`: how many entries followed their places,
+ * were set aside, or were set aside with a place taken away), and where each of the play
+ * session's layouts goes (`targets`, null: it came out differently or is gone). */
+export interface Remade {
+  followed: { ops: EditOp[]; kept: number; parked: number; removed: number; moved: [string, string][] } | null;
+  targets: (number | null)[];
+}
+
+/** A village or town added by hand, as the generator has it (`made_json`): its layout index,
+ * `reach` (its layout's), `built` (built-up radius), `rect` (all its battlemaps change over: the
+ * pad and the track) and its track's points (ft) from its edge to the road. */
+export interface MadeSettlement {
+  id: string;
+  layout: number;
+  tier: string;
+  population: number;
+  x: number;
+  y: number;
+  reach: number;
+  built: number;
+  rect: Rect;
+  track: [number, number][];
+  /** The link's road class (`RoadClass`: 2 a village's track, 1 a town's road) and bed width (ft). */
+  class: number;
+  width: number;
+}
 
 /** A name to rename (`worldgen::agent::name_entry`): `generated` is the name before renames. */
 export interface NameEntry {
@@ -879,6 +936,19 @@ export interface Overlay {
   /** The settlements added from Edit › Places: `[layout index, sketch stroke index]` (the pin each
    * stands for). */
   added?: [number, number][];
+  /** Shipping between ports (`t0::SeaLane`), segments split at ports and where lanes meet. */
+  sea_lanes?: SeaLane[];
+  /** Roads over rivers, for region zoom's bridge marks: `[x, y, dir x, dir y, road class, kind (0 bridge, 1 ford, 2 ferry), river width ft]`. */
+  bridges?: number[][];
+}
+
+/** A sea lane: `p` its line (world ft, x y pairs), `c` class (0 busy, 1 normal, 2 quiet), `f`
+ * flow, `e` its ends (a settlement's layout index, or -1 where lanes meet). */
+export interface SeaLane {
+  c: number;
+  f: number;
+  e: [number, number];
+  p: number[];
 }
 
 /** River polylines owned by one tile: vertex k is verts[4k..4k+4] = (x, y in tile units, width ft, discharge). */

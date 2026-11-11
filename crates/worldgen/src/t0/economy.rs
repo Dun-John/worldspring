@@ -16,6 +16,7 @@ use super::biome::Biome;
 use super::flood::neighbors;
 use super::hydro::NO_LAKE;
 use super::roads::{RoadClass, Routed};
+use super::sealanes;
 use super::settle::{self, Settlement, Tier};
 use crate::core::hash::FastMap;
 use crate::core::rng::{hash3, unit};
@@ -28,13 +29,44 @@ const MARKET_TRADE: f64 = 0.2;
 const CITY_GATE: f64 = 0.3;
 /// Trade between two places falls off past this distance (miles of travel).
 const TRADE_MI: f64 = 60.0;
-/// What a mile by sea costs against one by road, how much farther than straight a sea way runs,
-/// and loading and unloading (miles by road): a short way along the coast goes by road.
+/// What a mile by sea (along its routed lane, `sealanes`) costs against one by road, and loading
+/// and unloading (miles by road): a short way along the coast goes by road. (A link that could
+/// not be routed goes `SEA_DETOUR` times farther than straight.)
 const SEA_COST: f64 = 0.5;
 const SEA_DETOUR: f64 = 1.3;
 const SEA_LOAD: f64 = 25.0;
 /// Ports linked by sea to this many of their nearest on the same sea.
 const SEA_LINKS: usize = 3;
+
+/// A pair of ports is not linked where the lanes already join them by a way at most this many
+/// times as long as the sea between them.
+const SEA_REDUNDANT: f64 = 1.25;
+
+/// Whether the links so far (`joined`: per port, the ports it is linked to and how far) join
+/// ports `a` and `b` by a way of at most `limit` miles.
+fn sea_way(joined: &[Vec<(usize, f64)>], a: usize, b: usize, limit: f64) -> bool {
+    let mut cost = vec![f64::INFINITY; joined.len()];
+    let mut heap = BinaryHeap::new();
+    cost[a] = 0.0;
+    heap.push(Node(0.0, a as u32));
+    while let Some(Node(c, v)) = heap.pop() {
+        let v = v as usize;
+        if v == b {
+            return true;
+        }
+        if c > cost[v] {
+            continue;
+        }
+        for &(u, e) in &joined[v] {
+            let nc = c + e;
+            if nc <= limit && nc < cost[u] {
+                cost[u] = nc;
+                heap.push(Node(nc, u as u32));
+            }
+        }
+    }
+    false
+}
 
 /// What each town and up earned (index into the settlements, the tier it was placed at, the
 /// parts of its wealth: hinterland food relative to the mean, industry and gateway 0-1, trade
@@ -81,6 +113,8 @@ impl Traffic {
 pub struct Report {
     pub places: Vec<Place>,
     pub traffic: Traffic,
+    /// The sea links between ports, routed, with the goods over each (`sealanes::lanes`).
+    pub sea_links: Vec<sealanes::Link>,
 }
 
 #[derive(PartialEq)]
@@ -186,7 +220,9 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
         cells.sort_unstable();
         cells.dedup();
         let id = |c: u32| cells.binary_search(&c).expect("a graph cell") as u32;
-        let mut adj: Vec<Vec<(u32, f64, bool)>> = vec![Vec::new(); cells.len()];
+        // (Each edge: where it goes, its cost, and `ROAD` or the sea link it is.)
+        const ROAD: u32 = u32::MAX;
+        let mut adj: Vec<Vec<(u32, f64, u32)>> = vec![Vec::new(); cells.len()];
         let at = |c: u32| [(c as usize % w) as f64, (c as usize / w) as f64];
         let len = |a: u32, b: u32| {
             let (p, q) = (at(a), at(b));
@@ -195,8 +231,8 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
         for &((a, b), class) in &keys {
             let c = len(a, b) * [0.8, 1.0, 1.2][class as usize];
             let (ia, ib) = (id(a), id(b));
-            adj[ia as usize].push((ib, c, true));
-            adj[ib as usize].push((ia, c, true));
+            adj[ia as usize].push((ib, c, ROAD));
+            adj[ib as usize].push((ia, c, ROAD));
         }
         // Ports on one sea trade by water with their nearest on it.
         {
@@ -218,24 +254,62 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
                 }
                 next += 1;
             }
-            let ports: Vec<(u32, u32)> = towns
+            let mut size = vec![0usize; next as usize];
+            for &s in sea.iter().filter(|&&s| s != u32::MAX) {
+                size[s as usize] += 1;
+            }
+            let ports: Vec<(u32, u32, usize, i64)> = towns
                 .iter()
                 .filter(|&&i| settlements[i].coastal)
                 .filter_map(|&i| {
                     let k = settlements[i].cell;
-                    let (x, y) = ((k % w) as i64, (k / w) as i64);
-                    let water = (-2i64..=2).flat_map(|dy| (-2i64..=2).map(move |dx| (x + dx, y + dy))).filter(|&(i, j)| i >= 0 && j >= 0 && i < w as i64 && j < h as i64).map(|(i, j)| sea[j as usize * w + i as usize]).filter(|&s| s != u32::MAX).min()?;
-                    Some((k as u32, water))
+                    // (The largest sea within reach: not a pocket of water cut off beside it.)
+                    let (water, r) = sealanes::port_sea(k, w, h, &sea, &size)?;
+                    Some((k as u32, water, i, r))
                 })
                 .collect();
-            for &(a, sa) in &ports {
-                let mut near: Vec<(f64, u32)> = ports.iter().filter(|&&(b, sb)| sb == sa && b != a).map(|&(b, _)| (len(a, b), b)).collect();
-                near.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
-                for &(d, b) in near.iter().take(SEA_LINKS) {
-                    let c = d * SEA_COST * SEA_DETOUR + SEA_LOAD;
-                    adj[id(a) as usize].push((id(b), c, false));
-                    adj[id(b) as usize].push((id(a), c, false));
+            // Each port's nearest by sea; each pair once, routed shortest first (a lane sees
+            // those before it), unless the lanes so far already join it by a way not much longer.
+            let mut router = (!ports.is_empty()).then(|| {
+                let cells: Vec<usize> = ports.iter().map(|p| p.0 as usize).collect();
+                sealanes::Router::new(w, h, cell, inp.land, &cells)
+            });
+            let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+            if let Some(r) = router.as_mut() {
+                let list: Vec<(usize, Vec<u32>, u32)> = ports.iter().map(|&(a, sa, _, reach)| (a as usize, r.water(a as usize, &sea, sa, reach), sa)).collect();
+                for (pa, mut near) in r.nearest(&list, SEA_LINKS).into_iter().enumerate() {
+                    // (Where the blocks find none, narrow water: the nearest in a straight line.)
+                    if near.is_empty() {
+                        let (a, sa) = (ports[pa].0, ports[pa].1);
+                        near = ports.iter().enumerate().filter(|&(pb, p)| p.1 == sa && pb != pa).map(|(pb, p)| (len(a, p.0), pb)).collect();
+                        near.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+                        near.truncate(SEA_LINKS);
+                    }
+                    for (d, pb) in near {
+                        pairs.push((d, pa.min(pb), pa.max(pb)));
+                    }
                 }
+            }
+            pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+            pairs.dedup_by(|x, y| x.1 == y.1 && x.2 == y.2);
+            let mut joined: Vec<Vec<(usize, f64)>> = vec![Vec::new(); ports.len()];
+            for &(d, pa, pb) in &pairs {
+                if sea_way(&joined, pa, pb, SEA_REDUNDANT * d) {
+                    continue;
+                }
+                let ((a, sa, ia, ra), (b, _, ib, rb)) = (ports[pa], ports[pb]);
+                let routed = router.as_mut().and_then(|r| {
+                    let (from, into) = (r.water(a as usize, &sea, sa, ra), r.water(b as usize, &sea, sa, rb));
+                    r.route(a as usize, &from, b as usize, &into)
+                });
+                let (cells, way) = routed.unwrap_or((Vec::new(), d * SEA_DETOUR));
+                let c = way * SEA_COST + SEA_LOAD;
+                let l = report.sea_links.len() as u32;
+                adj[id(a) as usize].push((id(b), c, l));
+                adj[id(b) as usize].push((id(a), c, l));
+                joined[pa].push((pb, way));
+                joined[pb].push((pa, way));
+                report.sea_links.push(sealanes::Link { ports: [ia as u32, ib as u32], cells, mi: way, flow: 0.0 });
             }
         }
         for a in adj.iter_mut() {
@@ -249,7 +323,7 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
         let mut own = vec![0.0f64; towns.len()];
         let mut cost = vec![f64::INFINITY; m];
         let mut parent = vec![u32::MAX; m];
-        let mut road_up = vec![false; m];
+        let mut road_up = vec![ROAD; m];
         let mut acc = vec![0.0f64; m];
         let mut order: Vec<u32> = Vec::with_capacity(m);
         let mut step_flow: FastMap<(u32, u32), f64> = Default::default();
@@ -296,9 +370,11 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
                     continue;
                 }
                 acc[p as usize] += a;
-                if road_up[v as usize] {
+                if road_up[v as usize] == ROAD {
                     let (cv, cp) = (cells[v as usize], cells[p as usize]);
                     *step_flow.entry((cv.min(cp), cv.max(cp))).or_default() += a;
+                } else {
+                    report.sea_links[road_up[v as usize] as usize].flow += a;
                 }
             }
             // What passes a node (not ending there): the flow on from it to the places beyond.

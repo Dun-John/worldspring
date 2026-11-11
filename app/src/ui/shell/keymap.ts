@@ -30,6 +30,7 @@ export interface KeyContext {
   wholeMap(): void;
   grid(): void;
   places(): void;
+  seaLanes(): void;
   zoom(dz: number): void;
   pan(dx: number, dy: number): void;
   level(d: number): void;
@@ -106,6 +107,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     { keys: ['Home'], label: 'Whole map', group: 'Map', run: () => k.wholeMap() },
     { keys: ['G'], label: 'Battlemap grid', group: 'Map', run: () => k.grid() },
     { keys: ['P'], label: 'Place names (inns, shops, temples)', group: 'Map', run: () => k.places() },
+    { keys: ['Shift+L'], label: 'Sea lanes', group: 'Map', run: () => k.seaLanes() },
     { keys: [']', 'PageUp'], label: 'Floor up', group: 'Map', when: k.inside, run: () => k.level(1) },
     { keys: ['[', 'PageDown'], label: 'Floor down', group: 'Map', when: k.inside, run: () => k.level(-1) },
     { keys: ['Shift+N'], label: 'Turn the plan north up (again: back)', group: 'Map', when: k.inside, run: () => k.northUp() },

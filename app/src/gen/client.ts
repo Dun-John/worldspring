@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -110,12 +110,6 @@ export class GenClient {
     return this.ask({ op: 'names', scope: String(scope) }).then((j) => JSON.parse(j) as NameEntry[] | null);
   }
 
-  /** Fingerprints of layouts as generated (`town::layout_print`), in the order asked; null if the
-   * generator could not answer. */
-  prints(layouts: number[]): Promise<number[] | null> {
-    return this.ask({ op: 'prints', layouts }).then((j) => JSON.parse(j) as number[] | null);
-  }
-
   /** The sites standing in settlements, as layout indices; null if the generator could not answer. */
   parents(): Promise<Parents | null> {
     return this.ask({ op: 'parents' }).then((j) => JSON.parse(j) as Parents | null);
@@ -200,6 +194,37 @@ export class GenClient {
       const r = JSON.parse(j) as Partial<UnderResult> | null;
       return { items: r?.items ?? [], found: r?.found ?? 0, truncated: !!r?.truncated };
     });
+  }
+
+  /** The villages and towns added by hand, as the generator has them now (after every edit
+   * sent before); null if it could not answer. */
+  made(): Promise<MadeSettlement[] | null> {
+    return this.ask({ op: 'made' }).then((j) => JSON.parse(j) as MadeSettlement[] | null);
+  }
+
+  /** Whether a village or town (`kind`; `id`: its created id) can be added at (x, y), with the
+   * name, culture and living it would have; null if the generator could not answer. */
+  settlementSpot(kind: string, id: string, x: number, y: number): Promise<{ x: number; y: number; name: string; culture: number; lives_by: string } | { error: string } | null> {
+    return this.ask({ op: 'madespot', kind, id, x, y }).then((j) => JSON.parse(j));
+  }
+
+  /** `edits` with the edits made in each village or town added by hand that they remove, move or
+   * lay out anew (from `old`, the created sites before) set aside, as the generator would. */
+  setAside(old: Created[], edits: Edits): Promise<{ edits: Edits; moved: number } | { error: string } | null> {
+    return this.ask({ op: 'setaside', old: JSON.stringify(old), edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
+  }
+
+  /** The fingerprints of the world's own layouts a remake must find alike to keep what is made on
+   * them (those `edits` name and `played`), as `[layout, print]`; null if the generator could
+   * not answer. */
+  remakePrints(edits: Edits, played: number[]): Promise<[number, number][] | null> {
+    return this.ask({ op: 'remakeprints', edits: JSON.stringify(edits), played }).then((j) => JSON.parse(j));
+  }
+
+  /** The edits made on the world before following their places into this one, remade from a
+   * changed sketch (`t0::remap::follow_into`); null if the generator could not answer. */
+  follow(input: RemakeInput): Promise<Remade | { error: string } | null> {
+    return this.ask({ op: 'follow', input: JSON.stringify(input) }).then((j) => JSON.parse(j));
   }
 
   private ask(ask: Ask): Promise<string> {
