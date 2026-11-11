@@ -119,7 +119,7 @@ use worldgen::core::tile::TileKey;
 use worldgen::pipeline::Executor;
 use worldgen::t0::T0;
 use worldgen::town::catalog::Ward;
-use worldgen::town::geom::{add, area, centroid, contains, cross, dist, dot, len, lerp, mul, seg_dist, sub};
+use worldgen::town::geom::{add, area, centroid, contains, cross, dist, dot, len, lerp, mean, mul, seg_dist, sub};
 use worldgen::town::{self, Layout, PlazaKind};
 use worldgen::{World, interior};
 
@@ -4495,6 +4495,242 @@ fn yurts(ctx: &mut Ctx, r: &mut Report) {
                 listed += 1;
                 r.add("yurts listed", 0.0, format!("seed {} layout {li} {id} at {:.0},{:.0} door {ang:.0} aim {aim_ang:.0}", world.file.seed, c[0], c[1]));
             }
+        }
+    }
+    yurt_looks(ctx, r);
+    yurt_yards(ctx, r);
+}
+
+/// R5 towns (115): a steppe town's yurts (homes roofed round on 16-sided rings) by size (ft across) and
+/// felt (`roof::Look::shade`), and their clusters (walls within 14 ft of one another): those whose doors
+/// all lie within 60 degrees of one another, and those whose yurts all have one lane in reach (70 ft).
+fn yurt_looks(ctx: &mut Ctx, r: &mut Report) {
+    let bands = ["steppe yurts", "  under 14 ft across", "  14-16 ft", "  16-19 ft", "  19-22 ft", "  22-24 ft", "  over 24 ft"];
+    r.counts(&bands);
+    r.counts(&["  felt 0 cream", "  felt 1 off-white", "  felt 2 grey", "  felt 3 warm cream", "  felt 4 dusty grey", "  felt 5 smoke-browned", "  felt 6 red band", "  felt 7 sooty crown"]);
+    r.counts(&["yurt clusters (2 or more)", "  clusters with one lane in reach of all", "  clusters whose doors share a side (all within 60 degrees)", "  of those with one lane: doors sharing a side"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let felts = ["cream", "off-white", "grey", "warm cream", "dusty grey", "smoke-browned", "red band", "sooty crown"];
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.culture % 5 != 4 {
+            continue;
+        }
+        let ys: Vec<&town::Building> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && b.poly.len() == town::roof::ROUND_SIDES && b.parts.is_empty() && b.func.is_none() && town::roof::look(&l, b).shape == town::roof::Shape::Round).collect();
+        let fr: Vec<(P, f64, f64)> = ys
+            .iter()
+            .map(|b| {
+                let c = mean(&b.poly);
+                let m = lerp(b.poly[0], b.poly[1], 0.5);
+                (c, dist(b.poly[0], c), libm::atan2(m[1] - c[1], m[0] - c[0]).to_degrees())
+            })
+            .collect();
+        for (k, b) in ys.iter().enumerate() {
+            r.tally("steppe yurts", 1);
+            let d = 2.0 * fr[k].1;
+            r.tally(bands[if d < 13.9 { 1 } else if d < 16.0 { 2 } else if d < 19.0 { 3 } else if d < 22.0 { 4 } else if d <= 24.1 { 5 } else { 6 }], 1);
+            let s = town::roof::look(&l, b).shade as usize;
+            r.tally(&format!("  felt {s} {}", felts.get(s).unwrap_or(&"?")), 1);
+        }
+        let n = ys.len();
+        let mut up: Vec<usize> = (0..n).collect();
+        fn root(up: &mut [usize], mut a: usize) -> usize {
+            while up[a] != a {
+                a = up[a];
+            }
+            a
+        }
+        for a in 0..n {
+            for b in a + 1..n {
+                if dist(fr[a].0, fr[b].0) < fr[a].1 + fr[b].1 + 14.0 {
+                    let (ra, rb) = (root(&mut up, a), root(&mut up, b));
+                    if ra != rb {
+                        up[ra.max(rb)] = ra.min(rb);
+                    }
+                }
+            }
+        }
+        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for a in 0..n {
+            let ra = root(&mut up, a);
+            groups.entry(ra).or_default().push(a);
+        }
+        let ways: Vec<&Vec<P>> = l.roads.iter().map(|w| &w.0).chain(l.streets.iter()).collect();
+        let off = |a: f64, b: f64| ((a - b + 540.0) % 360.0 - 180.0).abs();
+        for g in groups.values().filter(|g| g.len() >= 2) {
+            r.tally("yurt clusters (2 or more)", 1);
+            let lane = ways.iter().any(|w| g.iter().all(|&k| w.windows(2).any(|e| seg_dist(fr[k].0, e[0], e[1]) <= 70.0)));
+            let share = g.iter().all(|&a| g.iter().all(|&b| off(fr[a].2, fr[b].2) <= 60.0));
+            if lane {
+                r.tally("  clusters with one lane in reach of all", 1);
+            }
+            if share {
+                r.tally("  clusters whose doors share a side (all within 60 degrees)", 1);
+            }
+            if share && lane {
+                r.tally("  of those with one lane: doors sharing a side", 1);
+            }
+        }
+    }
+}
+
+/// Whether two outlines touch or overlap (a corner of one in the other, or their edges crossing).
+fn outlines_touch(a: &[P], b: &[P]) -> bool {
+    let o = |p: P, q: P, s: P| cross(sub(q, p), sub(s, p));
+    a.iter().any(|&p| contains(b, p))
+        || b.iter().any(|&p| contains(a, p))
+        || (0..a.len()).any(|i| {
+            let (p, q) = (a[i], a[(i + 1) % a.len()]);
+            (0..b.len()).any(|j| {
+                let (s, t) = (b[j], b[(j + 1) % b.len()]);
+                o(p, q, s) * o(p, q, t) < 0.0 && o(s, t, p) * o(s, t, q) < 0.0
+            })
+        })
+}
+
+/// R5 towns (115): a steppe town's yurts' trodden ground, pens and carts (`town::yurts`): counted, their
+/// rules (none over a building, a lane, another's pen or cart, a door's open ground, or off its lot), and
+/// on the battlemap of the first 40 yurts with a pen or cart and 40 without per world: the trodden ring
+/// drawn as dirt, the props and fences laid, nothing else over a pen or a cart.
+fn yurt_yards(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["yurts with trodden ground", "yurts with a pen", "  horses in pens", "yurts with a cart", "  with a haystack too", "yurts drawn up toward their door"]);
+    r.counts(&["R pens and carts over a building", "R pens and carts over another's pen, cart or prop", "R pens and carts on a lane", "R pens and carts in a door's open ground", "R pens and carts off their lot"]);
+    r.counts(&["battlemap: yurts looked at", "battlemap: trodden rings drawn (dirt by the wall)", "battlemap: yurt props planned", "battlemap: yurt props laid", "battlemap: pen fence ft planned", "battlemap: pen fence ft laid", "R battlemap: objects over a pen or cart"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let size = world.geom.tile_size_ft(world.geom.max_level);
+    let mut look: Vec<(String, P, f64, Vec<[P; 4]>, Vec<(P, Kind)>, f64)> = Vec::new();
+    let (mut with, mut without, mut listed) = (0, 0, 0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.yurts.is_empty() {
+            continue;
+        }
+        let byid: HashMap<u32, &town::Building> = l.buildings.iter().map(|b| (b.id, b)).collect();
+        // (Every yurt's door ground: 10 ft out from its door side, 10 ft wide.)
+        let doors: Vec<(u32, Vec<P>)> = l
+            .yurts
+            .iter()
+            .filter_map(|y| byid.get(&y.id).map(|b| (y.id, b)))
+            .map(|(id, b)| {
+                let c = mean(&b.poly);
+                let m = lerp(b.poly[0], b.poly[1], 0.5);
+                let n = mul(sub(m, c), 1.0 / dist(m, c).max(1e-9));
+                (id, seg_rect(m, add(m, mul(n, town::YURT_CLEAR_FT)), 10.0).to_vec())
+            })
+            .collect();
+        let mut all: Vec<(u32, Vec<P>)> = Vec::new();
+        for y in &l.yurts {
+            r.tally("yurts with trodden ground", (y.trodden.len() >= 3) as usize);
+            let Some(b) = byid.get(&y.id) else { continue };
+            let c = mean(&b.poly);
+            let rr = dist(b.poly[0], c);
+            let mut boxes: Vec<[P; 4]> = Vec::new();
+            let mut planned: Vec<(P, Kind)> = Vec::new();
+            let mut fence = 0.0;
+            if let Some(p) = y.pen {
+                r.tally("yurts with a pen", 1);
+                if listed < 4 {
+                    listed += 1;
+                    r.add("  pens listed (fx, fy: the map's)", 0.0, format!("seed {} b:{li}:{} at {} fx {:.6} fy {:.6}", world.file.seed, y.id, at(c), c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft));
+                }
+                boxes.push(p.pts);
+                fence = (0..4).map(|e| dist(p.pts[e], p.pts[(e + 1) % 4])).sum::<f64>() - town::yurts::PEN_GATE_FT;
+            }
+            let mine: Vec<&town::Prop> = l.props.iter().filter(|p| matches!(p.kind, Kind::Horse | Kind::Cart | Kind::Haystack) && contains(&y.lot, p.at)).collect();
+            for p in &mine {
+                planned.push((p.at, p.kind));
+                match p.kind {
+                    Kind::Horse => r.tally("  horses in pens", 1),
+                    Kind::Cart => {
+                        r.tally("yurts with a cart", 1);
+                        boxes.push(horse_foot(p.kind, p.at, p.rot, p.scale).unwrap());
+                    }
+                    _ => {
+                        r.tally("  with a haystack too", 1);
+                        boxes.push(horse_foot(p.kind, p.at, p.rot, p.scale).unwrap());
+                    }
+                }
+            }
+            let ring = town::roof::round_footprint_sized(&y.lot, &|_| rr);
+            if ring.is_some_and(|g| dist(mean(&g), c) > 0.25) {
+                r.tally("yurts drawn up toward their door", 1);
+            }
+            let here = format!("seed {} b:{li}:{} at {}", world.file.seed, y.id, at(c));
+            for bx in &boxes {
+                if l.buildings.iter().any(|o| o.id != y.id && o.structure == town::Structure::Roofed && dist(o.poly[0], c) < 150.0 && outlines_touch(bx, &o.poly)) {
+                    r.add("R pens and carts over a building", 0.0, here.clone());
+                }
+                if all.iter().any(|(id, o)| *id != y.id && outlines_touch(bx, o)) || l.props.iter().any(|p| !mine.iter().any(|q| std::ptr::eq(*q, p)) && contains(bx, p.at)) {
+                    r.add("R pens and carts over another's pen, cart or prop", 0.0, here.clone());
+                }
+                let lane = l.roads.iter().any(|w| w.0.windows(2).any(|s| bx.iter().any(|&p| seg_dist(p, s[0], s[1]) < 0.5 * w.2) || boxes_cross(bx, &seg_rect(s[0], s[1], w.2))))
+                    || l.streets.iter().any(|w| w.windows(2).any(|s| boxes_cross(bx, &seg_rect(s[0], s[1], 10.0))));
+                if lane {
+                    r.add("R pens and carts on a lane", 0.0, here.clone());
+                }
+                if doors.iter().any(|(_, d)| boxes_cross(bx, d)) {
+                    r.add("R pens and carts in a door's open ground", 0.0, here.clone());
+                }
+                if !bx.iter().all(|&p| contains(&y.lot, p)) {
+                    r.add("R pens and carts off their lot", 0.0, here.clone());
+                }
+            }
+            for bx in &boxes {
+                all.push((y.id, bx.to_vec()));
+            }
+            let extra = !boxes.is_empty();
+            if (extra && with < 40) || (!extra && without < 40) {
+                if extra {
+                    with += 1;
+                } else {
+                    without += 1;
+                }
+                look.push((here, c, rr, if y.pen.is_some() { vec![y.pen.unwrap().pts] } else { boxes.clone() }, planned, fence));
+            }
+        }
+    }
+    for (here, c, rr, boxes, planned, fence) in look {
+        r.tally("battlemap: yurts looked at", 1);
+        let reach = rr + 30.0;
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let (mut dirt, mut laid, mut flen, mut over) = (0usize, 0usize, 0.0f64, 0usize);
+        for ky in k(c[1] - reach)..=k(c[1] + reach) {
+            for kx in k(c[0] - reach)..=k(c[0] + reach) {
+                let ch = ctx.chunk(kx, ky);
+                let (ox, oy) = (kx as f64 * size, ky as f64 * size);
+                for q in 0..SQ * SQ {
+                    let p = [ox + ((q % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    let d = dist(p, c);
+                    if d > rr && d < rr + town::yurts::TRODDEN_FT + 2.5 && ch.building[q] == 0 && ch.surface[q] == Surface::Dirt {
+                        dirt += 1;
+                    }
+                }
+                for o in &ch.objects {
+                    let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+                    if planned.iter().any(|q| q.1 == o.kind && dist(q.0, p) < 0.5) {
+                        laid += 1;
+                    } else if boxes.iter().any(|b| contains(b, p)) {
+                        over += 1;
+                        r.add("R battlemap: objects over a pen or cart", 0.0, format!("{here}: {} at {}", ch.name(o), at(p)));
+                    }
+                }
+                for s in ch.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Fence && s.pts.len() >= 2) {
+                    let f = |q: [f32; 2]| [ox + q[0] as f64 * SQUARE_FT, oy + q[1] as f64 * SQUARE_FT];
+                    let (a, e) = (f(s.pts[0]), f(s.pts[1]));
+                    if boxes.iter().any(|b| (0..4).any(|j| seg_dist(lerp(a, e, 0.5), b[j], b[(j + 1) % 4]) < 1.0)) {
+                        flen += dist(a, e);
+                    }
+                }
+            }
+        }
+        let _ = over;
+        r.tally("battlemap: trodden rings drawn (dirt by the wall)", (dirt > 0) as usize);
+        r.tally("battlemap: yurt props planned", planned.len());
+        r.tally("battlemap: yurt props laid", laid);
+        r.tally("battlemap: pen fence ft planned", fence as usize);
+        r.tally("battlemap: pen fence ft laid", flen as usize);
+        if dirt == 0 || laid < planned.len() || flen + 1.0 < fence {
+            r.add("battlemap: yurts short of dirt, props or fence", 0.0, format!("{here}: dirt squares {dirt}, props {laid}/{}, fence {flen:.0}/{fence:.0} ft", planned.len()));
         }
     }
 }
