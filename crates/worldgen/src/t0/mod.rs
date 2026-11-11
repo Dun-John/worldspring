@@ -13,6 +13,7 @@ pub mod features;
 pub mod flood;
 pub mod hydro;
 pub mod islands;
+pub mod islets;
 pub mod made;
 pub mod names;
 pub mod plates;
@@ -83,6 +84,8 @@ pub struct T0 {
     /// `ground_nodes` kept for one lattice while generating (they depend on `height` and
     /// `water` only, which never change after `from_grids`); empty otherwise.
     ground_cache: std::sync::OnceLock<(f64, std::sync::Arc<(Vec<f64>, i64, i64)>)>,
+    /// The world's islets by its cities (`islets::islets`), worked out on first use.
+    pub(crate) islets: std::sync::OnceLock<Vec<islets::Islet>>,
     /// Generation-time products; `None` when loaded from bytes in another worker.
     pub extra: Option<T0Extra>,
 }
@@ -632,6 +635,8 @@ impl T0 {
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
         t0.sketch_sites(world);
+        // (Islets follow the settlements and roads, final only now.)
+        t0.islets = Default::default();
         t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, economy, traffic: network.traffic, realm_paths: network.realm_paths, waterside });
         t0
     }
@@ -643,7 +648,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.

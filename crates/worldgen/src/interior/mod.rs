@@ -315,6 +315,8 @@ fn arch_of(b: &town::Building) -> Arch {
         Some("brewery" | "winery" | "distillery") => Arch::Brewery,
         // A tower mill: round floors up a round tower, its own on each (`program`), under a cap.
         Some("windmill") if round_ish(b) => Arch::Tower,
+        // R5 M20: an islet's watchtower: a stair up a round tower to its top room.
+        Some("watchtower") => Arch::Tower,
         Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
         Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs" | "tomb") => Arch::Temple,
         Some("prison") => Arch::Prison,
@@ -405,6 +407,10 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
         (Tower, _) if key == Some("windmill") && top => p("Dust floor", &[("dust floor", 1.0)], None, false),
         (Tower, 1) if key == Some("windmill") => p("Stone floor", &[("stone floor", 1.0)], None, false),
         (Tower, _) if key == Some("windmill") => p("Bin floor", &[("bin floor", 1.0)], None, false),
+        // R5 M20: an islet's watchtower: the guard below, stores between, the lookout at the top.
+        (Tower, 0) if key == Some("watchtower") => p("Guardroom", &[("guardroom", 1.0)], None, false),
+        (Tower, _) if key == Some("watchtower") && top => p("Lookout", &[("guardroom", 1.0)], None, false),
+        (Tower, _) if key == Some("watchtower") => p("Store", &[("storeroom", 1.0)], None, false),
         (Tower, 0) => p("Entry", &[("entry hall", 1.0)], None, false),
         (Tower, _) => {
             let rooms = ["library", "laboratory", "study", "bedchamber"];
@@ -1354,7 +1360,8 @@ pub fn has_deep_dungeon(b: &town::Building) -> bool {
 
 /// Whether a roofed building has a cellar (all do but a yurt).
 pub fn has_cellar(b: &town::Building) -> bool {
-    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b))
+    // (An islet's watchtower stands on rock in the water.)
+    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b)) && !b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "watchtower")
 }
 
 /// The ways from a cellar to other sites: a trapdoor down into the sewers (on the street side),

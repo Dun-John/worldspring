@@ -1383,6 +1383,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let overlaps = |b: (f64, f64, f64, f64)| b.2 >= hx0 && b.0 <= hx0 + span && b.3 >= hy0 && b.1 <= hy0 + span;
     // (R5 towns, 114: whether every town round the chunk is a steppe one, `steppe_only`.)
     let (mut steppe_any, mut steppe_all) = (false, true);
+    // (R5 M20: town bridges' decks over an islet and their flat level.)
+    let mut islet_decks: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
     for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
         if l.culture % 5 == 4 {
             steppe_any = true;
@@ -1429,6 +1431,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         for d in l.bridges.iter().chain(&l.piers) {
             stamp(d, URBAN_DECK, &mut urb_h);
+        }
+        // R5 M20: a bridge over one of the world's islets runs flat over it, at the islet's top
+        // or clear of its water, whichever is higher (`islet_decks`, after the decks are lifted).
+        for d in l.bridges.iter().filter(|d| overlaps(bbox(d))) {
+            let b = bbox(d);
+            for isl in crate::t0::islets::near(t0, [b.0, b.1, b.2, b.3]).filter(|i| crate::town::geom::poly_gap(d, &i.pts) < 1.0) {
+                islet_decks.push((d.clone(), isl.level.max(isl.water + DECK_CLEARANCE_FT)));
+            }
         }
         for y in &l.yards {
             stamp(&y.0, URBAN_YARD, &mut urb_h);
@@ -2339,6 +2349,23 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             lift[h] += top - hh[h];
             hh[h] = top;
             road_h[h] = 0x80 | 3;
+        }
+    }
+    // R5 M20: and a deck over an islet is one flat deck over it and the water round it.
+    for (d, top) in &islet_decks {
+        let (i0, j0, i1, j1) = range(bbox(d));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                if urb_h[h] == URBAN_DECK && hh[h] < *top && crate::town::geom::contains(d, center(i, j)) {
+                    lift[h] += top - hh[h];
+                    hh[h] = *top;
+                    road_h[h] = 0x80 | 3;
+                }
+            }
         }
     }
     // Road crossings as vectors (`CrossingShape`); the chunk owning each draws it, except a

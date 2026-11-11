@@ -5758,8 +5758,96 @@ fn bastion_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
     }
 }
 
+/// R5 M20: the world's islets by its cities (`t0::islets`): how many, their battlemaps dry, piers
+/// kept off them, bridges over them flat and dry, watchtowers built on them.
+fn harbours(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&[
+        "islets",
+        "river islets",
+        "coast islets",
+        "islets with a watchtower",
+        "watchtowers built",
+        "watchtowers missing",
+        "islets under 70% dry",
+        "piers within 20 ft of an islet",
+        "piers overlapping an islet",
+        "bridges over an islet",
+        "deck squares over an islet wet",
+        "deck squares over an islet stepped (> 1 ft)",
+    ]);
+    let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+    let islets: Vec<_> = worldgen::t0::islets::islets(&ctx.ex.t0).to_vec();
+    for isl in &islets {
+        let tag = format!("L{} {} r {:.0} at {}", isl.settlement, if isl.river { "river" } else { "coast" }, isl.r, at(isl.at));
+        r.tally("islets", 1);
+        r.tally(if isl.river { "river islets" } else { "coast islets" }, 1);
+        let l = town::layout(&ctx.ex.world, &ctx.ex.t0, isl.settlement as usize);
+        let tower = l.buildings.iter().find(|b| town::is_watchtower(b) && contains(&isl.pts, centroid(&b.poly)));
+        if isl.tower {
+            r.tally("islets with a watchtower", 1);
+            match tower {
+                Some(_) => r.tally("watchtowers built", 1),
+                None => r.add("watchtowers missing", 1.0, tag.clone()),
+            }
+        }
+        say!("  islet {tag}{}, level {:.1} over water {:.1}", if tower.is_some() { ", watchtower" } else { "" }, isl.level, isl.water);
+        for (i, p) in l.piers.iter().enumerate() {
+            let gap = town::geom::poly_gap(p, &isl.pts);
+            if gap == 0.0 {
+                r.add("piers overlapping an islet", 1.0, format!("{tag} pier {i}"));
+            } else if gap < 20.0 {
+                r.add("piers within 20 ft of an islet", gap, format!("{tag} pier {i} {gap:.0} ft"));
+            }
+        }
+        // The squares whose centres are inside its ring: dry ones (ground over the water).
+        let (mut n, mut dry) = (0usize, 0usize);
+        let b = isl.bbox;
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let mut chunks: Vec<(f64, f64, Rc<Chunk>)> = Vec::new();
+        for ky in k(b[1] - 30.0)..=k(b[3] + 30.0) {
+            for kx in k(b[0] - 30.0)..=k(b[2] + 30.0) {
+                chunks.push((kx as f64 * size, ky as f64 * size, ctx.chunk(kx, ky)));
+            }
+        }
+        for (cx, cy, c) in &chunks {
+            for q in 0..SQ * SQ {
+                let p = [cx + ((q % SQ) as f64 + 0.5) * SQUARE_FT, cy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                if contains(&isl.pts, p) {
+                    n += 1;
+                    dry += (c.height[q] > c.water_level[q]) as usize;
+                }
+            }
+        }
+        let share = dry as f64 / n.max(1) as f64;
+        r.value("islet squares dry (share)", share, tag.clone());
+        if share < 0.7 {
+            r.add("islets under 70% dry", share, format!("{tag}: {dry} of {n}"));
+        }
+        // Bridges over it: their deck squares over the islet's ring and 10 ft round it.
+        for (i, d) in l.bridges.iter().enumerate().filter(|(_, d)| town::geom::poly_gap(d, &isl.pts) < 1.0) {
+            r.add("bridges over an islet", 1.0, format!("{tag} bridge {i}"));
+            let mut tops: Vec<f32> = Vec::new();
+            for (cx, cy, c) in &chunks {
+                for q in 0..SQ * SQ {
+                    let p = [cx + ((q % SQ) as f64 + 0.5) * SQUARE_FT, cy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    if contains(d, p) && c.urban[q] == worldgen::battlemap::URBAN_DECK && (contains(&isl.pts, p) || (0..isl.pts.len()).any(|e| seg_dist(p, isl.pts[e], isl.pts[(e + 1) % isl.pts.len()]) < 10.0)) {
+                        if c.water_level[q] >= c.height[q] {
+                            r.add("deck squares over an islet wet", 1.0, format!("{tag} bridge {i} at {}", at(p)));
+                        }
+                        tops.push(c.height[q]);
+                    }
+                }
+            }
+            let (lo, hi) = tops.iter().fold((f32::MAX, f32::MIN), |(a, b), &t| (a.min(t), b.max(t)));
+            if !tops.is_empty() && hi - lo > 1.0 {
+                r.add("deck squares over an islet stepped (> 1 ft)", (hi - lo) as f64, format!("{tag} bridge {i}: {lo:.1} to {hi:.1} ft"));
+            }
+        }
+    }
+}
+
 fn main() {
-    const MODES: [&str; 25] = ["horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 26] = ["harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5776,7 +5864,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["steppe"] || modes == ["horseparks"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -5804,6 +5892,7 @@ fn main() {
                 "civic" => civic(&mut ctx, &mut r),
                 "inns" => inns(&mut ctx, &mut r),
                 "piers" => piers(&mut ctx, &mut r),
+                "harbours" => harbours(&mut ctx, &mut r),
                 "yurts" => yurts(&mut ctx, &mut r),
                 "villages" => villages(&mut ctx, &mut r),
                 "walls" => walls(&mut ctx, &mut r),

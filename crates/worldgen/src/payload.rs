@@ -301,6 +301,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
         for (pts, _, _) in crate::ground::islets_in(&world.file.edits, [ox, oy, ox + size, oy + size]) {
             push(&pts, 44);
         }
+        // (And the world's own, by its cities: `t0::islets`.)
+        for i in crate::t0::islets::near(t0, [ox, oy, ox + size, oy + size]) {
+            push(&i.pts, 44);
+        }
         for (_, w) in crate::wharf::near(world, [ox, oy, ox + size, oy + size]) {
             if w.kind == crate::world::WharfKind::Pier {
                 if key.level >= BUILDING_MIN_LEVEL {

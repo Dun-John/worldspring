@@ -1385,13 +1385,24 @@ pub struct Shore<'a> {
     plan: std::cell::OnceCell<PlanGround<'a>>,
     /// The rivers' curve samples, shared by every `in_river`.
     rivers: crate::lod::rivers::ClearCache,
-    /// Islets drawn by hand meeting the area (`ground::islets_in`): dry land in the water.
+    /// Islets meeting the area, drawn by hand (`ground::islets_in`) and the world's (`t0::islets`):
+    /// dry land in the water.
     islets: Vec<(Vec<P>, f32, [f64; 4])>,
 }
 
 impl<'a> Shore<'a> {
     /// Over `rect` (x0, y0, x1, y1 world ft).
     pub fn new(world: &World, t0: &'a T0, rect: [f64; 4]) -> Shore<'a> {
+        let lattice_ft = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+        let mut shore = Self::of_t0(t0, rect, lattice_ft);
+        shore.islets = crate::ground::islets_in(&world.file.edits, rect);
+        // (R5 M20: and the world's own islets, `t0::islets`.)
+        shore.islets.extend(crate::t0::islets::near(t0, rect).map(|i| (i.pts.clone(), i.level, i.bbox)));
+        shore
+    }
+
+    /// `new` from T0 alone: no islets (`t0::islets` places the world's own with it).
+    pub(crate) fn of_t0(t0: &'a T0, rect: [f64; 4], lattice_ft: f64) -> Shore<'a> {
         let pads = t0
             .settlements
             .iter()
@@ -1401,9 +1412,7 @@ impl<'a> Shore<'a> {
                 x + e >= rect[0] && x - e <= rect[2] && y + e >= rect[1] && y - e <= rect[3]
             })
             .collect();
-        let lattice_ft = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-        let islets = crate::ground::islets_in(&world.file.edits, rect);
-        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new(), rivers: Default::default(), islets }
+        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new(), rivers: Default::default(), islets: Vec::new() }
     }
 
     /// The drawn ground at `p` (world ft), without its fine detail.
@@ -1515,6 +1524,11 @@ impl Site<'_> {
     fn height(&self, p: P) -> f64 {
         let w = self.world(p);
         self.plan.ground(w[0], w[1], self.lakeside) + self.plan.depth(w[0], w[1])
+    }
+    /// The world's islets in reach (`t0::islets`), local: piers keep off them.
+    fn islets(&self) -> Vec<Vec<P>> {
+        let (c, r) = (self.center, self.reach);
+        crate::t0::islets::near(self.t0, [c[0] - r, c[1] - r, c[0] + r, c[1] + r]).map(|i| i.pts.iter().map(|&p| sub(p, c)).collect()).collect()
     }
     /// Sea or lake (not the river channel): inside the drawn shoreline (the same water mask
     /// the terrain renders), so buildings, quays and piers agree with the visible shore.
@@ -2023,6 +2037,20 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
     }
+    // R5 M20: the watchtowers on its islets, after every other building (an edited town keeps
+    // them as generated, ids and all, where they stand clear of its bridges).
+    match edit {
+        None => islet_towers(t0, index, &mut l),
+        Some(_) => {
+            let generated = generated_layout(world, t0, index);
+            for w in generated.buildings.iter().filter(|b| is_watchtower(b)) {
+                let at = l.buildings.partition_point(|b| b.id < w.id);
+                if l.buildings.get(at).is_none_or(|b| b.id != w.id) && l.bridges.iter().all(|d| poly_gap(d, &w.poly) >= 4.0) {
+                    l.buildings.insert(at, w.clone());
+                }
+            }
+        }
+    }
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())).chain(l.crofts.iter().flat_map(|c| c.pts.iter())) {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
@@ -2045,6 +2073,39 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
 /// home, a shrine; of one piece, its shape not set by hand) stands on the ring its lot holds
 /// (`roof::round_footprint`), if it is still roofed round there; the rest of its lot is open ground.
 /// Last, once every other building stands, so theirs are as they were.
+/// Whether `b` is an islet's watchtower (`catalog` "watchtower").
+pub fn is_watchtower(b: &Building) -> bool {
+    b.func.is_some_and(|f| CATALOG[f as usize].key == "watchtower")
+}
+
+/// R5 M20: a round watchtower (2-3 storeys and its battlements, 14-18 ft across) on the middle of
+/// each of settlement `index`'s islets that has one (`t0::islets`), its ground floor at the
+/// islet's top; none where a bridge's deck runs over it. Ids follow every other building's.
+fn islet_towers(t0: &T0, index: usize, l: &mut Layout) {
+    let Some(func) = catalog::index_of("watchtower") else { return };
+    let mut id = l.buildings.iter().map(|b| b.id + 1).max().unwrap_or(0);
+    for isl in crate::t0::islets::of(t0, index).filter(|i| i.tower) {
+        let h = hash3(0x3a7c_70e5, crate::core::round(isl.at[0]) as i64, crate::core::round(isl.at[1]) as i64, index as i64);
+        let rad = 7.0 + 2.0 * unit(h);
+        let a0 = unit(h ^ 1) * std::f64::consts::TAU;
+        let mut poly: Vec<P> = (0..rural::MILL_SIDES)
+            .map(|k| {
+                let a = a0 + std::f64::consts::TAU * k as f64 / rural::MILL_SIDES as f64;
+                [isl.at[0] + rad * libm::cos(a), isl.at[1] + rad * libm::sin(a)]
+            })
+            .collect();
+        if area(&poly) < 0.0 {
+            poly.reverse();
+        }
+        if l.bridges.iter().any(|d| poly_gap(d, &poly) < 4.0) {
+            continue;
+        }
+        let floors = 2 + (unit(h ^ 3) < 0.5) as u8;
+        l.buildings.push(Building { poly, ward: Ward::Docks, func: Some(func as u16), residential: 1, name: None, floors, pad_ft: isl.level, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None });
+        id += 1;
+    }
+}
+
 pub(crate) fn round_off(l: &mut Layout, site: Option<&Site>) {
     let mut found: Vec<(usize, Vec<P>)> = Vec::new();
     for i in 0..l.buildings.len() {
@@ -3495,6 +3556,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // dock patches get piers every ~80 ft, square to the shore, starting at the quay. A pier is
     // built only over open water and clear of other piers.
     let mut pier_dirs: Vec<P> = Vec::new();
+    let islets = site.islets();
     for i in 0..n_inner {
         if !usable(i) {
             continue;
@@ -3567,8 +3629,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         && !(0..=8).any(|j| site.near_network_road(add(base, mul(out, length * j as f64 / 8.0)), 36.0));
                 }
                 // No pier on any water touches or crosses another (6 ft between outlines): at a patch
-                // corner the later one is dropped.
-                free = free && l.piers.iter().all(|pp| poly_gap(pp, &pier) >= 6.0);
+                // corner the later one is dropped. (R5 M20: and none within 20 ft of an islet.)
+                free = free && l.piers.iter().all(|pp| poly_gap(pp, &pier) >= 6.0) && islets.iter().all(|i| poly_gap(i, &pier) >= 20.0);
                 if over_water && clear && free {
                     l.piers.push(pier);
                     pier_dirs.push(out);
@@ -5188,6 +5250,7 @@ fn shore_run(site: &Site, reach: f64) -> Option<Vec<P>> {
 /// shore, 25–45 ft into the water (a river pier reaches at most a third of the way across). Built
 /// only where the water starts right at the wharf and the whole pier stands over water.
 fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
+    let islets = site.islets();
     let total: f64 = wharf.windows(2).map(|w| dist(w[0], w[1])).sum();
     let mut at = rng.range(40.0, 120.0);
     while at < total - 20.0 {
@@ -5227,7 +5290,7 @@ fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
             let over_water = (0..=8).all(|k| wet_at(hi + 2.0 + (length - 2.0) * k as f64 / 8.0));
             let pier = rect(add(p, mul(out, 0.5 * (base + end))), out, end - base, 8.0);
             // Never on a road (or its bridge) or another deck.
-            let clear = !site.deck_on_road(&pier) && !l.bridges.iter().chain(&l.piers).any(|d| overlaps_or_crosses(d, &pier));
+            let clear = !site.deck_on_road(&pier) && !l.bridges.iter().chain(&l.piers).any(|d| overlaps_or_crosses(d, &pier)) && islets.iter().all(|i| poly_gap(i, &pier) >= 20.0);
             if length >= 12.0 && over_water && !wet_at(base) && clear {
                 l.piers.push(pier);
             }
