@@ -5461,7 +5461,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 24] = ["steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 25] = ["horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5478,7 +5478,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["steppe"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["steppe"] || modes == ["horseparks"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -5510,6 +5510,7 @@ fn main() {
                 "villages" => villages(&mut ctx, &mut r),
                 "walls" => walls(&mut ctx, &mut r),
                 "steppe" => steppe(&mut ctx, &mut r),
+                "horseparks" => horseparks(&mut ctx, &mut r),
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "handwalls" => handwalls(&mut ctx, &mut r),
                 "wallgates" => wallgates(&mut ctx, &mut r),
@@ -7197,6 +7198,266 @@ fn steppe(ctx: &mut Ctx, r: &mut Report) {
                 listed += 1;
                 r.add("felt halls listed", 0.0, format!("{tag} at {:.0},{:.0}, {:.0} ft across, door {ang:.0}, {} pieces", c[0], c[1], 2.0 * rad, lv.furniture.len()));
             }
+        }
+    }
+}
+
+// R5 towns (114)
+/// A prop's footprint (ft along its turn, across) as this check reads it, apart from the generator's.
+fn horse_foot(kind: Kind, at: P, rot: f32, scale: f32) -> Option<[P; 4]> {
+    let (l, w) = match kind {
+        Kind::Horse => (6.0, 2.3),
+        Kind::HitchingRail => (10.0, 1.2),
+        Kind::WaterTrough => (6.8, 2.8),
+        Kind::Haystack => (7.2, 7.2),
+        Kind::Cart => (11.5, 5.5),
+        _ => return None,
+    };
+    let (l, w) = (l * scale as f64, w * scale as f64);
+    let u = [libm::cos(rot as f64), libm::sin(rot as f64)];
+    let (a, b) = (mul(u, 0.5 * l), mul([-u[1], u[0]], 0.5 * w));
+    Some([sub(sub(at, a), b), sub(add(at, a), b), add(add(at, a), b), add(sub(at, a), b)])
+}
+
+/// Whether two convex outlines overlap (separating axes; touching is not).
+fn boxes_cross(a: &[P], b: &[P]) -> bool {
+    for q in [a, b] {
+        for k in 0..q.len() {
+            let e = sub(q[(k + 1) % q.len()], q[k]);
+            let ax = [-e[1], e[0]];
+            let pr = |r: &[P]| r.iter().fold((f64::MAX, f64::MIN), |s, p| (s.0.min(dot(*p, ax)), s.1.max(dot(*p, ax))));
+            let ((a0, a1), (b0, b1)) = (pr(a), pr(b));
+            if a0 >= b1 || b0 >= a1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn seg_rect(a: P, b: P, w: f64) -> [P; 4] {
+    let l = dist(a, b).max(1e-9);
+    let u = mul(sub(b, a), 1.0 / l);
+    let n = mul([-u[1], u[0]], 0.5 * w);
+    [sub(a, n), sub(b, n), add(b, n), add(a, n)]
+}
+
+const HORSE_RULES: [&str; 9] = [
+    "R Formal parks left in steppe towns",
+    "R horse parks not by hand outside steppe towns",
+    "R props overlapping props",
+    "R props over a fence",
+    "R props on a way in or in a gate",
+    "R fences across a way in",
+    "R horses outside a corral or the market ground",
+    "R props outside the park",
+    "R battlemap park squares beyond cover",
+];
+
+/// Horse parks (114): how many per steppe town, what they hold, the rules (each 0) on the plan; on the
+/// battlemap, props and fence laid against planned and the ground; a park patch set to one by hand.
+fn horseparks(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&HORSE_RULES);
+    r.counts(&["parks with under 2 corrals", "battlemap: horse props planned", "battlemap: horse props laid", "hand horse parks refused", "hand horse parks not laid"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let size = world.geom.tile_size_ft(world.geom.max_level);
+    let mut cams = 0;
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let mut look: Vec<(String, town::Park, worldgen::town::horses::Plan)> = Vec::new();
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town {
+            continue;
+        }
+        let steppe = l.culture % 5 == 4;
+        let tier = format!("{:?}", l.tier);
+        if steppe {
+            r.tally(&format!("steppe towns ({tier})"), 1);
+        }
+        for pk in &l.parks {
+            let here = format!("L{li} at {}", at(centroid(&pk.pts)));
+            if steppe && pk.kind == town::ParkKind::Formal {
+                r.add(HORSE_RULES[0], 1.0, here.clone());
+            }
+            if pk.kind != town::ParkKind::Horses {
+                if steppe {
+                    r.tally(&format!("steppe parks kept: {}", pk.kind.name()), 1);
+                }
+                continue;
+            }
+            if !steppe {
+                r.add(HORSE_RULES[1], 1.0, here.clone());
+            }
+            r.tally(&format!("horse parks ({tier})"), 1);
+            let Some(pl) = town::horses::plan(pk) else { continue };
+            check_horse_park(pk, &pl, &here, r);
+            if look.len() < 10 {
+                look.push((here.clone(), pk.clone(), pl.clone()));
+            }
+            if cams < 4 {
+                let c = centroid(&pk.pts);
+                cams += 1;
+                say!("    camera {here}: fx {:.6} fy {:.6}", c[0] / mw, c[1] / mh);
+            }
+        }
+    }
+    // A park patch set to horses by hand (not a steppe town), walls as they are.
+    let mut tried = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town && t0.settlements[i].culture % 5 != 4) {
+        if tried >= 2 {
+            break;
+        }
+        let Ok(plan) = town::wards::plan_json(world, t0, ci) else { continue };
+        let pick = plan["patches"].as_array().unwrap().iter().find(|p| p["in_town"] == true && p.get("park_refused").is_none() && !matches!(p["ward"].as_str(), Some("plaza" | "castle" | "temple"))).and_then(|p| p["patch"].as_u64());
+        let Some(p) = pick else { continue };
+        tried += 1;
+        let json = format!(r#"{{"patches":[{{"patch":{p},"ward":"park","park":"horses"}}]}}"#);
+        let Ok((Some(edit), _)) = town::wards::change(world, t0, ci, &serde_json::from_str(&json).unwrap()) else {
+            r.add("hand horse parks refused", 1.0, format!("#{ci} patch {p}"));
+            continue;
+        };
+        let mut file = world.file.clone();
+        file.edits.towns.insert(town::wards::key(ci), edit);
+        let w2 = World::new(file).unwrap();
+        let l = town::layout(&w2, t0, ci);
+        let at_p = plan["patches"].as_array().unwrap().iter().find(|q| q["patch"].as_u64() == Some(p)).map(|q| [q["at"][0].as_f64().unwrap(), q["at"][1].as_f64().unwrap()]).unwrap();
+        match l.parks.iter().find(|pk| pk.kind == town::ParkKind::Horses && dist(centroid(&pk.pts), at_p) < 200.0) {
+            Some(pk) => {
+                r.tally("hand horse parks", 1);
+                let here = format!("hand #{ci} patch {p}");
+                if let Some(pl) = town::horses::plan(pk) {
+                    check_horse_park(pk, &pl, &here, r);
+                }
+                let c = centroid(&pk.pts);
+                say!("    camera {here}: fx {:.6} fy {:.6}", c[0] / mw, c[1] / mh);
+            }
+            None => r.add("hand horse parks not laid", 1.0, format!("#{ci} patch {p}")),
+        }
+    }
+    for (here, pk, pl) in &look {
+        let b = pk.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let (mut laid, mut fence, mut dirt, mut squares, mut far) = (0usize, 0.0f64, 0usize, 0usize, 0usize);
+        for ky in k(b[1])..=k(b[3]) {
+            for kx in k(b[0])..=k(b[2]) {
+                let c = ctx.chunk(kx, ky);
+                let (ox, oy) = (kx as f64 * size, ky as f64 * size);
+                for o in &c.objects {
+                    let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+                    if contains(&pk.pts, p) && matches!(o.kind, Kind::Horse | Kind::HitchingRail | Kind::WaterTrough | Kind::Haystack | Kind::Cart) {
+                        laid += 1;
+                    }
+                    // (Anything else, or more than planned: what the battlemap's guarantee added.)
+                    if contains(&pk.pts, p) && !pl.props.iter().any(|q| q.2 == o.kind && dist(q.0, p) < 0.5) {
+                        let f = horse_foot(o.kind, p, o.rot, o.scale).unwrap_or_else(|| {
+                            let r = c.info(o).radius as f64 * o.scale as f64 * SQUARE_FT;
+                            [add(p, [-r, -r]), add(p, [r, -r]), add(p, [r, r]), add(p, [-r, r])]
+                        });
+                        let over = pl.props.iter().filter_map(|q| horse_foot(q.2, q.0, q.1, q.4)).any(|g| boxes_cross(&f, &g));
+                        let fenced = pl.fences().iter().any(|&(a, e)| boxes_cross(&f, &seg_rect(a, e, 0.8)));
+                        r.add("battlemap: props added on a horse park", 0.0, format!("{here}: {} at {}{}{}", c.name(o), at(p), if over { ", over a planned prop" } else { "" }, if fenced { ", over a fence" } else { "" }));
+                    }
+                }
+                for s in c.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Fence && s.pts.len() >= 2) {
+                    let f = |q: [f32; 2]| [ox + q[0] as f64 * SQUARE_FT, oy + q[1] as f64 * SQUARE_FT];
+                    let (a, e) = (f(s.pts[0]), f(s.pts[1]));
+                    if contains(&pk.pts, lerp(a, e, 0.5)) {
+                        fence += dist(a, e);
+                    }
+                }
+                let gap = worldgen::battlemap::cover_distance(&c);
+                for q in 0..SQ * SQ {
+                    let p = [ox + ((q % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    if contains(&pk.pts, p) && c.water_level[q] <= c.height[q] && gap[q] > worldgen::battlemap::cover_gap(&c, q) {
+                        far += 1;
+                    }
+                    if contains(&pk.pts, p) && c.building[q] == 0 {
+                        squares += 1;
+                        dirt += (c.surface[q] == Surface::Dirt) as usize;
+                    }
+                }
+            }
+        }
+        let planned = pl.props.len();
+        let want: f64 = pl.fences().iter().map(|(a, e)| dist(*a, *e)).sum();
+        r.tally("battlemap: horse props planned", planned);
+        r.tally("battlemap: horse props laid", laid);
+        r.tally("battlemap: fence ft planned", want as usize);
+        r.tally("battlemap: fence ft laid", fence as usize);
+        r.tally("battlemap: park squares", squares);
+        r.tally("battlemap: dirt squares", dirt);
+        if far > 0 {
+            r.add("R battlemap park squares beyond cover", far as f64, format!("{here}: {far}"));
+        }
+        if laid < planned || fence + 1.0 < want {
+            r.add("battlemap: parks short of props or fence", 0.0, format!("{here}: props {laid}/{planned}, fence {fence:.0}/{want:.0} ft"));
+        }
+    }
+}
+
+fn check_horse_park(pk: &town::Park, pl: &town::horses::Plan, here: &str, r: &mut Report) {
+    use town::horses::{GATE_FT, WAY_HALF};
+    let nc = pl.corrals.len();
+    r.tally(&format!("parks with {nc} corrals"), 1);
+    if nc < 2 {
+        r.add("parks with under 2 corrals", 0.0, format!("{here}: {nc}, {:.0} sq ft", area(&pk.pts).abs()));
+    }
+    let fences = pl.fences();
+    let fence_boxes: Vec<[P; 4]> = fences.iter().map(|&(a, b)| seg_rect(a, b, 0.8)).collect();
+    let way_boxes: Vec<[P; 4]> = pl.ways.iter().filter(|w| dist(w.0, w.1) > 0.5).map(|&(a, b, _)| seg_rect(a, b, 2.0 * WAY_HALF)).collect();
+    // (A gate's opening: its gap, 2 ft either side of the fence.)
+    let gate_boxes: Vec<[P; 4]> = pl
+        .corrals
+        .iter()
+        .map(|c| {
+            let (a, b) = (c.pts[c.side], c.pts[(c.side + 1) % 4]);
+            let u = mul(sub(b, a), 1.0 / dist(a, b));
+            seg_rect(sub(c.gate, mul(u, 0.5 * GATE_FT)), add(c.gate, mul(u, 0.5 * GATE_FT)), 4.0)
+        })
+        .collect();
+    let props: Vec<(Kind, [P; 4])> = pl.props.iter().filter_map(|&(at, rot, kind, _, sc)| horse_foot(kind, at, rot, sc).map(|f| (kind, f))).collect();
+    for (kind, _) in &props {
+        r.tally(&format!("props: {}", format!("{kind:?}").to_lowercase()), 1);
+    }
+    for (i, (ka, fa)) in props.iter().enumerate() {
+        for (kb, fb) in props.iter().skip(i + 1) {
+            if boxes_cross(fa, fb) {
+                r.add(HORSE_RULES[2], 1.0, format!("{here}: {ka:?} and {kb:?} at {}", at(centroid(fa))));
+            }
+        }
+        if fence_boxes.iter().any(|f| boxes_cross(f, fa)) {
+            r.add(HORSE_RULES[3], 1.0, format!("{here}: {ka:?} at {}", at(centroid(fa))));
+        }
+        if way_boxes.iter().chain(&gate_boxes).any(|f| boxes_cross(f, fa)) {
+            r.add(HORSE_RULES[4], 1.0, format!("{here}: {ka:?} at {}", at(centroid(fa))));
+        }
+        if !fa.iter().all(|&p| contains(&pk.pts, p)) {
+            r.add(HORSE_RULES[7], 1.0, format!("{here}: {ka:?} at {}", at(centroid(fa))));
+        }
+        if *ka == Kind::Horse {
+            let pen = pl.corrals.iter().position(|c| fa.iter().all(|&p| contains(&c.pts, p)));
+            let market = fa.iter().all(|&p| contains(&pk.pts, p)) && !pl.corrals.iter().any(|c| boxes_cross(&c.pts, fa));
+            match (pen, market) {
+                (Some(_), _) => r.tally("horses in corrals", 1),
+                (None, true) => r.tally("horses on the market ground (tied, led)", 1),
+                _ => r.add(HORSE_RULES[6], 1.0, format!("{here}: at {}", at(centroid(fa)))),
+            }
+        }
+    }
+    for (k, c) in pl.corrals.iter().enumerate() {
+        let n = props.iter().filter(|(kd, f)| *kd == Kind::Horse && f.iter().all(|&p| contains(&c.pts, p))).count();
+        r.value("horses a corral", n as f64, format!("{here} corral {k}"));
+        let (w, d) = (dist(c.pts[0], c.pts[1]), dist(c.pts[0], c.pts[3]));
+        r.value("corral ft (along x in)", w * d, format!("{here} corral {k}: {w:.0} x {d:.0}"));
+        for kd in [Kind::WaterTrough, Kind::Haystack] {
+            if !props.iter().any(|(x, f)| *x == kd && f.iter().all(|&p| contains(&c.pts, p))) {
+                r.add(&format!("corrals with no {}", format!("{kd:?}").to_lowercase()), 0.0, format!("{here} corral {k}"));
+            }
+        }
+    }
+    for (a, b) in &fences {
+        if way_boxes.iter().any(|w| boxes_cross(w, &seg_rect(*a, *b, 0.8))) {
+            r.add(HORSE_RULES[5], 1.0, format!("{here}: fence at {}", at(lerp(*a, *b, 0.5))));
         }
     }
 }
