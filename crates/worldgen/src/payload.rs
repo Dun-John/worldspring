@@ -324,8 +324,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
         // Network roads over rivers: a deck where each road crosses a river (the battlemap
         // draws the full bridge).
         if key.level >= BUILDING_MIN_LEVEL {
+            // (R5 M20: none under a metropolis's lined bridge, which carries the road on.)
+            let lined: Vec<Vec<[f64; 2]>> = crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]).iter().filter_map(|l| l.lined.as_ref().map(|d| d.0.clone())).collect();
             for d in road_bridges(tile) {
-                push(&d, 6);
+                if !lined.iter().any(|deck| crate::town::geom::contains(deck, crate::town::geom::centroid(&d))) {
+                    push(&d, 6);
+                }
             }
             // Crossings put down by hand: a bridge's deck; a ferry's jetties, raft and rope.
             for c in world.file.edits.crossings.values().filter(|c| c.problem(world.geom.map_w_ft, world.geom.map_h_ft).is_none()) {
@@ -453,15 +457,21 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 };
                 push(&poly, 9);
             }
-            // (R5 M20: a metropolis's lined bridge in pale stone (7), its houses' roofs reading over it as
-            // the city's others do.)
+            // (R5 M20: a metropolis's lined bridge paved as its street (46), the street's own bridge
+            // under it left out, so the street runs on over it between its houses.)
+            let lined = l.lined.as_ref().map(|(deck, _)| deck);
             for d in l.bridges.iter().chain(&l.piers) {
-                push(d, if l.lined.as_ref().is_some_and(|(deck, _)| deck == d) { 7 } else { 6 });
+                match lined {
+                    Some(deck) if deck == d => push(d, 46),
+                    Some(deck) if crate::town::geom::contains(deck, crate::town::geom::centroid(d)) => {}
+                    _ => push(d, 6),
+                }
             }
             // R5 M20: a big port's breakwater, made ground (45).
-            // (Its ramp onto the bank with it: the made ground the ground shaper lifts there.)
+            // (One outline, and its ramp onto the bank with it: the made ground the ground shaper lifts
+            // there; `Mole::plan`.)
             for m in &l.moles {
-                for p in m.polys().into_iter().chain(m.ramp().into_iter().map(|r| r.0)) {
+                for p in m.plan() {
                     push(&p, 45);
                 }
             }
@@ -616,15 +626,29 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         whole.set(None);
                         continue;
                     }
-                    push(&b.poly, plain);
-                    // (R5 M20: a lighthouse's lamp, a warm disc on its cone's top (piece code 13).)
-                    if crate::town::harbour::is_lighthouse(b) {
-                        use crate::town::geom::{add, centroid, mul, sub};
+                    // (R5 M20: an islet's watchtower or a breakwater's lighthouse as a tower mark, drawn a
+                    // little over its size: its long shadow to the south-east (piece 10), its stone wall
+                    // head (a keep's open top, piece 4), the pale walk inside its parapet (piece 9), and on
+                    // a lighthouse its lamp, a warm disc (piece 13).)
+                    let lighthouse = crate::town::harbour::is_lighthouse(b);
+                    if lighthouse || crate::town::is_watchtower(b) {
+                        use crate::town::geom::{add, centroid, hull, mul, sub};
                         let c = centroid(&b.poly);
+                        let at = |k: f64| b.poly.iter().map(|&p| add(c, mul(sub(p, c), k))).collect::<Vec<[f64; 2]>>();
+                        let base = attr & !(15 << 25);
                         whole.set(Some(owns(c)));
-                        push(&b.poly.iter().map(|&p| add(c, mul(sub(p, c), 0.4))).collect::<Vec<[f64; 2]>>(), attr | 13 << 25);
+                        let tower = at(1.2);
+                        let reach = 0.9 * crate::town::geom::dist(c, tower[0]);
+                        push(&hull(tower.iter().flat_map(|&p| [p, add(p, [reach, reach])]).collect()), base | 10 << 25);
+                        push(&tower, base | 4 << 25);
+                        push(&at(0.78), base | 9 << 25);
+                        if lighthouse {
+                            push(&at(0.38), base | 13 << 25);
+                        }
                         whole.set(None);
+                        continue;
                     }
+                    push(&b.poly, plain);
                     // A keep's round corner towers (as the battlemap draws them), standing a
                     // little proud of its walls; each tile keeps the ones it owns.
                     if let Some(t) = crate::interior::battlements(b)

@@ -1,8 +1,8 @@
 //! R5 M20: a port's harbour works, laid out last (`build_town`, world ft).
 //!
 //! - A big port (a city or metropolis with at least `BIG_PORT_PIERS` piers on a sea or lake) gets a
-//!   breakwater (`Mole`): from the shore past one end of its docks, out and curving round the piers'
-//!   heads, `MOLE_LEN_FT` long, `MOLE_WIDTH_FT` wide, in water at most `MOLE_DEPTH_FT` deep, clear
+//!   breakwater (`Mole`): from the shore past one end of its docks, straight out along the piers' way
+//!   (else curving round their heads), `MOLE_LEN_FT` long, `MOLE_WIDTH_FT` wide, in water at most `MOLE_DEPTH_FT` deep, clear
 //!   of islets, piers, bridges, network roads, sea lanes and ferries. It is made ground (raised
 //!   through `ground::Shaper::with_extra`, never read by created sites), with a round head and a
 //!   lighthouse (`lighthouse`, 3-4 storeys) on it, appended after every other building.
@@ -24,6 +24,8 @@ pub const MOLE_DEPTH_FT: f64 = 40.0;
 pub const MOLE_HEAD_FT: f64 = 18.0;
 /// The steps of the fill from the bank up to a breakwater's root.
 const RAMP_STEPS: usize = 4;
+/// How long each of those steps is (ft).
+const RAMP_STEP_FT: f64 = 3.5;
 
 /// A big port's breakwater (world ft): its line from the bank out to its head, its width, and the
 /// level of its top.
@@ -51,14 +53,50 @@ impl Mole {
         out
     }
 
-    /// The fill up to its root from the bank behind it: four steps down 1.2 ft each, 6 ft long
+    /// The fill up to its root from the bank behind it: four steps down 1.2 ft each, 3.5 ft long
     /// (only ever raising, so a bank higher than a step keeps its own ground).
     pub fn ramp(&self) -> Vec<(Vec<P>, f32)> {
         let (a, b) = (self.pts[0], self.pts[1]);
         let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
         (1..=RAMP_STEPS)
-            .map(|k| (rect(sub(a, mul(u, 6.0 * k as f64 - 3.0)), u, 6.2, self.width), self.level - 1.2 * k as f32))
+            .map(|k| (rect(sub(a, mul(u, RAMP_STEP_FT * (k as f64 - 0.5))), u, RAMP_STEP_FT + 0.2, self.width), self.level - 1.2 * k as f32))
             .collect()
+    }
+
+    /// Its plan (`payload`, made ground): one outline round its line and head (no joints showing),
+    /// and its ramp as two slabs, the steps two by two.
+    pub fn plan(&self) -> Vec<Vec<P>> {
+        let n = self.pts.len();
+        if n < 2 {
+            return self.polys();
+        }
+        let half = 0.5 * self.width;
+        let unit_of = |k: usize| mul(sub(self.pts[k + 1], self.pts[k]), 1.0 / dist(self.pts[k], self.pts[k + 1]).max(1e-9));
+        let normal = |u: P| [-u[1], u[0]];
+        // (Each side mitred at the joints; the last stretch stopped where the head's rim takes over.)
+        let side = |sign: f64| -> Vec<P> {
+            let mut out = vec![add(self.pts[0], mul(normal(unit_of(0)), sign * half))];
+            for k in 1..n - 1 {
+                let (n0, n1) = (normal(unit_of(k - 1)), normal(unit_of(k)));
+                let m = add(n0, n1);
+                let m = mul(m, 1.0 / len(m).max(1e-9));
+                out.push(add(self.pts[k], mul(m, sign * half / dot(m, n1).max(0.5))));
+            }
+            out
+        };
+        let rim = &self.edges(MOLE_HEAD_FT)[1];
+        let mut outline = side(1.0);
+        outline.extend_from_slice(rim);
+        let mut right = side(-1.0);
+        right.reverse();
+        outline.extend(right);
+        let mut out = vec![outline];
+        let r = self.ramp();
+        for pair in r.chunks(2) {
+            let (near, far) = (&pair[0].0, &pair[pair.len() - 1].0);
+            out.push(vec![far[0], near[1], near[2], far[3]]);
+        }
+        out
     }
 
     /// Its made ground as the ground shaper takes it, the ramp to its root with it.
@@ -253,27 +291,34 @@ fn breakwater(site: &Site, s: &Settlement, l: &Layout, all: &[(P, P)]) -> Result
             *why = w;
         }
     };
-    for (sign, past) in tries
-        .iter()
-        .map(|&(k, p)| (if first { k } else { -k }, p))
-        .chain(tries.iter().map(|&(k, p)| (if first { -k } else { k }, p)))
-    {
-        let end = if sign > 0.0 { s1 + past } else { s0 - past };
-        let q = add(o, mul(f, end));
-        // The bank: where the ground out along the piers' way first meets the water, 6 ft back
-        // onto land.
-        let wet = |t: f64| site.wet_standing(loc(add(q, mul(d, t))));
-        let Some(t) = (0..150).map(|k| -300.0 + 4.0 * k as f64).find(|&t| wet(t) && !wet(t - 4.0) && wet(t + 8.0)) else {
-            continue;
-        };
-        let root = add(q, mul(d, t - 10.0));
-        // Curving round the piers' heads, or less, or straight out past them.
-        for (share, extra) in [(0.6, 50.0), (0.3, 90.0), (0.0, 60.0)] {
-            let out = (reach - dot(sub(root, o), d) + extra).max(80.0);
+    // Straight out past the piers' heads, along their way (as the harbour's piers run), or
+    // curving a little round them, or more: each shape tried at every place along the shore first.
+    for (share, extra) in [(0.0, 60.0), (0.3, 90.0), (0.6, 50.0)] {
+        for (sign, past) in tries
+            .iter()
+            .map(|&(k, p)| (if first { k } else { -k }, p))
+            .chain(tries.iter().map(|&(k, p)| (if first { -k } else { k }, p)))
+        {
+            let end = if sign > 0.0 { s1 + past } else { s0 - past };
+            let q = add(o, mul(f, end));
+            // (Along the way of the pier at that end of the docks, the one beside it.)
+            let edge = piers.iter().max_by(|x, y| (sign * dot(sub(x.0, o), f)).total_cmp(&(sign * dot(sub(y.0, o), f)))).copied().unwrap_or(piers[0]);
+            let d = if dot(way(&edge), d) > 0.8 { way(&edge) } else { d };
+            let f = [-d[1], d[0]];
+            // The bank: where the ground out along the piers' way first meets the water, 6 ft back
+            // onto land.
+            let wet = |t: f64| site.wet_standing(loc(add(q, mul(d, t))));
+            let Some(t) = (0..150).map(|k| -300.0 + 4.0 * k as f64).find(|&t| wet(t) && !wet(t - 4.0) && wet(t + 8.0)) else {
+                continue;
+            };
+            let root = add(q, mul(d, t - 10.0));
+            let straight = share == 0.0;
+            let mut out = (reach - dot(sub(root, o), d) + extra).max(80.0);
             let mut across = share * (s1 - s0) + 60.0 * share / 0.6;
             let mut line: Vec<P> = Vec::new();
             for _ in 0..6 {
-                let (p1, p2) = (add(root, mul(d, 1.15 * out)), add(add(root, mul(d, out)), mul(f, -sign * across)));
+                let p2 = add(add(root, mul(d, out)), mul(f, -sign * across));
+                let p1 = if straight { lerp(root, p2, 0.5) } else { add(root, mul(d, 1.15 * out)) };
                 let curve: Vec<P> = (0..=24)
                     .map(|k| {
                         let t = k as f64 / 24.0;
@@ -282,7 +327,11 @@ fn breakwater(site: &Site, s: &Settlement, l: &Layout, all: &[(P, P)]) -> Result
                     .collect();
                 let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
                 if total < MOLE_LEN_FT.0 {
-                    across += MOLE_LEN_FT.0 - total + 10.0;
+                    if straight {
+                        out += MOLE_LEN_FT.0 - total + 10.0;
+                    } else {
+                        across += MOLE_LEN_FT.0 - total + 10.0;
+                    }
                     continue;
                 }
                 line = trim(&curve, MOLE_LEN_FT.1);

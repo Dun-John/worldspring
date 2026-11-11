@@ -1396,7 +1396,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === 33 || kind === 44 || kind === 45 || kind === TOWER_KIND;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === 33 || kind === 44 || kind === 45 || kind === 46 || kind === TOWER_KIND;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -1476,6 +1476,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // paving stone.
       else if (kind === 44) rgb = [0.6, 0.57, 0.5];
       else if (kind === 45) rgb = [0.74, 0.71, 0.64];
+      // (A metropolis's lined bridge (46): the street's paving (`tileroad.frag` PAVED), carried over the water.)
+      else if (kind === 46) rgb = [0.62, 0.58, 0.52];
       // v63 countryside: a village's headstones and a churchyard's low wall (`town::village::plan_polys`;
       // the green's and churchyard's grass is the land's own, its crofts seen on the battlemap only).
       else if (kind === 20) rgb = [0.74, 0.73, 0.69];
@@ -1532,7 +1534,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
       // A plot (kind 5) is often concave: ear-clipped, so no wedge crosses its notches (a fan would).
-      const ears = kind === 5 && m > 3 ? earClip(polys.verts, s0, m) : null;
+      // (A breakwater's outline (45) bends along its line: ear-clipped too.)
+      const ears = (kind === 5 || kind === 45) && m > 3 ? earClip(polys.verts, s0, m) : null;
       for (let k = 1; k + 1 < m; k++) {
         const t = ears ? ears[k - 1] : [0, k, k + 1];
         const corners = [s0 + t[0], s0 + t[1], s0 + t[2]];
