@@ -3985,6 +3985,11 @@
             onZoomIn={townZoomIn}
             picking={townPicking}
             onChangeTown={() => (townPicking = !townPicking)}
+            names={renames}
+            hiddenIds={edits.hidden ?? []}
+            onRename={rename}
+            onHide={setHidden}
+            onPatch={(p) => ((townPatch = p), (townCorner = null))}
           />
         {:else if groundOn}
           <GroundPanel

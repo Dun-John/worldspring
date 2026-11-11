@@ -38,9 +38,16 @@
     /** "Change town" is waiting for a click on the map. */
     picking?: boolean;
     onChangeTown: () => void;
+    /** District names by id (renames) and the ids whose labels are hidden. */
+    names?: Record<string, string>;
+    hiddenIds?: string[];
+    onRename?: (id: string, name: string) => void;
+    onHide?: (id: string, hide: boolean) => void;
+    /** Pick a patch (to show where a district lies). */
+    onPatch?: (patch: number) => void;
   }
 
-  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn, picking = false, onChangeTown }: Props = $props();
+  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn, picking = false, onChangeTown, names = {}, hiddenIds = [], onRename, onHide, onPatch }: Props = $props();
 
   const MODES: { key: TownMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
@@ -102,6 +109,21 @@
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
   const ft = (v: number) => `${Math.round(v).toLocaleString('en')} ft`;
 
+  const choose = MODES[0];
+  const reshape = MODES.slice(1);
+  const reshaping = $derived(reshape.find((m) => m.key === mode));
+  let reshapeOpen = $state(false);
+  let resetOpen = $state(false);
+  const gateCount = $derived(plan?.corners.filter((c) => c.gate).length ?? 0);
+  const towerCount = $derived(plan ? plan.corners.filter((c) => c.wall && !c.tower_removed).length + (plan.walls.by_hand?.towers_added.length ?? 0) : 0);
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : one.endsWith('ch') ? 'es' : 's'}`;
+  let renaming = $state<string | null>(null);
+  let renameTo = $state('');
+  const districtName = (d: { id: string; name: string }) => names[d.id] ?? d.name;
+  function saveRename() {
+    if (renaming !== null) onRename?.(renaming, renameTo.trim().slice(0, 80));
+    renaming = null;
+  }
   const hint = $derived(MODES.find((m) => m.key === mode)?.hint ?? '');
   const brush = $derived(mode !== 'select' && mode !== 'equalize');
   const generatedWard = $derived(selected ? (selected.ward_generated ?? selected.ward) : 'empty');
@@ -143,10 +165,20 @@
       <button class="ws-btn quiet" class:on={picking} aria-pressed={picking} onclick={onChangeTown} title="Then click a town on the map">{picking ? 'Click a town…' : 'Change town'}</button>
     </div>
   {/if}
-  <div class="ws-seg modes" role="radiogroup" aria-label="Tool">
-    {#each MODES as m (m.key)}
-      <button class:on={mode === m.key} aria-pressed={mode === m.key} onclick={() => onMode(m.key)} title="{m.label} ({m.kbd})"><Icon name={m.icon} size={16} />{m.label}</button>
-    {/each}
+  <div class="tools">
+    <div class="ws-seg modes" role="radiogroup" aria-label="Tool">
+      <button class:on={mode === choose.key} aria-pressed={mode === choose.key} onclick={() => ((reshapeOpen = false), onMode(choose.key))} title="{choose.label} ({choose.kbd})"><Icon name={choose.icon} size={16} />{choose.label}</button>
+      <button class:on={!!reshaping} aria-pressed={!!reshaping} aria-haspopup="menu" aria-expanded={reshapeOpen} onclick={() => (reshapeOpen = !reshapeOpen)} title="Brushes that reshape the town's patches">
+        <Icon name={reshaping?.icon ?? 'liquify'} size={16} />{reshaping?.label ?? 'Reshape'} ▾
+      </button>
+    </div>
+    {#if reshapeOpen}
+      <div class="menu ws-panel" role="menu" aria-label="Reshape">
+        {#each reshape as m (m.key)}
+          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((reshapeOpen = false), onMode(m.key))}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
+        {/each}
+      </div>
+    {/if}
   </div>
   {#if !plan}
     <div class="zoom">
@@ -168,6 +200,45 @@
         <span>Brush</span><output>{ft(2 * size * plan.max_move_ft)} across</output>
         <input type="range" min="0.25" max="4" step="0.05" bind:value={size} />
       </label>
+    {/if}
+    <section class="card" aria-label="Walls">
+      <label class="switch">
+        <span class="grow"><b>Walls</b><span class="ws-muted"> · {plan.walls.generated ? 'it was built with walls' : 'it was built without'}</span></span>
+        <input type="checkbox" class="ws-switch" checked={plan.walls.built} disabled={busy} onchange={(e) => onChange({ walls: (e.currentTarget as HTMLInputElement).checked }, 'walls')} />
+      </label>
+      {#if plan.walls.built}
+        <div>{plural(gateCount, 'gate')}, {plural(towerCount, 'tower')}</div>
+        <div class="ws-hint">Choose, then click a ringed corner on the wall to add or take away a gate or a tower.</div>
+      {/if}
+    </section>
+    {#if plan.districts?.length}
+      <section class="card" aria-label="Districts">
+        <div class="title"><span class="grow"><b>Districts</b></span></div>
+        <div class="dists">
+        {#each districtList as d (d.id)}
+          <div class="dist">
+            {#if renaming === d.id}
+              <input class="ws-input grow" type="text" maxlength="80" bind:value={renameTo} aria-label="District name" onkeydown={(e) => (e.key === 'Enter' ? saveRename() : e.key === 'Escape' && (renaming = null))} />
+              <button class="ws-btn" onclick={saveRename}>Save</button>
+            {:else}
+              <button class="ws-btn quiet grow name" class:dim={hiddenIds.includes(d.id)} title="Pick its first patch" onclick={() => d.patches[0] !== undefined && onPatch?.(d.patches[0])}>{districtName(d) || 'Unnamed'}<span class="ws-muted"> · {d.kind}, {plural(d.patches.length, 'patch')}</span></button>
+              <button class="ws-icon-btn" aria-label="Rename {districtName(d)}" title="Rename" onclick={() => ((renaming = d.id), (renameTo = districtName(d)))}><Icon name="pencil" size={16} /></button>
+              <button class="ws-icon-btn" aria-label={hiddenIds.includes(d.id) ? 'Show on the map' : 'Hide from the map'} title={hiddenIds.includes(d.id) ? 'Show its name on the map' : 'Hide its name from the map'} onclick={() => onHide?.(d.id, !hiddenIds.includes(d.id))}><Icon name={hiddenIds.includes(d.id) ? 'eye-off' : 'eye'} size={16} /></button>
+            {/if}
+          </div>
+        {/each}
+        </div>
+        <div class="row">
+          <button class="ws-btn" disabled={busy || !selected?.in_town} title={selected?.in_town ? 'A district of its own, taking the picked patch' : 'Pick a patch first'} onclick={() => (naming = true)}><Icon name="plus" size={16} /> New district</button>
+        </div>
+        {#if naming && selected}
+          <div class="row">
+            <input class="ws-input grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
+            <button class="ws-btn" disabled={busy || !newName.trim()} onclick={makeDistrict}>Make</button>
+            <button class="ws-btn" disabled={busy} onclick={() => (naming = false)}>Cancel</button>
+          </div>
+        {/if}
+      </section>
     {/if}
     {#if selected}
       <section class="card" aria-label="Patch">
@@ -301,21 +372,22 @@
         {/if}
       </section>
     {/if}
-    <label class="switch">
-      <span class="grow">Walls<span class="ws-muted"> · {plan.walls.generated ? 'it was built with walls' : 'it was built without'}</span></span>
-      <input type="checkbox" class="ws-switch" checked={plan.walls.built} disabled={busy} onchange={(e) => onChange({ walls: (e.currentTarget as HTMLInputElement).checked }, 'walls')} />
-    </label>
     {#if plan.set_aside.length}
       <div class="aside">Set aside since the world changed: {plan.set_aside.join('; ')}.</div>
     {/if}
     {#if plan.edited}
-      <div class="row">
-        <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'corners' }, 'corners')}>Corners as generated</button>
-        <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'patches' }, 'wards')}>Wards as generated</button>
-        {#if plan.corners.some((c) => c.square_generated !== undefined)}
-          <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'squares' }, 'squares')}>Squares as generated</button>
+      <div class="more">
+        <button class="ws-btn quiet" aria-haspopup="menu" aria-expanded={resetOpen} onclick={() => (resetOpen = !resetOpen)}><Icon name="more" size={16} /> Reset</button>
+        {#if resetOpen}
+          <div class="menu ws-panel up" role="menu" aria-label="Reset">
+            <button class="ws-btn quiet" role="menuitem" disabled={busy} onclick={() => ((resetOpen = false), onChange({ reset: 'corners' }, 'corners'))}>Corners as generated</button>
+            <button class="ws-btn quiet" role="menuitem" disabled={busy} onclick={() => ((resetOpen = false), onChange({ reset: 'patches' }, 'wards'))}>Wards as generated</button>
+            {#if plan.corners.some((c) => c.square_generated !== undefined)}
+              <button class="ws-btn quiet" role="menuitem" disabled={busy} onclick={() => ((resetOpen = false), onChange({ reset: 'squares' }, 'squares'))}>Squares as generated</button>
+            {/if}
+            <button class="ws-btn quiet" role="menuitem" disabled={busy} onclick={() => ((resetOpen = false), onChange({ reset: 'all' }, 'all'))}><Icon name="reset" size={16} /> All as generated</button>
+          </div>
         {/if}
-        <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'all' }, 'all')}><Icon name="reset" size={16} /> All as generated</button>
       </div>
     {/if}
   {/if}
@@ -373,12 +445,56 @@
     color: var(--warn);
     font-size: 12px;
   }
-  /* Seven tools side by side: each its icon over its word. */
-  .modes > button {
+  .tools,
+  .more {
+    position: relative;
+  }
+  .menu {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 2px);
+    z-index: 3;
+    display: flex;
     flex-direction: column;
-    gap: 0;
-    padding: 4px 1px;
-    font-size: 11px;
+    gap: 2px;
+    padding: 4px;
+    min-width: 200px;
+    background: var(--paper-solid);
+    box-shadow: var(--shadow-lg);
+  }
+  .menu.up {
+    top: auto;
+    bottom: calc(100% + 2px);
+  }
+  .menu .ws-btn {
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .menu kbd {
+    font: 11px var(--mono);
+    color: var(--ink-3);
+  }
+  .menu .on {
+    outline: 2px solid var(--ink);
+  }
+  .dists {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 190px;
+    overflow-y: auto;
+  }
+  .dist {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .dist .name {
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .dist .dim {
+    opacity: 0.55;
   }
   .slider {
     display: grid;
