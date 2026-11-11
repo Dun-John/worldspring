@@ -590,7 +590,7 @@ export function drawWalls(g: Graphics, walls: Shape[], gates: Shape[] = []) {
     const segs = (l.material === MAT_STONE || l.material === MAT_EARTH ? set.flatMap(breaks) : set).map(wallSeg);
     if (l.material === MAT_PALISADE) palisades(g, segs, gates);
     else if (l.material === MAT_EARTH) earthWalls(g, segs);
-    else stoneWalls(g, segs);
+    else stoneWalls(g, segs, gates);
   }
   use(null);
 }
@@ -632,7 +632,7 @@ function breaks(s: Shape): Shape[] {
 /** Which side of each segment faces out of the town (+1 its +n, -1 its -n): a run of segments end to end turns
  * toward the town it rings, so its outside is the side it turns from; a straight run's away from the way the
  * nearest gate leads in (`gates`), or +n with none. */
-function outsides(segs: Seg[], gates: Shape[] = []): number[] {
+function outsides(segs: Seg[], gates: Shape[] = [], strict = false): number[] {
   const n = segs.length;
   const root = segs.map((_, i) => i);
   const find = (i: number): number => (root[i] === i ? i : (root[i] = find(root[i])));
@@ -651,6 +651,7 @@ function outsides(segs: Seg[], gates: Shape[] = []): number[] {
     // (The generator's own word where it has one: `[flags, side]`, side +1 its +n.)
     if (s.side) return s.side;
     const t = turn[find(i)];
+    if (strict && Math.abs(t) <= 1e-3 && !gates.length) return 0;
     if (Math.abs(t) > 1e-3 || !gates.length) return t > 1e-3 ? -1 : 1;
     // (The nearest gate's way in: its side of the line between its towers.)
     const [mx, my] = [(s.x0 + s.x1) / 2, (s.y0 + s.y1) / 2];
@@ -738,7 +739,9 @@ function sector(x: number, y: number, r0: number, r1: number, t0: number, sweep:
  * down the middle, a parapet with merlons along each side, the shade of the parapet facing the light across
  * the walk; moss and cracks; rubble where an end stands bare; a ruin's with merlons gone and stones fallen.
  */
-function stoneWalls(g: Graphics, segs: Seg[]) {
+function stoneWalls(g: Graphics, segs: Seg[], gates: Shape[]) {
+  // (Merlons on the outer parapet only; where the outside can't be told, both.)
+  const out = outsides(segs, gates, true);
   const joints = (fn: (x: number, y: number) => void) => {
     for (const s of segs) {
       if (!s.bareA) fn(s.x0, s.y0);
@@ -827,7 +830,7 @@ function stoneWalls(g: Graphics, segs: Seg[]) {
       const toLight = lit(-s.uy * side, s.ux * side) > 0;
       const e = toLight ? d1 - side * FT * 0.3 : d0 + side * FT * 0.3;
       g.moveTo(...s.at(lim(s, i, 0, a0, e), e)).lineTo(...s.at(lim(s, i, 1, a1, e), e)).stroke({ width: FT * 0.3, color: ST[3], alpha: 0.8 });
-      crenelRun(s.at, Math.max(p0, q0), Math.min(p1, q1), d0, d1, s.rnd, crenels, s.ruined, fallen);
+      if (!out[i] || out[i] === side) crenelRun(s.at, Math.max(p0, q0), Math.min(p1, q1), d0, d1, s.rnd, crenels, s.ruined, fallen);
       g.moveTo(...s.at(p0, d0)).lineTo(...s.at(p1, d0));
     }
   });
@@ -1119,28 +1122,29 @@ export function drawBastion(g: Graphics, s: Shape) {
     if (a >= fAx) return side * (hw - cope);
     return side * Math.max(0, (hw * Math.max(0, a)) / Math.max(1e-6, fAx) - cope);
   };
-  const pitch = (len - start) / Math.max(3, Math.round((len - start) / (FT * 2)));
+  // (Few, big steps: about 3.5 ft deep, a dark riser band under each nose, the tread lit and light.)
+  const pitch = (len - start) / Math.max(3, Math.round((len - start) / (FT * 3.5)));
   const steps: number[] = [];
   for (let a = start + pitch; a < len - FT * 0.3; a += pitch) steps.push(a);
   for (const a of steps) {
     const [l0, l1] = [lat(a, -1), lat(a, 1)];
     if (l1 - l0 < FT) continue;
-    g.poly([...at(a, l0), ...at(a, l1), ...at(a - FT * 0.55, l1), ...at(a - FT * 0.55, l0)]);
+    g.poly([...at(a - pitch + FT * 0.1, l0), ...at(a - FT * 0.9, l0), ...at(a - FT * 0.9, l1), ...at(a - pitch + FT * 0.1, l1)]);
   }
-  g.fill({ color: PLUM, alpha: 0.3 });
+  g.fill(mix(ST[2], 0xffffff, 0.15));
   for (const a of steps) {
     const [l0, l1] = [lat(a, -1), lat(a, 1)];
     if (l1 - l0 < FT) continue;
-    g.moveTo(...at(a + FT * 0.3, l0 + FT * 0.2)).lineTo(...at(a + FT * 0.3, l1 - FT * 0.2));
+    g.poly([...at(a, l0), ...at(a, l1), ...at(a - FT * 0.9, l1), ...at(a - FT * 0.9, l0)]);
   }
-  g.stroke({ width: FT * 0.35, color: ST[3], alpha: 0.8, cap: 'round' });
+  g.fill({ color: ST[3], alpha: 0.95 });
   for (const a of steps) {
     const [l0, l1] = [lat(a, -1), lat(a, 1)];
     if (l1 - l0 < FT) continue;
     g.moveTo(...at(a, l0)).lineTo(...at(a, l1));
   }
   g.moveTo(...at(len, -hw)).lineTo(...at(len, hw));
-  g.stroke({ width: LINE, color: INK, cap: 'round' });
+  g.stroke({ width: LINE * 1.2, color: INK, cap: 'round' });
   // The revetment: a stone coping along the open back and down the ramp's sides (the earth stands up behind it),
   // its shadow on the town where it faces away from the light, inked on both edges.
   const runs: [number, number, number, number][] = [
