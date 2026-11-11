@@ -3,14 +3,14 @@
   import type { Change } from '../sync/mapd';
 
   /** One change asked on a settlement's card: its culture (0 north … 4 steppe), and for a village
-   * or town added by hand its tier, what it lives by or its name. */
+   * or town added by hand its tier, its economy or its name. */
   export type SettleAsk = { culture?: number; tier?: 'village' | 'town'; lives_by?: string; name?: string };
   /** A change worked out but not made: the edits it makes and what it sets aside (by field), or
    * why it can't be made, or that it changes nothing. */
   export type SettlePlan = { edits: Edits; change: Change; set_aside: number; by: Record<string, number>; count: number } | { error: string } | { unchanged: true };
 
   /** One of the world's own settlements, or one made by a pin, as its pin would have it (with the
-   * change waiting for a remake, if any): tier, what it lives by (a pin kind, '' from its land),
+   * change waiting for a remake, if any): tier, its economy (a pin kind, '' from its land),
    * capital, whether a port or fishing village may stand there, and the change waiting in words. */
   export type SettleOwn = { tier: string; livesBy: string; capital: boolean; portOk: boolean; fishingOk: boolean; waiting: string | null; byPin: boolean };
   /** A change to one of those: it waits for a remake. */
@@ -22,7 +22,7 @@
 
 <script lang="ts">
   // A settlement card's Settlement block: its culture, changed at once for every settlement; tier,
-  // what it lives by and name for a village or town added by hand (at once, laid out anew); what
+  // its economy and name for a village or town added by hand (at once, laid out anew); what
   // the world's own and pin-made ones: tier, living and capital through their pin, waiting for a
   // remake (the Dock's bar makes them all at once). A line says what a change
   // sets aside before it is made; it is asked only when something would be.
@@ -158,7 +158,7 @@
       </div>
     </div>
     <label class="row">
-      <span class="key">Lives by</span>
+      <span class="key">Economy</span>
       <select
         class="ws-input"
         value={livesBy ?? ''}
@@ -166,7 +166,7 @@
         onchange={(e) => {
           const to = e.currentTarget.value;
           e.currentTarget.value = livesBy ?? '';
-          void change({ lives_by: to }, `Laid out anew, living by ${livingWord(to).toLowerCase()}.`);
+          void change({ lives_by: to }, `Laid out anew, with ${livingWord(to).toLowerCase()} for its economy.`);
         }}
       >
         {#if !livesBy}<option value="">From its land</option>{/if}
@@ -183,9 +183,9 @@
         <button class="ws-btn" onclick={onMove} title="Click the map where it goes: it keeps its name, notes, NPCs and plots; the changes made inside it are set aside"><Icon name="move" size={16} /> Move</button>
       </div>
     {/if}
-    <div class="muted">Added by hand: these change at once (Undo puts them back). A new tier, living or culture lays it out anew.</div>
+    <div class="muted">Added by hand: every change here is made at once (Undo puts it back).</div>
   {:else if own}
-    <div class="row">
+    <div class="row stack">
       <span class="key">Tier</span>
       <div class="ws-seg four" role="radiogroup" aria-label="Tier">
         {#each TIERS as t (t)}
@@ -194,7 +194,7 @@
       </div>
     </div>
     <label class="row">
-      <span class="key">Lives by</span>
+      <span class="key">Economy</span>
       <select
         class="ws-input"
         value={own.livesBy}
@@ -243,14 +243,10 @@
         </span>
       </div>
     {/if}
-    <div class="muted">
-      {own.byPin ? 'Placed by a pin in the sketch' : 'One of the world’s own'}: culture changes at once; tier, living and capital wait for one remake.{own.byPin
-        ? ''
-        : ' It can’t be deleted; hide it instead (⋯).'}
-    </div>
+    <div class="muted">{own.byPin ? 'Added by a pin in the sketch' : 'Generated with the world'}: culture changes at once; tier, economy and capital wait for a remake.</div>
   {:else}
     <div class="row"><span class="key">Tier</span><span>{cap(tier)}</span></div>
-    <div class="row"><span class="key">Lives by</span><span>{cap(livesBy ?? 'its land')}</span></div>
+    <div class="row"><span class="key">Economy</span><span>{cap(livesBy ?? 'its land')}</span></div>
     <div class="row"><span class="key">Capital</span><span>{capital ? 'The realm’s capital' : 'No'}</span></div>
   {/if}
   {#if note}<div class="note bad">{note}</div>{/if}
@@ -325,8 +321,17 @@
   .note.bad {
     color: var(--danger, var(--ink));
   }
+  .stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+  .stack .key {
+    flex: none;
+  }
   .four {
-    flex: 1;
+    width: 100%;
+    flex: none;
     min-width: 0;
   }
   .four button {

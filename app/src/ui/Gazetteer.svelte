@@ -528,7 +528,7 @@
     {#if !showAside}<input class="ws-input" type="search" placeholder={withNotes ? 'Find notes…' : 'Find a name or note…'} bind:value={q} aria-label="Find a name or note" />{/if}
     <div class="bar">
       <button class="ws-chip" class:on={withNotes} aria-pressed={withNotes} onclick={() => ((withNotes = !withNotes), (showAside = false))} title="Only the places you wrote notes on"><Icon name="note" size={12} /> With notes ({Object.keys(notes).length})</button>
-      {#if asideN}<button class="ws-chip" class:on={showAside} aria-pressed={showAside} onclick={() => ((showAside = !showAside), (withNotes = false))} title="Places deleted, and what you made on places no longer on the map">Set aside ({asideN})</button>{/if}
+      {#if asideN}<button class="ws-chip" class:on={showAside} aria-pressed={showAside} onclick={() => ((showAside = !showAside), (withNotes = false))} title="Places deleted, and what you made on places no longer on the map">Deleted &amp; set aside ({asideN})</button>{/if}
       {#if !withNotes && !showAside}<button class="ws-chip" class:on={showHidden} aria-pressed={showHidden} onclick={() => (showHidden = !showHidden)} title="Names hidden from both maps">Show hidden</button>{/if}
       {#if here}<button class="ws-chip here" onclick={() => openPage(here.id)} title="{here.name}: its name and your note on it"><Icon name="pin" size={12} /> <span>{here.name}</span></button>{/if}
     </div>

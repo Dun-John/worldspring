@@ -2,6 +2,10 @@
   import type { Created, PinKind } from '../gen/protocol';
   import type { PinTier } from '../editor/sketcher';
 
+  /** What was chosen last, kept when the panel is closed and opened again (and `touched`: the user
+   * has chosen, so a tile looks chosen; else none does). */
+  const memory = $state({ pick: 'dungeon', touched: false });
+
   /** A settlement to pin (the world is remade round it): its tier and the pin's options. */
   export interface SettlementChoice {
     tier: PinTier;
@@ -57,7 +61,7 @@
   /** The choices: what each makes (`Created` kind, and what lies beneath). */
   const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; tier?: PinTier; group: Group; look: string }[] = [
     { key: 'village', label: 'Village', icon: 'home', kind: 'settlement', tier: 'village', group: 'Settlements', look: 'A few dozen to a few hundred souls. Added at once' },
-    { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand. Added at once; a capital remakes the world' },
+    { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand. Added at once' },
     { key: 'city', label: 'City', icon: 'castle', kind: 'settlement', tier: 'city', group: 'Settlements', look: 'Thousands, walled, with sewers below' },
     { key: 'metropolis', label: 'Metropolis', icon: 'wards', kind: 'settlement', tier: 'metropolis', group: 'Settlements', look: 'Tens of thousands: a great city' },
     { key: 'dungeon', label: 'Dungeon', icon: 'stairs', kind: 'entrance', under: 'dungeon', group: 'Underground', look: 'Stairs down, nothing above' },
@@ -73,7 +77,7 @@
   ];
   const RUIN_UNDER = ['dungeon', 'crypt', 'catacombs'];
 
-  let pick = $state('dungeon');
+  let pick = $state(memory.pick);
   let ruinUnder = $state('dungeon');
   let size = $state<SiteSize | ''>('');
   let levels = $state(0);
@@ -97,6 +101,8 @@
 
   function choose(key: string) {
     pick = key;
+    memory.pick = key;
+    memory.touched = true;
     theme = '';
   }
 
@@ -123,6 +129,7 @@
 </script>
 
 <div class="sites">
+  <div class="scroll">
   {#if added && !armed}
     <div class="towns added">
       <Icon name="check" size={16} />
@@ -137,8 +144,8 @@
     <div class="ws-seg" role="radiogroup" aria-label="Settlement size">
       {#each CHOICES.filter((c) => c.tier) as c (c.key)}<button class:on={pick === c.key} onclick={() => choose(c.key)}>{c.label}{#if c.tier !== 'village' && c.tier !== 'town'}<span class="remade" aria-label="(remakes the world)">↻</span>{/if}</button>{/each}
     </div>
-    <select class="ws-input" bind:value={livesBy} aria-label="Lives by">
-      {#each PIN_KINDS as [k, label] (k)}<option value={k} disabled={needsShore(k)}>{label === 'From its land' ? 'Lives by: from its land' : label}{needsShore(k) ? ' (on a shore: needs a remake)' : ''}</option>{/each}
+    <select class="ws-input" bind:value={livesBy} aria-label="Economy">
+      {#each PIN_KINDS as [k, label] (k)}<option value={k} disabled={needsShore(k)}>{label === 'From its land' ? 'Economy: from its land' : label}{needsShore(k) ? ' (on a shore: needs a remake)' : ''}</option>{/each}
     </select>
   {/if}
   {#if !peek}
@@ -148,8 +155,8 @@
         {#each CHOICES.filter((c) => c.group === group) as c (c.key)}
           <button
             class="tile"
-            class:on={pick === c.key}
-            aria-pressed={pick === c.key}
+            class:on={memory.touched && pick === c.key}
+            aria-pressed={memory.touched && pick === c.key}
             title={c.tier && !(c.tier === 'village' || c.tier === 'town') ? (playing ? 'Stop playing to remake the world' : remakes) : undefined}
             onclick={() => choose(c.key)}
             ><Icon name={c.icon} size={20} /><span>{c.label}{#if c.tier && c.tier !== 'village' && c.tier !== 'town'}<span class="remade" aria-label="(remakes the world)">↻</span>{/if}</span></button
@@ -163,7 +170,7 @@
     <div class="ws-hint">{choice.look}</div>
     {#if tier}
       <label class="ws-field">
-        Lives by
+        Economy
         <select class="ws-input" bind:value={livesBy}>
           {#each PIN_KINDS as [k, label] (k)}<option value={k} disabled={needsShore(k)}>{label}{needsShore(k) ? ' (on a shore: needs a remake)' : ''}</option>{/each}
         </select>
@@ -226,11 +233,12 @@
       </div>
     {/if}
   {/if}
+  </div>
   <div class="foot">
   {#if armed}
     <div class="armed">
       <span class="grow">{note ?? `Click on the map to place the ${choice.label.toLowerCase()}`}</span>
-      <button class="ws-btn" onclick={onCancel}>Cancel</button>
+      <button class="ws-btn" onclick={() => ((memory.touched = false), onCancel())}>Cancel</button>
     </div>
   {:else}
     <button class="ws-btn primary block" onclick={place} disabled={!!tier && !instant && playing} title={tier && !instant && playing ? 'Stop playing to remake the world' : undefined}
@@ -244,7 +252,8 @@
   .sites {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    flex: 1 1 auto;
+    min-height: 0;
     color: var(--ink);
     font: 13px/1.4 var(--font);
   }
@@ -274,13 +283,22 @@
     border-color: var(--line);
     color: var(--accent-ink);
   }
-  .foot {
-    position: sticky;
-    bottom: 0;
-    z-index: 1;
+  .scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 10px 10px 8px;
     display: flex;
     flex-direction: column;
-    padding: 6px 0 2px;
+    gap: 8px;
+  }
+  .foot {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px;
+    border-top: 1px solid var(--line-faint);
     background: var(--paper-solid);
   }
   .grow {

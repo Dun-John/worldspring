@@ -158,7 +158,12 @@
     {#if streets && onStreets}<button class="ws-btn" onclick={onStreets} disabled={!streets.ok} title={streets.why}><Icon name="wards" size={16} /> Streets</button>{#if !streets.ok}<span class="muted why">{streets.why}</span>{/if}{/if}
     {#if onDown}<button class="ws-btn" onclick={onDown} title="Into the site underground"><Icon name="stairs" size={16} /> Go down</button>{/if}
     {#if onEdit}<button class="ws-btn" onclick={onEdit} title="Change what it is, its storeys and roof, or draw it again"><Icon name="pencil" size={16} /> Edit</button>{/if}
-    {#if true}
+    {#if settle}
+      <button class="ws-btn" onclick={startEdit} title="Change its name"><Icon name="pencil" size={16} /> Rename</button>
+      {#if onHide}<button class="ws-btn" onclick={() => onHide(!hidden)} title={hidden ? 'Show its label and list it in search again' : 'Hide its label and leave it out of search'}><Icon name={hidden ? 'eye' : 'eye-off'} size={16} /> {hidden ? 'Show' : 'Hide'}</button>{/if}
+      {#if onDelete}<button class="ws-btn" class:danger={confirmDelete} onclick={() => (confirmDelete ? onDelete() : (confirmDelete = true))} onblur={() => (confirmDelete = false)} title="Take it off the map (Notes › Gazetteer › Deleted & set aside restores it)"><Icon name="trash" size={16} /> {confirmDelete ? 'Delete it?' : 'Delete'}</button>{/if}
+      {#if onUnsettle}<button class="ws-btn" onclick={onUnsettle} title="Make the world again without it (a remake). What was made on it is set aside in Notes"><Icon name="trash" size={16} /> Delete</button>{/if}
+    {:else}
       <div class="more-wrap">
         <button class="ws-icon-btn" onclick={() => ((more = !more), (confirmDelete = false))} aria-label="More" aria-expanded={more}><Icon name="more" /></button>
         {#if more}

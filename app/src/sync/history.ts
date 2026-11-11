@@ -44,6 +44,8 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return change.name === '' ? 'name reset' : `renamed to “${String(change.name ?? nameOf(id))}”`;
       case 'create_feature':
         return `created ${String(change.kind ?? 'site')} “${String(change.name ?? nameOf(id))}”`;
+      case 'create_settlement':
+        return `added ${String(change.kind ?? 'settlement')} “${String(change.name ?? nameOf(id))}”`;
       case 'create_building':
         return `built “${String(change.name ?? nameOf(id))}”`;
       case 'update_building':

@@ -285,6 +285,13 @@
   :global([data-short]) .dock:not(.phone) {
     width: 300px;
   }
+  /* A panel with its own foot (Places) scrolls inside, above it. */
+  .body:has(> :global(.sites)) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+  }
   .dock.peek .body:empty {
     display: none;
   }

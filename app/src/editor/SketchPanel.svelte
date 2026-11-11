@@ -232,7 +232,7 @@
         {#each TIERS as [t, label] (t)}<button class:on={settings.tier === t} onclick={() => (settings.tier = t)}>{label}</button>{/each}
       </div>
       <label class="ws-field">
-        Lives by
+        Economy
         <select class="ws-input" bind:value={settings.pinKind}>
           {#each PIN_KINDS as [k, label] (k)}<option value={k}>{label}</option>{/each}
         </select>

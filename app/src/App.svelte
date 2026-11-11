@@ -1328,6 +1328,8 @@
     if (sketchOn && !keepSketch) leaveSketch();
     if (designer && !keepDesign) closeDesigner();
     const editTab = to === 'edit' ? t : null;
+    // (Moving on from Places puts its "Added X" line away.)
+    if (editTab !== 'sites') placedName = null;
     if (editTab !== 'scatter') disarmScatter();
     if (editTab !== 'build') disarmBuild();
     if (editTab !== 'town') disarmTown();
@@ -2678,6 +2680,7 @@
     const f = overlay?.features.find((g) => g.id === nid);
     if (f) selection = { kind: 'feature', feature: f };
     placedName = site.name;
+    placedId = nid;
     placeNote = null;
   }
 
@@ -2685,6 +2688,12 @@
    * id, goes there instead). */
   /** What Places added at once last (its strip: Place another, Done), else null. */
   let placedName = $state<string | null>(null);
+  let placedId: string | null = null;
+  // (Selecting something else puts the "Added X" line away.)
+  $effect(() => {
+    const sel = selection;
+    if (placedName && placedId && !(sel?.kind === 'feature' && sel.feature.id === placedId)) untrack(() => (placedName = null));
+  });
   /** The remake's Added whose Places strip was put away (Done). */
   let addedDone = $state.raw<Added | null>(null);
 
@@ -3137,6 +3146,7 @@
     const f = overlay?.features.find((g) => g.id === id);
     if (f) selection = { kind: 'feature', feature: f };
     placedName = site.name;
+    placedId = id;
   }
 
   /** The info panel's actions for a created site: hide or show it, delete it, go down into its
