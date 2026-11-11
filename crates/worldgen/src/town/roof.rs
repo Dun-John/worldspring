@@ -243,6 +243,8 @@ pub fn look(l: &Layout, b: &Building) -> Look {
             } else {
                 // (R5 item 123: ordinary roofs as before 114, the European hip and gable; the felt halls above.)
                 let m = match role {
+                    // (A temple not a felt hall, in pieces: glazed tile as before 114, hipped or gabled, never round or domed.)
+                    Role::Sacred if key == "temple" => GlazedTile,
                     Role::Sacred => pick(u0, &[(GlazedTile, 4), (Copper, 3), (Hide, 3)]),
                     Role::Civic => pick(u0, &[(Shingle, 3), (GlazedTile, 3), (Hide, 2), (ClayTile, 2)]),
                     Role::Working => pick(u0, &[(Plank, 5), (Thatch, 3), (Hide, 2)]),
@@ -252,9 +254,9 @@ pub fn look(l: &Layout, b: &Building) -> Look {
                         _ => pick(u0, &[(Shingle, 4), (Thatch, 3), (ClayTile, 3)]),
                     },
                 };
-                let shape = if temple && compact {
+                let shape = if temple && compact && key != "temple" {
                     Dome
-                } else if role == Role::Sacred && u1 < 0.5 && ring() {
+                } else if role == Role::Sacred && key != "temple" && u1 < 0.5 && ring() {
                     Round
                 } else {
                     pick(u1, &[(Hip, 6), (Gable, 4)])
