@@ -315,7 +315,7 @@ export type LotSize = (typeof LOT_SIZES)[number];
 export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const;
 export type SquareKind = (typeof SQUARE_KINDS)[number];
 /** How a park can be laid out (`worldgen::world::PARK_KINDS`). */
-export const PARK_KINDS = ['formal', 'common', 'cemetery'] as const;
+export const PARK_KINDS = ['formal', 'common', 'cemetery', 'horses'] as const;
 export type ParkKind = (typeof PARK_KINDS)[number];
 
 /** A patch of a town as the ward editor sees it (`town::wards::plan_json`): its corners (plan
@@ -1223,6 +1223,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
+      // Roadmap 5 horse parks (`town::horses::PLAN_FENCE`, kind 34): a corral's post-and-rail fence, a thin
+      // line of weathered timber over the park's trodden ground (a camp clearing's, kind 8); not inked.
+      else if (kind === 34) {
+        rgb = [0.42, 0.31, 0.2];
+        a = 0.85;
+      }
       // A kurgan mound (kind 33): a low grassy barrow, a shade darker than a cemetery plot, lightly inked.
       else if (kind === 33) {
         rgb = [0.44, 0.52, 0.3];

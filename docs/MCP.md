@@ -1340,7 +1340,7 @@ on average) for the one there, `square_generated` when set by hand: a kind or `n
 `kind`, `patches`; `by_hand` for one made by hand, `changed` when its patches or their wards were changed by hand),
 `max_move_ft`, `walls` (`built`, `generated`), `edited`, `set_aside`, `places`: its squares, parks and gates (`id`,
 `kind`: `square`, `park` or `gate`; `sort`: a square's `market`, `civic`, `fountain`, `well`, `crossroads` or `green`,
-a park's `formal`, `common` or `cemetery`; `name`, `generated`, `x_ft`, `y_ft`, `size_ft`, `patch`, `district` with
+a park's `formal`, `common`, `cemetery` or `horses`; `name`, `generated`, `x_ft`, `y_ft`, `size_ft`, `patch`, `district` with
 its id, `main` for the square the main streets lead to). Their ids are kept by what they stand on (a patch, a corner,
 a road, a palace), so an edit elsewhere in the town or the walls set on or off move none; a gate is there only
 while the town is walled. `get_feature`, `rename_feature`, notes, `list_names` (`kind` `square`, `park`, `gate`)

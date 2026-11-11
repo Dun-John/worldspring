@@ -65,11 +65,14 @@
     empty: 'Open ground',
   };
   const LOT_LABEL: Record<LotSize, string> = { small: 'Small', medium: 'Medium', large: 'Large', huge: 'Huge' };
-  const PARK_LABEL: Record<ParkKind, string> = { formal: 'Formal garden', common: 'Common', cemetery: 'Cemetery' };
+  const PARK_LABEL: Record<ParkKind, string> = { formal: 'Formal garden', common: 'Common', cemetery: 'Cemetery', horses: 'Horse market' };
+  // (On the buttons: five side by side fit the panel only short.)
+  const PARK_SHORT: Record<ParkKind, string> = { formal: 'Formal', common: 'Common', cemetery: 'Cemetery', horses: 'Horses' };
   const PARK_HINT: Record<ParkKind, string> = {
     formal: 'cross walks, a fountain, hedged beds, statues and topiary',
     common: 'winding paths, a pond, trees, a gazebo or a bandstand',
     cemetery: "graves in rows, tombs and a lychgate by the town's culture",
+    horses: 'fenced corrals of horses, a trodden market ground, hitching rails, troughs and carts',
   };
   const SQUARE_LABEL: Record<SquareKind | 'none', string> = {
     crossroads: 'Widened crossroads',
@@ -202,7 +205,7 @@
             <div class="ws-seg" role="radiogroup" aria-label="Laid out as">
               <button class:on={!selected.park_by_hand} aria-pressed={!selected.park_by_hand} disabled={busy} onclick={() => set([{ patch: selected.patch, park: 'auto' }], 'park')} title="As the town has it: formal by the castle and the nobles, a common elsewhere">Auto</button>
               {#each PARK_KINDS as k (k)}
-                <button class:on={!!selected.park_by_hand && selected.park === k} aria-pressed={!!selected.park_by_hand && selected.park === k} disabled={busy} onclick={() => set([{ patch: selected.patch, park: k }], 'park')}>{PARK_LABEL[k]}</button>
+                <button class:on={!!selected.park_by_hand && selected.park === k} aria-pressed={!!selected.park_by_hand && selected.park === k} disabled={busy} onclick={() => set([{ patch: selected.patch, park: k }], 'park')} title={PARK_LABEL[k]}>{PARK_SHORT[k]}</button>
               {/each}
             </div>
             {#if selected.park}<span class="ws-muted">{PARK_LABEL[selected.park]}: {PARK_HINT[selected.park]}</span>{/if}
