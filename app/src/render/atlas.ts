@@ -4559,6 +4559,174 @@ function tombSlab(g: Graphics, r: number, rnd: () => number, v: number) {
   }
 }
 
+// Roadmap 5 steppe towns: a horse park's horses and hitching rails.
+
+/** A horse's coats, by look: [shade, coat, lit, mane and tail, muzzle]: bay, chestnut, dappled grey, black. */
+const COATS = [
+  [0x6c4026, 0x8a5634, 0xa87048, 0x2e2620, 0x3a2e26],
+  [0x80502c, 0xa0663a, 0xbe8450, 0x6a3a1c, 0x6e4228],
+  [0x8e8c86, 0xaeaca4, 0xcecbc2, 0x625e5a, 0x6e6a66],
+  [0x3c3638, 0x4e484c, 0x6c666c, 0x262224, 0x302c2e],
+];
+/** A horse's outline from above, nose toward +x: [x, half width], in feet along its spine. */
+const HORSE: [number, number][] = [
+  [-3.05, 0], [-2.97, 0.5], [-2.8, 0.85], [-2.5, 1.0], [-2.1, 0.98], [-1.6, 0.92], [-0.95, 1.08], [-0.4, 1.08], [0.05, 0.98], [0.4, 0.78],
+  [0.65, 0.54], [0.95, 0.46], [1.5, 0.4], [1.9, 0.36], [2.1, 0.42], [2.38, 0.54], [2.7, 0.47], [3.2, 0.33], [3.55, 0.31], [3.72, 0.23], [3.82, 0],
+];
+function horseHalf(x: number): number {
+  for (let i = 1; i < HORSE.length; i++) {
+    const [x0, h0] = HORSE[i - 1];
+    const [x1, h1] = HORSE[i];
+    if (x <= x1) return h0 + ((h1 - h0) * (x - x0)) / (x1 - x0);
+  }
+  return 0;
+}
+
+/** Horse, standing, seen from above, its nose toward +x (about 8 ft nose to tail): a long barrel with a
+ * rounded rump split by the croup's groove, a slim neck under a mane lying to the north, a long head with
+ * pricked ears, a forelock and dark nostrils, the tail hanging out behind; shaded along the south, lit
+ * along the north. Bay with a star (v0), chestnut with a blaze, its head turned (v1), dappled grey under a
+ * red and blue felt saddle blanket (v2), black, head turned the other way (v3). */
+function horse(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const [dark, coat, light, mane, muzzle] = COATS[v];
+  const bend = [0, -0.4, 0.15, 0.32][v];
+  const spine = (x: number) => (x > 0.45 ? bend * ((x - 0.45) / 3.35) ** 2 : 0);
+  const at = (x: number, k: number): [number, number] => [x * FT, (spine(x) + k * horseHalf(x)) * FT];
+  const xs: number[] = [];
+  for (let x = -3.05; x < 3.8; x += 0.1) xs.push(x);
+  xs.push(3.8);
+  const side = (k: (x: number) => number, from: number, to: number) => xs.filter((x) => x >= from && x <= to).map((x) => at(x, k(x)));
+  const band = (from: number, to: number, k0: (u: number) => number, k1: (u: number) => number) => {
+    const u = (x: number) => (x - from) / (to - from);
+    return [...side((x) => k0(u(x)), from, to), ...side((x) => k1(u(x)), from, to).reverse()].flat();
+  };
+  const outline = [...side(() => -1, -4, 4), ...side(() => 1, -4, 4).reverse()].flat();
+  // The tail, hanging out behind the rump, swished a little to one side.
+  const sw = [0.25, -0.2, 0.35, -0.3][v];
+  const tail = [
+    -2.85, -0.2, -3.4, -0.3 + sw * 0.3, -3.85, -0.26 + sw * 0.8, -4.05, -0.05 + sw, -3.95, 0.08 + sw * 0.9, -4.08, 0.22 + sw, -3.8, 0.3 + sw * 0.7, -3.35, 0.28 + sw * 0.3, -2.85, 0.2,
+  ].map((p) => p * FT);
+  g.poly(tail).fill(mane).stroke({ width: LINE, color: INK, join: 'round' });
+  // The body, neck and head as one shape: shaded along the south, lit along the north.
+  g.poly(outline).fill(coat);
+  g.poly(band(-3.0, 3.75, () => 1, (u) => 1 - 0.42 * Math.sqrt(Math.sin(Math.PI * u)))).fill(dark);
+  g.poly(band(-2.85, 0.7, (u) => -0.82 + 0.1 * (1 - Math.sin(Math.PI * u)), (u) => -0.82 + 0.5 * Math.sin(Math.PI * u))).fill({ color: light, alpha: 0.9 });
+  g.poly(band(2.15, 3.6, () => -0.72, (u) => -0.72 + 0.6 * Math.sin(Math.PI * u))).fill({ color: light, alpha: 0.85 });
+  if (v === 2) {
+    // Dapples: soft darker rings with pale middles over the rump and barrel.
+    for (let i = 0; i < 11; i++) {
+      const x = -2.7 + rnd() * 3.1;
+      const y = (rnd() - 0.5) * 1.3 * horseHalf(x);
+      const s = (0.16 + rnd() * 0.1) * FT;
+      g.circle(x * FT, y * FT, s).fill({ color: shade(coat, 0.86), alpha: 0.6 });
+      g.circle(x * FT - 0.5, y * FT - 0.5, s * 0.55).fill({ color: light, alpha: 0.7 });
+    }
+  }
+  // The muzzle a shade darker; the croup's groove down the rump.
+  g.poly(oval(3.6 * FT, spine(3.6) * FT, 0.18 * FT, 0.26 * FT, 0, 12)).fill({ color: muzzle, alpha: 0.75 });
+  g.moveTo(-3.0 * FT, 0).quadraticCurveTo(-2.6 * FT, 0.02 * FT, -2.15 * FT, -0.05 * FT).stroke({ width: LINE * 0.8, color: shade(dark, 0.85), cap: 'round' });
+  if (v === 0) g.poly([2.42, 0, 2.58, -0.1, 2.74, 0, 2.58, 0.1].map((p, i) => (i % 2 ? p + spine(2.58) : p) * FT)).fill(0xeee8da);
+  if (v === 1) g.poly(band(2.4, 3.62, (u) => -0.3 + 0.08 * u, (u) => 0.3 - 0.08 * u)).fill(0xeee8da);
+  if (v === 2) {
+    // A felt saddle blanket over the back: red, a blue border, a pale ram's-horn mark in its middle.
+    const [b0, b1] = [-1.45, 0.3];
+    const felt = band(b0, b1, () => -1.12, () => 1.12);
+    g.poly(felt).fill(0xa8443a);
+    g.poly(band(b0 + 0.18, b1 - 0.18, () => -0.86, () => 0.86)).stroke({ width: 0.2 * FT, color: 0x3e5a8a, join: 'round' });
+    g.poly(band(b0, b1, () => 1.12, () => 0.72)).fill({ color: 0x6a2420, alpha: 0.45 });
+    const cx = ((b0 + b1) / 2) * FT;
+    g.poly([cx - 0.36 * FT, 0, cx, -0.36 * FT, cx + 0.36 * FT, 0, cx, 0.36 * FT]).fill(0xe6d6b0).stroke({ width: 1.2, color: 0x6a2420 });
+    g.poly([cx - 0.14 * FT, 0, cx, -0.14 * FT, cx + 0.14 * FT, 0, cx, 0.14 * FT]).fill(0x3e5a8a);
+    g.poly(felt).stroke({ width: LINE, color: INK, join: 'round' });
+  }
+  g.poly(outline).stroke({ width: OUT, color: INK, join: 'round' });
+  // The mane along the crest, lying a little to the north, its north edge in locks.
+  const crest: number[] = [];
+  const locks: number[] = [];
+  let i = 0;
+  for (let x = 0.3; x <= 2.21; x += 0.11) {
+    const t = Math.min(1, (2.25 - x) / 0.4);
+    crest.push(...at(x, 0.12 * t));
+    locks.push(...at(x, -(0.26 + (i++ % 2 ? 0.04 : 0.17)) * t));
+  }
+  const pairs = (a: number[]) => Array.from({ length: a.length / 2 }, (_, k) => [a[k * 2], a[k * 2 + 1]]);
+  g.poly([...crest, ...pairs(locks).reverse().flat()]).fill(mane).stroke({ width: LINE, color: INK, join: 'round' });
+  g.moveTo(...at(0.85, -0.1)).quadraticCurveTo(...at(1.45, -0.22), ...at(2.05, -0.12)).stroke({ width: 1.2, color: shade(mane, 1.6), cap: 'round' });
+  // Ears pricked forward, a forelock between them; eyes and nostrils.
+  const [px, py] = at(2.28, 0);
+  for (const s of [-1, 1]) leaf(g, px - 0.05 * FT, py + s * 0.34 * FT, s * 0.7 + bend * 0.1, 0.66 * FT, 0.22 * FT, s < 0 ? light : coat, 0.4);
+  leaf(g, px + 0.05 * FT, py, bend * 0.15, 0.48 * FT, 0.14 * FT, mane, 0.4);
+  for (const s of [-1, 1]) g.circle(...at(2.55, s * 0.86), 1.4).fill(INK);
+  for (const s of [-1, 1]) g.moveTo(...at(3.62, s * 0.55)).lineTo(...at(3.72, s * 0.35)).stroke({ width: 1.4, color: INK, cap: 'round' });
+}
+
+/** Weathered wood: [dark, mid, light, sunlit]. */
+const GREY_WOOD = [0x5e5a52, 0x8a857a, 0xaaa496, 0xc8c2b2];
+
+/** Hitching rail, along x (fixed 10 ft): a rounded rail mortised through two stout posts whose tops show
+ * end grain, lit along the north; an iron tie ring (v0), a lead rope wrapped round it, its end trailing
+ * (v1), weathered grey with cracks, a split post and grass at the feet (v2), a water bucket by a post (v3). */
+function hitchingRail(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const tones = v === 2 ? GREY_WOOD : WOOD;
+  const [L, T, P, ph] = [4.75 * FT, 0.26 * FT, 4.0 * FT, 0.5 * FT];
+  if (v === 2) for (const x of [-P, P]) footGrass(g, x + 0.3 * FT, ph + 2, 0.45 * FT, rnd);
+  g.roundRect(-L, -T, L * 2, T * 2, T * 0.7).fill(tones[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.roundRect(-L + 2, -T + 1.2, L * 2 - 4, T * 0.62, T * 0.3).fill(tones[2]);
+  g.roundRect(-L + 2, T * 0.32, L * 2 - 4, T * 0.6, T * 0.3).fill(shade(tones[1], 0.84));
+  for (let k = 0; k < 4; k++) {
+    const x = -L + 0.6 * FT + rnd() * (L * 2 - 2 * FT);
+    g.moveTo(x, (rnd() - 0.5) * T * 0.6).lineTo(x + (0.8 + rnd()) * FT, (rnd() - 0.5) * T * 0.6);
+  }
+  g.stroke({ width: v === 2 ? 1.4 : 1.1, color: shade(tones[0], v === 2 ? 0.8 : 1), cap: 'round' });
+  for (const x of [-P, P]) {
+    bevel(g, x - ph, -ph, x + ph, ph, 2.2, tones, OUT);
+    g.circle(x, 0, ph * 0.5).stroke({ width: 1.1, color: shade(tones[0], 1.05), alpha: 0.8 });
+    g.circle(x, 0, ph * 0.22).stroke({ width: 1.1, color: shade(tones[0], 1.05), alpha: 0.8 });
+  }
+  if (v === 2) {
+    g.moveTo(P - ph + 2, -2).lineTo(P + 1, 1).lineTo(P + ph - 1, 0).stroke({ width: LINE, color: INK, join: 'round' });
+    g.moveTo(-1.5 * FT, -1).lineTo(0.6 * FT, 0.5).stroke({ width: 1.4, color: shade(tones[0], 0.75), cap: 'round' });
+    moss(g, -P - ph * 0.3, -ph * 0.4, ph * 0.55, rnd);
+  }
+  const ink2 = (draw: () => void, w: number, color: number) => {
+    draw();
+    g.stroke({ width: w + 2, color: INK, cap: 'round', join: 'round' });
+    draw();
+    g.stroke({ width: w, color, cap: 'round', join: 'round' });
+  };
+  if (v === 0 || v === 3) {
+    const x = v === 0 ? 0.9 * FT : -1.4 * FT;
+    ink2(() => g.circle(x, T + 0.22 * FT, 0.22 * FT), 1.8, IRON[2]);
+  }
+  if (v === 1) {
+    // A lead rope: three turns round the rail, its end trailing off to the south, frayed.
+    const rope = 0xc8b07a;
+    const x = -1.3 * FT;
+    for (let k = 0; k < 3; k++) ink2(() => g.moveTo(x + k * 4 - 2, -T - 1).lineTo(x + k * 4 + 2, T + 1), 2, rope);
+    ink2(() => g.moveTo(x + 9, T).quadraticCurveTo(x + 0.6 * FT, T + 1.4 * FT, x + 1.6 * FT, T + 1.5 * FT), 2, rope);
+    const [ex, ey] = [x + 1.6 * FT, T + 1.5 * FT];
+    for (const a of [-0.5, 0, 0.5]) g.moveTo(ex, ey).lineTo(ex + Math.cos(a) * 4, ey + Math.sin(a) * 4);
+    g.stroke({ width: 1, color: shade(rope, 0.8), cap: 'round' });
+  }
+  if (v === 3) {
+    // A wooden bucket of water by the east post, its handle laid over.
+    const [bx, by, R] = [P - 1.2 * FT, T + 1.0 * FT, 0.72 * FT];
+    g.circle(bx, by, R).fill(WOOD[2]).stroke({ width: LINE, color: INK });
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2;
+      g.moveTo(bx + Math.cos(a) * R * 0.7, by + Math.sin(a) * R * 0.7).lineTo(bx + Math.cos(a) * R * 0.98, by + Math.sin(a) * R * 0.98);
+    }
+    g.stroke({ width: 1, color: WOOD[0], alpha: 0.8 });
+    g.circle(bx, by, R * 0.86).stroke({ width: 1.6, color: IRON[1] });
+    g.circle(bx, by, R * 0.64).fill(0x4a8a90).stroke({ width: 1.2, color: shade(0x255a70, 0.8) });
+    g.moveTo(bx - R * 0.64, by).arc(bx, by, R * 0.64, Math.PI, Math.PI * 1.5).stroke({ width: 2, color: 0x1e4a5c, alpha: 0.6 });
+    g.poly(oval(bx - R * 0.2, by - R * 0.15, R * 0.16, R * 0.1, -0.3, 10)).fill({ color: 0xe6f4ec, alpha: 0.75 });
+    ink2(() => g.moveTo(bx - R * 0.95, by + R * 0.3).quadraticCurveTo(bx, by + R * 0.55, bx + R * 0.95, by - R * 0.3), 1.4, IRON[2]);
+  }
+}
+
 const DRAW: Record<number, Draw> = {
   1: (g, r, rnd, v) => canopy(g, r, rnd, [[0x2f4a22, 0x4d6e2d, 0x7a9a3c], [0x34502a, 0x557a32, 0x88a846], [0x3a4a20, 0x62702c, 0x9aa24a], [0x2c4426, 0x46683a, 0x6f9450]][v], 7),
   2: conifer,
@@ -4662,10 +4830,13 @@ const DRAW: Record<number, Draw> = {
   103: lychgate,
   104: kurgan,
   105: tombSlab,
+  // Roadmap 5 steppe towns' horse parks.
+  106: horse,
+  107: hitchingRail,
 };
 
 /** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */
-const ROOM: Record<number, number> = { 100: 1.9, 101: 6.2, 103: 1.45, 105: 0.84, 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
+const ROOM: Record<number, number> = { 107: 1.06, 100: 1.9, 101: 6.2, 103: 1.45, 105: 0.84, 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
 
 export function frameRadiusPx(info: KindInfo): number {
   // Radius in atlas px at scale 1 plus room for outlines.

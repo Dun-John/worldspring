@@ -19,6 +19,8 @@ export const BATTLE_GROUPS: [string, number[]][] = [
   ['Kitchen garden & smithy', [75, 76, 77, 78]],
   // Roadmap 5 cemeteries
   ['Cemetery', [39, 100, 101, 102, 103, 104, 105]],
+  // Roadmap 5 steppe towns' horse parks (the trough, haystack and cart stay in their own groups)
+  ['Horses', [106, 107]],
 ];
 
 /** The groups of furniture and props inside, in the order the picker shows them. */

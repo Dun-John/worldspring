@@ -1139,7 +1139,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1152,6 +1152,7 @@ const HALF_TURN = new Map([
   ['wattle fence', -135],
   ['lychgate', -135],
   ['tomb slab', -90],
+  ['hitching rail', -135],
 ]);
 /** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
  * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
@@ -1195,6 +1196,8 @@ export const LONG_SHADOW = new Map([
   ['footbridge', [3.1, 0.85, 1.6]],
   ['wattle fence', [1.0, 0.36, 0.6]],
   ['vegetable row', [1.9, 0.7, 0.5]],
+  ['horse', [1.5, 0.55, 1]],
+  ['hitching rail', [2.0, 0.3, 0.6]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
 export const OWN_SHADOW = new Set(['market cross', 'water wheel', 'kurgan']);
