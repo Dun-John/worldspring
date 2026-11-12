@@ -167,13 +167,13 @@
     right: calc(var(--dock-w, 0px) + 12px);
     bottom: 12px;
     display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
   }
   /* The Layers popup over the readout (the scale bar sits beside it on phones). */
   .controls:has(.pop) {
     z-index: calc(var(--z-hud) + 1);
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 8px;
   }
   .ctl {
     display: flex;
