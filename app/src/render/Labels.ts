@@ -182,6 +182,8 @@ interface Placed {
   /** `keep` styles: the symbol on its own (the name in `text`), and the name's offset from
    * the spot (px) in the last layout. */
   dot?: Text | null;
+  /** Index of the side the name is on (0 right, 1 left, 2 below, 3 above). */
+  side?: number;
   ox?: number;
   oy?: number;
 }
@@ -431,10 +433,17 @@ export class Labels {
           const [sx, sy] = cam.worldToScreen(f.x, f.y);
           const r = style.size * 0.4;
           const [dx, dy] = [r + pad + hw, r + pad + hh];
-          for (const [ox, oy] of [[dx, 0], [-dx, 0], [0, dy], [0, -dy]]) {
+          // Keeps the side it had (right, left, below, above) until that collides, so a name
+          // doesn't jump about while the map pans; a name that was off starts at the right again.
+          const sides = [[dx, 0], [-dx, 0], [0, dy], [0, -dy]];
+          const first = it.side ?? 0;
+          for (let k = 0; k < 4; k++) {
+            const side = k === 0 ? first : k - 1 < first ? k - 1 : k;
+            const [ox, oy] = sides[side];
             const box: Box = [sx + ox - hw - pad, sy + oy - hh - pad, sx + ox + hw + pad, sy + oy + hh + pad];
             if (boxes.hits(box) || dots.hits(box)) continue;
             boxes.add(box);
+            it.side = side;
             it.ox = ox;
             it.oy = oy;
             text.position.set(sx + ox, sy + oy);
@@ -442,6 +451,7 @@ export class Labels {
             break;
           }
         }
+        if (!placed) it.side = 0;
         if (it.text && it.text.visible !== placed) it.text.visible = placed;
         continue;
       }
