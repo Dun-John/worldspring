@@ -13,6 +13,7 @@ mod design;
 mod geo;
 mod ground;
 mod harbour;
+mod hexes;
 mod handwalls;
 mod mcp;
 mod notebook;

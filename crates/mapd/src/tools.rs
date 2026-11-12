@@ -80,6 +80,7 @@ pub fn list() -> Value {
         a.extend(crate::build::list());
         a.extend(crate::works::list());
         a.extend(crate::crossings::list());
+        a.extend(crate::hexes::list());
         a.extend(crate::ground::list());
         a.extend(crate::harbour::list());
         a.extend(crate::design::list());
@@ -237,6 +238,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::scatter::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::hexes::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::crossings::call(app, name, &a).await {

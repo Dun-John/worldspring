@@ -562,7 +562,7 @@ pub fn no_such(world: &worldgen::world::World, t0: &worldgen::t0::T0, id: &str) 
 }
 
 /// The map's size in feet.
-async fn map_size(app: &Shared) -> Result<[f64; 2], String> {
+pub(crate) async fn map_size(app: &Shared) -> Result<[f64; 2], String> {
     app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await
 }
 

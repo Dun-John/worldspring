@@ -9,6 +9,7 @@
 - put objects on battlemaps (and take generated ones away), with uploaded sprites;
 - draw buildings and towers, with what they are, their storeys and roofs;
 - shape a battlemap's ground: mounds, hollows, plateaus, cliffs and pits;
+- set the overland hex grid and look up the hex of a place;
 - put bridges, fords and ferries across rivers (crossings), and lay a town out anew (town plans: its patches, wards
   and lots) or design a dungeon's rooms and a building's interior by hand (designs);
 - do many of these at once, as one change, with `batch`.
@@ -995,6 +996,39 @@ Changes a settlement's tier, what it lives by, whether it is the realm's capital
 ```
 > *"Luskan is only a fishing village."* · *"Make Neverwinter a town of two thousand."* · *"Lay Hollywell out as a
 > steppe city."*
+
+## Hex grid tools
+
+The overland hex grid the map app can draw over the surface (one per world, saved with the edits; it does not change
+generation). Hex columns and rows count from 1: hex `0101` is the first whole hex at the map's top-left corner (world
+0,0), the whole lattice moved by the origin offset. A number is `CCRR`, zero-padded (`CCCRRR` on a map with more than 99
+columns or rows); a key is `"col,row"`. Which hexes the players have seen is play state, kept in the browser: these
+tools never see it.
+
+### `get_hex_grid`
+No parameters. Returns `{grid, set}`: `grid` is `{size_mi, flat, color, width, opacity, ox_mi, oy_mi, numbers}` (the defaults where nothing is set: 6 mi, flat-topped, `#2b241d` at 0.35, 1.5 px, no offset, numbers on) and `set` says whether any setting has been changed.
+
+### `set_hex_grid`
+| Parameter | Type | | |
+|---|---|---|---|
+| `size_mi` | number | optional | Miles across the flats (centre to neighbouring centre), 0.5–60. |
+| `flat` | boolean | optional | Flat-topped (`true`) or pointy-topped hexes. Flat grids shove odd columns down half a hex, pointy ones odd rows right. |
+| `color` | string | optional | Line colour, `#rrggbb`. |
+| `width` | number | optional | Line width in px, 0.5–6. |
+| `opacity` | number | optional | 0–1. |
+| `ox_mi`, `oy_mi` | number | optional | The lattice moved east and south, in miles (±10,000). |
+| `numbers` | boolean | optional | Hex numbers shown on the map. |
+| `reset` | boolean | optional | Back to the defaults first; fields given are then applied. |
+
+Only the fields given change. Returns `{grid, set}` as `get_hex_grid` does. Changing the grid keeps revealed hexes by number: old keys then name other hexes.
+
+### `hex_at`
+| Parameter | Type | | |
+|---|---|---|---|
+| `at` | id, name, `{x_ft, y_ft}` or `[x_ft, y_ft]` | one of `at`, `hex` | The hex holding that place (on the map). |
+| `hex` | string | one of `at`, `hex` | A hex by number (`0412`) or key (`"4,12"`); it may lie off the map. |
+
+Returns `label` (the number), `key`, `col`, `row`, `centre` and `corners` (six, world ft: clockwise from the east corner of a flat hex or the north-east one of a pointy hex), `on_map` (the centre is on the map), `around` (the six neighbours, `{key, label}`) and the `grid` used. Edge hexes may have column or row 0 or beyond the map's last.
 
 ## The sketch and `regenerate`
 
