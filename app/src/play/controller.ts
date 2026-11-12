@@ -2029,7 +2029,8 @@ export class PlayController implements PointerTool {
         // (Evenly along the line, by length.)
         let len = 0;
         for (let k = 1; k < path.length; k++) len += Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]);
-        const n = Math.min(24, Math.max(4, Math.ceil(len / (fr.s / 2))));
+        // (Every third of a hex, so a lone hex the line crosses is caught; asked once per change.)
+        const n = Math.min(240, Math.max(4, Math.ceil(len / (fr.s / 3))));
         let [k, done] = [1, 0];
         for (let i = 0; i <= n && !hide; i++) {
           const want = (len * i) / n;
@@ -2045,11 +2046,17 @@ export class PlayController implements PointerTool {
           }
         }
       } else if (!hide && area && AREA_KINDS.has(f.kind) && f.extent_ft > fr.s * 0.3) {
-        // (Along its direction, and a little across it.)
+        // (A lattice along its direction and a little across it, every third of a hex.)
         const [ux, uy] = [Math.cos(f.angle), Math.sin(f.angle)];
         const e = f.extent_ft;
-        for (const [a, b] of [[-0.5, 0], [-0.25, 0], [0.25, 0], [0.5, 0], [0, -0.2], [0, 0.2], [-0.35, -0.15], [0.35, 0.15], [-0.35, 0.15], [0.35, -0.15]]) {
-          if ((hide = out(f.x + (ux * a - uy * b) * e, f.y + (uy * a + ux * b) * e))) break;
+        const na = Math.min(40, Math.max(4, Math.ceil(e / (fr.s / 3))));
+        const nb = Math.min(12, Math.max(2, Math.ceil((0.4 * e) / (fr.s / 3))));
+        for (let i = 0; i <= na && !hide; i++) {
+          const a = i / na - 0.5;
+          for (let j = 0; j <= nb && !hide; j++) {
+            const b = (j / nb - 0.5) * 0.4;
+            hide = out(f.x + (ux * a - uy * b) * e, f.y + (uy * a + ux * b) * e);
+          }
         }
       }
       this.hexHides.set(f.id, hide);
@@ -2083,6 +2090,8 @@ export class PlayController implements PointerTool {
       case 'snapshot': {
         const before = this.fogKeys();
         await this.onWorld(m.world);
+        // (Another world's labels: asked again in its hexes.)
+        this.hexHides.clear();
         this.state = normalize(m.state);
         this.layer.fogChanged([...before, ...this.fogKeys()]);
         this.vision = m.vision;
