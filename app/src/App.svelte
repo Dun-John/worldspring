@@ -5,6 +5,7 @@
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { underlay } from './editor/trace/underlay.svelte';
+  import { tracer } from './editor/trace/tracer.svelte';
   import { MI, PIN_KINDS, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
@@ -4275,6 +4276,7 @@
       () => !!buildArmed?.cross.reset(),
       () => (crossEditing ? ((crossEditing = null), true) : false),
       () => !!townTool?.reset(),
+      () => (sketchOn && tracer.picking ? ((tracer.picking = null), true) : false),
       () => (sketchOn && underlay.adjust ? ((underlay.adjust = false), true) : false),
       () => (townMerging ? ((townMerging = false), true) : false),
       () => (townOn && (townPatch !== null || townCorner !== null) ? ((townPatch = null), (townCorner = null), true) : false),

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   // World › Sketch: the tools in one strip (all that shows when the panel is folded down),
   // the chosen tool's options, the preview, what the world can't follow, and Generate.
   import type { Conflict, RoadKind, SiteKind, VolcanoActivity, VolcanoKind } from '../gen/protocol';
@@ -6,6 +7,8 @@
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
   import { underlay } from './trace/underlay.svelte';
+  import { KIND_LABEL, tracer } from './trace/tracer.svelte';
+  import { TRACE_KINDS, type TraceKind } from './trace/types';
   import { PIN_KINDS, type EditTool, type PinTier, type Sketcher, type ToolSettings } from './sketcher';
 
   interface Props {
@@ -41,6 +44,34 @@
     input.value = '';
     if (f) await underlay.load(f);
   }
+  const FOREST_BIOMES = PAINT_BIOMES.filter(([id]) => ['temperate_forest', 'temperate_rainforest', 'taiga', 'jungle', 'swamp', 'blighted_woods'].includes(id));
+  const rgb = (c: [number, number, number]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  // A new picture starts with no picks; a change to the picks, controls or the picture's place re-traces (debounced).
+  let lastImage: unknown = null;
+  $effect(() => {
+    const im = underlay.image?.bitmap ?? null;
+    if (im !== lastImage) {
+      lastImage = im;
+      tracer.dropPicture();
+    }
+  });
+  $effect(() => {
+    void [JSON.stringify(tracer.picks), JSON.stringify(tracer.params), underlay.image, underlay.xf.cx, underlay.xf.cy, underlay.xf.ftPerPx, underlay.xf.rot];
+    untrack(() => tracer.schedule());
+  });
+  $effect(() => () => {
+    tracer.picking = null;
+    tracer.discard();
+  });
+  function pick(k: TraceKind) {
+    underlay.adjust = false;
+    tracer.picking = tracer.picking === k ? null : k;
+  }
+  function accept() {
+    sketcher.addStrokes(tracer.shownStrokes());
+    tracer.discard();
+  }
+  const anyShown = $derived((void tracer.version, tracer.shownStrokes().length > 0));
   const mi = (ft: number) => Math.round((ft / MI) * 100) / 100;
 
   const TOOLS: [EditTool, IconName, string, string, string][] = [
@@ -322,7 +353,7 @@
           <label class="slider"><span>Opacity</span><output>{Math.round(underlay.opacity * 100)}%</output><input type="range" min="0.05" max="1" step="0.05" bind:value={underlay.opacity} /></label>
           <div class="ws-row">
             <button class="ws-btn" onclick={() => underlay.fit()}>Fit to map</button>
-            <button class="ws-btn" aria-pressed={underlay.adjust} class:primary={underlay.adjust} onclick={() => (underlay.adjust = !underlay.adjust)} title="Drag the picture to move it; a corner to scale; the round handle to turn (Esc leaves)">Adjust</button>
+            <button class="ws-btn" aria-pressed={underlay.adjust} class:primary={underlay.adjust} onclick={() => ((underlay.adjust = !underlay.adjust), underlay.adjust && (tracer.picking = null))} title="Drag the picture to move it; a corner to scale; the round handle to turn (Esc leaves)">Adjust</button>
             <button class="ws-icon-btn" aria-pressed={underlay.shown} onclick={() => (underlay.shown = !underlay.shown)} title={underlay.shown ? 'Hide the picture' : 'Show the picture'} aria-label="Show the picture"><Icon name={underlay.shown ? 'eye' : 'eye-off'} /></button>
           </div>
           <div class="nums">
@@ -330,6 +361,37 @@
             <label class="ws-field">Centre south (mi)<input class="ws-input" type="number" step="0.5" value={mi(underlay.xf.cy)} onchange={(e) => (underlay.xf.cy = e.currentTarget.valueAsNumber * MI || 0)} /></label>
             <label class="ws-field">Across (mi)<input class="ws-input" type="number" step="1" min="0.01" value={mi(underlay.widthMi * MI)} onchange={(e) => (underlay.widthMi = e.currentTarget.valueAsNumber)} /></label>
             <label class="ws-field">Turn (°)<input class="ws-input" type="number" step="1" value={Math.round(underlay.xf.rot * 10) / 10} onchange={(e) => (underlay.xf.rot = e.currentTarget.valueAsNumber || 0)} /></label>
+          </div>
+          <div class="trace-kinds">
+            <div class="ws-muted">Pick a colour for what to trace (land is whatever isn’t water), then check the dashed preview.</div>
+            {#each TRACE_KINDS as k (k)}
+              {@const pk = tracer.picks[k]}
+              <details class="kind">
+                <summary>
+                  <span class="sw" style:background={pk ? rgb(pk) : 'transparent'} class:none={!pk}></span>
+                  <span class="kn">{KIND_LABEL[k]}</span>
+                  <button class="ws-icon-btn" aria-pressed={tracer.show[k]} onclick={(e) => (e.preventDefault(), (tracer.show[k] = !tracer.show[k]), tracer.version++)} title={tracer.show[k] ? 'Hide in the preview' : 'Show in the preview'} aria-label="Show {KIND_LABEL[k]} in the preview"><Icon name={tracer.show[k] ? 'eye' : 'eye-off'} /></button>
+                </summary>
+                <div class="kbody">
+                  <div class="ws-row">
+                    <button class="ws-btn grow" class:primary={tracer.picking === k} onclick={() => pick(k)}>{tracer.picking === k ? 'Click the picture…' : pk ? 'Pick again' : 'Pick colour'}</button>
+                    {#if pk}<button class="ws-btn" onclick={() => tracer.clearPick(k)}>Clear</button>{/if}
+                  </div>
+                  {#if k === 'forest'}
+                    <label class="ws-field">Biome<select class="ws-input" bind:value={tracer.biome} onchange={() => tracer.version++}>{#each FOREST_BIOMES as [id, label] (id)}<option value={id}>{label}</option>{/each}</select></label>
+                  {/if}
+                  <label class="slider"><span>Tolerance</span><output>{Math.round(tracer.params[k].threshold * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].threshold} /></label>
+                  <label class="slider"><span>Smoothing</span><output>{Math.round(tracer.params[k].smooth * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].smooth} /></label>
+                  <label class="slider"><span>Minimum size</span><output>{tracer.params[k].minSize}</output><input type="range" min="0" max="6000" step="20" bind:value={tracer.params[k].minSize} /></label>
+                  <button class="ws-btn" onclick={() => tracer.reset(k)}>Reset these</button>
+                </div>
+              </details>
+            {/each}
+            <div class="ws-muted status">{#if tracer.picking}Click the picture to pick the {KIND_LABEL[tracer.picking].toLowerCase()} colour (Esc cancels).{:else if tracer.busy}Tracing…{:else if tracer.error}{tracer.error}{:else if tracer.result}{tracer.summary}{:else}Nothing traced yet.{/if}</div>
+            <div class="ws-row">
+              <button class="ws-btn primary grow" disabled={!anyShown} onclick={accept} title="Add the shown strokes to the sketch (one undo step)">Accept</button>
+              <button class="ws-btn" disabled={!tracer.result} onclick={() => tracer.discard()}>Discard</button>
+            </div>
           </div>
         {/if}
       </div>
@@ -427,5 +489,39 @@
   }
   .note {
     margin-top: -4px;
+  }
+  .trace-kinds {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid var(--line-faint);
+    padding-top: 6px;
+  }
+  .kind > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .kn {
+    flex: 1;
+  }
+  .sw {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid var(--line-soft);
+  }
+  .sw.none {
+    background: repeating-linear-gradient(45deg, transparent 0 3px, var(--line-faint) 3px 4px);
+  }
+  .kbody {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 0 4px 26px;
+  }
+  .status {
+    min-height: 1.4em;
   }
 </style>

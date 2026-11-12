@@ -298,6 +298,11 @@ export class Sketcher {
     this.onChange();
   }
 
+  /** Append ready-made strokes (a traced picture's) as one undo step. */
+  addStrokes(add: Stroke[]) {
+    if (add.length) this.commit([...this.strokes, ...structuredClone(add)]);
+  }
+
   clear() {
     if (this.strokes.length) this.commit([]);
   }

@@ -5,6 +5,7 @@ import type { Geom, Stroke } from '../gen/protocol';
 import type { Sketcher } from '../editor/sketcher';
 import type { Camera } from './camera';
 import { HANDLE_PX, underlay } from '../editor/trace/underlay.svelte';
+import { tracer } from '../editor/trace/tracer.svelte';
 
 const BIOME_COLORS: Record<string, number> = {
   ice: 0xf2f2ed,
@@ -43,6 +44,8 @@ export class SketchLayer {
   private readonly trace = new Sprite();
   private readonly traceG = new Graphics();
   private traceImage: unknown = null;
+  /** The auto-trace's result, dashed (never part of the sketch until accepted). */
+  private readonly traceP = new Graphics();
   private readonly g = new Graphics();
   private readonly names = new Container();
   private previewSize: [number, number] = [1, 1];
@@ -63,7 +66,7 @@ export class SketchLayer {
     this.mapSize = [geom.map_w_ft, geom.map_h_ft];
     this.trace.anchor.set(0.5);
     this.trace.visible = false;
-    this.container.addChild(this.preview, this.trace, this.traceG, this.g, this.names);
+    this.container.addChild(this.preview, this.trace, this.traceG, this.traceP, this.g, this.names);
   }
 
   /** The map size being sketched (its outline is drawn; previews fill it). */
@@ -122,12 +125,47 @@ export class SketchLayer {
     for (const [cx, cy] of c) g.rect(cx - HANDLE_PX / 2, cy - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX).fill(0xffffff).stroke({ width: 2, color: 0x1a5fb4 });
   }
 
+  /** The traced strokes, dashed in each kind's sketch colour (shown kinds only). */
+  private drawTraced(cam: Camera) {
+    const g = this.traceP;
+    g.clear();
+    if (!underlay.visible) return;
+    for (const s of tracer.shownStrokes()) {
+      const color = s.tool === 'biome' ? (BIOME_COLORS[s.biome ?? ''] ?? 0x8aa86a) : (COLORS[s.tool] ?? 0x333333);
+      const pts = s.pts.map((p) => cam.worldToScreen(p[0], p[1]));
+      if (s.closed && pts.length > 2) pts.push(pts[0]);
+      const dark = s.tool === 'biome' ? 0x5a7a3a : color;
+      let on = true;
+      let left = 9;
+      for (let i = 1; i < pts.length; i++) {
+        let [x, y] = pts[i - 1];
+        const [x1, y1] = pts[i];
+        let d = Math.hypot(x1 - x, y1 - y);
+        const [ux, uy] = d > 0 ? [(x1 - x) / d, (y1 - y) / d] : [0, 0];
+        while (d > 0) {
+          const t = Math.min(d, left);
+          if (on) g.moveTo(x, y).lineTo(x + ux * t, y + uy * t);
+          x += ux * t;
+          y += uy * t;
+          d -= t;
+          left -= t;
+          if (left <= 0) {
+            on = !on;
+            left = on ? 9 : 5;
+          }
+        }
+      }
+      g.stroke({ width: 2.5, color: dark, alpha: 0.85 });
+    }
+  }
+
   update(cam: Camera) {
     const view = `${cam.cx},${cam.cy},${cam.zoom},${cam.width},${cam.height}`;
-    const key = `${view}|${underlay.visible}|${underlay.adjust}|${underlay.opacity}|${underlay.xf.cx},${underlay.xf.cy},${underlay.xf.ftPerPx},${underlay.xf.rot}|${this.traceImage === (underlay.image?.bitmap ?? null)}`;
+    const key = `${view}|${underlay.visible}|${underlay.adjust}|${underlay.opacity}|${underlay.xf.cx},${underlay.xf.cy},${underlay.xf.ftPerPx},${underlay.xf.rot}|${this.traceImage === (underlay.image?.bitmap ?? null)}|${tracer.version}`;
     if (key !== this.lastTrace) {
       this.lastTrace = key;
       this.updateTrace(cam);
+      this.drawTraced(cam);
     }
     if (!this.dirty && view === this.lastView) return;
     this.dirty = false;

@@ -17,6 +17,7 @@ import { HexLayer, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
 import { underlay } from '../editor/trace/underlay.svelte';
+import { tracer } from '../editor/trace/tracer.svelte';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
@@ -1877,7 +1878,15 @@ export class MapView {
           return;
         }
       }
-      if (this.sketcher && underlay.adjust && underlay.visible) {
+      if (this.sketcher && tracer.picking && underlay.visible) {
+        // Picking a colour off the trace picture: the click is the pick (nothing is drawn).
+        if (e.button === 0 && this.pointers.size === 0) {
+          const r = c.getBoundingClientRect();
+          const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+          tracer.pickAt(x, y);
+          return;
+        }
+      } else if (this.sketcher && underlay.adjust && underlay.visible) {
         // Adjusting the trace picture: a drag on it moves it; the pen doesn't draw (elsewhere pans).
         if (e.button === 0 && this.pointers.size === 0 && this.adjusting === null) {
           const r = c.getBoundingClientRect();
