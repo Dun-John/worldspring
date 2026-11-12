@@ -69,7 +69,7 @@ pub fn list() -> Value {
             "in_building": { "type": "string", "description": "Entrance in its cellar" },
             "way": { "type": "string", "enum": ["stairs", "trapdoor"] },
         })), &["kind"]) },
-        { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids. Works on r: rooms and m: point notes (at moves one).", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "in_building": { "type": ["string", "null"], "description": "Entrance: into this building; null: out" }, "way": { "type": "string" }, "at": {} }), &["id"]) },
+        { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids. Also r: rooms, m: notes.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "in_building": { "type": ["string", "null"], "description": "Entrance: into this building; null: out" }, "way": { "type": "string" }, "at": {} }), &["id"]) },
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
         { "name": "delete_feature", "title": "Delete a created site", "description": "Delete created sites and buildings drawn by hand (id or ids, all or none). Notes, NPCs and plots pointing at them are kept (left_pointing). restore_feature undoes it. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
     ]);
@@ -558,8 +558,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
                 None => return Err(crate::args::bad("notes", "text", &a["notes"])),
             };
             let tags: Vec<String> = a["tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            let tags = crate::notebook::canon_tags(tags);
             let remove: Vec<String> = a["remove_tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(|t| t.to_string())).collect()).unwrap_or_default();
-            if let Some(t) = tags.iter().find(|t| remove.contains(t)) {
+            if let Some(t) = tags.iter().find(|t| remove.iter().any(|r| r.eq_ignore_ascii_case(t))) {
                 return Err(crate::args::bad("remove_tags", "not also in tags", &json!(t)));
             }
             let append = a["append"].as_bool().unwrap_or(false);
@@ -571,13 +572,11 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
                 if let Some(t) = t {
                     n.text = if append && !n.text.is_empty() { format!("{}\n\n{t}", n.text) } else { t };
                 }
-                let removed: Vec<&String> = remove.iter().filter(|t| n.tags.contains(t)).collect();
-                n.tags.retain(|t| !remove.contains(t));
-                for tag in tags {
-                    if !n.tags.contains(&tag) {
-                        n.tags.push(tag);
-                    }
-                }
+                let gone = |t: &String| remove.iter().any(|r| r.eq_ignore_ascii_case(t));
+                let removed: Vec<String> = n.tags.iter().filter(|t| gone(t)).cloned().collect();
+                n.tags.retain(|t| !gone(t));
+                n.tags.extend(tags);
+                n.tags = crate::notebook::canon_tags(std::mem::take(&mut n.tags));
                 let mut v = json!({ "tool": "annotate_feature", "id": key, "notes": n.text, "tags": n.tags });
                 if !remove.is_empty() {
                     v["removed_tags"] = json!(removed);
@@ -589,6 +588,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         }
         "update_feature" => {
             let id = arg_str(&a, "id")?;
+            if id.starts_with("m:") && !a["name"].is_null() {
+                return Err("name: a point note has no name (it is called after its room); give notes, tags or at".into());
+            }
             // A point note (m:) moves with `at`, as move_note.
             let point = id.starts_with("m:") && !a["at"].is_null();
             if point {
@@ -608,7 +610,7 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             }
             let name = a["name"].as_str().map(|s| s.trim().to_string());
             let notes = a["notes"].as_str().map(str::to_string);
-            let tags: Option<Vec<String>> = a["tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect());
+            let tags: Option<Vec<String>> = a["tags"].as_array().map(|v| crate::notebook::canon_tags(v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()));
             let pair = drawn_pair(app, &id).await?;
             app.edit("agent", 0, move |e| {
                 if let Some(n) = &name {
@@ -689,7 +691,7 @@ pub(crate) async fn known(app: &Shared, id: &str) -> Result<(), String> {
 
 /// A building drawn by hand behind an id (`agent::drawn_pair`: its place in `created`, created
 /// and building ids), else None.
-async fn drawn_pair(app: &Shared, id: &str) -> Result<Option<(usize, String, String)>, String> {
+pub(crate) async fn drawn_pair(app: &Shared, id: &str) -> Result<Option<(usize, String, String)>, String> {
     let q = id.to_string();
     app.worker.with(move |ex| Ok(agent::drawn_pair(&ex.world, &ex.t0, &q))).await
 }
@@ -697,7 +699,7 @@ async fn drawn_pair(app: &Shared, id: &str) -> Result<Option<(usize, String, Str
 /// The key a place's note is kept under: a building drawn by hand's created id (`pair`, while
 /// `created` still holds it there), its note under its building id (written before) joined
 /// onto it; else `id`.
-fn note_key(e: &mut Edits, pair: Option<(usize, String, String)>, id: &str) -> String {
+pub(crate) fn note_key(e: &mut Edits, pair: Option<(usize, String, String)>, id: &str) -> String {
     match pair.filter(|p| e.created.get(p.0).is_some_and(|c| c.id == p.1)) {
         Some((_, c, b)) => {
             if let Some(old) = e.notes.remove(&b) {

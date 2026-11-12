@@ -4,7 +4,7 @@
 import type { Note } from '../gen/protocol';
 import type { IconName } from './icons';
 
-/** The quick-pick tags, in the order a point's marker takes its glyph from. */
+/** The quick-pick tags (the order the chips show in). */
 export const QUICK_TAGS: { tag: string; label: string; icon: IconName }[] = [
   { tag: 'treasure', label: 'Treasure', icon: 'chest' },
   { tag: 'read-aloud', label: 'Read aloud', icon: 'chat' },
@@ -13,9 +13,29 @@ export const QUICK_TAGS: { tag: string; label: string; icon: IconName }[] = [
   { tag: 'monster', label: 'Monster', icon: 'skull' },
 ];
 
-/** The first quick pick among a note's tags (its marker's glyph), else null. */
+const QUICK = new Set(QUICK_TAGS.map((q) => q.tag));
+
+/** A note's tags in one form: quick picks lower-case as listed, the others deduped ignoring case (first spelling kept). */
+export function canonTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of tags) {
+    const t = raw.trim();
+    const k = t.toLowerCase();
+    if (!t || seen.has(k)) continue;
+    seen.add(k);
+    out.push(QUICK.has(k) ? k : t);
+  }
+  return out;
+}
+
+/** The note's own first quick-pick tag (its marker's glyph), in the note's order, else null. */
 export function quickTag(tags: string[] | undefined): string | null {
-  return QUICK_TAGS.find((q) => tags?.includes(q.tag))?.tag ?? null;
+  for (const t of tags ?? []) {
+    const k = t.toLowerCase();
+    if (QUICK.has(k)) return k;
+  }
+  return null;
 }
 
 /** A point note's id split: its site, level and own id. */

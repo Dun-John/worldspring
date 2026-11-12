@@ -271,6 +271,37 @@ export class MapView {
   /** Inside a site, a click: the ways on from that square (empty elsewhere) and the screen
    * position, for a menu. */
   onMoves: (moves: Move[], sx: number, sy: number) => void = () => {};
+  private longPress: { id: number; x: number; y: number; timer: number } | null = null;
+  private longPressAt = -1e9;
+  /** Touch and pen have no right button, and iOS Safari sends no contextmenu: a held press opens the menu. */
+  private armLongPress(e: PointerEvent) {
+    this.cancelLongPress();
+    if (e.pointerType === 'mouse' || this.sketcher || this.tool || this.interiorStyle.player) return;
+    const [id, x, y] = [e.pointerId, e.clientX, e.clientY];
+    const timer = window.setTimeout(() => {
+      this.longPress = null;
+      if (this.openNotesMenu(x, y)) {
+        this.longPressAt = performance.now();
+        this.tap = null;
+      }
+    }, 500);
+    this.longPress = { id, x, y, timer };
+  }
+  private cancelLongPress() {
+    if (this.longPress) window.clearTimeout(this.longPress.timer);
+    this.longPress = null;
+  }
+  /** The one place the inside menu (ways on, a room's notes, a note here) opens from a right-click or long-press. */
+  private openNotesMenu(clientX: number, clientY: number): boolean {
+    if (this.inputOff) return false;
+    const r = this.app.canvas.getBoundingClientRect();
+    const [x, y] = this.cam.screenToWorld(clientX - r.left, clientY - r.top);
+    const site = this.interiorAt(x, y);
+    const notes = site?.noteMoves(x, y) ?? [];
+    if (!site || !notes.length) return false;
+    this.onMoves([...site.movesAt(x, y), ...notes], clientX - r.left, clientY - r.top);
+    return true;
+  }
   /** The DM clicked a point note's marker inside (`m:` id). */
   onNote: (id: string) => void = () => {};
   /** The DM clicked a room inside where there is no way on (`r:` id). */
@@ -1039,7 +1070,10 @@ export class MapView {
   /** The point notes inside (the DM's map only; never the players'). */
   private markNotes() {
     if (this.interiorStyle.player) return;
-    InteriorLayer.notes = noteMarkers(this.edits.notes);
+    // (Only a point note's change redraws the markers, not any edit to a note's text on a place.)
+    const next = noteMarkers(this.edits.notes);
+    if (JSON.stringify(next) === JSON.stringify(InteriorLayer.notes)) return;
+    InteriorLayer.notes = next;
     this.interior?.drawNotes();
     this.sewers?.drawNotes();
   }
@@ -1853,10 +1887,12 @@ export class MapView {
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (this.pointers.size === 1) {
         this.tap = { x: e.clientX, y: e.clientY, t: performance.now() };
+        this.armLongPress(e);
         this.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
         this.vel.x = this.vel.y = 0;
       } else if (this.pointers.size === 2) {
         this.tap = null;
+        this.cancelLongPress();
         const [a, b] = [...this.pointers.values()];
         this.pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
       }
@@ -1879,6 +1915,7 @@ export class MapView {
         if (!this.pointers.size) this.tool.hover(x, y);
       }
       if (!this.pointers.has(e.pointerId) || this.inputOff) return;
+      if (this.longPress && e.pointerId === this.longPress.id && Math.hypot(e.clientX - this.longPress.x, e.clientY - this.longPress.y) > 8) this.cancelLongPress();
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
@@ -1897,6 +1934,7 @@ export class MapView {
       }
     });
     const end = (e: PointerEvent) => {
+      if (this.longPress?.id === e.pointerId) this.cancelLongPress();
       // (Any click on the map, a tool's or a pick, lets go of a room picked from the search.)
       if (e.type === 'pointerup' && e.pointerId === this.toolPointer && InteriorLayer.picked) this.markRoom(null);
       if (e.pointerId === this.toolPointer) {
@@ -1924,6 +1962,11 @@ export class MapView {
         const site = this.interiorAt(x, y);
         // (A tap the tool takes, placing say, is never half a double-tap.)
         const taken = !!this.tool?.tap?.(x, y, e);
+        // (Only the main button clicks the map: a right-click there is a menu's, a tool may still take it.)
+        if (e.button !== 0 && !taken) {
+          if (this.drag?.id === e.pointerId) this.drag = null;
+          return;
+        }
         const note = !taken && site && !this.interiorStyle.player ? site.noteAt(x, y) : null;
         if (taken) this.lastTap = null;
         else if (note) {
@@ -1966,13 +2009,13 @@ export class MapView {
     c.addEventListener('contextmenu', (e) => {
       if (this.sketcher || this.tool) return e.preventDefault();
       if (this.interiorStyle.player || this.inputOff) return;
-      const r = c.getBoundingClientRect();
-      const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
-      const site = this.interiorAt(x, y);
-      const notes = site?.noteMoves(x, y) ?? [];
-      if (!site || !notes.length) return;
-      e.preventDefault();
-      this.onMoves([...site.movesAt(x, y), ...notes], e.clientX - r.left, e.clientY - r.top);
+      // (A long-press already opened the menu: Android sends contextmenu after it.)
+      if (performance.now() - this.longPressAt < 1500) return e.preventDefault();
+      if (this.openNotesMenu(e.clientX, e.clientY)) e.preventDefault();
+    });
+    // Lifting the finger after a long-press must not click the menu that opened under it.
+    c.addEventListener('touchend', (e) => {
+      if (e.cancelable && performance.now() - this.longPressAt < 5000 && !this.longPress) e.preventDefault();
     });
     c.addEventListener('dblclick', (e) => {
       // Touch double-taps are handled on pointerup (browsers differ on synthesizing these).

@@ -3,7 +3,7 @@
   // toggle, the other tags as a comma field. Text tagged read-aloud is boxed, to be read out.
   // Saves on change (the text when it loses focus).
   import Icon from './Icon.svelte';
-  import { QUICK_TAGS } from './notes';
+  import { QUICK_TAGS, canonTags } from './notes';
 
   interface Props {
     note?: { text: string; tags?: string[] };
@@ -17,7 +17,7 @@
   let { note, onSave, placeholder = 'Add a note: lore, hooks, secrets…', label, tagsAlways = false }: Props = $props();
 
   const quick = new Set(QUICK_TAGS.map((q) => q.tag));
-  const tags = $derived(note?.tags ?? []);
+  const tags = $derived(canonTags(note?.tags ?? []));
   const free = $derived(tags.filter((t) => !quick.has(t)));
   const aloud = $derived(tags.includes('read-aloud'));
   let area = $state<HTMLTextAreaElement>();
@@ -25,7 +25,7 @@
   const text = () => area?.value ?? note?.text ?? '';
   const tagList = (s: string) => [...new Set(s.split(',').map((t) => t.trim()).filter(Boolean))];
   function toggle(t: string) {
-    onSave(text(), tags.includes(t) ? tags.filter((x) => x !== t) : [...tags, t]);
+    onSave(text(), tags.includes(t) ? tags.filter((x) => x !== t) : canonTags([...tags, t]));
   }
 </script>
 
@@ -39,7 +39,7 @@
     {/each}
   </div>
   {#if tagsAlways || note?.text || tags.length}
-    <input class="ws-input" placeholder="Other tags, comma separated" value={free.join(', ')} onchange={(e) => onSave(text(), [...tags.filter((t) => quick.has(t)), ...tagList(e.currentTarget.value)])} aria-label="Tags" />
+    <input class="ws-input" placeholder="Other tags, comma separated" value={free.join(', ')} onchange={(e) => onSave(text(), canonTags([...tags.filter((t) => quick.has(t)), ...tagList(e.currentTarget.value)]))} aria-label="Tags" />
   {/if}
 </div>
 

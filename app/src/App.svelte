@@ -73,7 +73,7 @@
   import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, ownHash, PINNED, renumberedSince } from './world/versions';
-  import { asideCount, asideList, asideWhat, forgetAside } from './world/setaside';
+  import { asideCount, asideList, asideWhat, forgetAside, isAside } from './world/setaside';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
   import Choice, { type ChoiceButton } from './ui/shell/Choice.svelte';
   import { backup, keepLinked, linked, loadEdits, restore, restorePlan, saveEdits, saveWorld, takeRestored, type Backup, type RestorePlan } from './world/library';
@@ -390,7 +390,8 @@
   function toast(text: string, undo?: () => void, more: Pick<Toast, 'action' | 'sticky' | 'ms'> = {}): number {
     const id = nextToast++;
     // (Notices that stay are kept when the others are trimmed.)
-    toasts = [...toasts.filter((t) => t.sticky), ...toasts.filter((t) => !t.sticky).slice(-3), { id, text, undo, ...more }];
+    // (The same words again replace the earlier notice.)
+    toasts = [...toasts.filter((t) => t.sticky), ...toasts.filter((t) => !t.sticky && t.text !== text).slice(-3), { id, text, undo, ...more }];
     if (!more.sticky) setTimeout(() => dismiss(id), more.ms ?? (undo || more.action ? 8000 : 4000));
     return id;
   }
@@ -3944,7 +3945,7 @@
         const layer = view.interiorAt(x, y);
         if (!layer?.roomAt(x, y)) return toast('Pick a spot in a room');
         const g = layer.toGrid(x, y);
-        putNote(layer.interior.id, layer.currentLevel, [Math.round(g[0] * 100) / 100, Math.round(g[1] * 100) / 100], move);
+        putNote(layer.interior.id, layer.currentLevel, [Math.round(g[0] * 100) / 100, Math.round(g[1] * 100) / 100], move, layer.roomNameAt(x, y));
       },
     };
     pickTool = tool;
@@ -3955,7 +3956,7 @@
 
   /** A point note put down at `at` (grid units) on a site's level, or one moved there (to a new id
    * when it changes site or level). */
-  function putNote(site: string, level: number, at: [number, number], move?: string) {
+  function putNote(site: string, level: number, at: [number, number], move?: string, roomName?: string) {
     const all = { ...notes };
     let id: string;
     if (move && all[move]) {
@@ -3967,22 +3968,36 @@
       id = newPointId(site, level);
       all[id] = { text: '', at };
     }
-    applyEdits({ ...edits, notes: all }, { tool: move ? 'move_note' : 'add_note_at', id }, 'user');
+    applyEdits({ ...edits, notes: all }, { tool: move ? 'move_note' : 'add_note_at', id, ...(roomName ? { name: roomName } : {}) }, 'user');
     openNote(id);
   }
 
   /** Every note (places, rooms, points) for the Notebook's Notes tab, with where it is. */
   let noteRows = $state<NoteRow[]>([]);
   let noteRowsSeq = 0;
+  /** Rows already worked out, by id: a note's path changes with its spot or with names, not with its text. */
+  let noteRowCache = new Map<string, { at: string; path: string[] }>();
+  let noteRowKey: unknown = null;
   async function listNotes() {
     const seq = ++noteRowsSeq;
+    // (Names or the world changed: the paths are worked out again.)
+    const key = [renames, resolvePlace];
+    if (!noteRowKey || (noteRowKey as unknown[]).some((k, i) => k !== key[i])) noteRowCache = new Map();
+    noteRowKey = key;
     const rows = await Promise.all(
-      Object.entries(placeNotes).map(async ([id, n]): Promise<NoteRow> => {
-        const kind = id.startsWith('m:') ? 'point' : id.startsWith('r:') ? 'room' : 'place';
-        if (kind === 'place') return { id, kind, note: n, path: [nameOf(id)] };
-        const p = await notePlace(id);
-        return { id, kind, note: n, path: p ? [p.siteName, p.levelName, ...(p.roomName ? [p.roomName] : [])] : [nameOf(id)] };
-      }),
+      Object.entries(placeNotes)
+        .filter(([id]) => !id.startsWith('gone:') && !isAside(id))
+        .map(async ([id, n]): Promise<NoteRow> => {
+          const kind = id.startsWith('m:') ? 'point' : id.startsWith('r:') ? 'room' : 'place';
+          if (kind === 'place') return { id, kind, note: n, path: [nameOf(id)] };
+          const at = String(n.at ?? '');
+          const hit = noteRowCache.get(id);
+          if (hit && hit.at === at) return { id, kind, note: n, path: hit.path };
+          const p = await notePlace(id);
+          const path = p ? [p.siteName, p.levelName, ...(p.roomName ? [p.roomName] : [])] : [nameOf(id)];
+          noteRowCache.set(id, { at, path });
+          return { id, kind, note: n, path };
+        }),
     );
     if (seq === noteRowsSeq) noteRows = rows;
   }
@@ -4991,7 +5006,7 @@
       y={moves.y}
       onMove={(m) => {
         if (m.kind === 'room') openNote(m.id);
-        else if (m.kind === 'note') putNote(m.site, m.level, m.grid);
+        else if (m.kind === 'note') putNote(m.site, m.level, m.grid, undefined, view.interiorAt(m.at[0], m.at[1])?.roomNameAt(m.at[0], m.at[1]));
         else void view.move(m);
         moves = null;
       }}

@@ -44,12 +44,27 @@ fn plot_props() -> Value {
     })
 }
 
+/// A note's tags in one form: the quick picks lower-case, the others deduped ignoring case (the app's `canonTags`).
+pub(crate) fn canon_tags(tags: Vec<String>) -> Vec<String> {
+    const QUICK: [&str; 5] = ["treasure", "read-aloud", "trap", "secret", "monster"];
+    let mut out: Vec<String> = Vec::new();
+    for t in tags {
+        let t = t.trim();
+        if t.is_empty() || out.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+            continue;
+        }
+        let k = t.to_lowercase();
+        out.push(if QUICK.contains(&k.as_str()) { k } else { t.to_string() });
+    }
+    out
+}
+
 fn note_spot() -> Value {
     json!({
-        "site": { "type": "string", "description": "A building, dungeon or sewer section id" },
-        "level": { "type": "integer", "minimum": 0, "description": "0 is the lowest level" },
-        "at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] in the level's grid squares" },
-        "room": { "type": "string", "description": "An r: id, for its centre" },
+        "site": { "type": "string", "description": "Building, dungeon or sewer section id" },
+        "level": { "type": "integer", "minimum": 0, "description": "Level index" },
+        "at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] grid squares" },
+        "room": { "type": "string", "description": "r: id (its centre)" },
     })
 }
 
@@ -76,10 +91,10 @@ pub fn list() -> Vec<Value> {
         json!({ "name": "get_plot", "title": "Plot point", "description": "A plot point in full.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
         json!({ "name": "create_plot", "title": "Create a plot point", "description": "Add a plot point tied to places and NPCs. Returns it with its id.", "inputSchema": schema(plot_props(), &["title"]) }),
         json!({ "name": "update_plot", "title": "Update a plot point", "description": "Change a plot point's fields (only those given; lists are replaced).", "inputSchema": schema(with(id.clone(), plot_props()), &["id"]) }),
-        json!({ "name": "add_note_at", "title": "Add a note in a room", "description": "Put a note at a point inside a building, dungeon or sewer level: site, level and at [x, y] in grid squares, or room (an r: id: its centre). Returns the note with its m: id.", "inputSchema": schema(with(note_spot(), json!({ "text": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } })), &["text"]) }),
-        json!({ "name": "move_note", "title": "Move a point note", "description": "Move an m: note to at [x, y] or room (an r: id on the same level).", "inputSchema": schema(with(json!({ "id": { "type": "string" } }), json!({ "at": note_spot()["at"], "room": note_spot()["room"] })), &["id"]) }),
-        json!({ "name": "delete_note", "title": "Delete a note", "description": "Delete the note on a place, room (r:) or point (m:).", "inputSchema": schema(id.clone(), &["id"]) }),
-        json!({ "name": "list_notes", "title": "Notes", "description": "Notes on places, rooms and points, {items, found} (limit, default 100): id, kind, place path, text, tags, at. Filter by tag, site (also what is in it), level, kind or text.", "inputSchema": schema(json!({ "query": { "type": "string" }, "tag": { "type": "string" }, "site": { "type": "string" }, "level": { "type": "integer", "minimum": 0 }, "kind": { "type": "string", "enum": ["place", "room", "point"] }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
+        json!({ "name": "add_note_at", "title": "Add a note in a room", "description": "Put a note at a point in a building, dungeon or sewer level (site, level, at; or room). Returns it with its m: id.", "inputSchema": schema(with(note_spot(), json!({ "text": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } })), &["text"]) }),
+        json!({ "name": "move_note", "title": "Move a point note", "description": "Move an m: note (at, or room on its level).", "inputSchema": schema(with(json!({ "id": { "type": "string" } }), json!({ "at": note_spot()["at"], "room": note_spot()["room"] })), &["id"]) }),
+        json!({ "name": "delete_note", "title": "Delete a note", "description": "Delete a note (place, r: or m: id).", "inputSchema": schema(id.clone(), &["id"]) }),
+        json!({ "name": "list_notes", "title": "Notes", "description": "Notes on places, rooms and points: {items, found}, limit default 100. Filter by tag, site, level, kind, query.", "inputSchema": schema(json!({ "query": { "type": "string" }, "tag": { "type": "string" }, "site": { "type": "string" }, "level": { "type": "integer", "minimum": 0 }, "kind": { "type": "string", "enum": ["place", "room", "point"] }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
         json!({ "name": "delete_plot", "title": "Delete a plot point", "description": "Delete a plot point, or several (id or ids; all or none).", "inputSchema": schema(ids, &[]) }),
     ]
 }
@@ -428,6 +443,9 @@ fn spot(w: &worldgen::world::World, t0: &worldgen::t0::T0, a: &Value, fixed: Opt
     let (Some(site), Some(li)) = (site, li) else { return Err("give site and level, or a room".into()) };
     let Some(at) = at else { return Err("give at [x, y], or a room".into()) };
     let Some(it) = worldgen::interior::generate_id(w, t0, &site) else {
+        if let Some(l) = site.strip_prefix("w:").filter(|l| l.parse::<u32>().is_ok()) {
+            return Err(format!("{site} is a whole sewer network: a note goes in one of its 480-ft sections, w:{l}:<sx>:<sy> (or give room: an r: id)"));
+        }
         return Err(if agent::position(w, t0, &site).is_some() {
             format!("{site} has no inside: point notes go in a building, dungeon or sewer level (annotate_feature puts a note on a place on the map)")
         } else {
@@ -474,7 +492,7 @@ pub(crate) async fn write_point(app: &Shared, tool: &str, a: &Value) -> Result<V
     if add && a["text"].as_str().is_none_or(|t| t.trim().is_empty()) {
         return Err("text: the note's text (not empty)".into());
     }
-    let (id2, tags, text) = (id.clone(), strs(&a["tags"]).unwrap_or_default(), a["text"].as_str().map(str::to_string));
+    let (id2, tags, text) = (id.clone(), canon_tags(strs(&a["tags"]).unwrap_or_default()), a["text"].as_str().map(str::to_string));
     app.edit("agent", 0, move |e| {
         if add {
             e.notes.insert(id2.clone(), worldgen::world::Note { text: text.unwrap_or_default(), tags, at: Some(at) });
@@ -502,8 +520,11 @@ async fn delete_note(app: &Shared, a: &Value) -> Result<Value, String> {
     let id = arg_str(a, "id")?;
     let id2 = id.clone();
     let name = app.worker.with(move |ex| Ok(agent::name_any(&ex.world, &ex.t0, &id2))).await?;
+    // (A building drawn by hand keeps its note under its created id: the same key as annotate_feature.)
+    let pair = crate::tools::drawn_pair(app, &id).await?;
     app.edit("agent", 0, move |e| {
-        let n = e.notes.remove(&id).ok_or_else(|| format!("no note on {id}"))?;
+        let key = crate::tools::note_key(e, pair, &id);
+        let n = e.notes.remove(&key).or_else(|| e.notes.remove(&id)).ok_or_else(|| format!("no note on {id}"))?;
         Ok(json!({ "tool": "delete_note", "id": id, "name": name, "text": n.text, "tags": n.tags }))
     })
     .await
@@ -518,6 +539,8 @@ async fn list_notes(app: &Shared, a: Value) -> Result<Value, String> {
             let (kind, level) = (a["kind"].as_str(), a["level"].as_u64().map(|l| l as usize));
             let site = a["site"].as_str();
             let at = site.map(|s| agent::at_place(w, t0, s));
+            // (Each site's inside is generated once for the whole list.)
+            let mut cache = Default::default();
             let v: Vec<Value> = w
                 .file
                 .edits
@@ -527,7 +550,7 @@ async fn list_notes(app: &Shared, a: Value) -> Result<Value, String> {
                 .filter(|(_, n)| q.is_empty() || n.text.to_lowercase().contains(&q))
                 .filter(|(k, _)| at.as_ref().is_none_or(|f| f(k)))
                 .filter(|(k, _)| level.is_none_or(|l| agent::site_level(k).is_some_and(|s| s.1 == l)))
-                .filter_map(|(k, n)| agent::note_row(w, t0, k, n))
+                .filter_map(|(k, n)| agent::note_row_in(w, t0, k, n, &mut cache))
                 .filter(|r| kind.is_none_or(|x| r["kind"] == x))
                 .collect();
             Ok(listed(json!(v), crate::tools::limit_of(&a, 100), json!({})))

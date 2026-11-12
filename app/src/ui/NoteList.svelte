@@ -28,14 +28,20 @@
   /** The quick picks, then the other tags in use (most used first). */
   const tags = $derived.by(() => {
     const count = new Map<string, number>();
-    for (const r of rows) for (const t of r.note.tags ?? []) if (!quick.includes(t)) count.set(t, (count.get(t) ?? 0) + 1);
-    return [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t);
+    const spelt = new Map<string, string>();
+    for (const r of rows)
+      for (const t of new Set((r.note.tags ?? []).map((x) => x.toLowerCase())))
+        if (!quick.includes(t)) count.set(t, (count.get(t) ?? 0) + 1);
+    for (const r of rows) for (const t of r.note.tags ?? []) if (!spelt.has(t.toLowerCase())) spelt.set(t.toLowerCase(), t);
+    return [...count.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => spelt.get(t) ?? t);
   });
+  /** The filter in force: one whose tag is no longer on any note (or a quick pick) is off. */
+  const active = $derived(tag && (quick.includes(tag) || tags.some((t) => t.toLowerCase() === tag)) ? tag : null);
   const KIND_ORDER = { place: 0, room: 1, point: 2 };
   const shown = $derived.by(() => {
     const t = q.trim().toLowerCase();
     return rows
-      .filter((r) => (!tag || r.note.tags?.includes(tag)) && (!t || [r.note.text, ...r.path, ...(r.note.tags ?? [])].some((s) => s.toLowerCase().includes(t))))
+      .filter((r) => (!active || r.note.tags?.some((x) => x.toLowerCase() === active)) && (!t || [r.note.text, ...r.path, ...(r.note.tags ?? [])].some((s) => s.toLowerCase().includes(t))))
       .sort((a, b) => a.path.join(' ').localeCompare(b.path.join(' ')) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
   });
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -47,10 +53,10 @@
   <input class="ws-input" type="search" placeholder="Find notes…" bind:value={q} aria-label="Find notes" />
   <div class="chips" role="group" aria-label="Tags">
     {#each QUICK_TAGS as t (t.tag)}
-      <button class="ws-chip" aria-pressed={tag === t.tag} onclick={() => (tag = tag === t.tag ? null : t.tag)}><Icon name={t.icon} size={12} /> {t.label}</button>
+      <button class="ws-chip" aria-pressed={active === t.tag} onclick={() => (tag = active === t.tag ? null : t.tag)}><Icon name={t.icon} size={12} /> {t.label}</button>
     {/each}
     {#each tags as t (t)}
-      <button class="ws-chip" aria-pressed={tag === t} onclick={() => (tag = tag === t ? null : t)}><Icon name="tag" size={12} /> {t}</button>
+      <button class="ws-chip" aria-pressed={active === t.toLowerCase()} onclick={() => (tag = active === t.toLowerCase() ? null : t.toLowerCase())}><Icon name="tag" size={12} /> {t}</button>
     {/each}
   </div>
   <ul>

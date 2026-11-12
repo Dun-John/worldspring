@@ -2978,6 +2978,12 @@ export class InteriorLayer {
   }
 
   /** A room's name, as renamed (`r:<site>:<level>:<room>`), else what it is. */
+  /** The name of the room under a world point on this level, if any. */
+  roomNameAt(wx: number, wy: number): string | undefined {
+    const r = this.roomAt(wx, wy);
+    return r ? this.roomName(this.level, Number(r.slice(r.lastIndexOf(':') + 1))) : undefined;
+  }
+
   roomName(li: number, ri: number): string {
     return InteriorLayer.names[`r:${this.interior.id}:${li}:${ri}`] ?? this.interior.levels[li].rooms[ri].kind;
   }

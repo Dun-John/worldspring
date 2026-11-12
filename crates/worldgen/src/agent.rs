@@ -1748,14 +1748,31 @@ pub fn room_at(it: &crate::interior::Interior, li: usize, at: [f64; 2]) -> Optio
 /// A note as `list_notes` shows it: id, kind (place, room or point), its place path (site, level
 /// and room names joined by " › "), the room id a point lies in, text, tags and a point's spot.
 pub fn note_row(world: &World, t0: &T0, id: &str, n: &crate::world::Note) -> Option<Value> {
+    note_row_in(world, t0, id, n, &mut FastMap::default())
+}
+
+/// `note_row` with the interiors already generated kept in `cache` (by site), for a whole list. A point note whose
+/// site no longer resolves is a row with `place: null`.
+pub fn note_row_in(world: &World, t0: &T0, id: &str, n: &crate::world::Note, cache: &mut FastMap<String, Option<crate::interior::Interior>>) -> Option<Value> {
     let name = |i: &str| name_any(world, t0, i);
     let level_path = |site: &str, li: usize| vec![name(site).unwrap_or_else(|| site.to_string()), name(&format!("l:{site}:{li}")).unwrap_or_else(|| format!("level {li}"))];
     let (kind, place, room) = if let Some((site, li, _)) = split_point_id(id) {
-        let it = crate::interior::generate_id(world, t0, site)?;
-        let ri = n.at.and_then(|at| room_at(&it, li, at)).map(|ri| format!("r:{site}:{li}:{ri}"));
-        let mut path = level_path(site, li);
-        path.extend(ri.as_ref().and_then(|r| name(r)));
-        ("point", path.join(" › "), ri)
+        let it = cache.entry(site.to_string()).or_insert_with(|| crate::interior::generate_id(world, t0, site));
+        match it {
+            Some(it) => {
+                let ri = n.at.and_then(|at| room_at(it, li, at)).map(|ri| format!("r:{site}:{li}:{ri}"));
+                let mut path = level_path(site, li);
+                path.extend(ri.as_ref().and_then(|r| name(r)));
+                ("point", path.join(" › "), ri)
+            }
+            None => {
+                let mut v = json!({ "id": id, "kind": "point", "place": null, "missing": format!("{site} no longer has an inside"), "text": n.text, "tags": n.tags, "room": null });
+                if let Some(at) = n.at {
+                    v["at"] = json!(at);
+                }
+                return Some(v);
+            }
+        }
     } else if let Some((site, li, ri)) = split_room_id(id) {
         let mut path = level_path(site, li);
         if ri.is_some() {
