@@ -273,6 +273,8 @@ export class MapView {
   onMoves: (moves: Move[], sx: number, sy: number) => void = () => {};
   private longPress: { id: number; x: number; y: number; timer: number } | null = null;
   private longPressAt = -1e9;
+  /** The menu opened under a finger: the touchend that lifts it is swallowed (else it clicks an item). */
+  private menuTouch = false;
   /** Touch and pen have no right button, and iOS Safari sends no contextmenu: a held press opens the menu. */
   private armLongPress(e: PointerEvent) {
     this.cancelLongPress();
@@ -282,6 +284,7 @@ export class MapView {
       this.longPress = null;
       if (this.openNotesMenu(x, y)) {
         this.longPressAt = performance.now();
+        this.menuTouch = true;
         this.tap = null;
       }
     }, 500);
@@ -1962,8 +1965,8 @@ export class MapView {
         const site = this.interiorAt(x, y);
         // (A tap the tool takes, placing say, is never half a double-tap.)
         const taken = !!this.tool?.tap?.(x, y, e);
-        // (Only the main button clicks the map: a right-click there is a menu's, a tool may still take it.)
-        if (e.button !== 0 && !taken) {
+        // (Inside, only the main button clicks: a right-click there is the menu's; a tool may still take it.)
+        if (e.button !== 0 && !taken && site) {
           if (this.drag?.id === e.pointerId) this.drag = null;
           return;
         }
@@ -2011,11 +2014,23 @@ export class MapView {
       if (this.interiorStyle.player || this.inputOff) return;
       // (A long-press already opened the menu: Android sends contextmenu after it.)
       if (performance.now() - this.longPressAt < 1500) return e.preventDefault();
-      if (this.openNotesMenu(e.clientX, e.clientY)) e.preventDefault();
+      // (Android may send it before the long-press timer runs out: one menu, opened here.)
+      const touch = !!this.longPress || this.lastPointerType !== 'mouse';
+      this.cancelLongPress();
+      if (this.openNotesMenu(e.clientX, e.clientY)) {
+        e.preventDefault();
+        if (touch) {
+          this.longPressAt = performance.now();
+          this.menuTouch = true;
+          this.tap = null;
+        }
+      }
     });
     // Lifting the finger after a long-press must not click the menu that opened under it.
     c.addEventListener('touchend', (e) => {
-      if (e.cancelable && performance.now() - this.longPressAt < 5000 && !this.longPress) e.preventDefault();
+      if (!this.menuTouch || e.touches.length) return;
+      this.menuTouch = false;
+      if (e.cancelable) e.preventDefault();
     });
     c.addEventListener('dblclick', (e) => {
       // Touch double-taps are handled on pointerup (browsers differ on synthesizing these).

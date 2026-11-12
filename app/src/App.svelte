@@ -3848,7 +3848,11 @@
   /** Interiors looked up for notes' places (by site id; cleared when the world changes). */
   let noteSites = new Map<string, Promise<Interior | null>>();
   $effect(() => {
+    // (Or a site, building or town laid out anew: its rooms may have moved.)
     void worldsMade;
+    void edits?.designs;
+    void edits?.buildings;
+    void edits?.towns;
     noteSites = new Map();
   });
   $effect(() => {
@@ -3981,7 +3985,7 @@
   async function listNotes() {
     const seq = ++noteRowsSeq;
     // (Names or the world changed: the paths are worked out again.)
-    const key = [renames, resolvePlace];
+    const key = [renames, resolvePlace, noteSites];
     if (!noteRowKey || (noteRowKey as unknown[]).some((k, i) => k !== key[i])) noteRowCache = new Map();
     noteRowKey = key;
     const rows = await Promise.all(
@@ -3995,7 +3999,8 @@
           if (hit && hit.at === at) return { id, kind, note: n, path: hit.path };
           const p = await notePlace(id);
           const path = p ? [p.siteName, p.levelName, ...(p.roomName ? [p.roomName] : [])] : [nameOf(id)];
-          noteRowCache.set(id, { at, path });
+          // (Not found yet, say while the world is made: asked again next time.)
+          if (p) noteRowCache.set(id, { at, path });
           return { id, kind, note: n, path };
         }),
     );
@@ -4005,6 +4010,7 @@
     if (shell.section === 'notes' && notebookFocus.tab === 'notes') {
       void placeNotes;
       void renames;
+      void noteSites;
       untrack(() => void listNotes());
     }
   });

@@ -546,6 +546,8 @@ async fn list_notes(app: &Shared, a: Value) -> Result<Value, String> {
                 .edits
                 .notes
                 .iter()
+                // (Notes set aside with a place no longer on the map are left out, as in the app.)
+                .filter(|(k, _)| !k.starts_with("gone:") && !k.starts_with("was:") && worldgen::world::layout_in_id(k).is_none_or(|l| l < worldgen::world::PARKED_LAYOUT))
                 .filter(|(_, n)| tag.is_none_or(|t| n.tags.iter().any(|x| x.eq_ignore_ascii_case(t))))
                 .filter(|(_, n)| q.is_empty() || n.text.to_lowercase().contains(&q))
                 .filter(|(k, _)| at.as_ref().is_none_or(|f| f(k)))
