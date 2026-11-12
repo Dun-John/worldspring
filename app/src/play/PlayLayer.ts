@@ -282,6 +282,8 @@ export class PlayLayer {
     const pinPx = PIN * ts;
     for (const { t, place: tp, where, at: way } of ctl.tokensInView()) {
       if (player && where === 'here' && (t.hidden || (s.los && !t.vision && !seen(t)))) continue;
+      // (Crawling: only the PCs are seen in a hex not explored.)
+      if (player && t.loc === 'surface' && !(t.kind === 'character' && roleOf(t) === 'pc') && ctl.unexplored(t.x * 5, t.y * 5)) continue;
       live.add(t.id);
       let v = this.tokenViews.get(t.id);
       if (!v) {

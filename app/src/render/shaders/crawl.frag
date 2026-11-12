@@ -2,8 +2,9 @@
 // Hex crawl: every hex the players haven't explored washed over. In the players' window
 // (`uMode` 1) a soft land/water wash (`uWash`, made once from the whole-map tile and blurred)
 // opaque enough to hide roads and settlements; in the DM's (2) a light hatch. Hexes are looked
-// up in `uMask` (one texel per hex, by column and row) and blended across a soft band at their
-// edges: each hex's weight falls off with the point's distance to it, the same on both sides.
+// up in `uMask` (one texel per hex, by column and row). A hex not explored is washed from its
+// edge in; the soft band (`uBand`) lies on the explored side, fading with the distance out of
+// the nearest hex not explored.
 
 in vec2 vW;
 
@@ -14,13 +15,14 @@ uniform float uS;      // ft across the flats
 uniform float uFpp;    // ft per px
 uniform float uAlpha;
 uniform float uMode;   // 1 wash, 2 hatch
-uniform float uBand;   // the soft edge (ft, each side)
+uniform float uBand;   // the soft edge (ft, outside the hexes not explored)
 uniform vec4 uMap;     // the map (ft from the reference hex centre): x0, y0, x1, y1
 uniform vec2 uRef;     // the reference hex, axial in the shader's (pointy) frame
 uniform vec4 uMaskBox; // the mask's first column and row, its columns and rows
 uniform vec2 uWorld;   // the reference hex centre (world ft)
 uniform float uDomain; // ft across the wash texture
 uniform float uHasWash;
+uniform float uMaskOut; // hexes outside the mask: explored (1) or not (0)
 uniform highp sampler2D uWash;
 uniform highp sampler2D uMask;
 
@@ -37,7 +39,7 @@ float seen(vec2 a) {
     int i = uFlat > 0.5 ? q : q + (r - (r & 1)) / 2;
     int j = uFlat > 0.5 ? r + (q - (q & 1)) / 2 : r;
     ivec2 m = ivec2(i + 1, j + 1) - ivec2(uMaskBox.xy);
-    if (m.x < 0 || m.y < 0 || m.x >= int(uMaskBox.z) || m.y >= int(uMaskBox.w)) return 0.0;
+    if (m.x < 0 || m.y < 0 || m.x >= int(uMaskBox.z) || m.y >= int(uMaskBox.w)) return uMaskOut;
     return texelFetch(uMask, m, 0).r;
 }
 
@@ -64,25 +66,17 @@ void main() {
     else if (dc.y > dc.z) rc.y = -rc.x - rc.z;
     vec2 a = rc.xy;
     vec2 centre = vec2(uS * (a.x + a.y * 0.5), 1.5 * R * a.y);
-    float own = seen(a);
-    float v = own;
-    float dOwn = outside(p, centre);
-    if (dOwn > -uBand) {
-        // Near the edge: this hex and its six neighbours, each weighted by how near it is.
-        float w = 1.0 - smoothstep(-uBand, uBand, dOwn);
-        float sum = w;
-        float acc = w * own;
+    float hidden = 1.0 - seen(a);
+    if (hidden < 0.5 && outside(p, centre) > -uBand) {
+        // An explored hex, near its edge: hidden by the nearest neighbour not explored.
         vec2 dirs[6] = vec2[6](vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(-1.0, 1.0), vec2(-1.0, 0.0), vec2(0.0, -1.0), vec2(1.0, -1.0));
         for (int k = 0; k < 6; k++) {
             vec2 n = a + dirs[k];
-            float wk = 1.0 - smoothstep(-uBand, uBand, outside(p, vec2(uS * (n.x + n.y * 0.5), 1.5 * R * n.y)));
-            if (wk <= 0.0) continue;
-            sum += wk;
-            acc += wk * seen(n);
+            float d = outside(p, vec2(uS * (n.x + n.y * 0.5), 1.5 * R * n.y));
+            if (d >= uBand) continue;
+            hidden = max(hidden, (1.0 - seen(n)) * (1.0 - smoothstep(0.0, uBand, d)));
         }
-        v = acc / max(sum, 1e-4);
     }
-    float hidden = 1.0 - v;
     if (hidden <= 0.002) discard;
     if (uMode < 1.5) {
         // The wash: the land and water as seen from far off, light, with a little more pigment

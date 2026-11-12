@@ -7,6 +7,8 @@
 // Positions are in the squares of a location's grid: the world's squares on the surface
 // (x ft / 5), or a building's or site's own grid inside it (`Interior` grid units).
 
+import type { HexSeen } from '../render/hex';
+
 /** Token sizes (squares a side). */
 export const SIZES = [0.5, 1, 2, 3, 4];
 
@@ -115,7 +117,10 @@ export interface PlayState {
   hexMode: HexMode;
   /** A PC entering a hex reveals the six round it too. */
   hexRing: boolean;
-  /** The hexes the players have explored (`hexKey`: "col,row", global to the grid). */
+  /** Every hex explored ("Reveal all"), but those in `hexSeen`, hidden again since. */
+  hexAll: boolean;
+  /** The hexes the players have explored (`hexKey`: "col,row", global to the grid); with
+   * `hexAll`, those hidden again. Kept in step with `hexIndex` by `apply`. */
   hexSeen: string[];
   /** When the DM last changed it (ms since 1970; missing: not since this was kept). */
   changed?: number;
@@ -130,7 +135,7 @@ export interface PlayState {
 export const DEFAULT_GRID: GridSettings = { scale: 5, unit: 'ft', measure: 'chebyshev' };
 
 export function emptyState(): PlayState {
-  return { tokens: {}, shapes: {}, fog: {}, doors: {}, locs: {}, los: false, grid: { ...DEFAULT_GRID }, hexMode: 'off', hexRing: false, hexSeen: [] };
+  return { tokens: {}, shapes: {}, fog: {}, doors: {}, locs: {}, los: false, grid: { ...DEFAULT_GRID }, hexMode: 'off', hexRing: false, hexAll: false, hexSeen: [] };
 }
 
 /** Whether a session holds anything: tokens, shapes, fog, doors, settings, line of sight, or a
@@ -138,7 +143,7 @@ export function emptyState(): PlayState {
 export function hasSession(s: PlayState): boolean {
   const g = s.grid;
   const grid = g.scale !== DEFAULT_GRID.scale || g.unit !== DEFAULT_GRID.unit || g.measure !== DEFAULT_GRID.measure;
-  return grid || s.los || s.hexMode !== 'off' || s.hexRing || s.hexSeen.length > 0 || [s.tokens, s.shapes, s.fog, s.doors, s.locs].some((r) => Object.keys(r).length > 0);
+  return grid || s.los || s.hexMode !== 'off' || s.hexRing || s.hexAll || s.hexSeen.length > 0 || [s.tokens, s.shapes, s.fog, s.doors, s.locs].some((r) => Object.keys(r).length > 0);
 }
 
 /** A location's key: the surface, or a level of a building or site. */
@@ -179,7 +184,8 @@ export type Op =
   | { t: 'grid'; grid: GridSettings }
   /** Hexes explored or hidden again (one paint stroke, or a PC's move). */
   | { t: 'hexes'; reveal: string[]; hide: string[] }
-  | { t: 'hexset'; mode?: HexMode; ring?: boolean }
+  /** `all`: every hex explored (true) or none (false). */
+  | { t: 'hexset'; mode?: HexMode; ring?: boolean; all?: boolean }
   | { t: 'reset' };
 
 /**
@@ -223,15 +229,34 @@ export function apply(s: PlayState, op: Op): string[] {
       s.grid = op.grid;
       return [];
     case 'hexes': {
-      const seen = new Set(s.hexSeen);
-      for (const k of op.hide) seen.delete(k);
-      for (const k of op.reveal) seen.add(k);
-      s.hexSeen = [...seen];
+      // (With every hex explored, the list holds those hidden again.)
+      const [add, drop] = s.hexAll ? [op.hide, op.reveal] : [op.reveal, op.hide];
+      const at = hexIndex(s);
+      const list = s.hexSeen;
+      for (const k of drop) {
+        const i = at.get(k);
+        if (i === undefined) continue;
+        const last = list.pop()!;
+        at.delete(k);
+        if (i < list.length) {
+          list[i] = last;
+          at.set(last, i);
+        }
+      }
+      for (const k of add) {
+        if (typeof k !== 'string' || at.has(k)) continue;
+        at.set(k, list.length);
+        list.push(k);
+      }
       return [];
     }
     case 'hexset':
       if (op.mode && HEX_MODES.includes(op.mode)) s.hexMode = op.mode;
       if (op.ring !== undefined) s.hexRing = !!op.ring;
+      if (op.all !== undefined) {
+        s.hexAll = !!op.all;
+        s.hexSeen = [];
+      }
       return [];
     case 'reset': {
       const keys = Object.entries(s.fog).flatMap(([loc, chunks]) => Object.keys(chunks).map((k) => `${loc}|${k}`));
@@ -277,10 +302,36 @@ export function normalize(raw: unknown): PlayState {
   else if ((r as { diagonal?: string }).diagonal === '5-10') s.grid.measure = 'alternating';
   if (HEX_MODES.includes(r.hexMode as HexMode)) s.hexMode = r.hexMode as HexMode;
   s.hexRing = !!r.hexRing;
-  if (Array.isArray(r.hexSeen)) s.hexSeen = r.hexSeen.filter((k): k is string => typeof k === 'string');
+  s.hexAll = !!r.hexAll;
+  if (Array.isArray(r.hexSeen)) s.hexSeen = [...new Set(r.hexSeen.filter((k): k is string => typeof k === 'string'))];
   if (typeof r.changed === 'number') s.changed = r.changed;
   if (r.came && typeof r.came.from === 'string') s.came = { from: r.came.from, changed: Number(r.came.changed) || 0 };
   return s;
+}
+
+/** `hexSeen`'s keys and where each is in it (made once per list, then kept in step by `apply`). */
+const hexIndices = new WeakMap<string[], Map<string, number>>();
+export function hexIndex(s: PlayState): Map<string, number> {
+  let at = hexIndices.get(s.hexSeen);
+  if (!at) {
+    at = new Map(s.hexSeen.map((k, i) => [k, i]));
+    hexIndices.set(s.hexSeen, at);
+  }
+  return at;
+}
+
+/** Whether the players have explored a hex (`hexKey`). */
+export const hexExplored = (s: PlayState, key: string) => hexIndex(s).has(key) !== s.hexAll;
+
+/** The explored hexes of the state `of` gives, as the map draws them. */
+export function hexSeenOf(of: () => PlayState): HexSeen {
+  return {
+    get all() {
+      return of().hexAll;
+    },
+    explored: (k) => hexExplored(of(), k),
+    marks: () => hexIndex(of()).keys(),
+  };
 }
 
 /** The fog chunk holding a square, made (all hidden) if `make`. */

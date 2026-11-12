@@ -13,7 +13,7 @@ import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { HexLayer, type CrawlMode } from './HexLayer';
-import { HEX_DEFAULTS, hexGrid, type Hex } from './hex';
+import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
@@ -579,17 +579,23 @@ export class MapView {
 
   /** A hex crawl over the surface (play): the players' wash (1) or the DM's hatch (2) over the
    * hexes not in `seen`, or none (0). `seen` is kept: call again once it changes. */
-  setHexCrawl(mode: CrawlMode, seen: ReadonlySet<string>) {
+  setHexCrawl(mode: CrawlMode, seen: HexSeen) {
     this.hexCrawl = mode;
     this.hexSeen = seen;
     this.hexLayer?.setCrawl(mode, seen);
   }
   private hexCrawl: CrawlMode = 0;
-  private hexSeen: ReadonlySet<string> = new Set();
+  private hexSeen: HexSeen = NO_HEXES;
+
+  /** The DM's window in play: the grid's lines shown while the players have them, Layers or not. */
+  setHexPlay(shown: boolean) {
+    this.hexPlay = shown;
+  }
+  private hexPlay = false;
 
   /** The hex crawl as drawn last frame (for checks). */
-  get crawlStats(): { mode: CrawlMode; shown: boolean; washed: boolean } {
-    return { mode: this.hexCrawl, shown: this.hexLayer?.crawlShown ?? false, washed: this.hexLayer?.washed ?? false };
+  get crawlStats(): { mode: CrawlMode; shown: boolean; washed: boolean; writes: number } {
+    return { mode: this.hexCrawl, shown: this.hexLayer?.crawlShown ?? false, washed: this.hexLayer?.washed ?? false, writes: this.hexLayer?.maskWrites ?? 0 };
   }
 
   /** The hex grid shown or not (Layers). */
@@ -731,7 +737,8 @@ export class MapView {
     void (async () => {
       try {
         const hit = await this.gen.query(x, y);
-        const id = hit?.kind === 'building' ? hit.id : null;
+        // (Players crawling: nothing seen inside in a hex not explored.)
+        const id = hit?.kind === 'building' && !(this.hexCrawl === 1 && this.hexLayer?.unexplored(x, y)) ? hit.id : null;
         if (id === this.peek?.id && this.peek) {
           this.peek.out = false;
           return;
@@ -1595,7 +1602,7 @@ export class MapView {
         if (c) this.hexLayer.setWash(c.tex, c.biome, halfToFloat, this.geom!.domain_ft);
       }
       const surface = !this.interior && !this.sewers;
-      this.hexLayer?.update(this.cam, this.hexesOn && surface ? 1 : 0, this.app.renderer.resolution, surface);
+      this.hexLayer?.update(this.cam, (this.hexesOn || this.hexPlay) && surface ? 1 : 0, this.app.renderer.resolution, surface);
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);

@@ -94,6 +94,8 @@ async fn set(app: &Shared, a: &Value) -> Result<Value, String> {
             if let Some(v) = ox { g.ox_mi = v }
             if let Some(v) = oy { g.oy_mi = v }
             if let Some(v) = numbers { g.numbers = v }
+            // (Stored as the app draws it: each field in its range.)
+            let g = checked(Some(&g));
             let out = json!({ "grid": grid_json(&g), "set": g != HexGrid::default() });
             if g == HexGrid::default() { e.hexes.remove(KEY); } else { e.hexes.insert(KEY.into(), g); }
             Ok(out)
@@ -215,7 +217,8 @@ async fn at(app: &Shared, a: &Value) -> Result<Value, String> {
     Ok(json!({
         "label": label(col, row, d), "key": format!("{col},{row}"), "col": col, "row": row,
         "centre": pt(c), "corners": corners(&f, col, row).into_iter().map(pt).collect::<Vec<_>>(),
-        "on_map": c[0] >= 0.0 && c[0] < w && c[1] >= 0.0 && c[1] < h,
+        // (As the app numbers them: the centre on the map, from column and row 1.)
+        "on_map": col >= 1 && row >= 1 && c[0] >= 0.0 && c[0] <= w && c[1] >= 0.0 && c[1] <= h,
         "around": ring(&f, col, row).into_iter().map(|(c, r)| json!({ "key": format!("{c},{r}"), "label": label(c, r, d) })).collect::<Vec<_>>(),
         "grid": grid_json(&g),
     }))

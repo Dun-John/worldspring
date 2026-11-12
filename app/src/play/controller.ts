@@ -6,7 +6,7 @@ import { layoutOfId } from '../editor/reanchor';
 import type { Feature, Interior, WorldFile } from '../gen/protocol';
 import type { InteriorLayer } from '../render/InteriorLayer';
 import type { MapView, PointerTool } from '../render/MapView';
-import { hexAt, hexFrame, hexKey, hexRing, hexSpan, parseHexKey, type HexFrame } from '../render/hex';
+import { hexAt, hexFrame, hexKey, hexRing, parseHexKey, type HexFrame, type HexSeen } from '../render/hex';
 import { drawnDoorsOf } from '../render/roomShapes';
 import { SECTION_N, type Sewers } from '../render/Sewers';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
@@ -14,7 +14,7 @@ import { PIN, PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { forgetRehosted } from './rehosted';
 import { hasImage, loadSession, putImage, saveSession } from './session';
-import { apply, emptyState, type HexMode, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
+import { apply, emptyState, hexSeenOf, type HexMode, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
 import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, rulerTerrain, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 import { floorOf } from '../gen/floor';
 
@@ -94,10 +94,15 @@ function onFloor(it: Interior, level: number, gx: number, gy: number): boolean {
 
 /** Feature kinds that are places of interest (their labels are pins like businesses'). */
 const POI_KINDS = new Set(['waystation', 'ruin', 'tower', 'cave', 'mine', 'lava_tube', 'camp', 'entrance', 'building', 'place']);
+/** Labels naming an area or a line (a region, a range, water, a river): hidden from players crawling
+ * where any part of them reaches into a hex not explored. */
+const AREA_KINDS = new Set(['continent', 'ocean', 'sea', 'range', 'bay', 'lake', 'island', 'salt_flat', 'plains', 'desert', 'forest', 'jungle', 'glacier', 'swamp', 'taiga', 'river']);
 
 /** Pings: the DM's orange, the players' blue. */
 const PING_DM = 0xf97316;
 const PING_PLAYER = 0x38bdf8;
+/** A hex paint stroke is sent once it holds this many hexes (and goes on as another). */
+const HEX_STROKE_MAX = 4000;
 
 /** A role's default colour (the draft follows it until a swatch is chosen). */
 export const ROLE_COLORS = { pc: 0x2f5d8a, npc: 0x3f7a3a, creature: 0x8b2e2e, object: 0x7a5a2a } as const;
@@ -152,10 +157,11 @@ export class PlayController implements PointerTool {
   hexReveal = true;
   /** The hexes painted by the stroke under way (shown at once, sent as one op once it ends). */
   private hexStroke: { reveal: boolean; keys: Set<string> } | null = null;
-  /** The explored hexes (`state.hexSeen`), and as the view draws them (with a stroke under way). */
-  private hexSeen = new Set<string>();
-  private hexShown = new Set<string>();
-  /** Players' window: whether a feature's label is in a hex not explored (by feature id). */
+  /** The explored hexes as the play state has them, and as the view draws them (with a stroke under way). */
+  private readonly hexSeen: HexSeen = hexSeenOf(() => this.state);
+  private hexShown: HexSeen = this.hexSeen;
+  /** Players' window: whether a feature's label reaches into a hex not explored (by feature id;
+   * asked again once the hexes change). */
   private readonly hexHides = new Map<string, boolean>();
   /** The player window's camera follows the DM's, and can't be moved there. */
   follow = false;
@@ -234,7 +240,7 @@ export class PlayController implements PointerTool {
   private readonly sewerGrids = new Map<string, { it: Interior; grid: TacticalGrid; doors: number }>();
   /** Changes to doors, by the location they are in. */
   private readonly doorChanges = new Map<string, number>();
-  private readonly concealFn = (f: Feature) => this.conceal(f);
+  private readonly concealFn = (f: Feature, path: [number, number][] | undefined, area: boolean) => this.conceal(f, path, area);
   private press: {
     kind: 'door' | 'token' | 'place' | 'measure' | 'shape' | 'fog' | 'hex' | 'ping' | 'box' | 'none';
     x: number;
@@ -724,7 +730,7 @@ export class PlayController implements PointerTool {
     this.applyOp(op);
     this.state.changed = Date.now();
     this.channel.send({ t: 'op', op });
-    if (op.t === 'token') this.partyExplores(op.token);
+    if (op.t === 'token') this.partyExplores([op.token]);
     // (The token the players' view follows gone: it follows the DM again.)
     // (Or hidden: the players' window goes back to the DM's scene and camera, as on Stop.)
     const ft = this.followTarget;
@@ -763,69 +769,78 @@ export class PlayController implements PointerTool {
     return hexFrame(this.view.hexGrid);
   }
 
-  /** What the players see of the hexes: off, the lines, or the lines and the crawl. */
+  /** What the players see of the hexes: off, the lines, or the lines and the crawl (where the
+   * PCs stand explored at once). */
   setHexMode(mode: HexMode) {
     this.dispatch({ t: 'hexset', mode });
+    if (mode === 'crawl') this.partyExplores(Object.values(this.state.tokens));
   }
 
-  /** A PC entering a hex reveals the six round it too. */
+  /** A PC entering a hex reveals the six round it too (round each PC at once). */
   setHexRing(ring: boolean) {
     this.dispatch({ t: 'hexset', ring });
+    if (ring) this.partyExplores(Object.values(this.state.tokens));
   }
 
   /** Every hex on the map explored, or none. */
   hexAll(reveal: boolean) {
-    if (!reveal) {
-      if (this.state.hexSeen.length) this.dispatch({ t: 'hexes', reveal: [], hide: [...this.state.hexSeen] });
-      return;
-    }
-    const g = this.view.geom;
-    if (!g) return;
-    const f = this.hexFrame;
-    const [c0, c1, r0, r1] = hexSpan(f, g.map_w_ft, g.map_h_ft);
-    const add: string[] = [];
-    for (let c = c0; c <= c1; c++) for (let r = r0; r <= r1; r++) if (!this.hexSeen.has(hexKey(c, r))) add.push(hexKey(c, r));
-    if (add.length) this.dispatch({ t: 'hexes', reveal: add, hide: [] });
+    this.dispatch({ t: 'hexset', all: reveal });
   }
 
   /** The hexes as the play state has them now: drawn anew (and the players' labels asked again). */
   private hexesChanged() {
-    this.hexSeen = new Set(this.state.hexSeen);
     this.hexHides.clear();
     this.showHexes();
   }
 
   /** The view's hexes: the players' lines and crawl as the DM sets them (play on), the DM's
-   * hatch over what the players haven't explored (with the stroke under way). */
+   * hatch over what the players haven't explored (with the stroke under way), and the DM's
+   * lines while the players have them. */
   private showHexes() {
     const crawl = this.on && this.state.hexMode === 'crawl';
-    let shown: ReadonlySet<string> = this.hexSeen;
+    const base = this.hexSeen;
     const st = this.hexStroke;
-    if (st) {
-      const next = new Set(this.hexSeen);
-      for (const k of st.keys) {
-        if (st.reveal) next.add(k);
-        else next.delete(k);
-      }
-      shown = next;
-    }
-    this.hexShown = shown as Set<string>;
+    const shown: HexSeen = !st
+      ? base
+      : {
+          all: base.all,
+          explored: (k) => (st.keys.has(k) ? st.reveal : base.explored(k)),
+          *marks() {
+            yield* base.marks();
+            yield* st.keys;
+          },
+        };
+    this.hexShown = shown;
+    const lines = this.on && this.state.hexMode !== 'off';
     if (this.role === 'player') {
-      this.view.setHexGrid(this.view.hexGrid, this.on && this.state.hexMode !== 'off');
+      this.view.setHexGrid(this.view.hexGrid, lines);
       this.view.setHexCrawl(crawl ? 1 : 0, shown);
-    } else this.view.setHexCrawl(crawl ? 2 : 0, shown);
+    } else {
+      this.view.setHexPlay(lines);
+      this.view.setHexCrawl(crawl ? 2 : 0, shown);
+    }
   }
 
-  /** A PC on the surface moved (DM, crawling): the hex it stands in is explored, with the six
-   * round it if the DM said so. */
-  private partyExplores(t: Token) {
+  /** Players' window, crawling: whether a world point (ft) is in a hex not explored. */
+  unexplored(x: number, y: number): boolean {
+    if (!this.on || this.state.hexMode !== 'crawl') return false;
+    const [c, r] = hexAt(this.hexFrame, x, y);
+    return !this.hexShown.explored(hexKey(c, r));
+  }
+
+  /** PCs on the surface moved or came there (DM, crawling): the hexes they stand in are
+   * explored, with the six round each if the DM said so (one op). */
+  private partyExplores(ts: Token[]) {
     const s = this.state;
-    if (this.role !== 'dm' || s.hexMode !== 'crawl' || t.loc !== 'surface' || t.kind !== 'character' || t.hidden || roleOf(t) !== 'pc') return;
+    if (this.role !== 'dm' || s.hexMode !== 'crawl') return;
     const f = this.hexFrame;
-    const [c, r] = hexAt(f, t.x * 5, t.y * 5);
-    const hexes = [[c, r], ...(s.hexRing ? hexRing(f, c, r) : [])];
-    const add = hexes.map(([a, b]) => hexKey(a, b)).filter((k) => !this.hexSeen.has(k));
-    if (add.length) this.dispatch({ t: 'hexes', reveal: add, hide: [] });
+    const add = new Set<string>();
+    for (const t of ts) {
+      if (t.loc !== 'surface' || t.kind !== 'character' || t.hidden || roleOf(t) !== 'pc') continue;
+      const [c, r] = hexAt(f, t.x * 5, t.y * 5);
+      for (const [a, b] of [[c, r], ...(s.hexRing ? hexRing(f, c, r) : [])]) if (!this.hexSeen.explored(hexKey(a, b))) add.add(hexKey(a, b));
+    }
+    if (add.size) this.dispatch({ t: 'hexes', reveal: [...add], hide: [] });
   }
 
   /** The hex stroke takes in the hexes from the last point to (x, y) (world ft). */
@@ -834,9 +849,15 @@ export class PlayController implements PointerTool {
     if (!st) return;
     const f = this.hexFrame;
     const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (f.s / 4)));
+    let keys = st.keys;
     for (let k = 0; k <= n; k++) {
       const [c, r] = hexAt(f, x0 + ((x1 - x0) * k) / n, y0 + ((y1 - y0) * k) / n);
-      st.keys.add(hexKey(c, r));
+      keys.add(hexKey(c, r));
+      // (A long stroke goes as several ops, none too big.)
+      if (keys.size >= HEX_STROKE_MAX) {
+        this.endHexStroke();
+        this.hexStroke = { reveal: st.reveal, keys: (keys = new Set()) };
+      }
     }
     this.showHexes();
   }
@@ -846,7 +867,7 @@ export class PlayController implements PointerTool {
     const st = this.hexStroke;
     this.hexStroke = null;
     if (!st) return;
-    const keys = [...st.keys].filter((k) => parseHexKey(k) && this.hexSeen.has(k) !== st.reveal);
+    const keys = [...st.keys].filter((k) => parseHexKey(k) && this.hexSeen.explored(k) !== st.reveal);
     if (keys.length) this.dispatch(st.reveal ? { t: 'hexes', reveal: keys, hide: [] } : { t: 'hexes', reveal: [], hide: keys });
     else this.showHexes();
   }
@@ -1970,8 +1991,8 @@ export class PlayController implements PointerTool {
    * place pins, and then only where the players can see (in sight with line of sight on; else
    * revealed under fog; else anywhere).
    */
-  private conceal(f: Feature): boolean {
-    if (this.on && this.state.hexMode === 'crawl' && this.hexHidden(f)) return true;
+  private conceal(f: Feature, path?: [number, number][], area = false): boolean {
+    if (this.on && this.state.hexMode === 'crawl' && this.hexHidden(f, path, area)) return true;
     if (!POI_KINDS.has(f.kind) && !f.id.startsWith('c:')) return false;
     if (!this.dmPlaces) return true;
     if (!this.on) return false;
@@ -1992,12 +2013,45 @@ export class PlayController implements PointerTool {
     return true;
   }
 
-  /** Players' window, crawling: a label in a hex not explored (its anchor's hex). */
-  private hexHidden(f: Feature): boolean {
+  /** Players' window, crawling: a label reaching into a hex not explored: its anchor's hex, or
+   * for a curved label points along its line, for an area's (a region, a range, a sea) points
+   * across its extent. Kept per feature until the hexes change. */
+  private hexHidden(f: Feature, path?: [number, number][], area = false): boolean {
     let hide = this.hexHides.get(f.id);
     if (hide === undefined) {
-      const [c, r] = hexAt(this.hexFrame, f.x, f.y);
-      hide = !this.hexShown.has(hexKey(c, r));
+      const fr = this.hexFrame;
+      const out = (x: number, y: number) => {
+        const [c, r] = hexAt(fr, x, y);
+        return !this.hexShown.explored(hexKey(c, r));
+      };
+      hide = out(f.x, f.y);
+      if (!hide && path && path.length > 1) {
+        // (Evenly along the line, by length.)
+        let len = 0;
+        for (let k = 1; k < path.length; k++) len += Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]);
+        const n = Math.min(24, Math.max(4, Math.ceil(len / (fr.s / 2))));
+        let [k, done] = [1, 0];
+        for (let i = 0; i <= n && !hide; i++) {
+          const want = (len * i) / n;
+          for (;;) {
+            const seg = Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]);
+            if (done + seg >= want || k === path.length - 1) {
+              const t = seg > 0 ? Math.min(1, (want - done) / seg) : 0;
+              hide = out(path[k - 1][0] + (path[k][0] - path[k - 1][0]) * t, path[k - 1][1] + (path[k][1] - path[k - 1][1]) * t);
+              break;
+            }
+            done += seg;
+            k++;
+          }
+        }
+      } else if (!hide && area && AREA_KINDS.has(f.kind) && f.extent_ft > fr.s * 0.3) {
+        // (Along its direction, and a little across it.)
+        const [ux, uy] = [Math.cos(f.angle), Math.sin(f.angle)];
+        const e = f.extent_ft;
+        for (const [a, b] of [[-0.5, 0], [-0.25, 0], [0.25, 0], [0.5, 0], [0, -0.2], [0, 0.2], [-0.35, -0.15], [0.35, 0.15], [-0.35, 0.15], [0.35, -0.15]]) {
+          if ((hide = out(f.x + (ux * a - uy * b) * e, f.y + (uy * a + ux * b) * e))) break;
+        }
+      }
       this.hexHides.set(f.id, hide);
     }
     return hide;

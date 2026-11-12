@@ -10,7 +10,7 @@
 // when they change. Two draw calls at most, the same at any zoom.
 import { BitmapText, BufferImageSource, Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
 import type { Camera } from './camera';
-import { hexAt, hexAxial, hexCentre, hexDigits, hexFrame, hexLabel, hexRange, hexSpan, parseHexKey, type Hex, type HexFrame } from './hex';
+import { hexAt, hexAxial, hexCentre, hexDigits, hexFrame, hexKey, hexLabel, hexRange, hexSpan, NO_HEXES, parseHexKey, type Hex, type HexFrame, type HexSeen } from './hex';
 import crawlFragment from './shaders/crawl.frag?raw';
 import fragment from './shaders/hex.frag?raw';
 import vertex from './shaders/hex.vert?raw';
@@ -32,9 +32,12 @@ const FONT = ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif
 
 /** The explored-hexes mask is at most this many hexes a side (a finer grid's round the view). */
 const MASK_MAX = 1024;
-/** The crawl's soft edge (each side of a hex's border): this many px, or this part of a hex. */
+/** The crawl's soft edge (on the explored side of the border: a hex not explored is washed
+ * from its edge in): this part of a hex, but no more than `BAND_FT` (a battlemap's or a town's
+ * worth, so nothing shows through close up), and never less than `BAND_PX`. */
 const BAND_PX = 10;
 const BAND_PART = 0.07;
+const BAND_FT = 60;
 
 /** What a hex crawl draws over the hexes not explored: nothing, the players' wash, the DM's hatch. */
 export type CrawlMode = 0 | 1 | 2;
@@ -83,6 +86,7 @@ export class HexLayer {
     uWorld: { value: new Float32Array(2), type: 'vec2<f32>' },
     uDomain: { value: 1, type: 'f32' },
     uHasWash: { value: 0, type: 'f32' },
+    uMaskOut: { value: 0, type: 'f32' },
   });
   private readonly mesh: Mesh<Geometry, Shader>;
   private readonly crawlMesh: Mesh<Geometry, Shader>;
@@ -92,7 +96,11 @@ export class HexLayer {
   private maskBox: [number, number, number, number] = [0, 0, 1, 1];
   private maskDirty = true;
   private crawlMode: CrawlMode = 0;
-  private seen: ReadonlySet<string> = new Set();
+  private seen: HexSeen = NO_HEXES;
+  /** Times the mask was written (for checks). */
+  maskWrites = 0;
+  /** The numbers' colour (their font is made in it, with a halo). */
+  private numColor = -1;
   /** The players' wash is made (`setWash`). */
   washed = false;
   /** Whether the crawl was drawn last frame. */
@@ -136,14 +144,18 @@ export class HexLayer {
       u.uFlat = grid.flat ? 1 : 0;
       u.uS = this.frame.s;
       u.uWidth = grid.width;
-      for (const t of this.pool) t.tint = c;
+      if (c !== this.numColor) {
+        this.numColor = c;
+        for (const t of this.pool) t.destroy();
+        this.pool.length = 0;
+      }
     }
     this.maskDirty = true;
   }
 
   /** A hex crawl over the grid: `mode` 1 the players' wash, 2 the DM's hatch, 0 none; `seen` the
    * explored hexes (`hexKey`s; kept, not copied: call again once it changes). */
-  setCrawl(mode: CrawlMode, seen: ReadonlySet<string>) {
+  setCrawl(mode: CrawlMode, seen: HexSeen) {
     this.crawlMode = mode;
     this.seen = seen;
     this.maskDirty = true;
@@ -179,17 +191,30 @@ export class HexLayer {
     this.washed = true;
   }
 
-  /** The explored-hexes mask written again: the map's hexes, or (a fine grid) those round (cx, cy). */
-  private writeMask(f: HexFrame, cx: number, cy: number) {
+  /** The mask's box for a view at (cx, cy): the map's hexes, or (a fine grid) those round it. */
+  private boxFor(f: HexFrame, cx: number, cy: number): [number, number, number, number] {
     let [c0, c1, r0, r1] = hexSpan(f, this.mapW, this.mapH);
     if (c1 - c0 + 1 > MASK_MAX || r1 - r0 + 1 > MASK_MAX) {
       const [hc, hr] = hexAt(f, cx, cy);
-      c0 = Math.max(c0, hc - MASK_MAX / 2);
-      r0 = Math.max(r0, hr - MASK_MAX / 2);
+      // (Kept whole inside the map's span: shoved back from its far edges.)
+      c0 = Math.max(c0, Math.min(hc - MASK_MAX / 2, c1 - MASK_MAX + 1));
+      r0 = Math.max(r0, Math.min(hr - MASK_MAX / 2, r1 - MASK_MAX + 1));
       c1 = Math.min(c1, c0 + MASK_MAX - 1);
       r1 = Math.min(r1, r0 + MASK_MAX - 1);
     }
-    const [w, h] = [c1 - c0 + 1, r1 - r0 + 1];
+    return [c0, r0, c1 - c0 + 1, r1 - r0 + 1];
+  }
+
+  /** Whether a world point (ft) is in a hex the crawl has not explored (no crawl: false). */
+  unexplored(x: number, y: number): boolean {
+    if (!this.crawlMode || !this.frame) return false;
+    const [c, r] = hexAt(this.frame, x, y);
+    return !this.seen.explored(hexKey(c, r));
+  }
+
+  /** The explored-hexes mask written again for a view at (cx, cy). */
+  private writeMask(f: HexFrame, cx: number, cy: number) {
+    const [c0, r0, w, h] = this.boxFor(f, cx, cy);
     if (w !== this.mask.width || h !== this.mask.height) {
       const old = this.mask;
       this.mask = rgba(w, h);
@@ -197,16 +222,21 @@ export class HexLayer {
       old.destroy();
     }
     const data = this.mask.resource as Uint8Array;
-    data.fill(0);
-    for (const key of this.seen) {
+    const seen = this.seen;
+    // (Every hex explored, or none, then the hexes marked otherwise.)
+    if (seen.all) for (let k = 0; k < data.length; k += 4) data[k] = 255;
+    else data.fill(0);
+    for (const key of seen.marks()) {
       const at = parseHexKey(key);
       if (!at) continue;
       const [i, j] = [at[0] - c0, at[1] - r0];
-      if (i >= 0 && j >= 0 && i < w && j < h) data[(j * w + i) * 4] = 255;
+      if (i >= 0 && j >= 0 && i < w && j < h) data[(j * w + i) * 4] = seen.explored(key) ? 255 : 0;
     }
     this.mask.update();
     this.maskBox = [c0, r0, w, h];
     this.maskDirty = false;
+    this.maskWrites++;
+    this.crawlUniforms.uniforms.uMaskOut = seen.all ? 1 : 0;
   }
 
   /** Placed for the camera at `fade` (1 shown, 0 hidden: inside a building, off by choice); the
@@ -252,8 +282,11 @@ export class HexLayer {
   private placeCrawl(cam: Camera, f: HexFrame, rc: number, rr: number, hx: number, hy: number, fpp: number) {
     // (A fine grid's mask follows the view once it nears its edge.)
     const [c0, r0, w, h] = this.maskBox;
-    const far = (w >= MASK_MAX || h >= MASK_MAX) && (rc - c0 < MASK_MAX / 4 || c0 + w - rc < MASK_MAX / 4 || rr - r0 < MASK_MAX / 4 || r0 + h - rr < MASK_MAX / 4);
-    if (this.maskDirty || far) this.writeMask(f, cam.cx, cam.cy);
+    // (Near the box's edge, it moves only if a box round the view would be another: at the map's
+    // edges it can't.)
+    const near = (w >= MASK_MAX || h >= MASK_MAX) && (rc - c0 < MASK_MAX / 4 || c0 + w - rc < MASK_MAX / 4 || rr - r0 < MASK_MAX / 4 || r0 + h - rr < MASK_MAX / 4);
+    const moved = near && this.boxFor(f, cam.cx, cam.cy).some((v, k) => v !== this.maskBox[k]);
+    if (this.maskDirty || moved) this.writeMask(f, cam.cx, cam.cy);
     const u = this.crawlUniforms.uniforms;
     const l = this.uniforms.uniforms;
     for (const k of ['uRect', 'uHalf', 'uCam', 'uMap'] as const) (u[k] as Float32Array).set(l[k] as Float32Array);
@@ -262,7 +295,7 @@ export class HexLayer {
     u.uS = f.s;
     u.uAlpha = 1;
     u.uMode = this.crawlMode;
-    u.uBand = Math.min(f.s * 0.35, Math.max(BAND_PX * fpp, f.s * BAND_PART));
+    u.uBand = Math.min(f.s * 0.35, Math.max(BAND_PX * fpp, Math.min(BAND_FT, f.s * BAND_PART)));
     const [q, r] = hexAxial(f, rc, rr);
     (u.uRef as Float32Array).set(f.flat ? [r, q] : [q, r]);
     (u.uMaskBox as Float32Array).set(this.maskBox);
@@ -283,15 +316,16 @@ export class HexLayer {
       const size = Math.min(14, Math.max(9, across / (this.digits * 3.4)));
       // (Near the top of the hex, where printed hex maps put them.)
       const up = f.s * 0.3;
-      const tint = parseInt(g.color.slice(1), 16);
       for (let col = c0; col <= c1 && n < NUM_MAX; col++) {
         for (let row = r0; row <= r1 && n < NUM_MAX; row++) {
+          // (Numbered from 0101: the part hexes before the first column or row have none.)
+          if (col < 1 || row < 1) continue;
           const [cx, cy] = hexCentre(f, col, row);
           const y = cy - up;
           if (cx < 0 || cy < 0 || cx > this.mapW || cy > this.mapH) continue;
           const [sx, sy] = cam.worldToScreen(cx, y);
           if (Math.abs(sx - cam.width / 2) > mx + 40 || Math.abs(sy - cam.height / 2) > my + 20) continue;
-          const t = this.label(n++, tint);
+          const t = this.label(n++);
           const text = hexLabel(col, row, this.digits);
           if (t.text !== text) t.text = text;
           t.position.set(Math.round(sx), Math.round(sy));
@@ -305,11 +339,13 @@ export class HexLayer {
     this.shownNumbers = n;
   }
 
-  private label(i: number, tint: number): BitmapText {
+  private label(i: number): BitmapText {
     while (this.pool.length <= i) {
-      const t = new BitmapText({ text: '', style: { fontFamily: FONT, fontSize: 16, fill: 0xffffff, fontWeight: 'bold' } });
+      // (In the grid's colour with a halo against it, light or dark, to read over forest.)
+      const c = Math.max(0, this.numColor);
+      const light = ((c >> 16) & 255) * 0.3 + ((c >> 8) & 255) * 0.59 + (c & 255) * 0.11 > 140;
+      const t = new BitmapText({ text: '', style: { fontFamily: FONT, fontSize: 16, fill: c, fontWeight: 'bold', stroke: { color: light ? 0x2b241d : 0xf4eedf, width: 4, join: 'round' } } });
       t.anchor.set(0.5);
-      t.tint = tint;
       this.numbers.addChild(t);
       this.pool.push(t);
     }

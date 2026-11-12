@@ -6,7 +6,7 @@
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
   import { shell } from './layout.svelte';
-  import { HEX_SIZE_MI, HEX_WIDTH_PX, type Hex } from '../../render/hex';
+  import { HEX_OFFSET_MI, HEX_OPACITY, HEX_SIZE_MI, HEX_WIDTH_PX, type Hex } from '../../render/hex';
 
   interface Props {
     grid: boolean;
@@ -111,7 +111,7 @@
               </label>
               <label class="slider">
                 <span>Opacity</span><output>{Math.round(hg.opacity * 100)}%</output>
-                <input type="range" min="0.05" max="1" step="0.05" value={hg.opacity} oninput={(e) => (live = { ...live, opacity: Number(e.currentTarget.value) })} onchange={(e) => commit({ opacity: Number(e.currentTarget.value) })} />
+                <input type="range" min={HEX_OPACITY[0]} max={HEX_OPACITY[1]} step="0.05" value={hg.opacity} oninput={(e) => (live = { ...live, opacity: Number(e.currentTarget.value) })} onchange={(e) => commit({ opacity: Number(e.currentTarget.value) })} />
               </label>
               <div class="two">
                 <label class="ws-field colour">
@@ -126,11 +126,11 @@
               <div class="two">
                 <label class="ws-field"
                   >Move right (mi)
-                  <input class="ws-input" type="number" min={-hg.size_mi} max={hg.size_mi} step="0.1" value={hg.ox_mi} onchange={(e) => commit({ ox_mi: num(e.currentTarget, hg.ox_mi, -hg.size_mi, hg.size_mi) })} />
+                  <input class="ws-input" type="number" min={-HEX_OFFSET_MI} max={HEX_OFFSET_MI} step="0.1" value={hg.ox_mi} onchange={(e) => commit({ ox_mi: num(e.currentTarget, hg.ox_mi, -HEX_OFFSET_MI, HEX_OFFSET_MI) })} />
                 </label>
                 <label class="ws-field"
                   >Move down (mi)
-                  <input class="ws-input" type="number" min={-hg.size_mi} max={hg.size_mi} step="0.1" value={hg.oy_mi} onchange={(e) => commit({ oy_mi: num(e.currentTarget, hg.oy_mi, -hg.size_mi, hg.size_mi) })} />
+                  <input class="ws-input" type="number" min={-HEX_OFFSET_MI} max={HEX_OFFSET_MI} step="0.1" value={hg.oy_mi} onchange={(e) => commit({ oy_mi: num(e.currentTarget, hg.oy_mi, -HEX_OFFSET_MI, HEX_OFFSET_MI) })} />
                 </label>
               </div>
               <span class="ws-muted">Numbers show once hexes are big enough on screen. The grid is saved with the world; changing it keeps the hexes explored in play by number.</span>

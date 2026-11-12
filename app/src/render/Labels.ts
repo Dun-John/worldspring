@@ -245,7 +245,7 @@ export class Labels {
   private hidden = new Set<string>();
   /** Labels kept from view besides (the players' window: places they can't see); asked at
    * every layout. */
-  conceal: ((f: Feature) => boolean) | null = null;
+  conceal: ((f: Feature, path: [number, number][] | undefined, area: boolean) => boolean) | null = null;
 
   constructor(features: Feature[]) {
     this.items = features
@@ -406,7 +406,7 @@ export class Labels {
     const dotAt: [number, number][] = [];
     for (const it of band) {
       const { f, style } = it;
-      if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f) || this.inside?.has(f.id)) continue;
+      if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f, it.path, false) || this.inside?.has(f.id)) continue;
       const px = f.extent_ft * ppf;
       if (px < style.minPx || px > style.maxPx) continue;
       const [sx, sy] = cam.worldToScreen(f.x, f.y);
@@ -421,7 +421,7 @@ export class Labels {
     }
     for (const it of band) {
       const { f, style } = it;
-      if ((style.badge && !this.placesOn) || this.hidden.has(f.id) || this.conceal?.(f) || this.inside?.has(f.id)) continue;
+      if ((style.badge && !this.placesOn) || this.hidden.has(f.id) || this.conceal?.(f, it.path, !style.keep) || this.inside?.has(f.id)) continue;
       if (style.keep) {
         // The name right of the symbol, or else left, below or above it, or none.
         let placed = false;

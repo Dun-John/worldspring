@@ -50,6 +50,7 @@
       hexMode: play.state.hexMode,
       hexRing: play.state.hexRing,
       hexSeen: play.state.hexSeen.length,
+      hexAll: play.state.hexAll,
       hexReveal: play.hexReveal,
     };
   });
@@ -205,8 +206,8 @@
           <button class:on={!v.hexReveal} onclick={() => ((play.hexReveal = false), play.onChange())}>Hide</button>
         </div>
         <div class="ws-row">
-          <button class="ws-btn grow" onclick={() => play.hexAll(true)}>Reveal all</button>
-          <button class="ws-btn grow" onclick={() => play.hexAll(false)} disabled={!v.hexSeen}>Hide all</button>
+          <button class="ws-btn grow" onclick={() => play.hexAll(true)} disabled={v.hexAll && !v.hexSeen}>Reveal all</button>
+          <button class="ws-btn grow" onclick={() => play.hexAll(false)} disabled={!v.hexAll && !v.hexSeen}>Hide all</button>
         </div>
         {#if v.inside}<div class="ws-hint warn">Hexes are explored on the surface map.</div>{/if}
         {#if v.hexMode !== 'crawl'}<div class="ws-hint warn">The players see every hex: set Hexes for players to Crawl.</div>{/if}
@@ -303,7 +304,7 @@
       </div>
       {#if v.hexMode === 'crawl'}
         <label class="switch"><Icon name="hex" size={16} /><span class="grow">Party reveals the ring of six<span class="sub">A PC entering a hex explores the hexes round it too</span></span><input type="checkbox" class="ws-switch" checked={v.hexRing} onchange={(e) => play.setHexRing(checked(e))} /></label>
-        <div class="ws-hint">{v.hexSeen} {v.hexSeen === 1 ? 'hex' : 'hexes'} explored. PCs moving on the map explore the hex they enter; the Hexes tool reveals or hides more.</div>
+        <div class="ws-hint">{v.hexAll ? (v.hexSeen ? `Every hex explored but ${v.hexSeen} hidden again.` : 'Every hex explored.') : `${v.hexSeen} ${v.hexSeen === 1 ? 'hex' : 'hexes'} explored.`} PCs moving on the map explore the hex they enter; the Hexes tool reveals or hides more.</div>
       {/if}
     </section>
 

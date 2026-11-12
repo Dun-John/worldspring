@@ -18,6 +18,9 @@ export const HEX_DEFAULTS: Hex = { size_mi: 6, flat: true, color: '#2b241d', wid
 /** The sizes a grid may have (mi across the flats). */
 export const HEX_SIZE_MI: [number, number] = [0.5, 60];
 export const HEX_WIDTH_PX: [number, number] = [0.5, 6];
+export const HEX_OPACITY: [number, number] = [0, 1];
+/** The grid's origin moved at most this far (mi) each way. */
+export const HEX_OFFSET_MI = 1e4;
 
 const num = (v: unknown, d: number, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
 
@@ -31,9 +34,9 @@ export function hexGrid(e: Edits | undefined | null): Hex {
     flat: typeof g.flat === 'boolean' ? g.flat : d.flat,
     color: typeof g.color === 'string' && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color.toLowerCase() : d.color,
     width: num(g.width, d.width, HEX_WIDTH_PX[0], HEX_WIDTH_PX[1]),
-    opacity: num(g.opacity, d.opacity, 0, 1),
-    ox_mi: num(g.ox_mi, 0, -1e4, 1e4),
-    oy_mi: num(g.oy_mi, 0, -1e4, 1e4),
+    opacity: num(g.opacity, d.opacity, HEX_OPACITY[0], HEX_OPACITY[1]),
+    ox_mi: num(g.ox_mi, 0, -HEX_OFFSET_MI, HEX_OFFSET_MI),
+    oy_mi: num(g.oy_mi, 0, -HEX_OFFSET_MI, HEX_OFFSET_MI),
     numbers: typeof g.numbers === 'boolean' ? g.numbers : d.numbers,
   };
 }
@@ -127,6 +130,16 @@ export function hexRing(f: HexFrame, col: number, row: number): [number, number]
     return [i + 1, j + 1];
   });
 }
+
+/** Which hexes a crawl has explored: every one but those marked (`all`), or only those marked.
+ * `marks` lists every key that may differ from `all` (with repeats); `explored` says of any key. */
+export interface HexSeen {
+  all: boolean;
+  explored(key: string): boolean;
+  marks(): Iterable<string>;
+}
+
+export const NO_HEXES: HexSeen = { all: false, explored: () => false, marks: () => [] };
 
 /** A hex's key in play state (`"col,row"`). */
 export function hexKey(col: number, row: number): string {
