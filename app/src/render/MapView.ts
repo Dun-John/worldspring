@@ -214,6 +214,10 @@ export class MapView {
   private frameCount = 0;
   /** The canvas size while capturing a screenshot. */
   private captureSize: [number, number] | null = null;
+  /** The map element's size, read again only after it is resized (`ResizeObserver`): read every
+   * frame, it made the browser lay the page out then whenever the UI had changed (481 ms of main
+   * thread in the first 22 s of a `?bench=1` run, most as the first map shows). */
+  private elSize: [number, number] | null = null;
   /** The building being viewed inside, if any. */
   interior: InteriorLayer | null = null;
   /** In a city's sewers: the whole network round the view (`interior` is then the section
@@ -455,6 +459,7 @@ export class MapView {
 
   async mount(el: HTMLElement) {
     this.el = el;
+    new ResizeObserver(() => (this.elSize = null)).observe(el);
     await this.app.init({
       resizeTo: el,
       background: '#8aa0a8',
@@ -1568,7 +1573,7 @@ export class MapView {
   }
 
   private syncSize() {
-    [this.cam.width, this.cam.height] = this.captureSize ?? [this.el.clientWidth, this.el.clientHeight];
+    [this.cam.width, this.cam.height] = this.captureSize ?? (this.elSize ??= [this.el.clientWidth, this.el.clientHeight]);
   }
 
   private frame() {
