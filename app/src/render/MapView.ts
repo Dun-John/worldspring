@@ -218,6 +218,8 @@ export class MapView {
    * frame, it made the browser lay the page out then whenever the UI had changed (481 ms of main
    * thread in the first 22 s of a `?bench=1` run, most as the first map shows). */
   private elSize: [number, number] | null = null;
+  /** How long the first view's labels took to make (`Labels.prewarm`, ms). */
+  labelsPrewarmMs = 0;
   /** The building being viewed inside, if any. */
   interior: InteriorLayer | null = null;
   /** In a city's sewers: the whole network round the view (`interior` is then the section
@@ -1207,6 +1209,8 @@ export class MapView {
     this.syncSize();
     this.cam.minZoom = this.cam.fitZoom(geom.map_w_ft, geom.map_h_ft, 0.5);
     this.cam.set({ cx: geom.map_w_ft / 2, cy: geom.map_h_ft / 2, zoom: this.cam.fitZoom(geom.map_w_ft, geom.map_h_ft) });
+    // (The first view's labels made before it shows: `Labels.prewarm`.)
+    this.labelsPrewarmMs = this.labels.prewarm(this.cam, this.app.renderer);
     this.t0Ms = t0Ms;
     this.status = `Continent generated in ${(t0Ms / 1000).toFixed(1)} s`;
   }

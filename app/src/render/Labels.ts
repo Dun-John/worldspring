@@ -3,7 +3,7 @@
 // while its feature's on-screen size is within range), rotation along the feature, and
 // priority. Layout is greedy collision avoidance, highest priority first. Town districts
 // arrive later (once a layout exists) and are lettered along a curved baseline.
-import { Container, Graphics, Text, TextStyle } from 'pixi.js';
+import { Container, Graphics, RenderTexture, Text, TextStyle, type Renderer } from 'pixi.js';
 import type { DistrictLabel, Feature, Hit, NamedPlaces } from '../gen/protocol';
 import { buildingName } from '../ui/gazetteer';
 import type { Camera } from './camera';
@@ -240,6 +240,8 @@ export class Labels {
   private placesOn = false;
   /** Labels lettered in the last layout (for the frame profile). */
   lastCreated = 0;
+  /** Lettering every label a layout shows at once (`prewarm`). */
+  private unlimited = false;
   private readonly placeHits = new Map<string, BuildingHit>();
   /** Feature ids hidden by edits. */
   private hidden = new Set<string>();
@@ -384,6 +386,27 @@ export class Labels {
     }
   }
 
+  /**
+   * The labels a view shows, lettered and their text drawn and uploaded now (rendered once into a
+   * scratch target), before the map shows there: lettered as the map flies, each new label's text
+   * waited on Chrome's GPU process (30-310 ms frames as the first map showed). Returns the ms taken.
+   */
+  prewarm(cam: Camera, renderer: Renderer): number {
+    const t = performance.now();
+    this.unlimited = true;
+    try {
+      this.layout(cam);
+    } finally {
+      this.unlimited = false;
+    }
+    this.lastLayout = t;
+    this.lastZoom = cam.zoom;
+    const target = RenderTexture.create({ width: 4, height: 4 });
+    renderer.render({ container: this.container, target });
+    target.destroy(true);
+    return performance.now() - t;
+  }
+
   private layout(cam: Camera) {
     const boxes = new Boxes();
     // Rasterizing text is slow; spread new labels over several layouts to avoid hitches.
@@ -392,7 +415,7 @@ export class Labels {
     // New labels cost ~10 ms each to letter and measure on this laptop: at least one per
     // layout, more only while the layout is under ~4 ms.
     const start = performance.now();
-    const mayCreate = () => created === 0 || performance.now() - start < 4;
+    const mayCreate = () => this.unlimited || created === 0 || performance.now() - start < 4;
     const pad = 4;
     const margin = 40;
     // Thousands of features: the zoom band first (cheap), the screen test only within it.
