@@ -13,7 +13,7 @@ export const SETTLEMENT_KINDS = ['metropolis', 'city', 'town', 'village'];
 /** A layout-local id set aside when the world was remade (`PARKED_LAYOUT` and up): it names no
  * place any more. */
 export function setAside(id: string): boolean {
-  const m = /^(?:[lr]:)?[bdtukw]:(\d+)(?::|$)/.exec(id);
+  const m = /^(?:[lrm]:)?[bdtukw]:(\d+)(?::|$)/.exec(id);
   return !!m && Number(m[1]) >= PARKED_LAYOUT;
 }
 
@@ -224,7 +224,7 @@ export function underTarget(h: UnderHit): string {
   let at = h.id;
   if (m && (m.what === 'level' || m.what === 'room' || m.what === 'note')) at = m.id;
   else if (m && (m.what === 'npc' || m.what === 'plot')) at = h.attached.find((x) => x.what === m.what && x.id === m.id)?.at ?? h.id;
-  if (!/^[lr]:/.test(at) && !/^w:\d+:-?\d+:-?\d+$/.test(at)) at = h.id;
+  if (!/^[lrm]:/.test(at) && !/^w:\d+:-?\d+:-?\d+$/.test(at)) at = h.id;
   if (/^w:\d+$/.test(at)) at = `${at}:${Math.floor(h.x_ft / SEWER_SECTION_FT)}:${Math.floor(h.y_ft / SEWER_SECTION_FT)}`;
   return at;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   // The ways on from a square inside a site (stairs, the way out, tunnels), at the click; kept
-  // inside the window.
+  // inside the window. The DM's context menu adds a room's notes and a note put down there.
   import type { Move } from '../render/InteriorLayer';
 
   interface Props {
@@ -21,7 +21,7 @@
 <div class="menu" style:left="{left}px" style:top="{top}px" role="menu" bind:clientWidth={w} bind:clientHeight={h}>
   {#each moves as m (m.label)}
     <button role="menuitem" onclick={() => onMove(m)}>
-      <span class="icon">{m.kind === 'level' ? (/up/i.test(m.label) ? '▲' : '▼') : m.kind === 'surface' ? '⇧' : '➜'}</span>
+      <span class="icon">{m.kind === 'level' ? (/up/i.test(m.label) ? '▲' : '▼') : m.kind === 'surface' ? '⇧' : m.kind === 'room' ? '▢' : m.kind === 'note' ? '✎' : '➜'}</span>
       {m.label}
     </button>
   {/each}

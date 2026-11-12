@@ -941,6 +941,9 @@ pub struct Note {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// A point note's spot (`m:<site>:<level>:<id>`), in the location's own grid units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
 }
 
 impl Note {
@@ -964,7 +967,7 @@ impl Note {
                 tags.push(t.clone());
             }
         }
-        Some(Note { text, tags })
+        Some(Note { text, tags, at: a.at.or(b.at) })
     }
 }
 
@@ -1600,6 +1603,10 @@ impl Edits {
         }
         // Some(new id, or None if its level is gone) for the site's level and room ids.
         let moved = |id: &str| -> Option<Option<String>> {
+            if let Some((s, li, own)) = crate::agent::split_point_id(id).filter(|(s, _, _)| *s == site) {
+                let li = li as isize + delta;
+                return Some((li >= 0).then(|| format!("m:{s}:{li}:{own}")));
+            }
             let (s, li, ri) = crate::agent::split_room_id(id).filter(|(s, _, _)| *s == site)?;
             let li = li as isize + delta;
             Some((li >= 0).then(|| match ri {
@@ -1873,9 +1880,9 @@ enum Shape {
 pub const PARKED_LAYOUT: usize = 1_000_000;
 
 /// The layout number in a layout-local id (`b:<layout>:…`, `d:`, `t:`, `u:`, `k:`, `w:`, a
-/// level's or room's `l:`/`r:` round one), if it has one.
+/// level's, room's or point note's `l:`/`r:`/`m:` round one), if it has one.
 pub fn layout_in_id(id: &str) -> Option<usize> {
-    let id = id.strip_prefix("l:").or_else(|| id.strip_prefix("r:")).unwrap_or(id);
+    let id = id.strip_prefix("l:").or_else(|| id.strip_prefix("r:")).or_else(|| id.strip_prefix("m:")).unwrap_or(id);
     let (head, rest) = id.split_once(':')?;
     if !matches!(head, "b" | "d" | "t" | "u" | "k" | "w") {
         return None;

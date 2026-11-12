@@ -232,9 +232,9 @@ impl Attached {
 }
 
 /// The site an id belongs to (`u:`/`k:` itself, a sewer section's city `w:<layout>`), for a
-/// site's id or one of its levels' or rooms'.
+/// site's id or one of its levels', rooms' or point notes'.
 fn site_key(id: &str) -> Option<String> {
-    let base = crate::agent::split_room_id(id).map_or(id, |s| s.0);
+    let base = crate::agent::site_level(id).map_or(id, |s| s.0);
     if let Some(rest) = base.strip_prefix("w:") {
         return Some(format!("w:{}", rest.split(':').next()?));
     }
@@ -243,7 +243,7 @@ fn site_key(id: &str) -> Option<String> {
 
 /// The middle of the sewer section an id names (`w:<layout>:<sx>:<sy>` or a level or room of it).
 fn section_middle(id: &str) -> Option<[f64; 2]> {
-    let base = crate::agent::split_room_id(id).map_or(id, |s| s.0);
+    let base = crate::agent::site_level(id).map_or(id, |s| s.0);
     let n: Vec<f64> = base.strip_prefix("w:")?.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     let s = under::SEWER_SECTION_FT;
     (n.len() == 2).then(|| [(n[0] + 0.5) * s, (n[1] + 0.5) * s])

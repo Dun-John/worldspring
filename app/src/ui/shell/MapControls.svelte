@@ -30,8 +30,10 @@
     floors?: Snippet;
     /** Inside a building or site: the view turned so its plan stands north up. */
     north?: { on: boolean; set: (on: boolean) => void };
+    /** Inside: the markers of notes put down at points (the DM's). */
+    roomNotes?: { on: boolean; set: (on: boolean) => void };
   }
-  let { grid, places, seaLanes, hexes, battlemap, canUndo, undoLabel, onGrid, onPlaces, onSeaLanes, onHexes, onHexGrid, onZoom, onWhole, onUndo, floors, north }: Props = $props();
+  let { grid, places, seaLanes, hexes, battlemap, canUndo, undoLabel, onGrid, onPlaces, onSeaLanes, onHexes, onHexGrid, onZoom, onWhole, onUndo, floors, north, roomNotes }: Props = $props();
 
   const layers = $derived(shell.menu === 'layers');
   let hexOpen = $state(false);
@@ -76,6 +78,13 @@
           <kbd class="ws-kbd">P</kbd>
           <input type="checkbox" class="ws-switch" checked={places} onchange={(e) => onPlaces(e.currentTarget.checked)} />
         </label>
+        {#if roomNotes}
+          <label class="row">
+            <Icon name="note" />
+            <span class="text">Room notes<span class="ws-muted">Notes at points inside, only you see them</span></span>
+            <input type="checkbox" class="ws-switch" checked={roomNotes.on} onchange={(e) => roomNotes.set(e.currentTarget.checked)} />
+          </label>
+        {/if}
         <label class="row">
           <Icon name="ferry" />
           <span class="text">Sea lanes<span class="ws-muted">Shipping between ports</span></span>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { MI, PIN_KINDS, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
@@ -32,6 +32,9 @@
   import MovesMenu from './ui/MovesMenu.svelte';
   import type { Move } from './render/InteriorLayer';
   import InfoPanel from './ui/InfoPanel.svelte';
+  import NoteCard from './ui/NoteCard.svelte';
+  import NoteList, { type NoteRow } from './ui/NoteList.svelte';
+  import { newPointId, splitPoint, splitRoom } from './ui/notes';
   import { CULTURES, type SettleAsk, type SettlePlan, type WaitAsk } from './ui/SettlementEdit.svelte';
   import Gazetteer from './ui/Gazetteer.svelte';
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
@@ -77,7 +80,7 @@
   import { changeList } from './world/changes';
   import { noteChanges, noteExported, unexported } from './world/exported';
 
-  type Note = { text: string; tags?: string[] };
+  type Note = { text: string; tags?: string[]; at?: [number, number] };
 
   const params = new URLSearchParams(location.search);
   // (Its keys come from the shortcuts below.)
@@ -103,8 +106,18 @@
   // Raw: features are renamed in place (by the labels), and read fresh on every render.
   let overlay = $state.raw<Overlay | null>(null);
   let selection = $state.raw<Selection | null>(null);
+  /** A room's or point note's card open (`r:`/`m:` id; the DM's, inside), and where it is. */
+  let noteSel = $state<string | null>(null);
+  let notePath = $state<{ site: string; level: string; room: string | null } | null>(null);
   let inside = $state<InteriorState | null>(null);
   /** Inside a building or site: the view turned so its plan stands north up (this session only). */
+  // Point notes' markers inside (Layers › Room notes; this browser's choice).
+  let roomNotesOn = $state(stored('ui.roomNotes') !== '0');
+  function setRoomNotes(on: boolean) {
+    roomNotesOn = on;
+    view.setRoomNotes(on);
+    store('ui.roomNotes', on ? '1' : '0');
+  }
   let northUp = $state(false);
   function setNorthUp(on: boolean) {
     northUp = view.northUp = on;
@@ -1447,6 +1460,7 @@
 
   /** Phones: the sheet shows the selected place's card (no panel open, or asked for). */
   const cardSheet = $derived(shell.phone && !!selection && (!shell.section || shell.card));
+  const noteSheet = $derived(shell.phone && !!noteSel && !selection && (!shell.section || shell.card));
   // A new place chosen on a phone comes up as a strip (name and actions) over the map.
   $effect(() => {
     if (!selection) shell.card = false;
@@ -1530,7 +1544,8 @@
     if (!a) return b;
     const text = a.text && b.text && a.text.trim() !== b.text.trim() ? `${a.text}\n\n${b.text}` : a.text || b.text;
     const tags = [...new Set([...(a.tags ?? []), ...(b.tags ?? [])])];
-    return tags.length ? { text, tags } : { text };
+    const at = a.at ?? b.at;
+    return { text, ...(tags.length ? { tags } : {}), ...(at ? { at } : {}) };
   }
   /** The notes as shown, one per place: a note kept under a building drawn by hand's building
    * id (as its map card wrote it before) is shown under its created id. The same object when
@@ -3720,6 +3735,8 @@
     // (At a building drawn by hand's created id: into it, as at its building id.)
     const pair = drawnPair(place.id);
     if (pair && place.id === pair.c && !pair.entry.removed && pair.entry.structure !== 'ruin') place = { ...place, id: pair.b };
+    // A point note (`m:<site>:<level>:<id>`): into the site, on its level, at the point.
+    if (place.id.startsWith('m:')) return goNote(place.id);
     // A site's level or room (`l:<site>:<level>`, `r:<site>:<level>:<room>`): into the site, on that level.
     const room = /^l:(.+):(\d+)$/.exec(place.id) ?? /^r:(.+):(\d+):\d+$/.exec(place.id);
     if (room) {
@@ -3759,6 +3776,7 @@
       if (view.interior) view.exitBuilding();
       return select({ kind: 'feature', feature: f });
     }
+    if (/^m:/.test(id)) return goNote(id);
     if (view.interior && !/^[lr]:/.test(id) && view.interior.interior.id !== id) view.exitBuilding();
     await goTo(id);
   }
@@ -3821,6 +3839,172 @@
     if (shell.phone) shell.snap = 'peek';
     syncTool();
     toast(`${shell.phone ? 'Tap' : 'Click'} on the map where ${npcs[id]?.name ?? 'they'} can be found`);
+  }
+
+  // Notes on rooms and at points in rooms (inside, the DM's): the card open (`r:`/`m:` id) and
+  // where it is.
+  type NotePlace = { site: string; siteName: string; level: number; levelName: string; room: number | null; roomName: string | null };
+  /** Interiors looked up for notes' places (by site id; cleared when the world changes). */
+  let noteSites = new Map<string, Promise<Interior | null>>();
+  $effect(() => {
+    void worldsMade;
+    noteSites = new Map();
+  });
+  $effect(() => {
+    // (Another place selected: the note card goes.)
+    if (selection) untrack(() => noteSel && closeNote());
+  });
+
+  /** Where a room's or point note's id is: its site, level and room, by name. */
+  async function notePlace(id: string): Promise<NotePlace | null> {
+    const r = splitRoom(id) ?? splitPoint(id);
+    if (!r) return null;
+    let it: Interior | null = view.interior?.interior.id === r.site ? view.interior.interior : null;
+    if (!it) {
+      if (!noteSites.has(r.site)) noteSites.set(r.site, view.gen.interior(r.site).catch(() => null));
+      it = await noteSites.get(r.site)!;
+    }
+    const lv = it?.levels[r.level];
+    if (!it || !lv) return null;
+    let room: number | null = 'room' in r ? r.room : null;
+    const at = notes[id]?.at;
+    if (at) {
+      const [i, j] = [Math.floor(at[0]), Math.floor(at[1])];
+      const c = i >= 0 && j >= 0 && i < it.nx && j < it.ny ? lv.cells[j * it.nx + i] : -1;
+      room = c >= 0 ? c : null;
+    }
+    const roomName = room !== null && lv.rooms[room] ? (renames[`r:${r.site}:${r.level}:${room}`] ?? lv.rooms[room].kind) : null;
+    const sewer = /^w:(\d+):/.exec(r.site);
+    const siteName = renames[r.site] ?? (sewer ? `the sewers of ${settlementName(Number(sewer[1]))}` : ((await placeInfo(r.site))?.name ?? it.name ?? it.function));
+    return { site: r.site, siteName, level: r.level, levelName: renames[`l:${r.site}:${r.level}`] ?? lv.name, room, roomName };
+  }
+
+  /** Open a room's or point note's card (inside: the room outlined). */
+  function openNote(id: string) {
+    selection = null;
+    moves = null;
+    noteSel = id;
+    notePath = null;
+    view.markRoom(id.startsWith('r:') ? id : null);
+    if (shell.phone) shell.card = true;
+    void notePlace(id).then((p) => {
+      if (noteSel === id) notePath = p && { site: p.siteName, level: p.levelName, room: p.roomName };
+    });
+  }
+
+  function closeNote() {
+    if (noteSel?.startsWith('r:')) view.markRoom(null);
+    noteSel = null;
+    notePath = null;
+  }
+  // (Names and the spot change under an open card: its place again.)
+  $effect(() => {
+    void renames;
+    void notes;
+    const id = untrack(() => noteSel);
+    if (id) void notePlace(id).then((p) => untrack(() => noteSel === id) && (notePath = p && { site: p.siteName, level: p.levelName, room: p.roomName }));
+  });
+
+  /** A room's note or a point's set (null: a room's cleared, a point taken away). */
+  function saveNote(id: string, note: Note | null, tool = 'annotate_feature') {
+    const all = { ...notes };
+    if (note) all[id] = note;
+    else delete all[id];
+    applyEdits({ ...edits, notes: all }, { tool, id, ...(notePath?.room ? { name: notePath.room } : {}) }, 'user');
+  }
+
+  /** The point notes in a room (by where they are now). */
+  const pointsInRoom = $derived.by(() => {
+    const r = noteSel ? splitRoom(noteSel) : null;
+    if (!r) return [];
+    const it = view.interior?.interior.id === r.site ? view.interior.interior : null;
+    const lv = it?.levels[r.level];
+    return Object.entries(notes).filter(([k, n]) => {
+      const p = splitPoint(k);
+      if (!p || p.site !== r.site || p.level !== r.level || !n.at || !it || !lv) return false;
+      const [i, j] = [Math.floor(n.at[0]), Math.floor(n.at[1])];
+      return i >= 0 && j >= 0 && i < it.nx && j < it.ny && lv.cells[j * it.nx + i] === r.room;
+    });
+  });
+
+  /** Put a note down at a point inside (`move`: that point note moved there), by a click. */
+  function pickNotePoint(move?: string) {
+    const done = () => {
+      if (pickTool !== tool) return;
+      pickTool = null;
+      syncTool();
+    };
+    const tool: PointerTool = {
+      down: () => true,
+      move: () => {},
+      hover: () => {},
+      cancel: done,
+      up: (x, y) => {
+        done();
+        const layer = view.interiorAt(x, y);
+        if (!layer?.roomAt(x, y)) return toast('Pick a spot in a room');
+        const g = layer.toGrid(x, y);
+        putNote(layer.interior.id, layer.currentLevel, [Math.round(g[0] * 100) / 100, Math.round(g[1] * 100) / 100], move);
+      },
+    };
+    pickTool = tool;
+    if (shell.phone) shell.snap = 'peek';
+    syncTool();
+    toast(`${shell.phone ? 'Tap' : 'Click'} where in the room the note goes`);
+  }
+
+  /** A point note put down at `at` (grid units) on a site's level, or one moved there (to a new id
+   * when it changes site or level). */
+  function putNote(site: string, level: number, at: [number, number], move?: string) {
+    const all = { ...notes };
+    let id: string;
+    if (move && all[move]) {
+      const p = splitPoint(move);
+      id = p && p.site === site && p.level === level ? move : `m:${site}:${level}:${p?.own ?? newPointId(site, level).split(':').pop()}`;
+      all[id] = { ...all[move], at };
+      if (id !== move) delete all[move];
+    } else {
+      id = newPointId(site, level);
+      all[id] = { text: '', at };
+    }
+    applyEdits({ ...edits, notes: all }, { tool: move ? 'move_note' : 'add_note_at', id }, 'user');
+    openNote(id);
+  }
+
+  /** Every note (places, rooms, points) for the Notebook's Notes tab, with where it is. */
+  let noteRows = $state<NoteRow[]>([]);
+  let noteRowsSeq = 0;
+  async function listNotes() {
+    const seq = ++noteRowsSeq;
+    const rows = await Promise.all(
+      Object.entries(placeNotes).map(async ([id, n]): Promise<NoteRow> => {
+        const kind = id.startsWith('m:') ? 'point' : id.startsWith('r:') ? 'room' : 'place';
+        if (kind === 'place') return { id, kind, note: n, path: [nameOf(id)] };
+        const p = await notePlace(id);
+        return { id, kind, note: n, path: p ? [p.siteName, p.levelName, ...(p.roomName ? [p.roomName] : [])] : [nameOf(id)] };
+      }),
+    );
+    if (seq === noteRowsSeq) noteRows = rows;
+  }
+  $effect(() => {
+    if (shell.section === 'notes' && notebookFocus.tab === 'notes') {
+      void placeNotes;
+      void renames;
+      untrack(() => void listNotes());
+    }
+  });
+
+  /** Open a note from the Notebook: a place's as any place; a room's or point's inside its site,
+   * on its level, the room outlined or the point framed, with its card. */
+  async function goNote(id: string) {
+    const r = splitRoom(id) ?? splitPoint(id);
+    if (!r) return void goName(id);
+    // (A sewer section opens as the city's sewers, on its own section.)
+    if (view.interior?.interior.id !== r.site && !(await view.enterBuilding(r.site, { level: r.level }))) return toast('That place cannot be opened now');
+    if (view.interior?.currentLevel !== r.level) view.setInteriorLevel(r.level);
+    const p = await view.gen.place(id);
+    if (p) flyToSize(p.x, p.y, 120);
+    openNote(id);
   }
 
   /** An NPC into play as a token: where they stand inside, else the middle of the view. */
@@ -4066,6 +4250,7 @@
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
       () => (designer ? (go('edit', 'sites'), true) : false),
       () => (shell.phone && shell.card ? ((shell.card = false), true) : false),
+      () => (noteSel ? (closeNote(), true) : false),
       () => (view.interior ? (leaveSite(), true) : false),
       () => (selection ? ((selection = null), true) : false),
     ],
@@ -4110,6 +4295,11 @@
     view.onHexes = (on) => setHexes(on);
     view.setHexes(hexesOn);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
+    view.onNote = (id) => openNote(id);
+    view.onRoom = (id) => {
+      if (!playOn) openNote(id);
+    };
+    view.setRoomNotes(roomNotesOn);
     view.onOverlay = (o) => (overlay = o);
     const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk || !!openAsk || !!restoreAsk);
     window.addEventListener('keydown', onKey);
@@ -4244,7 +4434,13 @@
   <SectionBar playing={playOn} {canUndo} {canRedo} {undoLabel} {redoLabel} onSection={toggle} onUndo={undoAny} onRedo={redoAny} />
   {#if progress !== null}<div class="progress" style:width="{Math.round(progress * 100)}%"></div>{/if}
 
-  {#if cardSheet && selection}
+  {#if noteSheet && noteSel}
+    <Dock waiting={waitBar} title={noteSel.startsWith('m:') ? 'Note' : 'Room'} icon="note" onClose={closeNote} back={shell.section ? { label: SECTIONS.find((s) => s.key === shell.section)?.label ?? 'panel', go: () => (shell.card = false) } : undefined}>
+      {#snippet children(peek)}
+        {#if noteSel}{@render noteCard(noteSel, true, peek)}{/if}
+      {/snippet}
+    </Dock>
+  {:else if cardSheet && selection}
     <Dock
       waiting={waitBar}
       title="Place"
@@ -4488,6 +4684,7 @@
       tabs={[
         { key: 'npcs', label: `NPCs (${Object.keys(npcs).length})`, icon: 'user', hint: 'Who they are, where they are, how they feel about the players.' },
         { key: 'plots', label: `Plots (${Object.keys(plots).length})`, icon: 'scroll', hint: 'Plot points tied to places and NPCs.' },
+        { key: 'notes', label: `Notes (${Object.keys(placeNotes).length})`, icon: 'note', hint: 'Every note: on places, on rooms and at points in them. Find them by tag.' },
         { key: 'gazetteer', label: 'Gazetteer', icon: 'tag', hint: 'Every name in the world: rename it, hide a place from the map, write notes only you see.' },
       ]}
       tab={notebookFocus.tab}
@@ -4498,6 +4695,8 @@
       {#snippet children(peek)}
         {#if peek}
           <!-- (Folded down: the tabs alone.) -->
+        {:else if notebookFocus.tab === 'notes'}
+          <NoteList rows={noteRows} onOpen={(id) => void goNote(id)} />
         {:else if notebookFocus.tab === 'gazetteer'}
           {#if overlay}
             <Gazetteer
@@ -4573,6 +4772,28 @@
     </div>
   {/if}
 
+  {#if noteSel && !selection && !shell.phone}{@render noteCard(noteSel, false, shell.short && !!shell.section)}{/if}
+  {#if shell.phone && noteSel && shell.section && !shell.card}
+    <button class="chip" onclick={() => ((shell.card = true), (shell.snap = 'half'))}><Icon name="note" size={16} /><span>{notePath?.room ?? 'Note'}</span><Icon name="chevron-up" size={16} /></button>
+  {/if}
+  {#snippet noteCard(id: string, docked: boolean, peek: boolean)}
+    <NoteCard
+      {id}
+      {docked}
+      {peek}
+      path={notePath}
+      note={notes[id]}
+      points={pointsInRoom}
+      onSave={(n) => saveNote(id, n)}
+      onRename={id.startsWith('r:') ? (name) => rename(id, name) : undefined}
+      onAddPoint={id.startsWith('r:') ? () => pickNotePoint() : undefined}
+      onMove={id.startsWith('m:') ? () => pickNotePoint(id) : undefined}
+      onDelete={id.startsWith('m:') ? () => (saveNote(id, null, 'delete_note'), closeNote()) : undefined}
+      onOpen={openNote}
+      onGo={() => void goNote(id)}
+      onClose={closeNote}
+    />
+  {/snippet}
   {#if selection && !shell.phone}
     <!-- (Short landscape screens fold the card down while a panel is open.) -->
     {@render placeCard(selection, false, shell.short && !!shell.section)}
@@ -4643,6 +4864,7 @@
     onUndo={undoAny}
     floors={inside ? floorPicker : undefined}
     north={inside && !inside.id.startsWith('w:') ? { on: northUp, set: setNorthUp } : undefined}
+    roomNotes={inside ? { on: roomNotesOn, set: setRoomNotes } : undefined}
   />
   {#if placeArmed}
     <div class="banner" role="status">
@@ -4763,7 +4985,18 @@
     </div>
   {/if}
   {#if moves && inside}
-    <MovesMenu moves={moves.list} x={moves.x} y={moves.y} onMove={(m) => void view.move(m)} onClose={() => (moves = null)} />
+    <MovesMenu
+      moves={moves.list}
+      x={moves.x}
+      y={moves.y}
+      onMove={(m) => {
+        if (m.kind === 'room') openNote(m.id);
+        else if (m.kind === 'note') putNote(m.site, m.level, m.grid);
+        else void view.move(m);
+        moves = null;
+      }}
+      onClose={() => (moves = null)}
+    />
   {/if}
   {#if tokenMenu && playOn}
     <TokenMenu {play} version={playVersion} ids={tokenMenu.ids} box={tokenMenu.box} onPicture={(ids) => openPicker(ids)} onClose={closeTokenMenu} />

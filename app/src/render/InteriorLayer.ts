@@ -14,6 +14,7 @@ import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
+import type { NoteMarker } from '../ui/notes';
 import { noiseSource } from './noise';
 import { DIST_PAD } from './rockDistance';
 import { underLook } from './underTheme';
@@ -705,7 +706,10 @@ export function warmUnderground(renderer: Renderer) {
 export type Move =
   | { kind: 'level'; label: string; level: number; from: string; at: [number, number] }
   | { kind: 'surface'; label: string; at: [number, number] }
-  | { kind: 'site'; label: string; to: string; from: string; at: [number, number] };
+  | { kind: 'site'; label: string; to: string; from: string; at: [number, number] }
+  // (The DM's: a room's notes, a note put down at a point; `grid` in the site's grid units.)
+  | { kind: 'room'; label: string; id: string; at: [number, number] }
+  | { kind: 'note'; label: string; site: string; level: number; grid: [number, number]; at: [number, number] };
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** A way's label in the moves list: "Stairs down to Undermountain" for "stairs down to the dungeon" when the
@@ -751,6 +755,52 @@ const WAY_SCALE_TIGHT = 1.35;
 /** The ways' arrows: a darker warm tan than the stairs' cream (`wayArrow`). */
 const WAY_ARROW = 0xb08654;
 
+/** A point note's marker disc (screen px). */
+const NOTE_R = 10;
+/** The ring and glyph colour per quick-pick tag (else a plain note's). */
+const NOTE_TONE: Record<string, number> = { treasure: 0xa87a1c, 'read-aloud': 0x2f5f94, trap: 0xa13a26, secret: 0x5e3f86, monster: 0x46612a };
+
+/** A point note's marker (screen space, the DM's): a cream disc ringed in its tag's colour, with
+ * the tag's glyph drawn in ink lines (a chest, a speech bubble, a sprung trap, a keyhole, a
+ * skull; else a written page). */
+function noteGlyph(tag: string | null): Container {
+  const tone = (tag && NOTE_TONE[tag]) || 0x6b4a2c;
+  const g = new Graphics().circle(0, 0, NOTE_R + 1.5).fill({ color: 0x2a1f14, alpha: 0.55 }).circle(0, 0, NOTE_R).fill(0xf6ecd0).stroke({ width: 2, color: tone });
+  const line = { width: 1.4, color: tone, cap: 'round' as const, join: 'round' as const };
+  switch (tag) {
+    case 'treasure':
+      g.roundRect(-5, -1.5, 10, 6, 1).fill(0xe8c66a).stroke(line);
+      g.moveTo(-5, -1.5).quadraticCurveTo(0, -6.5, 5, -1.5).stroke(line);
+      g.moveTo(-5, 1).lineTo(5, 1).stroke(line);
+      g.rect(-1, 0.2, 2, 2.4).fill(tone);
+      break;
+    case 'read-aloud':
+      g.ellipse(0, -1.2, 5.6, 4).stroke(line);
+      g.moveTo(-2.6, 2.3).lineTo(-3.8, 5.4).lineTo(0, 2.7).stroke(line);
+      g.moveTo(-2.8, -2.2).lineTo(2.8, -2.2).moveTo(-2.8, -0.2).lineTo(1.6, -0.2).stroke({ ...line, width: 1.1 });
+      break;
+    case 'trap':
+      g.moveTo(-5.5, 3.6).lineTo(5.5, 3.6).stroke(line);
+      g.moveTo(-5, 3.6).lineTo(-3.7, -1.8).lineTo(-2.2, 1.6).lineTo(-0.8, -3.6).lineTo(0.8, 1.6).lineTo(2.2, -1.8).lineTo(3.7, 1.6).lineTo(5, 3.6).stroke(line);
+      break;
+    case 'secret':
+      g.circle(0, -1.8, 2.4).fill(tone);
+      g.poly([-1.3, -0.6, 1.3, -0.6, 2.2, 4.6, -2.2, 4.6]).fill(tone);
+      break;
+    case 'monster':
+      g.moveTo(-4.4, 1.2).quadraticCurveTo(-5.4, -5.6, 0, -5.8).quadraticCurveTo(5.4, -5.6, 4.4, 1.2).lineTo(2.6, 2.4).lineTo(2.6, 4.8).lineTo(-2.6, 4.8).lineTo(-2.6, 2.4).closePath().fill(0xf3e7c9).stroke(line);
+      g.circle(-1.9, -1.4, 1.3).circle(1.9, -1.4, 1.3).fill(tone);
+      g.moveTo(-0.9, 3).lineTo(-0.9, 4.8).moveTo(0.9, 3).lineTo(0.9, 4.8).stroke({ ...line, width: 1 });
+      break;
+    default:
+      g.moveTo(-3.6, -5).lineTo(1.6, -5).lineTo(3.8, -2.8).lineTo(3.8, 5).lineTo(-3.6, 5).closePath().fill(0xfffaf0).stroke(line);
+      g.moveTo(-1.8, -1.6).lineTo(2, -1.6).moveTo(-1.8, 0.8).lineTo(2, 0.8).moveTo(-1.8, 3).lineTo(0.8, 3).stroke({ ...line, width: 1 });
+  }
+  const node = new Container();
+  node.addChild(g);
+  return node;
+}
+
 export class InteriorLayer {
   /** The world's renames, for level and room names (`l:`/`r:` ids); set by `MapView`. */
   static names: Record<string, string> = {};
@@ -765,6 +815,10 @@ export class InteriorLayer {
   /** When its outline started to pulse (ms; 0: not yet, the camera still on its way in): for a
    * moment, then it stays. */
   static pickedAt = 0;
+  /** The point notes (`m:` ids) of every site, drawn for the DM on their levels; set by `MapView`. */
+  static notes: NoteMarker[] = [];
+  /** Whether point notes are shown (Layers › Room notes). */
+  static notesOn = true;
   readonly container = new Container();
   /** The picked room's outline (grid units, like the plan). */
   private readonly pickedRoom = new Graphics();
@@ -783,7 +837,9 @@ export class InteriorLayer {
   /** NPCs placed here, drawn for the DM only (screen space, like the labels). */
   private readonly marks = new Container();
   private npcs: NpcMarker[] = [];
-  private markSpots: { node: Container; x: number; y: number }[] = [];
+  private markSpots: { node: Container; x: number; y: number; note?: string }[] = [];
+  /** The camera of the last `update` (to find a marker under the pointer). */
+  private cam: Camera | null = null;
   /** The underground level's shader mesh, its uniforms and textures. */
   private under: { uniforms: UniformGroup; sources: BufferImageSource[]; shader: Shader; mesh: Mesh<any, any>; level: number } | null = null;
   /** Underground levels' textures, worked out once each (`underField`). */
@@ -886,6 +942,27 @@ export class InteriorLayer {
     return this.interior.levels[this.level].links?.find((k) => k.x === i && k.y === j)?.to ?? null;
   }
 
+  /** The room under a world point on the level in view (`r:<site>:<level>:<room>`), if any. */
+  roomAt(wx: number, wy: number): string | null {
+    const it = this.interior;
+    const [i, j] = this.toGrid(wx, wy).map(Math.floor);
+    const ri = i >= 0 && j >= 0 && i < it.nx && j < it.ny ? (it.levels[this.level]?.cells[j * it.nx + i] ?? -1) : -1;
+    return ri >= 0 ? `r:${it.id}:${this.level}:${ri}` : null;
+  }
+
+  /** The DM's entries for a point inside (the context menu): the room's notes, a note here. */
+  noteMoves(wx: number, wy: number): Move[] {
+    const room = this.roomAt(wx, wy);
+    if (!room) return [];
+    const ri = Number(room.slice(room.lastIndexOf(':') + 1));
+    const g = this.toGrid(wx, wy);
+    const grid: [number, number] = [Math.round(g[0] * 100) / 100, Math.round(g[1] * 100) / 100];
+    return [
+      { kind: 'room', label: `Notes on ${this.roomName(this.level, ri)}`, id: room, at: [wx, wy] },
+      { kind: 'note', label: 'Add a note here', site: this.interior.id, level: this.level, grid, at: [wx, wy] },
+    ];
+  }
+
   /** The ways on from the square under a world point (stairs and ladders up and down, the way
    * out, trapdoors and tunnels to other sites, a sewer run into the next section), first the
    * one a double-click takes. */
@@ -985,6 +1062,7 @@ export class InteriorLayer {
 
   /** Position the plan for the camera (grid units → screen). */
   update(cam: Camera) {
+    this.cam = cam;
     const it = this.interior;
     const [sx, sy] = cam.worldToScreen(it.origin[0], it.origin[1]);
     const s = SQUARE_FT * cam.ppf;
@@ -1034,9 +1112,14 @@ export class InteriorLayer {
       const t = InteriorLayer.pickedAt ? (performance.now() - InteriorLayer.pickedAt) / 1000 : PICK_PULSE_S;
       this.pickedRoom.alpha = t < PICK_PULSE_S ? 0.45 + 0.55 * Math.cos((t * Math.PI * 2) / 1.6) ** 2 : 1;
     }
+    this.placeMarks(cam);
+  }
+
+  private placeMarks(cam: Camera) {
     for (const m of this.markSpots) {
       const w = this.toWorld(m.x, m.y);
       m.node.position.set(...cam.worldToScreen(w[0], w[1]));
+      m.node.rotation = -cam.turn;
     }
   }
 
@@ -1077,6 +1160,33 @@ export class InteriorLayer {
       this.marks.addChild(node);
       this.markSpots.push({ node, x: gx + n * 1.2, y: gy });
     }
+    if (!InteriorLayer.notesOn) return;
+    for (const m of InteriorLayer.notes) {
+      if (m.site !== this.interior.id || m.level !== this.level) continue;
+      const node = noteGlyph(m.glyph);
+      this.marks.addChild(node);
+      this.markSpots.push({ node, x: m.at[0], y: m.at[1], note: m.id });
+    }
+  }
+
+  /** Draw the point notes again (`InteriorLayer.notes` or `notesOn` changed). */
+  drawNotes() {
+    this.drawMarks();
+    if (this.cam) this.placeMarks(this.cam);
+  }
+
+  /** The point note whose marker is under a world point (within its disc on screen), if any. */
+  noteAt(wx: number, wy: number): string | null {
+    if (!this.cam || !this.marks.visible || !this.container.visible) return null;
+    const [px, py] = this.cam.worldToScreen(wx, wy);
+    let best: string | null = null;
+    let bestD = NOTE_R + 4;
+    for (const m of this.markSpots) {
+      if (!m.note) continue;
+      const d = Math.hypot(m.node.position.x - px, m.node.position.y - py);
+      if (d < bestD) [best, bestD] = [m.note, d];
+    }
+    return best;
   }
 
   /** Mark the picked room (`InteriorLayer.picked`) if it is on this level: a soft gold wash

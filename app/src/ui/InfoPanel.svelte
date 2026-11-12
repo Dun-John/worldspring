@@ -5,16 +5,17 @@
   import { hitName, kindIcon, kindLabel, type Selection } from './gazetteer';
   import Icon from './Icon.svelte';
   import SettlementEdit from './SettlementEdit.svelte';
+  import NoteEditor from './NoteEditor.svelte';
   import type { ComponentProps } from 'svelte';
 
-  type Note = { text: string; tags?: string[] };
+  type Note = { text: string; tags?: string[]; at?: [number, number] };
   type Ref = { id: string; name: string };
 
   interface Props {
     selection: Selection;
     renames: Record<string, string>;
     /** The world's notes (lore, written by the user or agents), by id. */
-    notes: Record<string, { text: string; tags?: string[] }>;
+    notes: Record<string, Note>;
     /** The id a place's note is kept under (a building drawn by hand: its created id). */
     noteKey?: (id: string) => string;
     /** A settlement's or site's name, by layout index. */
@@ -125,11 +126,10 @@
     if (!text.trim() && !tags.length) {
       if (note) onNote(id, null);
     } else if (text !== (note?.text ?? '') || JSON.stringify(tags) !== JSON.stringify(note?.tags ?? [])) {
-      onNote(id, tags.length ? { text, tags } : { text });
+      onNote(id, { text, ...(tags.length ? { tags } : {}), ...(note?.at ? { at: note.at } : {}) });
     }
   }
 
-  const tagList = (s: string) => [...new Set(s.split(',').map((t) => t.trim()).filter(Boolean))];
 
   function key(e: KeyboardEvent) {
     if (e.key === 'Enter') commit();
@@ -216,10 +216,7 @@
       </div>
     {/if}
     <div class="note">
-      <textarea class="ws-input" placeholder="Add a note: lore, hooks, secrets…" value={note?.text ?? ''} onchange={(e) => saveNote(e.currentTarget.value, note?.tags ?? [])} aria-label="Note"></textarea>
-      {#if note?.text || note?.tags?.length}
-        <input class="ws-input" placeholder="Tags, comma separated" value={(note?.tags ?? []).join(', ')} onchange={(e) => saveNote(note?.text ?? '', tagList(e.currentTarget.value))} aria-label="Tags" />
-      {/if}
+      <NoteEditor {note} onSave={saveNote} />
     </div>
     <div class="here">
       <div class="sub">
@@ -352,11 +349,6 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-  }
-  .note textarea {
-    field-sizing: content;
-    min-height: 3.2em;
-    max-height: 40vh;
   }
   .sub {
     display: flex;

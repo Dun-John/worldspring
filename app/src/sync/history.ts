@@ -52,6 +52,12 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `changed ${String(change.name ?? nameOf(id))}`;
       case 'annotate_feature':
         return `notes on ${String(change.name ?? nameOf(id))}`;
+      case 'add_note_at':
+        return `note put down in ${String(change.name ?? nameOf(id))}`;
+      case 'move_note':
+        return `note moved to ${String(change.name ?? nameOf(id))}`;
+      case 'delete_note':
+        return `note deleted in ${String(change.name ?? nameOf(id))}`;
       case 'update_feature':
         return `changed ${nameOf(id)}`;
       case 'hide_feature':

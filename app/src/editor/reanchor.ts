@@ -98,7 +98,7 @@ function layoutsOf(o: Overlay): { list: Feature[]; first: number } {
 }
 
 /** A layout-local id: the part before its layout number, the number, and what follows it. */
-const LOCAL_ID = /^((?:[lr]:)?[bdtukw]:)(\d+)((?::.*)?)$/;
+const LOCAL_ID = /^((?:[lrm]:)?[bdtukw]:)(\d+)((?::.*)?)$/;
 
 /** The layout numbers `edits` name places in (below `PARKED_LAYOUT`), ascending. */
 function layoutsIn(edits: Edits): number[] {

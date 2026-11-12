@@ -24,7 +24,7 @@ export interface AsideGroup {
 }
 
 /** A layout-local id's prefix and layout number. */
-const LOCAL = /^((?:[lr]:)?[bdtukw]):(\d+)(?::|$)/;
+const LOCAL = /^((?:[lrm]:)?[bdtukw]):(\d+)(?::|$)/;
 
 /** Whether an id names a place no longer on the map, with what was made on it kept. */
 export const isAside = (id: string) => setAside(id) || removedKind(id) !== null;
@@ -71,12 +71,14 @@ const LOCAL_KIND: Record<string, string> = {
   'l:u': 'a level underground',
   'r:b': 'a room',
   'r:u': 'a chamber underground',
+  'm:b': 'a spot in a building',
+  'm:u': 'a spot underground',
 };
 
 /** An entry in words ("Name of a building: The Rusty Anchor", "NPC: Mara"). */
 export function asideWhat(x: AsideEntry, e: Edits): string {
   const m = LOCAL.exec(x.id);
-  const sub = m ? /^([lr]:[bu])/.exec(x.id)?.[1] ?? m[1].replace(/^[lr]:/, '') : null;
+  const sub = m ? /^([lrm]:[bu])/.exec(x.id)?.[1] ?? m[1].replace(/^[lrm]:/, '') : null;
   const where = sub ? ` ${x.field === 'notes' || x.field === 'hidden' ? 'on' : 'of'} ${LOCAL_KIND[sub] ?? 'a place'}` : '';
   switch (x.field) {
     case 'renames':

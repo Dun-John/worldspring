@@ -1676,6 +1676,13 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     if let Some(w) = edits.wharves.get(id) {
         return Some(crate::wharf::mid(w));
     }
+    // A point note at its spot (on its level, which must be there).
+    if let Some((site, li, _)) = split_point_id(id) {
+        let at = edits.notes.get(id)?.at?;
+        let it = crate::interior::generate_id(world, t0, site)?;
+        it.levels.get(li)?;
+        return Some(crate::interior::to_world(&it, at[0], at[1]));
+    }
     // A level is where its site is; a room at its middle.
     if let Some((site, li, ri)) = split_room_id(id) {
         let it = crate::interior::generate_id(world, t0, site)?;
@@ -1713,6 +1720,29 @@ pub fn split_room_id(id: &str) -> Option<(&str, usize, Option<usize>)> {
     let (head, room) = id.strip_prefix("r:")?.rsplit_once(':')?;
     let (site, lv) = head.rsplit_once(':')?;
     Some((site, lv.parse().ok()?, Some(room.parse().ok()?)))
+}
+
+/// A point note's id split into its site, level and own id: `m:<site>:<level>:<id>` (the
+/// site id is everything between).
+pub fn split_point_id(id: &str) -> Option<(&str, usize, &str)> {
+    let (head, own) = id.strip_prefix("m:")?.rsplit_once(':')?;
+    let (site, lv) = head.rsplit_once(':')?;
+    Some((site, lv.parse().ok()?, own))
+}
+
+/// The site and level of a level, room or point note id (`l:`, `r:`, `m:`).
+pub fn site_level(id: &str) -> Option<(&str, usize)> {
+    split_room_id(id).map(|(s, l, _)| (s, l)).or_else(|| split_point_id(id).map(|(s, l, _)| (s, l)))
+}
+
+/// The room of level `li` a grid point lies in.
+pub fn room_at(it: &crate::interior::Interior, li: usize, at: [f64; 2]) -> Option<usize> {
+    let lv = it.levels.get(li)?;
+    let (x, y) = (crate::core::floor(at[0]), crate::core::floor(at[1]));
+    if x < 0.0 || y < 0.0 || x >= it.nx as f64 || y >= it.ny as f64 {
+        return None;
+    }
+    usize::try_from(*lv.cells.get(y as usize * it.nx + x as usize)?).ok()
 }
 
 /// NPC and plot ids (which are not places themselves).
@@ -1796,6 +1826,14 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
     if deleted_with(world, t0, id).is_some() {
         return None;
     }
+    // A point note: "Note in" the room it lies in (as renamed), else on its level.
+    if let Some((site, li, _)) = split_point_id(id) {
+        let at = world.file.edits.notes.get(id)?.at?;
+        let it = crate::interior::generate_id(world, t0, site)?;
+        let lv = it.levels.get(li)?;
+        let room = room_at(&it, li, at).map(|ri| name_any(world, t0, &format!("r:{site}:{li}:{ri}")).unwrap_or_else(|| lv.rooms[ri].kind.to_string()));
+        return Some(format!("Note in {}", room.unwrap_or_else(|| world.file.edits.renames.get(&format!("l:{site}:{li}")).cloned().unwrap_or_else(|| lv.name.clone()))));
+    }
     if let Some((site, li, ri)) = split_room_id(id) {
         let it = crate::interior::generate_id(world, t0, site)?;
         let lv = it.levels.get(li)?;
@@ -1875,7 +1913,7 @@ pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use
         }
     }
     move |a: &str| {
-        let room = split_room_id(a);
+        let room = split_room_id(a).or_else(|| split_point_id(a).map(|(s, l, _)| (s, l, Some(0))));
         let at = room.map_or(a, |r| r.0);
         if ids.iter().any(|i| i == a || i == at) || room.is_some_and(|(s, lv, r)| r.is_some() && ids.contains(&format!("l:{s}:{lv}"))) {
             return true;

@@ -4,7 +4,7 @@
 export type Section = 'world' | 'edit' | 'notes' | 'play';
 export type WorldTab = 'generate' | 'sketch' | 'library';
 export type EditTab = 'sites' | 'build' | 'town' | 'ground' | 'scatter' | 'design';
-export type NotesTab = 'npcs' | 'plots' | 'gazetteer';
+export type NotesTab = 'npcs' | 'plots' | 'notes' | 'gazetteer';
 export type Tabs = { world: WorldTab; edit: EditTab; notes: NotesTab };
 /** How far a phone's sheet is up: its tool strip only, half the screen, or all of it. */
 export type Snap = 'peek' | 'half' | 'full';

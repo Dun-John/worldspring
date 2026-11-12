@@ -272,9 +272,17 @@ export interface Plot {
   tags: string[];
 }
 
+/** Notes on a place (any id), a room (`r:`) or a point in a room (`m:<site>:<level>:<id>`, with
+ * `at`, the point in the location's own grid units; `world.rs` `Note`). */
+export interface Note {
+  text: string;
+  tags?: string[];
+  at?: [number, number];
+}
+
 export interface Edits {
   renames?: Record<string, string>;
-  notes?: Record<string, { text: string; tags?: string[] }>;
+  notes?: Record<string, Note>;
   hidden?: string[];
   created?: Created[];
   /** `n:<id>` → NPC. */

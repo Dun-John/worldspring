@@ -168,9 +168,9 @@ pub fn fold(h: u64) -> u32 {
 }
 
 /// A layout-local id's parts: what comes before its layout number, the number, what follows
-/// (`^((?:[lr]:)?[bdtukw]:)(\d+)((?::.*)?)$`).
+/// (`^((?:[lrm]:)?[bdtukw]:)(\d+)((?::.*)?)$`).
 fn local_id(id: &str) -> Option<(&str, u64, &str)> {
-    let lead = if id.starts_with("l:") || id.starts_with("r:") { 2 } else { 0 };
+    let lead = if id.starts_with("l:") || id.starts_with("r:") || id.starts_with("m:") { 2 } else { 0 };
     let b = id.as_bytes();
     if b.len() < lead + 2 || !matches!(b[lead], b'b' | b'd' | b't' | b'u' | b'k' | b'w') || b[lead + 1] != b':' {
         return None;

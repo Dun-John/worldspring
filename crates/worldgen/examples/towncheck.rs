@@ -6829,7 +6829,7 @@ fn district_edits(base: &World, t0: &T0, r: &mut Report) {
             let key = format!("b:{ci}:{}", b.id);
             let mut file = base.file.clone();
             if note {
-                file.edits.notes.insert(key.clone(), worldgen::world::Note { text: "Checked note".into(), tags: Vec::new() });
+                file.edits.notes.insert(key.clone(), worldgen::world::Note { text: "Checked note".into(), tags: Vec::new(), at: None });
             } else {
                 file.edits.renames.insert(key.clone(), "Checked Name".into());
             }

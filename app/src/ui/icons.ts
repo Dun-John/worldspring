@@ -112,6 +112,8 @@ export const ICONS = {
   corridor: '<path d="M3 9h7V3M14 3v6h7M3 15h7v6M14 21v-6h7"/>',
   rock: '<path d="m4 18 3-8 5-4 6 3 2 9Z"/><path d="m7 10 4 3 7-4M11 13v5"/>',
   chest: '<rect x="3" y="9" width="18" height="11" rx="1"/><path d="M3 9a9 4 0 0 1 18 0M3 13h18M11 13v3h2v-3"/>',
+  trap: '<path d="M3 18h18"/><path d="m5 18 1.75-5 1.75 5 1.75-5 1.75 5 1.75-5 1.75 5 1.75-5 1.75 5"/><path d="M12 13V8"/><circle cx="12" cy="6" r="2"/>',
+  keyhole: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="2.2"/><path d="m11 12-1 5h4l-1-5"/>',
   wand: '<path d="m3 21 12-12M15 4V2M15 12v-2M18 7h2M10 7h2M17.1 4.9 18.5 3.5M12.9 4.9 11.5 3.5M17.1 9.1l1.4 1.4"/>',
   hide: '<path d="m3 3 18 18"/><path d="M10.6 5.1Q11.3 5 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.8 9.8 0 0 0 5.4-1.6"/>',
   home: '<path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10"/>',

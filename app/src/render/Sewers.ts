@@ -194,6 +194,11 @@ export class Sewers {
     for (const s of this.sections.values()) s.layer?.drawPicked();
   }
 
+  /** Draw the point notes again on every section (`InteriorLayer.drawNotes`). */
+  drawNotes() {
+    for (const s of this.sections.values()) s.layer?.drawNotes();
+  }
+
   destroy() {
     this.dead = true;
     for (const s of this.sections.values()) s.layer?.destroy();

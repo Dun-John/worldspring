@@ -9,10 +9,11 @@
   import type { Feature, NameEntry, PlaceInfo } from '../gen/protocol';
   import { kindIcon, kindLabel, listedName, SETTLEMENT_KINDS, SITE_KINDS, unnamed } from './gazetteer';
   import Icon from './Icon.svelte';
+  import NoteEditor from './NoteEditor.svelte';
   import type { Here } from './Notebook.svelte';
   import type { AsideEntry, AsideGroup } from '../world/setaside';
 
-  type Note = { text: string; tags?: string[] };
+  type Note = { text: string; tags?: string[]; at?: [number, number] };
 
   interface Props {
     /** The map's named features (created sites included). */
@@ -203,7 +204,7 @@
 
   function setNote(id: string, text: string, tags: string[]) {
     if (!text.trim() && !tags.length) onNote(id, null, placeName(id));
-    else onNote(id, tags.length ? { text, tags } : { text }, placeName(id));
+    else onNote(id, { text, ...(tags.length ? { tags } : {}), ...(notes[noteKey(id)]?.at ? { at: notes[noteKey(id)].at } : {}) }, placeName(id));
   }
 
   /** The page's name field: an empty name or the generated one goes back to it. */
@@ -215,7 +216,6 @@
     lookUp(id);
   }
 
-  const tagList = (s: string) => [...new Set(s.split(',').map((t) => t.trim()).filter(Boolean))];
   const val = (e: Event) => (e.currentTarget as HTMLInputElement | HTMLTextAreaElement).value;
 
   /** The tab's features by kind, in the tab's kind order (unknown kinds go with the land). */
@@ -515,8 +515,7 @@
         <input type="checkbox" class="ws-switch" checked={hiddenSet.has(id)} onchange={(e) => onHide(id, e.currentTarget.checked)} />
       </label>
     {/if}
-    <label class="ws-field">Note · only you see it<textarea class="ws-input grow-text" rows="6" value={note?.text ?? ''} placeholder="Lore, hooks, secrets…" onchange={(e) => setNote(id, val(e), note?.tags ?? [])}></textarea></label>
-    <label class="ws-field">Tags<input class="ws-input" value={(note?.tags ?? []).join(', ')} placeholder="comma, separated" onchange={(e) => setNote(id, note?.text ?? '', tagList(val(e)))} /></label>
+    <NoteEditor {note} label="Note · only you see it" placeholder="Lore, hooks, secrets…" tagsAlways onSave={(text, tags) => setNote(id, text, tags)} />
   {:else}
     {#if !withNotes && !showAside}
       <div class="ws-seg" role="tablist">
@@ -650,11 +649,6 @@
     align-items: center;
     gap: 8px;
     cursor: pointer;
-  }
-  .grow-text {
-    field-sizing: content;
-    min-height: 3em;
-    max-height: 40vh;
   }
   .here {
     min-width: 0;

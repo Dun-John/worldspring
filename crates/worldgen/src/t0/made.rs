@@ -557,7 +557,7 @@ fn relaid(id: &str, from: usize, to: usize) -> Option<String> {
         return None;
     }
     let (lead, rest) = match id.get(..2) {
-        Some(h @ ("l:" | "r:")) => (h, &id[2..]),
+        Some(h @ ("l:" | "r:" | "m:")) => (h, &id[2..]),
         _ => ("", id),
     };
     let (head, tail) = rest.split_once(':')?;

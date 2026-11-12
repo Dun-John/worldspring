@@ -7,6 +7,7 @@ import { type Clear, type Created, type Edits, type Feature, type MadeSettlement
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
+import { noteMarkers } from '../ui/notes';
 import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
 import { Labels } from './Labels';
@@ -270,6 +271,10 @@ export class MapView {
   /** Inside a site, a click: the ways on from that square (empty elsewhere) and the screen
    * position, for a menu. */
   onMoves: (moves: Move[], sx: number, sy: number) => void = () => {};
+  /** The DM clicked a point note's marker inside (`m:` id). */
+  onNote: (id: string) => void = () => {};
+  /** The DM clicked a room inside where there is no way on (`r:` id). */
+  onRoom: (id: string) => void = () => {};
   /** The features changed outside `setEdits` (the populations of the settlements added by hand,
    * once the generators have them). */
   onOverlay: (overlay: Overlay) => void = () => {};
@@ -883,7 +888,7 @@ export class MapView {
 
   /** Take a way on from a square: to another level, out to the surface, or into another site. */
   async move(m: Move) {
-    if (!this.interior) return;
+    if (!this.interior || m.kind === 'room' || m.kind === 'note') return;
     this.onMoves([], 0, 0);
     this.lastWay = { at: m.at, kind: m.kind, t: performance.now() };
     if (m.kind === 'level') {
@@ -1029,6 +1034,22 @@ export class MapView {
     const first = this.overlay?.first_created;
     if (first !== undefined) (e.created ?? []).forEach((c, k) => c.kind === 'building' && set.has(c.id) && set.add(`b:${first + k}:0`));
     return set;
+  }
+
+  /** The point notes inside (the DM's map only; never the players'). */
+  private markNotes() {
+    if (this.interiorStyle.player) return;
+    InteriorLayer.notes = noteMarkers(this.edits.notes);
+    this.interior?.drawNotes();
+    this.sewers?.drawNotes();
+  }
+
+  /** Show the point notes inside or not (Layers › Room notes). */
+  setRoomNotes(on: boolean) {
+    if (InteriorLayer.notesOn === on) return;
+    InteriorLayer.notesOn = on;
+    this.interior?.drawNotes();
+    this.sewers?.drawNotes();
   }
 
   /** Show the NPCs placed in the building or site we are in (the DM's map only). */
@@ -1218,6 +1239,7 @@ export class MapView {
     }
     if (prev.hidden !== next.hidden || createdChanged) this.labels?.setHidden(this.hiddenLabels(next));
     if (prev.npcs !== next.npcs) this.markNpcs();
+    if (prev.notes !== next.notes) this.markNotes();
     // A site designed anew while we are in it (by undo, an agent): shown as it is now.
     const here = this.interior?.interior.id;
     if (here && here !== this.designing && prev.designs?.[here] !== next.designs?.[here] && JSON.stringify(prev.designs?.[here]) !== JSON.stringify(next.designs?.[here])) {
@@ -1902,8 +1924,17 @@ export class MapView {
         const site = this.interiorAt(x, y);
         // (A tap the tool takes, placing say, is never half a double-tap.)
         const taken = !!this.tool?.tap?.(x, y, e);
+        const note = !taken && site && !this.interiorStyle.player ? site.noteAt(x, y) : null;
         if (taken) this.lastTap = null;
-        else if (site) this.onMoves(site.movesAt(x, y), e.clientX - r.left, e.clientY - r.top);
+        else if (note) {
+          this.onMoves([], 0, 0);
+          this.onNote(note);
+        } else if (site) {
+          const moves = site.movesAt(x, y);
+          this.onMoves(moves, e.clientX - r.left, e.clientY - r.top);
+          const room = !moves.length && !this.interiorStyle.player ? site.roomAt(x, y) : null;
+          if (room) this.onRoom(room);
+        }
         else this.onPick(x, y, e.clientX - r.left, e.clientY - r.top);
         // Touch screens: a second tap nearby soon after is a double-tap.
         if (e.pointerType !== 'mouse' && !taken) {
@@ -1930,8 +1961,18 @@ export class MapView {
       this.tool?.leave?.(e);
     });
     // Sketching pans with the right button, play tools use it: no menu.
+    // Inside, for the DM: the ways on from there, a room's notes, a note put down there (a
+    // long-press on touch screens).
     c.addEventListener('contextmenu', (e) => {
-      if (this.sketcher || this.tool) e.preventDefault();
+      if (this.sketcher || this.tool) return e.preventDefault();
+      if (this.interiorStyle.player || this.inputOff) return;
+      const r = c.getBoundingClientRect();
+      const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+      const site = this.interiorAt(x, y);
+      const notes = site?.noteMoves(x, y) ?? [];
+      if (!site || !notes.length) return;
+      e.preventDefault();
+      this.onMoves([...site.movesAt(x, y), ...notes], e.clientX - r.left, e.clientY - r.top);
     });
     c.addEventListener('dblclick', (e) => {
       // Touch double-taps are handled on pointerup (browsers differ on synthesizing these).

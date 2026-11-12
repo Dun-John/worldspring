@@ -2616,7 +2616,7 @@ fn agent_edits_guarantee() {
     user.renames.insert(city.clone(), "Userholm".into());
     user.created[1].removed = false;
     let mut agent_e = e0.clone();
-    agent_e.notes.insert(city.clone(), worldgen::world::Note { text: "agent lore".into(), tags: vec![] });
+    agent_e.notes.insert(city.clone(), worldgen::world::Note { text: "agent lore".into(), tags: vec![], at: None });
     agent_e.created.push(Created { id: "c:2".into(), kind: "camp".into(), x: spot[0], y: spot[1] + 3_000.0, name: "Camp".into(), ..Default::default() });
     let (ou, oa) = (e0.diff(&user), e0.diff(&agent_e));
     let merged = |first: &[worldgen::world::EditOp], then: &[worldgen::world::EditOp]| {
@@ -2664,6 +2664,13 @@ fn agent_edits_guarantee() {
     let names = agent::names(&w3, t0, Some("room"), Some(&site), None).unwrap();
     assert!(names["names"].as_array().unwrap().iter().any(|n| n["id"] == rid && n["name"] == "Vesk's Tomb"), "list_names misses a renamed room");
     assert!(agent::position(&w3, t0, &rid).is_some() && agent::position(&w3, t0, &format!("l:{site}:{}", crypt.levels.len())).is_none(), "level and room ids resolve wrongly");
+    // A note at a point in a room (`m:<site>:<level>:<id>`, `at` in grid units) is a place in it.
+    let (mid, c) = (format!("m:{site}:0:x1"), crypt.levels[0].rooms[ri].center);
+    let mut f = w3.file.clone();
+    f.edits.notes.insert(mid.clone(), worldgen::world::Note { text: "A chest".into(), tags: vec!["treasure".into()], at: Some([c[0] as f64, c[1] as f64]) });
+    let f: WorldFile = serde_json::from_value(serde_json::to_value(&f).unwrap()).unwrap();
+    let w4 = World::new(f).unwrap();
+    assert!(agent::position(&w4, t0, &mid) == agent::position(&w4, t0, &rid) && agent::name_any(&w4, t0, &mid).as_deref() == Some("Note in Vesk's Tomb"), "a point note does not resolve to its room");
 
     // Objects put down and taken away by hand: generated ones go (one by kind and place, all in
     // a circle), placed ones come in the chunk holding them with their rules (built-in, or an
@@ -2897,7 +2904,7 @@ fn agent_edits_guarantee() {
     e.plots.insert("p:upstairs".into(), worldgen::world::Plot { title: "Upstairs".into(), anchors: vec![format!("r:{ib}:0:0")], ..Default::default() });
     // A building drawn by hand is one place: an NPC at its created id, a note under its building id.
     e.npcs.insert("n:cook".into(), worldgen::world::Npc { name: "Cook".into(), location: Some(worldgen::world::NpcPlace { id: inn_id.clone(), ..Default::default() }), ..Default::default() });
-    e.notes.insert(ib.clone(), worldgen::world::Note { text: "Rooms upstairs".into(), tags: vec!["inn".into()] });
+    e.notes.insert(ib.clone(), worldgen::world::Note { text: "Rooms upstairs".into(), tags: vec!["inn".into()], at: None });
     let ex = Executor::new(World::new(WorldFile { edits: e, ..f.clone() }).unwrap());
     let (world, t0) = (&ex.world, &ex.t0);
     assert_eq!(world.hash, base.hash, "castles and walls changed the world hash");
@@ -2912,8 +2919,8 @@ fn agent_edits_guarantee() {
     assert!(got["npcs"].as_array().unwrap().iter().any(|n| n["id"] == "n:cook"), "the inn's building misses the NPC at its created id");
     let note = agent::get(world, t0, &inn_id).unwrap()["notes"].clone();
     assert!(note["text"] == "Rooms upstairs" && note == got["notes"], "the inn's note differs by its id: {note} vs {}", got["notes"]);
-    let (one, two) = (worldgen::world::Note { text: "A".into(), tags: vec!["x".into()] }, worldgen::world::Note { text: "B".into(), tags: vec!["x".into(), "y".into()] });
-    assert_eq!(worldgen::world::Note::join(Some(&one), Some(&two)), Some(worldgen::world::Note { text: "A\n\nB".into(), tags: vec!["x".into(), "y".into()] }), "two notes on one place lose text when joined");
+    let (one, two) = (worldgen::world::Note { text: "A".into(), tags: vec!["x".into()], at: None }, worldgen::world::Note { text: "B".into(), tags: vec!["x".into(), "y".into()], at: None });
+    assert_eq!(worldgen::world::Note::join(Some(&one), Some(&two)), Some(worldgen::world::Note { text: "A\n\nB".into(), tags: vec!["x".into(), "y".into()], at: None }), "two notes on one place lose text when joined");
     let kids = agent::children(world, t0, &city).unwrap();
     assert!(kids["sites"].as_array().unwrap().iter().any(|s| s["id"] == inn_id && s["building"] == ib), "the inn is not among the city's sites: {}", kids["sites"]);
     assert!(kids["businesses"].as_array().unwrap().iter().any(|b| b["id"] == ib), "the inn is not among the city's businesses");

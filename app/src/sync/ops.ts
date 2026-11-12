@@ -35,7 +35,7 @@ export const EDIT_FIELDS: Record<string, Shape> = {
 export const PARKED_LAYOUT = 1_000_000;
 
 /** Where the edits fields hold layout-local ids (`b:<layout>:…`, `d:`, `t:`, `u:`, `k:`, `w:`, a
- * level's or room's `l:`/`r:` round one, a town's bare layout number): in their `keys`, in their
+ * level's, room's or point note's `l:`/`r:`/`m:` round one, a town's bare layout number): in their `keys`, in their
  * `values` (a set's ids), or inside each value (`npcs` where they are, `plots` their anchors).
  * It mirrors `LAYOUT_ID_FIELDS` in `crates/worldgen/src/t0/remap.rs`, the list a remade world
  * moves with their places (there, in the generator); here for an upgrade (`upgradeEdits`,
@@ -122,16 +122,18 @@ export function keepPlaces(before: Edits, next: Edits): Edits {
 export function shiftLevels(e: Edits, site: string, delta: number): Edits {
   if (!delta) return e;
   // The new id ('' when its level is gone), or undefined when not one of the site's levels.
-  // (`l:<site>:<level>`, `r:<site>:<level>:<room>`: the site is everything between.)
+  // (`l:<site>:<level>`, `r:<site>:<level>:<room>`, a point note's `m:<site>:<level>:<id>`: the
+  // site is everything between.)
   const moved = (id: string): string | undefined => {
     const room = id.startsWith('r:');
-    if (!room && !id.startsWith('l:')) return undefined;
+    const point = id.startsWith('m:');
+    if (!room && !point && !id.startsWith('l:')) return undefined;
     const parts = id.slice(2).split(':');
-    const ri = room ? parts.pop() : undefined;
+    const ri = room || point ? parts.pop() : undefined;
     const lv = parts.pop();
-    if (parts.join(':') !== site || !/^\d+$/.test(lv ?? '') || (room && !/^\d+$/.test(ri ?? ''))) return undefined;
+    if (parts.join(':') !== site || !/^\d+$/.test(lv ?? '') || (room && !/^\d+$/.test(ri ?? '')) || (point && !ri)) return undefined;
     const li = Number(lv) + delta;
-    return li < 0 ? '' : room ? `r:${site}:${li}:${ri}` : `l:${site}:${li}`;
+    return li < 0 ? '' : room || point ? `${id[0]}:${site}:${li}:${ri}` : `l:${site}:${li}`;
   };
   const rekey = <V>(m: Record<string, V> | undefined): Record<string, V> | undefined => {
     if (!m || !Object.keys(m).some((k) => moved(k) !== undefined)) return m;
