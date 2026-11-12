@@ -13,7 +13,7 @@ import { precompile } from './precompile';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
-import { HexLayer, type CrawlMode } from './HexLayer';
+import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
 import { underlay } from '../editor/trace/underlay.svelte';
@@ -1789,9 +1789,12 @@ export class MapView {
     const renderer = this.app.renderer;
     const stub = { max_level: 0, domain_ft: 1, sea_level_ft: 0, map_w_ft: 1, map_h_ft: 1 } as Geom;
     const warmTiles = new TileLayer(stub, this.gen);
-    await precompile(renderer, [...warmTiles.programs, seaLaneProgram()]);
+    await precompile(renderer, [...warmTiles.programs, seaLaneProgram(), ...hexPrograms()]);
     warmTiles.warmup(renderer);
     warmTiles.destroy();
+    const warmHexes = new HexLayer();
+    warmHexes.warmup(renderer);
+    warmHexes.destroy();
   }
 
   /** The underground shader compiled in the background and warmed (the reference laptop: ~12 s

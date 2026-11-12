@@ -1,6 +1,7 @@
 // The overland hex grid over the map (`Edits.hexes`, `hex.ts`): one quad over the view whose
 // shader draws every hex edge (resolution independent, the same cost at any zoom), and hex
-// numbers (`CCRR`) from a pool once the hexes are big enough to hold them. The DM's window and
+// numbers (`CCRR`) once the hexes are big enough to hold them: a sprite per digit, cut from one
+// texture of the digits drawn once (Pixi batches them; a number changed only swaps textures). The DM's window and
 // the players' both draw one (`MapView.setHexGrid`).
 //
 // A hex crawl (play) adds a second quad under the lines (`setCrawl`): in the players' window every
@@ -8,9 +9,9 @@
 // whole-map tile: `setWash`), in the DM's lightly hatched. Which hexes are explored is a mask of
 // one RGBA8 texel per hex (the map's hexes, at most `MASK_MAX`² round the view), written only
 // when they change. Two draw calls at most, the same at any zoom.
-import { BitmapText, BufferImageSource, Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
+import { BufferImageSource, CanvasSource, Container, Geometry, GlProgram, Mesh, Rectangle, RenderTexture, Shader, Sprite, Texture, UniformGroup, type Renderer } from 'pixi.js';
 import type { Camera } from './camera';
-import { hexAt, hexAxial, hexCentre, hexDigits, hexFrame, hexKey, hexLabel, hexRange, hexSpan, NO_HEXES, parseHexKey, type Hex, type HexFrame, type HexSeen } from './hex';
+import { hexAt, hexAxial, hexCentre, hexDigits, hexFrame, hexGrid, hexKey, hexLabel, hexRange, hexSpan, NO_HEXES, parseHexKey, type Hex, type HexFrame, type HexSeen } from './hex';
 import crawlFragment from './shaders/crawl.frag?raw';
 import fragment from './shaders/hex.frag?raw';
 import vertex from './shaders/hex.vert?raw';
@@ -29,6 +30,9 @@ const NUM_FADE_PX = 16;
 /** At most this many numbers (a screenful of 70-px hexes is ~500). */
 const NUM_MAX = 900;
 const FONT = ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif'];
+/** The digits' texture: drawn this many px high (shown at 9-14, mipmapped), the characters a number has. */
+const GLYPH_PX = 32;
+const GLYPH_CHARS = '0123456789-';
 
 /** The explored-hexes mask is at most this many hexes a side (a finer grid's round the view). */
 const MASK_MAX = 1024;
@@ -50,6 +54,8 @@ let sharedCrawl: GlProgram | null = null;
 function crawlProgram(): GlProgram {
   return (sharedCrawl ??= GlProgram.from({ vertex, fragment: crawlFragment, name: 'hex-crawl' }));
 }
+/** The grid's and the crawl's programs (compiled in the background: `MapView.warmGpu`). */
+export const hexPrograms = (): GlProgram[] => [hexProgram(), crawlProgram()];
 
 const rgba = (w: number, h: number, data?: Uint8Array) =>
   new BufferImageSource({ resource: data ?? new Uint8Array(w * h * 4), width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
@@ -105,7 +111,12 @@ export class HexLayer {
   washed = false;
   /** Whether the crawl was drawn last frame. */
   crawlShown = false;
-  private readonly pool: BitmapText[] = [];
+  /** A sprite per digit shown. */
+  private readonly pool: Sprite[] = [];
+  /** The digits in the numbers' colour (`glyphTextures`), and their advance at `GLYPH_PX`. */
+  private glyphs: Record<string, Texture> | null = null;
+  private glyphSource: CanvasSource | null = null;
+  private glyphAdvance = 0;
   private grid: Hex | null = null;
   private frame: HexFrame | null = null;
   private digits = 2;
@@ -130,6 +141,19 @@ export class HexLayer {
     this.container.visible = false;
   }
 
+  /** Both quads and a digit drawn once into a scratch target, so the first grid shown doesn't
+   * link its shaders mid-flight (the default grid's colour: the digits are made per colour). */
+  warmup(renderer: Renderer) {
+    this.set(hexGrid(null), 1, 1);
+    this.container.visible = this.mesh.visible = this.crawlMesh.visible = this.numbers.visible = true;
+    const t = this.glyph(0);
+    t.texture = this.glyphTextures()['0'];
+    t.visible = true;
+    const target = RenderTexture.create({ width: 16, height: 16 });
+    renderer.render({ container: this.container, target });
+    target.destroy(true);
+  }
+
   /** The grid drawn (null: none), over a map `w` × `h` ft. */
   set(grid: Hex | null, w: number, h: number) {
     this.grid = grid;
@@ -146,8 +170,7 @@ export class HexLayer {
       u.uWidth = grid.width;
       if (c !== this.numColor) {
         this.numColor = c;
-        for (const t of this.pool) t.destroy();
-        this.pool.length = 0;
+        this.dropGlyphs();
       }
     }
     this.maskDirty = true;
@@ -264,10 +287,11 @@ export class HexLayer {
     // is the same shape about it).
     const [rc, rr] = hexAt(f, cam.cx, cam.cy);
     const [hx, hy] = hexCentre(f, rc, rr);
-    // The quad: the screen, and enough round it to cover the corners of a turned view.
+    // The quad: the screen, or (a turned view) enough round it to cover its corners.
     const m = Math.hypot(cam.width, cam.height) / 2;
+    const [qx, qy] = cam.turn ? [m, m] : [cam.width / 2, cam.height / 2];
     const u = this.uniforms.uniforms;
-    (u.uRect as Float32Array).set([cam.width / 2 - m, cam.height / 2 - m, cam.width / 2 + m, cam.height / 2 + m]);
+    (u.uRect as Float32Array).set([cam.width / 2 - qx, cam.height / 2 - qy, cam.width / 2 + qx, cam.height / 2 + qy]);
     (u.uHalf as Float32Array).set([cam.width / 2, cam.height / 2]);
     (u.uCam as Float32Array).set([cam.cx - hx, cam.cy - hy]);
     (u.uMap as Float32Array).set([-hx, -hy, this.mapW - hx, this.mapH - hy]);
@@ -306,7 +330,9 @@ export class HexLayer {
     const from = this.digits > 2 ? NUM_PX_WIDE : NUM_PX;
     const show = g.numbers ? Math.min(1, Math.max(0, (across - from) / NUM_FADE_PX)) : 0;
     let n = 0;
+    let sprites = 0;
     if (show > 0) {
+      const glyphs = this.glyphTextures();
       const fpp = 1 / cam.ppf;
       // (The screen; a turned view's numbers from the whole quad.)
       const [mx, my] = cam.turn ? [m, m] : [cam.width / 2, cam.height / 2];
@@ -325,31 +351,78 @@ export class HexLayer {
           if (cx < 0 || cy < 0 || cx > this.mapW || cy > this.mapH) continue;
           const [sx, sy] = cam.worldToScreen(cx, y);
           if (Math.abs(sx - cam.width / 2) > mx + 40 || Math.abs(sy - cam.height / 2) > my + 20) continue;
-          const t = this.label(n++);
           const text = hexLabel(col, row, this.digits);
-          if (t.text !== text) t.text = text;
-          t.position.set(Math.round(sx), Math.round(sy));
-          t.scale.set(size / 16);
-          t.visible = true;
+          const k = size / GLYPH_PX;
+          const adv = this.glyphAdvance * k;
+          const [px, py] = [Math.round(sx) - (adv * (text.length - 1)) / 2, Math.round(sy)];
+          for (let i = 0; i < text.length; i++) {
+            const t = this.glyph(sprites++);
+            t.texture = glyphs[text[i]] ?? glyphs['0'];
+            t.position.set(px + adv * i, py);
+            t.scale.set(k);
+            t.visible = true;
+          }
+          n++;
         }
       }
     }
-    for (let i = n; i < this.pool.length; i++) this.pool[i].visible = false;
+    for (let i = sprites; i < this.pool.length; i++) this.pool[i].visible = false;
     this.numbers.alpha = Math.min(1, g.opacity * 2.2) * show;
     this.shownNumbers = n;
   }
 
-  private label(i: number): BitmapText {
+  private glyph(i: number): Sprite {
     while (this.pool.length <= i) {
-      // (In the grid's colour with a halo against it, light or dark, to read over forest.)
-      const c = Math.max(0, this.numColor);
-      const light = ((c >> 16) & 255) * 0.3 + ((c >> 8) & 255) * 0.59 + (c & 255) * 0.11 > 140;
-      const t = new BitmapText({ text: '', style: { fontFamily: FONT, fontSize: 16, fill: c, fontWeight: 'bold', stroke: { color: light ? 0x2b241d : 0xf4eedf, width: 4, join: 'round' } } });
-      t.anchor.set(0.5);
+      const t = new Sprite({ texture: Texture.EMPTY, anchor: 0.5 });
       this.numbers.addChild(t);
       this.pool.push(t);
     }
     return this.pool[i];
+  }
+
+  /** The digits drawn once in the numbers' colour, with a halo against it (light or dark) to read
+   * over forest, as tabular figures (one advance). */
+  private glyphTextures(): Record<string, Texture> {
+    if (this.glyphs) return this.glyphs;
+    const c = Math.max(0, this.numColor);
+    const light = ((c >> 16) & 255) * 0.3 + ((c >> 8) & 255) * 0.59 + (c & 255) * 0.11 > 140;
+    const css = (v: number) => '#' + v.toString(16).padStart(6, '0');
+    const font = `bold ${GLYPH_PX}px ${FONT.map((f) => (f.includes(' ') ? `"${f}"` : f)).join(', ')}`;
+    const halo = GLYPH_PX / 4;
+    const cv = document.createElement('canvas');
+    let g = cv.getContext('2d')!;
+    g.font = font;
+    const adv = Math.ceil(Math.max(...[...GLYPH_CHARS].map((ch) => g.measureText(ch).width)));
+    const [cw, ch] = [adv + halo * 2 + 2, Math.ceil(GLYPH_PX * 1.3) + halo * 2];
+    cv.width = cw * GLYPH_CHARS.length;
+    cv.height = ch;
+    g = cv.getContext('2d')!;
+    g.font = font;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.lineJoin = 'round';
+    g.lineWidth = halo;
+    g.strokeStyle = css(light ? 0x2b241d : 0xf4eedf);
+    g.fillStyle = css(c);
+    [...GLYPH_CHARS].forEach((d, k) => {
+      g.strokeText(d, k * cw + cw / 2, ch / 2);
+      g.fillText(d, k * cw + cw / 2, ch / 2);
+    });
+    const source = new CanvasSource({ resource: cv, autoGenerateMipmaps: true, scaleMode: 'linear' });
+    const out: Record<string, Texture> = {};
+    [...GLYPH_CHARS].forEach((d, k) => (out[d] = new Texture({ source, frame: new Rectangle(k * cw, 0, cw, ch) })));
+    this.glyphSource = source;
+    this.glyphAdvance = adv;
+    return (this.glyphs = out);
+  }
+
+  /** The digits made again on next use (another colour); the sprites keep nothing of them. */
+  private dropGlyphs() {
+    for (const t of this.pool) t.texture = Texture.EMPTY;
+    if (this.glyphs) for (const t of Object.values(this.glyphs)) t.destroy();
+    this.glyphSource?.destroy();
+    this.glyphs = null;
+    this.glyphSource = null;
   }
 
   destroy() {
@@ -359,6 +432,7 @@ export class HexLayer {
     this.mask.destroy();
     this.wash.destroy();
     this.container.destroy({ children: true });
+    this.dropGlyphs();
     this.pool.length = 0;
   }
 }
