@@ -6,7 +6,7 @@ import { assetIds, bundleAssets } from './assets';
 import { PINNED } from './versions';
 
 /** Must match `worldgen::world::GEN_VERSION`. */
-export const GEN_VERSION = 63;
+export const GEN_VERSION = 64;
 
 export const DEFAULT_PARAMS: WorldParams = {
   width_mi: 1200,
