@@ -13,6 +13,7 @@
   import { hasSession, parseLoc } from './play/state';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
   import { MapView, type HudState, type InteriorState, type PointerTool } from './render/MapView';
+  import { HEX_KEY, hexGrid, type Hex } from './render/hex';
   import TopBar from './ui/shell/TopBar.svelte';
   import MainMenu from './ui/shell/MainMenu.svelte';
   import SectionBar from './ui/shell/SectionBar.svelte';
@@ -110,6 +111,7 @@
   }
   let places = $state(readPlaces());
   let seaLanes = $state(readSeaLanes());
+  let hexesOn = $state(readHexes());
 
   /** Business pins on or off, as this viewer left them (on at first). */
   function readPlaces(): boolean {
@@ -145,6 +147,31 @@
     } catch {
       // Private mode: the choice just isn't remembered.
     }
+  }
+  /** The hex grid on or off, as this viewer left it (off at first). */
+  function readHexes(): boolean {
+    try {
+      return localStorage.getItem('map.hexes') === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function setHexes(on: boolean) {
+    hexesOn = on;
+    try {
+      localStorage.setItem('map.hexes', on ? '1' : '0');
+    } catch {
+      // Private mode: the choice just isn't remembered.
+    }
+  }
+
+  /** The world's hex grid set anew (null: back to the default), an undoable change. */
+  function setHexGrid(grid: Hex | null) {
+    const rest = { ...(edits.hexes ?? {}) };
+    if (grid) rest[HEX_KEY] = grid;
+    else delete rest[HEX_KEY];
+    applyEdits({ ...edits, hexes: rest }, { tool: 'set_hex_grid' }, 'user');
   }
   let moves = $state<{ list: Move[]; x: number; y: number } | null>(null);
 
@@ -3958,6 +3985,7 @@
     grid: () => setGrid(!gridOn),
     places: () => view.setPlaces(!view.places),
     seaLanes: () => view.setSeaLanes(!view.seaLanes),
+    hexes: () => view.setHexes(!view.hexesOn),
     zoom: (dz) => view.zoomBy(dz),
     pan: (dx, dy) => view.panBy(dx, dy),
     level: (d) => view.levelBy(d),
@@ -4079,6 +4107,8 @@
     view.setPlaces(places);
     view.onSeaLanes = (on) => setSeaLanes(on);
     view.setSeaLanes(seaLanes);
+    view.onHexes = (on) => setHexes(on);
+    view.setHexes(hexesOn);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
     view.onOverlay = (o) => (overlay = o);
     const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk || !!openAsk || !!restoreAsk);
@@ -4605,6 +4635,9 @@
     onPlaces={(on) => view.setPlaces(on)}
     {seaLanes}
     onSeaLanes={(on) => view.setSeaLanes(on)}
+    hexes={{ on: hexesOn, grid: hexGrid(edits), set: !!edits.hexes?.[HEX_KEY] }}
+    onHexes={(on) => view.setHexes(on)}
+    onHexGrid={setHexGrid}
     onZoom={zoomStep}
     onWhole={wholeMap}
     onUndo={undoAny}

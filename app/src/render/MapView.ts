@@ -12,6 +12,8 @@ import { precompile } from './precompile';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
+import { HexLayer } from './HexLayer';
+import { HEX_DEFAULTS, hexGrid, type Hex } from './hex';
 import { MadeTracks } from './MadeTracks';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
@@ -248,6 +250,13 @@ export class MapView {
   seaLanes = true;
   onSeaLanes: (on: boolean) => void = () => {};
   private lanes: SeaLanes | null = null;
+  /** The overland hex grid (`Edits.hexes`) over the surface map: drawn when `hexesOn` (Layers in
+   * the DM's window; the play session's choice in the players'). */
+  private hexLayer: HexLayer | null = null;
+  /** The grid as the edits have it (each field filled in: a world without one has the default). */
+  hexGrid: Hex = HEX_DEFAULTS;
+  hexesOn = false;
+  onHexes: (on: boolean) => void = () => {};
   /** The ferries' water legs: their own layer, shown further in than the lanes. */
   private ferryLanes: SeaLanes | null = null;
   private bridgeMarks: BridgeMarks | null = null;
@@ -561,6 +570,25 @@ export class MapView {
     this.places = on;
     this.labels?.setPlaces(on && !this.interior);
     this.onPlaces(on);
+  }
+
+  /** The hex grid as drawn last frame (for checks). */
+  get hexStats(): { alpha: number; numbers: number } {
+    return { alpha: this.hexLayer?.alpha ?? 0, numbers: this.hexLayer?.shownNumbers ?? 0 };
+  }
+
+  /** The hex grid shown or not (Layers). */
+  setHexes(on: boolean) {
+    this.setHexGrid(this.hexGrid, on);
+    this.onHexes(on);
+  }
+
+  /** Draw `grid` over the surface map (`shown`), or not: the players' window sets it from the play
+   * session, the DM's from Layers (`setHexes`) with the grid the edits have (`setEdits`). */
+  setHexGrid(grid: Hex, shown: boolean) {
+    this.hexGrid = grid;
+    this.hexesOn = shown;
+    if (this.hexLayer && this.geom) this.hexLayer.set(grid, this.geom.map_w_ft, this.geom.map_h_ft);
   }
 
   setSeaLanes(on: boolean) {
@@ -1029,6 +1057,7 @@ export class MapView {
     this.labels?.destroy();
     this.lanes?.destroy();
     this.ferryLanes?.destroy();
+    this.hexLayer?.destroy();
     this.bridgeMarks?.destroy();
     this.madeTracks?.destroy();
     this.exitBuilding();
@@ -1046,6 +1075,9 @@ export class MapView {
     this.ferryLanes.on = this.seaLanes;
     this.madeTracks = new MadeTracks(this.tiles.riverFrame);
     this.bridgeMarks = new BridgeMarks(overlay.bridges ?? []);
+    this.hexLayer = new HexLayer();
+    this.hexGrid = hexGrid(adjusted ?? world.edits);
+    this.hexLayer.set(this.hexGrid, geom.map_w_ft, geom.map_h_ft);
     this.made = [];
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
@@ -1068,6 +1100,7 @@ export class MapView {
     this.app.stage.addChild(this.lanes.container);
     this.app.stage.addChild(this.ferryLanes.container);
     this.app.stage.addChild(battle.container);
+    this.app.stage.addChild(this.hexLayer.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
     this.app.stage.addChild(this.playOver);
@@ -1098,6 +1131,8 @@ export class MapView {
   setEdits(next: Edits, send = true, changed?: Record<string, string[]>) {
     const prev = this.edits;
     this.edits = next;
+    // (The hex grid is drawn here, never generated from.)
+    if (prev.hexes !== next.hexes) this.setHexGrid(hexGrid(next), this.hexesOn);
     /** The ids in a keyed field that may have changed. */
     const keys = (field: string, a: object, b: object): Iterable<string> => changed?.[field] ?? (changed ? [] : new Set([...Object.keys(a), ...Object.keys(b)]));
     const before = prev.created ?? [];
@@ -1537,6 +1572,8 @@ export class MapView {
       const level = Math.log2((this.geom!.domain_ft * this.cam.ppf * this.app.renderer.resolution) / TILE_N);
       this.lanes?.update(this.cam, this.interior ? 0 : laneFade(level, SITE_MIN_LEVEL - LANE_FADE[0], SITE_MIN_LEVEL - LANE_FADE[1]), level);
       this.ferryLanes?.update(this.cam, this.interior ? 0 : ferryFade(level), level);
+      // The hex grid over the surface (not inside a building or site, nor in the sewers).
+      this.hexLayer?.update(this.cam, this.hexesOn && !this.interior && !this.sewers ? 1 : 0, this.app.renderer.resolution);
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);

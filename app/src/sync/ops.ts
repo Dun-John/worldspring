@@ -27,6 +27,7 @@ export const EDIT_FIELDS: Record<string, Shape> = {
   plateaus: 'map',
   wharves: 'map',
   cultures: 'map',
+  hexes: 'map',
 };
 
 /** Layout numbers from here up are changes set aside when the world was remade (`PARKED_LAYOUT`

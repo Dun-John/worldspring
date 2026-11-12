@@ -306,6 +306,22 @@ export interface Edits {
   plateaus?: Record<string, Plateau>;
   /** `q:<id>` → a quay, pier or breakwater built by hand. */
   wharves?: Record<string, Wharf>;
+  /** `overland` → the hex grid drawn over the map for a hex crawl (`render/hex.ts`). */
+  hexes?: Record<string, HexGrid>;
+}
+
+/** An overland hex grid (`worldgen::world::HexGrid`; each field left out: its default, `HEX_DEFAULTS`):
+ * `size_mi` across the flats (centre to neighbouring centre), flat-topped or pointy, its lines'
+ * colour (`#rrggbb`), width (px) and opacity (0-1), the lattice moved by `ox_mi`/`oy_mi`, numbers. */
+export interface HexGrid {
+  size_mi?: number;
+  flat?: boolean;
+  color?: string;
+  width?: number;
+  opacity?: number;
+  ox_mi?: number;
+  oy_mi?: number;
+  numbers?: boolean;
 }
 
 /** A flat top or a pit (`worldgen::ground::Plateau`): ground inside `pts` (world ft) eases to

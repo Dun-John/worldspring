@@ -430,6 +430,32 @@ pub struct Edits {
     /// village or town added by hand keeps its own in `Created::culture`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cultures: BTreeMap<String, u8>,
+    /// Overland hex grids (one key, `overland`): drawn over the map for a hex crawl, never
+    /// generated from (the app draws them; play sessions keep which hexes are revealed).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hexes: BTreeMap<String, HexGrid>,
+}
+
+/// An overland hex grid's settings: `size_mi` across the flats (centre to neighbouring centre),
+/// flat-topped or pointy, its lines' colour (`#rrggbb`), width (px) and opacity (0-1), the
+/// lattice moved by `ox_mi`/`oy_mi`, and hex numbers (`CCRR`) shown or not.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HexGrid {
+    pub size_mi: f64,
+    pub flat: bool,
+    pub color: String,
+    pub width: f64,
+    pub opacity: f64,
+    pub ox_mi: f64,
+    pub oy_mi: f64,
+    pub numbers: bool,
+}
+
+impl Default for HexGrid {
+    fn default() -> Self {
+        HexGrid { size_mi: 6.0, flat: true, color: "#2b241d".into(), width: 1.5, opacity: 0.35, ox_mi: 0.0, oy_mi: 0.0, numbers: true }
+    }
 }
 
 /// A generated building changed by hand: removed, or given another function, storeys,
@@ -1646,6 +1672,7 @@ impl Edits {
                 "plateaus" => self.plateaus = std::mem::take(&mut part.plateaus),
                 "wharves" => self.wharves = std::mem::take(&mut part.wharves),
                 "cultures" => self.cultures = std::mem::take(&mut part.cultures),
+                "hexes" => self.hexes = std::mem::take(&mut part.hexes),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1682,6 +1709,7 @@ impl Edits {
                 "plateaus" => patch(&mut self.plateaus, p)?,
                 "wharves" => patch(&mut self.wharves, p)?,
                 "cultures" => patch(&mut self.cultures, p)?,
+                "hexes" => patch(&mut self.hexes, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1692,7 +1720,7 @@ impl Edits {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty()
-            && self.wharves.is_empty() && self.cultures.is_empty()
+            && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1770,6 +1798,7 @@ impl Edits {
             "plateaus" => Some(one(&mut self.plateaus, op, field, &key)),
             "wharves" => Some(one(&mut self.wharves, op, field, &key)),
             "cultures" => Some(one(&mut self.cultures, op, field, &key)),
+            "hexes" => Some(one(&mut self.hexes, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -1875,6 +1904,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("plateaus", Shape::Map),
     ("wharves", Shape::Map),
     ("cultures", Shape::Map),
+    ("hexes", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

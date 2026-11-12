@@ -148,6 +148,8 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return change.changed ? 'changed a plateau' : 'made a plateau';
       case 'delete_plateau':
         return 'took away a plateau';
+      case 'set_hex_grid':
+        return 'changed the hex grid';
       case 'start_over':
         return 'started over: every change to this world cleared';
       case 'reset_site_design':

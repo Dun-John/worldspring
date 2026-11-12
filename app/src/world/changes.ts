@@ -30,6 +30,7 @@ export function changeList(e: Edits | undefined): string[] {
       [n(e.ground), 'patch of ground shaped', 'patches of ground shaped'],
       [n(e.plateaus), 'plateau', 'plateaus'],
       [n(e.wharves), 'quay, pier or breakwater', 'quays, piers and breakwaters'],
+      [n(e.hexes), 'hex grid set up', 'hex grids set up'],
     ] as [number, string, string][]
   )
     .filter(([k]) => k > 0)
