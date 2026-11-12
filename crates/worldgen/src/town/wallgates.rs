@@ -440,6 +440,45 @@ pub fn gate_half(a: P, p: P, b: P) -> f64 {
     (GATE_HALF / s.max(0.05)).min(room).min(GATE_HALF_MOST).max(GATE_HALF)
 }
 
+/// Generated gates whose towers would stand under `SHARP_PAIR_FT` apart (a sharp bend: no passage
+/// between them) go across the bend's point instead: their towers `GATE_HALF` either side of the
+/// corner, square to the bend's middle line, each joined back to its side where its tower stood.
+/// The way through stays on the corner, where the streets and the road meet.
+fn spread_sharp(plan: &TownPlan, mesh: &Mesh, gates: &[usize], pieces: &mut [Vec<P>], towers: &mut Vec<P>, gate_towers: &mut [P]) {
+    for (chain, closed, _) in &plan.wall_runs {
+        let n = chain.len();
+        for k in 0..n {
+            let v = chain[k];
+            if !plan.gates.contains(&v) || !gates.contains(&v) || (!*closed && (k == 0 || k + 1 == n)) {
+                continue;
+            }
+            let (a, p, b) = (mesh.pos[chain[(k + n - 1) % n]], mesh.pos[v], mesh.pos[chain[(k + 1) % n]]);
+            let (ua, ub) = (unit(sub(a, p)), unit(sub(b, p)));
+            if dist(mul(ua, GATE_HALF), mul(ub, GATE_HALF)) >= SHARP_PAIR_FT {
+                continue;
+            }
+            let t = unit(sub(ub, ua));
+            for (u, side) in [(ua, -1.0), (ub, 1.0)] {
+                let (old, new) = (add(p, mul(u, GATE_HALF)), add(p, mul(t, side * GATE_HALF)));
+                for g in gate_towers.iter_mut().filter(|g| dist(**g, old) < 1e-6) {
+                    *g = new;
+                }
+                for w in pieces.iter_mut() {
+                    if w.first().is_some_and(|q| dist(*q, old) < 1e-6) {
+                        w.insert(0, new);
+                    } else if w.last().is_some_and(|q| dist(*q, old) < 1e-6) {
+                        w.push(new);
+                    }
+                }
+                towers.retain(|q| dist(*q, new) >= 30.0);
+            }
+        }
+    }
+}
+
+/// Generated gate towers under this far apart (at `GATE_HALF` either side of a bend) go across its point.
+const SHARP_PAIR_FT: f64 = 40.0;
+
 /// A hand-drawn wall's gates on its bends spread to a generated gate's passage (`gate_half`):
 /// its pieces' ends and gate towers moved out along the sides, the towers they'd crowd taken off.
 pub(super) fn spread_gates(line: &[(P, bool)], closed: bool, pieces: &mut [Vec<P>], towers: &mut Vec<P>, gate_towers: &mut [P]) {
@@ -590,6 +629,7 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
             towers.extend(t);
             gate_towers.extend(g);
         }
+        spread_sharp(plan, mesh, gates, &mut pieces, &mut towers, &mut gate_towers);
         return (pieces, towers, gate_towers);
     }
     let toward = |a: P, b: P, by: f64| add(a, mul(sub(b, a), by / dist(a, b).max(1e-9)));
@@ -687,6 +727,7 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
             pieces.push(cur);
         }
     }
+    spread_sharp(plan, mesh, gates, &mut pieces, &mut towers, &mut gate_towers);
     (pieces, towers, gate_towers)
 }
 

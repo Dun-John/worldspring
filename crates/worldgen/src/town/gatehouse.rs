@@ -124,10 +124,12 @@ impl House {
     }
 }
 
-/// The ground a bent entrance's block and the way out of it toward `exit` need, clear of buildings.
+/// The ground a bent entrance's block and the way out of it toward `exit` need, clear of buildings
+/// and of the walls (a gate across a sharp corner's point has its walls turning back behind it).
 fn bent_fits(l: &Layout, h: &House) -> bool {
     let near = |q: &P| dist(*q, h.a) < h.len() + 80.0;
-    !l.buildings.iter().filter(|b| b.poly.iter().any(near)).any(|b| bent_on(h, &b.poly))
+    let walled = l.walls.iter().flat_map(|w| w.windows(2)).filter(|s| near(&s[0]) || near(&s[1])).any(|s| bent_on(h, s));
+    !walled && !l.buildings.iter().filter(|b| b.poly.iter().any(near)).any(|b| bent_on(h, &b.poly))
 }
 
 /// Whether `poly` stands on a bent entrance's block or the way out of it.
@@ -135,7 +137,7 @@ fn bent_on(h: &House, poly: &[P]) -> bool {
     let len = h.len();
     let apron = h.rect(len - SQUARE_HALF, len - SQUARE_HALF + 14.0, SQUARE_HALF + 1.5, BENT_DEPTH);
     let block = h.block().unwrap_or_default();
-    [&block, &apron].iter().any(|z| poly.iter().any(|p| contains(z, *p)) || z.iter().any(|p| contains(poly, *p)))
+    [&block, &apron].iter().any(|z| poly.iter().any(|p| contains(z, *p)) || z.iter().any(|p| contains(poly, *p)) || (poly.len() == 2 && poly_gap(z, poly) == 0.0))
 }
 
 /// Whether a castle's bent entrance at `gate` (the middle of its passage, as `castle::curtain` sets it;
@@ -151,8 +153,10 @@ pub(super) fn bent_room(gate: P, inward: P, poly: &[P]) -> bool {
 /// `centre` the town's middle (the origin while it is laid out).
 fn framed(l: &Layout, a: P, b: P, centre: P) -> House {
     let m = lerp(a, b, 0.5);
-    let castle = l.castles.iter().find(|(c, rad)| dist(*c, a) < rad * 1.3);
-    let style = l.wall_style_at(a);
+    // (A town gate on the walls' line between the two is the town's, even beside a castle.)
+    let town_gate = l.gates.iter().any(|g| seg_dist(*g, a, b) <= 3.0);
+    let castle = l.castles.iter().find(|(c, rad)| dist(*c, a) < rad * 1.3).filter(|_| !town_gate);
+    let style = if castle.is_some() { l.wall_style.castle() } else { l.wall_style };
     let inside = castle.map_or(centre, |c| c.0);
     let u = sub(b, a);
     let v = mul([-u[1], u[0]], 1.0 / len(u).max(1e-9));
@@ -174,7 +178,7 @@ pub(super) fn bent_blocks(l: &Layout, walls: &[Vec<P>], gate_towers: &[P]) -> Ve
         return Vec::new();
     }
     let towers: Vec<(P, f64, bool)> = gate_towers.iter().map(|&t| (t, 15.0, true)).collect();
-    crate::battlemap::gateways_on(walls, &towers).into_iter().map(|(a, b)| framed(l, a, b, [0.0, 0.0])).filter(|h| !h.castle && h.form == Form::Bent && h.len() >= BENT_MIN_LEN).filter_map(|h| h.block()).collect()
+    crate::battlemap::gateways_on(walls, &towers, &l.gates).into_iter().map(|(a, b)| framed(l, a, b, [0.0, 0.0])).filter(|h| !h.castle && h.form == Form::Bent && h.len() >= BENT_MIN_LEN).filter_map(|h| h.block()).collect()
 }
 
 /// The gatehouses of `l`, in the order `battlemap::gateways` pairs their towers: a pure function of the

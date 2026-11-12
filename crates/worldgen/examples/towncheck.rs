@@ -1429,13 +1429,15 @@ fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: &str, it: &
     }
     // (R5 towns: a cemetery's tomb is one chamber on one storey, `town::cemetery`.)
     let tomb = l.building(id.rsplit(':').next().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX)).is_some_and(|b| b.func == town::catalog::index_of("tomb").map(|f| f as u16));
-    must!(it.levels.len() >= 2 || tomb || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
+    // (A yurt is one round room on one storey, not built from a design: `town::yurts`.)
+    let yurt = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|q| q.kind == "yurt");
+    must!(it.levels.len() >= 2 || tomb || yurt || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
     if id.starts_with("b:") {
         match interior::design::design_of(world, t0, id, false) {
             Ok((d, _)) => match interior::design::problems(world, t0, id, &d) {
                 Ok((built, problems)) => {
                     must!(problems.is_empty(), "as a design: {problems:?}");
-                    must!(serde_json::to_string(&built).unwrap() == serde_json::to_string(it).unwrap(), "built again from its design, it differs");
+                    must!(yurt || serde_json::to_string(&built).unwrap() == serde_json::to_string(it).unwrap(), "built again from its design, it differs");
                 }
                 Err(e) => bad.push(format!("as a design: {e}")),
             },
@@ -5428,7 +5430,12 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         // (Each town gate's way through: open squares from 15 ft out to 15 ft in.)
         let houses = town::gatehouse::houses(&l);
         for g in l.gates.iter().copied() {
-            let pair: Vec<P> = l.gate_towers.iter().copied().filter(|t| dist(*t, g) < 32.0).collect();
+            // (A hand gate on a bend has its towers spread along the sides, up to 60 ft out: its
+            // way through between them.)
+            let mut pair: Vec<P> = l.gate_towers.iter().copied().filter(|t| dist(*t, g) < 62.0).collect();
+            pair.sort_by(|a, b| dist(*a, g).total_cmp(&dist(*b, g)));
+            pair.truncate(2);
+            let g = if pair.len() == 2 { lerp(pair[0], pair[1], 0.5) } else { g };
             // (A bent entrance's way turns: walked through below.)
             if pair.len() < 2 || town::gatehouse::of_tower(&houses, pair[0]).is_some_and(|h| h.0.form == wallstyle::Gatehouse::Bent) {
                 continue;

@@ -49,6 +49,50 @@ fn crosses(p: P, q: P, r: P, t: P) -> bool {
     d1 * d2 < 0.0 && d3 * d4 < 0.0
 }
 
+/// The wall's pieces as laid, tidied: a piece ending on another's line (where the two meet, a
+/// corner of one dropped or rounded off the other, or exactly on it) stopped half a foot short of it
+/// instead of a hair across; a tower stood twice where a run passes one corner twice, once.
+pub(super) fn tidy(pieces: &mut [Vec<P>], towers: &mut Vec<P>) {
+    for i in 0..pieces.len() {
+        for first in [true, false] {
+            let n = pieces[i].len();
+            if n < 2 {
+                continue;
+            }
+            let (e, q) = if first { (pieces[i][0], pieces[i][1]) } else { (pieces[i][n - 1], pieces[i][n - 2]) };
+            let mut hit: Option<P> = None;
+            for (j, w) in pieces.iter().enumerate() {
+                for (k, sg) in w.windows(2).enumerate() {
+                    let own = j == i && (if first { k == 0 } else { k + 2 == n });
+                    // (Or ending on it, off its corners: a hair either way as it is moved.)
+                    let on = seg_dist(e, sg[0], sg[1]) < 0.25 && dist(e, sg[0]) > 0.25 && dist(e, sg[1]) > 0.25;
+                    if own || !(on || crosses(e, q, sg[0], sg[1])) {
+                        continue;
+                    }
+                    // (Where the end's stretch meets that line.)
+                    let (u, v) = (sub(q, e), sub(sg[1], sg[0]));
+                    let x = if on || cross(u, v).abs() < 1e-9 { e } else { add(e, mul(u, cross(sub(sg[0], e), v) / cross(u, v))) };
+                    if dist(x, e) <= 3.0 && hit.is_none_or(|h| dist(h, q) < dist(x, q)) {
+                        hit = Some(x);
+                    }
+                }
+            }
+            if let Some(x) = hit {
+                let to = add(x, mul(unit(sub(q, x)), 0.5));
+                if first { pieces[i][0] = to } else { pieces[i][n - 1] = to }
+            }
+        }
+    }
+    let mut kept: Vec<P> = Vec::new();
+    towers.retain(|t| {
+        let new = !kept.iter().any(|k| dist(*k, *t) < 0.5);
+        if new {
+            kept.push(*t);
+        }
+        new
+    });
+}
+
 /// A corner of the wall's pieces: where piece `p`'s point `k` stands, and the points either side of it
 /// (`a` before, `b` after), joining two pieces where one ends where the other starts (`seam`: the
 /// piece that starts there and its first point).

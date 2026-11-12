@@ -647,11 +647,11 @@ fn part_code(kind: crate::town::PartKind) -> u8 {
 /// outer and inner gates are not one gatehouse). Paired in order, each with its nearest; a pure function of the
 /// layout, so every chunk finds the same.
 pub(crate) fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
-    gateways_on(&l.walls, towers)
+    gateways_on(&l.walls, towers, &l.gates)
 }
 
-/// `gateways` along `walls` (a town's as laid, standing or not).
-pub(crate) fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
+/// `gateways` along `walls` (a town's as laid, standing or not), its gates' corners `town_gates`.
+pub(crate) fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, bool)], town_gates: &[[f64; 2]]) -> Vec<([f64; 2], [f64; 2])> {
     let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
     // Which way the wall runs from each gate tower, where a stretch of it ends there.
     let away: Vec<Option<[f64; 2]>> = gates
@@ -687,7 +687,11 @@ pub(crate) fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, boo
                 (Some(a), Some(b)) => a[0] * b[0] + a[1] * b[1] < 0.0,
                 _ => true,
             };
-            if used[j] || !(36.0..=54.0).contains(&d) || (away[i].is_none() && away[j].is_none()) || !beyond(away[i], 1.0) || !beyond(away[j], -1.0) || !apart {
+            // (A town gate midway between them: theirs, whichever way the wall runs on, as across
+            // the point of a sharp corner, `wallgates::spread_sharp`.)
+            let mid = [0.5 * (gates[i][0] + gates[j][0]), 0.5 * (gates[i][1] + gates[j][1])];
+            let gate_between = town_gates.iter().any(|g| (g[0] - mid[0]).abs() + (g[1] - mid[1]).abs() < 1.0);
+            if used[j] || !(36.0..=54.0).contains(&d) || (!gate_between && ((away[i].is_none() && away[j].is_none()) || !beyond(away[i], 1.0) || !beyond(away[j], -1.0) || !apart)) {
                 continue;
             }
             if best.is_none_or(|(bd, _)| d < bd) {

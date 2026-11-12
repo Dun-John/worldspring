@@ -1970,6 +1970,9 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         spacing = plan.spacing;
         let hand = build_town(&site, s, r, &plan, &ch, &mut l, survey);
         walls_off_river(&site, &mut l, &hand);
+        // (A castle's curtain meeting the town's wall, or a run cut at a river: stopped at the
+        // line it meets, as the town's own pieces, `outline::tidy`.)
+        outline::tidy(&mut l.walls, &mut l.towers);
     }
     // A pin's ward names go to its districts in order, the central one first.
     if let Some(pin) = s.pin.and_then(|i| world.file.sketch.strokes.get(i as usize)) {
@@ -3592,6 +3595,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             }
         }
     }
+    outline::tidy(&mut wall_laid.0, &mut wall_laid.1);
     if walled {
         l.walls.extend(wall_laid.0.iter().cloned());
         l.towers.extend(wall_laid.1.iter().copied());
@@ -4530,15 +4534,26 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         .map(|(q, members, touched)| {
             let patches: Vec<Vec<P>> = members.iter().map(|&i| cells[i].pts.clone()).collect();
             // (R5 towns: one changed by hand, at its largest connected piece; an emptied one, none.)
-            let mut label = match (*touched, members.is_empty()) {
+            let over: Vec<Vec<P>> = match (*touched, members.is_empty()) {
                 (_, true) => Vec::new(),
-                (true, false) => label_curve(&districts::label_piece(plan, &cells, members).iter().map(|&i| cells[i].pts.clone()).collect::<Vec<_>>()).0,
-                _ => label_curve(&patches).0,
+                (true, false) => districts::label_piece(plan, &cells, members).iter().map(|&i| cells[i].pts.clone()).collect(),
+                _ => patches.clone(),
             };
+            let mut label = if over.is_empty() { Vec::new() } else { label_curve(&over).0 };
             // (Not across a park's middle, its basin or its hub: over one of its sides.)
             if let Some(pk) = label.get(label.len() / 2).and_then(|&m| l.parks.iter().find(|pk| contains(&pk.pts, m))) {
                 let o = obb(&pk.pts);
                 let shift = mul([-o.axis[1], o.axis[0]], 0.3 * o.short);
+                label.iter_mut().for_each(|p| *p = add(*p, shift));
+            }
+            // (Its middle over the district: a piece bent round a corner, or its corners moved
+            // since, has its middle off it; moved onto the middle of its nearest patch.)
+            if let Some(&m) = label.get(label.len() / 2)
+                && !over.iter().any(|f| contains(f, m))
+                && let Some(f) = over.iter().min_by(|a, b| dist(centroid(a), m).total_cmp(&dist(centroid(b), m)))
+            {
+                let c = if contains(f, centroid(f)) { centroid(f) } else { mean(f) };
+                let shift = sub(c, m);
                 label.iter_mut().for_each(|p| *p = add(*p, shift));
             }
             Quarter { name: q.name.clone(), kind: q.kind, patches, label }
@@ -5551,15 +5566,13 @@ fn approach_curve(e: P, g: P, heading: Option<P>) -> Vec<P> {
 /// A bank tower no nearer another town tower than this (ft, centre to centre).
 const BANK_CLEAR: f64 = 22.0;
 
-/// Walls end at the bank: wall runs are cut where they cross a river channel (the water is
-/// the defence there), each cut end gets a tower on the bank, and towers standing in the
-/// channel go. The walls of castles set by hand (`hand`, places in `l.walls`) put their bank
-/// towers after every other, as their own towers are (no `t:` id moves).
+/// Walls end at the bank: wall runs are cut where they cross a river channel or run out into
+/// the sea or a lake (the water is the defence there), each cut end gets a tower on the bank, and
+/// towers standing in the water go. The walls of castles set by hand (`hand`, places in `l.walls`)
+/// put their bank towers after every other, as their own towers are (no `t:` id moves).
 fn walls_off_river(site: &Site, l: &mut Layout, hand: &[usize]) {
-    if site.river.is_empty() {
-        return;
-    }
-    clip_walls(l, |p| site.near_river(p, 3.0), |t| site.near_river(t, 2.0), hand);
+    let river = !site.river.is_empty();
+    clip_walls(l, |p| (river && site.near_river(p, 3.0)) || site.wet_standing(p), |t| (river && site.near_river(t, 2.0)) || site.wet_standing(t), hand);
 }
 
 /// Break walls where they would stand in water (`wet`, every 5 ft; a tower on each bank), and
