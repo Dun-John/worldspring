@@ -968,6 +968,8 @@
       ask(remake, () => void generate(asked, { ...o, confirmed: true, upgrade }));
       return false;
     }
+    // (Generated from sketch mode, the sketch carried: the trace picture stays with it; see below.)
+    const fromSketch = sketchOn && keepSketch;
     if (sketchOn) leaveSketch();
     shell.tabs.world = 'generate';
     // (The world being left keeps its last changes.)
@@ -1008,6 +1010,11 @@
     if (!shown || redrawn) undoHistory.clear();
     const { edits: _, ...bare } = w;
     world = Object.keys(kept).length ? { ...bare, edits: kept } : bare;
+    // (A trace picture belongs to the world it was laid over: another world opened or made drops it.)
+    if (!shown && !fromSketch) {
+      underlay.remove();
+      tracer.dropPicture();
+    }
     unexportedCount = unexported(editsKey(world))?.n ?? 0;
     selection = null;
     saveUrl();
@@ -1266,6 +1273,7 @@
   function leaveSketch() {
     view.exitSketch();
     sketchOn = false;
+    tracer.release();
     if (previewTimer) clearTimeout(previewTimer);
     previewWorker?.terminate();
     previewWorker = null;

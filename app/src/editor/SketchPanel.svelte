@@ -47,13 +47,9 @@
   const FOREST_BIOMES = PAINT_BIOMES.filter(([id]) => ['temperate_forest', 'temperate_rainforest', 'taiga', 'jungle', 'swamp', 'blighted_woods'].includes(id));
   const rgb = (c: [number, number, number]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
   // A new picture starts with no picks; a change to the picks, controls or the picture's place re-traces (debounced).
-  let lastImage: unknown = null;
   $effect(() => {
-    const im = underlay.image?.bitmap ?? null;
-    if (im !== lastImage) {
-      lastImage = im;
-      tracer.dropPicture();
-    }
+    void underlay.image;
+    untrack(() => tracer.syncImage());
   });
   $effect(() => {
     void [JSON.stringify(tracer.picks), JSON.stringify(tracer.params), underlay.image, underlay.xf.cx, underlay.xf.cy, underlay.xf.ftPerPx, underlay.xf.rot];
@@ -68,10 +64,14 @@
     tracer.picking = tracer.picking === k ? null : k;
   }
   function accept() {
-    sketcher.addStrokes(tracer.shownStrokes());
-    tracer.discard();
+    sketcher.addStrokes(tracer.take());
   }
   const anyShown = $derived((void tracer.version, tracer.shownStrokes().length > 0));
+  const anyPick = $derived(TRACE_KINDS.some((k) => tracer.picks[k]));
+  // Minimum size (px²): a log scale from 10 to 50000 (0 at the far left).
+  const MIN_SIZE_MAX = 50_000;
+  const sliderToSize = (v: number) => (v <= 0 ? 0 : Number((10 * (MIN_SIZE_MAX / 10) ** v).toPrecision(2)));
+  const sizeToSlider = (n: number) => (n <= 0 ? 0 : Math.min(1, Math.log(Math.max(10, n) / 10) / Math.log(MIN_SIZE_MAX / 10)));
   const mi = (ft: number) => Math.round((ft / MI) * 100) / 100;
 
   const TOOLS: [EditTool, IconName, string, string, string][] = [
@@ -382,15 +382,19 @@
                   {/if}
                   <label class="slider"><span>Tolerance</span><output>{Math.round(tracer.params[k].threshold * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].threshold} /></label>
                   <label class="slider"><span>Smoothing</span><output>{Math.round(tracer.params[k].smooth * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].smooth} /></label>
-                  <label class="slider"><span>Minimum size</span><output>{tracer.params[k].minSize}</output><input type="range" min="0" max="6000" step="20" bind:value={tracer.params[k].minSize} /></label>
+                  <label class="slider"><span>Minimum size</span><output>{tracer.params[k].minSize}</output><input type="range" min="0" max="1" step="0.005" value={sizeToSlider(tracer.params[k].minSize)} oninput={(e) => (tracer.params[k].minSize = sliderToSize(e.currentTarget.valueAsNumber))} /></label>
                   <button class="ws-btn" onclick={() => tracer.reset(k)}>Reset these</button>
                 </div>
               </details>
             {/each}
-            <div class="ws-muted status">{#if tracer.picking}Click the picture to pick the {KIND_LABEL[tracer.picking].toLowerCase()} colour (Esc cancels).{:else if tracer.busy}Tracing…{:else if tracer.error}{tracer.error}{:else if tracer.result}{tracer.summary}{:else}Nothing traced yet.{/if}</div>
+            <div class="ws-muted status">{#if tracer.picking}Click the picture to pick the {KIND_LABEL[tracer.picking].toLowerCase()} colour (Esc cancels).{:else if tracer.busy}Tracing…{:else if tracer.error}{tracer.error}{:else if tracer.result}{tracer.summary} ({Math.round(tracer.result.ms)} ms){:else if tracer.accepted}{tracer.accepted}{:else}Nothing traced yet.{/if}</div>
             <div class="ws-row">
-              <button class="ws-btn primary grow" disabled={!anyShown} onclick={accept} title="Add the shown strokes to the sketch (one undo step)">Accept</button>
-              <button class="ws-btn" disabled={!tracer.result} onclick={() => tracer.discard()}>Discard</button>
+              <button class="ws-btn primary grow" disabled={!anyShown || tracer.busy || !underlay.visible} onclick={accept} title="Add the shown strokes to the sketch (one undo step)">Accept</button>
+              {#if tracer.result || tracer.busy || !anyPick}
+                <button class="ws-btn" disabled={!tracer.result} onclick={() => tracer.discard()}>Discard</button>
+              {:else}
+                <button class="ws-btn" onclick={() => tracer.schedule()} title="Trace the picture again with these picks and controls">Trace again</button>
+              {/if}
             </div>
           </div>
         {/if}

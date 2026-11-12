@@ -3,6 +3,7 @@
 // drawn by SketchLayer; Accept hands the shown strokes to the sketcher (one undo step).
 import type { Stroke } from '../../gen/protocol';
 import type { TraceWorkerReply, TraceWorkerRequest } from './trace.worker';
+import { snapPick } from './engine';
 import { TRACE_KINDS, worldToImage, type TraceKind, type TraceParams, type TraceResult } from './types';
 import { underlay } from './underlay.svelte';
 
@@ -31,12 +32,24 @@ class Tracer {
   result = $state.raw<TraceResult | null>(null);
   /** Bumped when the result, its toggles or the biome change (the layer redraws). */
   version = $state(0);
+  /** What the last Accept added ("" once anything else happens). */
+  accepted = $state('');
 
   private copy: { key: string; bitmap: ImageBitmap; pixels: Uint8ClampedArray; w: number; h: number; sent: boolean } | null = null;
   private worker: Worker | null = null;
   private seq = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private imgN = 0;
+  /** The picture the picks were made on. */
+  private bitmap: ImageBitmap | null = null;
+
+  /** A new picture (or none) starts with no picks; the same one keeps them (tab switches, Generate). */
+  syncImage() {
+    const im = underlay.image?.bitmap ?? null;
+    if (im === this.bitmap) return;
+    this.dropPicture();
+    this.bitmap = im;
+  }
 
   /** The downsampled copy of the picture (made once per picture). */
   private ensureCopy() {
@@ -54,17 +67,21 @@ class Tracer {
     return this.copy;
   }
 
-  /** A click on the picture at world (x, y) while picking: take its colour. */
+  /** A click on the picture at world (x, y) while picking: take its colour, from the picture
+   * itself (not the tracer's smaller copy, where a thin river blurs into the land round it). */
   pickAt(x: number, y: number): boolean {
     const kind = this.picking;
     const im = underlay.image;
     if (!kind || !im) return false;
     const [px, py] = worldToImage(im.w, im.h, underlay.xf, x, y);
     if (px < 0 || py < 0 || px >= im.w || py >= im.h) return true;
-    const c = this.ensureCopy()!;
-    const i = (Math.min(c.h - 1, Math.floor((py / im.h) * c.h)) * c.w + Math.min(c.w - 1, Math.floor((px / im.w) * c.w))) * 4;
-    if (c.pixels[i + 3] < 128) return true;
-    this.picks[kind] = [c.pixels[i], c.pixels[i + 1], c.pixels[i + 2]];
+    const R = 5;
+    const cv = new OffscreenCanvas(2 * R + 1, 2 * R + 1);
+    const cx = cv.getContext('2d', { willReadFrequently: true })!;
+    cx.drawImage(im.bitmap, Math.floor(px) - R, Math.floor(py) - R, 2 * R + 1, 2 * R + 1, 0, 0, 2 * R + 1, 2 * R + 1);
+    const c = snapPick(cx.getImageData(0, 0, 2 * R + 1, 2 * R + 1).data, 2 * R + 1, kind === 'river');
+    if (!c) return true;
+    this.picks[kind] = c;
     this.picking = null;
     return true;
   }
@@ -80,12 +97,19 @@ class Tracer {
 
   /** The picture went: forget its picks and result. */
   dropPicture() {
-    this.cancel();
-    this.copy = null;
+    this.release();
     this.picks = {};
+    this.accepted = '';
+    this.error = '';
+  }
+
+  /** Sketch mode closed: the pixel copy, the worker and the preview go (the picture, picks and
+   * controls stay; reopening re-traces from the picture). */
+  release() {
+    this.cancel(true);
+    this.copy = null;
     this.picking = null;
     this.result = null;
-    this.error = '';
     this.version++;
   }
 
@@ -93,6 +117,9 @@ class Tracer {
   schedule() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    // (A trace still running is stale now: its answer is ignored.)
+    this.seq++;
+    this.accepted = '';
     if (!underlay.image || !TRACE_KINDS.some((k) => this.picks[k])) {
       if (this.result) {
         this.result = null;
@@ -123,21 +150,25 @@ class Tracer {
       this.version++;
     };
     const id = ++this.seq;
-    const xf = { ...underlay.xf, ftPerPx: underlay.xf.ftPerPx * (im.w / c.w) };
+    const xf = { ...underlay.xf, ftPerPx: underlay.xf.ftPerPx * (im.w / c.w), ftPerPxY: underlay.xf.ftPerPx * (im.h / c.h) };
     const pixels = c.sent ? undefined : c.pixels.slice();
     c.sent = true;
     const req: TraceWorkerRequest = { id, image: c.key, req: { pixels, w: c.w, h: c.h, xform: xf, picks: $state.snapshot(this.picks), params: $state.snapshot(this.params) } };
     w.postMessage(req, pixels ? [pixels.buffer] : []);
   }
 
-  private cancel() {
+  /** Stop any trace waiting or running; `drop`: let the worker go even when idle. */
+  private cancel(drop = false) {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.seq++;
+    // (A trace can't be interrupted but by ending the worker.)
+    if (this.busy || drop) {
+      this.worker?.terminate();
+      this.worker = null;
+      if (this.copy) this.copy.sent = false;
+    }
     this.busy = false;
-    this.worker?.terminate();
-    this.worker = null;
-    if (this.copy) this.copy.sent = false;
   }
 
   /** The strokes the shown kinds make (forests in the chosen biome). */
@@ -163,6 +194,7 @@ class Tracer {
     });
     const NAMES: [string, string, string][] = [['land', 'coast', 'coasts'], ['lake', 'lake', 'lakes'], ['range', 'range', 'ranges'], ['massif', 'massif', 'massifs'], ['biome', 'forest', 'forests'], ['river', 'river', 'rivers']];
     const parts = NAMES.filter(([t]) => n[t]).map(([t, one, many]) => `${n[t]} ${n[t] === 1 ? one : many}`);
+    if (r.dropped) parts.push(`${r.dropped} smallest left out`);
     return parts.length ? parts.join(', ') : 'nothing found';
   }
 
@@ -170,7 +202,17 @@ class Tracer {
   discard() {
     this.cancel();
     this.result = null;
+    this.accepted = '';
     this.version++;
+  }
+
+  /** The shown strokes, for Accept: the preview goes and the status says what was added. */
+  take(): Stroke[] {
+    const out = this.shownStrokes();
+    const said = this.summary.replace(/, \d+ smallest left out$/, '');
+    this.discard();
+    this.accepted = `Added ${out.length} ${out.length === 1 ? 'stroke' : 'strokes'}: ${said}.`;
+    return out;
   }
 }
 

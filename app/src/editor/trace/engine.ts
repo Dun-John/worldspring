@@ -11,7 +11,8 @@
 // - river: thin lines of the picked colour (thick areas of it are water), gaps bridged, skeleton
 //   (Zhang-Suen) split into a main stem and tributaries, each running toward its mouth: the end
 //   nearest the sea (else the nearest water, else the picture's edge).
-// Every shape is simplified (Douglas-Peucker) until the whole result fits `POINT_BUDGET`.
+// At most `MAX_STROKES` shapes (the smallest dropped), each simplified (Douglas-Peucker) until the
+// whole result fits `POINT_BUDGET`.
 import type { Stroke } from '../../gen/protocol';
 import { imageToWorld, TRACE_KINDS, type TraceKind, type TraceParams, type TraceRequest, type TraceResult } from './types';
 
@@ -20,6 +21,8 @@ const MI = 5280;
 export const MAX_SIDE = 2048;
 /** The most points the strokes may hold in all (T0 regenerates from them). */
 export const POINT_BUDGET = 3000;
+/** The most strokes a trace gives (the smallest shapes beyond it are dropped). */
+export const MAX_STROKES = 400;
 const FOREST = 'temperate_forest';
 
 type Mask = Uint8Array<ArrayBuffer>;
@@ -294,16 +297,41 @@ interface Crop {
   m: Mask;
   cw: number;
   ch: number;
-  /** Picture px of crop cell (0, 0). */
+  /** Picture px of crop cell (0, 0)'s corner. */
   ox: number;
   oy: number;
+  /** Picture px per crop cell (1, or more for a coarse copy). */
+  f: number;
 }
 
 function crop(lab: Int32Array, w: number, id: number, c: Comp): Crop {
   const [cw, ch] = [c.x1 - c.x0 + 3, c.y1 - c.y0 + 3];
   const m = new Uint8Array(cw * ch);
   for (let y = c.y0; y <= c.y1; y++) for (let x = c.x0; x <= c.x1; x++) if (lab[y * w + x] === id) m[(y - c.y0 + 1) * cw + x - c.x0 + 1] = 1;
-  return { m, cw, ch, ox: c.x0 - 1, oy: c.y0 - 1 };
+  return { m, cw, ch, ox: c.x0 - 1, oy: c.y0 - 1, f: 1 };
+}
+
+/** A crop on cells of f x f px (a cell is set if any of its px is): thinning it costs f³ less. */
+function coarse(cr: Crop, f: number): Crop {
+  if (f <= 1) return cr;
+  const [iw, ih] = [cr.cw - 2, cr.ch - 2];
+  const [cw, ch] = [Math.ceil(iw / f) + 2, Math.ceil(ih / f) + 2];
+  const m = new Uint8Array(cw * ch);
+  for (let y = 0; y < ih; y++) {
+    const row = ((y / f) | 0) + 1;
+    for (let x = 0; x < iw; x++) if (cr.m[(y + 1) * cr.cw + x + 1]) m[row * cw + ((x / f) | 0) + 1] = 1;
+  }
+  return { m, cw, ch, ox: cr.ox + 1 - f, oy: cr.oy + 1 - f, f };
+}
+
+/** The crop's largest inscribed radius (px, chamfer): its half-width at the thickest. */
+function maxRadius(cr: Crop): number {
+  const inv = new Uint8Array(cr.m.length);
+  for (let i = 0; i < inv.length; i++) inv[i] = cr.m[i] ? 0 : 1;
+  const d = chamfer(inv, cr.cw, cr.ch);
+  let r = 0;
+  for (let i = 0; i < d.length; i++) if (cr.m[i] && d[i] > r) r = d[i];
+  return r;
 }
 
 /** Zhang-Suen thinning (in place) to a one-pixel skeleton. */
@@ -402,7 +430,7 @@ function ends(cr: Crop): number[] {
 /** A crop path as flat picture px (pixel centres). */
 function toPx(cr: Crop, path: number[]): number[] {
   const out: number[] = [];
-  for (const p of path) out.push(cr.ox + (p % cr.cw) + 0.5, cr.oy + ((p / cr.cw) | 0) + 0.5);
+  for (const p of path) out.push(cr.ox + ((p % cr.cw) + 0.5) * cr.f, cr.oy + (((p / cr.cw) | 0) + 0.5) * cr.f);
   return out;
 }
 
@@ -557,14 +585,27 @@ function traceForest(c: Ctx, p: TraceParams) {
 
 /** How elongated a mountain area must be (spine length / mean width) to be a range. */
 const RANGE_ELONGATION = 4;
+/** Below this (area / thickest width²) a shape can't reach RANGE_ELONGATION, bar knots: a massif. */
+const RANGE_PLAUSIBLE = 0.9;
+/** Thinning's budget per shape (area x half-width, px³; ~40 ms): bigger ones are thinned coarser. */
+const THIN_WORK = 4e6;
 
 function traceMountains(c: Ctx, p: TraceParams) {
   const { L, keep } = areas(c, 'mountain', p);
   const eps = epsPx(c, p);
   for (const [k, id] of keep) {
-    const cr = crop(L.lab, c.img.w, id, k);
-    thin(cr);
-    const any = cr.m.indexOf(1);
+    // Decided before thinning (its cost is area x half-width): a shape no longer than
+    // RANGE_PLAUSIBLE times its thickest width is a massif; others are thinned on cells of up to
+    // a size that bounds the work (THIN_WORK), then judged by their spine.
+    let cr = crop(L.lab, c.img.w, id, k);
+    const r = Math.max(1, maxRadius(cr));
+    const plausible = k.area / (4 * r * r) >= RANGE_PLAUSIBLE;
+    let any = -1;
+    if (plausible) {
+      cr = coarse(cr, Math.max(1, Math.ceil(Math.cbrt((k.area * r) / THIN_WORK))));
+      thin(cr);
+      any = cr.m.indexOf(1);
+    }
     let paths: number[][] = [];
     let spine = 0;
     if (any >= 0) {
@@ -579,7 +620,7 @@ function traceMountains(c: Ctx, p: TraceParams) {
       const radius = Math.round(0.5 * width * c.ftPx);
       paths.forEach((path, i) => {
         const pts = toPx(cr, path);
-        if (i === 0 || length(pts) >= 2 * width) c.raws.push({ kind: 'mountain', pts, closed: false, eps, stroke: { tool: 'range', radius_ft: radius, strength } });
+        if (i === 0 || length(pts) >= 2 * width) c.raws.push({ kind: 'mountain', pts, closed: false, eps: Math.max(eps, 0.75 * cr.f), stroke: { tool: 'range', radius_ft: radius, strength } });
       });
     } else {
       const diam = 2 * Math.sqrt(k.area / Math.PI) * c.ftPx;
@@ -656,6 +697,53 @@ function traceRivers(c: Ctx, p: TraceParams) {
   });
 }
 
+/** A shape's size for the stroke cap: its bounding box's diagonal (px), lines and areas alike. */
+function extent(pts: number[]): number {
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < pts.length; i += 2) {
+    x0 = Math.min(x0, pts[i]);
+    x1 = Math.max(x1, pts[i]);
+    y0 = Math.min(y0, pts[i + 1]);
+    y1 = Math.max(y1, pts[i + 1]);
+  }
+  return pts.length ? Math.hypot(x1 - x0, y1 - y0) : 0;
+}
+
+/**
+ * The colour a pick takes from an n x n RGBA window of the picture centred on the click. Areas:
+ * the 3x3 pixel most like the rest (noise, a hatching stroke or an edge pixel isn't taken). Rivers:
+ * the 5x5 pixel most unlike the land round it (the window's rim), so a thin line picks its own
+ * colour even when the click lands beside it. Null if the click is on a transparent pixel.
+ */
+export function snapPick(px: Uint8ClampedArray, n: number, river: boolean): [number, number, number] | null {
+  const m = (n - 1) >> 1;
+  const at = (x: number, y: number) => (y * n + x) * 4;
+  const d2 = (i: number, c: number[]) => (px[i] - c[0]) ** 2 + (px[i + 1] - c[1]) ** 2 + (px[i + 2] - c[2]) ** 2;
+  if (px[at(m, m) + 3] < 128) return null;
+  const r = river ? Math.min(2, m) : Math.min(1, m);
+  const cells: number[] = [];
+  for (let y = m - r; y <= m + r; y++) for (let x = m - r; x <= m + r; x++) if (px[at(x, y) + 3] >= 128) cells.push(at(x, y));
+  let best = at(m, m);
+  if (river) {
+    // The land: the rim's median, channel by channel.
+    const rim: number[][] = [[], [], []];
+    for (let k = 0; k < n; k++) {
+      for (const i of [at(k, 0), at(k, n - 1), at(0, k), at(n - 1, k)]) if (px[i + 3] >= 128) for (let ch = 0; ch < 3; ch++) rim[ch].push(px[i + ch]);
+    }
+    if (rim[0].length) {
+      const land = rim.map((v) => v.sort((a, b) => a - b)[v.length >> 1]);
+      for (const i of cells) if (d2(i, land) > d2(best, land)) best = i;
+    }
+  } else {
+    let bs = Infinity;
+    for (const i of cells) {
+      const s = cells.reduce((t, j) => t + d2(i, [px[j], px[j + 1], px[j + 2]]), 0);
+      if (s < bs) [bs, best] = [s, i];
+    }
+  }
+  return [px[best], px[best + 1], px[best + 2]];
+}
+
 const now = () => (globalThis.performance ? globalThis.performance.now() : Date.now());
 
 /** Trace the picture: the strokes (world ft) for every kind picked. */
@@ -669,6 +757,14 @@ export function trace(req: TraceRequest): TraceResult {
   if (picks.forest) traceForest(c, params.forest);
   if (picks.river) traceRivers(c, params.river);
 
+  // At most MAX_STROKES (each costs the generator a pass): the smallest dropped first.
+  let dropped = 0;
+  if (c.raws.length > MAX_STROKES) {
+    const size = c.raws.map((r) => extent(r.pts));
+    const keep = c.raws.map((_, i) => i).sort((a, b) => size[b] - size[a] || a - b).slice(0, MAX_STROKES).sort((a, b) => a - b);
+    dropped = c.raws.length - keep.length;
+    c.raws = keep.map((i) => c.raws[i]);
+  }
   // Simplify until the whole fits the budget.
   let out: number[][] = [];
   for (let scale = 1, tries = 0; tries < 16; tries++, scale *= 1.35) {
@@ -690,5 +786,5 @@ export function trace(req: TraceRequest): TraceResult {
     kinds.push(r.kind);
     counts[r.kind]++;
   });
-  return { strokes, kinds, counts, ms: now() - t0 };
+  return { strokes, kinds, counts, dropped, ms: now() - t0 };
 }

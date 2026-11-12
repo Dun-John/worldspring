@@ -16,6 +16,8 @@ export interface TraceXform {
   cy: number;
   ftPerPx: number;
   rot: number;
+  /** Down the picture, if not `ftPerPx` (a copy resized by a slightly different ratio each way). */
+  ftPerPxY?: number;
 }
 
 /** What can be traced, each from a colour picked on the picture. */
@@ -45,6 +47,8 @@ export interface TraceResult {
   /** The kind each stroke came from (parallel to `strokes`), for the preview's toggles. */
   kinds: TraceKind[];
   counts: Record<TraceKind, number>;
+  /** Shapes left out past the stroke cap (the smallest). */
+  dropped: number;
   ms: number;
 }
 
@@ -52,7 +56,7 @@ export interface TraceResult {
 export function imageToWorld(w: number, h: number, xf: TraceXform, px: number, py: number): [number, number] {
   const a = (xf.rot * Math.PI) / 180;
   const [c, s] = [Math.cos(a), Math.sin(a)];
-  const [dx, dy] = [(px - w / 2) * xf.ftPerPx, (py - h / 2) * xf.ftPerPx];
+  const [dx, dy] = [(px - w / 2) * xf.ftPerPx, (py - h / 2) * (xf.ftPerPxY ?? xf.ftPerPx)];
   return [xf.cx + dx * c - dy * s, xf.cy + dx * s + dy * c];
 }
 
@@ -61,5 +65,5 @@ export function worldToImage(w: number, h: number, xf: TraceXform, x: number, y:
   const a = (xf.rot * Math.PI) / 180;
   const [c, s] = [Math.cos(a), Math.sin(a)];
   const [dx, dy] = [x - xf.cx, y - xf.cy];
-  return [(dx * c + dy * s) / xf.ftPerPx + w / 2, (-dx * s + dy * c) / xf.ftPerPx + h / 2];
+  return [(dx * c + dy * s) / xf.ftPerPx + w / 2, (-dx * s + dy * c) / (xf.ftPerPxY ?? xf.ftPerPx) + h / 2];
 }

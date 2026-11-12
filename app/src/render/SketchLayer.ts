@@ -36,6 +36,8 @@ const PIN_R: Record<string, number> = { metropolis: 8, city: 6.5, town: 5, villa
 /** Road strokes by kind: colour and width (px), as the map draws the roads; a no-road line. */
 const ROADS: Record<string, [number, number]> = { kings_road: [0x78201a, 4], road: [0x965028, 3], track: [0xaa825a, 2] };
 const NO_ROAD = 0xb02a1a;
+/** Dashes per redraw of the traced preview; past it the rest is drawn solid. */
+const MAX_DASHES = 20_000;
 
 export class SketchLayer {
   readonly container = new Container();
@@ -125,23 +127,65 @@ export class SketchLayer {
     for (const [cx, cy] of c) g.rect(cx - HANDLE_PX / 2, cy - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX).fill(0xffffff).stroke({ width: 2, color: 0x1a5fb4 });
   }
 
-  /** The traced strokes, dashed in each kind's sketch colour (shown kinds only). */
-  private drawTraced(cam: Camera) {
+  /** Where the traced strokes were last drawn: their key, the zoom and centre drawn at, and the
+   * world box drawn (the view and a view's size round it). */
+  private traced: { key: string; zoom: number; bx: number; by: number; box: [number, number, number, number] } | null = null;
+
+  /** The traced strokes, placed for the view: redrawn only when they change, the view leaves the box
+   * drawn or the zoom moves over ~1.4x; else just moved and scaled. */
+  private placeTraced(cam: Camera) {
+    const key = `${tracer.version}|${underlay.visible}`;
+    const [x0, y0, x1, y1] = cam.viewRect();
+    const t = this.traced;
+    if (!t || t.key !== key || Math.abs(cam.zoom - t.zoom) > 0.5 || x0 < t.box[0] || y0 < t.box[1] || x1 > t.box[2] || y1 > t.box[3]) this.drawTraced(cam, key);
+    const b = this.traced!;
+    const [sx, sy] = cam.worldToScreen(b.bx, b.by);
+    this.traceP.position.set(sx, sy);
+    this.traceP.scale.set(cam.ppf / 2 ** b.zoom);
+  }
+
+  /** The traced strokes, dashed in each kind's sketch colour (shown kinds only), in px at the
+   * current zoom from the view's centre: only the parts inside the box drawn are dashed, and past
+   * MAX_DASHES the rest is drawn solid. */
+  private drawTraced(cam: Camera, key: string) {
     const g = this.traceP;
     g.clear();
+    const [vx0, vy0, vx1, vy1] = cam.viewRect();
+    const [vw, vh] = [vx1 - vx0, vy1 - vy0];
+    const [bx, by] = [(vx0 + vx1) / 2, (vy0 + vy1) / 2];
+    this.traced = { key, zoom: cam.zoom, bx, by, box: [vx0 - vw, vy0 - vh, vx1 + vw, vy1 + vh] };
     if (!underlay.visible) return;
+    const k = cam.ppf;
+    // The box in local px.
+    const [X0, Y0, X1, Y1] = [-1.5 * vw * k, -1.5 * vh * k, 1.5 * vw * k, 1.5 * vh * k];
+    let dashes = 0;
     for (const s of tracer.shownStrokes()) {
       const color = s.tool === 'biome' ? (BIOME_COLORS[s.biome ?? ''] ?? 0x8aa86a) : (COLORS[s.tool] ?? 0x333333);
-      const pts = s.pts.map((p) => cam.worldToScreen(p[0], p[1]));
+      const pts = s.pts.map((p) => [(p[0] - bx) * k, (p[1] - by) * k]);
       if (s.closed && pts.length > 2) pts.push(pts[0]);
       const dark = s.tool === 'biome' ? 0x5a7a3a : color;
       let on = true;
       let left = 9;
       for (let i = 1; i < pts.length; i++) {
-        let [x, y] = pts[i - 1];
-        const [x1, y1] = pts[i];
-        let d = Math.hypot(x1 - x, y1 - y);
-        const [ux, uy] = d > 0 ? [(x1 - x) / d, (y1 - y) / d] : [0, 0];
+        // The segment clipped to the box (Liang-Barsky).
+        const [ax, ay] = pts[i - 1];
+        const [dx, dy] = [pts[i][0] - ax, pts[i][1] - ay];
+        let [t0, t1] = [0, 1];
+        for (const [p, q] of [[-dx, ax - X0], [dx, X1 - ax], [-dy, ay - Y0], [dy, Y1 - ay]]) {
+          if (p === 0) {
+            if (q < 0) t1 = -1;
+          } else if (p < 0) t0 = Math.max(t0, q / p);
+          else t1 = Math.min(t1, q / p);
+        }
+        if (t0 >= t1) continue;
+        let [x, y] = [ax + dx * t0, ay + dy * t0];
+        const [ex, ey] = [ax + dx * t1, ay + dy * t1];
+        let d = Math.hypot(ex - x, ey - y);
+        if (dashes > MAX_DASHES) {
+          g.moveTo(x, y).lineTo(ex, ey);
+          continue;
+        }
+        const [ux, uy] = d > 0 ? [(ex - x) / d, (ey - y) / d] : [0, 0];
         while (d > 0) {
           const t = Math.min(d, left);
           if (on) g.moveTo(x, y).lineTo(x + ux * t, y + uy * t);
@@ -152,6 +196,7 @@ export class SketchLayer {
           if (left <= 0) {
             on = !on;
             left = on ? 9 : 5;
+            dashes++;
           }
         }
       }
@@ -165,7 +210,7 @@ export class SketchLayer {
     if (key !== this.lastTrace) {
       this.lastTrace = key;
       this.updateTrace(cam);
-      this.drawTraced(cam);
+      this.placeTraced(cam);
     }
     if (!this.dirty && view === this.lastView) return;
     this.dirty = false;
