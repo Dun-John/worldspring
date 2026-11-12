@@ -22,7 +22,7 @@ export const MAX_SIDE = 2048;
 /** The most points the strokes may hold in all (T0 regenerates from them). */
 export const POINT_BUDGET = 3000;
 /** The most strokes a trace gives (the smallest shapes beyond it are dropped). */
-export const MAX_STROKES = 400;
+export const MAX_STROKES = 200;
 const FOREST = 'temperate_forest';
 
 type Mask = Uint8Array<ArrayBuffer>;

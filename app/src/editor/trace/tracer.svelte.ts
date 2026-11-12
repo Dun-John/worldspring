@@ -146,7 +146,19 @@ class Tracer {
       if (r.ok) {
         this.result = r.result;
         this.error = '';
-      } else this.error = r.error;
+      } else {
+        // (An old preview isn't left up to be accepted under the error.)
+        this.result = null;
+        this.error = r.error;
+      }
+      this.version++;
+    };
+    w.onerror = (e) => {
+      e.preventDefault();
+      // (The worker failed outright: it goes, and the next trace starts a new one with the pixels.)
+      this.cancel(true);
+      this.result = null;
+      this.error = 'The picture couldn’t be traced';
       this.version++;
     };
     const id = ++this.seq;
