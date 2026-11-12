@@ -2,7 +2,7 @@
   // Play (local table), the DM's side: the tools (all that shows when the panel is folded
   // down), the selected token, the players' window and view, this location's fog, dark and line
   // of sight, and the table's settings (grid scale, diagonals, reset) folded away.
-  import { roleOf, SIZES, type Measure, type ShapeKind, type Token, type TokenRole } from './state';
+  import { roleOf, SIZES, type HexMode, type Measure, type ShapeKind, type Token, type TokenRole } from './state';
   import { ROLE_COLORS, SHAPE_COLORS, TOKEN_COLORS, type PlayController, type Tool } from './controller';
   import { formatDistance } from './vision';
   import Icon from '../ui/Icon.svelte';
@@ -47,6 +47,10 @@
       fogReveal: play.fogReveal,
       fogRadius: play.fogRadius,
       fogRooms: play.fogRooms,
+      hexMode: play.state.hexMode,
+      hexRing: play.state.hexRing,
+      hexSeen: play.state.hexSeen.length,
+      hexReveal: play.hexReveal,
     };
   });
 
@@ -56,6 +60,12 @@
     ['measure', 'ruler', 'Measure', 'M'],
     ['shape', 'shapes', 'Shapes', 'S'],
     ['fog', 'cloud', 'Fog of war brush', 'F'],
+    ['hex', 'hex', 'Explore hexes (hex crawl)', 'H'],
+  ];
+  const HEX_MODES: [HexMode, string, string][] = [
+    ['off', 'Off', 'The players see no hexes'],
+    ['grid', 'Grid', 'The players see the hex grid'],
+    ['crawl', 'Crawl', 'The players see only the hexes they have explored; the rest is washed over'],
   ];
   const ROLES: [TokenRole | 'light', string][] = [
     ['pc', 'PC'],
@@ -188,6 +198,20 @@
         {#if !v.settings.fog}<div class="ws-hint warn">Fog is off here: the players see everything.</div>{/if}
         <div class="ws-hint">Shift-drag does the opposite.</div>
       </section>
+    {:else if v.tool === 'hex'}
+      <section>
+        <div class="ws-seg">
+          <button class:on={v.hexReveal} onclick={() => ((play.hexReveal = true), play.onChange())}>Reveal</button>
+          <button class:on={!v.hexReveal} onclick={() => ((play.hexReveal = false), play.onChange())}>Hide</button>
+        </div>
+        <div class="ws-row">
+          <button class="ws-btn grow" onclick={() => play.hexAll(true)}>Reveal all</button>
+          <button class="ws-btn grow" onclick={() => play.hexAll(false)} disabled={!v.hexSeen}>Hide all</button>
+        </div>
+        {#if v.inside}<div class="ws-hint warn">Hexes are explored on the surface map.</div>{/if}
+        {#if v.hexMode !== 'crawl'}<div class="ws-hint warn">The players see every hex: set Hexes for players to Crawl.</div>{/if}
+        <div class="ws-hint">{touch ? 'Tap or drag over hexes.' : 'Click or drag over hexes. Shift-drag does the opposite.'}</div>
+      </section>
     {:else if v.tool === 'measure'}
       <div class="ws-hint">Drag to measure; the players see it too.</div>
     {/if}
@@ -273,6 +297,17 @@
     </section>
 
     <section>
+      <div class="ws-label">Hexes for players</div>
+      <div class="ws-seg" role="radiogroup" aria-label="Hexes for players">
+        {#each HEX_MODES as [m, label, title] (m)}<button class:on={v.hexMode === m} {title} onclick={() => play.setHexMode(m)}>{label}</button>{/each}
+      </div>
+      {#if v.hexMode === 'crawl'}
+        <label class="switch"><Icon name="hex" size={16} /><span class="grow">Party reveals the ring of six<span class="sub">A PC entering a hex explores the hexes round it too</span></span><input type="checkbox" class="ws-switch" checked={v.hexRing} onchange={(e) => play.setHexRing(checked(e))} /></label>
+        <div class="ws-hint">{v.hexSeen} {v.hexSeen === 1 ? 'hex' : 'hexes'} explored. PCs moving on the map explore the hex they enter; the Hexes tool reveals or hides more.</div>
+      {/if}
+    </section>
+
+    <section>
       <div class="ws-label">This location</div>
       <label class="switch"><Icon name="cloud" size={16} /><span class="grow">Fog of war<span class="sub">Players see only what is revealed or seen here</span></span><input type="checkbox" class="ws-switch" checked={v.settings.fog} onchange={(e) => play.setSettingsHere({ fog: checked(e) })} /></label>
       <label class="switch"><Icon name="moon" size={16} /><span class="grow">Dark<span class="sub">Characters see only what light reaches</span></span><input type="checkbox" class="ws-switch" checked={v.settings.dark} onchange={(e) => play.setSettingsHere({ dark: checked(e) })} /></label>
@@ -293,10 +328,10 @@
         </div>
         <div class="ws-row">
           {#if confirmReset}
-            <button class="ws-btn danger" onclick={() => ((confirmReset = false), play.resetSession())}>Clear every token, shape and fog?</button>
+            <button class="ws-btn danger" onclick={() => ((confirmReset = false), play.resetSession())}>Clear every token, shape, fog and explored hex?</button>
             <button class="ws-btn quiet" onclick={() => (confirmReset = false)}>Cancel</button>
           {:else}
-            <button class="ws-btn" onclick={() => (confirmReset = true)} title="Remove every token, shape and fog for this world">Reset the session…</button>
+            <button class="ws-btn" onclick={() => (confirmReset = true)} title="Remove every token, shape, fog and explored hex for this world">Reset the session…</button>
           {/if}
         </div>
       </div>
@@ -342,7 +377,7 @@
   }
   .tools {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 2px;
   }
   .tools .ws-icon-btn {

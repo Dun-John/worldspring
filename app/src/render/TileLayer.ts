@@ -333,6 +333,14 @@ export class TileLayer {
     return null;
   }
 
+  /** The whole-map tile's samples (level 0: f16 heights and water from `base`, and biomes), once
+   * it is here (it is always asked for, as every view's fallback). */
+  coarse(): { tex: Uint16Array; biome: Uint8Array } | null {
+    const t = this.tiles.get(tileId(0, 0, 0));
+    const biome = t?.biomeTexture.source.resource;
+    return t && biome instanceof Uint8Array ? { tex: t.texData, biome } : null;
+  }
+
   destroy() {
     for (const t of this.tiles.values()) this.destroyTile(t);
     this.tiles.clear();

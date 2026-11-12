@@ -6,6 +6,7 @@ import { layoutOfId } from '../editor/reanchor';
 import type { Feature, Interior, WorldFile } from '../gen/protocol';
 import type { InteriorLayer } from '../render/InteriorLayer';
 import type { MapView, PointerTool } from '../render/MapView';
+import { hexAt, hexFrame, hexKey, hexRing, hexSpan, parseHexKey, type HexFrame } from '../render/hex';
 import { drawnDoorsOf } from '../render/roomShapes';
 import { SECTION_N, type Sewers } from '../render/Sewers';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
@@ -13,11 +14,11 @@ import { PIN, PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { forgetRehosted } from './rehosted';
 import { hasImage, loadSession, putImage, saveSession } from './session';
-import { apply, emptyState, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
+import { apply, emptyState, type HexMode, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
 import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, rulerTerrain, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 import { floorOf } from '../gen/floor';
 
-export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog';
+export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog' | 'hex';
 
 /** A location's grid on the map: squares to world ft and back. */
 export interface Place {
@@ -147,6 +148,15 @@ export class PlayController implements PointerTool {
   fogRadius = 3;
   /** The fog tool reveals or hides whole rooms (inside). */
   fogRooms = false;
+  /** The hex tool reveals hexes (else hides them). */
+  hexReveal = true;
+  /** The hexes painted by the stroke under way (shown at once, sent as one op once it ends). */
+  private hexStroke: { reveal: boolean; keys: Set<string> } | null = null;
+  /** The explored hexes (`state.hexSeen`), and as the view draws them (with a stroke under way). */
+  private hexSeen = new Set<string>();
+  private hexShown = new Set<string>();
+  /** Players' window: whether a feature's label is in a hex not explored (by feature id). */
+  private readonly hexHides = new Map<string, boolean>();
   /** The player window's camera follows the DM's, and can't be moved there. */
   follow = false;
   lock = false;
@@ -226,7 +236,7 @@ export class PlayController implements PointerTool {
   private readonly doorChanges = new Map<string, number>();
   private readonly concealFn = (f: Feature) => this.conceal(f);
   private press: {
-    kind: 'door' | 'token' | 'place' | 'measure' | 'shape' | 'fog' | 'ping' | 'box' | 'none';
+    kind: 'door' | 'token' | 'place' | 'measure' | 'shape' | 'fog' | 'hex' | 'ping' | 'box' | 'none';
     x: number;
     y: number;
     /** (`bridge`: a castle's drawbridge on the surface, by its door key.) */
@@ -626,6 +636,7 @@ export class PlayController implements PointerTool {
         const id = parseLoc(t.loc).interior;
         if (id) void this.fetchInterior(id);
       }
+      this.hexesChanged();
     }
     this.snapshot();
     this.onChange();
@@ -703,6 +714,7 @@ export class PlayController implements PointerTool {
       this.draftShape = null;
     }
     this.visionDirty = true;
+    this.hexesChanged();
     if (this.role === 'dm') this.channel.send({ t: 'mode', on });
     this.onChange();
   }
@@ -712,6 +724,7 @@ export class PlayController implements PointerTool {
     this.applyOp(op);
     this.state.changed = Date.now();
     this.channel.send({ t: 'op', op });
+    if (op.t === 'token') this.partyExplores(op.token);
     // (The token the players' view follows gone: it follows the DM again.)
     // (Or hidden: the players' window goes back to the DM's scene and camera, as on Stop.)
     const ft = this.followTarget;
@@ -731,14 +744,111 @@ export class PlayController implements PointerTool {
     }
     if (op.t === 'reset') this.bridgesChanged();
     if (op.t === 'reset') this.selection.clear();
+    if (op.t === 'hexes' || op.t === 'hexset' || op.t === 'reset') this.hexesChanged();
     if (op.t === 'untoken') this.selection.delete(op.id);
-    if (op.t !== 'fog' && op.t !== 'fogbits' && op.t !== 'fogreset' && op.t !== 'shape' && op.t !== 'unshape' && op.t !== 'grid') this.visionDirty = this.followDirty = true;
+    if (op.t !== 'fog' && op.t !== 'fogbits' && op.t !== 'fogreset' && op.t !== 'shape' && op.t !== 'unshape' && op.t !== 'grid' && op.t !== 'hexes' && op.t !== 'hexset') this.visionDirty = this.followDirty = true;
   }
 
   setTool(t: Tool) {
     this.tool = t;
     if (t !== 'fog') this.brush = null;
     this.onChange();
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // The overland hex crawl (`state.hexMode`, `hexSeen`; the grid is the world's, `Edits.hexes`).
+
+  /** The world's hex grid's lattice. */
+  private get hexFrame(): HexFrame {
+    return hexFrame(this.view.hexGrid);
+  }
+
+  /** What the players see of the hexes: off, the lines, or the lines and the crawl. */
+  setHexMode(mode: HexMode) {
+    this.dispatch({ t: 'hexset', mode });
+  }
+
+  /** A PC entering a hex reveals the six round it too. */
+  setHexRing(ring: boolean) {
+    this.dispatch({ t: 'hexset', ring });
+  }
+
+  /** Every hex on the map explored, or none. */
+  hexAll(reveal: boolean) {
+    if (!reveal) {
+      if (this.state.hexSeen.length) this.dispatch({ t: 'hexes', reveal: [], hide: [...this.state.hexSeen] });
+      return;
+    }
+    const g = this.view.geom;
+    if (!g) return;
+    const f = this.hexFrame;
+    const [c0, c1, r0, r1] = hexSpan(f, g.map_w_ft, g.map_h_ft);
+    const add: string[] = [];
+    for (let c = c0; c <= c1; c++) for (let r = r0; r <= r1; r++) if (!this.hexSeen.has(hexKey(c, r))) add.push(hexKey(c, r));
+    if (add.length) this.dispatch({ t: 'hexes', reveal: add, hide: [] });
+  }
+
+  /** The hexes as the play state has them now: drawn anew (and the players' labels asked again). */
+  private hexesChanged() {
+    this.hexSeen = new Set(this.state.hexSeen);
+    this.hexHides.clear();
+    this.showHexes();
+  }
+
+  /** The view's hexes: the players' lines and crawl as the DM sets them (play on), the DM's
+   * hatch over what the players haven't explored (with the stroke under way). */
+  private showHexes() {
+    const crawl = this.on && this.state.hexMode === 'crawl';
+    let shown: ReadonlySet<string> = this.hexSeen;
+    const st = this.hexStroke;
+    if (st) {
+      const next = new Set(this.hexSeen);
+      for (const k of st.keys) {
+        if (st.reveal) next.add(k);
+        else next.delete(k);
+      }
+      shown = next;
+    }
+    this.hexShown = shown as Set<string>;
+    if (this.role === 'player') {
+      this.view.setHexGrid(this.view.hexGrid, this.on && this.state.hexMode !== 'off');
+      this.view.setHexCrawl(crawl ? 1 : 0, shown);
+    } else this.view.setHexCrawl(crawl ? 2 : 0, shown);
+  }
+
+  /** A PC on the surface moved (DM, crawling): the hex it stands in is explored, with the six
+   * round it if the DM said so. */
+  private partyExplores(t: Token) {
+    const s = this.state;
+    if (this.role !== 'dm' || s.hexMode !== 'crawl' || t.loc !== 'surface' || t.kind !== 'character' || t.hidden || roleOf(t) !== 'pc') return;
+    const f = this.hexFrame;
+    const [c, r] = hexAt(f, t.x * 5, t.y * 5);
+    const hexes = [[c, r], ...(s.hexRing ? hexRing(f, c, r) : [])];
+    const add = hexes.map(([a, b]) => hexKey(a, b)).filter((k) => !this.hexSeen.has(k));
+    if (add.length) this.dispatch({ t: 'hexes', reveal: add, hide: [] });
+  }
+
+  /** The hex stroke takes in the hexes from the last point to (x, y) (world ft). */
+  private paintHexes(x0: number, y0: number, x1: number, y1: number) {
+    const st = this.hexStroke;
+    if (!st) return;
+    const f = this.hexFrame;
+    const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (f.s / 4)));
+    for (let k = 0; k <= n; k++) {
+      const [c, r] = hexAt(f, x0 + ((x1 - x0) * k) / n, y0 + ((y1 - y0) * k) / n);
+      st.keys.add(hexKey(c, r));
+    }
+    this.showHexes();
+  }
+
+  /** The stroke ended: one op for the hexes it changed. */
+  private endHexStroke() {
+    const st = this.hexStroke;
+    this.hexStroke = null;
+    if (!st) return;
+    const keys = [...st.keys].filter((k) => parseHexKey(k) && this.hexSeen.has(k) !== st.reveal);
+    if (keys.length) this.dispatch(st.reveal ? { t: 'hexes', reveal: keys, hide: [] } : { t: 'hexes', reveal: [], hide: keys });
+    else this.showHexes();
   }
 
   /** A new token at a world point (or the middle of the view); `as`: a character with this
@@ -1175,6 +1285,14 @@ export class PlayController implements PointerTool {
         this.draftShape = { id: newId(), loc: place.loc, kind: this.shapeKind, x: Math.round(gx), y: Math.round(gy), dx: 0, dy: 0, color: this.shapeColor };
         this.press = { kind: 'shape', x: gx, y: gy };
         return true;
+      case 'hex': {
+        // (The overland hexes: on the surface only.)
+        if (place.loc !== 'surface') return false;
+        this.hexStroke = { reveal: this.hexReveal !== e.shiftKey, keys: new Set() };
+        this.press = { kind: 'hex', x: gx, y: gy, wx: x, wy: y };
+        this.paintHexes(x, y, x, y);
+        return true;
+      }
       case 'fog': {
         const reveal = this.fogReveal !== e.shiftKey;
         if (this.fogRooms && (place.it || place.sewers)) {
@@ -1249,6 +1367,9 @@ export class PlayController implements PointerTool {
       }
     } else if (p.kind === 'shape' && this.draftShape) {
       this.draftShape = aim(this.draftShape, gx, gy);
+    } else if (p.kind === 'hex') {
+      this.paintHexes(p.wx!, p.wy!, x, y);
+      [p.wx, p.wy] = [x, y];
     } else if (p.kind === 'fog') {
       const pts = p.pts!;
       const [lx, ly] = [pts[pts.length - 2], pts[pts.length - 1]];
@@ -1334,6 +1455,9 @@ export class PlayController implements PointerTool {
         break;
       }
       case 'fog':
+        break;
+      case 'hex':
+        this.endHexStroke();
         break;
     }
   }
@@ -1455,6 +1579,10 @@ export class PlayController implements PointerTool {
     this.dragging.clear();
     this.box = null;
     this.draftShape = null;
+    if (this.hexStroke) {
+      this.hexStroke = null;
+      this.showHexes();
+    }
   }
 
   leave() {
@@ -1843,6 +1971,7 @@ export class PlayController implements PointerTool {
    * revealed under fog; else anywhere).
    */
   private conceal(f: Feature): boolean {
+    if (this.on && this.state.hexMode === 'crawl' && this.hexHidden(f)) return true;
     if (!POI_KINDS.has(f.kind) && !f.id.startsWith('c:')) return false;
     if (!this.dmPlaces) return true;
     if (!this.on) return false;
@@ -1861,6 +1990,17 @@ export class PlayController implements PointerTool {
       }
     }
     return true;
+  }
+
+  /** Players' window, crawling: a label in a hex not explored (its anchor's hex). */
+  private hexHidden(f: Feature): boolean {
+    let hide = this.hexHides.get(f.id);
+    if (hide === undefined) {
+      const [c, r] = hexAt(this.hexFrame, f.x, f.y);
+      hide = !this.hexShown.has(hexKey(c, r));
+      this.hexHides.set(f.id, hide);
+    }
+    return hide;
   }
 
   // ---------------------------------------------------------------------------------------
@@ -1911,6 +2051,8 @@ export class PlayController implements PointerTool {
       case 'edits':
         this.forgetRedesigned(m.world);
         this.onEdits(m.world);
+        // (The hex grid may have changed: labels are placed in their hexes again.)
+        this.hexesChanged();
         break;
       case 'op': {
         const touches = this.touchesFollow(m.op);

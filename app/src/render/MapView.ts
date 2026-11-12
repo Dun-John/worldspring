@@ -3,7 +3,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
@@ -12,7 +12,7 @@ import { precompile } from './precompile';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
-import { HexLayer } from './HexLayer';
+import { HexLayer, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, type Hex } from './hex';
 import { MadeTracks } from './MadeTracks';
 import { SketchLayer } from './SketchLayer';
@@ -577,6 +577,21 @@ export class MapView {
     return { alpha: this.hexLayer?.alpha ?? 0, numbers: this.hexLayer?.shownNumbers ?? 0 };
   }
 
+  /** A hex crawl over the surface (play): the players' wash (1) or the DM's hatch (2) over the
+   * hexes not in `seen`, or none (0). `seen` is kept: call again once it changes. */
+  setHexCrawl(mode: CrawlMode, seen: ReadonlySet<string>) {
+    this.hexCrawl = mode;
+    this.hexSeen = seen;
+    this.hexLayer?.setCrawl(mode, seen);
+  }
+  private hexCrawl: CrawlMode = 0;
+  private hexSeen: ReadonlySet<string> = new Set();
+
+  /** The hex crawl as drawn last frame (for checks). */
+  get crawlStats(): { mode: CrawlMode; shown: boolean; washed: boolean } {
+    return { mode: this.hexCrawl, shown: this.hexLayer?.crawlShown ?? false, washed: this.hexLayer?.washed ?? false };
+  }
+
   /** The hex grid shown or not (Layers). */
   setHexes(on: boolean) {
     this.setHexGrid(this.hexGrid, on);
@@ -1078,6 +1093,7 @@ export class MapView {
     this.hexLayer = new HexLayer();
     this.hexGrid = hexGrid(adjusted ?? world.edits);
     this.hexLayer.set(this.hexGrid, geom.map_w_ft, geom.map_h_ft);
+    this.hexLayer.setCrawl(this.hexCrawl, this.hexSeen);
     this.made = [];
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
@@ -1573,7 +1589,13 @@ export class MapView {
       this.lanes?.update(this.cam, this.interior ? 0 : laneFade(level, SITE_MIN_LEVEL - LANE_FADE[0], SITE_MIN_LEVEL - LANE_FADE[1]), level);
       this.ferryLanes?.update(this.cam, this.interior ? 0 : ferryFade(level), level);
       // The hex grid over the surface (not inside a building or site, nor in the sewers).
-      this.hexLayer?.update(this.cam, this.hexesOn && !this.interior && !this.sewers ? 1 : 0, this.app.renderer.resolution);
+      // (A players' crawl washes with the whole-map tile's land and water, made once it is here.)
+      if (this.hexLayer && this.hexCrawl === 1 && !this.hexLayer.washed) {
+        const c = this.tiles.coarse();
+        if (c) this.hexLayer.setWash(c.tex, c.biome, halfToFloat, this.geom!.domain_ft);
+      }
+      const surface = !this.interior && !this.sewers;
+      this.hexLayer?.update(this.cam, this.hexesOn && surface ? 1 : 0, this.app.renderer.resolution, surface);
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);

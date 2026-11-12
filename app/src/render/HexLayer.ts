@@ -2,9 +2,16 @@
 // shader draws every hex edge (resolution independent, the same cost at any zoom), and hex
 // numbers (`CCRR`) from a pool once the hexes are big enough to hold them. The DM's window and
 // the players' both draw one (`MapView.setHexGrid`).
-import { BitmapText, Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
+//
+// A hex crawl (play) adds a second quad under the lines (`setCrawl`): in the players' window every
+// hex not yet explored is washed over (a land/water texture made once, 257² RGBA8, from the
+// whole-map tile: `setWash`), in the DM's lightly hatched. Which hexes are explored is a mask of
+// one RGBA8 texel per hex (the map's hexes, at most `MASK_MAX`² round the view), written only
+// when they change. Two draw calls at most, the same at any zoom.
+import { BitmapText, BufferImageSource, Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
 import type { Camera } from './camera';
-import { hexAt, hexCentre, hexDigits, hexFrame, hexLabel, hexRange, type Hex, type HexFrame } from './hex';
+import { hexAt, hexAxial, hexCentre, hexDigits, hexFrame, hexLabel, hexRange, hexSpan, parseHexKey, type Hex, type HexFrame } from './hex';
+import crawlFragment from './shaders/crawl.frag?raw';
 import fragment from './shaders/hex.frag?raw';
 import vertex from './shaders/hex.vert?raw';
 
@@ -23,10 +30,26 @@ const NUM_FADE_PX = 16;
 const NUM_MAX = 900;
 const FONT = ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif'];
 
+/** The explored-hexes mask is at most this many hexes a side (a finer grid's round the view). */
+const MASK_MAX = 1024;
+/** The crawl's soft edge (each side of a hex's border): this many px, or this part of a hex. */
+const BAND_PX = 10;
+const BAND_PART = 0.07;
+
+/** What a hex crawl draws over the hexes not explored: nothing, the players' wash, the DM's hatch. */
+export type CrawlMode = 0 | 1 | 2;
+
 let shared: GlProgram | null = null;
 function hexProgram(): GlProgram {
   return (shared ??= GlProgram.from({ vertex, fragment, name: 'hex-grid' }));
 }
+let sharedCrawl: GlProgram | null = null;
+function crawlProgram(): GlProgram {
+  return (sharedCrawl ??= GlProgram.from({ vertex, fragment: crawlFragment, name: 'hex-crawl' }));
+}
+
+const rgba = (w: number, h: number, data?: Uint8Array) =>
+  new BufferImageSource({ resource: data ?? new Uint8Array(w * h * 4), width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
 
 export class HexLayer {
   readonly container = new Container();
@@ -44,7 +67,36 @@ export class HexLayer {
     uAlpha: { value: 0, type: 'f32' },
     uMap: { value: new Float32Array(4), type: 'vec4<f32>' },
   });
+  private readonly crawlUniforms = new UniformGroup({
+    uRect: { value: new Float32Array(4), type: 'vec4<f32>' },
+    uHalf: { value: new Float32Array(2), type: 'vec2<f32>' },
+    uCam: { value: new Float32Array(2), type: 'vec2<f32>' },
+    uFpp: { value: 1, type: 'f32' },
+    uFlat: { value: 1, type: 'f32' },
+    uS: { value: 1, type: 'f32' },
+    uAlpha: { value: 0, type: 'f32' },
+    uMode: { value: 1, type: 'f32' },
+    uBand: { value: 1, type: 'f32' },
+    uMap: { value: new Float32Array(4), type: 'vec4<f32>' },
+    uRef: { value: new Float32Array(2), type: 'vec2<f32>' },
+    uMaskBox: { value: new Float32Array(4), type: 'vec4<f32>' },
+    uWorld: { value: new Float32Array(2), type: 'vec2<f32>' },
+    uDomain: { value: 1, type: 'f32' },
+    uHasWash: { value: 0, type: 'f32' },
+  });
   private readonly mesh: Mesh<Geometry, Shader>;
+  private readonly crawlMesh: Mesh<Geometry, Shader>;
+  private mask = rgba(1, 1);
+  private wash = rgba(1, 1);
+  /** The mask's hexes: first column and row, columns and rows. */
+  private maskBox: [number, number, number, number] = [0, 0, 1, 1];
+  private maskDirty = true;
+  private crawlMode: CrawlMode = 0;
+  private seen: ReadonlySet<string> = new Set();
+  /** The players' wash is made (`setWash`). */
+  washed = false;
+  /** Whether the crawl was drawn last frame. */
+  crawlShown = false;
   private readonly pool: BitmapText[] = [];
   private grid: Hex | null = null;
   private frame: HexFrame | null = null;
@@ -63,7 +115,10 @@ export class HexLayer {
     });
     const shader = new Shader({ glProgram: hexProgram(), resources: { hexUniforms: this.uniforms } });
     this.mesh = new Mesh({ geometry, shader });
-    this.container.addChild(this.mesh, this.numbers);
+    const crawlShader = new Shader({ glProgram: crawlProgram(), resources: { crawlUniforms: this.crawlUniforms, uWash: this.wash, uMask: this.mask } });
+    this.crawlMesh = new Mesh({ geometry, shader: crawlShader });
+    this.crawlMesh.visible = false;
+    this.container.addChild(this.crawlMesh, this.mesh, this.numbers);
     this.container.visible = false;
   }
 
@@ -83,10 +138,80 @@ export class HexLayer {
       u.uWidth = grid.width;
       for (const t of this.pool) t.tint = c;
     }
+    this.maskDirty = true;
   }
 
-  /** Placed for the camera at `fade` (1 shown, 0 hidden: inside a building, off by choice). */
-  update(cam: Camera, fade: number, resolution: number) {
+  /** A hex crawl over the grid: `mode` 1 the players' wash, 2 the DM's hatch, 0 none; `seen` the
+   * explored hexes (`hexKey`s; kept, not copied: call again once it changes). */
+  setCrawl(mode: CrawlMode, seen: ReadonlySet<string>) {
+    this.crawlMode = mode;
+    this.seen = seen;
+    this.maskDirty = true;
+  }
+
+  /**
+   * The players' wash from the whole-map tile's samples (257² over `domain` ft): each one land
+   * (its biome's colour, light) or water, then blurred into a few big soft shapes.
+   */
+  setWash(tex: Uint16Array, biome: Uint8Array, toFloat: (h: number) => number, domain: number) {
+    const N = 257;
+    const out = new Float32Array(N * N * 3);
+    for (let k = 0; k < N * N; k++) {
+      const wet = toFloat(tex[k * 4 + 3]) > toFloat(tex[k * 4]);
+      const b = biome[k * 4];
+      const c = wet ? WATER : (PALETTE[b > 1 && b < PALETTE.length ? b : 8] ?? PALETTE[8]);
+      for (let ch = 0; ch < 3; ch++) out[k * 3 + ch] = c[ch] + (PAPER[ch] - c[ch]) * (wet ? 0.2 : 0.5);
+    }
+    blur(out, N, 2);
+    blur(out, N, 2);
+    const data = new Uint8Array(N * N * 4);
+    for (let k = 0; k < N * N; k++) {
+      for (let ch = 0; ch < 3; ch++) data[k * 4 + ch] = Math.round(Math.min(1, out[k * 3 + ch]) * 255);
+      data[k * 4 + 3] = 255;
+    }
+    const old = this.wash;
+    this.wash = new BufferImageSource({ resource: data, width: N, height: N, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    this.crawlMesh.shader!.resources.uWash = this.wash;
+    old.destroy();
+    const u = this.crawlUniforms.uniforms;
+    u.uDomain = domain;
+    u.uHasWash = 1;
+    this.washed = true;
+  }
+
+  /** The explored-hexes mask written again: the map's hexes, or (a fine grid) those round (cx, cy). */
+  private writeMask(f: HexFrame, cx: number, cy: number) {
+    let [c0, c1, r0, r1] = hexSpan(f, this.mapW, this.mapH);
+    if (c1 - c0 + 1 > MASK_MAX || r1 - r0 + 1 > MASK_MAX) {
+      const [hc, hr] = hexAt(f, cx, cy);
+      c0 = Math.max(c0, hc - MASK_MAX / 2);
+      r0 = Math.max(r0, hr - MASK_MAX / 2);
+      c1 = Math.min(c1, c0 + MASK_MAX - 1);
+      r1 = Math.min(r1, r0 + MASK_MAX - 1);
+    }
+    const [w, h] = [c1 - c0 + 1, r1 - r0 + 1];
+    if (w !== this.mask.width || h !== this.mask.height) {
+      const old = this.mask;
+      this.mask = rgba(w, h);
+      this.crawlMesh.shader!.resources.uMask = this.mask;
+      old.destroy();
+    }
+    const data = this.mask.resource as Uint8Array;
+    data.fill(0);
+    for (const key of this.seen) {
+      const at = parseHexKey(key);
+      if (!at) continue;
+      const [i, j] = [at[0] - c0, at[1] - r0];
+      if (i >= 0 && j >= 0 && i < w && j < h) data[(j * w + i) * 4] = 255;
+    }
+    this.mask.update();
+    this.maskBox = [c0, r0, w, h];
+    this.maskDirty = false;
+  }
+
+  /** Placed for the camera at `fade` (1 shown, 0 hidden: inside a building, off by choice); the
+   * crawl (`setCrawl`) where `surface` (not inside a building or site, nor the sewers). */
+  update(cam: Camera, fade: number, resolution: number, surface = fade > 0) {
     const g = this.grid;
     const f = this.frame;
     const fpp = 1 / cam.ppf;
@@ -94,7 +219,13 @@ export class HexLayer {
     const small = Math.min(1, Math.max(0, (across - TINY_PX) / (SMALL_PX - TINY_PX)));
     const battle = Math.min(1, Math.max(0, (fpp - BATTLE_TO) / (BATTLE_FROM - BATTLE_TO)));
     this.alpha = g && f ? fade * small * battle * g.opacity : 0;
-    this.container.visible = this.alpha > 0.002;
+    const lines = this.alpha > 0.002;
+    const crawl = !!g && !!f && surface && this.crawlMode > 0;
+    this.mesh.visible = lines;
+    this.numbers.visible = lines;
+    this.crawlMesh.visible = crawl;
+    this.crawlShown = crawl;
+    this.container.visible = lines || crawl;
     if (!this.container.visible || !g || !f) {
       this.shownNumbers = 0;
       return;
@@ -113,7 +244,29 @@ export class HexLayer {
     u.uFpp = fpp;
     u.uAa = 1 / Math.max(0.5, resolution);
     u.uAlpha = this.alpha;
-    this.drawNumbers(cam, f, g, across, m);
+    if (crawl) this.placeCrawl(cam, f, rc, rr, hx, hy, fpp);
+    if (lines) this.drawNumbers(cam, f, g, across, m);
+    else this.shownNumbers = 0;
+  }
+
+  private placeCrawl(cam: Camera, f: HexFrame, rc: number, rr: number, hx: number, hy: number, fpp: number) {
+    // (A fine grid's mask follows the view once it nears its edge.)
+    const [c0, r0, w, h] = this.maskBox;
+    const far = (w >= MASK_MAX || h >= MASK_MAX) && (rc - c0 < MASK_MAX / 4 || c0 + w - rc < MASK_MAX / 4 || rr - r0 < MASK_MAX / 4 || r0 + h - rr < MASK_MAX / 4);
+    if (this.maskDirty || far) this.writeMask(f, cam.cx, cam.cy);
+    const u = this.crawlUniforms.uniforms;
+    const l = this.uniforms.uniforms;
+    for (const k of ['uRect', 'uHalf', 'uCam', 'uMap'] as const) (u[k] as Float32Array).set(l[k] as Float32Array);
+    u.uFpp = fpp;
+    u.uFlat = f.flat ? 1 : 0;
+    u.uS = f.s;
+    u.uAlpha = 1;
+    u.uMode = this.crawlMode;
+    u.uBand = Math.min(f.s * 0.35, Math.max(BAND_PX * fpp, f.s * BAND_PART));
+    const [q, r] = hexAxial(f, rc, rr);
+    (u.uRef as Float32Array).set(f.flat ? [r, q] : [q, r]);
+    (u.uMaskBox as Float32Array).set(this.maskBox);
+    (u.uWorld as Float32Array).set([hx, hy]);
   }
 
   private drawNumbers(cam: Camera, f: HexFrame, g: Hex, across: number, m: number) {
@@ -166,7 +319,49 @@ export class HexLayer {
   destroy() {
     this.mesh.geometry.destroy();
     this.mesh.shader?.destroy();
+    this.crawlMesh.shader?.destroy();
+    this.mask.destroy();
+    this.wash.destroy();
     this.container.destroy({ children: true });
     this.pool.length = 0;
+  }
+}
+
+// The wash's colours: the terrain shader's biome palette (`terrain.frag` PALETTE), water, paper.
+const WATER: [number, number, number] = [0.62, 0.73, 0.77];
+const PAPER: [number, number, number] = [0.93, 0.9, 0.82];
+const PALETTE: [number, number, number][] = [
+  [0.54, 0.63, 0.66], [0.62, 0.72, 0.74], [0.95, 0.95, 0.93], [0.8, 0.79, 0.7], [0.74, 0.71, 0.64], [0.64, 0.69, 0.57], [0.68, 0.74, 0.54],
+  [0.58, 0.68, 0.52], [0.82, 0.82, 0.63], [0.85, 0.81, 0.64], [0.84, 0.79, 0.66], [0.91, 0.83, 0.63], [0.86, 0.81, 0.59], [0.52, 0.65, 0.45],
+  [0.66, 0.71, 0.6], [0.53, 0.48, 0.45], [0.93, 0.91, 0.86], [0.6, 0.57, 0.58], [0.6, 0.56, 0.51],
+];
+
+/** A box blur of radius `r` across and then down an `n` × `n` RGB field, in place. */
+function blur(a: Float32Array, n: number, r: number) {
+  const row = new Float32Array(n * 3);
+  for (const across of [true, false]) {
+    for (let line = 0; line < n; line++) {
+      const at = (k: number) => (across ? line * n + k : k * n + line) * 3;
+      for (let k = 0; k < n; k++) {
+        let [sr, sg, sb, c] = [0, 0, 0, 0];
+        for (let d = -r; d <= r; d++) {
+          const kk = Math.min(n - 1, Math.max(0, k + d));
+          const o = at(kk);
+          sr += a[o];
+          sg += a[o + 1];
+          sb += a[o + 2];
+          c++;
+        }
+        row[k * 3] = sr / c;
+        row[k * 3 + 1] = sg / c;
+        row[k * 3 + 2] = sb / c;
+      }
+      for (let k = 0; k < n; k++) {
+        const o = at(k);
+        a[o] = row[k * 3];
+        a[o + 1] = row[k * 3 + 1];
+        a[o + 2] = row[k * 3 + 2];
+      }
+    }
   }
 }

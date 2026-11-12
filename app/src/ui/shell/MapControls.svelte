@@ -133,7 +133,7 @@
                   <input class="ws-input" type="number" min={-hg.size_mi} max={hg.size_mi} step="0.1" value={hg.oy_mi} onchange={(e) => commit({ oy_mi: num(e.currentTarget, hg.oy_mi, -hg.size_mi, hg.size_mi) })} />
                 </label>
               </div>
-              <span class="ws-muted">Numbers show once hexes are big enough on screen. The grid is saved with the world.</span>
+              <span class="ws-muted">Numbers show once hexes are big enough on screen. The grid is saved with the world; changing it keeps the hexes explored in play by number.</span>
               <button class="ws-btn quiet" disabled={!hexes.set} onclick={() => onHexGrid(null)}>Back to the default grid</button>
             </div>
           </details>

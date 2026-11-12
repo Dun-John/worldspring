@@ -235,6 +235,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['M', 'measure', 'Measure'],
     ['S', 'shape', 'Shapes'],
     ['F', 'fog', 'Fog of war'],
+    ['H', 'hex', 'Explore hexes'],
   ];
   for (const [key, t, label] of tools) out.push({ keys: [key], label, group: 'Play', when: playing, run: () => k.playTool(t) });
   out.push({ keys: ['Delete', 'Backspace'], label: 'Remove the selected tokens', group: 'Play', when: () => playing() && k.tokensSelected(), run: () => k.removeTokens() });

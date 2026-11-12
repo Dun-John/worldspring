@@ -88,6 +88,11 @@ export interface GridSettings {
   measure: Measure;
 }
 
+/** What the players' window shows of the overland hex grid (`Edits.hexes`): nothing, its lines,
+ * or its lines with every hex not yet explored washed over (a hex crawl). */
+export type HexMode = 'off' | 'grid' | 'crawl';
+export const HEX_MODES: HexMode[] = ['off', 'grid', 'crawl'];
+
 /** Fog chunks are 128 x 128 squares (a battlemap chunk on the surface). */
 export const FOG_N = 128;
 
@@ -106,6 +111,12 @@ export interface PlayState {
   /** Line of sight: players see what their characters can see. */
   los: boolean;
   grid: GridSettings;
+  /** The overland hexes in the players' window. */
+  hexMode: HexMode;
+  /** A PC entering a hex reveals the six round it too. */
+  hexRing: boolean;
+  /** The hexes the players have explored (`hexKey`: "col,row", global to the grid). */
+  hexSeen: string[];
   /** When the DM last changed it (ms since 1970; missing: not since this was kept). */
   changed?: number;
   /** Carried over from another world's session when the world was remade: that world's hash,
@@ -119,7 +130,7 @@ export interface PlayState {
 export const DEFAULT_GRID: GridSettings = { scale: 5, unit: 'ft', measure: 'chebyshev' };
 
 export function emptyState(): PlayState {
-  return { tokens: {}, shapes: {}, fog: {}, doors: {}, locs: {}, los: false, grid: { ...DEFAULT_GRID } };
+  return { tokens: {}, shapes: {}, fog: {}, doors: {}, locs: {}, los: false, grid: { ...DEFAULT_GRID }, hexMode: 'off', hexRing: false, hexSeen: [] };
 }
 
 /** Whether a session holds anything: tokens, shapes, fog, doors, settings, line of sight, or a
@@ -127,7 +138,7 @@ export function emptyState(): PlayState {
 export function hasSession(s: PlayState): boolean {
   const g = s.grid;
   const grid = g.scale !== DEFAULT_GRID.scale || g.unit !== DEFAULT_GRID.unit || g.measure !== DEFAULT_GRID.measure;
-  return grid || s.los || [s.tokens, s.shapes, s.fog, s.doors, s.locs].some((r) => Object.keys(r).length > 0);
+  return grid || s.los || s.hexMode !== 'off' || s.hexRing || s.hexSeen.length > 0 || [s.tokens, s.shapes, s.fog, s.doors, s.locs].some((r) => Object.keys(r).length > 0);
 }
 
 /** A location's key: the surface, or a level of a building or site. */
@@ -166,6 +177,9 @@ export type Op =
   | { t: 'loc'; loc: string; settings: LocSettings }
   | { t: 'settings'; los: boolean }
   | { t: 'grid'; grid: GridSettings }
+  /** Hexes explored or hidden again (one paint stroke, or a PC's move). */
+  | { t: 'hexes'; reveal: string[]; hide: string[] }
+  | { t: 'hexset'; mode?: HexMode; ring?: boolean }
   | { t: 'reset' };
 
 /**
@@ -207,6 +221,17 @@ export function apply(s: PlayState, op: Op): string[] {
       return [];
     case 'grid':
       s.grid = op.grid;
+      return [];
+    case 'hexes': {
+      const seen = new Set(s.hexSeen);
+      for (const k of op.hide) seen.delete(k);
+      for (const k of op.reveal) seen.add(k);
+      s.hexSeen = [...seen];
+      return [];
+    }
+    case 'hexset':
+      if (op.mode && HEX_MODES.includes(op.mode)) s.hexMode = op.mode;
+      if (op.ring !== undefined) s.hexRing = !!op.ring;
       return [];
     case 'reset': {
       const keys = Object.entries(s.fog).flatMap(([loc, chunks]) => Object.keys(chunks).map((k) => `${loc}|${k}`));
@@ -250,6 +275,9 @@ export function normalize(raw: unknown): PlayState {
   const g = r.grid;
   if (g && g.scale > 0) s.grid = { scale: g.scale, unit: String(g.unit ?? ''), measure: g.measure ?? 'chebyshev' };
   else if ((r as { diagonal?: string }).diagonal === '5-10') s.grid.measure = 'alternating';
+  if (HEX_MODES.includes(r.hexMode as HexMode)) s.hexMode = r.hexMode as HexMode;
+  s.hexRing = !!r.hexRing;
+  if (Array.isArray(r.hexSeen)) s.hexSeen = r.hexSeen.filter((k): k is string => typeof k === 'string');
   if (typeof r.changed === 'number') s.changed = r.changed;
   if (r.came && typeof r.came.from === 'string') s.came = { from: r.came.from, changed: Number(r.came.changed) || 0 };
   return s;

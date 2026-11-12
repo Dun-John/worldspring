@@ -73,6 +73,11 @@ function fromAxial(f: HexFrame, q: number, r: number): [number, number] {
   return f.flat ? [q, r + (q - (q & 1)) / 2] : [q + (r - (r & 1)) / 2, r];
 }
 
+/** A hex's axial coordinates (q, r) from its column and row (from 1). */
+export function hexAxial(f: HexFrame, col: number, row: number): [number, number] {
+  return toAxial(f, col - 1, row - 1);
+}
+
 /** The hex (column, row from 1) holding the world point (x, y) ft. */
 export function hexAt(f: HexFrame, x: number, y: number): [number, number] {
   const px = x - f.x0;
