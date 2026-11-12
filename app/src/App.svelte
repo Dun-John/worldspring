@@ -4,6 +4,7 @@
   import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
+  import { underlay } from './editor/trace/underlay.svelte';
   import { MI, PIN_KINDS, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
@@ -252,13 +253,19 @@
     if (!e.dataTransfer?.types.includes('Files')) return;
     // (Never let the browser open the file instead of the page.)
     e.preventDefault();
-    e.dataTransfer.dropEffect = playOn ? 'copy' : 'none';
+    e.dataTransfer.dropEffect = playOn || sketchOn ? 'copy' : 'none';
   }
   function mapDrop(e: DragEvent) {
     if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
-    if (!playOn) return;
     const files = [...e.dataTransfer.files];
+    // The sketch tab takes a picture to trace from (kept for the session only).
+    if (sketchOn && !playOn) {
+      const f = files.find((f) => f.type.startsWith('image/'));
+      if (f) void underlay.load(f);
+      return;
+    }
+    if (!playOn) return;
     if (!files.some((f) => f.type.startsWith('image/'))) return;
     const r = container.getBoundingClientRect();
     void play.dropImages(files, ...view.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top));
@@ -1156,6 +1163,7 @@
     const [ow, oh] = sketchSize;
     sketchSize = [w, h];
     view.sketchLayer?.setMapSize(w * 5280, h * 5280);
+    underlay.setMap(w * 5280, h * 5280);
     // The view stretches with the drawing (it stays where it was on screen); a bigger map
     // can be zoomed out to as a whole.
     const [sx, sy] = [w / ow, h / oh];
@@ -1181,6 +1189,8 @@
     sketchSize = mapSize(world.params);
     const layer = view.enterSketch(sketcher);
     if (!layer) return;
+    underlay.setMap(sketchSize[0] * 5280, sketchSize[1] * 5280);
+    underlay.adjust = false;
     layer.showPreview = showPreview;
     sketcher.onDraw = () => layer.invalidate();
     sketcher.onChange = () => {
@@ -4265,6 +4275,7 @@
       () => !!buildArmed?.cross.reset(),
       () => (crossEditing ? ((crossEditing = null), true) : false),
       () => !!townTool?.reset(),
+      () => (sketchOn && underlay.adjust ? ((underlay.adjust = false), true) : false),
       () => (townMerging ? ((townMerging = false), true) : false),
       () => (townOn && (townPatch !== null || townCorner !== null) ? ((townPatch = null), (townCorner = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),

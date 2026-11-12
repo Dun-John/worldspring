@@ -5,6 +5,7 @@
   import { PAINT_BIOMES } from '../world/world';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
+  import { underlay } from './trace/underlay.svelte';
   import { PIN_KINDS, type EditTool, type PinTier, type Sketcher, type ToolSettings } from './sketcher';
 
   interface Props {
@@ -33,6 +34,14 @@
   const points = $derived((void version, sketcher.strokes.reduce((n, s) => n + s.pts.length, 0)));
   const canUndo = $derived((void version, sketcher.canUndo));
   let clearing = $state(false);
+  const MI = 5280;
+  async function pickImage(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const f = input.files?.[0];
+    input.value = '';
+    if (f) await underlay.load(f);
+  }
+  const mi = (ft: number) => Math.round((ft / MI) * 100) / 100;
 
   const TOOLS: [EditTool, IconName, string, string, string][] = [
     ['coast', 'coast', 'Coastline', 'C', 'Draw round a landmass: it becomes land, and undrawn map is sea.'],
@@ -299,6 +308,34 @@
     {/if}
   {/if}
 
+  {#if !peek}
+    <details class="ws-group trace" open={!!underlay.image}>
+      <summary>Trace image</summary>
+      <div class="ws-group-body">
+        <div class="ws-row">
+          <label class="ws-btn grow filebtn">{underlay.image ? 'Replace…' : 'Choose a picture…'}<input type="file" accept="image/*" hidden onchange={pickImage} /></label>
+          {#if underlay.image}<button class="ws-btn" onclick={() => underlay.remove()}>Remove</button>{/if}
+        </div>
+        {#if !underlay.image}
+          <div class="ws-muted">Or drop a picture on the map. It lies under the sketch to trace from, for this session only: it is never saved or shared.</div>
+        {:else}
+          <label class="slider"><span>Opacity</span><output>{Math.round(underlay.opacity * 100)}%</output><input type="range" min="0.05" max="1" step="0.05" bind:value={underlay.opacity} /></label>
+          <div class="ws-row">
+            <button class="ws-btn" onclick={() => underlay.fit()}>Fit to map</button>
+            <button class="ws-btn" aria-pressed={underlay.adjust} class:primary={underlay.adjust} onclick={() => (underlay.adjust = !underlay.adjust)} title="Drag the picture to move it; a corner to scale; the round handle to turn (Esc leaves)">Adjust</button>
+            <button class="ws-icon-btn" aria-pressed={underlay.shown} onclick={() => (underlay.shown = !underlay.shown)} title={underlay.shown ? 'Hide the picture' : 'Show the picture'} aria-label="Show the picture"><Icon name={underlay.shown ? 'eye' : 'eye-off'} /></button>
+          </div>
+          <div class="nums">
+            <label class="ws-field">Centre east (mi)<input class="ws-input" type="number" step="0.5" value={mi(underlay.xf.cx)} onchange={(e) => (underlay.xf.cx = e.currentTarget.valueAsNumber * MI || 0)} /></label>
+            <label class="ws-field">Centre south (mi)<input class="ws-input" type="number" step="0.5" value={mi(underlay.xf.cy)} onchange={(e) => (underlay.xf.cy = e.currentTarget.valueAsNumber * MI || 0)} /></label>
+            <label class="ws-field">Across (mi)<input class="ws-input" type="number" step="1" min="0.01" value={mi(underlay.widthMi * MI)} onchange={(e) => (underlay.widthMi = e.currentTarget.valueAsNumber)} /></label>
+            <label class="ws-field">Turn (°)<input class="ws-input" type="number" step="1" value={Math.round(underlay.xf.rot * 10) / 10} onchange={(e) => (underlay.xf.rot = e.currentTarget.valueAsNumber || 0)} /></label>
+          </div>
+        {/if}
+      </div>
+    </details>
+  {/if}
+
   <div class="foot">
     {#if !peek}<button class="ws-btn" onclick={onStop} title="Leave sketch mode (new strokes are asked about first)">Stop sketching</button>{/if}
     <button class="ws-btn primary grow" onclick={onGenerate} disabled={busy}>Generate from sketch</button>
@@ -372,6 +409,21 @@
     align-items: center;
     gap: 8px;
     cursor: pointer;
+  }
+  .nums {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .nums :global(.ws-field),
+  .nums :global(.ws-input) {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .filebtn {
+    cursor: pointer;
+    text-align: center;
   }
   .note {
     margin-top: -4px;

@@ -16,6 +16,7 @@ import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { HexLayer, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
+import { underlay } from '../editor/trace/underlay.svelte';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
@@ -204,6 +205,8 @@ export class MapView {
   private sketcher: Sketcher | null = null;
   /** The pointer drawing a stroke. */
   private sketching: number | null = null;
+  /** The pointer dragging the trace picture (Adjust). */
+  private adjusting: number | null = null;
   /** Tiles and chunks asked for in the last frame. */
   private lastWants = 0;
   /** Frames drawn so far. */
@@ -1531,6 +1534,8 @@ export class MapView {
     this.sketcher?.cancel();
     this.sketcher = null;
     this.sketching = null;
+    this.adjusting = null;
+    underlay.adjustUp();
     this.sketchLayer?.destroy();
     this.sketchLayer = null;
   }
@@ -1872,7 +1877,18 @@ export class MapView {
           return;
         }
       }
-      if (this.sketcher) {
+      if (this.sketcher && underlay.adjust && underlay.visible) {
+        // Adjusting the trace picture: a drag on it moves it; the pen doesn't draw (elsewhere pans).
+        if (e.button === 0 && this.pointers.size === 0 && this.adjusting === null) {
+          const r = c.getBoundingClientRect();
+          const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+          if (underlay.adjustDown(x, y, this.cam.ppf)) {
+            this.adjusting = e.pointerId;
+            this.vel.x = this.vel.y = 0;
+            return;
+          }
+        }
+      } else if (this.sketcher) {
         if (e.button === 0 && this.pointers.size === 0 && this.sketching === null) {
           const r = c.getBoundingClientRect();
           const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
@@ -1903,6 +1919,11 @@ export class MapView {
     c.addEventListener('pointermove', (e) => {
       const r = c.getBoundingClientRect();
       this.cursor = { sx: e.clientX - r.left, sy: e.clientY - r.top };
+      if (e.pointerId === this.adjusting) {
+        const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+        underlay.adjustMove(x, y);
+        return;
+      }
       if (e.pointerId === this.sketching && this.sketcher) {
         const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
         this.sketcher.move(x, y);
@@ -1946,6 +1967,11 @@ export class MapView {
         const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
         if (e.type === 'pointerup') this.tool?.up(x, y, e);
         else this.tool?.cancel();
+        return;
+      }
+      if (e.pointerId === this.adjusting) {
+        this.adjusting = null;
+        underlay.adjustUp();
         return;
       }
       if (e.pointerId === this.sketching) {
