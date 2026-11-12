@@ -104,6 +104,7 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `create_npc`, `update_npc`, `delete_npc` | NPCs (`delete_npc` takes `id` or `ids`): name, appearance, mannerisms, attitude toward the players (stance and why), goals, DM notes, tags, status, portrait; a place as `location`, a point or `at`. |
 | `place_npc` | Put an NPC at a place (a building puts them inside, on a level, shown to the DM), at a point, or nowhere. |
 | `list_plots`, `get_plot`, `create_plot`, `update_plot`, `delete_plot` | Plot points tied to places and NPCs, with a status (idea, active, resolved); lists take `limit` (100 by default). |
+| `add_note_at`, `move_note`, `delete_note`, `list_notes` | Notes on rooms and points inside a building, dungeon or sewer level (`m:<site>:<level>:<id>`): put at `[x, y]` grid squares or at a room's centre, move, delete (any note id), list by tag, site, level, kind or text. `get_feature`, `annotate_feature` and `update_feature` take `r:` and `m:` ids. |
 | `list_sprites` | The object kinds for battlemaps: built-in (trees, rocks, props, hazards) and uploaded, in one `{items, found}` list (`limit` 200 by default), with their rules. |
 | `list_objects` | Every object put down by hand (`o:`) and every clear (`x:`), world-wide (`{items, found}`, `limit` 200 by default); filter by `within`, `kinds`, `which`. |
 | `upload_sprite` | A picture (base64, or a file on this machine) as a new kind of object, with its size and rules (cover, blocks movement or sight, difficult, height). |

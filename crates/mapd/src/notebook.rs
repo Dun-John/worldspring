@@ -44,6 +44,15 @@ fn plot_props() -> Value {
     })
 }
 
+fn note_spot() -> Value {
+    json!({
+        "site": { "type": "string", "description": "A building, dungeon or sewer section id" },
+        "level": { "type": "integer", "minimum": 0, "description": "0 is the lowest level" },
+        "at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] in the level's grid squares" },
+        "room": { "type": "string", "description": "An r: id, for its centre" },
+    })
+}
+
 fn with(a: Value, b: Value) -> Value {
     let mut a = a;
     if let (Some(m), Value::Object(n)) = (a.as_object_mut(), b) {
@@ -67,6 +76,10 @@ pub fn list() -> Vec<Value> {
         json!({ "name": "get_plot", "title": "Plot point", "description": "A plot point in full.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
         json!({ "name": "create_plot", "title": "Create a plot point", "description": "Add a plot point tied to places and NPCs. Returns it with its id.", "inputSchema": schema(plot_props(), &["title"]) }),
         json!({ "name": "update_plot", "title": "Update a plot point", "description": "Change a plot point's fields (only those given; lists are replaced).", "inputSchema": schema(with(id.clone(), plot_props()), &["id"]) }),
+        json!({ "name": "add_note_at", "title": "Add a note in a room", "description": "Put a note at a point inside a building, dungeon or sewer level: site, level and at [x, y] in grid squares, or room (an r: id: its centre). Returns the note with its m: id.", "inputSchema": schema(with(note_spot(), json!({ "text": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } })), &["text"]) }),
+        json!({ "name": "move_note", "title": "Move a point note", "description": "Move an m: note to at [x, y] or room (an r: id on the same level).", "inputSchema": schema(with(json!({ "id": { "type": "string" } }), json!({ "at": note_spot()["at"], "room": note_spot()["room"] })), &["id"]) }),
+        json!({ "name": "delete_note", "title": "Delete a note", "description": "Delete the note on a place, room (r:) or point (m:).", "inputSchema": schema(id.clone(), &["id"]) }),
+        json!({ "name": "list_notes", "title": "Notes", "description": "Notes on places, rooms and points, {items, found} (limit, default 100): id, kind, place path, text, tags, at. Filter by tag, site (also what is in it), level, kind or text.", "inputSchema": schema(json!({ "query": { "type": "string" }, "tag": { "type": "string" }, "site": { "type": "string" }, "level": { "type": "integer", "minimum": 0 }, "kind": { "type": "string", "enum": ["place", "room", "point"] }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
         json!({ "name": "delete_plot", "title": "Delete a plot point", "description": "Delete a plot point, or several (id or ids; all or none).", "inputSchema": schema(ids, &[]) }),
     ]
 }
@@ -231,6 +244,9 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
                 .await
                 .map(text),
         },
+        "add_note_at" | "move_note" => write_point(app, name, a).await.map(text),
+        "delete_note" => delete_note(app, a).await.map(text),
+        "list_notes" => list_notes(app, a.clone()).await.map(text),
         "create_plot" | "update_plot" => write_plot(app, name, a).await.map(text),
         "delete_plot" => match crate::args::ids(a) {
             Err(e) => Err(e),
@@ -370,4 +386,151 @@ async fn write_plot(app: &Shared, tool: &str, a: &Value) -> Result<Value, String
         v["note"] = json!("a plot point with this title was already here: its id is returned and nothing was added (give another title for a second one)");
     }
     Ok(v)
+}
+
+/// Where `a` puts a point note: its site, level and grid point (rounded to 0.01), checked against
+/// the level (inside its grid; the second is whether the point is on a room's floor or outside
+/// the rooms). `room` (an `r:` id) is its centre; `fixed` is a site and level the note already has.
+fn spot(w: &worldgen::world::World, t0: &worldgen::t0::T0, a: &Value, fixed: Option<(&str, usize)>) -> Result<(String, usize, [f64; 2], bool), String> {
+    let (mut site, mut li) = (a["site"].as_str().map(str::to_string), a["level"].as_u64().map(|l| l as usize));
+    let mut at = None;
+    if let Some(r) = a["room"].as_str() {
+        if !a["at"].is_null() {
+            return Err("at and room: give one".into());
+        }
+        let (s, l, ri) = agent::split_room_id(r).and_then(|(s, l, ri)| Some((s, l, ri?))).ok_or_else(|| format!("room: an r: id (r:<site>:<level>:<room>), got {r}"))?;
+        if site.as_deref().is_some_and(|x| x != s) || li.is_some_and(|x| x != l) {
+            return Err(format!("room {r} is on level {l} of {s}, not the site and level given"));
+        }
+        let it = worldgen::interior::generate_id(w, t0, s).ok_or_else(|| format!("no such room: {r}"))?;
+        let lv = it.levels.get(l).ok_or_else(|| format!("no such room: {r}"))?;
+        let c = lv.rooms.get(ri).ok_or_else(|| format!("no such room: {r}"))?.center;
+        let c = [c[0] as f64, c[1] as f64];
+        // The centre itself when it lies in the room; else the room's square nearest to it.
+        let mut best = c;
+        if agent::room_at(&it, l, c) != Some(ri) {
+            let d = |p: &[f64; 2]| (p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]);
+            best = (0..it.nx * it.ny).filter(|&k| lv.cells[k] == ri as i16).map(|k| [(k % it.nx) as f64 + 0.5, (k / it.nx) as f64 + 0.5]).min_by(|a, b| d(a).total_cmp(&d(b))).unwrap_or(c);
+        }
+        (site, li, at) = (Some(s.to_string()), Some(l), Some(best));
+    } else if let Some(p) = a["at"].as_array() {
+        match p.iter().map(Value::as_f64).collect::<Vec<_>>().as_slice() {
+            [Some(x), Some(y)] if x.is_finite() && y.is_finite() => at = Some([*x, *y]),
+            _ => return Err("at: [x, y] in grid squares".into()),
+        }
+    }
+    if let Some((s, l)) = fixed {
+        if site.as_deref().is_some_and(|x| x != s) || li.is_some_and(|x| x != l) {
+            return Err(format!("a note stays on its level ({s}, level {l}): delete it and add one there"));
+        }
+        (site, li) = (Some(s.to_string()), Some(l));
+    }
+    let (Some(site), Some(li)) = (site, li) else { return Err("give site and level, or a room".into()) };
+    let Some(at) = at else { return Err("give at [x, y], or a room".into()) };
+    let Some(it) = worldgen::interior::generate_id(w, t0, &site) else {
+        return Err(if agent::position(w, t0, &site).is_some() {
+            format!("{site} has no inside: point notes go in a building, dungeon or sewer level (annotate_feature puts a note on a place on the map)")
+        } else {
+            crate::args::no_such(w, t0, &site)
+        });
+    };
+    if li >= it.levels.len() {
+        return Err(format!("level: 0 to {}, got {li} ({site} has {} levels)", it.levels.len() - 1, it.levels.len()));
+    }
+    if !(0.0..it.nx as f64).contains(&at[0]) || !(0.0..it.ny as f64).contains(&at[1]) {
+        return Err(format!("at: x 0 to {}, y 0 to {} (grid squares of this level), got [{}, {}]", it.nx, it.ny, at[0], at[1]));
+    }
+    let at = [(at[0] * 100.0).round() / 100.0, (at[1] * 100.0).round() / 100.0];
+    Ok((site, li, at, agent::room_at(&it, li, at).is_some()))
+}
+
+pub(crate) async fn write_point(app: &Shared, tool: &str, a: &Value) -> Result<Value, String> {
+    let (tool, a) = (tool.to_string(), a.clone());
+    let add = tool == "add_note_at";
+    let given = if add { None } else { Some(arg_str(&a, "id")?) };
+    if let Some(id) = &given
+        && agent::split_point_id(id).is_none()
+    {
+        return Err(format!("{id}: not a point note (m: id); a place's or room's note has no point to move"));
+    }
+    let (a2, g2) = (a.clone(), given.clone());
+    let (id, site_li, on_room) = app
+        .worker
+        .with(move |ex| {
+            let (w, t0) = (&ex.world, &ex.t0);
+            let fixed = match &g2 {
+                Some(id) => {
+                    w.file.edits.notes.get(id).ok_or_else(|| format!("no such note: {id}"))?;
+                    agent::split_point_id(id).map(|(s, l, _)| (s, l))
+                }
+                None => None,
+            };
+            let (site, li, at, on_room) = spot(w, t0, &a2, fixed)?;
+            let id = g2.unwrap_or_else(|| format!("m:{site}:{li}:{}", new_id("").trim_start_matches(':')));
+            Ok((id, (site, li, at), on_room))
+        })
+        .await?;
+    let (site, li, at) = site_li;
+    if add && a["text"].as_str().is_none_or(|t| t.trim().is_empty()) {
+        return Err("text: the note's text (not empty)".into());
+    }
+    let (id2, tags, text) = (id.clone(), strs(&a["tags"]).unwrap_or_default(), a["text"].as_str().map(str::to_string));
+    app.edit("agent", 0, move |e| {
+        if add {
+            e.notes.insert(id2.clone(), worldgen::world::Note { text: text.unwrap_or_default(), tags, at: Some(at) });
+        } else {
+            e.notes.get_mut(&id2).ok_or_else(|| format!("no such note: {id2}"))?.at = Some(at);
+        }
+        Ok(json!({ "tool": tool, "id": id2 }))
+    })
+    .await?;
+    let id2 = id.clone();
+    let mut v = app
+        .worker
+        .with(move |ex| {
+            let n = ex.world.file.edits.notes.get(&id2).ok_or("saved, but it could not be read back")?;
+            agent::note_row(&ex.world, &ex.t0, &id2, n).ok_or_else(|| "saved, but it could not be read back".to_string())
+        })
+        .await?;
+    v["site"] = json!(site);
+    v["level"] = json!(li);
+    v["on"] = json!(if on_room { "a room's floor" } else { "outside the rooms (inside the level's grid)" });
+    Ok(v)
+}
+
+async fn delete_note(app: &Shared, a: &Value) -> Result<Value, String> {
+    let id = arg_str(a, "id")?;
+    let id2 = id.clone();
+    let name = app.worker.with(move |ex| Ok(agent::name_any(&ex.world, &ex.t0, &id2))).await?;
+    app.edit("agent", 0, move |e| {
+        let n = e.notes.remove(&id).ok_or_else(|| format!("no note on {id}"))?;
+        Ok(json!({ "tool": "delete_note", "id": id, "name": name, "text": n.text, "tags": n.tags }))
+    })
+    .await
+}
+
+async fn list_notes(app: &Shared, a: Value) -> Result<Value, String> {
+    app.worker
+        .with(move |ex| {
+            let (w, t0) = (&ex.world, &ex.t0);
+            let q = a["query"].as_str().unwrap_or("").trim().to_lowercase();
+            let tag = a["tag"].as_str();
+            let (kind, level) = (a["kind"].as_str(), a["level"].as_u64().map(|l| l as usize));
+            let site = a["site"].as_str();
+            let at = site.map(|s| agent::at_place(w, t0, s));
+            let v: Vec<Value> = w
+                .file
+                .edits
+                .notes
+                .iter()
+                .filter(|(_, n)| tag.is_none_or(|t| n.tags.iter().any(|x| x.eq_ignore_ascii_case(t))))
+                .filter(|(_, n)| q.is_empty() || n.text.to_lowercase().contains(&q))
+                .filter(|(k, _)| at.as_ref().is_none_or(|f| f(k)))
+                .filter(|(k, _)| level.is_none_or(|l| agent::site_level(k).is_some_and(|s| s.1 == l)))
+                .filter_map(|(k, n)| agent::note_row(w, t0, k, n))
+                .filter(|r| kind.is_none_or(|x| r["kind"] == x))
+                .collect();
+            Ok(listed(json!(v), crate::tools::limit_of(&a, 100), json!({})))
+        })
+        .await
 }

@@ -1745,6 +1745,33 @@ pub fn room_at(it: &crate::interior::Interior, li: usize, at: [f64; 2]) -> Optio
     usize::try_from(*lv.cells.get(y as usize * it.nx + x as usize)?).ok()
 }
 
+/// A note as `list_notes` shows it: id, kind (place, room or point), its place path (site, level
+/// and room names joined by " › "), the room id a point lies in, text, tags and a point's spot.
+pub fn note_row(world: &World, t0: &T0, id: &str, n: &crate::world::Note) -> Option<Value> {
+    let name = |i: &str| name_any(world, t0, i);
+    let level_path = |site: &str, li: usize| vec![name(site).unwrap_or_else(|| site.to_string()), name(&format!("l:{site}:{li}")).unwrap_or_else(|| format!("level {li}"))];
+    let (kind, place, room) = if let Some((site, li, _)) = split_point_id(id) {
+        let it = crate::interior::generate_id(world, t0, site)?;
+        let ri = n.at.and_then(|at| room_at(&it, li, at)).map(|ri| format!("r:{site}:{li}:{ri}"));
+        let mut path = level_path(site, li);
+        path.extend(ri.as_ref().and_then(|r| name(r)));
+        ("point", path.join(" › "), ri)
+    } else if let Some((site, li, ri)) = split_room_id(id) {
+        let mut path = level_path(site, li);
+        if ri.is_some() {
+            path.extend(name(id));
+        }
+        (if ri.is_some() { "room" } else { "place" }, path.join(" › "), None)
+    } else {
+        ("place", name(id).unwrap_or_else(|| id.to_string()), None)
+    };
+    let mut v = json!({ "id": id, "kind": kind, "place": place, "text": n.text, "tags": n.tags, "room": room });
+    if let Some(at) = n.at {
+        v["at"] = json!(at);
+    }
+    Some(v)
+}
+
 /// NPC and plot ids (which are not places themselves).
 pub fn is_authored(id: &str) -> bool {
     id.starts_with("n:") || id.starts_with("p:")
@@ -2484,6 +2511,20 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["interior"] = interior_summary(world, &it);
         if let Some(&li) = nums.first().filter(|&&li| li < town::layout_count(t0)) {
             set_whereabouts(world, t0, &mut v, li);
+        }
+    } else if let Some((site, li, own)) = split_point_id(id) {
+        // A point note: its place path, the room it lies in and its spot.
+        v["kind"] = json!("note");
+        v["name"] = json!(name_any(world, t0, id));
+        v["site"] = json!(site);
+        v["level"] = json!(li);
+        v["point"] = json!(own);
+        if let Some(n) = world.file.edits.notes.get(id) {
+            v["at"] = json!(n.at);
+            if let Some(row) = note_row(world, t0, id, n) {
+                v["place"] = row["place"].clone();
+                v["room"] = row["room"].clone();
+            }
         }
     } else if let Some((site, ..)) = split_room_id(id) {
         v["kind"] = json!(if head == "l" { "level" } else { "room" });

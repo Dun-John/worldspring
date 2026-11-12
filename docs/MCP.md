@@ -1229,6 +1229,38 @@ Safe to repeat: a plot point with the same title (case and surrounding spaces ig
 ### `delete_plot`
 `id` or `ids` (all or none).
 
+### `add_note_at`
+A note at a point inside a building, dungeon or sewer level (the DM sees it as a marker in the room; the players never do).
+| Parameter | Type | | |
+|---|---|---|---|
+| `site` | string | with `level` and `at` | The building, dungeon or sewer section id (`b:`, `u:`, `k:`, `t:`, `w:`). A place on the surface is refused: use `annotate_feature`. |
+| `level` | integer | with `site` | 0 is the lowest level. |
+| `at` | [x, y] | or `room` | Grid squares of that level (decimals kept to 0.01). Must lie inside the level's grid; a point outside the rooms is kept and the reply's `on` says so. |
+| `room` | string | or `at` | An `r:` id: the note goes at its centre (`site` and `level`, if also given, must agree). |
+| `text` | string | required | The note. |
+| `tags` | array | optional | |
+
+Returns the note: `id` (`m:<site>:<level>:<own id>`), `kind` "point", `place` (site › level › room names), `room` (the `r:` id it lies in, or null), `text`, `tags`, `at`, `site`, `level`, `on`.
+
+### `move_note`
+`id` (an `m:` id) and `at` or `room`, as `add_note_at`. A note stays on its level: to put it on another, delete it and add one there. `update_feature` with `at` on an `m:` id does the same. Returns the note.
+
+### `delete_note`
+`id`: the note on a place, a room (`r:`) or a point (`m:`). Returns the text it had.
+
+### `list_notes`
+| Parameter | Type | | |
+|---|---|---|---|
+| `query` | string | optional | Matches the text. |
+| `tag` | string | optional | |
+| `site` | string | optional | A place id; also what is in it (a settlement: its buildings, sites, levels, rooms, points). |
+| `level` | integer | optional | Level of a room or point note. |
+| `kind` | string | optional | `place`, `room` or `point`. |
+| `limit` | integer | 100 | 1 to 1000 (`truncated: true` when it cut the list). |
+
+Returns `{items, found}`: each has `id`, `kind`, `place` (path of names), `room` (points), `text`, `tags`, and `at` (points).
+`get_feature` also takes `r:` and `m:` ids (an `m:` gives its site, level, room, spot and note); `annotate_feature` and `update_feature` add to or change the note on an `r:` room or an existing `m:` point.
+
 ---
 
 ## Battlemap objects: scatter and sprites

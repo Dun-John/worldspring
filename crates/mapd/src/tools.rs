@@ -69,7 +69,7 @@ pub fn list() -> Value {
             "in_building": { "type": "string", "description": "Entrance in its cellar" },
             "way": { "type": "string", "enum": ["stairs", "trapdoor"] },
         })), &["kind"]) },
-        { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "in_building": { "type": ["string", "null"], "description": "Entrance: into this building; null: out" }, "way": { "type": "string" }, "at": {} }), &["id"]) },
+        { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids. Works on r: rooms and m: point notes (at moves one).", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "in_building": { "type": ["string", "null"], "description": "Entrance: into this building; null: out" }, "way": { "type": "string" }, "at": {} }), &["id"]) },
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
         { "name": "delete_feature", "title": "Delete a created site", "description": "Delete created sites and buildings drawn by hand (id or ids, all or none). Notes, NPCs and plots pointing at them are kept (left_pointing). restore_feature undoes it. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
     ]);
@@ -111,17 +111,17 @@ pub fn list() -> Value {
 /// Tools that only read (or look): `readOnlyHint`.
 const READS: &[&str] = &[
     "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch",
+    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch",
 ];
 /// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
 const DESTRUCTIVE: &[&str] = &[
-    "delete_feature", "delete_npc", "delete_plot", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "reset_site_design", "set_site_design", "edit_town", "batch",
+    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "reset_site_design", "set_site_design", "edit_town", "batch",
 ];
 /// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
 /// `focus_view` and the creates that return what is already there.
 const IDEMPOTENT: &[&str] = &[
     "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_npc",
-    "update_npc", "place_npc", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
+    "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
 ];
 
 /// A tool's hints by name, one table for every tool (so a tool in any module gets them): reads say `readOnlyHint` and
@@ -589,14 +589,22 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         }
         "update_feature" => {
             let id = arg_str(&a, "id")?;
-            let moving = a.get("in_building").is_some() || !a["way"].is_null() || !a["at"].is_null();
-            if !moving && ["name", "notes", "tags"].iter().all(|k| a[k].is_null()) {
+            // A point note (m:) moves with `at`, as move_note.
+            let point = id.starts_with("m:") && !a["at"].is_null();
+            if point {
+                crate::notebook::write_point(app, "move_note", &json!({ "id": id, "at": a["at"] })).await?;
+            }
+            let moving = a.get("in_building").is_some() || !a["way"].is_null() || (!a["at"].is_null() && !point);
+            if !moving && !point && ["name", "notes", "tags"].iter().all(|k| a[k].is_null()) {
                 return Err(crate::args::bad("name, notes, tags", "give at least one", &json!({})));
             }
             known(app, &id).await?;
             let moved = if moving { Some(move_entrance(app, &a, &id).await?) } else { None };
             if let Some(m) = moved.as_ref().filter(|_| ["name", "notes", "tags"].iter().all(|k| a[k].is_null())) {
                 return Ok(text(m.clone()));
+            }
+            if point && ["name", "notes", "tags"].iter().all(|k| a[k].is_null()) {
+                return Ok(text(json!({ "tool": "update_feature", "id": id })));
             }
             let name = a["name"].as_str().map(|s| s.trim().to_string());
             let notes = a["notes"].as_str().map(str::to_string);
