@@ -5041,7 +5041,7 @@ fn fills(ctx: &mut Ctx, label: &str, r: &mut Report) {
     use town::clip::{self, Shape};
     use worldgen::core::hash::fnv64;
     const KINDS: [&str; 4] = ["corner cut, fronting", "corner cut, not fronting", "courtyard", "joined"];
-    r.counts(&["fills", "buildings", "variants not made", "buildings outside their region or over a hole", "buildings overlapping", "buildings with no front", "fills not the same twice", "fills not the same with rings rotated", "convex blocks' buildings (today's path)", "convex blocks' buildings with no front"]);
+    r.counts(&["fills", "buildings", "variants not made", "buildings outside their region or over a hole", "buildings overlapping", "buildings with no front", "fills not the same twice", "fills not the same with rings rotated", "convex blocks' buildings (as one region)", "convex blocks' buildings with no front"]);
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
     let dir = std::path::PathBuf::from(std::env::var("SVG_DIR").unwrap_or_else(|_| "target/towncheck-fills".into()));
     for li in 0..town::layout_count(t0) {
@@ -5100,7 +5100,7 @@ fn fills(ctx: &mut Ctx, label: &str, r: &mut Report) {
                     let (bt, a, n, lone) = convex(rr, *ward, seed ^ j as u64);
                     built += bt;
                     whole += a;
-                    r.tally("convex blocks' buildings (today's path)", n);
+                    r.tally("convex blocks' buildings (as one region)", n);
                     r.tally("convex blocks' buildings with no front", lone);
                 }
                 let share = houses.iter().map(|h| area(h).abs()).sum::<f64>() / clip::area(&region).max(1.0);

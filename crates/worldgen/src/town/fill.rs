@@ -146,7 +146,9 @@ impl District {
 /// A street front: the street's line as a block's street lines always were (outward normal `n`,
 /// offset `c`: the block lies where `dot(p, n) <= c`) and the stretch of it from `a` to `b` (both on
 /// the line) that the street runs along. A lot fronts it when one of its edges, longer than 6 ft,
-/// lies on the line within 0.5 ft and overlaps the stretch by more than 6 ft.
+/// lies on the line within 0.5 ft and overlaps the stretch by more than 6 ft, so a zero-length
+/// stretch (`a == b`, as `Front::of` gives a line the block does not touch) means no frontage at
+/// all, never an unbounded one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Front {
     pub n: P,
@@ -201,10 +203,10 @@ pub(super) enum Block<'a> {
     /// A block as `build_town` makes them (convex or nearly): filled as it always was, a lot
     /// fronting a street when it has an edge on the street's line (stretches not looked at).
     Plain(&'a [P]),
-    /// A hand-laid block, concave or with holes (courtyards). A single convex ring without holes
-    /// is filled as `Plain`; anything else is cut into convex pieces (`clip::convex_pieces`), each
-    /// filled in turn as a plain block is, but with its lots fronting only along the fronts'
-    /// stretches and the alleys cut in that piece. A piece fronting no street stays open.
+    /// A hand-laid block, convex, concave or with holes (courtyards): cut into convex pieces
+    /// (`clip::convex_pieces`; a convex ring is its own one piece), each filled in turn as a plain
+    /// block is, but with its lots fronting only along the fronts' stretches and the alleys cut in
+    /// that piece. A piece fronting no street stays open.
     Region(&'a [Shape]),
 }
 
@@ -217,7 +219,6 @@ pub(super) enum Block<'a> {
 pub(super) fn build_block<G: Ground>(site: &G, block: Block, fronts: &[Front], ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
     match block {
         Block::Plain(ring) => lay_block(site, ring, &mut fronts.to_vec(), false, ward, dp, rng, l, thin),
-        Block::Region([one]) if one.holes.is_empty() && clip::is_convex(&one.outer) => lay_block(site, &one.outer, &mut fronts.to_vec(), false, ward, dp, rng, l, thin),
         Block::Region(set) => {
             for piece in clip::convex_pieces(set) {
                 if fronts.iter().any(|f| f.fronted_by(&piece)) {
@@ -343,7 +344,6 @@ fn on_line(a: P, b: P, n: P, c: f64) -> bool {
 /// so pieces meet their frontage at right angles. Cuts that split too unevenly are retried
 /// in frames rotated by 36°. `gap` > 0 leaves a lane of width 2·gap along each cut, whose
 /// sides are recorded in `cuts` as fronts, as far as the lane runs.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, cuts: &mut Vec<Front>, chords: &mut Vec<(P, P)>, depth: u32) {
     let a = area(poly).abs();

@@ -1,7 +1,7 @@
 //! QA for `town::clip` (integer polygon booleans, offsets, splits, convex pieces): seeded random
 //! cases in families (convex, star-shaped, rectilinear combs rotated, grids of blocks sharing edges
 //! exactly, near-degenerate pairs with shared vertices, points on edges, spikes and repeated points,
-//! checkerboards touching at corners, shapes with holes), each checked for:
+//! checkerboards touching at corners, shapes with holes, city blocks with 40 courtyards), each checked for:
 //! - valid output: grid points, rings of 3+ points with no repeated or collinear ones, outers
 //!   anticlockwise and holes clockwise, each ring from its least vertex, shapes and holes in order,
 //!   no two edges crossing or overlapping, holes inside their outer, shapes not inside each other;
@@ -791,12 +791,28 @@ fn with_holes(rng: &R) -> Vec<Shape> {
     clip::difference(&ring(base), &cut)
 }
 
+/// A city block with many courtyards: a 40-vertex outline (convex, or a shallow star) with 40
+/// holes of 4-8 vertices on a jittered grid (the `bridge` cost P3's painted cut-outs reach).
+fn many_holes(rng: &R) -> Vec<Shape> {
+    let base = if rng.below(2) == 0 { rng.convex([0.0, 0.0], 400.0, 40) } else { rng.star([0.0, 0.0], 400.0, 40, 0.9) };
+    let mut cells: Vec<(f64, f64)> = (0..49).map(|i| (-240.0 + 80.0 * (i % 7) as f64, -240.0 + 80.0 * (i / 7) as f64)).collect();
+    shuffle(rng, &mut cells);
+    let cut: Vec<Shape> = cells[..40]
+        .iter()
+        .map(|&(x, y)| {
+            let c = [x + rng.range(-12.0, 12.0), y + rng.range(-12.0, 12.0)];
+            Shape::ring(rng.convex(c, rng.range(8.0, 25.0), 4 + rng.below(5) as usize))
+        })
+        .collect();
+    clip::difference(&ring(base), &cut)
+}
+
 fn main() {
     let cases: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(2000);
     let seed: u64 = std::env::var("SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
     let mut rep = Report::default();
     let t0 = Instant::now();
-    for fam in 0..8u64 {
+    for fam in 0..9u64 {
         let rng = R::new(seed, 100 + fam);
         for i in 0..cases {
             let pieces = i % 4 == 0;
@@ -856,6 +872,11 @@ fn main() {
                         check_offset(&mut rep, &rng, &a);
                     }
                 }
+                8 => {
+                    if i % 40 == 0 {
+                        check_pieces(&mut rep, "many holes", &many_holes(&rng));
+                    }
+                }
                 _ => {
                     check_buffer(&mut rep, &rng);
                     check_inset_convex(&mut rep, &rng);
@@ -901,6 +922,14 @@ fn main() {
     let nv = holed.iter().map(|s| s.outer.len()).sum::<usize>();
     let (t_pcs, n_pcs) = time(&mut || clip::convex_pieces(&holed).len(), 2000);
     let (t_norm, _) = time(&mut || clip::normalize(&holed).len(), 2000);
+    let mut many = many_holes(&rng);
+    for _ in 0..20 {
+        if many.len() == 1 && many[0].holes.len() == 40 {
+            break;
+        }
+        many = many_holes(&rng);
+    }
+    let (t_many, n_many) = time(&mut || clip::convex_pieces(&many).len(), 50);
     let grid: Vec<Shape> = grid_blocks(&rng, 10, 10).into_iter().map(Shape::ring).collect();
     let (t_grid, _) = time(&mut || clip::union_all(&grid).len(), 300);
     let (t_off, _) = time(&mut || clip::offset(&block, -6.0, Join::Round).len(), 500);
@@ -924,6 +953,7 @@ fn main() {
     println!("  difference: 40-vertex block minus 20 shapes of 4-12 vertices  {t_diff:.4}  ({n_diff} shapes)");
     println!("  convex_pieces: {nv}-vertex shape with {} holes          {t_pcs:.4}  ({n_pcs} pieces)", holed.first().map_or(0, |s| s.holes.len()));
     println!("    of which normalize (its input made canonical)          {t_norm:.4}");
+    println!("  convex_pieces: {}-vertex block with {} holes of 4-8 vertices  {t_many:.4}  ({n_many} pieces)", many.first().map_or(0, |s| s.outer.len()), many.first().map_or(0, |s| s.holes.len()));
     println!("  union_all: 100 grid blocks sharing edges                   {t_grid:.4}");
     println!("  offset: 40-vertex block shrunk 6 ft, round                  {t_off:.4}");
     println!("  buffer: 12-point polyline, 10 ft each side, round, square   {t_buf:.4}");

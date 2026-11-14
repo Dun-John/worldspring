@@ -19,6 +19,7 @@ use super::clip::{self, Shape};
 use super::geom::*;
 use super::{Building, District, Ground, Layout, Structure};
 use crate::World;
+use crate::core::hash::FastMap;
 use crate::core::rng::Pcg32;
 use crate::t0::T0;
 use crate::t0::settle::Tier;
@@ -29,8 +30,12 @@ const STRAIGHT_FT: f64 = 1.5;
 const MITRE_DEG: f64 = 20.0;
 /// The narrowest lot kept (`build_block`'s short side).
 const MIN_LOT_FT: f64 = 16.0;
-/// An alley's width between two lots (ft).
+/// An alley's width between two lots (ft): narrower on purpose than `build_block`'s (a 16 ft gap,
+/// `2 * fill::ALLEY_HALF_FT`, drawn 17 ft wide): a row's alley is a passage back to the yards
+/// behind the houses, not a lane through a block.
 const ALLEY_FT: f64 = 8.0;
+/// The cell of the grid the kept lots are found by when a new lot is tested against them (ft).
+const CELL_FT: f64 = 64.0;
 /// The share of slots left empty (yards and gardens between houses).
 const YARD_SHARE: f64 = 0.08;
 
@@ -165,15 +170,16 @@ fn meets(a: &[f64; 4], b: &[f64; 4]) -> bool {
     a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
 }
 
-/// The shapes of `set` whose bounds meet `bb`.
-fn near(set: &[(Shape, [f64; 4])], bb: &[f64; 4]) -> Vec<Shape> {
-    set.iter().filter(|(_, b)| meets(b, bb)).map(|(s, _)| s.clone()).collect()
+/// The shapes to avoid whose bounds meet `bb`, cloned only when there are any: `cand` holds
+/// places in `avoid` with their bounds.
+fn near(avoid: &[Shape], cand: &[(usize, [f64; 4])], bb: &[f64; 4]) -> Vec<Shape> {
+    cand.iter().filter(|(_, b)| meets(b, bb)).map(|&(i, _)| avoid[i].clone()).collect()
 }
 
 /// `lot` less the avoided shapes near it: the lot itself when they take nothing, else the
 /// largest convex piece of what is left that still makes a lot, if any.
-fn spare(lot: Vec<P>, avoid: &[(Shape, [f64; 4])], dp: &District, n: P, c: f64) -> Option<Vec<P>> {
-    let close = near(avoid, &bbox(&lot));
+fn spare(lot: Vec<P>, avoid: &[Shape], cand: &[(usize, [f64; 4])], dp: &District, n: P, c: f64) -> Option<Vec<P>> {
+    let close = near(avoid, cand, &bbox(&lot));
     if close.is_empty() {
         return Some(lot);
     }
@@ -205,16 +211,26 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
         let b = bbox(&run.band);
         [r[0].min(b[0]), r[1].min(b[1]), r[2].max(b[2]), r[3].max(b[3])]
     });
-    let avoid: Vec<(Shape, [f64; 4])> = avoid.iter().map(|sh| (sh.clone(), bbox(&sh.outer))).filter(|(_, b)| meets(b, &all)).collect();
+    // The avoided shapes near the row, by place and bounds; each run looks only at those near its
+    // own band (a diagonal street's whole row can span the town).
+    let row_avoid: Vec<(usize, [f64; 4])> = avoid.iter().enumerate().map(|(i, sh)| (i, bbox(&sh.outer))).filter(|(_, b)| meets(b, &all)).collect();
     let alley_every = |rng: &mut Pcg32| crate::core::round(dp.block_size * (0.5 + rng.next_f64())).max(2.0) as u32;
     let mut every = alley_every(rng);
     let mut since = 0u32;
-    let (mut kept, mut alleys): (Vec<Lot>, Vec<(P, P)>) = (Vec::new(), Vec::new());
-    let mut kept_boxes: Vec<[f64; 4]> = Vec::new();
+    let (mut kept, mut alleys): (Vec<(Vec<P>, Vec<P>, [f64; 4])>, Vec<(P, P)>) = (Vec::new(), Vec::new());
+    // The kept lots by grid cell (lookup only), to test a new lot against those near it alone.
+    let mut grid: FastMap<(i64, i64), Vec<usize>> = FastMap::default();
+    let cells = |b: [f64; 4]| {
+        let c = |x: f64| crate::core::floor(x / CELL_FT) as i64;
+        (c(b[0])..=c(b[2])).flat_map(move |x| (c(b[1])..=c(b[3])).map(move |y| (x, y)))
+    };
+    let mut close_kept: Vec<usize> = Vec::new();
     for run in &runs {
         if run.band.len() < 3 {
             continue;
         }
+        let band_bb = bbox(&run.band);
+        let cand: Vec<(usize, [f64; 4])> = row_avoid.iter().filter(|(_, b)| meets(b, &band_bb)).copied().collect();
         let (a, u, n) = (run.a, run.u, run.n);
         // The street line as `build_block` has its lines: normal toward the street, the lot on
         // the side where `dot(p, sn) <= sc`.
@@ -228,22 +244,24 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
                 let m = t + 0.5 * ALLEY_FT;
                 let lane = [add(add(a, mul(u, m)), mul(n, s)), add(add(a, mul(u, m)), mul(n, s + d))];
                 let strip = vec![add(lane[0], mul(u, -0.5 * ALLEY_FT)), add(lane[0], mul(u, 0.5 * ALLEY_FT)), add(lane[1], mul(u, 0.5 * ALLEY_FT)), add(lane[1], mul(u, -0.5 * ALLEY_FT))];
-                let close = near(&avoid, &bbox(&strip));
+                let close = near(avoid, &cand, &bbox(&strip));
                 let clear = close.is_empty() || clip::area(&clip::intersection(&[Shape::ring(strip)], &close)) < 1.0;
                 pending = (prev_kept && clear).then_some((lane[0], lane[1]));
                 (t, since, every) = (t + ALLEY_FT, 0, alley_every(rng));
                 continue;
             }
             let (r1, r2, yard, indent) = (rng.next_f64(), rng.next_f64(), rng.next_f64(), rng.next_f64());
-            let alley = pending.take();
             prev_kept = false;
             let want = dp.min_sq * libm::pow(1.0 + dp.size_chaos, r1 + r2 - 1.0);
             let mut w = (want / d).clamp(MIN_LOT_FT + 0.5, (2.5 * d).max(24.0));
             since += 1;
             if yard < YARD_SHARE {
+                // An alley waiting goes on waiting over a yard, for the next lot, so alleys keep
+                // their spacing.
                 t += (0.6 * w).clamp(8.0, 30.0);
                 continue;
             }
+            let alley = pending.take();
             // The last lot of a run takes what would be too narrow for another.
             let last = run.f1 - (t + w) < MIN_LOT_FT;
             if last {
@@ -262,11 +280,17 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
             if !good(&lot, dp, sn, sc) {
                 continue;
             }
-            let Some(lot) = spare(lot, &avoid, dp, sn, sc) else { continue };
+            let Some(lot) = spare(lot, avoid, &cand, dp, sn, sc) else { continue };
             // (A street doubling back or coming round again: its rows don't overlap.)
             let bb = bbox(&lot);
+            close_kept.clear();
+            for cell in cells(bb) {
+                close_kept.extend(grid.get(&cell).into_iter().flatten().copied());
+            }
+            close_kept.sort_unstable();
+            close_kept.dedup();
             let lot_shape = [Shape::ring(lot.clone())];
-            let over = kept.iter().zip(&kept_boxes).any(|((k, _), kb)| meets(kb, &bb) && clip::area(&clip::intersection(&lot_shape, &[Shape::ring(k.clone())])) > 1.0);
+            let over = close_kept.iter().any(|&i| meets(&kept[i].2, &bb) && clip::area(&clip::intersection(&lot_shape, &[Shape::ring(kept[i].0.clone())])) > 1.0);
             if over {
                 continue;
             }
@@ -277,13 +301,15 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
             if poly.len() < 3 || area(&poly).abs() < 150.0 || !site.buildable(&poly) {
                 continue;
             }
-            kept_boxes.push(bb);
-            kept.push((lot, poly));
+            for cell in cells(bb) {
+                grid.entry(cell).or_default().push(kept.len());
+            }
+            kept.push((lot, poly, bb));
             alleys.extend(alley);
             prev_kept = true;
         }
     }
-    (kept, alleys)
+    (kept.into_iter().map(|(lot, poly, _)| (lot, poly)).collect(), alleys)
 }
 
 /// Line `side` of a street with a row of the ward's houses (see the module comment): its
