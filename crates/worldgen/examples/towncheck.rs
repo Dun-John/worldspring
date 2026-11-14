@@ -104,7 +104,14 @@
 //! - `castlepieces` (not in `all`): a castle drawn by hand, its keep and yard buildings changed (`Created::pieces`),
 //!   an earlier site deleted and taken out of the list, the castle in ruins; keeps of generated castles changed.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
+//! - `same` (not in `all`): every settlement layout's hash (`{:?}` of the whole layout, `L:`), and every town's
+//!   with one scripted street-editor edit (`E:`: three corners moved, a patch's ward, lots and reroll set, the
+//!   walls toggled), checked against a baseline (`SAME_DIR`, default `target/towncheck-same`, a file per
+//!   world): the first run, or `SAME=write`, writes it. Layouts that differ are listed (`TOP=n`). Refactors
+//!   that must not change output run it before and after (Roadmap 6 P2: seeds 1-24 and the MCP fixture).
+//!   `SAME_EDITS=n`: towns edited per world (default 8).
+//!
+//! Usage: cargo run --release -p worldgen --example towncheck -- [same|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -4944,6 +4951,71 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
     }
 }
 
+/// `same`: every layout's hash, and every town's with a scripted street-editor edit, against a baseline.
+fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
+    use worldgen::core::hash::fnv64;
+    r.counts(&["layouts hashed", "edited layouts hashed", "edits refused", "layouts differing", "layouts not in the baseline"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let mut lines: Vec<String> = Vec::new();
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        lines.push(format!("L:{li} {:016x} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len()));
+        r.tally("layouts hashed", 1);
+    }
+    let edits: usize = std::env::var("SAME_EDITS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let towns = (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town);
+    for ci in towns.take(edits) {
+        let Ok(plan) = town::wards::plan_json(world, t0, ci) else { continue };
+        let patches = plan["patches"].as_array().cloned().unwrap_or_default();
+        let inner: Vec<&serde_json::Value> = patches.iter().filter(|p| p["in_town"] == true).collect();
+        // Three corners of patches in town that are no squares (the first that may move), each moved 35 ft
+        // east and 25 ft south.
+        let mut moves: Vec<String> = Vec::new();
+        for v in inner.iter().filter(|p| p["ward"] != "plaza").flat_map(|p| p["corners"].as_array().unwrap().iter()) {
+            let m = format!(r#"{{"corner":{v},"by":[35,-25]}}"#);
+            if moves.len() < 3 && !moves.contains(&m) && town::wards::change(world, t0, ci, &serde_json::from_str(&format!(r#"{{"moves":[{m}]}}"#)).unwrap()).is_ok() {
+                moves.push(m);
+            }
+        }
+        // The first common, craft or merchant patch made a noble one's, its lots large, rolled again.
+        let ward = inner.iter().find(|p| matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant"))).map(|p| format!(r#","patches":[{{"patch":{},"ward":"noble","lots":"large","reroll":true}}]"#, p["patch"])).unwrap_or_default();
+        let walls = if plan["walls"]["built"] == true { r#","walls":false"# } else { r#","walls":true"# };
+        let req = format!(r#"{{"moves":[{}]{ward}{walls}}}"#, moves.join(","));
+        let edit = match town::wards::change(world, t0, ci, &serde_json::from_str(&req).unwrap()) {
+            Ok((Some(edit), _)) => edit,
+            Ok((None, _)) => continue,
+            Err(e) => {
+                r.add("edits refused", 1.0, format!("{label} #{ci}: {e} ({req})"));
+                continue;
+            }
+        };
+        let mut file = world.file.clone();
+        file.edits.towns.insert(town::wards::key(ci), edit);
+        let w = World::new(file).unwrap();
+        let l = town::layout(&w, t0, ci);
+        lines.push(format!("E:{ci} {:016x} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len()));
+        r.tally("edited layouts hashed", 1);
+    }
+    let dir = std::path::PathBuf::from(std::env::var("SAME_DIR").unwrap_or_else(|_| "target/towncheck-same".into()));
+    let path = dir.join(format!("{label}.txt"));
+    let base = std::fs::read_to_string(&path).ok().filter(|_| std::env::var("SAME").as_deref() != Ok("write"));
+    let Some(base) = base else {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        say!("  baseline written: {} ({} lines)", path.display(), lines.len());
+        return;
+    };
+    let was: HashMap<&str, &str> = base.lines().filter_map(|x| x.split_once(' ')).collect();
+    for x in &lines {
+        let (k, v) = x.split_once(' ').unwrap();
+        match was.get(k) {
+            None => r.add("layouts not in the baseline", 1.0, format!("{label} {k}")),
+            Some(b) if b != &v => r.add("layouts differing", 1.0, format!("{label} {k}: {b} -> {v}")),
+            _ => {}
+        }
+    }
+}
+
 /// `under`: every underground site of every layout (`u:` ways down, a few sewer sections each, keep dungeons
 /// `k:`) with a hash of its serialized interior on stdout (`U <label> <id> <hash> <theme> <levels>`), and the
 /// totals: sites, levels, rooms, doors, secret doors, loops (doors beyond a spanning tree of each level's
@@ -6148,7 +6220,7 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 26] = ["harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 27] = ["same", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -6207,6 +6279,7 @@ fn main() {
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "places" => places(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
+                "same" => same(&mut ctx, &label.replace(' ', ""), &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
             say!("  {mode} ({:.1} s)", t.elapsed().as_secs_f64());
