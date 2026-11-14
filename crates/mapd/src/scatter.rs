@@ -386,7 +386,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
             let inside: Vec<String> = e
                 .objects
                 .iter()
-                .filter(|(_, p)| area.contains([p.x, p.y]) && (kinds.is_empty() || matches!(p.kind, ObjKind::Builtin(k) if kinds.contains(&k))))
+                .filter(|(_, p)| area.holds([p.x, p.y]) && (kinds.is_empty() || matches!(p.kind, ObjKind::Builtin(k) if kinds.contains(&k))))
                 .map(|(k, _)| k.clone())
                 .collect();
             for k in inside {

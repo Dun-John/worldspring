@@ -102,7 +102,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 - **Names** in results already include renames, and search matches them. Hidden features are left out of search
   unless you ask for them.
 - **Extents:** search results, `get_feature` and `features_near` give each place's `extent`: `bbox_ft` (`[x0, y0,
-  x1, y1]`) with `area_sq_mi`, or a river's `length_mi`. Settlements' and sites' areas are their built-up circle.
+  x1, y1]`) with `area_sq_mi`, or a river's `length_mi`. Settlements' and sites' areas are their built-up circle; a building drawn by hand has its footprint's box.
 - **Sites in settlements:** a site (created, drawn by hand or generated) is *in* a settlement when its point stands
   within the settlement's holding radius: its built-up area and its outer districts (1.4 built-up radii for a
   village, 2.15 for a town and up). When several hold it, the nearest for its size wins. A wall or castle has one
@@ -339,7 +339,7 @@ listed (kind `crossing`).
 | Parameter | Type | | |
 |---|---|---|---|
 | `kind` | string | optional | Only this kind: `river`, `range`, `city`… or `district`, `building`, `tower`, `underground`, `site`, `level`, `room`. |
-| `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). For a settlement, also the buildings drawn in it that have a trade (as businesses, `b:<layout>:0`) and every site in it (kind `site`, by the site's own id). |
+| `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). For a settlement, also the buildings drawn in it (as `b:<layout>:0`: businesses with their `function`, homes as `house`) and every site in it (kind `site`, by the site's own id). |
 | `inside` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). (`within` is accepted too.) |
 | `function` | string | optional | Only businesses of this function, by `create_building`'s `func` keys (`inn`, `blacksmith`, `temple`…); needs `settlement`. Each building entry also says its `function`. An unknown one is refused with a "did you mean". |
 | `limit` | integer | 200 | 1 to 2000 (`truncated: true` when it cut the list). |
@@ -637,7 +637,7 @@ app as one notice. If a step fails, nothing is changed, and the error names the 
 
 ### `rename_feature`
 Renames anything with a name: a feature, building, district, tower, underground site, a site's level (`l:`) or
-room (`r:`), a road stretch (`rd:`, ids from `list_roads` or `route`) or a crossing put down by hand (`v:`). Use
+room (`r:`), a road stretch (`rd:`, ids from `list_roads` or `route`), a crossing put down by hand (`v:`), a city's whole sewers (`w:<layout>`) or a plateau (`h:`; its name shows in `list_plateaus`). Use
 `list_names` for the ids. The app shows the new names everywhere, including the level list and
 the room labels inside. A building drawn by hand is one place, whether it is named by its `c:` id or its
 building id (`b:<layout>:0`): one name, one note (kept under `c:`) and one hidden mark.
@@ -866,6 +866,7 @@ are refused. A design drawn by hand for the site underground (`set_site_design`)
 Hides a feature from the map's labels and from search, or shows it again. It still exists, and
 `search_features` with `include_hidden` finds it. A building drawn by hand is hidden by either id (the mark is
 kept under its `c:` id), and its business pin is hidden with it.
+A district the ward plan left with no patch can be hidden too (it sits at the town's middle).
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1291,7 +1292,7 @@ list (objects first; `objects` and `clears` beside say how many of each), so an 
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `within` | box `[x0, y0, x1, y1]`, polygon `[[x, y], ...]` or circle `{at, radius_ft}` | whole world | Only those with their place inside. |
+| `within` | box `[x0, y0, x1, y1]`, polygon `[[x, y], ...]` or circle `{at, radius_ft}` | whole world | Only those with their place inside: an object belongs to an area by its middle, and a box is half-open (`x0 <= x < x1`, `y0 <= y < y1`), so boxes that tile a region list each object once. |
 | `kinds` | (id or name)[] | all | Only these kinds (built-in id or name, or `s:<asset>`); a clear of all kinds matches any. |
 | `which` | `objects`, `clears` or `both` | both | |
 | `limit` | integer | 200 | 1 to 2000 |
@@ -1599,7 +1600,7 @@ Water's-edge works put down by hand (`q:<id>`), drawn on the battlemap and the t
 Returns `{tool, id, kind, changed, wharf, river | water, bank_ft?}`: `wharf` is `{id, kind, path, width_ft, length_ft, material?, level_ft?, buildings?}` (`level_ft`: the top, above the sea, where there is water under it); `river` `{id, name, width_ft, banks}` and `bank_ft` (how far `path[0]` is from the bank) when a river is within 300 ft, else `water` `{kind, id, name}` (`null`: no water under it); `buildings` the lighthouse made, `retired` and `left_pointing` what was retired. A pier starting in the water is refused, naming the bank: `path[0]: (x, y) is in the water of Shadow Lake (lake:b4da59db): a pier starts on the bank: the nearest dry ground is at about (x, y)` (in a river: `… 419 ft wide there: a pier starts on the bank, at about (x, y)`). A lighthouse that cannot stand (something in the way) refuses a new breakwater, naming what; nothing is put down.
 
 ### `list_wharves`
-`within` (a box, a polygon or a circle) and `limit` (1 to 2000, default 200). Returns `{items, found}`: `{id, kind, path, width_ft, length_ft, material?, level_ft?, buildings?}`.
+`within` (a box, a polygon or a circle) and `limit` (1 to 2000, default 200). Returns `{items, found}`: `{id, kind, path, width_ft, length_ft, material?, level_ft?, buildings?}`. The order is the geometry's: by path (point by point, to half a foot), then kind and width, the id last, so quays sharing a first point keep their order from build to build.
 
 ### `remove_wharves`
 `id` or `ids` (`q:…`; all or none). The buildings on them are retired in the same change: `buildings` `[{id, name}]`, and `left_pointing` says what still points at them (NPCs, plots, notes), as `delete_feature` does.
@@ -2181,7 +2182,7 @@ How it applies:
 
 ### `shape_ground`
 A round brush, or a stroke along `path` (not both: `at` and `path` together are refused). `raise` and `lower` move each square by up to `height_ft` (full out to `hardness` of the radius,
-fading to the rim), `smooth` eases each square toward the mean of its neighbours as drawn by `strength`,
+fading to the rim), `smooth` eases each square toward the mean of the stroke's own squares round it (within half the radius, at least 10 ft; the ground beyond the rim doesn't pull) by `strength`, so a repeated smooth settles instead of piling up,
 `restore` takes brushed change back toward the ground as generated by `strength` (plateaus stay). Each square
 takes the stroke's strongest touch, so going over a place twice in one stroke doesn't pile up (a second call
 does). The reply: `blocks` changed, `squares` under the brush, the lowest and highest ground there `before` and
@@ -2234,7 +2235,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 
 ### `list_plateaus`
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
-`{id: "h:...", what: "plateau" (or "islet"), level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
+`{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
 block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 

@@ -132,6 +132,17 @@ fn extent(s: &Shape) -> Value {
     v
 }
 
+/// A feature's extent: a drawn building's own footprint (its shape is a point reaching to the
+/// farthest corner, which is not the footprint's box), the shape's box otherwise.
+fn feature_extent(world: &World, f: &Feature, s: &Shape) -> Value {
+    if f.kind == "building" {
+        if let Some(c) = world.file.edits.created.iter().find(|c| !c.removed && c.id == f.id && c.poly.len() >= 3) {
+            return poly_extent(&[&c.poly]);
+        }
+    }
+    extent(s)
+}
+
 /// The extent of a polygon (or of several).
 fn poly_extent(polys: &[&[P]]) -> Value {
     let b = polys.iter().flat_map(|p| p.iter()).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
@@ -151,7 +162,7 @@ fn extent_of(world: &World, t0: &T0, id: &str) -> Option<Value> {
         }
         _ => {
             let i = features(world, t0).iter().position(|f| f.id == id)?;
-            shapes(world, t0).get(i).map(|s| extent(s))
+            shapes(world, t0).get(i).map(|s| feature_extent(world, &features(world, t0)[i], s))
         }
     }
 }
@@ -1697,7 +1708,16 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     let nums: Vec<usize> = parts.filter_map(|p| p.parse().ok()).collect();
     match (head, nums.as_slice()) {
         ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
-        ("d", [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).and_then(|q| q.label.get(q.label.len() / 2).copied()),
+        // (A district the ward plan left with no patch has no label: the town's middle.)
+        ("d", [li, qi]) if *li < town::layout_count(t0) => {
+            let l = town::layout(world, t0, *li);
+            l.quarters.get(*qi).map(|q| q.label.get(q.label.len() / 2).copied().or_else(|| q.patches.first().map(|p| geom::centroid(p))).unwrap_or(l.center))
+        }
+        ("h", _) if edits.plateaus.contains_key(id) => {
+            let pts = &edits.plateaus[id].pts;
+            Some(geom::centroid(pts))
+        }
+        ("w", [li]) if town::is_settlement(t0, *li) => Some(town::layout(world, t0, *li).center),
         ("t", [li, k]) if *li < town::layout_count(t0) => {
             let l = town::layout(world, t0, *li);
             l.tower_index(*k).and_then(|i| crate::interior::towers(&l).get(i).map(|t| t.0))
@@ -2062,6 +2082,16 @@ fn drawn_businesses(world: &World, t0: &T0, si: usize) -> Vec<(String, std::rc::
         .collect()
 }
 
+/// The buildings drawn by hand in settlement `si` that are homes (no trade), as `drawn_businesses`.
+fn drawn_homes(world: &World, t0: &T0, si: usize) -> Vec<(String, std::rc::Rc<town::Layout>)> {
+    town::sites_in(t0, si)
+        .into_iter()
+        .filter(|&li| drawn_building(t0, li))
+        .map(|li| (format!("b:{li}:0"), town::layout(world, t0, li)))
+        .filter(|(_, l)| l.building(0).is_some_and(|b| b.func.is_none()))
+        .collect()
+}
+
 /// A place's note (a building drawn by hand: the notes under both its ids, as one).
 fn note_of(world: &World, t0: &T0, id: &str) -> Value {
     let notes = &world.file.edits.notes;
@@ -2187,7 +2217,7 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
             .zip(&shapes)
             .filter(|(f, _)| (ql.is_empty() || f.name.to_lowercase().contains(&ql)) && kind.is_none_or(|k| f.kind == k) && (include_hidden || !hidden.contains(&f.id)))
             .take(limit)
-            .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
+            .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": feature_extent(world, f, s) }))
             .collect();
         if ql.len() >= 3 && out.len() < limit && kind.is_none_or(|k| matches!(k, "building" | "district")) {
             for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), o.within.as_ref().map(|r| r.bbox()), include_hidden) {
@@ -2242,7 +2272,7 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
                     None => continue,
                 }
             } else if let Some((f, s)) = fs.iter().zip(&shapes).find(|(f, _)| f.id == *id) {
-                json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) })
+                json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": feature_extent(world, f, s) })
             } else if let Some(g) = get(world, t0, id) {
                 let mut v = json!({ "id": id, "kind": g["kind"], "name": g["name"], "x_ft": g["x_ft"], "y_ft": g["y_ft"], "settlement": g["settlement"] });
                 if let Some(e) = g.get("extent") {
@@ -2351,7 +2381,7 @@ pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: 
             let (d, at) = s.distance(p);
             (d <= radius).then(|| {
                 let dir = if d > 0.0 { compass(p, at) } else { "here" };
-                (d, json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "distance_mi": mi(d), "direction": dir, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
+                (d, json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "distance_mi": mi(d), "direction": dir, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": feature_extent(world, f, s) }))
             })
         })
         .collect();
@@ -2852,7 +2882,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     }
     // A settlement's buildings drawn by hand that have a trade, as its businesses.
     if town::is_settlement(t0, li) {
-        for (id, cl) in drawn_businesses(world, t0, li) {
+        for (id, cl) in drawn_businesses(world, t0, li).into_iter().chain(drawn_homes(world, t0, li)) {
             let Some(b) = cl.building(0) else { continue };
             let hidden = is_hidden(world, t0, &id);
             let mut v = name_entry(world, id, "building", b.name.clone().unwrap_or_else(|| b.label().to_string()), Some(geom::centroid(&b.poly)), true);

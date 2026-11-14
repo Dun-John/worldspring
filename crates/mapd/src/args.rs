@@ -278,6 +278,15 @@ pub enum Area {
 }
 
 impl Area {
+    /// An object belongs to an area by its middle, a box being half-open (the low edges in, the
+    /// high ones out): boxes that tile a region hold each object once.
+    pub fn holds(&self, p: [f64; 2]) -> bool {
+        match self {
+            Area::Box(b) => p[0] >= b[0] && p[0] < b[2] && p[1] >= b[1] && p[1] < b[3],
+            _ => self.contains(p),
+        }
+    }
+
     pub fn contains(&self, p: [f64; 2]) -> bool {
         match self {
             Area::Box(b) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3],

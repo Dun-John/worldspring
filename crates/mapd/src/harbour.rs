@@ -387,9 +387,13 @@ async fn list_wharves(app: &Shared, a: &Value) -> Result<Value, String> {
         .with(move |ex| {
             let sea = ex.world.params().sea_level_ft;
             let e = &ex.world.file.edits;
-            let items: Vec<Value> = e
-                .wharves
-                .iter()
+            // In the order of the geometry (the path point by point, then kind and width), the id
+            // only last: ids can change between builds, so a script can match by position.
+            let mut sorted: Vec<(&String, &Wharf)> = e.wharves.iter().collect();
+            let key = |w: &Wharf| (w.pts.iter().map(|p| [(p[0] * 2.0).round() as i64, (p[1] * 2.0).round() as i64]).collect::<Vec<_>>(), w.kind.name(), (w.width * 2.0).round() as i64);
+            sorted.sort_by(|a, b| key(a.1).cmp(&key(b.1)).then_with(|| a.0.cmp(b.0)));
+            let items: Vec<Value> = sorted
+                .into_iter()
                 .filter(|(_, w)| {
                     area.as_ref().is_none_or(|ar| {
                         let b = bbox(&w.pts);

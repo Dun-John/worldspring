@@ -60,7 +60,7 @@ async fn objects(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     let (mut objects, clears) = app
         .with_edits(|e| {
-            let near = |x: f64, y: f64| area.as_ref().is_none_or(|ar| ar.contains([x, y]));
+            let near = |x: f64, y: f64| area.as_ref().is_none_or(|ar| ar.holds([x, y]));
             let mut objects = Vec::new();
             if which != "clears" {
                 for (id, p) in e.objects.iter().filter(|(_, p)| near(p.x, p.y) && (wanted.is_empty() || wanted.contains(&p.kind))) {
@@ -123,7 +123,11 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                 let b = bbox(&p.pts);
                 let mid = worldgen::town::geom::centroid(&p.pts);
                 if hits(mid, &p.pts) {
-                    items.push(json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts }));
+                    let mut it = json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts });
+                    if let Some(n) = ex.world.file.edits.renames.get(id) {
+                        it["name"] = json!(n);
+                    }
+                    items.push(it);
                 }
             }
             let side = ground::BLOCK as f64 * battlemap::SQUARE_FT;

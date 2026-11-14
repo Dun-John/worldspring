@@ -659,6 +659,8 @@ pub fn stamp_brush(ground: &mut BTreeMap<String, GroundBlock>, s: &Stroke, heigh
     if keys.len() > MAX_STROKE_BLOCKS {
         return Err(format!("a stroke reaches at most {MAX_STROKE_BLOCKS} blocks of 80 ft (this one {})", keys.len()));
     }
+    let win = (s.radius_ft * 0.5).max(2.0 * SQUARE_FT);
+    let heights: BTreeMap<(i64, i64), f64> = if s.mode == Brush::Smooth { touch.iter().map(|&(gx, gy, _)| ((gx, gy), height(gx, gy))).collect() } else { BTreeMap::new() };
     let mut next: BTreeMap<String, Box<[i16; CELLS]>> = keys.iter().map(|k| (k.clone(), ground.get(k).map_or_else(|| Box::new([0; CELLS]), |b| b.add.clone()))).collect();
     for &(gx, gy, f) in &touch {
         let d = added(ground, gx, gy);
@@ -666,8 +668,25 @@ pub fn stamp_brush(ground: &mut BTreeMap<String, GroundBlock>, s: &Stroke, heigh
             Brush::Raise => d + s.height_ft * f,
             Brush::Lower => d - s.height_ft * f,
             Brush::Smooth => {
+                // The mean of the stroke's own squares within `win` (not the ground beyond the rim,
+                // which would pull the stroke up or down toward it each time): a repeated stroke
+                // settles instead of piling up.
                 let h = height(gx, gy);
-                let mean = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))).map(|(dx, dy)| height(gx + dx, gy + dy)).sum::<f64>() / 9.0;
+                let (mut sum, mut n) = (0.0, 0.0);
+                let r = (win / SQUARE_FT) as i64 + 1;
+                for dy in -r..=r {
+                    for dx in -r..=r {
+                        let (x, y) = (gx + dx, gy + dy);
+                        if x < sx0 || y < sy0 || x > sx1 || y > sy1 || ((dx * dx + dy * dy) as f64) * SQUARE_FT * SQUARE_FT > win * win {
+                            continue;
+                        }
+                        if let Some(&hh) = heights.get(&(x, y)) {
+                            sum += hh;
+                            n += 1.0;
+                        }
+                    }
+                }
+                let mean = if n > 0.0 { sum / n } else { h };
                 d + strength * f * (mean - h)
             }
             Brush::Restore => d * (1.0 - strength * f),
