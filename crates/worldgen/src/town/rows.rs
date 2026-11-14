@@ -229,7 +229,10 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
         if run.band.len() < 3 {
             continue;
         }
+        // (Grown by an alley's width: an alley's strip is square to the street and can stand a
+        // little past a band cut on the bisector at a bend.)
         let band_bb = bbox(&run.band);
+        let band_bb = [band_bb[0] - ALLEY_FT, band_bb[1] - ALLEY_FT, band_bb[2] + ALLEY_FT, band_bb[3] + ALLEY_FT];
         let cand: Vec<(usize, [f64; 4])> = row_avoid.iter().filter(|(_, b)| meets(b, &band_bb)).copied().collect();
         let (a, u, n) = (run.a, run.u, run.n);
         // The street line as `build_block` has its lines: normal toward the street, the lot on
