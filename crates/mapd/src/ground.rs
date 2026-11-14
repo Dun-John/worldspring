@@ -392,8 +392,12 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
                 return Err(format!("{}: no plateau {id}", crate::args::item(single, i)));
             }
         }
+        // (Its name, note and hidden mark go with it: nothing brings a plateau back but Undo.)
         for id in &ids {
             e.plateaus.remove(id);
+            e.renames.remove(id);
+            e.notes.remove(id);
+            e.hidden.remove(id);
         }
         Ok(json!({ "tool": "delete_plateau", "ids": ids }))
     })

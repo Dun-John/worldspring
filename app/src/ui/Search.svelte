@@ -132,7 +132,7 @@
   /** Where a token is: the surface, or its building or site and level. */
   function tokenWhere(loc: string): string {
     if (loc === 'surface') return 'On the map';
-    if (/^w:\d+$/.test(loc)) return 'Sewers';
+    if (/^w:\d+$/.test(loc)) return renames[loc] ?? 'Sewers';
     const { interior, level } = parseLoc(loc);
     if (interior) askLevels(interior);
     if (!interior) return 'On the map';

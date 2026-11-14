@@ -14,7 +14,7 @@
   import { getImage, loadSession, putImage } from './play/session';
   import { hasSession, parseLoc } from './play/state';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
-  import { MapView, type HudState, type InteriorState, type PointerTool } from './render/MapView';
+  import { MapView, plateauLabels, type HudState, type InteriorState, type PointerTool } from './render/MapView';
   import { HEX_KEY, hexGrid, type Hex } from './render/hex';
   import TopBar from './ui/shell/TopBar.svelte';
   import MainMenu from './ui/shell/MainMenu.svelte';
@@ -365,6 +365,8 @@
     ...(named?.roads ?? []).map(({ id, generated, bbox: [x0, y0, x1, y1] }) => ({ id, kind: 'road', name: generated, x: (x0 + x1) / 2, y: (y0 + y1) / 2, angle: 0, extent_ft: Math.max(x1 - x0, y1 - y0, 300) / 1.4, detail: 'road' })),
     ...(named?.crossings ?? []).map((c) => ({ id: c.id, kind: 'crossing', name: c.generated, x: c.x, y: c.y, angle: 0, extent_ft: Math.max(c.length_ft, 200), detail: c.generated })),
     ...(named?.wharves ?? []).map((c) => ({ id: c.id, kind: 'wharf', name: c.generated, x: c.x, y: c.y, angle: 0, extent_ft: Math.max(c.length_ft, 200), detail: c.generated })),
+    // (Plateaus someone named: only those have a name.)
+    ...plateauLabels(edits).map((f) => ({ ...f, name: f.detail === 'islet' ? 'Islet' : 'Plateau' })),
   ]);
   const searchOverlay = $derived.by<Overlay | null>(() => {
     const hidden = new Set(edits.hidden ?? []);
@@ -2717,6 +2719,11 @@
     const next: Edits = { ...e };
     if (Object.keys(blocks).length) next.ground = g;
     if (Object.keys(plateaus).length) next.plateaus = h;
+    // (A plateau taken away takes its name, note and hidden mark: Undo brings them back.)
+    const gone = Object.keys(plateaus).filter((k) => !plateaus[k]);
+    if (gone.some((k) => e.renames?.[k] !== undefined)) next.renames = Object.fromEntries(Object.entries(e.renames!).filter(([k]) => !gone.includes(k)));
+    if (gone.some((k) => e.notes?.[k] !== undefined)) next.notes = Object.fromEntries(Object.entries(e.notes!).filter(([k]) => !gone.includes(k)));
+    if (gone.some((k) => e.hidden?.includes(k))) next.hidden = e.hidden!.filter((k) => !gone.includes(k));
     applyEdits(next, label, 'user');
   }
 
@@ -3940,7 +3947,7 @@
     }
     const roomName = room !== null && lv.rooms[room] ? (renames[`r:${r.site}:${r.level}:${room}`] ?? lv.rooms[room].kind) : null;
     const sewer = /^w:(\d+):/.exec(r.site);
-    const siteName = renames[r.site] ?? (sewer ? `the sewers of ${settlementName(Number(sewer[1]))}` : ((await placeInfo(r.site))?.name ?? it.name ?? it.function));
+    const siteName = renames[r.site] ?? (sewer ? (renames[`w:${sewer[1]}`] ?? `the sewers of ${settlementName(Number(sewer[1]))}`) : ((await placeInfo(r.site))?.name ?? it.name ?? it.function));
     return { site: r.site, siteName, level: r.level, levelName: renames[`l:${r.site}:${r.level}`] ?? lv.name, room, roomName };
   }
 
@@ -4353,9 +4360,12 @@
   onMount(() => {
     view.onHud = (s) => (hud = s);
     // Underground sites take the name of the place they open from (`u:<layout>:<entrance>`,
-    // sewer sections `w:<layout>:<sx>:<sy>`), unless renamed.
+    // sewer sections `w:<layout>:<sx>:<sy>`), unless renamed; the sewers by the network's name
+    // (`w:<layout>`) once it has one.
     view.onInterior = (s) => {
-      inside = s && /^[uwk]:/.test(s.id) && !renames[s.id] ? { ...s, name: `${settlementName(Number(s.id.split(':')[1]))} · ${s.name}` } : s;
+      const net = s && !renames[s.id] && /^w:(\d+):/.exec(s.id);
+      const netName = net ? renames[`w:${net[1]}`] : undefined;
+      inside = s && netName ? { ...s, name: netName } : s && /^[uwk]:/.test(s.id) && !renames[s.id] ? { ...s, name: `${settlementName(Number(s.id.split(':')[1]))} · ${s.name}` } : s;
       // Out of the site being designed: the designer shuts.
       if (designer && s?.id !== designer.id) closeDesigner();
       else if (designer) designer.levelShown();

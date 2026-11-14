@@ -99,6 +99,7 @@ const STYLES: Record<string, KindStyle> = {
   ashlands: { ...REGION, fill: '#4f4c48' },
   region: { ...REGION, fill: '#4e4038' },
   district: { size: 12, fill: '#6b3f2a', spacing: 3, upper: true, minPx: 160, maxPx: 3200, prio: 25 },
+  plateau: { size: 11, fill: '#5a4330', spacing: 1, italic: true, minPx: 60, maxPx: 6000, prio: 22 },
 };
 
 /** A town's squares, parks, cemeteries and gates (`town::places`): as districts, smaller, nearer. */
@@ -807,9 +808,18 @@ export class Labels {
 
   /** Replace the labels of created sites (`c:` ids) with these. */
   setCreated(features: Feature[]) {
+    this.replaceAll('c:', features);
+  }
+
+  /** The plateaus someone named (`h:`), at their middles: these replace the ones before. */
+  setPlateaus(features: Feature[]) {
+    this.replaceAll('h:', features);
+  }
+
+  private replaceAll(prefix: string, features: Feature[]) {
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k];
-      if (!it.f.id.startsWith('c:')) continue;
+      if (!it.f.id.startsWith(prefix)) continue;
       this.unletter(it);
       this.items.splice(k, 1);
     }

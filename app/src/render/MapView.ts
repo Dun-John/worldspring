@@ -1072,6 +1072,9 @@ export class MapView {
     return c?.kind === 'building' ? c.id : null;
   }
 
+  /** The named plateaus' labels as last set (`plateauLabels`). */
+  private plateauKey = '';
+
   /** The labels hidden: a building drawn by hand hidden by its created id hides its business
    * pin (its building id) too. */
   private hiddenLabels(e: Edits): Set<string> {
@@ -1173,6 +1176,7 @@ export class MapView {
     this.made = [];
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
+    this.plateauKey = '';
     this.townHints.clear();
     this.setEdits(adjusted ?? world.edits ?? {}, false);
     this.labels.setPlaces(this.places);
@@ -1281,6 +1285,15 @@ export class MapView {
     }
     this.renames = nr;
     InteriorLayer.names = nr;
+    // Plateaus someone named: their names at their middles.
+    if (prev.plateaus !== next.plateaus || pr !== nr) {
+      const named = plateauLabels(next);
+      const key = JSON.stringify(named.map((f) => [f.id, f.name, f.x, f.y]));
+      if (key !== this.plateauKey) {
+        this.plateauKey = key;
+        this.labels?.setPlateaus(named);
+      }
+    }
     if (roadNames) queueMicrotask(() => this.askRoads());
     // Inside: the title, level and room names as renamed.
     if (renamed && this.interior) {
@@ -2134,4 +2147,27 @@ function linkIn(it: Interior, from: string): { level: number; x: number; y: numb
     if (k) return { level: li, x: k.x, y: k.y };
   }
   return null;
+}
+
+/** Labels for the plateaus someone named (`h:` renames), at each outline's middle (its centroid,
+ * as `list_plateaus` gives it). */
+export function plateauLabels(e: Edits): Feature[] {
+  const out: Feature[] = [];
+  for (const [id, name] of Object.entries(e.renames ?? {})) {
+    const p = id.startsWith('h:') ? e.plateaus?.[id] : undefined;
+    if (!p || !name || p.pts.length < 3) continue;
+    let [a, cx, cy] = [0, 0, 0];
+    for (let k = 0; k < p.pts.length; k++) {
+      const [x0, y0] = p.pts[k];
+      const [x1, y1] = p.pts[(k + 1) % p.pts.length];
+      const c = x0 * y1 - x1 * y0;
+      [a, cx, cy] = [a + c, cx + (x0 + x1) * c, cy + (y0 + y1) * c];
+    }
+    const xs = p.pts.map((q) => q[0]);
+    const ys = p.pts.map((q) => q[1]);
+    const [x, y] = Math.abs(a) > 1e-9 ? [cx / (3 * a), cy / (3 * a)] : [xs.reduce((s, v) => s + v, 0) / xs.length, ys.reduce((s, v) => s + v, 0) / ys.length];
+    const extent = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 40);
+    out.push({ id, kind: 'plateau', name, x, y, angle: 0, extent_ft: extent, detail: p.kind === 'islet' ? 'islet' : 'plateau' });
+  }
+  return out;
 }

@@ -435,7 +435,7 @@ export class GroundTool implements PointerTool {
       const f = touch.get(gx * BIG + gy);
       if (f === undefined) return null;
       const d = added(e.ground, gx, gy);
-      const next = this.value(brush, s, gx, gy, f, d);
+      const next = this.value(brush, s, gx, gy, f, d, touch);
       if (next === null) return null;
       const out = h + (next - d);
       // Ground that is dry stays above the water by it.
@@ -444,8 +444,10 @@ export class GroundTool implements PointerTool {
   }
 
   /** A square's new brushed change (ft, in tenths) from its touch `f` and change `d`; null where
-   * its neighbours aren't loaded (Smooth). */
-  private value(brush: Brush, s: GroundSettings, gx: number, gy: number, f: number, d: number): number | null {
+   * its ground isn't loaded (Smooth). Smooth eases it toward the mean of the stroke's own squares
+   * (`touch`) within half the radius (at least 10 ft), as `stamp_brush` does: not toward the
+   * ground beyond the rim, so a repeated stroke settles instead of piling up. */
+  private value(brush: Brush, s: GroundSettings, gx: number, gy: number, f: number, d: number, touch: Map<number, number>): number | null {
     let v: number;
     if (brush === 'raise') v = d + s.height * f;
     else if (brush === 'lower') v = d - s.height * f;
@@ -453,14 +455,18 @@ export class GroundTool implements PointerTool {
     else {
       const h = this.host.ground(gx, gy)?.[0];
       if (h === undefined) return null;
+      const win = Math.max(s.radius * 0.5, 2 * SQUARE_FT);
+      const r = Math.floor(win / SQUARE_FT) + 1;
       let [sum, n] = [0, 0];
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const g = this.host.ground(gx + dx, gy + dy);
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const [x, y] = [gx + dx, gy + dy];
+          if (x < 0 || y < 0 || (dx * dx + dy * dy) * SQUARE_FT * SQUARE_FT > win * win || !touch.has(x * BIG + y)) continue;
+          const g = this.host.ground(x, y);
           if (g) [sum, n] = [sum + g[0], n + 1];
         }
       }
-      v = d + s.strength * f * (sum / n - h);
+      v = d + s.strength * f * ((n ? sum / n : h) - h);
     }
     return Math.max(-MAX_ADD, Math.min(MAX_ADD, Math.round(v * 10))) / 10;
   }
@@ -481,7 +487,7 @@ export class GroundTool implements PointerTool {
         a = raw ? (values(raw)?.slice() ?? new Int16Array(BLOCK * BLOCK)) : new Int16Array(BLOCK * BLOCK);
         next.set(key, a);
       }
-      const v = this.value(brush, s, gx, gy, f, added(ground, gx, gy));
+      const v = this.value(brush, s, gx, gy, f, added(ground, gx, gy), touch);
       if (v !== null) a[(gy % BLOCK) * BLOCK + (gx % BLOCK)] = Math.round(v * 10);
     }
     const out: Record<string, string | null> = {};
