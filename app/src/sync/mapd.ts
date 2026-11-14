@@ -85,6 +85,14 @@ export class MapdSync {
   private following = false;
   /** Changes made here that mapd hasn't had. */
   private pending: EditOp[] = [];
+  /** Changes sent that mapd hasn't said it saved (`kept`), by number and the socket they went
+   * by: when that socket closes (mapd went away, or restarted) they go back to `pending`, to go
+   * on top of mapd's copy again (ops set or remove one entry each, so sending one twice does no
+   * harm). */
+  private unacked: { seq: number; ops: EditOp[]; ws: WebSocket }[] = [];
+  /** A hello was sent on this socket and mapd's copy hasn't come yet: changes made meanwhile
+   * wait in `pending` (its copy, sent before them, would otherwise cover them up here). */
+  private awaiting = false;
   /** mapd's copy, if it came when the app couldn't take it. */
   private untaken: WorldFile | null = null;
   /** The open world's edits replace mapd's copy (`open`), until mapd has answered with it. */
@@ -138,6 +146,7 @@ export class MapdSync {
     this.replace = replace;
     // (Changes kept for the world before belong to it: the browser has them.)
     this.pending = [];
+    this.unacked = [];
     this.untaken = null;
     this.following = false;
     this.keptSeq = this.sentSeq;
@@ -156,13 +165,28 @@ export class MapdSync {
 
   /** Say which world is open here (with `replace` until mapd has taken it). */
   private hello(take = false) {
-    if (this.world) this.send({ type: 'hello', world: this.world, seq: this.sentSeq, ...(take ? { take } : {}), ...(this.replace ? { replace: true } : {}) });
+    if (!this.world || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.requeue();
+    this.awaiting = true;
+    this.send({ type: 'hello', world: this.world, seq: this.sentSeq, ...(take ? { take } : {}), ...(this.replace ? { replace: true } : {}) });
   }
 
   /** The user changed the edits here. */
   ops(ops: EditOp[], change: Change) {
-    if (this.following && this.ws?.readyState === WebSocket.OPEN) this.send({ type: 'ops', ops, change, seq: ++this.sentSeq });
-    else this.pending.push(...ops);
+    const ws = this.ws;
+    if (this.following && !this.awaiting && !this.untaken && ws?.readyState === WebSocket.OPEN) {
+      this.unacked.push({ seq: ++this.sentSeq, ops, ws });
+      this.send({ type: 'ops', ops, change, seq: this.sentSeq });
+    } else this.pending.push(...ops);
+  }
+
+  /** Changes sent by a socket that has closed, which mapd may not have had: kept again, before
+   * any made since (those were made after them, as nothing is sent while some wait). */
+  private requeue() {
+    const gone = this.unacked.filter((u) => u.ws !== this.ws || this.ws?.readyState !== WebSocket.OPEN);
+    if (!gone.length) return;
+    this.unacked = this.unacked.filter((u) => !gone.includes(u));
+    this.pending = [...gone.flatMap((u) => u.ops), ...this.pending];
   }
 
   /** Give the app mapd's copy that came while it couldn't take it. */
@@ -206,6 +230,8 @@ export class MapdSync {
       if (this.connected) this.onStatus(false);
       this.connected = false;
       this.following = false;
+      this.awaiting = false;
+      this.requeue();
       if (this.closed) return;
       setTimeout(() => this.connect(), this.retryMs);
       this.retryMs = Math.min(30000, this.retryMs * 2);
@@ -217,22 +243,30 @@ export class MapdSync {
       // (mapd answers a hello with its copy only when it follows this tab.)
       this.following = true;
       this.replace = false;
+      this.awaiting = false;
       this.store = m.store ?? '';
       // (Its copy has every op sent before the hello it answers: `seq`, which an older mapd leaves out.)
+      // (Changes still unanswered went by this socket before the hello, so its copy has them.)
       if (m.seq != null) {
         this.lost = false;
         this.keptSeq = Math.max(this.keptSeq, m.seq);
+        this.unacked = this.unacked.filter((u) => u.seq > m.seq!);
       }
       this.take(m.world);
     }
     else if (m.type === 'kept') {
       this.keptSeq = Math.max(this.keptSeq, m.seq);
+      this.unacked = this.unacked.filter((u) => u.seq > m.seq);
       this.onKept();
     } else if (m.type === 'ops') this.onOps(m.ops ?? [], m.change ?? {}, m.author ?? 'agent');
     else if (m.type === 'focus') this.onFocus(m.x, m.y, m.size);
-    else if (m.type === 'remade') this.onRemade(m.file, m.gone ?? []);
+    else if (m.type === 'remade') {
+      this.awaiting = false;
+      this.onRemade(m.file, m.gone ?? []);
+    }
     else if (m.type === 'follow') {
       this.following = m.following;
+      if (!m.following) this.awaiting = false;
       // Changes sent just as mapd turned to another world come back: kept for later.
       if (m.refused) this.pending.push(...m.refused);
       // Followed now (mapd turned to this world for another tab): what is kept for it goes, by a
@@ -256,7 +290,13 @@ export class MapdSync {
       }
     } else if (m.type === 'error') {
       console.warn('[mapd]', m.message);
-      if (m.seq != null) this.lost = true;
+      // (A hello it could not answer with its copy is not waited for.)
+      if (m.seq == null) this.awaiting = false;
+      if (m.seq != null) {
+        this.lost = true;
+        // (Ops it could not apply: not sent again.)
+        this.unacked = this.unacked.filter((u) => u.seq !== m.seq);
+      }
       if (/switch worlds/.test(m.message)) this.onSaveError('switch');
       else if (/saved? to disk/.test(m.message)) {
         this.unsavedThere = true;

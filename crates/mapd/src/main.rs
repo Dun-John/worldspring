@@ -508,6 +508,15 @@ async fn mcp_post(State(app): State<Shared>, headers: HeaderMap, body: String) -
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().skip(1).any(|a| a == "--help" || a == "-h") {
+        println!("mapd: Worldspring's local agent server (127.0.0.1 only): MCP tools at /mcp, live sync with the app at /ws.");
+        println!("usage: mapd [--port N] [--dir DIR] [--app DIR]");
+        println!("  --port N    port to listen on (default 7777)");
+        println!("  --dir DIR   the worlds folder (default worlds)");
+        println!("  --app DIR   the built app to serve, when built (default app/dist)");
+        println!("  -h, --help  this text");
+        return;
+    }
     let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let port: u16 = arg("--port").and_then(|p| p.parse().ok()).unwrap_or(7777);
     let dir = PathBuf::from(arg("--dir").unwrap_or_else(|| "worlds".into()));

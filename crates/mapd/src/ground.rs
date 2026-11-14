@@ -44,7 +44,7 @@ pub fn list() -> Vec<Value> {
             "rise_ft": { "type": "number", "minimum": -ground::MAX_SHIFT_FT, "maximum": ground::MAX_SHIFT_FT, "default": 10 },
             "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0 },
         }), &[]) }),
-        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
+        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
         json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square within radius_ft (at most 200) of a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
     ]
 }

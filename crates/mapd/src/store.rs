@@ -138,7 +138,9 @@ fn recover(d: &Path) {
     }
 }
 
-/// The store's id, read from `<dir>/store-id` or made (time and process, hashed) and written there.
+/// The store's id, read from `<dir>/store-id` or made (time and process, hashed) and written there
+/// (a whole file or none: by a copy moved into place). A store that cannot be written takes an id
+/// from its folder's path, the same every start.
 fn store_id(dir: &Path) -> String {
     let path = dir.join("store-id");
     if let Ok(t) = std::fs::read_to_string(&path)
@@ -151,8 +153,16 @@ fn store_id(dir: &Path) -> String {
     h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
     h.write_u32(std::process::id());
     let id = format!("{:016x}", h.finish());
-    if let Err(e) = std::fs::write(&path, &id) {
-        eprintln!("mapd: cannot write {}: {e}", path.display());
+    let tmp = dir.join("store-id.tmp");
+    match std::fs::write(&tmp, &id).map_err(|e| e.to_string()).and_then(|()| replace(&tmp, &path)) {
+        Ok(()) => id,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            use sha2::{Digest, Sha256};
+            let at = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+            let id: String = Sha256::digest(at.to_string_lossy().as_bytes())[..8].iter().map(|b| format!("{b:02x}")).collect();
+            eprintln!("mapd: cannot write {} ({e}): the store's id comes from its folder ({id})", path.display());
+            id
+        }
     }
-    id
 }

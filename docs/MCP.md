@@ -122,7 +122,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 - **Undo:** the user has Undo in the app for each edit. For an agent, deletes come back with `restore_feature`
   (sites), `restore_objects` (cleared generated objects) and `restore_building` (the world's own buildings taken
   away or changed); `remove_crossings`, `delete_npc`, `delete_plot` and `delete_plateau` have no restore: make them
-  again.
+  again (a plateau deleted drops its name, note and hidden mark too: set them again; the user's Undo in the app
+  brings them back).
 
 ### Ids
 
@@ -2178,7 +2179,7 @@ How it applies:
   settlements stand) don't change, nor does `get_feature`'s `stairs` (the flights as generated); `get_battlemap`
   has the steps as drawn.
 - Limits: a stroke reaches at most 48 blocks; a world holds 1,500 blocks and 256 plateaus.
-- **Rock islets** are plateaus of kind `islet` (`raise_islet`): a rough ring of 12 to 20 corners, its top a few feet over the water of a river, lake or the sea, easing down over 6 ft, drawn as bare rock with a gravel rim. A building, tower or castle may stand on one (`create_feature` and `create_building` accept it, with no `moved`), as on the world's own islets (cities and metropolises on rivers and coasts). `delete_plateau` takes one away.
+- **Rock islets** are plateaus of kind `islet` (`raise_islet`): a rough ring of 12 to 20 corners, its top a few feet over the water of a river, lake or the sea, easing down over 6 ft, drawn as bare rock with a gravel rim. A building, tower or castle may stand on one (`create_feature` and `create_building` accept it, with no `moved`), as on the world's own islets (cities and metropolises on rivers and coasts). `delete_plateau` takes one away, with its name, note and hidden mark.
 
 ### `shape_ground`
 A round brush, or a stroke along `path` (not both: `at` and `path` together are refused). `raise` and `lower` move each square by up to `height_ft` (full out to `hardness` of the radius,
@@ -2241,6 +2242,8 @@ block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_
 
 ### `delete_plateau`
 Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).
+Its name (`rename_feature`), note and hidden mark go with it; there is no restore (the user's Undo in the app
+brings all of them back).
 
 ### `ground_heights`
 Every square of the box reaching `radius_ft` (default 25, at most 200) east, west, north and south of a place:
