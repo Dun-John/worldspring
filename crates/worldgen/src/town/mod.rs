@@ -45,6 +45,7 @@ pub mod horses;
 pub mod yurts;
 // R5 towns: districts drawn by hand, and renames kept when a patch is laid out anew.
 mod districts;
+mod fill;
 pub mod places;
 mod carry;
 pub mod wallgates;
@@ -58,6 +59,7 @@ use std::rc::Rc;
 use castle::castle;
 pub use castle::{DONJON_LOW, KeepKind, keep_tops, plain_keep_top};
 use catalog::{CATALOG, Naming, RESIDENTIAL, Ward};
+use fill::{ALLEY_HALF_FT, District, Fill, build_block, farm, fill_block, park, split_field, square_kind};
 use geom::*;
 use mesh::Mesh;
 
@@ -4162,7 +4164,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         if i < n_inner && w == Ward::Castle {
             paved(&d, l);
         }
-        let mut streets = street_lines(i, &d);
+        let streets = street_lines(i, &d);
         // Too steep to build a street front on (and not a common on the slope): the block is a
         // terraced garden of a few houses.
         let sparse = matches!(w, Ward::Merchant | Ward::Craft | Ward::Common | Ward::Noble | Ward::Slum | Ward::Docks | Ward::Temple) && block.len() >= 3 && site.grade(&block) > 0.18;
@@ -4174,86 +4176,6 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         }
         let (first, towers_at, gates_at, walls_at) = (l.buildings.len(), l.towers.len(), l.gate_towers.len(), l.walls.len());
         match w {
-            Ward::Plaza => {
-                // A monument, pushed toward the square's longest side (watabou's market).
-                let mr = plan.roll(i, 40);
-                if mr < 0.9 {
-                    let mb = block.len();
-                    let e = (0..mb).max_by(|&x, &y| dist(block[x], block[(x + 1) % mb]).total_cmp(&dist(block[y], block[(y + 1) % mb]))).unwrap_or(0);
-                    let (a, b) = (block[e], block[(e + 1) % mb]);
-                    let cen = centroid(&block);
-                    let at = lerp(cen, lerp(a, b, 0.5), 0.2 + 0.4 * plan.roll(i, 41));
-                    let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
-                    let size = 13.0 + 13.0 * plan.roll(i, 42);
-                    let plinth = if mr < 0.6 {
-                        rect(at, u, size, 13.0 + 13.0 * plan.roll(i, 43))
-                    } else {
-                        let o = circle(at, 0.6 * size, 8);
-                        o.iter().map(|q| add(at, rotate(sub(*q, at), libm::atan2(u[1], u[0])))).collect()
-                    };
-                    l.monuments.push(plinth);
-                }
-                // What the square is for: a market, busy, sparse or for a market day; a city's
-                // may be a civic square with no market at all.
-                let kr = plan.roll(i, 44);
-                let civic = if s.tier >= Tier::City { 0.25 } else { 0.0 };
-                let kind = if kr < civic {
-                    PlazaKind::Civic
-                } else if kr < civic + 0.4 * (1.0 - civic) {
-                    PlazaKind::Market
-                } else if kr < civic + 0.75 * (1.0 - civic) {
-                    PlazaKind::MarketSparse
-                } else {
-                    PlazaKind::MarketDay
-                };
-                l.plazas.push(Plaza { pts: block, kind, spot: places::Spot::Patch(i as u32) })
-            }
-            Ward::Farm => farm(site, &block, &mut prng, l, &mut plots, if ch.ward.contains_key(&i) { 0 } else { 1 }, true),
-            Ward::Park if sparse => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
-            // (A block left too small for a park once its streets are cut, 6,000 sq ft or 40 ft
-            // across: built on as a common ward's, `PARK_SLIVER`.)
-            Ward::Park if area(&block).abs() < 6000.0 || obb(&block).short < 40.0 => {
-                let (dp, mut prng) = lots_of(i, Ward::Common, false);
-                l.blocks.push(block.clone());
-                build_block(site, &block, &mut streets, Ward::Common, &dp, &mut prng, l, None)
-            }
-            // A park: as set by hand, else a formal garden by the castle (palace grounds), most
-            // often by the nobles, now and then in a capital or a metropolis (its first always), a
-            // common elsewhere (a town's always, and one on a slope). Its ways in are on its sides
-            // along a street (not the water's).
-            Ward::Park => {
-                let rich = s.capital || s.tier == Tier::Metropolis;
-                let by = |w: Ward| (0..m).any(|e| c.labels[e] >= 0 && ward[c.labels[e] as usize] == Some(w));
-                let t = plan.roll(i, 72);
-                // (Formal only on ground level enough to lay out as a terrace: 6 ft of relief at most.)
-                let (lo, hi) = site.dry_relief(&block);
-                let level = hi - lo <= 6.0;
-                let formal = level && (plan.palace == Some(i) || (!plan.steep[i] && s.tier >= Tier::City && (by(Ward::Castle) || (by(Ward::Noble) && t < 0.6) || (rich && t < 0.35))));
-                let kind = ch.park.get(&i).copied().unwrap_or(if formal { ParkKind::Formal } else { ParkKind::Common });
-                // (R5 towns: the common picked for a cemetery, `cemetery::inner_pick`.)
-                let kind = if kind == ParkKind::Common && !ch.park.contains_key(&i) && cem_inner == Some(i) { ParkKind::Cemetery } else { kind };
-                // (R5 towns, 114: a steppe town's horse pens and market in place of a formal garden.)
-                let kind = if kind == ParkKind::Formal && !ch.park.contains_key(&i) && s.culture % 5 == 4 { ParkKind::Horses } else { kind };
-                let lines: Vec<(P, f64)> = street_lines(i, &d)
-                    .into_iter()
-                    .filter(|&(n, off)| {
-                        (0..m).any(|e| {
-                            let mid = lerp(c.pts[e], c.pts[(e + 1) % m], 0.5);
-                            (dot(mid, n) - off - d[e]).abs() < 0.5 && strip(e, &d).is_some() && i < n_inner
-                        })
-                    })
-                    .collect();
-                let nb = block.len();
-                let fronts = (0..nb).map(|e| lines.iter().any(|&(n, off)| (dot(lerp(block[e], block[(e + 1) % nb], 0.5), n) - off).abs() < 1.0)).collect();
-                let key = hash3(plan.pseed, i as i64, ch.reroll.get(&i).copied().unwrap_or(0) as i64, 0x9a4c);
-                let mut pk = park(site, &block, kind, fronts, key);
-                if kind == ParkKind::Cemetery {
-                    pk.cemetery = Some(cemetery::Style::of(s, i, false));
-                    cem_laid += (!ch.park.contains_key(&i)) as usize;
-                }
-                pk.spot = places::Spot::Patch(i as u32);
-                l.parks.push(pk);
-            }
             // The gate faces the centre (the plaza, if the citadel backs onto it).
             Ward::Castle => {
                 // (The town wall as laid near it: the sides along it are that wall, as `insets` sets
@@ -4387,33 +4309,71 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     }
                 }
             }
-            Ward::Slum if i >= n_inner => {
-                // Sprawl thins out away from the city: lots are kept with a probability that
-                // falls with distance from the corners this patch shares with the city.
-                let anchors: Vec<P> = (0..m)
-                    .filter(|&e| {
-                        let nb = c.labels[e];
-                        nb >= 0 && usable(nb as usize)
-                    })
-                    .flat_map(|e| [c.pts[e], c.pts[(e + 1) % m]])
-                    .collect();
-                let reach = c.pts.iter().map(|q| dist(*q, centroid(&c.pts))).fold(0.0, f64::max);
-                build_block(site, &block, &mut streets, w, &dp, &mut prng, l, Some((&anchors, reach)))
-            }
-            // A temple's close (`fits` saw that it does): the block's lots, then the temple and its
-            // churchyard in the middle, the houses round them cut back to face them.
-            Ward::Temple if closes.contains(&i) => {
-                let (alleys, fronts) = (l.roads.len(), streets.clone());
-                build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None);
-                let laid = squares::close(site, &block, &fronts, plan.roll(i, 65), first, alleys, l);
-                debug_assert!(laid, "a close that fits is laid out");
-            }
+            // Every other block's fill (`fill_block`), as its ward and its patch decide.
             _ => {
-                build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None);
-                // A temple's patch with no lots that would do keeps its temple, alone.
-                if w == Ward::Temple && l.buildings.len() == first {
-                    squares::lone_temple(site, &block, plan.roll(i, 65), l);
-                }
+                let fill = match w {
+                    // A market square: a monument (by roll in `fill_block`), and what it is for.
+                    Ward::Plaza => Fill::Square(square_kind(plan.roll(i, 44), s.tier >= Tier::City)),
+                    Ward::Farm => Fill::Farm { class: if ch.ward.contains_key(&i) { 0 } else { 1 }, rng: prng },
+                    Ward::Park if sparse => Fill::Lots { ward: w, dp, rng: prng, thin: None, close: false },
+                    // (A block left too small for a park once its streets are cut, 6,000 sq ft or 40 ft
+                    // across: built on as a common ward's, `PARK_SLIVER`.)
+                    Ward::Park if area(&block).abs() < 6000.0 || obb(&block).short < 40.0 => {
+                        let (dp, prng) = lots_of(i, Ward::Common, false);
+                        l.blocks.push(block.clone());
+                        Fill::Lots { ward: Ward::Common, dp, rng: prng, thin: None, close: false }
+                    }
+                    // A park: as set by hand, else a formal garden by the castle (palace grounds), most
+                    // often by the nobles, now and then in a capital or a metropolis (its first always), a
+                    // common elsewhere (a town's always, and one on a slope). Its ways in are on its sides
+                    // along a street (not the water's).
+                    Ward::Park => {
+                        let rich = s.capital || s.tier == Tier::Metropolis;
+                        let by = |w: Ward| (0..m).any(|e| c.labels[e] >= 0 && ward[c.labels[e] as usize] == Some(w));
+                        let t = plan.roll(i, 72);
+                        // (Formal only on ground level enough to lay out as a terrace: 6 ft of relief at most.)
+                        let (lo, hi) = site.dry_relief(&block);
+                        let level = hi - lo <= 6.0;
+                        let formal = level && (plan.palace == Some(i) || (!plan.steep[i] && s.tier >= Tier::City && (by(Ward::Castle) || (by(Ward::Noble) && t < 0.6) || (rich && t < 0.35))));
+                        let kind = ch.park.get(&i).copied().unwrap_or(if formal { ParkKind::Formal } else { ParkKind::Common });
+                        // (R5 towns: the common picked for a cemetery, `cemetery::inner_pick`.)
+                        let kind = if kind == ParkKind::Common && !ch.park.contains_key(&i) && cem_inner == Some(i) { ParkKind::Cemetery } else { kind };
+                        // (R5 towns, 114: a steppe town's horse pens and market in place of a formal garden.)
+                        let kind = if kind == ParkKind::Formal && !ch.park.contains_key(&i) && s.culture % 5 == 4 { ParkKind::Horses } else { kind };
+                        let ways: Vec<(P, f64)> = street_lines(i, &d)
+                            .into_iter()
+                            .filter(|&(n, off)| {
+                                (0..m).any(|e| {
+                                    let mid = lerp(c.pts[e], c.pts[(e + 1) % m], 0.5);
+                                    (dot(mid, n) - off - d[e]).abs() < 0.5 && strip(e, &d).is_some() && i < n_inner
+                                })
+                            })
+                            .collect();
+                        let key = hash3(plan.pseed, i as i64, ch.reroll.get(&i).copied().unwrap_or(0) as i64, 0x9a4c);
+                        let cemetery = (kind == ParkKind::Cemetery).then(|| cemetery::Style::of(s, i, false));
+                        if kind == ParkKind::Cemetery {
+                            cem_laid += (!ch.park.contains_key(&i)) as usize;
+                        }
+                        Fill::Park { kind, ways, key, cemetery }
+                    }
+                    // Sprawl thins out away from the city: lots are kept with a probability that
+                    // falls with distance from the corners this patch shares with the city.
+                    Ward::Slum if i >= n_inner => {
+                        let anchors: Vec<P> = (0..m)
+                            .filter(|&e| {
+                                let nb = c.labels[e];
+                                nb >= 0 && usable(nb as usize)
+                            })
+                            .flat_map(|e| [c.pts[e], c.pts[(e + 1) % m]])
+                            .collect();
+                        let reach = c.pts.iter().map(|q| dist(*q, centroid(&c.pts))).fold(0.0, f64::max);
+                        Fill::Lots { ward: w, dp, rng: prng, thin: Some((anchors, reach)), close: false }
+                    }
+                    // A temple's close where `fits` saw that it does (else, with no lots that would
+                    // do, its temple alone).
+                    _ => Fill::Lots { ward: w, dp, rng: prng, thin: None, close: w == Ward::Temple && closes.contains(&i) },
+                };
+                fill_block(site, &block, streets, fill, &|k| plan.roll(i, k), places::Spot::Patch(i as u32), l, &mut plots);
             }
         }
         // A square where streets meet trims the lots at its corner of the block.
@@ -4844,53 +4804,6 @@ fn poly_seg_dist(poly: &[P], a: P, b: P) -> f64 {
     d
 }
 
-/// Block and lot parameters shared by a district (after watabou's per-district rolls).
-struct District {
-    /// Target lot area (ft²).
-    min_sq: f64,
-    /// 0.2–1: how irregular alley cuts are allowed to be.
-    grid_chaos: f64,
-    /// 0.4–1: how much lot and block sizes vary.
-    size_chaos: f64,
-    /// Lots per block before an alley cuts it (4–14).
-    block_size: f64,
-}
-
-impl District {
-    /// The ward's usual lot area (ft²).
-    fn base(w: Ward) -> f64 {
-        match w {
-            Ward::Merchant => 1400.0,
-            Ward::Craft => 1600.0,
-            Ward::Noble => 4200.0,
-            Ward::Slum => 650.0,
-            Ward::Docks => 2600.0,
-            Ward::Military => 2400.0,
-            Ward::Temple => 2200.0,
-            Ward::Castle => 2600.0,
-            Ward::Park => 9000.0,
-            _ => 1100.0,
-        }
-    }
-
-    fn roll(w: Ward, seed: u64) -> District {
-        let mut r = Pcg32::new(seed, 53);
-        let base = District::base(w);
-        let spread = r.next_f64();
-        let mut d = District {
-            min_sq: base * (0.75 + 0.9 * spread),
-            grid_chaos: 0.2 + 0.8 * r.next_f64(),
-            size_chaos: 0.4 + 0.6 * r.next_f64(),
-            block_size: 4.0 + 10.0 * r.next_f64(),
-        };
-        if w == Ward::Slum {
-            d.grid_chaos *= 0.5;
-            d.block_size *= 2.0;
-        }
-        d
-    }
-}
-
 /// A town castle's moat by roll (v63 castles, `moat`): a city's or a metropolis's citadel, the
 /// town's own or one set on a ward by hand, about half of them.
 fn castle_moat(s: &Settlement, inner: bool, age: u8, roll: f64, wide: f64) -> Option<moat::Plan> {
@@ -5021,11 +4934,6 @@ fn rotate(v: P, ang: f64) -> P {
     [v[0] * c - v[1] * s, v[0] * s + v[1] * c]
 }
 
-fn smoothstep_f(e0: f64, e1: f64, x: f64) -> f64 {
-    let t = ((x - e0) / (e1 - e0).max(1e-9)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 /// Every edge of a convex polygon as a street line (outward normal, offset).
 fn edge_lines(poly: &[P]) -> Vec<(P, f64)> {
     let m = poly.len();
@@ -5095,279 +5003,6 @@ fn shortest(adj: &Graph, start: (i64, i64), targets: &std::collections::BTreeSet
         }
     }
     None
-}
-
-/// Alleys, lots and buildings for one block (after watabou's Bisector). Big blocks are cut
-/// by 16 ft alleys into blocks of about `block_size` lots; blocks are cut into lots square to
-/// their street frontage; lots without frontage stay open (yards and gardens); buildings
-/// fill their lots wall to wall, some standing back from the street.
-#[allow(clippy::too_many_arguments)]
-fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
-    let mut parts: Vec<Vec<P>> = Vec::new();
-    let alley_area = dp.min_sq * dp.block_size;
-    if area(block).abs() > alley_area * libm::pow(2.0, dp.size_chaos * (2.0 * rng.next_f64() - 1.0)) {
-        let mut chords: Vec<(P, P)> = Vec::new();
-        bisect(block, alley_area, (16.0 * dp.grid_chaos).max(2.0), ALLEY_HALF_FT, rng, &mut parts, streets, &mut chords, 0);
-        // Alleys in towns are paved like their streets (the sprawl outside keeps dirt lanes).
-        if thin.is_none() && l.tier >= Tier::Town {
-            for (a, b) in chords {
-                l.roads.push((vec![a, b], 3, 2.0 * ALLEY_HALF_FT + 1.0));
-            }
-        }
-    } else {
-        parts.push(block.to_vec());
-    }
-    let lot_variance = (4.0 * dp.size_chaos).max(1.2);
-    for part in parts {
-        let mut lots: Vec<Vec<P>> = Vec::new();
-        bisect(&part, dp.min_sq, lot_variance, 0.0, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0);
-        for lot in lots {
-            let lot = clean(&blunt(&clean(&lot), 60.0, 10.0));
-            // No triangles, slivers or scraps: those corners stay open ground.
-            if lot.len() < 4 {
-                continue;
-            }
-            let la = area(&lot).abs();
-            let o = obb(&lot);
-            if la < dp.min_sq / 4.0 || o.short < 16.0 || la < 0.62 * o.long * o.short {
-                continue;
-            }
-            // Frontage: a street or alley line one of the lot's edges lies on.
-            let Some(&(n, c)) = streets.iter().find(|(n, c)| fronts(&lot, *n, *c)) else { continue };
-            // (A terraced garden on a steep block: a house here and there.)
-            if ward == Ward::Park && rng.next_f64() > 0.15 {
-                continue;
-            }
-            if let Some((anchors, reach)) = thin {
-                let c = centroid(&lot);
-                let d = anchors.iter().map(|a| dist(*a, c)).fold(f64::MAX, f64::min);
-                let keep = if anchors.is_empty() { 0.35 } else { 1.0 - smoothstep_f(0.0, 0.9 * reach, d) };
-                if rng.next_f64() > keep {
-                    continue;
-                }
-            }
-            // Irregular street fronts: some buildings stand back from the street line.
-            let indent = rng.next_f64() * (crate::core::sqrt(la) / 3.0).min(16.0);
-            let poly = if indent > 6.5 { clean(&clip_plain(&lot, n, c - indent)) } else { lot };
-            if poly.len() < 3 || area(&poly).abs() < 150.0 || !site.buildable(&poly) {
-                continue;
-            }
-            let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
-        }
-    }
-}
-
-/// Cut off corners sharper than `min_deg` with a chord square to the corner's bisector,
-/// `depth` ft in from the tip (keeps the polygon convex; houses don't come to a point).
-fn blunt(poly: &[P], min_deg: f64, depth: f64) -> Vec<P> {
-    let m = poly.len();
-    if m < 3 {
-        return poly.to_vec();
-    }
-    let cos_min = libm::cos(min_deg.to_radians());
-    let mut out = poly.to_vec();
-    for i in 0..m {
-        let (p, a, b) = (poly[i], poly[(i + m - 1) % m], poly[(i + 1) % m]);
-        let (u, v) = (sub(a, p), sub(b, p));
-        let (lu, lv) = (len(u), len(v));
-        if lu < 1e-9 || lv < 1e-9 {
-            continue;
-        }
-        let (u, v) = (mul(u, 1.0 / lu), mul(v, 1.0 / lv));
-        if dot(u, v) <= cos_min {
-            continue;
-        }
-        // Inward bisector; keep the part at least `depth` along it from the tip.
-        let bis = add(u, v);
-        let bl = len(bis).max(1e-9);
-        let n = mul(bis, -1.0 / bl);
-        out = clip_plain(&out, n, dot(p, n) - depth);
-        if out.len() < 3 {
-            return out;
-        }
-    }
-    out
-}
-
-/// Half the width of an alley cut through a block (ft).
-pub(super) const ALLEY_HALF_FT: f64 = 8.0;
-
-/// A lot edge of useful length lies on the line (normal `n`, offset `c`).
-fn fronts(lot: &[P], n: P, c: f64) -> bool {
-    let m = lot.len();
-    (0..m).any(|i| {
-        let (a, b) = (lot[i], lot[(i + 1) % m]);
-        (dot(a, n) - c).abs() < 0.5 && (dot(b, n) - c).abs() < 0.5 && dist(a, b) > 6.0
-    })
-}
-
-/// Recursive straight-cut bisection of a convex polygon (watabou's Bisector, straight cuts
-/// only so pieces stay convex). The cut crosses the long axis of the minimum bounding box
-/// near the middle; it runs square to the crossed edge that is most parallel to that axis,
-/// so pieces meet their frontage at right angles. Cuts that split too unevenly are retried
-/// in frames rotated by 36°. `gap` > 0 leaves a lane of width 2·gap along each cut, whose
-/// sides are recorded in `cuts` as street lines.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
-fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, cuts: &mut Vec<(P, f64)>, chords: &mut Vec<(P, P)>, depth: u32) {
-    let a = area(poly).abs();
-    let avg4 = (rng.next_f64() + rng.next_f64() + rng.next_f64() + rng.next_f64()) / 4.0;
-    if depth > 18 || a < min_area * libm::pow(variance, (avg4 * 2.0 - 1.0).abs()) {
-        out.push(poly.to_vec());
-        return;
-    }
-    let frame = obb(poly).axis;
-    let c = centroid(poly);
-    let m = poly.len();
-    for attempt in 0..10 {
-        let ang = attempt as f64 * std::f64::consts::PI / 5.0;
-        let (ca, sa) = (libm::cos(ang), libm::sin(ang));
-        let axis = [frame[0] * ca - frame[1] * sa, frame[0] * sa + frame[1] * ca];
-        let (lo, hi) = extent(poly, axis);
-        if hi - lo < 1e-6 {
-            continue;
-        }
-        let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
-        let cf = (dot(c, axis) - lo) / (hi - lo);
-        let pos = lo + (hi - lo) * (cf + avg3) / 2.0;
-        // The crossed edge most parallel to the axis: the cut leaves it at a right angle.
-        let mut best: Option<(f64, P, P)> = None;
-        for i in 0..m {
-            let (p, q) = (poly[i], poly[(i + 1) % m]);
-            let (dp_, dq) = (dot(p, axis) - pos, dot(q, axis) - pos);
-            if (dp_ <= 0.0) == (dq <= 0.0) {
-                continue;
-            }
-            let e = sub(q, p);
-            let el = len(e);
-            if el < 1e-9 {
-                continue;
-            }
-            let u = mul(e, 1.0 / el);
-            let cs = dot(u, axis).abs();
-            if best.is_none_or(|b| cs > b.0) {
-                best = Some((cs, lerp(p, q, dp_ / (dp_ - dq)), u));
-            }
-        }
-        let Some((_, x, nrm)) = best else { continue };
-        let cc = dot(x, nrm);
-        let p1 = clean(&clip_plain(poly, nrm, cc - gap));
-        let p2 = clean(&clip_plain(poly, mul(nrm, -1.0), -(cc + gap)));
-        if p1.len() < 3 || p2.len() < 3 {
-            continue;
-        }
-        let (a1, a2) = (area(&p1).abs(), area(&p2).abs());
-        if a1.max(a2) > 2.0 * variance * a1.min(a2).max(1e-9) {
-            continue;
-        }
-        if gap > 0.0 {
-            cuts.push((nrm, cc - gap));
-            cuts.push((mul(nrm, -1.0), -(cc + gap)));
-            // The alley's centre line across this piece.
-            let dir = [-nrm[1], nrm[0]];
-            let m = poly.len();
-            let hits: Vec<P> = (0..m)
-                .filter_map(|k| {
-                    let (a, b) = (poly[k], poly[(k + 1) % m]);
-                    let (da, db) = (dot(a, nrm) - cc, dot(b, nrm) - cc);
-                    (da * db < 0.0).then(|| lerp(a, b, da / (da - db)))
-                })
-                .collect();
-            let lo = hits.iter().min_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
-            let hi = hits.iter().max_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
-            if let (Some(&a), Some(&b)) = (lo, hi) {
-                chords.push((a, b));
-            }
-        }
-        bisect(&p1, min_area, variance, gap, rng, out, cuts, chords, depth + 1);
-        bisect(&p2, min_area, variance, gap, rng, out, cuts, chords, depth + 1);
-        return;
-    }
-    out.push(poly.to_vec());
-}
-
-/// Farmland (after watabou's fields): the patch is split into plots, square to the long
-/// side of each piece's bounding box with some skewed cuts, leaving hedged lanes between
-/// plots; corners are chamfered; one plot in five gets a farmhouse on its longest side. v63: the
-/// plots go to `out` with `class` (0: always kept; one with its farmhouse on it is too), which
-/// fields the belt keeps chosen once all are known (`build_town`); `houses` off: open ground past
-/// the farmland, fields only.
-fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout, out: &mut Vec<(Vec<P>, u8)>, class: u8, houses: bool) {
-    let spread = rng.next_f64();
-    let mut plots: Vec<Vec<P>> = Vec::new();
-    split_field(block, 67_600.0 * (1.0 + spread), rng, &mut plots, 0);
-    for plot in plots {
-        let f = clean(&chamfer(&plot, 17.0));
-        if f.len() < 3 || area(&f).abs() < 2_000.0 || site.wet(centroid(&f)) || !site.dry_outline(&f, 8.0) || site.grade(&f) > 0.08 {
-            continue;
-        }
-        let mut housed = false;
-        if houses && rng.next_f64() < 0.2 {
-            let m = f.len();
-            let e = (0..m).max_by(|&x, &y| dist(f[x], f[(x + 1) % m]).total_cmp(&dist(f[y], f[(y + 1) % m]))).unwrap_or(0);
-            let (a, b) = (f[e], f[(e + 1) % m]);
-            let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
-            let mut inward = [-u[1], u[0]];
-            if dot(inward, sub(centroid(&f), a)) < 0.0 {
-                inward = mul(inward, -1.0);
-            }
-            let (w, dp) = (rng.range(52.0, 65.0), rng.range(26.0, 39.0));
-            let house = rect(add(add(a, mul(u, 0.5 * w + 6.0)), mul(inward, 0.5 * dp + 6.0)), u, w, dp);
-            if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
-                let pad = site.pad(&house);
-                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
-                housed = true;
-            }
-        }
-        out.push((f, if housed { 0 } else { class }));
-    }
-}
-
-/// A park on `block` (local ft) with the ground it is planned on: every `PARK_GROUND_FT` over its
-/// bounds (on the world's grid of that spacing, so a corner moved changes no sample).
-fn park(site: &Site, block: &[P], kind: ParkKind, fronts: Vec<bool>, key: u64) -> Park {
-    let (x0, y0, x1, y1) = block.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
-    let s = PARK_GROUND_FT;
-    let snap = |v: f64, c: f64| crate::core::floor((v + c) / s) * s - c;
-    let origin = [snap(x0, site.center[0]), snap(y0, site.center[1])];
-    let (nx, ny) = (((x1 - origin[0]) / s) as usize + 2, ((y1 - origin[1]) / s) as usize + 2);
-    let pts: Vec<P> = (0..ny).flat_map(|j| (0..nx).map(move |i| [origin[0] + i as f64 * s, origin[1] + j as f64 * s])).collect();
-    // (Wet: on the water or by a river, whose valley the drawn ground cuts otherwise than planned.)
-    let ground = ParkGround {
-        origin,
-        nx,
-        ny,
-        h: pts.iter().map(|&p| site.height(p) as f32).collect(),
-        wet: pts.iter().map(|&p| site.wet(p) || site.near_river(p, 80.0)).collect(),
-        water: pts.iter().map(|&p| site.wet(p)).collect(),
-    };
-    Park { pts: block.to_vec(), kind, fronts, ground, key, cemetery: None, spot: places::Spot::None }
-}
-
-fn split_field(poly: &[P], max_area: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, depth: u32) {
-    if area(poly).abs() <= max_area || depth > 10 {
-        out.push(poly.to_vec());
-        return;
-    }
-    let axis = obb(poly).axis;
-    let (lo, hi) = extent(poly, axis);
-    let cut = lo + (hi - lo) * (0.5 + rng.range(-0.2, 0.2));
-    let mut n = axis;
-    if rng.next_f64() < 0.5 {
-        let t = rng.range(-std::f64::consts::FRAC_PI_8, std::f64::consts::FRAC_PI_8);
-        let (c, s) = (libm::cos(t), libm::sin(t));
-        n = [axis[0] * c - axis[1] * s, axis[0] * s + axis[1] * c];
-    }
-    let cen = centroid(poly);
-    let at = add(cen, mul(axis, cut - dot(cen, axis)));
-    let cc = dot(at, n);
-    const LANE_HALF: f64 = 10.0;
-    for half in [clean(&clip_plain(poly, n, cc - LANE_HALF)), clean(&clip_plain(poly, mul(n, -1.0), -(cc + LANE_HALF)))] {
-        if half.len() >= 3 && area(&half).abs() > 1.0 {
-            split_field(&half, max_area, rng, out, depth + 1);
-        }
-    }
 }
 
 /// Trim every corner: a chord between points `t` ft along both edges from the corner.
