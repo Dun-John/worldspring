@@ -60,7 +60,8 @@ use std::rc::Rc;
 use castle::castle;
 pub use castle::{DONJON_LOW, KeepKind, keep_tops, plain_keep_top};
 use catalog::{CATALOG, Naming, RESIDENTIAL, Ward};
-use fill::{ALLEY_HALF_FT, District, Fill, build_block, farm, fill_block, park, split_field, square_kind};
+use fill::{ALLEY_HALF_FT, Block, District, Fill, build_block, farm, fill_block, park, split_field, square_kind};
+pub use fill::{Front, qa_fill};
 use geom::*;
 use mesh::Mesh;
 
@@ -4077,7 +4078,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         let fronts = street_lines(p, &d);
         let (dp, mut prng) = lots_of(p, Ward::Temple, true);
         let mut aside = Layout::empty(li, lc, lr, lt);
-        build_block(site, &b, &mut fronts.clone(), Ward::Temple, &dp, &mut prng, &mut aside, None);
+        build_block(site, Block::Plain(&b), &Front::of(&b, &fronts), Ward::Temple, &dp, &mut prng, &mut aside, None);
         if !squares::close(site, &b, &fronts, plan.roll(p, 65), 0, 0, &mut aside) {
             return false;
         }
@@ -4244,7 +4245,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                             .collect();
                         streets.push(k.line);
                         let (dp, mut prng) = lots_of(i, Ward::Noble, false);
-                        build_block(site, &k.left, &mut streets, Ward::Noble, &dp, &mut prng, l, None);
+                        build_block(site, Block::Plain(&k.left), &Front::of(&k.left, &streets), Ward::Noble, &dp, &mut prng, l, None);
                     }
                     l.castle_cut = cut.as_ref().map_or_else(|r| *r, |_| castle::CUT_DONE);
                     let set = castle::Setting {
@@ -4301,9 +4302,9 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         // (Set by hand: the castle's after all, a tower house, `towerhouse`; its
                         // block left open.)
                         if plan.ward[i] == Some(Ward::Castle) {
-                            let mut streets = street_lines(i, &d);
+                            let streets = street_lines(i, &d);
                             let (dp, mut prng) = lots_of(i, Ward::Noble, false);
-                            build_block(site, &block, &mut streets, Ward::Noble, &dp, &mut prng, l, None);
+                            build_block(site, Block::Plain(&block), &Front::of(&block, &streets), Ward::Noble, &dp, &mut prng, l, None);
                         } else {
                             tower_houses.push((i, c.pts.clone()));
                         }

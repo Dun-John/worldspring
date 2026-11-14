@@ -6,6 +6,7 @@
 //! and the square's or park's id comes from its `places::Spot`.
 
 use super::catalog::Ward;
+use super::clip::{self, Shape};
 use super::geom::*;
 use super::{Building, Ground, Layout, PARK_GROUND_FT, Park, ParkGround, ParkKind, Plaza, PlazaKind, Site, Structure, cemetery, chamfer, places, rect, rotate, squares};
 use crate::core::rng::Pcg32;
@@ -47,7 +48,7 @@ pub(super) fn square_kind(t: f64, city: bool) -> PlazaKind {
 /// square's or park's id is keyed by; farmland's plots go to `plots` (kept or not once the town's
 /// fields are all known). The block itself is not recorded in `l.blocks`: its town does that.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn fill_block(site: &Site, block: &[P], mut streets: Vec<(P, f64)>, fill: Fill, roll: &dyn Fn(i64) -> f64, spot: places::Spot, l: &mut Layout, plots: &mut Vec<(Vec<P>, u8)>) {
+pub(super) fn fill_block(site: &Site, block: &[P], streets: Vec<(P, f64)>, fill: Fill, roll: &dyn Fn(i64) -> f64, spot: places::Spot, l: &mut Layout, plots: &mut Vec<(Vec<P>, u8)>) {
     let first = l.buildings.len();
     match fill {
         Fill::Square(kind) => {
@@ -83,10 +84,10 @@ pub(super) fn fill_block(site: &Site, block: &[P], mut streets: Vec<(P, f64)>, f
         Fill::Lots { ward, dp, mut rng, thin, close } => {
             // A temple's close: the block's lots, then the temple and its churchyard in the
             // middle, the houses round them cut back to face them.
-            let (alleys, fronts) = (l.roads.len(), if close { streets.clone() } else { Vec::new() });
-            build_block(site, block, &mut streets, ward, &dp, &mut rng, l, thin.as_ref().map(|(a, reach)| (a.as_slice(), *reach)));
+            let alleys = l.roads.len();
+            build_block(site, Block::Plain(block), &Front::of(block, &streets), ward, &dp, &mut rng, l, thin.as_ref().map(|(a, reach)| (a.as_slice(), *reach)));
             if close {
-                let laid = squares::close(site, block, &fronts, roll(65), first, alleys, l);
+                let laid = squares::close(site, block, &streets, roll(65), first, alleys, l);
                 debug_assert!(laid, "a close that fits is laid out");
             } else if ward == Ward::Temple && l.buildings.len() == first {
                 squares::lone_temple(site, block, roll(65), l);
@@ -142,18 +143,102 @@ impl District {
     }
 }
 
-/// Alleys, lots and buildings for one block (after watabou's Bisector). Big blocks are cut
-/// by 16 ft alleys into blocks of about `block_size` lots; blocks are cut into lots square to
-/// their street frontage; lots without frontage stay open (yards and gardens); buildings
-/// fill their lots wall to wall, some standing back from the street.
+/// A street front: the street's line as a block's street lines always were (outward normal `n`,
+/// offset `c`: the block lies where `dot(p, n) <= c`) and the stretch of it from `a` to `b` (both on
+/// the line) that the street runs along. A lot fronts it when one of its edges, longer than 6 ft,
+/// lies on the line within 0.5 ft and overlaps the stretch by more than 6 ft.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Front {
+    pub n: P,
+    pub c: f64,
+    pub a: P,
+    pub b: P,
+}
+
+impl Front {
+    /// Fronts from street lines (as `street_lines` gives them) and the block they run along: each
+    /// line's stretch is where the block's outline lies on it (none: an empty stretch, at the point
+    /// of the line nearest the block's first corner). The lines keep their order and their floats.
+    pub(super) fn of(block: &[P], lines: &[(P, f64)]) -> Vec<Front> {
+        let m = block.len();
+        lines
+            .iter()
+            .map(|&(n, c)| {
+                let t = [-n[1], n[0]];
+                let on = |p: P| (dot(p, n) - c).abs() < 0.5;
+                let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+                for i in 0..m {
+                    let (p, q) = (block[i], block[(i + 1) % m]);
+                    if on(p) && on(q) {
+                        lo = lo.min(dot(p, t)).min(dot(q, t));
+                        hi = hi.max(dot(p, t)).max(dot(q, t));
+                    }
+                }
+                if lo > hi {
+                    let s = block.first().map_or(0.0, |p| dot(*p, t));
+                    (lo, hi) = (s, s);
+                }
+                Front { n, c, a: add(mul(n, c), mul(t, lo)), b: add(mul(n, c), mul(t, hi)) }
+            })
+            .collect()
+    }
+
+    /// Whether `poly` fronts this street: one of its edges longer than 6 ft lies on the line within
+    /// 0.5 ft and overlaps the stretch by more than 6 ft.
+    pub fn fronted_by(&self, poly: &[P]) -> bool {
+        let t = [-self.n[1], self.n[0]];
+        let (s0, s1) = (dot(self.a, t).min(dot(self.b, t)), dot(self.a, t).max(dot(self.b, t)));
+        let m = poly.len();
+        (0..m).any(|i| {
+            let (p, q) = (poly[i], poly[(i + 1) % m]);
+            on_line(p, q, self.n, self.c) && dist(p, q) > 6.0 && dot(p, t).max(dot(q, t)).min(s1) - dot(p, t).min(dot(q, t)).max(s0) > 6.0
+        })
+    }
+}
+
+/// A block to fill with lots (`build_block`).
+pub(super) enum Block<'a> {
+    /// A block as `build_town` makes them (convex or nearly): filled as it always was, a lot
+    /// fronting a street when it has an edge on the street's line (stretches not looked at).
+    Plain(&'a [P]),
+    /// A hand-laid block, concave or with holes (courtyards). A single convex ring without holes
+    /// is filled as `Plain`; anything else is cut into convex pieces (`clip::convex_pieces`), each
+    /// filled in turn as a plain block is, but with its lots fronting only along the fronts'
+    /// stretches and the alleys cut in that piece. A piece fronting no street stays open.
+    Region(&'a [Shape]),
+}
+
+/// Alleys, lots and buildings for one block (after watabou's Bisector), fronting `fronts`. Big
+/// blocks are cut by 16 ft alleys into blocks of about `block_size` lots; blocks are cut into lots
+/// square to their street frontage; lots without frontage stay open (yards and gardens); buildings
+/// fill their lots wall to wall, some standing back from the street. A region's pieces are filled
+/// in `convex_pieces`' order, one stream through them all.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
+pub(super) fn build_block<G: Ground>(site: &G, block: Block, fronts: &[Front], ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
+    match block {
+        Block::Plain(ring) => lay_block(site, ring, &mut fronts.to_vec(), false, ward, dp, rng, l, thin),
+        Block::Region([one]) if one.holes.is_empty() && clip::is_convex(&one.outer) => lay_block(site, &one.outer, &mut fronts.to_vec(), false, ward, dp, rng, l, thin),
+        Block::Region(set) => {
+            for piece in clip::convex_pieces(set) {
+                if fronts.iter().any(|f| f.fronted_by(&piece)) {
+                    lay_block(site, &piece, &mut fronts.to_vec(), true, ward, dp, rng, l, thin);
+                }
+            }
+        }
+    }
+}
+
+/// One convex block's alleys, lots and buildings (`build_block`). The alleys' sides join
+/// `fronts` as they are cut; `spans`: whether a lot must front a street along its stretch (a
+/// region's piece) or only on its line (a plain block, as always).
+#[allow(clippy::too_many_arguments)]
+fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: bool, ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
     let mut parts: Vec<Vec<P>> = Vec::new();
     let alley_area = dp.min_sq * dp.block_size;
     if area(block).abs() > alley_area * libm::pow(2.0, dp.size_chaos * (2.0 * rng.next_f64() - 1.0)) {
         let mut chords: Vec<(P, P)> = Vec::new();
-        bisect(block, alley_area, (16.0 * dp.grid_chaos).max(2.0), ALLEY_HALF_FT, rng, &mut parts, streets, &mut chords, 0);
-        // Alleys in towns are paved like their streets (the sprawl outside keeps dirt lanes).
+        bisect(block, alley_area, (16.0 * dp.grid_chaos).max(2.0), ALLEY_HALF_FT, rng, &mut parts, fronts, &mut chords, 0);
+        // Alleys in towns are paved like their fronts (the sprawl outside keeps dirt lanes).
         if thin.is_none() && l.tier >= Tier::Town {
             for (a, b) in chords {
                 l.roads.push((vec![a, b], 3, 2.0 * ALLEY_HALF_FT + 1.0));
@@ -177,8 +262,8 @@ pub(super) fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P
             if la < dp.min_sq / 4.0 || o.short < 16.0 || la < 0.62 * o.long * o.short {
                 continue;
             }
-            // Frontage: a street or alley line one of the lot's edges lies on.
-            let Some(&(n, c)) = streets.iter().find(|(n, c)| fronts(&lot, *n, *c)) else { continue };
+            // Frontage: a street or alley one of the lot's edges lies on (along its stretch, in a piece).
+            let Some(&Front { n, c, .. }) = fronts.iter().find(|f| if spans { f.fronted_by(&lot) } else { on_line_lot(&lot, f.n, f.c) }) else { continue };
             // (A terraced garden on a steep block: a house here and there.)
             if ward == Ward::Park && rng.next_f64() > 0.15 {
                 continue;
@@ -239,12 +324,17 @@ fn blunt(poly: &[P], min_deg: f64, depth: f64) -> Vec<P> {
 pub(super) const ALLEY_HALF_FT: f64 = 8.0;
 
 /// A lot edge of useful length lies on the line (normal `n`, offset `c`).
-fn fronts(lot: &[P], n: P, c: f64) -> bool {
+fn on_line_lot(lot: &[P], n: P, c: f64) -> bool {
     let m = lot.len();
     (0..m).any(|i| {
         let (a, b) = (lot[i], lot[(i + 1) % m]);
-        (dot(a, n) - c).abs() < 0.5 && (dot(b, n) - c).abs() < 0.5 && dist(a, b) > 6.0
+        on_line(a, b, n, c) && dist(a, b) > 6.0
     })
+}
+
+/// Both ends of an edge lie on the line (normal `n`, offset `c`) within 0.5 ft.
+fn on_line(a: P, b: P, n: P, c: f64) -> bool {
+    (dot(a, n) - c).abs() < 0.5 && (dot(b, n) - c).abs() < 0.5
 }
 
 /// Recursive straight-cut bisection of a convex polygon (watabou's Bisector, straight cuts
@@ -252,10 +342,10 @@ fn fronts(lot: &[P], n: P, c: f64) -> bool {
 /// near the middle; it runs square to the crossed edge that is most parallel to that axis,
 /// so pieces meet their frontage at right angles. Cuts that split too unevenly are retried
 /// in frames rotated by 36°. `gap` > 0 leaves a lane of width 2·gap along each cut, whose
-/// sides are recorded in `cuts` as street lines.
+/// sides are recorded in `cuts` as fronts, as far as the lane runs.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, cuts: &mut Vec<(P, f64)>, chords: &mut Vec<(P, P)>, depth: u32) {
+fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, cuts: &mut Vec<Front>, chords: &mut Vec<(P, P)>, depth: u32) {
     let a = area(poly).abs();
     let avg4 = (rng.next_f64() + rng.next_f64() + rng.next_f64() + rng.next_f64()) / 4.0;
     if depth > 18 || a < min_area * libm::pow(variance, (avg4 * 2.0 - 1.0).abs()) {
@@ -307,9 +397,7 @@ fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, o
             continue;
         }
         if gap > 0.0 {
-            cuts.push((nrm, cc - gap));
-            cuts.push((mul(nrm, -1.0), -(cc + gap)));
-            // The alley's centre line across this piece.
+            // The alley's centre line across this piece; its sides, as far as it runs, are fronts.
             let dir = [-nrm[1], nrm[0]];
             let m = poly.len();
             let hits: Vec<P> = (0..m)
@@ -321,9 +409,17 @@ fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, o
                 .collect();
             let lo = hits.iter().min_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
             let hi = hits.iter().max_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
-            if let (Some(&a), Some(&b)) = (lo, hi) {
-                chords.push((a, b));
-            }
+            let (a, b) = match (lo, hi) {
+                (Some(&a), Some(&b)) => {
+                    chords.push((a, b));
+                    (a, b)
+                }
+                _ => (x, x),
+            };
+            let side = |s: f64| (add(a, mul(nrm, s)), add(b, mul(nrm, s)));
+            let ((a1, b1), (a2, b2)) = (side(-gap), side(gap));
+            cuts.push(Front { n: nrm, c: cc - gap, a: a1, b: b1 });
+            cuts.push(Front { n: mul(nrm, -1.0), c: -(cc + gap), a: a2, b: b2 });
         }
         bisect(&p1, min_area, variance, gap, rng, out, cuts, chords, depth + 1);
         bisect(&p2, min_area, variance, gap, rng, out, cuts, chords, depth + 1);
@@ -418,4 +514,38 @@ pub(super) fn split_field(poly: &[P], max_area: f64, rng: &mut Pcg32, out: &mut 
 fn smoothstep_f(e0: f64, e1: f64, x: f64) -> f64 {
     let t = ((x - e0) / (e1 - e0).max(1e-9)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Level dry ground everywhere (`qa_fill`).
+struct Level;
+
+impl Ground for Level {
+    fn buildable(&self, _: &[P]) -> bool {
+        true
+    }
+    fn pad(&self, _: &[P]) -> f32 {
+        0.0
+    }
+    fn height(&self, _: P) -> f64 {
+        0.0
+    }
+    fn wet(&self, _: P) -> bool {
+        false
+    }
+    fn near_water(&self, _: P, _: f64) -> bool {
+        false
+    }
+}
+
+/// QA entry for `towncheck fills`; generation never calls it. `region` (town-local ft) filled
+/// through `Block::Region` as a hand-laid block is: `ward`'s lots fronting `fronts`, its `District`
+/// rolled from `seed` and its lots cut by a stream of its own, on level dry ground in a town of
+/// `tier`. Returns the buildings' outlines and the alleys cut (centre lines; a town's only).
+pub fn qa_fill(region: &[Shape], fronts: &[Front], ward: Ward, seed: u64, tier: Tier) -> (Vec<Vec<P>>, Vec<(P, P)>) {
+    let dp = District::roll(ward, seed);
+    let mut rng = Pcg32::new(seed, 47);
+    let mut l = Layout::empty(0, [0.0, 0.0], 0.0, tier);
+    build_block(&Level, Block::Region(region), fronts, ward, &dp, &mut rng, &mut l, None);
+    let alleys = l.roads.iter().filter(|r| r.0.len() == 2).map(|r| (r.0[0], r.0[1])).collect();
+    (l.buildings.into_iter().map(|b| b.poly).collect(), alleys)
 }

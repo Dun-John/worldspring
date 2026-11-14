@@ -111,7 +111,15 @@
 //!   that must not change output run it before and after (Roadmap 6 P2: seeds 1-24 and the MCP fixture).
 //!   `SAME_EDITS=n`: towns edited per world (default 8).
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [same|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
+//! - `fills` (not in `all`; default seeds 1-8; Roadmap 6 P2): hand-laid blocks filled with lots (`town::qa_fill`,
+//!   `Block::Region`). Each town's blocks (`Layout::blocks`, the ward of a building in it) made concave: a corner cut
+//!   out with its new sides fronting a street, the same with them not fronting, a courtyard hole, two neighbours
+//!   joined across their street. Counts: buildings outside their region or over a hole, overlapping buildings,
+//!   buildings with no front (an edge on a street's or alley's line, up to the 16 ft a house stands back), fills
+//!   not the same twice or with their rings rotated; built area per area against the convex blocks filled the same
+//!   way. Up to 6 SVGs to `SVG_DIR` (default `target/towncheck-fills`), and those whose listing holds `FILL_SVG`.
+//!
+//! Usage: cargo run --release -p worldgen --example towncheck -- [same|fills|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -5016,6 +5024,279 @@ fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
     }
 }
 
+/// SVGs written by `fills` so far (up to 6 a run).
+static FILL_SVGS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// `fills`: hand-laid blocks filled through `town::qa_fill` (`Block::Region`). Each town's blocks made concave four
+/// ways (`fill_variant`), each filled twice and once with its rings rotated, checked (`fill_rules`), and its built area
+/// per area set against the convex blocks it came from filled the same way.
+fn fills(ctx: &mut Ctx, label: &str, r: &mut Report) {
+    use town::clip::{self, Shape};
+    use worldgen::core::hash::fnv64;
+    const KINDS: [&str; 4] = ["corner cut, fronting", "corner cut, not fronting", "courtyard", "joined"];
+    r.counts(&["fills", "buildings", "variants not made", "buildings outside their region or over a hole", "buildings overlapping", "buildings with no front", "fills not the same twice", "fills not the same with rings rotated", "convex blocks' buildings (today's path)", "convex blocks' buildings with no front"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let dir = std::path::PathBuf::from(std::env::var("SVG_DIR").unwrap_or_else(|_| "target/towncheck-fills".into()));
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town {
+            continue;
+        }
+        // Each block anticlockwise, with the ward of a building in it (blocks with none left out).
+        let blocks: Vec<(Vec<P>, Ward)> = l
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                let b: Vec<P> = if area(b) < 0.0 { b.iter().rev().copied().collect() } else { b.clone() };
+                let w = l.buildings.iter().find(|h| contains(&b, centroid(&h.poly)))?.ward;
+                Some((b, w))
+            })
+            .collect();
+        // A convex block alone, filled with the lots of its ward: (built area, area).
+        // (And its buildings with no front, to set the rule's own misses against.)
+        let convex = |ring: &[P], ward: Ward, seed: u64| {
+            let fronts = fronts_on(ring, &edge_lines(ring, None));
+            let (houses, alleys) = town::qa_fill(&[Shape::ring(ring.to_vec())], &fronts, ward, seed, l.tier);
+            let fronted = fronted_by(&fronts, &alleys);
+            (houses.iter().map(|h| area(h).abs()).sum::<f64>(), area(ring).abs(), houses.len(), houses.iter().filter(|h| !fronted(h)).count())
+        };
+        for (bi, (b, ward)) in blocks.iter().enumerate() {
+            let seed = fnv64(format!("{label} {li} {bi}").as_bytes());
+            let o = centroid(b);
+            let local = |ring: &[P]| ring.iter().map(|p| sub(*p, o)).collect::<Vec<P>>();
+            let ring = local(b);
+            for (k, kind) in KINDS.iter().enumerate() {
+                let tag = format!("{label} L{li} block {bi} ({kind})");
+                let Some((region, lines, refs)) = fill_variant(k, &ring, &blocks.iter().enumerate().filter(|(j, _)| *j != bi).map(|(j, x)| (j, local(&x.0))).collect::<Vec<_>>()) else {
+                    r.tally("variants not made", 1);
+                    continue;
+                };
+                let fronts = fronts_on(&region[0].outer, &lines);
+                let (houses, alleys) = town::qa_fill(&region, &fronts, *ward, seed, l.tier);
+                r.tally("fills", 1);
+                r.tally("buildings", houses.len());
+                if town::qa_fill(&region, &fronts, *ward, seed, l.tier) != (houses.clone(), alleys.clone()) {
+                    r.add("fills not the same twice", 1.0, tag.clone());
+                }
+                let rot = |v: &Vec<P>| {
+                    let mut v = v.clone();
+                    v.rotate_left(1);
+                    v
+                };
+                let turned: Vec<Shape> = region.iter().map(|s| Shape { outer: rot(&s.outer), holes: s.holes.iter().map(rot).collect() }).collect();
+                if town::qa_fill(&turned, &fronts, *ward, seed, l.tier) != (houses.clone(), alleys.clone()) {
+                    r.add("fills not the same with rings rotated", 1.0, tag.clone());
+                }
+                fill_rules(&region, &fronts, &houses, &alleys, &tag, o, r);
+                let (mut built, mut whole) = (0.0, 0.0);
+                for (j, rr) in refs.iter().enumerate() {
+                    let (bt, a, n, lone) = convex(rr, *ward, seed ^ j as u64);
+                    built += bt;
+                    whole += a;
+                    r.tally("convex blocks' buildings (today's path)", n);
+                    r.tally("convex blocks' buildings with no front", lone);
+                }
+                let share = houses.iter().map(|h| area(h).abs()).sum::<f64>() / clip::area(&region).max(1.0);
+                if built > 0.0 {
+                    r.value(&format!("built share against convex: {kind}"), share / (built / whole), tag.clone());
+                }
+                // (The first six, each a variant in turn from a later town; `FILL_SVG=text`: also every fill whose tag holds it.)
+                let n = FILL_SVGS.load(Ordering::Relaxed);
+                let asked = std::env::var("FILL_SVG").is_ok_and(|t| tag.contains(&t));
+                if asked || (n < 6 && n % 4 == k && li >= 3 * n) {
+                    FILL_SVGS.store(n + 1, Ordering::Relaxed);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    let path = dir.join(format!("fills-{label}-{li}-{bi}-{k}.svg"));
+                    std::fs::write(&path, fill_svg(&region, &fronts, &houses, &alleys)).unwrap();
+                    say!("  svg: {}", path.display());
+                }
+            }
+        }
+    }
+}
+
+/// The street line along edge `e` of an anticlockwise ring (outward normal, offset), as `town` keeps them.
+fn edge_line(ring: &[P], e: usize) -> Option<(P, f64)> {
+    let (a, b) = (ring[e], ring[(e + 1) % ring.len()]);
+    let el = dist(a, b);
+    (el > 1e-9).then(|| {
+        let n = [(b[1] - a[1]) / el, -(b[0] - a[0]) / el];
+        (n, dot(a, n))
+    })
+}
+
+/// The street lines along every edge of an anticlockwise ring but `skip`.
+fn edge_lines(ring: &[P], skip: Option<usize>) -> Vec<(P, f64)> {
+    (0..ring.len()).filter(|&e| Some(e) != skip).filter_map(|e| edge_line(ring, e)).collect()
+}
+
+/// Fronts on `lines` where `outer` runs along them (within 0.5 ft); lines it doesn't run along are left out.
+fn fronts_on(outer: &[P], lines: &[(P, f64)]) -> Vec<town::Front> {
+    let m = outer.len();
+    lines
+        .iter()
+        .filter_map(|&(n, c)| {
+            let t = [-n[1], n[0]];
+            let on = |p: P| (dot(p, n) - c).abs() < 0.5;
+            let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+            for i in 0..m {
+                let (p, q) = (outer[i], outer[(i + 1) % m]);
+                if on(p) && on(q) {
+                    lo = lo.min(dot(p, t)).min(dot(q, t));
+                    hi = hi.max(dot(p, t)).max(dot(q, t));
+                }
+            }
+            (hi > lo).then(|| town::Front { n, c, a: add(mul(n, c), mul(t, lo)), b: add(mul(n, c), mul(t, hi)) })
+        })
+        .collect()
+}
+
+/// A block (anticlockwise, about its centroid) made concave: 0, a corner cut out with its new sides fronting a
+/// street; 1, the same with them not fronting; 2, a courtyard hole; 3, joined to a neighbour of `others` across their
+/// street (two edges facing 2 to 40 ft apart along 30 ft or more). Gives the region (one shape), its street lines and
+/// the convex blocks it came from; none when the variant can't be made (or doesn't come out concave).
+fn fill_variant(k: usize, ring: &[P], others: &[(usize, Vec<P>)]) -> Option<(Vec<town::clip::Shape>, Vec<(P, f64)>, Vec<Vec<P>>)> {
+    use town::clip::{self, Shape};
+    let m = ring.len();
+    let unit = |v: P| mul(v, 1.0 / len(v).max(1e-9));
+    let (region, lines, refs) = match k {
+        0 | 1 => {
+            let s = 0.4 * dist(ring[0], ring[1]).min(dist(ring[m - 1], ring[0]));
+            if s < 25.0 {
+                return None;
+            }
+            let (v0, u) = (ring[0], unit(sub(ring[1], ring[0])));
+            let w = [-u[1], u[0]];
+            let q = |x: f64, y: f64| add(v0, add(mul(u, x), mul(w, y)));
+            let cut = vec![q(-2000.0, -2000.0), q(s, -2000.0), q(s, s), q(-2000.0, s)];
+            let mut lines = edge_lines(ring, None);
+            if k == 0 {
+                lines.push((mul(w, -1.0), dot(q(0.0, s), mul(w, -1.0))));
+                lines.push((mul(u, -1.0), dot(q(s, 0.0), mul(u, -1.0))));
+            }
+            (clip::difference(&[Shape::ring(ring.to_vec())], &[Shape::ring(cut)]), lines, vec![ring.to_vec()])
+        }
+        2 => {
+            let hole: Vec<P> = ring.iter().rev().map(|p| mul(*p, 0.4)).collect();
+            (clip::normalize(&[Shape { outer: ring.to_vec(), holes: vec![hole] }]), edge_lines(ring, None), vec![ring.to_vec()])
+        }
+        _ => {
+            let mut found = None;
+            'pairs: for (_, other) in others {
+                let mo = other.len();
+                for ei in 0..m {
+                    let (p0, p1) = (ring[ei], ring[(ei + 1) % m]);
+                    let (u, li) = (unit(sub(p1, p0)), dist(p0, p1));
+                    let n = [u[1], -u[0]];
+                    for ej in 0..mo {
+                        let (q0, q1) = (other[ej], other[(ej + 1) % mo]);
+                        let uj = unit(sub(q1, q0));
+                        let (g0, g1) = (dot(sub(q0, p0), n), dot(sub(q1, p0), n));
+                        if dot(u, uj) > -0.98 || !(2.0..40.0).contains(&g0) || !(2.0..40.0).contains(&g1) {
+                            continue;
+                        }
+                        let (tq0, tq1) = (dot(sub(q0, p0), u), dot(sub(q1, p0), u));
+                        let (t0, t1) = (tq0.min(tq1).max(0.0), tq0.max(tq1).min(li));
+                        if t1 - t0 < 30.0 {
+                            continue;
+                        }
+                        let foot = |x: P| add(add(q0, mul(uj, dot(sub(x, q0), uj))), n);
+                        let (a0, a1) = (add(p0, mul(u, t0)), add(p0, mul(u, t1)));
+                        let bridge = vec![sub(a0, n), sub(a1, n), foot(a1), foot(a0)];
+                        found = Some((ei, other.clone(), ej, bridge));
+                        break 'pairs;
+                    }
+                }
+            }
+            let (ei, other, ej, bridge) = found?;
+            let mut lines = edge_lines(ring, Some(ei));
+            lines.extend(edge_lines(&other, Some(ej)));
+            (clip::union_all(&[Shape::ring(ring.to_vec()), Shape::ring(other.clone()), Shape::ring(bridge)]), lines, vec![ring.to_vec(), other])
+        }
+    };
+    let concave = region.len() == 1 && (!region[0].holes.is_empty() || !clip::is_convex(&region[0].outer));
+    concave.then_some((region, lines, refs))
+}
+
+/// One fill's rules: buildings outside the region or over a hole (by more than 1 ft²), overlapping (the same), and
+/// with no front (`fronted_by`).
+fn fill_rules(region: &[town::clip::Shape], fronts: &[town::Front], houses: &[Vec<P>], alleys: &[(P, P)], tag: &str, o: P, r: &mut Report) {
+    use town::clip::{self, Shape};
+    let fronted = fronted_by(fronts, alleys);
+    let boxes: Vec<[f64; 4]> = houses.iter().map(|h| bbox(h)).collect();
+    for (i, h) in houses.iter().enumerate() {
+        let c = add(o, centroid(h));
+        let out = clip::area(&clip::difference(&[Shape::ring(h.clone())], region));
+        if out > 1.0 {
+            r.add("buildings outside their region or over a hole", out, format!("{tag}: {out:.0} ft² at {}", at(c)));
+        }
+        for j in i + 1..houses.len() {
+            let (a, b) = (boxes[i], boxes[j]);
+            if a[0] > b[2] || b[0] > a[2] || a[1] > b[3] || b[1] > a[3] {
+                continue;
+            }
+            let x = clip::area(&clip::intersection(&[Shape::ring(h.clone())], &[Shape::ring(houses[j].clone())]));
+            if x > 1.0 {
+                r.add("buildings overlapping", x, format!("{tag}: {x:.0} ft² at {}", at(c)));
+            }
+        }
+        if !fronted(h) {
+            r.add("buildings with no front", area(h).abs(), format!("{tag}: at {}", at(c)));
+        }
+    }
+}
+
+/// Whether a building fronts a street of `fronts` or a side of an alley (centre lines, 16 ft wide): an edge over 4 ft
+/// on its line or up to 16.5 ft back from it, along its stretch by more than 4 ft.
+fn fronted_by(fronts: &[town::Front], alleys: &[(P, P)]) -> impl Fn(&[P]) -> bool {
+    let mut all: Vec<town::Front> = fronts.to_vec();
+    for &(a, b) in alleys {
+        let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
+        for n in [[u[1], -u[0]], [-u[1], u[0]]] {
+            let half = 8.0;
+            all.push(town::Front { n, c: dot(a, n) - half, a: sub(a, mul(n, half)), b: sub(b, mul(n, half)) });
+        }
+    }
+    move |h: &[P]| {
+        let m = h.len();
+        (0..m).any(|i| {
+            let (p, q) = (h[i], h[(i + 1) % m]);
+            dist(p, q) > 4.0
+                && all.iter().any(|f| {
+                    let (dp, dq) = (f.c - dot(p, f.n), f.c - dot(q, f.n));
+                    let t = [-f.n[1], f.n[0]];
+                    let (s0, s1) = (dot(f.a, t).min(dot(f.b, t)), dot(f.a, t).max(dot(f.b, t)));
+                    (-0.5..16.5).contains(&dp) && (dp - dq).abs() < 0.5 && dot(p, t).max(dot(q, t)).min(s1) - dot(p, t).min(dot(q, t)).max(s0) > 4.0
+                })
+        })
+    }
+}
+
+/// A fill drawn: the region (grey, holes white), its fronts (red), alleys (dashed) and buildings (brown).
+fn fill_svg(region: &[town::clip::Shape], fronts: &[town::Front], houses: &[Vec<P>], alleys: &[(P, P)]) -> String {
+    let pts: Vec<P> = region.iter().flat_map(|s| s.outer.iter().copied()).collect();
+    let b = bbox(&pts);
+    let pad = 20.0;
+    let (w, h) = (b[2] - b[0] + 2.0 * pad, b[3] - b[1] + 2.0 * pad);
+    let xy = |p: P| format!("{:.1},{:.1}", p[0] - b[0] + pad, b[3] - p[1] + pad);
+    let ring = |r: &[P]| format!("M{}Z", r.iter().map(|p| xy(*p)).collect::<Vec<_>>().join(" L"));
+    let mut s = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w:.0} {h:.0}\" width=\"{:.0}\" height=\"{:.0}\">\n<rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n", w * 2.0, h * 2.0);
+    for sh in region {
+        let d: String = std::iter::once(&sh.outer).chain(sh.holes.iter()).map(|r| ring(r)).collect();
+        s += &format!("<path d=\"{d}\" fill=\"#ddd\" fill-rule=\"evenodd\" stroke=\"#888\" stroke-width=\"0.5\"/>\n");
+    }
+    for &(a, c) in alleys {
+        s += &format!("<path d=\"M{} L{}\" stroke=\"#999\" stroke-width=\"16\" stroke-opacity=\"0.4\"/>\n", xy(a), xy(c));
+    }
+    for f in fronts {
+        s += &format!("<path d=\"M{} L{}\" stroke=\"#c33\" stroke-width=\"2\"/>\n", xy(f.a), xy(f.b));
+    }
+    for p in houses {
+        s += &format!("<path d=\"{}\" fill=\"#b8865a\" stroke=\"#5a3a1a\" stroke-width=\"0.6\"/>\n", ring(p));
+    }
+    s + "</svg>\n"
+}
+
 /// `under`: every underground site of every layout (`u:` ways down, a few sewer sections each, keep dungeons
 /// `k:`) with a hash of its serialized interior on stdout (`U <label> <id> <hash> <theme> <levels>`), and the
 /// totals: sites, levels, rooms, doors, secret doors, loops (doors beyond a spanning tree of each level's
@@ -6220,7 +6501,7 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 27] = ["same", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 28] = ["same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -6237,7 +6518,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["fills"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -6280,6 +6561,7 @@ fn main() {
                 "places" => places(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 "same" => same(&mut ctx, &label.replace(' ', ""), &mut r),
+                "fills" => fills(&mut ctx, &label.replace(' ', ""), &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
             say!("  {mode} ({:.1} s)", t.elapsed().as_secs_f64());
