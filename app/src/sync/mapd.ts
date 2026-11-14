@@ -10,14 +10,15 @@ export type Change = Record<string, unknown> & { tool?: string; id?: string };
 
 export type FromMapd =
   | { type: 'welcome'; client: number }
-  | { type: 'world'; world: WorldFile }
+  | { type: 'world'; world: WorldFile; store?: string; seq?: number }
+  | { type: 'kept'; seq: number }
   | { type: 'ops'; ops: EditOp[]; change: Change; author: string }
   | { type: 'render'; id: number; x: number; y: number; size: number; width_px?: number; format?: 'jpeg' | 'png' }
   | { type: 'focus'; x: number; y: number; size: number }
   | { type: 'follow'; following: boolean; refused?: EditOp[] }
   | { type: 'resync' }
   | { type: 'saved' }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; seq?: number }
   | { type: 'remade'; file: WorldFile; gone?: RemadeGone[] };
 
 /** A settlement an agent's sketch change took away on purpose (`t0::remap::Gone`). */
@@ -73,6 +74,8 @@ export class MapdSync {
   onFollow: (following: boolean) => void = () => {};
   /** mapd could not save, or switch to this tab's world before saving (`'switch'`); saved
    * again after that (null). */
+  /** mapd saved the ops sent to disk (`inStep` may be true now). */
+  onKept: () => void = () => {};
   onSaveError: (problem: 'save' | 'switch' | null) => void = () => {};
   connected = false;
 
@@ -86,6 +89,16 @@ export class MapdSync {
   private untaken: WorldFile | null = null;
   /** The open world's edits replace mapd's copy (`open`), until mapd has answered with it. */
   private replace = false;
+  /** The last ops sent (by number), and the last mapd said it saved to disk: mapd has every
+   * change sent only when they meet (a mapd that never says, an older one, never meets them). */
+  private sentSeq = 0;
+  private keptSeq = 0;
+  /** Ops sent that mapd could not take: not in step until its copy comes again. */
+  private lost = false;
+  /** mapd said it could not save to disk (until it says it saved). */
+  private unsavedThere = false;
+  /** mapd's world store, by the id its copy came with (none: an older mapd). */
+  private store = '';
   private retryMs = 1000;
   private closed = false;
   private readonly url = socketUrl();
@@ -102,7 +115,7 @@ export class MapdSync {
   /** Whether mapd has every change made here: it follows this tab, which has nothing unsent
    * (nor a copy of mapd's waiting, nor edits still to replace mapd's with). */
   get inStep(): boolean {
-    return this.keeps && this.ws?.readyState === WebSocket.OPEN && !this.pending.length && !this.untaken && !this.replace;
+    return this.keeps && this.ws?.readyState === WebSocket.OPEN && !this.pending.length && !this.untaken && !this.replace && !this.lost && !this.unsavedThere && this.keptSeq >= this.sentSeq;
   }
 
   /** Changes made here that mapd hasn't had. */
@@ -110,9 +123,9 @@ export class MapdSync {
     return this.pending.length;
   }
 
-  /** Which mapd this tab reaches (null: none). */
+  /** Which mapd this tab reaches (null: none), with its world store as last heard. */
   get where(): string | null {
-    return this.url;
+    return this.url && `${this.url}#${this.store}`;
   }
 
   /**
@@ -127,6 +140,7 @@ export class MapdSync {
     this.pending = [];
     this.untaken = null;
     this.following = false;
+    this.keptSeq = this.sentSeq;
     this.hello();
   }
 
@@ -142,12 +156,12 @@ export class MapdSync {
 
   /** Say which world is open here (with `replace` until mapd has taken it). */
   private hello(take = false) {
-    if (this.world) this.send({ type: 'hello', world: this.world, ...(take ? { take } : {}), ...(this.replace ? { replace: true } : {}) });
+    if (this.world) this.send({ type: 'hello', world: this.world, seq: this.sentSeq, ...(take ? { take } : {}), ...(this.replace ? { replace: true } : {}) });
   }
 
   /** The user changed the edits here. */
   ops(ops: EditOp[], change: Change) {
-    if (this.following && this.ws?.readyState === WebSocket.OPEN) this.send({ type: 'ops', ops, change });
+    if (this.following && this.ws?.readyState === WebSocket.OPEN) this.send({ type: 'ops', ops, change, seq: ++this.sentSeq });
     else this.pending.push(...ops);
   }
 
@@ -203,9 +217,18 @@ export class MapdSync {
       // (mapd answers a hello with its copy only when it follows this tab.)
       this.following = true;
       this.replace = false;
+      this.store = m.store ?? '';
+      // (Its copy has every op sent before the hello it answers: `seq`, which an older mapd leaves out.)
+      if (m.seq != null) {
+        this.lost = false;
+        this.keptSeq = Math.max(this.keptSeq, m.seq);
+      }
       this.take(m.world);
     }
-    else if (m.type === 'ops') this.onOps(m.ops ?? [], m.change ?? {}, m.author ?? 'agent');
+    else if (m.type === 'kept') {
+      this.keptSeq = Math.max(this.keptSeq, m.seq);
+      this.onKept();
+    } else if (m.type === 'ops') this.onOps(m.ops ?? [], m.change ?? {}, m.author ?? 'agent');
     else if (m.type === 'focus') this.onFocus(m.x, m.y, m.size);
     else if (m.type === 'remade') this.onRemade(m.file, m.gone ?? []);
     else if (m.type === 'follow') {
@@ -221,7 +244,10 @@ export class MapdSync {
     else if (m.type === 'resync') {
       // The tab mapd followed closed: say again which world is open here.
       this.hello();
-    } else if (m.type === 'saved') this.onSaveError(null);
+    } else if (m.type === 'saved') {
+      this.unsavedThere = false;
+      this.onSaveError(null);
+    }
     else if (m.type === 'render') {
       try {
         this.send({ type: 'answer', id: m.id, image: await encodeShot(await this.onRender(m.x, m.y, m.size), m.width_px, m.format) });
@@ -230,8 +256,12 @@ export class MapdSync {
       }
     } else if (m.type === 'error') {
       console.warn('[mapd]', m.message);
+      if (m.seq != null) this.lost = true;
       if (/switch worlds/.test(m.message)) this.onSaveError('switch');
-      else if (/saved? to disk/.test(m.message)) this.onSaveError('save');
+      else if (/saved? to disk/.test(m.message)) {
+        this.unsavedThere = true;
+        this.onSaveError('save');
+      }
     }
   }
 

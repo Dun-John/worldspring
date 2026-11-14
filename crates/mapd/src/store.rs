@@ -13,12 +13,16 @@ use worldgen::WorldFile;
 
 pub struct Store {
     dir: PathBuf,
+    /// This store's own id (`<dir>/store-id`, made with the store): an app that kept edits
+    /// synced with one store can tell another (a fresh dir, another mapd at the same address).
+    pub id: String,
 }
 
 impl Store {
     pub fn new(dir: PathBuf) -> Store {
         let _ = std::fs::create_dir_all(&dir);
-        Store { dir }
+        let id = store_id(&dir);
+        Store { dir, id }
     }
 
     fn world_dir(&self, hash: u64) -> PathBuf {
@@ -132,4 +136,23 @@ fn recover(d: &Path) {
         Ok(()) => println!("mapd: recovered {} from a save that had not finished", main.display()),
         Err(e) => eprintln!("mapd: found a newer {} but could not recover it: {e}", tmp.display()),
     }
+}
+
+/// The store's id, read from `<dir>/store-id` or made (time and process, hashed) and written there.
+fn store_id(dir: &Path) -> String {
+    let path = dir.join("store-id");
+    if let Ok(t) = std::fs::read_to_string(&path)
+        && !t.trim().is_empty()
+    {
+        return t.trim().to_string();
+    }
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    h.write_u32(std::process::id());
+    let id = format!("{:016x}", h.finish());
+    if let Err(e) = std::fs::write(&path, &id) {
+        eprintln!("mapd: cannot write {}: {e}", path.display());
+    }
+    id
 }

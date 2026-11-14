@@ -334,6 +334,11 @@ fn left(app: &Shared, me: u64) {
     });
 }
 
+/// A hello's `seq` (the app's last ops sent), answered once its world is saved to disk.
+fn on_disk(app: &Shared, m: &Value) -> Value {
+    if app.unsaved.load(Ordering::Relaxed) { Value::Null } else { m["seq"].clone() }
+}
+
 async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
     match m["type"].as_str()? {
         // The app's open world. mapd follows it if it has it open already, if no other tab
@@ -395,9 +400,9 @@ async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
                     })
                     .await;
                 let now = app.world.lock().unwrap().as_ref().map(|(_, f)| f.clone());
-                return Some(json!({ "type": "world", "world": now.unwrap_or(open) }));
+                return Some(json!({ "type": "world", "world": now.unwrap_or(open), "store": app.store.id, "seq": on_disk(app, &m) }));
             }
-            Some(json!({ "type": "world", "world": open }))
+            Some(json!({ "type": "world", "world": open, "store": app.store.id, "seq": on_disk(app, &m) }))
         }
         // The user changed something in the app: its ops apply to mapd's copy, so whatever
         // agents changed meanwhile stays. (Only from a tab showing mapd's world.)
@@ -416,7 +421,12 @@ async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
                     Ok(change)
                 })
                 .await;
-            done.err().map(|e| json!({ "type": "error", "message": e }))
+            match done {
+                Err(e) => Some(json!({ "type": "error", "message": e, "seq": m["seq"] })),
+                // On disk: the app may note its edits as mapd's (a failed save is told as an error).
+                Ok(_) if !app.unsaved.load(Ordering::Relaxed) => m["seq"].as_u64().map(|seq| json!({ "type": "kept", "seq": seq })),
+                Ok(_) => None,
+            }
         }
         // Whole edits (older apps).
         "edits" => {

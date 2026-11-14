@@ -27,6 +27,11 @@ The app tells mapd which world it has open (seed and parameters).
 - **A world mapd has seen:** mapd keeps its edits, including any agents made while the app was closed, and the
   app takes them.
 - **A world mapd hasn't seen:** mapd takes it as the app has it.
+- **Changes only the browser has:** the app notes which edits mapd last saved to disk for it (mapd says so per
+  change, and names its world store), so the next time the world opens with edits the browser kept, mapd's copy
+  wins without a question only when mapd saved those edits and its copy lacks none of them; otherwise (a change
+  that never reached mapd's disk, another worlds folder at the same address, a copy that lost something) the
+  user chooses. When mapd's copy replaces the kept edits it is one step that Undo takes back.
 - **Changes replaced by the user:** opening a world file, a saved world or a link that brings its own changes, the
   user chooses between the changes kept and the ones it brings (or none). Chosen over the kept ones, or restored
   from a backup of the app's library, they replace mapd's copy whole: sites created before stay in their places

@@ -500,13 +500,19 @@
     if (busy) return false;
     const theirs = w.edits ?? {};
     // The first copy after opening the world with the edits this browser kept: when they are
-    // not what mapd was last known to have (changes only this browser has), the user picks
-    // between them and mapd's copy (taken later, `askKept`); else mapd's copy wins.
-    const k = keptCheck;
+    // not what this mapd (and its store) was last known to have saved (changes only this browser
+    // has), or mapd's copy lacks something they hold (a fresh store, a world remade there), the
+    // user picks between them and mapd's copy (taken later, `askKept`); else mapd's copy wins,
+    // one step that Undo takes back.
+    const k = keptCheck?.key === editsKey(world) ? keptCheck : null;
     keptCheck = null;
-    if (k && k.key === editsKey(world) && sync.where && syncedStamp(sync.where, k.key) !== editsStamp(k.edits) && diffEdits(k.edits, keepPlaces(k.edits, theirs)).length) {
-      void askKept(k.edits, theirs);
-      return false;
+    if (k && sync.where && diffEdits(k.edits, keepPlaces(k.edits, theirs)).length) {
+      const synced = syncedStamp(sync.where, k.key) === editsStamp(k.edits);
+      const lacks = diffEdits(k.edits, theirs).some((o) => o.op === 'unset');
+      if (!synced || lacks) {
+        void askKept(k.edits, theirs);
+        return false;
+      }
     }
     // mapd's copy of this world keeps the edits made while the app was away; what was changed
     // here meanwhile goes on top (and to mapd). (When that is what the app has, as after a
@@ -515,7 +521,7 @@
     if (!diffEdits(edits, tidy(mine.length ? applyOps(theirs, mine).edits : theirs)).length) {
       if (mine.length) sync.ops(mine, change);
     } else {
-      applyEdits(theirs, { tool: 'sync', label: 'Synced changes made elsewhere' }, 'mapd', { record: false, send: false });
+      applyEdits(theirs, { tool: 'sync', label: 'Synced changes made elsewhere' }, 'mapd', { record: !!k, send: false });
       if (mine.length) applyEdits(withOps(mine), change, 'user', { record: false });
     }
     // A world opened with its own edits, none kept here: mapd's copy, if other, is asked about.
@@ -541,16 +547,28 @@
    * takes back. */
   async function askKept(mine: Edits, theirs: Edits) {
     busy = true;
+    asked = [];
     const pick = await pickEdits('mapd', world, theirs, mine).finally(() => (busy = false));
+    const meanwhile = asked;
+    asked = null;
     if (pick?.replaced) {
       applyEdits(pick.edits, { tool: 'sync', label: changeList(pick.edits).length ? 'Took live sync’s changes over this browser’s' : 'Opened the world without changes' }, 'user', { send: false });
       // (mapd's copy again, with agents' changes that came meanwhile; none: mapd's goes too.)
       if (changeList(pick.edits).length) sync.resync();
       else sync.open(world, true);
-    } else sync.open(world, true);
+      return;
+    }
+    sync.open(world, true);
+    // Changes agents made while the user chose go on top of the edits kept (and back to mapd
+    // once it has taken them).
+    for (const a of meanwhile) applyEdits(withOps(a.ops), a.change, a.author);
   }
+  /** Changes from mapd that came while `askKept` asked (null: not asking). */
+  let asked: { ops: EditOp[]; change: Change; author: string }[] | null = null;
+  sync.onKept = () => noteInStep();
   sync.onOps = (ops, change, author) => {
-    if (!busy) applyEdits(withOps(ops), change, author, { send: false });
+    if (asked) asked.push({ ops, change, author });
+    else if (!busy) applyEdits(withOps(ops), change, author, { send: false });
   };
   sync.onFocus = (x, y, size) => flyToSize(x, y, size);
   sync.onRemade = (w, gone) => takeRemade(w, gone);
@@ -1014,6 +1032,8 @@
     // (The world being left keeps its last changes.)
     if (savePending()) flushSave();
     busy = true;
+    // (A check left from an earlier open is not this one's.)
+    keptCheck = null;
     // The world shown regenerated (or redrawn) keeps its edits; another has those this browser
     // kept for it. A world opened (a file, a saved world, a link) brings its own edits, or none:
     // where they differ from those, the user picks.
