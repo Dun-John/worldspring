@@ -4997,7 +4997,7 @@ fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
         r.tally("edited layouts hashed", 1);
     }
     let dir = std::path::PathBuf::from(std::env::var("SAME_DIR").unwrap_or_else(|_| "target/towncheck-same".into()));
-    let path = dir.join(format!("{label}.txt"));
+    let path = dir.join(format!("{}.txt", label.replace(['/', '\\'], "_")));
     let base = std::fs::read_to_string(&path).ok().filter(|_| std::env::var("SAME").as_deref() != Ok("write"));
     let Some(base) = base else {
         std::fs::create_dir_all(&dir).unwrap();
