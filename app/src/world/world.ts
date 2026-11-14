@@ -65,6 +65,26 @@ export function sameWorld(a: WorldFile, b: WorldFile): boolean {
   return a.seed === b.seed && Object.keys(DEFAULT_PARAMS).every((k) => JSON.stringify(sorted(pa[k])) === JSON.stringify(sorted(pb[k])));
 }
 
+/** A stroke's fields as `world.rs` `Stroke` reads them when left out (others: none, false or empty). */
+const STROKE_DEFAULTS: Record<string, unknown> = { radius_ft: 5 * 5280, strength: 0.7 };
+
+/** Whether two sketches are the same drawing, however written: mapd writes a stroke's fields in
+ * its own order and fills in those left out (`radius_ft`, `strength`), so the JSON text of one
+ * world's sketch differs between the app and mapd. */
+export function sameSketch(a: WorldFile['sketch'], b: WorldFile['sketch']): boolean {
+  const norm = (s: WorldFile['sketch']) =>
+    JSON.stringify(
+      (s?.strokes ?? []).map((st) => {
+        const o: Record<string, unknown> = { ...STROKE_DEFAULTS, ...(st as unknown as Record<string, unknown>) };
+        return Object.keys(o)
+          .sort()
+          .filter((k) => o[k] !== undefined && o[k] !== null && o[k] !== false && !(Array.isArray(o[k]) && !(o[k] as unknown[]).length))
+          .map((k) => [k, o[k]]);
+      }),
+    );
+  return norm(a) === norm(b);
+}
+
 /** A site created again within this of one of its kind (with the same beneath) is that one. */
 const SAME_SPOT_FT = 300;
 

@@ -99,6 +99,22 @@ export class MapdSync {
     return this.connected && this.following;
   }
 
+  /** Whether mapd has every change made here: it follows this tab, which has nothing unsent
+   * (nor a copy of mapd's waiting, nor edits still to replace mapd's with). */
+  get inStep(): boolean {
+    return this.keeps && this.ws?.readyState === WebSocket.OPEN && !this.pending.length && !this.untaken && !this.replace;
+  }
+
+  /** Changes made here that mapd hasn't had. */
+  get unsent(): number {
+    return this.pending.length;
+  }
+
+  /** Which mapd this tab reaches (null: none). */
+  get where(): string | null {
+    return this.url;
+  }
+
   /**
    * The world now open in the app (sent on connect and whenever it changes). `replace`: the
    * user chose its edits as they are here (a file's, or none, over those kept): they replace
@@ -221,5 +237,36 @@ export class MapdSync {
 
   private send(m: object) {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));
+  }
+}
+
+// What this browser last knew mapd to have of a world's edits (`editsStamp`, by mapd and
+// `editsKey`): edits kept here with that stamp were synced, so mapd's copy, if other, is newer
+// and wins; others have changes only this browser has, and the user is asked.
+const SYNCED = 'ws-synced';
+const SYNCED_MAX = 60;
+
+function syncedMarks(): [string, string][] {
+  try {
+    const v = JSON.parse(localStorage.getItem(SYNCED) ?? '[]');
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The stamp of the edits mapd (`where`) last had of world `key` with this browser, if known. */
+export function syncedStamp(where: string, key: string): string | null {
+  return syncedMarks().find(([k]) => k === `${where}|${key}`)?.[1] ?? null;
+}
+
+/** mapd (`where`) has world `key`'s edits as stamped (null: not known any more). */
+export function markSynced(where: string, key: string, stamp: string | null) {
+  const k = `${where}|${key}`;
+  const rest = syncedMarks().filter(([m]) => m !== k);
+  try {
+    localStorage.setItem(SYNCED, JSON.stringify((stamp === null ? rest : [...rest, [k, stamp]]).slice(-SYNCED_MAX)));
+  } catch {
+    // (No storage: the user is asked when mapd's copy differs from the edits kept here.)
   }
 }

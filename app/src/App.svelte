@@ -64,7 +64,7 @@
   import Search from './ui/Search.svelte';
   import Toasts, { type Toast } from './ui/Toasts.svelte';
   import { lowMemory } from './ui/support';
-  import { MapdSync, type Change } from './sync/mapd';
+  import { MapdSync, markSynced, syncedStamp, type Change } from './sync/mapd';
   import { carrySession, sessionLayouts, tokensIn, type Carried } from './play/carry';
   import { PlayController } from './play/controller';
   import PlayPanel from './play/PlayPanel.svelte';
@@ -73,7 +73,7 @@
   import { describe, tidy, type Step } from './sync/history';
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
   import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
-  import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
+  import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameSketch, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, ownHash, PINNED, renumberedSince } from './world/versions';
   import { asideCount, asideList, asideWhat, forgetAside, isAside } from './world/setaside';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
@@ -494,12 +494,21 @@
   sync.onWorld = (w, mine) => {
     syncKeeps = sync.keeps;
     // (A copy of the world as it was before a remake, answered late, is not this one's.)
-    if (!sameWorld(w, world) || JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null)) return true;
+    if (!sameWorld(w, world) || !sameSketch(w.sketch, world.sketch)) return true;
     if (busy) return false;
+    const theirs = w.edits ?? {};
+    // The first copy after opening the world with the edits this browser kept: when they are
+    // not what mapd was last known to have (changes only this browser has), the user picks
+    // between them and mapd's copy (taken later, `askKept`); else mapd's copy wins.
+    const k = keptCheck;
+    keptCheck = null;
+    if (k && k.key === editsKey(world) && sync.where && syncedStamp(sync.where, k.key) !== editsStamp(k.edits) && diffEdits(k.edits, keepPlaces(k.edits, theirs)).length) {
+      void askKept(k.edits, theirs);
+      return false;
+    }
     // mapd's copy of this world keeps the edits made while the app was away; what was changed
     // here meanwhile goes on top (and to mapd). (When that is what the app has, as after a
     // remake whose changes went on while mapd took the world, only mapd needs them.)
-    const theirs = w.edits ?? {};
     const change: Change = { tool: 'sync', label: 'Kept the changes made here meanwhile' };
     if (!diffEdits(edits, tidy(mine.length ? applyOps(theirs, mine).edits : theirs)).length) {
       if (mine.length) sync.ops(mine, change);
@@ -511,8 +520,33 @@
     const c = openCheck;
     openCheck = null;
     if (c && diffEdits(edits, keepPlaces(edits, c.theirs)).length) void offerOpened(c);
+    noteInStep();
     return true;
   };
+
+  /** The edits a world was just opened with, kept in this browser (`key`: their `editsKey`),
+   * until mapd's copy of it comes (`sync.onWorld`). */
+  let keptCheck: { key: string; edits: Edits } | null = null;
+
+  /** mapd has the edits shown: noted, so that the next time this world opens with them kept
+   * here, mapd's copy (if other) is taken as newer without asking. */
+  function noteInStep() {
+    if (sync.inStep && sync.where) markSynced(sync.where, editsKey(world), editsStamp(world.edits));
+  }
+
+  /** mapd's copy (`theirs`) of a world opened with edits only this browser has (`mine`): asked
+   * which to keep. Mine replace mapd's copy; mapd's (or none) replace mine, one step that Undo
+   * takes back. */
+  async function askKept(mine: Edits, theirs: Edits) {
+    busy = true;
+    const pick = await pickEdits('mapd', world, theirs, mine).finally(() => (busy = false));
+    if (pick?.replaced) {
+      applyEdits(pick.edits, { tool: 'sync', label: changeList(pick.edits).length ? 'Took live sync’s changes over this browser’s' : 'Opened the world without changes' }, 'user', { send: false });
+      // (mapd's copy again, with agents' changes that came meanwhile; none: mapd's goes too.)
+      if (changeList(pick.edits).length) sync.resync();
+      else sync.open(world, true);
+    } else sync.open(world, true);
+  }
   sync.onOps = (ops, change, author) => {
     if (!busy) applyEdits(withOps(ops), change, author, { send: false });
   };
@@ -523,6 +557,8 @@
   let followNotice = 0;
   sync.onFollow = (following) => {
     syncKeeps = sync.keeps;
+    // (Changes mapd sent back: what it was last known to have no longer says it has the edits kept.)
+    if (!following && sync.unsent && sync.where) markSynced(sync.where, editsKey(world), null);
     if (followNotice) dismiss(followNotice);
     followNotice = following
       ? 0
@@ -596,6 +632,7 @@
   function saveNow(): Promise<void> {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = null;
+    noteInStep();
     return saveEdits(editsKey(world), world.edits ?? {});
   }
   /** The link and the store now. */
@@ -821,7 +858,7 @@
 
   /** Where a world being opened came from: it brings its own edits, or none, and the user is
    * asked before they replace those this browser has for it. */
-  type Source = 'file' | 'library' | 'link';
+  type Source = 'file' | 'library' | 'link' | 'mapd';
   type OpenChoice = 'mine' | 'theirs' | 'clean' | 'download' | 'cancel';
   /** The question `pickEdits` asks, until answered (`sync`: mine are mapd's copy). */
   let openAsk = $state<{ from: Source; sync: boolean; mine: string[]; theirs: string[]; canCancel: boolean; choose: (c: OpenChoice) => void } | null>(null);
@@ -849,7 +886,7 @@
     // (The same, but for sites removed here keeping their places.)
     if (!diffEdits(mine, keepPlaces(mine, theirs)).length) return { edits: mine, replaced: false };
     for (;;) {
-      const c = await new Promise<OpenChoice>((choose) => (openAsk = { from, sync, mine: changeList(mine), theirs: changeList(theirs), canCancel: worldShown, choose }));
+      const c = await new Promise<OpenChoice>((choose) => (openAsk = { from, sync, mine: changeList(mine), theirs: changeList(theirs), canCancel: worldShown && from !== 'mapd', choose }));
       openAsk = null;
       if (c === 'cancel') return null;
       if (c === 'mine') return { edits: mine, replaced: false };
@@ -869,7 +906,7 @@
       ...(a.canCancel ? [{ label: 'Cancel', value: 'cancel', kind: 'quiet' } as const] : []),
       { label: 'Download mine', value: 'download', icon: 'download' } as const,
       { label: 'Start clean', value: 'clean', kind: 'danger' } as const,
-      ...(a.theirs.length ? [{ label: a.from === 'link' ? 'Use the link’s' : a.from === 'library' ? 'Use the saved ones' : 'Use the file’s', value: 'theirs' } as const] : []),
+      ...(a.theirs.length ? [{ label: a.from === 'link' ? 'Use the link’s' : a.from === 'mapd' ? 'Use live sync’s' : a.from === 'library' ? 'Use the saved ones' : 'Use the file’s', value: 'theirs' } as const] : []),
       { label: 'Keep mine', value: 'mine', kind: 'primary' } as const,
     ];
   });
@@ -895,7 +932,7 @@
     // (A world made with another generator: its own question was asked, `settleVersion`.)
     if (world.gen_version !== w.gen_version) return null;
     // (A play session alone comes along unasked: what it couldn't bring is said after.)
-    return edited && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null) ? 'regen' : null;
+    return edited && !sameSketch(w.sketch, world.sketch) ? 'regen' : null;
   }
 
   /** A remade world's edits with their keys moved to the places they were made on, and how many
@@ -980,10 +1017,11 @@
     // where they differ from those, the user picks.
     // (A world just upgraded is never the one shown: it brings the edits made on its version.)
     const shown = !upgrade && worldShown && sameWorld(w, world) && world.gen_version === w.gen_version;
-    const redrawn = shown && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null);
+    const redrawn = shown && !sameSketch(w.sketch, world.sketch);
     const before = overlay;
     // (Not opened: the edits an upgrade carried over, else those kept.)
     let mine = shown ? (world.edits ?? {}) : from ? ((await storedEdits(w)) ?? {}) : (w.edits ?? (await storedEdits(w)) ?? {});
+    const keptHere = !shown && (!!from || !w.edits);
     if (from && !Object.keys(mine).length && upgradedMine) mine = upgradedMine;
     upgradedMine = null;
     let kept = mine;
@@ -1055,7 +1093,10 @@
       overlay = view.overlay;
       // (Edits the user chose over those kept replace mapd's copy too; so do those carried over
       // to the world remade, over any copy kept of it from before.)
-      sync.open(world, !o.remade && (replaced || restored || following));
+      const replacing = !o.remade && (replaced || restored || following);
+      // (Edits this browser kept, shown as they were: checked against mapd's copy when it comes.)
+      keptCheck = keptHere && !replacing && !o.remade && !openCheck && kept === mine && Object.keys(kept).length ? { key: editsKey(world), edits: kept } : null;
+      sync.open(world, replacing);
       const how = await play.setWorld(world, view.geom!.world_hash, carried);
       lastCarried = how === 'carried' ? carried : null;
       worldShown = true;
@@ -4943,11 +4984,19 @@
   {#if openAsk}
     {@const what = openAsk.from === 'link' ? 'link' : openAsk.from === 'library' ? 'saved world' : 'file'}
     <Choice title="This world has changes here already" icon="globe" buttons={openButtons} onChoose={openAsk.choose}>
-      <p>{openAsk.sync ? 'Live sync keeps other changes to this world' : 'This browser has changes to this world'}: {openAsk.mine.join(', ')}.</p>
-      <p>
-        {#if openAsk.theirs.length}The {what} brings changes of its own: {openAsk.theirs.join(', ')}.{:else}The {what} brings no changes.{/if}
-        Keep yours, take the {what}’s, or start clean; nothing is mixed.
-      </p>
+      {#if openAsk.from === 'mapd'}
+        <p>This browser has changes to this world that live sync never had: {openAsk.mine.join(', ')}.</p>
+        <p>
+          {#if openAsk.theirs.length}Live sync’s copy has changes of its own: {openAsk.theirs.join(', ')}.{:else}Live sync’s copy has no changes.{/if}
+          Keep yours (they replace live sync’s copy), take live sync’s, or start clean; nothing is mixed.
+        </p>
+      {:else}
+        <p>{openAsk.sync ? 'Live sync keeps other changes to this world' : 'This browser has changes to this world'}: {openAsk.mine.join(', ')}.</p>
+        <p>
+          {#if openAsk.theirs.length}The {what} brings changes of its own: {openAsk.theirs.join(', ')}.{:else}The {what} brings no changes.{/if}
+          Keep yours, take the {what}’s, or start clean; nothing is mixed.
+        </p>
+      {/if}
       <p class="ws-muted">If yours give way, Undo brings them back while this page is open. Download them to keep a copy.</p>
     </Choice>
   {/if}
