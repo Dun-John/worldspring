@@ -118,8 +118,15 @@
 //!   buildings with no front (an edge on a street's or alley's line, up to the 16 ft a house stands back), fills
 //!   not the same twice or with their rings rotated; built area per area against the convex blocks filled the same
 //!   way. Up to 6 SVGs to `SVG_DIR` (default `target/towncheck-fills`), and those whose listing holds `FILL_SVG`.
+//! - `rows` (not in `all`; default seeds 1-8): both sides of each town's streets (`Layout::roads`
+//!   but class 3, the alleys and paved strips) lined with a row of lots (`town::qa_rows`, P3's path fill)
+//!   round the town's buildings, walls, other streets and their bands. Counts lots off their band,
+//!   overlapping (on one side, at bends; and another row's), over the region avoided, with no front on
+//!   their street, on the wrong side, not convex, under `build_block`'s rules, and rows not repeating
+//!   (the first two towns, twice); lots per 100 ft of a street's side. `ROWS=n`: towns a world (12);
+//!   `SVG_DIR`: a picture a world, up to 6.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [same|fills|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
+//! Usage: cargo run --release -p worldgen --example towncheck -- [same|fills|rows|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -6501,7 +6508,7 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 28] = ["same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 29] = ["same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -6518,7 +6525,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["fills"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["fills"] || modes == ["rows"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -6562,6 +6569,7 @@ fn main() {
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 "same" => same(&mut ctx, &label.replace(' ', ""), &mut r),
                 "fills" => fills(&mut ctx, &label.replace(' ', ""), &mut r),
+                "rows" => rows(&ctx.ex.world, &ctx.ex.t0, &label.replace(' ', ""), &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
             say!("  {mode} ({:.1} s)", t.elapsed().as_secs_f64());
@@ -8562,6 +8570,175 @@ fn check_horse_park(pk: &town::Park, pl: &town::horses::Plan, here: &str, r: &mu
     for (a, b) in &fences {
         if way_boxes.iter().any(|w| boxes_cross(w, &seg_rect(*a, *b, 0.8))) {
             r.add(HORSE_RULES[5], 1.0, format!("{here}: fence at {}", at(lerp(*a, *b, 0.5))));
+        }
+    }
+}
+
+const ROW_COUNTS: [&str; 9] = [
+    "lots off their band",
+    "lots overlapping on one side (bends)",
+    "lots overlapping another row's",
+    "lots over the region avoided",
+    "lots with no front on their street",
+    "lots on the wrong side",
+    "lots or buildings not convex",
+    "lots narrower than 16 ft or filling under 62% of their box",
+    "rows not repeating bit for bit",
+];
+
+/// `rows`: both sides of each town's streets (`Layout::roads` but alleys and paved strips) lined
+/// through `town::qa_rows`, round the town's buildings, walls, other streets and their bands.
+fn rows(base: &World, t0: &T0, label: &str, r: &mut Report) {
+    use std::sync::atomic::AtomicUsize;
+    use worldgen::town::clip::{self, Ends, Join, Shape};
+    use worldgen::town::geom::obb;
+    use worldgen::town::{QaRow, qa_bands, qa_rows};
+    static SVGS: AtomicUsize = AtomicUsize::new(0);
+    r.counts(&ROW_COUNTS);
+    let most: usize = std::env::var("ROWS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+    let wards = [Ward::Craft, Ward::Merchant, Ward::Common, Ward::Slum, Ward::Noble];
+    let bbox = |p: &[P]| p.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
+    let meets = |a: &[f64; 4], b: &[f64; 4]| a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+    let towns = (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town);
+    let mut svg_done = false;
+    for (done, ci) in towns.take(most).enumerate() {
+        let l = town::layout(base, t0, ci);
+        let streets: Vec<(Vec<P>, f64)> = l.roads.iter().filter(|s| s.1 != 3 && s.0.len() >= 2).map(|s| (s.0.clone(), 0.5 * s.2)).collect();
+        let mut rows: Vec<QaRow> = Vec::new();
+        let mut bands: Vec<Vec<Vec<P>>> = Vec::new();
+        let mut avoid: Vec<(u32, Shape)> = l.buildings.iter().map(|b| (u32::MAX, Shape::ring(b.poly.clone()))).collect();
+        for w in &l.walls {
+            avoid.extend(clip::buffer(w, 4.0, 4.0, Join::Miter(2.0), Ends::Flat).into_iter().map(|s| (u32::MAX, s)));
+        }
+        for (k, (line, hw)) in streets.iter().enumerate() {
+            let depth = 30.0 + 8.0 * (k % 3) as f64;
+            avoid.extend(clip::buffer(line, *hw, *hw, Join::Miter(2.0), Ends::Square).into_iter().map(|s| (k as u32, s)));
+            for left in [true, false] {
+                let row = QaRow { line: line.clone(), left, setback: hw + 2.0, depth, tag: k as u32 };
+                let b = qa_bands(&row.line, left, row.setback, depth);
+                avoid.extend(b.iter().map(|q| (k as u32, Shape::ring(q.clone()))));
+                bands.push(b);
+                rows.push(row);
+            }
+        }
+        let (ward, seed) = (wards[ci % wards.len()], ci as u64 + 7);
+        let out = qa_rows(base, t0, ci, ward, seed, &rows, &avoid);
+        if done < 2 {
+            let again = qa_rows(base, t0, ci, ward, seed, &rows, &avoid);
+            if out.iter().zip(&again).any(|(a, b)| a.lots != b.lots || a.alleys != b.alleys) {
+                r.add(ROW_COUNTS[8], 1.0, format!("{label} town {ci}"));
+            }
+        }
+        let tag = format!("{label} town {ci} ({})", ward.name());
+        let (mut lots_n, mut feet) = (0, 0.0);
+        let mut every: Vec<(usize, &Vec<P>, [f64; 4])> = Vec::new();
+        for (i, (row, o)) in rows.iter().zip(&out).enumerate() {
+            let run: f64 = row.line.windows(2).map(|w| dist(w[0], w[1])).sum();
+            lots_n += o.lots.len();
+            feet += run;
+            if run >= 200.0 {
+                r.value("lots per 100 ft of street (a side, 200 ft or longer)", 100.0 * o.lots.len() as f64 / run, format!("{tag} street {}", row.tag));
+            }
+            r.tally("alleys", o.alleys.len());
+            let off = |p: P| !bands[i].iter().any(|b| contains(b, p) || (0..b.len()).any(|e| seg_dist(p, b[e], b[(e + 1) % b.len()]) < 0.05));
+            let near_line = |p: P| row.line.windows(2).map(|w| seg_dist(p, w[0], w[1])).fold(f64::MAX, f64::min);
+            for (lot, house) in &o.lots {
+                let c = centroid(lot);
+                let at = format!("{tag} street {} at {:.0},{:.0}", row.tag, c[0], c[1]);
+                if lot.iter().chain(house).any(|p| off(*p)) {
+                    r.add(ROW_COUNTS[0], 1.0, at.clone());
+                }
+                let bb = bbox(lot);
+                let close: Vec<Shape> = avoid.iter().filter(|(t, s)| *t != row.tag && meets(&bbox(&s.outer), &bb)).map(|(_, s)| s.clone()).collect();
+                let over = if close.is_empty() { 0.0 } else { clip::area(&clip::intersection(&[Shape::ring(lot.clone())], &close)) };
+                if over > 1.0 {
+                    r.add(ROW_COUNTS[3], over, format!("{at}: {over:.1} ft²"));
+                }
+                let m = lot.len();
+                let band = |p: P| (near_line(p) - row.setback).abs() < 2.0;
+                if !(0..m).any(|e| dist(lot[e], lot[(e + 1) % m]) > 6.0 && band(lot[e]) && band(lot[(e + 1) % m]) && band(lerp(lot[e], lot[(e + 1) % m], 0.5))) {
+                    r.add(ROW_COUNTS[4], 1.0, at.clone());
+                }
+                let seg = row.line.windows(2).min_by(|a, b| seg_dist(c, a[0], a[1]).total_cmp(&seg_dist(c, b[0], b[1]))).unwrap();
+                if (cross(sub(seg[1], seg[0]), sub(c, seg[0])) > 0.0) != row.left {
+                    r.add(ROW_COUNTS[5], 1.0, at.clone());
+                }
+                if !clip::is_convex(lot) || !clip::is_convex(house) {
+                    r.add(ROW_COUNTS[6], 1.0, at.clone());
+                }
+                let ob = obb(lot);
+                if ob.short < 16.0 - 1e-6 || area(lot).abs() < 0.62 * ob.long * ob.short {
+                    r.add(ROW_COUNTS[7], 1.0, at.clone());
+                }
+                every.push((i, lot, bb));
+            }
+        }
+        for (x, &(i, a, ba)) in every.iter().enumerate() {
+            for &(j, b, bb) in &every[x + 1..] {
+                if !meets(&ba, &bb) {
+                    continue;
+                }
+                let o = clip::area(&clip::intersection(&[Shape::ring(a.clone())], &[Shape::ring(b.clone())]));
+                if o > 1.0 {
+                    let c = centroid(a);
+                    r.add(if i == j { ROW_COUNTS[1] } else { ROW_COUNTS[2] }, o, format!("{tag} at {:.0},{:.0}: {o:.1} ft²", c[0], c[1]));
+                }
+            }
+        }
+        r.tally("lots laid", lots_n);
+        r.tally("street sides, 100 ft", (feet / 100.0).round() as usize);
+        r.tally("towns", 1);
+        say!("  {tag}: {} streets, {lots_n} lots along {:.0} ft of street sides", streets.len(), feet);
+        // One picture a world (`SVG_DIR`, up to 6): the street whose rows hold the most lots, a
+        // road out of the town (class 0-2) before a street in it.
+        let Some(dir) = std::env::var("SVG_DIR").ok() else { continue };
+        let class: Vec<u8> = l.roads.iter().filter(|s| s.1 != 3 && s.0.len() >= 2).map(|s| s.1).collect();
+        let Some(k) = (0..streets.len()).max_by_key(|&k| (class[k] <= 2, out[2 * k].lots.len() + out[2 * k + 1].lots.len())) else { continue };
+        if svg_done || out[2 * k].lots.len() + out[2 * k + 1].lots.len() < 6 || SVGS.load(Ordering::Relaxed) >= 6 {
+            continue;
+        }
+        svg_done = true;
+        SVGS.fetch_add(1, Ordering::Relaxed);
+        let pts: Vec<P> = out[2 * k..2 * k + 2].iter().flat_map(|o| o.lots.iter().flat_map(|l| l.0.iter().copied())).collect();
+        let b = bbox(&pts);
+        let c = [0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])];
+        let half = (0.5 * (b[2] - b[0]).max(b[3] - b[1]) + 60.0).min(600.0);
+        let win = [c[0] - half, c[1] - half, c[0] + half, c[1] + half];
+        let path = |p: &[P], close: bool| {
+            let mut s = String::new();
+            for (n, q) in p.iter().enumerate() {
+                s += &format!("{}{:.1},{:.1} ", if n == 0 { 'M' } else { 'L' }, q[0] - win[0], win[3] - q[1]);
+            }
+            if close {
+                s += "Z";
+            }
+            s
+        };
+        let mut svg = format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {0:.0} {0:.0}' width='900' height='900'><rect width='100%' height='100%' fill='#f4efe2'/>", 2.0 * half);
+        for (line, hw) in &streets {
+            if meets(&bbox(line), &win) {
+                svg += &format!("<path d='{}' fill='none' stroke='#cbbf9f' stroke-width='{:.1}' stroke-linejoin='round'/>", path(line, false), 2.0 * hw);
+            }
+        }
+        for bl in l.buildings.iter().filter(|bl| meets(&bbox(&bl.poly), &win)) {
+            svg += &format!("<path d='{}' fill='#9a948a'/>", path(&bl.poly, true));
+        }
+        for i in [2 * k, 2 * k + 1] {
+            for band in &bands[i] {
+                svg += &format!("<path d='{}' fill='none' stroke='#6a8fc0' stroke-width='0.6' stroke-dasharray='3 2'/>", path(band, true));
+            }
+            for (lot, house) in &out[i].lots {
+                svg += &format!("<path d='{}' fill='#e9d3a8' stroke='#7a5a30' stroke-width='0.5'/>", path(lot, true));
+                svg += &format!("<path d='{}' fill='#c46e4a' stroke='#5a2d1a' stroke-width='0.7'/>", path(house, true));
+            }
+            for (a, b2) in &out[i].alleys {
+                svg += &format!("<path d='{}' stroke='#8a6a3a' stroke-width='2'/>", path(&[*a, *b2], false));
+            }
+        }
+        svg += "</svg>";
+        let file = format!("{dir}/rows-{label}-{ci}.svg");
+        if std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, svg)).is_ok() {
+            say!("    wrote {file}");
         }
     }
 }

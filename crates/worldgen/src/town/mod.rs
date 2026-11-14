@@ -18,6 +18,9 @@ mod towerhouse;
 pub mod catalog;
 pub mod geom;
 pub mod clip;
+mod rows;
+/// QA only (`towncheck rows`): rows of lots along a street, not used by generation.
+pub use rows::{QaRow, QaRowOut, qa_bands, qa_rows};
 pub mod mesh;
 pub mod moat;
 pub mod sites;
