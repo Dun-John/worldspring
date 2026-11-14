@@ -17,6 +17,7 @@ mod castle;
 mod towerhouse;
 pub mod catalog;
 pub mod geom;
+pub mod clip;
 pub mod mesh;
 pub mod moat;
 pub mod sites;
