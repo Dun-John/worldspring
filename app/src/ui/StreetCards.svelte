@@ -4,7 +4,7 @@
   // away); a junction: the square there; a block: how it is filled (lots of a ward, left for
   // buildings drawn by hand, or open ground) and its district; a painted area or a wall: what it is,
   // and taking it away. Each change is one step to undo.
-  import { HEIGHTS, LOT_SIZES, type BlockFill, type Height, type LotSize, type OpenKind, type StreetClass, type StreetPlan, type StreetRequest, type TownWard } from '../gen/protocol';
+  import { HEIGHTS, LOT_SIZES, type BlockFill, type Height, type LotSize, type OpenKind, type P2, type StreetClass, type StreetPlan, type StreetRequest, type TownWard } from '../gen/protocol';
   import { SQUARE_KINDS, type SquareKind } from '../gen/protocol';
   import { OPEN_COLOURS, fillColour, type StreetPick } from '../editor/streets';
   import { WARD_COLOURS } from '../editor/town';
@@ -48,6 +48,22 @@
   const area = $derived(pick?.kind === 'area' ? streets.areas.find((x) => x.id === pick.id) : undefined);
   const wall = $derived(pick?.kind === 'wall' ? streets.walls.find((x) => x.id === pick.id) : undefined);
   const rows = $derived(street ? streets.rows.filter((r) => r.street === street.id) : []);
+  // (How many times the streets cross the picked wall: a gate opens at each.)
+  const wallCrossings = $derived.by(() => {
+    if (!wall) return 0;
+    const at = new Map(streets.junctions.map((j) => [j.id, j.p]));
+    const side = (o: P2, a: P2, b: P2) => Math.sign((a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]));
+    const cross = (p: P2, q: P2, a: P2, b: P2) => side(p, q, a) * side(p, q, b) < 0 && side(a, b, p) * side(a, b, q) < 0;
+    const wp = wall.closed ? [...wall.pts, wall.pts[0]] : wall.pts;
+    let n = 0;
+    for (const st of streets.streets) {
+      const [a, b] = [at.get(st.a), at.get(st.b)];
+      if (!a || !b) continue;
+      const line = [a, ...(st.bends ?? []), b];
+      for (let i = 1; i < line.length; i++) for (let k = 1; k < wp.length; k++) if (cross(line[i - 1], line[i], wp[k - 1], wp[k])) n++;
+    }
+    return n;
+  });
   const districts = $derived([...new Set(streets.blocks.map((b) => b.district).filter((d): d is string => !!d))].sort());
 
   // A row being added: which side(s), how deep, which ward.
@@ -235,7 +251,7 @@
 {:else if wall}
   <section class="card" aria-label="Wall">
     <div class="title"><span class="grow"><b>{wall.name || 'A wall'}</b><span class="ws-muted"> · {wall.closed ? 'closed round' : 'open at its ends'}{wall.spacing ? `, towers ${ft(wall.spacing)} apart` : ''}</span></span></div>
-    <span class="ws-muted">Gates open where streets cross it{wall.gates.length ? `, and ${wall.gates.length === 1 ? 'one more' : `${wall.gates.length} more`} put in by hand` : ''}.</span>
+    <span class="ws-muted">{#if !wallCrossings && !wall.gates.length}No street crosses it yet, so it has no gate: a gate opens wherever a street crosses it.{:else}Gates open where streets cross it ({wallCrossings}){wall.gates.length ? `, and ${wall.gates.length === 1 ? 'one more' : `${wall.gates.length} more`} put in by hand` : ''}.{/if}</span>
     <div class="row">
       <button class="ws-btn danger" disabled={busy} onclick={() => (onStreet({ op: 'remove_wall', wall: wall.id }, 'wall'), onPick(null))} title="Its towers and gates go with it (Delete)"><Icon name="trash" size={16} /> Take the wall away</button>
     </div>

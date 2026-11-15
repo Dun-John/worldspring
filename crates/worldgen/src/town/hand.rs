@@ -304,6 +304,20 @@ pub struct Works {
     /// The districts' kinds by name (`QuarterKind::name`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quarters: Vec<(String, String)>,
+    /// The main square's block (`Layout::plaza_patch`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<u32>,
+    /// The harbour as generated: piers (outlines), breakwaters (width, level, line), boats moored
+    /// (x, y, bow, kind, length) and why a big port has no breakwater (`Layout::port`; "" it has
+    /// one). Kept as they are, whatever the streets do.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub piers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moles: Vec<(f64, f32, String)>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub moored: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1494,27 +1508,6 @@ pub fn blank(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Value)
     Ok(out)
 }
 
-/// The harbour pieces a converted town's records leave to `Edits.wharves`: its piers (each a
-/// rectangle: the middle of its short ends, its width) and breakwaters, as laid out now (key
-/// `q:h<layout>-<n>`).
-pub fn wharves(world: &World, t0: &T0, index: usize) -> Vec<(String, crate::world::Wharf)> {
-    use crate::world::{CrossingMaterial, Wharf, WharfKind};
-    let l = super::base_layout(world, t0, index);
-    let mut out = Vec::new();
-    for p in &l.piers {
-        if p.len() != 4 {
-            continue;
-        }
-        let (e0, e1) = (dist(p[0], p[1]), dist(p[1], p[2]));
-        let (a, b, w) = if e0 <= e1 { (lerp(p[0], p[1], 0.5), lerp(p[2], p[3], 0.5), e0) } else { (lerp(p[1], p[2], 0.5), lerp(p[3], p[0], 0.5), e1) };
-        out.push(Wharf { kind: WharfKind::Pier, pts: vec![a, b], width: w, material: CrossingMaterial::default() });
-    }
-    for m in &l.moles {
-        out.push(Wharf { kind: WharfKind::Breakwater, pts: m.pts.clone(), width: m.width, material: CrossingMaterial::default() });
-    }
-    out.into_iter().enumerate().map(|(k, w)| (format!("q:h{index}-{k}"), w)).collect()
-}
-
 /// A town's records as they would be stored (`Edits.streets`, compact JSON): its size in bytes.
 pub fn size_of(records: &[(String, Value)]) -> usize {
     records.iter().map(|(k, v)| k.len() + 4 + serde_json::to_string(v).map_or(0, |s| s.len())).sum()
@@ -1604,8 +1597,29 @@ fn works_from(l: &Layout, of: String, corner: &BTreeMap<usize, P>) -> Works {
             })
             .collect(),
         quarters: l.quarters.iter().map(|q| (q.name.clone(), q.kind.name().to_string())).collect(),
+        main: l.plaza_patch,
+        piers: l.piers.iter().map(|p| pk(p)).collect(),
+        moles: l.moles.iter().map(|m| (m.width, m.level, pk(&m.pts))).collect(),
+        moored: flat(&mut l.moored.iter().flat_map(|m| [m.at[0], m.at[1], m.rot as f64, AFLOAT.iter().position(|k| *k == m.kind).unwrap_or(0) as f64, m.length as f64])),
+        port: l.port.map(str::to_string),
     }
 }
+
+/// Why a big port has no breakwater (`harbour::breakwater`), "" when it has one.
+const PORT_WHY: [&str; 10] = [
+    "",
+    super::harbour::NO_SHORE,
+    super::harbour::TOO_DEEP,
+    "piers in the way",
+    "bridges in the way",
+    "buildings in the way",
+    "the town wall in the way",
+    "islets in the way",
+    "roads, sea lanes or ferries in the way",
+    "out of the town's reach",
+];
+
+const AFLOAT: [super::harbour::Afloat; 4] = [super::harbour::Afloat::Rowboat, super::harbour::Afloat::FishingBoat, super::harbour::Afloat::Cog, super::harbour::Afloat::Buoy];
 
 /// A park of no block as `works_from` wrote it down, planned again on `site` about `origin`.
 fn park_of(site: &Site, origin: P, meta: &str, pts: &str) -> Option<super::Park> {
@@ -2364,9 +2378,19 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
         BlockFill::Hand => false,
     };
     let mut paved_side: crate::core::hash::FastSet<(usize, bool)> = Default::default();
+    // (And the sides of blocks as converted, not laid out again since: a street between them
+    // stays as the generator left it, a deck or none.)
+    let (mut sided, mut as_converted): (crate::core::hash::FastSet<(usize, bool)>, crate::core::hash::FastSet<(usize, bool)>) = Default::default();
+    let untouched = |b: &Block| b.generation == 0 && (b.kept.is_some() || !matches!(b.fill, BlockFill::Generated { .. } | BlockFill::Castle { .. }));
     for (f, face) in faces.iter().enumerate() {
         if face_block[f].is_some_and(|id| paves(&recs.blocks[&id])) {
             paved_side.extend(face.side.iter().copied());
+        }
+        if let Some(id) = face_block[f] {
+            sided.extend(face.side.iter().copied());
+            if town.works.is_some() && untouched(&recs.blocks[&id]) {
+                as_converted.extend(face.side.iter().copied());
+            }
         }
     }
     let mut lines: BTreeMap<u32, Vec<P>> = BTreeMap::new();
@@ -2441,7 +2465,8 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
         }
         let n = (el / 5.0).ceil() as usize;
         let wet = |p: P| site.near_river(p, 0.0);
-        if over || site.river.is_empty() || wet(a) || wet(b) || !(1..n).any(|j| wet(lerp(a, b, j as f64 / n as f64))) {
+        let kept_side = [(k, true), (k, false)].iter().filter(|s| sided.contains(s)).all(|s| as_converted.contains(s)) && (sided.contains(&(k, true)) || sided.contains(&(k, false)));
+        if over || kept_side || site.river.is_empty() || wet(a) || wet(b) || !(1..n).any(|j| wet(lerp(a, b, j as f64 / n as f64))) {
             continue;
         }
         let m = super::river_crossing(site, a, b);
@@ -2819,6 +2844,18 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     }
     for (meta, pts) in works.map(|w| w.parks.as_slice()).unwrap_or_default() {
         l.parks.extend(park_of(kept_site, origin, meta, pts));
+    }
+    // The main square, and the harbour as generated.
+    if let Some(w) = works {
+        l.plaza_patch = w.main;
+        l.piers = w.piers.iter().map(|p| unpk(p)).filter(|p| p.len() == 4).collect();
+        l.moles = w.moles.iter().map(|m| super::harbour::Mole { pts: unpk(&m.2), width: m.0, level: m.1 }).filter(|m| m.pts.len() >= 2).collect();
+        l.moored = unpack(&w.moored)
+            .unwrap_or_default()
+            .chunks_exact(5)
+            .map(|c| super::harbour::Moored { at: [c[0], c[1]], rot: c[2] as f32, kind: AFLOAT[(c[3] as usize).min(3)], length: c[4] as f32 })
+            .collect();
+        l.port = w.port.as_deref().map(|why| PORT_WHY.iter().copied().find(|w| *w == why).unwrap_or(super::harbour::NO_SHORE));
     }
     // Districts: the blocks of each name (in the order of their lowest block), labelled along them.
     named.sort_by_key(|x| x.0);

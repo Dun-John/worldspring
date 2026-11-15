@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams, OpenKind } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, BlockFill, P2, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams, OpenKind } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
@@ -1848,8 +1848,10 @@
   $effect(() => {
     const f = townIndex >= 0 ? settlements[townIndex] : null;
     if (!f) return;
-    const size = 1.25 * townSpan();
-    townUnderlay.setHome(f.x, f.y, size, size);
+    // (Round the town's box: its middle, a little larger.)
+    const b = townBox();
+    if (b) townUnderlay.setHome((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 1.1 * Math.max(b[2] - b[0], 300), 1.1 * Math.max(b[3] - b[1], 300));
+    else townUnderlay.setHome(f.x, f.y, 5000, 5000);
   });
   $effect(() => {
     void [townOn, townUnderlay.adjust, townUnderlay.visible];
@@ -2064,7 +2066,9 @@
       streetTool?.settled();
       return (toast(r.error.charAt(0).toUpperCase() + r.error.slice(1)), false);
     }
-    if (edits.streets !== base.streets || edits.wharves !== base.wharves || edits.towns !== base.towns) {
+    // (Also what the change reads besides: the sites and obstacles, cultures, buildings, crossings.)
+    const read = ['streets', 'wharves', 'towns', 'created', 'cultures', 'buildings', 'crossings'] as const;
+    if (read.some((f) => edits[f] !== base[f])) {
       streetTool?.settled();
       return (toast('The map changed meanwhile: try again'), false);
     }
@@ -2106,7 +2110,9 @@
   /** The street, painted area or wall picked taken away (false: none of them picked). */
   function deletePicked(): boolean {
     const p = streetPick;
-    if (!p || townBusy) return false;
+    if (!p) return false;
+    // (Busy: a change is on its way; the key is swallowed, not passed on.)
+    if (townBusy) return true;
     let req: StreetRequest;
     if (p.kind === 'street') req = { op: 'delete_street', street: p.id };
     else if (p.kind === 'area') req = { op: 'remove_area', area: p.id };
@@ -2202,19 +2208,33 @@
     if (f) flyToSize(f.x, f.y, townSpan());
   }
 
-  /** The town in view's span (ft): its junctions' or patches' box, else 5,000. */
+  /** The town in view's span (ft): its box's larger side (`townBox`), else 5,000. */
   function townSpan(): number {
-    let size = 5000;
+    const b = townBox();
+    return b ? Math.max(b[2] - b[0], b[3] - b[1], 600) : 5000;
+  }
+
+  /** The town in view's box (x0, y0, x1, y1 ft): the corners of its built blocks (not farmland or
+   *  empty ones) laid by hand, else of its patches in town; null when neither is known. */
+  function townBox(): [number, number, number, number] | null {
+    let pts: P2[] = [];
     if (streetPlan?.junctions.length) {
-      const xs = streetPlan.junctions.map((j) => j.p[0]);
-      const ys = streetPlan.junctions.map((j) => j.p[1]);
-      size = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 600);
+      const at = new Map(streetPlan.junctions.map((j) => [j.id, j.p]));
+      const ends = new Map(streetPlan.streets.map((st) => [st.id, [st.a, st.b]]));
+      const built = (f: BlockFill) => (f.kind === 'generated' ? f.ward !== 'farm' && f.ward !== 'village' : f.kind !== 'hand' && !(f.kind === 'open' && f.open === 'farmland'));
+      for (const b of streetPlan.blocks.filter((b) => built(b.fill))) {
+        const js = (b.streets ?? []).flatMap((id) => ends.get(id) ?? []);
+        pts.push(...(js.length ? js.map((j) => at.get(j)).filter((p): p is P2 => !!p) : [b.at]));
+      }
+      if (!pts.length) pts = streetPlan.junctions.map((j) => j.p);
     } else if (townPlan) {
       const at = new Map(townPlan.corners.map((c) => [c.corner, c.at]));
-      const pts = townPlan.patches.filter((p) => p.in_town).flatMap((p) => p.corners.map((v) => at.get(v) ?? p.at));
-      if (pts.length) size = Math.max(Math.max(...pts.map((p) => p[0])) - Math.min(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1])) - Math.min(...pts.map((p) => p[1])));
+      pts = townPlan.patches.filter((p) => p.in_town).flatMap((p) => p.corners.map((v) => at.get(v) ?? p.at));
     }
-    return size;
+    if (!pts.length) return null;
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
   }
 
   function disarmBuild() {

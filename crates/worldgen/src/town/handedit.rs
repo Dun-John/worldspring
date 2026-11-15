@@ -765,9 +765,6 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
             for (k, v) in recs {
                 ch.streets.insert(k, Some(v));
             }
-            for (k, w) in hand::wharves(world, t0, index) {
-                ch.wharves.insert(k, Some(w));
-            }
             if world.file.edits.towns.contains_key(&tkey) {
                 ch.towns.insert(tkey, None);
             }
