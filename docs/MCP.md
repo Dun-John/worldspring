@@ -2262,7 +2262,15 @@ A plateau or pit, or a change to one. The outline is `poly` (also `outline`), or
 tower (`t:`) or a site (its buildings, towers and walls), its footprint's convex outline grown by `margin_ft`;
 outlines are simplified to at most 48 points. The level is `level_ft` above the sea, or `rise_ft` above the
 ground (as shaped, this plateau left out) at the outline's middle. The reply: `id`, `changed`, `level_ft`,
-`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`. Without `id`, an outline that matches an existing plateau's (the same number of corners, each within 1 ft) is that one: `existing: true`, nothing added; a different `level_ft`, `rise_ft` or `edge_ft` is refused (give its id to change it).
+`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`, `floor`. Without `id`, an outline that matches an existing plateau's (the same number of corners, each within 1 ft) is that one: `existing: true`, nothing added; a different `level_ft`, `rise_ft`, `edge_ft` or `floor` is refused (give its id to change it).
+
+Plateaus stack, whatever order they were made in: where they overlap the highest holds (a lower one inside a
+higher one changes nothing), and a pit (below the ground there) digs through the plateaus round it, the deepest pit
+holding; a plateau inside a pit stands up out of it. Pieces of one level join as one ground (no seam where they
+meet), and each edge eases toward the ground round the whole stack. Walls, castles and buildings may stand where a
+plateau holds the ground above the sea or a lake. The floor: `rock` draws the top as bare rock (scree at its foot) at
+every zoom, `ground` as the land round it; `auto` (the default, not written) is rock on a pit's floor 15 ft or more
+below the ground, the land round it otherwise.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -2273,6 +2281,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 | `level_ft` | number | | Its level above the sea, within 20,000 ft |
 | `rise_ft` | number | 10 | Or its level above the ground at the middle, within 150 ft (below zero: a pit); with `id`, only when given |
 | `edge_ft` | number | 0 | The slope round it, 0 (sheer) to 60 |
+| `floor` | string | `auto` | `auto`, `rock` or `ground`: what its top (a pit's floor) draws as; with `id`, kept unless given |
 
 ```json
 { "name": "set_plateau", "arguments": { "around": "c:3", "margin_ft": 15, "rise_ft": 25, "edge_ft": 0 } }
@@ -2280,7 +2289,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 
 ### `list_plateaus`
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
-`{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
+`{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, floor? (rock or ground, if set), x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
 block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 

@@ -124,6 +124,9 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                 let mid = worldgen::town::geom::centroid(&p.pts);
                 if hits(mid, &p.pts) {
                     let mut it = json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts });
+                    if let Some(f) = p.floor {
+                        it["floor"] = json!(f.name());
+                    }
                     if let Some(n) = ex.world.file.edits.renames.get(id) {
                         it["name"] = json!(n);
                     }

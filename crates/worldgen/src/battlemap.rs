@@ -1245,10 +1245,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             hh[h] = base_at(x, y, c);
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
             if let Some(s) = &shaper {
-                (hh[h], plat_w[h]) = s.at_square(gsx + i, gsy + j, hh[h], hw[h]);
+                let look;
+                (hh[h], plat_w[h], look) = s.at_square_look(gsx + i, gsy + j, hh[h], hw[h]);
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
                 if !look_h.is_empty() && plat_w[h] >= 0.5 {
-                    look_h[h] = s.look_at_square(gsx + i, gsy + j);
+                    look_h[h] = look;
                 }
             }
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);

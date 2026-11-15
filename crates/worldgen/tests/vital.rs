@@ -3797,7 +3797,75 @@ fn ground_edits(base: &World) {
     for k in 0..SQ * SQ {
         assert!(c.water_level[k] > c.height[k] || dug.water_level[k] <= dug.height[k], "lowering flooded square ({}, {}) of {key:?}", k % SQ, k / SQ);
     }
+    // P6: a pit 30 ft down on open dry ground has a floor of bare rock (`ground::CHASM_FT`);
+    // `floor: ground` keeps the land's own there.
+    let open_sq = |c: &Chunk, k: usize| c.building[k] == 0 && c.urban[k] == 0 && c.water_level[k] <= c.height[k] && c.road_halo[(k / SQ + 1) * HS + k % SQ + 1] == 0;
+    let (key, mid) = settlements
+        .iter()
+        .flat_map(|s| [(0.0, 0.0), (600.0, 0.0), (0.0, 600.0), (-600.0, 0.0), (0.0, -600.0)].map(|d| TileKey::surface(lvl, ((s.x + d.0) / size) as u32, ((s.y + d.1) / size) as u32)))
+        .find_map(|k| {
+            let c = ex.battlemap(k);
+            (12..SQ - 12).flat_map(|j| (12..SQ - 12).map(move |i| (i, j))).find(|&(i, j)| (0..81).all(|d| open_sq(&c, (j + d / 9 - 4) * SQ + i + d % 9 - 4))).map(|(i, j)| (k, j * SQ + i))
+        })
+        .expect("open dry ground for a pit");
+    let c = ex.battlemap(key);
+    let m = centre(&key, mid % SQ, mid / SQ);
+    let hole = [[-25.0, -25.0], [25.0, -25.0], [25.0, 25.0], [-25.0, 25.0]].map(|d| [m[0] + d[0], m[1] + d[1]]);
+    let mut e = Edits::default();
+    e.plateaus.insert("h:chasm".into(), ground::plateau_for(&hole, c.height[mid] as f64 - 30.0, 10.0).unwrap());
+    ex.world.file.edits = e;
+    let dug = ex.battlemap(key);
+    let floor_sq: Vec<usize> = (0..SQ * SQ).filter(|&k| { let q = centre(&key, k % SQ, k / SQ); (q[0] - m[0]).abs() < 20.0 && (q[1] - m[1]).abs() < 20.0 } && open_sq(&c, k)).collect();
+    let rock = |c: &Chunk| floor_sq.iter().filter(|&&k| c.surface[k] == battlemap::Surface::Rock).count();
+    assert!(floor_sq.len() >= 40 && rock(&dug) == floor_sq.len(), "the pit's floor is rock on {} of {} open squares", rock(&dug), floor_sq.len());
+    ex.world.file.edits.plateaus.get_mut("h:chasm").unwrap().floor = Some(ground::Floor::Ground);
+    let lawn = ex.battlemap(key);
+    assert!(rock(&lawn) <= rock(&c), "a pit with floor: ground draws rock on {} squares (the ground there {})", rock(&lawn), rock(&c));
     ex.world.file.edits = Edits::default();
+
+    // P6: plateaus stack whatever their sizes and ids. A base, a terrace 15 ft above it in two
+    // pieces of one level, and a lower piece inside the terrace (smallest, first by id): the
+    // terrace is flat at its level across its joint and the lower piece, the base flat round it;
+    // renamed, or read over a smaller rectangle, the same bit for bit.
+    {
+        let at = |x0: f64, y0: f64, x1: f64, y1: f64| [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
+        let lv = level as f64;
+        let stack = |ids: [&str; 4]| {
+            let mut e = Edits::default();
+            e.plateaus.insert(ids[0].into(), ground::plateau_for(&at(-60.0, -60.0, 60.0, 60.0), lv, 0.0).unwrap());
+            e.plateaus.insert(ids[1].into(), ground::plateau_for(&at(-30.0, -30.0, 0.0, 30.0), lv + 15.0, 10.0).unwrap());
+            e.plateaus.insert(ids[2].into(), ground::plateau_for(&at(0.0, -30.0, 30.0, 30.0), lv + 15.0, 10.0).unwrap());
+            e.plateaus.insert(ids[3].into(), ground::plateau_for(&at(-10.0, -10.0, 10.0, 10.0), lv + 5.0, 0.0).unwrap());
+            e
+        };
+        let (e, renamed) = (stack(["h:s0", "h:s1", "h:s2", "h:a"]), stack(["h:z0", "h:b1", "h:y2", "h:x"]));
+        let sq0 = |v: f64| (v / SQUARE_FT).floor() as i64;
+        let (gx0, gy0) = (sq0(corner[0] - 70.0), sq0(corner[1] - 70.0));
+        let wide = [corner[0] - 80.0, corner[1] - 80.0, corner[0] + 80.0, corner[1] + 80.0];
+        let (sh, sh2) = (ground::Shaper::build(&e, None, wide, SQUARE_FT).unwrap(), ground::Shaper::build(&renamed, None, wide, SQUARE_FT).unwrap());
+        let (mut terrace, mut base) = (0, 0);
+        for gy in gy0..gy0 + 28 {
+            for gx in gx0..gx0 + 28 {
+                let q = [(gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT];
+                let (dx, dy) = ((q[0] - corner[0]).abs(), (q[1] - corner[1]).abs());
+                let (gr, hw) = (ex.t0.sample(q[0], q[1], SQUARE_FT) as f32, ex.t0.sample_water(q[0], q[1]));
+                let h = sh.at_square(gx, gy, gr, hw).0;
+                assert_eq!(h.to_bits(), sh2.at_square(gx, gy, gr, hw).0.to_bits(), "stacked plateaus: square {q:?} changes with their ids");
+                let small = ground::Shaper::build(&e, None, [q[0] - 1.0, q[1] - 1.0, q[0] + 1.0, q[1] + 1.0], SQUARE_FT);
+                assert_eq!(h.to_bits(), small.map_or(gr, |s| s.at_square(gx, gy, gr, hw).0).to_bits(), "stacked plateaus: square {q:?} differs read over a smaller rectangle");
+                if dx < 30.0 && dy < 30.0 {
+                    assert!((h as f64 - lv - 15.0).abs() < 0.01, "stacked plateaus: terrace square ({dx}, {dy}) from the middle at {h}, not {}", lv + 15.0);
+                    terrace += 1;
+                } else if dx < 60.0 && dy < 60.0 && (dx > 45.0 || dy > 45.0) {
+                    assert!((h as f64 - lv).abs() < 0.01, "stacked plateaus: base square ({dx}, {dy}) from the middle at {h}, not {lv}");
+                    base += 1;
+                } else if dx < 40.0 && dy < 40.0 {
+                    assert!(h as f64 >= lv - 0.01 && h as f64 <= lv + 15.01, "stacked plateaus: the terrace's edge at ({dx}, {dy}) from the middle at {h}");
+                }
+            }
+        }
+        assert!(terrace >= 100 && base >= 100, "too few squares checked ({terrace} on the terrace, {base} on the base)");
+    }
 
     // R5 M20: an islet, a breakwater and a quay built by hand on a shore. The islet's top is dry
     // rock at its level, and a building may stand on it; the breakwater's made ground is dry and
@@ -3929,6 +3997,19 @@ fn ground_edits(base: &World) {
         assert!(pack(&mut ex, k).0 == plain_near[q], "chunk {k:?} differs once the islet and wharves are cleared");
     }
     assert!(agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).is_err(), "a building in the water once the islet is gone");
+
+    // P6: a plateau 12 ft over the water where the islet stood holds a wall and a building.
+    let water = ex.t0.sample_water(islet_at[0], islet_at[1]) as f64;
+    let deck = [[-35.0, -20.0], [35.0, -20.0], [35.0, 20.0], [-35.0, 20.0]].map(|d| [islet_at[0] + d[0], islet_at[1] + d[1]]);
+    let wall = worldgen::world::Created { id: "c:97".into(), kind: "wall".into(), pts: vec![[islet_at[0] - 15.0, islet_at[1]], [islet_at[0] + 15.0, islet_at[1]]], ..Default::default() };
+    let refused = agent::works_spot(&ex.world, &ex.t0, &wall, "c:97", None).err().unwrap_or_default();
+    assert!(refused.contains("in the water"), "a wall over the water: {refused:?}");
+    ex.world.file.edits.plateaus.insert("h:deck".into(), ground::plateau_for(&deck, water + 12.0, 0.0).unwrap());
+    if let Err(e) = agent::works_spot(&ex.world, &ex.t0, &wall, "c:97", None) {
+        panic!("a wall on a plateau over the water refused: {e}");
+    }
+    agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).expect("a building on a plateau over the water");
+    ex.world.file.edits = Edits::default();
 }
 
 /// R5 M20: shops on a bridge put down by hand over a river, clear of every layout. Its lots

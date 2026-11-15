@@ -1470,14 +1470,18 @@ pub struct Shore<'a> {
     /// Islets meeting the area, drawn by hand (`ground::islets_in`) and the world's (`t0::islets`):
     /// dry land in the water.
     islets: Vec<(Vec<P>, f32, [f64; 4])>,
+    /// The hand plateaus and brushed ground meeting the area (`ground::Shaper`): dry where they
+    /// raise the ground over the water.
+    shaped: Option<crate::ground::Shaper<'a>>,
 }
 
 impl<'a> Shore<'a> {
     /// Over `rect` (x0, y0, x1, y1 world ft).
-    pub fn new(world: &World, t0: &'a T0, rect: [f64; 4]) -> Shore<'a> {
+    pub fn new(world: &'a World, t0: &'a T0, rect: [f64; 4]) -> Shore<'a> {
         let lattice_ft = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
         let mut shore = Self::of_t0(t0, rect, lattice_ft);
         shore.islets = crate::ground::islets_in(&world.file.edits, rect);
+        shore.shaped = crate::ground::Shaper::build(&world.file.edits, None, rect, crate::battlemap::SQUARE_FT);
         // (R5 M20: and the world's own islets, `t0::islets`.)
         shore.islets.extend(crate::t0::islets::near(t0, rect).map(|i| (i.pts.clone(), i.level, i.bbox)));
         shore
@@ -1494,7 +1498,7 @@ impl<'a> Shore<'a> {
                 x + e >= rect[0] && x - e <= rect[2] && y + e >= rect[1] && y - e <= rect[3]
             })
             .collect();
-        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new(), rivers: Default::default(), islets: Vec::new() }
+        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new(), rivers: Default::default(), islets: Vec::new(), shaped: None }
     }
 
     /// The drawn ground at `p` (world ft), without its fine detail.
@@ -1513,22 +1517,36 @@ impl<'a> Shore<'a> {
         })
     }
 
-    /// Whether `p` is in a river channel or within 2 ft of its water (not on an islet in it).
+    /// Whether `p` is in a river channel or within 2 ft of its water (not on an islet in it, nor
+    /// a plateau over the water: `raised`).
     pub fn in_river(&self, p: P) -> bool {
-        if !self.islets.is_empty() && self.on_islet(p) {
+        if !self.islets.is_empty() && self.on_islet(p) || self.raised(p) {
             return false;
         }
         let q = crate::lod::rivers::clear_of_rivers_with(&self.t0.rivers, p[0], p[1], 2.0, self.t0.cell_ft, &self.rivers);
         (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01
     }
 
-    /// Standing water at `p` (world ft); an islet drawn by hand is dry.
+    /// Standing water at `p` (world ft); an islet drawn by hand is dry, and so is ground a plateau
+    /// (or the brush) raises above the water.
     pub fn wet(&self, p: P) -> bool {
         if !self.islets.is_empty() && self.on_islet(p) {
             return false;
         }
         let level = self.t0.sample_water(p[0], p[1]);
-        level > crate::t0::hydro::DRY && level as f64 > self.ground(p)
+        level > crate::t0::hydro::DRY && level as f64 > self.ground(p) && !self.raised(p)
+    }
+
+    /// Whether a plateau (or the brush) holds the ground at `p` above the sea or lake there.
+    pub fn raised(&self, p: P) -> bool {
+        let Some(s) = self.shaped.as_ref().filter(|s| {
+            let r = s.reach();
+            p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]
+        }) else {
+            return false;
+        };
+        let level = self.t0.sample_water(p[0], p[1]);
+        level > crate::t0::hydro::DRY && s.at_point(p[0], p[1], self.ground(p) as f32, level) > level
     }
 }
 

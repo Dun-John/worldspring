@@ -376,12 +376,14 @@ export interface HexGrid {
 
 /** A flat top or a pit (`worldgen::ground::Plateau`): ground inside `pts` (world ft) eases to
  * `level` (ft); outside, back to the ground over `edge` ft (absent or 0: a sheer step). An
- * `islet` is rock standing out of the water (its outline made from a centre and radius). */
+ * `islet` is rock standing out of the water (its outline made from a centre and radius). `floor`:
+ * what its top draws as (absent: rock on a pit's floor 15 ft or more below the ground). */
 export interface Plateau {
   pts: [number, number][];
   level: number;
   edge?: number;
   kind?: 'plateau' | 'islet';
+  floor?: 'rock' | 'ground';
 }
 
 export type WharfKind = 'quay' | 'pier' | 'breakwater';

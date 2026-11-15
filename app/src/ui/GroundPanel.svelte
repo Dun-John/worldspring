@@ -56,6 +56,11 @@
     const { edge: _, ...p } = selected.plateau;
     onPlateau(selected.id, e ? { ...p, edge: e } : p);
   }
+  function floor(f: string) {
+    if (!selected) return;
+    const { floor: _, ...p } = selected.plateau;
+    onPlateau(selected.id, f === 'rock' || f === 'ground' ? { ...p, floor: f } : p);
+  }
 </script>
 
 <div class="ground">
@@ -133,6 +138,16 @@
           <span>Edge</span><output>{edgeLabel(selected.plateau.edge ?? 0)}</output>
           <input type="range" min="0" max="60" step="5" value={selected.plateau.edge ?? 0} onchange={(e) => edge(Number(e.currentTarget.value))} />
         </label>
+        {#if selected.plateau.kind !== 'islet'}
+          <label class="ws-field">
+            Top
+            <select class="ws-input" value={selected.plateau.floor ?? 'auto'} onchange={(e) => floor(e.currentTarget.value)} title="What its top (a pit's floor) draws as">
+              <option value="auto">Rock on a deep pit's floor</option>
+              <option value="rock">Bare rock</option>
+              <option value="ground">The land round it</option>
+            </select>
+          </label>
+        {/if}
         <div class="row">
           <button class="ws-btn" onclick={onRemove} title="Take it away (Delete)"><Icon name="trash" size={16} /> Take away</button>
         </div>
