@@ -2827,7 +2827,8 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
             l.mottes = nums(&w.mottes).chunks_exact(7).map(|c| super::Motte { at: [c[0], c[1]], top_r: c[2], foot_r: c[3], top: c[4] as f32, way: [c[5], c[6]] }).collect();
         }
         None => {
-            let segs: Vec<(P, P)> = graph.segs.iter().filter(|g| recs.streets[&g.2].class != StreetClass::Joint).map(|g| (graph.pts[g.0], graph.pts[g.1])).collect();
+            // (Dead ends too: a street out of a gate to the country has no block beyond the wall.)
+            let segs: Vec<(P, P)> = graph.segs.iter().chain(&graph.loose).filter(|g| recs.streets[&g.2].class != StreetClass::Joint).map(|g| (graph.pts[g.0], graph.pts[g.1])).collect();
             let (pieces, towers, gate_towers, gates) = lay_walls(site, &recs, &segs, origin, l.wall_style.spacing);
             let w = |v: Vec<P>| v.into_iter().map(|p| add(p, origin)).collect::<Vec<P>>();
             l.walls = pieces.into_iter().map(w).collect();
