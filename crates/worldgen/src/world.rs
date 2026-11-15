@@ -1711,6 +1711,7 @@ impl Edits {
                 "cultures" => self.cultures = std::mem::take(&mut part.cultures),
                 "hexes" => self.hexes = std::mem::take(&mut part.hexes),
                 "streets" => self.streets = std::mem::take(&mut part.streets),
+                "links" => self.links = std::mem::take(&mut part.links),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1749,6 +1750,7 @@ impl Edits {
                 "cultures" => patch(&mut self.cultures, p)?,
                 "hexes" => patch(&mut self.hexes, p)?,
                 "streets" => patch(&mut self.streets, p)?,
+                "links" => patch(&mut self.links, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
