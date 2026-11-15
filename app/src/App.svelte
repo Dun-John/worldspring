@@ -5414,6 +5414,7 @@
             mode={buildMode}
             bind:works
             worksEditing={worksSite(worksEditing)?.name ?? null}
+            handTown={!!streetPlan}
             onWorksSave={saveWorks}
             bind:clearShape
             bind:stamp={stampSet}
