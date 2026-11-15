@@ -22,15 +22,14 @@ pub fn list() -> Vec<Value> {
     let kinds: Vec<&str> = WaterKind::ALL.iter().map(|k| k.name()).collect();
     let props = |with_id: bool| {
         let mut p = json!({
-            "poly": { "type": "array", "minItems": 2, "maxItems": waters::MAX_WATER_PTS, "items": pt.clone(), "description": "A polygon's points (world ft, 5 miles across at most; 3 or more), or a brushed line's (2 or more)" },
-            "shape": { "type": "string", "enum": ["polygon", "brush"], "description": "polygon: the water inside poly (default); brush: the band width_ft wide along poly (closed: a ring)" },
-            "width_ft": { "type": "number", "minimum": waters::STREAM_WIDTHS[0], "maximum": waters::BRUSH_WIDTHS[1], "description": "A brushed line's width, 3 to 80 ft (default 10)" },
-            "closed": { "type": "boolean", "description": "A brushed line comes round to its first point: a ring, its level still (default false)" },
-            "depth_ft": { "type": "number", "minimum": waters::DEPTHS[0], "maximum": waters::DEPTHS[1], "description": "How deep its bed lies under its level away from the shore, 1 to 20 ft (default 4); still water shallower than 4 ft looks a pond, deeper a lake" },
-            "dug": { "type": "boolean", "description": "Dug: straight sides with rounded corners and a stone edge, a paved quay with bollards where it is the sea's (default false: a natural shore, a smooth gently irregular curve round the points)" },
-            "kind": { "type": "string", "enum": kinds.clone(), "description": "Legacy, for older callers: a kind that sets the look, depth, shore and default level as before (inlet and basin the sea's, lake, pond, moat standing water, stream along a line). Leave it out to have the look follow the water" },
-            "line": { "type": "boolean", "description": "Legacy: the same as shape brush" },
-            "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Its surface, ft above the sea. Default: the sea's or a lake's where it reaches one (within 4 ft of its shore), else 1 ft under the lowest ground on its shore (half a foot over the sea at least); an open brushed line's falls with the ground from its higher end" },
+            "poly": { "type": "array", "minItems": 2, "maxItems": waters::MAX_WATER_PTS, "items": pt.clone(), "description": "Points (world ft): polygon 3+, brush 2+" },
+            "shape": { "type": "string", "enum": ["polygon", "brush"], "description": "brush: a band width_ft wide along poly (default polygon)" },
+            "width_ft": { "type": "number", "minimum": waters::STREAM_WIDTHS[0], "maximum": waters::BRUSH_WIDTHS[1], "description": "Brush width (default 10)" },
+            "closed": { "type": "boolean", "description": "Brush comes round to its start: a ring" },
+            "depth_ft": { "type": "number", "minimum": waters::DEPTHS[0], "maximum": waters::DEPTHS[1], "description": "Default 4; still water under 4 ft is a pond, deeper a lake" },
+            "dug": { "type": "boolean", "description": "Straight sides, stone edge (a quay at the sea); default natural" },
+            "kind": { "type": "string", "enum": kinds.clone(), "description": "Legacy fixed look; leave out" },
+            "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Surface, ft above the sea (default: the sea's or a lake's it reaches, else under its shore)" },
             "name": { "type": "string", "description": "Its name on the map (empty: none)" },
         });
         if with_id {
@@ -39,10 +38,10 @@ pub fn list() -> Vec<Value> {
         p
     };
     vec![
-        json!({ "name": "create_water", "title": "Draw water", "description": "Water drawn by hand: a polygon, or a brushed line width_ft wide (shape brush; closed for a ring), depth_ft deep, natural or dug. Its look follows the water: at the sea's level it is the sea's (a beach, or a paved quay with bollards when dug); an open brushed line is a stream, its level falling with the ground downhill; a ring is a moat, still, steep-banked (stone by walls and castles); else still water, a pond (greener, reeds, mud) shallower than 4 ft, a lake (blue, pebbles) deeper. The ground inside falls under its level (the battlemap's water, the map's at every zoom); water reaching the sea or a lake joins it; overlapping polygons are one water with one shore. Buildings, walls and crossings' ends keep out of it; a plateau or islet drawn over it stands dry. Returns its id (e:...) and its look as kind.", "inputSchema": schema(props(false), &["poly"]) }),
-        json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...): its points, shape, width, depth, dug, level or name; what is not given stays (water with a legacy kind keeps it unless shape, depth_ft or dug is given).", "inputSchema": schema(props(true), &["id"]) }),
+        json!({ "name": "create_water", "title": "Draw water", "description": "Water drawn by hand: a polygon or a brushed band, depth_ft deep, natural or dug. Its look follows the water: at the sea's level the sea's (dug: a paved quay); an open brushed line a stream falling downhill; a ring a still moat; else a pond or lake by depth. Overlapping polygons are one water; reaching the sea or a lake joins it. Returns id (e:...) and look as kind.", "inputSchema": schema(props(false), &["poly"]) }),
+        json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...); what is not given stays.", "inputSchema": schema(props(true), &["id"]) }),
         json!({ "name": "delete_water", "title": "Take water away", "description": "Take water drawn by hand away (the ground goes back as it was), by id (e:...), with its name, note and hidden mark (no restore; the user's Undo in the app brings it back).", "inputSchema": schema(crate::args::ids_props("water id (e:...)"), &[]) }),
-        json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "The water drawn by hand (e:...): id, kind (its look), shape, depth_ft, dug, level_ft, name, middle, bbox, area and points (a brushed line's with width_ft, closed). Returns {items, found}; limit (default 100) cuts it.", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
+        json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "Water drawn by hand (e:...) as create_water returns it. Returns {items, found}; limit (default 100).", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
     ]
 }
 
