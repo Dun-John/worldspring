@@ -226,14 +226,6 @@ export function setWayDown(d: SiteDesign, li: number, x: number, y: number) {
   landing(d, li - 1, x, y);
 }
 
-/** Why a level can't take a landing (null: it can). Above ground the stairs are a block, and the
- * top level underground has a way in from the surface instead of a way up. */
-export function landingReason(d: SiteDesign, li: number): string | null {
-  if (isBuilding(d)) return 'A building has no landing: its stair block sits on the same squares on every floor';
-  if (li + 1 >= d.levels.length) return 'The top level has no landing: its way in from the surface sits under the entrance';
-  return null;
-}
-
 /** Where the stairs come out on a level set by hand (a floor square; null: as generated). */
 export function setLanding(d: SiteDesign, li: number, at: [number, number] | null) {
   if (at) d.levels[li].landing = at;
