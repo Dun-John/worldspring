@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
+  import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
   import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, BlockFill, P2, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams, OpenKind, GenIslet } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
@@ -5126,6 +5126,10 @@
       // (This tab's own address, made before the edits stored caught up: those are taken.)
       const own = !!w.edits && ownLinks().includes(editsStamp(w.edits));
       if (own) w = { gen_version: w.gen_version, seed: w.seed, params: w.params, ...(w.sketch ? { sketch: w.sketch } : {}) };
+      // (?bench=city: the acceptance world, whatever the address names.)
+      const city = params.get('bench') === 'city' ? await cityWorld() : null;
+      if (city) w = city;
+      else if (params.get('bench') === 'city') toast('The acceptance world is served by the dev server only');
       await generate(w, { from: w.edits ? 'link' : null });
       if (params.get('bench') === 'play') {
         go('play');
@@ -5147,6 +5151,10 @@
           () => edits,
           (e) => applyEdits(e, { tool: 'sync', label: 'Bench edit' }, 'user', { record: false, send: false }),
         );
+        benchRunning = false;
+      } else if (params.get('bench') === 'city' && city) {
+        benchRunning = true;
+        bench = await runCityBench(view, city);
         benchRunning = false;
       } else if (params.get('bench') === 'heavy') {
         benchRunning = true;

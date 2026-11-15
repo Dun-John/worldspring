@@ -22,5 +22,10 @@ export default defineConfig({
   worker: { format: 'es' },
   // Two pages: the map (the DM's at a table) and the players' window.
   build: { target: 'es2022', rollupOptions: { input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), player: fileURLToPath(new URL('./player.html', import.meta.url)) } } },
-  server: { port: 5173, ...(poll ? { watch: { usePolling: true, interval: 300 } } : {}) },
+  // (The app, and the acceptance world `?bench=city` loads from the generator's test fixtures.)
+  server: {
+    port: 5173,
+    fs: { allow: [fileURLToPath(new URL('.', import.meta.url)), fileURLToPath(new URL('../crates/worldgen/tests/fixtures', import.meta.url))] },
+    ...(poll ? { watch: { usePolling: true, interval: 300 } } : {}),
+  },
 });

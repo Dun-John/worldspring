@@ -459,6 +459,54 @@ export async function runEditBench(view: MapView, edits: () => Edits, apply: (e:
   }
 }
 
+/** The acceptance world (Roadmap 6 P11): `crates/worldgen/tests/fixtures/acceptcity.json`, written by the
+ * `acceptcity` example. Only the dev server serves it (the benches run there); null in a build. */
+export async function cityWorld(): Promise<WorldFile | null> {
+  if (!import.meta.env.DEV) return null;
+  const m = await import('../../../crates/worldgen/tests/fixtures/acceptcity.json?raw');
+  return JSON.parse(m.default) as WorldFile;
+}
+
+/**
+ * The acceptance city's grown metropolis (the world `cityWorld` loads): from the continent down to battlemap
+ * zoom at its centre, across the grown part at battlemap zoom to its farthest junction, out to the region and
+ * down again at its middle, then out to the continent. Run with ?bench=city.
+ */
+export async function runCityBench(view: MapView, world: WorldFile): Promise<BenchResult> {
+  await waitReady(view, 4000);
+  const geom = view.geom!;
+  // (The metropolis laid out by hand: the header converted from a generated town, its junctions.)
+  const streets = world.edits?.streets ?? {};
+  const head = Object.keys(streets).find((k) => /^\d+$/.test(k) && (streets[k] as { from?: string }).from === 'generated');
+  if (!head) throw new Error('no city laid out by hand in this world');
+  const [cx, cy] = (streets[head] as { origin: [number, number] }).origin;
+  let far: [number, number] = [cx, cy];
+  for (const [k, v] of Object.entries(streets)) {
+    const p = k.startsWith(`${head}/n`) ? (v as { p?: [number, number] }).p : undefined;
+    if (p && Math.hypot(p[0] - cx, p[1] - cy) > Math.hypot(far[0] - cx, far[1] - cy)) far = p;
+  }
+  const mid: [number, number] = [(cx + far[0]) / 2, (cy + far[1]) / 2];
+  const region = BATTLEMAP_ZOOM - 10;
+  const town = BATTLEMAP_ZOOM - 4;
+  return runBench(view, {
+    segs: [
+      { hold: 800 },
+      { to: { cx, cy, zoom: BATTLEMAP_ZOOM }, ms: 14000 },
+      { hold: 2500 },
+      { to: { cx: mid[0], cy: mid[1], zoom: BATTLEMAP_ZOOM }, ms: 6000 },
+      { hold: 1500 },
+      { to: { cx: far[0], cy: far[1], zoom: BATTLEMAP_ZOOM }, ms: 6000 },
+      { hold: 2500 },
+      { to: { cx: mid[0], cy: mid[1], zoom: region }, ms: 4000 },
+      { hold: 1500 },
+      { to: { cx: mid[0], cy: mid[1], zoom: town }, ms: 4000 },
+      { hold: 2500 },
+      { to: { cx: geom.map_w_ft / 2, cy: geom.map_h_ft / 2, zoom: view.cam.fitZoom(geom.map_w_ft, geom.map_h_ft) }, ms: 4000 },
+      { hold: 1000 },
+    ],
+  });
+}
+
 async function waitReady(view: MapView, timeoutMs: number) {
   const start = performance.now();
   while (view.readiness < 1 && performance.now() - start < timeoutMs) {
