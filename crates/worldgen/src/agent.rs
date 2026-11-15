@@ -1173,10 +1173,10 @@ pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> 
             }
         }
         for p in l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Bailey) {
-            // (Touches the area: a corner or its middle in it, an edge running through it, or the area's middle on the square.)
+            // (Touches the area: a corner or its middle in it, an edge running through it (sampled every 2 ft, so a small box on a long edge counts), or the area's middle on the square.)
             let outline: Vec<P> = p.pts.iter().chain(p.pts.first()).copied().collect();
             let mid = [0.5 * (rect[0] + rect[2]), 0.5 * (rect[1] + rect[3])];
-            if p.pts.iter().any(|q| inside(*q)) || inside(geom::centroid(&p.pts)) || !clip_runs(&outline, inside).is_empty() || (inside(mid) && geom::contains(&p.pts, mid)) {
+            if p.pts.iter().any(|q| inside(*q)) || inside(geom::centroid(&p.pts)) || outline.windows(2).any(|e| (0..=(geom::dist(e[0], e[1]) / 2.0).ceil() as usize).any(|k| inside(geom::lerp(e[0], e[1], k as f64 / (geom::dist(e[0], e[1]) / 2.0).ceil().max(1.0))))) || (inside(mid) && geom::contains(&p.pts, mid)) {
                 let pts: Vec<P> = p.pts.iter().map(|q| [crate::core::round(q[0]), crate::core::round(q[1])]).collect();
                 out.push(with("square", json!({ "kind": plaza_kind(p.kind), "pts": pts_json(&pts) })));
             }
