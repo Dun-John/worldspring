@@ -27,7 +27,7 @@ use super::geom::*;
 use super::{Building, Layout, ParkKind, Part, PartKind, PlazaKind, RoofStyle, Site, Structure, TownPlan};
 use crate::World;
 use crate::core::hash::FastMap;
-use crate::core::rng::{Pcg32, hash3};
+use crate::core::rng::{Pcg32, hash2, hash3, unit};
 use crate::t0::T0;
 use crate::t0::settle::Tier;
 use crate::world::{LOT_SIZES, TownEdit};
@@ -291,13 +291,22 @@ pub struct Kept {
     /// Buildings stored whole.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub full: Vec<Full>,
+    /// Which of its farmland's plots (in the order its fill cuts them) the town kept as fields:
+    /// `1` or `0` each (none: all).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fields: String,
 }
 
-/// A fill run again (`fill_block`'s `Lots` or `Farm`): `k` 0 lots, 1 farmland; the ward (`WARDS`
-/// index), a temple's close, the farmland's class; `g` its numbers packed (`pack`): the block's
-/// `nb` corners (local ft about the header's `origin`), its `nl` street lines (normal, offset),
-/// the stream's state (two words), then for lots the district's sizes (4), the close's roll, and
-/// with `nt` the outskirts' thinning (its reach and `nt` corners).
+/// Farmland's plots as `fill_block` cuts them, and their class.
+type Plots = Vec<(Vec<P>, u8)>;
+
+/// A fill run again (`fill_block`'s): `k` 0 lots, 1 farmland, 2 a square, 3 a park; the ward
+/// (`WARDS` index; a square's kind, `PLAZAS`; a park's, `PARKS`), a temple's close, the farmland's
+/// class; `g` its numbers packed (`pack`): the block's `nb` corners (local ft about the header's
+/// `origin`), its `nl` street lines (normal, offset; a park's ways in), then for lots and
+/// farmland the stream's state (two words), for lots the district's sizes (4), the close's roll,
+/// and with `nt` the outskirts' thinning (its reach and `nt` corners); for a square its monument's
+/// rolls (stages 40-43), for a park its looks' key (its bits).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Refill {
     pub k: u8,
@@ -386,6 +395,21 @@ fn is_no_func(f: &i32) -> bool {
 const WARDS: [Ward; 13] = [Ward::Plaza, Ward::Castle, Ward::Temple, Ward::Merchant, Ward::Craft, Ward::Noble, Ward::Common, Ward::Slum, Ward::Docks, Ward::Military, Ward::Farm, Ward::Rural, Ward::Park];
 const STRUCTURES: [Structure; 3] = [Structure::Roofed, Structure::Open, Structure::Ruin];
 const ROOFS: [RoofStyle; 3] = [RoofStyle::Hip, RoofStyle::Battlements, RoofStyle::Cone];
+const PLAZAS: [PlazaKind; 12] = [
+    PlazaKind::Market,
+    PlazaKind::MarketSparse,
+    PlazaKind::MarketDay,
+    PlazaKind::Civic,
+    PlazaKind::Quay,
+    PlazaKind::Green,
+    PlazaKind::Yard,
+    PlazaKind::TempleClose,
+    PlazaKind::WellSquare,
+    PlazaKind::FountainSquare,
+    PlazaKind::Crossroads,
+    PlazaKind::Bailey,
+];
+const PARKS: [ParkKind; 4] = [ParkKind::Formal, ParkKind::Common, ParkKind::Cemetery, ParkKind::Horses];
 const KEEPS: [KeepKind; 6] = [KeepKind::Great, KeepKind::Hall, KeepKind::L, KeepKind::T, KeepKind::Shell, KeepKind::Plain];
 const PARTS: [PartKind; 6] = [PartKind::Body, PartKind::Tower { round: false }, PartKind::Tower { round: true }, PartKind::Forebuilding, PartKind::Wing, PartKind::Apse];
 
@@ -445,9 +469,9 @@ fn pts_of(fs: &[f64]) -> Vec<P> {
 }
 
 impl Refill {
-    /// A fill as `build_town` hands it to `fill_block` (`Lots` and `Farm` only: the others build
-    /// nothing there), `r65` its patch's close roll.
-    fn of(fill: &Fill, block: &[P], lines: &[(P, f64)], r65: f64) -> Option<Refill> {
+    /// A fill as `build_town` hands it to `fill_block`, `roll` its patch's rolls.
+    fn of(fill: &Fill, block: &[P], lines: &[(P, f64)], roll: &dyn Fn(i64) -> f64) -> Option<Refill> {
+        let r65 = roll(65);
         let mut g: Vec<f64> = block.iter().flat_map(|p| *p).collect();
         g.extend(lines.iter().flat_map(|(n, c)| [n[0], n[1], *c]));
         let (nb, nl) = (block.len() as u32, lines.len() as u32);
@@ -469,36 +493,82 @@ impl Refill {
                 }
                 Some(Refill { k: 0, w: index_of(&WARDS, ward), close: *close, class: 0, nb, nl, nt: thin.as_ref().map(|t| t.0.len() as u32), g: pack(&g) })
             }
-            _ => None,
+            Fill::Square(kind) => {
+                let mut g: Vec<f64> = block.iter().flat_map(|p| *p).collect();
+                g.extend((40..44).map(roll));
+                Some(Refill { k: 2, w: index_of(&PLAZAS, kind), close: false, class: 0, nb, nl: 0, nt: None, g: pack(&g) })
+            }
+            Fill::Park { kind, ways, key, .. } => {
+                let mut g: Vec<f64> = block.iter().flat_map(|p| *p).collect();
+                g.extend(ways.iter().flat_map(|(n, c)| [n[0], n[1], *c]));
+                g.push(f64::from_bits(*key));
+                Some(Refill { k: 3, w: index_of(&PARKS, kind), close: false, class: 0, nb, nl: ways.len() as u32, nt: None, g: pack(&g) })
+            }
         }
     }
 
-    /// Its fill laid out again (local ft about the origin), as `fill_block` laid it out then.
+    /// Its fill's buildings laid out again (local ft about the origin), as `fill_block` laid them
+    /// out then.
     fn run(&self, site: &Site, meta: (u32, P, f64, Tier)) -> Result<Vec<Building>, String> {
+        if self.k >= 2 {
+            return Ok(Vec::new());
+        }
+        Ok(self.lay(site, meta, None)?.0.buildings)
+    }
+
+    /// Its block (local ft about the origin).
+    pub(super) fn block(&self) -> Result<Vec<P>, String> {
+        let g = unpack(&self.g)?;
+        g.get(..2 * self.nb as usize).map(pts_of).ok_or_else(|| "kept block: corners cut short".to_string())
+    }
+
+    /// Its fill laid out again (local ft about the origin), as `fill_block` laid it out then: the
+    /// layout it made and farmland's plots; a cemetery's style (its town's, `cemetery::Style::of`).
+    pub(super) fn lay(&self, site: &Site, meta: (u32, P, f64, Tier), cemetery: Option<super::cemetery::Style>) -> Result<(Layout, Plots), String> {
         let g = unpack(&self.g)?;
         let (nb, nl) = (self.nb as usize, self.nl as usize);
-        let need = 2 * nb + 3 * nl + 2 + if self.k == 0 { 5 + self.nt.map_or(0, |t| 1 + 2 * t as usize) } else { 0 };
+        let need = 2 * nb + 3 * nl + match self.k {
+            0 => 7 + self.nt.map_or(0, |t| 1 + 2 * t as usize),
+            1 => 2,
+            2 => 4,
+            _ => 1,
+        };
         if g.len() != need {
             return Err(format!("kept block: {} numbers packed, {need} wanted", g.len()));
         }
         let block = pts_of(&g[..2 * nb]);
         let lines: Vec<(P, f64)> = g[2 * nb..2 * nb + 3 * nl].chunks(3).map(|c| ([c[0], c[1]], c[2])).collect();
         let at = 2 * nb + 3 * nl;
-        let rng = Pcg32::from_state(g[at].to_bits(), g[at + 1].to_bits());
+        let rng = || Pcg32::from_state(g[at].to_bits(), g[at + 1].to_bits());
+        let mut rolls = [0.0; 4];
         let (fill, r65) = match self.k {
-            1 => (Fill::Farm { class: self.class, rng }, 0.0),
+            1 => (Fill::Farm { class: self.class, rng: rng() }, 0.0),
+            2 => {
+                rolls.copy_from_slice(&g[at..at + 4]);
+                (Fill::Square(nth(&PLAZAS, self.w, "square")?), 0.0)
+            }
+            3 => {
+                let kind = nth(&PARKS, self.w, "park")?;
+                (Fill::Park { kind, ways: lines.clone(), key: g[at].to_bits(), cemetery: if kind == ParkKind::Cemetery { cemetery } else { None } }, 0.0)
+            }
             0 => {
                 let d = &g[at + 2..at + 7];
                 let dp = District { min_sq: d[0], grid_chaos: d[1], size_chaos: d[2], block_size: d[3] };
                 let thin = self.nt.map(|_| (pts_of(&g[at + 8..]), g[at + 7]));
-                (Fill::Lots { ward: nth(&WARDS, self.w, "ward")?, dp, rng, thin, close: self.close }, d[4])
+                (Fill::Lots { ward: nth(&WARDS, self.w, "ward")?, dp, rng: rng(), thin, close: self.close }, d[4])
             }
             k => return Err(format!("kept block: no fill kind {k}")),
         };
         let mut l = Layout::empty(meta.0, meta.1, meta.2, meta.3);
         let mut plots = Vec::new();
-        super::fill_block(site, &block, lines, fill, &|_| r65, super::places::Spot::default(), &mut l, &mut plots);
-        Ok(l.buildings)
+        // (The open ground past a town's farmland: its plots alone.)
+        if let Fill::Farm { class: 2, mut rng } = fill {
+            super::fill::farm(site, &block, &mut rng, &mut l, &mut plots, 2, false);
+            return Ok((l, plots));
+        }
+        let roll = |k: i64| if (40..44).contains(&k) { rolls[(k - 40) as usize] } else { r65 };
+        super::fill_block(site, &block, lines, fill, &roll, super::places::Spot::default(), &mut l, &mut plots);
+        Ok((l, plots))
     }
 }
 
@@ -686,10 +756,23 @@ pub struct KeptGround<'a> {
 impl<'a> KeptGround<'a> {
     /// The ground about the header's origin, as read when the town was converted.
     pub fn of(world: &World, t0: &'a T0, index: usize, town: &HandTown) -> KeptGround<'a> {
+        KeptGround::at(world, t0, index, town.origin, town.reach, Tier::from_u8(town.tier), u64::from_str_radix(&town.roofs, 16).unwrap_or(0))
+    }
+
+    fn at(world: &World, t0: &'a T0, index: usize, origin: P, reach: f64, tier: Tier, roof_seed: u64) -> KeptGround<'a> {
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-        let site = Site::new(t0, town.origin, lattice, town.reach, super::river_pieces(t0, town.origin, town.reach), world.params().sea_level_ft);
-        let meta = (index as u32, town.origin, 0.0, Tier::from_u8(town.tier));
-        KeptGround { site, meta, roofs: roofs_of(meta, u64::from_str_radix(&town.roofs, 16).unwrap_or(0)) }
+        let site = Site::new(t0, origin, lattice, reach, super::river_pieces(t0, origin, reach), world.params().sea_level_ft);
+        let meta = (index as u32, origin, 0.0, tier);
+        KeptGround { site, meta, roofs: roofs_of(meta, roof_seed) }
+    }
+
+    /// Farmland's plots laid out again by `r` (local ft), as the town's fields are cut from them
+    /// (`fields::off_sand`), with what is left of each (none: all gone).
+    fn plots(&self, r: &Refill) -> Vec<Option<Vec<P>>> {
+        match r.lay(&self.site, self.meta, None) {
+            Ok((_, plots)) => plots.iter().map(|(f, _)| super::fields::off_sand(&self.site, f)).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 
@@ -701,11 +784,16 @@ fn roofs_of(meta: (u32, P, f64, Tier), roof_seed: u64) -> Layout {
 
 /// A kept block's buildings (world ft), in id order, from its record alone.
 pub fn kept_on(ground: &KeptGround, kept: &Kept) -> Result<Vec<Building>, String> {
-    let origin = ground.meta.1;
     let raw = match &kept.refill {
         Some(r) => r.run(&ground.site, ground.meta)?,
         None => Vec::new(),
     };
+    kept_from(ground, kept, &raw)
+}
+
+/// `kept_on` with its fill's buildings laid out already (`raw`, local ft).
+fn kept_from(ground: &KeptGround, kept: &Kept, raw: &[Building]) -> Result<Vec<Building>, String> {
+    let origin = ground.meta.1;
     let overs: FastMap<u32, &Over> = kept.set.iter().map(|o| (o.i, o)).collect();
     let mut floors = kept.floors.bytes();
     let mut out = Vec::new();
@@ -825,8 +913,8 @@ pub(super) fn cap_town(faces: &[Vec<usize>], cells: &[Labeled], insets: Vec<Vec<
     })
 }
 
-pub(super) fn cap_fill(i: usize, fill: &Fill, block: &[P], lines: &[(P, f64)], r65: f64) {
-    with_cap(|c| c.pending = Refill::of(fill, block, lines, r65).map(|r| (i, r)))
+pub(super) fn cap_fill(i: usize, fill: &Fill, block: &[P], lines: &[(P, f64)], roll: &dyn Fn(i64) -> f64) {
+    with_cap(|c| c.pending = Refill::of(fill, block, lines, roll).map(|r| (i, r)))
 }
 
 pub(super) fn cap_built(i: usize, built: &[Building]) {
@@ -1001,6 +1089,27 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
             }
         }
     }
+    // (Every fill, though it keeps no building: a square's ground and monument, a park's, which of
+    // farmland's plots are fields, laid out again.)
+    let ground = KeptGround::at(world, t0, index, center, super::reach(&s) + 500.0, s.tier, base.roof_seed);
+    let mut fields: FastMap<Vec<u64>, u32> = FastMap::default();
+    for f in &base.fields {
+        *fields.entry(f.iter().flat_map(|p| [p[0].to_bits(), p[1].to_bits()]).collect()).or_default() += 1;
+    }
+    for (&i, (r, _)) in &cap.fills {
+        let kp = kept.entry(i).or_default();
+        kp.refill = Some(r.clone());
+        if r.k == 1 {
+            for p in ground.plots(r) {
+                let bits: Option<Vec<u64>> = p.map(|p| p.iter().flat_map(|q| { let w = add(*q, center); [w[0].to_bits(), w[1].to_bits()] }).collect());
+                let hit = bits.and_then(|b| fields.get_mut(&b)).filter(|n| **n > 0).map(|n| *n -= 1).is_some();
+                kp.fields.push(if hit { '1' } else { '0' });
+            }
+            if !kp.fields.contains('0') {
+                kp.fields.clear();
+            }
+        }
+    }
     for i in 0..cap.cells.len() {
         if cap.cells[i].len() < 3 {
             continue;
@@ -1025,6 +1134,7 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
             Some(Ward::Castle) => BlockFill::Castle { hand: plan.ward[i] != Some(Ward::Castle) },
             Some(w) => BlockFill::Generated { ward: w.name().into(), lots: lot_name(i), reroll: ch.reroll.get(&i).copied().unwrap_or(0), close: ch.close.get(&i).copied() },
         };
+        let open = !matches!(fill, BlockFill::Hand);
         let block = Block {
             at: add(inside_point(&cap.cells[i]), center),
             fill,
@@ -1032,7 +1142,8 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
             seed: hex(hash3(s.seed, index as i64, i as i64, 0x4a4d)),
             generation: 0,
             pins: Vec::new(),
-            kept: kept.remove(&i),
+            // (Nothing kept but what its fill made: it stays so until its lots next change.)
+            kept: kept.remove(&i).or_else(|| open.then(Kept::default)),
         };
         put(format!("{li}/k{i}"), serde_json::to_value(block).map_err(|e| e.to_string())?);
     }
@@ -1093,4 +1204,642 @@ pub fn wharves(world: &World, t0: &T0, index: usize) -> Vec<(String, crate::worl
 /// A town's records as they would be stored (`Edits.streets`, compact JSON): its size in bytes.
 pub fn size_of(records: &[(String, Value)]) -> usize {
     records.iter().map(|(k, v)| k.len() + 4 + serde_json::to_string(v).map_or(0, |s| s.len())).sum()
+}
+
+// ---------------------------------------------------------------------------------------
+// The builder: a hand town laid out from its records.
+
+/// Ids of the buildings a hand town's blocks lay out: `HAND_ID + (block × ROLLS + gen mod ROLLS)
+/// × PER_PATCH + k` (k in the order the block builds them), above every id a kept block keeps
+/// (`wards::ROLLED_ID`'s range); a row's take block number `ROW_BLOCK + row`. Blocks under
+/// `ROW_BLOCK` and rows under `MAX_ROWS` have room.
+pub const HAND_ID: u32 = 2_000_000_000;
+pub const ROW_BLOCK: u32 = 3_000;
+pub const MAX_ROWS: u32 = 350;
+use super::wards::{PER_PATCH, ROLLS};
+
+/// What of a hand town's records could not be laid out: (key, why).
+pub type Problems = Vec<(String, &'static str)>;
+
+/// The street graph: corners (junctions and bends, local ft) and the street pieces between them.
+struct Graph {
+    pts: Vec<P>,
+    q: Vec<(i64, i64)>,
+    /// (from, to, street id): from `a` toward `b`.
+    segs: Vec<(usize, usize, u32)>,
+}
+
+/// A face of the graph: its ring (corners, anticlockwise), and per side the street piece and
+/// whether the face is on its left.
+struct Face {
+    ring: Vec<usize>,
+    side: Vec<(usize, bool)>,
+}
+
+fn grid(p: P) -> (i64, i64) {
+    (crate::core::round(p[0] * 256.0) as i64, crate::core::round(p[1] * 256.0) as i64)
+}
+
+fn orient(a: (i64, i64), b: (i64, i64), c: (i64, i64)) -> i128 {
+    (b.0 - a.0) as i128 * (c.1 - a.1) as i128 - (b.1 - a.1) as i128 * (c.0 - a.0) as i128
+}
+
+/// Whether c lies on segment a-b strictly between its ends (exactly, by the grid).
+fn between(a: (i64, i64), b: (i64, i64), c: (i64, i64)) -> bool {
+    orient(a, b, c) == 0 && c != a && c != b && (c.0 - a.0) as i128 * (c.0 - b.0) as i128 + (c.1 - a.1) as i128 * (c.1 - b.1) as i128 <= 0
+}
+
+impl Graph {
+    /// The graph of `recs`' streets (local ft about `origin`), the streets that can't stand in it
+    /// left out and said why: a missing junction, no length, crossing a street of a lower id (or
+    /// touching it, or running along it), or ending nowhere (a dead end: no block beside it).
+    fn of(recs: &HandRecords, origin: P, li: &str, problems: &mut Problems) -> Graph {
+        let mut g = Graph { pts: Vec::new(), q: Vec::new(), segs: Vec::new() };
+        let mut at: FastMap<(i64, i64), usize> = FastMap::default();
+        let mut corner = |g: &mut Graph, p: P| {
+            let k = grid(p);
+            *at.entry(k).or_insert_with(|| {
+                g.pts.push(p);
+                g.q.push(k);
+                g.pts.len() - 1
+            })
+        };
+        // Each street's pieces, in id order.
+        let mut pieces: BTreeMap<u32, Vec<(usize, usize)>> = BTreeMap::new();
+        for (&id, st) in &recs.streets {
+            let (Some(a), Some(b)) = (recs.junctions.get(&st.a), recs.junctions.get(&st.b)) else {
+                problems.push((format!("{li}/e{id}"), "no such junction"));
+                continue;
+            };
+            let line: Vec<usize> = std::iter::once(a.p).chain(st.bends.iter().copied()).chain([b.p]).map(|p| corner(&mut g, sub(p, origin))).collect();
+            let mut ps: Vec<(usize, usize)> = line.windows(2).filter(|w| w[0] != w[1]).map(|w| (w[0], w[1])).collect();
+            // (A piece doubling straight back on the last is no street.)
+            if ps.is_empty() || ps.windows(2).any(|w| w[0].0 == w[1].1) {
+                problems.push((format!("{li}/e{id}"), "no length"));
+                ps.clear();
+            }
+            if !ps.is_empty() {
+                pieces.insert(id, ps);
+            }
+        }
+        // Crossings: every pair of pieces of different streets meeting other than at a shared corner,
+        // found by a sweep along x; the street of the higher id goes.
+        let all: Vec<(usize, usize, u32)> = pieces.iter().flat_map(|(&id, ps)| ps.iter().map(move |&(u, v)| (u, v, id))).collect();
+        let bx = |s: &(usize, usize, u32)| (g.q[s.0].0.min(g.q[s.1].0), g.q[s.0].0.max(g.q[s.1].0));
+        let mut order: Vec<usize> = (0..all.len()).collect();
+        order.sort_by_key(|&k| (bx(&all[k]).0, k));
+        let mut meets: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        for (oi, &i) in order.iter().enumerate() {
+            let (x1, (u, v, si)) = (bx(&all[i]).1, all[i]);
+            let (a, b) = (g.q[u], g.q[v]);
+            for &j in &order[oi + 1..] {
+                if bx(&all[j]).0 > x1 {
+                    break;
+                }
+                let (c, d, sj) = all[j];
+                if si == sj {
+                    continue;
+                }
+                let (pc, pd) = (g.q[c], g.q[d]);
+                if a.1.max(b.1) < pc.1.min(pd.1) || pc.1.max(pd.1) < a.1.min(b.1) {
+                    continue;
+                }
+                if conflict((u, v), (c, d), a, b, pc, pd) {
+                    meets.entry(si.max(sj)).or_default().push(si.min(sj));
+                }
+            }
+        }
+        let mut kept: BTreeMap<u32, Vec<(usize, usize)>> = BTreeMap::new();
+        for (id, ps) in pieces {
+            if meets.get(&id).is_some_and(|m| m.iter().any(|o| kept.contains_key(o))) {
+                problems.push((format!("{li}/e{id}"), "crosses another street"));
+            } else {
+                kept.insert(id, ps);
+            }
+        }
+        // Dead ends, until none is left.
+        loop {
+            let mut deg = vec![0u32; g.pts.len()];
+            for ps in kept.values() {
+                for &(u, v) in ps {
+                    deg[u] += 1;
+                    deg[v] += 1;
+                }
+            }
+            let dead: Vec<u32> = kept.iter().filter(|(_, ps)| ps.iter().any(|&(u, v)| deg[u] < 2 || deg[v] < 2)).map(|(&id, _)| id).collect();
+            if dead.is_empty() {
+                break;
+            }
+            for id in dead {
+                kept.remove(&id);
+                problems.push((format!("{li}/e{id}"), "a dead end: no block beside it"));
+            }
+        }
+        g.segs = kept.iter().flat_map(|(&id, ps)| ps.iter().map(move |&(u, v)| (u, v, id))).collect();
+        g
+    }
+
+    /// Its faces by a walk round each half piece (each corner's pieces in exact angle order),
+    /// the bounded ones (anticlockwise) and each part's outer edge (clockwise).
+    fn faces(&self) -> (Vec<Face>, Vec<Face>) {
+        let n = self.pts.len();
+        let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
+        // (Half piece 2k runs from the piece's first corner, 2k + 1 back.)
+        let from = |h: usize| if h.is_multiple_of(2) { self.segs[h / 2].0 } else { self.segs[h / 2].1 };
+        let to = |h: usize| from(h ^ 1);
+        for h in 0..2 * self.segs.len() {
+            out[from(h)].push(h);
+        }
+        let dir = |h: usize| {
+            let (a, b) = (self.q[from(h)], self.q[to(h)]);
+            (b.0 - a.0, b.1 - a.1)
+        };
+        let half = |d: (i64, i64)| if d.1 > 0 || (d.1 == 0 && d.0 > 0) { 0 } else { 1 };
+        for o in &mut out {
+            o.sort_by(|&x, &y| {
+                let (dx, dy) = (dir(x), dir(y));
+                half(dx).cmp(&half(dy)).then_with(|| 0.cmp(&((dx.0 as i128) * (dy.1 as i128) - (dx.1 as i128) * (dy.0 as i128)))).then(x.cmp(&y))
+            });
+        }
+        let mut pos = vec![0usize; 2 * self.segs.len()];
+        for o in &out {
+            for (k, &h) in o.iter().enumerate() {
+                pos[h] = k;
+            }
+        }
+        let mut seen = vec![false; 2 * self.segs.len()];
+        let (mut bounded, mut outer) = (Vec::new(), Vec::new());
+        for h0 in 0..2 * self.segs.len() {
+            if seen[h0] {
+                continue;
+            }
+            let mut f = Face { ring: Vec::new(), side: Vec::new() };
+            let mut h = h0;
+            let mut twice = 0i128;
+            while !seen[h] {
+                seen[h] = true;
+                f.ring.push(from(h));
+                f.side.push((h / 2, h.is_multiple_of(2)));
+                let (a, b) = (self.q[from(h)], self.q[to(h)]);
+                twice += a.0 as i128 * b.1 as i128 - b.0 as i128 * a.1 as i128;
+                let o = &out[to(h)];
+                h = o[(pos[h ^ 1] + o.len() - 1) % o.len()];
+            }
+            if twice > 0 { bounded.push(f) } else { outer.push(f) }
+        }
+        (bounded, outer)
+    }
+}
+
+/// Whether two pieces meet anywhere but a corner they share.
+fn conflict(s: (usize, usize), t: (usize, usize), a: (i64, i64), b: (i64, i64), c: (i64, i64), d: (i64, i64)) -> bool {
+    let shared = [s.0, s.1].iter().filter(|x| **x == t.0 || **x == t.1).count();
+    if shared == 2 {
+        return true;
+    }
+    if shared == 1 {
+        // (Meeting at their shared corner only, unless they run along each other from it.)
+        let (p, q, r) = if s.0 == t.0 { (a, b, d) } else if s.0 == t.1 { (a, b, c) } else if s.1 == t.0 { (b, a, d) } else { (b, a, c) };
+        return orient(p, q, r) == 0 && (q.0 - p.0) as i128 * (r.0 - p.0) as i128 + (q.1 - p.1) as i128 * (r.1 - p.1) as i128 > 0;
+    }
+    let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
+    if o1.signum() * o2.signum() < 0 && o3.signum() * o4.signum() < 0 {
+        return true;
+    }
+    between(a, b, c) || between(a, b, d) || between(c, d, a) || between(c, d, b) || a == c || a == d || b == c || b == d
+}
+
+/// A hand town laid out, with each block's ground (world ft) and what could not be laid out.
+pub struct HandBuilt {
+    pub layout: Layout,
+    pub blocks: Vec<(u32, Vec<super::clip::Shape>)>,
+    pub problems: Problems,
+}
+
+thread_local! {
+    static BUILT: RefCell<(u64, FastMap<u32, Rc<Layout>>)> = RefCell::new((0, FastMap::default()));
+}
+
+/// Layout `index` as its hand records lay it out, if it has a header (`base_layout`).
+pub(super) fn built(world: &World, t0: &T0, index: usize) -> Option<Rc<Layout>> {
+    let streets = &world.file.edits.streets;
+    if streets.is_empty() || !streets.contains_key(&index.to_string()) {
+        return None;
+    }
+    let key = index as u32;
+    if let Some(l) = BUILT.with(|c| {
+        let c = c.borrow();
+        if c.0 == world.hash { c.1.get(&key).cloned() } else { None }
+    }) {
+        return Some(l);
+    }
+    let l = Rc::new(build_hand(world, t0, index)?.layout);
+    BUILT.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.0 != world.hash {
+            *c = (world.hash, FastMap::default());
+        }
+        c.1.insert(key, l.clone());
+    });
+    Some(l)
+}
+
+/// What a block is laid out as, once its ground is known.
+fn ward_of(name: &str) -> Option<Ward> {
+    WARDS.iter().copied().find(|w| w.name() == name)
+}
+
+/// Hand town `index` laid out from its records (`Edits.streets`): the street graph's faces, each
+/// the block whose `at` it holds (the lowest id if several), cut back from its streets by their
+/// setbacks, from painted areas and from what is drawn or built over it (buildings drawn by hand,
+/// wharves); each block filled as its record says (a kept block's buildings as converted),
+/// then the rows along streets. None without a header or a settlement.
+pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
+    use super::clip::{self, Ends, Join, Shape};
+    use super::fill::{Block as Region, Front, build_block};
+    let recs = HandRecords::of(&world.file.edits.streets, index);
+    let town = recs.town.as_ref()?;
+    let s = super::culture::settlement(world, t0, index)?;
+    let li = index.to_string();
+    let origin = town.origin;
+    let ground = KeptGround::of(world, t0, index, town);
+    let site = &ground.site;
+    let tier = Tier::from_u8(town.tier);
+    let mut l = Layout::empty(index as u32, origin, super::urban_radius(tier, s.population), tier);
+    l.set_roofs(world, t0, town.culture);
+    l.roof_seed = u64::from_str_radix(&town.roofs, 16).unwrap_or(l.roof_seed);
+    l.wall_style = super::wallstyle::WallStyle::of(&s);
+    l.on_water = s.coastal || s.river || !site.river.is_empty();
+    let mut problems: Problems = Vec::new();
+    let graph = Graph::of(&recs, origin, &li, &mut problems);
+    let (faces, outers) = graph.faces();
+    let street = |k: usize| &recs.streets[&graph.segs[k].2];
+    let set = |k: usize, left: bool| if left { street(k).set_l } else { street(k).set_r };
+    let ring_pts = |f: &Face| f.ring.iter().map(|&v| graph.pts[v]).collect::<Vec<P>>();
+
+    // Each part's outer edge is a hole in the smallest face of another part round it.
+    let mut part = (0..graph.pts.len()).collect::<Vec<usize>>();
+    fn root(p: &mut [usize], mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    for &(u, v, _) in &graph.segs {
+        let (a, b) = (root(&mut part, u), root(&mut part, v));
+        part[a.max(b)] = a.min(b);
+    }
+    let rings: Vec<Vec<P>> = faces.iter().map(ring_pts).collect();
+    let areas: Vec<f64> = rings.iter().map(|r| area(r)).collect();
+    let mut holes: Vec<Vec<usize>> = vec![Vec::new(); faces.len()];
+    for (k, o) in outers.iter().enumerate() {
+        let p0 = graph.pts[o.ring[0]];
+        let me = root(&mut part, o.ring[0]);
+        let around = (0..faces.len()).filter(|&f| root(&mut part, faces[f].ring[0]) != me && contains(&rings[f], p0)).min_by(|&x, &y| areas[x].total_cmp(&areas[y]).then(x.cmp(&y)));
+        if let Some(f) = around {
+            holes[f].push(k);
+        }
+    }
+
+    // Faces to blocks.
+    let mut taken: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut face_block: Vec<Option<u32>> = vec![None; faces.len()];
+    for (f, ring) in rings.iter().enumerate() {
+        let inside = |p: P| contains(ring, p) && holes[f].iter().all(|&h| !contains(&ring_pts(&outers[h]), p));
+        if let Some((&id, _)) = recs.blocks.iter().find(|(id, b)| !taken.contains_key(id) && inside(sub(b.at, origin))) {
+            taken.insert(id, f);
+            face_block[f] = Some(id);
+        } else {
+            problems.push((format!("{li}/e{}", graph.segs[faces[f].side[0].0].2), "a block with no record beside this street"));
+        }
+    }
+    for &id in recs.blocks.keys() {
+        if !taken.contains_key(&id) {
+            problems.push((format!("{li}/k{id}"), "no block of the streets holds its point"));
+        }
+    }
+
+    // What no block is built over: buildings drawn by hand, wharves, painted areas.
+    let pad = |poly: &[P], d: f64| clip::offset(&clip::region(poly), d, Join::Miter(2.0));
+    let mut obstacles: Vec<Shape> = Vec::new();
+    for c in world.file.edits.created.iter().filter(|c| c.kind == "building" && c.poly.len() >= 3) {
+        let poly: Vec<P> = c.poly.iter().map(|p| sub(*p, origin)).collect();
+        obstacles.extend(pad(&poly, 2.0));
+    }
+    for w in world.file.edits.wharves.values().filter(|w| w.pts.len() >= 2) {
+        let pts: Vec<P> = w.pts.iter().map(|p| sub(*p, origin)).collect();
+        obstacles.extend(clip::buffer(&pts, 0.5 * w.width + 2.0, 0.5 * w.width + 2.0, Join::Miter(2.0), Ends::Flat));
+    }
+    let painted: Vec<(u32, Vec<P>, OpenKind)> = recs.areas.iter().filter(|(_, a)| a.poly.len() >= 3).map(|(&k, a)| (k, a.poly.iter().map(|p| sub(*p, origin)).collect(), a.open)).collect();
+    let mut cut: Vec<Shape> = obstacles.clone();
+    for (_, poly, _) in &painted {
+        cut.extend(clip::region(poly));
+    }
+    let bbox_of = |pts: &mut dyn Iterator<Item = P>| pts.fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let cut_boxes: Vec<[f64; 4]> = cut.iter().map(|sh| bbox_of(&mut sh.outer.iter().copied())).collect();
+
+    // Each block's ground: its face cut back by each street's setback on its side (mitred, as a
+    // generated town's patch is), less the parts inside it, painted areas and obstacles.
+    let mut grounds: Vec<Vec<Shape>> = Vec::with_capacity(faces.len());
+    for (f, face) in faces.iter().enumerate() {
+        let ring = &rings[f];
+        let d: Vec<f64> = face.side.iter().map(|&(k, left)| set(k, left)).collect();
+        let simple = {
+            let mut v = face.ring.clone();
+            v.sort_unstable();
+            v.windows(2).all(|w| w[0] != w[1])
+        };
+        let mut g = if simple {
+            clip::inset_edges(ring, &d)
+        } else {
+            // (A street with the face on both sides: the face less each street's buffer.)
+            let mut sub_: Vec<Shape> = Vec::new();
+            for e in 0..ring.len() {
+                sub_.extend(clip::buffer(&[ring[e], ring[(e + 1) % ring.len()]], d[e], 0.0, Join::Miter(2.0), Ends::Square));
+            }
+            clip::difference(&clip::region(ring), &sub_)
+        };
+        // (And each side's own strip: a mitre takes the nearer setback where two sides run straight
+        // on with different ones.)
+        let mut minus: Vec<Shape> = Vec::new();
+        for e in 0..ring.len() {
+            if d[e] > 0.0 {
+                minus.extend(clip::buffer(&[ring[e], ring[(e + 1) % ring.len()]], d[e], 0.0, Join::Miter(2.0), Ends::Flat));
+            }
+        }
+        for &h in &holes[f] {
+            let o = &outers[h];
+            let hr = ring_pts(o);
+            minus.extend(clip::region(&hr));
+            for (e, &(k, left)) in o.side.iter().enumerate() {
+                minus.extend(clip::buffer(&[hr[e], hr[(e + 1) % hr.len()]], set(k, left), 0.0, Join::Miter(2.0), Ends::Square));
+            }
+        }
+        let fb = bbox_of(&mut ring.iter().copied());
+        for (sh, b) in cut.iter().zip(&cut_boxes) {
+            if b[0] <= fb[2] && fb[0] <= b[2] && b[1] <= fb[3] && fb[1] <= b[3] {
+                minus.push(sh.clone());
+            }
+        }
+        if !minus.is_empty() {
+            g = clip::difference(&g, &minus);
+        }
+        grounds.push(g);
+    }
+
+    // The streets: each side's paved strip (as a generated town paves its patches' sides), main
+    // streets drawn whole too.
+    let near_water = |a: P, b: P, w: f64| {
+        let n = (dist(a, b) / 5.0).ceil() as usize;
+        site.near_river(lerp(a, b, 0.5), 2.0) || (0..=n).any(|j| site.near_river(lerp(a, b, j as f64 / n.max(1) as f64), 0.5 * w))
+    };
+    let mut lines: BTreeMap<u32, Vec<P>> = BTreeMap::new();
+    for &(u, v, id) in &graph.segs {
+        let line = lines.entry(id).or_insert_with(|| vec![graph.pts[u]]);
+        line.push(graph.pts[v]);
+        let st = &recs.streets[&id];
+        let (a, b) = (graph.pts[u], graph.pts[v]);
+        let el = dist(a, b);
+        if st.class == StreetClass::Joint || el < 1.0 {
+            continue;
+        }
+        let ev = mul(sub(b, a), 1.0 / el);
+        for (d, left) in [(st.set_l, true), (st.set_r, false)] {
+            if d <= 0.0 {
+                continue;
+            }
+            let o = mul(if left { [-ev[1], ev[0]] } else { [ev[1], -ev[0]] }, 0.5 * d);
+            let (p, q) = (add(a, o), add(b, o));
+            if !near_water(p, q, d) {
+                l.roads.push((vec![p, q], 3, d + 1.0));
+            }
+        }
+    }
+    for (id, line) in &lines {
+        if recs.streets[id].class == StreetClass::Main {
+            l.streets.push(line.clone());
+            l.roads.push((line.clone(), 4, recs.streets[id].width.clamp(8.0, 18.0)));
+        }
+    }
+
+    // The blocks' fills.
+    let meta = (index as u32, origin, 0.0, tier);
+    let mut kept_bs: Vec<Building> = Vec::new();
+    let mut plots: Vec<(Vec<P>, u8)> = Vec::new();
+    let mut built_ground: Vec<Shape> = Vec::new();
+    let cem = |id: u32| super::cemetery::Style::of(&s, id as usize, false);
+    let mut out: Vec<(u32, Vec<Shape>)> = Vec::new();
+    let seed_of = |hexs: &str| u64::from_str_radix(hexs, 16).unwrap_or_else(|_| hash2(0x4a4d, index as i64, 0));
+    let shift = |sh: &[Shape]| -> Vec<Shape> {
+        sh.iter().map(|x| Shape { outer: x.outer.iter().map(|p| add(*p, origin)).collect(), holes: x.holes.iter().map(|h| h.iter().map(|p| add(*p, origin)).collect()).collect() }).collect()
+    };
+    for (f, face) in faces.iter().enumerate() {
+        let Some(id) = face_block[f] else { continue };
+        let rec = &recs.blocks[&id];
+        let g = &grounds[f];
+        out.push((id, shift(g)));
+        // (What a row keeps clear of: every block but one left for buildings drawn by hand.)
+        if !matches!(rec.fill, BlockFill::Hand) {
+            built_ground.extend(g.iter().cloned());
+        }
+        let spot = super::places::Spot::Patch(id);
+        let bseed = seed_of(&rec.seed);
+        let gn = rec.generation as i64;
+        let first = l.buildings.len();
+        let ring = &rings[f];
+        // (Its streets' lines, outward, where a lot may front them.)
+        let fronts: Vec<Front> = face
+            .side
+            .iter()
+            .enumerate()
+            .filter_map(|(e, &(k, left))| {
+                let d = set(k, left);
+                let (a, b) = (ring[e], ring[(e + 1) % ring.len()]);
+                let el = dist(a, b);
+                (d > 0.0 && el > 1e-9 && street(k).class != StreetClass::Joint).then(|| {
+                    let n = [(b[1] - a[1]) / el, -(b[0] - a[0]) / el];
+                    Front { n, c: dot(a, n) - d, a: sub(a, mul(n, d)), b: sub(b, mul(n, d)) }
+                })
+            })
+            .collect();
+        let biggest = || g.iter().max_by(|x, y| x.area().total_cmp(&y.area())).map(|x| x.outer.clone());
+        let built_on = !matches!(rec.fill, BlockFill::Hand | BlockFill::Open { .. });
+        if built_on {
+            l.districts.push(ring.clone());
+        }
+        if let Some(kept) = &rec.kept {
+            // (Its fill laid out once: its buildings to keep, its open ground, its plots.)
+            let laid = kept.refill.as_ref().map(|r| r.lay(site, meta, Some(cem(id))));
+            let raw = match &laid {
+                Some(Ok((lay, _))) if kept.refill.as_ref().is_some_and(|r| r.k < 2) => lay.buildings.as_slice(),
+                _ => &[],
+            };
+            match kept_from(&ground, kept, raw) {
+                Ok(bs) => kept_bs.extend(bs),
+                Err(_) => problems.push((format!("{li}/k{id}"), "its kept buildings could not be laid out again")),
+            }
+            if let (Some(r), Some(laid)) = (&kept.refill, laid) {
+                match laid {
+                    Ok((mut lay, pl)) => {
+                        if r.k == 0 {
+                            l.blocks.push(r.block().unwrap_or_default());
+                        }
+                        let mask = kept.fields.as_bytes();
+                        plots.extend(pl.into_iter().enumerate().filter(|(k, _)| mask.get(*k).is_none_or(|c| *c == b'1')).map(|x| x.1));
+                        lay.plazas.iter_mut().for_each(|p| p.spot = spot);
+                        lay.parks.iter_mut().for_each(|p| p.spot = spot);
+                        l.plazas.append(&mut lay.plazas);
+                        l.parks.append(&mut lay.parks);
+                        l.monuments.append(&mut lay.monuments);
+                        l.roads.append(&mut lay.roads);
+                    }
+                    Err(_) => problems.push((format!("{li}/k{id}"), "its kept fill could not be laid out again")),
+                }
+            } else if built_on {
+                l.blocks.extend(g.iter().map(|x| x.outer.clone()));
+            }
+            continue;
+        }
+        if g.is_empty() {
+            continue;
+        }
+        match &rec.fill {
+            BlockFill::Hand | BlockFill::Castle { .. } => {}
+            BlockFill::Generated { ward, lots, reroll, close: _ } => {
+                let Some(w) = ward_of(ward) else {
+                    problems.push((format!("{li}/k{id}"), "no such ward"));
+                    continue;
+                };
+                let salt = |h: u64| if *reroll == 0 { h } else { hash3(h, *reroll as i64, 0x7e70, 1) };
+                let mut dp = District::roll(w, salt(hash2(bseed, gn, 0xd15)));
+                if let Some(k) = lots.as_deref().and_then(|n| LOT_SIZES.iter().position(|x| *x == n)) {
+                    dp.min_sq = District::base(w) * super::wards::LOT_FACTOR[k];
+                }
+                let mut rng = Pcg32::new(salt(hash2(bseed, gn, 0x107)), 47);
+                l.blocks.extend(g.iter().map(|x| x.outer.clone()));
+                build_block(site, Region::Region(g), &fronts, w, &dp, &mut rng, &mut l, None);
+                if w == Ward::Temple && l.buildings.len() == first
+                    && let Some(b) = biggest()
+                {
+                    super::squares::lone_temple(site, &b, unit(hash2(bseed, gn, 65)), &mut l);
+                }
+            }
+            BlockFill::Open { open, style } => {
+                let Some(b) = biggest() else { continue };
+                let roll = |k: i64| unit(hash3(bseed, gn, k, 0x09e));
+                let fill = open_fill(*open, style.as_deref(), &fronts, hash2(bseed, gn, 0x9a4c), || cem(id), &mut || Pcg32::new(hash2(bseed, gn, 0xfa), 61), tier);
+                let mut pl = Vec::new();
+                let (pz, pk) = (l.plazas.len(), l.parks.len());
+                super::fill_block(site, &b, Vec::new(), fill, &roll, spot, &mut l, &mut pl);
+                l.plazas[pz..].iter_mut().for_each(|p| p.spot = spot);
+                l.parks[pk..].iter_mut().for_each(|p| p.spot = spot);
+                plots.append(&mut pl);
+            }
+        }
+        // (Its own ids, by the order it laid them out.)
+        let base = HAND_ID as u64 + ((id as u64 * ROLLS as u64 + gn as u64 % ROLLS as u64) * PER_PATCH as u64);
+        for (k, b) in l.buildings[first..].iter_mut().enumerate() {
+            b.id = (base + k as u64).min(u32::MAX as u64) as u32;
+        }
+        if id >= ROW_BLOCK {
+            problems.push((format!("{li}/k{id}"), "block number too high for its ids"));
+        }
+    }
+    // Painted areas: open ground of their kind.
+    for (k, poly, open) in &painted {
+        let key = hash2(seed_of(&town.seed), *k as i64, 0xa4ea);
+        let fill = open_fill(*open, None, &[], key, || cem(*k + ROW_BLOCK), &mut || Pcg32::new(key, 61), tier);
+        let mut pl = Vec::new();
+        super::fill_block(site, poly, Vec::new(), fill, &|j| unit(hash2(key, j, 3)), super::places::Spot::None, &mut l, &mut pl);
+        plots.append(&mut pl);
+    }
+    // Rows of lots along streets, each clear of what stands already.
+    let mut avoid: Vec<Shape> = built_ground;
+    avoid.extend(obstacles.iter().cloned());
+    avoid.extend(painted.iter().flat_map(|a| clip::region(&a.1)));
+    // (And what stands in no block: kept by the header.)
+    let loose = match &town.kept {
+        Some(k) => kept_on(&ground, k).map_err(|_| problems.push((li.clone(), "its kept buildings could not be laid out again"))).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    for b in &loose {
+        avoid.extend(clip::region(&b.poly.iter().map(|p| sub(*p, origin)).collect::<Vec<P>>()));
+    }
+    for (id, line) in &lines {
+        let w = recs.streets[id].width;
+        avoid.extend(clip::buffer(line, 0.5 * w, 0.5 * w, Join::Miter(2.0), Ends::Flat));
+    }
+    for (&r, row) in &recs.rows {
+        let (Some(line), Some(w)) = (lines.get(&row.street), ward_of(&row.ward)) else {
+            problems.push((format!("{li}/r{r}"), "no such street or ward"));
+            continue;
+        };
+        if r >= MAX_ROWS {
+            problems.push((format!("{li}/r{r}"), "row number too high for its ids"));
+            continue;
+        }
+        let rseed = seed_of(&row.seed);
+        let mut dp = District::roll(w, hash2(rseed, r as i64, 0xd15));
+        if let Some(k) = row.lots.as_deref().and_then(|n| LOT_SIZES.iter().position(|x| *x == n)) {
+            dp.min_sq = District::base(w) * super::wards::LOT_FACTOR[k];
+        }
+        let mut rng = Pcg32::new(hash2(rseed, r as i64, 0x107), 1000 + r as u64);
+        let side = super::rows::Side { line, left: row.side == "l", setback: 0.5 * recs.streets[&row.street].width + 2.0, depth: row.depth };
+        let first = l.buildings.len();
+        let lots = super::rows::build_row(site, &side, w, &dp, &mut rng, &avoid, &mut l);
+        l.blocks.extend(super::rows::bands(&side));
+        for lot in &lots {
+            avoid.extend(clip::region(lot));
+        }
+        let base = HAND_ID as u64 + ((ROW_BLOCK + r) as u64 * ROLLS as u64) * PER_PATCH as u64;
+        for (k, b) in l.buildings[first..].iter_mut().enumerate() {
+            b.id = (base + k as u64) as u32;
+        }
+    }
+    // Farmland's plots, off the sand: the town's fields.
+    l.fields.extend(plots.into_iter().filter_map(|(f, _)| super::fields::off_sand(site, &f)));
+
+    // Local → world, then what was kept (world ft already).
+    let tw = |p: &mut P| *p = add(*p, origin);
+    for b in &mut l.buildings {
+        b.poly.iter_mut().chain(b.parts.iter_mut().flat_map(|p| p.poly.iter_mut())).for_each(tw);
+    }
+    for (pts, _, _) in &mut l.roads {
+        pts.iter_mut().for_each(tw);
+    }
+    for poly in l.streets.iter_mut().chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.monuments) {
+        poly.iter_mut().for_each(tw);
+    }
+    for pk in &mut l.parks {
+        pk.pts.iter_mut().chain([&mut pk.ground.origin]).for_each(tw);
+    }
+    l.buildings.append(&mut kept_bs);
+    l.buildings.extend(loose);
+    l.buildings.sort_by_key(|b| b.id);
+    super::fields::assign(site, s.seed, &mut l);
+    let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())).chain(l.districts.iter().flatten()) {
+        bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
+    }
+    l.bbox = if bb[0] <= bb[2] { bb } else { [origin[0], origin[1], origin[0], origin[1]] };
+    Some(HandBuilt { layout: l, blocks: out, problems })
+}
+
+/// The fill of open ground of kind `open` (its style by name, else the kind's usual): its ways in
+/// along `fronts`, its looks' key, a cemetery's style, farmland's stream.
+fn open_fill(open: OpenKind, style: Option<&str>, fronts: &[super::fill::Front], key: u64, cem: impl Fn() -> super::cemetery::Style, rng: &mut dyn FnMut() -> Pcg32, tier: Tier) -> Fill {
+    let plaza = style.and_then(|n| PLAZAS.iter().copied().find(|k| k.name() == n));
+    let parkk = style.and_then(ParkKind::parse);
+    let ways: Vec<(P, f64)> = fronts.iter().map(|f| (f.n, f.c)).collect();
+    let park = |kind: ParkKind| Fill::Park { kind, ways: ways.clone(), key, cemetery: (kind == ParkKind::Cemetery).then(&cem) };
+    match open {
+        OpenKind::Plaza => Fill::Square(plaza.unwrap_or(if tier >= Tier::City { PlazaKind::Civic } else { PlazaKind::MarketDay })),
+        OpenKind::Market => Fill::Square(plaza.filter(|k| k.is_market()).unwrap_or(PlazaKind::Market)),
+        OpenKind::Lawn => Fill::Square(PlazaKind::Green),
+        OpenKind::Park => park(parkk.unwrap_or(ParkKind::Common)),
+        OpenKind::Garden => park(parkk.unwrap_or(ParkKind::Formal)),
+        OpenKind::Cemetery => park(ParkKind::Cemetery),
+        OpenKind::Farmland => Fill::Farm { class: 0, rng: rng() },
+    }
 }

@@ -8771,6 +8771,216 @@ fn hand_towns(world: &World, t0: &T0, label: &str, r: &mut Report) {
             Err(e) => r.add("towns refused", 0.0, format!("{label} L{li} edited: {e}")),
         }
     }
+    hand_built(world, t0, label, &first, r);
+}
+
+/// Roadmap 6 P3b1: every converted town (`first`: its records) built from its records alone
+/// (`hand::build_hand`, all in one world with their wharves): its buildings against the town's
+/// (missing, extra, differing by field), its blocks' squares, parks, monuments and fields
+/// against the town's by kind. Then every block filled anew (its kept buildings dropped, a
+/// generated fill as its ward): nothing outside its block, overlapping, or over a street.
+fn hand_built(world: &World, t0: &T0, label: &str, first: &std::collections::BTreeMap<usize, String>, r: &mut Report) {
+    use std::collections::BTreeMap as Map;
+    use worldgen::town::clip::{self, Ends, Join, Shape};
+    use worldgen::town::hand;
+    r.counts(&["hand towns built", "hand: buildings missing", "hand: buildings extra", "hand: buildings differing", "hand: problems"]);
+    r.counts(&["hand: squares", "hand: squares differing", "hand: parks", "hand: parks differing", "hand: parks of no block (not rebuilt)", "hand: monuments", "hand: monuments missing", "hand: monuments extra", "hand: fields", "hand: fields missing", "hand: fields extra"]);
+    r.counts(&["refill: blocks", "refill: buildings", "refill: row buildings", "refill: outside the block", "refill: overlapping", "refill: over a street"]);
+    let key = |pts: &[[f64; 2]]| format!("{pts:?}");
+    let mut file = world.file.clone();
+    for (li, json) in first {
+        let recs: Vec<(String, serde_json::Value)> = serde_json::from_str(json).unwrap();
+        file.edits.streets.extend(recs);
+        file.edits.wharves.extend(hand::wharves(world, t0, *li));
+    }
+    let hw = World::new(file.clone()).unwrap();
+    let originals: Map<usize, std::rc::Rc<Layout>> = first.keys().map(|&li| (li, town::base_layout(world, t0, li))).collect();
+    for (&li, want) in &originals {
+        let Some(b) = hand::build_hand(&hw, t0, li) else {
+            r.add("hand: problems", 0.0, format!("{label} L{li}: not built"));
+            continue;
+        };
+        r.tally("hand towns built", 1);
+        for (k, why) in &b.problems {
+            r.add("hand: problems", 0.0, format!("{label} {k}: {why}"));
+        }
+        let got = &b.layout;
+        let have: Map<u32, &town::Building> = got.buildings.iter().map(|b| (b.id, b)).collect();
+        for w in &want.buildings {
+            match have.get(&w.id) {
+                None => r.add("hand: buildings missing", 0.0, format!("{label} L{li} b{}", w.id)),
+                Some(h) => {
+                    let d = hand::differs(h, w);
+                    if !d.is_empty() {
+                        r.add("hand: buildings differing", 0.0, format!("{label} L{li} b{}: {}", w.id, d.join(" ")));
+                    }
+                }
+            }
+        }
+        let ids: std::collections::BTreeSet<u32> = want.buildings.iter().map(|b| b.id).collect();
+        for b in got.buildings.iter().filter(|b| !ids.contains(&b.id)) {
+            r.add("hand: buildings extra", 0.0, format!("{label} L{li} b{}", b.id));
+        }
+        // Squares and parks by their block.
+        let patch = |s: &worldgen::town::places::Spot| matches!(s, worldgen::town::places::Spot::Patch(_));
+        let sq = |l: &Layout| l.plazas.iter().filter(|p| patch(&p.spot)).map(|p| (format!("{:?}", p.spot), format!("{:?} {}", p.kind, key(&p.pts)))).collect::<Map<String, String>>();
+        let (sw, sg) = (sq(want), sq(got));
+        r.tally("hand: squares", sw.len());
+        for (spot, v) in &sw {
+            if sg.get(spot) != Some(v) {
+                r.add("hand: squares differing", 0.0, format!("{label} L{li} {spot}: {}", if sg.contains_key(spot) { "otherwise" } else { "missing" }));
+            }
+        }
+        let pk = |l: &Layout| l.parks.iter().filter(|p| patch(&p.spot)).map(|p| (format!("{:?}", p.spot), format!("{p:?}"))).collect::<Map<String, String>>();
+        let (pw, pg) = (pk(want), pk(got));
+        r.tally("hand: parks", pw.len());
+        for p in want.parks.iter().filter(|p| !patch(&p.spot)) {
+            r.add("hand: parks of no block (not rebuilt)", 0.0, format!("{label} L{li} {:?} {:?}", p.spot, p.kind));
+        }
+        for (spot, v) in &pw {
+            if pg.get(spot) != Some(v) {
+                r.add("hand: parks differing", 0.0, format!("{label} L{li} {spot}: {}", if pg.contains_key(spot) { "otherwise" } else { "missing" }));
+            }
+        }
+        for (what, w, g) in [("monuments", &want.monuments, &got.monuments), ("fields", &want.fields, &got.fields)] {
+            let bag = |v: &Vec<Vec<[f64; 2]>>| {
+                let mut m: Map<String, i32> = Map::new();
+                v.iter().for_each(|p| *m.entry(key(p)).or_default() += 1);
+                m
+            };
+            let (bw, bg) = (bag(w), bag(g));
+            r.tally(&format!("hand: {what}"), w.len());
+            let missing: i32 = bw.iter().map(|(k, n)| (n - bg.get(k).copied().unwrap_or(0)).max(0)).sum();
+            let extra: i32 = bg.iter().map(|(k, n)| (n - bw.get(k).copied().unwrap_or(0)).max(0)).sum();
+            if missing > 0 {
+                r.add(&format!("hand: {what} missing"), missing as f64, format!("{label} L{li}: {missing} of {}", w.len()));
+            }
+            if extra > 0 {
+                r.add(&format!("hand: {what} extra"), extra as f64, format!("{label} L{li}: {extra} of {}", g.len()));
+            }
+        }
+    }
+    // Every block filled anew, and a row of lots along each side of each town's longest street
+    // (clear of the blocks).
+    for (_, v) in file.edits.streets.iter_mut() {
+        if let Some(o) = v.as_object_mut() {
+            o.remove("kept");
+        }
+    }
+    for &li in first.keys() {
+        let recs = hand::HandRecords::of(&file.edits.streets, li);
+        let long = recs.streets.iter().filter_map(|(id, st)| Some((*id, worldgen::town::geom::dist(recs.junctions.get(&st.a)?.p, recs.junctions.get(&st.b)?.p)))).max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.cmp(&x.0)));
+        if let Some((id, _)) = long {
+            for (k, side) in ["l", "r"].iter().enumerate() {
+                let row = serde_json::json!({"street": id, "side": side, "depth": 40.0, "ward": "common", "gaps": 0.08, "seed": format!("{:016x}", 0x5eed + li * 2 + k)});
+                file.edits.streets.insert(format!("{li}/r{k}"), row);
+            }
+        }
+    }
+    let rw = World::new(file).unwrap();
+    for &li in first.keys() {
+        let Some(b) = hand::build_hand(&rw, t0, li) else { continue };
+        let blocks: Map<u32, &Vec<Shape>> = b.blocks.iter().map(|(id, g)| (*id, g)).collect();
+        r.tally("refill: blocks", blocks.len());
+        if let Ok(dbg) = std::env::var("HAND_DBG")
+            && let Some((l0, k0)) = dbg.split_once(':')
+            && l0 == li.to_string()
+        {
+            let k0: u32 = k0.parse().unwrap();
+            let o = b.layout.center;
+            let rel = |p: &[f64; 2]| format!("({:.1},{:.1})", p[0] - o[0], p[1] - o[1]);
+            for sh in blocks.get(&k0).into_iter().flat_map(|g| g.iter()) {
+                say!("      ground outer {}", sh.outer.iter().map(rel).collect::<Vec<_>>().join(" "));
+            }
+            let recs = hand::HandRecords::of(&rw.file.edits.streets, li);
+            for (id, st) in &recs.streets {
+                let (a, z) = (&recs.junctions[&st.a], &recs.junctions[&st.b]);
+                if std::env::var("HAND_E").is_ok_and(|e| e == id.to_string()) {
+                    say!("      e{id} {} -> {} set {} {} {:?}", rel(&a.p), rel(&z.p), st.set_l, st.set_r, st.class);
+                }
+            }
+            for bd in b.layout.buildings.iter().filter(|x| x.id >= hand::HAND_ID && (x.id - hand::HAND_ID) / (worldgen::town::wards::PER_PATCH * worldgen::town::wards::ROLLS) == k0).take(12) {
+                say!("      b{} {}", bd.id, bd.poly.iter().map(rel).collect::<Vec<_>>().join(" "));
+            }
+        }
+        let recs = hand::HandRecords::of(&rw.file.edits.streets, li);
+        let per = worldgen::town::wards::PER_PATCH * worldgen::town::wards::ROLLS;
+        let new: Vec<&town::Building> = b.layout.buildings.iter().filter(|b| b.id >= hand::HAND_ID).collect();
+        r.tally("refill: buildings", new.len());
+        r.tally("refill: row buildings", new.iter().filter(|b| (b.id - hand::HAND_ID) / per >= hand::ROW_BLOCK).count());
+        // (A 64-ft grid of the buildings, for the pairs to look at.)
+        let cell = |p: [f64; 2]| ((p[0] / 64.0).floor() as i64, (p[1] / 64.0).floor() as i64);
+        let bbox = |pts: &[[f64; 2]]| pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let mut grid: Map<(i64, i64), Vec<usize>> = Map::new();
+        for (k, bd) in new.iter().enumerate() {
+            let bb = bbox(&bd.poly);
+            let (c0, c1) = (cell([bb[0], bb[1]]), cell([bb[2], bb[3]]));
+            for x in c0.0..=c1.0 {
+                for y in c0.1..=c1.1 {
+                    grid.entry((x, y)).or_default().push(k);
+                }
+            }
+        }
+        for (k, bd) in new.iter().enumerate() {
+            let blk = (bd.id - hand::HAND_ID) / per;
+            let poly = clip::region(&bd.poly);
+            let out = if blk >= hand::ROW_BLOCK { 0.0 } else { blocks.get(&blk).map_or(clip::area(&poly), |g| clip::area(&clip::difference(&poly, g))) };
+            if out > 1.0 {
+                r.add("refill: outside the block", out, format!("{label} L{li} b{} (block {blk}): {out:.1} sq ft", bd.id));
+            }
+            let bb = bbox(&bd.poly);
+            let (c0, c1) = (cell([bb[0], bb[1]]), cell([bb[2], bb[3]]));
+            let mut near: Vec<usize> = (c0.0..=c1.0).flat_map(|x| (c0.1..=c1.1).map(move |y| (x, y))).filter_map(|c| grid.get(&c)).flatten().copied().filter(|&j| j > k).collect();
+            near.sort_unstable();
+            near.dedup();
+            for j in near {
+                let o = clip::area(&clip::intersection(&poly, &clip::region(&new[j].poly)));
+                if o > 1.0 {
+                    r.add("refill: overlapping", o, format!("{label} L{li} b{} b{}: {o:.1} sq ft", bd.id, new[j].id));
+                }
+            }
+        }
+        for (id, st) in &recs.streets {
+            let (Some(a), Some(z)) = (recs.junctions.get(&st.a), recs.junctions.get(&st.b)) else { continue };
+            let line: Vec<[f64; 2]> = std::iter::once(a.p).chain(st.bends.iter().copied()).chain([z.p]).collect();
+            if st.set_l + st.set_r <= 0.0 {
+                continue;
+            }
+            // (Its paved way: up to 10 ft each side of its line, as far as the side stands back; not
+            // the last 12 ft to each junction, where the blocks of other streets meeting there come
+            // within that of its line.)
+            let mut line = line;
+            let trim = |line: &mut Vec<[f64; 2]>| {
+                let (a, b) = (line[0], line[1]);
+                let d = ((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1])).sqrt();
+                if d <= 24.0 {
+                    return false;
+                }
+                line[0] = [a[0] + (b[0] - a[0]) * 12.0 / d, a[1] + (b[1] - a[1]) * 12.0 / d];
+                true
+            };
+            if !trim(&mut line) {
+                continue;
+            }
+            line.reverse();
+            let n = line.len();
+            if n < 2 || !trim(&mut line) {
+                continue;
+            }
+            let buf = clip::buffer(&line, st.set_r.min(10.0), st.set_l.min(10.0), Join::Miter(2.0), Ends::Flat);
+            let bb = bbox(&line);
+            let (c0, c1) = (cell([bb[0] - 20.0, bb[1] - 20.0]), cell([bb[2] + 20.0, bb[3] + 20.0]));
+            let mut near: Vec<usize> = (c0.0..=c1.0).flat_map(|x| (c0.1..=c1.1).map(move |y| (x, y))).filter_map(|c| grid.get(&c)).flatten().copied().collect();
+            near.sort_unstable();
+            near.dedup();
+            for j in near.into_iter().filter(|&j| (new[j].id - hand::HAND_ID) / per < hand::ROW_BLOCK) {
+                let o = clip::area(&clip::intersection(&buf, &clip::region(&new[j].poly)));
+                if o > 1.0 {
+                    r.add("refill: over a street", o, format!("{label} L{li} b{} e{id}: {o:.1} sq ft", new[j].id));
+                }
+            }
+        }
+    }
 }
 
 /// `hand_towns` for one town converted (`recs`): its kept buildings against its layout's, and

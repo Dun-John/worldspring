@@ -1024,6 +1024,10 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
 /// A layout as laid out, before its building edits: as generated, or the town laid out anew by
 /// hand (`Edits.towns`). Building edits are made against it.
 pub fn base_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
+    // (A town laid out by hand: its street graph, `hand::build_hand`.)
+    if let Some(l) = hand::built(world, t0, index) {
+        return l;
+    }
     wards::edited(world, t0, index).unwrap_or_else(|| generated_layout(world, t0, index))
 }
 
@@ -4128,7 +4132,15 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             if i >= plan.n_inner && !plan.wet[i] && c.pts.len() >= 3 && !ch.ward.contains_key(&i) && c.pts.iter().any(|p| len(*p) < 1.9 * belt(*p)) {
                 let block = inset(&c.pts, &insets(i, Ward::Farm));
                 if block.len() >= 3 {
-                    farm(site, &block, &mut Pcg32::new(hash2(plan.pseed, i as i64, 0xf1e1d), 61), l, &mut plots, 2, false);
+                    let mut frng = Pcg32::new(hash2(plan.pseed, i as i64, 0xf1e1d), 61);
+                    if capturing {
+                        let (st, inc) = frng.state();
+                        hand::cap_fill(i, &Fill::Farm { class: 2, rng: Pcg32::from_state(st, inc) }, &block, &[], &|_| 0.0);
+                    }
+                    farm(site, &block, &mut frng, l, &mut plots, 2, false);
+                    if capturing {
+                        hand::cap_built(i, &[]);
+                    }
                 }
             }
             continue;
@@ -4389,7 +4401,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     _ => Fill::Lots { ward: w, dp, rng: prng, thin: None, close: w == Ward::Temple && closes.contains(&i) },
                 };
                 if capturing {
-                    hand::cap_fill(i, &fill, &block, &streets, plan.roll(i, 65));
+                    hand::cap_fill(i, &fill, &block, &streets, &|k| plan.roll(i, k));
                 }
                 fill_block(site, &block, streets, fill, &|k| plan.roll(i, k), places::Spot::Patch(i as u32), l, &mut plots);
             }
