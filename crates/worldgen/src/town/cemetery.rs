@@ -755,8 +755,84 @@ pub fn plan(pk: &Park) -> Option<Plan> {
     if matches!(group, 0 | 1) {
         out.props.push((gate, libm::atan2(t[1], t[0]) as f32, Kind::Lychgate, rng.below(4) as u8, 1.0));
     }
+    cover_middle(&mut out.props, &mut room, group, &roll, &mut rng);
     out.tombs = room.tombs;
     Some(out.moved(o))
+}
+
+/// How far apart the points are that `cover_middle` looks at, and how far from cover it lets one be (ft):
+/// any square of the plot then lies within the battlemap's `MAX_COVER_GAP` of something to hide behind.
+const FILL_STEP: f64 = 8.0;
+const FILL_R: f64 = 16.0;
+
+/// Cover through a large cemetery's middle, where its rows (or the Steppe's few kurgans) leave open
+/// ground: every point of an 8-ft lattice over the plot farther than `FILL_R` from what is set out
+/// (or a tomb) gets the culture's own: a standing stone in the North, a yew in the West (a headstone
+/// where none fits), a tomb slab in the South and the dry lands, a small kurgan on the Steppe (a
+/// standing stone where none fits). A small cemetery's rows reach everywhere and it gets nothing.
+fn cover_middle(props: &mut Vec<(P, f32, Kind, u8, f32)>, room: &mut Room, group: u8, roll: &dyn Fn(i64, i64, i64) -> f64, rng: &mut Pcg32) {
+    let (x0, y0, x1, y1) = room.boundary.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    let (nx, ny) = (((x1 - x0) / FILL_STEP) as i64 + 1, ((y1 - y0) / FILL_STEP) as i64 + 1);
+    let at = |i: i64, j: i64| [x0 + (i as f64 + 0.5) * FILL_STEP, y0 + (j as f64 + 0.5) * FILL_STEP];
+    let mut covered = vec![false; (nx * ny) as usize];
+    let reach = (FILL_R / FILL_STEP).ceil() as i64 + 1;
+    let cell = |p: P| (((p[0] - x0) / FILL_STEP).floor() as i64, ((p[1] - y0) / FILL_STEP).floor() as i64);
+    let mark = |covered: &mut Vec<bool>, p: P| {
+        let (ci, cj) = cell(p);
+        for j in (cj - reach).max(0)..=(cj + reach).min(ny - 1) {
+            for i in (ci - reach).max(0)..=(ci + reach).min(nx - 1) {
+                if dist(at(i, j), p) <= FILL_R {
+                    covered[(j * nx + i) as usize] = true;
+                }
+            }
+        }
+    };
+    for p in props.iter() {
+        mark(&mut covered, p.0);
+    }
+    for tb in &room.tombs {
+        let (a0, b0, a1, b1) = tb.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+        let ((i0, j0), (i1, j1)) = (cell([a0 - FILL_R, b0 - FILL_R]), cell([a1 + FILL_R, b1 + FILL_R]));
+        for j in j0.max(0)..=j1.min(ny - 1) {
+            for i in i0.max(0)..=i1.min(nx - 1) {
+                if depth_or_gap(tb, at(i, j)) <= FILL_R {
+                    covered[(j * nx + i) as usize] = true;
+                }
+            }
+        }
+    }
+    let slab_turn = (libm::atan2(room.walks.first().map_or(1.0, |w| w.1[1] - w.0[1]), room.walks.first().map_or(0.0, |w| w.1[0] - w.0[0]))) as f32;
+    for j in 0..ny {
+        for i in 0..nx {
+            let p0 = at(i, j);
+            if covered[(j * nx + i) as usize] || !contains(room.boundary, p0) {
+                continue;
+            }
+            // (At the lattice point, else a little off it.)
+            let spots = [[0.0, 0.0], [3.0, 0.0], [-3.0, 0.0], [0.0, 3.0], [0.0, -3.0], [3.0, 3.0], [-3.0, -3.0], [3.0, -3.0], [-3.0, 3.0]];
+            let big = roll(i, j, 13) < 0.5;
+            let mut put = None;
+            for d in spots {
+                let p = add(p0, d);
+                let want: [(Kind, f64, f64, f32); 2] = match group {
+                    0 => [(Kind::StandingStone, 2.5, 3.0, 1.0), (Kind::StandingStone, 1.2, 1.0, 0.7)],
+                    1 => [(Kind::Yew, 0.9 * YEW_R, 2.0, 0.9), (Kind::Headstone, 1.2, 1.0, 1.0)],
+                    2 | 3 => [(Kind::TombSlab, 2.5, 1.0, 1.0), (Kind::TombSlab, 1.5, 1.0, 1.0)],
+                    _ if big => [(Kind::Kurgan, 12.5, 3.0, (12.5 / KURGAN_R) as f32), (Kind::StandingStone, 1.2, 2.0, 0.7)],
+                    _ => [(Kind::StandingStone, 1.2, 2.0, 0.7), (Kind::StandingStone, 1.2, 2.0, 0.7)],
+                };
+                if let Some(&(kind, r, _, size)) = want.iter().find(|w| room.free(p, w.1, w.2, w.2)) {
+                    put = Some((p, kind, r, size));
+                    break;
+                }
+            }
+            let Some((p, kind, r, size)) = put else { continue };
+            let turn = if kind == Kind::TombSlab { slab_turn } else { 0.0 };
+            props.push((p, turn, kind, rng.below(4) as u8, size));
+            room.discs.push((p, r));
+            mark(&mut covered, p);
+        }
+    }
 }
 
 /// A cemetery as the battlemap and the tiles lay it out (`park::layout`): its walks as gravel paths

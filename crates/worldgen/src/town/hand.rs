@@ -2993,7 +2993,12 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     for b in &loose {
         avoid.extend(clip::region(&b.poly.iter().map(|p| sub(*p, origin)).collect::<Vec<P>>()));
     }
-    for (id, line) in &lines {
+    // (Every street's way, a dead end's too: a street out of a gate.)
+    let mut dead: BTreeMap<u32, Vec<P>> = BTreeMap::new();
+    for &(u, v, id) in &graph.loose {
+        dead.entry(id).or_insert_with(|| vec![graph.pts[u]]).push(graph.pts[v]);
+    }
+    for (id, line) in lines.iter().chain(&dead) {
         let w = recs.streets[id].width;
         avoid.extend(clip::buffer(line, 0.5 * w, 0.5 * w, Join::Miter(2.0), Ends::Flat));
     }
