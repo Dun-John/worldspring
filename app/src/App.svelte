@@ -14,7 +14,7 @@
   import { getImage, loadSession, putImage } from './play/session';
   import { hasSession, parseLoc } from './play/state';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
-  import { MapView, plateauLabels, type HudState, type InteriorState, type PointerTool } from './render/MapView';
+  import { MapView, plateauLabels, waterLabels, type HudState, type InteriorState, type PointerTool } from './render/MapView';
   import { HEX_KEY, hexGrid, type Hex } from './render/hex';
   import TopBar from './ui/shell/TopBar.svelte';
   import MainMenu from './ui/shell/MainMenu.svelte';
@@ -56,6 +56,7 @@
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
   import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from './editor/crossing';
   import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from './editor/harbour';
+  import { MAX_WATERS, WaterTool, defaultWater, ofSea, waterProblem, type WaterSettings } from './editor/water';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
   import type { BuildMode } from './ui/BuildPanel.svelte';
@@ -369,6 +370,8 @@
     ...(named?.wharves ?? []).map((c) => ({ id: c.id, kind: 'wharf', name: c.generated, x: c.x, y: c.y, angle: 0, extent_ft: Math.max(c.length_ft, 200), detail: c.generated })),
     // (Plateaus someone named: only those have a name.)
     ...plateauLabels(edits).map((f) => ({ ...f, name: f.detail === 'islet' ? 'Islet' : 'Plateau' })),
+    // (Water drawn by hand: every outline, named or not, as its kind.)
+    ...Object.entries(edits.waters ?? {}).map(([id, w]) => ({ ...waterLabels({ waters: { [id]: w }, renames: { [id]: w.kind } })[0], name: w.kind.charAt(0).toUpperCase() + w.kind.slice(1) })),
   ]);
   const searchOverlay = $derived.by<Overlay | null>(() => {
     const hidden = new Set(edits.hidden ?? []);
@@ -1449,7 +1452,7 @@
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
     const buildTool =
-      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
+      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
     view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? townTool ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
@@ -1594,7 +1597,7 @@
   /** One of the world's own being changed: its name, and the menu's choices as it was opened
    * (only what differs from them is changed). */
   let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool } | null = null;
+  let buildArmed: { tool: BuildTool; cross: CrossingTool; water: WaterTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool } | null = null;
   /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
    * own buildings. */
   let buildMode = $state<BuildMode>('building');
@@ -1607,6 +1610,9 @@
   let cross = $state<CrossSettings>(defaultCross());
   /** The crossing put down by hand being changed (its id). */
   let crossEditing = $state<string | null>(null);
+  /** Build › Water: the kind new outlines get, and the water picked (its id), else drawing new ones. */
+  let water = $state<WaterSettings>(defaultWater());
+  let waterPicked = $state<string | null>(null);
   let harbour = $state<HarbourSettings>(defaultHarbour());
   /** The quay, pier or breakwater picked (its id). */
   let harbourPicked = $state<string | null>(null);
@@ -1696,6 +1702,13 @@
       pick: pickCrossing,
       hint: (t) => toast(t),
     });
+    const waterTool = new WaterTool({
+      edits: () => edits,
+      picked: () => waterPicked,
+      placed: waterPlaced,
+      pick: (id) => (waterPicked = id),
+      hint: (t) => toast(t),
+    });
     const harbourTool = new HarbourTool({
       settings: () => harbour,
       edits: () => edits,
@@ -1723,7 +1736,7 @@
       },
       hint: (t) => toast(t),
     });
-    buildArmed = { tool, cross: crossTool, harbour: harbourTool, clear, works: worksTool };
+    buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, clear, works: worksTool };
   }
 
   /** A castle or wall drawn by hand, by its created id. */
@@ -2042,7 +2055,9 @@
     genEditing = null;
     crossEditing = null;
     harbourPicked = null;
+    waterPicked = null;
     buildArmed?.cross.reset();
+    buildArmed?.water.reset();
     buildArmed?.harbour.reset();
     syncTool();
   }
@@ -2132,6 +2147,71 @@
       out.created = created;
     }
     applyEdits(out, { tool: 'place_crossing', id, kind: next.kind, changed: true }, 'user');
+  }
+
+  /** The level an outline takes (as `mapd`'s `create_water`): the water's where it reaches the sea
+   * or a lake (the highest), else the sea's for an inlet or basin, else 1 ft under the lowest
+   * ground on its shore, as the loaded tiles have them. */
+  function waterLevel(pts: Pt[], kind: WaterSettings['kind']): number {
+    const sea = view.geom?.sea_level_ft ?? 0;
+    const n = pts.length;
+    const per = Math.max(1, Math.floor(96 / n));
+    let [wet, low] = [-Infinity, Infinity];
+    for (let i = 0; i < n; i++) {
+      for (let s = 0; s < per; s++) {
+        const [a, b] = [pts[i], pts[(i + 1) % n]];
+        const t = s / per;
+        const at = view.surfaceAt(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+        if (!at) continue;
+        if (at[1] > at[0]) wet = Math.max(wet, at[1]);
+        low = Math.min(low, at[0]);
+      }
+    }
+    if (wet > -Infinity) return Math.round(wet * 10) / 10;
+    if (ofSea(kind) || low === Infinity) return sea;
+    return Math.round(Math.max(sea, low - 1) * 10) / 10;
+  }
+
+  /** An outline closed in Build › Water: water of the menu's kind there. */
+  function waterPlaced(pts: Pt[]) {
+    const w = { pts, kind: water.kind, level: waterLevel(pts, water.kind) };
+    const bad = waterProblem(w);
+    if (bad) return toast(bad);
+    if (Object.keys(edits.waters ?? {}).length >= MAX_WATERS) return toast(`A world holds at most ${MAX_WATERS} water outlines`);
+    const id = newObjectId('e');
+    waterPicked = id;
+    applyEdits({ ...edits, waters: { ...(edits.waters ?? {}), [id]: w } }, { tool: 'create_water', id, kind: w.kind }, 'user');
+  }
+
+  /** The water picked: another kind (its level found again when it changes between the sea's
+   * and standing water) or name. */
+  function changeWater(change: { kind?: WaterSettings['kind']; name?: string }) {
+    const id = waterPicked;
+    const w = id ? edits.waters?.[id] : null;
+    if (!id || !w) return;
+    let next = edits;
+    if (change.kind && change.kind !== w.kind) {
+      const level = ofSea(change.kind) === ofSea(w.kind) ? w.level : waterLevel(w.pts, change.kind);
+      next = { ...next, waters: { ...(next.waters ?? {}), [id]: { ...w, kind: change.kind, level } } };
+    }
+    if (change.name !== undefined && change.name.trim() !== (edits.renames?.[id] ?? '')) {
+      const { [id]: _was, ...renames } = edits.renames ?? {};
+      next = { ...next, renames: change.name.trim() ? { ...renames, [id]: change.name.trim() } : renames };
+    }
+    if (next !== edits) applyEdits(next, { tool: 'update_water', id }, 'user');
+  }
+
+  function removeWater() {
+    const id = waterPicked;
+    if (!id || !edits.waters?.[id]) return;
+    const { [id]: _gone, ...rest } = edits.waters ?? {};
+    const drop = <T,>(m: Record<string, T> | undefined) => {
+      if (!m || !(id in m)) return m;
+      const { [id]: _x, ...r } = m;
+      return r;
+    };
+    waterPicked = null;
+    applyEdits({ ...edits, waters: rest, renames: drop(edits.renames), notes: drop(edits.notes), hidden: edits.hidden?.filter((h) => h !== id) }, { tool: 'delete_water', ids: [id] }, 'user');
   }
 
   function removeCrossing() {
@@ -4511,6 +4591,8 @@
       () => (worksEditing ? ((worksEditing = null), true) : false),
       () => !!buildArmed?.cross.reset(),
       () => (crossEditing ? ((crossEditing = null), true) : false),
+      () => !!buildArmed?.water.reset(),
+      () => (waterPicked ? ((waterPicked = null), true) : false),
       () => !!townTool?.reset(),
       () => (sketchOn && tracer.picking ? ((tracer.picking = null), true) : false),
       () => (sketchOn && underlay.adjust ? ((underlay.adjust = false), true) : false),
@@ -4861,10 +4943,14 @@
             {near}
             {peek}
             onSave={saveBuilding}
-            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null))}
+            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null), (waterPicked = null))}
             onMode={setBuildMode}
             onCrossSave={saveCrossing}
             onCrossRemove={removeCrossing}
+            bind:water
+            waterPicked={waterPicked && edits.waters?.[waterPicked] ? { kind: edits.waters[waterPicked].kind, name: edits.renames?.[waterPicked] ?? '' } : null}
+            onWaterChange={changeWater}
+            onWaterRemove={removeWater}
             onHarbourRemove={removeWharf}
             bind:harbour
             {harbourPicked}

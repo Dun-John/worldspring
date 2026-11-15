@@ -11,9 +11,9 @@ use crate::Shared;
 
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from the map's top-left corner, x east, y south. \
 Find places with search_features, features_near or world_overview; inspect them with get_feature and list_children. A place (at) is an id, {x_ft, y_ft} or [x_ft, y_ft]. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
-n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, rd: a road stretch, h: a plateau; get one wrong and search_features finds the right one. \
-Edits (rename, annotate, hide, create_feature, create_building, place_crossing, place_objects, shape_ground, set_plateau, edit_town, set_site_design) are saved and appear live in the open app; \
-many at once go in one batch. Roads and routes: list_roads, route, road_point (name a road by renaming its rd: stretches). Geometry: nearest (coast, cliff, river, road, flat, highest), search_features within an area. Read back hand work: list_objects, list_plateaus, list_designs. The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
+n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, rd: a road stretch, h: a plateau, e: water drawn by hand; get one wrong and search_features finds the right one. \
+Edits (rename, annotate, hide, create_feature, create_building, place_crossing, place_objects, shape_ground, set_plateau, create_water, edit_town, set_site_design) are saved and appear live in the open app; \
+many at once go in one batch. Roads and routes: list_roads, route, road_point (name a road by renaming its rd: stretches). Geometry: nearest (coast, cliff, river, road, flat, highest), search_features within an area. Read back hand work: list_objects, list_plateaus, list_waters, list_designs. The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
 render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: check_building_spot (or a dry_run where a tool has one) before a write; \
 an error means nothing changed, except a save warning (saved: false), which is not to be repeated; the creates are safe to repeat (the same one again returns what is there); \
 deletes come back with restore_feature, restore_objects and restore_building. Lists are cut by limit (found says how many there were). \
@@ -83,6 +83,7 @@ pub fn list() -> Value {
         a.extend(crate::hexes::list());
         a.extend(crate::links::list());
         a.extend(crate::ground::list());
+        a.extend(crate::waters::list());
         a.extend(crate::harbour::list());
         a.extend(crate::design::list());
         a.extend(crate::reads::list());
@@ -112,17 +113,17 @@ pub fn list() -> Value {
 /// Tools that only read (or look): `readOnlyHint`.
 const READS: &[&str] = &[
     "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch", "list_links",
+    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_waters", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch", "list_links",
 ];
 /// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
 const DESTRUCTIVE: &[&str] = &[
-    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "delete_link", "reset_site_design", "set_site_design", "edit_town", "batch",
+    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "delete_water", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "delete_link", "reset_site_design", "set_site_design", "edit_town", "batch",
 ];
 /// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
 /// `focus_view` and the creates that return what is already there.
 const IDEMPOTENT: &[&str] = &[
     "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_npc",
-    "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
+    "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "update_water", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
 ];
 
 /// A tool's hints by name, one table for every tool (so a tool in any module gets them): reads say `readOnlyHint` and
@@ -251,6 +252,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::ground::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::waters::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::harbour::call(app, name, &a).await {

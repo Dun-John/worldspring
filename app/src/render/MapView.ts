@@ -13,6 +13,7 @@ import { precompile } from './precompile';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
+import { Waters } from './Waters';
 import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
@@ -662,6 +663,11 @@ export class MapView {
     if (this.hexLayer && this.geom) this.hexLayer.set(grid, this.geom.map_w_ft, this.geom.map_h_ft);
   }
 
+  /** Ground and water's surface (ft) at a world point as the finest loaded tile has them, or null. */
+  surfaceAt(x: number, y: number): [number, number] | null {
+    return this.tiles?.surfaceAt(x, y) ?? null;
+  }
+
   setSeaLanes(on: boolean) {
     this.seaLanes = on;
     if (this.lanes) this.lanes.on = on;
@@ -1075,6 +1081,9 @@ export class MapView {
 
   /** The named plateaus' labels as last set (`plateauLabels`). */
   private plateauKey = '';
+  /** Water drawn by hand, above the finest levels (`Waters`), and its labels as last set. */
+  private readonly waterLayer = new Waters();
+  private waterKey = '';
 
   /** The labels hidden: a building drawn by hand hidden by its created id hides its business
    * pin (its building id) too. */
@@ -1178,6 +1187,8 @@ export class MapView {
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
     this.plateauKey = '';
+    this.waterKey = '';
+    this.waterLayer.set((adjusted ?? world.edits)?.waters);
     this.townHints.clear();
     this.setEdits(adjusted ?? world.edits ?? {}, false);
     this.labels.setPlaces(this.places);
@@ -1192,6 +1203,7 @@ export class MapView {
     this.refreshMade(false);
     const battle = this.makeBattle(geom, catalog);
     this.app.stage.addChild(this.tiles.container);
+    this.app.stage.addChild(this.waterLayer.container);
     this.app.stage.addChild(this.madeTracks.container);
     this.app.stage.addChild(this.bridgeMarks.container);
     this.app.stage.addChild(this.lanes.container);
@@ -1293,6 +1305,16 @@ export class MapView {
       if (key !== this.plateauKey) {
         this.plateauKey = key;
         this.labels?.setPlateaus(named);
+      }
+    }
+    // Water drawn by hand: drawn above the finest levels, its names at its middle.
+    if (prev.waters !== next.waters) this.waterLayer.set(next.waters);
+    if (prev.waters !== next.waters || pr !== nr) {
+      const named = waterLabels(next);
+      const key = JSON.stringify(named.map((f) => [f.id, f.name, f.x, f.y]));
+      if (key !== this.waterKey) {
+        this.waterKey = key;
+        this.labels?.setWaters(named);
       }
     }
     if (roadNames) queueMicrotask(() => this.askRoads());
@@ -1397,6 +1419,19 @@ export class MapView {
         if (!p) continue;
         const e = Math.max(p.edge ?? 0, 5) + 5;
         ground.push([Math.min(...p.pts.map((q) => q[0])) - e, Math.min(...p.pts.map((q) => q[1])) - e, Math.max(...p.pts.map((q) => q[0])) + e, Math.max(...p.pts.map((q) => q[1])) + e]);
+      }
+    }
+    // Water drawn by hand: its outline and its bank (`waters::BANK_FT`) round it, as it was and is
+    // (an outline over another cuts the other's shore there too).
+    const pw = prev.waters ?? {};
+    const nw = next.waters ?? {};
+    if (pw !== nw) for (const id of keys('waters', pw, nw)) {
+      const [a, b] = [pw[id], nw[id]];
+      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
+      for (const w of [a, b]) {
+        if (!w) continue;
+        const e = 20;
+        ground.push([Math.min(...w.pts.map((q) => q[0])) - e, Math.min(...w.pts.map((q) => q[1])) - e, Math.max(...w.pts.map((q) => q[0])) + e, Math.max(...w.pts.map((q) => q[1])) + e]);
       }
     }
     const REACH = 160;
@@ -1709,6 +1744,9 @@ export class MapView {
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
+      // (The three finest levels draw it in the terrain: gone over the first half level of them.)
+      const fine = this.geom!.max_level - 2;
+      this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, (level - fine) / 0.5)) : 0);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       if (this.sewers) {
@@ -2163,6 +2201,35 @@ function linkIn(it: Interior, from: string): { level: number; x: number; y: numb
     if (k) return { level: li, x: k.x, y: k.y };
   }
   return null;
+}
+
+/** Labels for the water drawn by hand that someone named (`e:` renames), at each outline's middle:
+ * a lake's look (an inlet or basin a bay's). */
+export function waterLabels(e: Edits): Feature[] {
+  const out: Feature[] = [];
+  for (const [id, name] of Object.entries(e.renames ?? {})) {
+    const w = id.startsWith('e:') ? e.waters?.[id] : undefined;
+    if (!w || !name || w.pts.length < 3) continue;
+    const f = outlineLabel(id, name, w.pts);
+    out.push({ ...f, kind: w.kind === 'inlet' || w.kind === 'basin' ? 'bay' : 'lake', detail: w.kind });
+  }
+  return out;
+}
+
+/** A label at an outline's middle (its centroid), as wide as the outline. */
+function outlineLabel(id: string, name: string, pts: [number, number][]): Feature {
+  let [a, cx, cy] = [0, 0, 0];
+  for (let k = 0; k < pts.length; k++) {
+    const [x0, y0] = pts[k];
+    const [x1, y1] = pts[(k + 1) % pts.length];
+    const c = x0 * y1 - x1 * y0;
+    [a, cx, cy] = [a + c, cx + (x0 + x1) * c, cy + (y0 + y1) * c];
+  }
+  const xs = pts.map((q) => q[0]);
+  const ys = pts.map((q) => q[1]);
+  const [x, y] = Math.abs(a) > 1e-9 ? [cx / (3 * a), cy / (3 * a)] : [xs.reduce((s, v) => s + v, 0) / xs.length, ys.reduce((s, v) => s + v, 0) / ys.length];
+  const extent = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 40);
+  return { id, kind: 'lake', name, x, y, angle: 0, extent_ft: extent };
 }
 
 /** Labels for the plateaus someone named (`h:` renames), at each outline's middle (its centroid,

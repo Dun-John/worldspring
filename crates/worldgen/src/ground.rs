@@ -201,11 +201,11 @@ impl Plateau {
     }
 }
 
-fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
+pub(crate) fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
     pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
-fn crosses_itself(pts: &[[f64; 2]]) -> bool {
+pub(crate) fn crosses_itself(pts: &[[f64; 2]]) -> bool {
     let n = pts.len();
     let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     for i in 0..n {
@@ -402,9 +402,9 @@ impl Kept<'_> {
     }
 }
 
-/// Whether any edits shape the ground: brushed blocks, plateaus, quays or breakwaters.
+/// Whether any edits shape the ground: brushed blocks, plateaus, water outlines, quays or breakwaters.
 pub fn shapes(edits: &crate::world::Edits) -> bool {
-    !edits.ground.is_empty() || !edits.plateaus.is_empty() || edits.wharves.values().any(|w| w.kind != crate::world::WharfKind::Pier)
+    !edits.ground.is_empty() || !edits.plateaus.is_empty() || !edits.waters.is_empty() || edits.wharves.values().any(|w| w.kind != crate::world::WharfKind::Pier)
 }
 
 /// The shaping that reaches one rectangle (a battlemap chunk with its halo, a tile), looked up
@@ -420,6 +420,9 @@ pub struct Shaper<'a> {
     order: Vec<u16>,
     steps: Vec<Step>,
     reach: [f64; 4],
+    /// Water drawn by hand meeting the rectangle (`waters`), and the bank's least width.
+    waters: Vec<crate::waters::Near<'a>>,
+    band: f64,
 }
 
 impl<'a> Shaper<'a> {
@@ -530,11 +533,15 @@ impl<'a> Shaper<'a> {
                 plats.push((std::borrow::Cow::Borrowed(k.as_str()), Kept { pts: std::borrow::Cow::Owned(strip), level, band, b, raise: true, look: Look::Made, floor: None }));
             }
         }
-        if !any && plats.is_empty() {
+        let waters = crate::waters::near(edits, rect);
+        if let Some(b) = crate::waters::bounds(&waters) {
+            grow(b);
+        }
+        if !any && plats.is_empty() && waters.is_empty() {
             return None;
         }
         let (order, steps) = stack(edits, &plats);
-        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.1).collect(), order, steps, reach })
+        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.1).collect(), order, steps, reach, waters, band: spacing })
     }
 
     /// Where the shaping it holds can change the ground (world ft: x0, y0, x1, y1); outside it
@@ -575,6 +582,12 @@ impl<'a> Shaper<'a> {
     /// step eases it down; so in one stack the highest plateau holds and the deepest pit, and
     /// each edge eases toward the ground left round it by the steps before.
     fn shape(&self, x: f64, y: f64, d: f64, g: f32, hw: f32) -> (f32, f32, Look, bool) {
+        // Water drawn by hand first: its bed is the ground the plateaus stand on (an islet or a
+        // plateau over it stays dry).
+        let (g, hw) = match self.outline_water(x, y) {
+            Some((l, bed)) => ((g as f64).min(bed).max(g as f64 - MAX_SHIFT_FT) as f32, hw.max(l as f32)),
+            None => (g, hw),
+        };
         let g0 = g as f64;
         let (mut h, mut wmax) = (g0, 0.0f64);
         let (mut look, mut floor) = (Look::Ground, false);
@@ -635,6 +648,29 @@ impl<'a> Shaper<'a> {
             h = h.max(g0.min(hw as f64 + 0.5));
         }
         (h as f32, wmax as f32, look, floor)
+    }
+
+    /// The water drawn by hand at (x, y): its level and the bed under it (`waters::at`).
+    fn outline_water(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if self.waters.is_empty() {
+            return None;
+        }
+        crate::waters::at(&self.waters, x, y, self.band)
+    }
+
+    /// The water's surface at (x, y) with water drawn by hand (`hw` as given elsewhere).
+    pub fn water(&self, x: f64, y: f64, hw: f32) -> f32 {
+        self.outline_water(x, y).map_or(hw, |(l, _)| hw.max(l as f32))
+    }
+
+    /// The level of the water drawn by hand holding (x, y), if any.
+    pub fn outline_level(&self, x: f64, y: f64) -> Option<f32> {
+        self.outline_water(x, y).map(|(l, _)| l as f32)
+    }
+
+    /// Whether any water drawn by hand meets what it covers.
+    pub fn has_waters(&self) -> bool {
+        !self.waters.is_empty()
     }
 
     /// Global square (gx, gy) with ground `g` and water `hw` shaped: (height, plateau weight).

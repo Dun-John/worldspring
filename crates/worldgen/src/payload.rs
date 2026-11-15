@@ -54,6 +54,8 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     let h: &[f32] = shaped.as_ref().map_or(padded, |s| &s.0);
     // (Bare rock where a plateau's rock floor holds the ground: as an alpine scree.)
     let rock: &[bool] = shaped.as_ref().map_or(&[], |s| &s.1);
+    // (The water's surface where water drawn by hand holds a sample; NaN elsewhere, empty when none.)
+    let wat: &[f32] = shaped.as_ref().map_or(&[], |s| &s.2);
     let at = |i: usize, j: usize| h[(j + HALO) * PADDED + i + HALO];
 
     let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -94,14 +96,16 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
             tex.push(f16_bits(h[k] - base));
             tex.push(f16_bits(gx as f32));
             tex.push(f16_bits(gy as f32));
-            tex.push(f16_bits(t0.sample_water(x, y).max(tile.river_water[k]) - base));
+            let hw = t0.sample_water(x, y).max(tile.river_water[k]);
+            let hw = wat.get(k).copied().filter(|v| !v.is_nan()).unwrap_or(hw);
+            tex.push(f16_bits(hw - base));
             let (gi, gj) = ((i / WS).min(WN - 2), (j / WS).min(WN - 2));
             let (fx, fy) = ((i - gi * WS) as f64 / WS as f64, (j - gj * WS) as f64 / WS as f64);
             let lerp2 = |a: (f64, f64), b: (f64, f64), t: f64| (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
             let top = lerp2(warp[gj * WN + gi], warp[gj * WN + gi + 1], fx);
             let bot = lerp2(warp[(gj + 1) * WN + gi], warp[(gj + 1) * WN + gi + 1], fx);
             let b = t0.sample_biome(x, y, lerp2(top, bot, fy));
-            if rock.get(k).copied().unwrap_or(false) && h[k] >= t0.sample_water(x, y).max(tile.river_water[k]) {
+            if rock.get(k).copied().unwrap_or(false) && h[k] >= hw {
                 let a = crate::t0::biome::Biome::Alpine as u8;
                 biome.extend_from_slice(&[a, a, 0, b[3]]);
             } else {
@@ -201,8 +205,9 @@ pub fn shaped_heights(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) 
 }
 
 /// `shaped_heights`, and per sample (as they) whether a plateau's rock floor holds it (empty
-/// when none can: `ground::Plateau::floor`).
-fn shaped(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Option<(Vec<f32>, Vec<bool>)> {
+/// when none can: `ground::Plateau::floor`) and the water's surface where water drawn by hand
+/// holds it (NaN elsewhere; empty when none meets the tile: `waters`).
+fn shaped(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Option<(Vec<f32>, Vec<bool>, Vec<f32>)> {
     if key.level + 2 < world.geom.max_level {
         return None;
     }
@@ -219,12 +224,19 @@ fn shaped(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Option<(V
     let ((i0, i1), (j0, j1)) = (span(r[0], r[2], gx0), span(r[1], r[3], gy0));
     let mut out = tile.padded.clone();
     let mut rock = if sh.has_floors() { vec![false; out.len()] } else { Vec::new() };
+    let mut wat = if sh.has_waters() { vec![f32::NAN; out.len()] } else { Vec::new() };
     for j in j0..=j1 {
         let y = (gy0 + j) as f64 * s;
         for i in i0..=i1 {
             let x = (gx0 + i) as f64 * s;
             let k = (j + HALO as i64) as usize * PADDED + (i + HALO as i64) as usize;
             let hw = t0.sample_water(x, y).max(tile.river_water[k]);
+            if !wat.is_empty() {
+                let w = sh.water(x, y, hw);
+                if w != hw {
+                    wat[k] = w;
+                }
+            }
             if rock.is_empty() {
                 out[k] = sh.at_point(x, y, out[k], hw);
             } else {
@@ -232,7 +244,7 @@ fn shaped(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Option<(V
             }
         }
     }
-    Some((out, rock))
+    Some((out, rock, wat))
 }
 
 /// A simple polygon as triangles (ear clipping); a convex one as itself.

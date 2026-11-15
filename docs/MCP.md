@@ -151,6 +151,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `x:<id>` | `x:9a1b7c3d` | Generated battlemap objects taken away (a clear) |
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
 | `h:<id>` | `h:d470a78s` | A plateau, pit or rock islet (ground shaped by hand; an islet says `what: "islet"`) |
+| `e:<id>` | `e:k2v9x0qa` | Water drawn by hand: an inlet, basin, lake, pond or moat (`create_water`) |
 | `q:<id>` | `q:7d0kx3ab` | A quay, pier or breakwater put down by hand (`place_wharf`); a lighthouse or shops stand on it as drawn buildings (`c:`) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 | `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
@@ -2322,6 +2323,46 @@ top (knolls, hollows) and levels road beds under roads.
 | `… is a settlement: a plateau spans at most 1280 ft` | `around` a whole town: give a building or an outline |
 
 ---
+
+## Water drawn by hand
+
+Water inside an outline drawn by hand, as Build › Water draws it: an inlet or basin of the sea, a lake, pond or
+moat. The edits field **`waters`** holds it, by `e:<id>`: `pts` (the outline, 3 to 128 points, rounded to 0.5 ft,
+not crossing itself, spanning at most 5 miles), `kind` (`inlet`, `basin`, `lake`, `pond`, `moat`) and `level` (its
+surface, ft on the world's datum).
+
+How it applies:
+
+- Inside the outline the water stands at its level and the ground falls from the shore to the kind's depth below
+  it over 15 ft (inlet 12 ft, basin 10, lake 8, moat 6, pond 3), at most 150 ft under the ground as generated.
+  Outlines that overlap are one water with one shore (the higher level, the deeper bed); one that reaches the sea
+  or a lake at its level joins it. Plateaus and islets go on top: one drawn over the water stands dry.
+- Battlemaps draw it as water (and its shore); the map draws it at every zoom, in the water's own look; a name
+  given to it (`rename_feature`, or `name`) shows on the map. Buildings, walls and castles keep out of it, and a
+  crossing's end can't be in it. The world's own towns as generated aren't laid out again round it.
+- Limits: a world holds 256 outlines.
+
+### `create_water`
+
+`poly` (or `outline`) and optionally `kind` (default `lake`), `level_ft` (above the sea) and `name`. Without a
+level it takes the sea's or a lake's where the outline reaches one (the highest; the reply's `joins` says which),
+else the sea's for an inlet or basin, else 1 ft under the lowest ground on its shore. The same outline again
+returns the water there (`existing: true`). Returns the water's entry: `id`, `kind`, `level_ft`, `x_ft`, `y_ft`,
+`bbox`, `area_sq_ft`, `points`, `poly`, `name`.
+
+### `update_water`
+
+`id` (`e:…`) and any of `poly`, `kind`, `level_ft`, `name` (empty: none). What is not given stays; a new outline,
+or a kind that changes between the sea's and standing water, finds its level again unless `level_ft` is given.
+
+### `delete_water`
+
+`id` or `ids` (all or none): the water goes with its name, note and hidden mark (no restore; the user's Undo in
+the app brings it back).
+
+### `list_waters`
+
+Every water drawn by hand, as `create_water` returns it (`{items, found}`, `limit` 100 by default).
 
 ## What agents can't do
 

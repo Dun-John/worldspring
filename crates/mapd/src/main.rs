@@ -27,6 +27,7 @@ mod store;
 mod streets;
 mod tools;
 mod towns;
+mod waters;
 mod worker;
 mod works;
 

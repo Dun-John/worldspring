@@ -345,6 +345,8 @@ export interface Edits {
   ground?: Record<string, string>;
   /** `h:<id>` → a plateau or pit drawn by hand (or a rock islet: `kind`). */
   plateaus?: Record<string, Plateau>;
+  /** Water drawn by hand (`e:<id>`: `worldgen::waters`). */
+  waters?: Record<string, Water>;
   /** `q:<id>` → a quay, pier or breakwater built by hand. */
   wharves?: Record<string, Wharf>;
   /** `overland` → the hex grid drawn over the map for a hex crawl (`render/hex.ts`). */
@@ -384,6 +386,17 @@ export interface Plateau {
   edge?: number;
   kind?: 'plateau' | 'islet';
   floor?: 'rock' | 'ground';
+}
+
+export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat';
+
+/** Water drawn by hand (`worldgen::waters::Water`): an outline (world ft, 3 to 128 points, rounded
+ * to 0.5 ft, 5 miles across at most) and its surface `level` (ft, the generator's datum). Inside,
+ * the ground falls under it; overlapping outlines are one water. */
+export interface Water {
+  pts: [number, number][];
+  kind: WaterKind;
+  level: number;
 }
 
 export type WharfKind = 'quay' | 'pier' | 'breakwater';

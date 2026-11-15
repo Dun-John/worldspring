@@ -1247,6 +1247,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if let Some(s) = &shaper {
                 let look;
                 (hh[h], plat_w[h], look) = s.at_square_look(gsx + i, gsy + j, hh[h], hw[h]);
+                // (Water drawn by hand: its surface over the bed `at_square_look` dug.)
+                hw[h] = s.water(x, y, hw[h]);
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
                 if !look_h.is_empty() && plat_w[h] >= 0.5 {
                     look_h[h] = look;

@@ -730,7 +730,9 @@ fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Optio
         if !wet && shore.wet(*p) {
             wet = true;
             let sea = world.params().sea_level_ft + 1.0;
-            out.push(Blocker { kind: Some(if (t0.sample_water(p[0], p[1]) as f64) <= sea { "sea" } else { "lake" }), ..Blocker::plain("water", *p) });
+            let held = crate::waters::holding(&world.file.edits, *p).map(|k| world.file.edits.waters[k].kind);
+            let lake = held.map_or((t0.sample_water(p[0], p[1]) as f64) > sea, |k| !k.of_sea());
+            out.push(Blocker { kind: Some(if lake { "lake" } else { "sea" }), ..Blocker::plain("water", *p) });
             if !all {
                 return out;
             }
@@ -1782,6 +1784,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
             let pts = &edits.plateaus[id].pts;
             Some(geom::centroid(pts))
         }
+        ("e", _) if edits.waters.contains_key(id) => Some(geom::centroid(&edits.waters[id].pts)),
         ("w", [li]) if town::is_settlement(t0, *li) => Some(town::layout(world, t0, *li).center),
         ("t", [li, k]) if *li < town::layout_count(t0) => {
             let l = town::layout(world, t0, *li);
@@ -1976,6 +1979,9 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
     }
     if let Some(w) = world.file.edits.wharves.get(id) {
         return Some(crate::wharf::generated_name(w));
+    }
+    if let Some(w) = world.file.edits.waters.get(id) {
+        return Some(w.kind.name().to_string());
     }
     if id.starts_with("rd:") {
         let i = crate::roadids::road_index(t0, id)?;

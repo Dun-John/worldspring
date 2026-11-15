@@ -1527,13 +1527,19 @@ impl<'a> Shore<'a> {
         (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01
     }
 
-    /// Standing water at `p` (world ft); an islet drawn by hand is dry, and so is ground a plateau
-    /// (or the brush) raises above the water.
+    /// Standing water at `p` (world ft), water drawn by hand too (`waters`); an islet drawn by
+    /// hand is dry, and so is ground a plateau (or the brush) raises above the water.
     pub fn wet(&self, p: P) -> bool {
         if !self.islets.is_empty() && self.on_islet(p) {
             return false;
         }
         let level = self.t0.sample_water(p[0], p[1]);
+        if let Some(s) = self.shaped.as_ref().filter(|s| s.has_waters())
+            && let Some(l) = s.outline_level(p[0], p[1])
+        {
+            let l = l.max(level);
+            return s.at_point(p[0], p[1], self.ground(p) as f32, level) < l;
+        }
         level > crate::t0::hydro::DRY && level as f64 > self.ground(p) && !self.raised(p)
     }
 

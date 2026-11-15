@@ -4010,6 +4010,51 @@ fn ground_edits(base: &World) {
     }
     agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).expect("a building on a plateau over the water");
     ex.world.file.edits = Edits::default();
+
+    // P6: water outlines. An inlet from 50 ft inland out into the sea at the sea's level: wet on
+    // the battlemap all the way out to the sea's own water (one water at one level), the ground
+    // round it as it was, refused to a building, the tile's samples as generated; two overlapping
+    // ponds on dry land are one water with no bank between them; cleared, as generated.
+    use worldgen::waters::{Water, WaterKind};
+    let k2 = others[2.min(others.len() - 1)];
+    let shore = at(k2);
+    let sea = plain_c.1.water_level[k2 + 8];
+    let inlet = Water { pts: vec![[shore[0] - 50.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] + 15.0], [shore[0] - 50.0, shore[1] + 15.0]], kind: WaterKind::Inlet, level: sea };
+    assert!(inlet.problem().is_none(), "the inlet: {:?}", inlet.problem());
+    ex.world.file.edits.waters.insert("e:inlet".into(), inlet.clone());
+    let (inlet_pack, c) = pack(&mut ex, key);
+    let (j, i0) = (k2 / SQ, k2 % SQ);
+    for i in i0 - 8..=i0 + 16 {
+        let q = j * SQ + i;
+        assert!(wet(&c, q) && (c.water_level[q] - sea).abs() < 0.01, "the inlet: square {} from the shore is not the sea's water ({} over {})", i as i64 - i0 as i64, c.water_level[q], c.height[q]);
+    }
+    for q in [(j - 6) * SQ + i0 - 4, (j + 6) * SQ + i0 - 4, j * SQ + i0 - 14] {
+        assert!(c.height[q] == plain_c.1.height[q] && c.water_level[q] == plain_c.1.water_level[q], "the inlet changed the ground outside it at square {q}");
+    }
+    assert!(agent::building_spot(&ex.world, &ex.t0, &foot([shore[0] - 25.0, shore[1]]), None, "c:99", None).is_err(), "a building in the inlet");
+    let tk = fine(shore);
+    let shaped_tile = ex.terrain_packed(tk);
+    let json = serde_json::to_string(&ex.world.file.edits).unwrap();
+    assert!(serde_json::from_str::<Edits>(&json).unwrap() == ex.world.file.edits, "water outlines through JSON");
+    ex.world.file.edits = Edits::default();
+    let plain_tile = ex.terrain_packed(tk);
+    let samples = 48..48 + PADDED * PADDED * 4;
+    assert!(shaped_tile != plain_tile && shaped_tile[samples.clone()] == plain_tile[samples], "tile {tk:?}: the inlet drawn, its samples as generated");
+    // Two ponds overlapping on dry ground west of the shore, 2 ft above it.
+    let dry = j * SQ + i0 - 40;
+    let (dp, top) = (at(dry), plain_c.1.height[dry]);
+    let pond = |dx: f64| Water { pts: vec![[dp[0] + dx - 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] + 20.0], [dp[0] + dx - 20.0, dp[1] + 20.0]], kind: WaterKind::Pond, level: top + 2.0 };
+    ex.world.file.edits.waters.insert("e:a".into(), pond(-15.0));
+    ex.world.file.edits.waters.insert("e:b".into(), pond(15.0));
+    let c = pack(&mut ex, key).1;
+    for i in dry % SQ - 5..=dry % SQ + 5 {
+        let q = j * SQ + i;
+        assert!(wet(&c, q) && (c.water_level[q] - top - 2.0).abs() < 0.01, "overlapping ponds: square {q} at {} under {}", c.height[q], c.water_level[q]);
+    }
+    let s = worldgen::town::Shore::new(&ex.world, &ex.t0, [dp[0] - 100.0, dp[1] - 100.0, dp[0] + 100.0, dp[1] + 100.0]);
+    assert!(s.wet(dp) && !s.wet([dp[0], dp[1] + 40.0]), "the ponds' shore");
+    ex.world.file.edits = Edits::default();
+    assert!(pack(&mut ex, key).0 == plain_c.0 && inlet_pack != plain_c.0, "the shore's chunk with and without the water outlines");
 }
 
 /// R5 M20: shops on a bridge put down by hand over a river, clear of every layout. Its lots

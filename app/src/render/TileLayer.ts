@@ -333,6 +333,23 @@ export class TileLayer {
     return null;
   }
 
+  /** Ground and water's surface (ft) at a world point from the finest loaded tile (as `heightAt`),
+   * or null. */
+  surfaceAt(wx: number, wy: number): [number, number] | null {
+    for (let l = this.geom.max_level; l >= 0; l--) {
+      const ts = this.geom.domain_ft / 2 ** l;
+      const x = Math.floor(wx / ts);
+      const y = Math.floor(wy / ts);
+      const t = this.tiles.get(tileId(l, x, y));
+      if (!t || this.reshaped.staleAt(t.level, t.x, t.y, ts, t.epoch)) continue;
+      const i = Math.min(TILE_N, Math.max(0, Math.round(((wx - x * ts) / ts) * TILE_N)));
+      const j = Math.min(TILE_N, Math.max(0, Math.round(((wy - y * ts) / ts) * TILE_N)));
+      const k = (j * TILE_SAMPLES + i) * 4;
+      return [t.base + halfToFloat(t.texData[k]), t.base + halfToFloat(t.texData[k + 3])];
+    }
+    return null;
+  }
+
   /** The whole-map tile's samples (level 0: f16 heights and water from `base`, and biomes), once
    * it is here (it is always asked for, as every view's fallback). */
   coarse(): { tex: Uint16Array; biome: Uint8Array } | null {

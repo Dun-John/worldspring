@@ -816,6 +816,11 @@ export class Labels {
     this.replaceAll('h:', features);
   }
 
+  /** The water drawn by hand someone named (`e:`), at its middles: these replace the ones before. */
+  setWaters(features: Feature[]) {
+    this.replaceAll('e:', features);
+  }
+
   private replaceAll(prefix: string, features: Feature[]) {
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k];

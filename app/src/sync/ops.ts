@@ -25,6 +25,7 @@ export const EDIT_FIELDS: Record<string, Shape> = {
   towns: 'map',
   ground: 'map',
   plateaus: 'map',
+  waters: 'map',
   wharves: 'map',
   cultures: 'map',
   hexes: 'map',

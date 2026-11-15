@@ -666,16 +666,16 @@ export class PlayController implements PointerTool {
   private editsTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** The ground last seen (by reference: edits are never changed in place). */
-  private groundSeen: [unknown, unknown] = [undefined, undefined];
+  private groundSeen: [unknown, unknown, unknown] = [undefined, undefined, undefined];
 
   /** Ground shaped by hand since the last edits (rare in play): buildings' floors may have moved
    * with it, so every interior is fetched again. */
   private forgetReshaped(world: WorldFile) {
-    const now: [unknown, unknown] = [world.edits?.ground, world.edits?.plateaus];
-    const [g, p] = this.groundSeen;
+    const now: [unknown, unknown, unknown] = [world.edits?.ground, world.edits?.plateaus, world.edits?.waters];
+    const seen = this.groundSeen;
     this.groundSeen = now;
-    if (g === now[0] && p === now[1]) return;
-    if (JSON.stringify(g ?? {}) === JSON.stringify(now[0] ?? {}) && JSON.stringify(p ?? {}) === JSON.stringify(now[1] ?? {})) return;
+    if (seen.every((v, k) => v === now[k])) return;
+    if (seen.every((v, k) => JSON.stringify(v ?? {}) === JSON.stringify(now[k] ?? {}))) return;
     this.interiors.clear();
     this.entrances.clear();
     for (const loc of [...this.places.keys()]) if (parseLoc(loc).interior) this.places.delete(loc);

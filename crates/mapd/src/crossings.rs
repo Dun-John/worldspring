@@ -47,6 +47,11 @@ async fn dry_end(app: &Shared, k: &str, p: Option<[f64; 2]>, tol: f64) -> Result
     let k = k.to_string();
     app.worker
         .with(move |ex| match worldgen::agent::river_at(&ex.world, &ex.t0, p, 50.0).filter(|r| 0.5 * r.width_ft - r.dist_ft > tol) {
+            // (Water drawn by hand is water too.)
+            _ if worldgen::waters::holding(&ex.world.file.edits, p).is_some() => {
+                let w = worldgen::waters::holding(&ex.world.file.edits, p).unwrap_or_default();
+                Err(format!("{k}: ({}, {}) is in the water {w}: put the end on its shore or farther out", p[0].round(), p[1].round()))
+            }
             Some(r) => {
                 let (b, _) = r.bank_of(p, 5.0);
                 let what = r.name.clone().map_or_else(|| "a river".to_string(), |n| format!("{n} ({})", r.id.clone().unwrap_or_default()));

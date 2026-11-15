@@ -41,6 +41,8 @@ const ALIASES: &[(&str, &str, &str)] = &[
     ("remove_objects", "at", "points"),
     ("remove_buildings", "area", "within"),
     ("set_plateau", "outline", "poly"),
+    ("create_water", "outline", "poly"),
+    ("update_water", "outline", "poly"),
     ("create_feature", "outline", "poly"),
     ("create_building", "outline", "poly"),
     ("update_building", "outline", "poly"),
