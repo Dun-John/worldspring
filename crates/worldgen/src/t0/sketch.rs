@@ -54,6 +54,8 @@ pub struct Pin {
     pub added: bool,
     /// In place of the world's own settlement at its spot, placed at this tier (`Stroke::replaces`).
     pub replaces: Option<Tier>,
+    /// Moved onto its shore or beside its river as the world's own are (`Stroke::on_water`).
+    pub on_water: bool,
 }
 
 /// A site the sketch places (`SketchTool::Site`).
@@ -1187,7 +1189,7 @@ pub fn pins(world: &World, g: Raster, land: &[bool], conflicts: &mut Vec<Conflic
             conflicts.push(Conflict { stroke: si, message: "This pin is within 3 miles of another: no settlement placed".into(), x, y });
             continue;
         }
-        out.push(Pin { stroke: si, tier, x, y, cell: k, kind: s.kind.as_deref().and_then(SettleKind::parse), capital: s.capital, added: s.added && replaces.is_none(), replaces });
+        out.push(Pin { stroke: si, tier, x, y, cell: k, kind: s.kind.as_deref().and_then(SettleKind::parse), capital: s.capital, added: s.added && replaces.is_none(), replaces, on_water: s.on_water != Some(false) });
     }
     out
 }

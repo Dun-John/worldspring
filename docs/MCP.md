@@ -924,8 +924,10 @@ is `get_feature`'s details with the new `c:<n>` id, plus `culture`, `lives_by`, 
 link's length). Its buildings take the world's building tools (`b:<layout>:<id>`), and `get_town_plan`/`edit_town` take a
 town.
 
-Villages and towns are added inland. The call is refused, with the reason, on the edge of the map, in water or a
-river, on or near a shore (ports and fishing villages need the world remade), too near another settlement (half a
+By a sea or lake a village or town stands back from the shore, its centre about a third of its built-up radius
+inland (as a port stands back from its harbour), and its patches are shaped by the water as a coastal town's are; it
+still lives by its land (ports and fishing villages need the world remade). The call is refused, with the reason, on
+the edge of the map, in water or a river, on the water's edge (nearer than that), too near another settlement (half a
 mile of open ground between them) or site, with a road running through it, on steep ground, more than 10 miles
 from a road (the refusal says how far the nearest is, which way, and where), or where water keeps its link from reaching one. Asking again for the
 same settlement at the same place returns that one, with `"existing": true`.
@@ -1052,7 +1054,7 @@ new one (`update_sketch_stroke` returns it). `index` is its place in the sketch,
 ### `get_sketch`
 The strokes (as the pending changes leave them), each with `id`, `index`, `tool` and its points (`path`, or `at` for a
 pin, volcano, site or region named at a point), and its options: `closed`, `radius_mi`, `strength`, `hard`, `biome`,
-`name`, a road's `kind`, a pin's `tier`, `lives_by`, `capital`, `wards`, `added`, `replaces` and `settlement` (the
+`name`, a road's `kind`, a pin's `tier`, `lives_by`, `capital`, `wards`, `added`, `replaces`, `on_water` and `settlement` (the
 settlement it made, or for a pin not regenerated yet that replaces one, that one's id; `replaces` is the tier the
 generator placed that one at, which can be above the tier it shows: a city placed that grew only to a town says `city`). A stroke changed or added since the
 world was made says so (`pending: "changed"` or `"added"`), and `changes` lists what changed (`added`, `changed`, and
@@ -1078,6 +1080,7 @@ the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbo
 | `wards` | `[string]` | pins | Its districts' names, the central one first (up to 24). |
 | `added` | boolean | pins | Beside the world's own settlements (default true, as Edit › Places adds them); false: in place of one of its tier. |
 | `replaces` | string | pins | In place of the world's own settlement at its spot (within 3 mi), changed: the tier the generator placed it at (`get_sketch`'s `replaces`; a city that grew only to a town is placed as a city). Nothing else moves. `update_settlement` makes these pins. |
+| `on_water` | boolean | pins | `false`: a port, fishing village or river town stays where the pin stands (on heights above its river, say) instead of being moved onto its shore or beside its river as the world's own are. Left out: moved. |
 
 An option for another tool is refused (`tier: only for pin, got "town"`), as is a point off the map (the message gives
 the map's size). The same stroke again adds nothing and returns `existing: true`. A pin far out at sea (no land within
@@ -1087,7 +1090,7 @@ changes features, names and settlements far from it.
 
 ### `update_sketch_stroke`
 `id` and any of `path`, `at`, `closed`, `radius_mi`, `strength`, `hard`, `biome`, `name`, `kind`, `tier`, `lives_by`,
-`capital`, `wards`, `added` and `replaces` (as above, not `tool`); what is not given stays. Returns the new `id` (and `was`).
+`capital`, `wards`, `added`, `replaces` and `on_water` (as above, not `tool`); what is not given stays. Returns the new `id` (and `was`).
 
 ### `delete_sketch_stroke`
 `ids` (or `id`): all or none. A pin taken away takes its settlement with it at `regenerate`: what was made on it is set

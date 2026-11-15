@@ -4043,8 +4043,12 @@ fn ground_edits(base: &World) {
     let plain_tile = ex.terrain_packed(tk);
     let samples = 48..48 + PADDED * PADDED * 4;
     assert!(shaped_tile != plain_tile && shaped_tile[samples.clone()] == plain_tile[samples], "tile {tk:?}: the inlet drawn, its samples as generated");
-    // Two ponds overlapping on dry ground west of the shore, 2 ft above it.
-    let dry = j * SQ + i0 - 40;
+    // Two ponds overlapping on dry ground west of the shore, 2 ft above it (open ground along
+    // the row looked at: no building there, as the town round the shore is laid out).
+    let open = |k2: usize| (k2 - 6..=k2 + 6).all(|q| !wet(&plain_c.1, q) && plain_c.1.building[q] == 0);
+    let mut west: Vec<usize> = (14..i0 - 10).collect();
+    west.sort_by_key(|&o| (o as i64 - 40).abs());
+    let dry = west.into_iter().map(|o| j * SQ + i0 - o).find(|&k2| open(k2)).expect("open dry ground west of the shore");
     let (dp, top) = (at(dry), plain_c.1.height[dry]);
     let pond = |dx: f64| Water { pts: vec![[dp[0] + dx - 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] + 20.0], [dp[0] + dx - 20.0, dp[1] + 20.0]], kind: WaterKind::Pond, level: top + 2.0 };
     ex.world.file.edits.waters.insert("e:a".into(), pond(-15.0));

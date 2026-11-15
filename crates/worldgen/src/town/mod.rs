@@ -4258,10 +4258,15 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         let streets = street_lines(i, &d);
         // Too steep to build a street front on (and not a common on the slope): the block is a
         // terraced garden of a few houses.
-        let sparse = matches!(w, Ward::Merchant | Ward::Craft | Ward::Common | Ward::Noble | Ward::Slum | Ward::Docks | Ward::Temple) && block.len() >= 3 && site.grade(&block) > 0.18;
+        // (R6 P8) A docks ward on a sloping shore is built down to its quay all the same: lots
+        // narrow enough to stand on the slope (about 7 ft of fall across each), each on its own
+        // pad a step below the next (`Ground::stepped`), as far as the slope allows.
+        let grade = if block.len() >= 3 { site.grade(&block) } else { 0.0 };
+        let sparse = matches!(w, Ward::Merchant | Ward::Craft | Ward::Common | Ward::Noble | Ward::Slum | Ward::Temple) && grade > 0.18;
         let w = if sparse { Ward::Park } else { w };
         // (Rolled again by hand: its own streams.)
-        let (dp, mut prng) = lots_of(i, w, w == Ward::Temple && closes.contains(&i));
+        let (mut dp, mut prng) = lots_of(i, w, w == Ward::Temple && closes.contains(&i));
+        docks_on_slope(&mut dp, w, grade);
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
             l.blocks.push(block.clone());
         }
@@ -4447,18 +4452,27 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         }
                         Fill::Park { kind, ways, key, cemetery }
                     }
-                    // Sprawl thins out away from the city: lots are kept with a probability that
-                    // falls with distance from the corners this patch shares with the city.
+                    // (R6 P8) The sprawl outside the walls: a street grid of small lots, alleys as
+                    // often as a common ward's (not a slum's few, which left most lots without a
+                    // front and the rest scattered huts). As generated it thins out away from the
+                    // city a block between alleys at a time, kept with a probability that falls
+                    // with distance from the corners this patch shares with the city; set by
+                    // hand, it is built up as a common ward is.
                     Ward::Slum if i >= n_inner => {
-                        let anchors: Vec<P> = (0..m)
-                            .filter(|&e| {
-                                let nb = c.labels[e];
-                                nb >= 0 && usable(nb as usize)
-                            })
-                            .flat_map(|e| [c.pts[e], c.pts[(e + 1) % m]])
-                            .collect();
-                        let reach = c.pts.iter().map(|q| dist(*q, centroid(&c.pts))).fold(0.0, f64::max);
-                        Fill::Lots { ward: w, dp, rng: prng, thin: Some((anchors, reach)), close: false }
+                        let mut dp = dp;
+                        dp.block_size *= 0.5;
+                        dp.grid_chaos = (2.0 * dp.grid_chaos).min(1.0);
+                        let thin = (!ch.ward.contains_key(&i)).then(|| {
+                            let anchors: Vec<P> = (0..m)
+                                .filter(|&e| {
+                                    let nb = c.labels[e];
+                                    nb >= 0 && usable(nb as usize)
+                                })
+                                .flat_map(|e| [c.pts[e], c.pts[(e + 1) % m]])
+                                .collect();
+                            (anchors, c.pts.iter().map(|q| dist(*q, centroid(&c.pts))).fold(0.0, f64::max))
+                        });
+                        Fill::Lots { ward: w, dp, rng: prng, thin, close: false }
                     }
                     // A temple's close where `fits` saw that it does (else, with no lots that would
                     // do, its temple alone).
@@ -4915,10 +4929,26 @@ fn castle_moat(s: &Settlement, inner: bool, age: u8, roll: f64, wide: f64) -> Op
     moat::roll(roll, wide, p, great)
 }
 
+/// (R6 P8) A docks ward on a sloping shore (its block's `Site::grade` over 0.09): lots narrow
+/// enough to stand on the slope (about 7 ft of fall across each), stepped (`District::stepped`).
+/// Generated and hand-laid blocks alike.
+fn docks_on_slope(dp: &mut fill::District, w: Ward, grade: f64) {
+    if w == Ward::Docks && grade > 0.09 {
+        let across = 7.0 / grade;
+        dp.min_sq = dp.min_sq.min((across * across).max(900.0));
+        dp.stepped = true;
+    }
+}
+
 /// The ground a layout is built on, as building lots see it: whether a footprint can stand
 /// there, and the level it is built at.
 trait Ground {
     fn buildable(&self, poly: &[P]) -> bool;
+    /// `buildable` for a docks lot on a sloping shore (grade over 0.09): the ground rising up to
+    /// 10 ft across it, so it stands on two pads a step apart (`fill::step_pads`).
+    fn stepped(&self, poly: &[P]) -> bool {
+        self.buildable(poly)
+    }
     fn pad(&self, poly: &[P]) -> f32;
     /// The ground's height at a point (ft).
     fn height(&self, p: P) -> f64;
@@ -4931,6 +4961,9 @@ trait Ground {
 impl Ground for Site<'_> {
     fn buildable(&self, poly: &[P]) -> bool {
         Site::buildable(self, poly)
+    }
+    fn stepped(&self, poly: &[P]) -> bool {
+        self.terraced(poly)
     }
     fn pad(&self, poly: &[P]) -> f32 {
         Site::pad(self, poly)

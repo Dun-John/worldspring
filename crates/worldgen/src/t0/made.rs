@@ -91,6 +91,9 @@ pub fn settlement(world: &World, t0: &T0, c: &Created, seed: u64) -> Settlement 
     let culture = c.culture.unwrap_or_else(|| culture_at(t0, c.x, c.y));
     let r = crate::town::urban_radius(tier, population);
     let river = !t0.rivers.segments_near(c.x - r, c.y - r, c.x + r, c.y + r, 0.0).is_empty();
+    // (R6 P8) By a sea or lake within its built-up radius: shaped by the shore as a coastal
+    // town is.
+    let coastal = shore_within(world, t0, [c.x, c.y], r).is_some();
     Settlement {
         tier,
         kind,
@@ -99,7 +102,7 @@ pub fn settlement(world: &World, t0: &T0, c: &Created, seed: u64) -> Settlement 
         x: c.x,
         y: c.y,
         population,
-        coastal: false,
+        coastal,
         river,
         capital: false,
         seed,
@@ -507,15 +510,47 @@ impl<'a> Ground<'a> {
 pub const SETTLEMENT_GAP_FT: f64 = 2_640.0;
 /// Least open ground between a created settlement's layout and a site's (ft).
 pub const SETTLEMENT_SITE_GAP_FT: f64 = 500.0;
-/// How far past its pad (`town::pad_extent`) a created settlement keeps from sea and lake (ft).
-pub const SETTLEMENT_SHORE_FT: f64 = 500.0;
+/// How far inland of sea and lake a created settlement's centre stands, as a part of its
+/// built-up radius (`town::urban_radius`): as far as a port stands back from its shore
+/// (`settle::snap_to_water`), so its patches stay dry and the town reaches the water.
+pub const SETTLEMENT_INLAND: f64 = 0.33;
 /// The steepest a created settlement's ground may be: the mean grade from its centre out to
 /// where its buildings stand (`town::holds_radius`), in any direction.
 pub const SETTLEMENT_MAX_GRADE: f64 = 0.15;
 
+/// How much farther than `SETTLEMENT_INLAND` a created settlement keeps from sea and lake as
+/// the map's coarser ground has them (ft): the map's shore lies a little off the one its layout
+/// is planned by.
+pub const SETTLEMENT_SHORE_MARGIN_FT: f64 = 150.0;
+
+/// The nearest sea or lake to `at` within `r` ft (rings every 250 ft or less, a probe every 250
+/// ft round each), on the map: water by the ground the layout is planned on or by T0's own.
+fn shore_within(world: &World, t0: &T0, at: P, r: f64) -> Option<f64> {
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+    let wet = |p: P| {
+        let w = t0.sample_water(p[0], p[1]) as f64;
+        w > t0.ground_at(p[0], p[1], lattice) || w > t0.sample(p[0], p[1], t0.cell_ft) as f64
+    };
+    let rings = (r / 250.0).ceil().max(1.0) as usize;
+    for k in 1..=rings {
+        let d = r * k as f64 / rings as f64;
+        let n = ((std::f64::consts::TAU * d / 250.0).ceil() as usize).max(8);
+        for a in 0..n {
+            let t = std::f64::consts::TAU * a as f64 / n as f64;
+            let p = [at[0] + d * libm::cos(t), at[1] + d * libm::sin(t)];
+            if p[0] >= 0.0 && p[1] >= 0.0 && p[0] <= mw && p[1] <= mh && wet(p) {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
 /// Where a village or town (`kind`; `id` its `c:<n>`, which draws its size) may be added
-/// without remaking the world: on the map, on dry land out of river channels, clear of sea and
-/// lake past its pad (no shore spots: no ports or fishing villages), `SETTLEMENT_GAP_FT` clear
+/// without remaking the world: on the map, on dry land out of river channels, its centre
+/// `SETTLEMENT_INLAND` of its radius back from sea and lake (by a shore its patches are shaped
+/// by the water as a coastal town's are; still no ports or fishing villages), `SETTLEMENT_GAP_FT` clear
 /// of every settlement's layout and `SETTLEMENT_SITE_GAP_FT` of every site's, with no network
 /// road through its layout, its ground no steeper than `SETTLEMENT_MAX_GRADE`, and a road within
 /// `TRACK_CAP_FT` that its link (`track`) reaches.
@@ -529,7 +564,6 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
     let seed = crate::core::hash::fnv64(id.as_bytes()) ^ world.seed;
     let s = settlement(world, t0, &c, seed);
     let (reach, holds) = (town::reach(&s), town::holds_radius(&s));
-    let far = town::pad_extent(reach) + SETTLEMENT_SHORE_FT;
     if x - reach < 0.0 || y - reach < 0.0 || x + reach > mw || y + reach > mh {
         return Err("that is too near the edge of the map".to_string());
     }
@@ -542,18 +576,9 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
     if (q.0 - x).abs() + (q.1 - y).abs() > 0.01 {
         return Err("that is in a river: put it on the bank".to_string());
     }
-    // Rings every 250 ft out past the pad, a probe every 250 ft round each.
-    let rings = (far / 250.0).ceil() as usize;
-    for k in 1..=rings {
-        let r = far * k as f64 / rings as f64;
-        let n = ((std::f64::consts::TAU * r / 250.0).ceil() as usize).max(8);
-        for a in 0..n {
-            let t = std::f64::consts::TAU * a as f64 / n as f64;
-            let p = [x + r * libm::cos(t), y + r * libm::sin(t)];
-            if p[0] >= 0.0 && p[1] >= 0.0 && p[0] <= mw && p[1] <= mh && wet(p) {
-                return Err(if r <= holds { "that is on the water's edge: villages and towns are added inland (ports and fishing villages need the world remade)" } else { "that is too near the shore: villages and towns are added inland (ports and fishing villages need the world remade)" }.to_string());
-            }
-        }
+    let inland = SETTLEMENT_INLAND * town::urban_radius(s.tier, s.population);
+    if shore_within(world, t0, at, inland + SETTLEMENT_SHORE_MARGIN_FT).is_some() {
+        return Err(format!("that is on the water's edge: a village or town by a shore stands at least {} ft inland of it (ports and fishing villages need the world remade)", (crate::core::ceil((inland + SETTLEMENT_SHORE_MARGIN_FT) / 50.0) * 50.0) as i64));
     }
     // Other settlements (the world's own and those added by hand; not itself, when it is moved
     // or restored) and sites.
@@ -587,7 +612,12 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
     let g0 = t0.ground_at(x, y, lattice);
     for a in 0..16 {
         let t = std::f64::consts::TAU * a as f64 / 16.0;
-        let g = t0.ground_at(x + holds * libm::cos(t), y + holds * libm::sin(t), lattice);
+        let p = [x + holds * libm::cos(t), y + holds * libm::sin(t)];
+        // (Not out over the water, whose bed falls away under the shore.)
+        if wet(p) {
+            continue;
+        }
+        let g = t0.ground_at(p[0], p[1], lattice);
         if (g - g0).abs() / holds > SETTLEMENT_MAX_GRADE {
             return Err("that ground is too steep for a settlement".to_string());
         }

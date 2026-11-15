@@ -15,6 +15,7 @@
 //!   walls, towers, blocking objects, a hedge every square it is drawn across) from the window's
 //!   edge and its streets, so from outside the outer gate: castle buildings cut off, outer gates
 //!   not reached, bailey squares sealed (and the largest pocket); the same for every park.
+//! - `slums`: out-of-town slum patches as generated, their buildings, and those with none (`SLUMS_LIST=1`: each).
 //! - `yurts`: round homes' doors (`town::round_off`): how many, the share facing their lane (within 70 ft)
 //!   or the centre within 30 degrees, the share still facing south, interior door squares more than 1.5
 //!   square from the ring's door side, and up to 8 listed per world with seed, layout, id, x,y and angle.
@@ -6491,8 +6492,36 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
     ports(ctx, r);
 }
 
+/// `slums`: the out-of-town slum patches as generated (not set by hand), and those of them with no
+/// building standing in them (a building's middle in the patch); `SLUMS_LIST=1` lists every patch.
+fn slums(world: &worldgen::World, t0: &worldgen::t0::T0, label: &str, r: &mut Report) {
+    r.counts(&["outer slum patches", "their buildings", "outer slum patches with no building"]);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town {
+            continue;
+        }
+        let Ok(plan) = town::wards::plan_json(world, t0, li) else { continue };
+        let pt = |v: &serde_json::Value| -> P { [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0)] };
+        let corners: HashMap<u64, P> = plan["corners"].as_array().into_iter().flatten().filter_map(|c| Some((c["corner"].as_u64()?, pt(&c["at"])))).collect();
+        for p in plan["patches"].as_array().into_iter().flatten().filter(|p| p["in_town"] == false && p["ward"] == "slum" && p.get("ward_generated").is_none()) {
+            let ring: Vec<P> = p["corners"].as_array().into_iter().flatten().filter_map(|c| corners.get(&c.as_u64()?).copied()).collect();
+            let ring: Vec<P> = if area(&ring) < 0.0 { ring.into_iter().rev().collect() } else { ring };
+            let n = l.buildings.iter().filter(|h| contains(&ring, centroid(&h.poly))).count();
+            r.tally("outer slum patches", 1);
+            r.tally("their buildings", n);
+            if std::env::var("SLUMS_LIST").is_ok() {
+                println!("slum {label} L{li} patch {} at {} local {} area {:.0} buildings {n}", p["patch"], at(pt(&p["at"])), at(sub(pt(&p["at"]), l.center)), area(&ring).abs());
+            }
+            if n == 0 {
+                r.add("outer slum patches with no building", area(&ring).abs(), format!("{label} L{li} patch {} at {}", p["patch"], at(pt(&p["at"]))));
+            }
+        }
+    }
+}
+
 fn main() {
-    const MODES: [&str; 30] = ["hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
+    const MODES: [&str; 31] = ["slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -6509,7 +6538,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -6554,6 +6583,7 @@ fn main() {
                 "same" => same(&mut ctx, &label.replace(' ', ""), &mut r),
                 "fills" => fills(&mut ctx, &label.replace(' ', ""), &mut r),
                 "rows" => rows(&ctx.ex.world, &ctx.ex.t0, &label.replace(' ', ""), &mut r),
+                "slums" => slums(&ctx.ex.world, &ctx.ex.t0, &label.replace(' ', ""), &mut r),
                 "hand" => hand_towns(&ctx.ex.world, &ctx.ex.t0, &label.replace(' ', ""), &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }

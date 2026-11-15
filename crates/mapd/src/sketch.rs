@@ -81,6 +81,7 @@ fn stroke_props(with_tool: bool) -> Value {
         "wards": { "type": "array", "items": { "type": "string" }, "maxItems": WARDS_MAX, "description": "District names, central first" },
         "added": { "type": "boolean", "description": "true (default): beside the world's settlements; false: in place of one" },
         "replaces": { "type": "string", "enum": PIN_TIERS, "description": "With added false: tier of the world's settlement (within 3 mi) it replaces" },
+        "on_water": { "type": "boolean", "description": "true (default): a port, fishing village or river town is moved onto its shore or beside its river as the world's own are; false: it stays where the pin is (on heights above its river, say)" },
     });
     if with_tool {
         p["tool"] = json!({ "type": "string", "enum": TOOLS, "description": "What the stroke makes (sea is cut out of land; range runs along the line, river down from its first point)" });
@@ -217,6 +218,9 @@ fn item(s: &Stroke, index: usize, points: bool) -> Value {
         v["capital"] = json!(s.capital);
         v["added"] = json!(s.added);
         opt(&mut v, "replaces", &s.replaces);
+        if let Some(on) = s.on_water {
+            v["on_water"] = json!(on);
+        }
         if !s.wards.is_empty() {
             v["wards"] = json!(s.wards);
         }
@@ -382,6 +386,7 @@ pub(crate) fn pin_stroke(at: [f64; 2], tier: &str) -> Stroke {
         added: false,
         under: None,
         replaces: None,
+        on_water: None,
     }
 }
 
@@ -457,7 +462,7 @@ async fn shape(app: &Shared, s: &mut Stroke, tool: &str, a: &Value, wh: [f64; 2]
     only("hard", &["land", "sea", "forest", "biome"])?;
     only("biome", &["forest", "biome"])?;
     only("kind", &["road"])?;
-    for k in ["tier", "lives_by", "capital", "wards", "added", "replaces", "at"] {
+    for k in ["tier", "lives_by", "capital", "wards", "added", "replaces", "on_water", "at"] {
         only(k, &["pin"])?;
     }
     if tool == "other" {
@@ -531,6 +536,10 @@ async fn shape(app: &Shared, s: &mut Stroke, tool: &str, a: &Value, wh: [f64; 2]
         if !a[k].is_null() {
             *f = a[k].as_bool().ok_or_else(|| bad(k, "true or false", &a[k]))?;
         }
+    }
+    if !a["on_water"].is_null() {
+        let on = a["on_water"].as_bool().ok_or_else(|| bad("on_water", "true or false", &a["on_water"]))?;
+        s.on_water = (!on).then_some(false);
     }
     if let Some(t) = word("replaces", &PIN_TIERS)? {
         s.replaces = Some(t);
@@ -644,6 +653,7 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
         added: tool == "pin",
         under: None,
         replaces: None,
+        on_water: None,
     };
     shape(app, &mut s, tool, a, size(&file), true).await?;
     let id = stroke_id(&s);
