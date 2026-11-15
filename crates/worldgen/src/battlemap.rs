@@ -355,6 +355,12 @@ pub const CATALOG: [KindInfo; 63] = [
     k(Kind::WaterWheel, "water wheel", 1.4, true, false, 2, false, 14.0, true),
 ];
 
+/// What a rock floor keeps off: every tree and the ground's plants.
+const TREES_AND_COVER: [Kind; 16] = [
+    Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
+    Kind::Thicket, Kind::FallenLog, Kind::Stump, Kind::Reeds, Kind::Cactus, Kind::TallGrass, Kind::Flowers, Kind::Brambles,
+];
+
 /// Every kind, by id - 1.
 const KINDS: [Kind; 63] = [
     Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
@@ -1131,6 +1137,15 @@ pub const DECK_GRADE_MAX: f64 = 0.125;
 /// deck, whichever is higher; the climb is capped at `DECK_GRADE_MAX` from the lower end, so a long bridge that meets a
 /// cliff runs into its face rather than rising steeply. A pure function of the world.
 pub fn hand_deck_ends(c: &crate::world::Crossing, world: &World, t0: &T0) -> (f32, f32) {
+    hand_deck(c, world, t0).0
+}
+
+/// How far (ft) a hand bridge's deck ends short of the higher end's level, where the 1 in 8 cap holds it down (0 if not).
+pub fn hand_deck_short(c: &crate::world::Crossing, world: &World, t0: &T0) -> f32 {
+    hand_deck(c, world, t0).1
+}
+
+fn hand_deck(c: &crate::world::Crossing, world: &World, t0: &T0) -> ((f32, f32), f32) {
     let rect = [c.a[0].min(c.b[0]) - 20.0, c.a[1].min(c.b[1]) - 20.0, c.a[0].max(c.b[0]) + 20.0, c.a[1].max(c.b[1]) + 20.0];
     let shaper = crate::ground::Shaper::build(&world.file.edits, Some(t0), rect, SQUARE_FT);
     let ground = |p: [f64; 2]| {
@@ -1142,11 +1157,11 @@ pub fn hand_deck_ends(c: &crate::world::Crossing, world: &World, t0: &T0) -> (f3
     let cap = (DECK_GRADE_MAX * c.length()) as f32;
     // (With no water under it and ends level, the old flat deck at the lower end: both ends the same.)
     if la > lb + cap {
-        (lb + cap, lb)
+        ((lb + cap, lb), la - lb - cap)
     } else if lb > la + cap {
-        (la, la + cap)
+        ((la, la + cap), lb - la - cap)
     } else {
-        (la, lb)
+        ((la, lb), 0.0)
     }
 }
 
@@ -3139,6 +3154,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 0 => match look_h.get((k / SQ + 1) * HS + k % SQ + 1) {
                     Some(crate::ground::Look::Rock { rim: false }) => chunk.surface[k] = Surface::Rock,
                     Some(crate::ground::Look::Rock { rim: true }) => chunk.surface[k] = Surface::Gravel,
+                    // (A plateau's rock floor is bare rock, never the alpine snow of its biome.)
+                    _ if on_floor(k) => chunk.surface[k] = Surface::Rock,
                     _ => {}
                 },
                 _ => {}
@@ -3207,7 +3224,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     place_objects(&mut chunk, &biome, &slope, &road_near, &yard, &Keep { farm: &farm_h, verge: &verge }, seed, gsx, gsy);
     if !floor_h.is_empty() {
         let sq = |o: &Object| (o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1);
-        chunk.objects.retain(|o| !(o.kind == Kind::TreeConifer && on_floor(sq(o))));
+        chunk.objects.retain(|o| !(TREES_AND_COVER.contains(&o.kind) && on_floor(sq(o))));
     }
     // The land's scatter in a bailey gives way to what the bailey is dressed with (every prop of
     // the layout, not only this chunk's, so a seam cuts nothing differently).

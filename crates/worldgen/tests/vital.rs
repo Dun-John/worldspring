@@ -3819,6 +3819,8 @@ fn ground_edits(base: &World) {
     let floor_sq: Vec<usize> = (0..SQ * SQ).filter(|&k| { let q = centre(&key, k % SQ, k / SQ); (q[0] - m[0]).abs() < 20.0 && (q[1] - m[1]).abs() < 20.0 } && open_sq(&c, k)).collect();
     let rock = |c: &Chunk| floor_sq.iter().filter(|&&k| c.surface[k] == battlemap::Surface::Rock).count();
     assert!(floor_sq.len() >= 40 && rock(&dug) == floor_sq.len(), "the pit's floor is rock on {} of {} open squares", rock(&dug), floor_sq.len());
+    assert!(floor_sq.iter().all(|&k| dug.surface[k] != battlemap::Surface::Snow), "snow on the pit's rock floor");
+    assert!(dug.objects.iter().all(|o| !(floor_sq.contains(&((o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1))) && matches!(o.kind, battlemap::Kind::TreeDeciduous | battlemap::Kind::Bush | battlemap::Kind::Flowers))), "a plant on the pit's rock floor");
     ex.world.file.edits.plateaus.get_mut("h:chasm").unwrap().floor = Some(ground::Floor::Ground);
     let lawn = ex.battlemap(key);
     assert!(rock(&lawn) <= rock(&c), "a pit with floor: ground draws rock on {} squares (the ground there {})", rock(&lawn), rock(&c));
