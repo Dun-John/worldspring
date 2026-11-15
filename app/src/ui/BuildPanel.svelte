@@ -597,14 +597,10 @@
   {/if}
   {#if !peek}
     {#if mode === 'stamp'}
-      <div class="ws-hint">Click to set one down, fronting the nearest street. The ghost shows where it lands and which way it faces. Hold Shift (or keep placing below) to put down many.</div>
+      <div class="ws-hint">Click to set one down, fronting the nearest street. The ghost shows where it lands and which way it faces. Each click puts down another.</div>
       <label class="switch">
         <span class="grow">Clear the way<span class="ws-muted"> · the town’s own buildings under it go</span></span>
         <input type="checkbox" class="ws-switch" bind:checked={stamp.clear} />
-      </label>
-      <label class="switch">
-        <span class="grow">Keep placing</span>
-        <input type="checkbox" class="ws-switch" bind:checked={stamp.keep} />
       </label>
       {@render quickLine('Place it')}
     {:else}

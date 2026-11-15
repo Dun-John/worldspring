@@ -12,12 +12,10 @@ export type StampSize = 'small' | 'usual' | 'large';
 export interface StampSettings {
   size: StampSize;
   clear: boolean;
-  /** Stay in Stamp after a click (Shift does too). */
-  keep: boolean;
   /** Which way its front faces, in degrees (0 = east, 90 = south, turned in 90 steps); null: toward the nearest street. */
   facing: number | null;
 }
-export const defaultStamp = (): StampSettings => ({ size: 'usual', clear: false, keep: false, facing: null });
+export const defaultStamp = (): StampSettings => ({ size: 'usual', clear: false, facing: null });
 
 export interface RowSettings {
   side: 'left' | 'right' | 'both';
@@ -46,8 +44,8 @@ const INK = 0xf97316;
 const BAD = 0xdc2626;
 
 export interface StampHost {
-  /** The pointer is at (x, y): show the ghost there (`place`: a click or a tap's, `shift`: keep the mode). */
-  at(x: number, y: number, place: boolean, shift: boolean): void;
+  /** The pointer is at (x, y): show the ghost there (`place`: a click's, not a tap's). */
+  at(x: number, y: number, place: boolean): void;
   hint(text: string): void;
 }
 
@@ -57,24 +55,22 @@ export class StampTool implements PointerTool {
   /** The generated buildings it would take away (their footprints are not known here: the middles). */
   gone: Pt[] = [];
   readonly hoverFollows = true;
-  private shift = false;
   private touch = false;
 
   constructor(private readonly host: StampHost) {}
 
   down(_x: number, _y: number, e: PointerEvent): boolean {
     if (e.button !== 0) return false;
-    this.shift = e.shiftKey;
     this.touch = e.pointerType === 'touch';
     return true;
   }
   move() {}
   up(x: number, y: number) {
-    this.host.at(x, y, !this.touch, this.shift);
+    this.host.at(x, y, !this.touch);
   }
   cancel() {}
   hover(x: number, y: number) {
-    this.host.at(x, y, false, false);
+    this.host.at(x, y, false);
   }
 
   draw(g: Graphics, cam: Camera) {

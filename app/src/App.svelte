@@ -1740,7 +1740,7 @@
       },
       hint: (t) => toast(t),
     });
-    const stampTool = new StampTool({ at: (x, y, place, shift) => void stampAt(x, y, place, shift), hint: (t) => toast(t) });
+    const stampTool = new StampTool({ at: (x, y, place) => void stampAt(x, y, place), hint: (t) => toast(t) });
     const pathTool = new PathTool({ mode: () => (buildMode === 'lasso' ? 'lasso' : 'row'), changed: (path, done) => void pathChanged(path, done), hint: (t) => toast(t) });
     buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, clear, works: worksTool, stamp: stampTool, path: pathTool };
   }
@@ -1767,13 +1767,13 @@
   /** A click's building is being put down: no preview is asked meanwhile. */
   let stampPlacing = false;
   /** The pointer is at (x, y) in Stamp: the ghost there, or (a click) the building put down. */
-  async function stampAt(x: number, y: number, place: boolean, shift: boolean) {
+  async function stampAt(x: number, y: number, place: boolean) {
     if (place) {
       // A click always puts down at the click: no queued preview runs after it (it would take the answer's token).
       stampNext = null;
       stampPlacing = true;
       try {
-        return await stampRun(x, y, true, shift);
+        return await stampRun(x, y, true);
       } finally {
         stampPlacing = false;
       }
@@ -1789,7 +1789,7 @@
       let at: Pt | null = [x, y];
       while (at) {
         stampNext = null;
-        await stampRun(at[0], at[1], false, false);
+        await stampRun(at[0], at[1], false);
         at = stampPlacing ? null : (stampNext as Pt | null);
       }
     } finally {
@@ -1797,7 +1797,7 @@
     }
   }
 
-  async function stampRun(x: number, y: number, place: boolean, shift: boolean) {
+  async function stampRun(x: number, y: number, place: boolean) {
     const tool = buildArmed?.stamp;
     if (!tool || buildMode !== 'stamp') return;
     stampLast = [x, y];
@@ -1814,11 +1814,11 @@
     tool.ghost = { poly: r.poly, facing: r.facing, ok: true };
     tool.gone = r.removed.map((b) => b.at);
     quick = { can: true, text: `${r.name}${r.removed.length ? `: ${plural(r.removed.length, 'building')} taken away` : ''}${r.moved_ft > 5 ? `, ${Math.round(r.moved_ft)} ft from the click` : ''}`, removed: r.removed.length };
-    if (place) void stampPlace(shift || stampSet.keep, [x, y]);
+    if (place) void stampPlace([x, y]);
   }
 
-  /** Put down the ghost's building (with the generated ones under it, if asked): one change. */
-  async function stampPlace(keep: boolean, at: Pt | null = stampLast) {
+  /** Put down the ghost's building (with the generated ones under it, if asked): one change; Stamp stays on. */
+  async function stampPlace(at: Pt | null = stampLast) {
     const tool = buildArmed?.stamp;
     if (!at || !tool) return;
     const r = await view.gen.stamp(stampAsk(at[0], at[1]));
@@ -1839,7 +1839,6 @@
     tool.ghost = null;
     tool.gone = [];
     quick = { can: false, text: '' };
-    if (!keep) setBuildMode('building');
   }
 
   /** The row or outline being drawn changed (`done`: finished). */
@@ -1901,12 +1900,12 @@
     void stampSet.clear;
     void stampSet.facing;
     void build.func;
-    if (buildMode === 'stamp' && stampLast) untrack(() => void stampAt(stampLast![0], stampLast![1], false, false));
+    if (buildMode === 'stamp' && stampLast) untrack(() => void stampAt(stampLast![0], stampLast![1], false));
   });
 
   /** The row or plot being drawn, put down: one change. */
   async function quickPlace() {
-    if (buildMode === 'stamp') return void stampPlace(stampSet.keep);
+    if (buildMode === 'stamp') return void stampPlace();
     const tool = buildArmed?.path;
     if (!tool || !tool.finished) return;
     const n = (edits.created ?? []).length;
