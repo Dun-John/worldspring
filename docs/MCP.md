@@ -2148,6 +2148,50 @@ and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `
 | `corner N is not on the town's wall …` / `corners N and M are not next to each other on the wall` | A gate or tower asked off the wall's line |
 | `towers_remove: … is not one of this town's towers` | A tower id of another layout |
 
+## Streets laid out by hand
+
+`edit_streets` with `lay_out_by_hand` turns a town's or city's plan (as generated, or as the ward editor left it) into
+records you change one by one: junctions, streets between them (straight or with bends), blocks the streets enclose
+(each with a fill), rows of lots along a street, painted open areas and wall lines. Villages have no street plan (refused).
+Positions are world feet. A town laid out by hand is refused by `edit_town` (the message points here); `back_to_generated`
+drops the records and the town is the ward editor's again, as it was before.
+
+### `get_street_plan`
+
+`{id}`: the town as its records stand. Returns `{layout, origin, tier, fill (the default for a face with no block), snap_ft (3),
+junctions [{id, p, square, streets}], streets [{id, a, b, bends, width, set_l, set_r, class, bridge}], blocks [{id, at, fill,
+district, seed, gen, kept, pins, streets (the ones round it)}], rows [{id, street, side, depth, ward, lots, gaps}], areas [{id,
+poly, open}], walls [{id, pts, closed, spacing, gates, name}], problems [{key, why}]}`. A town not laid out by hand is refused.
+
+### `edit_streets`
+
+`{id, ops: [{op, …}, …]}` (or one op as `op`), `dry_run` (one op, nothing changed). The ops are applied in order, each on the
+result of the last; one that is refused ends the list (the ones before it stay, the message says which). Inside `batch`, one op
+per call. Ids are the numbers `get_street_plan` shows; unknown fields are refused.
+
+| op | fields |
+|---|---|
+| `lay_out_by_hand` | none |
+| `back_to_generated` | none |
+| `add_street` | `points` [[x, y], …], `width`, `set_l`, `set_r` (setbacks), `class` main, street, quay or joint |
+| `delete_street` | `street` (its rows go, so do junctions left with no street) |
+| `set_street` | `street`, `width`, `set_l`, `set_r`, `class`, `bridge` |
+| `move_junctions` | `moves` [{`junction`, `to` or `by`}], all at once (if that breaks the streets, each that does not) |
+| `set_square` | `junction`, `square` (a square kind, or none) |
+| `set_block` | `block`, `fill` ({kind: generated, ward, lots, reroll, close} / {kind: hand} / {kind: open, open, style}), `district` (empty: none), `seed`, `reroll` |
+| `add_row` / `remove_row` | `street`, `side` l or r, `depth`, `ward`, `lots`, `gaps`, `seed` / `row` |
+| `add_area` / `remove_area` | `poly`, `open` (plaza, lawn, park, garden, market, cemetery, farmland) / `area` |
+| `add_wall` / `remove_wall` | `pts`, `closed`, `spacing`, `towers`, `gates` [[x, y]], `name` / `wall` |
+
+A street's ends and bends within 3 ft of a junction meet it, else within 3 ft of a street split it; where a new street
+crosses another both get a junction. Free ends make new junctions (a dead end is allowed and listed in `problems` until
+joined). A change that would make streets cross or break the graph is refused ("that would break the streets"). Blocks follow
+the streets: a block whose shape is unchanged is kept untouched, others are laid out again (`blocks.relaid`), buildings that
+carried a name, note, business or NPC keep their ids where a building stands there again, else they are listed in `lost`.
+The reply of each op: `{op, records {set, removed}, blocks {relaid, added, removed}, buildings {before, after}, rects, lost,
+problems}` and per op `streets_added`, `row`, `area`, `wall`, `stayed`, `size`. `regenerate` keeps a hand town (its records
+follow the world as other edits do).
+
 ## Shaping the ground
 
 A battlemap's ground can be shaped by hand, as the Ground tab shapes it: brushed up or down, smoothed, put back,

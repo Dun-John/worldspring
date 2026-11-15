@@ -25,6 +25,7 @@ mod sketch;
 mod store;
 mod streets;
 mod tools;
+mod streets_edit;
 mod towns;
 mod worker;
 mod works;

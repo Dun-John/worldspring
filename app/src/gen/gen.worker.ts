@@ -91,6 +91,10 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                 ? c.town_plan_json(a.layout)
                                 : a.op === 'townchange'
                                   ? c.town_change_json(a.layout, a.request)
+                                  : a.op === 'streetplan'
+                                  ? c.street_plan_json(a.layout)
+                                  : a.op === 'streetchange'
+                                  ? c.street_change_json(a.layout, a.request)
                                   : a.op === 'named'
                                     ? c.named_json()
                                     : a.op === 'under'
