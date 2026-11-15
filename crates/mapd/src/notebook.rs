@@ -421,11 +421,16 @@ fn spot(w: &worldgen::world::World, t0: &worldgen::t0::T0, a: &Value, fixed: Opt
         let lv = it.levels.get(l).ok_or_else(|| format!("no such room: {r}"))?;
         let c = lv.rooms.get(ri).ok_or_else(|| format!("no such room: {r}"))?.center;
         let c = [c[0] as f64, c[1] as f64];
-        // The centre itself when it lies in the room; else the room's square nearest to it.
+        // The centre itself when it lies in the room; else the room's square nearest to it (a
+        // room with no floor on the level is no room to put a note in).
         let mut best = c;
         if agent::room_at(&it, l, c) != Some(ri) {
             let d = |p: &[f64; 2]| (p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]);
-            best = (0..it.nx * it.ny).filter(|&k| lv.cells[k] == ri as i16).map(|k| [(k % it.nx) as f64 + 0.5, (k / it.nx) as f64 + 0.5]).min_by(|a, b| d(a).total_cmp(&d(b))).unwrap_or(c);
+            best = (0..it.nx * it.ny)
+                .filter(|&k| lv.cells[k] == ri as i16)
+                .map(|k| [(k % it.nx) as f64 + 0.5, (k / it.nx) as f64 + 0.5])
+                .min_by(|a, b| d(a).total_cmp(&d(b)))
+                .ok_or_else(|| format!("no such room: {r} (level {l} of {s} has no floor for room {ri}; list_names with inside lists its rooms)"))?;
         }
         (site, li, at) = (Some(s.to_string()), Some(l), Some(best));
     } else if let Some(p) = a["at"].as_array() {

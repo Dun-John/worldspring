@@ -106,6 +106,9 @@ pub(super) struct District {
     pub(super) size_chaos: f64,
     /// Lots per block before an alley cuts it (4–14).
     pub(super) block_size: f64,
+    /// (R6 P8) A docks ward on a sloping shore (grade over 0.09): a lot too steep for one pad
+    /// (`Ground::stepped`) stands on two (`step_pads`).
+    pub(super) stepped: bool,
 }
 
 impl District {
@@ -134,6 +137,7 @@ impl District {
             grid_chaos: 0.2 + 0.8 * r.next_f64(),
             size_chaos: 0.4 + 0.6 * r.next_f64(),
             block_size: 4.0 + 10.0 * r.next_f64(),
+            stepped: false,
         };
         if w == Ward::Slum {
             d.grid_chaos *= 0.5;
@@ -249,18 +253,31 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
         parts.push(block.to_vec());
     }
     let lot_variance = (4.0 * dp.size_chaos).max(1.2);
-    for part in parts {
-        // (The sprawl thinning out: a block between alleys at a time.)
-        if let Some((anchors, reach)) = thin {
-            let c = centroid(&part);
-            let d = anchors.iter().map(|a| dist(*a, c)).fold(f64::MAX, f64::min);
-            let keep = if anchors.is_empty() { 0.35 } else { 1.0 - smoothstep_f(0.0, 0.9 * reach, d) };
-            if rng.next_f64() > keep {
-                continue;
-            }
+    // (The sprawl thinning out away from the city a block between alleys at a time, nearest
+    // first: each block is kept with a share that falls with its distance from the corners the
+    // patch shares with the city (to a tenth at the far side), the shares added up block by block
+    // rather than each rolled alone, so the far blocks still stand here and there, one in so many,
+    // never all lost to a run of bad rolls; and blocks are kept until one has a house standing.)
+    let (order, share): (Vec<usize>, Vec<f64>) = match thin {
+        None => ((0..parts.len()).collect(), vec![1.0; parts.len()]),
+        Some((anchors, reach)) => {
+            let ds: Vec<f64> = parts.iter().map(|part| anchors.iter().map(|a| dist(*a, centroid(part))).fold(f64::MAX, f64::min)).collect();
+            let mut order: Vec<usize> = (0..parts.len()).collect();
+            order.sort_by(|&a, &b| ds[a].total_cmp(&ds[b]).then(a.cmp(&b)));
+            (order, ds.iter().map(|&d| if anchors.is_empty() { 0.35 } else { (1.0 - smoothstep_f(0.0, 0.9 * reach, d)).max(0.1) }).collect())
+        }
+    };
+    let (first, mut acc) = (l.buildings.len(), if thin.is_some() { rng.next_f64() } else { 0.0 });
+    for pi in order {
+        let part = &parts[pi];
+        acc += share[pi];
+        if acc >= 1.0 {
+            acc -= 1.0;
+        } else if l.buildings.len() > first {
+            continue;
         }
         let mut lots: Vec<Vec<P>> = Vec::new();
-        bisect(&part, dp.min_sq, lot_variance, 0.0, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0);
+        bisect(part, dp.min_sq, lot_variance, 0.0, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0);
         for lot in lots {
             let lot = clean(&blunt(&clean(&lot), 60.0, 10.0));
             // No triangles, slivers or scraps: those corners stay open ground.
@@ -281,13 +298,39 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             // Irregular street fronts: some buildings stand back from the street line.
             let indent = rng.next_f64() * (crate::core::sqrt(la) / 3.0).min(16.0);
             let poly = if indent > 6.5 { clean(&clip_plain(&lot, n, c - indent)) } else { lot };
-            if poly.len() < 3 || area(&poly).abs() < 150.0 || !(site.buildable(&poly) || (ward == Ward::Docks && site.stepped(&poly))) {
+            if poly.len() < 3 || area(&poly).abs() < 150.0 {
                 continue;
             }
-            let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
+            let pads = if site.buildable(&poly) {
+                vec![poly]
+            } else if dp.stepped && site.stepped(&poly) {
+                step_pads(site, &poly)
+            } else {
+                continue;
+            };
+            for poly in pads {
+                let pad = site.pad(&poly);
+                l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
+            }
         }
     }
+}
+
+/// A docks lot on a slope too steep for one pad (`Ground::stepped`): cut across the fall
+/// through its middle into an upper and a lower half, a pair of houses a step apart down the
+/// shore, each on its own pad and each kept only where it stands as any lot does
+/// (`Ground::buildable`), so their walls meet the ground as the rest of the town's do.
+fn step_pads<G: Ground>(site: &G, poly: &[P]) -> Vec<Vec<P>> {
+    let c = centroid(poly);
+    let hs: Vec<f64> = poly.iter().map(|p| site.height(*p)).collect();
+    let (lo, hi) = (0..poly.len()).fold((0, 0), |(lo, hi), k| (if hs[k] < hs[lo] { k } else { lo }, if hs[k] > hs[hi] { k } else { hi }));
+    let fall = sub(poly[hi], poly[lo]);
+    if len(fall) < 1.0 {
+        return Vec::new();
+    }
+    let n = mul(fall, 1.0 / len(fall));
+    let k = dot(c, n);
+    [clip_plain(poly, n, k), clip_plain(poly, mul(n, -1.0), -k)].into_iter().map(|h| clean(&h)).filter(|h| h.len() >= 3 && area(h).abs() >= 150.0 && site.buildable(h)).collect()
 }
 
 /// Cut off corners sharper than `min_deg` with a chord square to the corner's bisector,

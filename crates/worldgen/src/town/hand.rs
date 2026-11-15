@@ -725,7 +725,7 @@ impl Refill {
             }
             0 => {
                 let d = &g[at + 2..at + 7];
-                let dp = District { min_sq: d[0], grid_chaos: d[1], size_chaos: d[2], block_size: d[3] };
+                let dp = District { min_sq: d[0], grid_chaos: d[1], size_chaos: d[2], block_size: d[3], stepped: false };
                 let thin = self.nt.map(|_| (pts_of(&g[at + 8..]), g[at + 7]));
                 (Fill::Lots { ward: nth(&WARDS, self.w, "ward")?, dp, rng: rng(), thin, close: self.close }, d[4])
             }

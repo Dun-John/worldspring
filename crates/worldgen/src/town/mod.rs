@@ -4269,6 +4269,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         if w == Ward::Docks && grade > 0.09 {
             let across = 7.0 / grade;
             dp.min_sq = dp.min_sq.min((across * across).max(900.0));
+            dp.stepped = true;
         }
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
             l.blocks.push(block.clone());
@@ -4936,8 +4937,8 @@ fn castle_moat(s: &Settlement, inner: bool, age: u8, roll: f64, wide: f64) -> Op
 /// there, and the level it is built at.
 trait Ground {
     fn buildable(&self, poly: &[P]) -> bool;
-    /// `buildable` for a docks lot on a sloping shore: its pad cut into the slope, the ground
-    /// rising up to 10 ft across it.
+    /// `buildable` for a docks lot on a sloping shore (grade over 0.09): the ground rising up to
+    /// 10 ft across it, so it stands on two pads a step apart (`fill::step_pads`).
     fn stepped(&self, poly: &[P]) -> bool {
         self.buildable(poly)
     }
