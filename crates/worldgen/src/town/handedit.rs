@@ -995,11 +995,9 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
     // No building left without an id of its own: refused (a block or row with more buildings
     // than its range of ids holds, not so before).
     const NO_IDS: [&str; 3] = ["more buildings than a block has ids for", "more buildings than a row has ids for", "block number too high for its ids"];
-    if let Some(p) = problems.iter().find(|p| NO_IDS.contains(&p.1)) {
-        let had = hand::build_kept(world, t0, index).is_some_and(|(_, b)| b.contains(p));
-        if !had {
-            return Err(format!("{}: {} (make it smaller)", p.0, p.1));
-        }
+    let old = hand::build_kept(world, t0, index).map(|(_, b)| b).unwrap_or_default();
+    if let Some(p) = problems.iter().find(|p| NO_IDS.contains(&p.1) && !old.contains(p)) {
+        return Err(format!("{}: {} (make it smaller)", p.0, p.1));
     }
     // Its population counted from its homes as they now stand, and the size class it makes.
     if let Some(h) = w2.file.edits.streets.get(&li) {
