@@ -63,6 +63,16 @@ const built = JSON.parse(wasm.default_world_json(424242));
       'v:ford': { kind: 'ford', a: [x - 100, y + 160], b: [x + 140, y + 200.25], width: 9 },
       'v:ferry': { kind: 'ferry', a: [x - 200, y - 60], b: [x + 210, y - 20], width: 14 },
     },
+    // A pond on the next tile (1 ft under the ground there), and roads drawn by hand: a paved road
+    // bridging it, a footpath fording it, a cobbled street past the drawn buildings.
+    waters: {
+      'e:pond': { kind: 'pond', level: 1526.9, pts: Array.from({ length: 10 }, (_, k) => [Math.round(x + 900 + 70 * Math.cos((k / 10) * 2 * Math.PI)), Math.round(y + 150 + 55 * Math.sin((k / 10) * 2 * Math.PI))]) },
+    },
+    paths: {
+      'rw:paved': { type: 'paved', pts: [[x + 700, y + 150], [x + 900, y + 140.5], [x + 1100, y + 160]] },
+      'rw:foot': { type: 'footpath', pts: [[x + 800, y + 60], [x + 880, y + 150], [x + 1000, y + 250]] },
+      'rw:street': { type: 'cobbled', width: 16, name: 'Det Street', pts: [[x - 100, y + 250], [x + 250, y + 230], [x + 600, y + 260]] },
+    },
   };
 }
 
@@ -85,4 +95,4 @@ for (const worldJson of [wasm.default_world_json(424242), JSON.stringify(sketche
   }
   total += a.length;
 }
-console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, a castle, a wall, a ruin and a village, the world's own buildings edited, crossings, a town laid out anew, a site and a building redesigned`);
+console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, a castle, a wall, a ruin and a village, the world's own buildings edited, crossings, roads drawn over water, a town laid out anew, a site and a building redesigned`);
