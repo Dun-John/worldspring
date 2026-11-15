@@ -46,6 +46,15 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `created ${String(change.kind ?? 'site')} “${String(change.name ?? nameOf(id))}”`;
       case 'create_settlement':
         return `added ${String(change.kind ?? 'settlement')} “${String(change.name ?? nameOf(id))}”`;
+      case 'create_building_row': {
+        const n = Number(change.count ?? (Array.isArray(change.ids) ? change.ids.length : 0));
+        return `put down ${n === 1 ? 'a building' : `${n} buildings`} in a row`;
+      }
+      case 'create_parcel':
+        return change.name ? `made the plot “${String(change.name)}”` : 'made a plot';
+      case 'update_parcel':
+        return 'changed a plot';
+      case 'place_stamp':
       case 'create_building':
         return `built “${String(change.name ?? nameOf(id))}”`;
       case 'update_building':

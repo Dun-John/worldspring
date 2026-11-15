@@ -58,7 +58,8 @@
   import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from './editor/harbour';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
-  import type { BuildMode } from './ui/BuildPanel.svelte';
+  import type { BuildMode, QuickInfo } from './ui/BuildPanel.svelte';
+  import { PathTool, StampTool, defaultLasso, defaultRow, defaultStamp, type LassoSettings, type RowSettings, type StampSettings } from './editor/quick';
   import { defaultScatter, newObjectId, ScatterTool, type ScatterSettings } from './editor/scatter';
   import { shrink } from './render/customAtlas';
   import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
@@ -1449,7 +1450,7 @@
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
     const buildTool =
-      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
+      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
     view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? townTool ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
@@ -1594,7 +1595,7 @@
   /** One of the world's own being changed: its name, and the menu's choices as it was opened
    * (only what differs from them is changed). */
   let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool } | null = null;
+  let buildArmed: { tool: BuildTool; cross: CrossingTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool; stamp: StampTool; path: PathTool } | null = null;
   /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
    * own buildings. */
   let buildMode = $state<BuildMode>('building');
@@ -1723,7 +1724,176 @@
       },
       hint: (t) => toast(t),
     });
-    buildArmed = { tool, cross: crossTool, harbour: harbourTool, clear, works: worksTool };
+    const stampTool = new StampTool({ at: (x, y, place, shift) => void stampAt(x, y, place, shift), hint: (t) => toast(t) });
+    const pathTool = new PathTool({ mode: () => (buildMode === 'lasso' ? 'lasso' : 'row'), changed: (path, done) => void pathChanged(path, done), hint: (t) => toast(t) });
+    buildArmed = { tool, cross: crossTool, harbour: harbourTool, clear, works: worksTool, stamp: stampTool, path: pathTool };
+  }
+
+  // Quick placement: Stamp, Row and Plot (Lasso). A ghost follows the generator's answer (the same
+  // `placing` code the agent tools use); each placing is one change (one undo step).
+  let stampSet = $state<StampSettings>(defaultStamp());
+  let rowSet = $state<RowSettings>(defaultRow());
+  let lassoSet = $state<LassoSettings>(defaultLasso());
+  let quick = $state<QuickInfo>({ can: false, text: '' });
+  /** The newest preview asked for (an older answer is dropped). */
+  let quickToken = 0;
+  /** Where the stamp's ghost was last asked for. */
+  let stampLast: Pt | null = null;
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+  function stampAsk(x: number, y: number) {
+    return { x, y, func: build.func, size: stampSet.size, clear: stampSet.clear, id: `c:${(edits.created ?? []).length}` };
+  }
+
+  /** The pointer is at (x, y) in Stamp: the ghost there, or (a click) the building put down. */
+  async function stampAt(x: number, y: number, place: boolean, shift: boolean) {
+    const tool = buildArmed?.stamp;
+    if (!tool || buildMode !== 'stamp') return;
+    stampLast = [x, y];
+    const token = ++quickToken;
+    const r = await view.gen.stamp(stampAsk(x, y));
+    if (token !== quickToken || buildMode !== 'stamp') return;
+    if (!r) return void (quick = { can: false, text: 'The map could not answer: try again', bad: true });
+    if ('error' in r) {
+      tool.ghost = null;
+      tool.gone = [];
+      quick = { can: false, text: sentence(r.error), bad: true };
+      return place ? toast(quick.text) : undefined;
+    }
+    tool.ghost = { poly: r.poly, facing: r.facing, ok: true };
+    tool.gone = r.removed.map((b) => b.at);
+    quick = { can: true, text: `${r.name}${r.removed.length ? `: ${plural(r.removed.length, 'building')} taken away` : ''}${r.moved_ft > 5 ? `, ${Math.round(r.moved_ft)} ft from the click` : ''}`, removed: r.removed.length };
+    if (place) void stampPlace(shift || stampSet.keep);
+  }
+
+  /** Put down the ghost's building (with the generated ones under it, if asked): one change. */
+  async function stampPlace(keep: boolean) {
+    const at = stampLast;
+    const tool = buildArmed?.stamp;
+    if (!at || !tool) return;
+    const r = await view.gen.stamp(stampAsk(at[0], at[1]));
+    if (!r || 'error' in r) return toast(r ? sentence(r.error) : 'The map could not answer: try again');
+    const id = `c:${(edits.created ?? []).length}`;
+    const opts = buildOptions(build);
+    const old = existingSite(edits, { id, kind: 'building', x: 0, y: 0, name: '', poly: r.poly }, [0, 0]);
+    if (old) return toast(`${old.name} is already here`);
+    const spot = await view.gen.buildingSpot(r.poly, opts.func, id);
+    if (!spot) return toast('The map could not answer: try again');
+    if ('error' in spot) return toast(sentence(spot.short ?? spot.error));
+    const c: Created = { id, kind: 'building', x: spot.x, y: spot.y, name: build.name.trim() || spot.name, poly: r.poly, ...opts };
+    const buildings = { ...(edits.buildings ?? {}) };
+    for (const b of r.removed) buildings[b.id] = { at: b.at, removed: true };
+    applyEdits({ ...edits, created: [...(edits.created ?? []), c], ...(r.removed.length ? { buildings } : {}) }, { tool: 'place_stamp', id, name: c.name }, 'user');
+    build.name = '';
+    tool.ghost = null;
+    tool.gone = [];
+    quick = { can: false, text: '' };
+    if (!keep) setBuildMode('building');
+  }
+
+  /** The row or outline being drawn changed (`done`: finished). */
+  async function pathChanged(path: Pt[], done: boolean) {
+    const tool = buildArmed?.path;
+    if (!tool) return;
+    const token = ++quickToken;
+    if (buildMode === 'row') {
+      if (path.length < 2) {
+        tool.lots = [];
+        tool.refused = [];
+        quick = { can: false, text: '' };
+        return;
+      }
+      const q = { line: path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: (edits.created ?? []).length };
+      const r = await view.gen.row(q);
+      if (token !== quickToken || buildMode !== 'row') return;
+      if (!r || 'error' in r) {
+        tool.lots = [];
+        tool.refused = [];
+        quick = { can: false, text: r ? sentence(r.error) : 'The map could not answer: try again', bad: true };
+        return;
+      }
+      tool.lots = r.lots.map((l) => l.poly);
+      tool.refused = r.refused.map((f) => [f.x, f.y]);
+      const fresh = r.lots.filter((l) => !l.existing).length;
+      const parts = [`${plural(fresh, 'building')} in ${Math.round(r.length_ft)} ft`];
+      if (r.refused_count) parts.push(`${r.refused_count} would not fit (${r.refused[0].why})`);
+      if (r.removed.length) parts.push(`${plural(r.removed.length, 'building')} taken away`);
+      quick = { can: done && fresh > 0, text: fresh ? parts.join('; ') : 'All of these are here already', removed: r.removed.length };
+      if (!done && fresh) quick.text += ' · press Enter to finish';
+      return;
+    }
+    // Plot: only a finished outline is checked.
+    tool.over = null;
+    tool.bad = false;
+    if (!done) return void (quick = { can: false, text: '' });
+    const r = await view.gen.parcelCheck(path);
+    if (token !== quickToken || buildMode !== 'lasso') return;
+    if (!r) return void (quick = { can: false, text: 'The map could not answer: try again', bad: true });
+    if ('error' in r) {
+      tool.bad = true;
+      tool.over = r.over ?? null;
+      return void (quick = { can: false, text: sentence(r.error), bad: true });
+    }
+    quick = { can: true, text: 'Ready: this outline can be a plot' };
+  }
+
+  /** The row's settings changed: lay it again over the same path. */
+  $effect(() => {
+    void JSON.stringify(rowSet);
+    void edits.created?.length;
+    const tool = buildArmed?.path;
+    if (buildMode === 'row' && tool && tool.path.length >= 2) untrack(() => void pathChanged(tool.path, tool.finished));
+  });
+  /** The stamp's settings changed: the ghost again where it was. */
+  $effect(() => {
+    void stampSet.size;
+    void stampSet.clear;
+    void build.func;
+    if (buildMode === 'stamp' && stampLast) untrack(() => void stampAt(stampLast![0], stampLast![1], false, false));
+  });
+
+  /** The row or plot being drawn, put down: one change. */
+  async function quickPlace() {
+    if (buildMode === 'stamp') return void stampPlace(stampSet.keep);
+    const tool = buildArmed?.path;
+    if (!tool || !tool.finished) return;
+    const n = (edits.created ?? []).length;
+    if (buildMode === 'row') {
+      const q = { line: tool.path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: n };
+      const r = await view.gen.row(q);
+      if (!r || 'error' in r) return toast(r ? sentence(r.error) : 'The map could not answer: try again');
+      const made: Created[] = [];
+      for (const l of r.lots) {
+        if (l.existing) continue;
+        made.push({ id: `c:${n + made.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, func: l.func, floors: l.floors });
+      }
+      if (!made.length) return toast('All of these are here already');
+      const buildings = { ...(edits.buildings ?? {}) };
+      for (const b of r.removed) buildings[b.id] = { at: b.at, removed: true };
+      applyEdits({ ...edits, created: [...(edits.created ?? []), ...made], ...(r.removed.length ? { buildings } : {}) }, { tool: 'create_building_row', count: made.length }, 'user');
+      toast(`${plural(made.length, 'building')} put down${r.refused_count ? `; ${r.refused_count} would not fit` : ''}`);
+    } else {
+      const poly = tool.path;
+      const r = await view.gen.parcelCheck(poly);
+      if (!r || 'error' in r) return toast(r ? sentence(r.error) : 'The map could not answer: try again');
+      const fill: Record<string, unknown> =
+        lassoSet.fill === 'generated'
+          ? { kind: 'generated', ward: lassoSet.ward, ...(lassoSet.lots ? { lots: lassoSet.lots } : {}), ...(lassoSet.reroll ? { reroll: lassoSet.reroll } : {}) }
+          : lassoSet.fill === 'hand'
+            ? { kind: 'hand' }
+            : { kind: 'open', open: lassoSet.open };
+      const c: Created = { id: `c:${n}`, kind: 'plot', x: r.x, y: r.y, name: lassoSet.name.trim(), poly, fill };
+      if (existingSite(edits, c, [c.x, c.y])) return toast('There is a plot here already');
+      applyEdits({ ...edits, created: [...(edits.created ?? []), c] }, { tool: 'create_parcel', id: c.id, name: c.name }, 'user');
+      toast('Plot made');
+    }
+    tool.reset();
+    quick = { can: false, text: '' };
+  }
+
+  function quickDrop() {
+    buildArmed?.path.reset();
+    quick = { can: false, text: '' };
   }
 
   /** A castle or wall drawn by hand, by its created id. */
@@ -2044,6 +2214,11 @@
     harbourPicked = null;
     buildArmed?.cross.reset();
     buildArmed?.harbour.reset();
+    buildArmed?.path.reset();
+    if (buildArmed) (buildArmed.stamp.ghost = null), (buildArmed.stamp.gone = []);
+    stampLast = null;
+    quickToken++;
+    quick = { can: false, text: '' };
     syncTool();
   }
 
@@ -4470,8 +4645,9 @@
       // A round tower is a wizard's tower unless it was something else already.
       build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
     },
-    buildFinish: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildArmed?.tool.finish()),
-    buildBack: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildArmed?.tool.back()),
+    buildQuick: (m) => setBuildMode(m),
+    buildFinish: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildArmed?.tool.finish()),
+    buildBack: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back()),
     designMode: (m) => {
       // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
       const inBuilding = designer?.building ?? false;
@@ -4507,6 +4683,7 @@
       () => !!placer()?.escape(),
       () => !!groundArmed?.escape(),
       () => !!buildArmed?.tool.reset(),
+      () => !!buildArmed?.path.reset(),
       () => !!buildArmed?.works.reset(),
       () => (worksEditing ? ((worksEditing = null), true) : false),
       () => !!buildArmed?.cross.reset(),
@@ -4856,6 +5033,12 @@
             worksEditing={worksSite(worksEditing)?.name ?? null}
             onWorksSave={saveWorks}
             bind:clearShape
+            bind:stamp={stampSet}
+            bind:row={rowSet}
+            bind:lasso={lassoSet}
+            {quick}
+            onPlace={quickPlace}
+            onDrop={quickDrop}
             bind:cross
             crossEditing={crossEditing ? (edits.crossings?.[crossEditing]?.kind ?? null) : null}
             {near}

@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -125,6 +125,22 @@ export class GenClient {
    * name for it; null if the generator could not answer. */
   buildingSpot(poly: [number, number][], func: string | undefined, id: string): Promise<{ x: number; y: number; name: string } | { error: string; short?: string } | null> {
     return this.ask({ op: 'building', poly, func, id }).then((j) => JSON.parse(j));
+  }
+
+  /** A building of a kind set down at (x, y): fronting the nearest street (`facing` degrees: exactly there if clear), its spot,
+   * name and the generated buildings it would take away (`clear`); or why not. */
+  stamp(q: StampAsk): Promise<StampAnswer | { error: string } | null> {
+    return this.ask({ op: 'stamp', input: JSON.stringify(q) }).then((j) => JSON.parse(j));
+  }
+
+  /** A row of buildings along a path: its lots (with names), the removals, the slots refused; or why not. */
+  row(q: RowAsk): Promise<RowAnswer | { error: string } | null> {
+    return this.ask({ op: 'row', input: JSON.stringify(q) }).then((j) => JSON.parse(j));
+  }
+
+  /** Whether an outline can be a plot: its middle, or why not (`over`: the plot it meets). */
+  parcelCheck(poly: [number, number][]): Promise<{ x: number; y: number } | { error: string; over?: [number, number][] } | null> {
+    return this.ask({ op: 'parcel', input: JSON.stringify({ poly }) }).then((j) => JSON.parse(j));
   }
 
   /** Shop lots along a bridge (`rows` ft; lane absent: what the width leaves), or why not. */

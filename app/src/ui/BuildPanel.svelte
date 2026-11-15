@@ -1,5 +1,15 @@
 <script lang="ts" module>
-  export type BuildMode = 'building' | 'castle' | 'wall' | 'crossing' | 'harbour' | 'clear';
+  export type BuildMode = 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'harbour' | 'clear';
+  /** What the app says of a quick placement's ghost. */
+  export interface QuickInfo {
+    /** Something is ready to place. */
+    can: boolean;
+    /** The line to show (what it is, or why not). */
+    text: string;
+    bad?: boolean;
+    /** The generated buildings it takes away (clear). */
+    removed?: number;
+  }
 </script>
 
 <script lang="ts">
@@ -10,11 +20,12 @@
   // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
   // Castle: an outline (a rectangle or a convex polygon), then the side its gate is in; Wall: a
   // line of corners (a ring if closed), gates on the corners clicked twice.
-  import { CROSSING_WIDTH, NARROW_CROSSING_MAX, WHARF_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial, type WharfKind } from '../gen/protocol';
+  import { CROSSING_WIDTH, LOT_SIZES, TOWN_WARDS, NARROW_CROSSING_MAX, WHARF_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial, type WharfKind } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import { SHOP_DEPTH_RANGE, shopsWidth, type CrossSettings } from '../editor/crossing';
   import { ISLET_RADIUS, ISLET_RISE, type HarbourSettings, type HarbourKind } from '../editor/harbour';
   import type { ClearShape } from '../editor/clearArea';
+  import type { LassoSettings, RowSettings, StampSettings } from '../editor/quick';
   import type { WorksSettings } from '../editor/works';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -31,6 +42,11 @@
     worksEditing: string | null;
     /** Clear area: a box dragged, or a lasso drawn. */
     clearShape: ClearShape;
+    stamp: StampSettings;
+    row: RowSettings;
+    lasso: LassoSettings;
+    /** The ghost's state in Stamp, Row or Lasso. */
+    quick: QuickInfo;
     cross: CrossSettings;
     /** The crossing picked (what it is), else putting new ones down. */
     crossEditing: string | null;
@@ -44,6 +60,10 @@
     onSave: () => void;
     onDone: () => void;
     onMode: (m: BuildMode) => void;
+    /** Put the stamp, row or plot down. */
+    onPlace: () => void;
+    /** Drop the row or outline being drawn. */
+    onDrop: () => void;
     onWorksSave: () => void;
     onCrossSave: () => void;
     onCrossRemove: () => void;
@@ -60,6 +80,10 @@
     works = $bindable(),
     worksEditing,
     clearShape = $bindable(),
+    stamp = $bindable(),
+    row = $bindable(),
+    lasso = $bindable(),
+    quick,
     cross = $bindable(),
     crossEditing,
     harbour = $bindable(),
@@ -69,6 +93,8 @@
     onSave,
     onDone,
     onMode,
+    onPlace,
+    onDrop,
     onWorksSave,
     onCrossSave,
     onCrossRemove,
@@ -118,12 +144,32 @@
 
   const MODES: { key: BuildMode; label: string; icon: IconName; title: string }[] = [
     { key: 'building', label: 'Building', icon: 'building', title: 'Draw a building (B)' },
+    { key: 'stamp', label: 'Stamp', icon: 'building', title: 'Set down a building of a kind and size where you click (Q)' },
+    { key: 'row', label: 'Row', icon: 'wall', title: 'A row of buildings along a street (E)' },
+    { key: 'lasso', label: 'Plot', icon: 'polygon', title: 'Draw round a plot and fill it (L)' },
     { key: 'castle', label: 'Castle', icon: 'castle', title: 'Draw a castle: its walls, gate, keep and yard' },
     { key: 'wall', label: 'Wall', icon: 'wall', title: 'Draw a wall with towers and gates' },
     { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
     { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
     { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
   ];
+
+  const STAMP_SIZES = [
+    { key: 'small', label: 'Small' },
+    { key: 'usual', label: 'Usual' },
+    { key: 'large', label: 'Large' },
+  ] as const;
+  const SIDES = [
+    { key: 'both', label: 'Both sides' },
+    { key: 'left', label: 'Left' },
+    { key: 'right', label: 'Right' },
+  ] as const;
+  const OPEN_KINDS = ['plaza', 'lawn', 'park', 'garden', 'market', 'cemetery', 'farmland'];
+  const WARDS = TOWN_WARDS.filter((w) => w !== 'empty' && w !== 'castle');
+  const kindName = (k: string) => funcs?.businesses.find((b) => b.key === k)?.name ?? funcs?.homes.find((h) => h.key === k)?.name ?? label(k);
+  function addKind(k: string) {
+    if (k && !row.kinds.includes(k)) row.kinds = [...row.kinds, k];
+  }
 
   const categories = $derived(funcs ? [...new Set(funcs.businesses.map((b) => b.category))] : []);
 
@@ -133,6 +179,13 @@
     else settings = { ...settings, shape: k };
   }
 </script>
+
+{#snippet quickLine(action: string)}
+  <div class="quick" class:bad={quick.bad}>
+    <span class="grow">{quick.text}</span>
+    <button class="ws-btn primary" onclick={onPlace} disabled={!quick.can}>{action}</button>
+  </div>
+{/snippet}
 
 <div class="build">
   {#if !peek}
@@ -213,6 +266,119 @@
         {clearShape === 'box' ? 'Drag a box' : 'Draw round an area'}: the town's own buildings with their middle inside it are taken away, leaving the ground open to build on.
         Undo brings them back.
       </div>
+    {/if}
+  {:else if mode === 'row'}
+    <div class="ws-seg" role="radiogroup" aria-label="Side">
+      {#each SIDES as s (s.key)}
+        <button class:on={row.side === s.key} aria-pressed={row.side === s.key} onclick={() => (row.side = s.key)}>{s.label}</button>
+      {/each}
+    </div>
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to draw.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    {#if !peek}
+      <div class="ws-hint">Drag along a street, or click each corner and press Enter: buildings line the path, facing it, on the side you choose. Left and right are as you walk along it.</div>
+      <label class="ws-field">
+        Ward
+        <select class="ws-input" bind:value={row.ward}>
+          {#each WARDS as w (w)}<option value={w}>{label(w)}</option>{/each}
+        </select>
+      </label>
+      <div class="ws-field">
+        Kinds
+        <div class="tints">
+          {#if !row.kinds.length}<span class="ws-hint">The ward’s homes and now and then a trade</span>{/if}
+          {#each row.kinds as k (k)}
+            <button class="ws-chip on" onclick={() => (row.kinds = row.kinds.filter((x) => x !== k))} title="Take it out of the mix">{kindName(k)} ×</button>
+          {/each}
+        </div>
+        <select class="ws-input" value="" onchange={(e) => (addKind(e.currentTarget.value), (e.currentTarget.value = ''))} aria-label="Add a kind">
+          <option value="">Add a kind…</option>
+          {#if funcs}
+            <optgroup label="Homes">
+              {#each funcs.homes as h (h.key)}<option value={h.key}>{label(h.name)}</option>{/each}
+            </optgroup>
+            {#each categories as c (c)}
+              <optgroup label={label(c)}>
+                {#each funcs.businesses.filter((b) => b.category === c) as b (b.key)}<option value={b.key}>{b.name}</option>{/each}
+              </optgroup>
+            {/each}
+          {/if}
+        </select>
+      </div>
+      <label class="slider">
+        <span>Depth</span><output>{row.depth ? `${row.depth} ft` : 'By the ward'}</output>
+        <input type="range" min="0" max="120" step="5" bind:value={row.depth} />
+      </label>
+      <label class="slider">
+        <span>Gaps</span><output>{Math.round(row.gaps * 100)}%</output>
+        <input type="range" min="0" max="0.5" step="0.05" bind:value={row.gaps} />
+      </label>
+      <label class="switch">
+        <span class="grow">Clear the way<span class="ws-muted"> · the town’s own buildings in it go</span></span>
+        <input type="checkbox" class="ws-switch" bind:checked={row.clear} />
+      </label>
+      <div class="ws-seg">
+        <button onclick={() => (row.seed += 1)} title="Another mix of widths, kinds and storeys">Reroll</button>
+        <button onclick={onDrop} disabled={!quick.can && !quick.text}>Start over</button>
+      </div>
+      {@render quickLine('Place the row')}
+    {/if}
+  {:else if mode === 'lasso'}
+    <div class="ws-seg" role="radiogroup" aria-label="Fill">
+      <button class:on={lasso.fill === 'generated'} aria-pressed={lasso.fill === 'generated'} onclick={() => (lasso.fill = 'generated')}>Buildings</button>
+      <button class:on={lasso.fill === 'hand'} aria-pressed={lasso.fill === 'hand'} onclick={() => (lasso.fill = 'hand')}>Empty</button>
+      <button class:on={lasso.fill === 'open'} aria-pressed={lasso.fill === 'open'} onclick={() => (lasso.fill = 'open')}>Open ground</button>
+    </div>
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to draw.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    {#if !peek}
+      <div class="ws-hint">Draw round a plot, or click each corner (the first again to finish).
+        {lasso.fill === 'generated' ? 'The generator fills it with lots of the ward.' : lasso.fill === 'hand' ? 'It is left empty for buildings drawn by hand.' : 'It stays open ground.'}
+        A plot cannot overlap another.</div>
+      {#if lasso.fill === 'generated'}
+        <label class="ws-field">
+          Ward
+          <select class="ws-input" bind:value={lasso.ward}>
+            {#each WARDS as w (w)}<option value={w}>{label(w)}</option>{/each}
+          </select>
+        </label>
+        <div class="ws-field">
+          Lot size
+          <div class="ws-seg">
+            <button class:on={lasso.lots === ''} onclick={() => (lasso.lots = '')} title="As the ward has it">Usual</button>
+            {#each LOT_SIZES as l (l)}<button class:on={lasso.lots === l} onclick={() => (lasso.lots = l)}>{label(l)}</button>{/each}
+          </div>
+        </div>
+        <div class="ws-field">
+          Lay the lots out again
+          <div class="stepper">
+            <button class="ws-icon-btn" onclick={() => (lasso.reroll = Math.max(0, lasso.reroll - 1))} disabled={lasso.reroll <= 0} aria-label="Previous layout"><Icon name="minus" size={16} /></button>
+            <span>{lasso.reroll}</span>
+            <button class="ws-icon-btn" onclick={() => (lasso.reroll += 1)} aria-label="Another layout"><Icon name="plus" size={16} /></button>
+          </div>
+        </div>
+      {:else if lasso.fill === 'open'}
+        <label class="ws-field">
+          Ground
+          <select class="ws-input" bind:value={lasso.open}>
+            {#each OPEN_KINDS as o (o)}<option value={o}>{label(o)}</option>{/each}
+          </select>
+        </label>
+      {/if}
+      <label class="ws-field">
+        Name
+        <input class="ws-input" bind:value={lasso.name} placeholder="Unnamed" />
+      </label>
+      <div class="ws-seg"><button onclick={onDrop} disabled={!quick.can && !quick.text}>Start over</button></div>
+      {@render quickLine('Make the plot')}
     {/if}
   {:else if mode === 'crossing'}
     {#if crossEditing}
@@ -316,17 +482,25 @@
       {/if}
     {/if}
   {:else}
-  {#if editing}
+  {#if editing && mode === 'building'}
     <div class="editing">
       <span class="grow">Editing <b>{editing}</b></span>
       <button class="ws-btn" onclick={onDone}>Done</button>
     </div>
   {/if}
+  {#if mode === 'stamp'}
+    <div class="ws-seg" role="radiogroup" aria-label="Size">
+      {#each STAMP_SIZES as z (z.key)}
+        <button class:on={stamp.size === z.key} aria-pressed={stamp.size === z.key} onclick={() => (stamp.size = z.key)}>{z.label}</button>
+      {/each}
+    </div>
+  {:else}
   <div class="ws-seg" role="radiogroup" aria-label="Shape">
     {#each SHAPES as s (s.key)}
       <button class:on={settings.shape === s.key} aria-pressed={settings.shape === s.key} onclick={() => shape(s.key)} title="{s.label} ({s.kbd})"><Icon name={s.icon} size={16} />{s.label}</button>
     {/each}
   </div>
+  {/if}
   {#if !near}
     <div class="zoom">
       <span class="grow">Zoom in to draw.</span>
@@ -334,7 +508,20 @@
     </div>
   {/if}
   {#if !peek}
+    {#if mode === 'stamp'}
+      <div class="ws-hint">Click to set one down, fronting the nearest street. The ghost shows where it lands and which way it faces. Hold Shift (or keep placing below) to put down many.</div>
+      <label class="switch">
+        <span class="grow">Clear the way<span class="ws-muted"> · the town’s own buildings under it go</span></span>
+        <input type="checkbox" class="ws-switch" bind:checked={stamp.clear} />
+      </label>
+      <label class="switch">
+        <span class="grow">Keep placing</span>
+        <input type="checkbox" class="ws-switch" bind:checked={stamp.keep} />
+      </label>
+      {@render quickLine('Place it')}
+    {:else}
     <div class="ws-hint">{editing ? 'Draw on the map to move or reshape it: ' : ''}{SHAPES.find((s) => s.key === settings.shape)?.hint}</div>
+    {/if}
     <label class="ws-field">
       What it is
       <select class="ws-input" bind:value={settings.func}>
@@ -410,6 +597,15 @@
 </div>
 
 <style>
+  .quick {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .quick.bad span {
+    color: var(--danger, #dc2626);
+  }
   .slider {
     display: grid;
     grid-template-columns: 1fr auto;
@@ -485,7 +681,17 @@
     outline: 2px solid var(--ink);
     outline-offset: 2px;
   }
-  /* Six modes side by side: each its icon over its word. */
+  /* Nine modes in two rows of five: each its icon over its word. */
+  .modes {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+  }
+  .modes > button:nth-child(5n + 1) {
+    border-left: none;
+  }
+  .modes > button:nth-child(n + 6) {
+    border-top: 1px solid var(--line-soft);
+  }
   .modes > button {
     flex-direction: column;
     gap: 0;

@@ -373,6 +373,27 @@ impl Ctx {
         }
     }
 
+    /// A building of a kind set down at a point as `placing::stamp` does (input and output JSON: `placing::stamp_json`).
+    pub fn stamp_json(&self, input: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::placing::stamp_json(&self.world, t0, input),
+            None => "null".into(),
+        }
+    }
+
+    /// A row of buildings along a path as `placing::row` lays it (`placing::row_json`).
+    pub fn row_json(&self, input: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::placing::row_json(&self.world, t0, input),
+            None => "null".into(),
+        }
+    }
+
+    /// Whether an outline can be a plot (`placing::parcel_check_json`).
+    pub fn parcel_check_json(&self, input: &str) -> String {
+        worldgen::placing::parcel_check_json(&self.world, input)
+    }
+
     /// The generated buildings with their middle inside a polygon (`[[x, y], …]` JSON, ft):
     /// `[{id, at}]` (`agent::generated_buildings_in`).
     pub fn buildings_in_json(&self, poly: &str) -> String {

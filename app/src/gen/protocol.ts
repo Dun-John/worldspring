@@ -164,6 +164,65 @@ export interface Created {
   fill?: Record<string, unknown>;
 }
 
+/** A stamp asked for (`placing::stamp_json`): a kind at a point, a size or width x depth, a facing (degrees, 0 = +x), the id it would get. */
+export interface StampAsk {
+  x: number;
+  y: number;
+  func: string;
+  size?: 'small' | 'usual' | 'large';
+  width?: number;
+  depth?: number;
+  facing?: number;
+  clear?: boolean;
+  id: string;
+}
+/** A building generated that a placement takes away. */
+export interface Removal {
+  id: string;
+  name: string;
+  function: string;
+  at: [number, number];
+}
+export interface StampAnswer {
+  poly: [number, number][];
+  x: number;
+  y: number;
+  name: string;
+  facing: number | null;
+  width: number;
+  depth: number;
+  moved_ft: number;
+  removed: Removal[];
+}
+/** A row asked for (`placing::row_json`): along a path, on a side or both, of a ward's lots or the kinds given. */
+export interface RowAsk {
+  line: [number, number][];
+  side: 'left' | 'right' | 'both';
+  ward: string;
+  kinds: string[];
+  depth?: number;
+  gaps: number;
+  clear: boolean;
+  seed: number;
+  first_id: number;
+}
+export interface RowLot {
+  poly: [number, number][];
+  x: number;
+  y: number;
+  func: string;
+  floors: number;
+  name: string;
+  existing: string | null;
+}
+export interface RowAnswer {
+  lots: RowLot[];
+  removed: Removal[];
+  refused: { x: number; y: number; why: string }[];
+  refused_count: number;
+  length_ft: number;
+}
+
 /** One of a castle's pieces changed by hand: a building's edit (`at` its middle as built; no
  * footprint) and its name. */
 /** The answer of `bedit` for a castle's piece: its castle's `c:` id, its key in `pieces`, the
@@ -752,6 +811,12 @@ export type Ask =
   /** Whether a building drawn by hand can stand there, its point and a name
    * (`agent::building_spot`). */
   | { op: 'building'; poly: [number, number][]; func?: string; id: string }
+  /** A building of a kind set down at a point (`placing::stamp_json`). */
+  | { op: 'stamp'; input: string }
+  /** A row of buildings along a path (`placing::row_json`). */
+  | { op: 'row'; input: string }
+  /** Whether an outline can be a plot (`placing::parcel_check_json`). */
+  | { op: 'parcel'; input: string }
   /** What a building can be (`agent::building_funcs_json`). */
   | { op: 'funcs' }
   /** A generated building's edit with a change made, or its removal (`agent::building_edit_json`). */

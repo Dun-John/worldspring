@@ -326,3 +326,95 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
     }
     Ok(out)
 }
+
+fn removal_json(r: &Removal) -> serde_json::Value {
+    serde_json::json!({ "id": r.id, "name": r.name, "function": r.function, "at": r.at })
+}
+
+/// A stamp as the app asks for it, as JSON. Input `{x, y, func, size?: "small"|"usual"|"large", width?, depth?, facing?, clear?, id}`;
+/// output `{poly, x, y, name, facing?, width, depth, moved_ft, removed}` or `{error}` (the one model `place_stamp` uses).
+pub fn stamp_json(world: &World, t0: &T0, input: &str) -> String {
+    let go = || -> Result<serde_json::Value, String> {
+        let a: serde_json::Value = serde_json::from_str(input).map_err(|e| e.to_string())?;
+        let func = a["func"].as_str().ok_or("func: needed")?;
+        let (w, d) = match (a["width"].as_f64(), a["depth"].as_f64()) {
+            (Some(w), Some(d)) => (w, d),
+            _ => stamp_dims(func, a["size"].as_str().unwrap_or("usual")).ok_or("that kind has no stamp size")?,
+        };
+        if !(10.0..=400.0).contains(&w) || !(10.0..=400.0).contains(&d) {
+            return Err("a stamp is 10 to 400 ft a side".into());
+        }
+        let at = [a["x"].as_f64().ok_or("x: needed")?, a["y"].as_f64().ok_or("y: needed")?];
+        let s = stamp(world, t0, at, func, w, d, a["facing"].as_f64(), a["clear"].as_bool().unwrap_or(false), a["id"].as_str().unwrap_or("c:new"))?;
+        Ok(serde_json::json!({ "poly": s.poly, "x": s.mid[0], "y": s.mid[1], "name": s.name, "facing": s.facing, "width": w, "depth": d,
+            "moved_ft": s.moved_ft, "removed": s.removed.iter().map(removal_json).collect::<Vec<_>>() }))
+    };
+    go().unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string()
+}
+
+/// A row as the app asks for it, as JSON. Input `{line, side?: "left"|"right"|"both", ward?, kinds?, depth?, gaps?, clear?, seed?, first_id}`;
+/// output `{lots: [{poly, x, y, func, floors, name, existing?}], removed, refused: [{x, y, why}], refused_count, length_ft}` or `{error}`.
+pub fn row_json(world: &World, t0: &T0, input: &str) -> String {
+    let go = || -> Result<serde_json::Value, String> {
+        let a: serde_json::Value = serde_json::from_str(input).map_err(|e| e.to_string())?;
+        let line: Vec<P> = a["line"].as_array().ok_or("line: needed")?.iter().filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?])).collect();
+        let sides = match a["side"].as_str().unwrap_or("both") {
+            "left" => vec![true],
+            "right" => vec![false],
+            _ => vec![true, false],
+        };
+        let kinds: Vec<String> = a["kinds"].as_array().map(|k| k.iter().filter_map(|s| s.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        let ward = a["ward"].as_str().unwrap_or("common");
+        let n = a["first_id"].as_u64().unwrap_or(0) as usize;
+        let depth = a["depth"].as_f64().map(|d| d.clamp(DEPTH_RANGE.0, DEPTH_RANGE.1));
+        let ask = RowAsk { line: &line, sides, depth, kinds, ward, gaps: a["gaps"].as_f64().unwrap_or(0.15).clamp(0.0, 0.5), clear: a["clear"].as_bool().unwrap_or(false), seed: a["seed"].as_u64().unwrap_or(0) };
+        let edits = &world.file.edits;
+        let existing = |poly: &[P], func: &str| {
+            let probe = crate::world::Created { kind: "building".into(), poly: poly.to_vec(), func: Some(func.to_string()), ..Default::default() };
+            edits.existing_site(&probe, geom::centroid(poly)).map(|o| o.id.clone())
+        };
+        let out = row(world, t0, &ask, n, &existing)?;
+        let mut k = 0;
+        let lots: Vec<serde_json::Value> = out
+            .lots
+            .iter()
+            .map(|l| {
+                let name = if l.existing.is_some() {
+                    String::new()
+                } else {
+                    k += 1;
+                    agent::spot_name(world, t0, &l.poly, Some(&l.func), &format!("c:{}", n + k - 1))
+                };
+                serde_json::json!({ "poly": l.poly, "x": l.mid[0], "y": l.mid[1], "func": l.func, "floors": l.floors, "name": name, "existing": l.existing })
+            })
+            .collect();
+        Ok(serde_json::json!({ "lots": lots, "removed": out.removed.iter().map(removal_json).collect::<Vec<_>>(),
+            "refused": out.refused.iter().map(|(p, why)| serde_json::json!({ "x": p[0], "y": p[1], "why": why })).collect::<Vec<_>>(),
+            "refused_count": out.refused_count, "length_ft": out.length_ft }))
+    };
+    go().unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string()
+}
+
+/// Whether an outline can be a plot (`create_parcel`'s checks), as JSON: input `{poly}`; output `{x, y}` (its middle) or
+/// `{error, over?: [[x, y], ..]}` (`over`: the live plot it meets).
+pub fn parcel_check_json(world: &World, input: &str) -> String {
+    let go = || -> Result<serde_json::Value, String> {
+        let a: serde_json::Value = serde_json::from_str(input).map_err(|e| e.to_string())?;
+        let poly: Vec<P> = a["poly"].as_array().ok_or("poly: needed")?.iter().filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?])).collect();
+        let n = poly.len().max(1) as f64;
+        let (x, y) = (poly.iter().map(|q| q[0]).sum::<f64>() / n, poly.iter().map(|q| q[1]).sum::<f64>() / n);
+        let c = crate::world::Created { kind: "plot".into(), x, y, poly, fill: Some(hand::BlockFill::Generated { ward: "common".into(), lots: None, reroll: 0, close: None }), ..Default::default() };
+        c.check()?;
+        if let Some(o) = world.file.edits.created.iter().find(|o| o.kind == "plot" && !o.removed && !c.same_site(o, [c.x, c.y]) && agent::polys_overlap_pub(&o.poly, &c.poly)) {
+            return Err(serde_json::json!({ "over": o.poly }).to_string());
+        }
+        Ok(serde_json::json!({ "x": x, "y": y }))
+    };
+    match go() {
+        Ok(v) => v.to_string(),
+        Err(e) => match serde_json::from_str::<serde_json::Value>(&e) {
+            Ok(v) if v.get("over").is_some() => serde_json::json!({ "error": "That outline meets another plot", "over": v["over"] }).to_string(),
+            _ => serde_json::json!({ "error": e }).to_string(),
+        },
+    }
+}
