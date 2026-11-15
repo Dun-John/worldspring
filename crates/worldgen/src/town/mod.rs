@@ -3805,6 +3805,9 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let steps = (total / 5.0).ceil().max(1.0) as usize;
                 let samples: Vec<P> = (0..=steps).map(|j| point_along(&curve, total * j as f64 / steps as f64).0).collect();
                 let mut straight: Vec<P> = Vec::new();
+                // (The last deck laid on this curve: its index in `l.bridges`, where its span starts and that
+                // point's index in `straight`.)
+                let mut last: Option<(usize, P, usize)> = None;
                 let mut j = 0;
                 while j < samples.len() {
                     if !site.near_river(samples[j], 0.0) {
@@ -3824,14 +3827,31 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         straight.push(a);
                     }
                     straight.push(b);
-                    let span = dist(a, b);
-                    if span > 1.0 {
+                    let deck = if s.tier >= Tier::City { f64::max(width + 4.0, 24.0) } else { width + 4.0 };
+                    // From bank to bank at every corner, plus a landing each side.
+                    let lay = |a: P, b: P| {
+                        let span = dist(a, b);
                         let u = mul(sub(b, a), 1.0 / span);
-                        let deck = if s.tier >= Tier::City { f64::max(width + 4.0, 24.0) } else { width + 4.0 };
-                        // From bank to bank at every corner, plus a landing each side.
                         let m = lerp(a, b, 0.5);
                         let (fwd, back) = (site.dry_reach(m, u, deck, 1.0, 0.5 * span) + 8.0, site.dry_reach(m, u, deck, -1.0, 0.5 * span) + 8.0);
-                        l.bridges.push(rect(add(m, mul(u, 0.5 * (fwd - back))), u, fwd + back, deck));
+                        rect(add(m, mul(u, 0.5 * (fwd - back))), u, fwd + back, deck)
+                    };
+                    if dist(a, b) > 1.0 {
+                        let d = lay(a, b);
+                        // A second wet stretch so close that its deck would overlap the last one's (the curve
+                        // dry for a step between two channels): one deck goes straight over both.
+                        let overlaps = |p: &[P], q: &[P]| poly_gap(p, q) == 0.0 || p.iter().any(|v| geom::contains(q, *v)) || q.iter().any(|v| geom::contains(p, *v));
+                        match last {
+                            Some((k, a0, i0)) if overlaps(&d, &l.bridges[k]) && dist(a0, b) > 1.0 => {
+                                l.bridges[k] = lay(a0, b);
+                                straight.truncate(i0 + 1);
+                                straight.push(b);
+                            }
+                            _ => {
+                                l.bridges.push(d);
+                                last = Some((l.bridges.len() - 1, a, straight.len() - 2));
+                            }
+                        }
                     }
                     j += 2;
                 }
