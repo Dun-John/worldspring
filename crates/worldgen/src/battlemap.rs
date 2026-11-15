@@ -52,6 +52,10 @@ pub const YARD_COVER_GAP: i32 = 12;
 pub const FIELD_COVER_GAP: i32 = 12;
 const COVER_CELL: usize = 8;
 const TIER_CELL: usize = 16;
+/// A road drawn by hand marks the squares within at least this (ft) of its line, so a narrow one is a
+/// line of squares unbroken on the diagonal.
+const PATH_MIN_HALF_FT: f64 = 3.6;
+
 /// Micro-relief feature grid (squares).
 const RELIEF_CELL: i64 = 20;
 
@@ -2503,7 +2507,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Crossings put down by hand (`Edits::crossings`) near this chunk, over whatever is there:
     // a bridge's planks wherever the ground is below its deck, a ford's bed brought up to
     // wading depth, a ferry's jetties and raft (with the generated ferries' below).
-    let hand: Vec<(CrossingShape, Deck)> = world
+    let mut hand: Vec<(CrossingShape, Deck)> = world
         .file
         .edits
         .crossings
@@ -2514,6 +2518,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         })
         .map(|c| hand_crossing(c, world, t0))
         .collect();
+    // (Roads drawn by hand: where each runs over water, a bridge or a ford as one put down by hand.)
+    let path_near = if world.file.edits.paths.is_empty() { Vec::new() } else { crate::paths::near(&world.file.edits, [hx0 - 2.0 * SQUARE_FT, hy0 - 2.0 * SQUARE_FT, hx0 + span + 2.0 * SQUARE_FT, hy0 + span + 2.0 * SQUARE_FT], 0.0) };
+    if !path_near.is_empty() {
+        hand.extend(crate::paths::crossings_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span], 40.0).iter().map(|c| hand_crossing(c, world, t0)));
+    }
     for (c, top) in hand.iter().filter(|(c, _)| c.kind != ShapeKind::Ferry) {
         let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
         let len = crate::core::sqrt((c.b[0] - c.a[0]) * (c.b[0] - c.a[0]) + (c.b[1] - c.a[1]) * (c.b[1] - c.a[1]));
@@ -2541,6 +2550,22 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
+    }
+    // Roads drawn by hand: their band's squares on dry ground (a bridge's deck keeps its planks, a
+    // ford's water stays) are road squares of their kind's look, at least a square wide so a narrow
+    // path reads as one; a gravel road's squares are gravel (`path_h`, the road's kind + 1).
+    let mut path_h = vec![0u8; if path_near.is_empty() { 0 } else { HS * HS }];
+    for h in (0..path_h.len()).filter(|_| !path_near.is_empty()) {
+        let Some((kind, _)) = crate::paths::at(&path_near, center(h % HS, h / HS), 0.0, PATH_MIN_HALF_FT) else { continue };
+        if road_h[h] & 0x80 != 0 || hw[h] > hh[h] {
+            continue;
+        }
+        path_h[h] = kind as u8 + 1;
+        road_h[h] = match kind {
+            crate::paths::PathKind::Gravel => road_h[h],
+            crate::paths::PathKind::Paved | crate::paths::PathKind::Cobbled => crate::t0::roads::RoadClass::KingsRoad as u8 + 1,
+            _ => crate::t0::roads::RoadClass::Track as u8 + 1,
+        };
     }
     // A ferry's jetties and raft are decks too: planks over the water (the raft afloat).
     let sea_ferries = sea_ferry_shapes(world, t0, [hx0, hy0]);
@@ -3297,6 +3322,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 Surface::Road
             };
         }
+        // (A gravel road drawn by hand.)
+        if path_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&(crate::paths::PathKind::Gravel as u8 + 1)) && road[k] & 0x80 == 0 {
+            chunk.surface[k] = Surface::Gravel;
+        }
         if chunk.building[k] != 0 {
             chunk.surface[k] = Surface::Roof;
         }
@@ -3312,7 +3341,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         .map(|h| {
             let (i, j) = ((h % RN) as i64 - 2, (h / RN) as i64 - 2);
             let inside = i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64;
-            tile.road_mask.get(sidx(i, j)).is_some_and(|&r| r != 0) || (inside && chunk.urban[j as usize * SQ + i as usize] == URBAN_STREET)
+            // (Roads drawn by hand too: their band, a pure function of where the square is.)
+            let drawn = || !path_near.is_empty() && crate::paths::at(&path_near, [ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT], 0.0, PATH_MIN_HALF_FT).is_some();
+            tile.road_mask.get(sidx(i, j)).is_some_and(|&r| r != 0) || (inside && chunk.urban[j as usize * SQ + i as usize] == URBAN_STREET) || drawn()
                 || (!inside && i >= -1 && j >= -1 && i <= SQ as i64 && j <= SQ as i64 && urb_h[(j + 1) as usize * HS + (i + 1) as usize] == URBAN_STREET)
         })
         .collect();

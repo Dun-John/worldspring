@@ -122,6 +122,13 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
       }
       case 'restore_building':
         return `${nameOf(id)} as generated again`;
+      case 'place_path':
+        if (change.changed) return 'changed a road';
+        return `drew a ${({ footpath: 'footpath', track: 'track', gravel: 'gravel road', paved: 'paved road', cobbled: 'cobbled street' } as Record<string, string>)[String(change.kind)] ?? 'road'}`;
+      case 'remove_paths': {
+        const n = Array.isArray(change.ids) ? change.ids.length : 1;
+        return n === 1 ? 'took a road away' : `took away ${n} roads`;
+      }
       case 'place_crossing':
         return `${change.changed ? 'changed' : 'put down'} a ${String(change.kind ?? 'crossing')}`;
       case 'remove_crossings': {

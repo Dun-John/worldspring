@@ -454,6 +454,10 @@ pub struct Edits {
     /// end shows as a `link` item on its own map (`links::dress`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub links: BTreeMap<String, crate::links::Link>,
+    /// Roads drawn by hand on the ground (`rw:<id>`): a footpath, track, gravel road, paved road or
+    /// cobbled street along a line (`paths`); the world's road network and towns stay as they are.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paths: BTreeMap<String, crate::paths::Path>,
 }
 
 /// An overland hex grid's settings: `size_mi` across the flats (centre to neighbouring centre),
@@ -1843,6 +1847,7 @@ impl Edits {
                 "hexes" => self.hexes = std::mem::take(&mut part.hexes),
                 "streets" => self.streets = std::mem::take(&mut part.streets),
                 "links" => self.links = std::mem::take(&mut part.links),
+                "paths" => self.paths = std::mem::take(&mut part.paths),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1883,6 +1888,7 @@ impl Edits {
                 "hexes" => patch(&mut self.hexes, p)?,
                 "streets" => patch(&mut self.streets, p)?,
                 "links" => patch(&mut self.links, p)?,
+                "paths" => patch(&mut self.paths, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1894,7 +1900,7 @@ impl Edits {
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty() && self.waters.is_empty()
             && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
-            && self.streets.is_empty() && self.links.is_empty()
+            && self.streets.is_empty() && self.links.is_empty() && self.paths.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1976,6 +1982,7 @@ impl Edits {
             "hexes" => Some(one(&mut self.hexes, op, field, &key)),
             "streets" => Some(one(&mut self.streets, op, field, &key)),
             "links" => Some(one(&mut self.links, op, field, &key)),
+            "paths" => Some(one(&mut self.paths, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -2085,6 +2092,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("hexes", Shape::Map),
     ("streets", Shape::Map),
     ("links", Shape::Map),
+    ("paths", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

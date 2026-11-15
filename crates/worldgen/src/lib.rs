@@ -12,6 +12,7 @@ pub mod gazetteer;
 pub mod geoquery;
 pub mod ground;
 pub mod waters;
+pub mod paths;
 pub mod interior;
 pub mod links;
 pub mod lod;
