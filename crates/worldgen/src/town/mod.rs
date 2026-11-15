@@ -30,6 +30,7 @@ pub mod squares;
 pub mod stairs;
 pub mod temple;
 pub mod wards;
+pub mod hand;
 pub mod wallstyle;
 pub mod outline;
 mod curtain;
@@ -1976,6 +1977,8 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         }
         spacing = plan.spacing;
         let hand = build_town(&site, s, r, &plan, &ch, &mut l, survey);
+        // (Read by a conversion to a hand town alone: `hand::convert`.)
+        hand::cap_plan(index, &plan);
         walls_off_river(&site, &mut l, &hand);
         // (A castle's curtain meeting the town's wall, or a run cut at a river: stopped at the
         // line it meets, as the town's own pieces, `outline::tidy`.)
@@ -4111,6 +4114,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // R5 towns: the cemeteries the town wants, and the common that is one (`cemetery`).
     let (cem_want, cem_inner) = cemetery::inner_pick(s, plan, ward, ch);
     let mut cem_laid = 0;
+    // (A conversion to a hand town reads each patch as laid out: `hand::convert`. Nothing here
+    // changes what is built.)
+    let capturing = hand::capturing(l.index);
+    if capturing {
+        let d: Vec<Vec<f64>> = (0..total).map(|i| insets(i, ward[i].unwrap_or(Ward::Farm))).collect();
+        hand::cap_town(&mesh.faces, &cells, d, ward, group, walled, &gate_pts);
+    }
     for i in 0..total {
         let Some(w) = ward[i] else {
             // Open ground past the farmland: fields where the belt frays out over it.
@@ -4378,8 +4388,14 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     // do, its temple alone).
                     _ => Fill::Lots { ward: w, dp, rng: prng, thin: None, close: w == Ward::Temple && closes.contains(&i) },
                 };
+                if capturing {
+                    hand::cap_fill(i, &fill, &block, &streets, plan.roll(i, 65));
+                }
                 fill_block(site, &block, streets, fill, &|k| plan.roll(i, k), places::Spot::Patch(i as u32), l, &mut plots);
             }
+        }
+        if capturing {
+            hand::cap_built(i, &l.buildings[first..]);
         }
         // A square where streets meet trims the lots at its corner of the block.
         for cut in &cuts {
@@ -4416,6 +4432,9 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let (mut greens, mut green_paths): (Vec<Vec<P>>, Vec<(Vec<P>, f64)>) = (Vec::new(), Vec::new());
     for (cut, &(v, _)) in cuts.iter().zip(&spots) {
         if let Some(pts) = cut.outline() {
+            if capturing {
+                hand::cap_square(v, cut.kind);
+            }
             if cut.kind == PlazaKind::Green {
                 greens.push(pts.clone());
                 green_paths.extend(cut.edge_paths(5.0));

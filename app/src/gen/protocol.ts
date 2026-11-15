@@ -316,6 +316,10 @@ export interface Edits {
   wharves?: Record<string, Wharf>;
   /** `overland` → the hex grid drawn over the map for a hex crawl (`render/hex.ts`). */
   hexes?: Record<string, HexGrid>;
+  /** A town laid out by hand as a street graph (`worldgen::town::hand`): `<layout>` its header,
+   * `<layout>/n<id>` a junction, `/e<id>` a street, `/k<id>` a block, `/r<id>` a row, `/a<id>` a
+   * painted area, `/m<id>` a wall line; `lanes/…` lanes outside any town. Positions in world ft. */
+  streets?: Record<string, unknown>;
 }
 
 /** An overland hex grid (`worldgen::world::HexGrid`; each field left out: its default, `HEX_DEFAULTS`):

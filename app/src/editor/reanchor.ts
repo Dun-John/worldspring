@@ -12,10 +12,19 @@ function eachId(edits: Edits, f: (id: string) => void) {
     const v = (edits as Record<string, unknown>)[field];
     if (!v) continue;
     if (where === 'keys' || where === 'towns') for (const k of Object.keys(v)) f(where === 'towns' ? `t:${k}` : k);
+    else if (where === 'townPrefixed') for (const k of Object.keys(v)) { const h = townHead(k); if (h) f(`t:${h[0]}`); }
     else if (where === 'values') for (const k of v as string[]) f(k);
     else if (where === 'npcs') for (const n of Object.values(v as Record<string, Npc>)) n.location && f(n.location.id);
     else for (const p of Object.values(v as Record<string, Plot>)) for (const k of p.anchors ?? []) f(k);
   }
+}
+
+/** A hand town record key's layout number and what follows it (`<n>` or `<n>/…`), else none
+ * (`lanes/…`). */
+function townHead(key: string): [string, string] | undefined {
+  const i = key.indexOf('/');
+  const head = i < 0 ? key : key.slice(0, i);
+  return /^\d+$/.test(head) ? [head, i < 0 ? '' : key.slice(i)] : undefined;
 }
 
 /** `edits` with every id `rename` changes changed (bare town keys in `towns` as `bare`), and how
@@ -36,6 +45,13 @@ function renamed(edits: Edits, rename: (id: string, bare?: boolean) => string): 
   if (edits.buildings) out.buildings = rekeyed(edits.buildings);
   if (edits.towns) out.towns = rekeyed(edits.towns, true);
   if (edits.cultures) out.cultures = rekeyed(edits.cultures, true);
+  if (edits.streets)
+    out.streets = Object.fromEntries(
+      Object.entries(edits.streets).map(([k, v]) => {
+        const h = townHead(k);
+        return [h ? to(h[0], true) + h[1] : k, v];
+      }),
+    );
   if (edits.npcs)
     out.npcs = Object.fromEntries(
       Object.entries(edits.npcs).map(([k, v]) => {

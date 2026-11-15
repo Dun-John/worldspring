@@ -57,6 +57,16 @@ impl Pcg32 {
         r
     }
 
+    /// Its whole state (`from_state` makes the same stream again: a hand town's block kept as it
+    /// was laid out, `town::hand`).
+    pub fn state(&self) -> (u64, u64) {
+        (self.state, self.inc)
+    }
+
+    pub fn from_state(state: u64, inc: u64) -> Self {
+        Self { state, inc }
+    }
+
     pub fn next_u32(&mut self) -> u32 {
         let old = self.state;
         self.state = old.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(self.inc);

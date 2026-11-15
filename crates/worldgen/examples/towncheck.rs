@@ -4980,26 +4980,10 @@ fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
     let edits: usize = std::env::var("SAME_EDITS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
     let towns = (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town);
     for ci in towns.take(edits) {
-        let Ok(plan) = town::wards::plan_json(world, t0, ci) else { continue };
-        let patches = plan["patches"].as_array().cloned().unwrap_or_default();
-        let inner: Vec<&serde_json::Value> = patches.iter().filter(|p| p["in_town"] == true).collect();
-        // Three corners of patches in town that are no squares (the first that may move), each moved 35 ft
-        // east and 25 ft south.
-        let mut moves: Vec<String> = Vec::new();
-        for v in inner.iter().filter(|p| p["ward"] != "plaza").flat_map(|p| p["corners"].as_array().unwrap().iter()) {
-            let m = format!(r#"{{"corner":{v},"by":[35,-25]}}"#);
-            if moves.len() < 3 && !moves.contains(&m) && town::wards::change(world, t0, ci, &serde_json::from_str(&format!(r#"{{"moves":[{m}]}}"#)).unwrap()).is_ok() {
-                moves.push(m);
-            }
-        }
-        // The first common, craft or merchant patch made a noble one's, its lots large, rolled again.
-        let ward = inner.iter().find(|p| matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant"))).map(|p| format!(r#","patches":[{{"patch":{},"ward":"noble","lots":"large","reroll":true}}]"#, p["patch"])).unwrap_or_default();
-        let walls = if plan["walls"]["built"] == true { r#","walls":false"# } else { r#","walls":true"# };
-        let req = format!(r#"{{"moves":[{}]{ward}{walls}}}"#, moves.join(","));
-        let edit = match town::wards::change(world, t0, ci, &serde_json::from_str(&req).unwrap()) {
-            Ok((Some(edit), _)) => edit,
-            Ok((None, _)) => continue,
-            Err(e) => {
+        let edit = match scripted_edit(world, t0, ci) {
+            Some(Ok(edit)) => edit,
+            None => continue,
+            Some(Err((e, req))) => {
                 r.add("edits refused", 1.0, format!("{label} #{ci}: {e} ({req})"));
                 continue;
             }
@@ -6508,7 +6492,7 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 29] = ["same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
+    const MODES: [&str; 30] = ["hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -6525,7 +6509,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["fills"] || modes == ["rows"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -6570,6 +6554,7 @@ fn main() {
                 "same" => same(&mut ctx, &label.replace(' ', ""), &mut r),
                 "fills" => fills(&mut ctx, &label.replace(' ', ""), &mut r),
                 "rows" => rows(&ctx.ex.world, &ctx.ex.t0, &label.replace(' ', ""), &mut r),
+                "hand" => hand_towns(&ctx.ex.world, &ctx.ex.t0, &label.replace(' ', ""), &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
             say!("  {mode} ({:.1} s)", t.elapsed().as_secs_f64());
@@ -8740,5 +8725,160 @@ fn rows(base: &World, t0: &T0, label: &str, r: &mut Report) {
         if std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, svg)).is_ok() {
             say!("    wrote {file}");
         }
+    }
+}
+
+/// Roadmap 6 P3: every town converted to a hand town (`town::hand::convert`), and the first 4
+/// with the street editor's scripted edit (`scripted_edit`) too. Every block's kept buildings
+/// (`kept_on`, from its record alone) with the header's must be the town's buildings exactly,
+/// field by field; converting again (the towns in the other order) must give the same bytes.
+/// Sizes: each town's records as stored (compact JSON), per tier (`HAND_WHY=<layout>`: what
+/// that one's bytes and buildings stored whole are).
+fn hand_towns(world: &World, t0: &T0, label: &str, r: &mut Report) {
+    use std::collections::BTreeMap as Map;
+    use worldgen::town::hand;
+    const FIELDS: [&str; 14] = ["poly", "ward", "func", "residential", "name", "floors", "pad_ft", "structure", "roof", "look", "id", "parts", "keep", "deck"];
+    let fields: Vec<String> = FIELDS.iter().map(|f| format!("buildings differing: {f}")).collect();
+    r.counts(&["towns converted", "edited towns converted", "towns refused", "buildings", "buildings kept by their fill", "buildings stored whole", "buildings missing", "buildings extra", "towns not the same converted again"]);
+    r.counts(&fields.iter().map(String::as_str).collect::<Vec<_>>());
+    let lis: Vec<usize> = (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town).collect();
+    let mut first: Map<usize, String> = Map::new();
+    for &li in &lis {
+        match hand::convert(world, t0, li) {
+            Ok(recs) => drop(first.insert(li, serde_json::to_string(&recs).unwrap())),
+            Err(e) => r.add("towns refused", 0.0, format!("{label} L{li}: {e}")),
+        }
+    }
+    for &li in lis.iter().rev() {
+        let Some(json) = first.get(&li) else { continue };
+        let recs = hand::convert(world, t0, li).unwrap_or_default();
+        if serde_json::to_string(&recs).unwrap() != *json {
+            r.add("towns not the same converted again", 0.0, format!("{label} L{li}"));
+        }
+        r.tally("towns converted", 1);
+        hand_one(world, t0, li, &recs, label, true, r);
+    }
+    for &li in lis.iter().take(4) {
+        let Some(Ok(edit)) = scripted_edit(world, t0, li) else { continue };
+        let mut file = world.file.clone();
+        file.edits.towns.insert(town::wards::key(li), edit);
+        let w = World::new(file).unwrap();
+        match hand::convert(&w, t0, li) {
+            Ok(recs) => {
+                r.tally("edited towns converted", 1);
+                hand_one(&w, t0, li, &recs, &format!("{label} edited"), false, r);
+            }
+            Err(e) => r.add("towns refused", 0.0, format!("{label} L{li} edited: {e}")),
+        }
+    }
+}
+
+/// `hand_towns` for one town converted (`recs`): its kept buildings against its layout's, and
+/// (`sizes`) its records' sizes.
+fn hand_one(world: &World, t0: &T0, li: usize, recs: &[(String, serde_json::Value)], label: &str, sizes: bool, r: &mut Report) {
+    use std::collections::BTreeMap as Map;
+    use worldgen::town::hand;
+    let map: Map<String, serde_json::Value> = recs.iter().cloned().collect();
+    let hr = hand::HandRecords::of(&map, li);
+    let town = hr.town.clone().expect("a header");
+    let ground = hand::KeptGround::of(world, t0, li, &town);
+    let l = town::base_layout(world, t0, li);
+    let mut got = Vec::new();
+    let (mut by_fill, mut whole) = (0, 0);
+    for kept in hr.blocks.values().filter_map(|b| b.kept.as_ref()).chain(town.kept.as_ref()) {
+        by_fill += kept.runs.iter().map(|r| r[2] as usize).sum::<usize>();
+        whole += kept.full.len();
+        match hand::kept_on(&ground, kept) {
+            Ok(bs) => got.extend(bs),
+            Err(e) => r.add("towns refused", 0.0, format!("{label} L{li}: kept: {e}")),
+        }
+    }
+    r.tally("buildings kept by their fill", by_fill);
+    r.tally("buildings stored whole", whole);
+    r.tally("buildings", l.buildings.len());
+    let want: Map<u32, &town::Building> = l.buildings.iter().map(|b| (b.id, b)).collect();
+    let have: Map<u32, &town::Building> = got.iter().map(|b| (b.id, b)).collect();
+    for (id, b) in &want {
+        match have.get(id) {
+            None => r.add("buildings missing", 0.0, format!("{label} L{li} b{id}")),
+            Some(k) => {
+                for f in hand::differs(k, b) {
+                    r.add(&format!("buildings differing: {f}"), 0.0, format!("{label} L{li} b{id}"));
+                }
+            }
+        }
+    }
+    if got.len() != have.len() {
+        r.add("buildings extra", 0.0, format!("{label} L{li}: {} ids twice", got.len() - have.len()));
+    }
+    for id in have.keys().filter(|id| !want.contains_key(id)) {
+        r.add("buildings extra", 0.0, format!("{label} L{li} b{id}"));
+    }
+    if std::env::var("HAND_WHY").is_ok_and(|w| w == li.to_string()) {
+        let mut by: Map<String, (usize, usize)> = Map::new();
+        for (k, v) in recs {
+            let kind = k.split('/').nth(1).map_or("header".to_string(), |r| r[..1].to_string());
+            let all = serde_json::to_string(v).unwrap().len() + k.len() + 4;
+            let kept = v.get("kept").map_or(0, |x| serde_json::to_string(x).unwrap().len());
+            for (what, n) in [(kind.clone(), all - kept), (format!("{kind} kept"), kept)] {
+                let e = by.entry(what).or_default();
+                e.0 += 1;
+                e.1 += n;
+            }
+        }
+        for (what, (n, bytes)) in &by {
+            say!("      bytes {what}: {bytes} in {n}");
+        }
+        let kepts: Vec<&hand::Kept> = hr.blocks.values().filter_map(|b| b.kept.as_ref()).chain(town.kept.as_ref()).collect();
+        let full: usize = kepts.iter().flat_map(|k| &k.full).map(|f| serde_json::to_string(f).unwrap().len()).sum();
+        let refill: usize = kepts.iter().filter_map(|k| k.refill.as_ref()).map(|f| serde_json::to_string(f).unwrap().len()).sum();
+        let set: usize = kepts.iter().flat_map(|k| &k.set).map(|f| serde_json::to_string(f).unwrap().len()).sum();
+        say!("      kept bytes: whole {full}, refills {refill}, set {set}");
+        let mut why: Map<String, usize> = Map::new();
+        for f in kepts.iter().flat_map(|k| &k.full) {
+            let b = want[&f.i];
+            *why.entry(format!("{:?} func {:?} parts {} {:?}", b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key), b.parts.len(), b.structure)).or_default() += 1;
+        }
+        let mut v: Vec<_> = why.into_iter().collect();
+        v.sort_by_key(|x| std::cmp::Reverse(x.1));
+        for (w, n) in v.iter().take(12) {
+            say!("      {n} stored whole: {w}");
+        }
+    }
+    if sizes {
+        let size = hand::size_of(recs) as f64 / 1024.0;
+        let kept_kb = recs.iter().filter_map(|(k, v)| v.get("kept").map(|x| k.len() + serde_json::to_string(x).unwrap().len())).sum::<usize>() as f64 / 1024.0;
+        let tier = ["village", "town", "city", "metropolis"][t0.settlements[li].tier as usize];
+        let at = format!("{label} L{li}, {} buildings, {} records", l.buildings.len(), recs.len());
+        r.value(&format!("{tier}: KB of records"), size, at.clone());
+        r.value(&format!("{tier}: KB of it kept buildings"), kept_kb, at);
+        r.value(&format!("{tier}: bytes a building"), size * 1024.0 / l.buildings.len().max(1) as f64, format!("{label} L{li}"));
+    }
+}
+
+/// The street editor's scripted edit of town `ci` (`same`, `hand`): three corners moved, a patch
+/// made noble with large lots rolled again, its walls turned over. None if it changes nothing;
+/// the reason and the request if refused.
+fn scripted_edit(world: &World, t0: &T0, ci: usize) -> Option<Result<worldgen::world::TownEdit, (String, String)>> {
+    let plan = town::wards::plan_json(world, t0, ci).ok()?;
+    let patches = plan["patches"].as_array().cloned().unwrap_or_default();
+    let inner: Vec<&serde_json::Value> = patches.iter().filter(|p| p["in_town"] == true).collect();
+    // Three corners of patches in town that are no squares (the first that may move), each moved 35 ft
+    // east and 25 ft south.
+    let mut moves: Vec<String> = Vec::new();
+    for v in inner.iter().filter(|p| p["ward"] != "plaza").flat_map(|p| p["corners"].as_array().unwrap().iter()) {
+        let m = format!(r#"{{"corner":{v},"by":[35,-25]}}"#);
+        if moves.len() < 3 && !moves.contains(&m) && town::wards::change(world, t0, ci, &serde_json::from_str(&format!(r#"{{"moves":[{m}]}}"#)).unwrap()).is_ok() {
+            moves.push(m);
+        }
+    }
+    // The first common, craft or merchant patch made a noble one's, its lots large, rolled again.
+    let ward = inner.iter().find(|p| matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant"))).map(|p| format!(r#","patches":[{{"patch":{},"ward":"noble","lots":"large","reroll":true}}]"#, p["patch"])).unwrap_or_default();
+    let walls = if plan["walls"]["built"] == true { r#","walls":false"# } else { r#","walls":true"# };
+    let req = format!(r#"{{"moves":[{}]{ward}{walls}}}"#, moves.join(","));
+    match town::wards::change(world, t0, ci, &serde_json::from_str(&req).unwrap()) {
+        Ok((Some(edit), _)) => Some(Ok(edit)),
+        Ok((None, _)) => None,
+        Err(e) => Some(Err((e, req))),
     }
 }

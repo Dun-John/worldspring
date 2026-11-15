@@ -434,6 +434,13 @@ pub struct Edits {
     /// generated from (the app draws them; play sessions keep which hexes are revealed).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hexes: BTreeMap<String, HexGrid>,
+    /// Towns laid out by hand as a street graph (`<layout>` the town's header, `<layout>/n<id>` a
+    /// junction, `/e<id>` a street, `/k<id>` a block, `/r<id>` a row of lots along a street, `/a<id>`
+    /// a painted area, `/m<id>` a wall line; `lanes/…` the world's lanes outside any town). Each
+    /// value is one record of `town::hand` (positions in world ft), kept as JSON so that every
+    /// record is one small op.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub streets: BTreeMap<String, Value>,
 }
 
 /// An overland hex grid's settings: `size_mi` across the flats (centre to neighbouring centre),
@@ -1680,6 +1687,7 @@ impl Edits {
                 "wharves" => self.wharves = std::mem::take(&mut part.wharves),
                 "cultures" => self.cultures = std::mem::take(&mut part.cultures),
                 "hexes" => self.hexes = std::mem::take(&mut part.hexes),
+                "streets" => self.streets = std::mem::take(&mut part.streets),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1717,6 +1725,7 @@ impl Edits {
                 "wharves" => patch(&mut self.wharves, p)?,
                 "cultures" => patch(&mut self.cultures, p)?,
                 "hexes" => patch(&mut self.hexes, p)?,
+                "streets" => patch(&mut self.streets, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1728,6 +1737,7 @@ impl Edits {
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty()
             && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
+            && self.streets.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1806,6 +1816,7 @@ impl Edits {
             "wharves" => Some(one(&mut self.wharves, op, field, &key)),
             "cultures" => Some(one(&mut self.cultures, op, field, &key)),
             "hexes" => Some(one(&mut self.hexes, op, field, &key)),
+            "streets" => Some(one(&mut self.streets, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -1912,6 +1923,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("wharves", Shape::Map),
     ("cultures", Shape::Map),
     ("hexes", Shape::Map),
+    ("streets", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

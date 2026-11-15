@@ -33,6 +33,9 @@ pub enum IdsIn {
     Plots,
     /// Its keys are bare layout numbers (a town laid out anew), seen as `t:<n>`.
     Towns,
+    /// Its keys are a bare layout number or one followed by `/…` (a town laid out by hand and its
+    /// records: `town::hand`), seen as `t:<n>`; keys of no layout (`lanes/…`) name no place.
+    TownPrefixed,
 }
 
 /// Every edits field that names a place, and how: layout-local ids (`b:<layout>:…`, `d:`, `t:`,
@@ -49,6 +52,7 @@ pub const LAYOUT_ID_FIELDS: &[(&str, IdsIn)] = &[
     ("buildings", IdsIn::Keys),
     ("towns", IdsIn::Towns),
     ("cultures", IdsIn::Towns),
+    ("streets", IdsIn::TownPrefixed),
     ("npcs", IdsIn::Npcs),
     ("plots", IdsIn::Plots),
 ];
@@ -183,6 +187,13 @@ fn local_id(id: &str) -> Option<(&str, u64, &str)> {
     Some((&id[..head], id[head..end].parse().ok()?, &id[end..]))
 }
 
+/// A hand town record key's layout number and what follows it (`<n>` or `<n>/…`); None for a key
+/// of no town (`lanes/…`).
+fn town_head(key: &str) -> Option<(&str, &str)> {
+    let (head, rest) = key.find('/').map_or((key, ""), |i| key.split_at(i));
+    bare(head).map(|_| (head, rest))
+}
+
 /// A town key's layout number (all digits).
 fn bare(id: &str) -> Option<u64> {
     if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
@@ -210,6 +221,7 @@ fn each_id(edits: &Edits, mut f: impl FnMut(&str)) {
             "buildings" => edits.buildings.keys().for_each(|k| f(k)),
             "towns" => edits.towns.keys().for_each(|k| f(&format!("t:{k}"))),
             "cultures" => edits.cultures.keys().for_each(|k| f(&format!("t:{k}"))),
+            "streets" => edits.streets.keys().filter_map(|k| town_head(k)).for_each(|(li, _)| f(&format!("t:{li}"))),
             "npcs" => edits.npcs.values().filter_map(|n| n.location.as_ref()).for_each(|l| f(&l.id)),
             "plots" => edits.plots.values().flat_map(|p| &p.anchors).for_each(|k| f(k)),
             _ => unreachable!("a layout-id field each_id doesn't read"),
@@ -239,6 +251,8 @@ fn renamed(edits: &Edits, mut rename: impl FnMut(&str, bool) -> String) -> (Edit
     out.buildings = rekey(&edits.buildings, false, &mut to);
     out.towns = rekey(&edits.towns, true, &mut to);
     out.cultures = rekey(&edits.cultures, true, &mut to);
+    // (A hand town's records: the layout number before the `/` renamed, the rest kept.)
+    out.streets = edits.streets.iter().map(|(k, v)| (town_head(k).map_or_else(|| k.clone(), |(li, rest)| format!("{}{rest}", to(li, true))), v.clone())).collect();
     for n in out.npcs.values_mut() {
         if let Some(l) = n.location.as_mut() {
             l.id = to(&l.id, false);

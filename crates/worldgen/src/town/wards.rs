@@ -40,7 +40,7 @@ pub const ROLLED_ID: u32 = 100_000_000;
 pub const ROLLS: u32 = 64;
 
 /// Each lot size's target lot area, times the ward's usual (`LOT_SIZES` order).
-const LOT_FACTOR: [f64; 4] = [0.6, 1.2, 2.4, 4.0];
+pub(super) const LOT_FACTOR: [f64; 4] = [0.6, 1.2, 2.4, 4.0];
 
 /// A town edit as the builder takes it (local ft, the plan's corners and patches).
 #[derive(Default)]
