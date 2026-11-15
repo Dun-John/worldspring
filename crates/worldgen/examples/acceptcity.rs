@@ -128,8 +128,8 @@ fn main() {
     let li = (0..b.t0.settlements.len()).filter(|&i| b.t0.settlements[i].tier == Tier::Metropolis).max_by_key(|&i| (b.t0.settlements[i].population, std::cmp::Reverse(i))).expect("a metropolis");
     eprintln!("seed {SEED}: metropolis L{li}, T0 {:.1} s", start.elapsed().as_secs_f64());
 
-    grow_city(&mut b, li);
-    // P7: concave castle with three gates, round keep, wet moat
+    let first_new = grow_city(&mut b, li);
+    castles(&mut b, li, first_new);
     let lb = blank_town(&mut b, li);
     quick_placement(&mut b, li);
     water_and_ground(&mut b, li);
@@ -172,7 +172,7 @@ fn main() {
 /// The metropolis laid out by hand, then grown: streets out from its edge every 7.5 degrees where the land
 /// reaches, ring streets between them, the new blocks given every fill, districts, rows both sides of a
 /// long street, painted areas, squares, a wall round the grown part with gates where streets cross it.
-fn grow_city(b: &mut Build, li: usize) {
+fn grow_city(b: &mut Build, li: usize) -> u64 {
     use std::f64::consts::TAU;
     b.ask(li, json!({ "op": "lay_out_by_hand" }), "lay out by hand").expect("converted");
     let plan = b.plan(li);
@@ -362,6 +362,85 @@ fn grow_city(b: &mut Build, li: usize) {
     if wall.len() >= 2 {
         b.ask(li, json!({ "op": "add_wall", "pts": wall, "gates": gates, "name": "New Wall" }), "wall");
     }
+    // (Every grown block on dry land: the streets out run only as far as the land does.)
+    let plan = b.plan(li);
+    for x in plan["blocks"].as_array().unwrap().iter().filter(|x| x["id"].as_u64().unwrap() >= first_new) {
+        let at: P = serde_json::from_value(x["at"].clone()).unwrap();
+        if !b.land(at) {
+            b.refused.push(format!("grown block k{} at {at:?} off the land", x["id"]));
+        }
+    }
+    first_new
+}
+
+/// The castles (Roadmap 6 P7): a concave castle beside the grown city, a U open toward it (~700 x 500 ft,
+/// its notch 240 ft wide), three gates, a round keep, a wet moat, put down as the app's Castle tool does
+/// (`works_spot`: on dry land, nothing in its way); and a grown block of the city given the Castle fill
+/// (three gates, one toward each of three of its streets; a round keep, a wet moat).
+fn castles(b: &mut Build, li: usize, first_new: u64) {
+    use std::f64::consts::TAU;
+    let plan = b.plan(li);
+    let o: P = serde_json::from_value(plan["origin"].clone()).unwrap();
+    // The U: corners about its middle, its open side toward `+y` before it is turned to face the city.
+    let u = [[-350.0, -250.0], [350.0, -250.0], [350.0, 250.0], [120.0, 250.0], [120.0, 20.0], [-120.0, 20.0], [-120.0, 250.0], [-350.0, 250.0]];
+    let id = format!("c:{}", b.world.file.edits.created.len());
+    let mut put = None;
+    'find: for k in 0..RAYS {
+        let a = (k as f64 + 0.5) * TAU / RAYS as f64;
+        let mut r = GROWN_R + 1_000.0;
+        while r <= GROWN_R + 5_000.0 {
+            let c = q(polar(o, r, a));
+            // (Turned so its notch opens toward the city: local +y along -radial.)
+            let (ey, ex) = ([-libm::cos(a), -libm::sin(a)], [libm::sin(a), -libm::cos(a)]);
+            let poly: Vec<P> = u.iter().map(|d| q([c[0] + ex[0] * d[0] + ey[0] * d[1], c[1] + ex[1] * d[0] + ey[1] * d[1]])).collect();
+            r += 250.0;
+            if !poly.iter().chain([&c]).all(|p| b.land(*p)) {
+                continue;
+            }
+            let cr = Created { id: id.clone(), kind: "castle".into(), x: c[0], y: c[1], poly, name: "Castle Ward".into(), gates: vec![0, 1, 7], keep_shape: Some("round".into()), moat: Some("wet".into()), ..Default::default() };
+            if cr.check().is_err() {
+                continue;
+            }
+            match worldgen::agent::works_spot(&b.world, &b.t0, &cr, &id, None) {
+                Ok(spot) if spot.in_way.is_empty() && spot.gates_not_built.is_empty() => {
+                    put = Some(Created { x: spot.at[0], y: spot.at[1], ..cr });
+                    break 'find;
+                }
+                _ => {}
+            }
+        }
+    }
+    match put {
+        Some(c) => {
+            eprintln!("castle {id} at ({:.0}, {:.0})", c.x, c.y);
+            b.create(vec![c]);
+        }
+        None => b.refused.push("castle: no open ground beside the city".into()),
+    }
+    // The castle block: a grown block left as it came (a common ward), on dry land, at ~7,000 ft out.
+    let js: std::collections::BTreeMap<u64, P> = plan["junctions"].as_array().unwrap().iter().map(|j| (j["id"].as_u64().unwrap(), serde_json::from_value(j["p"].clone()).unwrap())).collect();
+    let sts: std::collections::BTreeMap<u64, (u64, u64)> = plan["streets"].as_array().unwrap().iter().map(|s| (s["id"].as_u64().unwrap(), (s["a"].as_u64().unwrap(), s["b"].as_u64().unwrap()))).collect();
+    let pick = plan["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["id"].as_u64().unwrap() >= first_new && x["fill"] == json!({ "kind": "generated", "ward": "common" }) && x["district"].is_null())
+        .filter_map(|x| {
+            let at: P = serde_json::from_value(x["at"].clone()).ok()?;
+            let round: Vec<u64> = x["streets"].as_array()?.iter().filter_map(|s| s.as_u64()).collect();
+            (round.len() >= 3 && b.land(at)).then(|| (x["id"].as_u64().unwrap(), at, round))
+        })
+        .min_by(|x, y| (dist(x.1, o) - 7_000.0).abs().total_cmp(&(dist(y.1, o) - 7_000.0).abs()).then(x.0.cmp(&y.0)));
+    let Some((bk, at, round)) = pick else {
+        b.refused.push("castle block: no grown block".into());
+        return;
+    };
+    // (A gate toward each of its first three streets, the main one toward the city's middle first.)
+    let mut gates: Vec<P> = round.iter().filter_map(|s| sts.get(s)).map(|&(a, z)| q([0.5 * (js[&a][0] + js[&z][0]), 0.5 * (js[&a][1] + js[&z][1])])).collect();
+    gates.sort_by(|p, r| dist(*p, o).total_cmp(&dist(*r, o)));
+    gates.truncate(3);
+    eprintln!("castle block k{bk} at ({:.0}, {:.0}), {} gates", at[0], at[1], gates.len());
+    b.ask(li, json!({ "op": "set_block", "block": bk, "fill": { "kind": "castle", "gates": gates, "keep_shape": "round", "moat": "wet" } }), &format!("castle block k{bk}"));
 }
 
 /// A blank town some miles off, laid out from a street plan in the manner of a walled market town of
