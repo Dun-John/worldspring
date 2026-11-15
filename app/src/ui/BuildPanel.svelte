@@ -309,13 +309,16 @@
         <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
       </div>
     {/if}
-    {#if !peek}
-      {#if waterPicked}
-        <label class="ws-field">
-          Name
-          <input class="ws-input" value={waterPicked.name} placeholder="No name" onchange={(e) => onWaterChange({ name: e.currentTarget.value })} />
-        </label>
-      {/if}
+    <!-- (On a phone's strip too: its name, and how to draw one, are all there is to it.) -->
+    {#if waterPicked}
+      <label class="ws-field">
+        Name
+        <input class="ws-input" value={waterPicked.name} placeholder="No name" onchange={(e) => onWaterChange({ name: e.currentTarget.value })} />
+      </label>
+    {/if}
+    {#if peek}
+      {#if !waterPicked}<div class="ws-hint">Tap its points, then the first again to close it; tap water drawn earlier to change it.</div>{/if}
+    {:else}
       <div class="ws-hint">
         {waterPicked ? 'Pick a kind or a name for it; click outside it to draw another. ' : 'Click its points, then the first again (or double-click) to close it; click water drawn earlier to change it. Outlines that overlap are one water. '}{WATERS.find((k) => k.key === waterKind)?.look}
       </div>

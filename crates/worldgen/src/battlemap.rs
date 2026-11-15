@@ -1273,6 +1273,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // R5 M20: what the shaping makes of each halo square (an islet's rock, a quay's made ground;
     // empty when nothing here is either).
     let mut look_h = vec![crate::ground::Look::Ground; if shaper.as_ref().is_some_and(|s| s.has_looks()) { HS * HS } else { 0 }];
+    // (P6: a plateau's rock floor, `Plateau::floor`: scree, no trees or ground cover on it.)
+    let mut floor_h = vec![false; if shaper.as_ref().is_some_and(|s| s.has_floors()) { HS * HS } else { 0 }];
     // (A river's channel stays as the river carved it: a link crosses it on a bridge or a ford.)
     let base_at = |x: f64, y: f64, c: usize| made.as_ref().filter(|_| tile.river_water[c] <= tile.padded[c]).map_or(tile.padded[c], |m| m.at(x, y, tile.padded[c]));
     for j in -1..=SQ as i64 {
@@ -1283,8 +1285,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             hh[h] = base_at(x, y, c);
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
             if let Some(s) = &shaper {
-                let look;
-                (hh[h], plat_w[h], look) = s.at_square_look(gsx + i, gsy + j, hh[h], hw[h]);
+                let (look, floor);
+                (hh[h], plat_w[h], look, floor) = s.at_square_look(gsx + i, gsy + j, hh[h], hw[h]);
+                if !floor_h.is_empty() {
+                    floor_h[h] = floor;
+                }
                 // (Water drawn by hand: its surface over the bed `at_square_look` dug.)
                 hw[h] = s.water(x, y, hw[h]);
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
@@ -3007,6 +3012,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let height = interior(&hh);
     let water_level = interior(&hw);
     let dominant = dominant_biome(&biome, &water_level, &height);
+    // A plateau's rock floor is scree, as the map draws it (`payload::shaped`): its boulders and
+    // rubble, no trees (below) or ground cover. (After the chunk's own biome is known.)
+    let on_floor = |k: usize| floor_h.get((k / SQ + 1) * HS + k % SQ + 1).is_some_and(|&f| f);
+    if !floor_h.is_empty() {
+        for k in (0..n).filter(|&k| on_floor(k)) {
+            biome[k] = Biome::Alpine;
+        }
+    }
     // (A park's path doesn't go on under the water, nor over a step steeper than a cliff's grade
     // to a square beside it: it stops at the edge, but where the step is a raised feature's.)
     let on_feature = |h: usize| features.iter().any(|f| crate::town::geom::dist(center(h % HS, h / HS), f.0) <= f.1);
@@ -3192,6 +3205,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         })
         .collect();
     place_objects(&mut chunk, &biome, &slope, &road_near, &yard, &Keep { farm: &farm_h, verge: &verge }, seed, gsx, gsy);
+    if !floor_h.is_empty() {
+        let sq = |o: &Object| (o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1);
+        chunk.objects.retain(|o| !(o.kind == Kind::TreeConifer && on_floor(sq(o))));
+    }
     // The land's scatter in a bailey gives way to what the bailey is dressed with (every prop of
     // the layout, not only this chunk's, so a seam cuts nothing differently).
     if !yard_ok.is_empty() {

@@ -3,7 +3,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat, linkSites } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat, linkSites } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
@@ -1171,6 +1171,7 @@ export class MapView {
     this.lastWantKey = '';
     this.geom = geom;
     this.overlay = this.baseOverlay = overlay;
+    this.islets = null;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
     this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);
@@ -1434,6 +1435,16 @@ export class MapView {
         ground.push([Math.min(...w.pts.map((q) => q[0])) - e, Math.min(...w.pts.map((q) => q[1])) - e, Math.max(...w.pts.map((q) => q[0])) + e, Math.max(...w.pts.map((q) => q[1])) + e]);
       }
     }
+    // The world's own islets taken away or brought back (`Edits.hidden`, `i:` ids): round each
+    // one, its edge (`ground::ISLET_EDGE_FT`) and a margin. Where they are is asked for once;
+    // before that they are redrawn when it comes (`redrawIslets`).
+    if (prev.hidden !== next.hidden) {
+      const ph = new Set((prev.hidden ?? []).filter((h) => h.startsWith('i:')));
+      const nh = new Set((next.hidden ?? []).filter((h) => h.startsWith('i:')));
+      const flipped = [...ph, ...nh].filter((h) => ph.has(h) !== nh.has(h));
+      if (flipped.length && this.islets) ground.push(...this.isletRects(flipped));
+      else if (flipped.length) void this.redrawIslets(flipped);
+    }
     const REACH = 160;
     for (const r of ground) battleRects.push([r[0] - REACH, r[1] - REACH, r[2] + REACH, r[3] + REACH]);
     // The tiles that draw it (the three finest levels), one of their samples round it: a sample
@@ -1529,6 +1540,39 @@ export class MapView {
     if (madeChanged) this.refreshMade(true);
     if (relink) this.relinkHere();
     else if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
+  }
+
+  /** The world's own islets (`GenClient.islets`), once asked for in this world. */
+  private islets: GenIslet[] | null = null;
+
+  /** Round the world's islets with these ids: each one's outline (out to 1.12 of its radius,
+   * `ground::islet_ring`), its edge and a margin. */
+  private isletRects(ids: string[]): Rect[] {
+    return (this.islets ?? []).filter((i) => ids.includes(i.id)).map((i) => {
+      const e = 1.15 * i.r + 6 + 10;
+      return [i.x - e, i.y - e, i.x + e, i.y + e];
+    });
+  }
+
+  /** Islets taken away or brought back before where they are was known: asked for, then their
+   * tiles (the three finest levels) and battlemaps made again. */
+  private async redrawIslets(ids: string[]) {
+    const geom = this.geom;
+    const list = await this.gen.islets().catch(() => null);
+    if (!list || !geom || geom !== this.geom) return;
+    this.islets = list;
+    const ground = this.isletRects(ids);
+    if (!ground.length) return;
+    const REACH = 160;
+    const tileLevel = Math.max(0, geom.max_level - 2);
+    const pad = geom.domain_ft / 2 ** tileLevel / TILE_N;
+    const groundRects: Rect[] = ground.map((r) => [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]);
+    const battleRects: Rect[] = ground.map((r) => [r[0] - REACH, r[1] - REACH, r[2] + REACH, r[3] + REACH]);
+    const epoch = ++this.editEpoch;
+    this.gen.setEdits(this.edits, [], epoch, battleRects, undefined, groundRects);
+    this.tiles?.invalidate(groundRects, tileLevel, epoch, true);
+    this.battle?.invalidate(battleRects, epoch);
+    this.lastWantKey = '';
   }
 
   /** The site in view made again for its paired exits (the sewers' sections all made again). */

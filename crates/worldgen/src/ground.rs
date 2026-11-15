@@ -681,10 +681,9 @@ impl<'a> Shaper<'a> {
 
     /// `at_square` with what the shaping makes of the square's ground: the look of the last
     /// plateau, pit, islet or made ground holding it (at least one half there): an islet's rock,
-    /// made ground, a rock floor (`Plateau::floor`, `CHASM_FT`).
-    pub fn at_square_look(&self, gx: i64, gy: i64, g: f32, hw: f32) -> (f32, f32, Look) {
-        let (h, w, l, _) = self.shape((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT, self.added(gx, gy), g, hw);
-        (h, w, l)
+    /// made ground, a rock floor (`Plateau::floor`, `CHASM_FT`); and whether that is a rock floor.
+    pub fn at_square_look(&self, gx: i64, gy: i64, g: f32, hw: f32) -> (f32, f32, Look, bool) {
+        self.shape((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT, self.added(gx, gy), g, hw)
     }
 
     /// Whether any islet, made ground or plateau that may draw as rock is among what it holds
