@@ -208,6 +208,27 @@ impl RiverCurve {
         // (Where the warp tightens the bends, the loops come smaller too, so the curve never
         // swings sideways faster than unwarped loops would.)
         let amp = (0.32 * lambda * sinuosity * vary).min(0.3 * cell_ft) / (rate * (1.0 + skew.abs())).max(1.0);
+        // Round bends, no hooked necks: a loop's tightest radius stays over ~0.8 channel widths
+        // (about the old unwarped loops' least, less what the spline's own bend already takes), so
+        // the inner bank never kinks, and no loop swings out past half the spline's radius, where
+        // it would fold back on itself.
+        // (Its curvature peaks near amp * angle'^2 * g, angle' = TAU / local wavelength, g the
+        // skew's steepening.) The spline's curvature is taken at its points and interpolated,
+        // so the cap is continuous across joints.
+        let kappa_at = |i: usize| {
+            if i == 0 || i + 1 >= n {
+                return 0.0;
+            }
+            let (a, b, c) = (self.pts[i - 1], self.pts[i], self.pts[i + 1]);
+            let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+            let cross = (u[0] * v[1] - u[1] * v[0]).abs();
+            2.0 * cross / (dist(a, b) * dist(b, c) * dist(a, c)).max(1e-9)
+        };
+        let kb = lerp(kappa_at(k), kappa_at(k1));
+        let r_min = 0.8 * w;
+        let g = (1.0 + skew.abs()) * (1.0 + skew.abs()) + 2.0 * skew.abs();
+        let turn_rate = TAU * rate / lambda;
+        let amp = amp.min((1.0 / r_min - kb).max(0.3 / r_min) / (turn_rate * turn_rate * g)).min(0.5 / kb.max(1e-12));
         let wphase = lerp(self.wphase[k], self.wphase[k1]);
         let wiggle = 1.2 * w * gradient2(self.seed ^ 0x55, wphase, 0.71);
         // Cell-scale drift: even small streams never run straight between T0 cells.
@@ -682,7 +703,8 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
             let k = k as usize;
             let seg_len = (r.s[k + 1] - r.s[k]).max(1.0);
             let w = seg_w(r, k);
-            let step = (wavelength_ft(w) / 16.0).max(spacing).min(seg_len);
+            // ~32 chords a mean loop (20 or more on the tightest), so banks draw round, not faceted.
+            let step = (wavelength_ft(w) / 32.0).max(spacing).min(seg_len);
             // Within a step of the padded rectangle: a chord that cuts its corner keeps both ends.
             let pad = pad(w) + step;
             let inside = |p: [f64; 2]| p[0] >= rect[0] - pad && p[0] <= rect[2] + pad && p[1] >= rect[1] - pad && p[1] <= rect[3] + pad;
