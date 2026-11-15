@@ -1383,6 +1383,9 @@ const calm = ([r, g, b]: [number, number, number]): [number, number, number] => 
 };
 
 // Fill colours by ward (buildings), then plaza, field, block. Watabou-ish muted browns.
+/** How much of a drawn building's roof colour shows at city zoom (the rest its ward's paper; a
+ * generated building's is 0.6). */
+const DRAWN_ROOF_MIX = 0.9;
 const WARD_RGB: [number, number, number][] = [
   [0.62, 0.56, 0.5], // plaza (unused for buildings)
   [0.5, 0.45, 0.42], // castle
@@ -1712,7 +1715,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       const m = polys.starts[i + 1] - s0;
       const attr = polys.attrs[i];
       const kind = attr & 0xff;
-      const ward = (attr >> 8) & 0xff;
+      // (A building's ward byte carries in bit 7 whether it was drawn by hand: `payload::pack_sites`.)
+      const drawn = kind === 0 && ((attr >> 15) & 1) === 1;
+      const ward = (attr >> 8) & (kind === 0 ? 0x7f : 0xff);
       const hasFunc = (attr >> 24) & 1;
       // (Its roof's material: `payload::pack_sites`, `town::roof`.)
       const material = (attr >> 20) & 15;
@@ -1820,10 +1825,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       } else if (kind === 0) {
         // A roofed building: its roof material's colour, softened toward its ward's paper brown
         // (watabou-ish), a business a little deeper.
+        // A building drawn by hand shows the roof chosen for it, barely softened (`DRAWN_ROOF_MIX`).
         const base = WARD_RGB[ward] ?? WARD_RGB[6];
         const m = roofRgb(material, (attr >>> 29) & 7);
-        const shade = (0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296)) * (hasFunc ? 0.88 : 1);
-        rgb = [0, 1, 2].map((c) => (0.6 * (((m >> (16 - 8 * c)) & 255) / 255) + 0.4 * base[c]) * shade) as [number, number, number];
+        const mix = drawn ? DRAWN_ROOF_MIX : 0.6;
+        const shade = drawn ? 1 : (0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296)) * (hasFunc ? 0.88 : 1);
+        rgb = [0, 1, 2].map((c) => (mix * (((m >> (16 - 8 * c)) & 255) / 255) + (1 - mix) * base[c]) * shade) as [number, number, number];
       } else {
         const base = WARD_RGB[ward] ?? WARD_RGB[6];
         const shade = 0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296);

@@ -15,7 +15,8 @@
 //!  .. roads: same layout, vertices as (x, y in tile units, bed width ft, class).
 //!  .. site polygons (levels >= SITE_MIN_LEVEL): n u32, n_verts u32, starts u32[n + 1],
 //!     attrs u32[n] (kind | ward << 8 | floors (to 15) << 16 | roof material (`town::roof`, to 15)
-//!     << 20 | has-function << 24 | (a plain building) roof colour variant 0-4 << 29; kind 0 building,
+//!     << 20 | has-function << 24 | (a plain building) roof colour variant 0-4 << 29; kind 0 building
+//!     (bit 7 of its ward byte: drawn by hand, `Created` kind building),
 //!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard (a cemetery's plot too), 6 deck: bridge or pier, 7 monument,
 //!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
@@ -513,6 +514,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
             let detailed = key.level >= BUILDING_MIN_LEVEL || l.tier == crate::t0::settle::Tier::Village;
             if detailed {
+                // (A layout of one building drawn by hand: `Created` kind building, `town::sites::drawn`.)
+                let drawn = l.site && (l.index as usize).checked_sub(t0.settlements.len()).and_then(|p| t0.pois.get(p)).is_some_and(|p| p.kind == crate::t0::settle::PoiKind::Building);
                 // R5 towns (115): the yurts' trodden ground and pens, under the buildings.
                 crate::town::yurts::plan_polys(&l, &mut push);
                 for b in &l.buildings {
@@ -532,7 +535,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     };
                     // (Its roof's material in bits 20-23, its storeys capped at 15 below them.)
                     let k = crate::town::roof::look(&l, b);
-                    let attr = kind | (b.ward as u32) << 8 | (b.floors.min(15) as u32) << 16 | (k.material as u32 & 15) << 20 | (b.func.is_some() as u32) << 24;
+                    // (A building drawn by hand: bit 7 of its ward byte, so the map shows its roof's own colour.)
+                    let attr = kind | (b.ward as u32 | (drawn as u32) << 7) << 8 | (b.floors.min(15) as u32) << 16 | (k.material as u32 & 15) << 20 | (b.func.is_some() as u32) << 24;
                     // (A plain building's colour variant in bits 29-31; a keep's pieces use them for their tops.)
                     let plain = attr | (k.shade as u32) << 29;
                     // (R5 towns, 115: a yurt's felt (piece code 11; its shade the felt, `yurts::felt`).)
