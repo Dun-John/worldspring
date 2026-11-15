@@ -3039,7 +3039,9 @@
   function endName(lv: string): string {
     const n = linkNames[lv];
     if (!n) return '…';
-    return endSite(lv).site === inside?.id ? n.level : `${n.site} · ${n.level}`;
+    // (A sewer end always carries the sewers' name: its sections have no names of their own.)
+    const site = endSite(lv).site;
+    return site === inside?.id && !site.startsWith('w:') ? n.level : `${n.site} · ${n.level}`;
   }
   let linkTool: LinkTool | null = null;
   /** In a place a way across can go: below ground, or a building with cellars (not while playing). */
