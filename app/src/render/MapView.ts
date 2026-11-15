@@ -26,7 +26,7 @@ import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
 import { BLOCK, parseKey } from '../editor/groundCodec';
-import { shore } from '../editor/water';
+import { lookOf, shore } from '../editor/water';
 import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
 
 export interface InteriorState {
@@ -1222,7 +1222,7 @@ export class MapView {
     this.edits = {};
     this.plateauKey = '';
     this.waterKey = '';
-    this.waterLayer.set((adjusted ?? world.edits)?.waters);
+    this.waterLayer.set((adjusted ?? world.edits)?.waters, geom.sea_level_ft);
     this.townHints.clear();
     this.streetHints.clear();
     this.setEdits(adjusted ?? world.edits ?? {}, false);
@@ -1382,11 +1382,11 @@ export class MapView {
       }
     }
     // Water drawn by hand: drawn above the finest levels, its names at its middle.
-    if (prev.waters !== next.waters) this.waterLayer.set(next.waters);
+    if (prev.waters !== next.waters) this.waterLayer.set(next.waters, this.geom?.sea_level_ft ?? 0);
     // Roads drawn by hand: drawn over the tiles at every zoom.
     if (prev.paths !== next.paths || !prev.paths) this.drawnRoads?.set(next.paths);
     if (prev.waters !== next.waters || pr !== nr) {
-      const named = waterLabels(next);
+      const named = waterLabels(next, this.geom?.sea_level_ft ?? 0);
       const key = JSON.stringify(named.map((f) => [f.id, f.name, f.x, f.y]));
       if (key !== this.waterKey) {
         this.waterKey = key;
@@ -1901,9 +1901,9 @@ export class MapView {
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.drawnRoads?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
-      // (The three finest levels draw it in the terrain: gone over the first half level of them.)
-      const fine = this.geom!.max_level - 2;
-      this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, (level - fine) / 0.5)) : 0);
+      // (The three finest levels draw it in the terrain too: the layer over it gives each kind its
+      // look there; gone as the battlemap comes in over it.)
+      this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, this.battle?.stats.alpha ?? 0)) : 0, level > this.geom!.max_level - 2.5);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       this.townTraceSprite.update(this.cam, this.townTrace && !this.interior ? this.townTrace : null);
@@ -2363,14 +2363,15 @@ function linkIn(it: Interior, from: string): { level: number; x: number; y: numb
 }
 
 /** Labels for the water drawn by hand that someone named (`e:` renames), at each outline's middle:
- * a lake's look (an inlet or basin a bay's). */
-export function waterLabels(e: Edits): Feature[] {
+ * a lake's look (the sea's water a bay's), the sea at `sea` ft. */
+export function waterLabels(e: Edits, sea: number): Feature[] {
   const out: Feature[] = [];
   for (const [id, name] of Object.entries(e.renames ?? {})) {
     const w = id.startsWith('e:') ? e.waters?.[id] : undefined;
-    if (!w || !name || w.pts.length < 3) continue;
+    if (!w || !name || w.pts.length < 2) continue;
     const f = outlineLabel(id, name, shore(w));
-    out.push({ ...f, kind: w.kind === 'inlet' || w.kind === 'basin' ? 'bay' : 'lake', detail: w.kind });
+    const k = lookOf(w, sea).kind;
+    out.push({ ...f, kind: k === 'inlet' || k === 'basin' ? 'bay' : 'lake', detail: k });
   }
   return out;
 }

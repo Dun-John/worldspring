@@ -310,7 +310,14 @@ pub fn crossings(world: &World, t0: &T0, p: &Path) -> Arc<[Crossing]> {
             h.write(&v.to_le_bytes());
         }
         h.write(&w.level.to_le_bytes());
-        h.write(w.kind.name().as_bytes());
+        // (All that shapes its shore and bed: its kind if it has one, depth, shore, line.)
+        h.write(w.kind.map_or("-", |k| k.name()).as_bytes());
+        h.write(&w.depth_ft().to_le_bytes());
+        h.write(&[w.is_dug() as u8, w.is_line() as u8, w.closed as u8]);
+        h.write(&w.width_ft().to_le_bytes());
+        for l in &w.levels {
+            h.write(&l.to_le_bytes());
+        }
     }
     let key = h.finish();
     if let Some(c) = CROSSINGS.with(|c| c.borrow().iter().find(|e| e.0 == key).map(|e| e.1.clone())) {

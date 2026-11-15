@@ -4163,7 +4163,7 @@ fn ground_edits(base: &World) {
     let k2 = others[2.min(others.len() - 1)];
     let shore = at(k2);
     let sea = plain_c.1.water_level[k2 + 8];
-    let inlet = Water { pts: vec![[shore[0] - 50.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] + 15.0], [shore[0] - 50.0, shore[1] + 15.0]], kind: WaterKind::Inlet, level: sea };
+    let inlet = Water::outline(vec![[shore[0] - 50.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] + 15.0], [shore[0] - 50.0, shore[1] + 15.0]], WaterKind::Inlet, sea);
     assert!(inlet.problem().is_none(), "the inlet: {:?}", inlet.problem());
     ex.world.file.edits.waters.insert("e:inlet".into(), inlet.clone());
     let (inlet_pack, c) = pack(&mut ex, key);
@@ -4191,7 +4191,7 @@ fn ground_edits(base: &World) {
     west.sort_by_key(|&o| (o as i64 - 40).abs());
     let dry = west.into_iter().map(|o| j * SQ + i0 - o).find(|&k2| open(k2)).expect("open dry ground west of the shore");
     let (dp, top) = (at(dry), plain_c.1.height[dry]);
-    let pond = |dx: f64| Water { pts: vec![[dp[0] + dx - 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] + 20.0], [dp[0] + dx - 20.0, dp[1] + 20.0]], kind: WaterKind::Pond, level: top + 2.0 };
+    let pond = |dx: f64| Water::outline(vec![[dp[0] + dx - 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] + 20.0], [dp[0] + dx - 20.0, dp[1] + 20.0]], WaterKind::Pond, top + 2.0);
     ex.world.file.edits.waters.insert("e:a".into(), pond(-15.0));
     ex.world.file.edits.waters.insert("e:b".into(), pond(15.0));
     let c = pack(&mut ex, key).1;

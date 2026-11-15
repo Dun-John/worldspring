@@ -459,7 +459,7 @@ export interface Plateau {
   floor?: 'rock' | 'ground';
 }
 
-export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat';
+export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat' | 'stream';
 
 /** A road drawn by hand's type (`worldgen::paths::PathKind`). */
 export type PathKind = 'footpath' | 'track' | 'gravel' | 'paved' | 'cobbled';
@@ -478,8 +478,21 @@ export interface DrawnPath {
  * the ground falls under it; overlapping outlines are one water. */
 export interface Water {
   pts: [number, number][];
-  kind: WaterKind;
+  /** Legacy: water drawn before has a kind (its look, depth and shore); water drawn now has none,
+   * its look following from its shape, depth and level (`water.ts` `lookOf`). */
+  kind?: WaterKind;
   level: number;
+  /** How deep its bed lies under its level (ft, 1 to 20; none: its kind's, or a lake's). */
+  depth?: number;
+  /** Dug: straight sides, a stone edge (none: as its kind, else natural). */
+  dug?: boolean;
+  /** A brushed line (`pts` its line, 2 points or more), its water the band `width` ft wide. */
+  line?: boolean;
+  width?: number;
+  /** A brushed line come round to its start (a ring). */
+  closed?: boolean;
+  /** An open line's level evenly along it (`waters::stream_levels`). */
+  levels?: number[];
 }
 
 export type WharfKind = 'quay' | 'pier' | 'breakwater';

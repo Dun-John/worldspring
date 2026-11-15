@@ -337,7 +337,7 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
             for (k, dx) in [("e:det0", -30.0), ("e:det1", 30.0)] {
                 let (cx, cy) = (corner[0] + dx, corner[1] + 1.4 * half);
                 let pts = vec![[cx - 40.0, cy - 30.0], [cx + 40.0, cy - 30.0], [cx + 40.0, cy + 30.0], [cx - 40.0, cy + 30.0]];
-                e.waters.insert(k.into(), crate::waters::Water { pts, kind: crate::waters::WaterKind::Pond, level: b.pad_ft + 2.0 });
+                e.waters.insert(k.into(), crate::waters::Water::outline(pts, crate::waters::WaterKind::Pond, b.pad_ft + 2.0));
             }
             let dab = [[corner[0], corner[1] + 2.0 * half]];
             let stroke = crate::ground::Stroke { mode: crate::ground::Brush::Raise, path: &dab, radius_ft: 30.0, height_ft: 10.0, hardness: 0.5, strength: 1.0 };

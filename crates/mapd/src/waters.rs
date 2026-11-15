@@ -1,5 +1,7 @@
-//! MCP tools for water drawn by hand (`Edits::waters`, `e:<id>`): inlets, basins, lakes, ponds
-//! and moats, each an outline and a level (`worldgen::waters`).
+//! MCP tools for water drawn by hand (`Edits::waters`, `e:<id>`): a polygon, or a brushed line with
+//! a width (a ring when closed), each with a depth, natural or dug, and a level; its look follows
+//! (`worldgen::waters::Form::look`). `kind` (inlet, basin, lake, pond, moat, stream) is still taken
+//! from older callers and kept on the record (`worldgen::waters`).
 
 use serde_json::{Value, json};
 use worldgen::geoquery::Squares;
@@ -20,9 +22,14 @@ pub fn list() -> Vec<Value> {
     let kinds: Vec<&str> = WaterKind::ALL.iter().map(|k| k.name()).collect();
     let props = |with_id: bool| {
         let mut p = json!({
-            "poly": { "type": "array", "minItems": 3, "maxItems": waters::MAX_WATER_PTS, "items": pt.clone(), "description": "The outline's points (world ft, 5 miles across at most). A lake's, pond's or inlet's shore is a natural curve round them; a basin or moat keeps straight sides with slightly rounded corners" },
-            "kind": { "type": "string", "enum": kinds.clone(), "description": "inlet and basin: the sea's, reaching in; lake, pond, moat: standing water (default lake)" },
-            "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Its surface, ft above the sea. Default: the sea's or a lake's where the outline reaches one, an inlet's or basin's the sea's, else 1 ft under the lowest ground on its shore" },
+            "poly": { "type": "array", "minItems": 2, "maxItems": waters::MAX_WATER_PTS, "items": pt.clone(), "description": "Points (world ft): polygon 3+, brush 2+" },
+            "shape": { "type": "string", "enum": ["polygon", "brush"], "description": "brush: a band width_ft wide along poly (default polygon)" },
+            "width_ft": { "type": "number", "minimum": waters::STREAM_WIDTHS[0], "maximum": waters::BRUSH_WIDTHS[1], "description": "Brush width (default 10)" },
+            "closed": { "type": "boolean", "description": "Brush comes round to its start: a ring" },
+            "depth_ft": { "type": "number", "minimum": waters::DEPTHS[0], "maximum": waters::DEPTHS[1], "description": "Default 4" },
+            "dug": { "type": "boolean", "description": "Straight sides, stone edge" },
+            "kind": { "type": "string", "enum": kinds.clone(), "description": "Legacy fixed look; leave out" },
+            "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Surface, ft above the sea (default: the sea's or a lake's it reaches, else under its shore)" },
             "name": { "type": "string", "description": "Its name on the map (empty: none)" },
         });
         if with_id {
@@ -31,10 +38,10 @@ pub fn list() -> Vec<Value> {
         p
     };
     vec![
-        json!({ "name": "create_water", "title": "Draw water", "description": "Water inside an outline drawn by hand: an inlet or basin of the sea, a lake, pond or moat. A lake, pond or inlet gets a natural, gently irregular shore drawn round the points; a basin or moat keeps straight sides with rounded corners. The ground inside falls under its level (the battlemap's water, the map's at every zoom); an outline reaching the sea or a lake joins it; overlapping outlines are one water with one shore. Buildings, walls and crossings' ends keep out of it; a plateau or islet drawn over it stands dry. Returns its id (e:...).", "inputSchema": schema(props(false), &["poly"]) }),
-        json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...): its outline, kind, level or name; what is not given stays.", "inputSchema": schema(props(true), &["id"]) }),
+        json!({ "name": "create_water", "title": "Draw water", "description": "Water drawn by hand: a polygon or brushed band. Its look follows it: the sea's at sea level (dug: a quay), an open band a stream running downhill, a ring a moat, else a pond or lake by depth. Returns id (e:...), look as kind.", "inputSchema": schema(props(false), &["poly"]) }),
+        json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...); what is not given stays.", "inputSchema": schema(props(true), &["id"]) }),
         json!({ "name": "delete_water", "title": "Take water away", "description": "Take water drawn by hand away (the ground goes back as it was), by id (e:...), with its name, note and hidden mark (no restore; the user's Undo in the app brings it back).", "inputSchema": schema(crate::args::ids_props("water id (e:...)"), &[]) }),
-        json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "The water drawn by hand (e:...): id, kind, level_ft, name, middle, bbox, area and outline. Returns {items, found}; limit (default 100) cuts it.", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
+        json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "Water drawn by hand (e:...) as create_water returns it. Returns {items, found}; limit (default 100).", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
     ]
 }
 
@@ -60,9 +67,22 @@ fn water_json(e: &Edits, id: &str, w: &Water, sea: f64) -> Value {
     let b = shore.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
     let mid = geom::centroid(&shore);
     let mut v = json!({
-        "id": id, "kind": w.kind.name(), "level_ft": round1(w.level as f64 - sea), "x_ft": mid[0].round(), "y_ft": mid[1].round(),
+        "id": id, "kind": w.look(sea).kind.name(), "shape": if w.is_line() { "brush" } else { "polygon" }, "depth_ft": w.depth_ft(), "dug": w.is_dug(),
+        "level_ft": round1(w.level as f64 - sea), "x_ft": mid[0].round(), "y_ft": mid[1].round(),
         "bbox": b.map(f64::round), "area_sq_ft": geom::area(&shore).abs().round(), "points": w.pts.len(), "poly": w.pts,
     });
+    if let Some(k) = w.kind {
+        v["legacy_kind"] = json!(k.name());
+    }
+    if w.is_line() {
+        v["line"] = json!(true);
+        v["width_ft"] = json!(w.width_ft());
+        v["closed"] = json!(w.closed);
+        if let (Some(a), Some(z)) = (w.levels.first(), w.levels.last()) {
+            v["level_ft"] = json!(round1(a.max(*z) as f64 - sea));
+            v["falls_to_ft"] = json!(round1(a.min(*z) as f64 - sea));
+        }
+    }
     if let Some(n) = e.renames.get(id) {
         v["name"] = json!(n);
     }
@@ -81,31 +101,79 @@ async fn list_waters(app: &Shared, limit: usize) -> Result<Value, String> {
 }
 
 /// The level an outline takes when none is given: the sea's or a lake's where it reaches one
-/// (the highest), else the sea's for an inlet or basin, else 1 ft under the lowest ground on its
-/// shore (`Water::shore`) as shaped by `others` (ft, the generator's datum). And what it joins.
-fn default_level(ex: &mut Executor, pts: &[[f64; 2]], kind: WaterKind, others: &Edits) -> (f64, Option<&'static str>) {
+/// (the highest), else the sea's for a legacy inlet or basin, else 1 ft under the lowest ground on
+/// its shore (`Water::shore`) as shaped by `others` (ft, the generator's datum). And what it
+/// joins. Water with no kind reaches the sea within `SEA_NEAR_FT` of its shore (read out there too)
+/// and then stands at the sea's level exactly; else never within `waters::SEA_WITHIN_FT` of it
+/// (its look the sea's only where it joins the sea: `waters::Form::look`).
+fn default_level(ex: &mut Executor, w: &Water, others: &Edits) -> (f64, Option<&'static str>) {
+    let legacy = w.legacy();
     let sea = ex.world.params().sea_level_ft;
-    let shore = waters::shape(pts, kind);
+    let shore = w.shore();
     let every = shore.len().div_ceil(LEVEL_SAMPLES).max(1);
     let sampled: Vec<[f64; 2]> = shore.iter().step_by(every).copied().collect();
     let (pts, n) = (sampled.as_slice(), sampled.len());
-    // The corners and points between them, at most `LEVEL_SAMPLES`.
+    // The corners and points between them, at most `LEVEL_SAMPLES`; with no kind, each also
+    // `SEA_NEAR_FT` out from the shore (to the right of it when its area is positive).
     let per = (LEVEL_SAMPLES / n).max(1);
-    let probes: Vec<[f64; 2]> = (0..n).flat_map(|i| (0..per).map(move |s| geom::lerp(pts[i], pts[(i + 1) % n], s as f64 / per as f64))).take(LEVEL_SAMPLES.max(n)).collect();
+    let out = if legacy.is_none() { SEA_NEAR_FT * if geom::area(pts) > 0.0 { -1.0 } else { 1.0 } } else { 0.0 };
+    let probes: Vec<([f64; 2], [f64; 2])> = (0..n)
+        .flat_map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
+            let l = geom::dist(a, b).max(1e-9);
+            let o = [(b[1] - a[1]) / l * out, -(b[0] - a[0]) / l * out];
+            (0..per).map(move |s| {
+                let p = geom::lerp(a, b, s as f64 / per as f64);
+                (p, [p[0] + o[0], p[1] + o[1]])
+            })
+        })
+        .take(LEVEL_SAMPLES.max(n))
+        .collect();
     let (mut wet, mut low) = (f64::MIN, f64::MAX);
-    for p in &probes {
-        let sq = Squares::round(ex, [p[0], p[1], p[0], p[1]], 0);
-        let g = sq.shaped(others, Some(&ex.t0))[0] as f64;
-        let w = sq.still[0] as f64;
-        if w > worldgen::t0::hydro::DRY as f64 && w > g {
-            wet = wet.max(w);
+    for (p, q) in &probes {
+        for (k, r) in [p, q].into_iter().enumerate() {
+            if k == 1 && out == 0.0 {
+                continue;
+            }
+            let sq = Squares::round(ex, [r[0], r[1], r[0], r[1]], 0);
+            let g = sq.shaped(others, Some(&ex.t0))[0] as f64;
+            let w = sq.still[0] as f64;
+            if w > worldgen::t0::hydro::DRY as f64 && w > g {
+                wet = wet.max(w);
+            }
+            if k == 0 {
+                low = low.min(g);
+            }
         }
-        low = low.min(g);
     }
     if wet > f64::MIN {
-        return (wet, Some(if wet <= sea + 1.0 { "sea" } else { "lake" }));
+        let of_sea = wet <= sea + 1.0;
+        return (if of_sea && legacy.is_none() { sea } else { wet }, Some(if of_sea { "sea" } else { "lake" }));
     }
-    if kind.of_sea() { (sea, None) } else { ((low - 1.0).max(sea), None) }
+    match legacy {
+        Some(k) if k.of_sea() => (sea, None),
+        Some(_) => ((low - 1.0).max(sea), None),
+        None => ((low - 1.0).max(sea + SEA_CLEAR_FT), None),
+    }
+}
+
+/// Water with no kind reaches the sea where the sea is this near its shore (ft).
+const SEA_NEAR_FT: f64 = 4.0;
+/// Water with no kind that doesn't reach the sea stands at least this over its level (ft).
+const SEA_CLEAR_FT: f64 = 0.5;
+
+/// A stream's levels along its line (`waters::stream_levels`), the ground as shaped by `others`.
+fn stream_levels(ex: &mut Executor, w: &Water, others: &Edits) -> Vec<f32> {
+    let sea = ex.world.params().sea_level_ft;
+    let at: Vec<(f64, Option<f64>)> = waters::stream_samples(&w.centre())
+        .iter()
+        .map(|p| {
+            let sq = Squares::round(ex, [p[0], p[1], p[0], p[1]], 0);
+            let (g, still) = (sq.shaped(others, Some(&ex.t0))[0] as f64, sq.still[0] as f64);
+            (g, (still > worldgen::t0::hydro::DRY as f64 && still > g).then_some(still))
+        })
+        .collect();
+    waters::stream_levels(&at, sea)
 }
 
 async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
@@ -114,10 +182,59 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
         Some(id) => Some(app.with_edits(|e| e.waters.get(id).cloned()).flatten().ok_or_else(|| format!("no water {id}"))?),
         None => None,
     };
-    let kind = match &a["kind"] {
-        Value::Null => old.as_ref().map_or(WaterKind::Lake, |w| w.kind),
-        Value::String(k) => WaterKind::parse(k).ok_or("kind: inlet, basin, lake, pond or moat")?,
-        _ => return Err("kind: inlet, basin, lake, pond or moat".into()),
+    let given_kind = match &a["kind"] {
+        Value::Null => None,
+        Value::String(k) => Some(WaterKind::parse(k).ok_or("kind: inlet, basin, lake, pond, moat or stream (or leave it out)")?),
+        _ => return Err("kind: inlet, basin, lake, pond, moat or stream (or leave it out)".into()),
+    };
+    let flag = |k: &str| match &a[k] {
+        Value::Null => Ok(None),
+        Value::Bool(b) => Ok(Some(*b)),
+        _ => Err(format!("{k}: true or false")),
+    };
+    let brush = match &a["shape"] {
+        Value::Null => flag("line")?,
+        Value::String(s) if s == "brush" => Some(true),
+        Value::String(s) if s == "polygon" => Some(false),
+        _ => return Err("shape: polygon or brush".into()),
+    };
+    let depth_ft = match &a["depth_ft"] {
+        Value::Null => None,
+        v => Some(v.as_f64().filter(|d| d.is_finite() && (waters::DEPTHS[0]..=waters::DEPTHS[1]).contains(d)).ok_or("depth_ft: 1 to 20 ft")?),
+    };
+    let dug = flag("dug")?;
+    // (A legacy kind: given, or kept from the water changed unless its shape, depth or shore is.)
+    let kind = given_kind.or_else(|| old.as_ref().filter(|_| brush.is_none() && depth_ft.is_none() && dug.is_none()).and_then(|w| w.kind));
+    let line = match kind {
+        Some(k) => brush.unwrap_or_else(|| old.as_ref().is_some_and(|w| w.line)) || k == WaterKind::Stream,
+        None => brush.unwrap_or_else(|| old.as_ref().is_some_and(|w| w.is_line())),
+    };
+    if let Some(k) = kind
+        && line
+        && !k.may_be_line()
+    {
+        return Err("line: only a moat or a stream is drawn as a line (or leave kind out)".into());
+    }
+    let closed = line && kind != Some(WaterKind::Stream) && flag("closed")?.unwrap_or_else(|| old.as_ref().is_some_and(|w| w.closed));
+    let width = match &a["width_ft"] {
+        Value::Null if kind.is_some() => old.as_ref().filter(|w| w.kind == kind).and_then(|w| w.width),
+        Value::Null => old.as_ref().filter(|w| w.is_line()).map(|w| w.width_ft().clamp(waters::BRUSH_WIDTHS[0], waters::BRUSH_WIDTHS[1])),
+        v => Some(v.as_f64().filter(|w| w.is_finite()).ok_or("width_ft: a number of ft")?),
+    };
+    let width = width.filter(|_| line);
+    // (Its depth and shore: given, else as it was, else 4 ft and natural; a legacy kind's own
+    // unless given.)
+    let depth = if kind.is_some() { depth_ft.or(old.as_ref().filter(|w| w.kind == kind).and_then(|w| w.depth)) } else { Some(depth_ft.or(old.as_ref().map(|w| w.depth_ft())).unwrap_or(waters::DEPTH_FT)) };
+    let dug = if kind.is_some() { dug.or(old.as_ref().filter(|w| w.kind == kind).and_then(|w| w.dug)) } else { Some(dug.or(old.as_ref().map(|w| w.is_dug())).unwrap_or(false)) };
+    let make = move |pts: Vec<[f64; 2]>, level: f32| {
+        let mut w = match kind {
+            Some(k) if line => Water::of_line(pts, k, level, width, closed),
+            Some(k) => Water::outline(pts, k, level),
+            None => Water::drawn(pts, level, line, width, closed, waters::DEPTH_FT, false),
+        };
+        w.depth = depth;
+        w.dug = dug;
+        w
     };
     let poly: Option<Vec<[f64; 2]>> = match a["poly"].as_array() {
         Some(o) => {
@@ -128,7 +245,7 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
             Some(waters::rounded(&pts))
         }
         None if a["poly"].is_null() => None,
-        None => return Err("poly: an outline, 3 or more points".into()),
+        None => return Err("poly: an outline, 3 or more points (a line: 2 or more)".into()),
     };
     if poly.is_none() && old.is_none() {
         return Err("poly: the water's outline".into());
@@ -144,9 +261,11 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
     };
     let pts = poly.clone().unwrap_or_else(|| old.as_ref().map(|w| w.pts.clone()).unwrap_or_default());
     // The level: given, kept (the outline and kind as they were), or found along the new shore.
-    let keep = level_ft.is_none() && poly.is_none() && old.as_ref().is_some_and(|w| w.kind.of_sea() == kind.of_sea());
+    let shaped = make(pts.clone(), 0.0);
+    let of_sea = |k: Option<WaterKind>| k.is_some_and(|k| k.of_sea());
+    let keep = level_ft.is_none() && poly.is_none() && old.as_ref().is_some_and(|w| of_sea(w.legacy()) == of_sea(shaped.legacy()) && w.is_line() == line && w.closed == closed && w.width_ft() == shaped.width_ft() && w.flows() == shaped.flows());
     let me = id.clone();
-    let (sea, level, joins) = app
+    let (sea, level, joins, levels) = app
         .worker
         .run(move |g| {
             let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;
@@ -159,8 +278,14 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
             if let Some(me) = &me {
                 others.waters.remove(me);
             }
-            let (found, joins) = default_level(ex, &pts, kind, &others);
-            Ok::<_, String>((sea, level_ft.map_or(found, |l| l + sea), joins))
+            if let Some(err) = shaped.problem() {
+                return Err(err);
+            }
+            let (found, joins) = default_level(ex, &shaped, &others);
+            // (A stream's level falls along it, unless one is given: then it is flat.)
+            let levels = if shaped.flows() && level_ft.is_none() && !keep { stream_levels(ex, &shaped, &others) } else { Vec::new() };
+            let found = levels.iter().copied().reduce(f32::max).map_or(found, |l| l as f64);
+            Ok::<_, String>((sea, level_ft.map_or(found, |l| l + sea), joins, levels))
         })
         .await?;
     app.edit("agent", 0, move |e| {
@@ -170,7 +295,9 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
         };
         let pts = poly.clone().unwrap_or_else(|| old.as_ref().map(|w| w.pts.clone()).unwrap_or_default());
         let level = if keep { old.as_ref().map_or(level, |w| w.level as f64) } else { level };
-        let w = Water { pts, kind, level: ((level * 10.0).round() * 0.1) as f32 };
+        let level = ((level * 10.0).round() * 0.1) as f32;
+        let mut w = make(pts, level);
+        w.levels = if keep { old.as_ref().map_or(Vec::new(), |o| o.levels.clone()) } else { levels.clone() };
         if let Some(err) = w.problem() {
             return Err(err);
         }
