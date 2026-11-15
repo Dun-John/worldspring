@@ -409,7 +409,10 @@ impl Ctx {
 
     /// Whether an outline can be a plot (`placing::parcel_check_json`).
     pub fn parcel_check_json(&self, input: &str) -> String {
-        worldgen::placing::parcel_check_json(&self.world, input)
+        match &self.t0 {
+            Some(t0) => worldgen::placing::parcel_check_json(&self.world, t0, input),
+            None => "null".into(),
+        }
     }
 
     /// The generated buildings with their middle inside a polygon (`[[x, y], …]` JSON, ft):

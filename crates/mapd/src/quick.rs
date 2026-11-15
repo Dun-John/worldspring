@@ -100,6 +100,9 @@ async fn stamp(app: &Shared, a: &Value) -> Result<Value, String> {
         Value::Object(o) => (o["width_ft"].as_f64().ok_or("size.width_ft: needed")?, o["depth_ft"].as_f64().ok_or("size.depth_ft: needed")?),
         s => placing::stamp_dims(&kind, s.as_str().unwrap_or("usual")).ok_or_else(|| format!("kind: {kind} has no stamp size (a business or home key)"))?,
     };
+    if !(10.0..=400.0).contains(&w) || !(10.0..=400.0).contains(&d) {
+        return Err("size: width_ft and depth_ft are 10 to 400 ft".into());
+    }
     let at = crate::args::point(app, "at", &a["at"]).await?;
     let (facing, clear, preview) = (a["facing"].as_f64(), a["clear"].as_bool().unwrap_or(false), a["preview"].as_bool().unwrap_or(false));
     let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
@@ -170,7 +173,7 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
         }
     }
     let ward = a["ward"].as_str().unwrap_or("common").to_string();
-    let (depth, gaps, clear, seed, preview) = (a["depth"].as_f64(), a["gaps"].as_f64().unwrap_or(0.15), a["clear"].as_bool().unwrap_or(false), a["seed"].as_u64().unwrap_or(0), a["preview"].as_bool().unwrap_or(false));
+    let (depth, gaps, clear, seed, preview) = (a["depth"].as_f64(), a["gaps"].as_f64().unwrap_or(0.15), a["clear"].as_bool().unwrap_or(false), placing::seed_of(&a["seed"])?, a["preview"].as_bool().unwrap_or(false));
     let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
     let out = app
         .worker
@@ -321,6 +324,9 @@ async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, St
     if let Some(o) = hit {
         return Err(format!("that outline meets the parcel {o}: change or delete_feature that first"));
     }
+    if let Some(why) = app.worker.with({ let p = c.poly.clone(); move |ex| Ok(placing::parcel_blocker(&ex.world, &ex.t0, &p)) }).await? {
+        return Err(why);
+    }
     let change = app
         .edit("agent", 0, move |e| {
             if creating {
@@ -340,7 +346,7 @@ async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, St
         })
         .await?;
     let id = change["id"].as_str().unwrap_or_default().to_string();
-    let mut v = found(app, id).await?;
+    let mut v = if change["existing"].as_bool().unwrap_or(false) { found(app, id).await? } else { crate::tools::read_back(app, id).await? };
     v["tool"] = json!(if creating { "create_parcel" } else { "update_parcel" });
     Ok(v)
 }

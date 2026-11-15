@@ -276,6 +276,16 @@ pub fn created_detail(c: &crate::world::Created) -> String {
     if let Some(u) = &c.under {
         s += &format!(" over a {}", u.replace('_', " "));
     }
+    if let Some(f) = c.fill.as_ref().filter(|_| c.kind == "plot") {
+        use crate::town::hand::BlockFill;
+        let open = |o: &crate::town::hand::OpenKind| serde_json::to_value(o).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        s += &match f {
+            BlockFill::Generated { ward, lots, .. } => format!(" (generated lots, {ward} ward{})", lots.as_ref().map(|l| format!(", {l} lots")).unwrap_or_default()),
+            BlockFill::Hand => " (left for buildings by hand)".to_string(),
+            BlockFill::Open { open: o, .. } => format!(" (open ground: {})", open(o)),
+            BlockFill::Castle { .. } => " (castle)".to_string(),
+        };
+    }
     let opts: Vec<String> = [c.theme.as_ref().map(|t| t.replace('_', " ")), c.size.clone(), c.levels.map(|l| format!("{l} level{}", if l == 1 { "" } else { "s" }))].into_iter().flatten().collect();
     if !opts.is_empty() {
         s += &format!(" ({})", opts.join(", "));

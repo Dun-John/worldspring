@@ -1512,7 +1512,8 @@ A free plot of ground drawn as an outline (`Created` kind `plot`, built like a h
 least 20 ft across, within 750 ft of their middle; `snap` as for buildings). `fill`: `{kind: generated, ward?, lots?, reroll?, close?}`
 (lots of a ward, default `common`; `lots` small to huge), `{kind: hand}` (left empty) or `{kind: open, open, style?}` (plaza, lawn, park,
 garden, market, cemetery, farmland); default generated common. `name`. A plot may not meet another one (refused naming it); the same
-outline and name again returns that plot (`existing`). Returns the plot's feature (`c:<n>`, kind `plot`). `delete_feature` and
+outline and name again returns that plot (`existing`: true; a new one has no such field). An outline with water, a river, a road or street, or a
+building drawn by hand in it is refused with the reason. Plots are listed by `search_features`/`list_names` (kind `plot`, the fill in `detail`). Returns the plot's feature (`c:<n>`, kind `plot`). `delete_feature` and
 `restore_feature` work on it. (`create_plot` is the notebook's plot point.)
 
 ### `update_parcel`

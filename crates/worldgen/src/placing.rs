@@ -249,8 +249,9 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
     let shops: Vec<&str> = catalog::CATALOG.iter().filter(|f| f.wards.contains(&ward) && !f.big && f.min_tier <= Tier::Town).map(|f| f.key).collect();
     let mut out = RowOut { lots: Vec::new(), removed: Vec::new(), refused: Vec::new(), refused_count: 0, length_ft: total };
     let mut seen: Vec<String> = Vec::new();
-    for (si, &left) in ask.sides.iter().enumerate() {
-        let mut rng = Pcg32::new(fnv64(key.as_bytes()), 71 + si as u64);
+    for &left in &ask.sides {
+        // (Keyed on the side, so "right" alone lays what "both" lays on its right.)
+        let mut rng = Pcg32::new(fnv64(key.as_bytes()), if left { 71 } else { 72 });
         let mut s = 0.0;
         while s < total - 8.0 && out.lots.len() < ROW_MAX {
             let width = (crate::core::sqrt(area * rng.range(0.6, 1.4)) * rng.range(0.8, 1.2)).clamp(14.0, 60.0);
@@ -327,6 +328,32 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
     Ok(out)
 }
 
+/// A row's seed from JSON: absent is 0; a negative or fractional number is refused.
+pub fn seed_of(v: &serde_json::Value) -> Result<u64, String> {
+    if v.is_null() {
+        return Ok(0);
+    }
+    v.as_u64().ok_or_else(|| "seed: a whole number, 0 or more".to_string())
+}
+
+/// What stops an outline from being a plot, in words: a building drawn by hand, water, a river or a road (streets too) under it; the
+/// world's own buildings and squares may be replaced by its fill. `None` when it is free.
+pub fn parcel_blocker(world: &World, t0: &T0, poly: &[P]) -> Option<String> {
+    let (found, _) = agent::spot_blockers(world, t0, poly, None, true).ok()?;
+    let b = found.iter().find(|b| match b.what {
+        "building" => !b.removable,
+        "water" | "river" | "road" | "street" => true,
+        _ => false,
+    })?;
+    let what = match b.what {
+        "building" => "a building drawn by hand".to_string(),
+        "water" => b.kind.map_or("water", |k| if k == "sea" { "the sea" } else { "a lake" }).to_string(),
+        "river" => "a river".to_string(),
+        w => format!("a {w}"),
+    };
+    Some(format!("that outline has {what} in it: a plot is free ground, so draw it clear of that"))
+}
+
 fn removal_json(r: &Removal) -> serde_json::Value {
     serde_json::json!({ "id": r.id, "name": r.name, "function": r.function, "at": r.at })
 }
@@ -367,7 +394,7 @@ pub fn row_json(world: &World, t0: &T0, input: &str) -> String {
         let ward = a["ward"].as_str().unwrap_or("common");
         let n = a["first_id"].as_u64().unwrap_or(0) as usize;
         let depth = a["depth"].as_f64().map(|d| d.clamp(DEPTH_RANGE.0, DEPTH_RANGE.1));
-        let ask = RowAsk { line: &line, sides, depth, kinds, ward, gaps: a["gaps"].as_f64().unwrap_or(0.15).clamp(0.0, 0.5), clear: a["clear"].as_bool().unwrap_or(false), seed: a["seed"].as_u64().unwrap_or(0) };
+        let ask = RowAsk { line: &line, sides, depth, kinds, ward, gaps: a["gaps"].as_f64().unwrap_or(0.15).clamp(0.0, 0.5), clear: a["clear"].as_bool().unwrap_or(false), seed: seed_of(&a["seed"])? };
         let edits = &world.file.edits;
         let existing = |poly: &[P], func: &str| {
             let probe = crate::world::Created { kind: "building".into(), poly: poly.to_vec(), func: Some(func.to_string()), ..Default::default() };
@@ -397,7 +424,7 @@ pub fn row_json(world: &World, t0: &T0, input: &str) -> String {
 
 /// Whether an outline can be a plot (`create_parcel`'s checks), as JSON: input `{poly}`; output `{x, y}` (its middle) or
 /// `{error, over?: [[x, y], ..]}` (`over`: the live plot it meets).
-pub fn parcel_check_json(world: &World, input: &str) -> String {
+pub fn parcel_check_json(world: &World, t0: &T0, input: &str) -> String {
     let go = || -> Result<serde_json::Value, String> {
         let a: serde_json::Value = serde_json::from_str(input).map_err(|e| e.to_string())?;
         let poly: Vec<P> = a["poly"].as_array().ok_or("poly: needed")?.iter().filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?])).collect();
@@ -407,6 +434,9 @@ pub fn parcel_check_json(world: &World, input: &str) -> String {
         c.check()?;
         if let Some(o) = world.file.edits.created.iter().find(|o| o.kind == "plot" && !o.removed && !c.same_site(o, [c.x, c.y]) && agent::polys_overlap_pub(&o.poly, &c.poly)) {
             return Err(serde_json::json!({ "over": o.poly }).to_string());
+        }
+        if let Some(why) = parcel_blocker(world, t0, &c.poly) {
+            return Err(why);
         }
         Ok(serde_json::json!({ "x": x, "y": y }))
     };

@@ -1748,8 +1748,31 @@
     return { x, y, func: build.func, size: stampSet.size, clear: stampSet.clear, id: `c:${(edits.created ?? []).length}` };
   }
 
+  /** The ghost's question in flight, and the newest place asked meanwhile (one at a time, the latest wins). */
+  let stampBusy = false;
+  let stampNext: Pt | null = null;
   /** The pointer is at (x, y) in Stamp: the ghost there, or (a click) the building put down. */
   async function stampAt(x: number, y: number, place: boolean, shift: boolean) {
+    if (place) return stampRun(x, y, true, shift);
+    stampLast = [x, y];
+    if (stampBusy) {
+      stampNext = [x, y];
+      return;
+    }
+    stampBusy = true;
+    try {
+      let at: Pt | null = [x, y];
+      while (at) {
+        stampNext = null;
+        await stampRun(at[0], at[1], false, false);
+        at = stampNext as Pt | null;
+      }
+    } finally {
+      stampBusy = false;
+    }
+  }
+
+  async function stampRun(x: number, y: number, place: boolean, shift: boolean) {
     const tool = buildArmed?.stamp;
     if (!tool || buildMode !== 'stamp') return;
     stampLast = [x, y];
@@ -1780,7 +1803,8 @@
     const opts = buildOptions(build);
     const old = existingSite(edits, { id, kind: 'building', x: 0, y: 0, name: '', poly: r.poly }, [0, 0]);
     if (old) return toast(`${old.name} is already here`);
-    const spot = await view.gen.buildingSpot(r.poly, opts.func, id);
+    // (With generated buildings to take away the stamp's own answer holds the spot: the plain check would refuse them.)
+    const spot = r.removed.length ? { x: r.x, y: r.y, name: r.name } : await view.gen.buildingSpot(r.poly, opts.func, id);
     if (!spot) return toast('The map could not answer: try again');
     if ('error' in spot) return toast(sentence(spot.short ?? spot.error));
     const c: Created = { id, kind: 'building', x: spot.x, y: spot.y, name: build.name.trim() || spot.name, poly: r.poly, ...opts };
