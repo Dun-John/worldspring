@@ -280,6 +280,22 @@ export interface Note {
   at?: [number, number];
 }
 
+/** How a link put down by hand goes (`links::WAYS`; the first is the default). */
+export const LINK_WAYS = ['stairs', 'ladder', 'passage', 'trapdoor', 'rope', 'portal'] as const;
+/** One end of a link put down by hand: a level id and a square on it. */
+export interface LinkEnd {
+  level: string;
+  x: number;
+  y: number;
+}
+/** A paired exit put down by hand (`Edits.links`). */
+export interface LinkEdit {
+  a: LinkEnd;
+  b: LinkEnd;
+  way: string;
+  name?: string;
+}
+
 export interface Edits {
   renames?: Record<string, string>;
   notes?: Record<string, Note>;
@@ -320,6 +336,11 @@ export interface Edits {
    * `<layout>/n<id>` a junction, `/e<id>` a street, `/k<id>` a block, `/r<id>` a row, `/a<id>` a
    * painted area, `/m<id>` a wall line; `lanes/…` lanes outside any town. Positions in world ft. */
   streets?: Record<string, unknown>;
+  /** Paired exits put down by hand (`j:<id>`; `crates/worldgen/src/links.rs`): two ends, each a
+   * level (`l:<site>:<level>`, levels from the bottom: a site underground `u:`/`k:`, a sewer section
+   * `w:<layout>:<sx>:<sy>`, a building's cellar `b:`) and a square on it; each shows on its own map as a
+   * `link` item with a way in the level's `links` (`far`). `way` one of `LINK_WAYS`. */
+  links?: Record<string, LinkEdit>;
 }
 
 /** An overland hex grid (`worldgen::world::HexGrid`; each field left out: its default, `HEX_DEFAULTS`):
@@ -919,7 +940,15 @@ export interface InteriorLevel {
   rim?: [number, number][];
   /** Ways to other sites (cellar trapdoors, stairs to deep dungeons, sewer ladders): the
    * square and the site's id; the other site has a way straight back. */
-  links?: { x: number; y: number; to: string }[];
+  links?: {
+    x: number;
+    y: number;
+    to: string;
+    /** A link put down by hand (`Edits.links`): its id, and where it comes out (the far site `to`'s
+     * level index, from the bottom, and square; that site's name; the link's own name; its way). */
+    id?: string;
+    far?: { level: number; x: number; y: number; name: string; label?: string; way: string };
+  }[];
   /** Floor height per square (underground sites; `interior::height`): a character per square (row-major), its
    * code - 48 the height above `elevation_ft` in half feet; absent where the level is flat. Read it with
    * `gen/floor.ts`. */

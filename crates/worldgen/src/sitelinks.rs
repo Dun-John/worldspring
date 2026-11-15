@@ -114,7 +114,7 @@ pub fn dress(world: &World, t0: &T0, layout: usize, it: &mut Interior) {
     for lv in it.levels.iter_mut() {
         if let Some(x) = lv.furniture.iter_mut().find(|f| f.kind == "exit") {
             x.name = name;
-            let link = Link { x: x.x, y: x.y, to: format!("b:{li}:{bi}") };
+            let link = Link { x: x.x, y: x.y, to: format!("b:{li}:{bi}"), id: String::new(), far: None };
             lv.links.push(link);
             return;
         }
@@ -122,7 +122,7 @@ pub fn dress(world: &World, t0: &T0, layout: usize, it: &mut Interior) {
 }
 
 /// Items `place_way` never takes away for a way: the ways and keys themselves, pictures and hangings.
-const KEPT: [&str; 13] = ["sprite", "trapdoor", "hoist_trapdoor", "link_down", "link_up", "exit", "up", "down", "ladder", "key", "spiral_stair", "tapestry", "banner"];
+pub(crate) const KEPT: [&str; 13] = ["sprite", "trapdoor", "hoist_trapdoor", "link_down", "link_up", "exit", "up", "down", "ladder", "key", "spiral_stair", "tapestry", "banner"];
 
 /// Put the way down to a site (item `kind`, `name`, linked `to`) on cellar level `lvl` so it reads at a glance:
 /// on a free floor square whose eight neighbours are free floor of its room (the app draws it bigger than its
@@ -224,6 +224,6 @@ pub fn place_way(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64
     let Some(k) = best else { return false };
     let (x, y) = ((k % nx) as u16, (k / nx) as u16);
     lvl.furniture.push(Item { kind, name, x, y, w: 1, h: 1, cover: 0, blocks_move: false, height_ft: 0.0, hazard: None, sprite: 0, back: None, variant: None });
-    lvl.links.push(Link { x, y, to });
+    lvl.links.push(Link { x, y, to, id: String::new(), far: None });
     true
 }

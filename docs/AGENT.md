@@ -69,6 +69,7 @@ pace.
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
 | `v:<id>` | A crossing put down by hand: a bridge, ford or ferry; takes a name and notes like a feature. |
+| `j:<id>` | A link put down by hand: a way from a square below ground (a site, sewer section or cellar) to another. |
 | `q:<id>` | A quay, pier or breakwater put down by hand. |
 | `rd:<8 hex>` | A road stretch, made from its two ends: the same across every edit that leaves the roads as generated; renamed and annotated like a feature. |
 | `h:<id>`, `g:<x>:<y>` | A plateau or pit; a block of ground brushed by hand (80 ft square, block indices). |
@@ -127,6 +128,7 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `raise_islet` | A rock islet in a river, lake or the sea (`at`, `radius_ft` 10-200, `rise_ft` 1-30; water at most 120 ft deep): a building, tower or castle may stand on it. With `id` (`h:`), changes one; `delete_plateau` takes it away. |
 | `place_wharf`, `list_wharves`, `remove_wharves` | A quay, pier or breakwater (`q:`) along a `path` (a pier's or breakwater's first point on the bank); a breakwater may carry a `lighthouse`. `place_crossing` takes `shops` on a bridge up to 80 ft wide: they follow it and go with it. |
 | `list_crossings`, `remove_crossings` | The crossings put down by hand (`{items, found}`, `limit` 200 by default); take some away by `id` or `ids`. |
+| `create_link`, `list_links`, `delete_link` | Paired exits below ground (`j:`): `create_link {a, b, way?, name?}` joins a square of a site underground, a sewer section or a cellar (each end `{at, x, y}`: a level, a room, or a site) to another; both maps show a way across naming the far end. `list_links` (`of`, `near`, `check` for problems), `delete_link` by `id` or `ids`. |
 | `get_hex_grid`, `set_hex_grid`, `hex_at` | The world's overland hex grid (size in miles, flat or pointy, line colour, width and opacity, origin offset, numbers; defaults where unset; `set_hex_grid` changes only the fields given, `reset` clears them). `hex_at` gives the hex of a place or point, or of a number (`0412`) or key (`"4,12"`): its number, centre and six corners (world ft) and its neighbours. |
 | `shape_ground` | Shape a battlemap's ground with a round brush, a dab (`at`, `radius_ft`) or a stroke (`path`, `width_ft`): `raise` or `lower` (`height_ft`, `hardness`), `smooth` or `restore` (`strength`). Dry ground lowered never sinks below the water beside it. Returns the blocks changed and the lowest and highest ground under it before and after. |
 | `set_plateau`, `delete_plateau` | A plateau or pit: a `poly` (or `outline`), or `around` a building, tower or site (its footprint grown by `margin_ft`), at `level_ft` above the sea or `rise_ft` above the ground there, with an `edge_ft` slope (0: a sheer cliff). With `id`, changes one; buildings on it stand at its level. |

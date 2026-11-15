@@ -441,6 +441,11 @@ pub struct Edits {
     /// record is one small op.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub streets: BTreeMap<String, Value>,
+    /// Paired exits put down by hand (`j:<id>` → `links::Link`): a square on a level of a site
+    /// underground, a sewer section or a building's cellar joined to another such square; each
+    /// end shows as a `link` item on its own map (`links::dress`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub links: BTreeMap<String, crate::links::Link>,
 }
 
 /// An overland hex grid's settings: `size_mi` across the flats (centre to neighbouring centre),
@@ -1651,6 +1656,24 @@ impl Edits {
                 at.level = Some((li as isize + delta).max(0) as usize);
             }
         }
+        // (A link with an end on a level filled in goes with it.)
+        let gone: Vec<String> = self
+            .links
+            .iter_mut()
+            .filter_map(|(k, l)| {
+                for e in [&mut l.a, &mut l.b] {
+                    match moved(&e.level) {
+                        Some(Some(id)) => e.level = id,
+                        Some(None) => return Some(k.clone()),
+                        None => {}
+                    }
+                }
+                None
+            })
+            .collect();
+        for k in gone {
+            self.links.remove(&k);
+        }
     }
 
     /// The live site `c` (being created, asked for at `asked`) would duplicate, if any
@@ -1737,7 +1760,7 @@ impl Edits {
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty()
             && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
-            && self.streets.is_empty()
+            && self.streets.is_empty() && self.links.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1817,6 +1840,7 @@ impl Edits {
             "cultures" => Some(one(&mut self.cultures, op, field, &key)),
             "hexes" => Some(one(&mut self.hexes, op, field, &key)),
             "streets" => Some(one(&mut self.streets, op, field, &key)),
+            "links" => Some(one(&mut self.links, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -1924,6 +1948,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("cultures", Shape::Map),
     ("hexes", Shape::Map),
     ("streets", Shape::Map),
+    ("links", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

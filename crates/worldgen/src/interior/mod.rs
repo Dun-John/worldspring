@@ -134,6 +134,24 @@ pub struct Link {
     pub x: u16,
     pub y: u16,
     pub to: String,
+    /// A link put down by hand (`Edits::links`): its id (`j:<id>`), and where it comes out.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub far: Option<Far>,
+}
+
+/// Where a link put down by hand comes out: the far site's level (index, bottom up) and square,
+/// the far site's name, the link's own name (if it has one) and its way (`links::WAYS`).
+#[derive(Serialize, Debug, Clone)]
+pub struct Far {
+    pub level: usize,
+    pub x: u16,
+    pub y: u16,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub way: &'static str,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -1438,7 +1456,7 @@ fn place_link(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2
     let Some(k) = best else { return false };
     let (x, y) = (k % nx, k / nx);
     lvl.furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover: 0, blocks_move: false, height_ft: 0.0, hazard: None, sprite: 0, back: None, variant: None });
-    lvl.links.push(Link { x: x as u16, y: y as u16, to });
+    lvl.links.push(Link { x: x as u16, y: y as u16, to, id: String::new(), far: None });
     true
 }
 
@@ -5294,6 +5312,15 @@ pub fn to_grid(it: &Interior, p: P) -> [f64; 2] {
 /// Interior by id: `b:<settlement>:<building>` or `t:<settlement>:<tower>` (wall towers,
 /// then gate towers, of that layout).
 pub fn generate_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
+    let mut it = generated_id(world, t0, id)?;
+    // (Paired exits put down by hand on its levels.)
+    if !world.file.edits.links.is_empty() {
+        crate::links::dress(world, t0, id, &mut it);
+    }
+    Some(it)
+}
+
+fn generated_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
     let mut parts = id.split(':');
     let kind = parts.next()?;
     let s: usize = parts.next()?.parse().ok()?;

@@ -36,6 +36,8 @@ pub enum IdsIn {
     /// Its keys are a bare layout number or one followed by `/…` (a town laid out by hand and its
     /// records: `town::hand`), seen as `t:<n>`; keys of no layout (`lanes/…`) name no place.
     TownPrefixed,
+    /// Each link's ends (`level`: a level id, `l:<site>:<level>`).
+    Links,
 }
 
 /// Every edits field that names a place, and how: layout-local ids (`b:<layout>:…`, `d:`, `t:`,
@@ -55,6 +57,7 @@ pub const LAYOUT_ID_FIELDS: &[(&str, IdsIn)] = &[
     ("streets", IdsIn::TownPrefixed),
     ("npcs", IdsIn::Npcs),
     ("plots", IdsIn::Plots),
+    ("links", IdsIn::Links),
 ];
 
 /// Settlement kinds, as the app's labels have them (`SETTLEMENT_KINDS` in `ui/gazetteer.ts`).
@@ -224,6 +227,7 @@ fn each_id(edits: &Edits, mut f: impl FnMut(&str)) {
             "streets" => edits.streets.keys().filter_map(|k| town_head(k)).for_each(|(li, _)| f(&format!("t:{li}"))),
             "npcs" => edits.npcs.values().filter_map(|n| n.location.as_ref()).for_each(|l| f(&l.id)),
             "plots" => edits.plots.values().flat_map(|p| &p.anchors).for_each(|k| f(k)),
+            "links" => edits.links.values().flat_map(|l| [&l.a.level, &l.b.level]).for_each(|k| f(k)),
             _ => unreachable!("a layout-id field each_id doesn't read"),
         }
     }
@@ -261,6 +265,11 @@ fn renamed(edits: &Edits, mut rename: impl FnMut(&str, bool) -> String) -> (Edit
     for p in out.plots.values_mut() {
         for a in p.anchors.iter_mut() {
             *a = to(a, false);
+        }
+    }
+    for l in out.links.values_mut() {
+        for e in [&mut l.a, &mut l.b] {
+            e.level = to(&e.level, false);
         }
     }
     (out, n)

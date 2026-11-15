@@ -135,6 +135,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `t:<layout>:<k>` | `t:0:2` | A wall tower |
 | `rd:<8 hex>` | `rd:c3517b52` | A road stretch (between settlements and junctions, as `list_roads` lists them). Made from its two ends (rounded to 10 ft, either way round; stretches with the same ends told apart by length, so two such twins may swap ids if a sketch change alters one's length), so it stays the same across every edit that leaves the roads as generated (renames, notes, sites, buildings, objects, crossings, town edits); a remake of the world, or a sketch change that moves one of its ends, gives it a new id. Renamed and annotated like a feature |
 | `v:<id>` | `v:zbfopudy` | A crossing put down by hand (bridge, ford, ferry): renamed and annotated like a feature |
+| `j:<id>` | `j:ohffcybs` | A link put down by hand: a way from a square below ground to another (`create_link`); `get_feature` gives its ends and `problems` |
 | `sq:<layout>:…` | `sq:0:p0`, `sq:0:20` | A town's square or park: `p<patch>` on a patch, `<corner>` where streets meet, `g<building>` a palace's garden, `r<road>` a cemetery by a road out |
 | `gt:<layout>:<corner>` | `gt:0:243` | A gate in a town's wall (while the town is walled) |
 | `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get_town_plan` |
@@ -1732,6 +1733,43 @@ The underground sites (`u:`) and buildings (`b:`) that have a design made by han
 1000, default 100): `{id, name, what: "site" or "building", kind, levels, x_ft, y_ft}` (`x_ft`/`y_ft` only while the site or building stands; one that is gone has `gone: true` instead; `world_overview`'s `designs_set_aside` also lists building designs that no longer fit, and a gone site only here). `within` (a box, a polygon or a circle
 `{at, radius_ft}`) keeps those whose place is inside. `get_feature` of one of them says `designed: true`; `reset_site_design`
 drops a design.
+
+## Links below ground (paired exits)
+
+A link put down by hand (`j:<id>`) joins a square of one place below ground to a square of another: a level of a
+site underground (`u:`, a keep's deep dungeons `k:`), a sewer section (`w:<layout>:<sx>:<sy>`) or a building's
+cellar (`b:`, a level below ground). Each end shows on its own map as a way across (item kind `link`, named by its
+way) that names the far end, so both maps have it; furniture on the square gives way. Ways (`way`): `stairs`
+(default), `ladder`, `passage`, `trapdoor`, `rope`, `portal`. An end is a level and a square: levels are counted from
+the bottom (`l:<site>:<level>`, as level and room ids are), squares as `get_site_design`'s plan numbers them (`x`
+across, `y` down, from 0). Places a link names change only by its ends; `get_feature` of a site or level lists its
+`links`, `describe_location` those with an end below the point. A level filled in (`set_site_design`) takes the
+links on it away; a remade world moves the ends with their places.
+
+### `create_link`
+| Parameter | Type | | |
+|---|---|---|---|
+| `a`, `b` | `{at, x, y}` | required | Each end. `at`: a level (`l:<site>:<level>`), a room (`r:<site>:<level>:<room>`; with no `x`/`y`, its free square nearest its middle), or a site: `u:`/`k:` (its top level, the way in), `w:` (a sewer section's walkway), `b:` (its cellar). `x`, `y`: the square. |
+| `way` | string | optional | How it goes: `stairs` (default), `ladder`, `passage`, `trapdoor`, `rope`, `portal`. |
+| `name` | string | optional | Its own name, shown with the far end's. |
+
+Both ends must be floor, off a building's stairs and off a way, key, hazard or picture already there, and not on
+another link's square; a building's end must be in a cellar. Refused with the reason (`a: 0,0 on level 1 of u:0:400
+is not floor`). Returns `{id, way, name?, a, b}`, each end `{level, site, x, y, name}` (`name`: the place's, as the
+far end's way names it).
+
+### `list_links`
+| Parameter | Type | | |
+|---|---|---|---|
+| `of` | string | optional | Only links with an end in this site (`u:`, `k:`, `w:`, `b:`) or level (`l:`). |
+| `near` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | optional | Only links with an end below this place: in the sewer section under it, or in a site or building whose place is within 100 ft. |
+| `check` | boolean | optional | Each with `problems`: what keeps an end from showing (its square no longer floor, a way now there, the place gone); empty when both show. |
+| `limit` | integer | optional | 1 to 2000, default 200 (`truncated: true` when it cut the list). |
+
+Returns `{items, found}` of links as `create_link` gives them.
+
+### `delete_link`
+`id` or `ids` (`j:…`; all or none): both ends go. A mistake names the id's place in the list (`ids[1]: no link j:zz`).
 
 ## Building interiors designed by hand
 

@@ -1687,6 +1687,13 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     if let Some(w) = edits.wharves.get(id) {
         return Some(crate::wharf::mid(w));
     }
+    // A link put down by hand at its first end.
+    if let Some(l) = edits.links.get(id) {
+        let (site, li) = crate::links::site_of(&l.a.level)?;
+        let it = crate::interior::generate_id(world, t0, site)?;
+        it.levels.get(li)?;
+        return Some(crate::interior::to_world(&it, l.a.x as f64 + 0.5, l.a.y as f64 + 0.5));
+    }
     // A point note at its spot (on its level, which must be there).
     if let Some((site, li, _)) = split_point_id(id) {
         let at = edits.notes.get(id)?.at?;
@@ -2415,6 +2422,13 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     if id.starts_with("rd:") || world.file.edits.crossings.contains_key(id) {
         return way_json(world, t0, id);
     }
+    // A link put down by hand: its ends, and what keeps either from showing.
+    if let Some(l) = world.file.edits.links.get(id) {
+        let mut v = crate::links::link_json(world, t0, id, l);
+        v["kind"] = json!("link");
+        v["problems"] = json!(crate::links::problems(world, t0, id, l));
+        return Some(v);
+    }
     let fs = features(world, t0);
     // (A building taken away: where it stood, while its place is in the world.)
     let here = || crate::world::layout_in_id(id).is_some_and(|li| li < town::layout_count(t0));
@@ -2587,6 +2601,10 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     let (npcs, plots) = authored_at(world, t0, &[id.to_string()]);
     v["npcs"] = json!(npcs);
     v["plots"] = json!(plots);
+    let links: Vec<Value> = crate::links::of(&world.file.edits, id).map(|(k, l)| crate::links::link_json(world, t0, k, l)).collect();
+    if !links.is_empty() {
+        v["links"] = json!(links);
+    }
     Some(v)
 }
 
@@ -2809,7 +2827,7 @@ pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
         ids.extend(h["settlement"].as_u64().and_then(|li| feature_of_layout(world, t0, li as usize)));
     }
     let (npcs, plots) = authored_at(world, t0, &ids);
-    json!({
+    let mut out = json!({
         "x_ft": x.round(),
         "y_ft": y.round(),
         "elevation_ft": (ground - sea).round(),
@@ -2821,7 +2839,32 @@ pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
         "here": here,
         "nearby": near,
         "nearest_settlements": nearest_settlements(&fs, p, "", 3),
-    })
+    });
+    let links = links_near(world, t0, p);
+    if !links.is_empty() {
+        out["links"] = json!(links);
+    }
+    out
+}
+
+/// The links put down by hand with an end below point `p`: in the sewer section under it, or in a
+/// site, keep or building whose place is within 100 ft.
+pub fn links_near(world: &World, t0: &T0, p: P) -> Vec<Value> {
+    let links = &world.file.edits.links;
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let s = crate::under::SEWER_SECTION_FT;
+    let (sx, sy) = (crate::core::floor(p[0] / s) as i64, crate::core::floor(p[1] / s) as i64);
+    let under = |site: &str| {
+        let n: Vec<i64> = site.split(':').skip(1).filter_map(|v| v.parse().ok()).collect();
+        match (site.as_bytes()[0], n.as_slice()) {
+            (b'w', [_, x, y]) => (*x, *y) == (sx, sy),
+            _ => position(world, t0, site).is_some_and(|q| geom::dist(p, q) <= 100.0),
+        }
+    };
+    let at = |e: &crate::links::End| crate::links::site_of(&e.level).is_some_and(|(site, _)| under(site));
+    links.iter().filter(|(_, l)| at(&l.a) || at(&l.b)).map(|(k, l)| crate::links::link_json(world, t0, k, l)).collect()
 }
 
 // ---------------------------------------------------------------------------------------

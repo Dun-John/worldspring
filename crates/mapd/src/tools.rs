@@ -81,6 +81,7 @@ pub fn list() -> Value {
         a.extend(crate::works::list());
         a.extend(crate::crossings::list());
         a.extend(crate::hexes::list());
+        a.extend(crate::links::list());
         a.extend(crate::ground::list());
         a.extend(crate::harbour::list());
         a.extend(crate::design::list());
@@ -111,11 +112,11 @@ pub fn list() -> Value {
 /// Tools that only read (or look): `readOnlyHint`.
 const READS: &[&str] = &[
     "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch",
+    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch", "list_links",
 ];
 /// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
 const DESTRUCTIVE: &[&str] = &[
-    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "reset_site_design", "set_site_design", "edit_town", "batch",
+    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "delete_link", "reset_site_design", "set_site_design", "edit_town", "batch",
 ];
 /// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
 /// `focus_view` and the creates that return what is already there.
@@ -241,6 +242,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::hexes::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::links::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::crossings::call(app, name, &a).await {
