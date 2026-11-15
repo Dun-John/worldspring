@@ -11,7 +11,7 @@
   import type { HeldView } from '../editor/placing';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
   import { BOSS } from '../editor/site/designer';
-  import { cellarsOf, SPANS, TERRAIN } from '../editor/site/model';
+  import { cellarsOf, landingReason, SPANS, TERRAIN } from '../editor/site/model';
   import { INSIDE_GROUPS, itemGroup, looks, turnsInside } from '../editor/itemGroups';
   import { HOUSES, houseOf, lookName } from '../render/furniture';
   import { InteriorLayer, lockColor } from '../render/InteriorLayer';
@@ -221,7 +221,7 @@
     </InHand>
   {/if}
   {#if !peek}
-    <div><b>{tool?.label}</b> <span class="ws-hint">{tool?.hint}</span></div>
+    <div><b>{tool?.label}</b> <span class="ws-hint">{tool?.key === 'landing' && draft ? (landingReason(draft, level) ?? tool.hint) : tool?.hint}</span></div>
 
     {#if settings.mode === 'room' || settings.mode === 'rect'}
       <label class="ws-field">

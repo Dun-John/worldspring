@@ -27,7 +27,7 @@ import type { MapView, PointerTool } from '../../render/MapView';
 import { APSE_E, APSE_N, APSE_S, APSE_W, isApse } from '../../render/roomShapes';
 import { FINGER_PX, WheelTurn, type BarAt, type HandState, type HeldView, type Placer } from '../placing';
 import { lockColor } from '../../render/InteriorLayer';
-import { setLanding, addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, paintTerrain, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
+import { landingReason, setLanding, addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, paintTerrain, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
 
 export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'terrain' | 'prop' | 'stairs' | 'wall' | 'merge' | 'landing';
 
@@ -609,6 +609,8 @@ export class SiteDesigner implements PointerTool, Placer {
         });
       }
       case 'landing': {
+        const why = landingReason(d, li);
+        if (why) return this.host.hint(why);
         const here = d.levels[li].landing;
         if (here && here[0] === sq[0] && here[1] === sq[1]) return void this.change((n) => setLanding(n, li, null));
         if (cells[k] < 0) return this.host.hint('The stairs come out on the floor');
