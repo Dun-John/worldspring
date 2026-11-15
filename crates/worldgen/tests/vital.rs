@@ -5542,9 +5542,12 @@ fn islet_and_deck_edits(base: &World) {
     let outline = [[b[0] - 30.0, b[1] - 30.0], [b[0] + 30.0, b[1] - 30.0], [b[0] + 30.0, b[1] + 30.0], [b[0] - 30.0, b[1] + 30.0]];
     ex.world.file.edits.plateaus.insert("h:up".into(), worldgen::ground::plateau_for(&outline, gb as f64 + 60.0, 0.0).unwrap());
     let c = Crossing { kind: CrossingKind::Bridge, a, b, width: 20.0, material: Default::default() };
-    let (da, db) = worldgen::battlemap::hand_deck_ends(&c, &ex.world, &ex.t0);
+    let deck = worldgen::battlemap::hand_deck_ends(&c, &ex.world, &ex.t0);
+    let (da, db) = deck.ends;
     assert!(db > da + 10.0 && (db - da) as f64 <= worldgen::battlemap::DECK_GRADE_MAX * 200.0 + 0.01, "the deck's ends {da} and {db}");
-    assert!(worldgen::battlemap::deck_level((da, db), 0.5) > da && worldgen::battlemap::deck_level((da, db), 0.5) < db, "the deck doesn't climb");
+    assert!(deck.level(0.5) > da && deck.level(0.5) < db, "the deck doesn't climb");
+    // (Its far end is the plateau's middle: the deck is at its end's level from the plateau's edge, 170 ft along, on.)
+    assert!((deck.level(0.85) - db).abs() < 0.01 && deck.level(0.8) < db, "the deck doesn't meet the plateau's edge: {deck:?}");
 }
 
 // R5 121

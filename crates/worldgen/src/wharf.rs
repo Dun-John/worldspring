@@ -267,7 +267,7 @@ pub fn deck_level_at(world: &crate::world::World, t0: &T0, on: &str, p: P) -> Op
     let Some(c) = world.file.edits.crossings.get(on).filter(|_| on.starts_with("v:")) else { return Some(top) };
     let len = c.length().max(1e-6);
     let t = ((p[0] - line[0][0]) * (line[1][0] - line[0][0]) + (p[1] - line[0][1]) * (line[1][1] - line[0][1])) / (len * len);
-    Some(crate::battlemap::deck_level(crate::battlemap::hand_deck_ends(c, world, t0), t))
+    Some(crate::battlemap::hand_deck_ends(c, world, t0).level(t))
 }
 
 /// The hand bridge whose deck footprint `poly` (world ft) stands wholly on, if one: its id, and

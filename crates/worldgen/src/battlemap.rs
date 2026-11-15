@@ -1097,7 +1097,7 @@ pub fn hand_decks(c: &crate::world::Crossing) -> Vec<Vec<[f64; 2]>> {
 /// of the highest water under it (rivers, lakes, the sea), else level with the lower end. A
 /// ferry's line runs between its jetties' ends, `JETTY_FT` out from the points given. Pure
 /// functions of the world, so every chunk finds the same.
-fn hand_crossing(c: &crate::world::Crossing, world: &World, t0: &T0) -> (CrossingShape, (f32, f32)) {
+fn hand_crossing(c: &crate::world::Crossing, world: &World, t0: &T0) -> (CrossingShape, Deck) {
     use crate::world::CrossingKind as K;
     let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
     let (kind, a, b) = match c.kind {
@@ -1106,7 +1106,7 @@ fn hand_crossing(c: &crate::world::Crossing, world: &World, t0: &T0) -> (Crossin
         K::Ferry => (ShapeKind::Ferry, [c.a[0] + u[0] * JETTY_FT, c.a[1] + u[1] * JETTY_FT], [c.b[0] - u[0] * JETTY_FT, c.b[1] - u[1] * JETTY_FT]),
     };
     let raft = (kind == ShapeKind::Ferry).then(|| raft_on(a, b, c.width));
-    let top = if kind == ShapeKind::RoadBridge { hand_deck_ends(c, world, t0) } else { (f32::MIN, f32::MIN) };
+    let top = if kind == ShapeKind::RoadBridge { hand_deck_ends(c, world, t0) } else { Deck { ends: (f32::MIN, f32::MIN), span: (0.0, 1.0) } };
     (CrossingShape { kind, a, b, size: c.width, raft, dropped: false, stone: c.material == crate::world::CrossingMaterial::Stone }, top)
 }
 
@@ -1132,11 +1132,28 @@ fn deck_water(a: [f64; 2], b: [f64; 2], t0: &T0) -> Option<f32> {
 /// The steepest a hand bridge's deck climbs (ft per ft of its length): 1 in 8.
 pub const DECK_GRADE_MAX: f64 = 0.125;
 
-/// A hand bridge's deck level (ft) at its two ends, `a` then `b` (P6 6b): it climbs straight from one to the other, each
-/// end at the ground there (the world's ground as edited: a plateau's top, an islet's) or clear of the water under the
-/// deck, whichever is higher; the climb is capped at `DECK_GRADE_MAX` from the lower end, so a long bridge that meets a
-/// cliff runs into its face rather than rising steeply. A pure function of the world.
-pub fn hand_deck_ends(c: &crate::world::Crossing, world: &World, t0: &T0) -> (f32, f32) {
+/// A hand bridge's deck (`hand_deck_ends`): its level (ft) at its two ends, `a` then `b`, reached at `span` (0 to 1 along
+/// it from `a`): an end on a plateau is at the plateau's level from where the deck meets its edge on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Deck {
+    pub ends: (f32, f32),
+    pub span: (f64, f64),
+}
+
+impl Deck {
+    /// The deck level (ft) `t` (0 to 1) of the way along it from `a`.
+    pub fn level(&self, t: f64) -> f32 {
+        let (s0, s1) = self.span;
+        deck_level(self.ends, if s1 - s0 > 1e-9 { (t - s0) / (s1 - s0) } else { 0.5 })
+    }
+}
+
+/// A hand bridge's deck (P6 6b): it climbs straight from one end to the other, each end at the ground there (the world's
+/// ground as edited: a plateau's top, an islet's) or clear of the water under the deck, whichever is higher; an end on a
+/// plateau (or islet) drawn by hand keeps that level from the plateau's edge in, so the deck meets the top at the edge.
+/// The climb is capped at `DECK_GRADE_MAX` from the lower end, so a long bridge that meets a cliff runs into its face
+/// rather than rising steeply. A pure function of the world.
+pub fn hand_deck_ends(c: &crate::world::Crossing, world: &World, t0: &T0) -> Deck {
     hand_deck(c, world, t0).0
 }
 
@@ -1145,7 +1162,30 @@ pub fn hand_deck_short(c: &crate::world::Crossing, world: &World, t0: &T0) -> f3
     hand_deck(c, world, t0).1
 }
 
-fn hand_deck(c: &crate::world::Crossing, world: &World, t0: &T0) -> ((f32, f32), f32) {
+/// How far (0 to 1 of the way from `end` to `other`) the deck first leaves a plateau drawn by hand that `end` stands on
+/// at `level` (ft): the nearest crossing of the outline of each such plateau (one as high as the end, within 1 ft).
+fn plateau_edge(end: [f64; 2], other: [f64; 2], level: f32, world: &World) -> Option<f64> {
+    let d = [other[0] - end[0], other[1] - end[1]];
+    let mut best: Option<f64> = None;
+    for p in world.file.edits.plateaus.values().filter(|p| p.level >= level - 1.0 && p.level <= level + 1.0 && crate::town::geom::contains(&p.pts, end)) {
+        for (i, &q0) in p.pts.iter().enumerate() {
+            let q1 = p.pts[(i + 1) % p.pts.len()];
+            let e = [q1[0] - q0[0], q1[1] - q0[1]];
+            let den = d[0] * e[1] - d[1] * e[0];
+            if den.abs() < 1e-12 {
+                continue;
+            }
+            let w = [q0[0] - end[0], q0[1] - end[1]];
+            let (s, u) = ((w[0] * e[1] - w[1] * e[0]) / den, (w[0] * d[1] - w[1] * d[0]) / den);
+            if s > 0.0 && s < 1.0 && (0.0..=1.0).contains(&u) && best.is_none_or(|b| s < b) {
+                best = Some(s);
+            }
+        }
+    }
+    best
+}
+
+fn hand_deck(c: &crate::world::Crossing, world: &World, t0: &T0) -> (Deck, f32) {
     let rect = [c.a[0].min(c.b[0]) - 20.0, c.a[1].min(c.b[1]) - 20.0, c.a[0].max(c.b[0]) + 20.0, c.a[1].max(c.b[1]) + 20.0];
     let shaper = crate::ground::Shaper::build(&world.file.edits, Some(t0), rect, SQUARE_FT);
     let ground = |p: [f64; 2]| {
@@ -1153,16 +1193,22 @@ fn hand_deck(c: &crate::world::Crossing, world: &World, t0: &T0) -> ((f32, f32),
         shaper.as_ref().map_or(g, |s| s.at_point(p[0], p[1], g, t0.sample_water(p[0], p[1])))
     };
     let base = deck_water(c.a, c.b, t0).unwrap_or(f32::MIN);
-    let (la, lb) = (ground(c.a).max(base), ground(c.b).max(base));
-    let cap = (DECK_GRADE_MAX * c.length()) as f32;
+    let (ga, gb) = (ground(c.a), ground(c.b));
+    let (la, lb) = (ga.max(base), gb.max(base));
+    // (An end on a plateau above the water's clearance: the deck reaches its level where it meets the plateau's edge.)
+    let sa = if ga >= base { plateau_edge(c.a, c.b, ga, world).unwrap_or(0.0) } else { 0.0 };
+    let sb = if gb >= base { 1.0 - plateau_edge(c.b, c.a, gb, world).unwrap_or(0.0) } else { 1.0 };
+    let span = if sb > sa { (sa, sb) } else { (0.0, 1.0) };
+    let cap = (DECK_GRADE_MAX * c.length() * (span.1 - span.0)) as f32;
     // (With no water under it and ends level, the old flat deck at the lower end: both ends the same.)
-    if la > lb + cap {
+    let (ends, short) = if la > lb + cap {
         ((lb + cap, lb), la - lb - cap)
     } else if lb > la + cap {
         ((la, la + cap), lb - la - cap)
     } else {
         ((la, lb), 0.0)
-    }
+    };
+    (Deck { ends, span }, short)
 }
 
 /// The deck level (ft) `t` (0 to 1) of the way along a deck with ends `(a, b)`.
@@ -1172,7 +1218,7 @@ pub fn deck_level(ends: (f32, f32), t: f64) -> f32 {
 
 /// A hand bridge's deck level at its middle (`hand_deck_ends`).
 pub fn hand_deck_top(c: &crate::world::Crossing, world: &World, t0: &T0) -> f32 {
-    deck_level(hand_deck_ends(c, world, t0), 0.5)
+    hand_deck_ends(c, world, t0).level(0.5)
 }
 
 /// Bridge decks that overlap (a road crossing a meander twice, two roads at a confluence)
@@ -2429,7 +2475,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Crossings put down by hand (`Edits::crossings`) near this chunk, over whatever is there:
     // a bridge's planks wherever the ground is below its deck, a ford's bed brought up to
     // wading depth, a ferry's jetties and raft (with the generated ferries' below).
-    let hand: Vec<(CrossingShape, (f32, f32))> = world
+    let hand: Vec<(CrossingShape, Deck)> = world
         .file
         .edits
         .crossings
@@ -2457,7 +2503,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 if along < 0.0 || along > len || across.abs() > 0.5 * c.size {
                     continue;
                 }
-                let top = deck_level(*top, if len > 0.0 { along / len } else { 0.0 });
+                let top = top.level(if len > 0.0 { along / len } else { 0.0 });
                 if c.kind == ShapeKind::RoadBridge && hh[h] < top - 0.5 {
                     lift[h] += top - hh[h];
                     hh[h] = top;
