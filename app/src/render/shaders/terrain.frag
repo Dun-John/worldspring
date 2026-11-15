@@ -4,6 +4,8 @@
 // ripple lines, beaches, map symbols (forest canopy, conifers, marsh, sand, tufts, scree),
 // slope hachures, ink contours and coastline, paper grain.
 //
+// uWorld: the tile's origin (ft) and size (ft), for fields anchored to the world (tundra snow).
+// uSeed: the world's seed as two 16-bit halves.
 // uTex:  f16 (h - uBase, dh/dx, dh/dy, water - uBase) per sample.
 // uBio:  u8 (primary biome, secondary biome, blend, coast distance sqrt-encoded) per sample.
 // Symbol patterns live in two world-anchored octaves (uPat0/uPat1: origin mod 256 in cells,
@@ -25,6 +27,7 @@ uniform vec2 uGrainOrigin;
 uniform float uTilePx;
 uniform vec4 uPat0;
 uniform vec4 uPat1;
+uniform vec4 uWorld;
 
 // Per frame.
 uniform float uExag;
@@ -34,6 +37,7 @@ uniform float uIndexEvery;
 uniform float uFtPerPx;
 uniform float uPatMix;
 uniform float uPatAlpha;
+uniform vec2 uSeed;
 
 const vec3 INK = vec3(0.20, 0.18, 0.16);
 const vec3 CONTOUR_INK = vec3(0.42, 0.33, 0.24);
@@ -45,7 +49,7 @@ const vec3 PALETTE[19] = vec3[19](
     vec3(0.54, 0.63, 0.66), // ocean
     vec3(0.62, 0.72, 0.74), // lake
     vec3(0.95, 0.95, 0.93), // ice
-    vec3(0.80, 0.80, 0.66), // tundra (moor and heath: grass and heather patches, see `moorTone`)
+    vec3(0.80, 0.80, 0.66), // tundra (grass and snow patches, heather among the grass, see `moorTone`)
     vec3(0.74, 0.71, 0.64), // alpine
     vec3(0.64, 0.69, 0.57), // taiga
     vec3(0.68, 0.74, 0.54), // temperate forest
@@ -68,6 +72,7 @@ const vec3 PALETTE[19] = vec3[19](
 const int SYMBOL[19] = int[19](0, 0, 0, 9, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
 const vec3 HEATHER = vec3(0.79, 0.74, 0.70);
 const vec3 MOOR_GRASS = vec3(0.75, 0.79, 0.60);
+const vec3 SNOW = vec3(0.94, 0.95, 0.94);
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -204,8 +209,9 @@ vec4 symbol(vec2 p, int kind, float aa) {
         return vec4(0.0, 1.0 - smoothstep(0.0, aa, l), 0.0, 0.0);
     }
     if (kind == 9) {
-        // Heath: a few low heather clumps (three lobes, inked), grass tufts between them.
-        if (h.x < 0.05) {
+        // Heath: a few low heather clumps (three lobes, inked), grass tufts between them (tundra:
+        // drawn on its grass only).
+        if (h.x < 0.035) {
             float r = 0.14 + 0.04 * h.y;
             float sd = min(min(length(d - vec2(-0.6, 0.25) * r), length(d - vec2(0.6, 0.25) * r)), length(d + vec2(0.0, 0.45) * r)) - r;
             float fill = 1.0 - smoothstep(-aa, 0.0, sd);
@@ -227,21 +233,69 @@ vec4 symbol(vec2 p, int kind, float aa) {
     return vec4(0.0);
 }
 
-// Moor tone at pattern coordinate p (cells): big soft patches of heather and of greener grass over
-// the pale heath, a few to a screen. World-anchored and seamless: the noise lattice is turned 45
-// degrees by a whole-number matrix (so its rows don't show) and repeats every 256 cells like the
-// pattern origin. The coordinates are warped by a slower noise of the same period, so patch
-// outlines wind instead of running straight along the lattice. Heather is a gentle mauve accent,
-// kept off the grass patches so the two never stack into a dark blot.
-vec3 moorTone(vec3 col, vec2 p) {
+// Tundra snow: the battlemap's field (`t0::biome::tundra_snow`, same constants and 32-bit hashing,
+// so the map and the battlemaps agree on where snow lies) at world position w (ft). An octave
+// fades to its mean (a warp to nothing) once its wavelength is under ~12 px, so it never shimmers.
+uint snowHash(uint h) {
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    return h ^ (h >> 16);
+}
+
+float snowNoise(vec2 p, uint s) {
+    vec2 i = floor(p);
+    vec2 f = p - i;
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    ivec2 c = ivec2(i);
+    uint x0 = uint(c.x) * 0x9e3779b1u, x1 = uint(c.x + 1) * 0x9e3779b1u;
+    uint y0 = uint(c.y) * 0x85ebca77u, y1 = uint(c.y + 1) * 0x85ebca77u;
+    float a = float(snowHash(x0 ^ y0 ^ s) >> 8u);
+    float b = float(snowHash(x1 ^ y0 ^ s) >> 8u);
+    float d = float(snowHash(x0 ^ y1 ^ s) >> 8u);
+    float e = float(snowHash(x1 ^ y1 ^ s) >> 8u);
+    return mix(mix(a, b, u.x), mix(d, e, u.x), u.y) / 16777216.0;
+}
+
+float snowFade(float wavelength) {
+    return clamp((wavelength / uFtPerPx - 4.0) / 8.0, 0.0, 1.0);
+}
+
+float tundraSnow(vec2 w) {
+    uint seed = uint(uSeed.x) | (uint(uSeed.y) << 16u);
+    uint s[8];
+    for (int k = 1; k < 8; k++) s[k] = snowHash(seed + uint(k) * 0x632be5abu);
+    vec2 r = vec2(0.8 * w.x - 0.6 * w.y, 0.6 * w.x + 0.8 * w.y);
+    r += 700.0 * snowFade(2600.0) * (vec2(snowNoise(r / 2600.0, s[1]), snowNoise(r / 2600.0, s[2])) - 0.5);
+    float f = snowFade(520.0);
+    if (f > 0.0) r += 160.0 * f * (vec2(snowNoise(r / 520.0, s[3]), snowNoise(r / 520.0, s[4])) - 0.5);
+    float n = 0.55 * mix(0.5, snowNoise(r / 1500.0, s[5]), snowFade(1500.0));
+    n += 0.3 * mix(0.5, snowNoise(r / 620.0, s[6]), snowFade(620.0));
+    f = snowFade(240.0);
+    return n + 0.15 * (f > 0.0 ? mix(0.5, snowNoise(r / 240.0, s[7]), f) : 0.5);
+}
+
+// Tundra tone at pattern coordinate p (cells): big soft patches of grass and of snow, with a
+// little heather among the grass. `world` is `tundraSnow` here and `near` how much of it to
+// use: zoomed far out (where its octaves have faded) the patches come from pattern noise
+// instead, a few to a screen. The pattern noise is world-anchored and seamless: its lattice is
+// turned 45 degrees by a whole-number matrix and repeats every 256 cells like the pattern
+// origin, its coordinates warped by a slower noise of the same period so outlines wind.
+// `snow` is set to the snow cover (0..1); soft edges, no ink.
+vec3 moorTone(vec3 col, vec2 p, float world, float near, out float snow) {
     vec2 r = vec2(p.x + p.y, p.y - p.x);
     r += 20.0 * (vec2(pnoise(r / 64.0 + 13.0, 4.0), pnoise(r / 64.0 + 29.0, 4.0)) - 0.5);
     r += 6.0 * (vec2(pnoise(r / 16.0 + 41.0, 16.0), pnoise(r / 16.0 + 53.0, 16.0)) - 0.5);
     float n = 0.65 * pnoise(r / 32.0, 8.0) + 0.25 * pnoise(r / 16.0 + 3.0, 16.0) + 0.1 * pnoise(r / 8.0 + 9.0, 32.0);
-    float m = 0.6 * pnoise(r / 32.0 + 5.0, 8.0) + 0.3 * pnoise(r / 16.0 + 7.0, 16.0) + 0.1 * pnoise(r / 8.0 + 17.0, 32.0);
-    float grass = smoothstep(0.48, 0.64, m);
-    col = mix(col, col * (MOOR_GRASS / PALETTE[3]), 0.75 * grass);
-    return mix(col, col * (HEATHER / PALETTE[3]), 0.6 * smoothstep(0.54, 0.68, n) * (1.0 - grass));
+    float m = near < 1.0 ? 0.6 * pnoise(r / 32.0 + 5.0, 8.0) + 0.3 * pnoise(r / 16.0 + 7.0, 16.0) + 0.1 * pnoise(r / 8.0 + 17.0, 32.0) : 0.5;
+    // Edges soft, ~40 px wide: the world field's are sharpened as it is zoomed in (it changes
+    // about 0.0005 a foot), the pattern field's stay at a few cells.
+    float w = mix(0.03, clamp(0.008 * uFtPerPx, 0.005, 0.03), near);
+    snow = smoothstep(0.5 - w, 0.5 + w, mix(m, world, near));
+    vec3 grass = mix(col, col * (MOOR_GRASS / PALETTE[3]), 0.6);
+    grass = mix(grass, grass * (HEATHER / PALETTE[3]), 0.35 * smoothstep(0.58, 0.72, n));
+    return mix(grass, SNOW, 0.8 * snow);
 }
 
 void main() {
@@ -266,17 +320,23 @@ void main() {
 
     float slope = length(g);
     vec3 col;
+    float moor = 0.0;
+    float snowy = 0.0;
     if (wet) {
         float d = clamp(depth / 6000.0, 0.0, 1.0);
         col = mix(vec3(0.70, 0.78, 0.77), vec3(0.52, 0.62, 0.66), sqrt(d));
     } else {
         col = mix(PALETTE[b1], PALETTE[b2], blend * 0.5);
-        // Moors and heaths (tundra): grass and heather patches, the two pattern octaves crossfaded.
-        float moor = (b1 == 3 ? 1.0 - blend * 0.5 : 0.0) + (b2 == 3 ? blend * 0.5 : 0.0);
+        // Tundra: grass and snow patches, the two pattern octaves crossfaded.
+        moor = (b1 == 3 ? 1.0 - blend * 0.5 : 0.0) + (b2 == 3 ? blend * 0.5 : 0.0);
         if (moor > 0.0) {
-            vec3 m0 = moorTone(col, uPat0.xy + vLocal * uPat0.z);
-            vec3 m1 = moorTone(col, uPat1.xy + vLocal * uPat1.z);
+            float near = snowFade(1500.0);
+            float world = near > 0.0 ? tundraSnow(uWorld.xy + vLocal * uWorld.z) : 0.5;
+            float sn0, sn1;
+            vec3 m0 = moorTone(col, uPat0.xy + vLocal * uPat0.z, world, near, sn0);
+            vec3 m1 = moorTone(col, uPat1.xy + vLocal * uPat1.z, world, near, sn1);
             col = mix(col, mix(m0, m1, uPatMix), moor);
+            snowy = mix(sn0, sn1, uPatMix);
         }
         float above = h - water;
         bool beachy = b1 != 2 && b1 != 3 && b1 != 5 && b1 != 14;
@@ -319,6 +379,8 @@ void main() {
             s1 *= clamp((uPatMix * 1.1 - 0.05 - hash21(c1 + 13.1)) * 20.0, 0.0, 1.0);
         }
         vec4 s = (s0 + s1 * (1.0 - max(s0.x, s0.y))) * uPatAlpha;
+        // Tundra's heath symbols only on its grass, never on the snow.
+        if (moor > 0.0) s *= 1.0 - smoothstep(0.25, 0.5, snowy);
         col *= 1.0 - 0.16 * s.w;
         // Crown fill: a little darker and more saturated than the ground, then shaded.
         vec3 crown = col * 0.78;

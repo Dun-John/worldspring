@@ -1194,6 +1194,7 @@ export class MapView {
     this.overlay = this.baseOverlay = overlay;
     this.islets = null;
     this.tiles = new TileLayer(geom, this.gen);
+    this.tiles.seed = world.seed;
     this.labels = new Labels(overlay.features);
     this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);
     this.lanes.on = this.seaLanes;

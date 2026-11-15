@@ -793,6 +793,13 @@ fn atmosphere_for(b: Biome, h: u64) -> Atmosphere {
     }
 }
 
+/// Whether tundra square `k` of the chunk at (`ox`, `oy`) lies in a snow patch
+/// (`t0::biome::tundra_snow` at the square's centre; the map draws the same patches).
+fn tundra_snowy(world: &World, ox: f64, oy: f64, k: usize) -> bool {
+    let (x, y) = (ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT);
+    crate::t0::biome::tundra_snow(world.file.seed, x, y) >= crate::t0::biome::TUNDRA_SNOW_AT
+}
+
 fn surface_for(b: Biome, slope: f64) -> Surface {
     if slope > 0.9 {
         return Surface::Rock;
@@ -3163,7 +3170,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         } else if beach(depth as f64, chunk.water_level[k] as f64, sea, slope[k]) {
             Surface::Sand
         } else {
-            surface_for(biome[k], slope[k])
+            match surface_for(biome[k], slope[k]) {
+                // Tundra: patches of snow among the grass, where the map draws them.
+                Surface::Grass if biome[k] == Biome::Tundra && tundra_snowy(world, ox, oy, k) => Surface::Snow,
+                s => s,
+            }
         };
         if depth <= 0.0 {
             // The ground's own kind, under any keep-clear mark.
@@ -3999,6 +4010,10 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
                 if biome[k] != b || c.surface[k].is_road() || c.building[k] != 0 {
                     continue;
                 }
+                // Tundra: no bushes on its snow patches, no drifts on its grass.
+                if b == Biome::Tundra && matches!((c.surface[k], kind), (Surface::Snow, Kind::Bush) | (Surface::Grass, Kind::Snowdrift)) {
+                    continue;
+                }
                 if c.urban[k] != 0 {
                     if !yard.ok.get(k).is_some_and(|&v| v) {
                         continue;
@@ -4369,6 +4384,8 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         0 if c.urban[k] == URBAN_FIELD => field_cover(c, k, biome[k], false, rng),
         0 if green(c, k) => green_cover(biome[k], false, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
+        // (Tundra's grass patches: no drifts, those keep to its snow.)
+        0 if biome[k] == Biome::Tundra && c.surface[k] == Surface::Grass => [Kind::Boulder, Kind::Bush, Kind::RockPile][rng.below(3) as usize],
         0 => fallback_cover(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], false, rng),
     };
