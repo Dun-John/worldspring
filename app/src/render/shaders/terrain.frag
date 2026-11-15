@@ -66,8 +66,8 @@ const vec3 PALETTE[19] = vec3[19](
 // Symbol per biome: 0 none, 1 canopy, 2 conifer, 3 dense canopy, 4 marsh, 5 sand, 6 sparse dots, 7 tufts, 8 scree,
 // 9 heath (heather clumps and grass tufts).
 const int SYMBOL[19] = int[19](0, 0, 0, 9, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
-const vec3 HEATHER = vec3(0.70, 0.60, 0.64);
-const vec3 MOOR_GRASS = vec3(0.73, 0.77, 0.57);
+const vec3 HEATHER = vec3(0.79, 0.74, 0.70);
+const vec3 MOOR_GRASS = vec3(0.75, 0.79, 0.60);
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -205,15 +205,15 @@ vec4 symbol(vec2 p, int kind, float aa) {
     }
     if (kind == 9) {
         // Heath: a few low heather clumps (three lobes, inked), grass tufts between them.
-        if (h.x < 0.07) {
-            float r = 0.12 + 0.04 * h.y;
+        if (h.x < 0.05) {
+            float r = 0.14 + 0.04 * h.y;
             float sd = min(min(length(d - vec2(-0.6, 0.25) * r), length(d - vec2(0.6, 0.25) * r)), length(d + vec2(0.0, 0.45) * r)) - r;
             float fill = 1.0 - smoothstep(-aa, 0.0, sd);
             float ink = 1.0 - smoothstep(0.0, aa * 1.4, abs(sd));
             float shade = smoothstep(r - aa, r + aa, length(d + vec2(0.35 * r, 0.6 * r)));
             return vec4(fill, ink, (0.25 + 0.5 * shade) * fill, 0.0);
         }
-        if (h.x > 0.18) return vec4(0.0);
+        if (h.x > 0.13) return vec4(0.0);
         float l = min(segment(d, vec2(-0.07, 0.05), vec2(-0.03, -0.06)), segment(d, vec2(0.0, 0.05), vec2(0.0, -0.07)));
         l = min(l, segment(d, vec2(0.07, 0.05), vec2(0.03, -0.06)));
         return vec4(0.0, 0.8 * (1.0 - smoothstep(0.0, aa, l)), 0.0, 0.0);
@@ -230,13 +230,18 @@ vec4 symbol(vec2 p, int kind, float aa) {
 // Moor tone at pattern coordinate p (cells): big soft patches of heather and of greener grass over
 // the pale heath, a few to a screen. World-anchored and seamless: the noise lattice is turned 45
 // degrees by a whole-number matrix (so its rows don't show) and repeats every 256 cells like the
-// pattern origin.
+// pattern origin. The coordinates are warped by a slower noise of the same period, so patch
+// outlines wind instead of running straight along the lattice. Heather is a gentle mauve accent,
+// kept off the grass patches so the two never stack into a dark blot.
 vec3 moorTone(vec3 col, vec2 p) {
     vec2 r = vec2(p.x + p.y, p.y - p.x);
-    float n = 0.75 * pnoise(r / 32.0, 8.0) + 0.25 * pnoise(r / 16.0 + 3.0, 16.0);
-    float m = 0.7 * pnoise(r / 32.0 + 5.0, 8.0) + 0.3 * pnoise(r / 16.0 + 7.0, 16.0);
-    col = mix(col, col * (MOOR_GRASS / PALETTE[3]), 0.8 * smoothstep(0.5, 0.62, m));
-    return mix(col, col * (HEATHER / PALETTE[3]), 0.75 * smoothstep(0.56, 0.66, n));
+    r += 20.0 * (vec2(pnoise(r / 64.0 + 13.0, 4.0), pnoise(r / 64.0 + 29.0, 4.0)) - 0.5);
+    r += 6.0 * (vec2(pnoise(r / 16.0 + 41.0, 16.0), pnoise(r / 16.0 + 53.0, 16.0)) - 0.5);
+    float n = 0.65 * pnoise(r / 32.0, 8.0) + 0.25 * pnoise(r / 16.0 + 3.0, 16.0) + 0.1 * pnoise(r / 8.0 + 9.0, 32.0);
+    float m = 0.6 * pnoise(r / 32.0 + 5.0, 8.0) + 0.3 * pnoise(r / 16.0 + 7.0, 16.0) + 0.1 * pnoise(r / 8.0 + 17.0, 32.0);
+    float grass = smoothstep(0.48, 0.64, m);
+    col = mix(col, col * (MOOR_GRASS / PALETTE[3]), 0.75 * grass);
+    return mix(col, col * (HEATHER / PALETTE[3]), 0.6 * smoothstep(0.54, 0.68, n) * (1.0 - grass));
 }
 
 void main() {
