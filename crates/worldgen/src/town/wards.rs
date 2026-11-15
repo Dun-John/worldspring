@@ -181,9 +181,11 @@ const NOT_PARK: &str = "only a park's patch is laid out as a garden: give it the
 /// Why a patch outside the town's districts (a farm's, open country) takes none.
 const OUTSIDE_DISTRICT: &str = "a district holds the town's patches only: this one is open country, in no district";
 
-/// Whether patch `p` is in one of the town's districts as generated (in the town or its sprawl).
-fn in_a_district(plan: &TownPlan, p: usize) -> bool {
-    plan.quarters.iter().any(|(_, m)| m.contains(&p))
+/// Whether patch `p` is in one of the town's districts as generated (in the town or its sprawl),
+/// or joins one with the ward `w` it is given by hand (R6 P8: built on, not a farm's,
+/// `districts::of`).
+fn in_a_district(plan: &TownPlan, p: usize, w: Option<Option<Ward>>) -> bool {
+    plan.quarters.iter().any(|(_, m)| m.contains(&p)) || w.is_some_and(super::districts::built)
 }
 
 /// Why a close set on a temple's patch isn't laid out.
@@ -312,7 +314,7 @@ pub(super) fn changes(plan: &TownPlan, e: &TownEdit, center: P) -> (Changes, Vec
             Some(Err(why)) => aside.push(format!("patch {p}: {why}")),
             None => {}
         }
-        match pe.district.as_deref().map(|d| if !in_a_district(plan, p) { Err(OUTSIDE_DISTRICT.to_string()) } else { super::districts::parse(plan, d) }) {
+        match pe.district.as_deref().map(|d| if !in_a_district(plan, p, ch.ward.get(&p).copied()) { Err(OUTSIDE_DISTRICT.to_string()) } else { super::districts::parse(plan, d) }) {
             Some(Ok(t)) => {
                 if let super::districts::Target::Named(n) = &t
                     && !ch.districts.contains(n)
@@ -476,12 +478,35 @@ pub(super) fn hash_edit(world: &World, e: &TownEdit) -> u64 {
     h.finish()
 }
 
-/// `hash_edit` for town `index`, with the culture it is laid out in when changed (R5 121).
+/// `hash_edit` for town `index`, with the culture it is laid out in when changed (R5 121) and the
+/// buildings drawn by hand over it (R6 P8, `drawn_over`).
 pub(super) fn hash_in(world: &World, t0: &T0, index: usize, e: &TownEdit) -> u64 {
-    match super::culture::mark(world, t0, index) {
+    let h = match super::culture::mark(world, t0, index) {
         0 => hash_edit(world, e),
         c => crate::core::rng::hash2(hash_edit(world, e), c, 0xc017),
+    };
+    let drawn = drawn_over(world, t0, index);
+    if drawn.is_empty() {
+        return h;
     }
+    let mut f = Fnv64::default();
+    f.write(&h.to_le_bytes());
+    for poly in drawn {
+        for p in poly {
+            f.write(&p[0].to_le_bytes());
+            f.write(&p[1].to_le_bytes());
+        }
+        f.write(&[0xfe]);
+    }
+    f.finish()
+}
+
+/// (R6 P8) The outlines of the buildings drawn by hand within town `index`'s reach (world ft;
+/// those taken away left out), in the order drawn.
+fn drawn_over<'a>(world: &'a World, t0: &T0, index: usize) -> Vec<&'a [P]> {
+    let Some(s) = super::settlement(t0, index) else { return Vec::new() };
+    let (c, r) = ([s.x, s.y], super::reach(s));
+    world.file.edits.created.iter().filter(|c| c.kind == "building" && !c.removed && c.poly.len() >= 3).map(|d| d.poly.as_slice()).filter(|poly| poly.iter().any(|p| dist(*p, c) < r)).collect()
 }
 
 /// A hash of the world and the town edit that applies to layout `index`, if any.
@@ -526,6 +551,21 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
         grid.entry(cell(centroid(&lot(b)))).or_default().push(k as u32);
     }
     let same = |a: &[P], b: &[P]| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| dist(*p, *q) < 0.01);
+    // (R6 P8) A building drawn by hand pushes out those laid out under it (as a hand town's
+    // does; not a castle's, nor one as generated that has edits of its own, which stay to be
+    // restored or changed): one generated there is lost, its function moved as any other's.
+    let drawn = drawn_over(world, t0, l.index as usize);
+    if !drawn.is_empty() {
+        let edited: Vec<u32> = super::building_edits(world, l.index).map(|(id, _)| id).collect();
+        let bb = |poly: &[P]| poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let boxes: Vec<[f64; 4]> = drawn.iter().map(|d| bb(d)).collect();
+        l.buildings.retain(|b| {
+            let o = bb(&b.poly);
+            let (cx, cy) = cell(centroid(&b.poly));
+            let has_edits = || (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (cx + dx, cy + dy))).filter_map(|c| grid.get(&c)).flatten().any(|&g| edited.contains(&generated.buildings[g as usize].id) && same(&lot(&generated.buildings[g as usize]), &b.poly));
+            b.ward == Ward::Castle || !drawn.iter().zip(&boxes).any(|(d, q)| o[0] < q[2] && q[0] < o[2] && o[1] < q[3] && q[1] < o[3] && super::on_lot(d, &b.poly)) || has_edits()
+        });
+    }
     let mut used = vec![false; generated.buildings.len()];
     let mut next: BTreeMap<u32, u32> = BTreeMap::new();
     let mut fresh: Vec<usize> = Vec::new();
@@ -1427,7 +1467,11 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             Some(_) => return Err(format!("patch {p}: close: true, false or \"auto\"")),
         }
         if let Some(d) = &pr.district {
-            if !in_a_district(&plan, p) && d.trim() != "auto" {
+            let w = match e.patches[k].ward.as_deref() {
+                Some(n) => Some(parse_ward(n).map_err(|why| format!("patch {p}: {why}"))?),
+                None => None,
+            };
+            if !in_a_district(&plan, p, w) && d.trim() != "auto" {
                 return Err(format!("patch {p}: {OUTSIDE_DISTRICT}"));
             }
             let mut d = super::districts::resolve(world, &plan, index, &mut e, p, d).map_err(|why| format!("patch {p}: {why}"))?;

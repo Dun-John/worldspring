@@ -1657,9 +1657,9 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
 /// villages stand just inland of the real shoreline (by a third of their built-up radius, so
 /// the town reaches the water), river towns just beside the river. `wet(x, y)` is standing
 /// water (sea or lake); `river(x, y)` is the nearest river centreline point within reach:
-/// (point, half width).
-pub fn snap_to_water(settlements: &mut [Settlement], cell: f64, wet: &dyn Fn(f64, f64) -> bool, river: &dyn Fn(f64, f64) -> Option<([f64; 2], f64)>) {
-    for s in settlements.iter_mut() {
+/// (point, half width). Those `stays` keeps stand where they are (a pin's set so).
+pub fn snap_to_water(settlements: &mut [Settlement], cell: f64, wet: &dyn Fn(f64, f64) -> bool, river: &dyn Fn(f64, f64) -> Option<([f64; 2], f64)>, stays: &dyn Fn(&Settlement) -> bool) {
+    for s in settlements.iter_mut().filter(|s| !stays(s)) {
         let r = crate::town::urban_radius(s.tier, s.population);
         let inland = 0.33 * r;
         // Nearest shore point by casting rays outward.

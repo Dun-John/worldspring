@@ -465,7 +465,9 @@ impl T0 {
             }
             best.map(|(_, p, hw)| (p, hw))
         };
-        settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
+        // (R6 P8: not a pin's that says to stay where it stands.)
+        let stays = |s: &settle::Settlement| s.pin.is_some_and(|st| pins.iter().any(|p| p.stroke == st as usize && !p.on_water));
+        settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river, &stays);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = settle::place_pois(&sinp, &settlements, &vents_at, &own_roads);
         // The sketch's sites (after the generated ones, so drawing one moves none of them), seeded

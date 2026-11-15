@@ -250,6 +250,15 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
     }
     let lot_variance = (4.0 * dp.size_chaos).max(1.2);
     for part in parts {
+        // (The sprawl thinning out: a block between alleys at a time.)
+        if let Some((anchors, reach)) = thin {
+            let c = centroid(&part);
+            let d = anchors.iter().map(|a| dist(*a, c)).fold(f64::MAX, f64::min);
+            let keep = if anchors.is_empty() { 0.35 } else { 1.0 - smoothstep_f(0.0, 0.9 * reach, d) };
+            if rng.next_f64() > keep {
+                continue;
+            }
+        }
         let mut lots: Vec<Vec<P>> = Vec::new();
         bisect(&part, dp.min_sq, lot_variance, 0.0, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0);
         for lot in lots {
@@ -269,18 +278,10 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             if ward == Ward::Park && rng.next_f64() > 0.15 {
                 continue;
             }
-            if let Some((anchors, reach)) = thin {
-                let c = centroid(&lot);
-                let d = anchors.iter().map(|a| dist(*a, c)).fold(f64::MAX, f64::min);
-                let keep = if anchors.is_empty() { 0.35 } else { 1.0 - smoothstep_f(0.0, 0.9 * reach, d) };
-                if rng.next_f64() > keep {
-                    continue;
-                }
-            }
             // Irregular street fronts: some buildings stand back from the street line.
             let indent = rng.next_f64() * (crate::core::sqrt(la) / 3.0).min(16.0);
             let poly = if indent > 6.5 { clean(&clip_plain(&lot, n, c - indent)) } else { lot };
-            if poly.len() < 3 || area(&poly).abs() < 150.0 || !site.buildable(&poly) {
+            if poly.len() < 3 || area(&poly).abs() < 150.0 || !(site.buildable(&poly) || (ward == Ward::Docks && site.stepped(&poly))) {
                 continue;
             }
             let pad = site.pad(&poly);

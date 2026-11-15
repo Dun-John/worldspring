@@ -96,6 +96,26 @@ pub(super) fn of(plan: &TownPlan, ch: &Changes) -> Vec<(Quarter, Vec<usize>, boo
         out[to].2 = true;
     }
     let (ward, _) = ch.wards(plan);
+    // (R6 P8) A patch outside every district given a ward built on by hand (open country made a
+    // slum or a common ward) joins one as an inner patch is in one: a neighbour's (the one whose
+    // patch's middle is nearest its own), else the district with the patch nearest it.
+    for (&p, _) in &ch.ward {
+        if !built(ward[p]) || out.iter().any(|(_, m, _)| m.contains(&p)) {
+            continue;
+        }
+        let mid = centroid(&plan.mesh.face_pts(p));
+        let labels = &plan.mesh.labels[p];
+        let best = out
+            .iter()
+            .enumerate()
+            .flat_map(|(qi, (_, m, _))| m.iter().map(move |&o| (qi, o)))
+            .map(|(qi, o)| (!labels.contains(&(o as i32)), dist(centroid(&plan.mesh.face_pts(o)), mid), qi))
+            .min_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        if let Some((_, _, qi)) = best {
+            out[qi].1.push(p);
+            out[qi].2 = true;
+        }
+    }
     for (qi, (q, m, touched)) in out.iter_mut().enumerate() {
         *touched |= m.iter().any(|&p| ward[p] != plan.ward[p]);
         if *touched && !m.is_empty() {
@@ -103,6 +123,11 @@ pub(super) fn of(plan: &TownPlan, ch: &Changes) -> Vec<(Quarter, Vec<usize>, boo
         }
     }
     out
+}
+
+/// Whether a ward set by hand is one built on (a patch with it joins a district, `of`).
+pub(super) fn built(w: Option<Ward>) -> bool {
+    w.is_some_and(|w| w != Ward::Farm)
 }
 
 /// Each patch's district (`of`).

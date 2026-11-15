@@ -286,6 +286,10 @@ pub struct Stroke {
     /// number among them), so no other moves; with none there it stands beside them (as `added`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaces: Option<String>,
+    /// Pins: false keeps a waterside settlement where the pin stands, not moved onto its shore or
+    /// beside its river (`settle::snap_to_water`); left out, it is moved as the world's own are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_water: Option<bool>,
     /// Sites: what lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under: Option<String>,
@@ -347,8 +351,8 @@ impl Sketch {
                     _ => return Err("'under' is for ruin sites (dungeon, crypt, catacombs) and entrances (any site)".into()),
                 }
             }
-            if (s.capital || s.added || !s.wards.is_empty() || s.replaces.is_some()) && s.tool != SketchTool::Pin {
-                return Err("capital, added, wards and replaces are for pins".into());
+            if (s.capital || s.added || !s.wards.is_empty() || s.replaces.is_some() || s.on_water.is_some()) && s.tool != SketchTool::Pin {
+                return Err("capital, added, wards, replaces and on_water are for pins".into());
             }
             if s.added && s.replaces.is_some() {
                 return Err("a pin is added beside the world's settlements or replaces one of them, not both".into());

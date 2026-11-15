@@ -92,6 +92,9 @@ export interface Stroke {
   /** Pins: in place of the world's own settlement at its spot (within 3 mi), changed: the tier it
    * was placed at (mapd's `update_settlement` makes these; nothing else moves). */
   replaces?: 'metropolis' | 'city' | 'town' | 'village';
+  /** Pins: false keeps a waterside settlement where the pin stands (not moved onto its shore or
+   * beside its river). */
+  on_water?: boolean;
   /** Sites: beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site). */
   under?: string;
 }
