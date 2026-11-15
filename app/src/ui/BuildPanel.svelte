@@ -181,6 +181,7 @@
     { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
   ];
 
+  const FACINGS: { label: string; deg: number | null }[] = [{ label: 'Auto', deg: null }, { label: 'East', deg: 0 }, { label: 'South', deg: 90 }, { label: 'West', deg: 180 }, { label: 'North', deg: 270 }];
   const STAMP_SIZES = [
     { key: 'small', label: 'Small' },
     { key: 'usual', label: 'Usual' },
@@ -366,6 +367,11 @@
         <span>Gaps</span><output>{Math.round(row.gaps * 100)}%</output>
         <input type="range" min="0" max="0.5" step="0.05" bind:value={row.gaps} />
       </label>
+      <div class="ws-seg" role="radiogroup" aria-label="Facing">
+        {#each FACINGS as f (f.label)}
+          <button class:on={stamp.facing === f.deg} aria-pressed={stamp.facing === f.deg} onclick={() => (stamp.facing = f.deg)} title={f.deg == null ? 'Front toward the nearest street' : `Front toward the ${f.label.toLowerCase()}`}>{f.label}</button>
+        {/each}
+      </div>
       <label class="switch">
         <span class="grow">Clear the way<span class="ws-muted"> · the town’s own buildings in it go</span></span>
         <input type="checkbox" class="ws-switch" bind:checked={row.clear} />

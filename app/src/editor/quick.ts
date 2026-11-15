@@ -14,8 +14,10 @@ export interface StampSettings {
   clear: boolean;
   /** Stay in Stamp after a click (Shift does too). */
   keep: boolean;
+  /** Which way its front faces, in degrees (0 = east, 90 = south, turned in 90 steps); null: toward the nearest street. */
+  facing: number | null;
 }
-export const defaultStamp = (): StampSettings => ({ size: 'usual', clear: false, keep: false });
+export const defaultStamp = (): StampSettings => ({ size: 'usual', clear: false, keep: false, facing: null });
 
 export interface RowSettings {
   side: 'left' | 'right' | 'both';

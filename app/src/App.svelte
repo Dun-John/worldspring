@@ -1758,7 +1758,7 @@
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
   function stampAsk(x: number, y: number) {
-    return { x, y, func: build.func, size: stampSet.size, clear: stampSet.clear, id: `c:${(edits.created ?? []).length}` };
+    return { x, y, func: build.func, size: stampSet.size, clear: stampSet.clear, ...(stampSet.facing != null ? { facing: stampSet.facing } : {}), id: `c:${(edits.created ?? []).length}` };
   }
 
   /** The ghost's question in flight, and the newest place asked meanwhile (one at a time, the latest wins). */
@@ -1899,6 +1899,7 @@
   $effect(() => {
     void stampSet.size;
     void stampSet.clear;
+    void stampSet.facing;
     void build.func;
     if (buildMode === 'stamp' && stampLast) untrack(() => void stampAt(stampLast![0], stampLast![1], false, false));
   });
