@@ -628,7 +628,9 @@ export type StreetRequest =
   | { op: 'add_area'; poly: P2[]; open: OpenKind }
   | { op: 'remove_area'; area: number }
   | { op: 'add_wall'; pts: P2[]; closed?: boolean; spacing?: number; towers?: number[]; gates?: P2[]; name?: string }
-  | { op: 'remove_wall'; wall: number };
+  | { op: 'remove_wall'; wall: number }
+  | { op: 'set_area'; area: number; open: OpenKind }
+  | { op: 'set_wall'; wall: number; gates?: P2[]; name?: string; spacing?: number };
 
 /** A hand town's plan (`town::handedit::plan_json`). */
 export interface StreetPlan {

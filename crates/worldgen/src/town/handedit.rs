@@ -112,6 +112,18 @@ pub enum HandRequest {
         name: Option<String>,
     },
     RemoveWall { wall: u32 },
+    /// A painted area's kind changed.
+    SetArea { area: u32, open: OpenKind },
+    /// A wall line's hand gates (replacing them; each snaps to the line), name ("" none), towers apart.
+    SetWall {
+        wall: u32,
+        #[serde(default)]
+        gates: Option<Vec<[f64; 2]>>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        spacing: Option<f64>,
+    },
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -976,6 +988,60 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
                 HandRequest::RemoveWall { wall } => {
                     after.walls.remove(wall).ok_or_else(|| format!("wall m{wall}: no such wall"))?;
                 }
+                HandRequest::SetArea { area, open } => {
+                    let a = after.areas.get_mut(area).ok_or_else(|| format!("area a{area}: no such area"))?;
+                    a.open = *open;
+                    let poly = a.poly.clone();
+                    asked.extend(blocks_under(&before, origin, &li, &poly));
+                }
+                HandRequest::SetWall { wall, gates, name, spacing } => {
+                    let w = after.walls.get_mut(wall).ok_or_else(|| format!("wall m{wall}: no such wall"))?;
+                    if let Some(gs) = gates {
+                        if gs.len() > 16 {
+                            return Err("no more than 16 gates on a wall".into());
+                        }
+                        let n = w.pts.len();
+                        let mut out: Vec<P> = Vec::new();
+                        for g in gs {
+                            let g = pt(g);
+                            let mut best: Option<(f64, P)> = None;
+                            for k in 0..(if w.closed { n } else { n - 1 }) {
+                                let (a, b) = (w.pts[k], w.pts[(k + 1) % n]);
+                                let ab = sub(b, a);
+                                let t = (dot(sub(g, a), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
+                                let c = add(a, mul(ab, t));
+                                let d = dist(g, c);
+                                if best.is_none_or(|b| d < b.0) {
+                                    best = Some((d, c));
+                                }
+                            }
+                            match best {
+                                Some((d, c)) if d <= 30.0 => {
+                                    let c = q(c);
+                                    if !out.iter().any(|o| dist(*o, c) < 1.0) {
+                                        out.push(c);
+                                    }
+                                }
+                                _ => return Err("a gate has to be on the wall line (within 30 ft of it)".into()),
+                            }
+                        }
+                        w.gates = out;
+                    }
+                    if let Some(nm) = name {
+                        let nm = nm.trim();
+                        if nm.chars().count() > 80 {
+                            return Err("name: 80 letters at most".into());
+                        }
+                        w.name = if nm.is_empty() { None } else { Some(nm.to_string()) };
+                    }
+                    if let Some(sp) = spacing {
+                        if !(40.0..=1000.0).contains(sp) {
+                            return Err("towers apart: 40 to 1000 ft".into());
+                        }
+                        w.spacing = *sp;
+                        w.towers.clear();
+                    }
+                }
                 HandRequest::LayOutByHand | HandRequest::BackToGenerated => unreachable!("handled above"),
             }
             if let Some(why) = broken(&graph_problems(&before, origin, &li), &graph_problems(&after, origin, &li)) {
@@ -1057,6 +1123,8 @@ fn op_name(r: &HandRequest) -> &'static str {
         HandRequest::RemoveArea { .. } => "remove_area",
         HandRequest::AddWall { .. } => "add_wall",
         HandRequest::RemoveWall { .. } => "remove_wall",
+        HandRequest::SetArea { .. } => "set_area",
+        HandRequest::SetWall { .. } => "set_wall",
     }
 }
 

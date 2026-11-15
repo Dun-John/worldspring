@@ -315,6 +315,12 @@
       <span class="dot" style:background={hex(OPEN_COLOURS[area.open] ?? WARD_COLOURS.park)}></span>
       <span class="grow"><b>{OPEN_LABEL[area.open] ?? area.open}</b><span class="ws-muted"> · painted over its block</span></span>
     </div>
+    <label class="ws-field">
+      Kind
+      <select class="ws-input" value={area.open} disabled={busy} onchange={(e) => onStreet({ op: 'set_area', area: area.id, open: (e.currentTarget as HTMLSelectElement).value as OpenKind }, 'area')}>
+        {#each OPEN_KINDS as k (k)}<option value={k}>{OPEN_LABEL[k]}</option>{/each}
+      </select>
+    </label>
     <div class="row">
       <button class="ws-btn danger" disabled={busy} onclick={() => (onStreet({ op: 'remove_area', area: area.id }, 'area'), onPick(null))} title="Its block built over again there (Delete)"><Icon name="trash" size={16} /> Take the area away</button>
     </div>
@@ -323,6 +329,11 @@
   <section class="card" aria-label="Wall">
     <div class="title"><span class="grow"><b>{wall.name || 'A wall'}</b><span class="ws-muted"> · {wall.closed ? 'closed round' : 'open at its ends'}{wall.spacing ? `, towers ${ft(wall.spacing)} apart` : ''}</span></span></div>
     <span class="ws-muted">{#if !wallCrossings && !wall.gates.length}No street crosses it yet, so it has no gate: a gate opens wherever a street crosses it.{:else}Gates open where streets cross it ({wallCrossings}){wall.gates.length ? `, and ${wall.gates.length === 1 ? 'one more' : `${wall.gates.length} more`} put in by hand` : ''}.{/if}</span>
+    <span class="ws-muted">Click the wall to add a gate there; click a gate to take it away. Gates also open wherever a street crosses it.</span>
+    <div class="nums">
+      <label class="ws-field">Name<input class="ws-input" type="text" maxlength="80" placeholder="None" value={wall.name ?? ''} disabled={busy} onchange={(e) => onStreet({ op: 'set_wall', wall: wall.id, name: e.currentTarget.value.trim() }, 'wall')} /></label>
+      <label class="ws-field">Towers apart (ft)<input class="ws-input" type="number" min="40" max="1000" step="10" value={wall.spacing || ''} disabled={busy} onchange={(e) => { const v = e.currentTarget.valueAsNumber; if (Number.isFinite(v) && v >= 40 && v <= 1000) onStreet({ op: 'set_wall', wall: wall.id, spacing: v }, 'wall'); }} /></label>
+    </div>
     <div class="row">
       <button class="ws-btn danger" disabled={busy} onclick={() => (onStreet({ op: 'remove_wall', wall: wall.id }, 'wall'), onPick(null))} title="Its towers and gates go with it (Delete)"><Icon name="trash" size={16} /> Take the wall away</button>
     </div>
@@ -364,5 +375,13 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
     gap: 6px;
+  }
+.nums {
+    display: flex;
+    gap: 8px;
+  }
+  .nums > :global(*) {
+    flex: 1;
+    min-width: 0;
   }
 </style>

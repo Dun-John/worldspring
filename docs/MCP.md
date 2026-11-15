@@ -2281,6 +2281,8 @@ per call. Ids are the numbers `get_street_plan` shows; unknown fields are refuse
 | `add_row` / `remove_row` | `street`, `side` l or r, `depth`, `ward`, `lots`, `gaps`, `seed` / `row` |
 | `add_area` / `remove_area` | `poly`, `open` (plaza, lawn, park, garden, market, cemetery, farmland) / `area` |
 | `add_wall` / `remove_wall` | `pts`, `closed`, `spacing`, `towers`, `gates` [[x, y]], `name` / `wall` |
+| `set_area` | `area`, `open` (as add_area) |
+| `set_wall` | `wall`, `gates` [[x, y]] (replaces the hand gates: up to 16, each snapped to the line, refused if over 30 ft from it; streets crossing the wall still make gates), `name` (empty: none), `spacing` (towers apart, 40 to 1000 ft) |
 
 A street's ends and bends within 3 ft of a junction meet it, else within 3 ft of a street split it; where a new street
 crosses another both get a junction. Free ends make new junctions (a dead end is allowed and listed in `problems` until

@@ -421,7 +421,7 @@ export class StreetTool implements PointerTool {
     this.cursor = p;
     if (mode === 'select') {
       const j = this.junctionAt(x, y);
-      if (j === null) return false;
+      if (j === null) return this.wallGate(x, y);
       this.drag = { kind: 'junction', j, start: p, live: false };
       return true;
     }
@@ -440,6 +440,27 @@ export class StreetTool implements PointerTool {
         if (d < r) drag.weight.set(j, Math.min(1, (1 - d / r) / SOFT));
       }
     }
+    return true;
+  }
+
+  /** A click on the picked wall: a gate by hand put there, or (near one) taken away. */
+  private wallGate(x: number, y: number): boolean {
+    const pk = this.host.picked();
+    const w = pk?.kind === 'wall' ? this.plan?.walls.find((v) => v.id === pk.id) : undefined;
+    if (!w) return false;
+    const p: Pt = [x, y];
+    const line = w.closed ? [...w.pts, w.pts[0]] : w.pts;
+    let best: Pt | null = null;
+    let bd = GRAB_PX / this.ppf;
+    for (let k = 1; k < line.length; k++) {
+      const c = nearest(p, line[k - 1], line[k]);
+      const d = dist(c, p);
+      if (d < bd) [best, bd] = [c, d];
+    }
+    if (!best) return false;
+    const near = w.gates.findIndex((g) => dist(g, best as Pt) <= 30);
+    const gates = near >= 0 ? w.gates.filter((_, i) => i !== near) : [...w.gates, best];
+    this.host.change({ op: 'set_wall', wall: w.id, gates }, 'wall');
     return true;
   }
 
