@@ -1752,7 +1752,7 @@ links on it away; a remade world moves the ends with their places.
 ### `create_link`
 | Parameter | Type | | |
 |---|---|---|---|
-| `a`, `b` | `{at, x, y}` | required | Each end. `at`: a level (`l:<site>:<level>`), a room (`r:<site>:<level>:<room>`; with no `x`/`y`, its free square nearest its middle), or a site: `u:`/`k:` (its top level, the way in), `w:` (a sewer section's walkway), `b:` (its cellar). `x`, `y`: the square. |
+| `a`, `b` | `{at, x, y}` | required | Each end. `at`: a level (`l:<site>:<level>`), a room (`r:<site>:<level>:<room>`; with no `x`/`y`, its free square nearest its middle), or a site: `u:`/`k:` (its top level), `w:` (a sewer section's walkway), `b:` (its cellar); a site with no `x`/`y` takes the free square nearest the middle of that level. `x`, `y`: the square. |
 | `way` | string | optional | How it goes: `stairs` (default), `ladder`, `passage`, `trapdoor`, `rope`, `portal`. |
 | `name` | string | optional | Its own name, shown with the far end's. |
 

@@ -157,6 +157,16 @@ export function shiftLevels(e: Edits, site: string, delta: number): Edits {
   if (e.npcs && Object.values(e.npcs).some((n) => n.location?.id === site && n.location.level !== undefined)) {
     out.npcs = Object.fromEntries(Object.entries(e.npcs).map(([k, n]) => [k, n.location?.id === site && n.location.level !== undefined ? { ...n, location: { ...n.location, level: Math.max(0, n.location.level + delta) } } : n]));
   }
+  if (e.links && Object.values(e.links).some((l) => moved(l.a.level) !== undefined || moved(l.b.level) !== undefined)) {
+    // (A link with an end on a level filled in goes with it.)
+    const links: NonNullable<Edits['links']> = {};
+    for (const [k, l] of Object.entries(e.links)) {
+      const [a, b] = [moved(l.a.level), moved(l.b.level)];
+      if (a === '' || b === '') continue;
+      links[k] = a === undefined && b === undefined ? l : { ...l, a: a === undefined ? l.a : { ...l.a, level: a }, b: b === undefined ? l.b : { ...l.b, level: b } };
+    }
+    out.links = links;
+  }
   return out;
 }
 

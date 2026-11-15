@@ -11,7 +11,7 @@ use crate::tools::{listed, schema, text};
 fn end_schema(description: &str) -> Value {
     json!({ "type": "object", "description": description, "properties": {
         "at": { "type": "string", "description": "A level (l:<site>:<level>, from the bottom), a room (r:<site>:<level>:<room>), or a site: u:/k: (its top level), w:<layout>:<sx>:<sy> (a sewer section), b: (its cellar)" },
-        "x": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "Square, as get_site_design's plan numbers them (a room alone: its free square nearest its middle)" },
+        "x": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "Square, as get_site_design's plan numbers them (a room alone, or a site alone: the free square nearest its middle)" },
         "y": { "type": "integer", "minimum": 0, "maximum": 4095 },
     }, "required": ["at"] })
 }
@@ -55,6 +55,7 @@ fn resolve(world: &worldgen::world::World, t0: &worldgen::t0::T0, field: &str, v
         return Err(format!("{field}.at: {at} is not below ground (a site underground u:/k:, a sewer section w:, a building's cellar b:, or one of their levels or rooms)"));
     }
     let it = worldgen::interior::generate_id(world, t0, &site).ok_or_else(|| format!("{field}.at: {site} has no inside"))?;
+    let li_given = li;
     let li = match li {
         Some(li) => li,
         None if site.starts_with("b:") => it.levels.iter().position(|l| l.z == -1).ok_or_else(|| format!("{field}.at: {site} has no cellar"))?,
@@ -73,6 +74,20 @@ fn resolve(world: &worldgen::world::World, t0: &worldgen::t0::T0, field: &str, v
                 .filter(|&k| lv.cells[k] == ri as i16 && links::spot_problem(&it, &site, li, (k % it.nx) as u16, (k / it.nx) as u16).is_none())
                 .min_by(|&a, &b| d(a).total_cmp(&d(b)).then(a.cmp(&b)))
                 .ok_or_else(|| format!("{field}.at: room {ri} has no free square"))?;
+            ((k % it.nx) as u16, (k / it.nx) as u16)
+        }
+        // A site alone (no level, no square): the free square nearest the middle of its top level
+        // (a cellar's, for a building), the lowest index among equals.
+        (None, None, None) if li_given.is_none() => {
+            let c = [it.nx as f32 / 2.0, it.ny as f32 / 2.0];
+            let d = |k: usize| {
+                let (dx, dy) = ((k % it.nx) as f32 + 0.5 - c[0], (k / it.nx) as f32 + 0.5 - c[1]);
+                dx * dx + dy * dy
+            };
+            let k = (0..it.nx * it.ny)
+                .filter(|&k| links::spot_problem(&it, &site, li, (k % it.nx) as u16, (k / it.nx) as u16).is_none())
+                .min_by(|&a, &b| d(a).total_cmp(&d(b)).then(a.cmp(&b)))
+                .ok_or_else(|| format!("{field}.at: {site} level {li} has no free square"))?;
             ((k % it.nx) as u16, (k / it.nx) as u16)
         }
         _ => return Err(format!("{field}: give x and y (or a room alone)")),

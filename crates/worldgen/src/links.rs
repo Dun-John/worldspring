@@ -72,12 +72,22 @@ pub fn site_name(world: &World, t0: &T0, level: &str) -> String {
     let mut name = match renames.get(site) {
         Some(n) => n.clone(),
         None if site.starts_with("w:") => sewers().unwrap_or_else(|| "Sewers".into()),
-        None => crate::agent::name_any(world, t0, site).unwrap_or_else(|| site.to_string()),
+        None => feature_name(world, t0, site).or_else(|| crate::agent::name_any(world, t0, site)).unwrap_or_else(|| site.to_string()),
     };
     if let Some(n) = renames.get(level) {
         name = format!("{name} › {n}");
     }
     name
+}
+
+/// The name of the feature a site underground (`u:<layout>:<n>`) is the inside of (a cave's, a
+/// mine's: "The Spore Caverns"), renamed first, unless its entrance has a name of its own.
+fn feature_name(world: &World, t0: &T0, site: &str) -> Option<String> {
+    let li: usize = site.strip_prefix("u:")?.split(':').next()?.parse().ok()?;
+    if crate::sitelinks::dungeon_name(world, t0, li).is_some() {
+        return None;
+    }
+    crate::agent::name_of(world, t0, &crate::agent::feature_of_layout(world, t0, li)?)
 }
 
 /// Whether an item stays where a link would go (a way, a key, a picture, a hazard, another link).
