@@ -1523,11 +1523,8 @@ impl<'a> Shore<'a> {
     /// Whether `p` is in a river channel or within 2 ft of its water (not on an islet in it, nor
     /// a plateau over the water: `raised`).
     pub fn in_river(&self, p: P) -> bool {
-        if !self.islets.is_empty() && self.on_islet(p) || self.raised(p) {
-            return false;
-        }
         let q = crate::lod::rivers::clear_of_rivers_with(&self.t0.rivers, p[0], p[1], 2.0, self.t0.cell_ft, &self.rivers);
-        (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01
+        (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 && !(!self.islets.is_empty() && self.on_islet(p) || self.raised(p))
     }
 
     /// Standing water at `p` (world ft), water drawn by hand too (`waters`); an islet drawn by
@@ -1546,7 +1543,8 @@ impl<'a> Shore<'a> {
         level > crate::t0::hydro::DRY && level as f64 > self.ground(p) && !self.raised(p)
     }
 
-    /// Whether a plateau (or the brush) holds the ground at `p` above the sea or lake there.
+    /// Whether a plateau (or the brush) holds the ground at `p` above the sea, lake or river
+    /// there (a river's: its surface over the channel's bed, as battlemaps shape it).
     pub fn raised(&self, p: P) -> bool {
         let Some(s) = self.shaped.as_ref().filter(|s| {
             let r = s.reach();
@@ -1555,7 +1553,16 @@ impl<'a> Shore<'a> {
             return false;
         };
         let level = self.t0.sample_water(p[0], p[1]);
-        level > crate::t0::hydro::DRY && s.at_point(p[0], p[1], self.ground(p) as f32, level) > level
+        // (Water drawn by hand: its surface, as `wet` reads it.)
+        let level = s.outline_level(p[0], p[1]).map_or(level, |l| l.max(level));
+        if level > crate::t0::hydro::DRY {
+            return s.at_point(p[0], p[1], self.ground(p) as f32, level) > level;
+        }
+        let Some((z, depth)) = crate::lod::rivers::surface_near(&self.t0.rivers, p[0], p[1], 2.5, self.t0.cell_ft) else {
+            return false;
+        };
+        let bed = self.ground(p).min(z - depth);
+        s.at_point(p[0], p[1], bed as f32, z as f32) as f64 > z
     }
 }
 

@@ -383,12 +383,24 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
             }));
         }
         let b = p.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
-        let reply = json!({
+        let mut reply = json!({
             "tool": "set_plateau", "id": id, "changed": changed,
             "level_ft": round1(p.level - sea as f32), "ground_ft": round1(here as f32 - sea as f32), "edge_ft": p.edge,
             "points": p.pts.len(), "area_sq_ft": geom::area(&p.pts).abs().round(), "bbox": [b[0], b[1], b[2], b[3]],
             "floor": p.floor.map_or("auto", ground::Floor::name),
         });
+        // (Shaped ground stays within MAX_SHIFT_FT of the ground: a plateau over deep water stays under it.)
+        let shift = p.level as f64 - here;
+        if shift.abs() > ground::MAX_SHIFT_FT {
+            let reach = here + shift.signum() * ground::MAX_SHIFT_FT;
+            let under = if reach < sea { ", under the sea: nothing can stand on it there" } else { "" };
+            reply["note"] = json!(format!(
+                "the ground here is at {:.1} ft and is moved at most {} ft: this plateau stands at {:.1} ft{under}",
+                here - sea,
+                ground::MAX_SHIFT_FT,
+                reach - sea
+            ));
+        }
         e.plateaus.insert(id, p);
         Ok(reply)
     })
