@@ -5797,7 +5797,8 @@ fn acceptance_city() {
         })
         .map(|p| TileKey::surface(g.max_level, (p[0] / size) as u32, (p[1] / size) as u32))
         .collect();
-    let gridded = keys.len();
+    let grid = keys.clone();
+    let gridded = grid.len();
     keys.push(TileKey::surface(g.max_level, (lb.center[0] / size) as u32, (lb.center[1] / size) as u32));
     // (And one in each open block: squares, parks, gardens, a cemetery and fields far from any building.)
     let recs = hand::HandRecords::of(&ex.world.file.edits.streets, city);
@@ -5807,10 +5808,12 @@ fn acceptance_city() {
     keys.dedup();
     let chunks = keys.len();
     let t = std::time::Instant::now();
-    let (mut squares, mut with_buildings) = (0, 0);
+    let (mut squares, mut with_buildings, mut grid_bare) = (0, 0, 0);
     for key in keys {
         let c = ex.battlemap(key);
         with_buildings += !c.buildings.is_empty() as usize;
+        // (Each grid chunk was picked at a building's middle: it has buildings.)
+        grid_bare += (c.buildings.is_empty() && grid.contains(&key)) as usize;
         // (Not empty: buildings, or a town's open ground, a square, a park, a cemetery, fields.)
         assert!(!c.buildings.is_empty() || c.urban.iter().any(|&u| u != 0), "{key:?}: an empty battlemap");
         let dist = battlemap::cover_distance(&c);
@@ -5824,7 +5827,7 @@ fn acceptance_city() {
         }
     }
     let t_maps = t.elapsed().as_secs_f64();
-    assert!(gridded >= 24 && with_buildings >= gridded, "{with_buildings} of {chunks} battlemaps with buildings ({gridded} on the grid)");
+    assert!(gridded >= 24 && grid_bare == 0, "{with_buildings} of {chunks} battlemaps with buildings ({gridded} on the grid, {grid_bare} of them bare)");
     // No building laid by hand (a block's or a row's) over a street's paved way (as towncheck's
     // refill check: up to 10 ft each side of its line, its last 12 ft to each junction left out).
     for (li, l) in [(city, &a), (blank, &lb)] {

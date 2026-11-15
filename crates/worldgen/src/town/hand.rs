@@ -2995,7 +2995,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     }
     // (Every street's way, a dead end's too: a street out of a gate.)
     let mut dead: BTreeMap<u32, Vec<P>> = BTreeMap::new();
-    for &(u, v, id) in &graph.loose {
+    for &(u, v, id) in graph.loose.iter().filter(|g| recs.streets[&g.2].class != StreetClass::Joint) {
         dead.entry(id).or_insert_with(|| vec![graph.pts[u]]).push(graph.pts[v]);
     }
     for (id, line) in lines.iter().chain(&dead) {
