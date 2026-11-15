@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type BuildMode = 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear';
+  export type BuildMode = 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear' | 'road';
   /** What the app says of a quick placement's ghost. */
   export interface QuickInfo {
     /** Something is ready to place. */
@@ -26,6 +26,8 @@
   import { SHOP_DEPTH_RANGE, shopsWidth, type CrossSettings } from '../editor/crossing';
   import type { WaterSettings } from '../editor/water';
   import type { WaterKind } from '../gen/protocol';
+  import { PATH_KINDS, PATH_WIDTH, type PathSettings } from '../editor/paths';
+  import type { PathKind } from '../gen/protocol';
   import { ISLET_RADIUS, ISLET_RISE, type HarbourSettings, type HarbourKind } from '../editor/harbour';
   import type { ClearShape } from '../editor/clearArea';
   import type { LassoSettings, RowSettings, StampSettings } from '../editor/quick';
@@ -74,6 +76,11 @@
     waterPicked: { kind: WaterKind; name: string } | null;
     onWaterChange: (change: { kind?: WaterKind; name?: string }) => void;
     onWaterRemove: () => void;
+    road: PathSettings;
+    /** The road drawn by hand picked (its type, width and name), else drawing new ones. */
+    roadPicked: { kind: PathKind; width: number; name: string } | null;
+    onRoadChange: (change: { kind?: PathKind; width?: number; name?: string }) => void;
+    onRoadRemove: () => void;
     harbour: HarbourSettings;
     /** The wharf picked (its id), else drawing new ones. */
     harbourPicked: string | null;
@@ -115,6 +122,10 @@
     waterPicked,
     onWaterChange,
     onWaterRemove,
+    road = $bindable(),
+    roadPicked,
+    onRoadChange,
+    onRoadRemove,
     harbour = $bindable(),
     harbourPicked,
     near,
@@ -180,6 +191,7 @@
     { key: 'wall', label: 'Wall', icon: 'wall', title: 'A wall standing on its own, anywhere: towers and gates where you click' },
     { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
     { key: 'water', label: 'Water', icon: 'lake', title: 'Draw an inlet, basin, lake, pond or moat' },
+    { key: 'road', label: 'Road', icon: 'road', title: 'Draw a footpath, track, gravel road, paved road or cobbled street (V)' },
     { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
     { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
   ];
@@ -526,6 +538,56 @@
       <div class="ws-hint">
         {waterPicked ? 'Pick a kind or a name for it; click outside it to draw another. ' : 'Click its points, then the first again (or double-click) to close it, or drag round it and let go near the start; click water drawn earlier to change it. A lake, pond or inlet gets a natural shore round the points; a basin or moat keeps straight sides. Outlines that overlap are one water. '}{WATERS.find((k) => k.key === waterKind)?.look}
       </div>
+    {/if}
+  {:else if mode === 'road'}
+    {@const roadKind = roadPicked?.kind ?? road.kind}
+    {@const roadW = roadPicked?.width ?? road.width}
+    {#if roadPicked}
+      <div class="editing">
+        <span class="grow">Changing the <b>{roadPicked.name || PATH_KINDS.find((k) => k.key === roadPicked.kind)?.name}</b></span>
+        <button class="ws-btn" onclick={onRoadRemove} title="Take it away"><Icon name="trash" size={16} /> Remove</button>
+        <button class="ws-btn" onclick={onDone}>Done</button>
+      </div>
+    {/if}
+    <div class="ws-seg" role="radiogroup" aria-label="Road">
+      {#each PATH_KINDS as k (k.key)}
+        <button class:on={roadKind === k.key} aria-pressed={roadKind === k.key} onclick={() => (roadPicked ? onRoadChange({ kind: k.key }) : (road = { ...road, kind: k.key, width: k.width }))}>{k.label}</button>
+      {/each}
+    </div>
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to draw it.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    {#if !peek}
+      <label class="slider">
+        <span>Width</span><output>{roadW} ft</output>
+        <input
+          type="range"
+          min={PATH_WIDTH.min}
+          max={PATH_WIDTH.max}
+          step="1"
+          value={roadW}
+          oninput={(e) => {
+            if (!roadPicked) road = { ...road, width: Number(e.currentTarget.value) };
+          }}
+          onchange={(e) => roadPicked && onRoadChange({ width: Number(e.currentTarget.value) })}
+        />
+      </label>
+      <label class="ws-field">
+        Name
+        {#if roadPicked}
+          <input class="ws-input" value={roadPicked.name} placeholder="No name" onchange={(e) => onRoadChange({ name: e.currentTarget.value })} />
+        {:else}
+          <input class="ws-input" bind:value={road.name} placeholder="No name" />
+        {/if}
+      </label>
+      <div class="ws-hint">
+        {roadPicked ? 'Pick a type, width or name for it; click away from it to draw another. ' : 'Click its points, then press Enter or double-click to end it, or press and drag it freehand; click a road drawn earlier to change it. It runs on a smooth curve through the points; trees and the town’s own buildings keep off it. '}{PATH_KINDS.find((k) => k.key === roadKind)?.look}
+      </div>
+    {:else if !roadPicked}
+      <div class="ws-hint">Tap its points, then double-tap to end it, or drag it; tap a road to change it.</div>
     {/if}
   {:else if mode === 'harbour'}
     {#if harbourPicked}

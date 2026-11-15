@@ -17,6 +17,8 @@ import { Waters } from './Waters';
 import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
+import { DrawnRoads } from './DrawnRoads';
+import { curve as pathCurve, pathWidth } from '../editor/paths';
 import { underlay, type Underlay } from '../editor/trace/underlay.svelte';
 import { TraceSprite } from './TraceSprite';
 import { tracer } from '../editor/trace/tracer.svelte';
@@ -262,6 +264,8 @@ export class MapView {
    * and the latest ask for them (an older answer is dropped). */
   private made: MadeSettlement[] = [];
   private madeTracks: MadeTracks | null = null;
+  /** Roads drawn by hand (`Edits.paths`). */
+  private drawnRoads: DrawnRoads | null = null;
   private madeAsk = 0;
   private readonly townHints = new Map<string, { edit: string; rects: Rect[] }>();
   private readonly streetHints = new Map<string, { records: [string, string][]; rects: Rect[] }>();
@@ -1190,6 +1194,7 @@ export class MapView {
     this.hexLayer?.destroy();
     this.bridgeMarks?.destroy();
     this.madeTracks?.destroy();
+    this.drawnRoads?.destroy();
     this.exitBuilding();
     this.peek?.layer.destroy();
     this.peek = null;
@@ -1206,6 +1211,7 @@ export class MapView {
     this.ferryLanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2], true);
     this.ferryLanes.on = this.seaLanes;
     this.madeTracks = new MadeTracks(this.tiles.riverFrame);
+    this.drawnRoads = new DrawnRoads(this.tiles.riverFrame);
     this.bridgeMarks = new BridgeMarks(overlay.bridges ?? []);
     this.hexLayer = new HexLayer();
     this.hexGrid = hexGrid(adjusted ?? world.edits);
@@ -1234,6 +1240,7 @@ export class MapView {
     this.app.stage.addChild(this.tiles.container);
     this.app.stage.addChild(this.waterLayer.container);
     this.app.stage.addChild(this.madeTracks.container);
+    this.app.stage.addChild(this.drawnRoads.container);
     this.app.stage.addChild(this.bridgeMarks.container);
     this.app.stage.addChild(this.lanes.container);
     this.app.stage.addChild(this.ferryLanes.container);
@@ -1376,6 +1383,8 @@ export class MapView {
     }
     // Water drawn by hand: drawn above the finest levels, its names at its middle.
     if (prev.waters !== next.waters) this.waterLayer.set(next.waters);
+    // Roads drawn by hand: drawn over the tiles at every zoom.
+    if (prev.paths !== next.paths || !prev.paths) this.drawnRoads?.set(next.paths);
     if (prev.waters !== next.waters || pr !== nr) {
       const named = waterLabels(next);
       const key = JSON.stringify(named.map((f) => [f.id, f.name, f.x, f.y]));
@@ -1443,6 +1452,20 @@ export class MapView {
         const r = c.width / 2 + 40;
         const box: Rect = [Math.min(c.a[0], c.b[0]) - r, Math.min(c.a[1], c.b[1]) - r, Math.max(c.a[0], c.b[0]) + r, Math.max(c.a[1], c.b[1]) + r];
         rects.push(box);
+      }
+    }
+    // Roads drawn by hand: the battlemaps and site tiles along them (their band, its bridges'
+    // decks, and the world's own buildings it takes away: 160 ft takes in the largest).
+    const pp = prev.paths ?? {};
+    const np = next.paths ?? {};
+    if (pp !== np) for (const id of keys('paths', pp, np)) {
+      const [a, b] = [pp[id], np[id]];
+      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
+      for (const r of [a, b]) {
+        if (!r) continue;
+        const line = pathCurve(r.pts);
+        const e = pathWidth(r) / 2 + 160;
+        rects.push([Math.min(...line.map((q) => q[0])) - e, Math.min(...line.map((q) => q[1])) - e, Math.max(...line.map((q) => q[0])) + e, Math.max(...line.map((q) => q[1])) + e]);
       }
     }
     // Quays, piers and breakwaters built by hand: the battlemaps and site tiles along them (a quay
@@ -1876,6 +1899,7 @@ export class MapView {
       this.hexLayer?.update(this.cam, (this.hexesOn || this.hexPlay) && surface ? 1 : 0, this.app.renderer.resolution, surface);
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
+      this.drawnRoads?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
       // (The three finest levels draw it in the terrain: gone over the first half level of them.)
       const fine = this.geom!.max_level - 2;

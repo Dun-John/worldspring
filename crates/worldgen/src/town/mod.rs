@@ -834,11 +834,19 @@ struct WallDeps {
 /// A layout with its buildings as edited (`Edits.buildings`).
 pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     let base = base_layout(world, t0, index);
-    if world.file.edits.buildings.is_empty() {
+    // (Roads drawn by hand take the world's own buildings off their band: a settlement's, not a
+    // town laid out by hand's nor a building drawn by hand.)
+    let roads = if world.file.edits.paths.is_empty() || !is_settlement(t0, index) || hand::is_hand(world, index) { None } else { crate::paths::fingerprint(&world.file.edits, base.bbox, 0.0) };
+    if world.file.edits.buildings.is_empty() && roads.is_none() {
         return base;
     }
     let key = index as u32;
-    let Some(fp) = edits_fingerprint(world, key) else { return base };
+    let fp = match (edits_fingerprint(world, key), roads) {
+        (Some(f), Some(r)) => crate::core::rng::hash2(f, r as i64, 0x9a75),
+        (Some(f), None) => f,
+        (None, Some(r)) => crate::core::rng::hash2(world.hash, r as i64, 0x9a76),
+        (None, None) => return base,
+    };
     let fp = match hand::fingerprint(world, t0, index).or_else(|| wards::fingerprint(world, t0, index)) {
         Some(t) => crate::core::rng::hash2(fp, t as i64, 0x70e5),
         None => fp,
@@ -1002,6 +1010,13 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
     }
     if !removed.is_empty() {
         l.buildings.retain(|b| !removed.contains(&b.id));
+    }
+    // (The world's own buildings a road drawn by hand meets: gone from its band.)
+    if !world.file.edits.paths.is_empty() && is_settlement(t0, l.index as usize) && !hand::is_hand(world, l.index as usize) {
+        let roads = crate::paths::near(&world.file.edits, l.bbox, 0.0);
+        if !roads.is_empty() {
+            l.buildings.retain(|b| !crate::paths::meets(&roads, &b.poly));
+        }
     }
     l
 }

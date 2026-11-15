@@ -71,6 +71,7 @@ pace.
 | `v:<id>` | A crossing put down by hand: a bridge, ford or ferry; takes a name and notes like a feature. |
 | `j:<id>` | A link put down by hand: a way from a square below ground (a site, sewer section or cellar) to another. |
 | `q:<id>` | A quay, pier or breakwater put down by hand. |
+| `rw:<id>` | A road drawn by hand on the ground: a footpath, track, gravel road, paved road or cobbled street. |
 | `rd:<8 hex>` | A road stretch, made from its two ends: the same across every edit that leaves the roads as generated; renamed and annotated like a feature. |
 | `h:<id>`, `g:<x>:<y>` | A plateau or pit; a block of ground brushed by hand (80 ft square, block indices). |
 | `e:<id>` | Water drawn by hand (inlet, basin, lake, pond, moat). |
@@ -139,6 +140,7 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `set_plateau`, `delete_plateau` | A plateau or pit: a `poly` (or `outline`), or `around` a building, tower or site (its footprint grown by `margin_ft`), at `level_ft` above the sea or `rise_ft` above the ground there, with an `edge_ft` slope (0: a sheer cliff) and a `floor` (`rock`; by default a pit 15 ft deep or more is rock). Overlapping ones stack (the highest holds; pits dig through). With `id`, changes one; buildings on it stand at its level. |
 | `create_water`, `update_water`, `delete_water` | Water inside an outline (`poly`, `kind` inlet, basin, lake, pond or moat, `level_ft`, `name`): the ground falls under it; overlapping outlines are one water, one reaching the sea or a lake joins it. Ids `e:`. |
 | `list_waters` | Every water drawn by hand (`e:`: outline, kind, level, name). |
+| `place_path`, `remove_paths`, `list_paths` | A road drawn on the ground along a line (`pts`, `type` footpath, track, gravel, paved or cobbled, `width_ft` 3-40, `name`): shown on the map and battlemap, walked like a road, a ford (footpath, track) or bridge (the others) where it meets water; scatter and the world's own buildings keep off it; the road network and towns don't change. With `id`, changes one. Ids `rw:`. |
 | `list_plateaus` | Every plateau or pit (`h:`: outline, level, edge) and brushed ground block (`g:`), world-wide (`{items, found}`, `limit` 100 by default), `within` an area. |
 | `ground_heights` | The ground's height on every square of a box round a place, as generated and as shaped, with the plateaus and brushed blocks there. |
 | `get_site_design` | An underground site (`u:`) or a building's interior (`b:`) as a text plan: rooms by symbol (with a shape drawn: round, octagon, apse, chamfered, cavern), one character per 5-ft square, doors, items and the ways between levels (a building's: its stair block, levels by storey, cellars, doors to the outside). Rooms of kind `open to below` (a hall open two storeys, a keep's yard) and `roof` (a keep's roof inside its walk) have no floor: no doors, no items. |
@@ -175,6 +177,7 @@ Edits are layered over the generated world. The world file is seed + parameters 
 | `ground` | Ground brushed by hand, by block (`g:XXXXX:YYYYY`, block indices zero-padded, x first): one string per 16 × 16 squares of height change in tenths of a foot. |
 | `plateaus` | Plateaus and pits, by `h:<id>`: `pts` (the outline, ft), `level` (ft, the world's datum: above the sea plus the sea's level), `edge` (ft, absent: sheer), `kind` (`islet` for a rock islet; absent: a plateau). |
 | `wharves` | Quays, piers and breakwaters, by `q:<id>`: `kind`, `pts` (ft), `width`, `material` (absent: timber). |
+| `paths` | Roads drawn by hand, by `rw:<id>`: `pts` (ft), `type` (footpath, track, gravel, paved, cobbled), `width` (ft; absent: the type's), `name`. |
 | `towns` | Towns laid out anew, by layout number: `at` (the town's centre; the edit is set aside if the town is laid out elsewhere), `corners` (`{v, from, to}`: a patch corner moved from where it was planned), `patches` (`{p, at, ward, lots, merge_with, reroll, close}`), `walls`, `squares` (`{v, at, kind}`: a square set where streets meet at corner `v`, planned at `at`; `kind` crossroads, well, fountain, green or none). Building changes (`buildings`) apply on top of it. |
 
 Edits don't change the world's hash, and created sites use the same generators as the world's own. Objects
