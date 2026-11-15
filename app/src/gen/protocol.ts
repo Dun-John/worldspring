@@ -805,7 +805,7 @@ export interface Crossing {
 }
 
 /** Limits on a crossing (`Crossing::WIDTH`, `LENGTH`; a ferry needs room for two 24-ft jetties). */
-export const CROSSING_WIDTH: [number, number] = [5, 80];
+export const CROSSING_WIDTH: [number, number] = [5, 120];
 /** A ford's or a ferry's widest (a bridge goes to `CROSSING_WIDTH[1]`). */
 export const NARROW_CROSSING_MAX = 40;
 export const CROSSING_LENGTH: [number, number] = [10, 2000];

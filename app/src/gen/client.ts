@@ -143,8 +143,8 @@ export class GenClient {
     return this.ask({ op: 'parcel', input: JSON.stringify({ poly }) }).then((j) => JSON.parse(j));
   }
 
-  /** Shop lots along a bridge (`rows` ft; lane absent: what the width leaves), or why not. */
-  bridgeLots(crossing: Crossing, rows: { depth: number; frontage: number; lane?: number } | null): Promise<{ lots: { poly: [number, number][]; func: string }[] } | { error: string } | null> {
+  /** Shop lots along a bridge (`rows` ft; lane the least between the rows: the width may leave more), or why not. */
+  bridgeLots(crossing: Crossing, rows: { depth: number; frontage: number; lane?: number; vary?: boolean; id?: string } | null): Promise<{ lots: { poly: [number, number][]; func: string; floors: number }[] } | { error: string } | null> {
     return this.ask({ op: 'bridgelots', input: JSON.stringify({ crossing, rows }) }).then((j) => JSON.parse(j));
   }
 

@@ -748,7 +748,7 @@ fn crossing_width() -> f64 {
 
 impl Crossing {
     /// Widths (ft) a crossing may have, and its length.
-    pub const WIDTH: std::ops::RangeInclusive<f64> = 5.0..=80.0;
+    pub const WIDTH: std::ops::RangeInclusive<f64> = 5.0..=120.0;
     /// (R5 M20) The widest a ford or a ferry may be (a bridge to `WIDTH`'s end, to carry shops).
     pub const NARROW_MAX: f64 = 40.0;
     pub const LENGTH: std::ops::RangeInclusive<f64> = 10.0..=2000.0;
@@ -1703,9 +1703,19 @@ impl Edits {
             (a.1 - a.0, c.1 - c.0, 0.5 * (a.0 + a.1), 0.5 * (c.0 + c.1))
         };
         let first = extent(&self.created[shops[0]].poly);
-        let (frontage, depth) = if first.0.is_finite() && first.0 >= 8.0 && first.1 >= 8.0 && len >= 1.0 { (first.0, first.1) } else { (wharf::SHOP_FRONT_FT, wharf::SHOP_DEPTH_FT) };
-        let lots = wharf::bridge_lots(&new, wharf::bridge_lane(&new, depth), depth, frontage);
-        let per_side = lots.len() / 2;
+        let all: Vec<(f64, f64, f64, f64)> = shops.iter().map(|&k| extent(&self.created[k].poly)).collect();
+        // Varied rows (lots of different frontage or depth) are laid out again varied, from the bridge's id; their deepest is the row's depth.
+        let vary = all.iter().any(|e| (e.0 - first.0).abs() > 0.5 || (e.1 - first.1).abs() > 0.5);
+        let (frontage, depth) = if !(first.0.is_finite() && first.0 >= 8.0 && first.1 >= 8.0 && len >= 1.0) {
+            (wharf::SHOP_FRONT_FT, wharf::SHOP_DEPTH_FT)
+        } else if vary {
+            (wharf::SHOP_FRONT_FT, all.iter().fold(0.0f64, |m, e| m.max(e.1)).round())
+        } else {
+            (first.0, first.1)
+        };
+        let lane = (new.width - 2.0 * depth).max(wharf::MIN_LANE_FT);
+        let lots = wharf::bridge_sides(&new, lane, depth, frontage, vary.then(|| wharf::key_of(id)));
+        let per_side = [lots[0].len(), lots[1].len()];
         let mut sides: [Vec<(f64, usize)>; 2] = [Vec::new(), Vec::new()];
         for &k in &shops {
             let e = extent(&self.created[k].poly);
@@ -1715,8 +1725,8 @@ impl Edits {
             list.sort_by(|p, q| p.0.total_cmp(&q.0));
             for (n, &(_, k)) in list.iter().enumerate() {
                 let c = &mut self.created[k];
-                match lots.get(s * per_side + n).filter(|_| n < per_side) {
-                    Some(lot) => {
+                match lots[s].get(n).filter(|_| n < per_side[s]) {
+                    Some((lot, _)) => {
                         let m = crate::town::geom::centroid(lot);
                         (c.poly, c.x, c.y) = (lot.clone(), m[0], m[1]);
                     }
