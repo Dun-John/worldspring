@@ -1386,8 +1386,10 @@ const calm = ([r, g, b]: [number, number, number]): [number, number, number] => 
 /** How much of a drawn building's roof colour shows at city zoom (the rest its ward's paper; a
  * generated building's is 0.6). */
 const DRAWN_ROOF_MIX = 0.9;
-/** A stone bridge's deck at city zoom: a light warm grey, as the battlemap's stone deck. */
-const STONE_DECK_RGB: [number, number, number] = [0.66, 0.64, 0.6];
+/** A stone bridge's deck at city zoom: a mid, slightly cool stone grey, darker than a paved road
+ * (`tileroad.frag` PAVED) and the water, so it holds as a bridge from the city zooms. Inked as a
+ * timber deck. */
+const STONE_DECK_RGB: [number, number, number] = [0.48, 0.49, 0.5];
 const WARD_RGB: [number, number, number][] = [
   [0.62, 0.56, 0.5], // plaza (unused for buildings)
   [0.5, 0.45, 0.42], // castle
