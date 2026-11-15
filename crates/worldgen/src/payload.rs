@@ -373,6 +373,15 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     push(&d, 6 | stone << 20);
                 }
             }
+            // (And the bridges of roads drawn by hand.)
+            if !world.file.edits.paths.is_empty() {
+                for c in crate::paths::crossings_near(world, t0, [ox, oy, ox + size, oy + size], 0.0).iter().filter(|c| c.kind == crate::world::CrossingKind::Bridge) {
+                    let stone = (c.material == crate::world::CrossingMaterial::Stone) as u32;
+                    for d in crate::battlemap::hand_decks(c) {
+                        push(&d, 6 | stone << 20);
+                    }
+                }
+            }
         }
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
             for f in &l.fields {

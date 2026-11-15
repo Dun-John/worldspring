@@ -152,6 +152,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
 | `h:<id>` | `h:d470a78s` | A plateau, pit or rock islet (ground shaped by hand; an islet says `what: "islet"`) |
 | `e:<id>` | `e:k2v9x0qa` | Water drawn by hand: an inlet, basin, lake, pond, moat or stream (`create_water`) |
+| `rw:<id>` | `rw:3m8q1zte` | A road drawn by hand: a footpath, track, gravel road, paved road or cobbled street (`place_path`) |
 | `q:<id>` | `q:7d0kx3ab` | A quay, pier or breakwater put down by hand (`place_wharf`); a lighthouse or shops stand on it as drawn buildings (`c:`) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 | `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
@@ -2489,6 +2490,45 @@ the app brings it back).
 ### `list_waters`
 
 Every water drawn by hand, as `create_water` returns it (`{items, found}`, `limit` 100 by default).
+
+## Roads drawn by hand
+
+Roads drawn on the ground, as Build › Road draws them: a footpath, track, gravel road, paved road or cobbled street
+along a line of points. The edits field **`paths`** holds them, by `rw:<id>`: `pts` (2 to 256 points, rounded to
+0.5 ft, no two in a row the same, spanning at most 5 miles), `type` (`footpath`, `track`, `gravel`, `paved`,
+`cobbled`), `width` (ft, 3 to 40; absent: the type's own, footpath 4, track 10, gravel 14, paved 18, cobbled 20) and
+`name`.
+
+How it applies:
+
+- The road runs on a smooth curve through its points (a centripetal Catmull-Rom spline), a band of its width along
+  it. The battlemap draws the band as road squares: a footpath or track packed earth (a footpath at least a square
+  wide), gravel as gravel, a paved road or cobbled street as cobbles; it is walked like a road.
+- Where its line runs over water (a river, a lake, the sea, water drawn by hand), a footpath or track crosses on a
+  ford (the bed at wading depth under stepping stones), the others on a bridge (gravel on timber, paved and
+  cobbled on stone), from a few feet before the water to as far past it; a crossing longer than 300 ft is built in
+  pieces end to end.
+- Trees, rocks and bushes keep off the band; the world's own buildings in villages, towns and cities that the band
+  meets are taken away (not those of a town laid out by hand, nor buildings drawn by hand). The world's road
+  network, its towns' plans and streets and the ground's shape don't change.
+- The map draws it at every zoom as a road of its look (a line, then a bed of its width close in).
+- Limits: a world holds 256 roads drawn by hand.
+
+### `place_path`
+
+`pts` and optionally `type` (default `track`), `width_ft` and `name`; with `id` (`rw:…`) it changes that road, and
+what is not given stays (a new type without `width_ft` takes its own width unless the road had a width of its own;
+`name` empty: none). The same line again returns the road there (`existing: true`). Returns its entry: `id`,
+`type`, `what`, `width_ft`, `name`, `length_ft`, `middle`, `bbox`, `pts`, and `crossings` (`{kind: bridge | ford,
+material, a, b, length_ft}` each).
+
+### `remove_paths`
+
+`id` or `ids` (all or none): the roads go with their notes (no restore; the user's Undo in the app brings them back).
+
+### `list_paths`
+
+Every road drawn by hand, as `place_path` returns it (`{items, found}`, `limit` 100 by default).
 
 ## What agents can't do
 

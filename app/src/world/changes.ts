@@ -31,6 +31,7 @@ export function changeList(e: Edits | undefined): string[] {
       [n(e.plateaus), 'plateau', 'plateaus'],
       [n(e.waters), 'water drawn', 'waters drawn'],
       [n(e.wharves), 'quay, pier or breakwater', 'quays, piers and breakwaters'],
+      [n(e.paths), 'road drawn', 'roads drawn'],
       [n(e.hexes), 'hex grid set up', 'hex grids set up'],
     ] as [number, string, string][]
   )
