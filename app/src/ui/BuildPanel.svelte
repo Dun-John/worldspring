@@ -57,6 +57,8 @@
     works: WorksSettings;
     /** The castle or wall being changed (its name), else drawing new ones. */
     worksEditing: string | null;
+    /** The view is over a town laid out by hand. */
+    handTown?: boolean;
     /** Clear area: a box dragged, or a lasso drawn. */
     clearShape: ClearShape;
     stamp: StampSettings;
@@ -98,6 +100,7 @@
     settings = $bindable(),
     funcs,
     editing,
+    handTown = false,
     mode,
     works = $bindable(),
     worksEditing,
@@ -174,7 +177,7 @@
     { key: 'row', label: 'Row', icon: 'wall', title: 'A row of buildings along a street (E)' },
     { key: 'lasso', label: 'Plot', icon: 'polygon', title: 'Draw round a plot and fill it (L)' },
     { key: 'castle', label: 'Castle', icon: 'castle', title: 'Draw a castle: its walls, gate, keep and yard' },
-    { key: 'wall', label: 'Wall', icon: 'wall', title: 'Draw a wall with towers and gates' },
+    { key: 'wall', label: 'Wall', icon: 'wall', title: 'A wall standing on its own, anywhere: towers and gates where you click' },
     { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
     { key: 'water', label: 'Water', icon: 'lake', title: 'Draw an inlet, basin, lake, pond or moat' },
     { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
@@ -257,6 +260,7 @@
             ? 'Drag the walls from corner to corner'
             : 'Click each corner; click the first again or press Enter'}, then click the side the gate is in (Enter: the side facing the road). 80 to 1,500 ft across.
         {:else}
+          {#if handTown}Round this town, draw its wall in Streets › Draw › Town wall: gates open where its streets cross.<br />{/if}
           {worksEditing ? 'Click the wall to add a gate there (on a gate: take it away), or draw it again. ' : ''}Click each corner; click a corner twice to make it a gate.
           Double-click or press Enter to finish. Roads and streets that cross it get a gate. Up to 3,000 ft.
         {/if}

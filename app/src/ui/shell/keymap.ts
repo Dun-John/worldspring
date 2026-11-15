@@ -191,7 +191,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   out.push(
     { keys: ['N'], label: 'Draw a street (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('street') },
     { keys: ['A'], label: 'Paint an area open or paved (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('area') },
-    { keys: ['W'], label: 'Draw a wall (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('wall') },
+    { keys: ['W'], label: 'Draw the town wall (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('wall') },
     { keys: ['Enter'], label: 'End the street, area or wall being drawn', group: 'Streets', when: hand, run: () => k.townStreetFinish() },
     { keys: ['Backspace'], label: 'Take a point back, else take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetBack() || k.townStreetDelete() },
     { keys: ['Delete'], label: 'Take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetDelete() },

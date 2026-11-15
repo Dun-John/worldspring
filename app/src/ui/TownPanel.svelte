@@ -141,7 +141,7 @@
     select: 'Click a street, a junction, a block, an area or a wall to pick it; drag a junction to move it.',
     street: 'Click or tap each point: a point near a junction or a street goes onto it, and the street ends there (or click the last point again). Crossing a block splits it.',
     area: 'Click or tap each corner of a part of a block to make open ground or paving; end on the first corner again (or Enter).',
-    wall: 'Click or tap each bend; end on the last point again (an open wall) or on the first (closed round). Gates open where streets cross it.',
+    wall: "The town's own wall: click or tap each bend; end on the last point again (an open wall) or on the first (closed round). Gates open where streets cross it.",
     displace: 'Drag: the junctions in the ring go with you, those in its middle all the way.',
     liquify: 'Drag: the junctions under the ring are smudged along.',
     bloat: 'Press and drag: the blocks round where you pressed swell, the further you drag the more.',
@@ -155,7 +155,7 @@
   const DRAWS: { key: TownMode; label: string; icon: IconName; kbd: string }[] = [
     { key: 'street', label: 'Street', icon: 'road', kbd: 'N' },
     { key: 'area', label: 'Area', icon: 'polygon', kbd: 'A' },
-    { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'W' },
+    { key: 'wall', label: 'Town wall', icon: 'wall', kbd: 'W' },
   ];
   const drawing = $derived(DRAWS.find((d) => d.key === mode));
   let drawOpen = $state(false);
@@ -231,7 +231,7 @@
     <div class="ws-seg modes" role="radiogroup" aria-label="Tool">
       <button class:on={mode === choose.key || (!hand && isDrawMode(mode))} aria-pressed={mode === choose.key} onclick={() => ((reshapeOpen = drawOpen = false), onMode(choose.key))} title="{choose.label} ({choose.kbd})"><Icon name={choose.icon} size={16} />{choose.label}</button>
       {#if hand}
-        <button class:on={!!drawing} aria-pressed={!!drawing} aria-haspopup="menu" aria-expanded={drawOpen} onclick={() => ((reshapeOpen = false), (drawOpen = !drawOpen))} title="Draw a street, paint an area, or draw a wall"><Icon name={drawing?.icon ?? 'road'} size={16} />{drawing?.label ?? 'Draw'} ▾</button>
+        <button class:on={!!drawing} aria-pressed={!!drawing} aria-haspopup="menu" aria-expanded={drawOpen} onclick={() => ((reshapeOpen = false), (drawOpen = !drawOpen))} title="Draw a street, paint an area, or draw the town's wall"><Icon name={drawing?.icon ?? 'road'} size={16} />{drawing?.label ?? 'Draw'} ▾</button>
       {/if}
       <button class:on={!!reshaping} aria-pressed={!!reshaping} aria-haspopup="menu" aria-expanded={reshapeOpen} onclick={() => ((drawOpen = false), (reshapeOpen = !reshapeOpen))} title={hand ? "Brushes that move the town's junctions" : "Brushes that reshape the town's patches"}>
         <Icon name={reshaping?.icon ?? 'liquify'} size={16} />{reshaping?.label ?? 'Reshape'} ▾
