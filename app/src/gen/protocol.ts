@@ -297,6 +297,19 @@ export interface LinkEdit {
   name?: string;
 }
 
+/** The sites at either end of the paired exits that differ between two edits' `links`. */
+export function linkSites(a: Record<string, LinkEdit> | undefined, b: Record<string, LinkEdit> | undefined): Set<string> {
+  const out = new Set<string>();
+  if (a === b) return out;
+  const [pa, pb] = [a ?? {}, b ?? {}];
+  const site = (level: string) => level.slice(2, level.lastIndexOf(':'));
+  for (const id of new Set([...Object.keys(pa), ...Object.keys(pb)])) {
+    if (JSON.stringify(pa[id]) === JSON.stringify(pb[id])) continue;
+    for (const l of [pa[id], pb[id]]) if (l) for (const e of [l.a, l.b]) out.add(site(e.level));
+  }
+  return out;
+}
+
 export interface Edits {
   renames?: Record<string, string>;
   notes?: Record<string, Note>;

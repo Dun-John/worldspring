@@ -119,6 +119,10 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         const n = Array.isArray(change.ids) ? change.ids.length : 1;
         return n === 1 ? `took away a ${String(change.kind ?? 'crossing')}` : `took away ${n} crossings`;
       }
+      case 'create_link':
+        return `${change.changed ? 'changed' : 'put down'} a way across (${String(change.way ?? 'stairs')})`;
+      case 'delete_link':
+        return 'took away a way across';
       case 'raise_islet':
         return `${change.changed ? 'changed' : 'raised'} an islet`;
       case 'place_wharf':

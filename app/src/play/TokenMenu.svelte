@@ -6,6 +6,7 @@
   import { roleOf, SIZES, type Token, type TokenRole } from './state';
   import type { PlayController } from './controller';
   import Icon from '../ui/Icon.svelte';
+  import { WAY_ICONS } from '../ui/icons';
 
   interface Props {
     play: PlayController;
@@ -39,6 +40,11 @@
     return rs.size === 1 ? [...rs][0] : null;
   });
   const anyShown = $derived(tokens.some((t) => !t.hidden));
+  /** The paired exit the one token stands on, if any: it can step across. */
+  const across = $derived.by(() => {
+    void version;
+    return one ? play.linkOf(one.id) : null;
+  });
   const following = $derived.by(() => {
     void version;
     return play.followTarget;
@@ -112,6 +118,10 @@
       <label class="switch"><span class="grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={!!t.vision} onchange={(e) => play.updateToken(t.id, { vision: checked(e) })} /></label>
       <label class="switch" title="The players' window goes where it is and keeps it in the middle"><span class="grow">Players’ view follows</span><input type="checkbox" class="ws-switch" checked={following === t.id} onchange={(e) => play.setFollowTarget(checked(e) ? t.id : null)} /></label>
       <button class="ws-btn item" role="menuitem" onclick={() => onPicture([t.id])}><Icon name="image" size={16} /> Picture…</button>
+    {/if}
+    {#if across}
+      {@const a = across}
+      <button class="ws-btn item" role="menuitem" title="Move it to the other end, and your view with it" onclick={() => (void play.stepAcross(t.id), onClose())}><Icon name={WAY_ICONS[a.way] ?? 'link'} size={16} /> {a.label}</button>
     {/if}
   {:else}
     <button class="ws-btn item" role="menuitem" onclick={() => hideAll(anyShown)}><Icon name="eye" size={16} /> {anyShown ? 'Hide' : 'Show'}</button>

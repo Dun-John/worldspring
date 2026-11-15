@@ -43,9 +43,11 @@
     onProblem: (level: number, at?: [number, number]) => void;
     /** The piece picked up, if any. */
     held: HeldView;
+    /** To the ways across (paired exits between levels and places below ground), if they can be put down here. */
+    onLinks?: () => void;
   }
 
-  let { designer, version, settings = $bindable(), catalog, name, renames, saved, sprites, picture, peek = false, onRename, onSave, onReset, onProblem, held }: Props = $props();
+  let { designer, version, settings = $bindable(), catalog, name, renames, saved, sprites, picture, peek = false, onRename, onSave, onReset, onProblem, held, onLinks }: Props = $props();
 
   const LANDING: { key: DesignMode; label: string; icon: IconName; kbd: string; hint: string } = { key: 'landing', label: 'Stair landing', icon: 'target', kbd: 'Y', hint: 'Click a floor square on this level: the stairs come out there (underground, the way up sits there too). Click it again to leave it to the generator.' };
   const TOOLS: { key: DesignMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
@@ -176,10 +178,11 @@
 
 <div class="design">
   {#if !peek}<div class="site">Designing <b>{name}</b> <span class="ws-muted">· {building ? (lv?.name ?? '') : `level ${level + 1} of ${draft?.levels.length ?? 1}`}</span></div>{/if}
-  <div class="tools" role="toolbar" aria-label="Design tools" style:--tools={tools.length}>
+  <div class="tools" role="toolbar" aria-label="Design tools" style:--tools={tools.length + (onLinks ? 1 : 0)}>
     {#each tools as t (t.key)}
       <button class="ws-icon-btn" aria-pressed={settings.mode === t.key} title="{t.label} ({t.kbd})" aria-label={t.label} onclick={() => (settings = { ...settings, mode: t.key })}><Icon name={t.icon} /></button>
     {/each}
+    {#if onLinks}<button class="ws-icon-btn" aria-pressed="false" title="Ways across (J): stairs, ladders, passages to another level or place below ground" aria-label="Ways across" onclick={onLinks}><Icon name="link" /></button>{/if}
   </div>
   {#if settings.mode === 'prop' && (held || settings.prop)}
     <InHand
