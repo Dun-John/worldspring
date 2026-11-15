@@ -16,7 +16,8 @@ import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
-import { underlay } from '../editor/trace/underlay.svelte';
+import { underlay, type Underlay } from '../editor/trace/underlay.svelte';
+import { TraceSprite } from './TraceSprite';
 import { tracer } from '../editor/trace/tracer.svelte';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
@@ -203,6 +204,9 @@ export class MapView {
   private previewed = new Set<string>();
   /** Sketch mode: the strokes and preview on the map, and the editor pointer input goes to. */
   sketchLayer: SketchLayer | null = null;
+  /** Edit › Streets' trace picture (session-only, never in the players' window): shown while set. */
+  townTrace: Underlay | null = null;
+  private readonly townTraceSprite = new TraceSprite();
   private sketcher: Sketcher | null = null;
   /** The pointer drawing a stroke. */
   private sketching: number | null = null;
@@ -1205,6 +1209,7 @@ export class MapView {
     this.app.stage.addChild(this.ferryLanes.container);
     this.app.stage.addChild(battle.container);
     this.app.stage.addChild(this.hexLayer.container);
+    this.app.stage.addChild(this.townTraceSprite.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
     this.app.stage.addChild(this.playOver);
@@ -1724,6 +1729,7 @@ export class MapView {
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
+      this.townTraceSprite.update(this.cam, this.townTrace && !this.interior ? this.townTrace : null);
       if (this.sewers) {
         this.sewers.update(this.cam, now);
         // The section in the middle of the view is the one the levels list speaks of.

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams, OpenKind } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
-  import { underlay } from './editor/trace/underlay.svelte';
+  import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
   import { MI, PIN_KINDS, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
@@ -48,7 +48,7 @@
   import GroundPanel from './ui/GroundPanel.svelte';
   import { defaultGround, GroundTool, type GroundSettings } from './editor/ground';
   import { TownTool, type TownMode } from './editor/town';
-  import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, type StreetPick } from './editor/streets';
+  import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, isDrawMode, pickIn, type StreetPick } from './editor/streets';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { belowGround } from './editor/site/model';
@@ -255,16 +255,16 @@
     if (!e.dataTransfer?.types.includes('Files')) return;
     // (Never let the browser open the file instead of the page.)
     e.preventDefault();
-    e.dataTransfer.dropEffect = playOn || sketchOn ? 'copy' : 'none';
+    e.dataTransfer.dropEffect = playOn || sketchOn || townOn ? 'copy' : 'none';
   }
   function mapDrop(e: DragEvent) {
     if (!e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
     const files = [...e.dataTransfer.files];
     // The sketch tab takes a picture to trace from (kept for the session only).
-    if (sketchOn && !playOn) {
+    if ((sketchOn || townOn) && !playOn) {
       const f = files.find((f) => f.type.startsWith('image/'));
-      if (f) void underlay.load(f);
+      if (f) void (sketchOn ? underlay : townUnderlay).load(f);
       return;
     }
     if (!playOn) return;
@@ -1074,6 +1074,7 @@
     // (A trace picture belongs to the world it was laid over: another world opened or made drops it.)
     if (!shown && !fromSketch) {
       underlay.remove();
+      townUnderlay.remove();
       tracer.dropPicture();
     }
     unexportedCount = unexported(editsKey(world))?.n ?? 0;
@@ -1436,7 +1437,8 @@
   function syncTool() {
     const buildTool =
       buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
-    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? (streetPlan ? streetTool : townTool) ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
+    const town = townOn && townUnderlay.adjust && townUnderlay.visible ? townTraceTool : streetPlan ? streetTool : townTool;
+    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? town ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -1521,7 +1523,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), editGenerated: (h: BuildingHit) => editGenerated(h), saveGenerated: () => saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(build, o), generatedActions: (h: BuildingHit) => generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), streets: () => ({ plan: streetPlan, pick: streetPick, tool: streetTool, drawn: streetDrawn }), streetChange: (r: StreetRequest) => streetChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), editGenerated: (h: BuildingHit) => editGenerated(h), saveGenerated: () => saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(build, o), generatedActions: (h: BuildingHit) => generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), streets: () => ({ plan: streetPlan, pick: streetPick, tool: streetTool, drawn: streetDrawn }), streetChange: (r: StreetRequest) => streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (streetPick = p), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1815,6 +1817,32 @@
   /** The points of the street being drawn; the class streets drawn get. */
   let streetDrawn = $state(0);
   let streetClass = $state<'main' | 'street'>('street');
+  /** What areas painted are; a wall drawn's towers apart (ft; null: as the town has them) and name. */
+  let streetOpen = $state<OpenKind>('lawn');
+  let wallSpacing = $state<number | null>(null);
+  let wallName = $state('');
+  // The town's trace picture (session-only, DM-only): shown over the map with the tab open, fitted
+  // round the town in view; Adjust hands the map's pointer to its handles.
+  $effect(() => {
+    view.townTrace = townOn ? townUnderlay : null;
+  });
+  $effect(() => {
+    const f = townIndex >= 0 ? settlements[townIndex] : null;
+    if (!f) return;
+    const size = 1.25 * townSpan();
+    townUnderlay.setHome(f.x, f.y, size, size);
+  });
+  $effect(() => {
+    void [townOn, townUnderlay.adjust, townUnderlay.visible];
+    untrack(() => syncTool());
+  });
+  const townTraceTool: PointerTool = {
+    down: (x, y, e) => e.button === 0 && townUnderlay.adjustDown(x, y, view.cam.ppf),
+    move: (x, y) => townUnderlay.adjustMove(x, y),
+    up: () => townUnderlay.adjustUp(),
+    cancel: () => townUnderlay.adjustUp(),
+    hover: () => {},
+  };
   /** "Back to generated" waiting for its answer. */
   let streetBackAsk = $state(false);
   /** Whether the town in view is laid out by hand. */
@@ -1836,7 +1864,7 @@
   function armTown() {
     if (townTool) return;
     townTool = new TownTool({
-      mode: () => (townMode === 'street' ? 'select' : townMode),
+      mode: () => (isDrawMode(townMode) ? 'select' : townMode),
       radius: () => townSize * (townPlan?.max_move_ft ?? 300),
       selected: () => townPatch,
       selectedCorner: () => townCorner,
@@ -1858,6 +1886,8 @@
       pick: (p) => (streetPick = p),
       change: (req, what) => void streetChange(req, what),
       drawClass: () => streetClass,
+      areaKind: () => streetOpen,
+      wallOpts: () => ({ spacing: wallSpacing, name: wallName }),
       drawing: (n) => (streetDrawn = n),
       hint: (t) => toast(t),
     });
@@ -1976,7 +2006,7 @@
       return setStreetPlan(null);
     }
     const p = streetPick;
-    if (p && !(p.kind === 'street' ? r.streets : p.kind === 'junction' ? r.junctions : r.blocks).some((x) => x.id === p.id)) streetPick = null;
+    if (p && !pickIn(r, p)) streetPick = null;
     setStreetPlan(r);
   }
 
@@ -1990,15 +2020,15 @@
   }
 
   /** A change asked of the hand town in view: its records applied per key (one step to undo), or why not. */
-  async function streetChange(request: StreetRequest, what: string) {
+  async function streetChange(request: StreetRequest, what: string): Promise<boolean> {
     const i = townIndex;
-    if (i < 0 || townBusy) return void streetTool?.settled();
+    if (i < 0 || townBusy) return (streetTool?.settled(), false);
     townBusy = true;
     const r = await view.gen.streetChange(i, request).finally(() => (townBusy = false));
-    if (i !== townIndex) return void streetTool?.settled();
+    if (i !== townIndex) return (streetTool?.settled(), false);
     if ('error' in r) {
       streetTool?.settled();
-      return void toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
+      return (toast(r.error.charAt(0).toUpperCase() + r.error.slice(1)), false);
     }
     const { change, report } = r;
     const next: Edits = { ...edits };
@@ -2016,7 +2046,7 @@
     }
     if (!any) {
       streetTool?.settled();
-      return void toast('Nothing changed');
+      return (toast('Nothing changed'), false);
     }
     const key = String(i);
     if (change.streets) view.hintStreets(key, change.streets, report.rects);
@@ -2032,14 +2062,24 @@
     const { rects: _, records: __, blocks: ___, problems: ____, lost: _____, ...rest } = report;
     const moved = request.op === 'move_junctions' ? request.moves.length - stayed : undefined;
     applyEdits(next, { tool: 'edit_streets', id: settlements[i]?.id, name: townName ?? undefined, what, ...rest, op: request.op, ...(moved !== undefined ? { moved } : {}) }, 'user');
+    return true;
   }
 
-  /** The street picked taken away (false: none picked). */
-  function deleteStreet(): boolean {
-    if (streetPick?.kind !== 'street') return false;
-    void streetChange({ op: 'delete_street', street: streetPick.id }, 'street');
+  /** The street, painted area or wall picked taken away (false: none of them picked). */
+  function deletePicked(): boolean {
+    const p = streetPick;
+    if (!p) return false;
+    if (p.kind === 'street') void streetChange({ op: 'delete_street', street: p.id }, 'street');
+    else if (p.kind === 'area') void streetChange({ op: 'remove_area', area: p.id }, 'area');
+    else if (p.kind === 'wall') void streetChange({ op: 'remove_wall', wall: p.id }, 'wall');
+    else return false;
     streetPick = null;
     return true;
+  }
+
+  /** Several changes asked in turn (each its own step to undo); stops at the first refused. */
+  async function streetChanges(reqs: StreetRequest[], what: string) {
+    for (const r of reqs) if (!(await streetChange(r, what))) return;
   }
 
   /** A click on the map with the tab open: a square or a patch picked, or the neighbour to join. */
@@ -2117,7 +2157,11 @@
 
   function townZoomIn() {
     const f = settlements[townIndex];
-    if (!f) return;
+    if (f) flyToSize(f.x, f.y, townSpan());
+  }
+
+  /** The town in view's span (ft): its junctions' or patches' box, else 5,000. */
+  function townSpan(): number {
     let size = 5000;
     if (streetPlan?.junctions.length) {
       const xs = streetPlan.junctions.map((j) => j.p[0]);
@@ -2128,7 +2172,7 @@
       const pts = townPlan.patches.filter((p) => p.in_town).flatMap((p) => p.corners.map((v) => at.get(v) ?? p.at));
       if (pts.length) size = Math.max(Math.max(...pts.map((p) => p[0])) - Math.min(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1])) - Math.min(...pts.map((p) => p[1])));
     }
-    flyToSize(f.x, f.y, size);
+    return size;
   }
 
   function disarmBuild() {
@@ -4447,11 +4491,12 @@
       townMode = m;
       townMerging = false;
       townTool?.reset();
+      streetTool?.reset();
     },
     townHand: () => !!streetPlan,
-    townStreetFinish: () => (streetTool && streetDrawn ? (streetTool.finish(), true) : false),
+    townStreetFinish: () => (streetTool && streetDrawn ? (streetTool.finish(townMode === 'area'), true) : false),
     townStreetBack: () => !!streetTool?.back(),
-    townStreetDelete: () => deleteStreet(),
+    townStreetDelete: () => deletePicked(),
     townBrush: (d) => (townSize = Math.max(0.25, Math.min(4, townSize * (d > 0 ? 1.15 : 1 / 1.15)))),
     groundMode: (m) => (ground.mode = m),
     groundBrush: (d) => groundArmed?.size(d),
@@ -4486,6 +4531,7 @@
       () => (townOn && streetPick ? ((streetPick = null), true) : false),
       () => (sketchOn && tracer.picking ? ((tracer.picking = null), true) : false),
       () => (sketchOn && underlay.adjust ? ((underlay.adjust = false), true) : false),
+      () => (townOn && townUnderlay.adjust ? ((townUnderlay.adjust = false), true) : false),
       () => (townMerging ? ((townMerging = false), true) : false),
       () => (townOn && (townPatch !== null || townCorner !== null) ? ((townPatch = null), (townCorner = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
@@ -4860,10 +4906,14 @@
             {streetPick}
             {streetDrawn}
             bind:streetClass
+            bind:streetOpen
+            bind:wallSpacing
+            bind:wallName
+            onStreets={(reqs, what) => void streetChanges(reqs, what)}
             onLayOut={() => void streetChange({ op: 'lay_out_by_hand' }, 'lay out')}
             onBack={() => (streetBackAsk = true)}
             onStreet={(req, what) => void streetChange(req, what)}
-            onStreetFinish={() => streetTool?.finish()}
+            onStreetFinish={(closed) => streetTool?.finish(closed)}
             onStreetBack={() => streetTool?.back()}
             onStreetPick={(p) => (streetPick = p)}
             onChange={(req, what) => void townChange(req, what)}

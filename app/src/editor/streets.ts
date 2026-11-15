@@ -7,17 +7,30 @@
 // a few px or the generator's 3 ft, shown as you go) and ends on a junction or street, on the
 // last point clicked again, or on Enter; the brushes (as the ward editor's) move every junction
 // within their ring, Equalize each block passed over toward a regular polygon. Nothing is laid
-// out while dragging: on release the moves go to the app as one change.
+// out while dragging: on release the moves go to the app as one change. Paint an area and Draw a
+// wall add points the same way (not snapped): an area ends on its first point again (or Enter),
+// a wall on its last (open) or first (closed). Rows are drawn as bands along their street's side,
+// areas tinted by their kind, walls dark with their gates.
 import type { Graphics } from 'pixi.js';
-import type { BlockFill, StreetClass, StreetPlan, StreetRequest, TownWard } from '../gen/protocol';
+import type { BlockFill, OpenKind, StreetClass, StreetPlan, StreetRequest, TownWard } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { WARD_COLOURS, type TownMode } from './town';
 
 type Pt = [number, number];
 
-/** What is picked: a street, a junction or a block (their record numbers). */
-export type StreetPick = { kind: 'street' | 'junction' | 'block'; id: number };
+/** What is picked: a street, a junction, a block, a painted area or a wall (their record numbers). */
+export type StreetPick = { kind: 'street' | 'junction' | 'block' | 'area' | 'wall'; id: number };
+
+/** The modes that draw a line point by point. */
+export const DRAW_MODES: readonly TownMode[] = ['street', 'area', 'wall'];
+export const isDrawMode = (m: TownMode) => DRAW_MODES.includes(m);
+
+/** Whether the plan still has what `p` picks. */
+export function pickIn(plan: StreetPlan, p: StreetPick): boolean {
+  const of = { street: plan.streets, junction: plan.junctions, block: plan.blocks, area: plan.areas, wall: plan.walls }[p.kind];
+  return of.some((x) => x.id === p.id);
+}
 
 /** The brush's radius at size 1 (ft): about a block across. */
 export const HAND_BRUSH_FT = 150;
@@ -39,7 +52,7 @@ const CLASS_LOOK: Record<StreetClass, { width: number; color: number }> = {
   quay: { width: 3, color: 0x7fb2d6 },
   joint: { width: 1.5, color: 0xd6d3d1 },
 };
-const OPEN_COLOURS: Record<string, number> = { plaza: 0xf0cf6a, market: 0xe6923a, lawn: 0x9cc65a, park: 0x3d9f5c, garden: 0x3d9f5c, cemetery: 0x8a8f7a, farmland: 0xb9c65a };
+export const OPEN_COLOURS: Record<string, number> = { plaza: 0xf0cf6a, market: 0xe6923a, lawn: 0x9cc65a, park: 0x3d9f5c, garden: 0x3d9f5c, cemetery: 0x8a8f7a, farmland: 0xb9c65a };
 
 /** A block's tint on the map: its ward, open kind or castle. */
 export function fillColour(f: BlockFill): number {
@@ -60,6 +73,10 @@ export interface StreetHost {
   change(req: StreetRequest, what: string): void;
   /** The class a street drawn gets. */
   drawClass(): StreetClass;
+  /** What an area painted is. */
+  areaKind(): OpenKind;
+  /** A wall drawn's towers (ft apart; none: as the town has them) and name. */
+  wallOpts(): { spacing: number | null; name: string };
   /** The points of the street being drawn changed (how many). */
   drawing(n: number): void;
   hint(text: string): void;
@@ -273,12 +290,30 @@ export class StreetTool implements PointerTool {
     return best;
   }
 
-  /** What a click at (x, y) picks: a junction, else a street, else a block. */
+  /** What a click at (x, y) picks: a junction, else a street, a wall, a painted area, a block. */
   pickAt(x: number, y: number): StreetPick | null {
     const j = this.junctionAt(x, y);
     if (j !== null) return { kind: 'junction', id: j };
-    const s = this.streetNear(x, y, GRAB_PX / this.ppf);
+    const r = GRAB_PX / this.ppf;
+    const s = this.streetNear(x, y, r);
     if (s) return { kind: 'street', id: s.id };
+    let wall: number | null = null;
+    let wd = r;
+    for (const w of this.plan?.walls ?? []) {
+      const p = w.closed ? [...w.pts, w.pts[0]] : w.pts;
+      for (let k = 1; k < p.length; k++) {
+        const d = dist(nearest([x, y], p[k - 1], p[k]), [x, y]);
+        if (d < wd) [wall, wd] = [w.id, d];
+      }
+    }
+    if (wall !== null) return { kind: 'wall', id: wall };
+    let area: number | null = null;
+    let aa = Infinity;
+    for (const a of this.plan?.areas ?? []) {
+      const ar = Math.abs(signedArea(a.poly));
+      if (ar < aa && inside([x, y], a.poly)) [area, aa] = [a.id, ar];
+    }
+    if (area !== null) return { kind: 'area', id: area };
     const b = this.blockAt(x, y);
     return b === null ? null : { kind: 'block', id: b };
   }
@@ -297,9 +332,11 @@ export class StreetTool implements PointerTool {
 
   /** A click or tap while drawing: a point, or the end. */
   tap(x: number, y: number, e: PointerEvent): boolean {
-    if (this.host.mode() !== 'street' || e.button !== 0 || !this.plan) return false;
+    const mode = this.host.mode();
+    if (!isDrawMode(mode) || e.button !== 0 || !this.plan) return false;
     if (this.sent) return true;
     this.version++;
+    if (mode !== 'street') return this.tapLine(mode, x, y);
     const s = this.snap(x, y);
     const d = this.draft;
     const last = d[d.length - 1];
@@ -321,14 +358,42 @@ export class StreetTool implements PointerTool {
     return true;
   }
 
-  /** Send the street drawn. */
-  finish() {
+  /** A point of an area or a wall: free, not snapped; the first point again closes it. */
+  private tapLine(mode: TownMode, x: number, y: number): boolean {
     const d = this.draft;
-    if (d.length < 2) return void this.host.hint('A street needs two points or more');
+    const p = round([x, y]);
+    const close = SNAP_PX / this.ppf;
+    if (d.length >= 3 && dist(d[0].p, p) < close) {
+      this.finish(true);
+      return true;
+    }
+    if (d.length && dist(d[d.length - 1].p, p) < close) {
+      if (mode === 'wall' && d.length >= 2) this.finish(false);
+      else if (d.length >= 3) this.finish(true);
+      return true;
+    }
+    d.push({ p, on: null, id: -1 });
+    if (d.length === 1) this.host.hint(mode === 'area' ? 'Click each corner; end on the first again (or press Enter)' : 'Click each bend; end on the last point again, or on the first to close it round');
+    this.host.drawing(d.length);
+    return true;
+  }
+
+  /** Send the street, area or wall drawn (`closed`: a wall closed round). */
+  finish(closed = false) {
+    const mode = this.host.mode();
+    const d = this.draft;
+    const need = mode === 'area' ? 3 : 2;
+    if (d.length < need) return void this.host.hint(mode === 'area' ? 'An area needs three corners or more' : mode === 'wall' ? 'A wall needs two points or more' : 'A street needs two points or more');
     this.version++;
     this.draft = [];
     this.host.drawing(0);
     this.sent = d.map((s) => s.p);
+    if (mode === 'area') return this.host.change({ op: 'add_area', poly: this.sent, open: this.host.areaKind() }, 'area');
+    if (mode === 'wall') {
+      const { spacing, name } = this.host.wallOpts();
+      const n = name.trim().slice(0, 80);
+      return this.host.change({ op: 'add_wall', pts: this.sent, ...(closed && d.length >= 3 ? { closed: true } : {}), ...(spacing ? { spacing } : {}), ...(n ? { name: n } : {}) }, 'wall');
+    }
     this.host.change({ op: 'add_street', points: this.sent, class: this.host.drawClass() }, 'street');
   }
 
@@ -350,7 +415,7 @@ export class StreetTool implements PointerTool {
 
   down(x: number, y: number, e: PointerEvent): boolean {
     const mode = this.host.mode();
-    if (e.button !== 0 || !this.plan || this.pending || mode === 'street') return false;
+    if (e.button !== 0 || !this.plan || this.pending || isDrawMode(mode)) return false;
     this.version++;
     const p: Pt = [x, y];
     this.cursor = p;
@@ -511,7 +576,7 @@ export class StreetTool implements PointerTool {
 
   drawKey(): string {
     const p = this.host.picked();
-    return `${this.version}|${this.host.mode()}|${p?.kind}${p?.id}|${this.host.radius()}`;
+    return `${this.version}|${this.host.mode()}|${p?.kind}${p?.id}|${this.host.radius()}|${this.host.areaKind()}`;
   }
 
   dblclick(): boolean {
@@ -539,6 +604,54 @@ export class StreetTool implements PointerTool {
       if (!r || !boxIn(r.box)) continue;
       const pts = moving ? this.ringNow(r) : r.pts;
       g.poly(pts.flatMap(scr)).fill({ color: this.bad.blocks.has(b) ? BAD : fillColour(fills.get(b)!), alpha: picked?.kind === 'block' && picked.id === b ? 0.34 : 0.14 });
+    }
+    // Rows: a band along their street's side, as deep as they are, tinted by their ward.
+    const widths = new Map(plan.streets.map((st) => [st.id, st.width]));
+    for (const row of plan.rows) {
+      const l = this.byId.get(row.street);
+      if (!l) continue;
+      const p = this.pts(l);
+      if (!p.some(inView)) continue;
+      const o0 = 0.5 * (widths.get(row.street) ?? 0) + 2;
+      const o1 = o0 + row.depth;
+      const lit = picked?.kind === 'street' && picked.id === row.street;
+      for (let k = 1; k < p.length; k++) {
+        const [a, b] = [p[k - 1], p[k]];
+        const len = dist(a, b);
+        if (len < 0.01) continue;
+        const u = mul(sub(b, a), 1 / len);
+        const n: Pt = row.side === 'l' ? [-u[1], u[0]] : [u[1], -u[0]];
+        const q = [add(a, mul(n, o0)), add(b, mul(n, o0)), add(b, mul(n, o1)), add(a, mul(n, o1))];
+        g.poly(q.flatMap(scr)).fill({ color: WARD_COLOURS[row.ward as TownWard] ?? WARD_COLOURS.common, alpha: lit ? 0.45 : 0.25 });
+      }
+    }
+    // Painted areas: tinted by their kind, outlined; the one picked in yellow.
+    for (const a of plan.areas) {
+      if (!a.poly.some(inView)) continue;
+      const lit = picked?.kind === 'area' && picked.id === a.id;
+      g.poly(a.poly.flatMap(scr)).fill({ color: OPEN_COLOURS[a.open] ?? WARD_COLOURS.park, alpha: 0.4 }).stroke({ width: lit ? 3 : 1.5, color: lit ? 0xfde047 : 0xfafaf9, alpha: 0.9 });
+    }
+    // Wall lines: dark and broad, the one picked under yellow; their gates as white squares.
+    for (const w of plan.walls) {
+      if (!w.pts.some(inView)) continue;
+      const sp = (w.closed ? [...w.pts, w.pts[0]] : w.pts).map(scr);
+      const line = () => {
+        g.moveTo(sp[0][0], sp[0][1]);
+        for (let k = 1; k < sp.length; k++) g.lineTo(sp[k][0], sp[k][1]);
+      };
+      if (picked?.kind === 'wall' && picked.id === w.id) {
+        line();
+        g.stroke({ width: 11, color: 0xfde047, alpha: 0.9 });
+      }
+      line();
+      g.stroke({ width: 7, color: 0x292524, alpha: 0.85 });
+      line();
+      g.stroke({ width: 3, color: 0xa8a29e, alpha: 0.95 });
+      // (The gates by hand, and where streets cross it: the generator puts a gate there.)
+      for (const q of [...w.gates, ...this.crossings(w.closed ? [...w.pts, w.pts[0]] : w.pts)]) {
+        const [sx, sy] = scr(q);
+        g.rect(sx - 4, sy - 4, 8, 8).fill({ color: 0xfafaf9 }).stroke({ width: 1.5, color: 0x292524 });
+      }
     }
     // Streets: dark under their class's colour; a problem red under both.
     const visible = this.lines.filter((l) => inView(this.at(l.a)) || inView(this.at(l.b)) || l.bends.some(inView));
@@ -601,19 +714,22 @@ export class StreetTool implements PointerTool {
         g.circle(sx, sy, 9).stroke({ width: 3, color: 0xfde047 });
       }
     }
-    // The street being drawn (or sent), on to the pointer, and where it would meet the others.
-    if (mode === 'street' || this.sent) {
+    // The street, area or wall being drawn (or sent), on to the pointer, and where it would meet
+    // the streets (a street's new junctions, a wall's gates).
+    if (isDrawMode(mode) || this.sent) {
       const pts: Pt[] = this.sent ?? this.draft.map((s) => s.p);
-      const next = !this.sent && this.cursor ? this.snap(this.cursor[0], this.cursor[1]) : null;
+      const free = mode !== 'street';
+      const next = !this.sent && this.cursor ? (free ? { p: this.cursor, on: null, id: -1 } : this.snap(this.cursor[0], this.cursor[1])) : null;
       const all = next ? [...pts, next.p] : pts;
+      if (mode === 'area' && all.length >= 3) g.poly(all.flatMap(scr)).fill({ color: OPEN_COLOURS[this.host.areaKind()] ?? WARD_COLOURS.park, alpha: 0.3 });
       if (all.length >= 2) {
-        const sp = all.map(scr);
+        const sp = (mode === 'area' && all.length >= 3 ? [...all, all[0]] : all).map(scr);
         for (const pass of [0, 1]) {
           g.moveTo(sp[0][0], sp[0][1]);
           for (let k = 1; k < sp.length; k++) g.lineTo(sp[k][0], sp[k][1]);
           g.stroke(pass === 0 ? { width: 6, color: 0x1c1917, alpha: 0.45 } : { width: 3, color: INK, alpha: 0.95 });
         }
-        for (const q of this.crossings(all)) {
+        for (const q of mode === 'area' ? [] : this.crossings(all)) {
           const [sx, sy] = scr(q);
           g.circle(sx, sy, 4).fill({ color: 0xfafaf9 }).stroke({ width: 2, color: INK });
         }
@@ -630,7 +746,7 @@ export class StreetTool implements PointerTool {
       }
     }
     // The brush's ring.
-    if (mode !== 'select' && mode !== 'equalize' && mode !== 'street' && this.cursor) {
+    if (mode !== 'select' && mode !== 'equalize' && !isDrawMode(mode) && this.cursor) {
       const [sx, sy] = scr(this.drag?.kind === 'brush' && (mode === 'bloat' || mode === 'pinch') ? this.drag.start : this.cursor);
       g.circle(sx, sy, this.host.radius() * ppf).stroke({ width: 1.5, color: INK, alpha: 0.8 });
       g.circle(sx, sy, this.host.radius() * ppf * (mode === 'displace' ? SOFT : 0.04)).stroke({ width: 1, color: INK, alpha: 0.5 });
@@ -707,4 +823,11 @@ function inside(p: Pt, poly: Pt[]): boolean {
     if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) c = !c;
   }
   return c;
+}
+
+/** A polygon's area, signed (positive: its points go round clockwise on screen, y down). */
+function signedArea(poly: Pt[]): number {
+  let a = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) a += poly[j][0] * poly[i][1] - poly[i][0] * poly[j][1];
+  return a / 2;
 }

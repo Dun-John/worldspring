@@ -60,11 +60,11 @@ export interface KeyContext {
   townBrush(d: number): void;
   /** The town in view is laid out by hand (its street graph is shown). */
   townHand(): boolean;
-  /** The street being drawn ended (false: none). */
+  /** The street, area or wall being drawn ended (false: none). */
   townStreetFinish(): boolean;
   /** Its last point taken back (false: none drawn). */
   townStreetBack(): boolean;
-  /** The street picked taken away (false: none). */
+  /** The street, area or wall picked taken away (false: none). */
   townStreetDelete(): boolean;
   groundMode(m: GroundMode): void;
   /** The ground brush a step wider (1) or narrower (-1). */
@@ -179,9 +179,11 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   const hand = () => edit('town')() && k.townHand();
   out.push(
     { keys: ['N'], label: 'Draw a street (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('street') },
-    { keys: ['Enter'], label: 'End the street being drawn', group: 'Streets', when: hand, run: () => k.townStreetFinish() },
-    { keys: ['Backspace'], label: 'Take a point back, else take the street chosen away', group: 'Streets', when: hand, run: () => k.townStreetBack() || k.townStreetDelete() },
-    { keys: ['Delete'], label: 'Take the street chosen away', group: 'Streets', when: hand, run: () => k.townStreetDelete() },
+    { keys: ['A'], label: 'Paint an area open or paved (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('area') },
+    { keys: ['W'], label: 'Draw a wall (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('wall') },
+    { keys: ['Enter'], label: 'End the street, area or wall being drawn', group: 'Streets', when: hand, run: () => k.townStreetFinish() },
+    { keys: ['Backspace'], label: 'Take a point back, else take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetBack() || k.townStreetDelete() },
+    { keys: ['Delete'], label: 'Take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetDelete() },
   );
   out.push(
     { keys: [']'], label: 'Bigger brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(1) },

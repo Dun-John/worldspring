@@ -7,12 +7,15 @@
   // Each change is one step to undo.
   //
   // A town laid out by hand (`streets`) shows its street graph instead: Choose (streets, junctions,
-  // blocks; junctions dragged), Draw a street, the same brushes on its junctions, what is picked,
-  // the problems the streets have, and Back to generated.
+  // blocks, areas, walls; junctions dragged), Draw a street, an area painted open or paved, a wall
+  // line, the same brushes on its junctions, what is picked (`StreetCards`), the problems the
+  // streets have, and Back to generated. Either way a plan can be laid under it to trace (`TownTrace`).
   import { LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS, type LotSize, type ParkKind, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWallsRequest, type TownWard } from '../gen/protocol';
-  import type { StreetClass, StreetPlan, StreetRequest } from '../gen/protocol';
+  import type { OpenKind, StreetClass, StreetPlan, StreetRequest } from '../gen/protocol';
+  import StreetCards from './StreetCards.svelte';
+  import TownTrace from './TownTrace.svelte';
   import { SQUARE_COLOURS, WARD_COLOURS, type TownMode } from '../editor/town';
-  import { HAND_BRUSH_FT, fillColour, type StreetPick } from '../editor/streets';
+  import { HAND_BRUSH_FT, isDrawMode, type StreetPick } from '../editor/streets';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -57,15 +60,21 @@
     /** Points of the street being drawn. */
     streetDrawn?: number;
     streetClass?: 'main' | 'street';
+    /** What an area painted is; a wall drawn's towers apart (ft; null: as the town has them) and name. */
+    streetOpen?: OpenKind;
+    wallSpacing?: number | null;
+    wallName?: string;
     onLayOut?: () => void;
     onBack?: () => void;
     onStreet?: (req: StreetRequest, what: string) => void;
-    onStreetFinish?: () => void;
+    onStreets?: (reqs: StreetRequest[], what: string) => void;
+    /** End what is being drawn (`closed`: a wall closed round). */
+    onStreetFinish?: (closed?: boolean) => void;
     onStreetBack?: () => void;
     onStreetPick?: (p: StreetPick | null) => void;
   }
 
-  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn, picking = false, onChangeTown, names = {}, hiddenIds = [], onRename, onHide, onPatch, streets = null, streetPick = null, streetDrawn = 0, streetClass = $bindable('street'), onLayOut, onBack, onStreet, onStreetFinish, onStreetBack, onStreetPick }: Props = $props();
+  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn, picking = false, onChangeTown, names = {}, hiddenIds = [], onRename, onHide, onPatch, streets = null, streetPick = null, streetDrawn = 0, streetClass = $bindable('street'), streetOpen = $bindable('lawn'), wallSpacing = $bindable(null), wallName = $bindable(''), onLayOut, onBack, onStreet, onStreets, onStreetFinish, onStreetBack, onStreetPick }: Props = $props();
 
   const MODES: { key: TownMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
@@ -129,8 +138,10 @@
 
   // (On a hand town: its junctions, not the patches' corners.)
   const HAND_HINT: Partial<Record<TownMode, string>> = {
-    select: 'Click a street, a junction or a block to pick it; drag a junction to move it.',
+    select: 'Click a street, a junction, a block, an area or a wall to pick it; drag a junction to move it.',
     street: 'Click or tap each point: a point near a junction or a street goes onto it, and the street ends there (or click the last point again). Crossing a block splits it.',
+    area: 'Click or tap each corner of a part of a block to make open ground or paving; end on the first corner again (or Enter).',
+    wall: 'Click or tap each bend; end on the last point again (an open wall) or on the first (closed round). Gates open where streets cross it.',
     displace: 'Drag: the junctions in the ring go with you, those in its middle all the way.',
     liquify: 'Drag: the junctions under the ring are smudged along.',
     bloat: 'Press and drag: the blocks round where you pressed swell, the further you drag the more.',
@@ -139,14 +150,16 @@
     equalize: 'Click or drag over blocks: each is made more regular.',
   };
   const CLASS_LABEL: Record<StreetClass, string> = { main: 'Main street', street: 'Street', quay: 'Quay', joint: 'Lane' };
-  const OPEN_LABEL: Record<string, string> = { plaza: 'Paved square', lawn: 'Lawn', park: 'Park', garden: 'Garden', market: 'Market', cemetery: 'Cemetery', farmland: 'Farmland' };
+  const OPEN_LABEL: Record<OpenKind, string> = { plaza: 'Paved', lawn: 'Lawn', park: 'Park', garden: 'Garden', market: 'Market', cemetery: 'Cemetery', farmland: 'Farmland' };
   const DRAW_CLASSES = ['street', 'main'] as const;
+  const DRAWS: { key: TownMode; label: string; icon: IconName; kbd: string }[] = [
+    { key: 'street', label: 'Street', icon: 'road', kbd: 'N' },
+    { key: 'area', label: 'Area', icon: 'polygon', kbd: 'A' },
+    { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'W' },
+  ];
+  const drawing = $derived(DRAWS.find((d) => d.key === mode));
+  let drawOpen = $state(false);
   const hand = $derived(!!streets);
-  const pickedStreet = $derived(streets && streetPick?.kind === 'street' ? streets.streets.find((x) => x.id === streetPick.id) : undefined);
-  const pickedJunction = $derived(streets && streetPick?.kind === 'junction' ? streets.junctions.find((x) => x.id === streetPick.id) : undefined);
-  const pickedBlock = $derived(streets && streetPick?.kind === 'block' ? streets.blocks.find((x) => x.id === streetPick.id) : undefined);
-  const fillLabel = (f: StreetPlan['fill']) =>
-    f.kind === 'generated' ? `${WARD_LABEL[f.ward as TownWard] ?? f.ward}${f.lots ? `, ${f.lots} lots` : ''}` : f.kind === 'open' ? (OPEN_LABEL[f.open] ?? f.open) : f.kind === 'castle' ? 'Castle' : 'Buildings put down by hand';
   /** A problem's record, as a pick. */
   const problemPick = (key: string): StreetPick | null => {
     const m = /\/([nek])(\d+)$/.exec(key);
@@ -174,7 +187,7 @@
     renaming = null;
   }
   const hint = $derived((hand ? HAND_HINT[mode] : undefined) ?? MODES.find((m) => m.key === mode)?.hint ?? '');
-  const brush = $derived(mode !== 'select' && mode !== 'equalize' && mode !== 'street');
+  const brush = $derived(mode !== 'select' && mode !== 'equalize' && !isDrawMode(mode));
   const generatedWard = $derived(selected ? (selected.ward_generated ?? selected.ward) : 'empty');
   const set = (req: TownRequest['patches'], what: string) => selected && onChange({ patches: req }, what);
   let naming = $state(false);
@@ -216,14 +229,21 @@
   {/if}
   <div class="tools">
     <div class="ws-seg modes" role="radiogroup" aria-label="Tool">
-      <button class:on={mode === choose.key || (!hand && mode === 'street')} aria-pressed={mode === choose.key} onclick={() => ((reshapeOpen = false), onMode(choose.key))} title="{choose.label} ({choose.kbd})"><Icon name={choose.icon} size={16} />{choose.label}</button>
+      <button class:on={mode === choose.key || (!hand && isDrawMode(mode))} aria-pressed={mode === choose.key} onclick={() => ((reshapeOpen = drawOpen = false), onMode(choose.key))} title="{choose.label} ({choose.kbd})"><Icon name={choose.icon} size={16} />{choose.label}</button>
       {#if hand}
-        <button class:on={mode === 'street'} aria-pressed={mode === 'street'} onclick={() => ((reshapeOpen = false), onMode('street'))} title="Draw a street (N)"><Icon name="road" size={16} />Draw</button>
+        <button class:on={!!drawing} aria-pressed={!!drawing} aria-haspopup="menu" aria-expanded={drawOpen} onclick={() => ((reshapeOpen = false), (drawOpen = !drawOpen))} title="Draw a street, paint an area, or draw a wall"><Icon name={drawing?.icon ?? 'road'} size={16} />{drawing?.label ?? 'Draw'} ▾</button>
       {/if}
-      <button class:on={!!reshaping} aria-pressed={!!reshaping} aria-haspopup="menu" aria-expanded={reshapeOpen} onclick={() => (reshapeOpen = !reshapeOpen)} title={hand ? "Brushes that move the town's junctions" : "Brushes that reshape the town's patches"}>
+      <button class:on={!!reshaping} aria-pressed={!!reshaping} aria-haspopup="menu" aria-expanded={reshapeOpen} onclick={() => ((drawOpen = false), (reshapeOpen = !reshapeOpen))} title={hand ? "Brushes that move the town's junctions" : "Brushes that reshape the town's patches"}>
         <Icon name={reshaping?.icon ?? 'liquify'} size={16} />{reshaping?.label ?? 'Reshape'} ▾
       </button>
     </div>
+    {#if drawOpen && hand}
+      <div class="menu ws-panel" role="menu" aria-label="Draw">
+        {#each DRAWS as m (m.key)}
+          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((drawOpen = false), onMode(m.key))}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
+        {/each}
+      </div>
+    {/if}
     {#if reshapeOpen}
       <div class="menu ws-panel" role="menu" aria-label="Reshape">
         {#each reshape as m (m.key)}
@@ -243,17 +263,32 @@
       <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
     </div>
   {/if}
-  {#if streets && mode === 'street'}
+  {#if streets && isDrawMode(mode)}
     <div class="row draw">
-      <div class="ws-seg" role="radiogroup" aria-label="Street">
-        {#each DRAW_CLASSES as c (c)}
-          <button class:on={streetClass === c} aria-pressed={streetClass === c} onclick={() => (streetClass = c)} title="Draw a {CLASS_LABEL[c].toLowerCase()}">{c === 'main' ? 'Main' : 'Street'}</button>
-        {/each}
-      </div>
-      <span class="grow ws-muted">{streetDrawn ? `${plural(streetDrawn, 'point')}` : ''}</span>
+      {#if mode === 'street'}
+        <div class="ws-seg" role="radiogroup" aria-label="Street">
+          {#each DRAW_CLASSES as c (c)}
+            <button class:on={streetClass === c} aria-pressed={streetClass === c} onclick={() => (streetClass = c)} title="Draw a {CLASS_LABEL[c].toLowerCase()}">{c === 'main' ? 'Main' : 'Street'}</button>
+          {/each}
+        </div>
+      {:else if mode === 'area'}
+        <select class="ws-input" bind:value={streetOpen} aria-label="Area">
+          {#each Object.keys(OPEN_LABEL) as k (k)}<option value={k}>{OPEN_LABEL[k as OpenKind]}</option>{/each}
+        </select>
+      {/if}
+      <span class="grow ws-muted">{streetDrawn ? `${plural(streetDrawn, mode === 'area' ? 'corner' : 'point')}` : ''}</span>
       <button class="ws-btn" disabled={!streetDrawn} onclick={onStreetBack} title="Take the last point back (Backspace)"><Icon name="undo" size={16} /> Back</button>
-      <button class="ws-btn primary" disabled={busy || streetDrawn < 2} onclick={onStreetFinish} title="End the street here (Enter)"><Icon name="check" size={16} /> End</button>
+      {#if mode === 'wall'}
+        <button class="ws-btn" disabled={busy || streetDrawn < 3} onclick={() => onStreetFinish?.(true)} title="Close the wall round to its first point"><Icon name="polygon" size={16} /> Close</button>
+      {/if}
+      <button class="ws-btn primary" disabled={busy || streetDrawn < (mode === 'area' ? 3 : 2)} onclick={() => onStreetFinish?.(mode === 'area')} title="End it here (Enter)"><Icon name="check" size={16} /> End</button>
     </div>
+    {#if mode === 'wall'}
+      <div class="nums">
+        <label class="ws-field">Name<input class="ws-input" type="text" maxlength="80" placeholder="None" bind:value={wallName} /></label>
+        <label class="ws-field">Towers apart (ft)<input class="ws-input" type="number" min="40" max="1000" step="10" placeholder="As the town" value={wallSpacing ?? ''} onchange={(e) => { const v = e.currentTarget.valueAsNumber; wallSpacing = Number.isFinite(v) && v > 0 ? v : null; }} /></label>
+      </div>
+    {/if}
   {/if}
   {#if !peek && streets}
     <div class="ws-hint">{hint}{mode === 'select' || mode === 'street' ? '' : ' Applied when you let go.'}</div>
@@ -277,27 +312,8 @@
         <span class="ws-muted">No problems: every street meets the others and every block has its streets round it.</span>
       {/if}
     </section>
-    {#if pickedStreet}
-      <section class="card" aria-label="Street">
-        <div class="title"><span class="grow"><b>{CLASS_LABEL[pickedStreet.class]}</b><span class="ws-muted"> · {ft(pickedStreet.width)} wide, set back {ft(pickedStreet.set_l)} and {ft(pickedStreet.set_r)}{pickedStreet.bridge ? ', a bridge' : ''}</span></span></div>
-        <div class="row">
-          <button class="ws-btn danger" disabled={busy} onclick={() => (onStreet?.({ op: 'delete_street', street: pickedStreet.id }, 'street'), onStreetPick?.(null))} title="The blocks on its two sides become one (Delete)"><Icon name="trash" size={16} /> Take the street away</button>
-        </div>
-      </section>
-    {:else if pickedJunction}
-      <section class="card" aria-label="Junction">
-        <div class="title"><span class="grow"><b>{pickedJunction.streets <= 1 ? 'A dead end' : `Where ${pickedJunction.streets} streets meet`}</b>{#if pickedJunction.square}<span class="ws-muted"> · a square ({pickedJunction.square})</span>{/if}</span></div>
-        <span class="ws-muted">Drag it to move it (Choose).</span>
-      </section>
-    {:else if pickedBlock}
-      <section class="card" aria-label="Block">
-        <div class="title">
-          <span class="dot" style:background={hex(fillColour(pickedBlock.fill))}></span>
-          <span class="grow"><b>{fillLabel(pickedBlock.fill)}</b>{#if pickedBlock.district}<span class="ws-muted"> · {names[pickedBlock.district] ?? pickedBlock.district}</span>{/if}</span>
-        </div>
-        {#if pickedBlock.kept}<span class="ws-muted">Its buildings as they were laid out, until its streets change.</span>{/if}
-      </section>
-    {/if}
+    <StreetCards {streets} pick={streetPick} {busy} {names} onStreet={(r, w) => onStreet?.(r, w)} onStreets={(rs, w) => onStreets?.(rs, w)} onPick={(p) => onStreetPick?.(p)} />
+    <TownTrace />
     <div class="more">
       <button class="ws-btn quiet" disabled={busy} onclick={onBack} title="Its streets as generated again"><Icon name="reset" size={16} /> Back to generated</button>
     </div>
@@ -507,6 +523,7 @@
         {/if}
       </div>
     {/if}
+    <TownTrace />
   {/if}
 </div>
 
@@ -644,6 +661,11 @@
   }
   .draw {
     align-items: center;
+  }
+  .nums {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
   }
   .switch {
     display: flex;
