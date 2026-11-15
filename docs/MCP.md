@@ -2309,7 +2309,7 @@ How it applies:
 
 - Plateaus first, largest first (a terrace or pit inside a plateau goes on top of it): inside the outline the
   ground is at the level; outside it eases back to the ground over `edge` ft (a sheer one over a square). Then the
-  brushed change, at most 150 ft from the ground as generated either way. Ground that was dry never sinks below
+  brushed change, at most 150 ft either way (plateaus and pits have no limit: they stand at their level). Ground that was dry never sinks below
   the water beside it; raising ground under water makes dry land.
 - Everything on the ground follows it: buildings stand on it (on a plateau, at its level; a building over a sheer
   edge takes the mean, so draw round it), with their interiors and cellars; streets, roads, walls, towers and camp
@@ -2378,7 +2378,7 @@ below the ground, the land round it otherwise.
 | `around` | string | | Or a building, tower or site to raise it round |
 | `margin_ft` | number | 10 | Round the footprint, 0–200 |
 | `level_ft` | number | | Its level above the sea, within 20,000 ft |
-| `rise_ft` | number | 10 | Or its level above the ground at the middle, within 150 ft (below zero: a pit); with `id`, only when given |
+| `rise_ft` | number | 10 | Or its level above the ground at the middle (below zero: a pit); for a brush stroke, within 150 ft; with `id`, only when given |
 | `edge_ft` | number | 0 | The slope round it, 0 (sheer) to 60 |
 | `floor` | string | `auto` | `auto`, `rock` or `ground`: what its top (a pit's floor) draws as; with `id`, kept unless given |
 
@@ -2442,7 +2442,7 @@ surface, ft on the world's datum).
 How it applies:
 
 - Inside the outline the water stands at its level and the ground falls from the shore to the kind's depth below
-  it over 15 ft (inlet 12 ft, basin 10, lake 8, moat 6, pond 3), at most 150 ft under the ground as generated.
+  it over 15 ft (inlet 12 ft, basin 10, lake 8, moat 6, pond 3), to any depth under the ground as generated.
   Outlines that overlap are one water with one shore (the higher level, the deeper bed); one that reaches the sea
   or a lake at its level joins it. Plateaus and islets go on top: one drawn over the water stands dry.
 - Battlemaps draw it as water (and its shore); the map draws it at every zoom, in the water's own look; a name

@@ -8,7 +8,8 @@
 //! terrain refinement (and every seam and zoom check) never depends on them. Evaluation is a pure
 //! function of position and the edits: plateaus stacked (`stack`: the highest holds, pits dig
 //! through, the deepest holds), then the brushed
-//! change, clamped to `MAX_SHIFT_FT` and never sinking ground that was dry below the water by it.
+//! change (at most `MAX_SHIFT_FT` of it; plateaus, pits and water beds go to their own level, with no
+//! limit) and never sinking ground that was dry below the water by it.
 //! The world's own islets by its cities (`t0::islets`, from T0 alone) are shaped with them
 //! wherever T0 is given, and a caller can add raised ground of its own (`Shaper::with_extra`).
 
@@ -30,7 +31,7 @@ pub const MAX_PLATEAUS: usize = 256;
 pub const MAX_PLATEAU_PTS: usize = 48;
 pub const MAX_PLATEAU_SPAN_FT: f64 = 1280.0;
 pub const MAX_EDGE_FT: f32 = 60.0;
-/// Shaped ground stays within this of the ground as generated.
+/// The brushed change stays within this of the ground (plateaus, pits and water beds have no limit).
 pub const MAX_SHIFT_FT: f64 = 150.0;
 /// A block's values are tenths of a foot, at most this far either way (150 ft).
 pub const MAX_ADD: i32 = 1500;
@@ -611,7 +612,7 @@ impl<'a> Shaper<'a> {
         // Water drawn by hand first: its bed is the ground the plateaus stand on (an islet or a
         // plateau over it stays dry).
         let (g, hw) = match self.outline_water(x, y) {
-            Some((l, bed)) => ((g as f64).min(bed).max(g as f64 - MAX_SHIFT_FT) as f32, hw.max(l as f32)),
+            Some((l, bed)) => ((g as f64).min(bed) as f32, hw.max(l as f32)),
             None => (g, hw),
         };
         let g0 = g as f64;
@@ -668,7 +669,7 @@ impl<'a> Shaper<'a> {
                 };
             }
         }
-        h = (h + d).clamp(g0 - MAX_SHIFT_FT, g0 + MAX_SHIFT_FT);
+        h += d.clamp(-MAX_SHIFT_FT, MAX_SHIFT_FT);
         // Ground that was dry stays above the water by it (raising wet ground makes land).
         if g >= hw {
             h = h.max(g0.min(hw as f64 + 0.5));

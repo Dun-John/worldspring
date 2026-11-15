@@ -4115,6 +4115,45 @@ fn ground_edits(base: &World) {
     }
     agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).expect("a building on a plateau over the water");
     ex.world.file.edits = Edits::default();
+    // No limit on the shift: a plateau 250 ft over the ground, a pit 300 ft under it and a plateau
+    // over sea deeper than 150 ft each stand flat at their own level.
+    {
+        let (gx0, gy0) = ((corner[0] / SQUARE_FT).floor() as i64, (corner[1] / SQUARE_FT).floor() as i64);
+        let area = [corner[0] - 80.0, corner[1] - 80.0, corner[0] + 80.0, corner[1] + 80.0];
+        let box_at = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
+        for (name, gr, rise, pit) in [("plateau", 100.0f32, 250.0, false), ("pit", 1000.0, -300.0, true)] {
+            let mut e = Edits::default();
+            let pl = ground::plateau_for(&box_at, gr as f64 + rise, 0.0).unwrap();
+            e.plateaus.insert("h:far".into(), pl);
+            let sh = ground::Shaper::build(&e, None, area, SQUARE_FT).unwrap();
+            let h = sh.at_square(gx0, gy0, gr, 0.0).0 as f64;
+            assert!((h - (gr as f64 + rise)).abs() < 0.01, "a {name} {rise} ft from the ground is at {h}, not {}", gr as f64 + rise);
+            assert!(pit == (h < gr as f64), "a {name}");
+        }
+        let (mut best, mut found) = (0.0, None);
+        'scan: for r in 1..2000 {
+            for d in [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]] {
+                let p = [islet_at[0] + d[0] * r as f64 * 400.0, islet_at[1] + d[1] * r as f64 * 400.0];
+                if p[0] < 200.0 || p[1] < 200.0 || p[0] > g.map_w_ft - 200.0 || p[1] > g.map_h_ft - 200.0 {
+                    continue;
+                }
+                let depth = ex.t0.sample_water(p[0], p[1]) as f64 - ex.t0.sample(p[0], p[1], SQUARE_FT);
+                if depth > best {
+                    best = depth;
+                }
+                if depth > 200.0 {
+                    found = Some(p);
+                    break 'scan;
+                }
+            }
+        }
+        let p = found.unwrap_or_else(|| panic!("no sea deeper than 200 ft (deepest {best})"));
+        let deck = [[-35.0, -20.0], [35.0, -20.0], [35.0, 20.0], [-35.0, 20.0]].map(|d| [p[0] + d[0], p[1] + d[1]]);
+        assert!(agent::building_spot(&ex.world, &ex.t0, &foot(p), None, "c:99", None).is_err(), "a building in deep water");
+        ex.world.file.edits.plateaus.insert("h:deep".into(), ground::plateau_for(&deck, ex.t0.sample_water(p[0], p[1]) as f64 + 12.0, 0.0).unwrap());
+        agent::building_spot(&ex.world, &ex.t0, &foot(p), None, "c:99", None).expect("a building on a plateau over deep water");
+        ex.world.file.edits = Edits::default();
+    }
 
     // P6: water outlines. An inlet from 50 ft inland out into the sea at the sea's level: wet on
     // the battlemap all the way out to the sea's own water (one water at one level), the ground
