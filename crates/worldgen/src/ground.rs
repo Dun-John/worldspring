@@ -448,7 +448,7 @@ pub struct Shaper<'a> {
     steps: Vec<Step>,
     reach: [f64; 4],
     /// Water drawn by hand meeting the rectangle (`waters`), and the bank's least width.
-    waters: Vec<crate::waters::Near<'a>>,
+    waters: Vec<crate::waters::Near>,
     band: f64,
 }
 

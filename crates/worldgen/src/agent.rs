@@ -1955,7 +1955,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
             let pts = &edits.plateaus[id].pts;
             Some(geom::centroid(pts))
         }
-        ("e", _) if edits.waters.contains_key(id) => Some(geom::centroid(&edits.waters[id].pts)),
+        ("e", _) if edits.waters.contains_key(id) => Some(geom::centroid(&edits.waters[id].shore())),
         ("w", [li]) if town::is_settlement(t0, *li) => Some(town::layout(world, t0, *li).center),
         ("t", [li, k]) if *li < town::layout_count(t0) => {
             let l = town::layout(world, t0, *li);

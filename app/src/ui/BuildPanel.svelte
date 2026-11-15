@@ -517,10 +517,10 @@
       </label>
     {/if}
     {#if peek}
-      {#if !waterPicked}<div class="ws-hint">Tap its points, then the first again to close it; tap water drawn earlier to change it.</div>{/if}
+      {#if !waterPicked}<div class="ws-hint">Tap its points, then the first again, or drag round it; tap water drawn earlier to change it.</div>{/if}
     {:else}
       <div class="ws-hint">
-        {waterPicked ? 'Pick a kind or a name for it; click outside it to draw another. ' : 'Click its points, then the first again (or double-click) to close it; click water drawn earlier to change it. Outlines that overlap are one water. '}{WATERS.find((k) => k.key === waterKind)?.look}
+        {waterPicked ? 'Pick a kind or a name for it; click outside it to draw another. ' : 'Click its points, then the first again (or double-click) to close it, or drag round it and let go near the start; click water drawn earlier to change it. A lake, pond or inlet gets a natural shore round the points; a basin or moat keeps straight sides. Outlines that overlap are one water. '}{WATERS.find((k) => k.key === waterKind)?.look}
       </div>
     {/if}
   {:else if mode === 'harbour'}

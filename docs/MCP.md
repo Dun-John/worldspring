@@ -2458,6 +2458,12 @@ else the sea's for an inlet or basin, else 1 ft under the lowest ground on its s
 returns the water there (`existing: true`). Returns the water's entry: `id`, `kind`, `level_ft`, `x_ft`, `y_ft`,
 `bbox`, `area_sq_ft`, `points`, `poly`, `name`.
 
+`poly` is kept as given; the shore is shaped from it. A lake, pond or inlet gets a natural shore: a smooth curve
+round the points (passing a little inside sharp corners, a little outside straight sides) with a gentle irregular
+wobble along it (a few feet, more on bigger water). A basin or moat keeps straight sides with its corners slightly
+rounded. `x_ft`, `y_ft`, `bbox` and `area_sq_ft` are the shaped shore's; `points` and `poly` the outline as given.
+Four points make a natural pond; more points steer the shape.
+
 ### `update_water`
 
 `id` (`e:…`) and any of `poly`, `kind`, `level_ft`, `name` (empty: none). What is not given stays; a new outline,

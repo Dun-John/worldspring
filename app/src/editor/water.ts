@@ -1,6 +1,8 @@
 // Build › Water: water drawn by hand (`Edits.waters`: `worldgen::waters`). Click the outline's
-// points, then click its first point again (or double-click) to close it: an inlet or basin of
-// the sea, a lake, pond or moat. Outlines that overlap are one water. A click inside water drawn
+// points, then click its first point again (or double-click) to close it, or drag round it
+// freehand and let go near the start: an inlet or basin of the sea, a lake, pond or moat. A
+// lake's, pond's or inlet's shore is shaped into a natural curve near the points, a basin's
+// or moat's sides kept straight with rounded corners (`shore`, as the generator shapes it). Outlines that overlap are one water. A click inside water drawn
 // earlier picks it (its kind, name, or take it away) when no outline is being drawn. Escape drops
 // the points. Right-drag pans meanwhile.
 import type { Graphics } from 'pixi.js';
@@ -60,6 +62,145 @@ function crosses(p: Pt[]): boolean {
   return false;
 }
 
+// The shore shaped from an outline's points, as the generator shapes it (`waters::shape`: the
+// same steps and arithmetic, so the map draws the shore the battlemap has).
+const SHORE_STEP_FT = 12;
+const MAX_SHORE_PTS = 384;
+const PULL = 0.6;
+const FILLET_FT = 6;
+const SHORE_SEED = 0x5a3e91c70d2b6f48n;
+const M64 = (1n << 64n) - 1n;
+
+/** Whether its shore is natural (a curve round the points) rather than dug (`WaterKind::natural`). */
+export const natural = (k: WaterKind) => k !== 'basin' && k !== 'moat';
+
+const shores = new WeakMap<Water, Pt[]>();
+
+/** A water's shore (`Water::shore`), kept per outline object. */
+export function shore(w: Water): Pt[] {
+  let s = shores.get(w);
+  if (!s) shores.set(w, (s = shapeShore(w.pts, w.kind)));
+  return s;
+}
+
+/** `waters::shape`; `wobbly` false leaves the wobble out (for the outline being drawn). */
+export function shapeShore(pts: Pt[], kind: WaterKind, wobbly = true): Pt[] {
+  const n = pts.length;
+  const ok = (s: Pt[]) => s.length >= 3 && s.every((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])) && Math.abs(area(s)) >= 25 && !crosses(s);
+  if (n < 3 || !pts.every((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))) return pts.slice();
+  if (!natural(kind)) {
+    const f = fillet(pts);
+    return ok(f) ? f : pts.slice();
+  }
+  const curve = spline(pts);
+  const a = Math.abs(area(pts));
+  const per = perimeter(pts);
+  if (per > 0 && wobbly) {
+    const hw = (2 * a) / per;
+    const amp = Math.min(Math.min(0.1 * Math.sqrt(a), 0.2 * hw), 40);
+    const wave = Math.min(Math.max(1.2 * hw, 25), 400);
+    for (const f of [1, 0.5]) {
+      if (amp * f < 0.5) break;
+      const s = wobble(curve, amp * f, wave);
+      if (ok(s)) return s;
+    }
+  }
+  return ok(curve) ? curve : pts.slice();
+}
+
+const dist = (a: Pt, b: Pt) => {
+  const [dx, dy] = [a[0] - b[0], a[1] - b[1]];
+  return Math.sqrt(dx * dx + dy * dy);
+};
+
+function perimeter(pts: Pt[]): number {
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) s += dist(pts[i], pts[(i + 1) % pts.length]);
+  return s;
+}
+
+function spline(pts: Pt[]): Pt[] {
+  const n = pts.length;
+  const step = Math.max(SHORE_STEP_FT, perimeter(pts) / (MAX_SHORE_PTS - Math.min(n, MAX_SHORE_PTS - 1)));
+  const q: Pt[] = pts.map((p, i) => {
+    const [a, b] = [pts[(i + n - 1) % n], pts[(i + 1) % n]];
+    const on = (k: 0 | 1) => (a[k] + 4 * p[k] + b[k]) / 6;
+    return [p[0] + (p[0] - on(0)) * PULL, p[1] + (p[1] - on(1)) * PULL];
+  });
+  const out: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const [q0, q1, q2, q3] = [q[(i + n - 1) % n], q[i], q[(i + 1) % n], q[(i + 2) % n]];
+    const k = Math.max(Math.ceil(dist(pts[i], pts[(i + 1) % n]) / step), 1);
+    for (let j = 0; j < k; j++) {
+      const u = j / k;
+      const [u2, u3, v] = [u * u, u * u * u, 1 - u];
+      const [b0, b1, b2, b3] = [(v * v * v) / 6, (3 * u3 - 6 * u2 + 4) / 6, (-3 * u3 + 3 * u2 + 3 * u + 1) / 6, u3 / 6];
+      out.push([q0[0] * b0 + q1[0] * b1 + q2[0] * b2 + q3[0] * b3, q0[1] * b0 + q1[1] * b1 + q2[1] * b2 + q3[1] * b3]);
+    }
+  }
+  return out;
+}
+
+function wobble(curve: Pt[], amp: number, wave: number): Pt[] {
+  const n = curve.length;
+  return curve.map((p, i) => {
+    const [a, b] = [curve[(i + n - 1) % n], curve[(i + 1) % n]];
+    const [tx, ty] = [b[0] - a[0], b[1] - a[1]];
+    const l = Math.sqrt(tx * tx + ty * ty);
+    if (l < 1e-9) return p;
+    const d = amp * shoreNoise(p[0] / wave, p[1] / wave);
+    return [p[0] + (ty / l) * d, p[1] - (tx / l) * d];
+  });
+}
+
+const shoreNoise = (x: number, y: number) => (value(x, y) + 0.5 * value(x * 2.5 + 17.25, y * 2.5 - 9.5)) / 1.5;
+
+/** `core::rng::mix64`, `hash2` and `signed`. */
+function mix64(z: bigint): bigint {
+  z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & M64;
+  z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & M64;
+  return z ^ (z >> 31n);
+}
+function signed(x: number, y: number): number {
+  const h = mix64(SHORE_SEED ^ mix64((BigInt(x) & M64) ^ mix64((BigInt(y) & M64) ^ 0x9e3779b97f4a7c15n)));
+  return Number(h >> 11n) * 2 ** -53 * 2 - 1;
+}
+
+function value(x: number, y: number): number {
+  const [fx, fy] = [Math.floor(x), Math.floor(y)];
+  let [u, v] = [x - fx, y - fy];
+  [u, v] = [u * u * (3 - 2 * u), v * v * (3 - 2 * v)];
+  const [h00, h10, h01, h11] = [signed(fx, fy), signed(fx + 1, fy), signed(fx, fy + 1), signed(fx + 1, fy + 1)];
+  const [top, bottom] = [h00 + (h10 - h00) * u, h01 + (h11 - h01) * u];
+  return top + (bottom - top) * v;
+}
+
+function fillet(pts: Pt[]): Pt[] {
+  const n = pts.length;
+  const out: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const [a, b, c] = [pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]];
+    const [la, lc] = [dist(a, b), dist(b, c)];
+    const r = Math.min(Math.min(FILLET_FT, 0.25 * la), 0.25 * lc);
+    if (r < 0.5) {
+      out.push(b);
+      continue;
+    }
+    const [ua, uc]: Pt[] = [[(a[0] - b[0]) / la, (a[1] - b[1]) / la], [(c[0] - b[0]) / lc, (c[1] - b[1]) / lc]];
+    if (ua[0] * uc[0] + ua[1] * uc[1] < -0.985) {
+      out.push(b);
+      continue;
+    }
+    const [p0, p2]: Pt[] = [[b[0] + ua[0] * r, b[1] + ua[1] * r], [b[0] + uc[0] * r, b[1] + uc[1] * r]];
+    for (let j = 0; j <= 4; j++) {
+      const t = j / 4;
+      const [w0, w1, w2] = [(1 - t) * (1 - t), 2 * (1 - t) * t, t * t];
+      out.push([p0[0] * w0 + b[0] * w1 + p2[0] * w2, p0[1] * w0 + b[1] * w1 + p2[1] * w2]);
+    }
+  }
+  return out;
+}
+
 export function contains(pts: Pt[], x: number, y: number): boolean {
   let inside = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -70,10 +211,46 @@ export function contains(pts: Pt[], x: number, y: number): boolean {
   return inside;
 }
 
+/** Freehand outlines are sampled this far apart (ft) at least. */
+const FREEHAND_FT = 15;
+
+/** A closed outline with points dropped while it stays within `tol` ft of them (Douglas-Peucker,
+ * from its first point and the one farthest from it), the tolerance raised until at most `max`. */
+export function simplify(pts: Pt[], max: number): Pt[] {
+  if (pts.length <= 3) return pts;
+  let far = 1;
+  for (let i = 1; i < pts.length; i++) if (Math.hypot(pts[i][0] - pts[0][0], pts[i][1] - pts[0][1]) > Math.hypot(pts[far][0] - pts[0][0], pts[far][1] - pts[0][1])) far = i;
+  const run = (a: number, b: number, tol: number, keep: boolean[]) => {
+    const [p, q] = [pts[a], pts[b % pts.length]];
+    const [dx, dy] = [q[0] - p[0], q[1] - p[1]];
+    const l2 = dx * dx + dy * dy;
+    let [best, at] = [-1, -1];
+    for (let i = a + 1; i < b; i++) {
+      const r = pts[i];
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((r[0] - p[0]) * dx + (r[1] - p[1]) * dy) / l2)) : 0;
+      const d = Math.hypot(r[0] - p[0] - dx * t, r[1] - p[1] - dy * t);
+      if (d > best) [best, at] = [d, i];
+    }
+    if (at < 0 || best <= tol) return;
+    keep[at] = true;
+    run(a, at, tol, keep);
+    run(at, b, tol, keep);
+  };
+  for (let tol = 1.5; ; tol *= 1.5) {
+    const keep = pts.map((_, i) => i === 0 || i === far);
+    run(0, far, tol, keep);
+    run(far, pts.length, tol, keep);
+    const out = pts.filter((_, i) => keep[i]);
+    if (out.length <= max) return out;
+  }
+}
+
 /** What the tool needs from the app. */
 export interface WaterHost {
   edits(): Edits;
   picked(): string | null;
+  /** The kind being drawn (its shore's shape in the preview). */
+  kind(): WaterKind;
   /** An outline closed (world ft, rounded to 0.5). */
   placed(pts: Pt[]): void;
   /** Water drawn earlier was clicked. */
@@ -81,24 +258,42 @@ export interface WaterHost {
   hint(text: string): void;
 }
 
+const round = (p: Pt): Pt => [Math.round(p[0] * 2) / 2, Math.round(p[1] * 2) / 2];
+
 export class WaterTool implements PointerTool {
   private pts: Pt[] = [];
   private cursor: Pt | null = null;
   /** ft per px, as last drawn. */
   private fpp = 1;
+  /** Where the button went down, and the freehand outline once it is dragged (no points yet). */
+  private press: Pt | null = null;
+  private stroke: Pt[] | null = null;
 
   constructor(private readonly host: WaterHost) {}
 
-  down(_x: number, _y: number, e: PointerEvent): boolean {
-    return e.button === 0;
+  down(x: number, y: number, e: PointerEvent): boolean {
+    if (e.button !== 0) return false;
+    this.press = [x, y];
+    this.stroke = null;
+    return true;
   }
 
   move(x: number, y: number) {
     this.cursor = [x, y];
+    const press = this.press;
+    if (!press || this.pts.length) return;
+    if (!this.stroke) {
+      if (Math.hypot(x - press[0], y - press[1]) < 6 * this.fpp) return;
+      this.stroke = [press];
+    }
+    const last = this.stroke[this.stroke.length - 1];
+    if (Math.hypot(x - last[0], y - last[1]) >= Math.max(FREEHAND_FT, 3 * this.fpp)) this.stroke.push([x, y]);
   }
 
   up(x: number, y: number) {
-    const p: Pt = [Math.round(x * 2) / 2, Math.round(y * 2) / 2];
+    this.press = null;
+    if (this.stroke) return this.endStroke(x, y);
+    const p = round([x, y]);
     if (!this.pts.length) {
       const hit = this.at(p);
       if (hit && hit !== this.host.picked()) return this.host.pick(hit);
@@ -111,6 +306,32 @@ export class WaterTool implements PointerTool {
     if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 1) return;
     if (this.pts.length >= MAX_WATER_PTS) return this.host.hint(`An outline has at most ${MAX_WATER_PTS} points: click the first to close it`);
     this.pts.push(p);
+  }
+
+  /** A freehand outline let go: closed when let go near its start (or it comes round to it),
+   * else its points kept to click on from. */
+  private endStroke(x: number, y: number) {
+    const s = this.stroke!;
+    this.stroke = null;
+    const end: Pt = [x, y];
+    const lastPt = s[s.length - 1];
+    if (Math.hypot(x - lastPt[0], y - lastPt[1]) > 1) s.push(end);
+    let length = 0;
+    for (let i = 1; i < s.length; i++) length += Math.hypot(s[i][0] - s[i - 1][0], s[i][1] - s[i - 1][1]);
+    const gap = Math.hypot(x - s[0][0], y - s[0][1]);
+    const closes = gap <= Math.max(16 * this.fpp, 0.1 * length);
+    if (closes && Math.hypot(lastPt[0] - s[0][0], lastPt[1] - s[0][1]) < 1e-9) s.pop();
+    const pts: Pt[] = [];
+    for (const p of simplify(s, closes ? MAX_WATER_PTS : MAX_WATER_PTS - 1).map(round)) {
+      const q = pts[pts.length - 1];
+      if (!q || Math.hypot(p[0] - q[0], p[1] - q[1]) >= 1) pts.push(p);
+    }
+    if (closes && pts.length >= 3) {
+      this.pts = pts;
+      return this.close();
+    }
+    this.pts = pts;
+    this.host.hint('Let go near the start to close it, or click on and click the first point');
   }
 
   dblclick(): boolean {
@@ -129,8 +350,9 @@ export class WaterTool implements PointerTool {
   private at(p: Pt): string | null {
     let best: [string, number] | null = null;
     for (const [id, w] of Object.entries(this.host.edits().waters ?? {})) {
-      if (!contains(w.pts, p[0], p[1])) continue;
-      const a = Math.abs(area(w.pts));
+      const sh = shore(w);
+      if (!contains(sh, p[0], p[1])) continue;
+      const a = Math.abs(area(sh));
       if (!best || a < best[1]) best = [id, a];
     }
     return best?.[0] ?? null;
@@ -138,12 +360,17 @@ export class WaterTool implements PointerTool {
 
   /** Drop the points clicked. True if there were some. */
   reset(): boolean {
-    const had = this.pts.length > 0;
+    const had = this.pts.length > 0 || !!this.stroke;
     this.pts = [];
+    this.stroke = null;
+    this.press = null;
     return had;
   }
 
-  cancel() {}
+  cancel() {
+    this.stroke = null;
+    this.press = null;
+  }
 
   hover(x: number, y: number) {
     this.cursor = [x, y];
@@ -156,9 +383,21 @@ export class WaterTool implements PointerTool {
     const picked = this.host.picked();
     for (const [id, w] of Object.entries(this.host.edits().waters ?? {})) {
       const on = id === picked;
-      g.poly(w.pts.flatMap((p) => scr(p)), true)
+      g.poly(shore(w).flatMap((p) => scr(p)), true)
         .fill({ color: ink, alpha: on ? 0.2 : 0.04 })
         .stroke({ width: on ? 2 : 1, color: ink, alpha: on ? 1 : 0.5 });
+    }
+    if (this.stroke) {
+      const line = this.cursor ? [...this.stroke, this.cursor] : this.stroke;
+      const s0 = scr(line[0]);
+      g.moveTo(s0[0], s0[1]);
+      for (const p of line.slice(1)) {
+        const s = scr(p);
+        g.lineTo(s[0], s[1]);
+      }
+      g.stroke({ width: 2, color: ink });
+      g.rect(s0[0] - 5, s0[1] - 5, 10, 10).fill({ color: 0xffffff }).stroke({ width: 1.5, color: ink });
+      return;
     }
     if (this.cursor && !this.pts.length) {
       const [sx, sy] = scr(this.cursor);
@@ -166,13 +405,16 @@ export class WaterTool implements PointerTool {
     }
     if (!this.pts.length) return;
     const line = this.cursor ? [...this.pts, this.cursor] : this.pts;
+    // The shore it will have (without its wobble) once there are three points, the points' line faint.
+    const shaped = line.length >= 3 ? shapeShore(line, this.host.kind(), false) : null;
     const s0 = scr(line[0]);
     g.moveTo(s0[0], s0[1]);
     for (const p of line.slice(1)) {
       const s = scr(p);
       g.lineTo(s[0], s[1]);
     }
-    g.stroke({ width: 2, color: ink });
+    g.stroke({ width: shaped ? 1 : 2, color: ink, alpha: shaped ? 0.45 : 1 });
+    if (shaped) g.poly(shaped.flatMap((p) => scr(p)), true).fill({ color: ink, alpha: 0.08 }).stroke({ width: 2, color: ink });
     for (const [k, p] of this.pts.entries()) {
       const [sx, sy] = scr(p);
       const r = k === 0 ? 5 : 3;
