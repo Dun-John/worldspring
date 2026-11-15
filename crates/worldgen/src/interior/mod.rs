@@ -126,6 +126,10 @@ pub struct Level {
     /// Ramp squares (indices into `cells`): rubble slopes joining two floors, at a height between them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ramps: Vec<u32>,
+    /// Where the stairs come out on this level, if set by hand (a building design's: off its stair block; a site's: its way up, which
+    /// sits there instead of under the way down above): play mode steps a token onto it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landing: Option<[u16; 2]>,
 }
 
 /// A way from a square of one site to another site (`to`: its id).
@@ -193,7 +197,7 @@ pub struct Door {
     pub kind: &'static str,
     /// Rooms on either side (-1 outside).
     pub rooms: [i16; 2],
-    /// Locked (underground): 0 not, else the colour of the lock (1-7), opened by the key
+    /// Locked: 0 not, else the colour of the lock (1 to `design::MAX_LOCK`), opened by the key
     /// (`key` item) of the same colour (its `variant`).
     #[serde(skip_serializing_if = "is_zero_u8")]
     pub lock: u8,
@@ -325,7 +329,7 @@ fn arch_of(b: &town::Building) -> Arch {
     if town::roof::felt_built(b).is_some() && round_ish(b) {
         return Arch::House;
     }
-    let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
+    let key = func_key(b);
     match key {
         Some("inn" | "caravanserai") => Arch::Inn,
         Some("tavern" | "alehouse" | "fine_dining" | "gambling_den" | "smugglers_den") => Arch::Tavern,
@@ -703,6 +707,16 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("sack_hoist", "sack hoist", 1, true, 4.0),
 ];
 
+/// A building's function key as its inside is built by: a hand-made hall is a town hall's and a chapel a shrine's (the nearest kinds
+/// with a hub and furnishing of their own).
+pub fn func_key(b: &town::Building) -> Option<&'static str> {
+    b.func.map(|f| town::catalog::CATALOG[f as usize].key).map(|k| match k {
+        "hall" => "town_hall",
+        "chapel" => "shrine",
+        k => k,
+    })
+}
+
 /// A guild's arms' looks (`Item::variant` of `guild_arms`): the merchants', the craftsmen's, the
 /// adventurers', the mages', the town's (a town hall's, a courthouse's).
 pub const GUILD_ARMS: u8 = 5;
@@ -734,8 +748,8 @@ pub const GOD_LOOKS: u8 = 8;
 /// timber (1); a temple's pieces are its god's (`GOD_LOOKS`).
 const LOOKS: &[(&str, u8)] = &[
     ("throne_dais", 6),
-    // (A key's look is the colour of the lock it opens, 1-7.)
-    ("key", 8),
+    // (A key's look is the colour of the lock it opens, 1 to `design::MAX_LOCK`.)
+    ("key", design::MAX_LOCK + 1),
     ("wall_banner", HOUSES),
     ("standing_banner", HOUSES),
     ("low_dais", 2),
@@ -768,7 +782,7 @@ fn item_info(kind: &'static str) -> (&'static str, u8, bool, f32) {
 pub const INDOOR_PROPS: &[&str] = &[
     "sacks", "rubble", "timber", "bones", "skeleton", "skulls", "urn", "coffin", "effigy", "brazier", "candles", "sconce",
     "lantern", "banner", "chains", "cobweb", "bedroll", "tools", "powder", "hoard", "offering", "glyph", "dais", "well",
-    "fountain", "iron_maiden", "stocks", "rat_nest", "trap", "collapsed_wall",
+    "fountain", "iron_maiden", "stocks", "rat_nest", "trap", "collapsed_wall", "key", "ballista",
 ];
 
 /// An item a building's design puts down, by kind or name: furniture (`FURNITURE`), else an
@@ -1062,7 +1076,7 @@ pub fn hub_kind(t0: &T0, l: &Layout, b: &town::Building) -> Option<hub::Kind> {
     if b.structure != Structure::Roofed || !zoned_arch(b) {
         return None;
     }
-    let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
+    let key = func_key(b);
     let sh = Shell::of(l, b);
     hub::kind_of(b, key, &sh, capital_of(t0, l.index as usize), city_of(t0, l.index as usize))
 }
@@ -1072,7 +1086,7 @@ pub fn hub_kind(t0: &T0, l: &Layout, b: &town::Building) -> Option<hub::Kind> {
 fn zoned_arch(b: &town::Building) -> bool {
     match arch_of(b) {
         Arch::Keep | Arch::Mansion | Arch::Temple | Arch::Inn => true,
-        Arch::Hall => matches!(b.func.map(|f| town::catalog::CATALOG[f as usize].key), Some("town_hall" | "merchant_guild" | "craft_guild" | "adventurers_guild" | "mages_guild")),
+        Arch::Hall => matches!(func_key(b), Some("town_hall" | "merchant_guild" | "craft_guild" | "adventurers_guild" | "mages_guild")),
         _ => false,
     }
 }
@@ -1332,7 +1346,7 @@ pub fn zone_plan_of(world: &World, t0: &T0, settlement: usize, building: usize) 
 /// A building's plan by zones (`hub::plan`), its front toward the nearest street (else the town's
 /// middle); `corner`: a keep's grid's corner towers' side.
 fn zone_plan(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, sh: &Shell, corner: usize) -> Option<hub::Plan> {
-    let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
+    let key = func_key(b);
     let street_d = |p: P| {
         l.roads
             .iter()
@@ -1893,7 +1907,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     let bi = b.id as usize;
     let mut rng = Pcg32::new(hash3(world.stream("interior"), town::rng_key(t0, settlement), bi as i64, 0x1a7), 71);
     let arch = arch_of(b);
-    let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
+    let key = func_key(b);
 
     // Grid along the footprint's long axis.
     let sh = Shell::of(l, b);
@@ -2582,7 +2596,7 @@ fn chapel_door(lvl: &mut Level, nx: usize, ny: usize, stairs: [usize; 4], ri: i1
 /// a castle's buildings, whether thrones go in it (a castle's or a palace's only) and how its great
 /// hall is furnished as a whole (`hall_style`).
 pub(crate) fn hall_kind(world: &World, t0: &T0, settlement: usize, b: &town::Building) -> (bool, bool, Vec<(&'static str, hall::Style)>) {
-    let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
+    let key = func_key(b);
     let castle = key == Some("castle") || b.keep.is_some() || b.ward == town::catalog::Ward::Castle;
     (castle, castle || key == Some("palace"), hall_style(world, t0, settlement, b, arch_of(b), key, castle))
 }
@@ -4622,7 +4636,7 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
         }
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);
-    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), rim: Vec::new(), links: Vec::new(), floor: String::new(), ramps: Vec::new() }
+    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), rim: Vec::new(), links: Vec::new(), floor: String::new(), ramps: Vec::new(), landing: None }
 }
 
 /// Wall runs: every square edge between different rooms (or a room and the outside) that is not

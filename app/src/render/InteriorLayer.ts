@@ -9,6 +9,7 @@ import { OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
+import { ballistaProp } from './fortProps';
 import { columnTones, drawFurniture, drawUnderProp, IN_RING, stoneColumn, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
@@ -87,9 +88,23 @@ export function sharedKind(kind: string, underground: boolean): string | undefin
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
 const INK = 0x1d1a14;
 
-/** A lock's colour 1-7 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. */
+/** A lock's colour 1-31 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. */
 export const LOCK_COLORS = [0x9a958b, 0xd8412f, 0xe8892a, 0xe8cc2a, 0x3fae52, 0x2f86d8, 0x9a56d4, 0xf0ece0];
-export const lockColor = (n: number) => LOCK_COLORS[n >= 0 && n < LOCK_COLORS.length ? n : 0];
+/** Colours 8-31 step round the hue wheel (`MAX_LOCK`), in lightness bands so neighbours differ. */
+export const lockColor = (n: number) => {
+  if (n >= 0 && n < LOCK_COLORS.length) return LOCK_COLORS[n];
+  if (n > 31) return LOCK_COLORS[0];
+  const k = n - LOCK_COLORS.length;
+  return hsl(((k * 47 + 20) % 360) / 360, 0.62, [0.5, 0.36, 0.64][k % 3]);
+};
+function hsl(h: number, s: number, l: number): number {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h * 12) % 12;
+    return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return (f(0) << 16) | (f(8) << 8) | f(4);
+}
 
 /** Underground terrain (`kit::TERRAIN`) drawn on the floor under everything else, and the spans over it (`kit::SPANS`). */
 const TERRAIN_KINDS = new Set(['water_shallow', 'water_deep', 'chasm', 'rubble_slope']);
@@ -2527,6 +2542,7 @@ export class InteriorLayer {
     const { x, y, w, h, kind } = f;
     if (TERRAIN_KINDS.has(kind) || SPAN_KINDS.has(kind)) return this.drawTerrain(g, f);
     if (kind === 'key') return keyGlyph(g, x + 0.5, y + 0.5, lockColor(this.lookOf(f)));
+    if (kind === 'ballista') return ballistaProp(g, x + w / 2, y + h / 2, this.lookOf(f));
     const c = itemColor(kind);
     const inset = 0.08;
     // A built site's columns, in its own stone.

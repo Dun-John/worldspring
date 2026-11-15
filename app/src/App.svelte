@@ -572,7 +572,20 @@
   };
   sync.onFocus = (x, y, size) => flyToSize(x, y, size);
   sync.onRemade = (w, gone) => takeRemade(w, gone);
-  sync.onRender = (x, y, size) => view.capture(x, y, size);
+  sync.onRender = async (x, y, size, inside) => {
+    if (!inside) return view.capture(x, y, size);
+    // (A building or site's level as the agent asked for it; the map goes back as it was.)
+    const was = view.interior ? { id: view.interior.interior.id, level: view.interior.currentLevel } : null;
+    if (was?.id === inside.id) view.setInteriorLevel(inside.level);
+    else if (!(await view.enterBuilding(inside.id, { level: inside.level }))) throw new Error(`${inside.id} has no inside to show`);
+    try {
+      return await view.capture(x, y, size);
+    } finally {
+      if (!was) view.exitBuilding();
+      else if (was.id === inside.id) view.setInteriorLevel(was.level);
+      else await view.enterBuilding(was.id, { level: was.level });
+    }
+  };
   // Another tab may have its own world open: live sync follows one world at a time.
   let followNotice = 0;
   sync.onFollow = (following) => {

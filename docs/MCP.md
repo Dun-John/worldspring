@@ -572,6 +572,7 @@ few seconds and ask again, or try a larger `size_ft`.
 |---|---|---|---|
 | `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
 | `size_ft` | number | 3000 | The ground across the image (50 to 5,000,000). |
+| `level` | integer | none | With `at` a building or site id (`b:`, `u:`, `k:`): its inside on this level, counted from the bottom. An `l:` or `r:` id in `at` shows that level of its site (floor plan, doors, locks, furniture) with no `level` needed; the map goes back as it was. |
 | `width_px` | integer | 1024 | Pixels across, 256 to 1536; the height is two thirds of it. |
 | `format` | string | `jpeg` | `jpeg` (quality 0.85) or `png` (exact lines; larger). The reply's `mimeType` follows it. |
 
@@ -1401,6 +1402,8 @@ alone.
   rooms for an inn, a forge for a smithy, cells for a prison, a round stair and study floors for a wizard's tower
   (when the footprint is round). A `func` the code does not know is refused with the nearest key
   (`func: a business or home such as inn, tavern, ..., got "tavrn" (did you mean tavern?)`).
+- **`hall` and `chapel`** are funcs too (insides of a town hall and of a shrine: great room, nave and crypt). `material` takes
+  `stone` (flagstone slabs) as well as the other roof materials.
 - **Roof:** `hip` (pitched; L-shapes get one per wing), `battlements` (a walkable roof with a parapet: the
   interior gains a roof level) or `cone`; left out, as its kind has it (battlements on castles, barracks and
   towers). **Tint:** `terracotta`, `slate`, `thatch`, `shingle` or `moss` (left out: picked).

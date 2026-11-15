@@ -1587,6 +1587,15 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
         });
         d = put.unwrap_or_else(|| panic!("{id}: no room in the study for {kind}"));
     }
+    // (A ballista on any free square of the ground floor.)
+    for (kind, variant) in [("ballista", None)] {
+        let put = (0..cells.len()).filter(|&k| cells[k] >= 0).find_map(|k| {
+            let mut t = d.clone();
+            t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1, back: None, variant });
+            t.problems(&ws, t0, &id).unwrap().1.iter().all(|p| !p.blocking).then_some(t)
+        });
+        d = put.unwrap_or_else(|| panic!("{id}: no square for a {kind}"));
+    }
     let (built, problems) = d.problems(&ws, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     let floor = &built.levels[built.entry_level].furniture;
@@ -2552,6 +2561,21 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     let (it, problems) = d.problems(world, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     assert_eq!(it.levels[0].doors.len(), 1, "{id}: one door from the landing into the vault");
+    // A lock of colour 12 (door flags bits 8-11) on that door builds and reads back; the first seven keep bits 4-6.
+    let mut locked = d.clone();
+    locked.levels[0].doors[0][3] |= worldgen::interior::design::lock_flags(12);
+    assert_eq!(locked.levels[0].doors[0][3] >> 4 & 7, 4, "{id}: the low bits of lock 12");
+    assert_eq!(worldgen::interior::design::lock_flags(5), 5 << 4, "{id}: an old lock colour's flags changed");
+    let (lit, lp) = locked.problems(world, t0, &id).unwrap();
+    assert!(lit.levels[0].doors[0].lock == 12 && lp.iter().any(|p| p.text.contains("lock 12") && p.text.contains("no key")), "{id}: lock 12: {lp:?}");
+    assert!(design::from_text(&design::to_text(&locked, &|_, _| None).unwrap(), &base).unwrap().0 == locked, "{id}: the lock 12 doesn't read back");
+    // A landing set by hand: the way up must sit on it.
+    let mut lands = d.clone();
+    lands.levels[0].landing = Some([x as u16 - 1, y as u16]);
+    assert!(lands.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.text.contains("not at the landing")), "{id}: a way up off its landing");
+    lands.levels[0].items.iter_mut().filter(|f| f.kind == "up").for_each(|f| f.x -= 1);
+    assert!(lands.problems(world, t0, &id).unwrap().1.iter().all(|p| !p.blocking), "{id}: the way up on its landing refused");
+    assert!(design::from_text(&design::to_text(&lands, &|_, _| None).unwrap(), &base).unwrap().0 == lands, "{id}: the landing doesn't read back");
     let chest = it.levels[0].furniture.iter().find(|f| f.kind == "chest").expect("the chest");
     assert!((chest.back, chest.variant) == (Some(1), Some(2)), "{id}: the chest's side and look: {chest:?}");
     let text = design::to_text(&d, &|_, _| None).unwrap();

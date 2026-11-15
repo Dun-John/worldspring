@@ -617,7 +617,7 @@ function roofMesh(roofs: Roof[]): ColorMesh {
   for (const roof of roofs) {
     if (roof.battlements || roof.pts.length < 6) continue;
     const tint = roof.tint >= 0 && roof.tint < ROOF_TINTS.length && roof.shade === 2 ? ROOF_TINTS[roof.tint] : (ROOF_MATERIAL_RGB[roof.material] === undefined ? ROOF_TINTS[3] : roofRgb(roof.material, roof.shade));
-    g.mat = roof.material < ROOF_MATERIAL_RGB.length ? roof.material : 3;
+    g.mat = roof.material === 12 ? 1 : roof.material < ROOF_MATERIAL_RGB.length ? roof.material : 3; // (stone: slate's pattern)
     g.code = g.mat + 16 * Math.min(15, roof.wear >> 4);
     g.seed = (((roof.idx * 2654435761) >>> 0) % 509) * 0.73;
     // (Ranges, halls and wings of a domed roof behind parapets, as flat ones.)
