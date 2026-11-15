@@ -17,7 +17,8 @@
 //!     attrs u32[n] (kind | ward << 8 | floors (to 15) << 16 | roof material (`town::roof`, to 15)
 //!     << 20 | has-function << 24 | (a plain building) roof colour variant 0-4 << 29; kind 0 building
 //!     (bit 7 of its ward byte: drawn by hand, `Created` kind building),
-//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard (a cemetery's plot too), 6 deck: bridge or pier, 7 monument,
+//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard (a cemetery's plot too), 6 deck: bridge or pier (bit 20
+//!     set: stone), 7 monument,
 //!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
 //!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed, 24 a castle's wet moat, 25 its
@@ -344,8 +345,9 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
         for (_, w) in crate::wharf::near(world, [ox, oy, ox + size, oy + size]) {
             if w.kind == crate::world::WharfKind::Pier {
                 if key.level >= BUILDING_MIN_LEVEL {
+                    let stone = (w.material == crate::world::CrossingMaterial::Stone) as u32;
                     for d in crate::wharf::decks(w) {
-                        push(&d, 6);
+                        push(&d, 6 | stone << 20);
                     }
                 }
             } else {
@@ -366,8 +368,9 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
             // Crossings put down by hand: a bridge's deck; a ferry's jetties, raft and rope.
             for c in world.file.edits.crossings.values().filter(|c| c.problem(world.geom.map_w_ft, world.geom.map_h_ft).is_none()) {
+                let stone = (c.material == crate::world::CrossingMaterial::Stone) as u32;
                 for d in crate::battlemap::hand_decks(c) {
-                    push(&d, 6);
+                    push(&d, 6 | stone << 20);
                 }
             }
         }
@@ -493,12 +496,14 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
             // (R5 M20: a metropolis's lined bridge paved as its street (46), the street's own bridge
             // under it left out, so the street runs on over it between its houses.)
+            // (A stone bridge's deck with bit 20 set, as the battlemap builds it: `battlemap::bridge_style`.)
             let lined = l.lined.as_ref().map(|(deck, _)| deck);
-            for d in l.bridges.iter().chain(&l.piers) {
+            let bridges = l.bridges.iter().map(|d| (d, (crate::battlemap::bridge_style(world.stream("battlemap"), &l, d) >= 2.0) as u32));
+            for (d, stone) in bridges.chain(l.piers.iter().map(|d| (d, 0))) {
                 match lined {
                     Some(deck) if deck == d => push(d, 46),
                     Some(deck) if crate::town::geom::contains(deck, crate::town::geom::centroid(d)) => {}
-                    _ => push(d, 6),
+                    _ => push(d, 6 | stone << 20),
                 }
             }
             // R5 M20: a big port's breakwater, made ground (45).

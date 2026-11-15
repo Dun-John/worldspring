@@ -1073,6 +1073,16 @@ fn sea_ferry_tracks(world: &World, t0: &T0, h0: [f64; 2], hh: &[f32], hw: &[f32]
 
 /// A crossing put down by hand as decks (world ft polygons) for the map's site tiles: a
 /// bridge's; a ferry's jetties, raft and rope (a ford has none).
+/// A settlement's bridge's deck style (`ShapeKind::Deck` size; `seed` the "battlemap" stream): 1 a
+/// village or town's timber bridge, 2 a city's stone bridge, 3 an old stone bridge (some of either,
+/// by where the deck stands).
+pub fn bridge_style(seed: u64, l: &crate::town::Layout, d: &[[f64; 2]]) -> f32 {
+    let city = l.tier >= crate::t0::settle::Tier::City;
+    let c = crate::town::geom::centroid(d);
+    let old = unit(hash3(seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 0x01d5)) < if city { 0.35 } else { 0.30 };
+    if old { 3.0 } else if city { 2.0 } else { 1.0 }
+}
+
 pub fn hand_decks(c: &crate::world::Crossing) -> Vec<Vec<[f64; 2]>> {
     use crate::world::CrossingKind as K;
     let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
@@ -2374,14 +2384,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h), [style, form], [side, exit]] });
             }
         }
-        // Deck style: 0 pier, 1 a village or town's timber bridge, 2 a city's stone bridge, 3 an
-        // old stone bridge (some of either, by where the deck stands).
-        let city = l.tier >= crate::t0::settle::Tier::City;
-        let style = |d: &Vec<[f64; 2]>| {
-            let c = crate::town::geom::centroid(d);
-            let old = unit(hash3(seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 0x01d5)) < if city { 0.35 } else { 0.30 };
-            if old { 3.0 } else if city { 2.0 } else { 1.0 }
-        };
+        // Deck style: 0 pier, else `bridge_style`.
+        let style = |d: &Vec<[f64; 2]>| bridge_style(seed, &l, d);
         for (d, size) in l.bridges.iter().map(|d| (d, style(d))).chain(l.piers.iter().map(|d| (d, 0.0))) {
             if owns(crate::town::geom::centroid(d)) {
                 shapes.push(VectorShape { kind: ShapeKind::Deck, size, pts: d.iter().map(local).collect() });

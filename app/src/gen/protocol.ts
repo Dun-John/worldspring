@@ -1386,6 +1386,8 @@ const calm = ([r, g, b]: [number, number, number]): [number, number, number] => 
 /** How much of a drawn building's roof colour shows at city zoom (the rest its ward's paper; a
  * generated building's is 0.6). */
 const DRAWN_ROOF_MIX = 0.9;
+/** A stone bridge's deck at city zoom: a light warm grey, as the battlemap's stone deck. */
+const STONE_DECK_RGB: [number, number, number] = [0.66, 0.64, 0.6];
 const WARD_RGB: [number, number, number][] = [
   [0.62, 0.56, 0.5], // plaza (unused for buildings)
   [0.5, 0.45, 0.42], // castle
@@ -1740,7 +1742,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
         // ground, its rows of grave marks over it (`withGraveRows`, or a village's own ticks).
         rgb = [0.5, 0.6, 0.42];
         a = 0.55;
-      } else if (kind === 6) rgb = [0.55, 0.4, 0.26];
+      }
+      // A deck: timber brown, a stone bridge's or pier's (bit 20: `payload::pack_sites`) grey stone.
+      else if (kind === 6) rgb = material === 1 ? STONE_DECK_RGB : [0.55, 0.4, 0.26];
       else if (kind === 7) rgb = [0.72, 0.69, 0.62];
       else if (kind === 8) {
         // A camp's clearing: bare earth.
