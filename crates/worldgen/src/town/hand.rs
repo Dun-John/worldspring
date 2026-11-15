@@ -70,6 +70,17 @@ pub struct HandTown {
     /// what its size class follows (`size`). Not read by the builder (left out of `fingerprint`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub people: Option<u32>,
+    /// A converted town's population as generated and the homes it had then (`people_of`'s
+    /// count): its people are that population scaled by its homes since (`count_people`), so
+    /// converting it never changes its size class. None for a blank town (counted per home).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub was_people: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub was_homes: Option<u32>,
+    /// The lowest block number never yet given out: a deleted block's number is never used
+    /// again (ids pinned from it can't meet a new block's). None: one past the highest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_block: Option<u32>,
 }
 
 /// A junction (`/n<id>`), and the square opening there.
@@ -1323,7 +1334,10 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
         roofs: hex(base.roof_seed),
         kept: kept.remove(&usize::MAX),
         works: None,
-        people: Some(people_of(&base)),
+        people: Some(s.population),
+        was_people: Some(s.population),
+        was_homes: Some(people_of(&base)),
+        next_block: None,
     };
     debug_assert!(kept.is_empty(), "every block's buildings go with its block");
     // (And its walls, gates, bridges and squares as they are, while what they stand on stands.)
@@ -1406,6 +1420,16 @@ pub fn people_of(l: &Layout) -> u32 {
     l.buildings.iter().filter(|b| b.func.is_none()).map(|b| PEOPLE_PER_HOME.get(b.residential as usize).copied().unwrap_or(5)).sum()
 }
 
+/// A hand town's people as layout `l` (its homes now) houses them: a converted town's population
+/// as generated scaled by its homes now against its homes then; a blank town's per home.
+pub fn count_people(town: &HandTown, l: &Layout) -> u32 {
+    let now = people_of(l);
+    match (town.was_people, town.was_homes) {
+        (Some(p), Some(h)) if h > 0 => ((p as u64 * now as u64 + h as u64 / 2) / h as u64).min(u32::MAX as u64) as u32,
+        _ => now,
+    }
+}
+
 /// The size class a population makes (`t0::settle::pop_range`'s floors).
 pub fn tier_of_people(people: u32) -> Tier {
     let floor = |t: Tier| crate::t0::settle::pop_range(t).0 as u32;
@@ -1456,6 +1480,9 @@ pub fn blank(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Value)
         kept: None,
         works: None,
         people: Some(0),
+        was_people: None,
+        was_homes: None,
+        next_block: None,
     };
     out.push((li, serde_json::to_value(town).map_err(|e| e.to_string())?));
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1718,6 +1745,9 @@ pub(super) struct Graph {
     q: Vec<(i64, i64)>,
     /// (from, to, street id): from `a` toward `b`.
     pub(super) segs: Vec<(usize, usize, u32)>,
+    /// The pieces of streets left out as dead ends (no block beside them), in the same form: drawn
+    /// all the same (a blank town's first streets), never a block's side.
+    pub(super) loose: Vec<(usize, usize, u32)>,
 }
 
 /// A face of the graph: its ring (corners, anticlockwise), and per side the street piece and
@@ -1745,7 +1775,7 @@ impl Graph {
     /// left out and said why: a missing junction, no length, crossing a street of a lower id (or
     /// touching it, or running along it), or ending nowhere (a dead end: no block beside it).
     pub(super) fn of(recs: &HandRecords, origin: P, li: &str, problems: &mut Problems) -> Graph {
-        let mut g = Graph { pts: Vec::new(), q: Vec::new(), segs: Vec::new() };
+        let mut g = Graph { pts: Vec::new(), q: Vec::new(), segs: Vec::new(), loose: Vec::new() };
         let mut at: FastMap<(i64, i64), usize> = FastMap::default();
         let mut corner = |g: &mut Graph, p: P| {
             let k = grid(p);
@@ -1822,7 +1852,9 @@ impl Graph {
                 break;
             }
             for id in dead {
-                kept.remove(&id);
+                if let Some(ps) = kept.remove(&id) {
+                    g.loose.extend(ps.into_iter().map(|(u, v)| (u, v, id)));
+                }
                 problems.push((format!("{li}/e{id}"), "a dead end: no block beside it"));
             }
         }
@@ -2048,6 +2080,15 @@ pub fn bounds(streets: &BTreeMap<String, Value>, index: usize) -> Option<[f64; 4
             b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
         }
     }
+    // (And the bends of its streets.)
+    let le = format!("{head}/e");
+    for (_, v) in streets.range(le.clone()..).take_while(|(k, _)| k.starts_with(&le)) {
+        for p in v.get("bends").and_then(Value::as_array).into_iter().flatten() {
+            if let (Some(x), Some(y)) = (num(p.get(0)), num(p.get(1))) {
+                b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+            }
+        }
+    }
     Some([b[0] - MARGIN, b[1] - MARGIN, b[2] + MARGIN, b[3] + MARGIN])
 }
 
@@ -2066,23 +2107,42 @@ pub fn fingerprint(world: &World, t0: &T0, index: usize) -> Option<u64> {
     // (The header but its count of people, which the builder doesn't read.)
     let mut header = edits.streets[&head].clone();
     if let Some(o) = header.as_object_mut() {
-        o.remove("people");
+        for k in ["people", "was_people", "was_homes"] {
+            o.remove(k);
+        }
     }
     for (k, v) in std::iter::once((&head, &header)).chain(edits.streets.range(lo.clone()..).take_while(|(k, _)| k.starts_with(&lo))) {
         h.write(k.as_bytes());
         hash_value(&mut h, v);
     }
-    let within = |p: &P| p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
-    for c in edits.created.iter().filter(|c| (c.kind == "building" || (c.kind == "plot" && !c.removed)) && c.poly.iter().any(within)) {
+    for c in edits.created.iter().filter(|c| drawn_obstacle(c, &b)) {
         h.write(c.id.as_bytes());
         c.poly.iter().for_each(|p| h.write(&[p[0].to_bits().to_le_bytes(), p[1].to_bits().to_le_bytes()].concat()));
     }
-    for (k, w) in edits.wharves.iter().filter(|(_, w)| w.pts.iter().any(within)) {
+    for (k, w) in edits.wharves.iter().filter(|(_, w)| wharf_obstacle(w, &b)) {
         h.write(k.as_bytes());
         h.write(&w.width.to_bits().to_le_bytes());
         w.pts.iter().for_each(|p| h.write(&[p[0].to_bits().to_le_bytes(), p[1].to_bits().to_le_bytes()].concat()));
     }
     Some(h.finish())
+}
+
+/// Whether points `pts`, grown by `pad` ft, overlap rectangle `b` (x0, y0, x1, y1).
+fn box_meets(pts: &[P], pad: f64, b: &[f64; 4]) -> bool {
+    let Some(first) = pts.first() else { return false };
+    let r = pts.iter().fold([first[0], first[1], first[0], first[1]], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+    r[0] - pad <= b[2] && r[2] + pad >= b[0] && r[1] - pad <= b[3] && r[3] + pad >= b[1]
+}
+
+/// A building or plot drawn by hand that a hand town within `b` builds round (`build_hand`'s
+/// obstacles, `fingerprint`'s: the same test, so all the builder reads is hashed).
+fn drawn_obstacle(c: &crate::world::Created, b: &[f64; 4]) -> bool {
+    (c.kind == "building" || (c.kind == "plot" && !c.removed)) && c.poly.len() >= 3 && box_meets(&c.poly, 4.0, b)
+}
+
+/// A wharf a hand town within `b` builds round (as `drawn_obstacle`).
+fn wharf_obstacle(w: &crate::world::Wharf, b: &[f64; 4]) -> bool {
+    w.pts.len() >= 2 && box_meets(&w.pts, 0.5 * w.width + 4.0, b)
 }
 
 /// Layout `index` as its hand records lay it out, if it has a header (`base_layout`).
@@ -2180,7 +2240,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     let mut unrecorded: BTreeMap<u32, Value> = BTreeMap::new();
     if face_block.iter().any(Option::is_none) {
         let hseed = u64::from_str_radix(&town.seed, 16).unwrap_or(0);
-        let mut next = recs.blocks.keys().next_back().map_or(0, |k| k + 1);
+        let mut next = recs.blocks.keys().next_back().map_or(0, |k| k + 1).max(town.next_block.unwrap_or(0));
         for f in 0..faces.len() {
             if face_block[f].is_some() {
                 continue;
@@ -2202,11 +2262,12 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     // What no block is built over: buildings drawn by hand, wharves, painted areas.
     let pad = |poly: &[P], d: f64| clip::offset(&clip::region(poly), d, Join::Miter(2.0));
     let mut obstacles: Vec<Shape> = Vec::new();
-    for c in world.file.edits.created.iter().filter(|c| (c.kind == "building" || (c.kind == "plot" && !c.removed)) && c.poly.len() >= 3) {
+    let tb = bounds(&world.file.edits.streets, index)?;
+    for c in world.file.edits.created.iter().filter(|c| drawn_obstacle(c, &tb)) {
         let poly: Vec<P> = c.poly.iter().map(|p| sub(*p, origin)).collect();
         obstacles.extend(pad(&poly, 2.0));
     }
-    for w in world.file.edits.wharves.values().filter(|w| w.pts.len() >= 2) {
+    for w in world.file.edits.wharves.values().filter(|w| wharf_obstacle(w, &tb)) {
         let pts: Vec<P> = w.pts.iter().map(|p| sub(*p, origin)).collect();
         obstacles.extend(clip::buffer(&pts, 0.5 * w.width + 2.0, 0.5 * w.width + 2.0, Join::Miter(2.0), Ends::Flat));
     }
@@ -2331,6 +2392,22 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
             l.roads.push((line.clone(), 4, recs.streets[id].width.clamp(8.0, 18.0)));
         }
     }
+    // (Dead ends, with no block beside them to show where they run: each paved as a main street
+    // is, whatever its class, but a joint's.)
+    let mut loose: BTreeMap<u32, Vec<P>> = BTreeMap::new();
+    for &(u, v, id) in &graph.loose {
+        loose.entry(id).or_insert_with(|| vec![graph.pts[u]]).push(graph.pts[v]);
+    }
+    for (id, line) in &loose {
+        let st = &recs.streets[id];
+        if st.class == StreetClass::Joint {
+            continue;
+        }
+        if st.class == StreetClass::Main {
+            l.streets.push(line.clone());
+        }
+        l.roads.push((line.clone(), 4, st.width.clamp(8.0, 18.0)));
+    }
 
     // Bridges: a deck wherever a street runs over the river, set or not (as converted where a
     // street or a road in from the country still runs over one), as a generated town spans it.
@@ -2396,6 +2473,8 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     let shift = |sh: &[Shape]| -> Vec<Shape> {
         sh.iter().map(|x| Shape { outer: x.outer.iter().map(|p| add(*p, origin)).collect(), holes: x.holes.iter().map(|h| h.iter().map(|p| add(*p, origin)).collect()).collect() }).collect()
     };
+    // (Every id pinned in the town, by block: no block's fresh ids take one pinned in another.)
+    let pinned_all: Vec<(u32, u32)> = recs.blocks.iter().flat_map(|(&b, r)| r.pins.iter().map(move |p| (b, p.id))).collect();
     for (f, face) in faces.iter().enumerate() {
         let Some(id) = face_block[f] else { continue };
         let rec = &recs.blocks[&id];
@@ -2430,7 +2509,12 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
         let biggest = || g.iter().max_by(|x, y| x.area().total_cmp(&y.area())).map(|x| x.outer.clone());
         let built_on = !matches!(rec.fill, BlockFill::Hand | BlockFill::Open { .. });
         // (Filled once for all it reads: the same block comes out the same whatever else changed.)
-        let key = block_key(gkey, id, world.file.edits.streets.get(&format!("{li}/k{id}")).or_else(|| unrecorded.get(&id)).unwrap_or(&Value::Null), g, &fronts);
+        let base = HAND_ID as u64 + ((id as u64 * ROLLS as u64 + gn as u64 % ROLLS as u64) * PER_PATCH as u64);
+        let foreign: Vec<u32> = pinned_all.iter().filter(|x| x.0 != id && (x.1 as u64) >= base && (x.1 as u64) < base + PER_PATCH as u64).map(|x| x.1).collect();
+        let mut key = block_key(gkey, id, world.file.edits.streets.get(&format!("{li}/k{id}")).or_else(|| unrecorded.get(&id)).unwrap_or(&Value::Null), g, &fronts);
+        for &p in &foreign {
+            key = hash2(key, p as i64, 0x4e1d);
+        }
         let filled = FILLED.with(|c| c.borrow().get(&key).cloned()).unwrap_or_else(|| {
             let mut l = template.clone();
             let mut kept_bs: Vec<Building> = Vec::new();
@@ -2531,23 +2615,34 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                     }
                 }
                 // (Its own ids, by the order it laid them out, but those pinned: those keep theirs,
-                // and no other takes one of them.)
-                let base = HAND_ID as u64 + ((id as u64 * ROLLS as u64 + gn as u64 % ROLLS as u64) * PER_PATCH as u64);
-                let held: Vec<u32> = pinned.iter().flatten().copied().collect();
+                // and no other takes one of them, nor one pinned anywhere else in the town. Past
+                // its range (PER_PATCH ids, blocks under ROW_BLOCK) the rest are left out.)
+                let held: Vec<u32> = pinned.iter().flatten().copied().chain(foreign.iter().copied()).collect();
+                let end = if id < ROW_BLOCK { base + PER_PATCH as u64 } else { base };
                 let mut next = base;
+                let mut keep = vec![true; l.buildings.len() - first];
                 for (k, b) in l.buildings[first..].iter_mut().enumerate() {
                     if let Some(Some(pid)) = pinned.get(k) {
                         b.id = *pid;
                         continue;
                     }
-                    while held.contains(&(next.min(u32::MAX as u64) as u32)) {
+                    while next < end && held.contains(&(next as u32)) {
                         next += 1;
                     }
-                    b.id = next.min(u32::MAX as u64) as u32;
+                    if next >= end {
+                        keep[k] = false;
+                        continue;
+                    }
+                    b.id = next as u32;
                     next += 1;
                 }
-                if id >= ROW_BLOCK {
-                    problems.push((format!("{li}/k{id}"), "block number too high for its ids"));
+                if keep.contains(&false) {
+                    let mut k = 0;
+                    l.buildings.retain(|_| {
+                        k += 1;
+                        k <= first || keep[k - 1 - first]
+                    });
+                    problems.push((format!("{li}/k{id}"), if id >= ROW_BLOCK { "block number too high for its ids" } else { "more buildings than a block has ids for" }));
                 }
             }
             let fl = Rc::new(Filled { layout: l, kept: kept_bs, plots, problems });
@@ -2622,6 +2717,12 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
             avoid.extend(clip::region(lot));
         }
         let base = HAND_ID as u64 + ((ROW_BLOCK + r) as u64 * ROLLS as u64) * PER_PATCH as u64;
+        // (A row's ids run over all ROLLS of its number; past them the rest are left out.)
+        let room = (ROLLS * PER_PATCH) as usize;
+        if l.buildings.len() - first > room {
+            l.buildings.truncate(first + room);
+            problems.push((format!("{li}/r{r}"), "more buildings than a row has ids for"));
+        }
         for (k, b) in l.buildings[first..].iter_mut().enumerate() {
             b.id = (base + k as u64) as u32;
         }

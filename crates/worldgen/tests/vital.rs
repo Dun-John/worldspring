@@ -5420,6 +5420,8 @@ fn hand_town_guarantee() {
     let edits = followed.map_or_else(|| ab.file.edits.clone(), |f| f.edits);
     let nl = edits.streets.keys().find_map(|k| k.parse::<usize>().ok()).expect("the hand town's header");
     assert!(nl < worldgen::world::PARKED_LAYOUT, "L{li}: set aside by the remake");
+    let wharves = |e: &worldgen::world::Edits, n: usize| e.wharves.keys().filter(|k| k.starts_with(&format!("q:h{n}-"))).count();
+    assert_eq!(wharves(&edits, nl), wharves(&ab.file.edits, li), "L{li}: its wharves not moved with it (now L{nl})");
     nf.edits = edits;
     let remade = World::new(nf).unwrap();
     same(&town::base_layout(&remade, &t1, nl), &edited, &format!("L{li} remade (now L{nl})"));
@@ -5453,9 +5455,12 @@ fn hand_town_guarantee() {
     let mut f = base.file.clone();
     let recs = hand::blank(&base, &t0, lb).unwrap();
     assert!(recs.iter().all(|(k, _)| !k.contains("/k")), "a blank town has no blocks");
+    let roads_in = recs.iter().any(|(k, _)| k.contains("/e"));
     f.edits.streets.extend(recs);
     let mut wb = World::new(f).unwrap();
-    assert!(town::base_layout(&wb, &t0, lb).buildings.is_empty(), "L{lb}: a blank town has buildings");
+    let l0 = town::base_layout(&wb, &t0, lb);
+    assert!(l0.buildings.is_empty(), "L{lb}: a blank town has buildings");
+    assert!(!roads_in || l0.roads.iter().any(|r| r.1 == 4), "L{lb}: a blank town's streets are not drawn");
     let c = [t0.settlements[lb].x, t0.settlements[lb].y];
     let r = 260.0;
     let sq = [[-r, -r], [r, -r], [r, r], [-r, r]].map(|d| [c[0] + d[0], c[1] + d[1]]);

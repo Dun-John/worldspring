@@ -131,8 +131,10 @@ pub fn resized_detail(detail: &str, was: &str, now: &str, people: u32) -> String
         Some((h, rest)) => (h, rest.split_once(", ").map_or(String::new(), |(_, t)| format!(", {t}"))),
         None => (detail, String::new()),
     };
-    let head = match head.strip_suffix(was) {
-        Some(h) if !h.is_empty() => format!("{h}{now}"),
+    // (`"<what it lives by> <size>"`, or a town added by hand's `"<size> (added by hand)"`.)
+    let head = match (head.strip_suffix(was), head.strip_prefix(was)) {
+        (Some(h), _) if !h.is_empty() => format!("{h}{now}"),
+        (_, Some(t)) if t.starts_with(" (") => format!("{now}{t}"),
         _ => head.to_string(),
     };
     let digits = people.to_string();
@@ -2728,8 +2730,10 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     flights.sort_by(|a, b| b.0.total_cmp(&a.0));
     let stairs: Vec<Value> = flights.iter().take(40).map(|(rise, at, length)| json!({ "x_ft": at[0].round(), "y_ft": at[1].round(), "length_ft": length.round(), "rise_ft": (*rise as f64 * 10.0).round() / 10.0 })).collect();
     let _ = t0;
+    // (A town laid out by hand: the size class its people make, as its feature's kind.)
+    let tier = town::hand::size(world, l.index as usize).map_or(l.tier, |x| x.1);
     json!({
-        "tier": l.tier.name(),
+        "tier": tier.name(),
         "culture": town::culture::NAMES[l.culture as usize % 5],
         "buildings": l.buildings.len(),
         "walled": !l.walls.is_empty(),
