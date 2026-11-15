@@ -38,6 +38,9 @@ pub enum IdsIn {
     TownPrefixed,
     /// Each link's ends (`level`: a level id, `l:<site>:<level>`).
     Links,
+    /// Its keys of a hand town's wharves (`q:h<n>-<k>`, as conversion wrote them before P4), seen as `t:<n>`;
+    /// other keys (wharves drawn by hand) name no place.
+    HandWharves,
 }
 
 /// Every edits field that names a place, and how: layout-local ids (`b:<layout>:…`, `d:`, `t:`,
@@ -58,6 +61,7 @@ pub const LAYOUT_ID_FIELDS: &[(&str, IdsIn)] = &[
     ("npcs", IdsIn::Npcs),
     ("plots", IdsIn::Plots),
     ("links", IdsIn::Links),
+    ("wharves", IdsIn::HandWharves),
 ];
 
 /// Settlement kinds, as the app's labels have them (`SETTLEMENT_KINDS` in `ui/gazetteer.ts`).
@@ -197,6 +201,13 @@ fn town_head(key: &str) -> Option<(&str, &str)> {
     bare(head).map(|_| (head, rest))
 }
 
+/// A hand town's wharf key's layout number and what follows it (`q:h<n>-<k>`: `<n>`, `-<k>`).
+pub fn hand_wharf(key: &str) -> Option<(&str, &str)> {
+    let rest = key.strip_prefix("q:h")?;
+    let i = rest.find('-')?;
+    bare(&rest[..i]).map(|_| (&rest[..i], &rest[i..]))
+}
+
 /// A town key's layout number (all digits).
 fn bare(id: &str) -> Option<u64> {
     if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
@@ -228,6 +239,7 @@ fn each_id(edits: &Edits, mut f: impl FnMut(&str)) {
             "npcs" => edits.npcs.values().filter_map(|n| n.location.as_ref()).for_each(|l| f(&l.id)),
             "plots" => edits.plots.values().flat_map(|p| &p.anchors).for_each(|k| f(k)),
             "links" => edits.links.values().flat_map(|l| [&l.a.level, &l.b.level]).for_each(|k| f(k)),
+            "wharves" => edits.wharves.keys().filter_map(|k| hand_wharf(k)).for_each(|(li, _)| f(&format!("t:{li}"))),
             _ => unreachable!("a layout-id field each_id doesn't read"),
         }
     }
@@ -257,6 +269,7 @@ fn renamed(edits: &Edits, mut rename: impl FnMut(&str, bool) -> String) -> (Edit
     out.cultures = rekey(&edits.cultures, true, &mut to);
     // (A hand town's records: the layout number before the `/` renamed, the rest kept.)
     out.streets = edits.streets.iter().map(|(k, v)| (town_head(k).map_or_else(|| k.clone(), |(li, rest)| format!("{}{rest}", to(li, true))), v.clone())).collect();
+    out.wharves = edits.wharves.iter().map(|(k, v)| (hand_wharf(k).map_or_else(|| k.clone(), |(li, rest)| format!("q:h{}{rest}", to(li, true))), v.clone())).collect();
     for n in out.npcs.values_mut() {
         if let Some(l) = n.location.as_mut() {
             l.id = to(&l.id, false);

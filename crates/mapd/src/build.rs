@@ -11,7 +11,7 @@ use crate::tools::{found, schema, text};
 
 const SQUARE_FT: f64 = 5.0;
 
-fn props() -> Value {
+pub(crate) fn props() -> Value {
     json!({
         "poly": { "type": "array", "minItems": 3, "maxItems": 64, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "Corners [x_ft, y_ft] in order" },
         "rect": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "width_ft": { "type": "number" }, "depth_ft": { "type": "number" }, "angle_deg": { "type": "number", "default": 0 } }, "required": ["x_ft", "y_ft", "width_ft", "depth_ft"], "description": "A rectangle about its middle" },
@@ -150,7 +150,7 @@ async fn check_spot(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 /// A `func` the code knows: a business (`town::catalog`) or a home (`BUILDING_HOMES`); empty is none.
-fn known_func(f: &str) -> Result<(), String> {
+pub(crate) fn known_func(f: &str) -> Result<(), String> {
     let f = f.trim();
     if f.is_empty() || worldgen::town::catalog::index_of(f).is_some() || BUILDING_HOMES.contains(&f) {
         return Ok(());
@@ -374,7 +374,7 @@ async fn restore_buildings(app: &Shared, ids: Vec<String>, single: bool, at: Vec
 }
 
 /// The footprint asked for, if any (world ft).
-fn footprint(a: &Value) -> Result<Option<Vec<[f64; 2]>>, String> {
+pub(crate) fn footprint(a: &Value) -> Result<Option<Vec<[f64; 2]>>, String> {
     let snap = a["snap"].as_bool().unwrap_or(true);
     let grid = |v: f64| if snap { (v / SQUARE_FT).round() * SQUARE_FT } else { v };
     let num = |o: &Value, k: &str| o[k].as_f64().filter(|v| v.is_finite()).ok_or_else(|| format!("missing '{k}'"));
@@ -424,7 +424,7 @@ fn remembered(app: &Shared, key: &(u64, String)) -> Option<String> {
 }
 
 /// Create a building (`id` None) or change one.
-async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, String> {
+pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, String> {
     let poly = footprint(a)?;
     // The footprint's middle as asked for (before the grid): a move of more than 5 ft is said.
     let asked_mid = match &poly {

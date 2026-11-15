@@ -1487,6 +1487,42 @@ by hand, a castle's building that isn't there, or no such place.
 { "name": "update_building", "arguments": { "id": "b:12:340", "func": "tavern", "floors": 2, "name": "The Leaky Tap" } }
 ```
 
+### `place_stamp`
+One building of a kind and a size set down at a point. `kind` (required): a business or home key, as `create_building`'s `func`.
+`at` (required): a place. `size`: `small`, `usual` (default) or `large` (0.75, 1 and 1.4 times the kind's footprint, on the 5-ft grid;
+a house is 25 x 25 ft, an inn 50 x 40, a temple 35 x 40 usual) or `{width_ft, depth_ft}` (10 to 400; width runs along the
+street). Without `facing` it goes to the nearest clear spot to `at` that fronts the nearest street (within 300 ft), turned square to
+it and 2 to 12 ft from its bed (as `create_building near`). With `facing` (degrees, 0 = +x, 90 = +y, the way its front
+looks) it stands at `at` turned that way, or on the nearest clear spot (moved, not turned) when `at` is not clear. `clear: true` takes
+away the world's own buildings it stands on (`removed`). `preview: true` makes nothing and returns `{preview, kind, name, x_ft, y_ft,
+poly, width_ft, depth_ft, facing_deg?, would_remove?}`. Otherwise the reply is `create_building`'s with `width_ft`, `depth_ft`,
+`facing_deg` (toward the nearest street, if there is one) and `moved_ft` when more than 5 ft from `at`. It also takes `name`,
+`floors`, `roof`, `tint`, `material`, `shape`, `shade`, `structure` as `create_building` does. The result is an ordinary drawn building.
+
+### `create_building_row`
+Drawn buildings lining a path, in one edit. `along` (required): `[[x, y], ...]` (2 to 200 points) or a road stretch id (`rd:`).
+`side`: `left` (the normal `[-dy, dx]` of the direction of travel), `right` or `both` (default). `ward` (default `common`) sets the lot
+widths (from the ward's lot area), storeys and mix; `kinds` (up to 24 keys) mixes only those, else homes of the ward with now and then
+a business of it; `depth` (15 to 120 ft; else the lot area over its width, 22 to 60); `gaps` (0 to 0.5, default 0.15) the share of
+slots left empty; `seed` another mix for the same path; `clear` takes away the world's own buildings in the way. Each lot is a rectangle
+square to its chord with its front 7, 12, 18 or 26 ft off the line (the first that is clear); a slot that is not clear, or meets
+another of the row, is skipped and listed. Up to 100 buildings (`note` says it stopped). Returns `{count, ids, lots: [{id, kind,
+floors, x_ft, y_ft, poly}], refused_count, refused?: [{x_ft, y_ft, why}] (12 at most), removed?, length_ft}`; the same call again returns
+the same ids and adds nothing. `preview: true` returns the lots without ids and makes nothing. Each building is `c:<n>` (delete_feature
+takes one away; one change per call).
+
+### `create_parcel`
+A free plot of ground drawn as an outline (`Created` kind `plot`, built like a hand block). `poly` (required, 3 to 64 corners, simple, at
+least 20 ft across, within 750 ft of their middle; `snap` as for buildings). `fill`: `{kind: generated, ward?, lots?, reroll?, close?}`
+(lots of a ward, default `common`; `lots` small to huge), `{kind: hand}` (left empty) or `{kind: open, open, style?}` (plaza, lawn, park,
+garden, market, cemetery, farmland); default generated common. `name`. A plot may not meet another one (refused naming it); the same
+outline and name again returns that plot (`existing`: true; a new one has no such field). An outline with water, a river, a road or street, or a
+building drawn by hand in it is refused with the reason. Plots are listed by `search_features`/`list_names` (kind `plot`, the fill in `detail`). Returns the plot's feature (`c:<n>`, kind `plot`). `delete_feature` and
+`restore_feature` work on it. (`create_plot` is the notebook's plot point.)
+
+### `update_parcel`
+`id` (a plot, `c:<n>`) with any of `poly` (`snap` as in `create_parcel`), `fill`, `name`; fields left out stay. Checked as `create_parcel` is.
+
 ### `check_building_spot`
 Read-only: whether a footprint (`poly`, `rect` or `circle`, with `snap`) is clear for a building, as
 `create_building` checks it. `id` is the building being reshaped (it does not count against itself). `clear: true`
@@ -2195,6 +2231,50 @@ and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `
 | `the town was laid out anew: …` | The edit was made before a sketch change moved the town or its patches |
 | `corner N is not on the town's wall …` / `corners N and M are not next to each other on the wall` | A gate or tower asked off the wall's line |
 | `towers_remove: … is not one of this town's towers` | A tower id of another layout |
+
+## Streets laid out by hand
+
+`edit_streets` with `lay_out_by_hand` turns a town's or city's plan (as generated, or as the ward editor left it) into
+records you change one by one: junctions, streets between them (straight or with bends), blocks the streets enclose
+(each with a fill), rows of lots along a street, painted open areas and wall lines. Villages have no street plan (refused).
+Positions are world feet. A town laid out by hand is refused by `edit_town` (the message points here); `back_to_generated`
+drops the records and the town is the ward editor's again, as it was before.
+
+### `get_street_plan`
+
+`{id}`: the town as its records stand. Returns `{layout, origin, tier, fill (the default for a face with no block), snap_ft (3),
+junctions [{id, p, square, streets}], streets [{id, a, b, bends, width, set_l, set_r, class, bridge}], blocks [{id, at, fill,
+district, seed, gen, kept, pins, streets (the ones round it)}], rows [{id, street, side, depth, ward, lots, gaps}], areas [{id,
+poly, open}], walls [{id, pts, closed, spacing, gates, name}], problems [{key, why}]}`. A town not laid out by hand is refused.
+
+### `edit_streets`
+
+`{id, ops: [{op, …}, …]}` (or one op as `op`), `dry_run` (one op, nothing changed). The ops are applied in order, each on the
+result of the last; one that is refused ends the list (the ones before it stay, the message says which). Inside `batch`, one op
+per call. Ids are the numbers `get_street_plan` shows; unknown fields are refused.
+
+| op | fields |
+|---|---|
+| `lay_out_by_hand` | none |
+| `back_to_generated` | none |
+| `add_street` | `points` [[x, y], …], `width`, `set_l`, `set_r` (setbacks), `class` main, street, quay or joint |
+| `delete_street` | `street` (its rows go, so do junctions left with no street) |
+| `set_street` | `street`, `width`, `set_l`, `set_r`, `class`, `bridge` |
+| `move_junctions` | `moves` [{`junction`, `to` or `by`}], all at once (if that breaks the streets, each that does not) |
+| `set_square` | `junction`, `square` (a square kind, or none) |
+| `set_block` | `block`, `fill` ({kind: generated, ward, lots, height, reroll, close} / {kind: hand} / {kind: open, open, style}; `height`: `low` one storey each, `usual` (or none) as its ward has them, `tall` one storey more, up to 4), `district` (empty: none), `seed`, `reroll` |
+| `add_row` / `remove_row` | `street`, `side` l or r, `depth`, `ward`, `lots`, `gaps`, `seed` / `row` |
+| `add_area` / `remove_area` | `poly`, `open` (plaza, lawn, park, garden, market, cemetery, farmland) / `area` |
+| `add_wall` / `remove_wall` | `pts`, `closed`, `spacing`, `towers`, `gates` [[x, y]], `name` / `wall` |
+
+A street's ends and bends within 3 ft of a junction meet it, else within 3 ft of a street split it; where a new street
+crosses another both get a junction. Free ends make new junctions (a dead end is allowed and listed in `problems` until
+joined). A change that would make streets cross or break the graph is refused ("that would break the streets"). Blocks follow
+the streets: a block whose shape is unchanged is kept untouched, others are laid out again (`blocks.relaid`), buildings that
+carried a name, note, business or NPC keep their ids where a building stands there again, else they are listed in `lost`.
+The reply of each op: `{op, records {set, removed}, blocks {relaid, added, removed}, buildings {before, after}, rects, lost,
+problems}` and per op `streets_added`, `row`, `area`, `wall`, `stayed`, `size`. `regenerate` keeps a hand town (its records
+follow the world as other edits do).
 
 ## Shaping the ground
 

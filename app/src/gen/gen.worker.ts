@@ -77,6 +77,12 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                             ? c.wharf_check_json(a.wharf, a.lighthouse)
                             : a.op === 'building'
                         ? c.building_spot_json(JSON.stringify(a.poly), a.func, a.id)
+                        : a.op === 'stamp'
+                        ? c.stamp_json(a.input)
+                        : a.op === 'row'
+                        ? c.row_json(a.input)
+                        : a.op === 'parcel'
+                        ? c.parcel_check_json(a.input)
                         : a.op === 'funcs'
                           ? building_funcs_json()
                           : a.op === 'bedit'
@@ -93,6 +99,10 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                 ? c.town_plan_json(a.layout)
                                 : a.op === 'townchange'
                                   ? c.town_change_json(a.layout, a.request)
+                                  : a.op === 'streetplan'
+                                  ? c.street_plan_json(a.layout)
+                                  : a.op === 'streetchange'
+                                  ? c.street_change_json(a.layout, a.request)
                                   : a.op === 'named'
                                     ? c.named_json()
                                     : a.op === 'under'

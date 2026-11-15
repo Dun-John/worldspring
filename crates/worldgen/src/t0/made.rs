@@ -703,7 +703,9 @@ fn set_aside_to(edits: &mut crate::world::Edits, li: usize) -> (usize, [(&'stati
     ids.extend(edits.hidden.iter().map(String::as_str));
     ids.extend(edits.npcs.values().filter_map(|n| n.location.as_ref().map(|l| l.id.as_str())));
     ids.extend(edits.plots.values().flat_map(|p| p.anchors.iter().map(String::as_str)));
-    let to = ids.into_iter().filter_map(parked).chain(edits.towns.keys().filter_map(|k| k.parse::<usize>().ok()).filter(|&l| l >= PARKED_LAYOUT)).max().map_or(PARKED_LAYOUT, |m| m + 1);
+    let heads = edits.streets.keys().filter_map(|k| k.split('/').next()).chain(edits.wharves.keys().filter_map(|k| crate::t0::remap::hand_wharf(k).map(|x| x.0)));
+    let towns = edits.towns.keys().map(String::as_str).chain(heads).filter_map(|k| k.parse::<usize>().ok()).filter(|&l| l >= PARKED_LAYOUT);
+    let to = ids.into_iter().filter_map(parked).chain(towns).max().map_or(PARKED_LAYOUT, |m| m + 1);
     let mut n = [0; 8];
     fn rekey<V>(m: &mut std::collections::BTreeMap<String, V>, li: usize, to: usize, n: &mut usize) {
         let keys: Vec<String> = m.keys().filter(|k| relaid(k, li, to).is_some()).cloned().collect();
@@ -730,6 +732,13 @@ fn set_aside_to(edits: &mut crate::world::Edits, li: usize) -> (usize, [(&'stati
     for k in keys {
         let v = edits.streets.remove(&k).expect("listed");
         edits.streets.insert(format!("{to}{}", &k[head.len()..]), v);
+    }
+    // (And the wharves its conversion left, `q:h<li>-<k>`.)
+    let wp = format!("q:h{li}-");
+    let keys: Vec<String> = edits.wharves.range(wp.clone()..).take_while(|(k, _)| k.starts_with(&wp)).map(|(k, _)| k.clone()).collect();
+    for k in keys {
+        let v = edits.wharves.remove(&k).expect("listed");
+        edits.wharves.insert(format!("q:h{to}-{}", &k[wp.len()..]), v);
     }
     let hidden: Vec<String> = edits.hidden.iter().filter(|h| relaid(h, li, to).is_some()).cloned().collect();
     for h in hidden {

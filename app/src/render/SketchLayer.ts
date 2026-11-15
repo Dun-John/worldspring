@@ -4,7 +4,8 @@ import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { Geom, Stroke } from '../gen/protocol';
 import type { Sketcher } from '../editor/sketcher';
 import type { Camera } from './camera';
-import { HANDLE_PX, underlay } from '../editor/trace/underlay.svelte';
+import { underlay } from '../editor/trace/underlay.svelte';
+import { TraceSprite } from './TraceSprite';
 import { tracer } from '../editor/trace/tracer.svelte';
 
 const BIOME_COLORS: Record<string, number> = {
@@ -43,9 +44,7 @@ export class SketchLayer {
   readonly container = new Container();
   private readonly preview = new Sprite();
   /** The trace picture (session-only, DM's sketch view) and its Adjust handles. */
-  private readonly trace = new Sprite();
-  private readonly traceG = new Graphics();
-  private traceImage: unknown = null;
+  private readonly trace = new TraceSprite();
   /** The auto-trace's result, dashed (never part of the sketch until accepted). */
   private readonly traceP = new Graphics();
   private readonly g = new Graphics();
@@ -66,9 +65,7 @@ export class SketchLayer {
   ) {
     this.preview.visible = false;
     this.mapSize = [geom.map_w_ft, geom.map_h_ft];
-    this.trace.anchor.set(0.5);
-    this.trace.visible = false;
-    this.container.addChild(this.preview, this.trace, this.traceG, this.traceP, this.g, this.names);
+    this.container.addChild(this.preview, this.trace.container, this.traceP, this.g, this.names);
   }
 
   /** The map size being sketched (its outline is drawn; previews fill it). */
@@ -94,37 +91,6 @@ export class SketchLayer {
     this.previewSize = [w, h];
     this.preview.visible = this.showPreview;
     this.dirty = true;
-  }
-
-  /** The trace picture and its handles, from the underlay's state (cheap when unchanged). */
-  private updateTrace(cam: Camera) {
-    const im = underlay.visible ? underlay.image : null;
-    if (im?.bitmap !== this.traceImage) {
-      const old = this.trace.texture;
-      this.trace.texture = im ? Texture.from(im.bitmap) : Texture.EMPTY;
-      if (old && old !== Texture.EMPTY) old.destroy(true);
-      this.traceImage = im?.bitmap ?? null;
-    }
-    this.trace.visible = !!im;
-    this.traceG.clear();
-    if (!im) return;
-    const xf = underlay.xf;
-    const [x, y] = cam.worldToScreen(xf.cx, xf.cy);
-    this.trace.position.set(x, y);
-    this.trace.scale.set(xf.ftPerPx * cam.ppf);
-    this.trace.rotation = (xf.rot * Math.PI) / 180;
-    this.trace.alpha = underlay.opacity;
-    if (!underlay.adjust) return;
-    const hs = underlay.handles(cam.ppf);
-    if (!hs) return;
-    const g = this.traceG;
-    const c = hs.corners.map((p) => cam.worldToScreen(p[0], p[1]));
-    g.poly(c.flat()).stroke({ width: 1.5, color: 0x1a5fb4, alpha: 0.9 });
-    const t = cam.worldToScreen(hs.top[0], hs.top[1]);
-    const r = cam.worldToScreen(hs.rotate[0], hs.rotate[1]);
-    g.moveTo(t[0], t[1]).lineTo(r[0], r[1]).stroke({ width: 1.5, color: 0x1a5fb4, alpha: 0.9 });
-    g.circle(r[0], r[1], HANDLE_PX).fill(0xffffff).stroke({ width: 2, color: 0x1a5fb4 });
-    for (const [cx, cy] of c) g.rect(cx - HANDLE_PX / 2, cy - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX).fill(0xffffff).stroke({ width: 2, color: 0x1a5fb4 });
   }
 
   /** Where the traced strokes were last drawn: their key, the zoom and centre drawn at, and the
@@ -206,10 +172,10 @@ export class SketchLayer {
 
   update(cam: Camera) {
     const view = `${cam.cx},${cam.cy},${cam.zoom},${cam.width},${cam.height}`;
-    const key = `${view}|${underlay.visible}|${underlay.adjust}|${underlay.opacity}|${underlay.xf.cx},${underlay.xf.cy},${underlay.xf.ftPerPx},${underlay.xf.rot}|${this.traceImage === (underlay.image?.bitmap ?? null)}|${tracer.version}`;
+    const key = `${view}|${underlay.visible}|${underlay.adjust}|${underlay.opacity}|${underlay.xf.cx},${underlay.xf.cy},${underlay.xf.ftPerPx},${underlay.xf.rot}|${this.trace.shows(underlay.visible ? (underlay.image?.bitmap ?? null) : null)}|${tracer.version}`;
     if (key !== this.lastTrace) {
       this.lastTrace = key;
-      this.updateTrace(cam);
+      this.trace.update(cam, underlay);
       this.placeTraced(cam);
     }
     if (!this.dirty && view === this.lastView) return;
@@ -373,7 +339,7 @@ export class SketchLayer {
 
   destroy() {
     this.preview.texture?.destroy(true);
-    if (this.trace.texture !== Texture.EMPTY) this.trace.texture.destroy(true);
+    this.trace.destroy();
     this.container.destroy({ children: true });
   }
 }

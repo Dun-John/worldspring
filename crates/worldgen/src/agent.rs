@@ -131,8 +131,10 @@ pub fn resized_detail(detail: &str, was: &str, now: &str, people: u32) -> String
         Some((h, rest)) => (h, rest.split_once(", ").map_or(String::new(), |(_, t)| format!(", {t}"))),
         None => (detail, String::new()),
     };
-    let head = match head.strip_suffix(was) {
-        Some(h) if !h.is_empty() => format!("{h}{now}"),
+    // (`"<what it lives by> <size>"`, or a town added by hand's `"<size> (added by hand)"`.)
+    let head = match (head.strip_suffix(was), head.strip_prefix(was)) {
+        (Some(h), _) if !h.is_empty() => format!("{h}{now}"),
+        (_, Some(t)) if t.starts_with(" (") => format!("{now}{t}"),
         _ => head.to_string(),
     };
     let digits = people.to_string();
@@ -273,6 +275,16 @@ pub fn created_detail(c: &crate::world::Created) -> String {
     let mut s = if c.kind == "village" || c.kind == "town" { format!("{} (added by hand)", c.kind) } else { format!("created {}", c.kind.replace('_', " ")) };
     if let Some(u) = &c.under {
         s += &format!(" over a {}", u.replace('_', " "));
+    }
+    if let Some(f) = c.fill.as_ref().filter(|_| c.kind == "plot") {
+        use crate::town::hand::BlockFill;
+        let open = |o: &crate::town::hand::OpenKind| serde_json::to_value(o).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        s += &match f {
+            BlockFill::Generated { ward, lots, .. } => format!(" (generated lots, {ward} ward{})", lots.as_ref().map(|l| format!(", {l} lots")).unwrap_or_default()),
+            BlockFill::Hand => " (left for buildings by hand)".to_string(),
+            BlockFill::Open { open: o, .. } => format!(" (open ground: {})", open(o)),
+            BlockFill::Castle { .. } => " (castle)".to_string(),
+        };
     }
     let opts: Vec<String> = [c.theme.as_ref().map(|t| t.replace('_', " ")), c.size.clone(), c.levels.map(|l| format!("{l} level{}", if l == 1 { "" } else { "s" }))].into_iter().flatten().collect();
     if !opts.is_empty() {
@@ -1565,6 +1577,11 @@ pub fn restore_clash(world: &World, t0: &T0, ids: &[String]) -> Result<(), Strin
 }
 
 /// Whether two polygons share any area (or one holds the other).
+pub fn polys_overlap_pub(a: &[P], b: &[P]) -> bool {
+    polys_overlap(a, b)
+}
+
+/// Whether two polygons share any area (or one holds the other).
 fn polys_overlap(a: &[P], b: &[P]) -> bool {
     a.iter().any(|p| geom::contains(b, *p)) || b.iter().any(|p| geom::contains(a, *p)) || (0..a.len()).any(|i| (0..b.len()).any(|j| segs_cross(a[i], a[(i + 1) % a.len()], b[j], b[(j + 1) % b.len()])))
 }
@@ -2737,8 +2754,10 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     flights.sort_by(|a, b| b.0.total_cmp(&a.0));
     let stairs: Vec<Value> = flights.iter().take(40).map(|(rise, at, length)| json!({ "x_ft": at[0].round(), "y_ft": at[1].round(), "length_ft": length.round(), "rise_ft": (*rise as f64 * 10.0).round() / 10.0 })).collect();
     let _ = t0;
+    // (A town laid out by hand: the size class its people make, as its feature's kind.)
+    let tier = town::hand::size(world, l.index as usize).map_or(l.tier, |x| x.1);
     json!({
-        "tier": l.tier.name(),
+        "tier": tier.name(),
         "culture": town::culture::NAMES[l.culture as usize % 5],
         "buildings": l.buildings.len(),
         "walled": !l.walls.is_empty(),

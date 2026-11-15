@@ -1400,8 +1400,10 @@ impl Created {
         }
         match &self.fill {
             Some(crate::town::hand::BlockFill::Castle { .. }) => Err("a plot's fill: generated, hand or open (a castle is drawn as one)".into()),
-            Some(crate::town::hand::BlockFill::Generated { ward, lots, .. }) if crate::town::hand::ward_of(ward).is_none() || lots.as_deref().is_some_and(|l| !LOT_SIZES.contains(&l)) => {
-                Err(format!("a plot's ward: one of {}; lots: one of {}", TOWN_WARDS.join(", "), LOT_SIZES.join(", ")))
+            Some(crate::town::hand::BlockFill::Generated { ward, lots, height, .. })
+                if crate::town::hand::ward_of(ward).is_none() || lots.as_deref().is_some_and(|l| !LOT_SIZES.contains(&l)) || height.as_deref().is_some_and(|h| !crate::town::hand::HEIGHTS.contains(&h)) =>
+            {
+                Err(format!("a plot's ward: one of {}; lots: one of {}; height: one of {}", TOWN_WARDS.join(", "), LOT_SIZES.join(", "), crate::town::hand::HEIGHTS.join(", ")))
             }
             _ => Ok(()),
         }

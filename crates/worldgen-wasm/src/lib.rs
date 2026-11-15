@@ -386,6 +386,48 @@ impl Ctx {
         }
     }
 
+    /// A building of a kind set down at a point as `placing::stamp` does (input and output JSON: `placing::stamp_json`).
+    pub fn stamp_json(&self, input: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::placing::stamp_json(&self.world, t0, input),
+            None => "null".into(),
+        }
+    }
+
+    /// A hand town's street plan for the street editor (`town::handedit::plan_json`): header,
+    /// junctions, streets, blocks, rows, areas, walls, problems; or `{error}`.
+    pub fn street_plan_json(&self, layout: u32) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::town::handedit::plan_json(&self.world, t0, layout as usize).unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string(),
+            None => "null".into(),
+        }
+    }
+
+    /// A row of buildings along a path as `placing::row` lays it (`placing::row_json`).
+    pub fn row_json(&self, input: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::placing::row_json(&self.world, t0, input),
+            None => "null".into(),
+        }
+    }
+
+    /// A hand town's streets changed as asked (`town::handedit::HandRequest` JSON), without
+    /// changing the edits: `{change, report}` or `{error}`.
+    pub fn street_change_json(&self, layout: u32, request: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::town::handedit::change_json(&self.world, t0, layout as usize, request),
+            None => "null".into(),
+        }
+    }
+
+    /// Whether an outline can be a plot (`placing::parcel_check_json`).
+    pub fn parcel_check_json(&self, input: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::placing::parcel_check_json(&self.world, t0, input),
+            None => "null".into(),
+        }
+    }
+
     /// The generated buildings with their middle inside a polygon (`[[x, y], …]` JSON, ft):
     /// `[{id, at}]` (`agent::generated_buildings_in`).
     pub fn buildings_in_json(&self, poly: &str) -> String {

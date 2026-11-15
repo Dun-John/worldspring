@@ -13,6 +13,7 @@ function eachId(edits: Edits, f: (id: string) => void) {
     if (!v) continue;
     if (where === 'keys' || where === 'towns') for (const k of Object.keys(v)) f(where === 'towns' ? `t:${k}` : k);
     else if (where === 'townPrefixed') for (const k of Object.keys(v)) { const h = townHead(k); if (h) f(`t:${h[0]}`); }
+    else if (where === 'handWharves') for (const k of Object.keys(v)) { const h = handWharf(k); if (h) f(`t:${h[0]}`); }
     else if (where === 'values') for (const k of v as string[]) f(k);
     else if (where === 'npcs') for (const n of Object.values(v as Record<string, Npc>)) n.location && f(n.location.id);
     else if (where === 'links') for (const l of Object.values(v as Record<string, LinkEdit>)) {
@@ -29,6 +30,12 @@ function townHead(key: string): [string, string] | undefined {
   const i = key.indexOf('/');
   const head = i < 0 ? key : key.slice(0, i);
   return /^\d+$/.test(head) ? [head, i < 0 ? '' : key.slice(i)] : undefined;
+}
+
+/** A hand town's wharf key's layout number and what follows it (`q:h<n>-<k>`), else none. */
+function handWharf(key: string): [string, string] | undefined {
+  const m = /^q:h(\d+)(-.*)$/.exec(key);
+  return m ? [m[1], m[2]] : undefined;
 }
 
 /** `edits` with every id `rename` changes changed (bare town keys in `towns` as `bare`), and how
@@ -54,6 +61,13 @@ function renamed(edits: Edits, rename: (id: string, bare?: boolean) => string): 
       Object.entries(edits.streets).map(([k, v]) => {
         const h = townHead(k);
         return [h ? to(h[0], true) + h[1] : k, v];
+      }),
+    );
+  if (edits.wharves)
+    out.wharves = Object.fromEntries(
+      Object.entries(edits.wharves).map(([k, v]) => {
+        const h = handWharf(k);
+        return [h ? `q:h${to(h[0], true)}${h[1]}` : k, v];
       }),
     );
   if (edits.npcs)

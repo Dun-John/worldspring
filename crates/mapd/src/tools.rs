@@ -78,6 +78,7 @@ pub fn list() -> Value {
         a.extend(crate::sites::list());
         a.extend(crate::scatter::list());
         a.extend(crate::build::list());
+        a.extend(crate::quick::list());
         a.extend(crate::works::list());
         a.extend(crate::crossings::list());
         a.extend(crate::hexes::list());
@@ -90,6 +91,7 @@ pub fn list() -> Value {
         a.extend(crate::streets::list());
         a.extend(crate::geo::list());
         a.extend(crate::towns::list());
+        a.extend(crate::streets_edit::list());
         a.extend(crate::settlements::list());
         a.extend(crate::sketch::list());
         a.extend(crate::batch::list());
@@ -122,7 +124,7 @@ const DESTRUCTIVE: &[&str] = &[
 /// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
 /// `focus_view` and the creates that return what is already there.
 const IDEMPOTENT: &[&str] = &[
-    "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_npc",
+    "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_building_row", "create_parcel", "update_parcel", "create_npc",
     "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "restore_islets", "update_water", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
 ];
 
@@ -233,6 +235,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
     if let Some(r) = crate::build::call(app, name, &a).await {
         return r;
     }
+    if let Some(r) = crate::quick::call(app, name, &a).await {
+        return r;
+    }
     if let Some(r) = crate::works::call(app, name, &a).await {
         return r;
     }
@@ -264,6 +269,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::towns::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::streets_edit::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::reads::call(app, name, &a).await {
@@ -1107,7 +1115,19 @@ async fn create_in_building(app: &Shared, a: Value, kind: String) -> Result<Valu
 /// A site asked to be created that was already there (`Created::same_site`), as `get_feature`
 /// has it (a building with its building id), marked `existing`.
 pub(crate) async fn found(app: &Shared, id: String) -> Result<Value, String> {
-    let mut v = app
+    let mut v = read_back(app, id).await?;
+    // (Its description says what it is, not that it was just made.)
+    if let Some(d) = v["detail"].as_str().and_then(|d| d.strip_prefix("created ")) {
+        v["detail"] = json!(format!("already here, not made again: {d}"));
+    }
+    v["existing"] = json!(true);
+    v["note"] = json!("this was already here: its id is returned and nothing was added (change something to make a second one: another name or place)");
+    Ok(v)
+}
+
+/// A site as `get_feature` has it (a building with its building id).
+pub(crate) async fn read_back(app: &Shared, id: String) -> Result<Value, String> {
+    app
         .worker
         .with(move |ex| {
             let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "it could not be read back".to_string())?;
@@ -1118,12 +1138,5 @@ pub(crate) async fn found(app: &Shared, id: String) -> Result<Value, String> {
             }
             Ok::<_, String>(v)
         })
-        .await?;
-    // (Its description says what it is, not that it was just made.)
-    if let Some(d) = v["detail"].as_str().and_then(|d| d.strip_prefix("created ")) {
-        v["detail"] = json!(format!("already here, not made again: {d}"));
-    }
-    v["existing"] = json!(true);
-    v["note"] = json!("this was already here: its id is returned and nothing was added (change something to make a second one: another name or place)");
-    Ok(v)
+        .await
 }

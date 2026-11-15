@@ -3819,6 +3819,8 @@ fn ground_edits(base: &World) {
     let floor_sq: Vec<usize> = (0..SQ * SQ).filter(|&k| { let q = centre(&key, k % SQ, k / SQ); (q[0] - m[0]).abs() < 20.0 && (q[1] - m[1]).abs() < 20.0 } && open_sq(&c, k)).collect();
     let rock = |c: &Chunk| floor_sq.iter().filter(|&&k| c.surface[k] == battlemap::Surface::Rock).count();
     assert!(floor_sq.len() >= 40 && rock(&dug) == floor_sq.len(), "the pit's floor is rock on {} of {} open squares", rock(&dug), floor_sq.len());
+    assert!(floor_sq.iter().all(|&k| dug.surface[k] != battlemap::Surface::Snow), "snow on the pit's rock floor");
+    assert!(dug.objects.iter().all(|o| !(floor_sq.contains(&((o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1))) && matches!(o.kind, battlemap::Kind::TreeDeciduous | battlemap::Kind::Bush | battlemap::Kind::Flowers))), "a plant on the pit's rock floor");
     ex.world.file.edits.plateaus.get_mut("h:chasm").unwrap().floor = Some(ground::Floor::Ground);
     let lawn = ex.battlemap(key);
     assert!(rock(&lawn) <= rock(&c), "a pit with floor: ground draws rock on {} squares (the ground there {})", rock(&lawn), rock(&c));
@@ -5574,6 +5576,8 @@ fn hand_town_guarantee() {
     let edits = followed.map_or_else(|| ab.file.edits.clone(), |f| f.edits);
     let nl = edits.streets.keys().find_map(|k| k.parse::<usize>().ok()).expect("the hand town's header");
     assert!(nl < worldgen::world::PARKED_LAYOUT, "L{li}: set aside by the remake");
+    let wharves = |e: &worldgen::world::Edits, n: usize| e.wharves.keys().filter(|k| k.starts_with(&format!("q:h{n}-"))).count();
+    assert_eq!(wharves(&edits, nl), wharves(&ab.file.edits, li), "L{li}: its wharves not moved with it (now L{nl})");
     nf.edits = edits;
     let remade = World::new(nf).unwrap();
     same(&town::base_layout(&remade, &t1, nl), &edited, &format!("L{li} remade (now L{nl})"));
@@ -5607,9 +5611,12 @@ fn hand_town_guarantee() {
     let mut f = base.file.clone();
     let recs = hand::blank(&base, &t0, lb).unwrap();
     assert!(recs.iter().all(|(k, _)| !k.contains("/k")), "a blank town has no blocks");
+    let roads_in = recs.iter().any(|(k, _)| k.contains("/e"));
     f.edits.streets.extend(recs);
     let mut wb = World::new(f).unwrap();
-    assert!(town::base_layout(&wb, &t0, lb).buildings.is_empty(), "L{lb}: a blank town has buildings");
+    let l0 = town::base_layout(&wb, &t0, lb);
+    assert!(l0.buildings.is_empty(), "L{lb}: a blank town has buildings");
+    assert!(!roads_in || l0.roads.iter().any(|r| r.1 == 4), "L{lb}: a blank town's streets are not drawn");
     let c = [t0.settlements[lb].x, t0.settlements[lb].y];
     let r = 260.0;
     let sq = [[-r, -r], [r, -r], [r, r], [-r, r]].map(|d| [c[0] + d[0], c[1] + d[1]]);

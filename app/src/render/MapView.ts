@@ -17,7 +17,8 @@ import { Waters } from './Waters';
 import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
-import { underlay } from '../editor/trace/underlay.svelte';
+import { underlay, type Underlay } from '../editor/trace/underlay.svelte';
+import { TraceSprite } from './TraceSprite';
 import { tracer } from '../editor/trace/tracer.svelte';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
@@ -204,6 +205,9 @@ export class MapView {
   private previewed = new Set<string>();
   /** Sketch mode: the strokes and preview on the map, and the editor pointer input goes to. */
   sketchLayer: SketchLayer | null = null;
+  /** Edit › Streets' trace picture (session-only, never in the players' window): shown while set. */
+  townTrace: Underlay | null = null;
+  private readonly townTraceSprite = new TraceSprite();
   private sketcher: Sketcher | null = null;
   /** The pointer drawing a stroke. */
   private sketching: number | null = null;
@@ -249,6 +253,7 @@ export class MapView {
   private madeTracks: MadeTracks | null = null;
   private madeAsk = 0;
   private readonly townHints = new Map<string, { edit: string; rects: Rect[] }>();
+  private readonly streetHints = new Map<string, { records: [string, string][]; rects: Rect[] }>();
   private districtsAsked = new Set<number>();
   /** The last ask for the roads someone named (a later one wins). */
   private roadsAsk = 0;
@@ -588,6 +593,12 @@ export class MapView {
    * taken when edits holding `edit` for it come in; any other change redraws all it reaches. */
   hintTown(key: string, edit: TownEdit | null, rects: Rect[]) {
     this.townHints.set(key, { edit: JSON.stringify(edit), rects });
+  }
+
+  /** What a change to a hand town's streets (`Edits.streets`, layout `li`) redraws: `rects`, as
+   * long as its records come out as `records` (null: removed) when the edits arrive. */
+  hintStreets(li: string, records: Record<string, unknown>, rects: Rect[]) {
+    this.streetHints.set(li, { records: Object.entries(records).map(([k, v]) => [k, JSON.stringify(v ?? null)]), rects });
   }
 
   /** At town zoom, ask once for the districts of each town in view (or its cemeteries by the roads
@@ -1191,6 +1202,7 @@ export class MapView {
     this.waterKey = '';
     this.waterLayer.set((adjusted ?? world.edits)?.waters);
     this.townHints.clear();
+    this.streetHints.clear();
     this.setEdits(adjusted ?? world.edits ?? {}, false);
     this.labels.setPlaces(this.places);
     this.placesRect = null;
@@ -1211,6 +1223,7 @@ export class MapView {
     this.app.stage.addChild(this.ferryLanes.container);
     this.app.stage.addChild(battle.container);
     this.app.stage.addChild(this.hexLayer.container);
+    this.app.stage.addChild(this.townTraceSprite.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
     this.app.stage.addChild(this.playOver);
@@ -1493,6 +1506,27 @@ export class MapView {
       this.labels?.forgetTown(t.index);
       this.placesRect = null;
       this.placesEpoch++;
+    }
+    // Towns laid out by hand as streets (`Edits.streets`, keys `<li>` and `<li>/…`; `lanes/…` lie
+    // outside any town): what their change said it redraws, else all they reach.
+    const hs = (prev.streets ?? {}) as Record<string, unknown>;
+    const hn = (next.streets ?? {}) as Record<string, unknown>;
+    if (hs !== hn) {
+      const hand = new Set<string>();
+      for (const key of keys('streets', hs, hn)) if (hs[key] !== hn[key]) hand.add(key.split('/')[0]);
+      for (const li of hand) {
+        const t = this.towns.find((t) => String(t.index) === li);
+        if (!t) continue;
+        const hint = this.streetHints.get(li);
+        this.streetHints.delete(li);
+        const r = 2.3 * t.r + 200;
+        if (hint && hint.records.every(([k, v]) => JSON.stringify(hn[k] ?? null) === v)) rects.push(...hint.rects);
+        else rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
+        this.districtsAsked.delete(t.index);
+        this.labels?.forgetTown(t.index);
+        this.placesRect = null;
+        this.placesEpoch++;
+      }
     }
     // The world's own settlements laid out in another culture (`Edits.cultures`): all they reach,
     // as a town re-planned; their district labels, business pins and an open building anew.
@@ -1793,6 +1827,7 @@ export class MapView {
       this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, (level - fine) / 0.5)) : 0);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
+      this.townTraceSprite.update(this.cam, this.townTrace && !this.interior ? this.townTrace : null);
       if (this.sewers) {
         this.sewers.update(this.cam, now);
         // The section in the middle of the view is the one the levels list speaks of.
