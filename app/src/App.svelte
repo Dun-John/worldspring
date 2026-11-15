@@ -57,7 +57,7 @@
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
   import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from './editor/crossing';
   import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from './editor/harbour';
-  import { MAX_WATERS, WaterTool, defaultWater, ofSea, waterProblem, type WaterSettings } from './editor/water';
+  import { MAX_WATERS, WaterTool, defaultWater, ofSea, shapeShore, waterProblem, type WaterSettings } from './editor/water';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
   import type { BuildMode, QuickInfo } from './ui/BuildPanel.svelte';
@@ -1709,6 +1709,7 @@
     const waterTool = new WaterTool({
       edits: () => edits,
       picked: () => waterPicked,
+      kind: () => water.kind,
       placed: waterPlaced,
       pick: (id) => (waterPicked = id),
       hint: (t) => toast(t),
@@ -2601,8 +2602,12 @@
   /** The level an outline takes (as `mapd`'s `create_water`): the water's where it reaches the sea
    * or a lake (the highest), else the sea's for an inlet or basin, else 1 ft under the lowest
    * ground on its shore, as the loaded tiles have them. */
-  function waterLevel(pts: Pt[], kind: WaterSettings['kind']): number {
+  function waterLevel(drawn: Pt[], kind: WaterSettings['kind']): number {
     const sea = view.geom?.sea_level_ft ?? 0;
+    // Along its shore as shaped (`waters::shape`), at most 96 points of it.
+    const sh = shapeShore(drawn, kind);
+    const every = Math.max(1, Math.ceil(sh.length / 96));
+    const pts = sh.filter((_, i) => i % every === 0);
     const n = pts.length;
     const per = Math.max(1, Math.floor(96 / n));
     let [wet, low] = [-Infinity, Infinity];

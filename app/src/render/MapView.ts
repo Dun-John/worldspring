@@ -24,6 +24,7 @@ import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
 import { BLOCK, parseKey } from '../editor/groundCodec';
+import { shore } from '../editor/water';
 import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
 
 export interface InteriorState {
@@ -1498,7 +1499,8 @@ export class MapView {
       for (const w of [a, b]) {
         if (!w) continue;
         const e = 20;
-        ground.push([Math.min(...w.pts.map((q) => q[0])) - e, Math.min(...w.pts.map((q) => q[1])) - e, Math.max(...w.pts.map((q) => q[0])) + e, Math.max(...w.pts.map((q) => q[1])) + e]);
+        const sh = shore(w);
+        ground.push([Math.min(...sh.map((q) => q[0])) - e, Math.min(...sh.map((q) => q[1])) - e, Math.max(...sh.map((q) => q[0])) + e, Math.max(...sh.map((q) => q[1])) + e]);
       }
     }
     // The world's own islets taken away or brought back (`Edits.hidden`, `i:` ids): round each
@@ -2343,7 +2345,7 @@ export function waterLabels(e: Edits): Feature[] {
   for (const [id, name] of Object.entries(e.renames ?? {})) {
     const w = id.startsWith('e:') ? e.waters?.[id] : undefined;
     if (!w || !name || w.pts.length < 3) continue;
-    const f = outlineLabel(id, name, w.pts);
+    const f = outlineLabel(id, name, shore(w));
     out.push({ ...f, kind: w.kind === 'inlet' || w.kind === 'basin' ? 'bay' : 'lake', detail: w.kind });
   }
   return out;
