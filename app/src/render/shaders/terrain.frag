@@ -45,7 +45,7 @@ const vec3 PALETTE[19] = vec3[19](
     vec3(0.54, 0.63, 0.66), // ocean
     vec3(0.62, 0.72, 0.74), // lake
     vec3(0.95, 0.95, 0.93), // ice
-    vec3(0.80, 0.79, 0.70), // tundra
+    vec3(0.80, 0.80, 0.66), // tundra (moor and heath: grass and heather patches, see `moorTone`)
     vec3(0.74, 0.71, 0.64), // alpine
     vec3(0.64, 0.69, 0.57), // taiga
     vec3(0.68, 0.74, 0.54), // temperate forest
@@ -63,8 +63,11 @@ const vec3 PALETTE[19] = vec3[19](
     vec3(0.60, 0.56, 0.51)  // ashlands
 );
 
-// Symbol per biome: 0 none, 1 canopy, 2 conifer, 3 dense canopy, 4 marsh, 5 sand, 6 sparse dots, 7 tufts, 8 scree.
-const int SYMBOL[19] = int[19](0, 0, 0, 6, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
+// Symbol per biome: 0 none, 1 canopy, 2 conifer, 3 dense canopy, 4 marsh, 5 sand, 6 sparse dots, 7 tufts, 8 scree,
+// 9 heath (heather clumps and grass tufts).
+const int SYMBOL[19] = int[19](0, 0, 0, 9, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
+const vec3 HEATHER = vec3(0.70, 0.60, 0.64);
+const vec3 MOOR_GRASS = vec3(0.73, 0.77, 0.57);
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -200,6 +203,21 @@ vec4 symbol(vec2 p, int kind, float aa) {
         l = min(l, segment(d, vec2(0.1, 0.08), vec2(0.04, -0.08)));
         return vec4(0.0, 1.0 - smoothstep(0.0, aa, l), 0.0, 0.0);
     }
+    if (kind == 9) {
+        // Heath: a few low heather clumps (three lobes, inked), grass tufts between them.
+        if (h.x < 0.07) {
+            float r = 0.12 + 0.04 * h.y;
+            float sd = min(min(length(d - vec2(-0.6, 0.25) * r), length(d - vec2(0.6, 0.25) * r)), length(d + vec2(0.0, 0.45) * r)) - r;
+            float fill = 1.0 - smoothstep(-aa, 0.0, sd);
+            float ink = 1.0 - smoothstep(0.0, aa * 1.4, abs(sd));
+            float shade = smoothstep(r - aa, r + aa, length(d + vec2(0.35 * r, 0.6 * r)));
+            return vec4(fill, ink, (0.25 + 0.5 * shade) * fill, 0.0);
+        }
+        if (h.x > 0.18) return vec4(0.0);
+        float l = min(segment(d, vec2(-0.07, 0.05), vec2(-0.03, -0.06)), segment(d, vec2(0.0, 0.05), vec2(0.0, -0.07)));
+        l = min(l, segment(d, vec2(0.07, 0.05), vec2(0.03, -0.06)));
+        return vec4(0.0, 0.8 * (1.0 - smoothstep(0.0, aa, l)), 0.0, 0.0);
+    }
     if (kind == 8) {
         if (h.x > 0.45) return vec4(0.0);
         float a = h.y * 6.2831;
@@ -207,6 +225,18 @@ vec4 symbol(vec2 p, int kind, float aa) {
         return vec4(0.0, 1.0 - smoothstep(0.0, aa, segment(d, -dir, dir)), 0.0, 0.0);
     }
     return vec4(0.0);
+}
+
+// Moor tone at pattern coordinate p (cells): big soft patches of heather and of greener grass over
+// the pale heath, a few to a screen. World-anchored and seamless: the noise lattice is turned 45
+// degrees by a whole-number matrix (so its rows don't show) and repeats every 256 cells like the
+// pattern origin.
+vec3 moorTone(vec3 col, vec2 p) {
+    vec2 r = vec2(p.x + p.y, p.y - p.x);
+    float n = 0.75 * pnoise(r / 32.0, 8.0) + 0.25 * pnoise(r / 16.0 + 3.0, 16.0);
+    float m = 0.7 * pnoise(r / 32.0 + 5.0, 8.0) + 0.3 * pnoise(r / 16.0 + 7.0, 16.0);
+    col = mix(col, col * (MOOR_GRASS / PALETTE[3]), 0.8 * smoothstep(0.5, 0.62, m));
+    return mix(col, col * (HEATHER / PALETTE[3]), 0.75 * smoothstep(0.56, 0.66, n));
 }
 
 void main() {
@@ -236,6 +266,13 @@ void main() {
         col = mix(vec3(0.70, 0.78, 0.77), vec3(0.52, 0.62, 0.66), sqrt(d));
     } else {
         col = mix(PALETTE[b1], PALETTE[b2], blend * 0.5);
+        // Moors and heaths (tundra): grass and heather patches, the two pattern octaves crossfaded.
+        float moor = (b1 == 3 ? 1.0 - blend * 0.5 : 0.0) + (b2 == 3 ? blend * 0.5 : 0.0);
+        if (moor > 0.0) {
+            vec3 m0 = moorTone(col, uPat0.xy + vLocal * uPat0.z);
+            vec3 m1 = moorTone(col, uPat1.xy + vLocal * uPat1.z);
+            col = mix(col, mix(m0, m1, uPatMix), moor);
+        }
         float above = h - water;
         bool beachy = b1 != 2 && b1 != 3 && b1 != 5 && b1 != 14;
         if (beachy && above < 6.0 && slope < 0.08) col = mix(col, SAND, 1.0 - smoothstep(3.0, 6.0, above));
