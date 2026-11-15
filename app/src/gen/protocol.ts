@@ -596,6 +596,17 @@ export interface TownReport {
 /** A generated building changed by hand (`worldgen::world::BuildingEdit`): `at` is its middle
  * as generated (the edit is set aside if another building stands at its id after the town is
  * laid out anew); every option left out is as generated. */
+/** One of the world's own islets (`t0::islets`): rock in a river or off a coast; a watchtower may stand on it. */
+export interface GenIslet {
+  id: string;
+  x: number;
+  y: number;
+  r: number;
+  river: boolean;
+  level: number;
+  tower: { id: string; x: number; y: number } | null;
+}
+
 export interface BuildingEdit {
   at: [number, number];
   removed?: boolean;
@@ -777,6 +788,8 @@ export type Ask =
   /** Shop lots along a bridge, or its shops laid out again after a change (`wharf::shop_lots`,
    * `Edits::follow_crossing`; `input` JSON). */
   | { op: 'bridgelots'; input: string }
+  /** The world's generated islets (`t0::islets`). */
+  | { op: 'islets' }
   /** A hand islet round a point (`wharf::islet_at`). */
   | { op: 'islet'; key: string; x: number; y: number; radius: number; rise: number }
   /** Whether a wharf can be put down, with its lighthouse (`wharf::root_problem`). */

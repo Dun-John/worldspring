@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, GenIslet, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -136,6 +136,11 @@ export class GenClient {
    * (`old`: it as it was), as the generator does for agents; the whole list. */
   followBridge(id: string, crossing: Crossing, old: Crossing | undefined, created: Created[]): Promise<{ created: Created[] } | { error: string } | null> {
     return this.ask({ op: 'bridgelots', input: JSON.stringify({ crossing, follow: { id, old, created } }) }).then((j) => JSON.parse(j));
+  }
+
+  /** The world's own islets (rock in rivers and off coasts), with the watchtower on each. */
+  islets(): Promise<GenIslet[]> {
+    return this.ask({ op: 'islets' }).then((j) => JSON.parse(j));
   }
 
   /** A hand islet round a point: its plateau and the water it stands in, or why not. */

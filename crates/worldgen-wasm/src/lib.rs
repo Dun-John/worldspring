@@ -291,6 +291,19 @@ impl Ctx {
         }
     }
 
+    /// The world's generated islets (`t0::islets`): `[{id, x, y, r, river, level, tower: {id, x, y} | null}]`.
+    pub fn islets_json(&self) -> String {
+        let Some(t0) = &self.t0 else { return "[]".into() };
+        let v: Vec<_> = worldgen::t0::islets::islets(t0)
+            .iter()
+            .map(|i| {
+                let tower = worldgen::t0::islets::tower_building(&self.world, t0, i).map(|(id, at)| serde_json::json!({ "id": id, "x": at[0], "y": at[1] }));
+                serde_json::json!({ "id": i.id, "x": i.at[0], "y": i.at[1], "r": i.r, "river": i.river, "level": i.level, "tower": tower })
+            })
+            .collect();
+        serde_json::to_string(&v).unwrap_or_else(|_| "[]".into())
+    }
+
     /// A hand islet round (x, y) (`wharf::islet_at`): `{plateau, water: {kind, name, depth_ft}}` or `{error}`.
     pub fn islet_json(&self, key: &str, x: f64, y: f64, radius: f64, rise: f64) -> String {
         let Some(t0) = &self.t0 else { return "null".into() };

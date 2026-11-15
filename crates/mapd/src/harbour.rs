@@ -75,15 +75,16 @@ async fn islet(app: &Shared, a: &Value) -> Result<Value, String> {
     let key = id.clone().unwrap_or_else(|| new_id("h"));
     let (p, w, sea, existing, changed) = app
         .worker
-        .with({
+        .with_mut({
             let key = key.clone();
             move |ex| {
                 let (world, t0) = (&ex.world, &ex.t0);
                 let plateaus = &world.file.edits.plateaus;
                 let old = match &id {
-                    Some(id) => Some(plateaus.get(id).filter(|p| p.kind == PlateauKind::Islet).ok_or_else(|| format!("no islet {id}"))?),
+                    Some(id) => Some(plateaus.get(id).filter(|p| p.kind == PlateauKind::Islet).ok_or_else(|| format!("no islet {id}"))?.clone()),
                     None => None,
                 };
+                let old = old.as_ref();
                 let at = at.or_else(|| old.map(|p| geom::centroid(&p.pts))).ok_or("at: needed")?;
                 let sea = world.params().sea_level_ft;
                 // A change keeps what it is not told: the radius as the ring is, the rise over the water.
@@ -104,7 +105,7 @@ async fn islet(app: &Shared, a: &Value) -> Result<Value, String> {
                         }
                     }
                 }
-                let (p, w) = wharf::islet_at(world, t0, &key, at, radius, rise)?;
+                let (p, w) = wharf::islet_at_fine(ex, &key, at, radius, rise)?;
                 Ok::<_, String>((p, w, sea, None, old.is_some()))
             }
         })

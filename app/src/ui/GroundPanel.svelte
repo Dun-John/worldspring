@@ -22,9 +22,13 @@
     onPlateau: (id: string, p: Plateau) => void;
     onRemove: () => void;
     onZoomIn: () => void;
+    /** The world's own islets, those taken away marked, and taking one away or bringing it back. */
+    islets?: { id: string; x: number; y: number; r: number; river: boolean; removed: boolean; tower: boolean }[];
+    onIslet?: (id: string, removed: boolean) => void;
+    onGoIslet?: (x: number, y: number) => void;
   }
 
-  let { settings = $bindable(), selected, sea, near, inside, peek = false, onPlateau, onRemove, onZoomIn }: Props = $props();
+  let { settings = $bindable(), selected, sea, near, inside, peek = false, onPlateau, onRemove, onZoomIn, islets = [], onIslet = () => {}, onGoIslet = () => {} }: Props = $props();
 
   const MODES: { key: GroundMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'raise', label: 'Raise', icon: 'raise', kbd: 'Q', hint: 'Brush over the ground to lift it, at most by the height below however often you go over it.' },
@@ -117,6 +121,17 @@
             <input type="range" min="0" max="60" step="5" bind:value={settings.edge} />
           </label>
         </div>
+      </details>
+    {/if}
+    {#if islets.length}
+      <details class="card" aria-label="The world's islets">
+        <summary>Islets in the world <span class="ws-muted">· {islets.filter((i) => !i.removed).length} of {islets.length}</span></summary>
+        {#each islets as i (i.id)}
+          <div class="ws-row">
+            <button class="ws-chip grow" onclick={() => onGoIslet(i.x, i.y)} title="Fly there">{i.river ? 'River' : 'Coast'} islet, {Math.round(i.r)} ft{i.tower ? ', watchtower' : ''}{i.removed ? ' (taken away)' : ''}</button>
+            <button class="ws-chip" onclick={() => onIslet(i.id, !i.removed)}>{i.removed ? 'Bring back' : 'Take away'}</button>
+          </div>
+        {/each}
       </details>
     {/if}
     {#if selected}

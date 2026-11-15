@@ -47,6 +47,14 @@ async fn dry_end(app: &Shared, k: &str, p: Option<[f64; 2]>, tol: f64) -> Result
     let k = k.to_string();
     app.worker
         .with(move |ex| match worldgen::agent::river_at(&ex.world, &ex.t0, p, 50.0).filter(|r| 0.5 * r.width_ft - r.dist_ft > tol) {
+            // (An islet, hand-made or generated, or a plateau over the water is dry land: a crossing may end on it.)
+            _ if {
+                let sh = worldgen::town::Shore::new(&ex.world, &ex.t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]);
+                sh.on_islet(p) || sh.raised(p)
+            } =>
+            {
+                Ok(())
+            }
             // (Water drawn by hand is water too.)
             _ if worldgen::waters::holding(&ex.world.file.edits, p).is_some() => {
                 let w = worldgen::waters::holding(&ex.world.file.edits, p).unwrap_or_default();

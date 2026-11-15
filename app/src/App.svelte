@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, GenIslet, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { underlay } from './editor/trace/underlay.svelte';
@@ -3916,6 +3916,23 @@
   }
 
   /** Hide a feature's label from both maps and search, or show it again. */
+  /** The world's own islets (listed in the Ground panel). */
+  let genIslets = $state<GenIslet[]>([]);
+  $effect(() => {
+    void (edits.hidden?.length, edits.buildings);
+    if (groundOn) void view.gen.islets().then((l) => (genIslets = l));
+  });
+  /** An islet of the world's taken away (its watchtower with it) or brought back: a hidden mark. */
+  function setIslet(id: string, removed: boolean) {
+    const gi = genIslets.find((i) => i.id === id);
+    const hidden = new Set(edits.hidden ?? []);
+    if (removed) hidden.add(id);
+    else hidden.delete(id);
+    const buildings = { ...(edits.buildings ?? {}) };
+    if (removed && gi?.tower) buildings[gi.tower.id] = { at: [gi.tower.x, gi.tower.y], removed: true };
+    applyEdits({ ...edits, hidden: [...hidden].sort(), buildings }, { tool: 'hide_feature', id, hidden: removed }, 'user');
+  }
+
   function setHidden(id: string, hide: boolean) {
     // (A building drawn by hand: kept under its created id, a mark under its building id moved.)
     const pair = drawnPair(id);
@@ -4993,6 +5010,9 @@
             onPlateau={(id, p) => groundArmed?.change(id, p)}
             onRemove={() => groundArmed?.remove()}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 2)) })}
+            islets={genIslets.map((i) => ({ id: i.id, x: i.x, y: i.y, r: i.r, river: i.river, removed: (edits.hidden ?? []).includes(i.id), tower: !!i.tower }))}
+            onIslet={setIslet}
+            onGoIslet={(x, y) => view.flyTo({ cx: x, cy: y, zoom: clampZoom(Math.max(view.cam.zoom, 3)) })}
           />
         {:else if scatterOn}
           <ScatterPanel

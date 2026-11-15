@@ -1557,7 +1557,7 @@ into a town lays the town out anew (its gates follow its roads): draw roads befo
 Crossings put down by hand (`v:<id>`) join one bank to the other, drawn on the battlemap over what is there. A
 bridge is a walkable deck clear of the water (timber, or old stone), a ford a bed brought up to wading depth under
 stepping stones, a ferry jetties out from each end with a raft between. The ends are exactly where they are given
-(never moved), but an end in a river's water is refused, naming the bank point on that side to use. A crossing takes a
+(never moved), but an end in a river's water is refused, naming the bank point on that side to use. An end on a rock islet (hand-made or the world's) or on a plateau over the water is dry land and passes. A hand bridge's deck climbs straight from the ground (or the water's clearance) at one end to the other, at most 1 in 8, so a long bridge can reach a cliff top (it runs into the cliff face where the climb is capped); shops on it stand at its level where they are. A pier may start on an islet. `raise_islet` reads the water as the battlemap draws it (a spot T0 calls dry but the fine shore floods takes an islet; one it floods but the fine shore dries is dry land). A crossing takes a
 name and notes like a feature (`rename_feature`, `annotate_feature`, `get_feature` with its `v:` id); a named one is
 found by `search_features` (kind `crossing`) and listed in Notes › Gazetteer (nothing is lettered on the map).
 
@@ -2292,12 +2292,22 @@ below the ground, the land round it otherwise.
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
 `{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, floor? (rock or ground, if set), x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
-block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
+block's north-west corner), and (unless `generated: false`) the world's own islets in rivers and off coasts
+`{id: "i:<8 hex>", what: "islet", generated: true, level_ft, water_ft, x_ft, y_ft, radius_ft, in: "river" or "sea or lake", tower? (a watchtower stands on it), removed? (taken away), bbox, poly}`.
+`within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 
 ### `delete_plateau`
 Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).
 Its name (`rename_feature`), note and hidden mark go with it; there is no restore (the user's Undo in the app
 brings all of them back).
+
+Also takes the world's own islets (`i:...`, from `list_plateaus`): a hidden mark takes one off the ground, the shore and the
+map (a bridge deck or pier no longer keeps clear of it only where the town's plan already did), and a watchtower on it is
+removed as a building (`removed_towers`, `b:...`). `restore_islets` undoes it.
+
+### `restore_islets`
+Bring the world's own islets (`i:...`) back by `id` or `ids` (all or none) after `delete_plateau` took them away; one not
+taken away is refused. A watchtower taken away with one stays removed (`restore_building`). Returns `{tool, ids}`.
 
 ### `ground_heights`
 Every square of the box reaching `radius_ft` (default 25, at most 200) east, west, north and south of a place:

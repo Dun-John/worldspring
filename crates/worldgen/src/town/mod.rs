@@ -1103,6 +1103,9 @@ fn raised_fp(world: &World, t0: &T0, index: usize) -> Option<u64> {
         match crate::wharf::deck_of(world, t0, on) {
             Some((top, line)) => {
                 h = hash2(h, top.to_bits() as i64, 0x0d3c);
+                for t in [0.0, 1.0] {
+                    h = hash2(h, crate::wharf::deck_level_at(world, t0, on, line[t as usize]).unwrap_or(top).to_bits() as i64, 0x0d3d);
+                }
                 for q in line {
                     h = hash2(h, q[0].to_bits() as i64, q[1].to_bits() as i64);
                 }
@@ -1483,7 +1486,7 @@ impl<'a> Shore<'a> {
         shore.islets = crate::ground::islets_in(&world.file.edits, rect);
         shore.shaped = crate::ground::Shaper::build(&world.file.edits, None, rect, crate::battlemap::SQUARE_FT);
         // (R5 M20: and the world's own islets, `t0::islets`.)
-        shore.islets.extend(crate::t0::islets::near(t0, rect).map(|i| (i.pts.clone(), i.level, i.bbox)));
+        shore.islets.extend(crate::t0::islets::near_in(t0, &world.file.edits, rect).map(|i| (i.pts.clone(), i.level, i.bbox)));
         shore
     }
 

@@ -256,6 +256,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
                 match c.on.as_deref() {
                     Some(on) => {
                         if let Some((top, line)) = crate::wharf::deck_of(world, t0, on).filter(|_| poly.len() >= 3) {
+                            let top = crate::wharf::deck_level_at(world, t0, on, crate::town::geom::centroid(&c.poly)).unwrap_or(top);
                             let mut b = drawn(c, poly, top, &mut rng, t0, center);
                             b.deck = Some(line);
                             buildings.push(b);

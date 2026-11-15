@@ -447,7 +447,7 @@ impl<'a> Shaper<'a> {
     fn gather(edits: &'a crate::world::Edits, t0: Option<&crate::t0::T0>, extra: &[Raised], rect: [f64; 4], spacing: f64) -> Option<Shaper<'a>> {
         let near = |b: [f64; 4], band: f64| !(b[2] + band < rect[0] || b[0] - band > rect[2] || b[3] + band < rect[1] || b[1] - band > rect[3]);
         let islet_band = (ISLET_EDGE_FT as f64).max(spacing);
-        let world_islets: Vec<(usize, &crate::t0::islets::Islet)> = t0.map_or(Vec::new(), |t0| crate::t0::islets::islets(t0).iter().enumerate().filter(|(_, i)| near(i.bbox, islet_band)).collect());
+        let world_islets: Vec<(usize, &crate::t0::islets::Islet)> = t0.map_or(Vec::new(), |t0| crate::t0::islets::islets(t0).iter().enumerate().filter(|(_, i)| near(i.bbox, islet_band) && !edits.hidden.contains(&i.id)).collect());
         if !shapes(edits) && world_islets.is_empty() && extra.is_empty() {
             return None;
         }
@@ -936,6 +936,13 @@ pub fn plateau_for(outline: &[[f64; 2]], level: f64, edge: f64) -> Result<Platea
 /// (standing water or a river), easing down to the bed over `ISLET_EDGE_FT`. Refused on dry land
 /// and where the water is deeper than `ISLET_MAX_DEPTH_FT`.
 pub fn islet_for(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0: &crate::t0::T0) -> Result<Plateau, String> {
+    islet_for_fine(key, at, radius_ft, rise_ft, t0, None)
+}
+
+/// `islet_for` where the water is as the battlemap draws it (`fine`: the water level and the ground at the point, 5-ft
+/// squares): T0's shore is coarser, so a spot it calls dry but the fine shore floods is wet (the level and depth are the
+/// fine ones), and a spot it floods but the fine shore dries (not a river) is dry land.
+pub fn islet_for_fine(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0: &crate::t0::T0, fine: Option<(f32, f32)>) -> Result<Plateau, String> {
     use crate::core::rng::stream;
     if !radius_ft.is_finite() || !ISLET_RADIUS_FT.contains(&radius_ft) {
         return Err(format!("radius_ft: {:.0} to {:.0}", ISLET_RADIUS_FT.start(), ISLET_RADIUS_FT.end()));
@@ -948,12 +955,22 @@ pub fn islet_for(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0: &cra
     }
     let still = t0.sample_water(at[0], at[1]);
     let river = t0.rivers.crossing_level(at, at, 0.0, t0.cell_ft, &crate::lod::rivers::CrossingCache::default()).map_or(crate::t0::hydro::DRY, |(z, _)| z as f32);
-    let water = still.max(river);
+    let mut water = still.max(river);
+    let mut ground = t0.ground_at(at[0], at[1], 5.0);
+    if let Some((hw, g)) = fine {
+        if hw > g {
+            // (The fine shore floods it: its level over its ground.)
+            water = water.max(hw);
+            ground = if river > crate::t0::hydro::DRY || ground >= hw as f64 { g as f64 } else { ground.min(g as f64) };
+        } else if river <= crate::t0::hydro::DRY {
+            water = crate::t0::hydro::DRY;
+        }
+    }
     // (A river's channel is water whatever the valley's ground there: it never dips below the water.)
-    if water <= crate::t0::hydro::DRY || ((water as f64) <= t0.ground_at(at[0], at[1], 5.0) && river <= crate::t0::hydro::DRY) {
+    if water <= crate::t0::hydro::DRY || ((water as f64) <= ground && river <= crate::t0::hydro::DRY) {
         return Err(format!("at: ({:.0}, {:.0}) is on dry land: an islet stands in a river, lake or the sea", at[0], at[1]));
     }
-    let depth = (water as f64 - t0.ground_at(at[0], at[1], 5.0)).max(0.0);
+    let depth = (water as f64 - ground).max(0.0);
     if depth > ISLET_MAX_DEPTH_FT {
         return Err(format!("at: the water there is {depth:.0} ft deep: at most {ISLET_MAX_DEPTH_FT:.0}"));
     }

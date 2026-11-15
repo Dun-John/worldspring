@@ -45,7 +45,8 @@ pub fn list() -> Vec<Value> {
             "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0 },
             "floor": { "type": "string", "enum": ["auto", "rock", "ground"], "description": "What its top or floor draws as (kept when changing one; default auto)" },
         }), &[]) }),
-        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
+        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus, pits or the world\'s own generated islets (i:..., see list_plateaus; its watchtower goes too: removed_towers) away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
+        json!({ "name": "restore_islets", "title": "Bring generated islets back", "description": "Bring the world's own islets (i:...) back after delete_plateau took them away. A watchtower removed with one stays removed (restore_building).", "inputSchema": schema(crate::args::ids_props("islet id (i:...)"), &[]) }),
         json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square within radius_ft (at most 200) of a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
     ]
 }
@@ -56,6 +57,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "shape_ground" => shape(app, a).await.map(text),
         "set_plateau" => set_plateau(app, a).await.map(text),
         "delete_plateau" => delete(app, a).await.map(text),
+        "restore_islets" => restore_islets(app, a).await.map(text),
         "ground_heights" => heights(app, a).await.map(text),
         _ => return None,
     })
@@ -393,23 +395,77 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
     .await
 }
 
+/// The generated islets among `ids` (`i:`): each one's watchtower building (`b:<layout>:<id>`, its centre) when it has one.
+async fn generated_islets(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<(String, Option<(String, [f64; 2])>)>, String> {
+    app.worker
+        .with(move |ex| {
+            let all = worldgen::t0::islets::islets(&ex.t0);
+            let mut out = Vec::new();
+            for (n, id) in ids.iter().enumerate().filter(|(_, id)| id.starts_with("i:")) {
+                let i = all.iter().find(|i| &i.id == id).ok_or_else(|| format!("{}: no generated islet {id}", crate::args::item(single, n)))?;
+                let tower = worldgen::t0::islets::tower_building(&ex.world, &ex.t0, i);
+                out.push((id.clone(), tower));
+            }
+            Ok(out)
+        })
+        .await
+}
+
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
     let single = a["ids"].is_null();
+    let islets = generated_islets(app, ids.clone(), single).await?;
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
-            if !e.plateaus.contains_key(id) {
+            if !id.starts_with("i:") && !e.plateaus.contains_key(id) {
                 return Err(format!("{}: no plateau {id}", crate::args::item(single, i)));
             }
         }
         // (Its name, note and hidden mark go with it: nothing brings a plateau back but Undo.)
-        for id in &ids {
+        for id in ids.iter().filter(|id| !id.starts_with("i:")) {
             e.plateaus.remove(id);
             e.renames.remove(id);
             e.notes.remove(id);
             e.hidden.remove(id);
         }
-        Ok(json!({ "tool": "delete_plateau", "ids": ids }))
+        // A generated islet is taken off the map by a hidden mark (`restore_islets` lifts it); so is its watchtower, as a building removed.
+        let mut towers = Vec::new();
+        for (id, tower) in &islets {
+            e.hidden.insert(id.clone());
+            if let Some((b, at)) = tower {
+                e.buildings.insert(b.clone(), worldgen::world::BuildingEdit { at: *at, removed: true, ..Default::default() });
+                towers.push(b.clone());
+            }
+        }
+        let mut reply = json!({ "tool": "delete_plateau", "ids": ids });
+        if !towers.is_empty() {
+            reply["removed_towers"] = json!(towers);
+        }
+        Ok(reply)
+    })
+    .await
+}
+
+/// Bring generated islets taken away by `delete_plateau` back (their watchtowers stay removed: `restore_building`).
+async fn restore_islets(app: &Shared, a: &Value) -> Result<Value, String> {
+    let ids = crate::args::ids(a)?;
+    let single = a["ids"].is_null();
+    for (i, id) in ids.iter().enumerate() {
+        if !id.starts_with("i:") {
+            return Err(format!("{}: {id} is not a generated islet (i:...)", crate::args::item(single, i)));
+        }
+    }
+    generated_islets(app, ids.clone(), single).await?;
+    app.edit("agent", 0, move |e| {
+        for (i, id) in ids.iter().enumerate() {
+            if !e.hidden.contains(id) {
+                return Err(format!("{}: {id} is not taken away", crate::args::item(single, i)));
+            }
+        }
+        for id in &ids {
+            e.hidden.remove(id);
+        }
+        Ok(json!({ "tool": "restore_islets", "ids": ids }))
     })
     .await
 }

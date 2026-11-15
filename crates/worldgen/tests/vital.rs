@@ -2686,6 +2686,7 @@ fn agent_edits_guarantee() {
     ward_edits(&base, &t0);
     ward_castles_by_the_wall(&base, &t0);
     ground_edits(&base);
+    islet_and_deck_edits(&base);
     bridge_shops(&base);
     let sea = base.params().sea_level_ft;
     // Dry open land two miles from a town, clear of every layout.
@@ -4117,7 +4118,7 @@ fn bridge_shops(base: &World) {
     }
     e.created.push(Created { id: "c:0".into(), kind: "building".into(), x: at[0], y: at[1], name: String::new(), poly: lot.clone(), func: Some("tailor".into()), floors: Some(2), on: Some("v:shops".into()), ..Default::default() });
     set(&mut ex, e.clone());
-    let top = worldgen::battlemap::hand_deck_top(&bridge, &ex.t0);
+    let top = worldgen::battlemap::hand_deck_top(&bridge, &ex.world, &ex.t0);
     let li = agent::layout_of(&ex.world, &ex.t0, "c:0").expect("the shop's layout");
     let l = town::layout(&ex.world, &ex.t0, li);
     let b = l.buildings.first().expect("the shop");
@@ -5407,6 +5408,33 @@ fn harbour_ground() {
         towers += 1;
     }
     assert!(towers >= 1, "no islet tower checked");
+}
+
+/// P6 6b: a generated islet taken away (`Edits.hidden`) is no longer one (it leaves the shore and the ground, its id is
+/// stable and brings it back), and a hand bridge's deck climbs from end to end, at most `DECK_GRADE_MAX`.
+fn islet_and_deck_edits(base: &World) {
+    use worldgen::world::{Crossing, CrossingKind};
+    let mut ex = Executor::new(World::new(base.file.clone()).unwrap());
+    let isl = worldgen::t0::islets::islets(&ex.t0).iter().find(|i| i.river).expect("a river islet").clone();
+    assert!(isl.id.starts_with("i:") && isl.id.len() == 10, "an islet's id: {}", isl.id);
+    let r = [isl.at[0] - 5.0, isl.at[1] - 5.0, isl.at[0] + 5.0, isl.at[1] + 5.0];
+    assert!(worldgen::town::Shore::new(&ex.world, &ex.t0, r).on_islet(isl.at), "the generated islet isn't one");
+    ex.world.file.edits.hidden.insert(isl.id.clone());
+    assert!(!worldgen::town::Shore::new(&ex.world, &ex.t0, r).on_islet(isl.at), "the islet taken away is still one");
+    assert!(worldgen::t0::islets::near_in(&ex.t0, &ex.world.file.edits, r).next().is_none(), "near_in lists it");
+    ex.world.file.edits.hidden.remove(&isl.id);
+    assert!(worldgen::town::Shore::new(&ex.world, &ex.t0, r).on_islet(isl.at), "the islet brought back isn't one");
+    // A bridge over dry ground from level ground to a plateau 60 ft up, 200 ft away: the deck climbs, at most 1 in 8.
+    let s = ex.t0.settlements.iter().max_by_key(|s| s.population).unwrap();
+    let a = [s.x + 3000.0, s.y];
+    let b = [a[0] + 200.0, a[1]];
+    let gb = ex.t0.ground_at(b[0], b[1], 5.0) as f32;
+    let outline = [[b[0] - 30.0, b[1] - 30.0], [b[0] + 30.0, b[1] - 30.0], [b[0] + 30.0, b[1] + 30.0], [b[0] - 30.0, b[1] + 30.0]];
+    ex.world.file.edits.plateaus.insert("h:up".into(), worldgen::ground::plateau_for(&outline, gb as f64 + 60.0, 0.0).unwrap());
+    let c = Crossing { kind: CrossingKind::Bridge, a, b, width: 20.0, material: Default::default() };
+    let (da, db) = worldgen::battlemap::hand_deck_ends(&c, &ex.world, &ex.t0);
+    assert!(db > da + 10.0 && (db - da) as f64 <= worldgen::battlemap::DECK_GRADE_MAX * 200.0 + 0.01, "the deck's ends {da} and {db}");
+    assert!(worldgen::battlemap::deck_level((da, db), 0.5) > da && worldgen::battlemap::deck_level((da, db), 0.5) < db, "the deck doesn't climb");
 }
 
 // R5 121
