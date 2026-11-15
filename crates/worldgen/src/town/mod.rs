@@ -2240,16 +2240,31 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
 /// home, a shrine; of one piece, its shape not set by hand) stands on the ring its lot holds
 /// (`roof::round_footprint`), if it is still roofed round there; the rest of its lot is open ground.
 /// Last, once every other building stands, so theirs are as they were.
-/// R5 M20: a lined bridge's span (ft): its width, a 24-ft lane between rows of houses 16 ft deep;
-/// the least water it spans; how far it reaches onto each bank.
+/// R5 M20: a lined bridge's span (ft): its width (56 for a narrow water, up to 80 over the widest: `lined_width`), rows
+/// of houses 16 ft deep (up to 24 on the widest) either side of a lane of at least 24; the least water it spans; how
+/// far it reaches onto each bank.
 const LINED_WIDTH_FT: f64 = 56.0;
-const LINED_ROW_FT: f64 = 16.0;
+const LINED_WIDTH_MAX_FT: f64 = 80.0;
+const LINED_WIDEST_WATER_FT: f64 = 480.0;
 const LINED_MIN_WATER_FT: f64 = 120.0;
 const LINED_BANK_FT: f64 = 0.0;
 
+/// A lined bridge's width (ft, whole) over `water` ft of water in settlement `seed`: from `LINED_WIDTH_FT` at the least
+/// span to `LINED_WIDTH_MAX_FT` at `LINED_WIDEST_WATER_FT` and over, a quarter of it by the town's hash.
+fn lined_width(water: f64, seed: i64) -> f64 {
+    let t = ((water - LINED_MIN_WATER_FT) / (LINED_WIDEST_WATER_FT - LINED_MIN_WATER_FT)).clamp(0.0, 1.0);
+    let t = 0.75 * t + 0.25 * unit(hash2(0x11e3_b51e, seed, 1));
+    crate::core::round(LINED_WIDTH_FT + (LINED_WIDTH_MAX_FT - LINED_WIDTH_FT) * t)
+}
+
+/// The depth (ft) of a lined bridge's rows at its full depth, by its width: 16 ft at `LINED_WIDTH_FT` to 24 at the widest.
+fn lined_row(width: f64) -> f64 {
+    16.0 + (width - LINED_WIDTH_FT) / 3.0
+}
+
 /// R5 M20: a metropolis's lined bridge. In 1 of 2 metropolises with a main street's bridge over
 /// at least `LINED_MIN_WATER_FT` of water, the longest such gets a second deck over the water
-/// part only (`LINED_WIDTH_FT` wide, each side `LINED_BANK_FT` onto its bank, so the landings and the bank
+/// part only (`lined_width` wide, each side `LINED_BANK_FT` onto its bank, so the landings and the bank
 /// streets stay as they are), at one flat level: the highest water under it + 4 ft
 /// (`battlemap::deck_top`). It goes in `bridges` (local, after the street's own) and `lined`.
 /// None over one of the world's islets. `over`: (water spanned, the crossing, the street's way,
@@ -2260,6 +2275,7 @@ fn lined_bridge(site: &Site, s: &Settlement, over: &[(f64, P, P, f64, f64)], l: 
     }
     let Some(&(_, p, u, wf, wb)) = over.iter().filter(|o| o.0 >= LINED_MIN_WATER_FT).max_by(|x, y| x.0.total_cmp(&y.0)) else { return };
     let span = wf + wb + 2.0 * LINED_BANK_FT;
+    let width = lined_width(wf + wb, s.seed as i64);
     let c = add(p, mul(u, 0.5 * (wf - wb)));
     // (Each long side ends where its own bank begins, 1 ft onto it, so a bank met at a slant
     // takes the deck's end slanting with it: no corner stands out over the land.)
@@ -2270,9 +2286,9 @@ fn lined_bridge(site: &Site, s: &Settlement, over: &[(f64, P, P, f64, f64)], l: 
         while t > 0.0 && !wet(add(e, mul(u, sign * (t - 1.0)))) {
             t -= 1.0;
         }
-        (t + LINED_BANK_FT).clamp(0.6 * centre, centre + 0.5 * LINED_WIDTH_FT)
+        (t + LINED_BANK_FT).clamp(0.6 * centre, centre + 0.5 * width)
     };
-    let side = |k: f64| add(p, mul(v, k * 0.5 * LINED_WIDTH_FT));
+    let side = |k: f64| add(p, mul(v, k * 0.5 * width));
     let (l0, l1) = (side(-1.0), side(1.0));
     let deck = vec![
         add(l0, mul(u, -reach(l0, -1.0, wb))),
@@ -2280,7 +2296,7 @@ fn lined_bridge(site: &Site, s: &Settlement, over: &[(f64, P, P, f64, f64)], l: 
         add(l1, mul(u, reach(l1, 1.0, wf))),
         add(l1, mul(u, -reach(l1, -1.0, wb))),
     ];
-    let deck = if area(&deck) * area(&rect(c, u, span, LINED_WIDTH_FT)) > 0.0 { deck } else { rect(c, u, span, LINED_WIDTH_FT) };
+    let deck = if area(&deck) * area(&rect(c, u, span, width)) > 0.0 { deck } else { rect(c, u, span, width) };
     let (a, b) = (add(add(c, mul(u, -0.5 * span)), site.center), add(add(c, mul(u, 0.5 * span)), site.center));
     let world_deck: Vec<P> = deck.iter().map(|&q| add(q, site.center)).collect();
     let bb = deck.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, q| [r[0].min(q[0] + site.center[0]), r[1].min(q[1] + site.center[1]), r[2].max(q[0] + site.center[0]), r[3].max(q[1] + site.center[1])]);
@@ -2295,8 +2311,8 @@ fn lined_bridge(site: &Site, s: &Settlement, over: &[(f64, P, P, f64, f64)], l: 
 }
 
 /// R5 M20: the houses along both sides of a lined bridge (`Layout::lined`, world ft by now): lots
-/// 18-24 ft along it and `LINED_ROW_FT` deep against its outer edges, 4 ft short of each bank,
-/// 2-3 storeys, shops (each its own trade, spaced) and homes, their ground floors at the deck's level (`Building::deck`: no
+/// 14-32 ft along it and 60-100% of `lined_row` deep against its outer edges (the back line ragged), 4 ft short of each
+/// bank, 1-3 storeys, an open landing now and then, shops (each its own trade, spaced) and homes, their ground floors at the deck's level (`Building::deck`: no
 /// cellar, the door on the lane). Lots meeting another building are left empty. Ids follow
 /// every other building's.
 fn bridge_houses(index: usize, l: &mut Layout) {
@@ -2312,6 +2328,8 @@ fn bridge_houses(index: usize, l: &mut Layout) {
     let span = dist(a, b);
     let u = mul(sub(b, a), 1.0 / span.max(1e-9));
     let v = [-u[1], u[0]];
+    let width = crate::core::round(dot(sub(deck[3], deck[0]), v).abs());
+    let row = lined_row(width);
     // (Where each end crosses `s` ft across the line: the ends follow the banks, `lined_bridge`.)
     let end_at = |p: P, q: P, s: f64| {
         let (sp, sq) = (dot(sub(p, a), v), dot(sub(q, a), v));
@@ -2322,8 +2340,7 @@ fn bridge_houses(index: usize, l: &mut Layout) {
     // (Each lot: its footprint, its middle along the line, its hash.)
     let mut lots: Vec<(Vec<P>, f64, u64)> = Vec::new();
     for (side, sign) in [(0i64, 1.0), (1, -1.0)] {
-        let across = sign * (0.5 * LINED_WIDTH_FT - 0.5 * LINED_ROW_FT);
-        let (inner, outer) = (sign * (0.5 * LINED_WIDTH_FT - LINED_ROW_FT), sign * 0.5 * LINED_WIDTH_FT);
+        let (inner, outer) = (sign * (0.5 * width - row), sign * 0.5 * width);
         // (The row clear of the deck's ends at both its edges, 4 ft short of the banks.)
         let lo = end_at(deck[0], deck[3], inner).max(end_at(deck[0], deck[3], outer)) + 4.0;
         let hi = end_at(deck[1], deck[2], inner).min(end_at(deck[1], deck[2], outer)) - 4.0;
@@ -2332,14 +2349,21 @@ fn bridge_houses(index: usize, l: &mut Layout) {
         while t < hi {
             // (Side by side along the row: they share their walls.)
             let h = hash3(0x11e3_40a5, index as i64, side, k);
-            let front = (18.0 + 6.0 * unit(h)).min(hi - t);
+            let front = (14.0 + 18.0 * unit(h)).min(hi - t);
             k += 1;
             if front < 14.0 {
                 break;
             }
-            let m = add(add(a, mul(u, t + 0.5 * front)), mul(v, across));
+            // (An open landing now and then, 8-12 ft along, never at the first lot.)
+            if k > 1 && unit(h ^ 7) < 0.125 {
+                t += (0.5 * front).max(8.0);
+                continue;
+            }
+            // (Each lot's depth 60-100% of the row, its inner face ragged against the lane's side, the outer flush with the edge.)
+            let depth = crate::core::round(row * (0.6 + 0.4 * unit(h ^ 9)));
+            let m = add(add(a, mul(u, t + 0.5 * front)), mul(v, sign * (0.5 * width - 0.5 * depth)));
             t += front;
-            let mut poly = rect(m, u, front, LINED_ROW_FT);
+            let mut poly = rect(m, u, front, depth);
             if area(&poly) < 0.0 {
                 poly.reverse();
             }
@@ -2366,7 +2390,8 @@ fn bridge_houses(index: usize, l: &mut Layout) {
     }
     let mut out: Vec<Building> = Vec::new();
     for (i, (poly, _, h)) in lots.into_iter().enumerate() {
-        let floors = 2 + (unit(h ^ 3) < 0.5) as u8;
+        let r = unit(h ^ 3);
+        let floors = if r < 0.2 { 1 } else if r < 0.65 { 2 } else { 3 };
         out.push(Building { poly, ward: Ward::Merchant, func: func[i], residential: 1, name: None, floors, pad_ft: level, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None, deck: Some([a, b]) });
         id += 1;
     }

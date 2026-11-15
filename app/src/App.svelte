@@ -2520,14 +2520,14 @@
 
   /** `created` with shops laid along bridge `c` (`id`) as the menu's depth says; or why not. */
   async function withShops(id: string, c: Crossing, created: Created[]): Promise<Created[] | string> {
-    const r = await view.gen.bridgeLots(c, { depth: cross.shopDepth, frontage: SHOP_FRONT_FT });
+    const r = await view.gen.bridgeLots(c, { depth: cross.shopDepth, frontage: SHOP_FRONT_FT, lane: cross.shopLane, vary: cross.shopVary, id });
     if (!r) return 'The map could not answer: try again';
     if ('error' in r) return r.error.replace(/^shops: /, '').replace(/^./, (x) => x.toUpperCase());
     const out = [...created];
     for (const lot of r.lots) {
       const x = lot.poly.reduce((s, p) => s + p[0], 0) / lot.poly.length;
       const y = lot.poly.reduce((s, p) => s + p[1], 0) / lot.poly.length;
-      out.push({ id: `c:${out.length}`, kind: 'building', x, y, name: '', poly: lot.poly, floors: 2, func: lot.func, on: id });
+      out.push({ id: `c:${out.length}`, kind: 'building', x, y, name: '', poly: lot.poly, floors: lot.floors, func: lot.func, on: id });
     }
     return out;
   }
@@ -2537,7 +2537,7 @@
   async function crossPlaced(a: Pt, b: Pt) {
     const c: Crossing = crossingOf(cross, a, b);
     const withShopsOn = cross.shops && c.kind === 'bridge';
-    if (withShopsOn) c.width = Math.max(c.width, shopsWidth(cross.shopDepth));
+    if (withShopsOn) c.width = Math.max(c.width, shopsWidth(cross.shopDepth, cross.shopLane));
     const problem = crossingProblem(c);
     if (problem) return toast(problem);
     const editing = crossEditing && edits.crossings?.[crossEditing] ? crossEditing : null;
@@ -2566,9 +2566,14 @@
     crossEditing = id;
     const shops = shopsOn(id);
     // (Their depth as they stand: the first one's short side across the deck.)
-    const poly = shops[0]?.poly;
-    const depth = poly && poly.length >= 4 ? Math.min(Math.hypot(poly[1][0] - poly[0][0], poly[1][1] - poly[0][1]), Math.hypot(poly[2][0] - poly[1][0], poly[2][1] - poly[1][1])) : cross.shopDepth;
-    cross = { kind: c.kind, width: c.width, material: c.material ?? 'timber', shops: shops.length > 0, shopDepth: Math.max(10, Math.min(18, Math.round(depth))) };
+    const sides = shops.map((s) => {
+      const q = s.poly ?? [];
+      return q.length >= 4 ? [Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]), Math.hypot(q[2][0] - q[1][0], q[2][1] - q[1][1])] : [0, 0];
+    });
+    const depths = sides.map((d) => Math.min(d[0], d[1]));
+    const depth = depths.length ? Math.max(...depths) : cross.shopDepth;
+    const vary = depths.length > 0 && (Math.max(...depths) - Math.min(...depths) > 0.5 || sides.some((d) => Math.abs(Math.max(d[0], d[1]) - Math.max(sides[0][0], sides[0][1])) > 0.5));
+    cross = { kind: c.kind, width: c.width, material: c.material ?? 'timber', shops: shops.length > 0, shopDepth: Math.max(10, Math.min(40, Math.round(depth))), shopLane: cross.shopLane, shopVary: depths.length ? vary : cross.shopVary };
   }
 
   /** The crossing being changed gets the menu's kind, width and material (its ends stay); its
@@ -2579,7 +2584,7 @@
     if (!c || !id) return;
     const next: Crossing = crossingOf(cross, c.a, c.b);
     const withShopsOn = cross.shops && next.kind === 'bridge';
-    if (withShopsOn) next.width = Math.max(next.width, shopsWidth(cross.shopDepth));
+    if (withShopsOn) next.width = Math.max(next.width, shopsWidth(cross.shopDepth, cross.shopLane));
     const problem = crossingProblem(next);
     if (problem) return toast(problem);
     const out: Edits = { ...edits, crossings: { ...(edits.crossings ?? {}), [id]: next } };

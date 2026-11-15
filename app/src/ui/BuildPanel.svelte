@@ -23,7 +23,7 @@
   // line of corners (a ring if closed), gates on the corners clicked twice.
   import { CROSSING_WIDTH, LOT_SIZES, TOWN_WARDS, NARROW_CROSSING_MAX, WHARF_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial, type WharfKind } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
-  import { SHOP_DEPTH_RANGE, shopsWidth, type CrossSettings } from '../editor/crossing';
+  import { SHOP_DEPTH_RANGE, SHOP_LANE_RANGE, shopsWidth, type CrossSettings } from '../editor/crossing';
   import type { WaterSettings } from '../editor/water';
   import type { WaterKind } from '../gen/protocol';
   import { ISLET_RADIUS, ISLET_RISE, type HarbourSettings, type HarbourKind } from '../editor/harbour';
@@ -143,12 +143,15 @@
   const kindLook = $derived(cross.kind === 'bridge' ? (MATERIALS.find((m) => m.key === cross.material)?.look ?? '') : (KINDS.find((k) => k.key === cross.kind)?.look ?? ''));
   const widthMax = $derived(cross.kind === 'bridge' ? CROSSING_WIDTH[1] : NARROW_CROSSING_MAX);
   // (A bridge with shops is wide enough for its rows and the lane between.)
-  const widthMin = $derived(cross.kind === 'bridge' && cross.shops ? Math.min(widthMax, shopsWidth(cross.shopDepth)) : CROSSING_WIDTH[0]);
+  const widthMin = $derived(cross.kind === 'bridge' && cross.shops ? Math.min(widthMax, shopsWidth(cross.shopDepth, cross.shopLane)) : CROSSING_WIDTH[0]);
   function shopsOn(on: boolean) {
-    cross = { ...cross, shops: on, width: on ? Math.max(cross.width, shopsWidth(cross.shopDepth)) : cross.width };
+    cross = { ...cross, shops: on, width: on ? Math.max(cross.width, shopsWidth(cross.shopDepth, cross.shopLane)) : cross.width };
   }
   function shopDepth(d: number) {
-    cross = { ...cross, shopDepth: d, width: Math.max(cross.width, shopsWidth(d)) };
+    cross = { ...cross, shopDepth: d, width: Math.max(cross.width, shopsWidth(d, cross.shopLane)) };
+  }
+  function shopLane(l: number) {
+    cross = { ...cross, shopLane: l, width: Math.max(cross.width, shopsWidth(cross.shopDepth, l)) };
   }
 
   const HARBOUR: { key: HarbourKind; label: string; icon: IconName; look: string }[] = [
@@ -486,10 +489,15 @@
         <label class="switch"><span class="grow">Shops on the deck</span><input type="checkbox" class="ws-switch" checked={cross.shops} onchange={(e) => shopsOn(e.currentTarget.checked)} /></label>
         {#if cross.shops}
           <label class="slider">
-            <span>Shop depth</span><output>{cross.shopDepth} ft</output>
+            <span>Deepest shops</span><output>{cross.shopDepth} ft</output>
             <input type="range" min={SHOP_DEPTH_RANGE[0]} max={SHOP_DEPTH_RANGE[1]} step="1" value={cross.shopDepth} oninput={(e) => shopDepth(Number(e.currentTarget.value))} />
           </label>
-          <div class="ws-hint">A row of shops down each side, a lane of at least 14 ft between. One undo takes the bridge and its shops away; changing the bridge lays them out again.</div>
+          <label class="slider">
+            <span>Lane between</span><output>{cross.shopLane} ft</output>
+            <input type="range" min={SHOP_LANE_RANGE[0]} max={SHOP_LANE_RANGE[1]} step="1" value={cross.shopLane} oninput={(e) => shopLane(Number(e.currentTarget.value))} />
+          </label>
+          <label class="switch"><span class="grow">Vary the shops</span><input type="checkbox" class="ws-switch" checked={cross.shopVary} onchange={(e) => (cross = { ...cross, shopVary: e.currentTarget.checked })} /></label>
+          <div class="ws-hint">A row of shops down each side, the lane between them as wide as the bridge leaves. Varied, each shop has its own frontage, depth and storeys, with an open landing now and then. One undo takes the bridge and its shops away; changing the bridge lays them out again.</div>
         {/if}
       {/if}
       {#if crossEditing}<button class="ws-btn primary block" onclick={onCrossSave}>Save changes</button>{/if}

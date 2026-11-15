@@ -12,15 +12,15 @@ use crate::tools::{listed, schema, text};
 pub fn list() -> Vec<Value> {
     vec![
         json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries) with id, kind, ends, width, length, material, name and notes. Returns {items, found}; limit (default 200) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), 10-2000 ft long (a ferry 68+), 5-80 ft wide (a ford or ferry 40 at most); a bridge may carry shops. With id, changes that crossing. Returns its id (v:...), shops and the river's banks; an end in the water is refused.", "inputSchema": schema(json!({
+        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), 10-2000 ft long (a ferry 68+), 5-120 ft wide (a ford or ferry 40 at most); a bridge may carry shops. With id, changes that crossing. Returns its id (v:...), shops and the river's banks; an end in the water is refused.", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A crossing to change" },
             "kind": { "type": "string", "enum": ["bridge", "ford", "ferry"] },
             "from": crate::args::point_schema("One bank (a place)"),
             "to": crate::args::point_schema("The other bank (a place); the crossing"),
-            "width_ft": { "type": "number", "minimum": 5, "maximum": 80, "default": 12, "description": "Deck, ford or raft width (a ford or ferry at most 40)" },
+            "width_ft": { "type": "number", "minimum": 5, "maximum": 120, "default": 12, "description": "Deck, ford or raft width (a ford or ferry at most 40)" },
             "material": { "type": "string", "enum": ["timber", "stone"] },
-            "shops": { "type": ["boolean", "object"], "description": "A bridge's shops: true or {depth_ft, frontage_ft, lane_ft}; false takes them off", "properties": {
-                "depth_ft": { "type": "number", "minimum": 10, "maximum": 30 }, "frontage_ft": { "type": "number", "minimum": 12, "maximum": 40 }, "lane_ft": { "type": "number", "minimum": 10, "maximum": 30 } } },
+            "shops": { "type": ["boolean", "object"], "description": "A bridge's shops: true or {depth_ft (the deepest row), frontage_ft, lane_ft, vary}; false takes them off", "properties": {
+                "depth_ft": { "type": "number", "minimum": 10, "maximum": 40 }, "frontage_ft": { "type": "number", "minimum": 12, "maximum": 40 }, "lane_ft": { "type": "number", "minimum": 10, "maximum": 40 }, "vary": { "type": "boolean", "default": true, "description": "Vary each shop's frontage, depth and storeys, with an open landing now and then; false for even rows" } } },
         }), &[]) }),
         json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id or ids (v:..., all or none).", "inputSchema": schema(crate::args::ids_props("crossing id"), &[]) }),
     ]
@@ -125,10 +125,12 @@ fn shops_arg(a: &Value) -> Result<Option<Option<wharf::Rows>>, String> {
         Value::Null => Ok(None),
         Value::Bool(false) => Ok(Some(None)),
         v => Ok(Some(Some(wharf::Rows {
-            depth: get(v, "depth_ft", wharf::SHOP_DEPTH_FT, 10.0..=30.0)?,
+            depth: get(v, "depth_ft", wharf::SHOP_DEPTH_FT, 10.0..=wharf::MAX_SHOP_DEPTH_FT)?,
             frontage: get(v, "frontage_ft", wharf::SHOP_FRONT_FT, 12.0..=40.0)?,
-            lane: get(v, "lane_ft", wharf::SHOP_LANE_FT, 10.0..=30.0)?,
+            lane: get(v, "lane_ft", wharf::SHOP_LANE_FT, wharf::MIN_LANE_FT..=wharf::MAX_LANE_FT)?,
             lane_given: !v["lane_ft"].is_null(),
+            vary: v["vary"].as_bool().unwrap_or(true),
+            key: 0,
         }))),
     }
 }

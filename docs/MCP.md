@@ -90,7 +90,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
 | A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` and `update_fortification` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
 | A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `place_wharf`, `create_feature` (wall), `update_fortification` |
-| Rock and water | `radius_ft`, `rise_ft` (an islet's top over the water), `lighthouse` (a breakwater's), `shops` (a bridge's: `true` or `{depth_ft, frontage_ft, lane_ft}`) | | `raise_islet`, `place_wharf`, `place_crossing` |
+| Rock and water | `radius_ft`, `rise_ft` (an islet's top over the water), `lighthouse` (a breakwater's), `shops` (a bridge's: `true` or `{depth_ft, frontage_ft, lane_ft, vary}`) | | `raise_islet`, `place_wharf`, `place_crossing` |
 | One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `restore_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
 | Notes | `notes` on features and NPCs, `text` on plot points | the other one | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
 | A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `blocks_move`, `cover` 0 to 3, `size` | `upload_sprite` |
@@ -1615,7 +1615,7 @@ stepping stones, a ferry jetties out from each end with a raft between. The ends
 name and notes like a feature (`rename_feature`, `annotate_feature`, `get_feature` with its `v:` id); a named one is
 found by `search_features` (kind `crossing`) and listed in Notes › Gazetteer (nothing is lettered on the map).
 
-A bridge up to 80 ft wide may carry **shops**: rows of houses and shops (drawn buildings, `c:<n>`, standing `on` the
+A bridge up to 120 ft wide may carry **shops**: rows of houses and shops (drawn buildings, `c:<n>`, standing `on` the
 bridge) along both sides of its deck, a lane left clear down the middle and 20 ft clear at each end. They are made with
 the bridge (`shops`), follow it when its ends or width change, and are retired when it is removed. See *Shops on Wyrm's
 Crossing* under Recipes.
@@ -1629,9 +1629,9 @@ Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the li
 |---|---|---|---|
 | `kind` | string | required for a new one | `bridge`, `ford` or `ferry`. |
 | `from`, `to` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required for a new one | The banks (on the map). The length between them is 10–2,000 ft (a ferry at least 68). |
-| `width_ft` | number | optional | Deck, ford or raft width, 5–80 (a ford or ferry at most 40; default 12; with `shops`: rows and lane, 50). |
+| `width_ft` | number | optional | Deck, ford or raft width, 5–120 (a ford or ferry at most 40; default 12; with `shops`: rows and lane, 50). |
 | `material` | string | optional | A bridge's: `timber` (default) or `stone`. |
-| `shops` | boolean or object | optional | A bridge's shops: `true`, or `{depth_ft, frontage_ft, lane_ft}`: rows `depth_ft` deep (10–30, default 18) of lots `frontage_ft` along the deck (12–40, 20) either side of a lane `lane_ft` wide (10–30, 14, or what the width leaves). A new bridge's width then defaults to `lane + 2 · depth` (50); a narrower one is refused, and so is a lane narrower than the deck keeps clear (`width_ft` less 36). `false` takes the shops off. Only a bridge has them (a ford or ferry is refused), and one long enough for a row (`frontage + 40` ft). |
+| `shops` | boolean or object | optional | A bridge's shops: `true`, or `{depth_ft, frontage_ft, lane_ft, vary}`: rows up to `depth_ft` deep (10–40, default 18) of lots along the deck (`frontage_ft` 12–40, default 20, for even rows) either side of a lane `lane_ft` wide (10–40, 14, or what the width leaves). `vary` (default true) makes each shop its own size: 14–32 ft along the deck, 60–100% of `depth_ft` deep (the first is the full depth, so the back line is ragged), 1–3 storeys, an open landing now and then; the same bridge always gets the same shops. `vary: false` gives even rows of `frontage_ft`, two storeys. A new bridge's width then defaults to `lane + 2 · depth` (50); a narrower one is refused, and so is a lane narrower than the deck keeps clear (`width_ft` less 80, at least 10). `false` takes the shops off. Only a bridge has them (a ford or ferry is refused), and one long enough for a row (`frontage + 40` ft). |
 | `id` | string | optional | A crossing to change (`v:…`): only the fields given change. Without it, a crossing with both ends within 5 ft of an existing one's (either way round) is that one: `existing: true`; a different kind, material or width is refused (give its id to change it). |
 
 Returns `{tool, id, kind, changed, crossing}` (`changed: true` when an `id` was given; `existing: true` for the same
