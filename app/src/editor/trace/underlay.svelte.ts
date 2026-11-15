@@ -1,6 +1,8 @@
 // The trace picture's session state: the image, where it lies, how strongly it shows, and the
 // "Adjust" drag logic. Held in memory only: never in the world file, IndexedDB, links, exports,
 // mapd or the players' window. Slice 2b reads `underlay.image` / `underlay.xf` (picks, preview).
+// Two of them: the sketch's (`underlay`, over the whole map) and Edit › Streets' (`townUnderlay`,
+// a town's plan to lay its streets over, fitted round the town in view).
 import { imageToWorld, worldToImage, type TraceImage, type TraceXform } from './types';
 
 const MI = 5280;
@@ -10,18 +12,23 @@ export const ROTATE_PX = 30;
 
 type Drag = { kind: 'move'; dx: number; dy: number } | { kind: 'scale'; half: number } | { kind: 'rotate' };
 
-class Underlay {
+export class Underlay {
   image = $state.raw<TraceImage | null>(null);
   xf = $state<TraceXform>({ cx: 0, cy: 0, ftPerPx: 1, rot: 0 });
   opacity = $state(0.5);
   shown = $state(true);
   adjust = $state(false);
-  /** The map's size (ft), for Fit. */
-  private map: [number, number] = [1, 1];
+  /** What Fit fits the picture into (world ft): its centre and size. */
+  private home = { cx: 0.5, cy: 0.5, w: 1, h: 1 };
   private drag: Drag | null = null;
 
   setMap(wFt: number, hFt: number) {
-    this.map = [wFt, hFt];
+    this.setHome(wFt / 2, hFt / 2, wFt, hFt);
+  }
+
+  /** Fit puts the picture round (cx, cy), as large as fits in w × h ft. */
+  setHome(cx: number, cy: number, wFt: number, hFt: number) {
+    this.home = { cx, cy, w: wFt, h: hFt };
   }
 
   /** Take a picture file (images only); false if it isn't one or can't be read. */
@@ -40,11 +47,12 @@ class Underlay {
     return true;
   }
 
-  /** Centre it on the map and scale it so the whole picture fits. */
+  /** Centre it on the map (or the town) and scale it so the whole picture fits. */
   fit() {
     const im = this.image;
     if (!im) return;
-    this.xf = { cx: this.map[0] / 2, cy: this.map[1] / 2, ftPerPx: Math.min(this.map[0] / im.w, this.map[1] / im.h), rot: 0 };
+    const h = this.home;
+    this.xf = { cx: h.cx, cy: h.cy, ftPerPx: Math.min(h.w / im.w, h.h / im.h), rot: 0 };
   }
 
   remove() {
@@ -126,3 +134,4 @@ class Underlay {
 }
 
 export const underlay = new Underlay();
+export const townUnderlay = new Underlay();

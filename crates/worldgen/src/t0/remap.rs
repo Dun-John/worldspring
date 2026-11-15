@@ -38,7 +38,7 @@ pub enum IdsIn {
     TownPrefixed,
     /// Each link's ends (`level`: a level id, `l:<site>:<level>`).
     Links,
-    /// Its keys of a hand town's wharves (`q:h<n>-<k>`: `town::hand::wharves`), seen as `t:<n>`;
+    /// Its keys of a hand town's wharves (`q:h<n>-<k>`, as conversion wrote them before P4), seen as `t:<n>`;
     /// other keys (wharves drawn by hand) name no place.
     HandWharves,
 }

@@ -480,6 +480,9 @@ export type TownWard = (typeof TOWN_WARDS)[number];
 /** Lot sizes, smallest first (`worldgen::world::LOT_SIZES`). */
 export const LOT_SIZES = ['small', 'medium', 'large', 'huge'] as const;
 export type LotSize = (typeof LOT_SIZES)[number];
+/** A generated block fill's storeys (`worldgen::town::hand::HEIGHTS`): one each, the ward's usual, one more. */
+export const HEIGHTS = ['low', 'usual', 'tall'] as const;
+export type Height = (typeof HEIGHTS)[number];
 /** Squares a corner where streets meet can be given (`worldgen::world::SQUARE_KINDS`). */
 export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const;
 export type SquareKind = (typeof SQUARE_KINDS)[number];
@@ -570,6 +573,73 @@ export interface TownWallsByHand {
   gates_removed: number[];
   towers_added: { id: string; corners: [number, number]; f: number }[];
   towers_removed: string[];
+}
+
+// ---- Hand towns (Roadmap 6): streets as records; Ask ops `streetplan` / `streetchange` ----
+
+export type StreetClass = 'main' | 'street' | 'quay' | 'joint';
+export type OpenKind = 'plaza' | 'lawn' | 'park' | 'garden' | 'market' | 'cemetery' | 'farmland';
+export type BlockFill =
+  | { kind: 'generated'; ward: string; lots?: string; height?: Height; reroll?: number; close?: boolean }
+  | { kind: 'hand' }
+  | { kind: 'open'; open: OpenKind; style?: string }
+  | { kind: 'castle'; hand?: boolean };
+export type P2 = [number, number];
+
+/** A request to `streetchange` (`town::handedit::HandRequest`, `{op, …}`; world ft, ids the plan's numbers). */
+export type StreetRequest =
+  | { op: 'lay_out_by_hand' }
+  | { op: 'back_to_generated' }
+  | { op: 'add_street'; points: P2[]; width?: number; set_l?: number; set_r?: number; class?: StreetClass }
+  | { op: 'delete_street'; street: number }
+  | { op: 'set_street'; street: number; width?: number; set_l?: number; set_r?: number; class?: StreetClass; bridge?: boolean }
+  | { op: 'move_junctions'; moves: { junction: number; to?: P2; by?: P2 }[] }
+  | { op: 'set_square'; junction: number; square: string }
+  | { op: 'set_block'; block: number; fill?: BlockFill; district?: string; seed?: string; reroll?: boolean }
+  | { op: 'add_row'; street: number; side: 'l' | 'r'; depth: number; ward: string; lots?: string; gaps?: number; seed?: string }
+  | { op: 'remove_row'; row: number }
+  | { op: 'add_area'; poly: P2[]; open: OpenKind }
+  | { op: 'remove_area'; area: number }
+  | { op: 'add_wall'; pts: P2[]; closed?: boolean; spacing?: number; towers?: number[]; gates?: P2[]; name?: string }
+  | { op: 'remove_wall'; wall: number };
+
+/** A hand town's plan (`town::handedit::plan_json`). */
+export interface StreetPlan {
+  layout: number;
+  from: unknown;
+  origin: P2;
+  tier: unknown;
+  fill: BlockFill;
+  works: boolean;
+  ward_edit: boolean;
+  /** Points this close meet a junction or street (ft). */
+  snap_ft: number;
+  junctions: { id: number; p: P2; square: string | null; streets: number }[];
+  streets: { id: number; a: number; b: number; bends?: P2[]; width: number; set_l: number; set_r: number; class: StreetClass; bridge?: boolean }[];
+  blocks: { id: number; at: P2; fill: BlockFill; district: string | null; seed: string; gen: number; kept: boolean; pins: number; streets: number[] | null }[];
+  rows: { id: number; street: number; side: string; depth: number; ward: string; lots: string | null; gaps: number | null }[];
+  areas: { id: number; poly: P2[]; open: OpenKind }[];
+  walls: { id: number; pts: P2[]; closed: boolean; spacing: number | null; gates: P2[]; name: string | null }[];
+  problems: { key: string; why: string }[];
+}
+
+/** What a street change does (`HandChange::to_json`'s `change`: per Edits key, the record, null = removed) and its report. */
+export interface StreetChange {
+  streets?: Record<string, unknown | null>;
+  wharves?: Record<string, Wharf | null>;
+  towns?: Record<string, TownEdit | null>;
+}
+export interface StreetReport {
+  op: string;
+  records?: { set: unknown; removed: unknown };
+  blocks?: { relaid: unknown; added: unknown; removed: unknown };
+  buildings?: { before: number; after: number };
+  /** Rectangles (x0, y0, x1, y1 ft) to draw again (`hintTown`). */
+  rects: Rect[];
+  /** What carried something (a business, rename, note, ...) and is gone. */
+  lost?: { id: string; name?: string; what: string }[];
+  problems?: { key: string; why: string }[];
+  [more: string]: unknown;
 }
 
 /** A town's plan for the ward editor (Ask op `townplan`). */
@@ -840,6 +910,10 @@ export type Ask =
   | { op: 'townplan'; layout: number }
   /** A town changed as asked, without changing the edits (`town::wards::change_json`). */
   | { op: 'townchange'; layout: number; request: string }
+  /** A hand town's street plan (`town::handedit::plan_json`). */
+  | { op: 'streetplan'; layout: number }
+  /** A hand town's streets changed as asked, without changing the edits (`town::handedit::change_json`); `request` is a `StreetRequest` as JSON. */
+  | { op: 'streetchange'; layout: number; request: string }
   /** The villages and towns added by hand (`MadeSettlement`s). */
   | { op: 'made' }
   /** Whether a village or town can be added there (`t0::made::spot`), with what it would be. */

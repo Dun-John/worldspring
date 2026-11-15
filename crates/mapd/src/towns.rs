@@ -95,6 +95,13 @@ async fn plan(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     let id = a["id"].as_str().ok_or("missing 'id'")?.to_string();
     let dry = a["dry_run"].as_bool().unwrap_or(false);
+    {
+        let town = id.clone();
+        let hand = app.worker.with(move |ex| Ok(agent::layout_of(&ex.world, &ex.t0, &town).is_some_and(|l| worldgen::town::hand::is_hand(&ex.world, l)))).await?;
+        if hand {
+            return Err(format!("{id} is laid out by hand: its streets are changed with edit_streets (get_street_plan reads them; edit_streets op back_to_generated returns it to the ward editor)"));
+        }
+    }
     let mut req = a.clone();
     if let Some(m) = req.as_object_mut() {
         for k in ["id", "dry_run", "world"] {

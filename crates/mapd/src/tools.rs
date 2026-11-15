@@ -90,6 +90,7 @@ pub fn list() -> Value {
         a.extend(crate::streets::list());
         a.extend(crate::geo::list());
         a.extend(crate::towns::list());
+        a.extend(crate::streets_edit::list());
         a.extend(crate::settlements::list());
         a.extend(crate::sketch::list());
         a.extend(crate::batch::list());
@@ -264,6 +265,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::towns::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::streets_edit::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::reads::call(app, name, &a).await {

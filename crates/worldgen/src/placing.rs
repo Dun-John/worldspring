@@ -403,7 +403,7 @@ pub fn parcel_check_json(world: &World, input: &str) -> String {
         let poly: Vec<P> = a["poly"].as_array().ok_or("poly: needed")?.iter().filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?])).collect();
         let n = poly.len().max(1) as f64;
         let (x, y) = (poly.iter().map(|q| q[0]).sum::<f64>() / n, poly.iter().map(|q| q[1]).sum::<f64>() / n);
-        let c = crate::world::Created { kind: "plot".into(), x, y, poly, fill: Some(hand::BlockFill::Generated { ward: "common".into(), lots: None, reroll: 0, close: None }), ..Default::default() };
+        let c = crate::world::Created { kind: "plot".into(), x, y, poly, fill: Some(hand::BlockFill::Generated { ward: "common".into(), lots: None, height: None, reroll: 0, close: None }), ..Default::default() };
         c.check()?;
         if let Some(o) = world.file.edits.created.iter().find(|o| o.kind == "plot" && !o.removed && !c.same_site(o, [c.x, c.y]) && agent::polys_overlap_pub(&o.poly, &c.poly)) {
             return Err(serde_json::json!({ "over": o.poly }).to_string());

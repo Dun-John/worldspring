@@ -765,9 +765,6 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
             for (k, v) in recs {
                 ch.streets.insert(k, Some(v));
             }
-            for (k, w) in hand::wharves(world, t0, index) {
-                ch.wharves.insert(k, Some(w));
-            }
             if world.file.edits.towns.contains_key(&tkey) {
                 ch.towns.insert(tkey, None);
             }
@@ -888,12 +885,15 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
                 HandRequest::SetBlock { block, fill, district, seed, reroll } => {
                     let b = after.blocks.get_mut(block).ok_or_else(|| format!("block k{block}: no such block"))?;
                     if let Some(f) = fill {
-                        if let BlockFill::Generated { ward, lots, .. } = f {
+                        if let BlockFill::Generated { ward, lots, height, .. } = f {
                             if hand::ward_of(ward).is_none() {
                                 return Err(format!("no ward {ward}"));
                             }
                             if lots.as_deref().is_some_and(|l| !crate::world::LOT_SIZES.contains(&l)) {
                                 return Err(format!("lots: one of {}", crate::world::LOT_SIZES.join(", ")));
+                            }
+                            if height.as_deref().is_some_and(|h| !hand::HEIGHTS.contains(&h)) {
+                                return Err(format!("height: one of {}", hand::HEIGHTS.join(", ")));
                             }
                         }
                         b.fill = f.clone();
