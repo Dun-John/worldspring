@@ -14,6 +14,14 @@
 //! A moat or a stream may instead be a line (`Water::line`): its water the band `width` ft wide
 //! along it (`band`; a moat's line may come round to its start, a ring round what it guards). A
 //! stream's level isn't flat: it follows the ground down its line (`Water::levels`, `stream_levels`).
+//!
+//! P146: water drawn now has no kind: a polygon or a brushed line (`line`, `width`, `closed`), a
+//! `depth` and whether it is `dug` (straight sides). Its look follows from that and its level
+//! (`Form::look`, one place, mirrored in the app's `water.ts` `lookOf`): at the sea's level the sea's
+//! (a beach, or a paved quay when dug); an open brushed line a stream falling downhill; a ring a
+//! moat; else still water, a pond's when shallower than `POND_BELOW_FT`, a lake's deeper. A record
+//! with a `kind` (made before) keeps that kind's look, depth, bank and shore; one with neither a kind
+//! nor a depth is a lake (as the kind's default was).
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -41,7 +49,20 @@ pub const STREAM_WIDTHS: [f64; 2] = [3.0, 12.0];
 /// A stream's level is taken along its line this far apart (ft), at most `MAX_STREAM_LEVELS` times.
 pub const STREAM_STEP_FT: f64 = 20.0;
 pub const MAX_STREAM_LEVELS: usize = 512;
+/// Water drawn with no kind: a brushed line's width when none is given and the widths allowed,
+/// and the depths (ft).
+pub const BRUSH_WIDTH_FT: f64 = 10.0;
+pub const BRUSH_WIDTHS: [f64; 2] = [3.0, 80.0];
+pub const DEPTH_FT: f64 = 4.0;
+pub const DEPTHS: [f64; 2] = [1.0, 20.0];
+/// Still water shallower than this looks a pond, else a lake.
+pub const POND_BELOW_FT: f64 = 4.0;
+/// Water whose level is within this of the sea's is the sea's (ft).
+pub const SEA_WITHIN_FT: f64 = 0.25;
+/// A dug water's or a ring's bank (ft): steep.
+pub const DUG_BANK_FT: f64 = 4.0;
 
+/// A record's kind (legacy: `Water::kind`), and the looks water drawn without one takes (`Look`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WaterKind {
@@ -123,8 +144,10 @@ impl WaterKind {
 pub struct Water {
     /// World ft, 3 to `MAX_WATER_PTS` points rounded to 0.5 ft, a simple polygon.
     pub pts: Vec<[f64; 2]>,
-    #[serde(default)]
-    pub kind: WaterKind,
+    /// Legacy: water drawn before P146 has a kind, its look, depth, bank and shore (`legacy`);
+    /// water drawn since has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<WaterKind>,
     /// Its surface, ft (the generator's datum, as `height` everywhere).
     pub level: f32,
     /// A line, not an outline (a moat or stream): `pts` its line, 2 points or more.
@@ -140,6 +163,70 @@ pub struct Water {
     /// (`stream_levels`); none: `level` all along.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub levels: Vec<f32>,
+    /// How far its bed lies below its level away from the shore (ft, `DEPTHS`; none: its kind's,
+    /// or a lake's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<f64>,
+    /// Dug: straight sides with rounded corners and a stone edge (none: as its kind is, else
+    /// natural).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dug: Option<bool>,
+}
+
+/// What water drawn by hand looks like (`Form::look`): which look (`WaterKind` names them: the
+/// sea's `Inlet`, or `Basin` dug with a quay; a `Stream`; a ring's `Moat`; still `Lake` or `Pond`)
+/// and whether it is dug (a stone edge).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Look {
+    pub kind: WaterKind,
+    pub dug: bool,
+}
+
+/// What a water's look follows from (`Water::form`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Form {
+    pub legacy: Option<WaterKind>,
+    /// An open line, its level falling along it.
+    pub flows: bool,
+    /// A line come round to its start.
+    pub ring: bool,
+    pub dug: bool,
+    pub depth: f64,
+    /// Its own level (ft; a stream's highest).
+    pub level: f32,
+}
+
+impl Form {
+    /// The look: a legacy kind's own; else at the sea's level (`sea`, ft) the sea's (a quay when
+    /// dug), an open line a stream, a ring a moat, else a pond shallower than `POND_BELOW_FT`, a
+    /// lake deeper.
+    pub fn look(&self, sea: f64) -> Look {
+        let kind = match self.legacy {
+            Some(k) => k,
+            None if self.level as f64 <= sea + SEA_WITHIN_FT => {
+                if self.dug {
+                    WaterKind::Basin
+                } else {
+                    WaterKind::Inlet
+                }
+            }
+            None if self.flows => WaterKind::Stream,
+            None if self.ring => WaterKind::Moat,
+            None if self.depth < POND_BELOW_FT => WaterKind::Pond,
+            None => WaterKind::Lake,
+        };
+        Look { kind, dug: self.dug }
+    }
+
+    /// How far (ft) its bed falls from the shore to its depth: a legacy kind's; dug water's and a
+    /// ring's steep (`DUG_BANK_FT`); else 3 ft at 2 ft deep or less up to `BANK_FT` at 20 ft.
+    pub fn bank(&self) -> f64 {
+        match self.legacy {
+            Some(k) => k.bank(),
+            None if self.dug || self.ring => DUG_BANK_FT,
+            None => 3.0 + (BANK_FT - 3.0) * ((self.depth - 2.0) / 18.0).clamp(0.0, 1.0),
+        }
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -150,7 +237,12 @@ impl Water {
     /// What is wrong with it, if anything (checked when one is made; the generator only skips
     /// one it can't evaluate).
     pub fn problem(&self) -> Option<String> {
-        if self.line || self.kind == WaterKind::Stream {
+        if let Some(d) = self.depth
+            && !(d.is_finite() && (DEPTHS[0]..=DEPTHS[1]).contains(&d))
+        {
+            return Some(format!("the depth is {} to {} ft", DEPTHS[0], DEPTHS[1]));
+        }
+        if self.is_line() {
             return self.line_problem();
         }
         let n = self.pts.len();
@@ -174,37 +266,89 @@ impl Water {
         None
     }
 
-    /// A water outline (no line).
+    /// A water outline of a kind (legacy: no depth or dug of its own).
     pub fn outline(pts: Vec<P>, kind: WaterKind, level: f32) -> Water {
-        Water { pts, kind, level, line: false, width: None, closed: false, levels: Vec::new() }
+        Water { pts, kind: Some(kind), level, line: false, width: None, closed: false, levels: Vec::new(), depth: None, dug: None }
     }
 
-    /// A moat's or stream's line (a stream's never closed).
+    /// A moat's or stream's line (legacy; a stream's never closed).
     pub fn of_line(pts: Vec<P>, kind: WaterKind, level: f32, width: Option<f64>, closed: bool) -> Water {
-        Water { pts, kind, level, line: true, width, closed: closed && kind != WaterKind::Stream, levels: Vec::new() }
+        Water { pts, kind: Some(kind), level, line: true, width, closed: closed && kind != WaterKind::Stream, levels: Vec::new(), depth: None, dug: None }
     }
 
-    /// A line's width (ft), within what its kind allows.
+    /// Water drawn with no kind: an outline (`line` false) or a brushed line `width` ft wide
+    /// (`closed`: a ring), `depth` ft deep, dug or natural.
+    pub fn drawn(pts: Vec<P>, level: f32, line: bool, width: Option<f64>, closed: bool, depth: f64, dug: bool) -> Water {
+        Water { pts, kind: None, level, line, width: width.filter(|_| line), closed: closed && line, levels: Vec::new(), depth: Some(depth), dug: Some(dug) }
+    }
+
+    /// Its kind as made before P146, if it has one (one with neither a kind nor a depth is a lake).
+    pub fn legacy(&self) -> Option<WaterKind> {
+        self.kind.or(if self.depth.is_none() { Some(WaterKind::Lake) } else { None })
+    }
+
+    /// Its width's default and the widths it may have (ft).
+    pub fn widths(&self) -> (f64, [f64; 2]) {
+        self.legacy().map_or((BRUSH_WIDTH_FT, BRUSH_WIDTHS), |k| k.widths())
+    }
+
+    /// A line's width (ft), within what it may have.
     pub fn width_ft(&self) -> f64 {
-        let (d, [lo, hi]) = self.kind.widths();
+        let (d, [lo, hi]) = self.widths();
         self.width.filter(|w| w.is_finite()).unwrap_or(d).clamp(lo, hi)
     }
 
     /// Whether it is a line (a stream always is).
     pub fn is_line(&self) -> bool {
-        self.line || self.kind == WaterKind::Stream
+        self.line || self.legacy() == Some(WaterKind::Stream)
     }
 
-    /// A line's middle as every reader takes it: a moat's the points as drawn, a stream's
-    /// smoothed (`chaikin`, its ends kept).
+    /// Whether it is an open line whose level falls along it (a stream).
+    pub fn flows(&self) -> bool {
+        match self.legacy() {
+            Some(k) => k == WaterKind::Stream,
+            None => self.line && !self.closed,
+        }
+    }
+
+    /// Whether it is a line come round to its start.
+    pub fn is_ring(&self) -> bool {
+        self.is_line() && self.closed && !self.flows()
+    }
+
+    /// Its depth (ft): its own, else its kind's.
+    pub fn depth_ft(&self) -> f64 {
+        match self.depth.filter(|d| d.is_finite()) {
+            Some(d) => d.clamp(DEPTHS[0], DEPTHS[1]),
+            None => self.legacy().unwrap_or_default().depth(),
+        }
+    }
+
+    /// Whether it is dug (straight sides, a stone edge): its own word, else its kind's.
+    pub fn is_dug(&self) -> bool {
+        self.dug.unwrap_or_else(|| self.legacy().is_some_and(|k| !k.natural()))
+    }
+
+    /// What its look follows from (`Form::look`).
+    pub fn form(&self) -> Form {
+        Form { legacy: self.legacy(), flows: self.flows(), ring: self.is_ring(), dug: self.is_dug(), depth: self.depth_ft(), level: self.level }
+    }
+
+    /// Its look, the sea at `sea` ft (`Form::look`).
+    pub fn look(&self, sea: f64) -> Look {
+        self.form().look(sea)
+    }
+
+    /// A line's middle as every reader takes it: a ring's or a moat's the points as drawn, a
+    /// stream's smoothed (`chaikin`, its ends kept).
     pub fn centre(&self) -> Vec<P> {
-        if self.kind == WaterKind::Stream { chaikin(&chaikin(&self.pts)) } else { self.pts.clone() }
+        if self.flows() { chaikin(&chaikin(&self.pts)) } else { self.pts.clone() }
     }
 
     fn line_problem(&self) -> Option<String> {
         let n = self.pts.len();
-        let closed = self.closed && self.kind != WaterKind::Stream;
-        if !self.kind.may_be_line() {
+        let closed = self.closed && !self.flows();
+        if self.legacy().is_some_and(|k| !k.may_be_line()) {
             return Some("only a moat or a stream is drawn as a line".into());
         }
         let least = if closed { 3 } else { 2 };
@@ -214,11 +358,14 @@ impl Water {
         if !self.pts.iter().all(|p| p[0].is_finite() && p[1].is_finite()) || !self.level.is_finite() || self.level.abs() > 30_000.0 {
             return Some("points and level must be finite (level ±30,000 ft at most)".into());
         }
-        let (_, [lo, hi]) = self.kind.widths();
+        let (_, [lo, hi]) = self.widths();
         if let Some(w) = self.width
             && !(w.is_finite() && (lo..=hi).contains(&w))
         {
-            return Some(format!("a {}'s width is {lo} to {hi} ft", self.kind.name()));
+            return Some(match self.legacy() {
+                Some(k) => format!("a {}'s width is {lo} to {hi} ft", k.name()),
+                None => format!("the width is {lo} to {hi} ft"),
+            });
         }
         if self.levels.len() > MAX_STREAM_LEVELS || self.levels.iter().any(|l| !l.is_finite() || l.abs() > 30_000.0) || !self.levels.is_empty() && self.levels.len() < 2 {
             return Some(format!("a stream's levels are 2 to {MAX_STREAM_LEVELS} finite heights"));
@@ -249,7 +396,7 @@ impl Water {
 
     /// The shore, and where a ring's band crosses from its outer edge to its inner (`band`).
     fn shore_bridge(&self) -> (Arc<[P]>, Option<usize>) {
-        let key = (self.kind, self.is_line(), self.width_ft().to_bits(), self.closed);
+        let key = (!self.is_dug(), self.is_line(), self.flows(), self.width_ft().to_bits(), self.closed);
         SHORES.with(|c| {
             let mut c = c.borrow_mut();
             if let Some((_, _, s, b)) = c.iter().find(|(k, p, _, _)| *k == key && p.as_slice() == self.pts.as_slice()) {
@@ -258,7 +405,7 @@ impl Water {
             if c.len() >= SHORE_CACHE {
                 c.clear();
             }
-            let (s, b) = if self.is_line() { band(&self.centre(), self.closed && self.kind != WaterKind::Stream, 0.5 * self.width_ft()) } else { (shape(&self.pts, self.kind), None) };
+            let (s, b) = if self.is_line() { band(&self.centre(), self.is_ring(), 0.5 * self.width_ft()) } else { (shape(&self.pts, !self.is_dug()), None) };
             let s: Arc<[P]> = s.into();
             c.push((key, self.pts.clone(), s.clone(), b));
             (s, b)
@@ -275,7 +422,7 @@ impl Water {
 
     /// A stream's line with its levels, for reading its level anywhere along it.
     fn course(&self) -> Option<Arc<Course>> {
-        (self.kind == WaterKind::Stream && self.levels.len() >= 2).then(|| {
+        (self.flows() && self.levels.len() >= 2).then(|| {
             let c = self.centre();
             let mut s = vec![0.0];
             for w in c.windows(2) {
@@ -486,28 +633,29 @@ const PULL: f64 = 0.6;
 const FILLET_FT: f64 = 6.0;
 /// The wobble's noise (keyed by world position).
 const SHORE_SEED: u64 = 0x5a3e_91c7_0d2b_6f48;
-/// Shores shaped lately (a pure function of the points and the kind; kept per thread).
+/// Shores shaped lately (a pure function of the points and the rest of `ShoreKey`; kept per thread).
 const SHORE_CACHE: usize = 512;
-/// What a shore is shaped by besides the points: the kind, a line, its width's bits, a ring.
-type ShoreKey = (WaterKind, bool, u64, bool);
+/// What a shore is shaped by besides the points: natural, a line, a stream's (smoothed), its
+/// width's bits, a ring.
+type ShoreKey = (bool, bool, bool, u64, bool);
 
 thread_local! {
     static SHORES: RefCell<Vec<(ShoreKey, Vec<P>, Arc<[P]>, Option<usize>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The shore shaped from an outline's points (a simple polygon when they are one): for a natural
-/// kind a smooth curve near them (`spline`), sampled every `SHORE_STEP_FT` or so, and
+/// shore a smooth curve near them (`spline`), sampled every `SHORE_STEP_FT` or so, and
 /// moved in and out along it by a low noise (a few ft, at most ~10% of the water's size and 20% of
 /// its mean half-width); for a dug one the sides as drawn with each corner rounded over
 /// `FILLET_FT`. Where that would cross itself it shapes less (half the wobble, none, the points).
 /// The app mirrors it (`app/src/editor/water.ts` `shapeShore`).
-pub fn shape(pts: &[P], kind: WaterKind) -> Vec<P> {
+pub fn shape(pts: &[P], natural: bool) -> Vec<P> {
     let n = pts.len();
     let ok = |s: &[P]| s.len() >= 3 && s.iter().all(|p| p[0].is_finite() && p[1].is_finite()) && fabs(geom::area(s)) >= 25.0 && !crate::ground::crosses_itself(s);
     if n < 3 || !pts.iter().all(|p| p[0].is_finite() && p[1].is_finite()) {
         return pts.to_vec();
     }
-    if !kind.natural() {
+    if !natural {
         let f = fillet(pts);
         return if ok(&f) { f } else { pts.to_vec() };
     }
@@ -638,9 +786,9 @@ pub(crate) struct Near {
     b: [f64; 4],
     level: f64,
     depth: f64,
-    /// How far its bed falls to its depth (`WaterKind::bank`).
+    /// How far its bed falls to its depth (`Form::bank`).
     bank: f64,
-    kind: WaterKind,
+    form: Form,
     /// A stream's line and levels (its level is theirs, not `level`).
     course: Option<Arc<Course>>,
     shore: Vec<(P, P)>,
@@ -709,7 +857,8 @@ pub(crate) fn near(edits: &crate::world::Edits, rect: [f64; 4]) -> Vec<Near> {
             }
         }
         let runs = shore.chunks(RUN).map(|r| r.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, &(p, q)| [b[0].min(p[0]).min(q[0]), b[1].min(p[1]).min(q[1]), b[2].max(p[0]).max(q[0]), b[3].max(p[1]).max(q[1])])).collect();
-        out.push(Near { pts: pts.clone(), b, level: levels[i] as f64, depth: w.kind.depth(), bank: w.kind.bank(), kind: w.kind, course: w.course(), shore, runs });
+        let form = w.form();
+        out.push(Near { pts: pts.clone(), b, level: levels[i] as f64, depth: form.depth, bank: form.bank(), form, course: w.course(), shore, runs });
     }
     out
 }
@@ -740,7 +889,7 @@ fn group_levels(all: &[(&Water, Arc<[P]>, [f64; 4], Option<usize>)]) -> Vec<f32>
     }
     for i in 0..n {
         for j in i + 1..n {
-            if all[i].0.kind != WaterKind::Stream && all[j].0.kind != WaterKind::Stream && meets(all[i].2, all[j].2, 0.0) && overlap(&all[i].1, &all[j].1) {
+            if !all[i].0.flows() && !all[j].0.flows() && meets(all[i].2, all[j].2, 0.0) && overlap(&all[i].1, &all[j].1) {
                 let (a, b) = (find(&mut root, i), find(&mut root, j));
                 root[a.max(b)] = a.min(b);
             }
@@ -832,9 +981,9 @@ pub(crate) fn at(near: &[Near], x: f64, y: f64, band: f64) -> Option<(f64, f64)>
 }
 
 /// Beside the water drawn by hand, within `reach` ft of its shore (at a point no water holds):
-/// the kind of the nearest and how far its shore is.
-pub(crate) fn edge(near: &[Near], x: f64, y: f64, reach: f64) -> Option<(WaterKind, f64)> {
-    let mut best: Option<(WaterKind, f64)> = None;
+/// the look of the nearest (the sea at `sea` ft), how far its shore is and its level there.
+pub(crate) fn edge(near: &[Near], x: f64, y: f64, reach: f64, sea: f64) -> Option<(Look, f64, f64)> {
+    let mut best: Option<(&Near, f64)> = None;
     for n in near.iter().filter(|n| x >= n.b[0] - reach && x <= n.b[2] + reach && y >= n.b[1] - reach && y <= n.b[3] + reach) {
         for (r, rb) in n.runs.iter().enumerate() {
             let d = best.map_or(reach, |b| b.1);
@@ -845,12 +994,12 @@ pub(crate) fn edge(near: &[Near], x: f64, y: f64, reach: f64) -> Option<(WaterKi
             for &(a, b) in &n.shore[r * RUN..((r + 1) * RUN).min(n.shore.len())] {
                 let e = geom::seg_dist([x, y], a, b);
                 if e < best.map_or(reach, |b| b.1) {
-                    best = Some((n.kind, e));
+                    best = Some((n, e));
                 }
             }
         }
     }
-    best
+    best.map(|(n, e)| (n.form.look(sea), e, n.level_at([x, y])))
 }
 
 /// The level of the water drawn by hand at `p` (world ft), if an outline holds it.

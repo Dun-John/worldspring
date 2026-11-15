@@ -151,7 +151,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `x:<id>` | `x:9a1b7c3d` | Generated battlemap objects taken away (a clear) |
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
 | `h:<id>` | `h:d470a78s` | A plateau, pit or rock islet (ground shaped by hand; an islet says `what: "islet"`) |
-| `e:<id>` | `e:k2v9x0qa` | Water drawn by hand: an inlet, basin, lake, pond, moat or stream (`create_water`) |
+| `e:<id>` | `e:k2v9x0qa` | Water drawn by hand: a polygon or a brushed line (`create_water`) |
 | `q:<id>` | `q:7d0kx3ab` | A quay, pier or breakwater put down by hand (`place_wharf`); a lighthouse or shops stand on it as drawn buildings (`c:`) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 | `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
@@ -2436,50 +2436,67 @@ top (knolls, hollows) and levels road beds under roads.
 
 ## Water drawn by hand
 
-Water inside an outline drawn by hand, as Build › Water draws it: an inlet or basin of the sea, a lake, pond or
-moat. The edits field **`waters`** holds it, by `e:<id>`: `pts` (the outline, 3 to 128 points, rounded to 0.5 ft,
-not crossing itself, spanning at most 5 miles), `kind` (`inlet`, `basin`, `lake`, `pond`, `moat`) and `level` (its
-surface, ft on the world's datum).
+Water drawn by hand, as Build › Water draws it: a polygon, or a band brushed along a line, with a depth and a
+shore that is natural or dug. Its look follows the water (there is no kind to pick). The edits field **`waters`**
+holds it, by `e:<id>`: `pts` (a polygon's points, 3 to 128, rounded to 0.5 ft, not crossing itself, spanning at
+most 5 miles; or a line's, 2 or more, with `line: true`, `width` and `closed`), `depth` (ft), `dug` and `level`
+(its surface, ft on the world's datum). Water made by older callers may carry a `kind` instead (see below).
 
 How it applies:
 
-- Inside the outline the water stands at its level and the ground falls from the shore to the kind's depth below
-  it over 15 ft (inlet 12 ft, basin 10, lake 8, moat 6, pond 3), to any depth under the ground as generated.
-  Outlines that overlap are one water with one shore (the higher level, the deeper bed); one that reaches the sea
-  or a lake at its level joins it. Plateaus and islets go on top: one drawn over the water stands dry.
-- Battlemaps draw it as water (and its shore); the map draws it at every zoom, in the water's own look; a name
-  given to it (`rename_feature`, or `name`) shows on the map. Buildings, walls and castles keep out of it, and a
-  crossing's end can't be in it. The world's own towns as generated aren't laid out again round it.
-- Limits: a world holds 256 outlines.
+- Inside it the water stands at its level and the ground falls from the shore to its depth below it (1 to 20 ft,
+  default 4) over a bank that widens gently with depth (3 ft at 2 ft deep or less, up to 15 ft at 20 ft; dug water
+  and rings about 4 ft, steep), to any depth under the ground as generated. Polygons that overlap are one water
+  with one shore (the lower level, the deeper bed); one that reaches the sea or a lake at its level joins it.
+  Plateaus and islets go on top: one drawn over the water stands dry.
+- Its look, the same on the map and the battlemap: at the sea's level (within a quarter foot) it is the sea's,
+  its colour and a sand beach, or, dug, a paved quay about 6 ft wide with bollards; an open brushed line is a
+  stream, shallow-looking, its level falling along it, gravel banks; a ring (a brushed line closed) is a moat,
+  still and dark, earth banks (stone within 60 ft of a wall or castle); anything else is still water: a pond
+  (greener, reeds, mud) shallower than 4 ft, a lake (blue, darker toward its middle where it is wide enough,
+  pebbles) 4 ft or deeper. Dug still water has straight sides and a stone edge.
+- Battlemaps draw it as water (and its shore); the map draws it at every zoom; a name given to it
+  (`rename_feature`, or `name`) shows on the map. Buildings, walls and castles keep out of it, and a crossing's end
+  can't be in it. The world's own towns as generated aren't laid out again round it.
+- Limits: a world holds 256 waters.
 
 ### `create_water`
 
-`poly` (or `outline`) and optionally `kind` (default `lake`), `level_ft` (above the sea) and `name`. Without a
-level it takes the sea's or a lake's where the outline reaches one (the highest; the reply's `joins` says which),
-else the sea's for an inlet or basin, else 1 ft under the lowest ground on its shore. The same outline again
-returns the water there (`existing: true`). Returns the water's entry: `id`, `kind`, `level_ft`, `x_ft`, `y_ft`,
-`bbox`, `area_sq_ft`, `points`, `poly`, `name`.
+`poly` (or `outline`) and optionally `shape` (`polygon`, the default, or `brush`), `width_ft` (a brushed line's,
+3 to 80, default 10), `closed` (a brushed line brought round to its first point: a ring), `depth_ft` (1 to 20,
+default 4), `dug` (default false), `level_ft` (above the sea) and `name`. Without a level it takes the sea's or a
+lake's where it reaches one within 4 ft of its shore (the highest; the reply's `joins` says which), else 1 ft
+under the lowest ground on its shore (half a foot over the sea's at least: only water that reaches the sea looks
+the sea's); an open brushed line's
+level follows the ground down the line from its higher end, 1 ft under it and never rising, meeting water it runs
+into at that water's level (with `level_ft` it is flat). The same points again return the water there
+(`existing: true`). Returns the water's entry: `id`, `kind` (its look: `inlet`, `basin`, `lake`, `pond`, `moat`
+or `stream`), `shape`, `depth_ft`, `dug`, `level_ft`, `x_ft`, `y_ft`, `bbox`, `area_sq_ft`, `points`, `poly`,
+`name`.
 
-`poly` is kept as given; the shore is shaped from it. A lake, pond or inlet gets a natural shore: a smooth curve
-round the points (passing a little inside sharp corners, a little outside straight sides) with a gentle irregular
-wobble along it (a few feet, more on bigger water). A basin or moat keeps straight sides with its corners slightly
-rounded. `x_ft`, `y_ft`, `bbox` and `area_sq_ft` are the shaped shore's; `points` and `poly` the outline as given.
-Four points make a natural pond; more points steer the shape.
+`poly` is kept as given; the shore is shaped from it. A natural polygon gets a smooth curve round the points
+(passing a little inside sharp corners, a little outside straight sides) with a gentle irregular wobble along it
+(a few feet, more on bigger water); a dug one keeps straight sides with its corners slightly rounded. `x_ft`,
+`y_ft`, `bbox` and `area_sq_ft` are the shaped shore's; `points` and `poly` the points as given. Four points make
+a natural pond; more points steer the shape.
 
-A moat may instead be a line: `line: true`, `poly` its line (2 points or more), `width_ft` (8 to 60, default 20)
-and `closed: true` to bring it round to its first point, a ring round what it guards. Its water is the band that
-wide along the line, round at the bends' outsides and at an open line's ends; its banks fall steeply (about 4 ft).
-A band that would fold over itself (a bend too sharp for its width) is refused. A `stream` is always a line,
-never closed, `width_ft` 3 to 12 (default 5), shallow (about 1.5 ft) with low banks. Without `level_ft` its level
-follows the ground down the line from its higher end, 1 ft under it and never rising, meeting water it runs into
-at that water's level; with `level_ft` it is flat. A line's entry adds `line`, `width_ft`, `closed`, and a
-stream's `level_ft` is its top and `falls_to_ft` its lowest.
+A brushed line's water is the band `width_ft` wide along it (an open line's smoothed), round at the bends'
+outsides and at an open line's ends. A band that would fold over itself (a bend too sharp for its width) is
+refused. Its entry adds `line`, `width_ft`, `closed`, and an open line's `level_ft` is its top and `falls_to_ft`
+its lowest.
+
+Legacy: `kind` (`inlet`, `basin`, `lake`, `pond`, `moat`, `stream`) and `line` are still taken from older callers.
+Given a kind, the water keeps it and looks, digs and finds its level as that kind did: inlet 12 ft deep and basin
+10 (the sea's level, a basin dug), lake 8, moat 6 (dug; may be a line 8 to 60 ft wide, default 20), pond 3, stream
+1.5 (always an open line, 3 to 12 ft wide, default 5); `line: true` is `shape: brush`. Its entry adds
+`legacy_kind`. Water with neither a kind nor a depth is a lake.
 
 ### `update_water`
 
-`id` (`e:…`) and any of `poly`, `kind`, `line`, `width_ft`, `closed`, `level_ft`, `name` (empty: none). What is not
-given stays; a new outline or line, a new width, or a kind that changes between the sea's and standing water (or to
-or from a stream), finds its level again unless `level_ft` is given.
+`id` (`e:…`) and any of `poly`, `shape`, `width_ft`, `closed`, `depth_ft`, `dug`, `level_ft`, `name` (empty:
+none), or a legacy `kind`. What is not given stays; water with a legacy kind keeps it unless `shape`, `depth_ft` or
+`dug` is given (then it has none, keeping its depth and shore). New points, a new shape or width, or a change
+between an open line and anything else finds its level again unless `level_ft` is given.
 
 ### `delete_water`
 

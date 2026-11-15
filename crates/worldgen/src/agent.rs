@@ -749,7 +749,7 @@ fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Optio
         if !wet && shore.wet(*p) {
             wet = true;
             let sea = world.params().sea_level_ft + 1.0;
-            let held = crate::waters::holding(&world.file.edits, *p).map(|k| world.file.edits.waters[k].kind);
+            let held = crate::waters::holding(&world.file.edits, *p).map(|k| world.file.edits.waters[k].look(sea - 1.0).kind);
             let lake = held.map_or((t0.sample_water(p[0], p[1]) as f64) > sea, |k| !k.of_sea());
             out.push(Blocker { kind: Some(if lake { "lake" } else { "sea" }), ..Blocker::plain("water", *p) });
             if !all {
@@ -2153,7 +2153,7 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
         return Some(crate::wharf::generated_name(w));
     }
     if let Some(w) = world.file.edits.waters.get(id) {
-        return Some(w.kind.name().to_string());
+        return Some(w.look(world.params().sea_level_ft).kind.name().to_string());
     }
     if id.starts_with("rd:") {
         let i = crate::roadids::road_index(t0, id)?;

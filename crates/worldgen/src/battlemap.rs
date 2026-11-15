@@ -2436,7 +2436,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     // P145: what stands along water drawn by hand, by its kind (`hand_shore_things`).
-    hand_shore_things(&world.file.edits, seed, [hx0, hy0, hx0 + span, hy0 + span], &mut dock);
+    hand_shore_things(&world.file.edits, seed, sea, [hx0, hy0, hx0 + span, hy0 + span], &mut dock);
     // R5 M20: quays and breakwaters built by hand: their made ground paved (a quay's with cargo
     // along it); a pier's deck over the water at one flat level, as a hand bridge's.
     for (_, w) in crate::wharf::near(world, [hx0, hy0, hx0 + span, hy0 + span]) {
@@ -2483,6 +2483,21 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     for h in (0..look_h.len()).filter(|&h| look_h[h] == crate::ground::Look::Made) {
         if urb_h[h] == 0 && hh[h] >= hw[h] {
             urb_h[h] = URBAN_PLAZA;
+        }
+    }
+    // P146: beside dug water of the sea drawn by hand, a quay: paved as a town's plaza, two squares
+    // wide (`QUAY_FT`; open dry ground only).
+    let mut quay_h = vec![false; if shaper.as_ref().is_some_and(|s| s.has_waters()) { HS * HS } else { 0 }];
+    if let Some(sh) = shaper.as_ref().filter(|_| !quay_h.is_empty()) {
+        for h in 0..HS * HS {
+            if urb_h[h] != 0 || bld_h[h] != 0 || road_h[h] != 0 || hh[h] < hw[h] {
+                continue;
+            }
+            let p = center(h % HS, h / HS);
+            if sh.water_edge(p[0], p[1], QUAY_FT, sea).is_some_and(|(look, _, _)| look.kind == crate::waters::WaterKind::Basin) {
+                urb_h[h] = URBAN_PLAZA;
+                quay_h[h] = true;
+            }
         }
     }
     // Crossings put down by hand (`Edits::crossings`) near this chunk, over whatever is there:
@@ -3048,6 +3063,25 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
+    // P146: water drawn by hand, as a park's: its squares and the two round it `edges` bit 32 (the
+    // ground's drawing follows the water's edge, not the squares), and the dry squares by its
+    // shore take its level (kept under their ground) instead of the land's no-water one, so the
+    // surface between squares meets the ground along the shore, not in torn steps at the squares.
+    if let Some(sh) = shaper.as_ref().filter(|s| s.has_waters()) {
+        for h in 0..HS * HS {
+            let p = center(h % HS, h / HS);
+            if hw[h] > hh[h] {
+                park_wet[h] |= sh.outline_level(p[0], p[1]).is_some();
+                continue;
+            }
+            if let Some((_, d, l)) = sh.water_edge(p[0], p[1], 2.0 * SQUARE_FT, sea) {
+                park_wet[h] = true;
+                if d <= 1.5 * SQUARE_FT {
+                    hw[h] = hw[h].max((l as f32).min(hh[h] - 0.3));
+                }
+            }
+        }
+    }
     for q in &sunk {
         let (i0, j0, i1, j1) = range(bbox(q));
         if i1 < 0.0 || j1 < 0.0 {
@@ -3192,6 +3226,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 // a path up a motte is gravel, a town's plaza paved.
                 // (R5 M20: a quay's or breakwater's top is paved, in a village too.)
                 URBAN_PLAZA if look_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&crate::ground::Look::Made) => chunk.surface[k] = Surface::Cobble,
+                URBAN_PLAZA if quay_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&true) => chunk.surface[k] = Surface::Cobble,
                 URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
                 URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {}
                 URBAN_PLAZA if dirt_sq[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Dirt,
@@ -3227,23 +3262,26 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 _ => {}
             }
         }
-        // P145: the bank of water drawn by hand, by its kind: a pond's mud, a lake's pebbles, an
-        // inlet's sand, a basin's paved quay, a moat's earth (stone by a castle or wall), a
-        // stream's gravel (on open ground only: a street, a field or a yard keeps its own).
+        // P145: the bank of water drawn by hand, by its look (`waters::Form::look`): a pond's mud,
+        // a lake's pebbles, an inlet's sand, a moat's earth (stone by a castle or wall), a
+        // stream's gravel a square wide each side (no patches), dug water's stone edge (a quay's
+        // paving is the plaza's, `quay_h`) (on open ground only: a street, a field or a yard
+        // keeps its own).
         if depth <= 0.0
             && urb_h[(k / SQ + 1) * HS + k % SQ + 1] == 0
             && let Some(sh) = shaper.as_ref().filter(|s| s.has_waters())
         {
             let (x, y) = (ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT);
-            if let Some((kind, d)) = sh.water_edge(x, y, HAND_BANK_FT) {
+            if let Some((look, d, _)) = sh.water_edge(x, y, HAND_BANK_FT, sea) {
                 use crate::waters::WaterKind as W;
-                let (reach, surface) = match kind {
+                let (reach, surface) = match look.kind {
+                    W::Pond | W::Lake if look.dug => (4.0, Surface::Rock),
                     W::Pond => (6.0, Surface::Mud),
                     W::Lake => (5.0, Surface::Gravel),
                     W::Inlet => (8.0, Surface::Sand),
-                    W::Basin => (6.0, Surface::Cobble),
+                    W::Basin => (QUAY_FT, Surface::Cobble),
                     W::Moat => (4.0, if moat_stone.get_or_insert_with(|| guarded_near(world, t0, [ox, oy, ox + SQ as f64 * SQUARE_FT, oy + SQ as f64 * SQUARE_FT])).iter().any(|&(a, b)| crate::town::geom::seg_dist([x, y], a, b) <= MOAT_STONE_FT) { Surface::Rock } else { Surface::Dirt }),
-                    W::Stream => (3.0, Surface::Gravel),
+                    W::Stream => (6.0, Surface::Gravel),
                 };
                 if d <= reach {
                     chunk.surface[k] = surface;
@@ -5231,6 +5269,9 @@ fn quay_works(poly: &[[f64; 2]], seed: u64, piers: &[Vec<[f64; 2]>], cranes: boo
 /// P145: how far from the shore of water drawn by hand its bank is dressed (ft; each kind less or
 /// as far), and how near a castle or wall a moat's bank is stone.
 const HAND_BANK_FT: f64 = 8.0;
+/// P146: a quay's paving beside dug water of the sea: squares whose middle is this near its edge
+/// (two squares: drawn with its smooth edge, about 7 ft of paving shows).
+const QUAY_FT: f64 = 9.5;
 const MOAT_STONE_FT: f64 = 60.0;
 
 /// The walls and castle curtains (as pieces) within `MOAT_STONE_FT` of `rect`: the towns' walls,
@@ -5272,14 +5313,18 @@ fn guarded_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<([f64; 2], [f64; 
 /// P145: what stands along the shore of water drawn by hand, at points spaced by length along
 /// its shore from its first point (so every chunk finds the same; each kept by the chunk holding
 /// it, on its dry bank): reeds round a pond, pebbles round a lake, bollards round a basin, pebbles
-/// and a few reeds along a stream. An inlet and a moat have none.
-fn hand_shore_things(edits: &crate::world::Edits, seed: u64, rect: [f64; 4], out: &mut Vec<([f64; 2], f32, Kind, u8, bool)>) {
+/// and a few reeds along a stream. An inlet, a moat and dug still water have none. By look
+/// (`waters::Form::look`, the sea at `sea` ft).
+fn hand_shore_things(edits: &crate::world::Edits, seed: u64, sea: f64, rect: [f64; 4], out: &mut Vec<([f64; 2], f32, Kind, u8, bool)>) {
     use crate::waters::WaterKind as W;
     for w in edits.waters.values() {
-        let (step, out_ft) = match w.kind {
+        let look = w.look(sea);
+        let (step, out_ft) = match look.kind {
+            W::Pond | W::Lake if look.dug => continue,
             W::Pond => (9.0, 3.5),
             W::Lake => (22.0, 3.5),
-            W::Basin => (24.0, 3.0),
+            // (On the quay's paving, near its edge.)
+            W::Basin => (18.0, 4.0),
             W::Stream => (14.0, 3.0),
             W::Inlet | W::Moat => continue,
         };
@@ -5310,7 +5355,7 @@ fn hand_shore_things(edits: &crate::world::Edits, seed: u64, rect: [f64; 4], out
                     continue;
                 }
                 let v = (r >> 20) as u8 & 3;
-                let kind = match w.kind {
+                let kind = match look.kind {
                     W::Pond if unit(r ^ 1) < 0.75 => Kind::Reeds,
                     W::Lake if unit(r ^ 1) < 0.45 => Kind::RockSmall,
                     W::Basin => Kind::Bollard,
