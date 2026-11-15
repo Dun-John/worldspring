@@ -2,7 +2,8 @@
 //!
 //! Each T0 river chain becomes a parametric curve: a Catmull-Rom spline through its cell
 //! centers plus a lateral meander offset (wavelength ≈ 11 channel widths, amplitude growing
-//! as the slope flattens, tapered to zero at sources, mouths and confluences) and a small
+//! as the slope flattens, tapered to zero at sources, mouths and confluences; its phase warped
+//! and its loops skewed by noise along the river, so no two reaches repeat) and a small
 //! irregular wiggle. The curve is a pure function of (river, segment, t), so every tile at
 //! every level samples the same line: the vector ink line, the carved channel and the water
 //! surface always agree, and neighbouring tiles agree exactly (seams).
@@ -129,8 +130,11 @@ impl RiverCurve {
             return self.eval(k + 1, 0.0, spacing, cell_ft);
         }
         let f = self.frame(k, t, cell_ft);
-        // Unresolvable meanders fade out at coarse levels instead of aliasing into zigzags.
-        let resolve = 1.0 - smoothstep(0.12, 0.35, spacing / f.lambda);
+        // Unresolvable meanders fade out at coarse levels instead of aliasing into zigzags: a
+        // loop under ~16 samples long draws as a regular sawtooth a few pixels across, so they
+        // go by then. (Measured past 20 ft of spacing: the finest levels, and the generators
+        // asking at 2.5 to 20 ft, see every loop as before.)
+        let resolve = 1.0 - smoothstep(0.04, 0.12, (spacing - 20.0).max(0.0) / f.lambda_local);
         let resolve_drift = 1.0 - smoothstep(0.12, 0.35, spacing / f.drift_len);
         let off = f.taper * (resolve * (f.amp * libm::sin(f.phase) + f.wiggle) + resolve_drift * f.drift);
         CurvePoint { p: [f.base[0] + f.nrm[0] * off, f.base[1] + f.nrm[1] * off], z: f.z, w: f.w, q: f.q }
@@ -189,14 +193,27 @@ impl RiverCurve {
         let sinuosity = lerp(sinu_at(k), sinu_at(k1));
         // Noise coordinates accumulate along the river (like the meander phase), so they
         // advance smoothly even where the width changes.
-        let vary = 0.6 + 0.4 * gradient2(self.seed, phase / (3.0 * std::f64::consts::TAU), 0.37);
-        let amp = (0.32 * lambda * sinuosity * vary).min(0.3 * cell_ft);
+        // Loops are not all alike: the phase is warped by noise along the river (bends come
+        // tighter here, longer there: local wavelength about 0.65 to 1.8 times the mean, never
+        // running backwards) and each loop is skewed up or down stream by a slowly turning
+        // amount; the amplitude swells and calms over a few loops (some reaches run nearly
+        // straight) and differs loop to loop, never past the old greatest.
+        use std::f64::consts::TAU;
+        let (warp, dwarp, _) = crate::core::noise::gradient2_d(self.seed ^ 0x2B, phase / (3.0 * TAU), 0.29);
+        let rate = (1.0 + 4.5 * dwarp / (3.0 * TAU)).max(0.35);
+        let turn = phase + 4.5 * warp;
+        let skew = 0.3 * gradient2(self.seed ^ 0x3C, phase / (4.0 * TAU), 0.61);
+        let angle = turn + 0.5 * skew * libm::sin(2.0 * turn);
+        let vary = (0.55 + 0.7 * gradient2(self.seed, phase / (3.0 * TAU), 0.37) + 0.3 * gradient2(self.seed ^ 0x4D, phase / (1.3 * TAU), 0.83)).clamp(0.12, 1.0);
+        // (Where the warp tightens the bends, the loops come smaller too, so the curve never
+        // swings sideways faster than unwarped loops would.)
+        let amp = (0.32 * lambda * sinuosity * vary).min(0.3 * cell_ft) / (rate * (1.0 + skew.abs())).max(1.0);
         let wphase = lerp(self.wphase[k], self.wphase[k1]);
         let wiggle = 1.2 * w * gradient2(self.seed ^ 0x55, wphase, 0.71);
         // Cell-scale drift: even small streams never run straight between T0 cells.
         let drift_len = 2.5 * cell_ft;
         let drift = 0.22 * cell_ft * gradient2(self.seed ^ 0x99, s / drift_len, 0.13);
-        Frame { base, nrm, z, w, q, taper, lambda, amp, phase, wiggle, drift_len, drift }
+        Frame { base, nrm, z, w, q, taper, lambda_local: lambda / rate, amp, phase: angle, wiggle, drift_len, drift }
     }
 }
 
@@ -207,7 +224,8 @@ struct Frame {
     w: f64,
     q: f64,
     taper: f64,
-    lambda: f64,
+    /// Meander wavelength where the phase warp has it (ft).
+    lambda_local: f64,
     amp: f64,
     phase: f64,
     wiggle: f64,
