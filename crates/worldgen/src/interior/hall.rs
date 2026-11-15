@@ -815,7 +815,8 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         // (One square deep only where nothing deeper fits. Its depth, width and the rows g between its
         // back row and the frame's end: against the wall at it, a row past it or two where the hall
         // goes on there (g -1, -2), a row in where a door needs the way (1); then a castle's anywhere
-        // a row or two in.)
+        // a row or two in. Its middle past the hall's: a short hall's dais never at its middle, where
+        // the way in from the low end would reach it.)
         let sizes: Vec<(usize, usize)> = [deep, 1].into_iter().flat_map(|d| widths.iter().map(move |&w| (d, w))).collect();
         let mut tries: Vec<(usize, usize, isize)> = sizes.iter().flat_map(|&(d, w)| [0, -1, -2, 1].map(|g| (d, w, g))).collect();
         let near = tries.len();
@@ -825,7 +826,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         for (i, &(deep, dw, g)) in tries.iter().enumerate() {
             let t0 = (w - dw as isize) / 2;
             let s0 = l - deep as isize - g;
-            if s0 < 1 {
+            if s0 < 1 || 2 * s0 + deep as isize <= l {
                 continue;
             }
             if i < near {
