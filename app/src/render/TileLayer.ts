@@ -567,6 +567,8 @@ export class TileLayer {
     t.road?.destroy({ children: true });
     t.siteFill?.destroy({ children: true });
     t.siteInk?.destroy({ children: true });
+    // The shader holds the textures: let it go first, or PixiJS warns of a destroyed bound texture.
+    t.mesh.shader?.destroy();
     t.mesh.destroy();
     t.texture.destroy(true);
     t.biomeTexture.destroy(true);

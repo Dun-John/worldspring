@@ -1118,10 +1118,19 @@ export class BattlemapLayer {
       gone = true;
     }
     if (gone) this.refreshBridges();
+    // Shaders go first: they hold the textures, and PixiJS warns of one destroyed while bound.
+    for (const p of c.parts) freeShaders(p);
     for (const p of c.parts) p.destroy({ children: true });
     for (const t of c.textures) t.destroy(true);
     c.roofGeometry?.destroy();
   }
+}
+
+/** Destroy the shader of every mesh under `node` (each chunk builds its own). */
+function freeShaders(node: Container) {
+  const shader = (node as unknown as { shader?: Shader }).shader;
+  if (shader) shader.destroy();
+  for (const k of node.children) freeShaders(k as Container);
 }
 
 /** The sprite atlas depends only on the catalog: built once per page and reused by every
