@@ -695,6 +695,12 @@ impl<'a> Shaper<'a> {
         self.outline_water(x, y).map(|(l, _)| l as f32)
     }
 
+    /// Beside water drawn by hand: the kind of the nearest within `reach` ft of its shore and how
+    /// far that is (`waters::edge`).
+    pub fn water_edge(&self, x: f64, y: f64, reach: f64) -> Option<(crate::waters::WaterKind, f64)> {
+        crate::waters::edge(&self.waters, x, y, reach)
+    }
+
     /// Whether any water drawn by hand meets what it covers.
     pub fn has_waters(&self) -> bool {
         !self.waters.is_empty()

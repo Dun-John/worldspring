@@ -2435,6 +2435,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             statues.push(crate::town::geom::centroid(m));
         }
     }
+    // P145: what stands along water drawn by hand, by its kind (`hand_shore_things`).
+    hand_shore_things(&world.file.edits, seed, [hx0, hy0, hx0 + span, hy0 + span], &mut dock);
     // R5 M20: quays and breakwaters built by hand: their made ground paved (a quay's with cargo
     // along it); a pier's deck over the water at one flat level, as a hand bridge's.
     for (_, w) in crate::wharf::near(world, [hx0, hy0, hx0 + span, hy0 + span]) {
@@ -3161,6 +3163,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     chunk.stone = here.iter().filter(|l| Some(l.tier) == tier_here).min_by(|a, b| away(a).total_cmp(&away(b))).map_or(0, |l| (l.index + 1) & 0xff_ffff | (l.culture as u32 % 5 + 1) << 24);
     let paved = tier_here.is_some_and(|t| t >= crate::t0::settle::Tier::Town);
     let village = tier_here == Some(crate::t0::settle::Tier::Village);
+    // (P145: the walls and castles a moat drawn by hand may run by, found when one does.)
+    let mut moat_stone: Option<Vec<([f64; 2], [f64; 2])>> = None;
     for k in 0..n {
         let depth = chunk.water_level[k] - chunk.height[k];
         chunk.surface[k] = if depth > 4.0 {
@@ -3221,6 +3225,29 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     _ => {}
                 },
                 _ => {}
+            }
+        }
+        // P145: the bank of water drawn by hand, by its kind: a pond's mud, a lake's pebbles, an
+        // inlet's sand, a basin's paved quay, a moat's earth (stone by a castle or wall), a
+        // stream's gravel (on open ground only: a street, a field or a yard keeps its own).
+        if depth <= 0.0
+            && urb_h[(k / SQ + 1) * HS + k % SQ + 1] == 0
+            && let Some(sh) = shaper.as_ref().filter(|s| s.has_waters())
+        {
+            let (x, y) = (ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT);
+            if let Some((kind, d)) = sh.water_edge(x, y, HAND_BANK_FT) {
+                use crate::waters::WaterKind as W;
+                let (reach, surface) = match kind {
+                    W::Pond => (6.0, Surface::Mud),
+                    W::Lake => (5.0, Surface::Gravel),
+                    W::Inlet => (8.0, Surface::Sand),
+                    W::Basin => (6.0, Surface::Cobble),
+                    W::Moat => (4.0, if moat_stone.get_or_insert_with(|| guarded_near(world, t0, [ox, oy, ox + SQ as f64 * SQUARE_FT, oy + SQ as f64 * SQUARE_FT])).iter().any(|&(a, b)| crate::town::geom::seg_dist([x, y], a, b) <= MOAT_STONE_FT) { Surface::Rock } else { Surface::Dirt }),
+                    W::Stream => (3.0, Surface::Gravel),
+                };
+                if d <= reach {
+                    chunk.surface[k] = surface;
+                }
             }
         }
         if road[k] != 0 {
@@ -5197,6 +5224,103 @@ fn quay_works(poly: &[[f64; 2]], seed: u64, piers: &[Vec<[f64; 2]>], cranes: boo
         let p = add(add(a, mul(u, at * el)), mul(v, 3.0));
         if roots.iter().all(|r| dist(*r, p) > 18.0) {
             out.push((p, libm::atan2(-v[1], -v[0]) as f32, Kind::DockCrane, (h >> 24) as u8 & 3, false));
+        }
+    }
+}
+
+/// P145: how far from the shore of water drawn by hand its bank is dressed (ft; each kind less or
+/// as far), and how near a castle or wall a moat's bank is stone.
+const HAND_BANK_FT: f64 = 8.0;
+const MOAT_STONE_FT: f64 = 60.0;
+
+/// The walls and castle curtains (as pieces) within `MOAT_STONE_FT` of `rect`: the towns' walls,
+/// castles' curtains and the castles and walls drawn by hand.
+fn guarded_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<([f64; 2], [f64; 2])> {
+    let m = MOAT_STONE_FT;
+    let r = [rect[0] - m, rect[1] - m, rect[2] + m, rect[3] + m];
+    let mut out = Vec::new();
+    let ring = |p: &[[f64; 2]], closed: bool, out: &mut Vec<([f64; 2], [f64; 2])>| {
+        for w in p.windows(2) {
+            out.push((w[0], w[1]));
+        }
+        if closed && p.len() > 2 {
+            out.push((p[p.len() - 1], p[0]));
+        }
+    };
+    for l in crate::town::layouts_near(world, t0, r) {
+        for w in &l.walls {
+            ring(w, false, &mut out);
+        }
+        for &(c, rad) in &l.castles {
+            let pts: Vec<[f64; 2]> = (0..24).map(|k| {
+                let a = k as f64 * core::f64::consts::TAU / 24.0;
+                [c[0] + rad * libm::cos(a), c[1] + rad * libm::sin(a)]
+            }).collect();
+            ring(&pts, true, &mut out);
+        }
+    }
+    for c in world.file.edits.created.iter().filter(|c| matches!(c.kind.as_str(), "castle" | "wall" | "tower")) {
+        if !c.poly.is_empty() {
+            ring(&c.poly, c.kind != "wall", &mut out);
+        } else {
+            out.push(([c.x, c.y], [c.x, c.y]));
+        }
+    }
+    out
+}
+
+/// P145: what stands along the shore of water drawn by hand, at points spaced by length along
+/// its shore from its first point (so every chunk finds the same; each kept by the chunk holding
+/// it, on its dry bank): reeds round a pond, pebbles round a lake, bollards round a basin, pebbles
+/// and a few reeds along a stream. An inlet and a moat have none.
+fn hand_shore_things(edits: &crate::world::Edits, seed: u64, rect: [f64; 4], out: &mut Vec<([f64; 2], f32, Kind, u8, bool)>) {
+    use crate::waters::WaterKind as W;
+    for w in edits.waters.values() {
+        let (step, out_ft) = match w.kind {
+            W::Pond => (9.0, 3.5),
+            W::Lake => (22.0, 3.5),
+            W::Basin => (24.0, 3.0),
+            W::Stream => (14.0, 3.0),
+            W::Inlet | W::Moat => continue,
+        };
+        let sh = w.shore();
+        let b = crate::ground::bbox(&sh);
+        if b[2] + 10.0 < rect[0] || b[0] - 10.0 > rect[2] || b[3] + 10.0 < rect[1] || b[1] - 10.0 > rect[3] || w.problem().is_some() {
+            continue;
+        }
+        let n = sh.len();
+        // (Outward: to the right of the shore when its area is positive.)
+        let sign = if crate::town::geom::area(&sh) > 0.0 { -1.0 } else { 1.0 };
+        let h = hash2(seed ^ 0x5a0e_5001, crate::core::round(w.pts[0][0]) as i64, crate::core::round(w.pts[0][1]) as i64);
+        let (mut along, mut next, mut k) = (0.0, step * unit(h), 0i64);
+        for i in 0..n {
+            let (a, c) = (sh[i], sh[(i + 1) % n]);
+            let l = crate::town::geom::dist(a, c);
+            if l < 1e-6 {
+                continue;
+            }
+            let (ux, uy) = ((c[0] - a[0]) / l, (c[1] - a[1]) / l);
+            while next <= along + l {
+                let t = next - along;
+                let r = hash2(h, k, 7);
+                k += 1;
+                next += step * (0.7 + 0.6 * unit(r));
+                let p = [a[0] + ux * t + sign * uy * out_ft, a[1] + uy * t - sign * ux * out_ft];
+                if p[0] < rect[0] || p[1] < rect[1] || p[0] >= rect[2] || p[1] >= rect[3] {
+                    continue;
+                }
+                let v = (r >> 20) as u8 & 3;
+                let kind = match w.kind {
+                    W::Pond if unit(r ^ 1) < 0.75 => Kind::Reeds,
+                    W::Lake if unit(r ^ 1) < 0.45 => Kind::RockSmall,
+                    W::Basin => Kind::Bollard,
+                    W::Stream if unit(r ^ 1) < 0.35 => Kind::RockSmall,
+                    W::Stream if unit(r ^ 1) < 0.5 => Kind::Reeds,
+                    _ => continue,
+                };
+                out.push((p, 0.0, kind, v, false));
+            }
+            along += l;
         }
     }
 }
