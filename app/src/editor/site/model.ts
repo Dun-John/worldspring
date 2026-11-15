@@ -226,6 +226,12 @@ export function setWayDown(d: SiteDesign, li: number, x: number, y: number) {
   landing(d, li - 1, x, y);
 }
 
+/** Where the stairs come out on a level set by hand (a floor square; null: as generated). */
+export function setLanding(d: SiteDesign, li: number, at: [number, number] | null) {
+  if (at) d.levels[li].landing = at;
+  else delete d.levels[li].landing;
+}
+
 /** Rock round (x, y) on a level made a landing (3 × 3, inside the grid), if (x, y) is rock. */
 function landing(d: SiteDesign, li: number, x: number, y: number) {
   const nx = d.nx;

@@ -3828,13 +3828,24 @@ const LOOKS: Record<string, number> = {
   // A guild's arms, or the town's (`ARMS`).
   guild_arms: ARMS.length,
   // A key's colour (1-7 opens the lock of that colour; `interior::Door::lock`).
-  key: 8,
+  key: 32,
   // A burial niche: its look `v % 4` (body, bones, slab, empty), the rest only varies the details.
   niche: 12,
 };
 
 /** How many looks a piece of furniture has (`Item::variant` 0 to this - 1). */
 export const looksOf = (kind: string): number => LOOKS[kind] ?? 4;
+
+/** A lock's colour by number (`lockColor`): 0-7 as named, 8-31 a hue round the wheel in a dark, usual or light band. */
+export function lockName(v: number): string {
+  if (v < 8) return ['No colour', 'Red', 'Orange', 'Yellow', 'Green', 'Blue', 'Purple', 'White'][v];
+  const k = v - 8;
+  const hue = (k * 47 + 20) % 360;
+  const names: [number, string][] = [[15, 'red'], [45, 'orange'], [70, 'yellow'], [95, 'lime'], [160, 'green'], [190, 'teal'], [215, 'sky'], [255, 'blue'], [290, 'violet'], [330, 'magenta'], [361, 'rose']];
+  const base = names.find(([h]) => hue < h)![1];
+  const band = ['', 'dark ', 'light '][k % 3];
+  return `${(band + base).replace(/^./, (c) => c.toUpperCase())} (${v})`;
+}
 
 /** What a look of a piece is, for the designer's Look menu: named where they differ by more than colour. */
 export function lookName(kind: string, v: number): string {
@@ -3844,7 +3855,7 @@ export function lookName(kind: string, v: number): string {
   if (kind === 'low_dais') return ['Stone', 'Timber'][v % 2];
   if (['god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'side_altar'].includes(kind)) return GOD_NAMES[v % GOD_NAMES.length];
   if (kind === 'guild_arms') return ARMS[v % ARMS.length].name;
-  if (kind === 'key') return ['No colour', 'Red', 'Orange', 'Yellow', 'Green', 'Blue', 'Purple', 'White'][v % 8];
+  if (kind === 'key') return lockName(v);
   if (kind === 'strongbox') return ['Black iron', 'Walnut, iron-strapped', 'Iron, brass studs', 'Oak, iron-strapped'][v % 4];
   if (kind === 'counting_desk') return ['Oak, green baize', 'Walnut, green baize', 'Oak, red leather', 'Walnut, red leather'][v % 4];
   if (kind === 'job_board') return ['Notices', 'A wanted bill', 'A painted header', 'A map'][v % 4];
