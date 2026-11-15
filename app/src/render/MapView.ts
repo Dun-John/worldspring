@@ -86,9 +86,9 @@ const LANE_FADE: [number, number] = [1.3, 0.4];
 const SITE_REACH_FT = 260 + 100;
 
 /** How far (ft) from its point a created site's layout reaches, with a margin (as
- * `worldgen::world::Created::reach`: a castle's or wall's farthest corner and its towers). */
+ * `worldgen::world::Created::reach`: a castle's, wall's or plot's farthest corner and its towers). */
 export function siteReach(c: Created): number {
-  const pts = c.kind === 'castle' ? c.poly : c.kind === 'wall' ? c.pts : null;
+  const pts = c.kind === 'castle' || c.kind === 'plot' ? c.poly : c.kind === 'wall' ? c.pts : null;
   if (!pts?.length) return SITE_REACH_FT;
   return Math.max(...pts.map((p) => Math.hypot(p[0] - c.x, p[1] - c.y))) + WORKS_MARGIN_FT + 100;
 }
@@ -136,7 +136,7 @@ function createdDetail(c: Created): string {
 function createdFeature(c: Created, population?: number): Feature {
   // (A village or town added by hand: labelled as the world's own of its tier, `features.rs`, its
   // population in its detail once known, as theirs: the breadcrumbs size a settlement by it.)
-  const extent = c.kind === 'building' ? 0.5 * 5280 : c.kind === 'castle' || c.kind === 'wall' ? Math.max(2 * (siteReach(c) - 100), 0.5 * 5280) : (MADE_EXTENT_MI[c.kind] ?? 2) * 5280;
+  const extent = c.kind === 'building' ? 0.5 * 5280 : c.kind === 'castle' || c.kind === 'wall' ? Math.max(2 * (siteReach(c) - 100), 0.5 * 5280) : c.kind === 'plot' ? 2 * (siteReach(c) - 100) : (MADE_EXTENT_MI[c.kind] ?? 2) * 5280;
   const detail = createdDetail(c) + (isMade(c) && population ? `, pop. ${population.toLocaleString('en-US')}` : '');
   return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: extent, detail };
 }
@@ -351,6 +351,10 @@ export class MapView {
   readonly playOver = new Container();
   /** Takes pointer input before panning and picking (play mode tools). */
   tool: PointerTool | null = null;
+  /** Plots drawn by hand, outlined while the Build panel is open (`setPlotOutlines`). */
+  private readonly plotLayer = new Graphics();
+  private plotOutlines: { poly: [number, number][]; color: number }[] = [];
+  private plotDrawn = '';
   /** What the tool draws over everything (`PointerTool.draw`). */
   private readonly toolLayer = new Graphics();
   private toolDrawn = false;
@@ -1238,6 +1242,7 @@ export class MapView {
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
     this.app.stage.addChild(this.playOver);
+    this.app.stage.addChild(this.plotLayer);
     this.app.stage.addChild(this.toolLayer);
     this.progress = null;
     this.stage = null;
@@ -1255,6 +1260,42 @@ export class MapView {
     this.labelsPrewarmMs = this.labels.prewarm(this.cam, this.app.renderer);
     this.t0Ms = t0Ms;
     this.status = `Continent generated in ${(t0Ms / 1000).toFixed(1)} s`;
+  }
+
+  /** Outline these plots (world ft, each in its fill's colour) over the map; none: hidden. */
+  setPlotOutlines(plots: { poly: [number, number][]; color: number }[]) {
+    this.plotOutlines = plots;
+    this.plotDrawn = '';
+  }
+
+  /** The plots' outlines as dashes of ink, drawn again when the camera or the plots change. */
+  private drawPlots() {
+    const cam = this.cam;
+    const key = this.plotOutlines.length ? `${cam.cx},${cam.cy},${cam.zoom},${cam.width},${cam.height}` : 'none';
+    if (key === this.plotDrawn) return;
+    this.plotDrawn = key;
+    const g = this.plotLayer;
+    g.clear();
+    const [on, off] = [9, 6];
+    for (const { poly, color } of this.plotOutlines) {
+      const s = poly.map((p) => cam.worldToScreen(p[0], p[1]));
+      if (s.length < 3 || s.every((q) => q[0] < 0) || s.every((q) => q[1] < 0) || s.every((q) => q[0] > cam.width) || s.every((q) => q[1] > cam.height)) continue;
+      g.poly(s.flat()).fill({ color, alpha: 0.1 });
+      // (Dashes laid along the whole ring, so a corner doesn't start one afresh.)
+      let run = 0;
+      for (let i = 0; i < s.length; i++) {
+        const [a, b] = [s[i], s[(i + 1) % s.length]];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (len < 1e-6) continue;
+        const at = (t: number) => [a[0] + ((b[0] - a[0]) * t) / len, a[1] + ((b[1] - a[1]) * t) / len] as const;
+        for (let t = -(run % (on + off)); t < len; t += on + off) {
+          const [t0, t1] = [Math.max(0, t), Math.min(len, t + on)];
+          if (t1 > t0) g.moveTo(...at(t0)).lineTo(...at(t1));
+        }
+        run += len;
+      }
+      g.stroke({ width: 2.5, color, alpha: 0.95 });
+    }
   }
 
   /**
@@ -1864,6 +1905,7 @@ export class MapView {
           this.tool.hover(...cam0.screenToWorld(this.cursor.sx, this.cursor.sy));
         }
       }
+      this.drawPlots();
       if (this.tool?.draw || this.toolDrawn) {
         // (A tool with a key: its drawing kept and shifted while only the camera's middle moves,
         // drawn again once that is a quarter of the view away.)

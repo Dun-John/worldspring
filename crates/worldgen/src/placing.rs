@@ -337,9 +337,12 @@ pub fn seed_of(v: &serde_json::Value) -> Result<u64, String> {
 }
 
 /// What stops an outline from being a plot, in words: a building drawn by hand, water, a river or a road (streets too) under it; the
-/// world's own buildings and squares may be replaced by its fill. `None` when it is free.
-pub fn parcel_blocker(world: &World, t0: &T0, poly: &[P]) -> Option<String> {
-    let (found, _) = match agent::spot_blockers(world, t0, poly, None, true) {
+/// world's own buildings and squares may be replaced by its fill. `None` when it is free. `own`: the plot being changed, whose
+/// fill's own lots, alleys and squares never stand in its way.
+pub fn parcel_blocker(world: &World, t0: &T0, poly: &[P], own: Option<&str>) -> Option<String> {
+    let first = t0.settlements.len() + t0.base_pois;
+    let skip = own.and_then(|id| world.file.edits.created.iter().position(|c| c.id == id && c.kind == "plot")).map(|k| (first + k, None));
+    let (found, _) = match agent::spot_blockers(world, t0, poly, skip, true) {
         Ok(f) => f,
         Err(e) => return Some(e),
     };
@@ -491,7 +494,8 @@ pub fn row_json(world: &World, t0: &T0, input: &str) -> String {
     go().unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string()
 }
 
-/// Whether an outline can be a plot (`create_parcel`'s checks), as JSON: input `{poly}`; output `{x, y}` (its middle) or
+/// Whether an outline can be a plot (`create_parcel`'s checks), as JSON: input `{poly}`; output `{x, y, removed}` (its middle, the
+/// world's own buildings under it, as `stamp_json`'s) or
 /// `{error, over?: [[x, y], ..]}` (`over`: the live plot it meets).
 pub fn parcel_check_json(world: &World, t0: &T0, input: &str) -> String {
     let go = || -> Result<serde_json::Value, String> {
@@ -504,10 +508,13 @@ pub fn parcel_check_json(world: &World, t0: &T0, input: &str) -> String {
         if let Some(o) = world.file.edits.created.iter().find(|o| o.kind == "plot" && !o.removed && !c.same_site(o, [c.x, c.y]) && agent::polys_overlap_pub(&o.poly, &c.poly)) {
             return Err(serde_json::json!({ "over": o.poly }).to_string());
         }
-        if let Some(why) = parcel_blocker(world, t0, &c.poly) {
+        if let Some(why) = parcel_blocker(world, t0, &c.poly, None) {
             return Err(why);
         }
-        Ok(serde_json::json!({ "x": x, "y": y }))
+        // (The world's own buildings under it give way to its fill: the app takes them away in the same change.)
+        let found = agent::spot_blockers(world, t0, &c.poly, None, true).map(|f| f.0).unwrap_or_default();
+        let removed = agent::removals(world, t0, &found);
+        Ok(serde_json::json!({ "x": x, "y": y, "removed": removed.iter().map(removal_json).collect::<Vec<_>>() }))
     };
     match go() {
         Ok(v) => v.to_string(),

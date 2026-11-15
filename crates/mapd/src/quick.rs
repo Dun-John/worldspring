@@ -324,7 +324,7 @@ async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, St
     if let Some(o) = hit {
         return Err(format!("that outline meets the parcel {o}: change or delete_feature that first"));
     }
-    if let Some(why) = app.worker.with({ let p = c.poly.clone(); move |ex| Ok(placing::parcel_blocker(&ex.world, &ex.t0, &p)) }).await? {
+    if let Some(why) = app.worker.with({ let (p, id) = (c.poly.clone(), mine.clone()); move |ex| Ok(placing::parcel_blocker(&ex.world, &ex.t0, &p, Some(&id))) }).await? {
         return Err(why);
     }
     let change = app

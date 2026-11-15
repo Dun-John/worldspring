@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
+import type { Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -138,8 +138,8 @@ export class GenClient {
     return this.ask({ op: 'row', input: JSON.stringify(q) }).then((j) => JSON.parse(j));
   }
 
-  /** Whether an outline can be a plot: its middle, or why not (`over`: the plot it meets). */
-  parcelCheck(poly: [number, number][]): Promise<{ x: number; y: number } | { error: string; over?: [number, number][] } | null> {
+  /** Whether an outline can be a plot: its middle and the world's own buildings under it, or why not (`over`: the plot it meets). */
+  parcelCheck(poly: [number, number][]): Promise<{ x: number; y: number; removed?: Removal[] } | { error: string; over?: [number, number][] } | null> {
     return this.ask({ op: 'parcel', input: JSON.stringify({ poly }) }).then((j) => JSON.parse(j));
   }
 

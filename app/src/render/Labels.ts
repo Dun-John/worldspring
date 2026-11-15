@@ -89,6 +89,8 @@ const STYLES: Record<string, KindStyle> = {
   entrance: { size: 10, fill: '#4a4038', spacing: 0, italic: true, symbol: '▼', minPx: 60, maxPx: 1e9, prio: 30, pin: true },
   camp: { size: 10, fill: '#5a4330', spacing: 0, italic: true, symbol: '▲', minPx: 60, maxPx: 1e9, prio: 30, pin: true },
   building: { size: 10, fill: '#5a4330', spacing: 0, italic: true, symbol: '■', minPx: 60, maxPx: 6000, prio: 29, pin: true },
+  /** A plot drawn by hand, named: across its middle, as a district's name. */
+  plot: { size: 11, fill: '#6b3f2a', spacing: 2, upper: true, minPx: 60, maxPx: 4000, prio: 26 },
   forest: REGION,
   jungle: REGION,
   taiga: REGION,
@@ -838,7 +840,8 @@ export class Labels {
       this.unletter(it);
       this.items.splice(k, 1);
     }
-    for (const f of features) if (STYLES[f.kind]) this.items.push({ f, orig: f.name, style: STYLES[f.kind], text: null });
+    // (A plot without a name has no label.)
+    for (const f of features) if (STYLES[f.kind] && (f.kind !== 'plot' || f.name.trim())) this.items.push({ f, orig: f.name, style: STYLES[f.kind], text: null });
     this.sort();
     this.lastZoom = NaN;
   }

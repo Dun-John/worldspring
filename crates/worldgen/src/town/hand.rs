@@ -1540,9 +1540,10 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
 }
 
 /// A plot drawn by hand (`Created` kind `plot`, layout `index`): its outline, about its point,
-/// filled as a hand town's block is by its fill (`Created::fill`; none: common lots) fronting no
-/// street, seeded by its id; businesses named as a hand town's are. Its buildings number from 0
-/// as a site's do. The nearest settlement gives a cemetery its looks.
+/// filled as a hand town's block is by its fill (`Created::fill`; none: common lots), its lots
+/// fronting its own sides, seeded by its id; businesses named as a hand town's are; laid out in
+/// world ft. Its buildings number from 0 as a site's do. The nearest settlement gives a
+/// cemetery its looks.
 pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Created) -> Layout {
     use super::fill::{Block as Region, build_block};
     let origin = [c.x, c.y];
@@ -1557,6 +1558,7 @@ pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Creat
     let seed = crate::core::hash::fnv64(c.id.as_bytes()) ^ world.seed;
     let near = |s: &&crate::t0::settle::Settlement| dist([s.x, s.y], origin);
     let Some(s) = t0.settlements.iter().min_by(|a, b| near(a).total_cmp(&near(b))) else { return l };
+    let mut plots = Vec::new();
     match c.fill.clone().unwrap_or_default() {
         BlockFill::Hand | BlockFill::Castle { .. } => {}
         BlockFill::Generated { ward, lots, height, reroll, .. } => {
@@ -1569,7 +1571,30 @@ pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Creat
             super::docks_on_slope(&mut dp, w, if poly.len() >= 3 { site.grade(&poly) } else { 0.0 });
             let mut rng = Pcg32::new(salt(hash2(seed, 0, 0x107)), 47);
             l.blocks.extend(g.iter().map(|x| x.outer.clone()));
-            build_block(site, Region::Region(&g), &[], w, &dp, &mut rng, &mut l, None);
+            // (Its lots front its own sides, as a block's front its streets: without a front no
+            // lot is cut. Outward normals, the outline taken anticlockwise.)
+            let ring: Vec<P> = if area(&poly) < 0.0 { poly.iter().rev().copied().collect() } else { poly.clone() };
+            let fronts: Vec<super::fill::Front> = (0..ring.len())
+                .filter_map(|e| {
+                    let (a, b) = (ring[e], ring[(e + 1) % ring.len()]);
+                    let el = dist(a, b);
+                    (el > 1e-9).then(|| {
+                        let n = [(b[1] - a[1]) / el, -(b[0] - a[0]) / el];
+                        super::fill::Front { n, c: dot(a, n), a, b }
+                    })
+                })
+                .collect();
+            build_block(site, Region::Region(&g), &fronts, w, &dp, &mut rng, &mut l, None);
+            // (Its alleys stop at its outline, round ends and all: no street runs on past it.)
+            for (pts, _, width) in &mut l.roads {
+                if let [a, .., b] = pts.as_mut_slice() {
+                    let (d, h) = (dist(*a, *b), 0.5 * *width);
+                    if d > 2.0 * h + 1.0 {
+                        let u = mul(sub(*b, *a), 1.0 / d);
+                        (*a, *b) = (add(*a, mul(u, h)), sub(*b, mul(u, h)));
+                    }
+                }
+            }
             home_storeys(&mut l, 0, w, tier, hash2(salt(seed), 0, 0x5707), &[]);
             businesses(&mut l, 0, w, tier, false, hash2(salt(seed), 0, 0xb05), &[]);
             height_storeys(&mut l, 0, height.as_deref(), &[]);
@@ -1582,11 +1607,37 @@ pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Creat
                 let roll = |j: i64| unit(salt(hash3(seed, 0, j, 0x09e)));
                 let cem = || super::cemetery::Style::of(s, index, false);
                 let fill = open_fill(open, style.as_deref(), &[], salt(hash2(seed, 0, 0x9a4c)), cem, &mut || Pcg32::new(salt(hash2(seed, 0, 0xfa)), 61), tier);
-                let mut plots = Vec::new();
                 super::fill_block(site, &g[k].outer, Vec::new(), fill, &roll, super::places::Spot::None, &mut l, &mut plots);
             }
         }
     }
+    // (A farm's fields, off the sand, as a hand town's.)
+    l.fields.extend(plots.into_iter().filter_map(|(f, _)| super::fields::off_sand(site, &f)));
+    // Local → world (as `build_hand` moves its own).
+    let tw = |p: &mut P| *p = add(*p, origin);
+    for b in &mut l.buildings {
+        b.poly.iter_mut().chain(b.parts.iter_mut().flat_map(|p| p.poly.iter_mut())).for_each(tw);
+    }
+    for (pts, _, _) in &mut l.roads {
+        pts.iter_mut().for_each(tw);
+    }
+    for poly in l.streets.iter_mut().chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.monuments).chain(&mut l.bridges) {
+        poly.iter_mut().for_each(tw);
+    }
+    for pk in &mut l.parks {
+        pk.pts.iter_mut().chain([&mut pk.ground.origin]).for_each(tw);
+    }
+    for c in &mut l.crofts {
+        c.pts.iter_mut().for_each(tw);
+    }
+    for (_, g) in &mut l.grounds {
+        g.iter_mut().for_each(tw);
+    }
+    let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.blocks.iter().flatten()).chain(l.fields.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())) {
+        bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
+    }
+    l.bbox = if bb[0] <= bb[2] { bb } else { [origin[0], origin[1], origin[0], origin[1]] };
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (k, b) in l.buildings.iter_mut().enumerate() {
         b.id = k as u32;
