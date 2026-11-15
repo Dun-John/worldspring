@@ -26,8 +26,8 @@ pub fn list() -> Vec<Value> {
             "shape": { "type": "string", "enum": ["polygon", "brush"], "description": "brush: a band width_ft wide along poly (default polygon)" },
             "width_ft": { "type": "number", "minimum": waters::STREAM_WIDTHS[0], "maximum": waters::BRUSH_WIDTHS[1], "description": "Brush width (default 10)" },
             "closed": { "type": "boolean", "description": "Brush comes round to its start: a ring" },
-            "depth_ft": { "type": "number", "minimum": waters::DEPTHS[0], "maximum": waters::DEPTHS[1], "description": "Default 4; still water under 4 ft is a pond, deeper a lake" },
-            "dug": { "type": "boolean", "description": "Straight sides, stone edge (a quay at the sea); default natural" },
+            "depth_ft": { "type": "number", "minimum": waters::DEPTHS[0], "maximum": waters::DEPTHS[1], "description": "Default 4" },
+            "dug": { "type": "boolean", "description": "Straight sides, stone edge" },
             "kind": { "type": "string", "enum": kinds.clone(), "description": "Legacy fixed look; leave out" },
             "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Surface, ft above the sea (default: the sea's or a lake's it reaches, else under its shore)" },
             "name": { "type": "string", "description": "Its name on the map (empty: none)" },
@@ -38,7 +38,7 @@ pub fn list() -> Vec<Value> {
         p
     };
     vec![
-        json!({ "name": "create_water", "title": "Draw water", "description": "Water drawn by hand: a polygon or a brushed band, depth_ft deep, natural or dug. Its look follows the water: at the sea's level the sea's (dug: a paved quay); an open brushed line a stream falling downhill; a ring a still moat; else a pond or lake by depth. Overlapping polygons are one water; reaching the sea or a lake joins it. Returns id (e:...) and look as kind.", "inputSchema": schema(props(false), &["poly"]) }),
+        json!({ "name": "create_water", "title": "Draw water", "description": "Water drawn by hand: a polygon or brushed band. Its look follows it: the sea's at sea level (dug: a quay), an open band a stream running downhill, a ring a moat, else a pond or lake by depth. Returns id (e:...), look as kind.", "inputSchema": schema(props(false), &["poly"]) }),
         json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...); what is not given stays.", "inputSchema": schema(props(true), &["id"]) }),
         json!({ "name": "delete_water", "title": "Take water away", "description": "Take water drawn by hand away (the ground goes back as it was), by id (e:...), with its name, note and hidden mark (no restore; the user's Undo in the app brings it back).", "inputSchema": schema(crate::args::ids_props("water id (e:...)"), &[]) }),
         json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "Water drawn by hand (e:...) as create_water returns it. Returns {items, found}; limit (default 100).", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
