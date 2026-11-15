@@ -5,10 +5,11 @@
 // the interior's own 5-ft grid units; the container maps them to the screen every frame.
 import { BufferImageSource, Container, Geometry, GlProgram, Graphics, Mesh, RenderTexture, Shader, Sprite, Text, TextStyle, Texture, UniformGroup, type Renderer } from 'pixi.js';
 import { floorFt, lipOf } from '../gen/floor';
-import { OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type InteriorLevel } from '../gen/protocol';
+import { LINK_WAYS, OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type InteriorLevel } from '../gen/protocol';
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
+import { ballistaProp } from './fortProps';
 import { columnTones, drawFurniture, drawUnderProp, IN_RING, stoneColumn, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
@@ -87,9 +88,23 @@ export function sharedKind(kind: string, underground: boolean): string | undefin
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
 const INK = 0x1d1a14;
 
-/** A lock's colour 1-7 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. */
+/** A lock's colour 1-31 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. */
 export const LOCK_COLORS = [0x9a958b, 0xd8412f, 0xe8892a, 0xe8cc2a, 0x3fae52, 0x2f86d8, 0x9a56d4, 0xf0ece0];
-export const lockColor = (n: number) => LOCK_COLORS[n >= 0 && n < LOCK_COLORS.length ? n : 0];
+/** Colours 8-31 step round the hue wheel (`MAX_LOCK`), in lightness bands so neighbours differ. */
+export const lockColor = (n: number) => {
+  if (n >= 0 && n < LOCK_COLORS.length) return LOCK_COLORS[n];
+  if (n > 31) return LOCK_COLORS[0];
+  const k = n - LOCK_COLORS.length;
+  return hsl(((k * 47 + 20) % 360) / 360, 0.62, [0.5, 0.36, 0.64][k % 3]);
+};
+function hsl(h: number, s: number, l: number): number {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h * 12) % 12;
+    return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return (f(0) << 16) | (f(8) << 8) | f(4);
+}
 
 /** Underground terrain (`kit::TERRAIN`) drawn on the floor under everything else, and the spans over it (`kit::SPANS`). */
 const TERRAIN_KINDS = new Set(['water_shallow', 'water_deep', 'chasm', 'rubble_slope']);
@@ -706,12 +721,15 @@ export function warmUnderground(renderer: Renderer) {
 export type Move =
   | { kind: 'level'; label: string; level: number; from: string; at: [number, number] }
   | { kind: 'surface'; label: string; at: [number, number] }
-  | { kind: 'site'; label: string; to: string; from: string; at: [number, number] }
+  | { kind: 'site'; label: string; to: string; from: string; at: [number, number]; far?: LinkFar }
   // (The DM's: a room's notes, a note put down at a point; `grid` in the site's grid units.)
   | { kind: 'room'; label: string; id: string; at: [number, number] }
   | { kind: 'note'; label: string; site: string; level: number; grid: [number, number]; at: [number, number] };
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** Where a paired exit put down by hand comes out (`Level.links` `far`): the far site's level and square. */
+export type LinkFar = { level: number; x: number; y: number };
+type LevelLink = NonNullable<InteriorLevel['links']>[number];
 /** A way's label in the moves list: "Stairs down to Undermountain" for "stairs down to the dungeon" when the
  * site has a name, else its own ("Trapdoor to the sewers · <name>" for other named ways). */
 const wayLabel = (item: string, named?: string) => {
@@ -978,11 +996,14 @@ export class InteriorLayer {
     const level = (li: number, dir: 'up' | 'down', what?: string): Move => ({ kind: 'level', label: `${cap(what ?? `go ${dir}`)} to ${this.levelName(li)}`, level: li, from: it.id, at });
     const near = this.wayNear(lv, gx, gy);
     const item = near ?? itemAt(lv, i, j);
-    const link = near ? this.wayLink(lv, near) : lv.links?.find((k) => k.x === i && k.y === j);
+    // A paired exit put down by hand: straight to its far end.
+    const hand = near ? undefined : lv.links?.find((k) => k.far && k.x === i && k.y === j);
+    if (hand?.far) out.push({ kind: 'site', label: this.linkText(hand), to: hand.to, from: it.id, at, far: hand.far });
+    const link = near ? this.wayLink(lv, near) : hand ? undefined : lv.links?.find((k) => k.x === i && k.y === j);
     // (A renamed site goes by its name.)
     const named = link && InteriorLayer.siteName(link.to);
     if (link) out.push({ kind: 'site', label: wayLabel(item?.name ?? 'follow the way through', named), to: link.to, from: it.id, at });
-    if (item && !link) {
+    if (item && !link && !hand) {
       if (item.kind === 'exit') out.push({ kind: 'surface', label: `Up to the surface (${item.name.toLowerCase()})`, at });
       // Ways up and down within the site: the level above or below has its pair here.
       else if (item.kind === 'up' && this.level + 1 < n) out.push(level(this.level + 1, 'up', item.name));
@@ -2153,6 +2174,7 @@ export class InteriorLayer {
   }
 
   private itemKey(f: InteriorItem): string {
+    if (f.kind === 'link') return `link:${f.variant ?? 0}:${this.linkUp(f) ? 1 : 0}:${this.light.map((v) => Math.round(v * 100)).join(',')}`;
     if (this.isWay(f)) return `way:${this.underground ? 'u' : 'b'}:${f.kind}:${f.w}x${f.h}:${this.light.map((v) => Math.round(v * 100)).join(',')}:${this.lookOf(f)}:q${this.wayTurn()}:${this.wayScale(f)}`;
     const base = `${f.kind}:${f.w}x${f.h}`;
     const light = this.light.map((v) => Math.round(v * 100)).join(',');
@@ -2526,7 +2548,9 @@ export class InteriorLayer {
     if (this.drawWay(g, f)) return;
     const { x, y, w, h, kind } = f;
     if (TERRAIN_KINDS.has(kind) || SPAN_KINDS.has(kind)) return this.drawTerrain(g, f);
+    if (kind === 'link') return this.drawLink(g, f);
     if (kind === 'key') return keyGlyph(g, x + 0.5, y + 0.5, lockColor(this.lookOf(f)));
+    if (kind === 'ballista') return ballistaProp(g, x + w / 2, y + h / 2, this.lookOf(f));
     const c = itemColor(kind);
     const inset = 0.08;
     // A built site's columns, in its own stone.
@@ -2808,7 +2832,8 @@ export class InteriorLayer {
       const to = this.underground ? 'b:' : 'u:';
       for (const lv of this.interior.levels) {
         for (const k of lv.links ?? []) {
-          if (!k.to.startsWith(to)) continue;
+          // (Paired exits put down by hand are drawn as their own way, labelled `linkText`.)
+          if (!k.to.startsWith(to) || k.far) continue;
           const f = lv.furniture.find((f) => f.x === k.x && f.y === k.y && f.w === 1 && f.h === 1);
           if (!f) continue;
           const room = lv.cells[f.y * nx + f.x];
@@ -2819,6 +2844,46 @@ export class InteriorLayer {
       }
     }
     return this.wayItems.get(f) ?? 0;
+  }
+
+  /** A paired exit's label ("Ladder to the Sewers of Waterdeep"): its own name or way, to the far
+   * site as renamed, or to the far level when both ends are in this site. */
+  linkText(k: LevelLink): string {
+    const far = k.far!;
+    const to = k.to === this.interior.id ? this.levelName(far.level) : (InteriorLayer.names[k.to] ?? far.name);
+    return `${cap(far.label || far.way)} to ${to}`;
+  }
+
+  /** Whether stairs put down as a paired exit go up: into a building's cellar, or to a higher level
+   * of this site (else down). */
+  private linkUp(f: InteriorItem): boolean {
+    // (The level the item is on, not the one in view: levels are drawn ahead too.)
+    const li = this.interior.levels.findIndex((l) => l.furniture.includes(f));
+    const k = this.interior.levels[li]?.links?.find((k) => k.far && k.x === f.x && k.y === f.y);
+    if (!k?.far) return false;
+    return k.to.startsWith('b:') || (k.to === this.interior.id && k.far.level > li);
+  }
+
+  /** A paired exit put down by hand (`link`, its way the variant): drawn as the way it goes. */
+  private drawLink(g: Graphics, f: InteriorItem) {
+    const way = LINK_WAYS[f.variant ?? 0] ?? 'stairs';
+    const [cx, cy] = [f.x + 0.5, f.y + 0.5];
+    const plain = { ...f, w: 1, h: 1 };
+    if (way === 'ladder') drawUnderProp(g, { ...plain, kind: 'ladder' }, this.light, 0, [0, -1]);
+    else if (way === 'passage') drawUnderProp(g, { ...plain, kind: 'tunnel' }, this.light, 0, [0, -1]);
+    else if (way === 'trapdoor') drawFurniture(g, { ...plain, kind: 'trapdoor' }, this.light, 0);
+    else if (way === 'rope') {
+      // A dark shaft with a coil of rope at its lip, the rope running down into it.
+      g.circle(cx, cy, 0.36).fill(0x1e1a16).stroke({ width: 0.06, color: INK });
+      g.circle(cx + 0.18, cy - 0.18, 0.17).fill(0xb48a52).stroke({ width: 0.05, color: INK });
+      g.circle(cx + 0.18, cy - 0.18, 0.09).stroke({ width: 0.04, color: 0x7a5a32 });
+      g.moveTo(cx + 0.06, cy - 0.1).quadraticCurveTo(cx - 0.05, cy, cx - 0.02, cy + 0.2).stroke({ width: 0.07, color: 0xb48a52, cap: 'round' });
+    } else if (way === 'portal') {
+      // A ring of light on the floor.
+      g.circle(cx, cy, 0.42).fill({ color: 0x6d4fc4, alpha: 0.3 }).stroke({ width: 0.06, color: INK });
+      g.circle(cx, cy, 0.31).stroke({ width: 0.08, color: 0xb9a2ff });
+      g.circle(cx, cy, 0.15).fill({ color: 0xeee6ff, alpha: 0.85 });
+    } else drawUnderProp(g, { ...plain, kind: this.linkUp(f) ? 'up' : 'down' }, this.light, 0, [0, -1]);
   }
 
   /** The link of way item `f` on level `lv`. */
@@ -2896,6 +2961,7 @@ export class InteriorLayer {
       add(named ? `${this.underground ? 'Up' : 'Down'} to ${named}` : cap(f.name), [f.x + 0.5 - h, f.y + 0.5 - h, f.x + 0.5 + h, f.y + 0.5 + h]);
     }
     const ways = this.waySpots.length;
+    for (const k of lv.links ?? []) if (k.far) add(this.linkText(k), [k.x, k.y, k.x + 1, k.y + 1]);
     for (const k of lv.links ?? []) if (!this.waySpots.some((w) => w.rect[0] < k.x + 0.5 && k.x + 0.5 < w.rect[2] && w.rect[1] < k.y + 0.5 && k.y + 0.5 < w.rect[3])) this.wayMarks.push([k.x, k.y, k.x + 1, k.y + 1]);
     const [sx, sy, sw, sh] = this.interior.stairs;
     if (!lv.has_stairs || this.underground) return;

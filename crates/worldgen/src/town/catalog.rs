@@ -200,6 +200,10 @@ pub const CATALOG: &[Func] = &[
     // R5 M20: a big port's lighthouse on its breakwater's head (`harbour`), set only by the layout:
     // never on a lot.
     f("lighthouse", "Lighthouse", CIVIC, Metropolis, None, [0, 0, 0, 0], &[Docks], Institution, true, false, "Lighthouse"),
+    // Roadmap 6 P9: kinds for hand-drawn buildings (`create_building`), never put on a lot by the generator; their insides
+    // are a town hall's and a shrine's (`interior::func_key`).
+    f("hall", "Hall", CIVIC, Metropolis, None, [0, 0, 0, 0], &[Noble, Plaza], Institution, false, true, "Hall"),
+    f("chapel", "Chapel", FAITH, Metropolis, None, [0, 0, 0, 0], &[Temple, Noble], Institution, false, false, "Chapel"),
 ];
 
 /// Residential building kinds by ward (index into `RESIDENTIAL`).
@@ -220,7 +224,7 @@ pub fn residential_for(ward: Ward, big: bool) -> usize {
 
 /// Copies of `func` this settlement is guaranteed.
 pub fn required_count(func: &Func, tier: Tier, on_water: bool) -> usize {
-    if matches!(func.key, "windmill" | "tomb" | "watchtower" | "lighthouse") {
+    if matches!(func.key, "windmill" | "tomb" | "watchtower" | "lighthouse" | "hall" | "chapel") {
         return 0;
     }
     if func.water && !on_water {

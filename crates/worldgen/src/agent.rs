@@ -24,7 +24,7 @@ type P = [f64; 2];
 
 const MI: f64 = 5280.0;
 const SETTLEMENT_KINDS: [&str; 4] = ["metropolis", "city", "town", "village"];
-const SITE_KINDS: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+const SITE_KINDS: [&str; 12] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall", "plot"];
 
 thread_local! {
     /// The settlements and sites of the overlay as `(id, kind, name)` in its order, for a T0 read
@@ -75,7 +75,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             angle: 0.0,
             extent_ft: match c.kind.as_str() {
                 "building" => 0.5 * MI,
-                "castle" | "wall" => (2.0 * c.reach()).max(0.5 * MI),
+                "castle" | "wall" | "plot" => (2.0 * c.reach()).max(0.5 * MI),
                 "village" | "town" => if c.kind == "town" { 12.0 * MI } else { 5.0 * MI },
                 _ => 2.0 * MI,
             },
@@ -83,12 +83,69 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             detail: Some(created_detail(c)),
         });
     }
+    for (id, kind, extent, people) in hand_sizes(world, t0) {
+        if let Some(f) = out.iter_mut().find(|f| f.id == id) {
+            f.detail = Some(resized_detail(f.detail.as_deref().unwrap_or(""), f.kind, kind, people));
+            (f.kind, f.extent_ft) = (kind, extent);
+        }
+    }
     for f in &mut out {
         if let Some(n) = edits.renames.get(&f.id) {
             f.name = n.clone();
         }
     }
     out
+}
+
+/// The towns laid out by hand, sized by the people their homes house (`hand::size`) at once, as
+/// their labels, icons and lists show them: (feature id, size class, label extent ft, people).
+/// T0 (its roads, its trade) keeps the settlement as it was until the world is next remade.
+pub fn hand_sizes(world: &World, t0: &T0) -> Vec<(String, &'static str, f64, u32)> {
+    let streets = &world.file.edits.streets;
+    if streets.is_empty() {
+        return Vec::new();
+    }
+    let ids = place_ids(t0);
+    let settled: Vec<&String> = ids.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.1)).map(|g| &g.0).collect();
+    let first = t0.settlements.len() + t0.base_pois;
+    let mut out = Vec::new();
+    for li in streets.keys().filter_map(|k| k.parse::<usize>().ok()) {
+        let id = if li < t0.settlements.len() { settled.get(li).map(|s| s.to_string()) } else { li.checked_sub(first).and_then(|k| world.file.edits.created.get(k)).map(|c| c.id.clone()) };
+        let (Some(id), Some((people, tier))) = (id, town::hand::size(world, li)) else { continue };
+        use crate::t0::settle::Tier;
+        let extent = match tier {
+            Tier::Metropolis => 60.0,
+            Tier::City => 30.0,
+            Tier::Town => 12.0,
+            Tier::Village => 5.0,
+        } * MI;
+        out.push((id, tier.name(), extent, people));
+    }
+    out
+}
+
+/// A settlement's detail (`"<what it lives by> <size>, pop. <n>[, capital]"`) with its size
+/// class and population as its homes now make them.
+pub fn resized_detail(detail: &str, was: &str, now: &str, people: u32) -> String {
+    let (head, tail) = match detail.split_once(", pop. ") {
+        Some((h, rest)) => (h, rest.split_once(", ").map_or(String::new(), |(_, t)| format!(", {t}"))),
+        None => (detail, String::new()),
+    };
+    // (`"<what it lives by> <size>"`, or a town added by hand's `"<size> (added by hand)"`.)
+    let head = match (head.strip_suffix(was), head.strip_prefix(was)) {
+        (Some(h), _) if !h.is_empty() => format!("{h}{now}"),
+        (_, Some(t)) if t.starts_with(" (") => format!("{now}{t}"),
+        _ => head.to_string(),
+    };
+    let digits = people.to_string();
+    let mut n = String::new();
+    for (k, ch) in digits.chars().enumerate() {
+        if k > 0 && (digits.len() - k) % 3 == 0 {
+            n.push(',');
+        }
+        n.push(ch);
+    }
+    if head.is_empty() { format!("pop. {n}{tail}") } else { format!("{head}, pop. {n}{tail}") }
 }
 
 /// A feature other than `id` that has the name `name` (as renamed), if any: its id.
@@ -1687,6 +1744,13 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     if let Some(w) = edits.wharves.get(id) {
         return Some(crate::wharf::mid(w));
     }
+    // A link put down by hand at its first end.
+    if let Some(l) = edits.links.get(id) {
+        let (site, li) = crate::links::site_of(&l.a.level)?;
+        let it = crate::interior::generate_id(world, t0, site)?;
+        it.levels.get(li)?;
+        return Some(crate::interior::to_world(&it, l.a.x as f64 + 0.5, l.a.y as f64 + 0.5));
+    }
     // A point note at its spot (on its level, which must be there).
     if let Some((site, li, _)) = split_point_id(id) {
         let at = edits.notes.get(id)?.at?;
@@ -2415,6 +2479,13 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     if id.starts_with("rd:") || world.file.edits.crossings.contains_key(id) {
         return way_json(world, t0, id);
     }
+    // A link put down by hand: its ends, and what keeps either from showing.
+    if let Some(l) = world.file.edits.links.get(id) {
+        let mut v = crate::links::link_json(world, t0, id, l);
+        v["kind"] = json!("link");
+        v["problems"] = json!(crate::links::problems(world, t0, id, l));
+        return Some(v);
+    }
     let fs = features(world, t0);
     // (A building taken away: where it stood, while its place is in the world.)
     let here = || crate::world::layout_in_id(id).is_some_and(|li| li < town::layout_count(t0));
@@ -2587,6 +2658,10 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     let (npcs, plots) = authored_at(world, t0, &[id.to_string()]);
     v["npcs"] = json!(npcs);
     v["plots"] = json!(plots);
+    let links: Vec<Value> = crate::links::of(&world.file.edits, id).map(|(k, l)| crate::links::link_json(world, t0, k, l)).collect();
+    if !links.is_empty() {
+        v["links"] = json!(links);
+    }
     Some(v)
 }
 
@@ -2655,8 +2730,10 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     flights.sort_by(|a, b| b.0.total_cmp(&a.0));
     let stairs: Vec<Value> = flights.iter().take(40).map(|(rise, at, length)| json!({ "x_ft": at[0].round(), "y_ft": at[1].round(), "length_ft": length.round(), "rise_ft": (*rise as f64 * 10.0).round() / 10.0 })).collect();
     let _ = t0;
+    // (A town laid out by hand: the size class its people make, as its feature's kind.)
+    let tier = town::hand::size(world, l.index as usize).map_or(l.tier, |x| x.1);
     json!({
-        "tier": l.tier.name(),
+        "tier": tier.name(),
         "culture": town::culture::NAMES[l.culture as usize % 5],
         "buildings": l.buildings.len(),
         "walled": !l.walls.is_empty(),
@@ -2809,7 +2886,7 @@ pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
         ids.extend(h["settlement"].as_u64().and_then(|li| feature_of_layout(world, t0, li as usize)));
     }
     let (npcs, plots) = authored_at(world, t0, &ids);
-    json!({
+    let mut out = json!({
         "x_ft": x.round(),
         "y_ft": y.round(),
         "elevation_ft": (ground - sea).round(),
@@ -2821,7 +2898,32 @@ pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
         "here": here,
         "nearby": near,
         "nearest_settlements": nearest_settlements(&fs, p, "", 3),
-    })
+    });
+    let links = links_near(world, t0, p);
+    if !links.is_empty() {
+        out["links"] = json!(links);
+    }
+    out
+}
+
+/// The links put down by hand with an end below point `p`: in the sewer section under it, or in a
+/// site, keep or building whose place is within 100 ft.
+pub fn links_near(world: &World, t0: &T0, p: P) -> Vec<Value> {
+    let links = &world.file.edits.links;
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let s = crate::under::SEWER_SECTION_FT;
+    let (sx, sy) = (crate::core::floor(p[0] / s) as i64, crate::core::floor(p[1] / s) as i64);
+    let under = |site: &str| {
+        let n: Vec<i64> = site.split(':').skip(1).filter_map(|v| v.parse().ok()).collect();
+        match (site.as_bytes()[0], n.as_slice()) {
+            (b'w', [_, x, y]) => (*x, *y) == (sx, sy),
+            _ => position(world, t0, site).is_some_and(|q| geom::dist(p, q) <= 100.0),
+        }
+    };
+    let at = |e: &crate::links::End| crate::links::site_of(&e.level).is_some_and(|(site, _)| under(site));
+    links.iter().filter(|(_, l)| at(&l.a) || at(&l.b)).map(|(k, l)| crate::links::link_json(world, t0, k, l)).collect()
 }
 
 // ---------------------------------------------------------------------------------------

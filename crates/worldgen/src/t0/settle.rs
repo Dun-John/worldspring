@@ -154,6 +154,8 @@ pub enum PoiKind {
     Wall,
     /// Created only: a village or town added without remaking the world (`t0::made`).
     Settlement,
+    /// Created only: a plot drawn by hand, filled as a hand town's block (`world::Created::fill`).
+    Plot,
 }
 
 impl PoiKind {
@@ -171,12 +173,13 @@ impl PoiKind {
             "castle" => PoiKind::Castle,
             "wall" => PoiKind::Wall,
             "village" | "town" => PoiKind::Settlement,
+            "plot" => PoiKind::Plot,
             _ => PoiKind::Ruin,
         }
     }
 
     pub fn from_u8(v: u8) -> PoiKind {
-        const ALL: [PoiKind; 12] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building, PoiKind::Castle, PoiKind::Wall, PoiKind::Settlement];
+        const ALL: [PoiKind; 13] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building, PoiKind::Castle, PoiKind::Wall, PoiKind::Settlement, PoiKind::Plot];
         ALL[(v as usize).min(ALL.len() - 1)]
     }
 }

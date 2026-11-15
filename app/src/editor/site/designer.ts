@@ -27,9 +27,9 @@ import type { MapView, PointerTool } from '../../render/MapView';
 import { APSE_E, APSE_N, APSE_S, APSE_W, isApse } from '../../render/roomShapes';
 import { FINGER_PX, WheelTurn, type BarAt, type HandState, type HeldView, type Placer } from '../placing';
 import { lockColor } from '../../render/InteriorLayer';
-import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, paintTerrain, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
+import { setLanding, addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, paintTerrain, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
 
-export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'terrain' | 'prop' | 'stairs' | 'wall' | 'merge';
+export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'terrain' | 'prop' | 'stairs' | 'wall' | 'merge' | 'landing';
 
 /** The designer menu's choices. */
 export interface DesignSettings {
@@ -608,6 +608,12 @@ export class SiteDesigner implements PointerTool, Placer {
           }
         });
       }
+      case 'landing': {
+        const here = d.levels[li].landing;
+        if (here && here[0] === sq[0] && here[1] === sq[1]) return void this.change((n) => setLanding(n, li, null));
+        if (cells[k] < 0) return this.host.hint('The stairs come out on the floor');
+        return void this.change((n) => setLanding(n, li, [sq[0], sq[1]]));
+      }
       case 'stairs': {
         if (this.building) return;
         if (li === 0) return this.host.hint('The deepest level has no way down: add a level below first');
@@ -628,7 +634,7 @@ export class SiteDesigner implements PointerTool, Placer {
     const [ra, rb] = [room(e.a), room(e.b)];
     const at = doorPlace(d, cells, e);
     if (!at || ra === rb) return this.host.hint('Doors go in walls: between two rooms, or to the outside');
-    if (ra >= 0 && rb >= 0) return void this.change((n) => cycleDoor(n, li, at[0], at[1], at[2], 0, !!this.host.settings().portcullis));
+    if (ra >= 0 && rb >= 0) return void this.change((n) => cycleDoor(n, li, at[0], at[1], at[2], this.host.settings().lock, !!this.host.settings().portcullis));
     if ((d.levels[li].z ?? 0) !== 0) return this.host.hint('Doors to the outside go on the ground floor');
     return void this.change((n) => cycleOuterDoor(n, li, at[0], at[1], at[2]));
   }
@@ -1042,7 +1048,7 @@ export class SiteDesigner implements PointerTool, Placer {
     const s = this.host.settings();
     const scr = (gx: number, gy: number) => cam.worldToScreen(...layer.toWorld(gx, gy));
     const quad = (x0: number, y0: number, x1: number, y1: number) => [...scr(x0, y0), ...scr(x1, y0), ...scr(x1, y1), ...scr(x0, y1)];
-    const ink = s.mode === 'rock' || (s.mode === 'terrain' && !s.terrain) ? 0x7f1d1d : s.mode === 'door' && s.lock && !this.building ? lockColor(s.lock) : 0xf97316;
+    const ink = s.mode === 'rock' || (s.mode === 'terrain' && !s.terrain) ? 0x7f1d1d : s.mode === 'door' && s.lock ? lockColor(s.lock) : 0xf97316;
     if (this.stroke) for (const k of this.stroke) g.poly(quad(k % d.nx, Math.floor(k / d.nx), (k % d.nx) + 1, Math.floor(k / d.nx) + 1)).fill({ color: ink, alpha: 0.35 });
     if (this.rect) {
       const { from, to } = this.rect;
@@ -1053,6 +1059,13 @@ export class SiteDesigner implements PointerTool, Placer {
     if (this.line) {
       const [a, b] = [scr(...this.line.from), scr(...this.line.to)];
       g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: 4, color: ink, cap: 'round' });
+    }
+    // Where the stairs come out on this level, if set by hand.
+    const lan = d.levels[this.level]?.landing;
+    if (lan) {
+      const c = scr(lan[0] + 0.5, lan[1] + 0.5);
+      g.poly(quad(lan[0], lan[1], lan[0] + 1, lan[1] + 1)).stroke({ width: 2, color: 0x38bdf8 });
+      g.circle(c[0], c[1], 4).fill({ color: 0x38bdf8 });
     }
     // A building's stair block, while it is being moved.
     if (this.building && s.mode === 'stairs' && d.stairs && !this.rect) {

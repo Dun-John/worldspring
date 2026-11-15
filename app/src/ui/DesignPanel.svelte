@@ -43,10 +43,13 @@
     onProblem: (level: number, at?: [number, number]) => void;
     /** The piece picked up, if any. */
     held: HeldView;
+    /** To the ways across (paired exits between levels and places below ground), if they can be put down here. */
+    onLinks?: () => void;
   }
 
-  let { designer, version, settings = $bindable(), catalog, name, renames, saved, sprites, picture, peek = false, onRename, onSave, onReset, onProblem, held }: Props = $props();
+  let { designer, version, settings = $bindable(), catalog, name, renames, saved, sprites, picture, peek = false, onRename, onSave, onReset, onProblem, held, onLinks }: Props = $props();
 
+  const LANDING: { key: DesignMode; label: string; icon: IconName; kbd: string; hint: string } = { key: 'landing', label: 'Stair landing', icon: 'target', kbd: 'Y', hint: 'Click a floor square on this level: the stairs come out there (underground, the way up sits there too). Click it again to leave it to the generator.' };
   const TOOLS: { key: DesignMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a room to choose it.' },
     { key: 'room', label: 'Room', icon: 'room', kbd: 'R', hint: 'Paint squares into the room chosen, else into a new room of the kind below.' },
@@ -57,6 +60,7 @@
     { key: 'terrain', label: 'Terrain', icon: 'waves', kbd: 'A', hint: 'Drag out a rectangle of what is chosen below on bare floor. Bridges and stepping stones go over water and chasms; Clear takes terrain away. Deep water and chasms block the way until a bridge or stones cross them.' },
     { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the prop down. Click a prop to pick it up (even with another chosen), click again to put it down. T turns the prop pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Way down', icon: 'stairs', kbd: 'W', hint: 'Click a square for this level’s way down; the way up below follows.' },
+    LANDING,
   ];
   // A building's: walls are where rooms meet; its floors follow its storeys.
   const BUILDING_TOOLS: typeof TOOLS = [
@@ -65,12 +69,13 @@
     { key: 'rect', label: 'Rectangle', icon: 'square', kbd: 'X', hint: 'Drag out a new room of the kind below, inside the walls.' },
     { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'L', hint: 'Draw a line along the grid across a room (or click by a grid line): the wall runs on to the room’s walls and splits it in two.' },
     { key: 'merge', label: 'Take a wall away', icon: 'eraser', kbd: 'E', hint: 'Click a wall between two rooms: they become one.' },
-    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none (with Portcullis chosen below, an iron grate, again none). In an outside wall of the ground floor: a back door, again the front door, again none.' },
+    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none (with Portcullis chosen below, an iron grate, again none). With a lock colour chosen below, a door with that lock between two rooms. In an outside wall of the ground floor: a back door, again the front door, again none.' },
     { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the piece down (furniture, a prop or one of your pictures). Click a piece to pick it up (even with another chosen), click again to put it down. T turns the piece pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
+    LANDING,
   ];
   // The door tool's locks (colours as `Door::lock` and a key's look) and the terrain tool's choices.
-  const LOCKS = [1, 2, 3, 4, 5, 6, 7];
+  const LOCKS = Array.from({ length: 31 }, (_, i) => i + 1);
   const TERRAINS: [string, string][][] = [
     [['water_shallow', 'Shallow water'], ['water_deep', 'Deep water'], ['chasm', 'Chasm'], ['rubble_slope', 'Rubble slope']],
     [['rope_bridge', 'Rope bridge'], ['stone_bridge', 'Stone bridge'], ['stepping_stone', 'Stepping stones'], ['', 'Clear']],
@@ -173,10 +178,11 @@
 
 <div class="design">
   {#if !peek}<div class="site">Designing <b>{name}</b> <span class="ws-muted">· {building ? (lv?.name ?? '') : `level ${level + 1} of ${draft?.levels.length ?? 1}`}</span></div>{/if}
-  <div class="tools" role="toolbar" aria-label="Design tools" style:--tools={tools.length}>
+  <div class="tools" role="toolbar" aria-label="Design tools" style:--tools={tools.length + (onLinks ? 1 : 0)}>
     {#each tools as t (t.key)}
       <button class="ws-icon-btn" aria-pressed={settings.mode === t.key} title="{t.label} ({t.kbd})" aria-label={t.label} onclick={() => (settings = { ...settings, mode: t.key })}><Icon name={t.icon} /></button>
     {/each}
+    {#if onLinks}<button class="ws-icon-btn" aria-pressed="false" title="Ways across (J): stairs, ladders, passages to another level or place below ground" aria-label="Ways across" onclick={onLinks}><Icon name="link" /></button>{/if}
   </div>
   {#if settings.mode === 'prop' && (held || settings.prop)}
     <InHand
@@ -252,10 +258,10 @@
         </div>
       </div>
     {/if}
-    {#if settings.mode === 'door' && !building}
+    {#if settings.mode === 'door'}
       <div class="ws-field">
         Lock
-        <div class="ws-seg">
+        <div class="ws-seg locks">
           <button class:on={settings.lock === 0} title="Plain and secret doors" onclick={() => (settings.lock = 0)}>None</button>
           {#each LOCKS as c (c)}
             <button class:on={settings.lock === c} title="{lookName('key', c)} lock: its key is the {lookName('key', c).toLowerCase()} one" aria-label="{lookName('key', c)} lock" onclick={() => (settings.lock = c)}>
@@ -403,6 +409,24 @@
   }
   .look {
     max-width: 16em;
+  }
+  .locks {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--tap), 1fr));
+    gap: 2px;
+    max-width: 20em;
+    border: none;
+    overflow: visible;
+    background: transparent;
+  }
+  .locks > button {
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm);
+    background: var(--btn);
+    min-width: var(--tap);
+  }
+  .locks > button:first-child {
+    grid-column: 1 / -1;
   }
   .swatch {
     display: inline-block;

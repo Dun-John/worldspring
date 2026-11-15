@@ -529,10 +529,8 @@ fn reconcile(world: &World, index: usize, l: &Layout, before: &HandRecords, afte
             continue;
         }
         let like = overlaps[f].first().and_then(|x| after.blocks.get(&x.1).or_else(|| before.blocks.get(&x.1))).cloned();
-        let mut id = next_id(&after.blocks).max(next_id(&before.blocks));
-        if id >= hand::ROW_BLOCK {
-            id = (0..hand::ROW_BLOCK).find(|k| !after.blocks.contains_key(k) && !before.blocks.contains_key(k)).unwrap_or(id);
-        }
+        // (Numbered past every block the town has had: a number is never given out twice.)
+        let id = next_id(&after.blocks).max(next_id(&before.blocks)).max(town.next_block.unwrap_or(0));
         let (fill, district) = like.map_or((town.fill.clone(), None), |b| (b.fill, b.district));
         after.blocks.insert(id, Block { at: [0.0, 0.0], fill, district, seed: hand::hex(hash3(seed, id as i64, 0xb10c, 1)), generation: 0, pins: Vec::new(), kept: None });
         assign[f] = Some(id);
@@ -548,6 +546,13 @@ fn reconcile(world: &World, index: usize, l: &Layout, before: &HandRecords, afte
             out.removed.insert(b);
             out.rings.push(g.ring.clone());
         }
+    }
+    // (The highest number given out, kept in the header once it is more than the blocks show.)
+    let high = next_id(&after.blocks).max(next_id(&before.blocks)).max(town.next_block.unwrap_or(0));
+    if let Some(t) = after.town.as_mut()
+        && (t.next_block.is_some() || high > next_id(&after.blocks))
+    {
+        t.next_block = Some(high);
     }
     let mut relaid_face: BTreeMap<u32, usize> = BTreeMap::new();
     for f in 0..fa.len() {
@@ -966,6 +971,9 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
                 return Err(format!("that would break the streets: {why}"));
             }
             let blocks = reconcile(world, index, &before_l, &before, &mut after, &asked);
+            if after.blocks.keys().next_back().is_some_and(|&k| k >= hand::ROW_BLOCK) {
+                return Err(format!("no more than {} blocks in a town (a block's number is never used again)", hand::ROW_BLOCK));
+            }
             refresh_works(&mut after, &before, &blocks.rings);
             let (kb, ka) = (keyed(&li, &before), keyed(&li, &after));
             for (k, v) in &ka {
@@ -984,6 +992,26 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
         Some((l, p)) => (l, p),
         None => (super::base_layout(&w2, t0, index), Vec::new()),
     };
+    // No building left without an id of its own: refused (a block or row with more buildings
+    // than its range of ids holds, not so before).
+    const NO_IDS: [&str; 3] = ["more buildings than a block has ids for", "more buildings than a row has ids for", "block number too high for its ids"];
+    if let Some(p) = problems.iter().find(|p| NO_IDS.contains(&p.1)) {
+        let had = hand::build_kept(world, t0, index).is_some_and(|(_, b)| b.contains(p));
+        if !had {
+            return Err(format!("{}: {} (make it smaller)", p.0, p.1));
+        }
+    }
+    // Its population counted from its homes as they now stand, and the size class it makes.
+    if let Some(h) = w2.file.edits.streets.get(&li) {
+        let n = HandRecords::of(&w2.file.edits.streets, index).town.map_or_else(|| hand::people_of(&after_l), |t| hand::count_people(&t, &after_l));
+        if h.get("people").and_then(Value::as_u64) != Some(n as u64) {
+            let mut h = h.clone();
+            h["people"] = json!(n);
+            ch.streets.insert(li.clone(), Some(h));
+        }
+        report["population"] = json!(n);
+        report["class"] = json!(hand::tier_of_people(n).name());
+    }
     let set: Vec<&String> = ch.streets.iter().filter(|x| x.1.is_some()).map(|x| x.0).collect();
     let removed: Vec<&String> = ch.streets.iter().filter(|x| x.1.is_none()).map(|x| x.0).collect();
     let few = |v: &[&String]| if v.len() > 40 { json!({ "count": v.len() }) } else { json!(v) };

@@ -3,12 +3,12 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat, linkSites } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
 import { noteMarkers } from '../ui/notes';
-import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
+import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type LinkFar, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
@@ -826,9 +826,10 @@ export class MapView {
 
   /** Go inside a building or a site, over the map, framed; false if it can't be entered.
    * `keep`: on that level, the camera staying where it is; `from`: arriving at this site's way
-   * back to that one (a trapdoor, stairs or ladder between sites). A city's sewers open as one
+   * back to that one (a trapdoor, stairs or ladder between sites), or at a level and square (a
+   * paired exit's far end). A city's sewers open as one
    * network (`Sewers`); a section's undercroft on its own. */
-  async enterBuilding(id: string, keep?: { level: number }, from?: string): Promise<boolean> {
+  async enterBuilding(id: string, keep?: { level: number }, from?: string | LinkFar): Promise<boolean> {
     this.unmarkUnless(id);
     const it = await this.gen.interior(id);
     if (it) await this.nameWays(it);
@@ -837,7 +838,7 @@ export class MapView {
       if (InteriorLayer.picked?.startsWith(`r:${id}:`)) this.markRoom(null);
       return false;
     }
-    const back = from ? linkIn(it, from) : null;
+    const back = typeof from === 'string' ? linkIn(it, from) : from && from.level < it.levels.length ? from : null;
     const level = back?.level ?? keep?.level ?? it.entry_level;
     const sewer = id.startsWith('w:') && level === it.entry_level;
     // Underground, the level one arrives on is shaded in a worker first (no stall here).
@@ -952,7 +953,7 @@ export class MapView {
       if (m.from !== this.interior.interior.id) await this.enterBuilding(m.from, { level: m.level });
       else this.setInteriorLevel(m.level);
     } else if (m.kind === 'surface') this.exitBuilding();
-    else await this.enterBuilding(m.to, undefined, m.from);
+    else await this.enterBuilding(m.to, undefined, m.far ?? m.from);
   }
 
   /** Outline a room picked from the search (`r:` id; null: none), on whichever layer shows it. */
@@ -1316,9 +1317,14 @@ export class MapView {
     if (prev.hidden !== next.hidden || createdChanged) this.labels?.setHidden(this.hiddenLabels(next));
     if (prev.npcs !== next.npcs) this.markNpcs();
     if (prev.notes !== next.notes) this.markNotes();
-    // A site designed anew while we are in it (by undo, an agent): shown as it is now.
+    // A site designed anew while we are in it (by undo, an agent): shown as it is now. Paired
+    // exits put down or taken away: both ends' sites are made again (the sewers, if any end is
+    // in a section of the network open).
     const here = this.interior?.interior.id;
-    if (here && here !== this.designing && prev.designs?.[here] !== next.designs?.[here] && JSON.stringify(prev.designs?.[here]) !== JSON.stringify(next.designs?.[here])) {
+    const linked = linkSites(prev.links, next.links);
+    for (const id of linked) this.peekCache.delete(id);
+    const relink = !!here && [...linked].some((id) => id === here || (!!this.sewers && id.startsWith(`w:${this.sewers.layout}:`)));
+    if (here && here !== this.designing && !relink && prev.designs?.[here] !== next.designs?.[here] && JSON.stringify(prev.designs?.[here]) !== JSON.stringify(next.designs?.[here])) {
       void this.enterBuilding(here, { level: this.interior!.currentLevel });
     }
     if (this.battle) this.battle.sprites = next.sprites ?? {};
@@ -1503,6 +1509,7 @@ export class MapView {
     // (Asked once the generators have the edits: after they are sent.)
     if (!send) {
       if (madeChanged) this.refreshMade(false);
+      if (relink) this.relinkHere();
       return;
     }
     if (rects.length || battleRects.length) {
@@ -1519,7 +1526,16 @@ export class MapView {
       this.gen.setEdits(next, [], this.editEpoch, [], changed && { prev, changed });
     }
     if (madeChanged) this.refreshMade(true);
-    if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
+    if (relink) this.relinkHere();
+    else if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
+  }
+
+  /** The site in view made again for its paired exits (the sewers' sections all made again). */
+  private relinkHere() {
+    if (!this.interior || this.interior.interior.id === this.designing) return;
+    const [id, level] = [this.interior.interior.id, this.interior.currentLevel];
+    if (this.sewers) this.exitBuilding(true);
+    void this.enterBuilding(id, { level });
   }
 
   /** Draw objects about to be put down (a brush stroke) at once, before the change is made. */

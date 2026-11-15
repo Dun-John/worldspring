@@ -55,7 +55,7 @@ pub fn list() -> Value {
         { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace). by_road lists the stretches (rd:) it takes and the named roads it follows.", "inputSchema": schema(json!({ "from": crate::args::point_schema("Where from: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]"), "to": crate::args::point_schema("Where to: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]") }), &["from", "to"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_roads", "title": "Roads", "description": "The road network: sketch-drawn roads, then roads between settlements and junctions, longest first, with id (rd:), class, length, ends and name. Returns {items, found, named}; limit cuts it. Filter by at and radius_mi, settlement, class or drawn.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 3000, "default": 25 }, "settlement": { "type": "string", "description": "Only roads ending at this settlement" }, "class": { "type": "string", "description": "king's road (also kings road, kings_road), road or track; results say \"king's road\"" }, "drawn": { "type": "boolean", "default": false, "description": "Only roads drawn in the sketch" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, every kind of object with its tactical rules, and the objects near the place by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "minimum": 1, "maximum": 64, "default": 12 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (JPEG 1024x683; width_px 256-1536, format png). Needs the app open in a visible tab with the map generated. size_ft is the ground across: ~450 a battlemap, 3000 a village, 20000 a city.", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 }, "width_px": { "type": "integer", "minimum": 256, "maximum": 1536, "default": 1024, "description": "Pixels across (height 2/3 of it)" }, "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" } })), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (JPEG 1024x683; width_px 256-1536, format png). Needs the app open in a visible tab with the map generated. size_ft is the ground across: ~450 a battlemap, 3000 a village, 20000 a city. Inside: an l: or r: id in at shows that level of its building or site (its floor plan, doors, locks, furniture), as does a b:, u: or k: id with level; the map goes back as it was.", "inputSchema": schema(merge(place_props(), json!({ "level": { "type": "integer", "minimum": 0, "description": "With at a building or site (b:, u:, k:): show its inside on this level, counted from the bottom (0 the lowest, as the l: ids)" }, "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 }, "width_px": { "type": "integer", "minimum": 256, "maximum": 1536, "default": 1024, "description": "Pixels across (height 2/3 of it)" }, "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 } })), &[]) },
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, site, a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), a road stretch (rd:) or crossing (v:). Empty restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
         { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "remove_tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to take off (notes may be left out when tags or remove_tags is given)" }, "append": { "type": "boolean", "default": false } }), &["id"]) },
@@ -81,6 +81,7 @@ pub fn list() -> Value {
         a.extend(crate::works::list());
         a.extend(crate::crossings::list());
         a.extend(crate::hexes::list());
+        a.extend(crate::links::list());
         a.extend(crate::ground::list());
         a.extend(crate::harbour::list());
         a.extend(crate::design::list());
@@ -112,11 +113,11 @@ pub fn list() -> Value {
 /// Tools that only read (or look): `readOnlyHint`.
 const READS: &[&str] = &[
     "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch",
+    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch", "list_links",
 ];
 /// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
 const DESTRUCTIVE: &[&str] = &[
-    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "reset_site_design", "set_site_design", "edit_town", "batch",
+    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "delete_link", "reset_site_design", "set_site_design", "edit_town", "batch",
 ];
 /// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
 /// `focus_view` and the creates that return what is already there.
@@ -242,6 +243,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::hexes::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::links::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::crossings::call(app, name, &a).await {
@@ -497,7 +501,15 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             let size = a["size_ft"].as_f64().unwrap_or(3000.0);
             let width = a["width_px"].as_u64().unwrap_or(1024);
             let png = a["format"].as_str() == Some("png");
-            let reply = app.ask_app(json!({ "type": "render", "x": p[0], "y": p[1], "size": size, "width_px": width, "format": if png { "png" } else { "jpeg" } }), 45).await.map_err(|e| {
+            // (An l: or r: id, or a b:, u: or k: one with a level, is looked at from inside.)
+            let at = a["at"].as_str().unwrap_or("");
+            let inside = match (agent::split_room_id(at), a["level"].as_u64()) {
+                (Some((site, lv, _)), _) => Some(json!({ "id": site, "level": lv })),
+                (None, Some(lv)) if matches!(at.get(..2), Some("b:" | "u:" | "k:")) => Some(json!({ "id": at, "level": lv })),
+                (None, Some(_)) => return Err("level: needs at to be a building or site id (b:, u:, k:) or use an l: id".into()),
+                _ => None,
+            };
+            let reply = app.ask_app(json!({ "type": "render", "x": p[0], "y": p[1], "size": size, "width_px": width, "format": if png { "png" } else { "jpeg" }, "inside": inside }), 45).await.map_err(|e| {
                 format!("{e}; render_view needs the map app open in a visible tab, with the place generated (give it a few seconds and try again, or try a larger size_ft)")
             })?;
             let img = reply["image"].as_str().or_else(|| reply["png"].as_str()).ok_or_else(|| format!("the app could not render: {} (the tab must be visible and the map generated; try again, or a larger size_ft)", reply["error"].as_str().unwrap_or("no image")))?;

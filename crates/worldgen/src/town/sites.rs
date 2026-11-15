@@ -67,6 +67,10 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         works.wall_style = super::wallstyle::WallStyle::of(s);
     }
     let created = poi.checked_sub(t0.base_pois).and_then(|k| world.file.edits.created.get(k));
+    // (A plot drawn by hand: its outline filled as a hand town's block, `hand::plot_layout`.)
+    if p.kind == PoiKind::Plot && let Some(c) = created {
+        return super::hand::plot_layout(world, t0, t0.settlements.len() + poi, c);
+    }
     // Uphill (unit, local): passages run into the hill.
     let uphill = |q: P| {
         let e = 60.0;
@@ -242,7 +246,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             }
         }
         // (Laid out as a settlement, `town::generate`; never here.)
-        PoiKind::Settlement => {}
+        PoiKind::Settlement | PoiKind::Plot => {}
         PoiKind::Building => {
             // Drawn by hand: one building, as the world file has it.
             if let Some(c) = created {

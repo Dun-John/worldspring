@@ -1587,6 +1587,15 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
         });
         d = put.unwrap_or_else(|| panic!("{id}: no room in the study for {kind}"));
     }
+    // (A ballista on any free square of the ground floor.)
+    for (kind, variant) in [("ballista", None)] {
+        let put = (0..cells.len()).filter(|&k| cells[k] >= 0).find_map(|k| {
+            let mut t = d.clone();
+            t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1, back: None, variant });
+            t.problems(&ws, t0, &id).unwrap().1.iter().all(|p| !p.blocking).then_some(t)
+        });
+        d = put.unwrap_or_else(|| panic!("{id}: no square for a {kind}"));
+    }
     let (built, problems) = d.problems(&ws, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     let floor = &built.levels[built.entry_level].furniture;
@@ -2333,6 +2342,109 @@ fn underground_guarantee() {
     assert!(shaped_rooms > 100, "too few shaped rooms built ({shaped_rooms})");
     designed_site(&world, &t0);
     designed_cellars(&world, &t0);
+    paired_links(&world, &t0);
+}
+
+/// Links put down by hand (`Edits::links`): between a site's deepest level and a sewer section,
+/// the section and a cellar, and two levels of one site; each end shows on its own map as a
+/// `link` item on floor, reached from the level's way in, its way naming the far end; places no
+/// link names build as before.
+fn paired_links(world: &World, t0: &worldgen::t0::T0) {
+    use worldgen::interior::{self, Interior, Level};
+    use worldgen::links::{self, End, Link};
+    use worldgen::town;
+    use worldgen::under::UnderKind;
+    // (A created site of two levels: `underground_guarantee`'s second.)
+    let site = format!("u:{}:0", t0.settlements.len() + t0.base_pois + 1);
+    let (sewer, cellar, other) = (0..t0.settlements.len())
+        .find_map(|li| {
+            let l = town::layout(world, t0, li);
+            let e = l.entrances.iter().find(|e| e.kind == UnderKind::Sewer)?;
+            let q = worldgen::under::sewer_section(e.at);
+            let s = worldgen::under::SEWER_SECTION_FT;
+            let b = l.buildings.iter().find(|b| worldgen::under::sewer_link_of(t0, &l, b).is_some())?;
+            let other = l.entrances.iter().find(|e| e.kind != UnderKind::Sewer).map(|e| format!("u:{li}:{}", e.id))?;
+            Some((format!("w:{li}:{}:{}", (q[0] / s) as i64, (q[1] / s) as i64), format!("b:{li}:{}", b.id), other))
+        })
+        .expect("a city with sewers, a cellar on them and a site underground");
+    let built = |w: &World, id: &str| interior::generate_id(w, t0, id).unwrap_or_else(|| panic!("{id}: no interior"));
+    // A free floor square of a level (one with furniture that may move on it, if there is one).
+    let spot = |id: &str, li: usize, avoid: &[(u16, u16)]| -> End {
+        let it = built(world, id);
+        let ok = |x: u16, y: u16| !avoid.contains(&(x, y)) && links::spot_problem(&it, id, li, x, y).is_none();
+        let lv = &it.levels[li];
+        let under = lv.furniture.iter().filter(|f| !f.blocks_move && f.w == 1 && f.h == 1).map(|f| (f.x, f.y)).find(|&(x, y)| ok(x, y));
+        let any = (0..it.nx * it.ny).map(|k| ((k % it.nx) as u16, (k / it.nx) as u16)).find(|&(x, y)| ok(x, y));
+        let (x, y) = under.or(any).unwrap_or_else(|| panic!("{id} level {li}: no square for a link"));
+        End { level: links::level_id(id, li), x, y }
+    };
+    let top = built(world, &site).levels.len() - 1;
+    assert!(top > 0, "{site}: one level");
+    let cellar_li = built(world, &cellar).levels.iter().position(|l| l.z < 0).expect("a cellar");
+    let (deep, up_top) = (spot(&site, 0, &[]), spot(&site, top, &[]));
+    let (deep2, up_top2) = (spot(&site, 0, &[(deep.x, deep.y)]), spot(&site, top, &[(up_top.x, up_top.y)]));
+    let in_sewer = spot(&sewer, 0, &[]);
+    let in_sewer2 = spot(&sewer, 0, &[(in_sewer.x, in_sewer.y)]);
+    let mut file = world.file.clone();
+    let mut put = |k: &str, a: &End, b: &End, way: &str| {
+        file.edits.links.insert(k.into(), Link { a: a.clone(), b: b.clone(), way: way.into(), name: None });
+    };
+    put("j:a", &deep, &in_sewer, "ladder");
+    put("j:b", &in_sewer2, &spot(&cellar, cellar_li, &[]), "trapdoor");
+    put("j:c", &up_top, &deep2, "passage");
+    // (An end on j:a's square: the second link there is not shown.)
+    put("j:d", &up_top2, &deep, "rope");
+    let w2 = World::new(file).unwrap();
+    let edits = &w2.file.edits;
+    let blocked_ok = ["j:d"];
+    // Squares reached from `start` over floor, between rooms only through doors (any step on a natural level), round blocking furniture.
+    let reached = |it: &Interior, lv: &Level, start: usize| {
+        let (nx, ny) = (it.nx, it.ny);
+        let blocks = worldgen::under::blocked_squares(&lv.furniture, nx, ny);
+        let door = |a: usize, b: usize| {
+            let (ia, ja, ib, jb) = ((a % nx) as f32, (a / nx) as f32, (b % nx) as f32, (b / nx) as f32);
+            let (p, q) = if ja == jb { ([ia.max(ib), ja], [ia.max(ib), ja + 1.0]) } else { ([ia, ja.max(jb)], [ia + 1.0, ja.max(jb)]) };
+            lv.doors.iter().any(|d| (d.a == p && d.b == q) || (d.a == q && d.b == p))
+        };
+        let mut seen = vec![false; nx * ny];
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(k) = stack.pop() {
+            let (i, j) = (k % nx, k / nx);
+            for q in [(i > 0).then(|| k - 1), (i + 1 < nx).then(|| k + 1), (j > 0).then(|| k - nx), (j + 1 < ny).then(|| k + nx)].into_iter().flatten() {
+                if !seen[q] && lv.cells[q] >= 0 && !blocks[q] && (lv.natural || lv.cells[q] == lv.cells[k] || door(k, q)) {
+                    seen[q] = true;
+                    stack.push(q);
+                }
+            }
+        }
+        seen
+    };
+    for (key, l) in &edits.links {
+        let problems = links::problems(&w2, t0, key, l);
+        if blocked_ok.contains(&key.as_str()) {
+            assert!(problems.len() == 1 && problems[0].contains("already leads elsewhere"), "{key}: {problems:?}");
+            continue;
+        }
+        assert!(problems.is_empty(), "{key}: {problems:?}");
+        for (here, there) in [(&l.a, &l.b), (&l.b, &l.a)] {
+            let (id, li) = links::site_of(&here.level).unwrap();
+            let it = built(&w2, id);
+            let lv = &it.levels[li];
+            let (x, y) = (here.x, here.y);
+            let item: Vec<_> = lv.furniture.iter().filter(|f| x >= f.x && x < f.x + f.w && y >= f.y && y < f.y + f.h).collect();
+            assert!(item.len() == 1 && item[0].kind == links::KIND && !item[0].blocks_move, "{key} at {}: {:?} on its square", here.level, item.iter().map(|f| f.kind).collect::<Vec<_>>());
+            let way = lv.links.iter().find(|w| w.id == *key && (w.x, w.y) == (x, y)).unwrap_or_else(|| panic!("{key}: no way at {}", here.level));
+            let far = way.far.as_ref().unwrap();
+            assert_eq!((way.to.as_str(), links::level_id(&way.to, far.level), far.x, far.y), (links::site_of(&there.level).unwrap().0, there.level.clone(), there.x, there.y), "{key}: the way leads elsewhere");
+            // (From the way onto the level: the way in or up, else a cellar's stairs.)
+            let at = |kind: &str| lv.furniture.iter().find(|f| f.kind == kind).map(|f| f.y as usize * it.nx + f.x as usize);
+            let start = at("exit").or_else(|| at("up")).unwrap_or(it.stairs[1] * it.nx + it.stairs[0]);
+            assert!(reached(&it, lv, start)[y as usize * it.nx + x as usize], "{key} at {}: not reached from the way in", here.level);
+        }
+    }
+    // A place no link names builds as before.
+    assert_eq!(serde_json::to_string(&built(&w2, &other)).unwrap(), serde_json::to_string(&built(world, &other)).unwrap(), "{other}: changed by links elsewhere");
 }
 
 /// Cellars designed where they lead on: a large keep's and a cellar on the sewers dug two deep
@@ -2449,6 +2561,21 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     let (it, problems) = d.problems(world, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     assert_eq!(it.levels[0].doors.len(), 1, "{id}: one door from the landing into the vault");
+    // A lock of colour 12 (door flags bits 8-11) on that door builds and reads back; the first seven keep bits 4-6.
+    let mut locked = d.clone();
+    locked.levels[0].doors[0][3] |= worldgen::interior::design::lock_flags(12);
+    assert_eq!(locked.levels[0].doors[0][3] >> 4 & 7, 4, "{id}: the low bits of lock 12");
+    assert_eq!(worldgen::interior::design::lock_flags(5), 5 << 4, "{id}: an old lock colour's flags changed");
+    let (lit, lp) = locked.problems(world, t0, &id).unwrap();
+    assert!(lit.levels[0].doors[0].lock == 12 && lp.iter().any(|p| p.text.contains("lock 12") && p.text.contains("no key")), "{id}: lock 12: {lp:?}");
+    assert!(design::from_text(&design::to_text(&locked, &|_, _| None).unwrap(), &base).unwrap().0 == locked, "{id}: the lock 12 doesn't read back");
+    // A landing set by hand: the way up must sit on it.
+    let mut lands = d.clone();
+    lands.levels[0].landing = Some([x as u16 - 1, y as u16]);
+    assert!(lands.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.text.contains("not at the landing")), "{id}: a way up off its landing");
+    lands.levels[0].items.iter_mut().filter(|f| f.kind == "up").for_each(|f| f.x -= 1);
+    assert!(lands.problems(world, t0, &id).unwrap().1.iter().all(|p| !p.blocking), "{id}: the way up on its landing refused");
+    assert!(design::from_text(&design::to_text(&lands, &|_, _| None).unwrap(), &base).unwrap().0 == lands, "{id}: the landing doesn't read back");
     let chest = it.levels[0].furniture.iter().find(|f| f.kind == "chest").expect("the chest");
     assert!((chest.back, chest.variant) == (Some(1), Some(2)), "{id}: the chest's side and look: {chest:?}");
     let text = design::to_text(&d, &|_, _| None).unwrap();
@@ -5213,4 +5340,142 @@ fn a_culture_change_moves_nothing_else() {
     assert!(!c.unchanged && c.aside.is_empty() && e.cultures.is_empty(), "{c:?}");
     ex.world.file.edits = e;
     assert_eq!(laid(&ex, li), laid0, "changed back, it is not laid out as before");
+}
+
+/// Towns laid out by hand (Roadmap 6, P3): converting a town gives the same records twice, and its
+/// layout equals the generated one (buildings, ids, walls and towers within 1/64 ft); two unrelated
+/// edits give the same records and layout in either order; a world remade round it keeps it as it
+/// was; its battlemap keeps the guarantee (buildings, cover, seams); a blank town with streets drawn
+/// round its centre builds blocks of homes, and its population is counted from them.
+#[test]
+fn hand_town_guarantee() {
+    use worldgen::t0::{T0, remap, settle::Tier};
+    use worldgen::town::{self, Layout, hand, handedit};
+    let base = World::from_json(&world_json(3)).unwrap();
+    let t0 = T0::generate(&base);
+    let ask = |w: &World, t0: &T0, li: usize, req: &str| -> World {
+        let asked: handedit::HandRequest = serde_json::from_str(req).unwrap();
+        let (ch, _) = handedit::change(w, t0, li, &asked).unwrap_or_else(|e| panic!("L{li} {req}: {e}"));
+        let mut f = w.file.clone();
+        ch.apply(&mut f.edits);
+        World::new(f).unwrap()
+    };
+    let near = |a: f64, b: f64| (a - b).abs() <= 1.0 / 64.0 + 1e-9;
+    let same = |a: &Layout, b: &Layout, what: &str| {
+        let (mut x, mut y) = (a.buildings.iter().collect::<Vec<_>>(), b.buildings.iter().collect::<Vec<_>>());
+        x.sort_by_key(|b| b.id);
+        y.sort_by_key(|b| b.id);
+        assert_eq!(x.len(), y.len(), "{what}: buildings");
+        for (p, q) in x.iter().zip(&y) {
+            assert!(p.id == q.id && p.func == q.func && p.poly.len() == q.poly.len(), "{what}: building {} / {}", p.id, q.id);
+            assert!(p.poly.iter().zip(&q.poly).all(|(u, v)| near(u[0], v[0]) && near(u[1], v[1])), "{what}: building {} moved", p.id);
+        }
+        assert_eq!(a.walls.len(), b.walls.len(), "{what}: walls");
+        for (p, q) in a.walls.iter().zip(&b.walls) {
+            assert!(p.len() == q.len() && p.iter().zip(q).all(|(u, v)| near(u[0], v[0]) && near(u[1], v[1])), "{what}: a wall moved");
+        }
+        assert!(a.towers.len() == b.towers.len() && a.towers.iter().zip(&b.towers).all(|(u, v)| near(u[0], v[0]) && near(u[1], v[1])), "{what}: towers");
+    };
+    // The biggest town (a city's conversion takes long): converted twice the same, as generated.
+    let li = (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier == Tier::Town).max_by_key(|&i| (t0.settlements[i].population, std::cmp::Reverse(i))).expect("a town");
+    assert_eq!(hand::convert(&base, &t0, li).unwrap(), hand::convert(&base, &t0, li).unwrap(), "L{li}: converted otherwise the second time");
+    let w1 = ask(&base, &t0, li, r#"{"op": "lay_out_by_hand"}"#);
+    let gen_l = town::generated_layout(&base, &t0, li);
+    let hand_l = town::base_layout(&w1, &t0, li);
+    same(&hand_l, &gen_l, &format!("L{li} converted"));
+    let (people, tier) = hand::size(&w1, li).expect("counted");
+    assert!(people > 0 && tier >= Tier::Village, "L{li}: {people} people");
+
+    // Two unrelated edits, in either order: a street across one block, another block refilled.
+    let plan = handedit::plan_json(&w1, &t0, li).unwrap();
+    let recs = hand::HandRecords::of(&w1.file.edits.streets, li);
+    let ids = |v: &serde_json::Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as u32).collect::<Vec<u32>>()).unwrap_or_default();
+    let lots: Vec<&serde_json::Value> = plan["blocks"].as_array().unwrap().iter().filter(|b| b["fill"]["kind"] == "generated" && ids(&b["streets"]).len() >= 4).collect();
+    let mid = |id: u32| {
+        let st = &recs.streets[&id];
+        let line: Vec<[f64; 2]> = std::iter::once(recs.junctions[&st.a].p).chain(st.bends.iter().copied()).chain([recs.junctions[&st.b].p]).collect();
+        worldgen::town::geom::lerp(line[0], line[1], 0.5)
+    };
+    let a = lots[0];
+    let round = ids(&a["streets"]);
+    let far = round.iter().copied().skip(1).max_by(|x, y| geom_dist(mid(*x), mid(round[0])).total_cmp(&geom_dist(mid(*y), mid(round[0]))).then(y.cmp(x))).unwrap();
+    let (m0, m1) = (mid(round[0]), mid(far));
+    let split = format!(r#"{{"op": "add_street", "points": [[{}, {}], [{}, {}]]}}"#, m0[0], m0[1], m1[0], m1[1]);
+    let b = lots.iter().skip(1).find(|b| ids(&b["streets"]).iter().all(|e| !round.contains(e))).expect("a block apart");
+    let refill = format!(r#"{{"op": "set_block", "block": {}, "fill": {{"kind": "generated", "ward": "craft"}}}}"#, b["id"]);
+    let ab = ask(&ask(&w1, &t0, li, &split), &t0, li, &refill);
+    let ba = ask(&ask(&w1, &t0, li, &refill), &t0, li, &split);
+    assert_eq!(ab.file.edits.streets, ba.file.edits.streets, "L{li}: the order of two unrelated edits changed the records");
+    let edited = town::base_layout(&ab, &t0, li);
+    same(&edited, &town::base_layout(&ba, &t0, li), &format!("L{li} edits in either order"));
+    // Back to generated: the generated town again.
+    same(&town::base_layout(&ask(&ab, &t0, li, r#"{"op": "back_to_generated"}"#), &t0, li), &gen_l, &format!("L{li} back to generated"));
+
+    // A world remade round it (a pin far away): the town as it was laid by hand.
+    let far_s = t0.settlements.iter().max_by(|p, q| geom_dist([p.x, p.y], [t0.settlements[li].x, t0.settlements[li].y]).total_cmp(&geom_dist([q.x, q.y], [t0.settlements[li].x, t0.settlements[li].y]))).unwrap();
+    let mut nf = ab.file.clone();
+    nf.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "pin", "tier": "village", "pts": [[far_s.x + 15_840.0, far_s.y]] })).unwrap());
+    let new = World::new(nf.clone()).unwrap();
+    let (t1, followed) = remap::remake(&ab, &t0, &new, &[]);
+    let edits = followed.map_or_else(|| ab.file.edits.clone(), |f| f.edits);
+    let nl = edits.streets.keys().find_map(|k| k.parse::<usize>().ok()).expect("the hand town's header");
+    assert!(nl < worldgen::world::PARKED_LAYOUT, "L{li}: set aside by the remake");
+    let wharves = |e: &worldgen::world::Edits, n: usize| e.wharves.keys().filter(|k| k.starts_with(&format!("q:h{n}-"))).count();
+    assert_eq!(wharves(&edits, nl), wharves(&ab.file.edits, li), "L{li}: its wharves not moved with it (now L{nl})");
+    nf.edits = edits;
+    let remade = World::new(nf).unwrap();
+    same(&town::base_layout(&remade, &t1, nl), &edited, &format!("L{li} remade (now L{nl})"));
+
+    // Its battlemap: the chunk at its centre and those east and south of it.
+    {
+        use worldgen::battlemap::{self, HS, SQ};
+        let s = &t0.settlements[li];
+        let mut ex = Executor::new(World::new(ab.file.clone()).unwrap());
+        let g = ex.world.geom.clone();
+        let size = g.tile_size_ft(g.max_level);
+        let key = TileKey::surface(g.max_level, (s.x / size) as u32, (s.y / size) as u32);
+        let c = ex.battlemap(key);
+        assert!(c.building.iter().any(|&b| b != 0), "L{li}: its battlemap at its centre has no buildings");
+        let dry: Vec<bool> = (0..SQ * SQ).map(|k| c.water_level[k] <= c.height[k] && c.surface[k] != battlemap::Surface::Planks).collect();
+        let dist = battlemap::cover_distance(&c);
+        for k in 0..SQ * SQ {
+            assert!(!dry[k] || dist[k] <= battlemap::cover_gap(&c, k), "L{li} {key:?}: square {k} is {} squares from cover", dist[k]);
+        }
+        let east = ex.battlemap(TileKey::surface(key.level, key.x + 1, key.y));
+        let south = ex.battlemap(TileKey::surface(key.level, key.x, key.y + 1));
+        for j in 0..SQ {
+            assert_eq!(c.halo_height[(j + 1) * HS + SQ + 1].to_bits(), east.height[j * SQ].to_bits(), "L{li} {key:?}: battlemap seam at row {j}");
+            assert_eq!(c.halo_height[(SQ + 1) * HS + j + 1].to_bits(), south.height[j].to_bits(), "L{li} {key:?}: battlemap seam at column {j}");
+        }
+    }
+
+    // A blank town (another town's place): its roads in to its centre, then four streets round
+    // the centre make blocks of the header's fill, built on, its people counted from its homes.
+    let lb = (0..t0.settlements.len()).filter(|&i| i != li && t0.settlements[i].tier == Tier::Town).max_by_key(|&i| (t0.settlements[i].population, std::cmp::Reverse(i))).expect("another town");
+    let mut f = base.file.clone();
+    let recs = hand::blank(&base, &t0, lb).unwrap();
+    assert!(recs.iter().all(|(k, _)| !k.contains("/k")), "a blank town has no blocks");
+    let roads_in = recs.iter().any(|(k, _)| k.contains("/e"));
+    f.edits.streets.extend(recs);
+    let mut wb = World::new(f).unwrap();
+    let l0 = town::base_layout(&wb, &t0, lb);
+    assert!(l0.buildings.is_empty(), "L{lb}: a blank town has buildings");
+    assert!(!roads_in || l0.roads.iter().any(|r| r.1 == 4), "L{lb}: a blank town's streets are not drawn");
+    let c = [t0.settlements[lb].x, t0.settlements[lb].y];
+    let r = 260.0;
+    let sq = [[-r, -r], [r, -r], [r, r], [-r, r]].map(|d| [c[0] + d[0], c[1] + d[1]]);
+    for k in 0..4 {
+        let (p, q) = (sq[k], sq[(k + 1) % 4]);
+        wb = ask(&wb, &t0, lb, &format!(r#"{{"op": "add_street", "points": [[{}, {}], [{}, {}]]}}"#, p[0], p[1], q[0], q[1]));
+    }
+    let lbl = town::base_layout(&wb, &t0, lb);
+    assert!(lbl.buildings.len() >= 10, "L{lb}: a blank town with streets drawn built {} buildings", lbl.buildings.len());
+    // (A layout's buildings stand in world ft.)
+    let out = lbl.buildings.iter().flat_map(|b| b.poly.iter()).map(|p| (p[0] - c[0]).abs().max((p[1] - c[1]).abs())).fold(0.0, f64::max);
+    assert!(out <= r, "L{lb}: a building {out:.0} ft out from its centre, outside its streets");
+    let (n, _) = hand::size(&wb, lb).expect("counted");
+    assert_eq!(n, hand::people_of(&lbl), "L{lb}: its people not counted from its homes");
+    assert!(n > 0, "L{lb}: no people");
+    // (The same again from nothing: determinism.)
+    same(&lbl, &town::base_layout(&World::new(wb.file.clone()).unwrap(), &T0::generate(&base), lb), &format!("L{lb} blank, built again"));
 }

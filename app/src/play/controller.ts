@@ -3,7 +3,7 @@
 // characters can see, and the link to the player window; in the player window it follows the
 // DM (state, location, camera, place pins) and draws the players' view.
 import { layoutOfId } from '../editor/reanchor';
-import type { Feature, Interior, WorldFile } from '../gen/protocol';
+import { linkSites, type Feature, type Interior, type LinkEdit, type WorldFile } from '../gen/protocol';
 import type { InteriorLayer } from '../render/InteriorLayer';
 import type { MapView, PointerTool } from '../render/MapView';
 import { hexAt, hexFrame, hexKey, hexRing, parseHexKey, type HexFrame, type HexSeen } from '../render/hex';
@@ -683,9 +683,20 @@ export class PlayController implements PointerTool {
     this.visionDirty = true;
   }
 
-  /** Sites designed anew since the last edits: their walls and levels are fetched again. */
+  /** The paired exits last seen (by reference). */
+  private linksSeen: Record<string, LinkEdit> | undefined = undefined;
+
+  /** Sites designed anew since the last edits: their walls and levels are fetched again (and the
+   * sites at the ends of paired exits put down or taken away). */
   private forgetRedesigned(world: WorldFile) {
     if (forgetRehosted(this, world, this.interiors, this.entrances, this.places)) [this.placeCache, this.visionDirty] = [null, true];
+    const links = world.edits?.links;
+    for (const id of linkSites(this.linksSeen, links)) {
+      this.interiors.delete(id);
+      for (const loc of [...this.places.keys()]) if (parseLoc(loc).interior === id) this.places.delete(loc);
+      [this.placeCache, this.visionDirty] = [null, true];
+    }
+    this.linksSeen = links;
     const now = world.edits?.designs ?? {};
     for (const id of new Set([...Object.keys(this.designsSeen), ...Object.keys(now)])) {
       // (The same design object is the same design; one received anew is compared as JSON.)
@@ -1084,10 +1095,53 @@ export class PlayController implements PointerTool {
     const name = t ? parseLoc(t.loc).interior : null;
     const it = name ? this.interiors.get(name) : null;
     if (!t || !it) return;
-    const sq = nearestFloor(it, level, t.x, t.y);
+    // (Where the stairs come out, when set by hand: the level's landing.)
+    const landing = it.levels[level]?.landing;
+    const sq = landing ? nearestFloor(it, level, landing[0] + 0.5, landing[1] + 0.5) : nearestFloor(it, level, t.x, t.y);
     if (!sq) return;
     const [x, y] = snap(sq[0], sq[1], t.size);
     this.dispatch({ t: 'token', token: { ...t, loc: locKey(it.id, level), x, y } });
+  }
+
+  /** The paired exit (one put down by hand) under a token in the place in view, if any: its label
+   * and where it comes out (the far site, its level and square). */
+  linkOf(id: string): { label: string; way: string; to: string; level: number; x: number; y: number } | null {
+    const t = this.state.tokens[id];
+    const here = this.place;
+    if (!t || !here || t.loc !== here.loc) return null;
+    // (Any square the token covers.)
+    const r = Math.max(0.5, t.size) / 2 - 0.01;
+    for (let j = Math.floor(t.y - r); j <= Math.floor(t.y + r); j++) {
+      for (let i = Math.floor(t.x - r); i <= Math.floor(t.x + r); i++) {
+        const sec = this.sectionAt(here, i + 0.5, j + 0.5);
+        if (!sec) continue;
+        const k = sec.it.levels[sec.level]?.links?.find((k) => k.far && k.x === i - sec.ox && k.y === j - sec.oy);
+        if (!k?.far) continue;
+        const layer = here.sewers?.layerAt(...here.toWorld(i + 0.5, j + 0.5)) ?? here.layer;
+        const to = k.to === sec.it.id ? (layer?.levelName(k.far.level) ?? sec.it.levels[k.far.level]?.name ?? 'another level') : k.far.name;
+        return { label: layer ? layer.linkText(k) : `${k.far.label || k.far.way} to ${to}`, way: k.far.way, to: k.to, level: k.far.level, x: k.far.x, y: k.far.y };
+      }
+    }
+    return null;
+  }
+
+  /** Step a token across the paired exit it stands on to the far end (a city's sewers: in the
+   * network's world squares); the DM's view goes along (and the players' window, following). */
+  async stepAcross(id: string) {
+    const l = this.linkOf(id);
+    const here = this.place;
+    const was = this.state.tokens[id];
+    if (!l || !here || !was) return;
+    const at = here.toWorld(was.x, was.y);
+    const it = await this.fetchInterior(l.to);
+    const t = this.state.tokens[id];
+    if (!it || !t || !it.levels[l.level]) return;
+    const sewer = l.to.startsWith('w:') && l.level === it.entry_level;
+    const loc = sewer ? `w:${l.to.split(':')[1]}` : locKey(it.id, l.level);
+    const [ox, oy] = sewer ? [Math.round(it.origin[0] / 5), Math.round(it.origin[1] / 5)] : [0, 0];
+    const [x, y] = snap(ox + l.x + 0.5, oy + l.y + 0.5, t.size);
+    this.dispatch({ t: 'token', token: { ...t, loc, x, y } });
+    await this.view.move({ kind: 'site', label: l.label, to: l.to, from: '', at, far: { level: l.level, x: l.x, y: l.y } });
   }
 
   settingsHere(): LocSettings {

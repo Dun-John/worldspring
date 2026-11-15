@@ -33,6 +33,20 @@ pub const ARCH: u16 = 8;
 /// A portcullis between two rooms (an iron grate: shut, it stops a step but not the eye). Above a
 /// lock's colour (bits 4-6, underground), so the two go together.
 pub const PORTCULLIS: u16 = 128;
+/// The most lock colours a door can have (`Door::lock` 1 to this, a key's `variant` the same).
+pub const MAX_LOCK: u8 = 31;
+
+/// A lock's colour as door flags: its low three bits in bits 4-6 (as the first seven colours always were),
+/// the rest in bits 8-11 (above the portcullis).
+pub fn lock_flags(lock: u8) -> u16 {
+    let l = lock.min(MAX_LOCK) as u16;
+    (l & 7) << 4 | (l >> 3) << 8
+}
+
+/// The lock colour (0 none) in door flags.
+pub fn lock_of(flags: u16) -> u8 {
+    (((flags >> 4) & 7) | ((flags >> 8) & 15) << 3).min(MAX_LOCK as u16) as u8
+}
 /// Items that are ways to other sites, put back at build time (never in a design).
 const LINKS: [&str; 2] = ["trapdoor", "link_down"];
 
@@ -100,14 +114,15 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
                 .doors
                 .iter()
                 .map(|d| {
-                    let flags = match d.kind {
-                        "secret" => SECRET,
-                        "front" => FRONT,
-                        "back" => BACK,
-                        "arch" => ARCH,
-                        "portcullis" => PORTCULLIS,
-                        _ => 0,
-                    };
+                    let flags = lock_flags(d.lock)
+                        | match d.kind {
+                            "secret" => SECRET,
+                            "front" => FRONT,
+                            "back" => BACK,
+                            "arch" => ARCH,
+                            "portcullis" => PORTCULLIS,
+                            _ => 0,
+                        };
                     let (x, y) = (d.a[0].min(d.b[0]), d.a[1].min(d.b[1]));
                     // A vertical edge on line x lies between squares x-1 and x; a horizontal one on
                     // line y between y-1 and y. A door to the outside is given from its room's square.
@@ -132,6 +147,7 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
                 z: lv.z,
                 roof: lv.roof,
                 has_stairs: lv.has_stairs,
+                landing: lv.landing,
             }
         })
         .collect();
@@ -190,10 +206,10 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
             continue;
         }
         doors.push(if rb >= 0 {
-            Door { a: p, b: q, kind: if flags & SECRET != 0 { "secret" } else if flags & PORTCULLIS != 0 { "portcullis" } else { "door" }, rooms: [ra.min(rb), ra.max(rb)], lock: 0 }
+            Door { a: p, b: q, kind: if flags & SECRET != 0 { "secret" } else if flags & PORTCULLIS != 0 { "portcullis" } else { "door" }, rooms: [ra.min(rb), ra.max(rb)], lock: lock_of(flags) }
         } else {
             // (A portcullis out here is kept as one, for `check` to refuse: it is a gate between rooms.)
-            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else if flags & ARCH != 0 { "arch" } else if flags & PORTCULLIS != 0 { "portcullis" } else { "back" }, rooms: [ra, -1], lock: 0 }
+            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else if flags & ARCH != 0 { "arch" } else if flags & PORTCULLIS != 0 { "portcullis" } else { "back" }, rooms: [ra, -1], lock: lock_of(flags) }
         });
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);
@@ -230,6 +246,7 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
         links: Vec::new(),
         floor: String::new(),
         ramps: Vec::new(),
+        landing: lv.landing.filter(|l| (l[0] as usize) < nx && (l[1] as usize) < ny),
     };
     if !lv.roof {
         windows(&mut level, nx, ny, lv.z == 0);
@@ -325,6 +342,14 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
             && let Some((i, j)) = (st[1]..st[1] + st[3]).flat_map(|j| (st[0]..st[0] + st[2]).map(move |i| (i, j))).find(|&(i, j)| lv.cells[j * nx + i] < 0)
         {
             put(li, Some((i, j)), "the stairs are not on the floor".into(), true);
+        }
+        if let Some([i, j]) = lv.landing {
+            let (i, j) = (i as usize, j as usize);
+            if i >= nx || j >= ny || lv.cells[j * nx + i] < 0 || !walkable(lv.rooms[lv.cells[j * nx + i] as usize].kind) {
+                put(li, Some((i.min(nx - 1), j.min(ny - 1))), format!("the landing at {i},{j} is not on the floor"), true);
+            } else if lv.furniture.iter().any(|f| f.blocks_move && (f.x as usize..(f.x + f.w) as usize).contains(&i) && (f.y as usize..(f.y + f.h) as usize).contains(&j)) {
+                put(li, Some((i, j)), format!("the landing at {i},{j} is under a {}", lv.furniture.iter().find(|f| f.blocks_move && (f.x as usize..(f.x + f.w) as usize).contains(&i) && (f.y as usize..(f.y + f.h) as usize).contains(&j)).map_or("piece", |f| f.name)), true);
+            }
         }
         // Doors to the outside: on the ground floor only, onto open ground; one front door.
         let fronts = lv.doors.iter().filter(|d| d.kind == "front").count();
@@ -461,6 +486,12 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
     if deepest.is_none() && !want.is_empty() {
         put(it.entry_level, None, format!("it needs a cellar, for {}", want.join(" and ")), true);
     }
+    // Keys and locks: notes (the DM can always open a door), counted as underground; whether a key lies behind its own lock is not checked here.
+    let keys: Vec<(usize, usize, u8)> = (0..it.levels.len())
+        .flat_map(|li| it.levels[li].furniture.iter().filter(|f| f.kind == "key").map(move |f| (li, f.y as usize * nx + f.x as usize, f.variant.unwrap_or(0))))
+        .collect();
+    let locks: Vec<(usize, (usize, usize), u8)> = (0..it.levels.len()).flat_map(|li| it.levels[li].doors.iter().filter(|d| d.lock != 0).map(move |d| (li, crate::under::design::door_pair(d, nx), d.lock))).collect();
+    crate::under::design::key_counts(&keys, &locks, nx, &mut |level, at, text| put(level, at.map(|k| (k % nx, k / nx)), text, false));
     out
 }
 
@@ -711,6 +742,7 @@ pub fn set_cellars(d: &mut SiteDesign, n: usize) -> bool {
                 z,
                 roof: false,
                 has_stairs: true,
+                landing: None,
             },
         );
     }

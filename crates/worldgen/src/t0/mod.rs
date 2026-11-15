@@ -74,6 +74,8 @@ pub struct T0 {
     pub sketched: Vec<(usize, CreatedSite)>,
     /// The settlements created by edits (`made`), by point of interest; removed ones left out.
     pub made: Vec<made::Made>,
+    /// The lanes laid by hand outside any town (`made::lanes`), joining the world's roads.
+    pub lanes: Vec<made::Lane>,
     /// The sea lanes between ports (`sealanes::lanes`; none with generated roads off).
     pub sea_lanes: Vec<sealanes::SeaLane>,
     /// The ferries over the sea to near islands (`ferries`; none with generated roads off).
@@ -648,7 +650,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), lanes: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -711,6 +713,7 @@ impl T0 {
             self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None });
             self.created.push(CreatedSite { removed: c.removed, reach, under, spec });
         }
+        self.lanes = if world.file.edits.streets.is_empty() { Vec::new() } else { made::lanes(world, self) };
     }
 
     /// The options of the sketch's sites (what lies beneath a ruin or an entrance), from the

@@ -55,6 +55,12 @@ export interface KeyContext {
   buildFinish(): void;
   buildBack(): void;
   designMode(m: DesignMode): void;
+  /** Rooms: the ways across (paired exits) or back to the rooms (false: not here). */
+  linksToggle(): boolean;
+  /** The ways across are open in Rooms. */
+  linking(): boolean;
+  /** The way across chosen taken away. */
+  linkRemove(): void;
   townMode(m: TownMode): void;
   /** The town brush a step bigger (1) or smaller (-1). */
   townBrush(d: number): void;
@@ -242,9 +248,12 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['W', 'stairs', 'Way down (in a building: the stairs)'],
     ['L', 'wall', 'Wall line (in a building)'],
     ['E', 'merge', 'Take a wall away (in a building)'],
+    ['Y', 'landing', 'Where the stairs come out on this level'],
   ];
   const designing = () => edit('design')() && k.designing();
   for (const [key, m, label] of design) out.push({ keys: typeof key === 'string' ? [key] : key, label, group: 'Rooms', when: designing, run: () => k.designMode(m) });
+  out.push({ keys: ['J'], label: 'Ways across between levels and places below ground (again: back to the rooms)', group: 'Rooms', when: edit('design'), run: () => void k.linksToggle() });
+  out.push({ keys: ['Delete', 'Backspace'], label: 'Take the way across chosen away', group: 'Rooms', when: () => edit('design')() && k.linking(), run: () => k.linkRemove() });
   out.push({ keys: ['Ctrl+S'], label: 'Save the design', group: 'Rooms', inInputs: true, when: designing, run: () => k.saveDesign() });
   const tools: [string, PlayTool, string][] = [
     ['V', 'select', 'Select and move'],

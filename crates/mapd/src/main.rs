@@ -14,6 +14,7 @@ mod geo;
 mod ground;
 mod harbour;
 mod hexes;
+mod links;
 mod handwalls;
 mod mcp;
 mod notebook;

@@ -104,12 +104,12 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
         if let Some(q) = sewer_link_of(t0, l, b)
             && let Some(k) = square_of(q)
         {
-            joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: format!("b:{}:{bi}", l.index) }, "ladder", "ladder up into a cellar"));
+            joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: format!("b:{}:{bi}", l.index), id: String::new(), far: None }, "ladder", "ladder up into a cellar"));
         }
         if let Some(q) = keep_escape(t0, l, b)
             && let Some(k) = square_of(q)
         {
-            joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: format!("k:{}:{bi}", l.index) }, "tunnel", "tunnel to the keep's dungeons"));
+            joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: format!("k:{}:{bi}", l.index), id: String::new(), far: None }, "tunnel", "tunnel to the keep's dungeons"));
         }
     }
     for (k, _, _, _) in &joins {

@@ -29,6 +29,7 @@ export const EDIT_FIELDS: Record<string, Shape> = {
   cultures: 'map',
   hexes: 'map',
   streets: 'map',
+  links: 'map',
 };
 
 /** Layout numbers from here up are changes set aside when the world was remade (`PARKED_LAYOUT`
@@ -41,7 +42,7 @@ export const PARKED_LAYOUT = 1_000_000;
  * It mirrors `LAYOUT_ID_FIELDS` in `crates/worldgen/src/t0/remap.rs`, the list a remade world
  * moves with their places (there, in the generator); here for an upgrade (`upgradeEdits`,
  * `restorePinned`). A new field that holds such ids joins both lists. */
-export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plots' | 'towns' | 'townPrefixed'> = {
+export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plots' | 'towns' | 'townPrefixed' | 'links' | 'handWharves'> = {
   renames: 'keys',
   notes: 'keys',
   hidden: 'values',
@@ -52,6 +53,8 @@ export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plot
   streets: 'townPrefixed',
   npcs: 'npcs',
   plots: 'plots',
+  links: 'links',
+  wharves: 'handWharves',
 };
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -154,6 +157,16 @@ export function shiftLevels(e: Edits, site: string, delta: number): Edits {
   }
   if (e.npcs && Object.values(e.npcs).some((n) => n.location?.id === site && n.location.level !== undefined)) {
     out.npcs = Object.fromEntries(Object.entries(e.npcs).map(([k, n]) => [k, n.location?.id === site && n.location.level !== undefined ? { ...n, location: { ...n.location, level: Math.max(0, n.location.level + delta) } } : n]));
+  }
+  if (e.links && Object.values(e.links).some((l) => moved(l.a.level) !== undefined || moved(l.b.level) !== undefined)) {
+    // (A link with an end on a level filled in goes with it.)
+    const links: NonNullable<Edits['links']> = {};
+    for (const [k, l] of Object.entries(e.links)) {
+      const [a, b] = [moved(l.a.level), moved(l.b.level)];
+      if (a === '' || b === '') continue;
+      links[k] = a === undefined && b === undefined ? l : { ...l, a: a === undefined ? l.a : { ...l.a, level: a }, b: b === undefined ? l.b : { ...l.b, level: b } };
+    }
+    out.links = links;
   }
   return out;
 }
