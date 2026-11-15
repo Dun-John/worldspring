@@ -1,14 +1,14 @@
 // Build › Castle and Wall: a castle's outline is dragged as a rectangle or clicked corner by
-// corner (a convex polygon), then a click on one of its sides puts the gate there (Enter: the
-// side facing the nearest road). A wall is clicked corner by corner and finished with a double
-// click or Enter (on its first corner too when it is a ring); a click on a corner as it is drawn
-// makes that corner a gate. With a castle or wall picked to change, a click on its line moves
-// the castle's gate there, or adds a gate to the wall (on a gate, takes it away). Everything
+// corner (a polygon, corners may turn inward), then a click on one of its sides puts the gate
+// there (Enter: the side facing the nearest road). A wall is clicked corner by corner and finished
+// with a double click or Enter (on its first corner too when it is a ring); a click on a corner as
+// it is drawn makes that corner a gate. With a castle or wall picked to change, a click on its line
+// adds a gate there (a castle's in that side's middle; on a gate, takes it away). Everything
 // snaps to the 5-ft grid; right-drag pans meanwhile. The app checks the result with the
 // generator (dry land, clear of walls and drawn buildings; the town's own buildings in the way
 // can go with it).
 import type { Graphics } from 'pixi.js';
-import { CASTLE_MAX_FT, CASTLE_MIN_FT, WALL_MAX_FT, WALL_RING_MAX_FT, type Created } from '../gen/protocol';
+import { CASTLE_MAX_FT, CASTLE_MIN_FT, WALL_MAX_FT, WALL_RING_MAX_FT, type Created, type KeepShape, type Moat } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import type { Pt } from './build';
@@ -19,6 +19,10 @@ export type CastleShape = 'rect' | 'poly';
 export interface WorksSettings {
   castleShape: CastleShape;
   keep: boolean;
+  /** The keep's shape ('auto': rolled). */
+  keepShape: KeepShape | 'auto';
+  /** The moat ('auto': by roll). */
+  moat: Moat | 'auto';
   yardBuildings: boolean;
   ruin: boolean;
   /** A wall drawn as a ring. */
@@ -27,7 +31,17 @@ export interface WorksSettings {
   name: string;
 }
 
-export const defaultWorks = (): WorksSettings => ({ castleShape: 'rect', keep: true, yardBuildings: true, ruin: false, closed: false, name: '' });
+export const defaultWorks = (): WorksSettings => ({ castleShape: 'rect', keep: true, keepShape: 'auto', moat: 'auto', yardBuildings: true, ruin: false, closed: false, name: '' });
+
+/** A castle's gates, its sides (`gate` first, then `gates`, as `Created::castle_gates`). */
+export function castleGates(c: Created): number[] {
+  const out: number[] = [];
+  for (const g of [...(c.gate != null ? [c.gate] : []), ...(c.gates ?? [])]) if (!out.includes(g)) out.push(g);
+  return out;
+}
+
+/** Most gates a castle may have (`worldgen::world::CASTLE_MAX_GATES`). */
+export const CASTLE_MAX_GATES = 8;
 
 const GRID = 5;
 const MAX_CASTLE_CORNERS = 32;
@@ -48,20 +62,21 @@ export interface WorksHost {
   castle(poly: Pt[], gate: number | null): void;
   /** A wall's line and gate corners. */
   wall(pts: Pt[], gates: number[], closed: boolean): void;
-  /** The castle or wall being changed gets a new gate (a castle's side) or gates (a wall's). */
-  gates(change: { gate: number } | { pts: Pt[]; gates: number[] }): void;
+  /** The castle or wall being changed gets its gates: a castle's sides, a wall's corners. */
+  gates(change: { sides: number[] } | { pts: Pt[]; gates: number[] }): void;
   hint(text: string): void;
 }
 
-/** Whether a polygon turns the same way at every corner. */
-export function convex(p: Pt[]): boolean {
-  let sign = 0;
-  for (let i = 0; i < p.length; i++) {
-    const [a, b, c] = [p[i], p[(i + 1) % p.length], p[(i + 2) % p.length]];
-    const z = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
-    if (Math.abs(z) < 1e-6) continue;
-    if (sign && Math.sign(z) !== sign) return false;
-    sign = Math.sign(z);
+/** Whether a closed polygon's sides cross only at shared corners. */
+export function simple(p: Pt[]): boolean {
+  const n = p.length;
+  const cr = (a: Pt, b: Pt, c: Pt) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue;
+      const [a, b, c, d] = [p[i], p[(i + 1) % n], p[j], p[(j + 1) % n]];
+      if (cr(a, b, c) * cr(a, b, d) < 0 && cr(c, d, a) * cr(c, d, b) < 0) return false;
+    }
   }
   return true;
 }
@@ -69,7 +84,7 @@ export function convex(p: Pt[]): boolean {
 /** A castle outline's problem, if any (as `Created::check_castle` has them). */
 export function castleProblem(p: Pt[]): string | null {
   if (p.length < 3) return 'A castle needs at least 3 corners';
-  if (!convex(p)) return 'A castle’s outline must be convex: no corner turning inward';
+  if (!simple(p)) return 'A castle’s outline must not cross itself';
   let across = 0;
   for (const a of p) for (const b of p) across = Math.max(across, Math.hypot(a[0] - b[0], a[1] - b[1]));
   if (across > CASTLE_MAX_FT) return `A castle is at most ${CASTLE_MAX_FT} ft across (this is ${Math.round(across)})`;
@@ -171,7 +186,13 @@ export class WorksTool implements PointerTool {
     if (c.kind === 'castle' && this.castleMode && c.poly) {
       const side = this.nearestSide(c.poly, p);
       if (!side || side[1] > reach) return false;
-      if (!test) this.host.gates({ gate: side[0] });
+      if (test) return true;
+      const gates = castleGates(c);
+      const k = gates.indexOf(side[0]);
+      if (k >= 0 && gates.length > 1) gates.splice(k, 1);
+      else if (k < 0 && gates.length < CASTLE_MAX_GATES) gates.push(side[0]);
+      else return true;
+      this.host.gates({ sides: gates });
       return true;
     }
     if (c.kind === 'wall' && !this.castleMode && c.pts) {
@@ -338,8 +359,9 @@ export class WorksTool implements PointerTool {
     if (ed && !this.corners.length && !this.outline && !this.drag) {
       const pts = (ed.kind === 'castle' ? ed.poly : ed.pts) ?? [];
       line(pts, ed.kind === 'castle' || !!ed.closed, 2, 0.5);
-      if (ed.kind === 'castle' && ed.gate != null && pts.length) {
-        const [a, b] = [pts[ed.gate], pts[(ed.gate + 1) % pts.length]];
+      for (const k of ed.kind === 'castle' ? castleGates(ed) : []) {
+        if (!pts[k]) continue;
+        const [a, b] = [pts[k], pts[(k + 1) % pts.length]];
         const [sx, sy] = scr([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
         g.rect(sx - 5, sy - 5, 10, 10).fill({ color: ink });
       }

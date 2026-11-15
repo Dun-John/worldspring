@@ -140,11 +140,15 @@ export interface Created {
   shade?: number;
   structure?: 'roofed' | 'ruin';
   /** A castle drawn by hand (its outline in `poly`, `structure` too): the side its gate is in
-   * (corner `gate` to the next; else facing the nearest road), a keep, buildings round the yard
-   * (both by default). */
+   * (corner `gate` to the next; else facing the nearest road; more in `gates`, its sides), a
+   * keep (its shape: square, round or drawn in `keep_poly`; else rolled), buildings round the
+   * yard (both by default), its moat (none, dry or wet; else rolled). */
   gate?: number;
   keep?: boolean;
+  keep_shape?: KeepShape;
+  keep_poly?: [number, number][];
   yard_buildings?: boolean;
+  moat?: Moat;
   /** A wall drawn by hand: its line (world ft), the corners that are gates, a ring or not. */
   pts?: [number, number][];
   gates?: number[];
@@ -178,7 +182,10 @@ export type CastlePiece = Omit<BuildingEdit, 'poly'> & { name?: string };
 
 /** Widest a castle may be and narrowest (ft), longest a wall (`worldgen::world`), how far past
  * its outline a castle's or wall's layout reaches (`WORKS_MARGIN_FT`). */
-export const CASTLE_MAX_FT = 600;
+export const CASTLE_MAX_FT = 1500;
+/** A castle's keep's shapes and moats (`worldgen::world::KEEP_SHAPES`, `MOATS`). */
+export type KeepShape = 'square' | 'round' | 'drawn';
+export type Moat = 'none' | 'dry' | 'wet';
 export const CASTLE_MIN_FT = 80;
 export const WALL_MAX_FT = 3000;
 /** Longest a closed wall (a ring) may be, ft round (`worldgen::world::WALL_RING_MAX_FT`). */

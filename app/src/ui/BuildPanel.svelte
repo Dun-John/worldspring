@@ -8,7 +8,8 @@
   // open the map's pointer draws; each footprint drawn becomes a building. Editing one: change
   // its options, or draw again to move or reshape it. Or put a crossing down (a bridge, ford
   // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
-  // Castle: an outline (a rectangle or a convex polygon), then the side its gate is in; Wall: a
+  // Castle: an outline (a rectangle or a polygon), then the side its gate is in (more gates, its
+  // keep's shape and its moat while changing it); Wall: a
   // line of corners (a ring if closed), gates on the corners clicked twice.
   import { CROSSING_WIDTH, NARROW_CROSSING_MAX, WHARF_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial, type WharfKind } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
@@ -19,6 +20,20 @@
   import type { ClearShape } from '../editor/clearArea';
   import type { WorksSettings } from '../editor/works';
   import Icon from './Icon.svelte';
+  import type { KeepShape, Moat } from '../gen/protocol';
+
+  const KEEP_SHAPES: { key: KeepShape | 'auto'; label: string; title: string }[] = [
+    { key: 'auto', label: 'Any keep', title: 'A keep of the castle’s own kind (now and then a shell keep on a mound)' },
+    { key: 'square', label: 'Square', title: 'A keep of square towers and halls' },
+    { key: 'round', label: 'Round', title: 'A round great tower' },
+    { key: 'drawn', label: 'Drawn', title: 'The keep as drawn' },
+  ];
+  const MOATS: { key: Moat | 'auto'; label: string; title: string }[] = [
+    { key: 'auto', label: 'Any moat', title: 'A moat or none, as the castle’s age and ground have it' },
+    { key: 'none', label: 'No moat', title: 'No moat' },
+    { key: 'dry', label: 'Dry', title: 'A dry ditch round the walls' },
+    { key: 'wet', label: 'Wet', title: 'A moat of water round the walls' },
+  ];
   import type { IconName } from './icons';
 
   interface Props {
@@ -185,9 +200,9 @@
     {#if !peek}
       <div class="ws-hint">
         {#if mode === 'castle'}
-          {worksEditing ? 'Click a side to move the gate there, or draw the walls again. ' : ''}{works.castleShape === 'rect'
+          {worksEditing ? 'Click a side to add a gate in its middle (on a gate: take it away), or draw the walls again. ' : ''}{works.castleShape === 'rect'
             ? 'Drag the walls from corner to corner'
-            : 'Click each corner (no corner turning inward); click the first again or press Enter'}, then click the side the gate is in (Enter: the side facing the road). 80 to 600 ft across.
+            : 'Click each corner; click the first again or press Enter'}, then click the side the gate is in (Enter: the side facing the road). 80 to 1,500 ft across.
         {:else}
           {worksEditing ? 'Click the wall to add a gate there (on a gate: take it away), or draw it again. ' : ''}Click each corner; click a corner twice to make it a gate.
           Double-click or press Enter to finish. Roads and streets that cross it get a gate. Up to 3,000 ft.
@@ -198,6 +213,20 @@
           <span class="grow">Keep<span class="ws-muted"> · the castle’s great tower in the yard</span></span>
           <input type="checkbox" class="ws-switch" bind:checked={works.keep} />
         </label>
+        {#if works.keep}
+          <div class="ws-seg" role="radiogroup" aria-label="Keep shape">
+            {#each KEEP_SHAPES as k (k.key)}
+              {#if k.key !== 'drawn' || works.keepShape === 'drawn'}
+                <button class:on={works.keepShape === k.key} aria-pressed={works.keepShape === k.key} onclick={() => (works.keepShape = k.key)} title={k.title}>{k.label}</button>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+        <div class="ws-seg" role="radiogroup" aria-label="Moat">
+          {#each MOATS as m (m.key)}
+            <button class:on={works.moat === m.key} aria-pressed={works.moat === m.key} onclick={() => (works.moat = m.key)} title={m.title}>{m.label}</button>
+          {/each}
+        </div>
         <label class="switch">
           <span class="grow">Yard buildings<span class="ws-muted"> · barracks, stables, a smithy along the walls</span></span>
           <input type="checkbox" class="ws-switch" bind:checked={works.yardBuildings} />
