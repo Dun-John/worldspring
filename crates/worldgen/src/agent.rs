@@ -1468,7 +1468,9 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     let in_line = |poly: &[P]| body.iter().any(|&(a, b)| poly_seg_dist(poly, a, b) < WALL_CLEAR);
     // (Where a joined end meets the other's line, or another wall's end meets this one's, is no
     // crossing: within the wall's half width of that end.)
-    let joint = |p: P, w: &[P]| ends.iter().chain([w[0], w[w.len() - 1]].iter().filter(|e| segs.iter().any(|&(a, b)| geom::seg_dist(**e, a, b) < 1.0))).any(|e| geom::dist(*e, p) < WALL_CLEAR);
+    // (A castle's curtain stands inside its outline, so a wall T-joined onto it ends within `WALL_JOIN` of it.)
+    let tol = if castle { WALL_JOIN } else { 1.0 };
+    let joint = |p: P, w: &[P]| ends.iter().chain([w[0], w[w.len() - 1]].iter().filter(|e| segs.iter().any(|&(a, b)| geom::seg_dist(**e, a, b) < tol))).any(|e| geom::dist(*e, p) < WALL_CLEAR.max(tol));
     let crosses_line = |w: &[P]| {
         w.windows(2).any(|s| {
             segs.iter().any(|&(a, b)| {
@@ -1504,7 +1506,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
                 in_way.push((id, geom::centroid(&g.poly)));
             }
         }
-        if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().any(|p| geom::contains(pts, *p)))) {
+        if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().enumerate().any(|(k, p)| !(k == 0 || k + 1 == w.len()) | ((0..pts.len()).all(|i| geom::seg_dist(*p, pts[i], pts[(i + 1) % pts.len()]) > WALL_JOIN)) && geom::contains(pts, *p)))) {
             return Err(town::handwall::wall_crossed(world, t0, &l, &segs));
         }
         if castle {

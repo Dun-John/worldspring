@@ -565,6 +565,11 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     if area(&block) < 0.0 {
         block.reverse();
     }
+    // (Laid from the canonical outline too, anticlockwise from its least corner: the same outline
+    // gives the same castle, whichever corner it was drawn from and whichever way round.)
+    if let Some(k) = (0..m).min_by_key(|&i| (crate::core::round(block[i][0] + center[0]) as i64, crate::core::round(block[i][1] + center[1]) as i64, i)) {
+        block.rotate_left(k);
+    }
     let ground = Open::new(world, t0, center, &c.poly);
     let dp = District::roll(Ward::Castle, hash2(world.stream("castle"), rng.next_u32() as i64, 0));
     let keep = c.keep.unwrap_or(true);
