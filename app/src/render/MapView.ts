@@ -1877,9 +1877,9 @@ export class MapView {
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
-      // (The three finest levels draw it in the terrain: gone over the first half level of them.)
-      const fine = this.geom!.max_level - 2;
-      this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, (level - fine) / 0.5)) : 0);
+      // (The three finest levels draw it in the terrain too: the layer over it gives each kind its
+      // look there; gone as the battlemap comes in over it.)
+      this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, this.battle?.stats.alpha ?? 0)) : 0, level > this.geom!.max_level - 2.5);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       this.townTraceSprite.update(this.cam, this.townTrace && !this.interior ? this.townTrace : null);
