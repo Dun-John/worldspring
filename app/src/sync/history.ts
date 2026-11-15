@@ -146,6 +146,29 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         const town = String(change.name ?? (id ? nameOf(id) : 'the town'));
         return `laid ${town} out anew${parts.length ? `: ${parts.join('; ')}` : ''}`;
       }
+      case 'edit_streets': {
+        const town = String(change.name ?? (id ? nameOf(id) : 'the town'));
+        const b = change.buildings as { before: number; after: number } | undefined;
+        const more = b && b.before !== b.after ? ` (${b.after.toLocaleString('en')} buildings, were ${b.before.toLocaleString('en')})` : '';
+        switch (change.op) {
+          case 'lay_out_by_hand':
+            return `laid ${town} out by hand`;
+          case 'back_to_generated':
+            return `${town} as generated again`;
+          case 'add_street':
+            return `drew a street in ${town}${more}`;
+          case 'delete_street':
+            return `took away a street in ${town}${more}`;
+          case 'set_street':
+            return `changed a street in ${town}`;
+          case 'move_junctions': {
+            const n = Number(change.moved ?? 0);
+            return `moved ${n === 1 ? 'a junction' : `${n || 'the'} junctions`} in ${town}${more}`;
+          }
+          default:
+            return `changed the streets of ${town}${more}`;
+        }
+      }
       case 'shape_ground': {
         const how: Record<string, string> = { raise: 'raised', lower: 'lowered', smooth: 'smoothed', restore: 'put back' };
         return `${how[String(change.mode)] ?? 'shaped'} the ground`;

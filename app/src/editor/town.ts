@@ -18,7 +18,7 @@ import type { SquareKind, TownPlan, TownWard } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 
-export type TownMode = 'select' | 'displace' | 'liquify' | 'bloat' | 'pinch' | 'relax' | 'equalize';
+export type TownMode = 'select' | 'street' | 'displace' | 'liquify' | 'bloat' | 'pinch' | 'relax' | 'equalize';
 type Pt = [number, number];
 
 /** Each ward's tint on the map (and its swatch in the panel). */

@@ -248,6 +248,7 @@ export class MapView {
   private madeTracks: MadeTracks | null = null;
   private madeAsk = 0;
   private readonly townHints = new Map<string, { edit: string; rects: Rect[] }>();
+  private readonly streetHints = new Map<string, { records: [string, string][]; rects: Rect[] }>();
   private districtsAsked = new Set<number>();
   /** The last ask for the roads someone named (a later one wins). */
   private roadsAsk = 0;
@@ -587,6 +588,12 @@ export class MapView {
    * taken when edits holding `edit` for it come in; any other change redraws all it reaches. */
   hintTown(key: string, edit: TownEdit | null, rects: Rect[]) {
     this.townHints.set(key, { edit: JSON.stringify(edit), rects });
+  }
+
+  /** What a change to a hand town's streets (`Edits.streets`, layout `li`) redraws: `rects`, as
+   * long as its records come out as `records` (null: removed) when the edits arrive. */
+  hintStreets(li: string, records: Record<string, unknown>, rects: Rect[]) {
+    this.streetHints.set(li, { records: Object.entries(records).map(([k, v]) => [k, JSON.stringify(v ?? null)]), rects });
   }
 
   /** At town zoom, ask once for the districts of each town in view (or its cemeteries by the roads
@@ -1178,6 +1185,7 @@ export class MapView {
     this.edits = {};
     this.plateauKey = '';
     this.townHints.clear();
+    this.streetHints.clear();
     this.setEdits(adjusted ?? world.edits ?? {}, false);
     this.labels.setPlaces(this.places);
     this.placesRect = null;
@@ -1441,6 +1449,27 @@ export class MapView {
       this.labels?.forgetTown(t.index);
       this.placesRect = null;
       this.placesEpoch++;
+    }
+    // Towns laid out by hand as streets (`Edits.streets`, keys `<li>` and `<li>/…`; `lanes/…` lie
+    // outside any town): what their change said it redraws, else all they reach.
+    const hs = (prev.streets ?? {}) as Record<string, unknown>;
+    const hn = (next.streets ?? {}) as Record<string, unknown>;
+    if (hs !== hn) {
+      const hand = new Set<string>();
+      for (const key of keys('streets', hs, hn)) if (hs[key] !== hn[key]) hand.add(key.split('/')[0]);
+      for (const li of hand) {
+        const t = this.towns.find((t) => String(t.index) === li);
+        if (!t) continue;
+        const hint = this.streetHints.get(li);
+        this.streetHints.delete(li);
+        const r = 2.3 * t.r + 200;
+        if (hint && hint.records.every(([k, v]) => JSON.stringify(hn[k] ?? null) === v)) rects.push(...hint.rects);
+        else rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
+        this.districtsAsked.delete(t.index);
+        this.labels?.forgetTown(t.index);
+        this.placesRect = null;
+        this.placesEpoch++;
+      }
     }
     // The world's own settlements laid out in another culture (`Edits.cultures`): all they reach,
     // as a town re-planned; their district labels, business pins and an open building anew.

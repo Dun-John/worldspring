@@ -537,8 +537,8 @@ export interface StreetReport {
   /** Rectangles (x0, y0, x1, y1 ft) to draw again (`hintTown`). */
   rects: Rect[];
   /** What carried something (a business, rename, note, ...) and is gone. */
-  lost: { id: string; name?: string; what: string }[];
-  problems: { key: string; why: string }[];
+  lost?: { id: string; name?: string; what: string }[];
+  problems?: { key: string; why: string }[];
   [more: string]: unknown;
 }
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { underlay } from './editor/trace/underlay.svelte';
@@ -48,6 +48,7 @@
   import GroundPanel from './ui/GroundPanel.svelte';
   import { defaultGround, GroundTool, type GroundSettings } from './editor/ground';
   import { TownTool, type TownMode } from './editor/town';
+  import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, type StreetPick } from './editor/streets';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { belowGround } from './editor/site/model';
@@ -1435,7 +1436,7 @@
   function syncTool() {
     const buildTool =
       buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
-    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? townTool ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
+    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? (streetPlan ? streetTool : townTool) ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -1520,7 +1521,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), editGenerated: (h: BuildingHit) => editGenerated(h), saveGenerated: () => saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(build, o), generatedActions: (h: BuildingHit) => generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), editGenerated: (h: BuildingHit) => editGenerated(h), saveGenerated: () => saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(build, o), generatedActions: (h: BuildingHit) => generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), streets: () => ({ plan: streetPlan, pick: streetPick, tool: streetTool, drawn: streetDrawn }), streetChange: (r: StreetRequest) => streetChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1807,6 +1808,20 @@
   });
   let townMerging = $state(false);
   let townBusy = $state(false);
+  // A town laid out by hand (`Edits.streets`): its street graph (`editor/streets.ts`) in place of the ward editor.
+  let streetTool = $state.raw<StreetTool | null>(null);
+  let streetPlan = $state.raw<StreetPlan | null>(null);
+  let streetPick = $state<StreetPick | null>(null);
+  /** The points of the street being drawn; the class streets drawn get. */
+  let streetDrawn = $state(0);
+  let streetClass = $state<'main' | 'street'>('street');
+  /** "Back to generated" waiting for its answer. */
+  let streetBackAsk = $state(false);
+  /** Whether the town in view is laid out by hand. */
+  const townHand = $derived(townIndex >= 0 && !!edits.streets?.[String(townIndex)]);
+  /** The edits' streets as last seen, and how often they have changed (the plan is read again). */
+  let streetsSeen: unknown = null;
+  let streetsEpoch = 0;
   /** What the plan shown was read for: the town and its edit. */
   let townRead = '';
   let townAsked = 0;
@@ -1816,12 +1831,12 @@
     const f = townIndex >= 0 ? layoutFeature(townIndex) : null;
     return f ? (renames[f.id] ?? f.name) : null;
   });
-  const townNear = $derived(!!townPlan && townPlan.max_move_ft / (hud?.ftPerPx ?? 99) >= 40);
+  const townNear = $derived(streetPlan ? (hud?.ftPerPx ?? 99) <= 1 / DOTS_PPF : !!townPlan && townPlan.max_move_ft / (hud?.ftPerPx ?? 99) >= 40);
 
   function armTown() {
     if (townTool) return;
     townTool = new TownTool({
-      mode: () => townMode,
+      mode: () => (townMode === 'street' ? 'select' : townMode),
       radius: () => townSize * (townPlan?.max_move_ft ?? 300),
       selected: () => townPatch,
       selectedCorner: () => townCorner,
@@ -1836,6 +1851,17 @@
       hint: (t) => toast(t),
     });
     townTool.setPlan(townPlan);
+    streetTool = new StreetTool({
+      mode: () => townMode,
+      radius: () => townSize * HAND_BRUSH_FT,
+      picked: () => streetPick,
+      pick: (p) => (streetPick = p),
+      change: (req, what) => void streetChange(req, what),
+      drawClass: () => streetClass,
+      drawing: (n) => (streetDrawn = n),
+      hint: (t) => toast(t),
+    });
+    streetTool.setPlan(streetPlan);
     townRead = '';
   }
 
@@ -1854,6 +1880,9 @@
 
   function disarmTown() {
     townTool = null;
+    streetTool = null;
+    streetPick = null;
+    streetDrawn = 0;
     townMerging = false;
     townPatch = null;
     townCorner = null;
@@ -1889,6 +1918,8 @@
       townPatch = null;
       townCorner = null;
       townMerging = false;
+      streetPick = null;
+      untrack(() => streetTool)?.reset();
     }
   });
 
@@ -1897,7 +1928,12 @@
   $effect(() => {
     if (!townOn || !townTool || !overlay) return;
     const i = townIndex;
-    const key = `${i}|${JSON.stringify(edits.towns?.[String(i)] ?? null)}|${view.geom?.world_hash ?? world.seed}|${overlay.features.length}`;
+    if (edits.streets !== streetsSeen) {
+      streetsSeen = edits.streets;
+      streetsEpoch++;
+    }
+    const edit = townHand ? `hand ${streetsEpoch}` : JSON.stringify(edits.towns?.[String(i)] ?? null);
+    const key = `${i}|${edit}|${view.geom?.world_hash ?? world.seed}|${overlay.features.length}`;
     if (key === townRead) return;
     townRead = key;
     void untrack(() => readTownPlan(i));
@@ -1909,8 +1945,10 @@
       townPlan = null;
       townNote = 'Go to a town, city or metropolis to re-plan it (villages grow along their roads). New towns are added in Edit › Places.';
       townTool?.setPlan(null);
+      setStreetPlan(null);
       return;
     }
+    if (untrack(() => townHand)) return readStreetPlan(i, asked);
     if (!townPlan || townPlan.layout !== i) townNote = 'Reading the town’s plan…';
     const r = await view.gen.townPlan(i);
     if (asked !== townAsked) return;
@@ -1923,10 +1961,93 @@
       if (townCorner !== null && !r.corners.some((c) => c.corner === townCorner)) townCorner = null;
     }
     townTool?.setPlan(townPlan);
+    setStreetPlan(null);
+  }
+
+  /** A hand town's street graph read (in place of the ward editor's plan). */
+  async function readStreetPlan(i: number, asked: number) {
+    if (!streetPlan || streetPlan.layout !== i) townNote = 'Reading the town’s streets…';
+    const r = await view.gen.streetPlan(i);
+    if (asked !== townAsked) return;
+    townPlan = null;
+    townTool?.setPlan(null);
+    if ('error' in r) {
+      townNote = r.error.charAt(0).toUpperCase() + r.error.slice(1);
+      return setStreetPlan(null);
+    }
+    const p = streetPick;
+    if (p && !(p.kind === 'street' ? r.streets : p.kind === 'junction' ? r.junctions : r.blocks).some((x) => x.id === p.id)) streetPick = null;
+    setStreetPlan(r);
+  }
+
+  function setStreetPlan(p: StreetPlan | null) {
+    const was = !!streetPlan;
+    streetPlan = p;
+    streetTool?.setPlan(p);
+    if (!p) streetPick = null;
+    // (The map's tool: the street graph's, or the ward editor's.)
+    if (was !== !!p && townOn) syncTool();
+  }
+
+  /** A change asked of the hand town in view: its records applied per key (one step to undo), or why not. */
+  async function streetChange(request: StreetRequest, what: string) {
+    const i = townIndex;
+    if (i < 0 || townBusy) return void streetTool?.settled();
+    townBusy = true;
+    const r = await view.gen.streetChange(i, request).finally(() => (townBusy = false));
+    if (i !== townIndex) return void streetTool?.settled();
+    if ('error' in r) {
+      streetTool?.settled();
+      return void toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
+    }
+    const { change, report } = r;
+    const next: Edits = { ...edits };
+    let any = false;
+    for (const field of ['streets', 'wharves', 'towns'] as const) {
+      const recs = change[field];
+      if (!recs || !Object.keys(recs).length) continue;
+      const out = { ...((edits[field] ?? {}) as Record<string, unknown>) };
+      for (const [k, v] of Object.entries(recs)) {
+        if (v === null) delete out[k];
+        else out[k] = v;
+      }
+      (next as Record<string, unknown>)[field] = out;
+      any = true;
+    }
+    if (!any) {
+      streetTool?.settled();
+      return void toast('Nothing changed');
+    }
+    const key = String(i);
+    if (change.streets) view.hintStreets(key, change.streets, report.rects);
+    if (change.towns && key in change.towns) view.hintTown(key, change.towns[key] ?? null, report.rects);
+    const stayed = Array.isArray(report.stayed) ? report.stayed.length : 0;
+    if (stayed) toast(`${stayed === 1 ? 'A junction stays' : `${stayed} junctions stay`} put: moved, ${stayed === 1 ? 'it' : 'they'} would cross the streets`);
+    if (report.lost?.length) toast(`Gone with their buildings: ${report.lost.map((l) => l.name || l.what).join(', ')}`);
+    if (request.op === 'back_to_generated' || request.op === 'lay_out_by_hand') {
+      streetPick = null;
+      townPatch = null;
+      townCorner = null;
+    }
+    const { rects: _, records: __, blocks: ___, problems: ____, lost: _____, ...rest } = report;
+    const moved = request.op === 'move_junctions' ? request.moves.length - stayed : undefined;
+    applyEdits(next, { tool: 'edit_streets', id: settlements[i]?.id, name: townName ?? undefined, what, ...rest, op: request.op, ...(moved !== undefined ? { moved } : {}) }, 'user');
+  }
+
+  /** The street picked taken away (false: none picked). */
+  function deleteStreet(): boolean {
+    if (streetPick?.kind !== 'street') return false;
+    void streetChange({ op: 'delete_street', street: streetPick.id }, 'street');
+    streetPick = null;
+    return true;
   }
 
   /** A click on the map with the tab open: a square or a patch picked, or the neighbour to join. */
   function townPick(x: number, y: number) {
+    if (streetPlan) {
+      streetPick = streetTool?.pickAt(x, y) ?? null;
+      return;
+    }
     const p = townTool?.patchAt(x, y) ?? null;
     if (townMerging && townSelected) {
       townMerging = false;
@@ -1998,7 +2119,11 @@
     const f = settlements[townIndex];
     if (!f) return;
     let size = 5000;
-    if (townPlan) {
+    if (streetPlan?.junctions.length) {
+      const xs = streetPlan.junctions.map((j) => j.p[0]);
+      const ys = streetPlan.junctions.map((j) => j.p[1]);
+      size = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 600);
+    } else if (townPlan) {
       const at = new Map(townPlan.corners.map((c) => [c.corner, c.at]));
       const pts = townPlan.patches.filter((p) => p.in_town).flatMap((p) => p.corners.map((v) => at.get(v) ?? p.at));
       if (pts.length) size = Math.max(Math.max(...pts.map((p) => p[0])) - Math.min(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1])) - Math.min(...pts.map((p) => p[1])));
@@ -4323,6 +4448,10 @@
       townMerging = false;
       townTool?.reset();
     },
+    townHand: () => !!streetPlan,
+    townStreetFinish: () => (streetTool && streetDrawn ? (streetTool.finish(), true) : false),
+    townStreetBack: () => !!streetTool?.back(),
+    townStreetDelete: () => deleteStreet(),
     townBrush: (d) => (townSize = Math.max(0.25, Math.min(4, townSize * (d > 0 ? 1.15 : 1 / 1.15)))),
     groundMode: (m) => (ground.mode = m),
     groundBrush: (d) => groundArmed?.size(d),
@@ -4352,6 +4481,9 @@
       () => !!buildArmed?.cross.reset(),
       () => (crossEditing ? ((crossEditing = null), true) : false),
       () => !!townTool?.reset(),
+      () => !!streetTool?.reset(),
+      () => (streetBackAsk ? ((streetBackAsk = false), true) : false),
+      () => (townOn && streetPick ? ((streetPick = null), true) : false),
       () => (sketchOn && tracer.picking ? ((tracer.picking = null), true) : false),
       () => (sketchOn && underlay.adjust ? ((underlay.adjust = false), true) : false),
       () => (townMerging ? ((townMerging = false), true) : false),
@@ -4723,7 +4855,17 @@
             near={townNear}
             wallWhy={townWallWhy}
             {peek}
-            onMode={(m) => ((townMode = m), (townMerging = false), townTool?.reset())}
+            onMode={(m) => ((townMode = m), (townMerging = false), townTool?.reset(), streetTool?.reset())}
+            streets={streetPlan}
+            {streetPick}
+            {streetDrawn}
+            bind:streetClass
+            onLayOut={() => void streetChange({ op: 'lay_out_by_hand' }, 'lay out')}
+            onBack={() => (streetBackAsk = true)}
+            onStreet={(req, what) => void streetChange(req, what)}
+            onStreetFinish={() => streetTool?.finish()}
+            onStreetBack={() => streetTool?.back()}
+            onStreetPick={(p) => (streetPick = p)}
             onChange={(req, what) => void townChange(req, what)}
             onMerge={() => (townMerging = !townMerging)}
             onZoomIn={townZoomIn}
@@ -5055,6 +5197,22 @@
       {/if}
       {#if q.tokens}<p>{q.tokens} play {q.tokens === 1 ? 'token in it waits' : 'tokens in it wait'} outside.</p>{/if}
       {#if q.others}<p class="ws-muted">Changes to towns and sites that come out differently are set aside. Undo starts afresh.</p>{/if}
+    </Choice>
+  {/if}
+  {#if streetBackAsk}
+    <Choice
+      title="Back to the generated streets?"
+      icon="reset"
+      buttons={[
+        { label: 'Cancel', value: 'no', kind: 'quiet' },
+        { label: 'Back to generated', value: 'yes', kind: 'danger' },
+      ]}
+      onChoose={(v) => ((streetBackAsk = false), v === 'yes' && void streetChange({ op: 'back_to_generated' }, 'back'))}
+    >
+      <p>
+        {townName ?? 'The town'} is laid out again as it was before it was laid out by hand: every street, block and junction drawn or moved since goes
+        (with the ward editor’s changes from before, if any). Undo brings them back.
+      </p>
     </Choice>
   {/if}
   {#if inWayAsk}
