@@ -6,11 +6,13 @@
 // Each kind has its look, in a few flat shapes: a pond lighter and greener; a lake the usual blue,
 // darker toward its middle; an inlet the sea's own, no rim (it joins the sea's water); a basin deep
 // and dark inside a pale stone quay; a moat dark and still with a thin ink line along each side; a
-// stream a thin line of shallow water at its width (1.5 px at least), inked each side.
+// stream a thin line of shallow water at its width (1.5 px at least), inked each side. The look is
+// the water's (`water.ts` `lookOf`: by its shape, depth and level against the sea's); dug still
+// water has a narrow pale stone edge.
 import { AlphaFilter, Container, Graphics } from 'pixi.js';
 import type { Water } from '../gen/protocol';
 import type { Camera } from './camera';
-import { centre, contains, shore, shoreRings, widthOf } from '../editor/water';
+import { centre, contains, lookOf, shore, shoreRings, widthOf } from '../editor/water';
 
 /** The terrain shader's shallow water (`terrain.frag`: 0.70, 0.78, 0.77) and its shore ink. */
 const FILL = 0xb3c7c4;
@@ -24,21 +26,25 @@ const STREAM = 0xbbcfcc;
 /** A basin's quay: pale stone, 6 ft wide (2 px at least). */
 const QUAY = 0xd9d3c6;
 const QUAY_FT = 6;
+/** Dug still water's stone edge (ft). */
+const EDGE_FT = 2.5;
 /** The rim's width (px): half of it shows outside the fill. */
 const RIM_PX = 3;
 /** A moat's ink each side, and a stream's narrowest (px). */
 const THIN_PX = 2;
 const STREAM_MIN_PX = 1.5;
 
-type Shown = { kind: Water['kind']; pts: number[]; rings: number[][]; mid: number[] | null; line: number[] | null; px: number };
+type Kind = NonNullable<Water['kind']>;
+type Shown = { kind: Kind; dug: boolean; pts: number[]; rings: number[][]; mid: number[] | null; line: number[] | null; px: number };
 
-const FILLS: Record<Water['kind'], number> = { inlet: FILL, basin: BASIN, lake: FILL, pond: POND, moat: MOAT, stream: STREAM };
+const FILLS: Record<Kind, number> = { inlet: FILL, basin: BASIN, lake: FILL, pond: POND, moat: MOAT, stream: STREAM };
 
 export class Waters {
   readonly container = new Container();
   private readonly g = new Graphics();
   private readonly fader = new AlphaFilter();
   private waters: [string, Water][] = [];
+  private sea = 0;
   private key = '';
   /** Outlines drawn last (for checks). */
   drawn = 0;
@@ -48,8 +54,10 @@ export class Waters {
     this.container.visible = false;
   }
 
-  set(waters: Record<string, Water> | undefined) {
-    const next = Object.entries(waters ?? {}).filter(([, w]) => w.pts.length >= 3);
+  /** The waters to draw, the sea at `sea` ft (their looks). */
+  set(waters: Record<string, Water> | undefined, sea: number) {
+    this.sea = sea;
+    const next = Object.entries(waters ?? {}).filter(([, w]) => w.pts.length >= 2);
     this.waters = next;
     this.key = '';
   }
@@ -83,27 +91,32 @@ export class Waters {
       return out;
     };
     for (const [, w] of this.waters) {
-      if (fine && w.kind === 'inlet') continue;
+      const look = lookOf(w, this.sea);
+      if (fine && look.kind === 'inlet') continue;
       let [bx0, by0, bx1, by1] = [Infinity, Infinity, -Infinity, -Infinity];
       const pts0 = shore(w);
       for (const [x, y] of pts0) [bx0, by0, bx1, by1] = [Math.min(bx0, x), Math.min(by0, y), Math.max(bx1, x), Math.max(by1, y)];
       if (bx1 < x0 || bx0 > x1 || by1 < y0 || by0 > y1) continue;
       if (Math.max(bx1 - bx0, by1 - by0) * cam.ppf < 1) continue;
-      const stream = w.kind === 'stream';
+      const stream = look.kind === 'stream';
+      // (A brushed stream wider than 16 ft is drawn by its shore, as other water.)
+      const thin = stream && widthOf(w) <= 16;
+      const kind = look.kind;
       shown.push({
-        kind: w.kind,
-        pts: stream ? [] : flat(pts0),
-        rings: w.kind === 'moat' ? shoreRings(w).map(flat) : [],
-        mid: w.kind === 'lake' ? lakeMiddle(pts0) : null,
-        line: stream ? flat(centre(w)) : null,
-        px: stream ? Math.max(STREAM_MIN_PX, widthOf(w) * cam.ppf) : Math.max(2, QUAY_FT * cam.ppf),
+        kind,
+        dug: look.dug && (kind === 'lake' || kind === 'pond'),
+        pts: thin ? [] : flat(pts0),
+        rings: kind === 'moat' ? shoreRings(w).map(flat) : [],
+        mid: kind === 'lake' ? lakeMiddle(pts0) : null,
+        line: thin ? flat(centre(w)) : null,
+        px: thin ? Math.max(STREAM_MIN_PX, widthOf(w) * cam.ppf) : Math.max(2, (look.dug && kind !== 'basin' ? EDGE_FT : QUAY_FT) * cam.ppf),
       });
     }
     // Under every fill: the rims (a basin's quay with ink each side of it), so overlapping water is one.
     for (const s of shown) {
       if (s.line) {
         line(g, s.line).stroke({ width: s.px + 2, color: INK, alpha: 0.85, join: 'round', cap: 'round' });
-      } else if (s.kind === 'basin') {
+      } else if (s.kind === 'basin' || s.dug) {
         g.poly(s.pts, true).stroke({ width: 2 * s.px + 2, color: INK, alpha: 0.85, join: 'round' });
         g.poly(s.pts, true).stroke({ width: 2 * s.px, color: QUAY, join: 'round' });
         g.poly(s.pts, true).stroke({ width: 2, color: INK, alpha: 0.7, join: 'round' });

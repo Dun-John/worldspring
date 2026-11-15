@@ -24,7 +24,7 @@
   import { CROSSING_WIDTH, LOT_SIZES, TOWN_WARDS, NARROW_CROSSING_MAX, WHARF_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial, type WharfKind } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import { SHOP_DEPTH_RANGE, shopsWidth, type CrossSettings } from '../editor/crossing';
-  import { widths, type WaterSettings } from '../editor/water';
+  import { BRUSH_WIDTHS, DEPTHS, POND_BELOW_FT, type WaterSettings } from '../editor/water';
   import type { WaterKind } from '../gen/protocol';
   import { ISLET_RADIUS, ISLET_RISE, type HarbourSettings, type HarbourKind } from '../editor/harbour';
   import type { ClearShape } from '../editor/clearArea';
@@ -70,9 +70,9 @@
     /** The crossing picked (what it is), else putting new ones down. */
     crossEditing: string | null;
     water: WaterSettings;
-    /** The water picked (its kind and name), else drawing new outlines. */
-    waterPicked: { kind: WaterKind; name: string; width: number | null } | null;
-    onWaterChange: (change: { kind?: WaterKind; name?: string; width?: number }) => void;
+    /** The water picked (its look, name, a line's width, depth and shore), else drawing new water. */
+    waterPicked: { look: WaterKind; name: string; width: number | null; depth: number; dug: boolean } | null;
+    onWaterChange: (change: { name?: string; width?: number; depth?: number; dug?: boolean }) => void;
     onWaterRemove: () => void;
     harbour: HarbourSettings;
     /** The wharf picked (its id), else drawing new ones. */
@@ -179,7 +179,7 @@
     { key: 'castle', label: 'Castle', icon: 'castle', title: 'Draw a castle: its walls, gate, keep and yard' },
     { key: 'wall', label: 'Wall', icon: 'wall', title: 'A wall standing on its own, anywhere: towers and gates where you click' },
     { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
-    { key: 'water', label: 'Water', icon: 'lake', title: 'Draw an inlet, basin, lake, pond, moat or stream' },
+    { key: 'water', label: 'Water', icon: 'lake', title: 'Brush or outline water, of a width and depth' },
     { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
     { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
   ];
@@ -201,25 +201,20 @@
   function addKind(k: string) {
     if (k && !row.kinds.includes(k)) row.kinds = [...row.kinds, k];
   }
-  const WATERS: { key: WaterKind; label: string; look: string }[] = [
-    { key: 'inlet', label: 'Inlet', look: 'The sea reaching in, at its level.' },
-    { key: 'basin', label: 'Basin', look: 'A harbour basin dug from the sea, at its level.' },
-    { key: 'lake', label: 'Lake', look: 'Standing water, 8 ft deep away from its shore.' },
-    { key: 'pond', label: 'Pond', look: 'Shallow standing water, 3 ft deep.' },
-    { key: 'moat', label: 'Moat', look: 'A moat round a castle or town, 6 ft deep, its banks steep: click along it, then press Enter, or click its first point to bring it round as a ring.' },
-    { key: 'stream', label: 'Stream', look: 'A small, shallow stream running downhill: click along it, then press Enter or double-click.' },
-  ];
-  const waterKind = $derived(waterPicked?.kind ?? water.kind);
-  /** The width shown: the picked line's, or the one new lines get. */
-  const waterLine = $derived(waterPicked ? waterPicked.width !== null : waterKind === 'moat' || waterKind === 'stream');
-  const waterWidths = $derived(widths(waterKind));
+  /** What the picked water looks like, by its look (`water.ts` `lookOf`). */
+  const LOOKS: Record<WaterKind, string> = {
+    inlet: 'the sea reaching in, a beach round it',
+    basin: 'a harbour basin of the sea, a paved quay round it',
+    lake: 'a lake',
+    pond: 'a pond, reeds round it',
+    moat: 'a ring of still water, as a moat',
+    stream: 'a stream running downhill',
+  };
+  /** The width shown: the picked line's, or the one new brushed water gets. */
+  const waterLine = $derived(waterPicked ? waterPicked.width !== null : water.brush);
   const waterWidth = $derived(waterPicked?.width ?? water.width);
-  /** A new line's width kept within its kind's (a moat's 8-60 ft, a stream's 3-12). */
-  function waterKindNew(k: WaterKind) {
-    const [d, lo, hi] = widths(k);
-    const was = widths(water.kind);
-    water = { ...water, kind: k, width: was[0] === d ? Math.min(hi, Math.max(lo, water.width)) : d };
-  }
+  const waterDepth = $derived(waterPicked?.depth ?? water.depth);
+  const waterDug = $derived(waterPicked?.dug ?? water.dug);
 
   const categories = $derived(funcs ? [...new Set(funcs.businesses.map((b) => b.category))] : []);
 
@@ -508,23 +503,23 @@
   {:else if mode === 'water'}
     {#if waterPicked}
       <div class="editing">
-        <span class="grow">Changing the <b>{waterPicked.name || waterPicked.kind}</b></span>
+        <span class="grow">Changing <b>{waterPicked.name || 'this water'}</b></span>
         <button class="ws-btn" onclick={onWaterRemove} title="Take it away"><Icon name="trash" size={16} /> Remove</button>
         <button class="ws-btn" onclick={onDone}>Done</button>
       </div>
+    {:else}
+      <div class="ws-seg" role="radiogroup" aria-label="Shape">
+        <button class:on={water.brush} aria-pressed={water.brush} onclick={() => (water = { ...water, brush: true })} title="Paint water along a stroke">Brush</button>
+        <button class:on={!water.brush} aria-pressed={!water.brush} onclick={() => (water = { ...water, brush: false })} title="Outline the water">Polygon</button>
+      </div>
     {/if}
-    <div class="ws-seg" role="radiogroup" aria-label="Water">
-      {#each WATERS as k (k.key)}
-        <button class:on={waterKind === k.key} aria-pressed={waterKind === k.key} onclick={() => (waterPicked ? onWaterChange({ kind: k.key }) : waterKindNew(k.key))}>{k.label}</button>
-      {/each}
-    </div>
     {#if waterLine}
       <label class="slider">
         <span>Width</span><output>{waterWidth} ft</output>
         <input
           type="range"
-          min={waterWidths[1]}
-          max={waterWidths[2]}
+          min={BRUSH_WIDTHS[1]}
+          max={BRUSH_WIDTHS[2]}
           step="1"
           value={waterWidth}
           onchange={(e) => (waterPicked ? onWaterChange({ width: +e.currentTarget.value }) : (water = { ...water, width: +e.currentTarget.value }))}
@@ -534,6 +529,24 @@
         />
       </label>
     {/if}
+    <label class="slider">
+      <span>Depth</span><output>{waterDepth} ft</output>
+      <input
+        type="range"
+        min={DEPTHS[1]}
+        max={DEPTHS[2]}
+        step="1"
+        value={waterDepth}
+        onchange={(e) => (waterPicked ? onWaterChange({ depth: +e.currentTarget.value }) : (water = { ...water, depth: +e.currentTarget.value }))}
+        oninput={(e) => {
+          if (!waterPicked) water = { ...water, depth: +e.currentTarget.value };
+        }}
+      />
+    </label>
+    <div class="ws-seg" role="radiogroup" aria-label="Shore">
+      <button class:on={!waterDug} aria-pressed={!waterDug} onclick={() => (waterPicked ? onWaterChange({ dug: false }) : (water = { ...water, dug: false }))} title="A natural curve round the points">Natural</button>
+      <button class:on={waterDug} aria-pressed={waterDug} onclick={() => (waterPicked ? onWaterChange({ dug: true }) : (water = { ...water, dug: true }))} title="Straight sides, rounded corners, a stone edge">Dug</button>
+    </div>
     {#if !near}
       <div class="zoom">
         <span class="grow">Zoom in to draw it.</span>
@@ -548,11 +561,18 @@
       </label>
     {/if}
     {#if peek}
-      {#if !waterPicked}<div class="ws-hint">Tap its points, then the first again, or drag round it; tap water drawn earlier to change it.</div>{/if}
+      {#if !waterPicked}<div class="ws-hint">{water.brush ? 'Drag to paint water; end on its start for a ring.' : 'Tap its points, then the first again, or drag round it.'} Tap water drawn earlier to change it.</div>{/if}
     {:else}
       <div class="ws-hint">
-        {waterPicked ? 'Pick a kind or a name for it; click outside it to draw another. ' : (waterLine ? 'Click along it or drag along it; click water drawn earlier to change it. ' : 'Click its points, then the first again (or double-click) to close it, or drag round it and let go near the start; click water drawn earlier to change it. A lake, pond or inlet gets a natural shore round the points; a basin keeps straight sides. Outlines that overlap are one water. ')}{WATERS.find((k) => k.key === waterKind)?.look}
+        {#if waterPicked}
+          It looks like {LOOKS[waterPicked.look]}. Click outside it to draw more.
+        {:else if water.brush}
+          Press and drag to paint water along the stroke, or click along a line and press Enter; end on its start for a ring. Click water drawn earlier to change it.
+        {:else}
+          Click its points, then the first again (or double-click), or drag round it and let go near the start. Water drawn over each other is one water. Click water drawn earlier to change it.
+        {/if}
       </div>
+      <div class="ws-hint">The look follows the water: at the sea's level it is the sea's (dug: a quay); an open stroke runs downhill as a stream; a ring stays still, as a moat; other water under {POND_BELOW_FT} ft deep is a pond, deeper a lake.</div>
     {/if}
   {:else if mode === 'harbour'}
     {#if harbourPicked}

@@ -1,12 +1,14 @@
-// Build › Water: water drawn by hand (`Edits.waters`: `worldgen::waters`). Click the outline's
-// points, then click its first point again (or double-click) to close it, or drag round it
-// freehand and let go near the start: an inlet or basin of the sea, a lake, pond or moat. A
-// lake's, pond's or inlet's shore is shaped into a natural curve near the points, a basin's
-// or moat's sides kept straight with rounded corners (`shore`, as the generator shapes it). Outlines that overlap are one water. A click inside water drawn
-// earlier picks it (its kind, name, or take it away) when no outline is being drawn. Escape drops
-// the points. Right-drag pans meanwhile. A moat or a stream is drawn as a line instead (`band`):
-// click its points, then press Enter or double-click to end it, or (a moat) click the first point
-// again to bring it round as a ring; or drag along it.
+// Build › Water: water drawn by hand (`Edits.waters`: `worldgen::waters`), in two shapes. Brush:
+// press and drag paints water along the stroke at the width set (`band`), or click along a line
+// and press Enter or double-click to end it; ending on its start (or clicking the first point)
+// brings it round as a ring. Polygon: click its points, then the first again (or double-click),
+// or drag round it freehand and let go near the start. A natural shore is shaped into a curve
+// near the points, a dug one kept straight with rounded corners (`shore`, as the generator
+// shapes it). Polygons that overlap are one water. The look follows the water (`lookOf`, as
+// `waters::Form::look`): the sea's at its level, a stream along an open line, a moat round a
+// ring, else a pond or a lake by its depth. A click inside water drawn earlier picks it (its
+// width, depth, shore, name, or take it away) when nothing is being drawn. Escape drops the
+// points. Right-drag pans meanwhile.
 import type { Graphics } from 'pixi.js';
 import type { Edits, Water, WaterKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
@@ -19,30 +21,82 @@ export const MAX_WATER_SPAN_FT = 26_400;
 export const MAX_WATERS = 256;
 
 export interface WaterSettings {
-  kind: WaterKind;
-  /** A moat's or stream's width (ft). */
+  /** Brush (a band along a line) or polygon. */
+  brush: boolean;
+  /** A brushed line's width (ft, `BRUSH_WIDTHS`). */
   width: number;
+  /** Its depth (ft, `DEPTHS`). */
+  depth: number;
+  /** Dug: straight sides, a stone edge. */
+  dug: boolean;
 }
 
-export const defaultWater = (): WaterSettings => ({ kind: 'pond', width: MOAT_WIDTH_FT });
+/** A brushed line's width when none is given and the widths allowed, and the depths (`waters`). */
+export const BRUSH_WIDTHS: [number, number, number] = [10, 3, 80];
+export const DEPTHS: [number, number, number] = [4, 1, 20];
+/** Still water shallower than this looks a pond (`waters::POND_BELOW_FT`). */
+export const POND_BELOW_FT = 4;
+/** Water within this of the sea's level is the sea's (`waters::SEA_WITHIN_FT`). */
+export const SEA_WITHIN_FT = 0.25;
 
-/** A line's width when none is given and the widths allowed (`WaterKind::widths`). */
-export const MOAT_WIDTH_FT = 20;
-export const widths = (k: WaterKind): [number, number, number] => (k === 'stream' ? [5, 3, 12] : [MOAT_WIDTH_FT, 8, 60]);
-/** Whether it is drawn as a line in the tool (`WaterKind::may_be_line`). */
-export const drawnAsLine = (k: WaterKind) => k === 'moat' || k === 'stream';
+export const defaultWater = (): WaterSettings => ({ brush: true, width: BRUSH_WIDTHS[0], depth: DEPTHS[0], dug: false });
+
+/** A legacy kind's depth (`WaterKind::depth`). */
+const KIND_DEPTH: Record<WaterKind, number> = { inlet: 12, basin: 10, lake: 8, pond: 3, moat: 6, stream: 1.5 };
+/** Its kind if it was made with one (`Water::legacy`: neither a kind nor a depth is a lake). */
+export const legacy = (w: Water): WaterKind | null => w.kind ?? (w.depth === undefined ? 'lake' : null);
+/** Its width's default and the widths allowed (`Water::widths`). */
+export function widths(w: Water): [number, number, number] {
+  const k = legacy(w);
+  return !k ? BRUSH_WIDTHS : k === 'stream' ? [5, 3, 12] : [20, 8, 60];
+}
 /** Whether it is a line (`Water::is_line`). */
-export const isLine = (w: Water) => !!w.line || w.kind === 'stream';
+export const isLine = (w: Water) => !!w.line || legacy(w) === 'stream';
+/** Whether it is an open line whose level falls along it (`Water::flows`). */
+export function flows(w: Water): boolean {
+  const k = legacy(w);
+  return k ? k === 'stream' : !!w.line && !w.closed;
+}
 /** A line's width (`Water::width_ft`). */
 export function widthOf(w: Water): number {
-  const [d, lo, hi] = widths(w.kind);
+  const [d, lo, hi] = widths(w);
   const v = w.width !== undefined && Number.isFinite(w.width) ? w.width : d;
   return Math.min(hi, Math.max(lo, v));
 }
-const isClosed = (w: Water) => !!w.closed && w.kind !== 'stream';
+const isClosed = (w: Water) => isLine(w) && !!w.closed && !flows(w);
+/** Its depth (`Water::depth_ft`). */
+export function depthOf(w: Water): number {
+  if (w.depth !== undefined && Number.isFinite(w.depth)) return Math.min(DEPTHS[2], Math.max(DEPTHS[1], w.depth));
+  return KIND_DEPTH[legacy(w) ?? 'lake'];
+}
+/** Whether it is dug (`Water::is_dug`). */
+export function isDug(w: Water): boolean {
+  if (w.dug !== undefined) return w.dug;
+  const k = legacy(w);
+  return k === 'basin' || k === 'moat';
+}
 
-/** Whether its level is the sea's by default (`WaterKind::of_sea`). */
-export const ofSea = (k: WaterKind) => k === 'inlet' || k === 'basin';
+/** What water looks like (`waters::Look`): which look, and dug (a stone edge). */
+export interface WaterLook {
+  kind: WaterKind;
+  dug: boolean;
+}
+
+/** Its look (`waters::Form::look`), the sea at `sea` ft: a legacy kind's own; else the sea's at
+ * its level (a quay when dug), a stream along an open line, a moat round a ring, else a pond
+ * shallower than `POND_BELOW_FT`, a lake deeper. */
+export function lookOf(w: Water, sea: number): WaterLook {
+  const dug = isDug(w);
+  const k = legacy(w);
+  if (k) return { kind: k, dug };
+  if (w.level <= sea + SEA_WITHIN_FT) return { kind: dug ? 'basin' : 'inlet', dug };
+  if (flows(w)) return { kind: 'stream', dug };
+  if (isClosed(w)) return { kind: 'moat', dug };
+  return { kind: depthOf(w) < POND_BELOW_FT ? 'pond' : 'lake', dug };
+}
+
+/** Whether a legacy kind's level is the sea's by default (`WaterKind::of_sea`). */
+export const ofSea = (w: Water) => legacy(w) === 'inlet' || legacy(w) === 'basin';
 
 /** Why an outline can't be water (mirrors `Water::problem`), if so. */
 export function waterProblem(w: Water): string | null {
@@ -59,6 +113,8 @@ export function waterProblem(w: Water): string | null {
 }
 
 function lineProblem(w: Water): string | null {
+  const [, lo, hi] = widths(w);
+  if (w.width !== undefined && !(w.width >= lo && w.width <= hi)) return `The width is ${lo} to ${hi} ft`;
   const n = w.pts.length;
   const closed = isClosed(w);
   const least = closed ? 3 : 2;
@@ -109,15 +165,12 @@ const FILLET_FT = 6;
 const SHORE_SEED = 0x5a3e91c70d2b6f48n;
 const M64 = (1n << 64n) - 1n;
 
-/** Whether its shore is natural (a curve round the points) rather than dug (`WaterKind::natural`). */
-export const natural = (k: WaterKind) => k !== 'basin' && k !== 'moat';
-
 const shores = new WeakMap<Water, Pt[]>();
 
 /** A water's shore (`Water::shore`: a line's `band`), kept per outline object. */
 export function shore(w: Water): Pt[] {
   let s = shores.get(w);
-  if (!s) shores.set(w, (s = isLine(w) ? band(centre(w), isClosed(w), widthOf(w) / 2).pts : shapeShore(w.pts, w.kind)));
+  if (!s) shores.set(w, (s = isLine(w) ? band(centre(w), isClosed(w), widthOf(w) / 2).pts : shapeShore(w.pts, !isDug(w))));
   return s;
 }
 
@@ -129,9 +182,9 @@ export function shoreRings(w: Water): Pt[][] {
   return [side(c, h, true), side(c, -h, true)];
 }
 
-/** A line's middle (`Water::centre`): a stream's smoothed twice. */
+/** A line's middle (`Water::centre`): an open line's (a stream's) smoothed twice. */
 export function centre(w: Water): Pt[] {
-  return w.kind === 'stream' ? chaikin(chaikin(w.pts)) : w.pts.slice();
+  return flows(w) ? chaikin(chaikin(w.pts)) : w.pts.slice();
 }
 
 function chaikin(c: Pt[]): Pt[] {
@@ -268,11 +321,11 @@ export function streamLevels(at: [number, number | null][], floor: number): numb
 }
 
 /** `waters::shape`; `wobbly` false leaves the wobble out (for the outline being drawn). */
-export function shapeShore(pts: Pt[], kind: WaterKind, wobbly = true): Pt[] {
+export function shapeShore(pts: Pt[], natural: boolean, wobbly = true): Pt[] {
   const n = pts.length;
   const ok = (s: Pt[]) => s.length >= 3 && s.every((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])) && Math.abs(area(s)) >= 25 && !crosses(s);
   if (n < 3 || !pts.every((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))) return pts.slice();
-  if (!natural(kind)) {
+  if (!natural) {
     const f = fillet(pts);
     return ok(f) ? f : pts.slice();
   }
@@ -461,8 +514,10 @@ export function simplify(pts: Pt[], max: number): Pt[] {
 export interface WaterHost {
   edits(): Edits;
   picked(): string | null;
-  /** The kind being drawn (its shore's shape in the preview). */
-  kind(): WaterKind;
+  /** Brushing a line (else a polygon). */
+  brush(): boolean;
+  /** Drawing a dug shore (its shape in the preview). */
+  dug(): boolean;
   /** An outline closed, or a line ended (`closed`: come round as a ring) (world ft, rounded to 0.5). */
   placed(pts: Pt[], closed?: boolean): void;
   /** A line's width (ft), for its preview. */
@@ -508,18 +563,15 @@ export class WaterTool implements PointerTool {
     this.press = null;
     if (this.stroke) return this.endStroke(x, y);
     const p = round([x, y]);
-    const line = drawnAsLine(this.host.kind());
+    const line = this.host.brush();
     if (!this.pts.length) {
       const hit = this.at(p);
       if (hit && hit !== this.host.picked()) return this.host.pick(hit);
       this.pts = [p];
-      return this.host.hint(line ? `Click along it; press Enter or double-click to end it${this.host.kind() === 'moat' ? ', or click the first point to bring it round' : ''}` : 'Click its next points; click the first again to close it');
+      return this.host.hint(line ? 'Click along it; press Enter or double-click to end it, or click the first point to bring it round' : 'Click its next points; click the first again to close it');
     }
     const first = this.pts[0];
-    if (this.pts.length >= 3 && Math.hypot(p[0] - first[0], p[1] - first[1]) <= 8 * this.fpp) {
-      if (!line) return this.close();
-      if (this.host.kind() === 'moat') return this.close(true);
-    }
+    if (this.pts.length >= 3 && Math.hypot(p[0] - first[0], p[1] - first[1]) <= 8 * this.fpp) return this.close(line);
     const last = this.pts[this.pts.length - 1];
     if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 1) return;
     if (this.pts.length >= MAX_WATER_PTS) return this.host.hint(`An outline has at most ${MAX_WATER_PTS} points: click the first to close it`);
@@ -537,8 +589,8 @@ export class WaterTool implements PointerTool {
     let length = 0;
     for (let i = 1; i < s.length; i++) length += Math.hypot(s[i][0] - s[i - 1][0], s[i][1] - s[i - 1][1]);
     const gap = Math.hypot(x - s[0][0], y - s[0][1]);
-    const line = drawnAsLine(this.host.kind());
-    const closes = gap <= Math.max(16 * this.fpp, 0.1 * length) && (!line || this.host.kind() === 'moat');
+    const line = this.host.brush();
+    const closes = gap <= Math.max(16 * this.fpp, 0.1 * length);
     if (closes && Math.hypot(lastPt[0] - s[0][0], lastPt[1] - s[0][1]) < 1e-9) s.pop();
     if (line) {
       // (A line drawn freehand is done when let go: a ring when let go near its start.)
@@ -567,7 +619,7 @@ export class WaterTool implements PointerTool {
   }
 
   dblclick(): boolean {
-    if (drawnAsLine(this.host.kind())) {
+    if (this.host.brush()) {
       // (The double click's second press added a point where the first did.)
       if (this.pts.length < 2) return this.pts.length > 0;
       this.close();
@@ -580,7 +632,7 @@ export class WaterTool implements PointerTool {
 
   /** Enter: a line ended where it is, an outline closed. */
   finish() {
-    if (this.pts.length >= (drawnAsLine(this.host.kind()) ? 2 : 3)) this.close();
+    if (this.pts.length >= (this.host.brush() ? 2 : 3)) this.close();
   }
 
   private close(ring = false) {
@@ -649,14 +701,13 @@ export class WaterTool implements PointerTool {
     const line = this.cursor ? [...this.pts, this.cursor] : this.pts;
     // The shore it will have (without its wobble) once there are three points, the points' line
     // faint; a line's band as soon as it has two.
-    const kind = this.host.kind();
-    const asLine = drawnAsLine(kind);
+    const asLine = this.host.brush();
     const shaped = asLine
       ? line.length >= 2
-        ? band(kind === 'stream' ? chaikin(chaikin(line)) : line, false, this.host.width() / 2).pts
+        ? band(chaikin(chaikin(line)), false, this.host.width() / 2).pts
         : null
       : line.length >= 3
-        ? shapeShore(line, kind, false)
+        ? shapeShore(line, !this.host.dug(), false)
         : null;
     const s0 = scr(line[0]);
     g.moveTo(s0[0], s0[1]);

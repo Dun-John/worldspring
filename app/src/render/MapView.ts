@@ -24,7 +24,7 @@ import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
 import { BLOCK, parseKey } from '../editor/groundCodec';
-import { shore } from '../editor/water';
+import { lookOf, shore } from '../editor/water';
 import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
 
 export interface InteriorState {
@@ -1216,7 +1216,7 @@ export class MapView {
     this.edits = {};
     this.plateauKey = '';
     this.waterKey = '';
-    this.waterLayer.set((adjusted ?? world.edits)?.waters);
+    this.waterLayer.set((adjusted ?? world.edits)?.waters, geom.sea_level_ft);
     this.townHints.clear();
     this.streetHints.clear();
     this.setEdits(adjusted ?? world.edits ?? {}, false);
@@ -1375,9 +1375,9 @@ export class MapView {
       }
     }
     // Water drawn by hand: drawn above the finest levels, its names at its middle.
-    if (prev.waters !== next.waters) this.waterLayer.set(next.waters);
+    if (prev.waters !== next.waters) this.waterLayer.set(next.waters, this.geom?.sea_level_ft ?? 0);
     if (prev.waters !== next.waters || pr !== nr) {
-      const named = waterLabels(next);
+      const named = waterLabels(next, this.geom?.sea_level_ft ?? 0);
       const key = JSON.stringify(named.map((f) => [f.id, f.name, f.x, f.y]));
       if (key !== this.waterKey) {
         this.waterKey = key;
@@ -2339,14 +2339,15 @@ function linkIn(it: Interior, from: string): { level: number; x: number; y: numb
 }
 
 /** Labels for the water drawn by hand that someone named (`e:` renames), at each outline's middle:
- * a lake's look (an inlet or basin a bay's). */
-export function waterLabels(e: Edits): Feature[] {
+ * a lake's look (the sea's water a bay's), the sea at `sea` ft. */
+export function waterLabels(e: Edits, sea: number): Feature[] {
   const out: Feature[] = [];
   for (const [id, name] of Object.entries(e.renames ?? {})) {
     const w = id.startsWith('e:') ? e.waters?.[id] : undefined;
-    if (!w || !name || w.pts.length < 3) continue;
+    if (!w || !name || w.pts.length < 2) continue;
     const f = outlineLabel(id, name, shore(w));
-    out.push({ ...f, kind: w.kind === 'inlet' || w.kind === 'basin' ? 'bay' : 'lake', detail: w.kind });
+    const k = lookOf(w, sea).kind;
+    out.push({ ...f, kind: k === 'inlet' || k === 'basin' ? 'bay' : 'lake', detail: k });
   }
   return out;
 }
