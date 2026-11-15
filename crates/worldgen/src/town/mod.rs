@@ -31,6 +31,7 @@ pub mod stairs;
 pub mod temple;
 pub mod wards;
 pub mod hand;
+pub mod handedit;
 pub mod wallstyle;
 pub mod outline;
 mod curtain;

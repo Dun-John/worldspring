@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::castle::KeepKind;
-use super::catalog::{self, Ward};
+use super::catalog::{self, CATALOG, Ward};
 use super::fill::{District, Fill};
 use super::geom::*;
 use super::{Building, Layout, ParkKind, Part, PartKind, PlazaKind, QuarterKind, RoofStyle, Site, Structure, TownPlan};
@@ -169,6 +169,11 @@ impl Default for BlockFill {
 pub struct Pin {
     pub p: P,
     pub id: u32,
+    /// The business it was (`CATALOG` key) and its name: the building there carries them on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub func: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// A block (`/k<id>`): the face of the street graph holding `at`.
@@ -480,10 +485,9 @@ fn nth<T: Copy>(list: &[T], i: u8, what: &str) -> Result<T, String> {
     list.get(i as usize).copied().ok_or_else(|| format!("kept building: no {what} {i}"))
 }
 
-/// Numbers packed exactly: each f64's bits, little-endian, base64url without padding.
-pub fn pack(fs: &[f64]) -> String {
+/// Bytes as base64url without padding.
+fn b64(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let bytes: Vec<u8> = fs.iter().flat_map(|f| f.to_bits().to_le_bytes()).collect();
     let mut out = String::with_capacity(bytes.len() * 4 / 3 + 3);
     for c in bytes.chunks(3) {
         let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
@@ -494,8 +498,8 @@ pub fn pack(fs: &[f64]) -> String {
     out
 }
 
-/// `pack` undone.
-pub fn unpack(s: &str) -> Result<Vec<f64>, String> {
+/// `b64` undone.
+fn unb64(s: &str) -> Result<Vec<u8>, String> {
     let val = |c: u8| -> Result<u32, String> {
         Ok(match c {
             b'A'..=b'Z' => c - b'A',
@@ -517,10 +521,87 @@ pub fn unpack(s: &str) -> Result<Vec<f64>, String> {
         }
         bytes.extend((0..c.len() - 1).map(|k| (n >> (16 - 8 * k) & 255) as u8));
     }
+    Ok(bytes)
+}
+
+/// Numbers packed exactly: each f64's bits, little-endian, base64url without padding.
+pub fn pack(fs: &[f64]) -> String {
+    b64(&fs.iter().flat_map(|f| f.to_bits().to_le_bytes()).collect::<Vec<u8>>())
+}
+
+/// `pack` undone.
+pub fn unpack(s: &str) -> Result<Vec<f64>, String> {
+    let bytes = unb64(s)?;
     if bytes.len() % 8 != 0 {
         return Err("packed numbers: not whole numbers".into());
     }
     Ok(bytes.chunks(8).map(|b| f64::from_bits(u64::from_le_bytes(b.try_into().unwrap()))).collect())
+}
+
+/// Points packed on a 1/64-ft grid (`~`, then each number's step from the last, zigzag varints,
+/// base64url): a quarter of `pk`'s size, for long lines whose places need no more (walls, towers).
+pub(super) fn pkq(pts: &[P]) -> String {
+    if pts.is_empty() {
+        return String::new();
+    }
+    let mut bytes: Vec<u8> = Vec::with_capacity(pts.len() * 4);
+    let mut last = [0i64; 2];
+    for p in pts {
+        for k in 0..2 {
+            let v = crate::core::round(p[k] * 64.0) as i64;
+            let d = v - last[k];
+            last[k] = v;
+            let mut z = ((d << 1) ^ (d >> 63)) as u64;
+            loop {
+                let b = (z & 127) as u8;
+                z >>= 7;
+                if z == 0 {
+                    bytes.push(b);
+                    break;
+                }
+                bytes.push(b | 128);
+            }
+        }
+    }
+    format!("~{}", b64(&bytes))
+}
+
+/// Towers' forms packed short (`~` centres `|` shapes, two hex digits each `|` ways, each on a
+/// 1/4096 grid), or as `pack` (five numbers each) without the `~`.
+fn forms_pk(forms: &[(P, u8, P)]) -> String {
+    if forms.is_empty() {
+        return String::new();
+    }
+    let at: Vec<P> = forms.iter().map(|f| f.0).collect();
+    let ways: Vec<P> = forms.iter().map(|f| mul(f.2, 64.0)).collect();
+    let shapes: String = forms.iter().map(|f| format!("{:02x}", f.1)).collect();
+    format!("{}|{shapes}|{}", pkq(&at), pkq(&ways))
+}
+
+fn forms_unpk(s: &str) -> Vec<(P, u8, P)> {
+    if !s.starts_with('~') {
+        return unpack(s).unwrap_or_default().chunks_exact(5).map(|c| ([c[0], c[1]], c[2] as u8, [c[3], c[4]])).collect();
+    }
+    let mut it = s.split('|');
+    let (at, shapes, ways) = (unpk(it.next().unwrap_or("")), it.next().unwrap_or(""), unpk(it.next().unwrap_or("")));
+    let shapes: Vec<u8> = shapes.as_bytes().chunks(2).map(|c| std::str::from_utf8(c).ok().and_then(|h| u8::from_str_radix(h, 16).ok()).unwrap_or(0)).collect();
+    at.into_iter().zip(shapes).zip(ways).map(|((a, k), w)| (a, k, mul(w, 1.0 / 64.0))).collect()
+}
+
+fn unpkq(s: &str) -> Vec<P> {
+    let Ok(bytes) = unb64(s) else { return Vec::new() };
+    let (mut nums, mut z, mut shift, mut last) = (Vec::new(), 0u64, 0, [0i64; 2]);
+    for b in bytes {
+        z |= ((b & 127) as u64) << shift;
+        shift += 7;
+        if b & 128 == 0 {
+            let k = nums.len() % 2;
+            last[k] += (z >> 1) as i64 ^ -((z & 1) as i64);
+            nums.push(last[k] as f64 / 64.0);
+            (z, shift) = (0, 0);
+        }
+    }
+    nums.chunks_exact(2).map(|c| [c[0], c[1]]).collect()
 }
 
 fn pts_of(fs: &[f64]) -> Vec<P> {
@@ -993,13 +1074,18 @@ pub(super) fn cap_square(v: usize, kind: PlazaKind) {
 // ---------------------------------------------------------------------------------------
 // Conversion.
 
-fn hex(v: u64) -> String {
+/// A point on a 1/64-ft grid (written short, read back the same).
+fn q64(p: P) -> P {
+    [crate::core::round(p[0] * 64.0) / 64.0, crate::core::round(p[1] * 64.0) / 64.0]
+}
+
+pub(super) fn hex(v: u64) -> String {
     format!("{v:016x}")
 }
 
 /// A point well inside a polygon: its centroid if inside, else the middle of the widest chord
 /// across it from one of its corners (its mean, failing those).
-fn inside_point(poly: &[P]) -> P {
+pub(super) fn inside_point(poly: &[P]) -> P {
     let c = centroid(poly);
     if contains(poly, c) {
         return c;
@@ -1195,7 +1281,7 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
         };
         let open = !matches!(fill, BlockFill::Hand);
         let block = Block {
-            at: add(inside_point(&cap.cells[i]), center),
+            at: q64(add(inside_point(&cap.cells[i]), center)),
             fill,
             district: district(i),
             seed: hex(hash3(s.seed, index as i64, i as i64, 0x4a4d)),
@@ -1275,20 +1361,23 @@ pub fn size_of(records: &[(String, Value)]) -> usize {
 const QUARTERS: [QuarterKind; 9] =
     [QuarterKind::Center, QuarterKind::Castle, QuarterKind::Docks, QuarterKind::Bridge, QuarterKind::Gate, QuarterKind::Bank, QuarterKind::Park, QuarterKind::Sprawl, QuarterKind::Regular];
 
-fn pk(pts: &[P]) -> String {
+pub(super) fn pk(pts: &[P]) -> String {
     pack(&pts.iter().flat_map(|p| [p[0], p[1]]).collect::<Vec<f64>>())
 }
 
-fn unpk(s: &str) -> Vec<P> {
+pub(super) fn unpk(s: &str) -> Vec<P> {
+    if let Some(q) = s.strip_prefix('~') {
+        return unpkq(q);
+    }
     unpack(s).map(|f| pts_of(&f)).unwrap_or_default()
 }
 
-fn plaza_kind(name: &str) -> Option<PlazaKind> {
+pub(super) fn plaza_kind(name: &str) -> Option<PlazaKind> {
     PLAZAS.iter().copied().find(|k| k.name() == name)
 }
 
 /// A hash (hex) of what a town's walls are laid from: its wall lines and its castle blocks.
-fn works_of(recs: &HandRecords) -> String {
+pub(super) fn works_of(recs: &HandRecords) -> String {
     let mut h = crate::core::hash::Fnv64::default();
     for (id, w) in &recs.walls {
         h.write(&id.to_le_bytes());
@@ -1310,20 +1399,20 @@ fn works_from(l: &Layout, of: String, corner: &BTreeMap<usize, P>) -> Works {
     let flat = |it: &mut dyn Iterator<Item = f64>| pack(&it.collect::<Vec<f64>>());
     Works {
         of,
-        walls: l.walls.iter().map(|w| pk(w)).collect(),
-        towers: pk(&l.towers),
+        walls: l.walls.iter().map(|w| pkq(w)).collect(),
+        towers: pkq(&l.towers),
         gates: pk(&l.gates),
-        gate_towers: pk(&l.gate_towers),
+        gate_towers: pkq(&l.gate_towers),
         gate_spots: l.gate_spots.clone(),
         bastions: l.bastions.iter().map(|b| pk(b)).collect(),
         dropped: l.bastions_dropped,
         castles: flat(&mut l.castles.iter().flat_map(|c| [c.0[0], c.0[1], c.1])),
         square: flat(&mut l.square_towers.iter().flat_map(|t| [t.0[0], t.0[1], t.1[0], t.1[1]])),
-        forms: flat(&mut l.tower_forms.iter().flat_map(|t| [t.0[0], t.0[1], t.1 as f64, t.2[0], t.2[1]])),
+        forms: forms_pk(&l.tower_forms),
         extra: flat(&mut l.extra_towers.iter().flat_map(|t| [t.0[0], t.0[1], t.1 as u8 as f64])),
         mottes: flat(&mut l.mottes.iter().flat_map(|m| [m.at[0], m.at[1], m.top_r, m.foot_r, m.top as f64, m.way[0], m.way[1]])),
-        bridges: l.bridges.iter().map(|b| pk(b)).collect(),
-        roads: l.roads.iter().filter(|r| r.1 <= 2).map(|r| (r.1, r.2, pk(&r.0))).collect(),
+        bridges: l.bridges.iter().map(|b| pkq(b)).collect(),
+        roads: l.roads.iter().filter(|r| r.1 <= 2).map(|r| (r.1, r.2, pkq(&r.0))).collect(),
         corners: l
             .plazas
             .iter()
@@ -1379,7 +1468,7 @@ fn park_of(site: &Site, origin: P, meta: &str, pts: &str) -> Option<super::Park>
 }
 
 /// Whether the line `a`-`b` runs over `poly` (crossing it, or an end in it).
-fn runs_over(poly: &[P], a: P, b: P) -> bool {
+pub(super) fn runs_over(poly: &[P], a: P, b: P) -> bool {
     super::overlaps_or_crosses(poly, &[a, b])
 }
 
@@ -1491,18 +1580,18 @@ use super::wards::{PER_PATCH, ROLLS};
 pub type Problems = Vec<(String, &'static str)>;
 
 /// The street graph: corners (junctions and bends, local ft) and the street pieces between them.
-struct Graph {
-    pts: Vec<P>,
+pub(super) struct Graph {
+    pub(super) pts: Vec<P>,
     q: Vec<(i64, i64)>,
     /// (from, to, street id): from `a` toward `b`.
-    segs: Vec<(usize, usize, u32)>,
+    pub(super) segs: Vec<(usize, usize, u32)>,
 }
 
 /// A face of the graph: its ring (corners, anticlockwise), and per side the street piece and
 /// whether the face is on its left.
-struct Face {
-    ring: Vec<usize>,
-    side: Vec<(usize, bool)>,
+pub(super) struct Face {
+    pub(super) ring: Vec<usize>,
+    pub(super) side: Vec<(usize, bool)>,
 }
 
 fn grid(p: P) -> (i64, i64) {
@@ -1522,7 +1611,7 @@ impl Graph {
     /// The graph of `recs`' streets (local ft about `origin`), the streets that can't stand in it
     /// left out and said why: a missing junction, no length, crossing a street of a lower id (or
     /// touching it, or running along it), or ending nowhere (a dead end: no block beside it).
-    fn of(recs: &HandRecords, origin: P, li: &str, problems: &mut Problems) -> Graph {
+    pub(super) fn of(recs: &HandRecords, origin: P, li: &str, problems: &mut Problems) -> Graph {
         let mut g = Graph { pts: Vec::new(), q: Vec::new(), segs: Vec::new() };
         let mut at: FastMap<(i64, i64), usize> = FastMap::default();
         let mut corner = |g: &mut Graph, p: P| {
@@ -1657,6 +1746,73 @@ impl Graph {
             if twice > 0 { bounded.push(f) } else { outer.push(f) }
         }
         (bounded, outer)
+    }
+}
+
+/// The graph of a town's streets with its faces: their rings (local ft), the parts held inside
+/// each as holes (`outers`' indices), and the block each face is (the lowest-id block whose `at` it
+/// holds, outside its holes, not taken by another face).
+pub(super) struct Faces {
+    pub(super) graph: Graph,
+    pub(super) faces: Vec<Face>,
+    pub(super) outers: Vec<Face>,
+    pub(super) rings: Vec<Vec<P>>,
+    pub(super) holes: Vec<Vec<usize>>,
+    pub(super) face_block: Vec<Option<u32>>,
+}
+
+impl Faces {
+    pub(super) fn of(recs: &HandRecords, origin: P, li: &str, problems: &mut Problems) -> Faces {
+        let graph = Graph::of(recs, origin, li, problems);
+        let (faces, outers) = graph.faces();
+        let ring_pts = |f: &Face| f.ring.iter().map(|&v| graph.pts[v]).collect::<Vec<P>>();
+        // Each part's outer edge is a hole in the smallest face of another part round it.
+        let mut part = (0..graph.pts.len()).collect::<Vec<usize>>();
+        fn root(p: &mut [usize], mut x: usize) -> usize {
+            while p[x] != x {
+                p[x] = p[p[x]];
+                x = p[x];
+            }
+            x
+        }
+        for &(u, v, _) in &graph.segs {
+            let (a, b) = (root(&mut part, u), root(&mut part, v));
+            part[a.max(b)] = a.min(b);
+        }
+        let rings: Vec<Vec<P>> = faces.iter().map(ring_pts).collect();
+        let areas: Vec<f64> = rings.iter().map(|r| area(r)).collect();
+        let mut holes: Vec<Vec<usize>> = vec![Vec::new(); faces.len()];
+        for (k, o) in outers.iter().enumerate() {
+            let p0 = graph.pts[o.ring[0]];
+            let me = root(&mut part, o.ring[0]);
+            let around = (0..faces.len()).filter(|&f| root(&mut part, faces[f].ring[0]) != me && contains(&rings[f], p0)).min_by(|&x, &y| areas[x].total_cmp(&areas[y]).then(x.cmp(&y)));
+            if let Some(f) = around {
+                holes[f].push(k);
+            }
+        }
+        // Faces to blocks.
+        let mut taken: BTreeMap<u32, usize> = BTreeMap::new();
+        let mut face_block: Vec<Option<u32>> = vec![None; faces.len()];
+        for (f, ring) in rings.iter().enumerate() {
+            let inside = |p: P| contains(ring, p) && holes[f].iter().all(|&h| !contains(&ring_pts(&outers[h]), p));
+            if let Some((&id, _)) = recs.blocks.iter().find(|(id, b)| !taken.contains_key(id) && inside(sub(b.at, origin))) {
+                taken.insert(id, f);
+                face_block[f] = Some(id);
+            } else {
+                problems.push((format!("{li}/e{}", graph.segs[faces[f].side[0].0].2), "a block with no record beside this street"));
+            }
+        }
+        for &id in recs.blocks.keys() {
+            if !taken.contains_key(&id) {
+                problems.push((format!("{li}/k{id}"), "no block of the streets holds its point"));
+            }
+        }
+        Faces { graph, faces, outers, rings, holes, face_block }
+    }
+
+    /// Face `f`'s ring as points (local ft).
+    pub(super) fn ring_of(&self, f: &Face) -> Vec<P> {
+        f.ring.iter().map(|&v| self.graph.pts[v]).collect()
     }
 }
 
@@ -1803,6 +1959,16 @@ pub(super) fn built(world: &World, t0: &T0, index: usize) -> Option<Rc<Layout>> 
     Some(l)
 }
 
+/// `build_hand`, remembered as `built` would (the change function's after: the app asks for it next),
+/// with what could not be laid out.
+pub(super) fn build_kept(world: &World, t0: &T0, index: usize) -> Option<(Rc<Layout>, Problems)> {
+    let fp = fingerprint(world, t0, index)?;
+    let b = build_hand(world, t0, index)?;
+    let l = Rc::new(b.layout);
+    BUILT.with(|c| c.borrow_mut().insert(index as u32, (fp, l.clone())));
+    Some((l, b.problems))
+}
+
 /// What one block's fill laid out (town-local ft but its kept buildings, world ft).
 struct Filled {
     layout: Layout,
@@ -1833,7 +1999,7 @@ fn block_key(ground: u64, id: u32, rec: &Value, g: &[super::clip::Shape], fronts
 }
 
 /// What a block is laid out as, once its ground is known.
-fn ward_of(name: &str) -> Option<Ward> {
+pub(super) fn ward_of(name: &str) -> Option<Ward> {
     WARDS.iter().copied().find(|w| w.name() == name)
 }
 
@@ -1868,54 +2034,10 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     let template = l.clone();
     let gkey = ground_key(world, t0, index, town, far.max(town.reach));
     let mut problems: Problems = Vec::new();
-    let graph = Graph::of(&recs, origin, &li, &mut problems);
-    let (faces, outers) = graph.faces();
+    let Faces { graph, faces, outers, rings, holes, face_block } = Faces::of(&recs, origin, &li, &mut problems);
     let street = |k: usize| &recs.streets[&graph.segs[k].2];
     let set = |k: usize, left: bool| if left { street(k).set_l } else { street(k).set_r };
     let ring_pts = |f: &Face| f.ring.iter().map(|&v| graph.pts[v]).collect::<Vec<P>>();
-
-    // Each part's outer edge is a hole in the smallest face of another part round it.
-    let mut part = (0..graph.pts.len()).collect::<Vec<usize>>();
-    fn root(p: &mut [usize], mut x: usize) -> usize {
-        while p[x] != x {
-            p[x] = p[p[x]];
-            x = p[x];
-        }
-        x
-    }
-    for &(u, v, _) in &graph.segs {
-        let (a, b) = (root(&mut part, u), root(&mut part, v));
-        part[a.max(b)] = a.min(b);
-    }
-    let rings: Vec<Vec<P>> = faces.iter().map(ring_pts).collect();
-    let areas: Vec<f64> = rings.iter().map(|r| area(r)).collect();
-    let mut holes: Vec<Vec<usize>> = vec![Vec::new(); faces.len()];
-    for (k, o) in outers.iter().enumerate() {
-        let p0 = graph.pts[o.ring[0]];
-        let me = root(&mut part, o.ring[0]);
-        let around = (0..faces.len()).filter(|&f| root(&mut part, faces[f].ring[0]) != me && contains(&rings[f], p0)).min_by(|&x, &y| areas[x].total_cmp(&areas[y]).then(x.cmp(&y)));
-        if let Some(f) = around {
-            holes[f].push(k);
-        }
-    }
-
-    // Faces to blocks.
-    let mut taken: BTreeMap<u32, usize> = BTreeMap::new();
-    let mut face_block: Vec<Option<u32>> = vec![None; faces.len()];
-    for (f, ring) in rings.iter().enumerate() {
-        let inside = |p: P| contains(ring, p) && holes[f].iter().all(|&h| !contains(&ring_pts(&outers[h]), p));
-        if let Some((&id, _)) = recs.blocks.iter().find(|(id, b)| !taken.contains_key(id) && inside(sub(b.at, origin))) {
-            taken.insert(id, f);
-            face_block[f] = Some(id);
-        } else {
-            problems.push((format!("{li}/e{}", graph.segs[faces[f].side[0].0].2), "a block with no record beside this street"));
-        }
-    }
-    for &id in recs.blocks.keys() {
-        if !taken.contains_key(&id) {
-            problems.push((format!("{li}/k{id}"), "no block of the streets holds its point"));
-        }
-    }
 
     // What no block is built over: buildings drawn by hand, wharves, painted areas.
     let pad = |poly: &[P], d: f64| clip::offset(&clip::region(poly), d, Join::Miter(2.0));
@@ -2155,6 +2277,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
             let mut plots: Vec<(Vec<P>, u8)> = Vec::new();
             let mut problems: Problems = Vec::new();
             let first = 0;
+            let mut pinned: Vec<Option<u32>> = Vec::new();
             'fill: {
                 if built_on {
                     l.districts.push(ring.clone());
@@ -2197,7 +2320,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                 }
                 match &rec.fill {
                     BlockFill::Hand | BlockFill::Castle { .. } => {}
-                    BlockFill::Generated { ward, lots, reroll, close: _ } => {
+                    BlockFill::Generated { ward, lots, reroll, close } => {
                         let Some(w) = ward_of(ward) else {
                             problems.push((format!("{li}/k{id}"), "no such ward"));
                             break 'fill;
@@ -2209,12 +2332,25 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                         }
                         let mut rng = Pcg32::new(salt(hash2(bseed, gn, 0x107)), 47);
                         l.blocks.extend(g.iter().map(|x| x.outer.clone()));
+                        let alleys = l.roads.len();
                         build_block(site, Region::Region(g), &fronts, w, &dp, &mut rng, &mut l, None);
-                        if w == Ward::Temple && l.buildings.len() == first
+                        // A temple's close round its temple on its largest piece (where it fits,
+                        // unless asked for none), else a temple alone where no lot was cut.
+                        if w == Ward::Temple
                             && let Some(b) = biggest()
                         {
-                            super::squares::lone_temple(site, &b, unit(hash2(bseed, gn, 65)), &mut l);
+                            let lines: Vec<(P, f64)> = fronts.iter().map(|f| (f.n, f.c)).collect();
+                            let t = unit(hash2(bseed, gn, 65));
+                            let laid = *close != Some(false) && l.buildings.len() > first && super::squares::close(site, &b, &lines, t, first, alleys, &mut l);
+                            if !laid && *close == Some(true) {
+                                problems.push((format!("{li}/k{id}"), "no room for a close round its temple"));
+                            }
+                            if l.buildings.len() == first {
+                                super::squares::lone_temple(site, &b, t, &mut l);
+                            }
                         }
+                        pinned = pin_on(&mut l, first, &rec.pins, origin);
+                        businesses(&mut l, first, w, tier, s.coastal || s.river || !site.river.is_empty(), hash2(salt(bseed), gn, 0xb05), &pinned);
                     }
                     BlockFill::Open { open, style } => {
                         // (Every piece of its ground, the largest first: each but the first with
@@ -2234,10 +2370,21 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                         }
                     }
                 }
-                // (Its own ids, by the order it laid them out.)
+                // (Its own ids, by the order it laid them out, but those pinned: those keep theirs,
+                // and no other takes one of them.)
                 let base = HAND_ID as u64 + ((id as u64 * ROLLS as u64 + gn as u64 % ROLLS as u64) * PER_PATCH as u64);
+                let held: Vec<u32> = pinned.iter().flatten().copied().collect();
+                let mut next = base;
                 for (k, b) in l.buildings[first..].iter_mut().enumerate() {
-                    b.id = (base + k as u64).min(u32::MAX as u64) as u32;
+                    if let Some(Some(pid)) = pinned.get(k) {
+                        b.id = *pid;
+                        continue;
+                    }
+                    while held.contains(&(next.min(u32::MAX as u64) as u32)) {
+                        next += 1;
+                    }
+                    b.id = next.min(u32::MAX as u64) as u32;
+                    next += 1;
                 }
                 if id >= ROW_BLOCK {
                     problems.push((format!("{li}/k{id}"), "block number too high for its ids"));
@@ -2345,6 +2492,21 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     l.buildings.append(&mut kept_bs);
     l.buildings.extend(loose);
     l.buildings.sort_by_key(|b| b.id);
+    // Businesses laid out anew named unlike any other in the town, each by its id.
+    {
+        let mut names: std::collections::BTreeSet<String> = l.buildings.iter().filter(|b| b.func.is_some()).filter_map(|b| b.name.clone()).collect();
+        let tseed = seed_of(&town.seed);
+        for b in l.buildings.iter_mut().filter(|b| b.id >= HAND_ID && b.func.is_some() && b.name.is_none()) {
+            for salt in 0..8 {
+                let mut rng = Pcg32::new(hash3(tseed, b.id as i64, 0x4e + salt, 0xb7), 43);
+                b.name = super::sites::trade_name(b.func, &mut rng, t0, origin, names.iter().map(String::as_str));
+                if b.name.as_ref().is_none_or(|n| !names.contains(n)) {
+                    break;
+                }
+            }
+            names.extend(b.name.clone());
+        }
+    }
     super::fields::assign(site, s.seed, &mut l);
 
     // Walls, towers and gates: as converted while the wall lines and castle blocks are as they
@@ -2362,7 +2524,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
             l.bastions_dropped = w.dropped;
             l.castles = nums(&w.castles).chunks_exact(3).map(|c| ([c[0], c[1]], c[2])).collect();
             l.square_towers = nums(&w.square).chunks_exact(4).map(|c| ([c[0], c[1]], [c[2], c[3]])).collect();
-            l.tower_forms = nums(&w.forms).chunks_exact(5).map(|c| ([c[0], c[1]], c[2] as u8, [c[3], c[4]])).collect();
+            l.tower_forms = forms_unpk(&w.forms);
             l.extra_towers = nums(&w.extra).chunks_exact(3).map(|c| ([c[0], c[1]], c[2] != 0.0)).collect();
             l.mottes = nums(&w.mottes).chunks_exact(7).map(|c| super::Motte { at: [c[0], c[1]], top_r: c[2], foot_r: c[3], top: c[4] as f32, way: [c[5], c[6]] }).collect();
         }
@@ -2418,6 +2580,118 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     }
     l.number_entrances();
     Some(HandBuilt { layout: l, blocks: out, problems })
+}
+
+/// Pins on a block laid out anew (`Block::pins`, world ft; `l` local about `origin`): the building
+/// standing on each pin's point takes its id, and its business with the name it had (each building
+/// one pin, the pins in order); a pin no building stands on then goes to the nearest building left
+/// within `PIN_REACH` ft (a lot moved a little), else it is lost. Per building laid out from
+/// `first`: the id pinned to it.
+fn pin_on(l: &mut Layout, first: usize, pins: &[Pin], origin: P) -> Vec<Option<u32>> {
+    const PIN_REACH: f64 = 12.0;
+    let mut out = vec![None; l.buildings.len() - first];
+    let mut on: Vec<Option<usize>> = vec![None; pins.len()];
+    for (i, pin) in pins.iter().enumerate() {
+        let at = sub(pin.p, origin);
+        on[i] = (0..out.len()).find(|&k| out[k].is_none() && contains(&l.buildings[first + k].poly, at));
+        if let Some(k) = on[i] {
+            out[k] = Some(pin.id);
+        }
+    }
+    for (i, pin) in pins.iter().enumerate() {
+        if on[i].is_some() {
+            continue;
+        }
+        let at = sub(pin.p, origin);
+        let edge = |poly: &[P]| (0..poly.len()).map(|e| seg_dist(at, poly[e], poly[(e + 1) % poly.len()])).fold(f64::MAX, f64::min);
+        on[i] = (0..out.len()).filter(|&k| out[k].is_none()).map(|k| (edge(&l.buildings[first + k].poly), k)).filter(|x| x.0 <= PIN_REACH).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|x| x.1);
+        if let Some(k) = on[i] {
+            out[k] = Some(pin.id);
+        }
+    }
+    for (pin, k) in pins.iter().zip(on) {
+        let Some(k) = k else { continue };
+        if let Some(fi) = pin.func.as_deref().and_then(catalog::index_of) {
+            let b = &mut l.buildings[first + k];
+            (b.func, b.name) = (Some(fi as u16), pin.name.clone());
+            if CATALOG[fi].key == "graveyard" {
+                b.structure = Structure::Open;
+            }
+        }
+    }
+    out
+}
+
+/// What a block laid out anew may hold as businesses: shops, workshops, inns, taverns and the like
+/// (not what a town has one of: its hall, castle, temples, guilds, mills).
+fn trade(f: &catalog::Func) -> bool {
+    let shops = ["alchemist", "apothecary", "magic_shop", "scribe", "bookseller", "cartographer", "fortune_teller", "bathhouse", "curiosities", "gambling_den", "undertaker", "guard_post", "pawnbroker"];
+    (matches!(f.category, "food & lodging" | "arms & gear" | "luxury & finance" | "crafts & transport") && !matches!(f.key, "mill" | "caravanserai" | "auction_house" | "bank")) || shops.contains(&f.key)
+}
+
+/// About this share of a block's homes are businesses when it is laid out anew, by its ward.
+fn business_share(w: Ward) -> f64 {
+    match w {
+        Ward::Merchant | Ward::Plaza => 0.14,
+        Ward::Craft => 0.10,
+        Ward::Docks => 0.08,
+        Ward::Military => 0.06,
+        Ward::Common => 0.04,
+        Ward::Noble | Ward::Slum => 0.03,
+        _ => 0.0,
+    }
+}
+
+/// Businesses for a block of ward `w` laid out anew (`l.buildings[first..]`, `pinned` as `pin_on`
+/// gave): about `business_share` of its homes become a business of that ward the town's size has
+/// (more likely the more of it a town of that size has), on the lot that suits it best (as
+/// `assign_functions` picks), with its storeys; a pinned building is left as pinned. Named after,
+/// with the town's others (`build_hand`).
+fn businesses(l: &mut Layout, first: usize, w: Ward, tier: Tier, on_water: bool, key: u64, pinned: &[Option<u32>]) {
+    let free = |k: usize| pinned.get(k - first).is_none_or(|p| p.is_none());
+    let homes: Vec<usize> = (first..l.buildings.len()).filter(|&k| free(k) && l.buildings[k].func.is_none() && l.buildings[k].keep.is_none() && l.buildings[k].structure == Structure::Roofed).collect();
+    let have = l.buildings[first..].iter().filter(|b| b.func.is_some()).count();
+    let want = (crate::core::floor(homes.len() as f64 * business_share(w) + unit(hash2(key, 0, 1))) as usize).saturating_sub(have);
+    let menu: Vec<(usize, f64)> = CATALOG
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| tier >= f.min_tier && (!f.water || on_water) && trade(f))
+        .filter_map(|(fi, f)| f.wards.iter().position(|x| *x == w).map(|pos| (fi, (1 + f.counts[tier as usize]) as f64 / (1 + pos) as f64)))
+        .collect();
+    if menu.is_empty() || want == 0 {
+        return;
+    }
+    let mut rng = Pcg32::new(key, 53);
+    let areas: Vec<f64> = homes.iter().map(|&k| area(&l.buildings[k].poly).abs()).collect();
+    let max_area = areas.iter().cloned().fold(1.0, f64::max);
+    let mut taken = vec![false; homes.len()];
+    let total: f64 = menu.iter().map(|m| m.1).sum();
+    for _ in 0..want.min(homes.len()) {
+        let mut r = rng.next_f64() * total;
+        let fi = menu.iter().find(|m| {
+            r -= m.1;
+            r < 0.0
+        });
+        let fi = fi.map_or(menu[menu.len() - 1].0, |m| m.0);
+        let f = &CATALOG[fi];
+        let mut best: Option<(f64, usize)> = None;
+        for j in (0..homes.len()).filter(|&j| !taken[j]) {
+            let size = areas[j] / max_area;
+            let score = if f.big { 6.0 * size } else { -2.0 * size } - if areas[j] < 500.0 { 100.0 } else { 0.0 } + 1.5 * rng.next_f64();
+            if best.is_none_or(|(s, _)| score > s) {
+                best = Some((score, j));
+            }
+        }
+        let Some((_, j)) = best else { break };
+        taken[j] = true;
+        let b = &mut l.buildings[homes[j]];
+        b.func = Some(fi as u16);
+        b.floors = match f.key {
+            "inn" | "tavern" => 2 + (rng.next_f64() < 0.5) as u8,
+            "warehouse" | "shrine" => 1,
+            _ => 1 + (tier >= Tier::Town && rng.next_f64() < 0.6) as u8,
+        };
+    }
 }
 
 /// The fill of open ground of kind `open` (its style by name, else the kind's usual): its ways in

@@ -8772,6 +8772,178 @@ fn hand_towns(world: &World, t0: &T0, label: &str, r: &mut Report) {
         }
     }
     hand_built(world, t0, label, &first, r);
+    hand_edits(world, t0, label, &lis, r);
+}
+
+/// Roadmap 6 P3c1: a scripted run of changes on a few towns (laid out by hand, a block split, two
+/// merged, a junction dragged, a block filled anew with a renamed house on it, a row added, back
+/// to generated), each through `handedit::change`: every change made, the graph unbroken, no new
+/// building outside its block or over another, ids one each, what carries something kept or told
+/// lost, and back to generated the town as generated again.
+fn hand_edits(world: &World, t0: &T0, label: &str, lis: &[usize], r: &mut Report) {
+    use serde_json::json;
+    use worldgen::town::clip;
+    use worldgen::town::hand;
+    use worldgen::town::handedit::{self, HandRequest};
+    const STEPS: [&str; 8] = ["lay out", "split", "merge", "drag", "refill", "row", "square", "back"];
+    r.counts(&["edits: towns", "edits: steps", "edits: refused", "edits: problems", "edits: outside the block", "edits: overlapping", "edits: ids twice", "edits: carried", "edits: told lost", "edits: lost untold", "edits: not as generated again", "edits: blocks relaid", "edits: blocks added", "edits: blocks removed", "edits: businesses new", "edits: closes"]);
+    let per = worldgen::town::wards::PER_PATCH * worldgen::town::wards::ROLLS;
+    for &li in lis.iter().take(4) {
+        let tag = format!("{label} L{li}");
+        let mut w = World::new(world.file.clone()).unwrap();
+        let mut renamed: Vec<u32> = Vec::new();
+        let mut ok = true;
+        r.tally("edits: towns", 1);
+        for step in STEPS {
+            if !ok {
+                break;
+            }
+            let recs = hand::HandRecords::of(&w.file.edits.streets, li);
+            let plan = handedit::plan_json(&w, t0, li).ok();
+            let blocks = plan.as_ref().map(|p| p["blocks"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
+            let mid = |id: u32| -> Option<[f64; 2]> {
+                let st = recs.streets.get(&id)?;
+                let line: Vec<[f64; 2]> = std::iter::once(recs.junctions.get(&st.a)?.p).chain(st.bends.iter().copied()).chain([recs.junctions.get(&st.b)?.p]).collect();
+                Some(lerp(line[0], line[1], 0.5))
+            };
+            let ids = |v: &serde_json::Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as u32).collect::<Vec<u32>>()).unwrap_or_default();
+            // (The biggest kept block built on lots, by its streets round it.)
+            let lots: Vec<&serde_json::Value> = blocks.iter().filter(|b| b["kept"] == json!(true) && b["fill"]["kind"] == json!("generated") && ids(&b["streets"]).len() >= 4).collect();
+            let req: Option<HandRequest> = match step {
+                "lay out" => Some(HandRequest::LayOutByHand),
+                "split" => lots.first().and_then(|b| {
+                    let round = ids(&b["streets"]);
+                    let m0 = mid(round[0])?;
+                    let far = round.iter().copied().skip(1).filter_map(|e| Some((dist(mid(e)?, m0), e))).max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)))?;
+                    Some(HandRequest::AddStreet { points: vec![m0, mid(far.1)?], width: None, set_l: None, set_r: None, class: None })
+                }),
+                "merge" => {
+                    let mut seen: BTreeMap<u32, u32> = BTreeMap::new();
+                    for b in &lots {
+                        for e in ids(&b["streets"]) {
+                            *seen.entry(e).or_default() += 1;
+                        }
+                    }
+                    seen.iter().find(|(e, n)| **n >= 2 && recs.streets.get(e).is_some_and(|s| s.class == hand::StreetClass::Street)).map(|(e, _)| HandRequest::DeleteStreet { street: *e })
+                }
+                "drag" => recs.junctions.iter().find(|(id, _)| recs.streets.values().filter(|s| s.a == **id || s.b == **id).count() >= 4).map(|(id, _)| HandRequest::MoveJunctions { moves: vec![handedit::JunctionMove { junction: *id, to: None, by: Some([6.0, 4.0]) }] }),
+                "refill" => lots.get(1).or(lots.first()).map(|b| {
+                    let id = b["id"].as_u64().unwrap() as u32;
+                    // (Two of its houses renamed first: they stay, pinned, or are told lost.)
+                    if let Some(hb) = hand::build_hand(&w, t0, li) {
+                        let ground = hb.blocks.iter().find(|x| x.0 == id).map(|x| x.1.clone()).unwrap_or_default();
+                        let mut file = w.file.clone();
+                        for bd in hb.layout.buildings.iter().filter(|bd| bd.func.is_none() && clip::contains(&ground, centroid(&bd.poly))).take(2) {
+                            file.edits.renames.insert(format!("b:{li}:{}", bd.id), format!("Renamed {}", bd.id));
+                            renamed.push(bd.id);
+                        }
+                        w = World::new(file).unwrap();
+                    }
+                    HandRequest::SetBlock { block: id, fill: Some(hand::BlockFill::Generated { ward: "merchant".into(), lots: None, reroll: 0, close: None }), district: None, seed: None, reroll: false }
+                }),
+                "row" => recs.streets.iter().filter_map(|(id, st)| Some((dist(recs.junctions.get(&st.a)?.p, recs.junctions.get(&st.b)?.p), *id))).max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1))).map(|(_, e)| HandRequest::AddRow { street: e, side: "l".into(), depth: 40.0, ward: "common".into(), lots: None, gaps: None, seed: None }),
+                "square" => recs.junctions.iter().find(|(id, j)| j.square.is_none() && recs.streets.values().filter(|s| s.a == **id || s.b == **id).count() >= 3).map(|(id, _)| HandRequest::SetSquare { junction: *id, square: "market".into() }),
+                _ => Some(HandRequest::BackToGenerated),
+            };
+            let Some(req) = req else {
+                r.add("edits: refused", 0.0, format!("{tag} {step}: nothing to do it on"));
+                continue;
+            };
+            let before = town::base_layout(&w, t0, li);
+            let clock = Instant::now();
+            // (One change sent as JSON, as the app and the agent server send it: the same change.)
+            if step == "row"
+                && let HandRequest::AddRow { street, .. } = &req
+            {
+                let text = handedit::change_json(&w, t0, li, &format!(r#"{{"op": "add_row", "street": {street}, "side": "l", "depth": 40, "ward": "common"}}"#));
+                let got: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let want = handedit::change(&w, t0, li, &req).map(|x| x.0.to_json()).unwrap_or_default();
+                if got["change"] != want {
+                    r.add("edits: refused", 0.0, format!("{tag} {step}: as JSON otherwise: {}", &text[..text.len().min(200)]));
+                }
+            }
+            match handedit::change(&w, t0, li, &req) {
+                Err(e) => {
+                    r.add("edits: refused", 0.0, format!("{tag} {step}: {e}"));
+                    ok = step != "lay out";
+                }
+                Ok((ch, rep)) => {
+                    r.tally("edits: steps", 1);
+                    let mut file = w.file.clone();
+                    ch.apply(&mut file.edits);
+                    w = World::new(file).unwrap();
+                    let after = town::base_layout(&w, t0, li);
+                    if std::env::var("HAND_EDITS").is_ok() {
+                        let pins: usize = hand::HandRecords::of(&w.file.edits.streets, li).blocks.values().map(|b| b.pins.len()).sum();
+                        say!("      {tag} {step} ({} ms): blocks {} buildings {} -> {} rects {} lost {} pins {} renamed {:?} kept {:?}", clock.elapsed().as_millis(), rep["blocks"], before.buildings.len(), after.buildings.len(), rep["rects"].as_array().map_or(0, |a| a.len()), rep["lost"].as_array().map_or(0, |a| a.len()), pins, renamed, renamed.iter().map(|id| after.buildings.iter().any(|b| b.id == *id)).collect::<Vec<_>>());
+                    }
+                    for (k, n) in [("relaid", "edits: blocks relaid"), ("added", "edits: blocks added"), ("removed", "edits: blocks removed")] {
+                        r.tally(n, rep["blocks"][k].as_array().map_or(0, |a| a.len()));
+                    }
+                    for p in rep["problems"].as_array().into_iter().flatten() {
+                        r.add("edits: problems", 0.0, format!("{tag} {step}: {} {}", p["key"], p["why"]));
+                    }
+                    // Ids one each; what carries something kept or told lost.
+                    let mut seen = std::collections::BTreeSet::new();
+                    for b in &after.buildings {
+                        if !seen.insert(b.id) {
+                            r.add("edits: ids twice", 0.0, format!("{tag} {step}: b{}", b.id));
+                        }
+                    }
+                    let told: std::collections::BTreeSet<String> = rep["lost"].as_array().into_iter().flatten().filter_map(|x| x["id"].as_str().map(String::from)).collect();
+                    r.tally("edits: told lost", told.len());
+                    for b in before.buildings.iter().filter(|b| b.func.is_some() || renamed.contains(&b.id)) {
+                        if seen.contains(&b.id) {
+                            r.tally("edits: carried", 1);
+                        } else if !told.contains(&format!("b:{li}:{}", b.id)) {
+                            r.add("edits: lost untold", 0.0, format!("{tag} {step}: b{}", b.id));
+                        }
+                    }
+                    r.tally("edits: businesses new", after.buildings.iter().filter(|b| b.func.is_some() && b.id >= hand::HAND_ID).count().saturating_sub(before.buildings.iter().filter(|b| b.func.is_some() && b.id >= hand::HAND_ID).count()));
+                    if step == "back" {
+                        let g = town::generated_layout(&w, t0, li);
+                        let same = g.buildings.len() == after.buildings.len() && g.buildings.iter().zip(after.buildings.iter()).all(|(a, b)| a.id == b.id && a.poly == b.poly);
+                        if !same || hand::is_hand(&w, li) {
+                            let edited = w.file.edits.towns.contains_key(&town::wards::key(li));
+                            if !edited || !same {
+                                // (With a ward edit restored: against the town as that edit lays it out.)
+                                let e = w.file.edits.towns.get(&town::wards::key(li)).cloned();
+                                let want = e.map(|e| town::wards::with_edit(&w, t0, li, &e)).unwrap_or(g);
+                                if want.buildings.len() != after.buildings.len() || want.buildings.iter().zip(after.buildings.iter()).any(|(a, b)| a.id != b.id || a.poly != b.poly) {
+                                    r.add("edits: not as generated again", 0.0, format!("{tag}: {} buildings against {}", after.buildings.len(), want.buildings.len()));
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    // New buildings of the blocks laid out anew: in their block, over no other.
+                    let Some(hb) = hand::build_hand(&w, t0, li) else { continue };
+                    let relaid: Vec<u32> = ids(&rep["blocks"]["relaid"]).into_iter().chain(ids(&rep["blocks"]["added"])).collect();
+                    r.tally("edits: closes", hb.layout.plazas.iter().filter(|p| p.kind == worldgen::town::PlazaKind::TempleClose).count().saturating_sub(before.plazas.iter().filter(|p| p.kind == worldgen::town::PlazaKind::TempleClose).count()));
+                    let fresh: Vec<&town::Building> = hb.layout.buildings.iter().filter(|b| b.id >= hand::HAND_ID && relaid.contains(&((b.id - hand::HAND_ID) / per))).collect();
+                    for bd in &fresh {
+                        let blk = (bd.id - hand::HAND_ID) / per;
+                        let poly = clip::region(&bd.poly);
+                        let out = hb.blocks.iter().find(|x| x.0 == blk).map_or(clip::area(&poly), |g| clip::area(&clip::difference(&poly, &g.1)));
+                        if out > 1.0 {
+                            r.add("edits: outside the block", out, format!("{tag} {step} b{}: {out:.1} sq ft", bd.id));
+                        }
+                    }
+                    for (k, a) in fresh.iter().enumerate() {
+                        for b in &fresh[k + 1..] {
+                            if dist(centroid(&a.poly), centroid(&b.poly)) > 200.0 {
+                                continue;
+                            }
+                            let o = clip::area(&clip::intersection(&clip::region(&a.poly), &clip::region(&b.poly)));
+                            if o > 1.0 {
+                                r.add("edits: overlapping", o, format!("{tag} {step} b{} b{}: {o:.1} sq ft", a.id, b.id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Roadmap 6 P3b2: each converted town's walls, towers, gates, bridges, squares at junctions,
@@ -9178,6 +9350,9 @@ fn hand_one(world: &World, t0: &T0, li: usize, recs: &[(String, serde_json::Valu
         }
         for (what, (n, bytes)) in &by {
             say!("      bytes {what}: {bytes} in {n}");
+        }
+        if let Some(w) = recs.iter().find(|(k, _)| *k == li.to_string()).and_then(|(_, v)| v.get("works")).and_then(|w| w.as_object()) {
+            say!("      works: {}", w.iter().map(|(k, v)| format!("{k} {}", v.to_string().len())).collect::<Vec<_>>().join(", "));
         }
         let kepts: Vec<&hand::Kept> = hr.blocks.values().filter_map(|b| b.kept.as_ref()).chain(town.kept.as_ref()).collect();
         let full: usize = kepts.iter().flat_map(|k| &k.full).map(|f| serde_json::to_string(f).unwrap().len()).sum();
