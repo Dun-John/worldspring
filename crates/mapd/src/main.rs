@@ -18,6 +18,7 @@ mod links;
 mod handwalls;
 mod mcp;
 mod notebook;
+mod quick;
 mod reads;
 mod scatter;
 mod settlements;

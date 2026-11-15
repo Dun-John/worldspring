@@ -1562,6 +1562,11 @@ pub fn restore_clash(world: &World, t0: &T0, ids: &[String]) -> Result<(), Strin
 }
 
 /// Whether two polygons share any area (or one holds the other).
+pub fn polys_overlap_pub(a: &[P], b: &[P]) -> bool {
+    polys_overlap(a, b)
+}
+
+/// Whether two polygons share any area (or one holds the other).
 fn polys_overlap(a: &[P], b: &[P]) -> bool {
     a.iter().any(|p| geom::contains(b, *p)) || b.iter().any(|p| geom::contains(a, *p)) || (0..a.len()).any(|i| (0..b.len()).any(|j| segs_cross(a[i], a[(i + 1) % a.len()], b[j], b[(j + 1) % b.len()])))
 }

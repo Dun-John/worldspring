@@ -78,6 +78,7 @@ pub fn list() -> Value {
         a.extend(crate::sites::list());
         a.extend(crate::scatter::list());
         a.extend(crate::build::list());
+        a.extend(crate::quick::list());
         a.extend(crate::works::list());
         a.extend(crate::crossings::list());
         a.extend(crate::hexes::list());
@@ -121,7 +122,7 @@ const DESTRUCTIVE: &[&str] = &[
 /// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
 /// `focus_view` and the creates that return what is already there.
 const IDEMPOTENT: &[&str] = &[
-    "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_npc",
+    "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "place_stamp", "create_building_row", "create_parcel", "update_parcel", "create_npc",
     "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
 ];
 
@@ -230,6 +231,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::build::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::quick::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::works::call(app, name, &a).await {

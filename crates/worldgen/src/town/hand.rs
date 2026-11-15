@@ -2201,6 +2201,11 @@ pub fn ward_of(name: &str) -> Option<Ward> {
     WARDS.iter().copied().find(|w| w.name() == name)
 }
 
+/// A ward's usual lot area (ft²).
+pub fn lot_area(w: Ward) -> f64 {
+    super::fill::District::base(w)
+}
+
 /// Hand town `index` laid out from its records (`Edits.streets`): the street graph's faces, each
 /// the block whose `at` it holds (the lowest id if several), cut back from its streets by their
 /// setbacks, from painted areas and from what is drawn or built over it (buildings drawn by hand,

@@ -1483,6 +1483,41 @@ by hand, a castle's building that isn't there, or no such place.
 { "name": "update_building", "arguments": { "id": "b:12:340", "func": "tavern", "floors": 2, "name": "The Leaky Tap" } }
 ```
 
+### `place_stamp`
+One building of a kind and a size set down at a point. `kind` (required): a business or home key, as `create_building`'s `func`.
+`at` (required): a place. `size`: `small`, `usual` (default) or `large` (0.75, 1 and 1.4 times the kind's footprint, on the 5-ft grid;
+a house is 25 x 25 ft, an inn 50 x 40, a temple 35 x 40 usual) or `{width_ft, depth_ft}` (10 to 400; width runs along the
+street). Without `facing` it goes to the nearest clear spot to `at` that fronts the nearest street (within 300 ft), turned square to
+it and 2 to 12 ft from its bed (as `create_building near`). With `facing` (degrees, 0 = +x, 90 = +y, the way its front
+looks) it stands at `at` turned that way, or on the nearest clear spot (moved, not turned) when `at` is not clear. `clear: true` takes
+away the world's own buildings it stands on (`removed`). `preview: true` makes nothing and returns `{preview, kind, name, x_ft, y_ft,
+poly, width_ft, depth_ft, facing_deg?, would_remove?}`. Otherwise the reply is `create_building`'s with `width_ft`, `depth_ft`,
+`facing_deg` (toward the nearest street, if there is one) and `moved_ft` when more than 5 ft from `at`. It also takes `name`,
+`floors`, `roof`, `tint`, `material`, `shape`, `shade`, `structure` as `create_building` does. The result is an ordinary drawn building.
+
+### `create_building_row`
+Drawn buildings lining a path, in one edit. `along` (required): `[[x, y], ...]` (2 to 200 points) or a road stretch id (`rd:`).
+`side`: `left` (the normal `[-dy, dx]` of the direction of travel), `right` or `both` (default). `ward` (default `common`) sets the lot
+widths (from the ward's lot area), storeys and mix; `kinds` (up to 24 keys) mixes only those, else homes of the ward with now and then
+a business of it; `depth` (15 to 120 ft; else the lot area over its width, 22 to 60); `gaps` (0 to 0.5, default 0.15) the share of
+slots left empty; `seed` another mix for the same path; `clear` takes away the world's own buildings in the way. Each lot is a rectangle
+square to its chord with its front 7, 12, 18 or 26 ft off the line (the first that is clear); a slot that is not clear, or meets
+another of the row, is skipped and listed. Up to 100 buildings (`note` says it stopped). Returns `{count, ids, lots: [{id, kind,
+floors, x_ft, y_ft, poly}], refused_count, refused?: [{x_ft, y_ft, why}] (12 at most), removed?, length_ft}`; the same call again returns
+the same ids and adds nothing. `preview: true` returns the lots without ids and makes nothing. Each building is `c:<n>` (delete_feature
+takes one away; one change per call).
+
+### `create_parcel`
+A free plot of ground drawn as an outline (`Created` kind `plot`, built like a hand block). `poly` (required, 3 to 64 corners, simple, at
+least 20 ft across, within 750 ft of their middle; `snap` as for buildings). `fill`: `{kind: generated, ward?, lots?, reroll?, close?}`
+(lots of a ward, default `common`; `lots` small to huge), `{kind: hand}` (left empty) or `{kind: open, open, style?}` (plaza, lawn, park,
+garden, market, cemetery, farmland); default generated common. `name`. A plot may not meet another one (refused naming it); the same
+outline and name again returns that plot (`existing`). Returns the plot's feature (`c:<n>`, kind `plot`). `delete_feature` and
+`restore_feature` work on it. (`create_plot` is the notebook's plot point.)
+
+### `update_parcel`
+`id` (a plot, `c:<n>`) with any of `poly` (`snap` as in `create_parcel`), `fill`, `name`; fields left out stay. Checked as `create_parcel` is.
+
 ### `check_building_spot`
 Read-only: whether a footprint (`poly`, `rect` or `circle`, with `snap`) is clear for a building, as
 `create_building` checks it. `id` is the building being reshaped (it does not count against itself). `clear: true`
