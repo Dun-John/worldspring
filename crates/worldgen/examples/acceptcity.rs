@@ -643,7 +643,7 @@ fn water_and_ground(b: &mut Build, li: usize) {
     let (c, a) = coast.expect("a coast past the city");
     let (u, v) = ([libm::cos(a), libm::sin(a)], [-libm::sin(a), libm::cos(a)]);
     let corner = |x: f64, y: f64| worldgen::waters::rounded(&[[c[0] + u[0] * x + v[0] * y, c[1] + u[1] * x + v[1] * y]])[0];
-    let basin = worldgen::waters::Water { pts: vec![corner(-260.0, -180.0), corner(260.0, -200.0), corner(260.0, 200.0), corner(-260.0, 180.0), corner(-330.0, 0.0)], kind: worldgen::waters::WaterKind::Basin, level: sea as f32 };
+    let basin = worldgen::waters::Water::outline(vec![corner(-260.0, -180.0), corner(260.0, -200.0), corner(260.0, 200.0), corner(-260.0, 180.0), corner(-330.0, 0.0)], worldgen::waters::WaterKind::Basin, sea as f32);
     if let Some(e) = basin.problem() {
         b.refused.push(format!("basin: {e}"));
     } else {

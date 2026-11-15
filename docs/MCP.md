@@ -151,7 +151,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `x:<id>` | `x:9a1b7c3d` | Generated battlemap objects taken away (a clear) |
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
 | `h:<id>` | `h:d470a78s` | A plateau, pit or rock islet (ground shaped by hand; an islet says `what: "islet"`) |
-| `e:<id>` | `e:k2v9x0qa` | Water drawn by hand: an inlet, basin, lake, pond or moat (`create_water`) |
+| `e:<id>` | `e:k2v9x0qa` | Water drawn by hand: an inlet, basin, lake, pond, moat or stream (`create_water`) |
 | `q:<id>` | `q:7d0kx3ab` | A quay, pier or breakwater put down by hand (`place_wharf`); a lighthouse or shops stand on it as drawn buildings (`c:`) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 | `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
@@ -2466,10 +2466,20 @@ wobble along it (a few feet, more on bigger water). A basin or moat keeps straig
 rounded. `x_ft`, `y_ft`, `bbox` and `area_sq_ft` are the shaped shore's; `points` and `poly` the outline as given.
 Four points make a natural pond; more points steer the shape.
 
+A moat may instead be a line: `line: true`, `poly` its line (2 points or more), `width_ft` (8 to 60, default 20)
+and `closed: true` to bring it round to its first point, a ring round what it guards. Its water is the band that
+wide along the line, round at the bends' outsides and at an open line's ends; its banks fall steeply (about 4 ft).
+A band that would fold over itself (a bend too sharp for its width) is refused. A `stream` is always a line,
+never closed, `width_ft` 3 to 12 (default 5), shallow (about 1.5 ft) with low banks. Without `level_ft` its level
+follows the ground down the line from its higher end, 1 ft under it and never rising, meeting water it runs into
+at that water's level; with `level_ft` it is flat. A line's entry adds `line`, `width_ft`, `closed`, and a
+stream's `level_ft` is its top and `falls_to_ft` its lowest.
+
 ### `update_water`
 
-`id` (`e:…`) and any of `poly`, `kind`, `level_ft`, `name` (empty: none). What is not given stays; a new outline,
-or a kind that changes between the sea's and standing water, finds its level again unless `level_ft` is given.
+`id` (`e:…`) and any of `poly`, `kind`, `line`, `width_ft`, `closed`, `level_ft`, `name` (empty: none). What is not
+given stays; a new outline or line, a new width, or a kind that changes between the sea's and standing water (or to
+or from a stream), finds its level again unless `level_ft` is given.
 
 ### `delete_water`
 

@@ -457,7 +457,7 @@ export interface Plateau {
   floor?: 'rock' | 'ground';
 }
 
-export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat';
+export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat' | 'stream';
 
 /** Water drawn by hand (`worldgen::waters::Water`): an outline (world ft, 3 to 128 points, rounded
  * to 0.5 ft, 5 miles across at most) and its surface `level` (ft, the generator's datum). Inside,
@@ -466,6 +466,13 @@ export interface Water {
   pts: [number, number][];
   kind: WaterKind;
   level: number;
+  /** A moat's or stream's line (`pts` its line, 2 points or more), its water the band `width` ft wide. */
+  line?: boolean;
+  width?: number;
+  /** A moat's line come round to its start. */
+  closed?: boolean;
+  /** A stream's level evenly along its line (`waters::stream_levels`). */
+  levels?: number[];
 }
 
 export type WharfKind = 'quay' | 'pier' | 'breakwater';

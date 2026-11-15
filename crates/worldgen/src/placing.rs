@@ -379,7 +379,7 @@ fn hand_water(world: &World, poly: &[P]) -> Option<(&'static str, Option<&'stati
         poly.iter().map(|p| p[1]).fold(f64::MIN, f64::max),
     ];
     let hit = poly.iter().any(|&p| crate::waters::level_in(&grouped, p).is_some())
-        || grouped.iter().any(|(pts, _, _)| pts.iter().any(|&q| geom::contains(poly, q)));
+        || grouped.iter().any(|g| g.pts().iter().any(|&q| geom::contains(poly, q)));
     let step = 10.0_f64.max((x1 - x0).max(y1 - y0) / 80.0);
     let mut y = y0 + step * 0.5;
     while !hit && y < y1 {

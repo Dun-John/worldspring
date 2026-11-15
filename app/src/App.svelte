@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, BlockFill, P2, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams, OpenKind, GenIslet } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, BlockFill, P2, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams, OpenKind, GenIslet, Water, WaterKind } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
@@ -57,7 +57,7 @@
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
   import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from './editor/crossing';
   import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from './editor/harbour';
-  import { MAX_WATERS, WaterTool, defaultWater, ofSea, shapeShore, waterProblem, type WaterSettings } from './editor/water';
+  import { MAX_WATERS, WaterTool, centre, defaultWater, drawnAsLine, isLine, ofSea, shore, streamLevels, streamSamples, waterProblem, widthOf, type WaterSettings } from './editor/water';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
   import type { BuildMode, QuickInfo } from './ui/BuildPanel.svelte';
@@ -1710,6 +1710,7 @@
       edits: () => edits,
       picked: () => waterPicked,
       kind: () => water.kind,
+      width: () => water.width,
       placed: waterPlaced,
       pick: (id) => (waterPicked = id),
       hint: (t) => toast(t),
@@ -2602,10 +2603,11 @@
   /** The level an outline takes (as `mapd`'s `create_water`): the water's where it reaches the sea
    * or a lake (the highest), else the sea's for an inlet or basin, else 1 ft under the lowest
    * ground on its shore, as the loaded tiles have them. */
-  function waterLevel(drawn: Pt[], kind: WaterSettings['kind']): number {
+  function waterLevel(w: Water): number {
+    const kind = w.kind;
     const sea = view.geom?.sea_level_ft ?? 0;
-    // Along its shore as shaped (`waters::shape`), at most 96 points of it.
-    const sh = shapeShore(drawn, kind);
+    // Along its shore as shaped (`Water::shore`), at most 96 points of it.
+    const sh = shore(w);
     const every = Math.max(1, Math.ceil(sh.length / 96));
     const pts = sh.filter((_, i) => i % every === 0);
     const n = pts.length;
@@ -2626,9 +2628,29 @@
     return Math.round(Math.max(sea, low - 1) * 10) / 10;
   }
 
+  /** A stream's levels along its line (`waters::stream_levels`), as the loaded tiles have the ground. */
+  function streamLevelsOf(w: Water): number[] {
+    const sea = view.geom?.sea_level_ft ?? 0;
+    const at = streamSamples(centre(w)).map(([x, y]): [number, number | null] => {
+      const a = view.surfaceAt(x, y);
+      return a ? [a[0], a[1] > a[0] ? a[1] : null] : [sea + 1, null];
+    });
+    return streamLevels(at, sea);
+  }
+
+  /** Water as the tool draws it: an outline, or a moat's or stream's line of the width set. */
+  function waterOf(pts: Pt[], kind: WaterKind, closed: boolean, width: number | undefined, prev?: Water): Water {
+    const base: Water = drawnAsLine(kind) ? { pts, kind, level: 0, line: true, width, ...(closed && kind === 'moat' ? { closed: true } : {}) } : { pts, kind, level: 0 };
+    if (kind === 'stream') {
+      base.levels = prev?.levels?.length && prev.kind === 'stream' && prev.pts === pts ? prev.levels : streamLevelsOf(base);
+      base.level = Math.max(...base.levels);
+    } else base.level = prev && ofSea(kind) === ofSea(prev.kind) && prev.pts === pts && prev.kind !== 'stream' ? prev.level : waterLevel(base);
+    return base;
+  }
+
   /** An outline closed in Build › Water: water of the menu's kind there. */
-  function waterPlaced(pts: Pt[]) {
-    const w = { pts, kind: water.kind, level: waterLevel(pts, water.kind) };
+  function waterPlaced(pts: Pt[], closed = false) {
+    const w = waterOf(pts, water.kind, closed, drawnAsLine(water.kind) ? water.width : undefined);
     const bad = waterProblem(w);
     if (bad) return toast(bad);
     if (Object.keys(edits.waters ?? {}).length >= MAX_WATERS) return toast(`A world holds at most ${MAX_WATERS} water outlines`);
@@ -2639,14 +2661,24 @@
 
   /** The water picked: another kind (its level found again when it changes between the sea's
    * and standing water) or name. */
-  function changeWater(change: { kind?: WaterSettings['kind']; name?: string }) {
+  function changeWater(change: { kind?: WaterSettings['kind']; name?: string; width?: number }) {
     const id = waterPicked;
     const w = id ? edits.waters?.[id] : null;
     if (!id || !w) return;
     let next = edits;
     if (change.kind && change.kind !== w.kind) {
-      const level = ofSea(change.kind) === ofSea(w.kind) ? w.level : waterLevel(w.pts, change.kind);
-      next = { ...next, waters: { ...(next.waters ?? {}), [id]: { ...w, kind: change.kind, level } } };
+      // (A line stays a line: a moat or a stream; an outline is never a stream.)
+      if (isLine(w) ? !drawnAsLine(change.kind) : change.kind === 'stream') return toast(isLine(w) ? 'Water drawn as a line is a moat or a stream' : 'A stream is drawn as a line');
+      const nw = isLine(w) ? waterOf(w.pts, change.kind, !!w.closed, undefined, w) : { ...w, kind: change.kind, level: ofSea(change.kind) === ofSea(w.kind) ? w.level : waterLevel({ ...w, kind: change.kind }) };
+      const bad = waterProblem(nw);
+      if (bad) return toast(bad);
+      next = { ...next, waters: { ...(next.waters ?? {}), [id]: nw } };
+    }
+    if (change.width !== undefined && isLine(w) && change.width !== widthOf(w)) {
+      const nw = waterOf(w.pts, w.kind, !!w.closed, change.width, w);
+      const bad = waterProblem(nw);
+      if (bad) return toast(bad);
+      next = { ...next, waters: { ...(next.waters ?? {}), [id]: nw } };
     }
     if (change.name !== undefined && change.name.trim() !== (edits.renames?.[id] ?? '')) {
       const { [id]: _was, ...renames } = edits.renames ?? {};
@@ -5024,7 +5056,7 @@
       build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
     },
     buildQuick: (m) => setBuildMode(m),
-    buildFinish: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildArmed?.tool.finish()),
+    buildFinish: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildMode === 'water' ? buildArmed?.water.finish() : buildArmed?.tool.finish()),
     buildBack: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back()),
     designMode: (m) => {
       // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
@@ -5448,7 +5480,7 @@
             onCrossSave={saveCrossing}
             onCrossRemove={removeCrossing}
             bind:water
-            waterPicked={waterPicked && edits.waters?.[waterPicked] ? { kind: edits.waters[waterPicked].kind, name: edits.renames?.[waterPicked] ?? '' } : null}
+            waterPicked={waterPicked && edits.waters?.[waterPicked] ? { kind: edits.waters[waterPicked].kind, name: edits.renames?.[waterPicked] ?? '', width: isLine(edits.waters[waterPicked]) ? widthOf(edits.waters[waterPicked]) : null } : null}
             onWaterChange={changeWater}
             onWaterRemove={removeWater}
             onHarbourRemove={removeWharf}

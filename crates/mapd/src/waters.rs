@@ -1,5 +1,6 @@
 //! MCP tools for water drawn by hand (`Edits::waters`, `e:<id>`): inlets, basins, lakes, ponds
-//! and moats, each an outline and a level (`worldgen::waters`).
+//! and moats, each an outline and a level, and moats and streams drawn as a line with a width
+//! (`worldgen::waters`).
 
 use serde_json::{Value, json};
 use worldgen::geoquery::Squares;
@@ -20,8 +21,11 @@ pub fn list() -> Vec<Value> {
     let kinds: Vec<&str> = WaterKind::ALL.iter().map(|k| k.name()).collect();
     let props = |with_id: bool| {
         let mut p = json!({
-            "poly": { "type": "array", "minItems": 3, "maxItems": waters::MAX_WATER_PTS, "items": pt.clone(), "description": "The outline's points (world ft, 5 miles across at most). A lake's, pond's or inlet's shore is a natural curve round them; a basin or moat keeps straight sides with slightly rounded corners" },
-            "kind": { "type": "string", "enum": kinds.clone(), "description": "inlet and basin: the sea's, reaching in; lake, pond, moat: standing water (default lake)" },
+            "poly": { "type": "array", "minItems": 2, "maxItems": waters::MAX_WATER_PTS, "items": pt.clone(), "description": "The outline's points (world ft, 5 miles across at most; 3 or more), or a line's (line or stream: 2 or more). A lake's, pond's or inlet's shore is a natural curve round them; a basin or moat keeps straight sides with slightly rounded corners" },
+            "kind": { "type": "string", "enum": kinds.clone(), "description": "inlet and basin: the sea's, reaching in; lake, pond, moat: standing water; stream: a small stream along a line, its level falling with the ground from its higher end (default lake)" },
+            "line": { "type": "boolean", "description": "A moat drawn as a line: its water the band width_ft wide along poly (a stream always is one). Default false" },
+            "width_ft": { "type": "number", "minimum": waters::STREAM_WIDTHS[0], "maximum": waters::MOAT_WIDTHS[1], "description": "A line's width: a moat's 8 to 60 ft (default 20), a stream's 3 to 12 ft (default 5)" },
+            "closed": { "type": "boolean", "description": "A moat's line comes round to its first point: a ring round what it guards (default false)" },
             "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Its surface, ft above the sea. Default: the sea's or a lake's where the outline reaches one, an inlet's or basin's the sea's, else 1 ft under the lowest ground on its shore" },
             "name": { "type": "string", "description": "Its name on the map (empty: none)" },
         });
@@ -31,10 +35,10 @@ pub fn list() -> Vec<Value> {
         p
     };
     vec![
-        json!({ "name": "create_water", "title": "Draw water", "description": "Water inside an outline drawn by hand: an inlet or basin of the sea, a lake, pond or moat. A lake, pond or inlet gets a natural, gently irregular shore drawn round the points; a basin or moat keeps straight sides with rounded corners. The ground inside falls under its level (the battlemap's water, the map's at every zoom); an outline reaching the sea or a lake joins it; overlapping outlines are one water with one shore. Buildings, walls and crossings' ends keep out of it; a plateau or islet drawn over it stands dry. Returns its id (e:...).", "inputSchema": schema(props(false), &["poly"]) }),
-        json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...): its outline, kind, level or name; what is not given stays.", "inputSchema": schema(props(true), &["id"]) }),
+        json!({ "name": "create_water", "title": "Draw water", "description": "Water inside an outline drawn by hand: an inlet or basin of the sea, a lake, pond or moat; or a moat or stream along a line (line, width_ft, closed for a ring). A lake, pond or inlet gets a natural, gently irregular shore drawn round the points; a basin or moat keeps straight sides with rounded corners; a stream follows the ground downhill, shallow. The ground inside falls under its level (the battlemap's water, the map's at every zoom); an outline reaching the sea or a lake joins it; overlapping outlines are one water with one shore. Buildings, walls and crossings' ends keep out of it; a plateau or islet drawn over it stands dry. Returns its id (e:...).", "inputSchema": schema(props(false), &["poly"]) }),
+        json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...): its outline or line, kind, width, level or name; what is not given stays.", "inputSchema": schema(props(true), &["id"]) }),
         json!({ "name": "delete_water", "title": "Take water away", "description": "Take water drawn by hand away (the ground goes back as it was), by id (e:...), with its name, note and hidden mark (no restore; the user's Undo in the app brings it back).", "inputSchema": schema(crate::args::ids_props("water id (e:...)"), &[]) }),
-        json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "The water drawn by hand (e:...): id, kind, level_ft, name, middle, bbox, area and outline. Returns {items, found}; limit (default 100) cuts it.", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
+        json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "The water drawn by hand (e:...): id, kind, level_ft, name, middle, bbox, area and outline (a line's with line, width_ft, closed). Returns {items, found}; limit (default 100) cuts it.", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
     ]
 }
 
@@ -63,6 +67,15 @@ fn water_json(e: &Edits, id: &str, w: &Water, sea: f64) -> Value {
         "id": id, "kind": w.kind.name(), "level_ft": round1(w.level as f64 - sea), "x_ft": mid[0].round(), "y_ft": mid[1].round(),
         "bbox": b.map(f64::round), "area_sq_ft": geom::area(&shore).abs().round(), "points": w.pts.len(), "poly": w.pts,
     });
+    if w.is_line() {
+        v["line"] = json!(true);
+        v["width_ft"] = json!(w.width_ft());
+        v["closed"] = json!(w.closed);
+        if let (Some(a), Some(z)) = (w.levels.first(), w.levels.last()) {
+            v["level_ft"] = json!(round1(a.max(*z) as f64 - sea));
+            v["falls_to_ft"] = json!(round1(a.min(*z) as f64 - sea));
+        }
+    }
     if let Some(n) = e.renames.get(id) {
         v["name"] = json!(n);
     }
@@ -83,9 +96,10 @@ async fn list_waters(app: &Shared, limit: usize) -> Result<Value, String> {
 /// The level an outline takes when none is given: the sea's or a lake's where it reaches one
 /// (the highest), else the sea's for an inlet or basin, else 1 ft under the lowest ground on its
 /// shore (`Water::shore`) as shaped by `others` (ft, the generator's datum). And what it joins.
-fn default_level(ex: &mut Executor, pts: &[[f64; 2]], kind: WaterKind, others: &Edits) -> (f64, Option<&'static str>) {
+fn default_level(ex: &mut Executor, w: &Water, others: &Edits) -> (f64, Option<&'static str>) {
+    let kind = w.kind;
     let sea = ex.world.params().sea_level_ft;
-    let shore = waters::shape(pts, kind);
+    let shore = w.shore();
     let every = shore.len().div_ceil(LEVEL_SAMPLES).max(1);
     let sampled: Vec<[f64; 2]> = shore.iter().step_by(every).copied().collect();
     let (pts, n) = (sampled.as_slice(), sampled.len());
@@ -108,6 +122,20 @@ fn default_level(ex: &mut Executor, pts: &[[f64; 2]], kind: WaterKind, others: &
     if kind.of_sea() { (sea, None) } else { ((low - 1.0).max(sea), None) }
 }
 
+/// A stream's levels along its line (`waters::stream_levels`), the ground as shaped by `others`.
+fn stream_levels(ex: &mut Executor, w: &Water, others: &Edits) -> Vec<f32> {
+    let sea = ex.world.params().sea_level_ft;
+    let at: Vec<(f64, Option<f64>)> = waters::stream_samples(&w.centre())
+        .iter()
+        .map(|p| {
+            let sq = Squares::round(ex, [p[0], p[1], p[0], p[1]], 0);
+            let (g, still) = (sq.shaped(others, Some(&ex.t0))[0] as f64, sq.still[0] as f64);
+            (g, (still > worldgen::t0::hydro::DRY as f64 && still > g).then_some(still))
+        })
+        .collect();
+    waters::stream_levels(&at, sea)
+}
+
 async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
     let id = if change { Some(a["id"].as_str().ok_or("id: the water to change (e:...)")?.to_string()) } else { None };
     let old = match &id {
@@ -116,8 +144,22 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
     };
     let kind = match &a["kind"] {
         Value::Null => old.as_ref().map_or(WaterKind::Lake, |w| w.kind),
-        Value::String(k) => WaterKind::parse(k).ok_or("kind: inlet, basin, lake, pond or moat")?,
-        _ => return Err("kind: inlet, basin, lake, pond or moat".into()),
+        Value::String(k) => WaterKind::parse(k).ok_or("kind: inlet, basin, lake, pond, moat or stream")?,
+        _ => return Err("kind: inlet, basin, lake, pond, moat or stream".into()),
+    };
+    let flag = |k: &str| match &a[k] {
+        Value::Null => Ok(None),
+        Value::Bool(b) => Ok(Some(*b)),
+        _ => Err(format!("{k}: true or false")),
+    };
+    let line = flag("line")?.unwrap_or_else(|| old.as_ref().is_some_and(|w| w.line)) || kind == WaterKind::Stream;
+    if line && !kind.may_be_line() {
+        return Err("line: only a moat or a stream is drawn as a line".into());
+    }
+    let closed = line && kind != WaterKind::Stream && flag("closed")?.unwrap_or_else(|| old.as_ref().is_some_and(|w| w.closed));
+    let width = match &a["width_ft"] {
+        Value::Null => old.as_ref().filter(|w| w.kind == kind).and_then(|w| w.width),
+        v => Some(v.as_f64().filter(|w| w.is_finite()).ok_or("width_ft: a number of ft")?),
     };
     let poly: Option<Vec<[f64; 2]>> = match a["poly"].as_array() {
         Some(o) => {
@@ -128,7 +170,7 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
             Some(waters::rounded(&pts))
         }
         None if a["poly"].is_null() => None,
-        None => return Err("poly: an outline, 3 or more points".into()),
+        None => return Err("poly: an outline, 3 or more points (a line: 2 or more)".into()),
     };
     if poly.is_none() && old.is_none() {
         return Err("poly: the water's outline".into());
@@ -144,9 +186,10 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
     };
     let pts = poly.clone().unwrap_or_else(|| old.as_ref().map(|w| w.pts.clone()).unwrap_or_default());
     // The level: given, kept (the outline and kind as they were), or found along the new shore.
-    let keep = level_ft.is_none() && poly.is_none() && old.as_ref().is_some_and(|w| w.kind.of_sea() == kind.of_sea());
+    let keep = level_ft.is_none() && poly.is_none() && old.as_ref().is_some_and(|w| w.kind.of_sea() == kind.of_sea() && w.line == line && w.closed == closed && w.width == width && (w.kind == WaterKind::Stream) == (kind == WaterKind::Stream));
     let me = id.clone();
-    let (sea, level, joins) = app
+    let shaped = if line { Water::of_line(pts.clone(), kind, 0.0, width, closed) } else { Water::outline(pts.clone(), kind, 0.0) };
+    let (sea, level, joins, levels) = app
         .worker
         .run(move |g| {
             let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;
@@ -159,8 +202,14 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
             if let Some(me) = &me {
                 others.waters.remove(me);
             }
-            let (found, joins) = default_level(ex, &pts, kind, &others);
-            Ok::<_, String>((sea, level_ft.map_or(found, |l| l + sea), joins))
+            if let Some(err) = shaped.problem() {
+                return Err(err);
+            }
+            let (found, joins) = default_level(ex, &shaped, &others);
+            // (A stream's level falls along it, unless one is given: then it is flat.)
+            let levels = if kind == WaterKind::Stream && level_ft.is_none() && !keep { stream_levels(ex, &shaped, &others) } else { Vec::new() };
+            let found = levels.iter().copied().reduce(f32::max).map_or(found, |l| l as f64);
+            Ok::<_, String>((sea, level_ft.map_or(found, |l| l + sea), joins, levels))
         })
         .await?;
     app.edit("agent", 0, move |e| {
@@ -170,7 +219,9 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
         };
         let pts = poly.clone().unwrap_or_else(|| old.as_ref().map(|w| w.pts.clone()).unwrap_or_default());
         let level = if keep { old.as_ref().map_or(level, |w| w.level as f64) } else { level };
-        let w = Water { pts, kind, level: ((level * 10.0).round() * 0.1) as f32 };
+        let level = ((level * 10.0).round() * 0.1) as f32;
+        let mut w = if line { Water::of_line(pts, kind, level, width, closed) } else { Water::outline(pts, kind, level) };
+        w.levels = if keep { old.as_ref().map_or(Vec::new(), |o| o.levels.clone()) } else { levels.clone() };
         if let Some(err) = w.problem() {
             return Err(err);
         }
