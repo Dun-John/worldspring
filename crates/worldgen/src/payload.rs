@@ -380,11 +380,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     push(p, if m.wet { 24 } else { 25 } | (ink as u32) << 8);
                 }
                 // (Its drawbridge, 26: a deck from its berm over the gap to its far end.)
-                let b = &m.bridge;
-                let (g, side) = (crate::town::geom::mul(b.dir, 1.0), crate::town::geom::mul([-b.dir[1], b.dir[0]], 0.5 * b.width));
-                let (a, z) = (crate::town::geom::add(b.at, crate::town::geom::mul(g, crate::town::moat::BERM - 1.0)), crate::town::geom::add(b.at, crate::town::geom::mul(g, b.span)));
-                let deck = [crate::town::geom::add(a, side), crate::town::geom::add(z, side), crate::town::geom::sub(z, side), crate::town::geom::sub(a, side)];
-                push(&deck, 26);
+                for b in &m.bridges {
+                    let (g, side) = (crate::town::geom::mul(b.dir, 1.0), crate::town::geom::mul([-b.dir[1], b.dir[0]], 0.5 * b.width));
+                    let (a, z) = (crate::town::geom::add(b.at, crate::town::geom::mul(g, crate::town::moat::BERM - 1.0)), crate::town::geom::add(b.at, crate::town::geom::mul(g, b.span)));
+                    let deck = [crate::town::geom::add(a, side), crate::town::geom::add(z, side), crate::town::geom::sub(z, side), crate::town::geom::sub(a, side)];
+                    push(&deck, 26);
+                }
             }
             crate::town::village::plan_polys(&l, &mut push);
             crate::town::rural::plan_polys(&l, &mut push);

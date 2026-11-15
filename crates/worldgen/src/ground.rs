@@ -340,6 +340,32 @@ pub fn decode(raw: &str) -> Result<Box<[i16; CELLS]>, String> {
     Ok(add)
 }
 
+/// (Roadmap 6 P7) A hash of the shaping that meets `rect` (world ft): the brushed blocks over it and
+/// the plateaus meeting it (with their edges), for a layout that reads the ground as shaped
+/// (a castle drawn by hand, its moat's roll) to be laid out again when that changes.
+pub fn shaped_fp(edits: &crate::world::Edits, rect: [f64; 4]) -> u64 {
+    use crate::core::hash::fnv64;
+    use crate::core::rng::hash2;
+    let b = 16.0 * SQUARE_FT;
+    let k = |v: f64| crate::core::floor(v / b) as i64;
+    let mut h = 0;
+    if !edits.ground.is_empty() {
+        for bx in k(rect[0]) - 1..=k(rect[2]) + 1 {
+            for (key, g) in edits.ground.range(block_key(bx, k(rect[1]) - 1)..=block_key(bx, k(rect[3]) + 1)) {
+                h = hash2(h, fnv64(key.as_bytes()) as i64, fnv64(g.raw.as_bytes()) as i64);
+            }
+        }
+    }
+    for (key, p) in &edits.plateaus {
+        let e = p.edge as f64 + b;
+        let pb = p.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, q| [r[0].min(q[0]), r[1].min(q[1]), r[2].max(q[0]), r[3].max(q[1])]);
+        if pb[2] + e >= rect[0] && pb[0] - e <= rect[2] && pb[3] + e >= rect[1] && pb[1] - e <= rect[3] {
+            h = hash2(h, fnv64(key.as_bytes()) as i64, fnv64(serde_json::to_string(p).unwrap_or_default().as_bytes()) as i64);
+        }
+    }
+    h
+}
+
 /// A block's key: block indices zero-padded, x first (one column of blocks is one key range).
 pub fn block_key(bx: i64, by: i64) -> String {
     format!("g:{bx:05}:{by:05}")

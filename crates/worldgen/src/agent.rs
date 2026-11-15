@@ -251,7 +251,13 @@ pub fn created_detail(c: &crate::world::Created) -> String {
             (c.structure.as_deref() == Some("ruin")).then(|| "ruined".to_string()),
             (c.keep == Some(false)).then(|| "no keep".to_string()),
             (c.yard_buildings == Some(false)).then(|| "an empty yard".to_string()),
-            c.gate.map(|g| format!("gate on side {g}")),
+            match c.castle_gates().as_slice() {
+                [] => None,
+                [g] => Some(format!("gate on side {g}")),
+                gs => Some(format!("gates on sides {}", gs.iter().map(|g| g.to_string()).collect::<Vec<_>>().join(", "))),
+            },
+            c.keep_shape.as_deref().or((!c.keep_poly.is_empty()).then_some("drawn")).map(|k| format!("a {k} keep")),
+            c.moat.as_deref().map(|m| if m == "none" { "no moat".to_string() } else { format!("a {m} moat") }),
         ]
         .into_iter()
         .flatten()
@@ -757,7 +763,9 @@ fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Optio
             continue;
         }
         let place = |world: &World| if full { place_of(world, t0, li) } else { (Value::Null, None) };
-        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && polys_overlap(&inner, &b.poly)) {
+        // (A castle drawn by hand: its yard's buildings make room for one drawn there, `town::sites`.)
+        let yard = hand_castle(world, t0, li);
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(yard && b.keep.is_none()) && polys_overlap(&inner, &b.poly)) {
             out.push(building_blocker(world, t0, &l, b, full));
             if enough(all, clear, &out) {
                 return out;
@@ -857,6 +865,11 @@ pub fn spot_blockers(world: &World, t0: &T0, poly: &[P], skip: Option<(usize, Op
 /// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
 /// culture, seeded by its id (else what it is: "House"). A refusal names what is in the way,
 /// where (`spot_blockers` lists them all).
+/// Whether layout `li` is a castle drawn by hand (`Created` kind `castle`).
+fn hand_castle(world: &World, t0: &T0, li: usize) -> bool {
+    li.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.kind == "castle")
+}
+
 pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
     spot_check(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip, false, true).map(|s| (s.0, s.1))
 }
@@ -929,7 +942,8 @@ pub fn nearest_clear(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
         if own == Some(None) {
             continue;
         }
-        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated)) {
+        let yard = hand_castle(world, t0, li);
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated) && !(yard && b.keep.is_none())) {
             let bb = bbox(&b.poly);
             if near(bb) {
                 obst.push(Obst::Area(bb, b.poly.clone()));
@@ -1398,8 +1412,10 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         if Some(li) == skip {
             continue;
         }
+        // (Roadmap 6 P7: a building drawn by hand may stand in a castle's yard, not on its walls.)
+        let drawn = castle && li >= generated && li.checked_sub(generated).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.kind == "building");
         for b in &l.buildings {
-            let hit = if castle { polys_overlap(pts, &b.poly) } else { in_line(&b.poly) };
+            let hit = if castle && !drawn { polys_overlap(pts, &b.poly) } else { in_line(&b.poly) };
             if !hit {
                 continue;
             }

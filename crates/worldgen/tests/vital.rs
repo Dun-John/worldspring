@@ -1383,8 +1383,10 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
         }
         assert!(ways.iter().all(|&k| seen[k]) && (0..nx * ny).all(|k| lv.cells[k] != plan.room || blocked[k] || seen[k]), "{tag} ({}): its hall's furniture shuts part of it off", kind.name());
     }
-    // (A castle laid out by a town or drawn by hand keeps its keep.)
-    assert!(keeps >= 1 || !l.buildings.iter().any(|b| b.func == Some(fi)), "#{si}: its keep is not made of pieces");
+    // (A castle laid out by a town or drawn by hand keeps its keep: of pieces, but a hand castle's
+    // round or drawn one.)
+    let whole = l.buildings.iter().any(|b| b.func == Some(fi) && b.parts.is_empty() && b.keep.is_some());
+    assert!(keeps >= 1 || whole || !l.buildings.iter().any(|b| b.func == Some(fi)), "#{si}: its keep is not made of pieces");
     for b in l.buildings.iter().filter(|b| b.parts.is_empty() && b.ward == town::catalog::Ward::Castle && geom_dist(geom::centroid(&b.poly), l.castles[0].0) < l.castles[0].1) {
         assert!(!near_wall(&b.poly), "#{si} b:{si}:{}: a building stands on the curtain", b.id);
     }
@@ -3096,6 +3098,104 @@ fn agent_edits_guarantee() {
     assert!(agent::works_spot(world, t0, &works("castle", "c:99".into(), rect_at(castle_spot), vec![]), "c:99", None).is_err(), "a castle over a castle is allowed");
 }
 
+/// (Roadmap 6 P7) A castle drawn by hand on a concave outline: its curtain keeps inside the outline
+/// with a tower at each corner turning inward, a gate in the middle of each side asked for (one
+/// drawbridge each over its moat), its keep round or drawn as asked and its moat as asked; a moat
+/// left to its roll is the same under another id (keyed to the outline); a building drawn in its
+/// yard is let in, the castle's own buildings standing clear of it. The castle's guarantees hold.
+#[test]
+fn hand_castle_options() {
+    use worldgen::pipeline::Executor;
+    use worldgen::town::{self, geom};
+    use worldgen::world::Created;
+    use worldgen::agent;
+    let mut ex = Executor::new(World::from_json(&world_json(1)).unwrap());
+    let sea = ex.world.params().sea_level_ft;
+    let first = ex.t0.settlements.len() + ex.t0.base_pois;
+    let n0 = ex.world.file.edits.created.len();
+    // A U open to the south (y runs south): 700 × 500 ft, its notch 240 ft wide and 230 deep.
+    let u = |c: [f64; 2]| [[-350.0, -250.0], [350.0, -250.0], [350.0, 250.0], [120.0, 250.0], [120.0, 20.0], [-120.0, 20.0], [-120.0, 250.0], [-350.0, 250.0]].map(|q| [c[0] + q[0], c[1] + q[1]]).to_vec();
+    let castle = |id: usize, at: [f64; 2]| Created { id: format!("c:{id}"), kind: "castle".into(), x: at[0], y: at[1], poly: u(at), name: format!("Castle {id}"), ..Default::default() };
+    let (world, t0) = (&ex.world, &ex.t0);
+    let at = (0..t0.settlements.len() * 8)
+        .map(|k| {
+            let s = &t0.settlements[k / 8];
+            let a = (k % 8) as f64 * std::f64::consts::TAU / 8.0 + 0.3;
+            [s.x + 15_840.0 * libm::cos(a), s.y + 15_840.0 * libm::sin(a)].map(|v| (v / 5.0).round() * 5.0)
+        })
+        .find(|p| t0.sample(p[0], p[1], 20.0) > sea + 20.0 && agent::works_spot(world, t0, &castle(n0, *p), "c:98", None).is_ok_and(|s| s.in_way.is_empty()))
+        .expect("open ground for a castle");
+    let gated = Created { gates: vec![0, 1, 7], keep_shape: Some("round".into()), moat: Some("dry".into()), ..castle(n0, at) };
+    assert!(gated.check().is_ok(), "a concave castle with three gates is refused: {:?}", gated.check());
+    assert!(Created { keep_shape: Some("drawn".into()), ..gated.clone() }.check().is_err(), "a drawn keep without its outline is let in");
+    // The same outline under other ids: its moat by roll, none, and wet with a drawn keep.
+    let far = [at[0] + 3_000.0, at[1]];
+    let keep_poly = vec![[at[0] - 80.0, at[1] - 200.0], [at[0] + 40.0, at[1] - 200.0], [at[0] + 40.0, at[1] - 120.0], [at[0] - 80.0, at[1] - 120.0], [at[0] - 110.0, at[1] - 160.0]];
+    let others = [
+        castle(n0 + 1, at),
+        Created { moat: Some("none".into()), ..castle(n0 + 2, far) },
+        Created { moat: Some("wet".into()), keep_poly: keep_poly.iter().map(|q| [q[0] + 3_000.0, q[1]]).collect(), ..castle(n0 + 3, far) },
+    ];
+    let mut e = ex.world.file.edits.clone();
+    e.created.push(gated.clone());
+    e.created.extend(others.iter().cloned());
+    let set = |ex: &mut Executor, e: worldgen::world::Edits| {
+        let old = std::mem::replace(&mut ex.world.file.edits, e).created;
+        ex.t0.apply_edits(&ex.world);
+        town::forget_created(&old, &ex.world.file.edits.created, first);
+    };
+    set(&mut ex, e.clone());
+    let (world, t0) = (&ex.world, &ex.t0);
+    let li = first + n0;
+    let l = town::layout(world, t0, li);
+    let tag = "the U castle";
+    castle_works(world, t0, &l, li, &mut 0, &mut 0);
+    assert!(l.walls.iter().flatten().all(|p| geom::contains(&gated.poly, *p)), "{tag}: its curtain stands outside the outline drawn");
+    for c in [[at[0] + 120.0, at[1] + 20.0], [at[0] - 120.0, at[1] + 20.0]] {
+        assert!(l.towers.iter().any(|t| geom_dist(*t, c) < 15.0), "{tag}: no tower at the corner turning inward at {c:?}");
+    }
+    let g = &l.gate_towers;
+    let pairs: Vec<[f64; 2]> = (0..g.len()).flat_map(|a| (a + 1..g.len()).filter(move |&b| (geom_dist(g[a], g[b]) - 52.0).abs() < 2.0).map(move |b| geom::lerp(g[a], g[b], 0.5))).collect();
+    for side in [0usize, 1, 7] {
+        let (a, b) = (gated.poly[side], gated.poly[(side + 1) % 8]);
+        let mid = geom::lerp(a, b, 0.5);
+        assert!(pairs.iter().any(|g| geom_dist(*g, mid) < 12.0), "{tag}: no gate in the middle of side {side} ({mid:?}); gates {pairs:?}");
+    }
+    let fi = town::catalog::index_of("castle").unwrap() as u16;
+    let k = l.buildings.iter().find(|b| b.func == Some(fi)).expect("the U castle has no keep");
+    assert!(k.parts.is_empty() && k.poly.len() == 24, "{tag}: its keep is not round ({} corners, {} pieces)", k.poly.len(), k.parts.len());
+    assert!(l.moats.len() == 1 && !l.moats[0].wet && l.moats[0].bridges.len() == 3, "{tag}: {} moats, want one dry with 3 drawbridges", l.moats.len());
+    let rolled = town::layout(world, t0, li + 1);
+    let none = town::layout(world, t0, li + 2);
+    let wet = town::layout(world, t0, li + 3);
+    assert!(none.moats.is_empty(), "a castle with moat none has one");
+    assert!(wet.moats.len() == 1 && wet.moats[0].wet, "a castle with a wet moat asked has {}", if wet.moats.is_empty() { "none" } else { "a dry one" });
+    let wk = wet.buildings.iter().find(|b| b.func == Some(fi)).expect("the drawn keep");
+    assert!(wk.poly.len() == 5 && wk.poly.iter().all(|p| others[2].keep_poly.iter().any(|q| geom_dist(*p, *q) < 0.01)), "the drawn keep is not as drawn: {:?}", wk.poly);
+    // (Keyed to the outline: a castle with its moat rolled drawn on the outline of one under another id.)
+    let mut moved = e.clone();
+    moved.created[n0 + 2] = castle(n0 + 2, at);
+    set(&mut ex, moved);
+    let (world, t0) = (&ex.world, &ex.t0);
+    let again = town::layout(world, t0, li + 2);
+    let roll = |l: &town::Layout| l.moats.first().map(|m| (m.wet, (m.width * 8.0).round() as i64));
+    assert_eq!(roll(&again), roll(&rolled), "the same outline rolled another moat under another id");
+    // A building drawn in the yard, on its ranges along the south curtain: let in; the castle's own
+    // buildings stand clear of it.
+    let yard_l = town::layout(world, t0, li);
+    let range = yard_l.buildings.iter().filter(|b| b.keep.is_none()).find(|b| b.poly.iter().all(|p| p[1] < at[1] - 150.0)).expect("a range along the south curtain");
+    let c = geom::centroid(&range.poly);
+    let hut = vec![[c[0] - 15.0, c[1] - 10.0], [c[0] + 15.0, c[1] - 10.0], [c[0] + 15.0, c[1] + 10.0], [c[0] - 15.0, c[1] + 10.0]];
+    let spot = agent::building_spot(world, t0, &hut, None, "c:99", None);
+    assert!(spot.is_ok(), "a building in a hand castle's yard is refused: {spot:?}");
+    let mut with = ex.world.file.edits.clone();
+    with.created.push(Created { id: format!("c:{}", n0 + 4), kind: "building".into(), x: c[0], y: c[1], name: "Hut".into(), poly: hut.clone(), ..Default::default() });
+    set(&mut ex, with);
+    let l = town::layout(&ex.world, &ex.t0, li);
+    assert!(l.buildings.iter().all(|b| b.poly.iter().all(|p| !geom::contains(&hut, *p)) && hut.iter().all(|p| !geom::contains(&b.poly, *p))), "the castle's buildings stand on the one drawn in its yard");
+    assert!(l.moats.len() == 1 && l.buildings.iter().any(|b| b.func == Some(fi)), "the castle lost its keep or moat to the building drawn in its yard");
+}
+
 /// Places created by hand stay put when the world is remade: keyed by their ids, not by where
 /// they fall in the list of layouts, a created ruin's layout and dungeon and a drawn building's
 /// layout and interior come out the same after a site drawn in the sketch far away moves them
@@ -4695,10 +4795,12 @@ fn castle_moats() {
             } else {
                 dry += 1;
             }
-            let tag = format!("seed {seed} #{si} ({} moat by {:?})", if m.wet { "wet" } else { "dry" }, m.bridge.at);
-            assert!(m.bridge.span >= m.width && m.bridge.span <= m.width + 40.0, "{tag}: a drawbridge {:.0} ft long over a moat {:.0} ft wide", m.bridge.span, m.width);
+            let tag = format!("seed {seed} #{si} ({} moat by {:?})", if m.wet { "wet" } else { "dry" }, m.bridges[0].at);
+            for b in &m.bridges {
+                assert!(b.span >= m.width && b.span <= m.width + 40.0, "{tag}: a drawbridge {:.0} ft long over a moat {:.0} ft wide", b.span, m.width);
+            }
             castle_reach_by(&l, si, &|p| match m.spot(p) {
-                Some(s) if s.inside() && !m.bridge.covers(p) => 2,
+                Some(s) if s.inside() && !m.bridged(p) => 2,
                 Some(_) => 1,
                 None => 0,
             });
@@ -4717,7 +4819,7 @@ fn castle_moats() {
                     for q in 0..SQ * SQ {
                         let p = [kx as f64 * size + ((q % SQ) as f64 + 0.5) * SQUARE_FT, ky as f64 * size + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
                         let Some(s) = m.spot(p).filter(|s| s.inside()) else { continue };
-                        if m.bridge.covers(p) {
+                        if m.bridged(p) {
                             deck += (c.road_halo[(q / SQ + 1) * HS + q % SQ + 1] & 0x80 != 0) as usize;
                             continue;
                         }

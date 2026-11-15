@@ -1043,21 +1043,34 @@ pub struct Created {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<String>,
     /// A castle's gate: the side of `poly` it is in (corner `gate` to the next), else the side
-    /// facing the nearest road.
+    /// facing the nearest road (with `gates`, the first of them; `gate` the main one, first).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<u32>,
     /// A castle's keep in the yard (default true).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<bool>,
+    /// (Roadmap 6 P7) A castle's keep's shape (`KEEP_SHAPES`): `square` (a keep of pieces, its
+    /// kind rolled, never a round shell), `round` (a round great tower), `drawn` (`keep_poly`);
+    /// else as rolled (now and then a shell keep on a motte).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_shape: Option<String>,
+    /// A castle's keep drawn by hand (world ft): a simple polygon inside its outline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep_poly: Vec<[f64; 2]>,
     /// Buildings lining the inside of a castle's curtain (default true).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yard_buildings: Option<bool>,
+    /// (Roadmap 6 P7) A castle's moat (`MOATS`): `none`, `dry` (a ditch) or `wet`; else by roll
+    /// (seeded by its outline), wet where water lies near and the ground (as shaped) is level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moat: Option<String>,
     /// A wall's line (world ft), 2–64 corners, at most `WALL_MAX_FT` long (a ring: 3–256,
     /// `WALL_RING_MAX_FT`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pts: Vec<[f64; 2]>,
     /// A wall's corners that are gates (indices into `pts`); more gates come where roads and
-    /// streets cross it.
+    /// streets cross it. A castle's sides with a gate (corner `g` to the next; the first the
+    /// main gate), each in its side's middle.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gates: Vec<u32>,
     /// A wall's last corner joins its first (a ring).
@@ -1210,7 +1223,13 @@ pub const DRAWN_KINDS: [&str; 4] = ["building", "castle", "wall", "plot"];
 /// Widest a plot may be, its point to its farthest corner (ft).
 pub const PLOT_REACH_FT: f64 = 750.0;
 /// Widest a castle may be, corner to corner (ft).
-pub const CASTLE_MAX_FT: f64 = 600.0;
+pub const CASTLE_MAX_FT: f64 = 1500.0;
+/// Most gates a castle may have.
+pub const CASTLE_MAX_GATES: usize = 8;
+/// A castle's keep's shapes (`Created::keep_shape`).
+pub const KEEP_SHAPES: [&str; 3] = ["square", "round", "drawn"];
+/// A castle's moats (`Created::moat`).
+pub const MOATS: [&str; 3] = ["none", "dry", "wet"];
 /// Narrowest a castle may be (ft): room for a curtain, a yard and a keep.
 pub const CASTLE_MIN_FT: f64 = 80.0;
 /// Longest a wall may be (ft).
@@ -1295,10 +1314,10 @@ impl Created {
         if self.culture.is_some() || self.lives_by.is_some() {
             return Err("culture and lives_by are for villages and towns".into());
         }
-                let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
+                let works = self.gate.is_some() || self.keep.is_some() || self.keep_shape.is_some() || !self.keep_poly.is_empty() || self.moat.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
         match self.kind.as_str() {
             "plot" => return self.check_plot(),
-            "building" if works => return Err("gate, keep, yard_buildings, pts, gates and closed are for castles and walls".into()),
+            "building" if works => return Err("gate, keep, keep_shape, keep_poly, moat, yard_buildings, pts, gates and closed are for castles and walls".into()),
             "building" => return self.check_building(),
             "castle" => return self.check_castle(),
             "wall" => return self.check_wall(),
@@ -1377,7 +1396,7 @@ impl Created {
     /// A building's options: a simple footprint of 3–64 corners near its point, at least
     /// 10 ft across; storeys, function, roof, tint and structure from their lists.
     fn check_plot(&self) -> Result<(), String> {
-        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
+        let works = self.gate.is_some() || self.keep.is_some() || self.keep_shape.is_some() || !self.keep_poly.is_empty() || self.moat.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
         if works || self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() || self.structure.is_some() {
             return Err("a plot has an outline and a fill only".into());
         }
@@ -1444,15 +1463,16 @@ impl Created {
 }
 
 impl Created {
-    /// A castle's options: a convex outline of 3–32 corners round its point, `CASTLE_MIN_FT`
-    /// to `CASTLE_MAX_FT` across, its gate on one of its sides; ruined or not.
+    /// A castle's options: an outline of 3–32 corners round its point that doesn't cross itself
+    /// (concave or not), `CASTLE_MIN_FT` to `CASTLE_MAX_FT` across, its gates on its sides, its
+    /// keep's shape (a drawn one inside the outline), its moat; ruined or not.
     fn check_castle(&self) -> Result<(), String> {
-        use crate::town::geom::{cross, obb, sub};
+        use crate::town::geom::obb;
         if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() {
-            return Err("a castle takes its outline (poly), gate, keep, yard_buildings and structure".into());
+            return Err("a castle takes its outline (poly), gate or gates, keep, keep_shape, keep_poly, moat, yard_buildings and structure".into());
         }
-        if !self.pts.is_empty() || !self.gates.is_empty() || self.closed {
-            return Err("pts, gates and closed are for walls: a castle has an outline (poly) and one gate".into());
+        if !self.pts.is_empty() || self.closed {
+            return Err("pts and closed are for walls: a castle has an outline (poly)".into());
         }
         let p = &self.poly;
         if p.len() < 3 || p.len() > 32 || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
@@ -1462,9 +1482,8 @@ impl Created {
             return Err("a castle's outline must not cross itself".into());
         }
         let m = p.len();
-        let turns: Vec<f64> = (0..m).map(|i| cross(sub(p[(i + 1) % m], p[i]), sub(p[(i + 2) % m], p[(i + 1) % m]))).collect();
-        if !(turns.iter().all(|t| *t >= -1e-6) || turns.iter().all(|t| *t <= 1e-6)) {
-            return Err("a castle's outline must be convex (no corner turning inward)".into());
+        if (0..m).any(|i| (p[(i + 1) % m][0] - p[i][0]).hypot(p[(i + 1) % m][1] - p[i][1]) < 10.0) {
+            return Err("a castle's corners must be at least 10 ft apart".into());
         }
         let across = p.iter().flat_map(|a| p.iter().map(move |b| (a[0] - b[0]).hypot(a[1] - b[1]))).fold(0.0, f64::max);
         if across > CASTLE_MAX_FT {
@@ -1478,6 +1497,42 @@ impl Created {
         }
         if self.gate.is_some_and(|g| g as usize >= m) {
             return Err(format!("gate: a side of the outline, 0 to {}", m - 1));
+        }
+        if self.gates.iter().any(|g| *g as usize >= m) {
+            return Err(format!("gates: sides of the outline, 0 to {}", m - 1));
+        }
+        if self.castle_gates().len() > CASTLE_MAX_GATES {
+            return Err(format!("a castle has at most {CASTLE_MAX_GATES} gates"));
+        }
+        if let Some(s) = &self.moat
+            && !MOATS.contains(&s.as_str())
+        {
+            return Err(format!("moat must be one of {}", MOATS.join(", ")));
+        }
+        if let Some(s) = &self.keep_shape
+            && !KEEP_SHAPES.contains(&s.as_str())
+        {
+            return Err(format!("keep_shape must be one of {}", KEEP_SHAPES.join(", ")));
+        }
+        if self.keep == Some(false) && (self.keep_shape.is_some() || !self.keep_poly.is_empty()) {
+            return Err("keep_shape and keep_poly are for a castle with a keep".into());
+        }
+        let k = &self.keep_poly;
+        match (self.keep_shape.as_deref(), k.is_empty()) {
+            (Some("drawn") | None, false) => {
+                if k.len() < 3 || k.len() > 32 || k.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) || !simple(k) {
+                    return Err("keep_poly: 3–32 corners, not crossing itself".into());
+                }
+                if obb(k).short < 20.0 || crate::town::geom::area(k).abs() < 600.0 {
+                    return Err("a drawn keep is at least 20 ft across".into());
+                }
+                if k.iter().any(|q| inside_by(p, *q) < 12.0) {
+                    return Err("a drawn keep stands inside the castle's outline, 12 ft or more in from its walls".into());
+                }
+            }
+            (Some("drawn"), true) => return Err("keep_shape drawn: give its outline (keep_poly)".into()),
+            (Some(_), false) => return Err("keep_poly is a drawn keep's (keep_shape drawn)".into()),
+            _ => {}
         }
         if let Some(s) = &self.structure
             && !STRUCTURES.contains(&s.as_str())
@@ -1502,7 +1557,7 @@ impl Created {
         if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() {
             return Err("a wall takes its line (pts), gates and closed".into());
         }
-        if !self.poly.is_empty() || self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || self.structure.is_some() || !self.pieces.is_empty() {
+        if !self.poly.is_empty() || self.gate.is_some() || self.keep.is_some() || self.keep_shape.is_some() || !self.keep_poly.is_empty() || self.moat.is_some() || self.yard_buildings.is_some() || self.structure.is_some() || !self.pieces.is_empty() {
             return Err("poly, gate, keep, yard_buildings and structure are for castles: a wall has a line (pts) and gates".into());
         }
         let p = &self.pts;
@@ -1535,6 +1590,17 @@ impl Created {
         Ok(())
     }
 
+    /// A castle's gates: the sides with one (`gate` first, then `gates`), each once.
+    pub fn castle_gates(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for g in self.gate.iter().chain(&self.gates) {
+            if !out.contains(g) {
+                out.push(*g);
+            }
+        }
+        out
+    }
+
     /// How far (ft) from its point a created site's layout reaches: a castle's or wall's
     /// farthest corner and its towers; any other site `town::sites::SITE_REACH_FT`.
     pub fn reach(&self) -> f64 {
@@ -1546,6 +1612,13 @@ impl Created {
             _ => crate::town::sites::SITE_REACH_FT,
         }
     }
+}
+
+/// How far `q` lies inside polygon `p` (ft; negative outside).
+fn inside_by(p: &[[f64; 2]], q: [f64; 2]) -> f64 {
+    let n = p.len();
+    let d = (0..n).map(|i| crate::town::geom::seg_dist(q, p[i], p[(i + 1) % n])).fold(f64::MAX, f64::min);
+    if crate::town::geom::contains(p, q) { d } else { -d }
 }
 
 /// Whether a polygon's sides cross only at shared corners.

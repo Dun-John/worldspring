@@ -758,26 +758,35 @@ Rules:
 
 ### Castles and walls
 `create_feature` with `kind: "castle"` or `"wall"` takes a shape instead of a place. A **castle** is an outline
-(`poly`, convex, 3–32 corners, 80 to 600 ft across, measured along its longest diagonal: a `rect` of 500 × 350 is 610
-across and refused; or `rect` about its middle): a curtain wall just inside it, a
-tower on every corner and along long runs (round, or square in some castles), a gatehouse on one side (`gate`: the
-side from corner `gate` to the next; else the side facing the nearest road), in a big one (80,000 sq ft or more and
+(`poly`, 3–32 corners at least 10 ft apart, turning inward or not but never crossing itself, 80 to 1,500 ft across,
+measured along its longest diagonal: a `rect` of 1,300 × 800 is 1,526 across and refused; or `rect` about its middle):
+a curtain wall just inside it, a tower on every corner (those turning inward too) and along long runs (round, or
+square in some castles), a gatehouse on one side (`gate`: the side from corner `gate` to the next; else the side
+facing the nearest road) or on several (`gates`: the sides, up to 8, a gatehouse in the middle of each, the first the
+main one; `gates` replaces `gate`), in a big one (80,000 sq ft or more and
 200 ft across) an inner curtain with its own gatehouse round the keep's high ground, leaving an outer bailey at
 least 48 ft wide all round and the inner curtain at least 80 ft from the outer gate, its gate at least 90 ft from
 that one; the keep (the castle itself, named as the site;
 `keep: false` for none) on the highest ground that holds it, made of pieces: a great tower with corner towers, a hall
 with a forebuilding, an L or a T with towers at its outer corners, or a round shell keep on a motte (a mound eased up
-from the ground, a gravel path up it to the shell's gate; a tower keep alone where nothing else fits), its flat tops
+from the ground, a gravel path up it to the shell's gate; a tower keep alone where nothing else fits); `keep_shape`
+chooses: `square` (those of pieces, never a shell keep), `round` (a round great tower, as big as the court holds),
+`drawn` with `keep_poly` (its outline, 3–32 corners, 12 ft or more inside the castle's; `keep_poly` alone means
+drawn), `auto` back to the roll; its flat tops
 drawn as open battlements (a wall walk of stone flags in the merlons, a broad one's middle dark lead) or, every top of
 1,100 sq ft or more and in some keeps the smaller ones too, hipped roofs of lead or slate; and ranges of
 stone buildings under slate against the inside of the curtain, clear of the way from gate to gate (the biggest the
-barracks, then stables and a smithy; `yard_buildings: false` for none). The bailey inside is an open yard of grass, no
+barracks, then stables and a smithy; `yard_buildings: false` for none). A moat round the curtain comes by roll (keyed
+to the outline, so the same castle drawn again under another id keeps it), wet where water lies near and the ground,
+as shaped by hand (plateaus, the brush), is level, else a dry ditch; `moat` chooses: `none`, `dry`, `wet`, `auto`
+back to the roll; a drawbridge spans it at each gate. The bailey inside is an open yard of grass, no
 wild trees or rocks, set out sparingly: stores by the ranges, a cart, a trough or barrels inside each gate, a well in
 the keep's court, a little cover out in the open yard (haystacks, carts, troughs, firewood; small stores by a wall or
 a building: its curtains, towers and buildings are the yard's cover, so the ground near them needs none), nothing on a
 motte or in the way from gate to gate and to the keep; in some castles a garden yard: a plot
 by the keep (flowerbeds, topiary at its corners, benches, a short hedge, now and then a fountain) and a few planted
-trees. Buildings can be drawn in it. With
+trees. Buildings can be drawn in it (`create_building`): the castle's own yard buildings make room (its keep and
+walls do not). With
 `structure: "ruin"` the walls are broken, some towers fallen and every building a roofless shell.
 
 The keep and the yard's buildings are the castle's pieces (`b:<layout>:<id>`, as `get_feature`, `search_features`
@@ -841,7 +850,8 @@ The last answers (cut short) `{"id": "c:0", "closed": true, "corners": 19, "leng
 ### `update_fortification`
 `id` (a castle's or wall's `c:` id) and any of `create_feature`'s castle or wall fields: a new outline or line
 (`pts`, or `settlement` and `around_patches`: the ring laid anew on the plan as it stands, its gates with it), its
-gate or gates, `street_gates`, `keep`, `yard_buildings`, `structure`, `closed`, `name`. Fields left out stay; the result is checked
+gate or gates (a castle's: its sides), `street_gates`, `keep`, `keep_shape`, `keep_poly`, `yard_buildings`, `moat`,
+`structure`, `closed`, `name`. Fields left out stay; the result is checked
 like a new one (`remove_in_way` as there). `delete_feature` takes it away.
 
 ### `update_feature`

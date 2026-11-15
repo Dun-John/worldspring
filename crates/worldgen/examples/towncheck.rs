@@ -964,8 +964,8 @@ fn moat_checks(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
         return;
     };
     let kind = if m.wet { "wet" } else { "dry" };
-    let far = add(m.bridge.at, mul(m.bridge.dir, m.bridge.span));
-    r.add(&format!("moats: {kind}"), m.width, format!("{tag}: {:.0} ft wide, drawbridge {} to {}", m.width, at(m.bridge.at), at(far)));
+    let far = add(m.bridges[0].at, mul(m.bridges[0].dir, m.bridges[0].span));
+    r.add(&format!("moats: {kind}"), m.width, format!("{tag}: {:.0} ft wide, drawbridge {} to {}", m.width, at(m.bridges[0].at), at(far)));
     r.tally(&format!("{:?} castles with a {kind} moat", l.tier), 1);
     let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
     let k = |v: f64| (v / size).floor().max(0.0) as u32;
@@ -980,7 +980,7 @@ fn moat_checks(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
                 if !s.inside() {
                     continue;
                 }
-                if m.bridge.covers(p) {
+                if m.bridged(p) {
                     deck += (c.road_halo[(q / SQ + 1) * (SQ + 2) + q % SQ + 1] & 0x80 != 0) as usize;
                     continue;
                 }
@@ -993,10 +993,10 @@ fn moat_checks(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
     r.tally("moat squares", band);
     r.tally(&format!("moat squares deep water ({kind} moats)"), deep);
     if good * 10 < band * 9 {
-        r.add(&format!("{kind} moats under 90% {}", if m.wet { "water" } else { "difficult" }), (band - good) as f64, format!("{tag}: {good} of {band} at {}", at(m.bridge.at)));
+        r.add(&format!("{kind} moats under 90% {}", if m.wet { "water" } else { "difficult" }), (band - good) as f64, format!("{tag}: {good} of {band} at {}", at(m.bridges[0].at)));
     }
     if deck == 0 {
-        r.add("drawbridges with no deck", 1.0, format!("{tag}: at {}", at(m.bridge.at)));
+        r.add("drawbridges with no deck", 1.0, format!("{tag}: at {}", at(m.bridges[0].at)));
     }
 }
 
@@ -4972,9 +4972,15 @@ fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
     r.counts(&["layouts hashed", "edited layouts hashed", "edits refused", "layouts differing", "layouts not in the baseline"]);
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
     let mut lines: Vec<String> = Vec::new();
+    // (P7: a moat's one drawbridge became a list; printed as before, a moat with one compares
+    // with the baseline.)
+    let print = |l: &Layout| {
+        let s = format!("{l:?}");
+        if s.contains("bridges: [Drawbridge {") { s.replace("bridges: [Drawbridge {", "bridge: Drawbridge {").replace("}], pieces: ", "}, pieces: ") } else { s }
+    };
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
-        lines.push(format!("L:{li} {:016x} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len()));
+        lines.push(format!("L:{li} {:016x} {}", fnv64(print(&l).as_bytes()), l.buildings.len()));
         r.tally("layouts hashed", 1);
     }
     let edits: usize = std::env::var("SAME_EDITS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
@@ -4992,7 +4998,7 @@ fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
         file.edits.towns.insert(town::wards::key(ci), edit);
         let w = World::new(file).unwrap();
         let l = town::layout(&w, t0, ci);
-        lines.push(format!("E:{ci} {:016x} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len()));
+        lines.push(format!("E:{ci} {:016x} {}", fnv64(print(&l).as_bytes()), l.buildings.len()));
         r.tally("edited layouts hashed", 1);
     }
     let dir = std::path::PathBuf::from(std::env::var("SAME_DIR").unwrap_or_else(|_| "target/towncheck-same".into()));

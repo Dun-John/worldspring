@@ -559,10 +559,9 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
         return;
     }
     let m = block.len();
-    let toward = match c.gate.map(|g| g as usize).filter(|&g| g < m) {
-        Some(g) => lerp(block[g], block[(g + 1) % m], 0.5),
-        None => gate_toward(t0, center),
-    };
+    // (Its gates in the middles of their sides, the main one first.)
+    let gates: Vec<P> = c.castle_gates().iter().map(|&g| g as usize).filter(|&g| g < m).map(|g| lerp(block[g], block[(g + 1) % m], 0.5)).collect();
+    let toward = gates.first().copied().unwrap_or_else(|| gate_toward(t0, center));
     if area(&block) < 0.0 {
         block.reverse();
     }
@@ -571,14 +570,42 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     let keep = c.keep.unwrap_or(true);
     // (The curtain on the outline drawn; the keep, and an inner curtain in a big one, on the high
     // ground. Its bailey an open yard of grass, built on only by hand.)
-    // (A moat by roll, v63 castles: the likelier for a ruin (older), a big one or one with a keep.)
-    // (Keyed to its id: the same castle moved keeps its roll.)
-    let key = world.stream(&format!("castle.moat:{}", c.id));
+    // (A moat as asked, else by roll, v63 castles: the likelier for a ruin (older), a big one or
+    // one with a keep. Keyed to its outline, to the foot: the same castle made again, under
+    // another id, keeps its roll.)
+    let mut bytes: Vec<u8> = Vec::with_capacity(16 * c.poly.len());
+    for q in &c.poly {
+        for v in q {
+            bytes.extend((crate::core::round(*v) as i64).to_le_bytes());
+        }
+    }
+    let key = hash2(world.stream("castle.moat"), crate::core::hash::fnv64(&bytes) as i64, 0);
     let roll = |salt: i64| crate::core::rng::unit(hash2(key, salt, 0));
     let p = super::moat::odds(roll(3), c.structure.as_deref() == Some("ruin"), keep, area(&block).abs() >= 80_000.0);
-    let moat = super::moat::roll(roll(1), roll(2), p, false);
+    let moat = match c.moat.as_deref() {
+        Some("none") => None,
+        Some(k) => Some(super::moat::Plan { wet: Some(k == "wet"), ..super::moat::roll(0.0, roll(2), 1.0, false).expect("a moat at odds 1") }),
+        None => super::moat::roll(roll(1), roll(2), p, false).map(|m| super::moat::Plan { level: shaped_level(&ground, &block, m.width), ..m }),
+    };
     let set = super::castle::Setting { follow: false, capital: false, wall_up: false, planned: false, inner: None, hall: false, moat };
-    castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true));
+    // (Buildings drawn by hand in its yard: its own stand clear of them.)
+    let reach = c.reach();
+    let drawn: Vec<Vec<P>> = world
+        .file
+        .edits
+        .created
+        .iter()
+        .filter(|o| o.kind == "building" && !o.removed && o.poly.len() >= 3 && o.poly.iter().any(|q| dist(*q, center) <= reach))
+        .map(|o| o.poly.iter().map(|q| sub(*q, center)).collect())
+        .collect();
+    let keep_shape = match (c.keep_shape.as_deref(), c.keep_poly.is_empty()) {
+        (Some("square"), _) => super::castle::KeepShape::Square,
+        (Some("round"), _) => super::castle::KeepShape::Round,
+        (Some("drawn") | None, false) => super::castle::KeepShape::Drawn(c.keep_poly.iter().map(|q| sub(*q, center)).collect()),
+        _ => super::castle::KeepShape::Rolled,
+    };
+    let asked = super::castle::Asked { gates, keep: keep_shape, drawn };
+    castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true), Some(&asked));
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();
     let kept = keep && l.buildings.last().is_some_and(|b| b.keep.is_some() && b.func.is_none());
@@ -605,6 +632,43 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     if c.structure.as_deref() == Some("ruin") {
         ruin_works(l, rng);
     }
+}
+
+/// Whether a hand castle's ground as shaped by hand (plateaus, the brush) holds a wet moat
+/// (`moat::level_enough`: its inside on a 10-ft lattice, its moat's line every 10 ft), where shaping
+/// reaches it and changes it there; else None (its own survey says, as for any castle).
+fn shaped_level(ground: &Open, block: &[P], width: f64) -> Option<bool> {
+    let shaped = |p: P| ground.shore.shaped_ground(add(p, ground.center));
+    let (mut inside, mut line, mut moved) = (Vec::new(), Vec::new(), false);
+    let mut take = |p: P, out: &mut Vec<f64>| {
+        if let Some(h) = shaped(p) {
+            moved |= (h - ground.height(p)).abs() > 0.5;
+            out.push(h);
+        }
+    };
+    let b = block.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+    let (i0, j0) = (crate::core::ceil(b[0] / 10.0) as i64, crate::core::ceil(b[1] / 10.0) as i64);
+    let (i1, j1) = (crate::core::floor(b[2] / 10.0) as i64, crate::core::floor(b[3] / 10.0) as i64);
+    for j in j0..=j1 {
+        for i in i0..=i1 {
+            let p = [i as f64 * 10.0, j as f64 * 10.0];
+            if contains(block, p) && !ground.wet(p) {
+                take(p, &mut inside);
+            }
+        }
+    }
+    // (The moat's middle line, out from each side: the block runs anticlockwise.)
+    let n = block.len();
+    let out = super::moat::BERM + 0.5 * width - super::castle::CURTAIN_IN;
+    for k in 0..n {
+        let (a, z) = (block[k], block[(k + 1) % n]);
+        let u = mul(sub(z, a), 1.0 / dist(a, z).max(1e-9));
+        let steps = crate::core::ceil(dist(a, z) / 10.0).max(1.0) as usize;
+        for s in 0..=steps {
+            take(add(lerp(a, z, s as f64 / steps as f64), mul([u[1], -u[0]], out)), &mut line);
+        }
+    }
+    moved.then(|| super::moat::level_enough(&inside, &line, super::castle::FLAT_FT))
 }
 
 /// A ruin's works: every building a roofless shell (the keep still the castle), some stretches

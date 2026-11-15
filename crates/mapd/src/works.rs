@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::town::pieces;
-use worldgen::world::{BuildingEdit, CASTLE_MAX_FT, CASTLE_MIN_FT, CastlePiece, Created, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
+use worldgen::world::{BuildingEdit, CASTLE_MAX_FT, CASTLE_MAX_GATES, CASTLE_MIN_FT, CastlePiece, Created, KEEP_SHAPES, MOATS, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
 
 use crate::Shared;
 use crate::tools::{found, schema, text};
@@ -15,10 +15,13 @@ const SQUARE_FT: f64 = 5.0;
 pub fn props() -> Value {
     let pt = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 });
     json!({
-        "poly": { "type": "array", "items": pt, "minItems": 3, "maxItems": 32, "description": format!("A castle's outline: convex corners in order, {CASTLE_MIN_FT} to {CASTLE_MAX_FT} ft across") },
+        "poly": { "type": "array", "items": pt, "minItems": 3, "maxItems": 32, "description": format!("A castle's outline: corners in order (it may turn inward, not cross itself), {CASTLE_MIN_FT} to {CASTLE_MAX_FT} ft across") },
         "rect": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "width_ft": { "type": "number" }, "depth_ft": { "type": "number" }, "angle_deg": { "type": "number", "default": 0 } }, "required": ["x_ft", "y_ft", "width_ft", "depth_ft"], "description": "Instead of poly: a rectangle about its middle (angle_deg clockwise from east)" },
-        "gate": { "type": "integer", "minimum": 0, "description": "A castle's gate: its side (corner gate to the next); else facing a road" },
+        "gate": { "type": "integer", "minimum": 0, "description": "A castle's gate: its side (corner gate to the next); else facing a road (several: gates)" },
         "keep": { "type": "boolean", "default": true, "description": "A castle's keep in the yard" },
+        "keep_shape": { "type": "string", "enum": KEEP_SHAPES.iter().chain(&["auto"]).collect::<Vec<_>>(), "description": "A castle's keep: square (a keep of pieces, never a shell keep), round (a round great tower), drawn (keep_poly); auto: as rolled" },
+        "keep_poly": { "type": "array", "items": pt, "minItems": 3, "maxItems": 32, "description": "A castle's keep drawn by hand: its outline, 12 ft or more inside the castle's" },
+        "moat": { "type": "string", "enum": MOATS.iter().chain(&["auto"]).collect::<Vec<_>>(), "description": "A castle's moat: none, dry (a ditch) or wet; auto: by roll, wet where water lies near and the ground (as shaped) is level" },
         "yard_buildings": { "type": "boolean", "default": true, "description": "Barracks, stables, a smithy... along the inside of the walls" },
         "structure": { "type": "string", "enum": STRUCTURES, "description": "Roofed (default) or in ruins" },
         "keep_func": { "type": "string", "description": "The keep's business (a list_names key) or home; auto: the castle itself" },
@@ -27,7 +30,7 @@ pub fn props() -> Value {
         "settlement": { "type": "string", "description": "With around_patches: the town (its id)" },
         "around_patches": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 1, "maxItems": 256, "description": "Instead of pts: a closed wall round these patches of the settlement's plan (get_town_plan); give it again after moving corners" },
         "street_gates": { "type": "boolean", "default": false, "description": "A gate on every street crossing the wall (else only roads and main streets)" },
-        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "maxItems": 256, "description": "Corners (indices into its line) that are gates" },
+        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "maxItems": 256, "description": format!("A wall's corners (indices into its line) that are gates; a castle's sides (corner g to the next) with a gate in their middle, the first the main one, {CASTLE_MAX_GATES} at most (replaces gate)") },
         "closed": { "type": "boolean", "default": false, "description": "A wall's last corner joins its first (a ring)" },
         "snap": { "type": "boolean", "default": true, "description": "Snap corners to the 5-ft grid" },
         "remove_in_way": { "type": "boolean", "default": false, "description": "Take away the world's buildings in its way (else refused)" },
@@ -40,7 +43,7 @@ pub fn list() -> Vec<Value> {
         m.insert("id".into(), json!({ "type": "string", "description": "A castle or wall drawn by hand (its created id c:<n>)" }));
         m.insert("name".into(), json!({ "type": "string" }));
     }
-    vec![json!({ "name": "update_fortification", "title": "Change a castle or wall", "description": "Change a castle or wall made with create_feature: outline (poly or rect), line (pts), gate or gates, keep, keep_func, keep_name, yard_buildings, structure, closed, name. Fields left out stay; checked like a new one. delete_feature takes it away.", "inputSchema": schema(update, &["id"]) })]
+    vec![json!({ "name": "update_fortification", "title": "Change a castle or wall", "description": "Change a castle or wall made with create_feature: outline (poly or rect), line (pts), gate or gates, keep, keep_shape, keep_poly, keep_func, keep_name, yard_buildings, moat, structure, closed, name. Fields left out stay; checked like a new one. delete_feature takes it away.", "inputSchema": schema(update, &["id"]) })]
 }
 
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
@@ -103,16 +106,55 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
             if c.gate.is_some_and(|g| g as usize >= p.len()) {
                 c.gate = None;
             }
+            c.gates.retain(|g| (*g as usize) < p.len());
             c.poly = p;
+        }
+        if let Some(g) = a["gates"].as_array() {
+            let mut sides: Vec<u32> = Vec::new();
+            for v in g {
+                let k = v.as_u64().filter(|k| *k < 1000).ok_or("gates: the sides' indices")? as u32;
+                if !sides.contains(&k) {
+                    sides.push(k);
+                }
+            }
+            (c.gate, c.gates) = (None, sides);
         }
         match &a["gate"] {
             Value::Null => {}
-            v => c.gate = Some(v.as_u64().filter(|g| *g < 1000).ok_or("gate: a side's index")? as u32),
+            v => {
+                let g = v.as_u64().filter(|g| *g < 1000).ok_or("gate: a side's index")? as u32;
+                c.gates.retain(|k| *k != g);
+                c.gate = Some(g);
+            }
+        }
+        if let Some(k) = a["keep_poly"].as_array().map(|_| corners(a, "keep_poly")).transpose()?.flatten() {
+            c.keep_poly = k;
+            if c.keep_shape.as_deref() != Some("drawn") {
+                c.keep_shape = None;
+            }
+        }
+        match a["keep_shape"].as_str() {
+            None => {}
+            Some("auto") => (c.keep_shape, c.keep_poly) = (None, Vec::new()),
+            Some(k) => {
+                if k != "drawn" {
+                    c.keep_poly.clear();
+                }
+                c.keep_shape = Some(k.to_string());
+            }
+        }
+        match a["moat"].as_str() {
+            None => {}
+            Some("auto") => c.moat = None,
+            Some(m) => c.moat = Some(m.to_string()),
         }
         for (k, slot) in [("keep", &mut c.keep), ("yard_buildings", &mut c.yard_buildings)] {
             if let Some(b) = a[k].as_bool() {
                 *slot = (!b).then_some(false);
             }
+        }
+        if a["keep"].as_bool() == Some(false) && a["keep_shape"].is_null() && a["keep_poly"].is_null() {
+            (c.keep_shape, c.keep_poly) = (None, Vec::new());
         }
         if let Some(s) = a["structure"].as_str() {
             c.structure = Some(s.to_string()).filter(|s| s != "roofed");
