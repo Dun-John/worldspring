@@ -136,3 +136,13 @@ export function shotStones(g: Graphics, r: number, rnd: () => number, v: number)
   for (const [x, y, rr] of lower.sort((a, b) => a[0] + a[1] - (b[0] + b[1]))) round(g, x, y, rr, SHOT);
   for (const [x, y, rr] of top.sort((a, b) => a[0] + a[1] - (b[0] + b[1]))) round(g, x - r * 0.03, y - r * 0.05, rr, SHOT);
 }
+
+/** A ballista as a prop on a floor (a building's roof or tower top, a gatehouse): the field sprite's drawing centred at (cx, cy) in
+ * grid squares, about one square across, aimed along +x. */
+export function ballistaProp(g: Graphics, cx: number, cy: number, v: number) {
+  const r = PX * 0.5;
+  const k = 0.46 / r;
+  g.save().setTransform(k, 0, 0, k, cx, cy);
+  ballista(g, r, () => 0.5, v & 3);
+  g.restore();
+}

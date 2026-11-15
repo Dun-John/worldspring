@@ -13,7 +13,7 @@ export type FromMapd =
   | { type: 'world'; world: WorldFile; store?: string; seq?: number }
   | { type: 'kept'; seq: number }
   | { type: 'ops'; ops: EditOp[]; change: Change; author: string }
-  | { type: 'render'; id: number; x: number; y: number; size: number; width_px?: number; format?: 'jpeg' | 'png' }
+  | { type: 'render'; id: number; x: number; y: number; size: number; width_px?: number; format?: 'jpeg' | 'png'; inside?: { id: string; level: number } | null }
   | { type: 'focus'; x: number; y: number; size: number }
   | { type: 'follow'; following: boolean; refused?: EditOp[] }
   | { type: 'resync' }
@@ -64,7 +64,7 @@ export class MapdSync {
   onWorld: (w: WorldFile, mine: EditOp[]) => boolean = () => true;
   onOps: (ops: EditOp[], change: Change, author: string) => void = () => {};
   /** A screenshot request: resolve with a PNG data URL. */
-  onRender: (x: number, y: number, size: number) => Promise<string> = () => Promise.reject(new Error('no map'));
+  onRender: (x: number, y: number, size: number, inside?: { id: string; level: number } | null) => Promise<string> = () => Promise.reject(new Error('no map'));
   onFocus: (x: number, y: number, size: number) => void = () => {};
   /** mapd remade the world open here (an agent's `regenerate`): `file` is the world remade, with
    * the edits as they followed their places; `gone`: the settlements its sketch took away. */
@@ -284,7 +284,7 @@ export class MapdSync {
     }
     else if (m.type === 'render') {
       try {
-        this.send({ type: 'answer', id: m.id, image: await encodeShot(await this.onRender(m.x, m.y, m.size), m.width_px, m.format) });
+        this.send({ type: 'answer', id: m.id, image: await encodeShot(await this.onRender(m.x, m.y, m.size, m.inside), m.width_px, m.format) });
       } catch (err) {
         this.send({ type: 'answer', id: m.id, error: String(err) });
       }

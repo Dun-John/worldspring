@@ -403,7 +403,7 @@ impl Plan {
             }
         }
         let (floor, ramps) = crate::interior::height::encode(&self.floor(ny));
-        Level { z, name, elevation_ft, cells: self.cells, rooms, walls, doors, windows: Vec::new(), furniture: self.items, roof: false, has_stairs: false, natural: self.natural, paths: self.paths, rim: self.rim, links: self.links, floor, ramps }
+        Level { z, name, elevation_ft, cells: self.cells, rooms, walls, doors, windows: Vec::new(), furniture: self.items, roof: false, has_stairs: false, natural: self.natural, paths: self.paths, rim: self.rim, links: self.links, floor, ramps, landing: None }
     }
 }
 

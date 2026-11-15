@@ -11,6 +11,7 @@ pub mod gazetteer;
 pub mod geoquery;
 pub mod ground;
 pub mod interior;
+pub mod links;
 pub mod lod;
 pub mod park;
 pub mod payload;

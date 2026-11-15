@@ -872,7 +872,7 @@ fn site(
         if d == 0 && kind == UnderKind::KeepDungeon {
             // Up into the keep's cellar; and an old escape tunnel out to the sewers.
             p.put(Item::new("up", "stairs up to the keep", here % nx, here / nx, 1, 1, 0, false, 0.0, None));
-            p.links.push(Link { x: (here % nx) as u16, y: (here / nx) as u16, to: format!("b:{settlement}:{building}") });
+            p.links.push(Link { x: (here % nx) as u16, y: (here / nx) as u16, to: format!("b:{settlement}:{building}"), id: String::new(), far: None });
             if let Some(q) = l.building(building as usize).and_then(|b| keep_escape(t0, l, b)) {
                 let g = sub(q, f.origin);
                 let at = [crate::town::geom::dot(g, f.axis) / SQUARE_FT, crate::town::geom::dot(g, f.across) / SQUARE_FT];
@@ -882,7 +882,7 @@ fn site(
                 });
                 if let Some(k) = free {
                     p.put(Item::new("tunnel", "escape tunnel to the sewers", k % nx, k / nx, 1, 1, 0, false, 0.0, Some("hidden: DC 15 Perception to find")));
-                    p.links.push(Link { x: (k % nx) as u16, y: (k / nx) as u16, to: sewer_id(settlement as usize, q) });
+                    p.links.push(Link { x: (k % nx) as u16, y: (k / nx) as u16, to: sewer_id(settlement as usize, q), id: String::new(), far: None });
                 }
             }
         } else if d > 0 {

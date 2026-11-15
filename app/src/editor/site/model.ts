@@ -76,14 +76,16 @@ export function rectSquares(d: SiteDesign, x0: number, y0: number, x1: number, y
   return out;
 }
 
-/** A door's flag bits: 1 secret; a lock's colour (1-7) in bits 4-6 (`(lock & 7) << 4`, as the generator reads them);
+/** A door's flag bits: 1 secret; a lock's colour (1-31): the low three bits in bits 4-6 (`(lock & 7) << 4`, as the first seven always were), the
+ * rest in bits 8-11 (`(lock >> 3) << 8`, above the portcullis; `lock_flags` in the generator);
  * 128 a portcullis (an iron grate: shut, it stops a step but not the eye). */
 export const SECRET = 1;
 export const PORTCULLIS = 128;
-export const lockOf = (flags: number) => (flags >> 4) & 7;
-const withLock = (flags: number, lock: number) => (flags & ~(7 << 4)) | (lock << 4);
+export const MAX_LOCK = 31;
+export const lockOf = (flags: number) => Math.min(MAX_LOCK, ((flags >> 4) & 7) | (((flags >> 8) & 15) << 3));
+const withLock = (flags: number, lock: number) => (flags & ~((7 << 4) | (15 << 8))) | ((lock & 7) << 4) | (((lock >> 3) & 15) << 8);
 
-/** A door on an edge. With a lock's colour 1-7 chosen: none → a door (a portcullis with the tool) with that lock; any
+/** A door on an edge. With a lock's colour 1-31 chosen: none → a door (a portcullis with the tool) with that lock; any
  * door there, of either kind, gets that lock or loses it if it has it already. With no lock chosen: the plain-door tool
  * goes none → door → secret door → none and turns a portcullis into a plain door; the portcullis tool goes none →
  * portcullis → none and turns a door into a portcullis (a lock on it stays as it was). */
@@ -222,6 +224,12 @@ export function setWayDown(d: SiteDesign, li: number, x: number, y: number) {
   below.items = below.items.filter((f) => f.kind !== 'up' && !covers(f, x, y));
   below.items.unshift({ kind: 'up', x, y, w: 1, h: 1 });
   landing(d, li - 1, x, y);
+}
+
+/** Where the stairs come out on a level set by hand (a floor square; null: as generated). */
+export function setLanding(d: SiteDesign, li: number, at: [number, number] | null) {
+  if (at) d.levels[li].landing = at;
+  else delete d.levels[li].landing;
 }
 
 /** Rock round (x, y) on a level made a landing (3 × 3, inside the grid), if (x, y) is rock. */

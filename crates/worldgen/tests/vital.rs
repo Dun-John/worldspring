@@ -1587,6 +1587,15 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
         });
         d = put.unwrap_or_else(|| panic!("{id}: no room in the study for {kind}"));
     }
+    // (A ballista on any free square of the ground floor.)
+    for (kind, variant) in [("ballista", None)] {
+        let put = (0..cells.len()).filter(|&k| cells[k] >= 0).find_map(|k| {
+            let mut t = d.clone();
+            t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1, back: None, variant });
+            t.problems(&ws, t0, &id).unwrap().1.iter().all(|p| !p.blocking).then_some(t)
+        });
+        d = put.unwrap_or_else(|| panic!("{id}: no square for a {kind}"));
+    }
     let (built, problems) = d.problems(&ws, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     let floor = &built.levels[built.entry_level].furniture;
@@ -2333,6 +2342,109 @@ fn underground_guarantee() {
     assert!(shaped_rooms > 100, "too few shaped rooms built ({shaped_rooms})");
     designed_site(&world, &t0);
     designed_cellars(&world, &t0);
+    paired_links(&world, &t0);
+}
+
+/// Links put down by hand (`Edits::links`): between a site's deepest level and a sewer section,
+/// the section and a cellar, and two levels of one site; each end shows on its own map as a
+/// `link` item on floor, reached from the level's way in, its way naming the far end; places no
+/// link names build as before.
+fn paired_links(world: &World, t0: &worldgen::t0::T0) {
+    use worldgen::interior::{self, Interior, Level};
+    use worldgen::links::{self, End, Link};
+    use worldgen::town;
+    use worldgen::under::UnderKind;
+    // (A created site of two levels: `underground_guarantee`'s second.)
+    let site = format!("u:{}:0", t0.settlements.len() + t0.base_pois + 1);
+    let (sewer, cellar, other) = (0..t0.settlements.len())
+        .find_map(|li| {
+            let l = town::layout(world, t0, li);
+            let e = l.entrances.iter().find(|e| e.kind == UnderKind::Sewer)?;
+            let q = worldgen::under::sewer_section(e.at);
+            let s = worldgen::under::SEWER_SECTION_FT;
+            let b = l.buildings.iter().find(|b| worldgen::under::sewer_link_of(t0, &l, b).is_some())?;
+            let other = l.entrances.iter().find(|e| e.kind != UnderKind::Sewer).map(|e| format!("u:{li}:{}", e.id))?;
+            Some((format!("w:{li}:{}:{}", (q[0] / s) as i64, (q[1] / s) as i64), format!("b:{li}:{}", b.id), other))
+        })
+        .expect("a city with sewers, a cellar on them and a site underground");
+    let built = |w: &World, id: &str| interior::generate_id(w, t0, id).unwrap_or_else(|| panic!("{id}: no interior"));
+    // A free floor square of a level (one with furniture that may move on it, if there is one).
+    let spot = |id: &str, li: usize, avoid: &[(u16, u16)]| -> End {
+        let it = built(world, id);
+        let ok = |x: u16, y: u16| !avoid.contains(&(x, y)) && links::spot_problem(&it, id, li, x, y).is_none();
+        let lv = &it.levels[li];
+        let under = lv.furniture.iter().filter(|f| !f.blocks_move && f.w == 1 && f.h == 1).map(|f| (f.x, f.y)).find(|&(x, y)| ok(x, y));
+        let any = (0..it.nx * it.ny).map(|k| ((k % it.nx) as u16, (k / it.nx) as u16)).find(|&(x, y)| ok(x, y));
+        let (x, y) = under.or(any).unwrap_or_else(|| panic!("{id} level {li}: no square for a link"));
+        End { level: links::level_id(id, li), x, y }
+    };
+    let top = built(world, &site).levels.len() - 1;
+    assert!(top > 0, "{site}: one level");
+    let cellar_li = built(world, &cellar).levels.iter().position(|l| l.z < 0).expect("a cellar");
+    let (deep, up_top) = (spot(&site, 0, &[]), spot(&site, top, &[]));
+    let (deep2, up_top2) = (spot(&site, 0, &[(deep.x, deep.y)]), spot(&site, top, &[(up_top.x, up_top.y)]));
+    let in_sewer = spot(&sewer, 0, &[]);
+    let in_sewer2 = spot(&sewer, 0, &[(in_sewer.x, in_sewer.y)]);
+    let mut file = world.file.clone();
+    let mut put = |k: &str, a: &End, b: &End, way: &str| {
+        file.edits.links.insert(k.into(), Link { a: a.clone(), b: b.clone(), way: way.into(), name: None });
+    };
+    put("j:a", &deep, &in_sewer, "ladder");
+    put("j:b", &in_sewer2, &spot(&cellar, cellar_li, &[]), "trapdoor");
+    put("j:c", &up_top, &deep2, "passage");
+    // (An end on j:a's square: the second link there is not shown.)
+    put("j:d", &up_top2, &deep, "rope");
+    let w2 = World::new(file).unwrap();
+    let edits = &w2.file.edits;
+    let blocked_ok = ["j:d"];
+    // Squares reached from `start` over floor, between rooms only through doors (any step on a natural level), round blocking furniture.
+    let reached = |it: &Interior, lv: &Level, start: usize| {
+        let (nx, ny) = (it.nx, it.ny);
+        let blocks = worldgen::under::blocked_squares(&lv.furniture, nx, ny);
+        let door = |a: usize, b: usize| {
+            let (ia, ja, ib, jb) = ((a % nx) as f32, (a / nx) as f32, (b % nx) as f32, (b / nx) as f32);
+            let (p, q) = if ja == jb { ([ia.max(ib), ja], [ia.max(ib), ja + 1.0]) } else { ([ia, ja.max(jb)], [ia + 1.0, ja.max(jb)]) };
+            lv.doors.iter().any(|d| (d.a == p && d.b == q) || (d.a == q && d.b == p))
+        };
+        let mut seen = vec![false; nx * ny];
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(k) = stack.pop() {
+            let (i, j) = (k % nx, k / nx);
+            for q in [(i > 0).then(|| k - 1), (i + 1 < nx).then(|| k + 1), (j > 0).then(|| k - nx), (j + 1 < ny).then(|| k + nx)].into_iter().flatten() {
+                if !seen[q] && lv.cells[q] >= 0 && !blocks[q] && (lv.natural || lv.cells[q] == lv.cells[k] || door(k, q)) {
+                    seen[q] = true;
+                    stack.push(q);
+                }
+            }
+        }
+        seen
+    };
+    for (key, l) in &edits.links {
+        let problems = links::problems(&w2, t0, key, l);
+        if blocked_ok.contains(&key.as_str()) {
+            assert!(problems.len() == 1 && problems[0].contains("already leads elsewhere"), "{key}: {problems:?}");
+            continue;
+        }
+        assert!(problems.is_empty(), "{key}: {problems:?}");
+        for (here, there) in [(&l.a, &l.b), (&l.b, &l.a)] {
+            let (id, li) = links::site_of(&here.level).unwrap();
+            let it = built(&w2, id);
+            let lv = &it.levels[li];
+            let (x, y) = (here.x, here.y);
+            let item: Vec<_> = lv.furniture.iter().filter(|f| x >= f.x && x < f.x + f.w && y >= f.y && y < f.y + f.h).collect();
+            assert!(item.len() == 1 && item[0].kind == links::KIND && !item[0].blocks_move, "{key} at {}: {:?} on its square", here.level, item.iter().map(|f| f.kind).collect::<Vec<_>>());
+            let way = lv.links.iter().find(|w| w.id == *key && (w.x, w.y) == (x, y)).unwrap_or_else(|| panic!("{key}: no way at {}", here.level));
+            let far = way.far.as_ref().unwrap();
+            assert_eq!((way.to.as_str(), links::level_id(&way.to, far.level), far.x, far.y), (links::site_of(&there.level).unwrap().0, there.level.clone(), there.x, there.y), "{key}: the way leads elsewhere");
+            // (From the way onto the level: the way in or up, else a cellar's stairs.)
+            let at = |kind: &str| lv.furniture.iter().find(|f| f.kind == kind).map(|f| f.y as usize * it.nx + f.x as usize);
+            let start = at("exit").or_else(|| at("up")).unwrap_or(it.stairs[1] * it.nx + it.stairs[0]);
+            assert!(reached(&it, lv, start)[y as usize * it.nx + x as usize], "{key} at {}: not reached from the way in", here.level);
+        }
+    }
+    // A place no link names builds as before.
+    assert_eq!(serde_json::to_string(&built(&w2, &other)).unwrap(), serde_json::to_string(&built(world, &other)).unwrap(), "{other}: changed by links elsewhere");
 }
 
 /// Cellars designed where they lead on: a large keep's and a cellar on the sewers dug two deep
@@ -2449,6 +2561,21 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     let (it, problems) = d.problems(world, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     assert_eq!(it.levels[0].doors.len(), 1, "{id}: one door from the landing into the vault");
+    // A lock of colour 12 (door flags bits 8-11) on that door builds and reads back; the first seven keep bits 4-6.
+    let mut locked = d.clone();
+    locked.levels[0].doors[0][3] |= worldgen::interior::design::lock_flags(12);
+    assert_eq!(locked.levels[0].doors[0][3] >> 4 & 7, 4, "{id}: the low bits of lock 12");
+    assert_eq!(worldgen::interior::design::lock_flags(5), 5 << 4, "{id}: an old lock colour's flags changed");
+    let (lit, lp) = locked.problems(world, t0, &id).unwrap();
+    assert!(lit.levels[0].doors[0].lock == 12 && lp.iter().any(|p| p.text.contains("lock 12") && p.text.contains("no key")), "{id}: lock 12: {lp:?}");
+    assert!(design::from_text(&design::to_text(&locked, &|_, _| None).unwrap(), &base).unwrap().0 == locked, "{id}: the lock 12 doesn't read back");
+    // A landing set by hand: the way up must sit on it.
+    let mut lands = d.clone();
+    lands.levels[0].landing = Some([x as u16 - 1, y as u16]);
+    assert!(lands.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.text.contains("not at the landing")), "{id}: a way up off its landing");
+    lands.levels[0].items.iter_mut().filter(|f| f.kind == "up").for_each(|f| f.x -= 1);
+    assert!(lands.problems(world, t0, &id).unwrap().1.iter().all(|p| !p.blocking), "{id}: the way up on its landing refused");
+    assert!(design::from_text(&design::to_text(&lands, &|_, _| None).unwrap(), &base).unwrap().0 == lands, "{id}: the landing doesn't read back");
     let chest = it.levels[0].furniture.iter().find(|f| f.kind == "chest").expect("the chest");
     assert!((chest.back, chest.variant) == (Some(1), Some(2)), "{id}: the chest's side and look: {chest:?}");
     let text = design::to_text(&d, &|_, _| None).unwrap();

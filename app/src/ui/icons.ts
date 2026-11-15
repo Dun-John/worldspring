@@ -118,6 +118,14 @@ export const ICONS = {
   hide: '<path d="m3 3 18 18"/><path d="M10.6 5.1Q11.3 5 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.8 9.8 0 0 0 5.4-1.6"/>',
   home: '<path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  // The ways a paired exit goes (stairs and corridor serve too).
+  ladder: '<path d="M8 3v18M16 3v18M8 7h8M8 12h8M8 17h8"/>',
+  trapdoor: '<rect x="4" y="5" width="16" height="14" rx="1"/><path d="M4 12h16"/><path d="M11 15.5h2"/>',
+  rope: '<circle cx="9" cy="8" r="4"/><circle cx="9" cy="8" r="1.2"/><path d="M13 8c3 0 4 3 3 6s-2 5-1 7"/>',
+  portal: '<ellipse cx="12" cy="12" rx="6" ry="9"/><ellipse cx="12" cy="12" rx="3" ry="5.5"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
+
+/** A paired exit's way (`LINK_WAYS`) as an icon. */
+export const WAY_ICONS: Record<string, IconName> = { stairs: 'stairs', ladder: 'ladder', passage: 'corridor', trapdoor: 'trapdoor', rope: 'rope', portal: 'portal' };

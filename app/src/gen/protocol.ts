@@ -192,11 +192,11 @@ export type Tint = 'terracotta' | 'slate' | 'thatch' | 'shingle' | 'moss';
 export const TINTS: Tint[] = ['terracotta', 'slate', 'thatch', 'shingle', 'moss'];
 /** Roof materials by id (`worldgen::town::roof::MATERIALS`, append-only) and their base colours (the
  * old tints' materials keep the tints' colours: `roof::TINT_MATERIAL`). */
-export type RoofMaterial = 'thatch' | 'slate' | 'clay_tile' | 'shingle' | 'turf' | 'lead' | 'copper' | 'glazed_tile' | 'flat_clay' | 'hide' | 'plank' | 'whitewash';
-export const ROOF_MATERIALS: RoofMaterial[] = ['thatch', 'slate', 'clay_tile', 'shingle', 'turf', 'lead', 'copper', 'glazed_tile', 'flat_clay', 'hide', 'plank', 'whitewash'];
+export type RoofMaterial = 'thatch' | 'slate' | 'clay_tile' | 'shingle' | 'turf' | 'lead' | 'copper' | 'glazed_tile' | 'flat_clay' | 'hide' | 'plank' | 'whitewash' | 'stone';
+export const ROOF_MATERIALS: RoofMaterial[] = ['thatch', 'slate', 'clay_tile', 'shingle', 'turf', 'lead', 'copper', 'glazed_tile', 'flat_clay', 'hide', 'plank', 'whitewash', 'stone'];
 /** The materials the old tints map to (`roof::TINT_MATERIAL`). */
 export const TINT_MATERIAL: Record<Tint, RoofMaterial> = { terracotta: 'clay_tile', slate: 'slate', thatch: 'thatch', shingle: 'shingle', moss: 'turf' };
-export const ROOF_MATERIAL_RGB = [0xa88b5c, 0x5c6470, 0x995742, 0x7a6656, 0x7f7b54, 0x7c848c, 0x6a9282, 0x4a718b, 0xb89a72, 0x9c8a6c, 0x86684a, 0xc4baa7];
+export const ROOF_MATERIAL_RGB = [0xa88b5c, 0x5c6470, 0x995742, 0x7a6656, 0x7f7b54, 0x7c848c, 0x6a9282, 0x4a718b, 0xb89a72, 0x9c8a6c, 0x86684a, 0xc4baa7, 0x8d8a82];
 /** Five colours per material (`Look.shade` 0-4, matte; index 2 is `ROOF_MATERIAL_RGB`, the usual one). Slate
  * keeps two hues (cool grey, warm grey-moss), glaze is dusty (saturation about 0.5), plaster a warm cream. */
 export const ROOF_SHADES = [
@@ -212,6 +212,7 @@ export const ROOF_SHADES = [
   [0x7c6a52, 0x8a7c64, 0x9c8a6c, 0xaa9a7c, 0x9a7e66], // hide: dark, grey, tan, pale, reddish
   [0x6e5a44, 0x7a6a56, 0x86684a, 0x94744e, 0x8a6a56], // plank: dark, grey, brown, warm, rosy
   [0xb6b3aa, 0xbdb399, 0xc4baa7, 0xcbc1ae, 0xbdac96], // whitewash: cool, cream, lime, bright, sand
+  [0x74726c, 0x827e72, 0x8d8a82, 0x9b968a, 0x7a7770], // stone: dark, warm, grey, pale, weathered
 ];
 /** Felt for a round roof (`Roof.shade` 0-4): cream, off-white, grey, warm cream, dusty grey (a felt hall's). */
 export const FELT = [0xc9bea6, 0xc4bdad, 0xaea595, 0xc2b394, 0xa39a88];
@@ -283,6 +284,35 @@ export interface Note {
   at?: [number, number];
 }
 
+/** How a link put down by hand goes (`links::WAYS`; the first is the default). */
+export const LINK_WAYS = ['stairs', 'ladder', 'passage', 'trapdoor', 'rope', 'portal'] as const;
+/** One end of a link put down by hand: a level id and a square on it. */
+export interface LinkEnd {
+  level: string;
+  x: number;
+  y: number;
+}
+/** A paired exit put down by hand (`Edits.links`). */
+export interface LinkEdit {
+  a: LinkEnd;
+  b: LinkEnd;
+  way: string;
+  name?: string;
+}
+
+/** The sites at either end of the paired exits that differ between two edits' `links`. */
+export function linkSites(a: Record<string, LinkEdit> | undefined, b: Record<string, LinkEdit> | undefined): Set<string> {
+  const out = new Set<string>();
+  if (a === b) return out;
+  const [pa, pb] = [a ?? {}, b ?? {}];
+  const site = (level: string) => level.slice(2, level.lastIndexOf(':'));
+  for (const id of new Set([...Object.keys(pa), ...Object.keys(pb)])) {
+    if (JSON.stringify(pa[id]) === JSON.stringify(pb[id])) continue;
+    for (const l of [pa[id], pb[id]]) if (l) for (const e of [l.a, l.b]) out.add(site(e.level));
+  }
+  return out;
+}
+
 export interface Edits {
   renames?: Record<string, string>;
   notes?: Record<string, Note>;
@@ -323,6 +353,11 @@ export interface Edits {
    * `<layout>/n<id>` a junction, `/e<id>` a street, `/k<id>` a block, `/r<id>` a row, `/a<id>` a
    * painted area, `/m<id>` a wall line; `lanes/…` lanes outside any town. Positions in world ft. */
   streets?: Record<string, unknown>;
+  /** Paired exits put down by hand (`j:<id>`; `crates/worldgen/src/links.rs`): two ends, each a
+   * level (`l:<site>:<level>`, levels from the bottom: a site underground `u:`/`k:`, a sewer section
+   * `w:<layout>:<sx>:<sy>`, a building's cellar `b:`) and a square on it; each shows on its own map as a
+   * `link` item with a way in the level's `links` (`far`). `way` one of `LINK_WAYS`. */
+  links?: Record<string, LinkEdit>;
 }
 
 /** An overland hex grid (`worldgen::world::HexGrid`; each field left out: its default, `HEX_DEFAULTS`):
@@ -610,8 +645,8 @@ export interface DesignLevel {
    * roomShapes.ts` `SHAPES`; absent or 0 square), while its squares fit the shape. */
   rooms: { kind: string; raise_ft: number; shape?: number }[];
   /** x, y, side (0 east, 1 south; a building's also 2 west, 3 north), flags (1 secret; a
-   * building's door to the outside: 2 front, 4 back, 8 arch; underground, bits 4-6: `(lock & 7) << 4`, a
-   * lock's colour 1-7; 128 a portcullis between two rooms). */
+   * building's door to the outside: 2 front, 4 back, 8 arch; a lock's colour 1-31: its low three bits in bits
+   * 4-6 (`(lock & 7) << 4`), the rest in bits 8-11 (`(lock >> 3) << 8`); 128 a portcullis between two rooms). */
   doors: [number, number, number, number][];
   /** Props and the ways (`exit`, `up`, `down`), in order; a building's furniture. `back`: the
    * side it stands against (0 north 1 east 2 south 3 west), `variant`: one of its looks (0-3, more for a few);
@@ -621,6 +656,8 @@ export interface DesignLevel {
   z?: number;
   roof?: boolean;
   has_stairs?: boolean;
+  /** Where the stairs come out here (a building's: off its stair block; a site's: its way up, else under the way down above). */
+  landing?: [number, number];
 }
 
 /** Something wrong with a design (`worldgen::under::design::Problem`); `blocking` ones keep it
@@ -914,6 +951,8 @@ export interface InteriorLevel {
   roof: boolean;
   /** The main stair block reaches this level (not a keep's tower tops). */
   has_stairs: boolean;
+  /** Where the stairs come out, if set by hand (`DesignLevel.landing`). */
+  landing?: [number, number];
   /** Hewn or natural rock (caves, mines): rooms open into each other; walls only at rock. */
   natural: boolean;
   /** Lines the floor follows (sewers: the streets above): x0, y0, x1, y1, reach (grid). */
@@ -922,7 +961,15 @@ export interface InteriorLevel {
   rim?: [number, number][];
   /** Ways to other sites (cellar trapdoors, stairs to deep dungeons, sewer ladders): the
    * square and the site's id; the other site has a way straight back. */
-  links?: { x: number; y: number; to: string }[];
+  links?: {
+    x: number;
+    y: number;
+    to: string;
+    /** A link put down by hand (`Edits.links`): its id, and where it comes out (the far site `to`'s
+     * level index, from the bottom, and square; that site's name; the link's own name; its way). */
+    id?: string;
+    far?: { level: number; x: number; y: number; name: string; label?: string; way: string };
+  }[];
   /** Floor height per square (underground sites; `interior::height`): a character per square (row-major), its
    * code - 48 the height above `elevation_ft` in half feet; absent where the level is flat. Read it with
    * `gen/floor.ts`. */

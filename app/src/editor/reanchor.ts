@@ -1,7 +1,7 @@
 // What the edits hold on a place, where a layout stands, and an upgraded world's edits set
 // aside. A world remade from a changed sketch moves its edits with their places in the generator
 // (`crates/worldgen/src/t0/remap.rs`: `follow_json`), not here.
-import type { Edits, Feature, Npc, Overlay, Plot, Stroke } from '../gen/protocol';
+import type { Edits, Feature, LinkEdit, Npc, Overlay, Plot, Stroke } from '../gen/protocol';
 import { LAYOUT_ID_FIELDS, PARKED_LAYOUT } from '../sync/ops';
 import { SETTLEMENT_KINDS, SITE_KINDS, WAS_ID } from '../ui/gazetteer';
 
@@ -15,6 +15,10 @@ function eachId(edits: Edits, f: (id: string) => void) {
     else if (where === 'townPrefixed') for (const k of Object.keys(v)) { const h = townHead(k); if (h) f(`t:${h[0]}`); }
     else if (where === 'values') for (const k of v as string[]) f(k);
     else if (where === 'npcs') for (const n of Object.values(v as Record<string, Npc>)) n.location && f(n.location.id);
+    else if (where === 'links') for (const l of Object.values(v as Record<string, LinkEdit>)) {
+      f(l.a.level);
+      f(l.b.level);
+    }
     else for (const p of Object.values(v as Record<string, Plot>)) for (const k of p.anchors ?? []) f(k);
   }
 }
@@ -64,6 +68,13 @@ function renamed(edits: Edits, rename: (id: string, bare?: boolean) => string): 
       Object.entries(edits.plots).map(([k, p]) => {
         const anchors = (p.anchors ?? []).map((a) => to(a));
         return [k, anchors.some((x, i) => x !== p.anchors[i]) ? { ...p, anchors } : p];
+      }),
+    );
+  if (edits.links)
+    out.links = Object.fromEntries(
+      Object.entries(edits.links).map(([k, l]) => {
+        const [a, b] = [to(l.a.level), to(l.b.level)];
+        return [k, a !== l.a.level || b !== l.b.level ? { ...l, a: { ...l.a, level: a }, b: { ...l.b, level: b } } : l];
       }),
     );
   return { edits: out, n };

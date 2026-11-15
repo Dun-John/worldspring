@@ -21,7 +21,7 @@ use super::geom::P;
 use super::{Building, Layout, RoofStyle, Structure};
 use crate::core::rng::{hash3, unit};
 
-pub const MATERIALS: [&str; 12] = ["thatch", "slate", "clay_tile", "shingle", "turf", "lead", "copper", "glazed_tile", "flat_clay", "hide", "plank", "whitewash"];
+pub const MATERIALS: [&str; 13] = ["thatch", "slate", "clay_tile", "shingle", "turf", "lead", "copper", "glazed_tile", "flat_clay", "hide", "plank", "whitewash", "stone"];
 pub const SHAPES: [&str; 6] = ["hip", "gable", "cone", "dome", "flat", "round"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +39,8 @@ pub enum Material {
     Hide,
     Plank,
     Whitewash,
+    /// Flagstone slabs, set by hand only (drawn with slate's pattern in stone colours).
+    Stone,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,7 +61,7 @@ use Shape::*;
 /// (their colours are those materials' base colours).
 pub const TINT_MATERIAL: [Material; 5] = [ClayTile, Slate, Thatch, Shingle, Turf];
 
-const ALL_MATERIALS: [Material; 12] = [Thatch, Slate, ClayTile, Shingle, Turf, Lead, Copper, GlazedTile, FlatClay, Hide, Plank, Whitewash];
+const ALL_MATERIALS: [Material; 13] = [Thatch, Slate, ClayTile, Shingle, Turf, Lead, Copper, GlazedTile, FlatClay, Hide, Plank, Whitewash, Stone];
 const ALL_SHAPES: [Shape; 6] = [Hip, Gable, Cone, Dome, Flat, Round];
 
 impl Material {

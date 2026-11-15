@@ -6,7 +6,7 @@
   import { ROLE_COLORS, SHAPE_COLORS, TOKEN_COLORS, type PlayController, type Tool } from './controller';
   import { formatDistance } from './vision';
   import Icon from '../ui/Icon.svelte';
-  import type { IconName } from '../ui/icons';
+  import { WAY_ICONS, type IconName } from '../ui/icons';
   import { remember, remembered } from '../ui/shell/layout.svelte';
 
   const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -29,6 +29,7 @@
       sel,
       count: play.selection.size,
       levels: sel ? play.levelsOf(sel) : [],
+      across: sel ? play.linkOf(sel.id) : null,
       settings: play.settingsHere(),
       los: play.state.los,
       grid: { ...play.state.grid },
@@ -265,6 +266,9 @@
             </label>
           {/if}
         </div>
+        {#if v.across}
+          <button class="ws-btn" title="Move it to the other end, and your view with it" onclick={() => void play.stepAcross(t.id)}><Icon name={WAY_ICONS[v.across.way] ?? 'link'} size={16} /> {v.across.label}</button>
+        {/if}
         <div class="ws-row">
           {#if t.kind === 'character'}
             <button class="ws-btn" onclick={() => play.onPickPicture([t.id])}><Icon name="image" size={16} /> Picture…</button>
