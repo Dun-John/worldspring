@@ -43,6 +43,8 @@ const CHUNK_CAP = 24;
 /** Battlemap fades in between these ft-per-pixel values (5-ft square ≈ 7 px → 17 px). */
 const FADE_START = 0.7;
 const FADE_END = 0.3;
+/** How far into that fade (0-1) the objects are already opaque. */
+const OBJECTS_OPAQUE_AT = 0.3;
 /** Chunks are requested a little before they fade in. */
 const REQUEST_BELOW = 1.2;
 
@@ -669,6 +671,7 @@ export class BattlemapLayer {
   update(cam: Camera, now: number): WantTile[] {
     const ftPerPx = 1 / cam.ppf;
     const alpha = Math.min(1, Math.max(0, (FADE_START - ftPerPx) / (FADE_START - FADE_END)));
+    const objectAlpha = Math.min(1, alpha / OBJECTS_OPAQUE_AT);
     this.stats = { chunks: this.chunks.size, alpha };
     this.frame.uniforms.uTime = now / 1000;
     this.covering = false;
@@ -744,10 +747,12 @@ export class BattlemapLayer {
       if (!show) continue;
       c.lastUsed = now;
       const [sx, sy] = cam.worldToScreen(c.x * ts, c.y * ts);
+      // (The objects' layers, low and tall, turn opaque early in the fade, so the town map's paths
+      // under the battlemap's half-faded ground never show through a pond or a statue.)
       for (const p of c.parts) {
         p.position.set(sx, sy);
         p.scale.set(pxPerSq / PX);
-        p.alpha = p === c.decks ? 1 : alpha;
+        p.alpha = p === c.decks ? 1 : p === c.parts[1] || p === c.parts[3] ? objectAlpha : alpha;
       }
       const u = c.uniforms.uniforms;
       u.uAlpha = 1;
