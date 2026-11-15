@@ -4266,11 +4266,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         let w = if sparse { Ward::Park } else { w };
         // (Rolled again by hand: its own streams.)
         let (mut dp, mut prng) = lots_of(i, w, w == Ward::Temple && closes.contains(&i));
-        if w == Ward::Docks && grade > 0.09 {
-            let across = 7.0 / grade;
-            dp.min_sq = dp.min_sq.min((across * across).max(900.0));
-            dp.stepped = true;
-        }
+        docks_on_slope(&mut dp, w, grade);
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
             l.blocks.push(block.clone());
         }
@@ -4931,6 +4927,17 @@ fn castle_moat(s: &Settlement, inner: bool, age: u8, roll: f64, wide: f64) -> Op
     let great = s.capital || s.tier == Tier::Metropolis;
     let p = moat::odds(age as f64 / 90.0, s.kind == crate::t0::settle::SettleKind::Fortress, s.capital || inner, great);
     moat::roll(roll, wide, p, great)
+}
+
+/// (R6 P8) A docks ward on a sloping shore (its block's `Site::grade` over 0.09): lots narrow
+/// enough to stand on the slope (about 7 ft of fall across each), stepped (`District::stepped`).
+/// Generated and hand-laid blocks alike.
+fn docks_on_slope(dp: &mut fill::District, w: Ward, grade: f64) {
+    if w == Ward::Docks && grade > 0.09 {
+        let across = 7.0 / grade;
+        dp.min_sq = dp.min_sq.min((across * across).max(900.0));
+        dp.stepped = true;
+    }
 }
 
 /// The ground a layout is built on, as building lots see it: whether a footprint can stand

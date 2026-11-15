@@ -221,12 +221,15 @@ pub(super) enum Block<'a> {
 /// in `convex_pieces`' order, one stream through them all.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_block<G: Ground>(site: &G, block: Block, fronts: &[Front], ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
+    // (The outskirts' thinning runs through the whole block, a region's pieces and all: one
+    // running share, and "until a house stands" counted from the block's start.)
+    let mut run = (l.buildings.len(), None);
     match block {
-        Block::Plain(ring) => lay_block(site, ring, &mut fronts.to_vec(), false, ward, dp, rng, l, thin),
+        Block::Plain(ring) => lay_block(site, ring, &mut fronts.to_vec(), false, ward, dp, rng, l, thin, &mut run),
         Block::Region(set) => {
             for piece in clip::convex_pieces(set) {
                 if fronts.iter().any(|f| f.fronted_by(&piece)) {
-                    lay_block(site, &piece, &mut fronts.to_vec(), true, ward, dp, rng, l, thin);
+                    lay_block(site, &piece, &mut fronts.to_vec(), true, ward, dp, rng, l, thin, &mut run);
                 }
             }
         }
@@ -237,7 +240,7 @@ pub(super) fn build_block<G: Ground>(site: &G, block: Block, fronts: &[Front], w
 /// `fronts` as they are cut; `spans`: whether a lot must front a street along its stretch (a
 /// region's piece) or only on its line (a plain block, as always).
 #[allow(clippy::too_many_arguments)]
-fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: bool, ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
+fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: bool, ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>, run: &mut (usize, Option<f64>)) {
     let mut parts: Vec<Vec<P>> = Vec::new();
     let alley_area = dp.min_sq * dp.block_size;
     if area(block).abs() > alley_area * libm::pow(2.0, dp.size_chaos * (2.0 * rng.next_f64() - 1.0)) {
@@ -267,7 +270,10 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             (order, ds.iter().map(|&d| if anchors.is_empty() { 0.35 } else { (1.0 - smoothstep_f(0.0, 0.9 * reach, d)).max(0.1) }).collect())
         }
     };
-    let (first, mut acc) = (l.buildings.len(), if thin.is_some() { rng.next_f64() } else { 0.0 });
+    if thin.is_some() && run.1.is_none() {
+        run.1 = Some(rng.next_f64());
+    }
+    let (first, mut acc) = (run.0, run.1.unwrap_or(0.0));
     for pi in order {
         let part = &parts[pi];
         acc += share[pi];
@@ -313,6 +319,9 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
                 l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
             }
         }
+    }
+    if thin.is_some() {
+        run.1 = Some(acc);
     }
 }
 

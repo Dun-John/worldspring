@@ -415,6 +415,9 @@ pub struct Refill {
     pub nl: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nt: Option<u32>,
+    /// (R6 P8) Lots: a docks ward on a sloping shore (`District::stepped`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub st: bool,
     pub g: String,
 }
 
@@ -654,7 +657,7 @@ impl Refill {
         match fill {
             Fill::Farm { class, rng } => {
                 g.extend(words(rng));
-                Some(Refill { k: 1, w: 0, close: false, class: *class, nb, nl, nt: None, g: pack(&g) })
+                Some(Refill { k: 1, w: 0, close: false, class: *class, nb, nl, nt: None, st: false, g: pack(&g) })
             }
             Fill::Lots { ward, dp, rng, thin, close } => {
                 g.extend(words(rng));
@@ -663,18 +666,18 @@ impl Refill {
                     g.push(*reach);
                     g.extend(pts.iter().flat_map(|p| *p));
                 }
-                Some(Refill { k: 0, w: index_of(&WARDS, ward), close: *close, class: 0, nb, nl, nt: thin.as_ref().map(|t| t.0.len() as u32), g: pack(&g) })
+                Some(Refill { k: 0, w: index_of(&WARDS, ward), close: *close, class: 0, nb, nl, nt: thin.as_ref().map(|t| t.0.len() as u32), st: dp.stepped, g: pack(&g) })
             }
             Fill::Square(kind) => {
                 let mut g: Vec<f64> = block.iter().flat_map(|p| *p).collect();
                 g.extend((40..44).map(roll));
-                Some(Refill { k: 2, w: index_of(&PLAZAS, kind), close: false, class: 0, nb, nl: 0, nt: None, g: pack(&g) })
+                Some(Refill { k: 2, w: index_of(&PLAZAS, kind), close: false, class: 0, nb, nl: 0, nt: None, st: false, g: pack(&g) })
             }
             Fill::Park { kind, ways, key, .. } => {
                 let mut g: Vec<f64> = block.iter().flat_map(|p| *p).collect();
                 g.extend(ways.iter().flat_map(|(n, c)| [n[0], n[1], *c]));
                 g.push(f64::from_bits(*key));
-                Some(Refill { k: 3, w: index_of(&PARKS, kind), close: false, class: 0, nb, nl: ways.len() as u32, nt: None, g: pack(&g) })
+                Some(Refill { k: 3, w: index_of(&PARKS, kind), close: false, class: 0, nb, nl: ways.len() as u32, nt: None, st: false, g: pack(&g) })
             }
         }
     }
@@ -725,7 +728,7 @@ impl Refill {
             }
             0 => {
                 let d = &g[at + 2..at + 7];
-                let dp = District { min_sq: d[0], grid_chaos: d[1], size_chaos: d[2], block_size: d[3], stepped: false };
+                let dp = District { min_sq: d[0], grid_chaos: d[1], size_chaos: d[2], block_size: d[3], stepped: self.st };
                 let thin = self.nt.map(|_| (pts_of(&g[at + 8..]), g[at + 7]));
                 (Fill::Lots { ward: nth(&WARDS, self.w, "ward")?, dp, rng: rng(), thin, close: self.close }, d[4])
             }
@@ -1392,6 +1395,7 @@ pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Creat
             if let Some(k) = lots.as_deref().and_then(|n| LOT_SIZES.iter().position(|x| *x == n)) {
                 dp.min_sq = District::base(w) * super::wards::LOT_FACTOR[k];
             }
+            super::docks_on_slope(&mut dp, w, if poly.len() >= 3 { site.grade(&poly) } else { 0.0 });
             let mut rng = Pcg32::new(salt(hash2(seed, 0, 0x107)), 47);
             l.blocks.extend(g.iter().map(|x| x.outer.clone()));
             build_block(site, Region::Region(&g), &[], w, &dp, &mut rng, &mut l, None);
@@ -2609,6 +2613,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                         if let Some(k) = lots.as_deref().and_then(|n| LOT_SIZES.iter().position(|x| *x == n)) {
                             dp.min_sq = District::base(w) * super::wards::LOT_FACTOR[k];
                         }
+                        super::docks_on_slope(&mut dp, w, if ring.len() >= 3 { site.grade(ring) } else { 0.0 });
                         let mut rng = Pcg32::new(salt(hash2(bseed, gn, 0x107)), 47);
                         l.blocks.extend(g.iter().map(|x| x.outer.clone()));
                         let alleys = l.roads.len();
