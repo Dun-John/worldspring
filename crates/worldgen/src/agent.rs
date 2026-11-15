@@ -653,8 +653,9 @@ fn building_blocker(world: &World, t0: &T0, l: &town::Layout, b: &town::Building
     let generated = t0.settlements.len() + t0.base_pois;
     let at = geom::centroid(&b.poly);
     let drawn = if li >= generated { world.file.edits.created.get(li - generated).filter(|c| c.kind == "building").map(|c| c.id.clone()) } else { None };
-    // (A building a town edit added, id from `NEW_ID` up, is taken away like the others: `remove_buildings` names it too.)
-    let removable = li < generated || town::is_settlement(t0, li);
+    // (A building a town edit added, id from `NEW_ID` up, is taken away like the others: `remove_buildings` names it too.
+    // So is one a plot's fill laid out: the plot's outline can move over its own.)
+    let removable = li < generated || town::is_settlement(t0, li) || world.file.edits.created.get(li - generated).is_some_and(|c| c.kind == "plot");
     let (settlement, place) = if full { place_of(world, t0, li) } else { (Value::Null, None) };
     let id = Some(drawn.unwrap_or_else(|| format!("b:{li}:{}", b.id)));
     Blocker { id, name: Some(building_name(world, l, b)), function: Some(b.label().to_string()), settlement, place, removable, ..Blocker::plain("building", at) }

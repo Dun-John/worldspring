@@ -48,7 +48,7 @@
   import GroundPanel from './ui/GroundPanel.svelte';
   import { defaultGround, GroundTool, type GroundSettings } from './editor/ground';
   import { TownTool, type TownMode } from './editor/town';
-  import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, isDrawMode, pickIn, type StreetPick } from './editor/streets';
+  import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, fillColour, isDrawMode, pickIn, type StreetPick } from './editor/streets';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { endSite, LinkTool, newLinkId } from './editor/links';
@@ -1903,6 +1903,12 @@
     if (buildMode === 'stamp' && stampLast) untrack(() => void stampAt(stampLast![0], stampLast![1], false));
   });
 
+  /** Plots drawn by hand outlined while Build is open, each in its fill's colour. */
+  $effect(() => {
+    const plots = buildOn ? (edits.created ?? []).filter((c) => c.kind === 'plot' && !c.removed && (c.poly?.length ?? 0) >= 3) : [];
+    view.setPlotOutlines(plots.map((c) => ({ poly: c.poly!, color: fillColour((c.fill ?? { kind: 'generated', ward: 'common' }) as BlockFill) })));
+  });
+
   /** The row or plot being drawn, put down: one change. */
   async function quickPlace() {
     if (buildMode === 'stamp') return void stampPlace();
@@ -1935,8 +1941,12 @@
             : { kind: 'open', open: lassoSet.open };
       const c: Created = { id: `c:${n}`, kind: 'plot', x: r.x, y: r.y, name: lassoSet.name.trim(), poly, fill };
       if (existingSite(edits, c, [c.x, c.y])) return toast('There is a plot here already');
-      applyEdits({ ...edits, created: [...(edits.created ?? []), c] }, { tool: 'create_parcel', id: c.id, name: c.name }, 'user');
-      toast('Plot made');
+      // (The world's own buildings under it give way to its fill, in the same change.)
+      const removed = r.removed ?? [];
+      const buildings = { ...(edits.buildings ?? {}) };
+      for (const b of removed) buildings[b.id] = { at: b.at, removed: true };
+      applyEdits({ ...edits, created: [...(edits.created ?? []), c], ...(removed.length ? { buildings } : {}) }, { tool: 'create_parcel', id: c.id, name: c.name }, 'user');
+      toast(`Plot made${removed.length ? `; ${plural(removed.length, 'building')} taken away for it` : ''}`);
     }
     tool.reset();
     quick = { can: false, text: '' };
