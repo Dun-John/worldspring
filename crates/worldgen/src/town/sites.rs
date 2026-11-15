@@ -233,7 +233,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         }
         PoiKind::Castle => {
             if let Some(c) = created {
-                castle_site(world, t0, c, center, &mut rng, &mut works);
+                castle_site(world, t0, c, center, &mut rng, &mut works, &mut Default::default());
                 buildings = std::mem::take(&mut works.buildings);
                 for p in works.plazas.drain(..) {
                     if p.kind == super::PlazaKind::Bailey { baileys.push(p.pts) } else { plazas.push(p.pts) }
@@ -553,7 +553,7 @@ fn gate_toward(t0: &T0, center: P) -> P {
 /// on the side chosen (else facing the nearest road), the keep (the castle, named as the site)
 /// and the buildings round the yard (the biggest the barracks, then the stables and the smithy);
 /// in ruins, broken walls and roofless shells.
-fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng: &mut Pcg32, l: &mut Layout) {
+fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng: &mut Pcg32, l: &mut Layout, report: &mut super::castle::Report) {
     let mut block: Vec<P> = c.poly.iter().map(|q| sub(*q, center)).collect();
     if block.len() < 3 {
         return;
@@ -571,12 +571,12 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     // (The curtain on the outline drawn; the keep, and an inner curtain in a big one, on the high
     // ground. Its bailey an open yard of grass, built on only by hand.)
     // (A moat as asked, else by roll, v63 castles: the likelier for a ruin (older), a big one or
-    // one with a keep. Keyed to its outline, to the foot: the same castle made again, under
-    // another id, keeps its roll.)
+    // one with a keep. Keyed to its outline, to the foot, whichever corner it starts at and
+    // whichever way round it runs: the same castle made again, under another id, keeps its roll.)
     let mut bytes: Vec<u8> = Vec::with_capacity(16 * c.poly.len());
-    for q in &c.poly {
+    for q in canonical_ring(&c.poly) {
         for v in q {
-            bytes.extend((crate::core::round(*v) as i64).to_le_bytes());
+            bytes.extend(v.to_le_bytes());
         }
     }
     let key = hash2(world.stream("castle.moat"), crate::core::hash::fnv64(&bytes) as i64, 0);
@@ -602,8 +602,9 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
         (Some("drawn") | None, false) => super::castle::KeepShape::Drawn(c.keep_poly.iter().map(|q| sub(*q, center)).collect()),
         (k, _) => super::castle::KeepShape::of(k),
     };
-    let asked = super::castle::Asked { gates, keep: keep_shape, drawn };
+    let asked = super::castle::Asked { gates, keep: keep_shape, drawn, ..Default::default() };
     castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true), Some(&asked));
+    *report = asked.report.into_inner();
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();
     let kept = keep && l.buildings.last().is_some_and(|b| b.keep.is_some() && b.func.is_none());
@@ -630,6 +631,30 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     if c.structure.as_deref() == Some("ruin") {
         ruin_works(l, rng);
     }
+}
+
+/// A ring's corners to the foot, anticlockwise from the least (by x, then y): the same outline
+/// gives the same, whichever corner it was drawn from and whichever way round.
+fn canonical_ring(poly: &[P]) -> Vec<[i64; 2]> {
+    let mut r: Vec<[i64; 2]> = poly.iter().map(|q| [crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64]).collect();
+    let twice: i64 = (0..r.len()).map(|i| r[i][0] * r[(i + 1) % r.len()][1] - r[(i + 1) % r.len()][0] * r[i][1]).sum();
+    if twice < 0 {
+        r.reverse();
+    }
+    if let Some(k) = (0..r.len()).min_by_key(|&i| (r[i], i)) {
+        r.rotate_left(k);
+    }
+    r
+}
+
+/// (Roadmap 6 P7) What of a castle drawn by hand's asks would not be built (gates, a drawn keep
+/// on what it must not stand on), it standing at `at` (`agent::works_spot`).
+pub fn castle_report(world: &World, t0: &T0, c: &crate::world::Created, at: P) -> super::castle::Report {
+    let mut report = super::castle::Report::default();
+    let mut works = scratch(0);
+    let mut rng = Pcg32::new(hash2(world.stream("site"), 0, 0), 41);
+    castle_site(world, t0, c, at, &mut rng, &mut works, &mut report);
+    report
 }
 
 /// Whether a hand castle's ground as shaped by hand (plateaus, the brush) holds a wet moat

@@ -93,6 +93,17 @@ pub(super) struct Asked {
     pub keep: KeepShape,
     /// Footprints drawn by hand in its yard (local ft): its own buildings stand clear of them.
     pub drawn: Vec<Vec<P>>,
+    /// What came of it: written as the castle is built (`sites::castle_report`).
+    pub report: std::cell::RefCell<Report>,
+}
+
+/// (Roadmap 6 P7) What of a hand castle's asks could not be built, and why.
+#[derive(Clone, Debug, Default)]
+pub struct Report {
+    /// Gates not built: (their place in `Asked::gates`, why).
+    pub gates: Vec<(usize, String)>,
+    /// What a drawn keep stands on that it must not (a tower, a gate, a building drawn in the yard).
+    pub keep: Option<String>,
 }
 
 /// A hand castle's keep's shape (`world::KEEP_SHAPES`).
@@ -454,11 +465,13 @@ pub(super) fn castle<G: Ground>(
     let mut banned: Vec<P> = Vec::new();
     // (A hand castle's gates past its main one.)
     let mut extra: Vec<(P, P)> = Vec::new();
+    let mut dropped: Vec<(usize, String)> = Vec::new();
     let (outer_gate, outer_in) = loop {
         let mark = (l.walls.len(), l.towers.len(), l.gate_towers.len(), l.square_towers.len(), others.len(), l.tower_forms.len());
         let tried = |p: P| banned.iter().any(|b| dist(*b, p) < 60.0);
         let score = |p: P| outer_score(p) + if tried(p) { 5_000.0 } else { 0.0 };
         extra.clear();
+        dropped.clear();
         let (g, gin) = curtain(
             l,
             &ring,
@@ -472,6 +485,7 @@ pub(super) fn castle<G: Ground>(
             set.follow,
             asked.map_or(&[][..], |a| &a.gates[..]),
             &mut extra,
+            &mut dropped,
         );
         if streets.is_empty() || street_dist(g) <= 20.0 {
             break (g, gin);
@@ -493,6 +507,9 @@ pub(super) fn castle<G: Ground>(
             None => break (g, gin),
         }
     };
+    if let Some(a) = asked {
+        a.report.borrow_mut().gates = dropped;
+    }
     let cc = centroid(&ring);
     l.castles.push((cc, ring.iter().map(|p| dist(*p, cc)).fold(0.0, f64::max)));
     // An inner curtain round the highest ground with room for it (on flat ground, the middle drawn
@@ -537,7 +554,7 @@ pub(super) fn castle<G: Ground>(
     if let Some(inner) = &inner {
         let walled_in = vec![false; inner.len()];
         let apart = |p: P| outer_gates.iter().all(|o| dist(p, o.0) >= GATES_APART);
-        let (g, gin) = curtain(l, inner, &walled_in, true, &|p: P| dist(p, outer_gate), &apart, &style, 4.0, &mut others, set.follow, &[], &mut Vec::new());
+        let (g, gin) = curtain(l, inner, &walled_in, true, &|p: P| dist(p, outer_gate), &apart, &style, 4.0, &mut others, set.follow, &[], &mut Vec::new(), &mut Vec::new());
         gates.push(g);
         gate_ins.push((g, gin));
         // The way from gate to gate along the outer bailey.
@@ -607,7 +624,12 @@ pub(super) fn castle<G: Ground>(
     let drawn: &[Vec<P>] = asked.map_or(&[][..], |a| &a.drawn[..]);
     let shape = asked.map_or(KeepShape::Rolled, |a| a.keep.clone());
     let kept = if keep {
-        place_keep(site, court, &spots, &more, axis, square, &towers, &near, &own, &curtain, &gates, &lanes, court_gate, &room, (&shape, drawn), prng)
+        let mut why = None;
+        let k = place_keep(site, court, &spots, &more, axis, square, &towers, &near, &own, &curtain, &gates, &lanes, court_gate, &room, (&shape, drawn), prng, &mut why);
+        if let Some(a) = asked {
+            a.report.borrow_mut().keep = why;
+        }
+        k
     } else {
         None
     };
@@ -1314,6 +1336,7 @@ fn curtain(
     stubs: bool,
     want: &[P],
     extra: &mut Vec<(P, P)>,
+    dropped: &mut Vec<(usize, String)>,
 ) -> (P, P) {
     let n = ring.len();
     let edge = |e: usize| (ring[e], ring[(e + 1) % n]);
@@ -1373,13 +1396,32 @@ fn curtain(
             .min_by(|x, y| x.2.total_cmp(&y.2).then(x.0.cmp(&y.0)))
             .map(|s| (s.0, s.1))
     };
+    // (Vetted as a rolled one: open ground before it (`ok`), its towers clear of those standing,
+    // `HAND_GATES_APART` from the gates asked before it; where its spot will not do, the nearest on
+    // its side that will; else it is not built, and why: `dropped`.)
     let asked: Vec<(usize, f64)> = {
         let mut out: Vec<(usize, f64)> = Vec::new();
-        for p in want {
-            if let Some((e, t)) = snap(*p) {
-                let at = lerp(edge(e).0, edge(e).1, t);
-                if out.iter().all(|&(f, u)| dist(lerp(edge(f).0, edge(f).1, u), at) >= HAND_GATES_APART) {
-                    out.push((e, t));
+        for (i, p) in want.iter().enumerate() {
+            let Some((e, t)) = snap(*p) else {
+                dropped.push((i, "no side there is long enough for a gate".into()));
+                continue;
+            };
+            let at = lerp(edge(e).0, edge(e).1, t);
+            let apart = |q: P| out.iter().all(|&(f, u)| dist(lerp(edge(f).0, edge(f).1, u), q) >= HAND_GATES_APART);
+            let mut on_side: Vec<(usize, f64, P)> = spots.iter().chain(&short).filter(|s| s.0 == e).copied().collect();
+            on_side.sort_by(|x, y| dist(x.2, at).total_cmp(&dist(y.2, at)).then(x.1.total_cmp(&y.1)));
+            let tries: Vec<(usize, f64, P)> = std::iter::once((e, t, at)).chain(on_side).collect();
+            match tries.iter().find(|s| apart(s.2) && ok(s.2) && clear(s)) {
+                Some(s) => out.push((s.0, s.1)),
+                None => {
+                    let why = if !tries.iter().any(|s| apart(s.2)) {
+                        "too near another gate (they stand 76 ft apart at least)"
+                    } else if !tries.iter().any(|s| apart(s.2) && ok(s.2)) {
+                        "no open ground before it (water, a building or a town gate), or no way from it to the streets"
+                    } else {
+                        "its towers would stand against the towers there"
+                    };
+                    dropped.push((i, why.into()));
                 }
             }
         }
@@ -2039,16 +2081,24 @@ fn place_keep<G: Ground>(
     room: &dyn Fn(&[P]) -> bool,
     (shape, drawn): (&KeepShape, &[Vec<P>]),
     prng: &mut Pcg32,
+    report: &mut Option<String>,
 ) -> Option<(Building, Option<Motte>)> {
     const CLEAR: f64 = 16.0;
     let roll = prng.next_f64();
     let rolls: [f64; 6] = std::array::from_fn(|_| prng.next_f64());
-    // (A keep without pieces: drawn by hand, or a round great tower; 4 storeys, as any.)
+    // (A keep drawn by hand, or a round great tower: one piece, drawn as a keep of pieces is: a
+    // round one a great round tower (walled, roofed, its door), one of four corners a keep's body under its
+    // roof or battlements; any other shape its flat top behind a parapet. 4 storeys, as any.)
     let plain = |mut poly: Vec<P>| {
         if area(&poly) < 0.0 {
             poly.reverse();
         }
+        let parts = match (shape, poly.len()) {
+            (KeepShape::Round, _) | (_, 4) => vec![Part { poly: poly.clone(), kind: PartKind::Body }],
+            _ => Vec::new(),
+        };
         Building {
+            parts,
             pad_ft: site.pad(&poly),
             poly,
             ward: Ward::Castle,
@@ -2063,16 +2113,28 @@ fn place_keep<G: Ground>(
             shape: None,
             shade: None,
             id: 0,
-            parts: Vec::new(),
             keep: Some(KeepKind::Plain),
             deck: None,
         }
     };
-    if let KeepShape::Drawn(p) = shape {
-        return Some((plain(p.clone()), None));
-    }
     // (Clear of the buildings drawn by hand in the yard.)
     let off_drawn = |poly: &[P]| drawn.iter().all(|d| apart_by(d, poly) >= DRAWN_CLEAR);
+    // A drawn keep stands as drawn; what it stands on that it must not (a tower, a gate or its way
+    // in, a building drawn in the yard) is told (`Report::keep`: `agent::works_spot` refuses it).
+    if let KeepShape::Drawn(p) = shape {
+        let k = plain(p.clone());
+        let at = |q: P| format!("({:.0}, {:.0})", q[0], q[1]);
+        let why = if let Some((t, _)) = by_ring.iter().chain(towers).find(|(t, r)| inset_depth(&k.poly, *t) > -(r + 1.0)) {
+            Some(format!("on a tower of the curtain at {}", at(*t)))
+        } else if let Some(g) = gates.iter().find(|g| inset_depth(&k.poly, **g) > -GATE_HALF) {
+            Some(format!("on a gate at {}", at(*g)))
+        } else if let Some((q, _)) = lanes.iter().find(|&&(q, r)| super::poly_seg_dist(&k.poly, q, r) < 4.0 || contains(&k.poly, q)) {
+            Some(format!("across the way in from the gate at {}", at(*q)))
+        } else {
+            drawn.iter().find(|d| apart_by(d, &k.poly) < 1.0).map(|d| format!("on a building drawn in the yard at {}", at(centroid(d))))
+        };
+        return Some((k, None)).inspect(|_| *report = why);
+    }
     // A round great tower: as big as the court holds clear of its curtain and towers, on the first
     // spot it fits.
     if *shape == KeepShape::Round {

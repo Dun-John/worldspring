@@ -85,8 +85,19 @@ export function simple(p: Pt[]): boolean {
 export function castleProblem(p: Pt[]): string | null {
   if (p.length < 3) return 'A castle needs at least 3 corners';
   if (!simple(p)) return 'A castle’s outline must not cross itself';
+  // Across: the long side of the box that fits it closest (`geom::obb`, as its width reads).
   let across = 0;
-  for (const a of p) for (const b of p) across = Math.max(across, Math.hypot(a[0] - b[0], a[1] - b[1]));
+  let least = Infinity;
+  for (let i = 0; i < p.length; i++) {
+    const [a, b] = [p[i], p[(i + 1) % p.length]];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (l < 1e-9) continue;
+    const u = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+    const su = p.map((q) => q[0] * u[0] + q[1] * u[1]);
+    const sv = p.map((q) => -q[0] * u[1] + q[1] * u[0]);
+    const [w, h] = [Math.max(...su) - Math.min(...su), Math.max(...sv) - Math.min(...sv)];
+    if (w * h < least) [least, across] = [w * h, Math.max(w, h)];
+  }
   if (across > CASTLE_MAX_FT) return `A castle is at most ${CASTLE_MAX_FT} ft across (this is ${Math.round(across)})`;
   // Narrowest: the least width over every side's direction.
   let narrow = Infinity;

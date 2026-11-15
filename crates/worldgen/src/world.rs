@@ -1222,8 +1222,10 @@ pub const CREATED_SETTLEMENTS: [&str; 2] = ["village", "town"];
 pub const DRAWN_KINDS: [&str; 4] = ["building", "castle", "wall", "plot"];
 /// Widest a plot may be, its point to its farthest corner (ft).
 pub const PLOT_REACH_FT: f64 = 750.0;
-/// Widest a castle may be, corner to corner (ft).
+/// Widest a castle may be across: the long side of the box that fits it closest (ft).
 pub const CASTLE_MAX_FT: f64 = 1500.0;
+/// A hand castle's outline drawn in this far (ft) stays one piece: its necks 30 ft across at least.
+pub const CASTLE_NECK_FT: f64 = 15.0;
 /// Most gates a castle may have.
 pub const CASTLE_MAX_GATES: usize = 8;
 /// A castle's keep's shapes (`Created::keep_shape`).
@@ -1487,7 +1489,8 @@ impl Created {
         if (0..m).any(|i| (p[(i + 1) % m][0] - p[i][0]).hypot(p[(i + 1) % m][1] - p[i][1]) < 10.0) {
             return Err("a castle's corners must be at least 10 ft apart".into());
         }
-        let across = p.iter().flat_map(|a| p.iter().map(move |b| (a[0] - b[0]).hypot(a[1] - b[1]))).fold(0.0, f64::max);
+        // (Across: the long side of the box that fits it closest, as its width reads.)
+        let across = obb(p).long;
         if across > CASTLE_MAX_FT {
             return Err(format!("a castle is at most {CASTLE_MAX_FT} ft across (this is {across:.0})"));
         }
@@ -1496,6 +1499,11 @@ impl Created {
         }
         if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > CASTLE_MAX_FT) {
             return Err("a castle's corners must lie round its point".into());
+        }
+        // (Its curtain, drawn in from the outline, in one piece: a neck too narrow for it would
+        // leave a lobe without walls.)
+        if !crate::town::clip::is_convex(p) && crate::town::clip::inset_edges(p, &vec![CASTLE_NECK_FT; m]).iter().filter(|s| s.area().abs() >= 1.0).count() > 1 {
+            return Err(format!("a castle's outline is too narrow at a neck for its walls: make it {:.0} ft across there at least", 2.0 * CASTLE_NECK_FT));
         }
         if self.gate.is_some_and(|g| g as usize >= m) {
             return Err(format!("gate: a side of the outline, 0 to {}", m - 1));
@@ -1528,7 +1536,10 @@ impl Created {
                 if obb(k).short < 20.0 || crate::town::geom::area(k).abs() < 600.0 {
                     return Err("a drawn keep is at least 20 ft across".into());
                 }
-                if k.iter().any(|q| inside_by(p, *q) < 12.0) {
+                // (All of it, not only its corners: an edge may cross a notch.)
+                let room = crate::town::clip::offset(&crate::town::clip::region(p), -12.0, crate::town::clip::Join::Miter(2.0));
+                let out = crate::town::clip::area(&crate::town::clip::difference(&crate::town::clip::region(k), &room));
+                if k.iter().any(|q| inside_by(p, *q) < 12.0) || out > 1.0 {
                     return Err("a drawn keep stands inside the castle's outline, 12 ft or more in from its walls".into());
                 }
             }

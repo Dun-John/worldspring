@@ -14,6 +14,7 @@
 
 pub mod belfry;
 mod castle;
+pub use castle::Report as CastleReport;
 mod towerhouse;
 pub mod catalog;
 pub mod geom;

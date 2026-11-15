@@ -204,10 +204,10 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         .worker
         .with(move |ex| {
             let skip = agent::layout_of(&ex.world, &ex.t0, &probe.id).filter(|_| !creating);
-            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way, s.in_way_names, s.pts))
+            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way, s.in_way_names, s.pts, s.gates_not_built))
         })
         .await?;
-    let (p, name, in_way, names, joined) = spot;
+    let (p, name, in_way, names, joined, gates_not_built) = spot;
     // (A wall's ends put onto the walls they meet: a T-join.)
     let joins = joined.is_some();
     if let Some(pts) = joined {
@@ -238,6 +238,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
     if !removed.is_empty() {
         reply["removed"] = json!(removed);
     }
+
     let cid = c.id.clone();
     let change = app
         .edit("agent", 0, move |e| {
@@ -276,6 +277,9 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
                     v["keep"] = json!(format!("b:{li}:{}", k.id));
                 }
                 v["buildings"] = json!(l.buildings.len());
+                if castle {
+                    v["moat"] = json!(l.moats.first().map_or("none", |m| if m.wet { "wet" } else { "dry" }));
+                }
             }
             if castle {
                 let aside = aside_of(ex, &cid2);
@@ -296,6 +300,10 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
     }
     if !removed.is_empty() {
         v["removed"] = json!(removed);
+    }
+    // (A castle's gates asked for that could not be built, and why.)
+    if !gates_not_built.is_empty() {
+        v["gates_not_built"] = json!(gates_not_built.iter().map(|(g, why)| json!({ "side": g, "why": why })).collect::<Vec<_>>());
     }
     Ok(v)
 }

@@ -1375,6 +1375,8 @@ pub struct WorksSpot {
     /// (Roadmap 6 P7) A wall's line with its open ends put onto the walls they meet (`WALL_JOIN`):
     /// None where neither end meets one.
     pub pts: Option<Vec<P>>,
+    /// (Roadmap 6 P7) A castle's gates asked for that cannot be built: (side, why).
+    pub gates_not_built: Vec<(u32, String)>,
 }
 
 /// An open wall's end this near another wall's line (or a castle's curtain), short of it or past
@@ -1530,7 +1532,18 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     }
     in_way.sort_by(|a, b| a.0.cmp(&b.0));
     in_way.dedup_by(|a, b| a.0 == b.0);
-    Ok(WorksSpot { at, name: works_name(world, t0, castle, at, id), in_way, in_way_names, pts: joined })
+    // (A castle as it would be built: a drawn keep on a tower, a gate or a building drawn in its
+    // yard is refused; the gates asked for that cannot be built, told.)
+    let mut gates_not_built = Vec::new();
+    if castle {
+        let r = town::sites::castle_report(world, t0, c, at);
+        if let Some(why) = r.keep {
+            return Err(format!("the drawn keep stands {why}: draw it clear of the curtain's towers, its gates and the buildings in the yard"));
+        }
+        let sides = c.castle_gates();
+        gates_not_built = r.gates.into_iter().filter_map(|(i, why)| sides.get(i).map(|&g| (g, why))).collect();
+    }
+    Ok(WorksSpot { at, name: works_name(world, t0, castle, at, id), in_way, in_way_names, pts: joined, gates_not_built })
 }
 
 /// The name a castle or wall `id` standing at `at` is given when none is asked for (the nearest
@@ -1601,6 +1614,9 @@ pub fn works_spot_json(world: &World, t0: &T0, created: &str) -> String {
             let mut v = json!({ "x": s.at[0], "y": s.at[1], "name": s.name, "in_way": s.in_way.iter().map(|(id, at)| json!({ "id": id, "at": at })).collect::<Vec<_>>() });
             if let Some(p) = s.pts {
                 v["pts"] = json!(p);
+            }
+            if !s.gates_not_built.is_empty() {
+                v["gates_not_built"] = json!(s.gates_not_built.iter().map(|(g, why)| json!({ "side": g, "why": why })).collect::<Vec<_>>());
             }
             v
         }

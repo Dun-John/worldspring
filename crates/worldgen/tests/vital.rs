@@ -3163,7 +3163,9 @@ fn hand_castle_options() {
     }
     let fi = town::catalog::index_of("castle").unwrap() as u16;
     let k = l.buildings.iter().find(|b| b.func == Some(fi)).expect("the U castle has no keep");
-    assert!(k.parts.is_empty() && k.poly.len() == 24, "{tag}: its keep is not round ({} corners, {} pieces)", k.poly.len(), k.parts.len());
+    // (A round great tower: one piece, its round body.)
+    let round = k.parts.len() == 1 && matches!(k.parts[0].kind, town::PartKind::Body);
+    assert!(round && k.poly.len() == 24, "{tag}: its keep is not round ({} corners, {} pieces)", k.poly.len(), k.parts.len());
     assert!(l.moats.len() == 1 && !l.moats[0].wet && l.moats[0].bridges.len() == 3, "{tag}: {} moats, want one dry with 3 drawbridges", l.moats.len());
     let rolled = town::layout(world, t0, li + 1);
     let none = town::layout(world, t0, li + 2);

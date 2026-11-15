@@ -759,11 +759,14 @@ Rules:
 ### Castles and walls
 `create_feature` with `kind: "castle"` or `"wall"` takes a shape instead of a place. A **castle** is an outline
 (`poly`, 3–32 corners at least 10 ft apart, turning inward or not but never crossing itself, 80 to 1,500 ft across,
-measured along its longest diagonal: a `rect` of 1,300 × 800 is 1,526 across and refused; or `rect` about its middle):
+measured as the long side of the box that fits it closest: a `rect` of 1,400 × 1,000 is 1,400 across; no neck under
+30 ft across, where its curtain would come apart; or `rect` about its middle):
 a curtain wall just inside it, a tower on every corner (those turning inward too) and along long runs (round, or
 square in some castles), a gatehouse on one side (`gate`: the side from corner `gate` to the next; else the side
 facing the nearest road) or on several (`gates`: the sides, up to 8, a gatehouse in the middle of each, the first the
-main one; `gates` replaces `gate`), in a big one (80,000 sq ft or more and
+main one; `gates` replaces `gate`; a gate whose spot won't do (water or a building before it, too near another
+gate, its towers against others) moves along its side, else is not built and the reply lists it in
+`gates_not_built`, `[{side, why}]`), in a big one (80,000 sq ft or more and
 200 ft across) an inner curtain with its own gatehouse round the keep's high ground, leaving an outer bailey at
 least 48 ft wide all round and the inner curtain at least 80 ft from the outer gate, its gate at least 90 ft from
 that one; the keep (the castle itself, named as the site;
@@ -771,8 +774,8 @@ that one; the keep (the castle itself, named as the site;
 with a forebuilding, an L or a T with towers at its outer corners, or a round shell keep on a motte (a mound eased up
 from the ground, a gravel path up it to the shell's gate; a tower keep alone where nothing else fits); `keep_shape`
 chooses: `square` (those of pieces, never a shell keep), `round` (a round great tower, as big as the court holds),
-`drawn` with `keep_poly` (its outline, 3–32 corners, 12 ft or more inside the castle's; `keep_poly` alone means
-drawn), `auto` back to the roll; its flat tops
+`drawn` with `keep_poly` (its outline, 3–32 corners, all of it 12 ft or more inside the castle's, off the curtain's
+towers, its gates and the buildings drawn in the yard; `keep_poly` alone means drawn), `auto` back to the roll; its flat tops
 drawn as open battlements (a wall walk of stone flags in the merlons, a broad one's middle dark lead) or, every top of
 1,100 sq ft or more and in some keeps the smaller ones too, hipped roofs of lead or slate; and ranges of
 stone buildings under slate against the inside of the curtain, clear of the way from gate to gate (the biggest the

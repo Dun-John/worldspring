@@ -1960,7 +1960,7 @@ fn castle_block(site: &Site, block: &[P], (bseed, gn): (u64, i64), origin: P, ga
     };
     let dp = District::roll(Ward::Castle, hash2(bseed, gn, 0xd15));
     let mut rng = Pcg32::new(hash2(bseed, gn, 0xca5), 53);
-    let asked = Asked { gates, keep, drawn: Vec::new() };
+    let asked = Asked { gates, keep, drawn: Vec::new(), ..Default::default() };
     super::castle::castle(site, block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), &mut rng, l, true, true, Some(&asked));
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();
