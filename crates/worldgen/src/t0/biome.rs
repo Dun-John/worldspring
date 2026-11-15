@@ -228,3 +228,51 @@ pub fn local_slope(w: usize, h: usize, height: &[f64], i: usize, j: usize, cell_
     let gy = (at(i, j + 1) - at(i, j.saturating_sub(1))) / (2.0 * cell_ft);
     crate::core::sqrt(gx * gx + gy * gy)
 }
+
+/// Where snow lies on tundra: big soft patches of snow and of grass, a pure function of world
+/// position (ft) and the world's seed. The map's terrain shader draws the same field
+/// (`terrain.frag` `tundraSnow`, same constants, 32-bit integer hashing so both agree bit for bit
+/// on the lattice); battlemaps lay `Surface::Snow` where it passes `TUNDRA_SNOW_AT`. Value noise
+/// on a turned lattice, its coordinates warped twice so outlines wind; three octaves (1,500, 620
+/// and 240 ft). Returns 0..1, about half of it over the threshold.
+pub fn tundra_snow(seed: u32, x: f64, y: f64) -> f64 {
+    let (mut rx, mut ry) = (0.8 * x - 0.6 * y, 0.6 * x + 0.8 * y);
+    let s = |k: u32| snow_hash(seed.wrapping_add(k.wrapping_mul(0x632b_e5ab)));
+    let (wx, wy) = (snow_noise(rx / 2600.0, ry / 2600.0, s(1)), snow_noise(rx / 2600.0, ry / 2600.0, s(2)));
+    rx += 700.0 * (wx - 0.5);
+    ry += 700.0 * (wy - 0.5);
+    let (wx, wy) = (snow_noise(rx / 520.0, ry / 520.0, s(3)), snow_noise(rx / 520.0, ry / 520.0, s(4)));
+    rx += 160.0 * (wx - 0.5);
+    ry += 160.0 * (wy - 0.5);
+    0.55 * snow_noise(rx / 1500.0, ry / 1500.0, s(5)) + 0.3 * snow_noise(rx / 620.0, ry / 620.0, s(6)) + 0.15 * snow_noise(rx / 240.0, ry / 240.0, s(7))
+}
+
+/// `tundra_snow` at or over this: snow.
+pub const TUNDRA_SNOW_AT: f64 = 0.5;
+
+/// lowbias32 (Chris Wellons): the 32-bit mix the shader mirrors.
+fn snow_hash(mut h: u32) -> u32 {
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846c_a68b);
+    h ^ (h >> 16)
+}
+
+fn snow_corner(ix: i32, iy: i32, s: u32) -> f64 {
+    let h = snow_hash((ix as u32).wrapping_mul(0x9e37_79b1) ^ (iy as u32).wrapping_mul(0x85eb_ca77) ^ s);
+    (h >> 8) as f64 / 16_777_216.0
+}
+
+fn snow_noise(x: f64, y: f64, s: u32) -> f64 {
+    let (fx0, fy0) = (crate::core::floor(x), crate::core::floor(y));
+    let (ix, iy) = (fx0 as i32, fy0 as i32);
+    let (fx, fy) = (x - fx0, y - fy0);
+    let (ux, uy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let a = snow_corner(ix, iy, s);
+    let b = snow_corner(ix + 1, iy, s);
+    let c = snow_corner(ix, iy + 1, s);
+    let d = snow_corner(ix + 1, iy + 1, s);
+    let top = a + (b - a) * ux;
+    top + (c + (d - c) * ux - top) * uy
+}

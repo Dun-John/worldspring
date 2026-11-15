@@ -107,6 +107,8 @@ export class TileLayer {
     uFtPerPx: { value: 1, type: 'f32' },
     uPatMix: { value: 0, type: 'f32' },
     uPatAlpha: { value: 1, type: 'f32' },
+    // The world's seed as two 16-bit halves (exact in f32), for the tundra's snow patches.
+    uSeed: { value: new Float32Array(2), type: 'vec2<f32>' },
   });
   readonly riverFrame = new UniformGroup({
     uPpf: { value: 1, type: 'f32' },
@@ -144,6 +146,13 @@ export class TileLayer {
   /** Tiles uploaded in the last update (for the frame profile). */
   lastUploads = 0;
   private viewRms = 0.3;
+
+  /** The world's seed (u32), for fields the map shares with the battlemaps (tundra snow). */
+  set seed(seed: number) {
+    const v = this.frameUniforms.uniforms.uSeed as Float32Array;
+    v[0] = seed & 0xffff;
+    v[1] = (seed >>> 16) & 0xffff;
+  }
 
   constructor(
     private readonly geom: Geom,
@@ -440,6 +449,7 @@ export class TileLayer {
       uTilePx: { value: 256, type: 'f32' },
       uPat0: { value: pat0, type: 'vec4<f32>' },
       uPat1: { value: pat1, type: 'vec4<f32>' },
+      uWorld: { value: new Float32Array([m.x * ts, m.y * ts, ts, 0]), type: 'vec4<f32>' },
     });
     const shader = new Shader({
       glProgram: this.program,
