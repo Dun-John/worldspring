@@ -136,45 +136,97 @@ pub fn near<'a>(world: &'a crate::world::World, rect: [f64; 4]) -> impl Iterator
 
 /// A hand bridge's shops by default (ft): rows this deep either side of a lane this wide, each
 /// lot this long along it; a lane is never narrower than `MIN_LANE_FT`; the ends of a bridge
-/// (`END_CLEAR_FT` at each) are kept clear.
+/// (`END_CLEAR_FT` at each) are kept clear. Rows may be `MAX_SHOP_DEPTH_FT` deep at most; a bridge
+/// keeps `bridge_lane` (rows that deep taken off its width) clear for its market street.
 pub const SHOP_DEPTH_FT: f64 = 18.0;
+pub const MAX_SHOP_DEPTH_FT: f64 = 40.0;
 pub const SHOP_FRONT_FT: f64 = 20.0;
 pub const SHOP_LANE_FT: f64 = 14.0;
 pub const MIN_LANE_FT: f64 = 10.0;
+pub const MAX_LANE_FT: f64 = 40.0;
 pub const END_CLEAR_FT: f64 = 20.0;
 
-/// The lane (ft) left down the middle of hand bridge `c` with rows `depth` deep either side:
-/// `width − 2·depth`, at least `MIN_LANE_FT`.
-pub fn bridge_lane(c: &crate::world::Crossing, depth: f64) -> f64 {
-    (c.width - 2.0 * depth).max(MIN_LANE_FT)
+/// Varied shops (`Rows::vary`): each lot's frontage is 0.7 to 1.6 of `SHOP_FRONT_FT` (14 to 32 ft), its depth 0.6 to 1
+/// of the row's (the back line ragged), 1 to 3 storeys, and about one place in eight an open landing instead of a lot.
+const VARY_FRONT: (f64, f64) = (0.7, 1.6);
+const VARY_DEPTH_MIN: f64 = 0.6;
+const GAP_CHANCE: f64 = 0.125;
+
+/// The lane (ft) kept clear down the middle of hand bridge `c` (no building drawn by hand stands on it):
+/// `width − 2·MAX_SHOP_DEPTH_FT`, at least `MIN_LANE_FT`.
+pub fn bridge_lane(c: &crate::world::Crossing) -> f64 {
+    (c.width - 2.0 * MAX_SHOP_DEPTH_FT).max(MIN_LANE_FT)
 }
 
-/// Shop lots (world ft rectangles) along both sides of hand bridge `c`'s deck, each `frontage`
-/// along the bridge and up to `depth` across, against a middle lane `lane` ft wide (at least
-/// `MIN_LANE_FT`), the `END_CLEAR_FT` at each end left clear: first the left side's from `a` to
-/// `b`, then the right's. None on a ford or ferry, or a deck with no room for a row 8 ft deep.
-pub fn bridge_lots(c: &crate::world::Crossing, lane: f64, depth: f64, frontage: f64) -> Vec<Vec<P>> {
+/// A key for the hashes that vary bridge `id`'s shops.
+pub fn key_of(id: &str) -> u64 {
+    crate::core::rng::stream(0x5b0b, id)
+}
+
+/// A shop lot: its footprint (world ft) and storeys.
+pub type Lot = (Vec<P>, u8);
+
+/// Shop lots (world ft rectangles) along both sides of hand bridge `c`'s deck, each up to `depth` across, against a
+/// middle lane `lane` ft wide (at least `MIN_LANE_FT`), the `END_CLEAR_FT` at each end left clear: the left side's
+/// lots from `a` to `b`, then the right's. Uniform lots `frontage` along when `key` is None; else varied
+/// (`VARY_*`), a pure function of `key` and the lot's place along the deck (the first lot of the first side is
+/// always as deep as `depth`). Empty on a ford or ferry, or a deck with no room for a row 8 ft deep.
+pub fn bridge_sides(c: &crate::world::Crossing, lane: f64, depth: f64, frontage: f64, key: Option<u64>) -> [Vec<Lot>; 2] {
     let lane = lane.max(MIN_LANE_FT);
     let depth = depth.min(0.5 * (c.width - lane));
     let len = c.length();
     if c.kind != crate::world::CrossingKind::Bridge || depth < 8.0 || frontage < 8.0 || !frontage.is_finite() || len < 1.0 {
-        return Vec::new();
+        return [Vec::new(), Vec::new()];
     }
     let usable = len - 2.0 * END_CLEAR_FT;
-    let n = if usable >= frontage { (usable / frontage).floor() as usize } else { 0 };
     let u = geom::sub(c.b, c.a);
     let (u, v) = ([u[0] / len, u[1] / len], [-u[1] / len, u[0] / len]);
-    let start = END_CLEAR_FT + 0.5 * (usable - n as f64 * frontage);
-    let mut out = Vec::with_capacity(2 * n);
-    for side in [1.0, -1.0] {
-        let across = side * (0.5 * lane + 0.5 * depth);
-        for k in 0..n {
-            let along = start + (k as f64 + 0.5) * frontage;
+    let mut out = [Vec::new(), Vec::new()];
+    for (s, side) in [1.0, -1.0].into_iter().enumerate() {
+        // (along from the first lot's start, frontage, depth, storeys)
+        let mut cells: Vec<(f64, f64, f64, u8)> = Vec::new();
+        let mut pos = 0.0;
+        match key {
+            None => {
+                let n = if usable >= frontage { (usable / frontage).floor() as usize } else { 0 };
+                cells.extend((0..n).map(|k| (k as f64 * frontage, frontage, depth, 2u8)));
+                pos = n as f64 * frontage;
+            }
+            Some(key) => {
+                for k in 0..200i64 {
+                    let h = |w: i64| crate::core::rng::unit(crate::core::rng::hash3(key, s as i64, k, w));
+                    let f = crate::core::round(SHOP_FRONT_FT * (VARY_FRONT.0 + (VARY_FRONT.1 - VARY_FRONT.0) * h(0)));
+                    if k > 0 && h(1) < GAP_CHANCE {
+                        let gap = crate::core::round(0.5 * f).max(8.0);
+                        if pos + gap > usable {
+                            break;
+                        }
+                        pos += gap;
+                        continue;
+                    }
+                    if pos + f > usable {
+                        break;
+                    }
+                    let d = if s == 0 && cells.is_empty() { depth } else { crate::core::round(depth * (VARY_DEPTH_MIN + (1.0 - VARY_DEPTH_MIN) * h(2))).max(8.0) };
+                    cells.push((pos, f, d, 1 + ((h(3) * 3.0) as u8).min(2)));
+                    pos += f;
+                }
+            }
+        }
+        let start = END_CLEAR_FT + 0.5 * (usable - pos);
+        for (at, f, d, floors) in cells {
+            let across = side * (0.5 * lane + 0.5 * d);
+            let along = start + at + 0.5 * f;
             let m = [c.a[0] + u[0] * along + v[0] * across, c.a[1] + u[1] * along + v[1] * across];
-            out.push(crate::town::rect(m, u, frontage, depth));
+            out[s].push((crate::town::rect(m, u, f, d), floors));
         }
     }
     out
+}
+
+/// `bridge_sides` uniform, as one list (the left side's lots, then the right's).
+pub fn bridge_lots(c: &crate::world::Crossing, lane: f64, depth: f64, frontage: f64) -> Vec<Vec<P>> {
+    bridge_sides(c, lane, depth, frontage, None).into_iter().flatten().map(|l| l.0).collect()
 }
 
 /// Whether a crossing from `a` to `b` (world ft) has water under it: a river's channel or standing
@@ -198,6 +250,9 @@ pub struct Rows {
     pub lane: f64,
     /// `lane_ft` was given (else the lane is whatever the bridge's width leaves between the rows).
     pub lane_given: bool,
+    /// Vary each lot's size, depth and storeys (`bridge_sides`), keyed by `key` (`key_of` the bridge's id).
+    pub vary: bool,
+    pub key: u64,
 }
 
 impl Rows {
@@ -207,42 +262,53 @@ impl Rows {
 
     /// The default rows.
     pub fn standard() -> Rows {
-        Rows { depth: SHOP_DEPTH_FT, frontage: SHOP_FRONT_FT, lane: SHOP_LANE_FT, lane_given: false }
+        Rows { depth: SHOP_DEPTH_FT, frontage: SHOP_FRONT_FT, lane: SHOP_LANE_FT, lane_given: false, vary: false, key: 0 }
     }
 }
 
 /// The trades shops take by turns along a bridge.
 pub const TRADES: [&str; 6] = ["general_store", "tailor", "apothecary", "cobbler", "jeweler", "cartographer"];
 
+/// A shop to build: footprint, trade and storeys.
+pub struct Shop {
+    pub poly: Vec<P>,
+    pub func: &'static str,
+    pub floors: u8,
+}
+
 /// The shop lots along bridge `c` as `rows` say, each with its trade (by turns), or why not (the rules mapd's
 /// `place_crossing shops` and the app's Crossing mode share).
-pub fn shop_lots(c: &crate::world::Crossing, rows: Rows) -> Result<Vec<(Vec<P>, &'static str)>, String> {
+pub fn shop_lots(c: &crate::world::Crossing, rows: Rows) -> Result<Vec<Shop>, String> {
     if c.kind != crate::world::CrossingKind::Bridge {
         return Err(format!("shops: only a bridge has them (this is a {})", c.kind.name()));
+    }
+    if rows.depth > MAX_SHOP_DEPTH_FT + 1e-9 {
+        return Err(format!("shops: rows are at most {MAX_SHOP_DEPTH_FT} ft deep"));
     }
     if c.width + 1e-9 < rows.width() {
         return Err(format!("shops: rows {} ft deep either side of a lane {} ft wide need width_ft {} or more, this one is {}", rows.depth, rows.lane, rows.width(), c.width));
     }
     // The lane between the rows: as asked, else what the width leaves. The deck keeps `bridge_lane` clear down its middle (no building stands on it).
     let lane = if rows.lane_given { rows.lane } else { (c.width - 2.0 * rows.depth).max(rows.lane) };
-    let kept = bridge_lane(c, SHOP_DEPTH_FT);
+    let kept = bridge_lane(c);
     if kept > lane + 1e-9 {
-        return Err(format!("shops: a {} ft wide bridge keeps {kept} ft clear down its middle (width_ft less {}): rows {} ft deep with a lane of {lane} ft would stand on it; give lane_ft {kept} or more, or a narrower width_ft", c.width, 2.0 * SHOP_DEPTH_FT, rows.depth));
+        return Err(format!("shops: a {} ft wide bridge keeps {kept} ft clear down its middle (width_ft less {}): rows {} ft deep with a lane of {lane} ft would stand on it; give lane_ft {kept} or more, or a narrower width_ft", c.width, 2.0 * MAX_SHOP_DEPTH_FT, rows.depth));
     }
-    let lots = bridge_lots(c, lane, rows.depth, rows.frontage);
-    if lots.is_empty() {
+    let [l, r] = bridge_sides(c, lane, rows.depth, rows.frontage, rows.vary.then_some(rows.key));
+    if l.is_empty() && r.is_empty() {
         return Err(format!("shops: a bridge {} ft long has no room for a row (20 ft are left clear at each end: it needs {} ft or more)", c.length().round(), rows.frontage + 2.0 * END_CLEAR_FT));
     }
-    Ok(lots.into_iter().enumerate().map(|(k, lot)| (lot, TRADES[k % TRADES.len()])).collect())
+    Ok(l.into_iter().chain(r).enumerate().map(|(k, (poly, floors))| Shop { poly, func: TRADES[k % TRADES.len()], floors }).collect())
 }
 
 /// Shops along bridge `c` (`id`) as `rows` say: each a drawn building `on` it, in a trade by turns. Their ids, or why not.
-pub fn lay_shops(e: &mut crate::world::Edits, id: &str, c: &crate::world::Crossing, rows: Rows) -> Result<Vec<String>, String> {
+pub fn lay_shops(e: &mut crate::world::Edits, id: &str, c: &crate::world::Crossing, mut rows: Rows) -> Result<Vec<String>, String> {
+    rows.key = key_of(id);
     let mut out = Vec::new();
-    for (lot, trade) in shop_lots(c, rows)? {
-        let m = geom::centroid(&lot);
+    for s in shop_lots(c, rows)? {
+        let m = geom::centroid(&s.poly);
         let cid = format!("c:{}", e.created.len());
-        e.created.push(crate::world::Created { id: cid.clone(), kind: "building".into(), x: m[0], y: m[1], poly: lot, floors: Some(2), func: Some(trade.into()), on: Some(id.to_string()), ..Default::default() });
+        e.created.push(crate::world::Created { id: cid.clone(), kind: "building".into(), x: m[0], y: m[1], poly: s.poly, floors: Some(s.floors), func: Some(s.func.into()), on: Some(id.to_string()), ..Default::default() });
         out.push(cid);
     }
     Ok(out)
@@ -271,7 +337,7 @@ pub fn deck_level_at(world: &crate::world::World, t0: &T0, on: &str, p: P) -> Op
 }
 
 /// The hand bridge whose deck footprint `poly` (world ft) stands wholly on, if one: its id, and
-/// when it is over the bridge's lane (`bridge_lane` with rows `SHOP_DEPTH_FT` deep, where no
+/// when it is over the bridge's lane (`bridge_lane`, where no
 /// building may stand), the lane's width. `None` when it is on no deck (or only partly on one).
 pub fn deck_under(world: &crate::world::World, poly: &[P]) -> Option<(String, Option<f64>)> {
     if poly.len() < 3 {
@@ -297,7 +363,7 @@ pub fn deck_under(world: &crate::world::World, poly: &[P]) -> Option<(String, Op
         }) {
             continue;
         }
-        let lane = bridge_lane(c, SHOP_DEPTH_FT);
+        let lane = bridge_lane(c);
         let over = probes.iter().any(|&p| frame(p).1.abs() < 0.5 * lane - 0.5);
         return Some((id.clone(), over.then_some(lane)));
     }

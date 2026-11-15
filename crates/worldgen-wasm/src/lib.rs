@@ -255,6 +255,14 @@ impl Ctx {
             depth: f64,
             frontage: f64,
             lane: Option<f64>,
+            /// `lane` is exactly as asked (else the least; the bridge's width may leave more).
+            #[serde(default)]
+            exact: bool,
+            #[serde(default)]
+            vary: bool,
+            /// The bridge's id (its hash for varied shops).
+            #[serde(default)]
+            id: String,
         }
         #[derive(serde::Deserialize)]
         struct Follow {
@@ -284,9 +292,9 @@ impl Ctx {
             e.follow_crossing(&f.id, f.old.as_ref());
             return serde_json::json!({ "created": e.created }).to_string();
         }
-        let r = i.rows.map_or_else(wharf::Rows::standard, |r| wharf::Rows { depth: r.depth, frontage: r.frontage, lane: r.lane.unwrap_or(wharf::SHOP_LANE_FT), lane_given: r.lane.is_some() });
+        let r = i.rows.map_or_else(wharf::Rows::standard, |r| wharf::Rows { depth: r.depth, frontage: r.frontage, lane: r.lane.unwrap_or(wharf::SHOP_LANE_FT), lane_given: r.lane.is_some() && r.exact, vary: r.vary, key: wharf::key_of(&r.id) });
         match wharf::shop_lots(&i.crossing, r) {
-            Ok(l) => serde_json::json!({ "lots": l.into_iter().map(|(poly, func)| serde_json::json!({ "poly": poly, "func": func })).collect::<Vec<_>>() }).to_string(),
+            Ok(l) => serde_json::json!({ "lots": l.into_iter().map(|s| serde_json::json!({ "poly": s.poly, "func": s.func, "floors": s.floors })).collect::<Vec<_>>() }).to_string(),
             Err(e) => serde_json::json!({ "error": e }).to_string(),
         }
     }

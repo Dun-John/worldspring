@@ -18,20 +18,26 @@ export interface CrossSettings {
   material: CrossingMaterial;
   /** A bridge's shops along its deck. */
   shops: boolean;
-  /** How deep each shop is (ft). */
+  /** How deep the deepest shops are (ft). */
   shopDepth: number;
+  /** The least lane left between the rows (ft). */
+  shopLane: number;
+  /** Each shop its own size, depth and storeys (else even rows). */
+  shopVary: boolean;
 }
 
-export const defaultCross = (): CrossSettings => ({ kind: 'bridge', width: 12, material: 'timber', shops: false, shopDepth: SHOP_DEPTH_FT });
+export const defaultCross = (): CrossSettings => ({ kind: 'bridge', width: 12, material: 'timber', shops: false, shopDepth: SHOP_DEPTH_FT, shopLane: SHOP_LANE_FT, shopVary: true });
 
-/** Shop rows (`wharf::SHOP_*`): each lot 20 ft along the deck, 10 to 18 deep either side of a lane of at least 14 ft
- * (a deeper row would stand on the lane the deck keeps clear). */
+/** Shop rows (`wharf::SHOP_*`): rows up to 10 to 40 ft deep either side of a lane of 10 to 40 ft (14 by default); with
+ * Vary on each lot is 14 to 32 ft along the deck and 60 to 100% as deep, an even row's lots 20 ft. The width is at least
+ * the lane and both rows; a wider bridge has a broader lane. */
 export const SHOP_DEPTH_FT = 18;
-export const SHOP_DEPTH_RANGE: [number, number] = [10, 18];
+export const SHOP_DEPTH_RANGE: [number, number] = [10, 40];
 export const SHOP_FRONT_FT = 20;
 export const SHOP_LANE_FT = 14;
-/** The narrowest bridge that holds rows `depth` deep (ft). */
-export const shopsWidth = (depth: number) => SHOP_LANE_FT + 2 * depth;
+export const SHOP_LANE_RANGE: [number, number] = [10, 40];
+/** The narrowest bridge that holds rows `depth` deep either side of a lane `lane` wide (ft). */
+export const shopsWidth = (depth: number, lane: number = SHOP_LANE_FT) => lane + 2 * depth;
 
 /** A crossing from the menu's choices: a bridge of old stone says so, timber and the other
  * kinds carry no material (as the world file keeps them). */
