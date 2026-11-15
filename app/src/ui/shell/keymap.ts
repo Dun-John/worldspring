@@ -52,6 +52,8 @@ export interface KeyContext {
   buildHarbour(): void;
   /** Castles or walls. */
   buildWorks(m: 'castle' | 'wall'): void;
+  /** Stamp, row or plot. */
+  buildQuick(m: 'stamp' | 'row' | 'lasso'): void;
   buildFinish(): void;
   buildBack(): void;
   designMode(m: DesignMode): void;
@@ -64,6 +66,14 @@ export interface KeyContext {
   townMode(m: TownMode): void;
   /** The town brush a step bigger (1) or smaller (-1). */
   townBrush(d: number): void;
+  /** The town in view is laid out by hand (its street graph is shown) and its trace underlay isn't being adjusted. */
+  townHand(): boolean;
+  /** The street, area or wall being drawn ended (false: none). */
+  townStreetFinish(): boolean;
+  /** Its last point taken back (false: none drawn). */
+  townStreetBack(): boolean;
+  /** The street, area or wall picked taken away (false: none). */
+  townStreetDelete(): boolean;
   groundMode(m: GroundMode): void;
   /** The ground brush a step wider (1) or narrower (-1). */
   groundBrush(d: 1 | -1): void;
@@ -158,10 +168,13 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   for (const [key, s, label] of shapes) out.push({ keys: [key], label, group: 'Build', when: edit('build'), run: () => k.buildShape(s) });
   out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when: edit('build'), run: () => k.buildCross() });
   out.push({ keys: ['H'], label: 'Harbour (islet, quay, pier, breakwater)', group: 'Build', when: edit('build'), run: () => k.buildHarbour() });
+  out.push({ keys: ['Q'], label: 'Stamp (a building of a kind and size)', group: 'Build', when: edit('build'), run: () => k.buildQuick('stamp') });
+  out.push({ keys: ['E'], label: 'Row of buildings along a street', group: 'Build', when: edit('build'), run: () => k.buildQuick('row') });
+  out.push({ keys: ['L'], label: 'Plot (draw round it, fill it)', group: 'Build', when: edit('build'), run: () => k.buildQuick('lasso') });
   out.push({ keys: ['K'], label: 'Castle', group: 'Build', when: edit('build'), run: () => k.buildWorks('castle') });
   out.push({ keys: ['W'], label: 'Wall', group: 'Build', when: edit('build'), run: () => k.buildWorks('wall') });
   out.push(
-    { keys: ['Enter'], label: 'Finish the polygon, castle or wall', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
+    { keys: ['Enter'], label: 'Finish the polygon, castle, wall, row or plot', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
     { keys: ['Backspace'], label: 'Take a corner back', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildBack() },
   );
   const town: [string, TownMode, string][] = [
@@ -174,6 +187,15 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['E', 'equalize', 'Equalize'],
   ];
   for (const [key, m, label] of town) out.push({ keys: [key], label, group: 'Streets', when: edit('town'), run: () => k.townMode(m) });
+  const hand = () => edit('town')() && k.townHand();
+  out.push(
+    { keys: ['N'], label: 'Draw a street (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('street') },
+    { keys: ['A'], label: 'Paint an area open or paved (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('area') },
+    { keys: ['W'], label: 'Draw a wall (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('wall') },
+    { keys: ['Enter'], label: 'End the street, area or wall being drawn', group: 'Streets', when: hand, run: () => k.townStreetFinish() },
+    { keys: ['Backspace'], label: 'Take a point back, else take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetBack() || k.townStreetDelete() },
+    { keys: ['Delete'], label: 'Take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetDelete() },
+  );
   out.push(
     { keys: [']'], label: 'Bigger brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(1) },
     { keys: ['['], label: 'Smaller brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(-1) },

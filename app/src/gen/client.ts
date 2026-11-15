@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, GenIslet, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -127,6 +127,22 @@ export class GenClient {
     return this.ask({ op: 'building', poly, func, id }).then((j) => JSON.parse(j));
   }
 
+  /** A building of a kind set down at (x, y): fronting the nearest street (`facing` degrees: exactly there if clear), its spot,
+   * name and the generated buildings it would take away (`clear`); or why not. */
+  stamp(q: StampAsk): Promise<StampAnswer | { error: string } | null> {
+    return this.ask({ op: 'stamp', input: JSON.stringify(q) }).then((j) => JSON.parse(j));
+  }
+
+  /** A row of buildings along a path: its lots (with names), the removals, the slots refused; or why not. */
+  row(q: RowAsk): Promise<RowAnswer | { error: string } | null> {
+    return this.ask({ op: 'row', input: JSON.stringify(q) }).then((j) => JSON.parse(j));
+  }
+
+  /** Whether an outline can be a plot: its middle, or why not (`over`: the plot it meets). */
+  parcelCheck(poly: [number, number][]): Promise<{ x: number; y: number } | { error: string; over?: [number, number][] } | null> {
+    return this.ask({ op: 'parcel', input: JSON.stringify({ poly }) }).then((j) => JSON.parse(j));
+  }
+
   /** Shop lots along a bridge (`rows` ft; lane absent: what the width leaves), or why not. */
   bridgeLots(crossing: Crossing, rows: { depth: number; frontage: number; lane?: number } | null): Promise<{ lots: { poly: [number, number][]; func: string }[] } | { error: string } | null> {
     return this.ask({ op: 'bridgelots', input: JSON.stringify({ crossing, rows }) }).then((j) => JSON.parse(j));
@@ -188,6 +204,19 @@ export class GenClient {
   /** What the designer offers: props, room kinds, themes. */
   underCatalog(): Promise<UnderCatalog> {
     return this.ask({ op: 'undercat' }).then((j) => JSON.parse(j) as UnderCatalog);
+  }
+
+  /** A hand town's street plan, or why it has none. */
+  streetPlan(layout: number): Promise<StreetPlan | { error: string }> {
+    return this.ask({ op: 'streetplan', layout }).then((j) => (JSON.parse(j) as StreetPlan | { error: string } | null) ?? { error: 'The map could not answer: try again' });
+  }
+
+  /** A hand town's streets changed as asked, the edits left alone: the change to apply to the
+   * edits (per key, null = remove) and its report, or why not. */
+  streetChange(layout: number, request: StreetRequest): Promise<{ change: StreetChange; report: StreetReport } | { error: string }> {
+    return this.ask({ op: 'streetchange', layout, request: JSON.stringify(request) }).then(
+      (j) => (JSON.parse(j) as { change: StreetChange; report: StreetReport } | { error: string } | null) ?? { error: 'The map could not answer: try again' },
+    );
   }
 
   /** A town's plan for the ward editor (patches, corners, walls), or why it has none. */

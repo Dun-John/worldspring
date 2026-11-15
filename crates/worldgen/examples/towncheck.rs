@@ -8852,7 +8852,7 @@ fn hand_edits(world: &World, t0: &T0, label: &str, lis: &[usize], r: &mut Report
                         }
                         w = World::new(file).unwrap();
                     }
-                    HandRequest::SetBlock { block: id, fill: Some(hand::BlockFill::Generated { ward: "merchant".into(), lots: None, reroll: 0, close: None }), district: None, seed: None, reroll: false }
+                    HandRequest::SetBlock { block: id, fill: Some(hand::BlockFill::Generated { ward: "merchant".into(), lots: None, height: None, reroll: 0, close: None }), district: None, seed: None, reroll: false }
                 }),
                 "row" => recs.streets.iter().filter_map(|(id, st)| Some((dist(recs.junctions.get(&st.a)?.p, recs.junctions.get(&st.b)?.p), *id))).max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1))).map(|(_, e)| HandRequest::AddRow { street: e, side: "l".into(), depth: 40.0, ward: "common".into(), lots: None, gaps: None, seed: None }),
                 "square" => recs.junctions.iter().find(|(id, j)| j.square.is_none() && recs.streets.values().filter(|s| s.a == **id || s.b == **id).count() >= 3).map(|(id, _)| HandRequest::SetSquare { junction: *id, square: "market".into() }),
@@ -9107,13 +9107,13 @@ fn hand_built(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
     use worldgen::town::hand;
     r.counts(&["hand towns built", "hand: buildings missing", "hand: buildings extra", "hand: buildings differing", "hand: problems"]);
     r.counts(&["hand: squares", "hand: squares differing", "hand: parks", "hand: parks differing", "hand: parks of no block (not rebuilt)", "hand: monuments", "hand: monuments missing", "hand: monuments extra", "hand: fields", "hand: fields missing", "hand: fields extra"]);
+    r.counts(&["hand: harbour fields", "hand: harbour fields differing", "hand: props differing (not kept yet)", "hand: places", "hand: places differing"]);
     r.counts(&["refill: blocks", "refill: buildings", "refill: row buildings", "refill: outside the block", "refill: overlapping", "refill: over a street"]);
     let key = |pts: &[[f64; 2]]| format!("{pts:?}");
     let mut file = world.file.clone();
-    for (li, json) in first {
+    for json in first.values() {
         let recs: Vec<(String, serde_json::Value)> = serde_json::from_str(json).unwrap();
         file.edits.streets.extend(recs);
-        file.edits.wharves.extend(hand::wharves(world, t0, *li));
     }
     let hw = World::new(file.clone()).unwrap();
     let originals: Map<usize, std::rc::Rc<Layout>> = first.keys().map(|&li| (li, town::base_layout(world, t0, li))).collect();
@@ -9181,6 +9181,41 @@ fn hand_built(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
             }
             if extra > 0 {
                 r.add(&format!("hand: {what} extra"), extra as f64, format!("{label} L{li}: {extra} of {}", g.len()));
+            }
+        }
+        // P4: the harbour (piers, breakwaters, boats, port, props) and the places' names and labels
+        // as the town drew them before it was laid out by hand (the layouts the map draws).
+        let (lw, lg) = (town::layout(world, t0, li), town::layout(&hw, t0, li));
+        let props = |l: &Layout| l.props.iter().map(|p| format!("{p:?}")).collect::<Vec<_>>();
+        for (what, same) in [
+            ("piers", lw.piers == lg.piers),
+            ("breakwaters", lw.moles == lg.moles),
+            ("boats", lw.moored == lg.moored),
+            ("port", lw.port == lg.port),
+        ] {
+            r.tally("hand: harbour fields", 1);
+            if !same {
+                r.add("hand: harbour fields differing", 0.0, format!("{label} L{li} {what}"));
+            }
+        }
+        // (Props: yurts' and sites' are not kept by conversion yet, P3's known limit.)
+        if props(&lw) != props(&lg) {
+            r.add("hand: props differing (not kept yet)", 0.0, format!("{label} L{li}: {} before, {} after", lw.props.len(), lg.props.len()));
+        }
+        // (Bridges within 1 ft, corner by corner: kept decks are stored to 1/64 ft.)
+        let near = |a: &Vec<[f64; 2]>, b: &Vec<[f64; 2]>| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (p[0] - q[0]).abs() < 1.0 && (p[1] - q[1]).abs() < 1.0);
+        let gone = lw.bridges.iter().filter(|d| !lg.bridges.iter().any(|e| near(d, e))).count();
+        let new = lg.bridges.iter().filter(|d| !lw.bridges.iter().any(|e| near(d, e))).count();
+        r.tally("hand: harbour fields", 1);
+        if gone + new > 0 {
+            r.add("hand: harbour fields differing", 0.0, format!("{label} L{li} bridges: {gone} of {} gone, {new} new", lw.bridges.len()));
+        }
+        let pl = |w: &World, l: &Layout| worldgen::town::places::of(w, t0, l).into_iter().map(|p| (p.id.clone(), format!("{} {:?}", p.name, p.label))).collect::<Map<String, String>>();
+        let (pw, pg) = (pl(world, &lw), pl(&hw, &lg));
+        r.tally("hand: places", pw.len());
+        for (id, v) in &pw {
+            if pg.get(id) != Some(v) {
+                r.add("hand: places differing", 0.0, format!("{label} L{li} {id}: {}", if pg.contains_key(id) { "otherwise" } else { "missing" }));
             }
         }
     }

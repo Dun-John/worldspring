@@ -46,6 +46,15 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `created ${String(change.kind ?? 'site')} “${String(change.name ?? nameOf(id))}”`;
       case 'create_settlement':
         return `added ${String(change.kind ?? 'settlement')} “${String(change.name ?? nameOf(id))}”`;
+      case 'create_building_row': {
+        const n = Number(change.count ?? (Array.isArray(change.ids) ? change.ids.length : 0));
+        return `put down ${n === 1 ? 'a building' : `${n} buildings`} in a row`;
+      }
+      case 'create_parcel':
+        return change.name ? `made the plot “${String(change.name)}”` : 'made a plot';
+      case 'update_parcel':
+        return 'changed a plot';
+      case 'place_stamp':
       case 'create_building':
         return `built “${String(change.name ?? nameOf(id))}”`;
       case 'update_building':
@@ -149,6 +158,29 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         if (lost.length) parts.push(`no room left for: ${lost.map((f) => f.replace(/_/g, ' ')).join(', ')}`);
         const town = String(change.name ?? (id ? nameOf(id) : 'the town'));
         return `laid ${town} out anew${parts.length ? `: ${parts.join('; ')}` : ''}`;
+      }
+      case 'edit_streets': {
+        const town = String(change.name ?? (id ? nameOf(id) : 'the town'));
+        const b = change.buildings as { before: number; after: number } | undefined;
+        const more = b && b.before !== b.after ? ` (${b.after.toLocaleString('en')} buildings, were ${b.before.toLocaleString('en')})` : '';
+        switch (change.op) {
+          case 'lay_out_by_hand':
+            return `laid ${town} out by hand`;
+          case 'back_to_generated':
+            return `${town} as generated again`;
+          case 'add_street':
+            return `drew a street in ${town}${more}`;
+          case 'delete_street':
+            return `took away a street in ${town}${more}`;
+          case 'set_street':
+            return `changed a street in ${town}`;
+          case 'move_junctions': {
+            const n = Number(change.moved ?? 0);
+            return `moved ${n === 1 ? 'a junction' : `${n || 'the'} junctions`} in ${town}${more}`;
+          }
+          default:
+            return `changed the streets of ${town}${more}`;
+        }
       }
       case 'shape_ground': {
         const how: Record<string, string> = { raise: 'raised', lower: 'lowered', smooth: 'smoothed', restore: 'put back' };
