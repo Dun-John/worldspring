@@ -6,7 +6,8 @@
 //! Both are applied only where heights are read for a battlemap (`battlemap::generate`) and, at
 //! the three finest levels, for the terrain texture; never to a tile's `padded` samples, so
 //! terrain refinement (and every seam and zoom check) never depends on them. Evaluation is a pure
-//! function of position and the edits: plateaus largest first (then by key), then the brushed
+//! function of position and the edits: plateaus stacked (`stack`: the highest holds, pits dig
+//! through, the deepest holds), then the brushed
 //! change, clamped to `MAX_SHIFT_FT` and never sinking ground that was dry below the water by it.
 //! The world's own islets by its cities (`t0::islets`, from T0 alone) are shaped with them
 //! wherever T0 is given, and a caller can add raised ground of its own (`Shaper::with_extra`).
@@ -88,7 +89,41 @@ pub struct Plateau {
     /// A plateau (the default, not written) or a rock islet out in the water (`islet_for`).
     #[serde(default, skip_serializing_if = "PlateauKind::is_plateau")]
     pub kind: PlateauKind,
+    /// What its top (a pit's floor) draws as: absent, the ground's own, but bare rock on a pit's
+    /// floor `CHASM_FT` or more below the ground there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<Floor>,
 }
+
+/// A plateau's top or a pit's floor (`Plateau::floor`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Floor {
+    /// The ground's own (grass, sand, ...), however deep.
+    Ground,
+    /// Bare rock (scree at its foot), at every zoom.
+    Rock,
+}
+
+impl Floor {
+    pub fn parse(s: &str) -> Option<Floor> {
+        match s {
+            "ground" => Some(Floor::Ground),
+            "rock" => Some(Floor::Rock),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Floor::Ground => "ground",
+            Floor::Rock => "rock",
+        }
+    }
+}
+
+/// A pit's floor this far (ft) or more below the ground there is bare rock unless its `floor`
+/// says otherwise: a chasm, not a lawn between two cliffs.
+pub const CHASM_FT: f64 = 15.0;
 
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
@@ -110,7 +145,7 @@ impl PlateauKind {
     }
 }
 
-/// What the shaping makes of a square's ground (`Shaper::look_at_square`): the ground's own,
+/// What the shaping makes of a square's ground (`Shaper::at_square_look`): the ground's own,
 /// bare rock (an islet's top; `rim`: its edge), or made ground (a quay's or breakwater's top,
 /// paved).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,11 +201,11 @@ impl Plateau {
     }
 }
 
-fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
+pub(crate) fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
     pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
-fn crosses_itself(pts: &[[f64; 2]]) -> bool {
+pub(crate) fn crosses_itself(pts: &[[f64; 2]]) -> bool {
     let n = pts.len();
     let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     for i in 0..n {
@@ -335,7 +370,22 @@ struct Kept<'a> {
     /// Only ever raises the ground (made ground: a quay's or breakwater's strip).
     raise: bool,
     look: Look,
+    /// A hand plateau's `floor`.
+    floor: Option<Floor>,
 }
+
+/// One step of the shaping (`Shaper::shape`): the pieces `at` (indices into `order`) of one
+/// level, raising (none lowers the ground) or digging (pits below the ground, none raises it).
+struct Step {
+    dig: bool,
+    level: f64,
+    at: std::ops::Range<usize>,
+}
+
+/// A pit's floor eases from levelling only the ground (a piece at the ground's own height) to
+/// cutting through raised ground over its first this many ft below the ground (so the shaping
+/// stays continuous where a piece's level crosses the ground).
+const DIG_EASE_FT: f64 = 5.0;
 
 impl Kept<'_> {
     /// Its weight at (x, y): 1 inside, easing to 0 over its band outside; `None` beyond.
@@ -352,9 +402,9 @@ impl Kept<'_> {
     }
 }
 
-/// Whether any edits shape the ground: brushed blocks, plateaus, quays or breakwaters.
+/// Whether any edits shape the ground: brushed blocks, plateaus, water outlines, quays or breakwaters.
 pub fn shapes(edits: &crate::world::Edits) -> bool {
-    !edits.ground.is_empty() || !edits.plateaus.is_empty() || edits.wharves.values().any(|w| w.kind != crate::world::WharfKind::Pier)
+    !edits.ground.is_empty() || !edits.plateaus.is_empty() || !edits.waters.is_empty() || edits.wharves.values().any(|w| w.kind != crate::world::WharfKind::Pier)
 }
 
 /// The shaping that reaches one rectangle (a battlemap chunk with its halo, a tile), looked up
@@ -366,7 +416,13 @@ pub struct Shaper<'a> {
     bh: i64,
     blocks: Vec<Option<&'a GroundBlock>>,
     plats: Vec<Kept<'a>>,
+    /// Indices into `plats`, step by step (`steps`).
+    order: Vec<u16>,
+    steps: Vec<Step>,
     reach: [f64; 4],
+    /// Water drawn by hand meeting the rectangle (`waters`), and the bank's least width.
+    waters: Vec<crate::waters::Near<'a>>,
+    band: f64,
 }
 
 impl<'a> Shaper<'a> {
@@ -391,7 +447,7 @@ impl<'a> Shaper<'a> {
     fn gather(edits: &'a crate::world::Edits, t0: Option<&crate::t0::T0>, extra: &[Raised], rect: [f64; 4], spacing: f64) -> Option<Shaper<'a>> {
         let near = |b: [f64; 4], band: f64| !(b[2] + band < rect[0] || b[0] - band > rect[2] || b[3] + band < rect[1] || b[1] - band > rect[3]);
         let islet_band = (ISLET_EDGE_FT as f64).max(spacing);
-        let world_islets: Vec<(usize, &crate::t0::islets::Islet)> = t0.map_or(Vec::new(), |t0| crate::t0::islets::islets(t0).iter().enumerate().filter(|(_, i)| near(i.bbox, islet_band)).collect());
+        let world_islets: Vec<(usize, &crate::t0::islets::Islet)> = t0.map_or(Vec::new(), |t0| crate::t0::islets::islets(t0).iter().enumerate().filter(|(_, i)| near(i.bbox, islet_band) && !edits.hidden.contains(&i.id)).collect());
         if !shapes(edits) && world_islets.is_empty() && extra.is_empty() {
             return None;
         }
@@ -420,10 +476,9 @@ impl<'a> Shaper<'a> {
                 }
             }
         }
-        let mut plats: Vec<(f64, std::borrow::Cow<str>, Kept)> = Vec::new();
+        let mut plats: Vec<(std::borrow::Cow<str>, Kept)> = Vec::new();
         for (k, p) in &edits.plateaus {
-            let n = p.pts.len();
-            if !(3..=MAX_PLATEAU_PTS).contains(&n) || !p.pts.iter().all(|q| q[0].is_finite() && q[1].is_finite()) || !p.level.is_finite() || !p.edge.is_finite() {
+            if !usable(p) {
                 continue;
             }
             let b = bbox(&p.pts);
@@ -436,13 +491,13 @@ impl<'a> Shaper<'a> {
             }
             grow([b[0] - band, b[1] - band, b[2] + band, b[3] + band]);
             let look = if p.kind == PlateauKind::Islet { Look::Rock { rim: false } } else { Look::Ground };
-            plats.push((geom::area(&p.pts).abs(), std::borrow::Cow::Borrowed(k.as_str()), Kept { pts: std::borrow::Cow::Borrowed(&p.pts), level: p.level as f64, band, b, raise: false, look }));
+            plats.push((std::borrow::Cow::Borrowed(k.as_str()), Kept { pts: std::borrow::Cow::Borrowed(&p.pts), level: p.level as f64, band, b, raise: false, look, floor: p.floor }));
         }
         // The world's islets (rock, like a hand islet) and the caller's raised ground.
         for (i, isl) in world_islets {
             grow([isl.bbox[0] - islet_band, isl.bbox[1] - islet_band, isl.bbox[2] + islet_band, isl.bbox[3] + islet_band]);
-            let kept = Kept { pts: std::borrow::Cow::Owned(isl.pts.clone()), level: isl.level as f64, band: islet_band, b: isl.bbox, raise: false, look: Look::Rock { rim: false } };
-            plats.push((geom::area(&isl.pts).abs(), std::borrow::Cow::Owned(format!("~t0:{i:05}")), kept));
+            let kept = Kept { pts: std::borrow::Cow::Owned(isl.pts.clone()), level: isl.level as f64, band: islet_band, b: isl.bbox, raise: false, look: Look::Rock { rim: false }, floor: None };
+            plats.push((std::borrow::Cow::Owned(format!("~t0:{i:05}")), kept));
         }
         for (i, r) in extra.iter().enumerate() {
             if r.pts.len() < 3 || !r.level.is_finite() {
@@ -453,8 +508,8 @@ impl<'a> Shaper<'a> {
                 continue;
             }
             grow([b[0] - band, b[1] - band, b[2] + band, b[3] + band]);
-            let kept = Kept { pts: std::borrow::Cow::Owned(r.pts.clone()), level: r.level as f64, band, b, raise: r.look == Look::Made, look: r.look };
-            plats.push((geom::area(&r.pts).abs(), std::borrow::Cow::Owned(format!("~x:{i:05}")), kept));
+            let kept = Kept { pts: std::borrow::Cow::Owned(r.pts.clone()), level: r.level as f64, band, b, raise: r.look == Look::Made, look: r.look, floor: None };
+            plats.push((std::borrow::Cow::Owned(format!("~x:{i:05}")), kept));
         }
         // Quays and breakwaters: made ground, raised (never dug) to their level.
         let band = spacing;
@@ -475,15 +530,18 @@ impl<'a> Shaper<'a> {
                     continue;
                 }
                 grow([b[0] - band, b[1] - band, b[2] + band, b[3] + band]);
-                plats.push((geom::area(&strip).abs(), std::borrow::Cow::Borrowed(k.as_str()), Kept { pts: std::borrow::Cow::Owned(strip), level, band, b, raise: true, look: Look::Made }));
+                plats.push((std::borrow::Cow::Borrowed(k.as_str()), Kept { pts: std::borrow::Cow::Owned(strip), level, band, b, raise: true, look: Look::Made, floor: None }));
             }
         }
-        if !any && plats.is_empty() {
+        let waters = crate::waters::near(edits, rect);
+        if let Some(b) = crate::waters::bounds(&waters) {
+            grow(b);
+        }
+        if !any && plats.is_empty() && waters.is_empty() {
             return None;
         }
-        // Largest first, so terraces and pits inside a plateau come after it.
-        plats.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.2).collect(), reach })
+        let (order, steps) = stack(edits, &plats);
+        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.1).collect(), order, steps, reach, waters, band: spacing })
     }
 
     /// Where the shaping it holds can change the ground (world ft: x0, y0, x1, y1); outside it
@@ -519,56 +577,185 @@ impl<'a> Shaper<'a> {
     }
 
     /// Ground `g` (water `hw`) at (x, y) shaped, with `d` brushed on: (height, the plateaus'
-    /// weight there, 0 to 1).
-    fn shape(&self, x: f64, y: f64, d: f64, g: f32, hw: f32) -> (f32, f32) {
+    /// weight there, 0 to 1, and what the ground there looks like). Step by step (`stack`): a
+    /// raising step eases the ground up to its level (`w * (level - h)`, never down), a digging
+    /// step eases it down; so in one stack the highest plateau holds and the deepest pit, and
+    /// each edge eases toward the ground left round it by the steps before.
+    fn shape(&self, x: f64, y: f64, d: f64, g: f32, hw: f32) -> (f32, f32, Look, bool) {
+        // Water drawn by hand first: its bed is the ground the plateaus stand on (an islet or a
+        // plateau over it stays dry).
+        let (g, hw) = match self.outline_water(x, y) {
+            Some((l, bed)) => ((g as f64).min(bed).max(g as f64 - MAX_SHIFT_FT) as f32, hw.max(l as f32)),
+            None => (g, hw),
+        };
         let g0 = g as f64;
         let (mut h, mut wmax) = (g0, 0.0f64);
-        for p in &self.plats {
-            let Some(w) = p.weight(x, y) else { continue };
-            if !p.raise || p.level > h {
-                h += w * (p.level - h);
+        let (mut look, mut floor) = (Look::Ground, false);
+        // Each piece's weight here (-1: out of its reach), once.
+        let n = self.plats.len();
+        let (mut stack, mut heap) = ([0f64; 32], Vec::new());
+        let ws: &mut [f64] = if n <= stack.len() {
+            &mut stack[..n]
+        } else {
+            heap.resize(n, 0.0);
+            &mut heap
+        };
+        for (i, p) in self.plats.iter().enumerate() {
+            ws[i] = p.weight(x, y).unwrap_or(-1.0);
+            wmax = wmax.max(ws[i]);
+        }
+        for st in &self.steps {
+            // Pieces of one level are one ground: the greatest weight of them.
+            let Some((w, i)) = self.order[st.at.clone()].iter().map(|&i| (ws[i as usize], i as usize)).filter(|a| a.0 >= 0.0).reduce(|a, b| if b.0 > a.0 { b } else { a }) else {
+                continue;
+            };
+            let (p, l) = (&self.plats[i], st.level);
+            let deep = if st.dig {
+                // (Only a pit below the ground here digs.)
+                if l >= g0 {
+                    continue;
+                }
+                let holds = l <= h;
+                let s = ((g0 - l) / DIG_EASE_FT).clamp(0.0, 1.0);
+                h -= w * ((h.min(g0) - l).max(0.0) + s * (h - g0).max(0.0));
+                if !holds {
+                    continue;
+                }
+                g0 - l
+            } else {
+                let holds = l >= h || p.raise;
+                if l > h {
+                    h += w * (l - h);
+                }
+                if !holds {
+                    continue;
+                }
+                0.0
+            };
+            if w >= 0.5 {
+                let rock = Look::Rock { rim: w < 1.0 };
+                (look, floor) = match (p.look, p.floor) {
+                    (Look::Ground, Some(Floor::Rock)) => (rock, true),
+                    (Look::Ground, None) if deep >= CHASM_FT => (rock, true),
+                    (Look::Rock { .. }, _) => (rock, false),
+                    (l, _) => (l, false),
+                };
             }
-            wmax = wmax.max(w);
         }
         h = (h + d).clamp(g0 - MAX_SHIFT_FT, g0 + MAX_SHIFT_FT);
         // Ground that was dry stays above the water by it (raising wet ground makes land).
         if g >= hw {
             h = h.max(g0.min(hw as f64 + 0.5));
         }
-        (h as f32, wmax as f32)
+        (h as f32, wmax as f32, look, floor)
+    }
+
+    /// The water drawn by hand at (x, y): its level and the bed under it (`waters::at`).
+    fn outline_water(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if self.waters.is_empty() {
+            return None;
+        }
+        crate::waters::at(&self.waters, x, y, self.band)
+    }
+
+    /// The water's surface at (x, y) with water drawn by hand (`hw` as given elsewhere).
+    pub fn water(&self, x: f64, y: f64, hw: f32) -> f32 {
+        self.outline_water(x, y).map_or(hw, |(l, _)| hw.max(l as f32))
+    }
+
+    /// The level of the water drawn by hand holding (x, y), if any.
+    pub fn outline_level(&self, x: f64, y: f64) -> Option<f32> {
+        self.outline_water(x, y).map(|(l, _)| l as f32)
+    }
+
+    /// Whether any water drawn by hand meets what it covers.
+    pub fn has_waters(&self) -> bool {
+        !self.waters.is_empty()
     }
 
     /// Global square (gx, gy) with ground `g` and water `hw` shaped: (height, plateau weight).
     pub fn at_square(&self, gx: i64, gy: i64, g: f32, hw: f32) -> (f32, f32) {
+        let (h, w, _, _) = self.shape((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT, self.added(gx, gy), g, hw);
+        (h, w)
+    }
+
+    /// `at_square` with what the shaping makes of the square's ground: the look of the last
+    /// plateau, pit, islet or made ground holding it (at least one half there): an islet's rock,
+    /// made ground, a rock floor (`Plateau::floor`, `CHASM_FT`); and whether that is a rock floor.
+    pub fn at_square_look(&self, gx: i64, gy: i64, g: f32, hw: f32) -> (f32, f32, Look, bool) {
         self.shape((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT, self.added(gx, gy), g, hw)
     }
 
-    /// What the shaping makes of global square (gx, gy): the look of the last (smallest) plateau,
-    /// islet or made ground weighing at least one half there.
-    pub fn look_at_square(&self, gx: i64, gy: i64) -> Look {
-        let (x, y) = ((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT);
-        let mut look = Look::Ground;
-        for p in &self.plats {
-            if let Some(w) = p.weight(x, y).filter(|&w| w >= 0.5) {
-                look = match p.look {
-                    Look::Rock { .. } => Look::Rock { rim: w < 1.0 },
-                    l => l,
-                };
-            }
-        }
-        look
-    }
-
-    /// Whether any islet or made ground is among what it holds (`look_at_square` can be other
-    /// than `Ground`).
+    /// Whether any islet, made ground or plateau that may draw as rock is among what it holds
+    /// (`at_square_look` can be other than `Ground`).
     pub fn has_looks(&self) -> bool {
-        self.plats.iter().any(|p| p.look != Look::Ground)
+        self.plats.iter().any(|p| p.look != Look::Ground || p.floor != Some(Floor::Ground))
     }
 
     /// Any point (world ft) with ground `g` and water `hw` shaped.
     pub fn at_point(&self, x: f64, y: f64, g: f32, hw: f32) -> f32 {
         self.shape(x, y, self.added_at(x, y), g, hw).0
     }
+
+    /// `at_point`, and whether a plateau's rock floor (`Plateau::floor`, `CHASM_FT`) holds the
+    /// point (the map draws it as rock).
+    pub fn at_point_floor(&self, x: f64, y: f64, g: f32, hw: f32) -> (f32, bool) {
+        let (h, _, _, floor) = self.shape(x, y, self.added_at(x, y), g, hw);
+        (h, floor)
+    }
+
+    /// Whether a plateau that may draw a rock floor is among what it holds.
+    pub fn has_floors(&self) -> bool {
+        self.plats.iter().any(|p| p.look == Look::Ground && !p.raise && p.floor != Some(Floor::Ground))
+    }
+}
+
+/// Whether the generator can shape with it (`Plateau::problem` checks more when one is made).
+fn usable(p: &Plateau) -> bool {
+    (3..=MAX_PLATEAU_PTS).contains(&p.pts.len()) && p.pts.iter().all(|q| q[0].is_finite() && q[1].is_finite()) && p.level.is_finite() && p.edge.is_finite()
+}
+
+/// The order the pieces shape the ground in (`Shaper::shape`): by how many hand plateaus hold
+/// each one (its whole outline inside theirs, counted over the world's plateaus, not only those
+/// near, so every rectangle shapes alike), then at each depth the raising steps from the lowest
+/// level up and the digging steps from the highest down (made ground never digs). Pieces of one
+/// level at one depth make one step. A pit inside a plateau digs it, a pillar inside a pit
+/// stands in it, a lower plateau inside a higher one changes nothing, and a higher pit inside a
+/// deeper one neither.
+fn stack(edits: &crate::world::Edits, plats: &[(std::borrow::Cow<str>, Kept)]) -> (Vec<u16>, Vec<Step>) {
+    let hand: Vec<(&str, &[[f64; 2]], [f64; 4])> =
+        edits.plateaus.iter().filter(|(_, p)| usable(p)).map(|(k, p)| (k.as_str(), p.pts.as_slice(), bbox(&p.pts))).filter(|(_, _, b)| b[2] - b[0] <= MAX_PLATEAU_SPAN_FT && b[3] - b[1] <= MAX_PLATEAU_SPAN_FT).collect();
+    let depth = |k: &str, p: &Kept| -> usize {
+        hand.iter()
+            .filter(|(hk, pts, b)| *hk != k && b[0] <= p.b[0] && b[1] <= p.b[1] && b[2] >= p.b[2] && b[3] >= p.b[3] && p.pts.iter().all(|q| geom::contains(pts, *q)))
+            .count()
+    };
+    let depths: Vec<usize> = plats.iter().map(|(k, p)| if hand.is_empty() { 0 } else { depth(k, p) }).collect();
+    let mut idx: Vec<usize> = (0..plats.len()).collect();
+    // (Stable: strips of one quay keep their order.)
+    idx.sort_by(|&a, &b| depths[a].cmp(&depths[b]).then_with(|| plats[a].1.level.total_cmp(&plats[b].1.level)).then_with(|| plats[a].0.cmp(&plats[b].0)));
+    let (mut order, mut steps): (Vec<u16>, Vec<Step>) = (Vec::with_capacity(2 * idx.len()), Vec::new());
+    // A run of one depth's raising (or digging) steps: pieces of one level after another join one.
+    let mut run = |dig: bool, pieces: &mut dyn Iterator<Item = usize>| {
+        let first = steps.len();
+        for i in pieces {
+            let level = plats[i].1.level;
+            let joins = steps.len() > first;
+            match steps.last_mut() {
+                Some(st) if joins && st.level == level => st.at.end += 1,
+                _ => steps.push(Step { dig, level, at: order.len()..order.len() + 1 }),
+            }
+            order.push(i as u16);
+        }
+    };
+    let mut s = 0;
+    while s < idx.len() {
+        let e = s + idx[s..].iter().take_while(|&&i| depths[i] == depths[idx[s]]).count();
+        run(false, &mut idx[s..e].iter().copied());
+        run(true, &mut idx[s..e].iter().rev().copied().filter(|&i| !plats[i].1.raise));
+        s = e;
+    }
+    (order, steps)
 }
 
 /// How far the shaping moves a building standing at `pad` ft (its ground floor): the mean change
@@ -735,6 +922,7 @@ pub fn plateau_for(outline: &[[f64; 2]], level: f64, edge: f64) -> Result<Platea
         level: (crate::core::round(level * 10.0) * 0.1) as f32,
         edge: edge.clamp(0.0, MAX_EDGE_FT as f64) as f32,
         kind: PlateauKind::Plateau,
+        floor: None,
     };
     match p.problem() {
         Some(e) => Err(e),
@@ -747,6 +935,13 @@ pub fn plateau_for(outline: &[[f64; 2]], level: f64, edge: f64) -> Result<Platea
 /// (standing water or a river), easing down to the bed over `ISLET_EDGE_FT`. Refused on dry land
 /// and where the water is deeper than `ISLET_MAX_DEPTH_FT`.
 pub fn islet_for(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0: &crate::t0::T0) -> Result<Plateau, String> {
+    islet_for_fine(key, at, radius_ft, rise_ft, t0, None)
+}
+
+/// `islet_for` where the water is as the battlemap draws it (`fine`: the water level and the ground at the point, 5-ft
+/// squares): T0's shore is coarser, so a spot it calls dry but the fine shore floods is wet (the level and depth are the
+/// fine ones), and a spot it floods but the fine shore dries (not a river) is dry land.
+pub fn islet_for_fine(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0: &crate::t0::T0, fine: Option<(f32, f32)>) -> Result<Plateau, String> {
     use crate::core::rng::stream;
     if !radius_ft.is_finite() || !ISLET_RADIUS_FT.contains(&radius_ft) {
         return Err(format!("radius_ft: {:.0} to {:.0}", ISLET_RADIUS_FT.start(), ISLET_RADIUS_FT.end()));
@@ -759,17 +954,27 @@ pub fn islet_for(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0: &cra
     }
     let still = t0.sample_water(at[0], at[1]);
     let river = t0.rivers.crossing_level(at, at, 0.0, t0.cell_ft, &crate::lod::rivers::CrossingCache::default()).map_or(crate::t0::hydro::DRY, |(z, _)| z as f32);
-    let water = still.max(river);
+    let mut water = still.max(river);
+    let mut ground = t0.ground_at(at[0], at[1], 5.0);
+    if let Some((hw, g)) = fine {
+        if hw > g {
+            // (The fine shore floods it: its level over its ground.)
+            water = water.max(hw);
+            ground = if river > crate::t0::hydro::DRY || ground >= hw as f64 { g as f64 } else { ground.min(g as f64) };
+        } else if river <= crate::t0::hydro::DRY {
+            water = crate::t0::hydro::DRY;
+        }
+    }
     // (A river's channel is water whatever the valley's ground there: it never dips below the water.)
-    if water <= crate::t0::hydro::DRY || ((water as f64) <= t0.ground_at(at[0], at[1], 5.0) && river <= crate::t0::hydro::DRY) {
+    if water <= crate::t0::hydro::DRY || ((water as f64) <= ground && river <= crate::t0::hydro::DRY) {
         return Err(format!("at: ({:.0}, {:.0}) is on dry land: an islet stands in a river, lake or the sea", at[0], at[1]));
     }
-    let depth = (water as f64 - t0.ground_at(at[0], at[1], 5.0)).max(0.0);
+    let depth = (water as f64 - ground).max(0.0);
     if depth > ISLET_MAX_DEPTH_FT {
         return Err(format!("at: the water there is {depth:.0} ft deep: at most {ISLET_MAX_DEPTH_FT:.0}"));
     }
     let pts = islet_ring(stream(0x15_1e7, key), at, radius_ft);
-    let p = Plateau { pts, level: (crate::core::round((water as f64 + rise_ft) * 10.0) * 0.1) as f32, edge: ISLET_EDGE_FT, kind: PlateauKind::Islet };
+    let p = Plateau { pts, level: (crate::core::round((water as f64 + rise_ft) * 10.0) * 0.1) as f32, edge: ISLET_EDGE_FT, kind: PlateauKind::Islet, floor: None };
     match p.problem() {
         Some(e) => Err(e),
         None => Ok(p),

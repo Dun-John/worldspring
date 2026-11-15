@@ -47,6 +47,19 @@ async fn dry_end(app: &Shared, k: &str, p: Option<[f64; 2]>, tol: f64) -> Result
     let k = k.to_string();
     app.worker
         .with(move |ex| match worldgen::agent::river_at(&ex.world, &ex.t0, p, 50.0).filter(|r| 0.5 * r.width_ft - r.dist_ft > tol) {
+            // (An islet, hand-made or generated, or a plateau over the water is dry land: a crossing may end on it.)
+            _ if {
+                let sh = worldgen::town::Shore::new(&ex.world, &ex.t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]);
+                sh.on_islet(p) || sh.raised(p)
+            } =>
+            {
+                Ok(())
+            }
+            // (Water drawn by hand is water too.)
+            _ if worldgen::waters::holding(&ex.world.file.edits, p).is_some() => {
+                let w = worldgen::waters::holding(&ex.world.file.edits, p).unwrap_or_default();
+                Err(format!("{k}: ({}, {}) is in the water {w}: put the end on its shore or farther out", p[0].round(), p[1].round()))
+            }
             Some(r) => {
                 let (b, _) = r.bank_of(p, 5.0);
                 let what = r.name.clone().map_or_else(|| "a river".to_string(), |n| format!("{n} ({})", r.id.clone().unwrap_or_default()));
@@ -306,6 +319,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     })
     .await?;
     banks(app, &mut v).await?;
+    deck_note(app, &mut v).await?;
     // The new shops are checked as buildings (what stands on the bridge's ends or crosses it); one that cannot stand is dropped.
     let fresh: Vec<String> = v["shops"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect();
     if !fresh.is_empty() {
@@ -317,6 +331,26 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         }
     }
     Ok(v)
+}
+
+/// A bridge whose deck the 1 in 8 climb cap holds below the higher end's ground says so, and by how much.
+async fn deck_note(app: &Shared, v: &mut Value) -> Result<(), String> {
+    let pt = |x: &Value| Some([x[0].as_f64()?, x[1].as_f64()?]);
+    let (Some(a), Some(b)) = (pt(&v["crossing"]["from"]), pt(&v["crossing"]["to"])) else { return Ok(()) };
+    if v["kind"] != "bridge" || v["existing"] == true {
+        return Ok(());
+    }
+    let width = v["crossing"]["width"].as_f64().unwrap_or(10.0);
+    let c = worldgen::world::Crossing { kind: CrossingKind::Bridge, a, b, width, material: Default::default() };
+    let short = app.worker.with(move |ex| Ok(worldgen::battlemap::hand_deck_short(&c, &ex.world, &ex.t0))).await?;
+    if short > 0.5 {
+        let n = format!("the deck is capped at a climb of 1 in 8, so it ends {} ft short of the ground at its higher end: move that end back or the other end up", short.round());
+        match v["note"].as_str() {
+            Some(old) => v["note"] = json!(format!("{old}; {n}")),
+            None => v["note"] = json!(n),
+        }
+    }
+    Ok(())
 }
 
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {

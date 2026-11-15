@@ -35,7 +35,7 @@ pub fn list() -> Vec<Value> {
             "hardness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "0 soft to 1 hard" },
             "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
         }), &["mode"]) }),
-        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: the ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Give poly (at most 48 points, 1280 ft across) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes it. Returns its id (h:...).", "inputSchema": schema(json!({
+        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: the ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Overlapping and nested plateaus stack: the highest holds, a pit below the ground digs through them (the deepest holds), same-level pieces join as one. floor: rock draws the top as bare rock at every zoom (auto, the default: rock on a pit's floor 15 ft or more below the ground). Give poly (at most 48 points, 1280 ft across) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes it. Returns its id (h:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A plateau to change (h:...)" },
             "poly": { "type": "array", "minItems": 3, "items": pt },
             "around": { "type": "string", "description": "A building, tower or site (its footprint)" },
@@ -43,8 +43,10 @@ pub fn list() -> Vec<Value> {
             "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Its level, ft above the sea" },
             "rise_ft": { "type": "number", "minimum": -ground::MAX_SHIFT_FT, "maximum": ground::MAX_SHIFT_FT, "default": 10 },
             "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0 },
+            "floor": { "type": "string", "enum": ["auto", "rock", "ground"], "description": "What its top or floor draws as (kept when changing one; default auto)" },
         }), &[]) }),
-        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
+        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus, pits or the world\'s own generated islets (i:..., see list_plateaus; its watchtower goes too: removed_towers) away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
+        json!({ "name": "restore_islets", "title": "Bring generated islets back", "description": "Bring the world's own islets (i:...) back after delete_plateau took them away. A watchtower removed with one stays removed (restore_building).", "inputSchema": schema(crate::args::ids_props("islet id (i:...)"), &[]) }),
         json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square within radius_ft (at most 200) of a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
     ]
 }
@@ -55,6 +57,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "shape_ground" => shape(app, a).await.map(text),
         "set_plateau" => set_plateau(app, a).await.map(text),
         "delete_plateau" => delete(app, a).await.map(text),
+        "restore_islets" => restore_islets(app, a).await.map(text),
         "ground_heights" => heights(app, a).await.map(text),
         _ => return None,
     })
@@ -312,6 +315,13 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         return Err(format!("level_ft: within 20,000 ft of the sea; rise_ft: within {} ft", ground::MAX_SHIFT_FT));
     }
     let edge_arg = opt_num(a, "edge_ft")?;
+    // Some(None): auto; None: as it was.
+    let floor_arg: Option<Option<ground::Floor>> = match &a["floor"] {
+        Value::Null => None,
+        Value::String(f) if f == "auto" => Some(None),
+        Value::String(f) => Some(Some(ground::Floor::parse(f).ok_or("floor: auto, rock or ground")?)),
+        _ => return Err("floor: auto, rock or ground".into()),
+    };
     app.edit("agent", 0, move |e| {
         let changed = id.is_some();
         // (As it is now: it may have changed, or gone, since it was read above.)
@@ -340,7 +350,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         let p = match (&outline, &old) {
             (Some(o), _) => ground::plateau_for(o, level, edge)?,
             (None, Some(p)) => {
-                let p = Plateau { pts: p.pts.clone(), level: ((level * 10.0).round() * 0.1) as f32, edge: edge as f32, kind: p.kind };
+                let p = Plateau { pts: p.pts.clone(), level: ((level * 10.0).round() * 0.1) as f32, edge: edge as f32, kind: p.kind, floor: p.floor };
                 if let Some(err) = p.problem() {
                     return Err(err);
                 }
@@ -348,6 +358,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             (None, None) => unreachable!("an outline or a plateau"),
         };
+        let p = Plateau { floor: floor_arg.unwrap_or(old.as_ref().and_then(|o| o.floor)), ..p };
         // The same outline again (a script run twice): that plateau, nothing added.
         if !changed
             && let Some((eid, ep)) = e.plateaus.iter().find(|(_, q)| q.pts.len() == p.pts.len() && q.pts.iter().zip(&p.pts).all(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) <= 1.0))
@@ -362,7 +373,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
                 }
             };
             let tol = if level_ft.is_some() { 0.15 } else { 1.0 };
-            if (level_ft.is_some() || rise.is_some()) && (ep.level as f64 - level).abs() > tol || edge_arg.is_some() && (ep.edge - p.edge).abs() > 1e-4 {
+            if (level_ft.is_some() || rise.is_some()) && (ep.level as f64 - level).abs() > tol || edge_arg.is_some() && (ep.edge - p.edge).abs() > 1e-4 || floor_arg.is_some_and(|f| f != ep.floor) {
                 return Err(format!("{eid} has this outline: give its id to change it"));
             }
             return Ok(json!({
@@ -372,34 +383,101 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
             }));
         }
         let b = p.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
-        let reply = json!({
+        let mut reply = json!({
             "tool": "set_plateau", "id": id, "changed": changed,
             "level_ft": round1(p.level - sea as f32), "ground_ft": round1(here as f32 - sea as f32), "edge_ft": p.edge,
             "points": p.pts.len(), "area_sq_ft": geom::area(&p.pts).abs().round(), "bbox": [b[0], b[1], b[2], b[3]],
+            "floor": p.floor.map_or("auto", ground::Floor::name),
         });
+        // (Shaped ground stays within MAX_SHIFT_FT of the ground: a plateau over deep water stays under it.)
+        let shift = p.level as f64 - here;
+        if shift.abs() > ground::MAX_SHIFT_FT {
+            let reach = here + shift.signum() * ground::MAX_SHIFT_FT;
+            let under = if reach < sea { ", under the sea: nothing can stand on it there" } else { "" };
+            reply["note"] = json!(format!(
+                "the ground here is at {:.1} ft and is moved at most {} ft: this plateau stands at {:.1} ft{under}",
+                here - sea,
+                ground::MAX_SHIFT_FT,
+                reach - sea
+            ));
+        }
         e.plateaus.insert(id, p);
         Ok(reply)
     })
     .await
 }
 
+/// The generated islets among `ids` (`i:`): each one's watchtower building (`b:<layout>:<id>`, its centre) when it has one.
+async fn generated_islets(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<(String, Option<(String, [f64; 2])>)>, String> {
+    app.worker
+        .with(move |ex| {
+            let all = worldgen::t0::islets::islets(&ex.t0);
+            let mut out = Vec::new();
+            for (n, id) in ids.iter().enumerate().filter(|(_, id)| id.starts_with("i:")) {
+                let i = all.iter().find(|i| &i.id == id).ok_or_else(|| format!("{}: no generated islet {id}", crate::args::item(single, n)))?;
+                let tower = worldgen::t0::islets::tower_building(&ex.world, &ex.t0, i);
+                out.push((id.clone(), tower));
+            }
+            Ok(out)
+        })
+        .await
+}
+
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
     let single = a["ids"].is_null();
+    let islets = generated_islets(app, ids.clone(), single).await?;
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
-            if !e.plateaus.contains_key(id) {
+            if !id.starts_with("i:") && !e.plateaus.contains_key(id) {
                 return Err(format!("{}: no plateau {id}", crate::args::item(single, i)));
             }
         }
         // (Its name, note and hidden mark go with it: nothing brings a plateau back but Undo.)
-        for id in &ids {
+        for id in ids.iter().filter(|id| !id.starts_with("i:")) {
             e.plateaus.remove(id);
             e.renames.remove(id);
             e.notes.remove(id);
             e.hidden.remove(id);
         }
-        Ok(json!({ "tool": "delete_plateau", "ids": ids }))
+        // A generated islet is taken off the map by a hidden mark (`restore_islets` lifts it); so is its watchtower, as a building removed.
+        let mut towers = Vec::new();
+        for (id, tower) in &islets {
+            e.hidden.insert(id.clone());
+            if let Some((b, at)) = tower {
+                e.buildings.insert(b.clone(), worldgen::world::BuildingEdit { at: *at, removed: true, ..Default::default() });
+                towers.push(b.clone());
+            }
+        }
+        let mut reply = json!({ "tool": "delete_plateau", "ids": ids });
+        if !towers.is_empty() {
+            reply["removed_towers"] = json!(towers);
+        }
+        Ok(reply)
+    })
+    .await
+}
+
+/// Bring generated islets taken away by `delete_plateau` back (their watchtowers stay removed: `restore_building`).
+async fn restore_islets(app: &Shared, a: &Value) -> Result<Value, String> {
+    let ids = crate::args::ids(a)?;
+    let single = a["ids"].is_null();
+    for (i, id) in ids.iter().enumerate() {
+        if !id.starts_with("i:") {
+            return Err(format!("{}: {id} is not a generated islet (i:...)", crate::args::item(single, i)));
+        }
+    }
+    generated_islets(app, ids.clone(), single).await?;
+    app.edit("agent", 0, move |e| {
+        for (i, id) in ids.iter().enumerate() {
+            if !e.hidden.contains(id) {
+                return Err(format!("{}: {id} is not taken away", crate::args::item(single, i)));
+            }
+        }
+        for id in &ids {
+            e.hidden.remove(id);
+        }
+        Ok(json!({ "tool": "restore_islets", "ids": ids }))
     })
     .await
 }

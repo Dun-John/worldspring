@@ -296,15 +296,19 @@ void main() {
     }
 
     // Contours on land; fade out where they would crowd closer than a few pixels.
+    // Only where the ground slopes in the samples: level ground at a contour height (a plateau's
+    // top) has d ~ 0 everywhere, and the height's f16 rounding per tile or a hair of float noise
+    // must not ink it across. (fw never 0: smoothstep's edges must not meet.)
     if (!wet && uContour > 0.0) {
         float f = (h - uSea) / uContour;
-        float fw = fwidth(f);
+        float fw = max(fwidth(f), 1e-6);
         float d = abs(fract(f + 0.5) - 0.5);
         float isIndex = mod(floor(f + 0.5), uIndexEvery) < 0.5 ? 1.0 : 0.0;
         float w = mix(0.5, 0.9, isIndex);
         float line = 1.0 - smoothstep(w * fw, (w + 1.0) * fw, d);
         float room = 1.0 - smoothstep(0.12, 0.3, fw);
-        col = mix(col, CONTOUR_INK, line * room * mix(0.22, 0.45, isIndex));
+        float sloped = smoothstep(5e-5, 2e-4, slope);
+        col = mix(col, CONTOUR_INK, line * room * sloped * mix(0.22, 0.45, isIndex));
     }
 
     // Coast ripples: evenly spaced ink lines offshore (sea only).

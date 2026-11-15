@@ -398,6 +398,22 @@ impl Squares {
         [self.gx0 as f64 * SQUARE_FT, self.gy0 as f64 * SQUARE_FT, (self.gx0 + self.w) as f64 * SQUARE_FT, (self.gy0 + self.h) as f64 * SQUARE_FT]
     }
 
+    /// The water drawn by hand (`waters`) over the squares: its surface where an outline holds one
+    /// (as standing water).
+    pub fn add_waters(&mut self, edits: &Edits) {
+        if edits.waters.is_empty() {
+            return;
+        }
+        let grouped = crate::waters::grouped(edits);
+        for k in 0..self.g.len() {
+            let (gx, gy) = (self.gx0 + k as i64 % self.w, self.gy0 + k as i64 / self.w);
+            if let Some(l) = crate::waters::level_in(&grouped, [(gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT]) {
+                self.still[k] = self.still[k].max(l);
+                self.hw[k] = self.hw[k].max(l);
+            }
+        }
+    }
+
     /// Each square's ground shaped by `edits`.
     /// (Quays and breakwaters only with `t0`.)
     pub fn shaped(&self, edits: &Edits, t0: Option<&crate::t0::T0>) -> Vec<f32> {
@@ -417,8 +433,9 @@ struct Patch {
 impl Patch {
     /// The squares within `half_ft` of `c` each way.
     fn read(ex: &mut Executor, c: P, half_ft: f64) -> Patch {
-        let s = Squares::round(ex, [c[0] - half_ft, c[1] - half_ft, c[0] + half_ft, c[1] + half_ft], 0);
+        let mut s = Squares::round(ex, [c[0] - half_ft, c[1] - half_ft, c[0] + half_ft, c[1] + half_ft], 0);
         let h = s.shaped(&ex.world.file.edits, Some(&ex.t0));
+        s.add_waters(&ex.world.file.edits);
         Patch { s, h }
     }
 

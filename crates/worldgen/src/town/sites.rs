@@ -256,6 +256,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
                 match c.on.as_deref() {
                     Some(on) => {
                         if let Some((top, line)) = crate::wharf::deck_of(world, t0, on).filter(|_| poly.len() >= 3) {
+                            let top = crate::wharf::deck_level_at(world, t0, on, crate::town::geom::centroid(&c.poly)).unwrap_or(top);
                             let mut b = drawn(c, poly, top, &mut rng, t0, center);
                             b.deck = Some(line);
                             buildings.push(b);
@@ -481,7 +482,7 @@ struct Open<'a> {
 
 impl<'a> Open<'a> {
     /// Round `pts` (world ft).
-    fn new(world: &World, t0: &'a T0, center: P, pts: &[P]) -> Open<'a> {
+    fn new(world: &'a World, t0: &'a T0, center: P, pts: &[P]) -> Open<'a> {
         let r = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
         Open { t0, center, shore: super::Shore::new(world, t0, r), rivers: Default::default() }
     }

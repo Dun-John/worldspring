@@ -24,6 +24,8 @@ type P = [f64; 2];
 /// in a river, and its ring's bounds.
 #[derive(Clone, Debug)]
 pub struct Islet {
+    /// Its id (`i:<8 hex>`, from its place): the key in `Edits.hidden` that takes it away.
+    pub id: String,
     pub pts: Vec<P>,
     pub level: f32,
     pub water: f32,
@@ -54,6 +56,24 @@ pub fn islets(t0: &T0) -> &[Islet] {
 /// The islets whose rings' bounds meet `rect` (world ft: x0, y0, x1, y1).
 pub fn near<'a>(t0: &'a T0, rect: [f64; 4]) -> impl Iterator<Item = &'a Islet> + 'a {
     islets(t0).iter().filter(move |i| i.bbox[2] >= rect[0] && i.bbox[0] <= rect[2] && i.bbox[3] >= rect[1] && i.bbox[1] <= rect[3])
+}
+
+/// `near`, without the islets taken away by hand (`Edits.hidden` holds their ids).
+pub fn near_in<'a>(t0: &'a T0, edits: &'a crate::world::Edits, rect: [f64; 4]) -> impl Iterator<Item = &'a Islet> + 'a {
+    near(t0, rect).filter(move |i| !edits.hidden.contains(&i.id))
+}
+
+/// The watchtower building (`b:<layout>:<id>`, and its middle in world ft) standing on islet `i`, if it has one.
+pub fn tower_building(world: &crate::world::World, t0: &T0, i: &Islet) -> Option<(String, P)> {
+    if !i.tower {
+        return None;
+    }
+    let want = crate::town::catalog::index_of("watchtower").map(|f| f as u16)?;
+    let l = crate::town::layout(world, t0, i.settlement as usize);
+    l.buildings.iter().find_map(|b| {
+        let w = crate::town::geom::centroid(&b.poly);
+        (b.func == Some(want) && dist(w, i.at) <= i.r).then(|| (format!("b:{}:{}", l.index, b.id), w))
+    })
 }
 
 /// The islets of settlement (layout) `index`.
@@ -96,7 +116,8 @@ fn generate(t0: &T0) -> Vec<Islet> {
             let level = (crate::core::round((water + rise) * 10.0) * 0.1) as f32;
             let tower = r >= TOWER_MIN_R_FT && roll(60 + k) < 0.5;
             let bbox = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-            out.push(Islet { pts, level, water: water as f32, at, r, tower, settlement: index as u32, river, bbox });
+            let id = format!("i:{:08x}", hash3(s.seed ^ SALT ^ 0x1d, crate::core::round(at[0]) as i64, crate::core::round(at[1]) as i64, k) & 0xffff_ffff);
+            out.push(Islet { id, pts, level, water: water as f32, at, r, tower, settlement: index as u32, river, bbox });
         };
         let clear_of = |out: &[Islet], at: P, r: f64| out.iter().all(|o| dist(o.at, at) >= o.r + r + 150.0);
 

@@ -355,6 +355,12 @@ pub const CATALOG: [KindInfo; 63] = [
     k(Kind::WaterWheel, "water wheel", 1.4, true, false, 2, false, 14.0, true),
 ];
 
+/// What a rock floor keeps off: every tree and the ground's plants.
+const TREES_AND_COVER: [Kind; 16] = [
+    Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
+    Kind::Thicket, Kind::FallenLog, Kind::Stump, Kind::Reeds, Kind::Cactus, Kind::TallGrass, Kind::Flowers, Kind::Brambles,
+];
+
 /// Every kind, by id - 1.
 const KINDS: [Kind; 63] = [
     Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
@@ -1091,7 +1097,7 @@ pub fn hand_decks(c: &crate::world::Crossing) -> Vec<Vec<[f64; 2]>> {
 /// of the highest water under it (rivers, lakes, the sea), else level with the lower end. A
 /// ferry's line runs between its jetties' ends, `JETTY_FT` out from the points given. Pure
 /// functions of the world, so every chunk finds the same.
-fn hand_crossing(c: &crate::world::Crossing, t0: &T0) -> (CrossingShape, f32) {
+fn hand_crossing(c: &crate::world::Crossing, world: &World, t0: &T0) -> (CrossingShape, (f32, f32)) {
     use crate::world::CrossingKind as K;
     let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
     let (kind, a, b) = match c.kind {
@@ -1100,7 +1106,7 @@ fn hand_crossing(c: &crate::world::Crossing, t0: &T0) -> (CrossingShape, f32) {
         K::Ferry => (ShapeKind::Ferry, [c.a[0] + u[0] * JETTY_FT, c.a[1] + u[1] * JETTY_FT], [c.b[0] - u[0] * JETTY_FT, c.b[1] - u[1] * JETTY_FT]),
     };
     let raft = (kind == ShapeKind::Ferry).then(|| raft_on(a, b, c.width));
-    let top = if kind == ShapeKind::RoadBridge { hand_deck_top(c, t0) } else { f32::MIN };
+    let top = if kind == ShapeKind::RoadBridge { hand_deck_ends(c, world, t0) } else { (f32::MIN, f32::MIN) };
     (CrossingShape { kind, a, b, size: c.width, raft, dropped: false, stone: c.material == crate::world::CrossingMaterial::Stone }, top)
 }
 
@@ -1108,18 +1114,65 @@ fn hand_crossing(c: &crate::world::Crossing, t0: &T0) -> (CrossingShape, f32) {
 /// `DECK_CLEARANCE_FT` over the highest water under it (rivers, lakes, the sea), else level with
 /// the lower end. A pure function of the world, so every chunk and the plan find the same.
 pub fn deck_top(a: [f64; 2], b: [f64; 2], t0: &T0) -> f32 {
+    deck_water(a, b, t0).unwrap_or_else(|| t0.ground_at(a[0], a[1], 5.0).min(t0.ground_at(b[0], b[1], 5.0)) as f32)
+}
+
+/// The least level (ft) a deck from `a` to `b` may have over the water under it: `DECK_CLEARANCE_FT` over the highest
+/// water (rivers, lakes, the sea); `None` where it crosses no water.
+fn deck_water(a: [f64; 2], b: [f64; 2], t0: &T0) -> Option<f32> {
     let river = t0.rivers.crossing_level(a, b, 0.0, t0.cell_ft, &crate::lod::rivers::CrossingCache::default());
     let len = crate::core::sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
     let n = (len / 10.0).ceil().max(1.0) as usize;
     let at = |k: usize| [a[0] + (b[0] - a[0]) * k as f64 / n as f64, a[1] + (b[1] - a[1]) * k as f64 / n as f64];
     let still = (0..=n).map(|k| at(k)).map(|p| t0.sample_water(p[0], p[1])).fold(crate::t0::hydro::DRY, f32::max);
     let water = river.map_or(still, |(z, _)| still.max(z as f32));
-    if water > crate::t0::hydro::DRY { water + DECK_CLEARANCE_FT } else { t0.ground_at(a[0], a[1], 5.0).min(t0.ground_at(b[0], b[1], 5.0)) as f32 }
+    (water > crate::t0::hydro::DRY).then_some(water + DECK_CLEARANCE_FT)
 }
 
-/// A hand bridge's deck level (`deck_top` from bank to bank): where its shops stand (R5 M20).
-pub fn hand_deck_top(c: &crate::world::Crossing, t0: &T0) -> f32 {
-    deck_top(c.a, c.b, t0)
+/// The steepest a hand bridge's deck climbs (ft per ft of its length): 1 in 8.
+pub const DECK_GRADE_MAX: f64 = 0.125;
+
+/// A hand bridge's deck level (ft) at its two ends, `a` then `b` (P6 6b): it climbs straight from one to the other, each
+/// end at the ground there (the world's ground as edited: a plateau's top, an islet's) or clear of the water under the
+/// deck, whichever is higher; the climb is capped at `DECK_GRADE_MAX` from the lower end, so a long bridge that meets a
+/// cliff runs into its face rather than rising steeply. A pure function of the world.
+pub fn hand_deck_ends(c: &crate::world::Crossing, world: &World, t0: &T0) -> (f32, f32) {
+    hand_deck(c, world, t0).0
+}
+
+/// How far (ft) a hand bridge's deck ends short of the higher end's level, where the 1 in 8 cap holds it down (0 if not).
+pub fn hand_deck_short(c: &crate::world::Crossing, world: &World, t0: &T0) -> f32 {
+    hand_deck(c, world, t0).1
+}
+
+fn hand_deck(c: &crate::world::Crossing, world: &World, t0: &T0) -> ((f32, f32), f32) {
+    let rect = [c.a[0].min(c.b[0]) - 20.0, c.a[1].min(c.b[1]) - 20.0, c.a[0].max(c.b[0]) + 20.0, c.a[1].max(c.b[1]) + 20.0];
+    let shaper = crate::ground::Shaper::build(&world.file.edits, Some(t0), rect, SQUARE_FT);
+    let ground = |p: [f64; 2]| {
+        let g = t0.ground_at(p[0], p[1], 5.0) as f32;
+        shaper.as_ref().map_or(g, |s| s.at_point(p[0], p[1], g, t0.sample_water(p[0], p[1])))
+    };
+    let base = deck_water(c.a, c.b, t0).unwrap_or(f32::MIN);
+    let (la, lb) = (ground(c.a).max(base), ground(c.b).max(base));
+    let cap = (DECK_GRADE_MAX * c.length()) as f32;
+    // (With no water under it and ends level, the old flat deck at the lower end: both ends the same.)
+    if la > lb + cap {
+        ((lb + cap, lb), la - lb - cap)
+    } else if lb > la + cap {
+        ((la, la + cap), lb - la - cap)
+    } else {
+        ((la, lb), 0.0)
+    }
+}
+
+/// The deck level (ft) `t` (0 to 1) of the way along a deck with ends `(a, b)`.
+pub fn deck_level(ends: (f32, f32), t: f64) -> f32 {
+    ends.0 + (ends.1 - ends.0) * t.clamp(0.0, 1.0) as f32
+}
+
+/// A hand bridge's deck level at its middle (`hand_deck_ends`).
+pub fn hand_deck_top(c: &crate::world::Crossing, world: &World, t0: &T0) -> f32 {
+    deck_level(hand_deck_ends(c, world, t0), 0.5)
 }
 
 /// Bridge decks that overlap (a road crossing a meander twice, two roads at a confluence)
@@ -1235,6 +1288,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // R5 M20: what the shaping makes of each halo square (an islet's rock, a quay's made ground;
     // empty when nothing here is either).
     let mut look_h = vec![crate::ground::Look::Ground; if shaper.as_ref().is_some_and(|s| s.has_looks()) { HS * HS } else { 0 }];
+    // (P6: a plateau's rock floor, `Plateau::floor`: scree, no trees or ground cover on it.)
+    let mut floor_h = vec![false; if shaper.as_ref().is_some_and(|s| s.has_floors()) { HS * HS } else { 0 }];
     // (A river's channel stays as the river carved it: a link crosses it on a bridge or a ford.)
     let base_at = |x: f64, y: f64, c: usize| made.as_ref().filter(|_| tile.river_water[c] <= tile.padded[c]).map_or(tile.padded[c], |m| m.at(x, y, tile.padded[c]));
     for j in -1..=SQ as i64 {
@@ -1245,10 +1300,16 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             hh[h] = base_at(x, y, c);
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
             if let Some(s) = &shaper {
-                (hh[h], plat_w[h]) = s.at_square(gsx + i, gsy + j, hh[h], hw[h]);
+                let (look, floor);
+                (hh[h], plat_w[h], look, floor) = s.at_square_look(gsx + i, gsy + j, hh[h], hw[h]);
+                if !floor_h.is_empty() {
+                    floor_h[h] = floor;
+                }
+                // (Water drawn by hand: its surface over the bed `at_square_look` dug.)
+                hw[h] = s.water(x, y, hw[h]);
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
                 if !look_h.is_empty() && plat_w[h] >= 0.5 {
-                    look_h[h] = s.look_at_square(gsx + i, gsy + j);
+                    look_h[h] = look;
                 }
             }
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
@@ -1472,7 +1533,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // or clear of its water, whichever is higher (`islet_decks`, after the decks are lifted).
         for d in l.bridges.iter().filter(|d| overlaps(bbox(d))) {
             let b = bbox(d);
-            for isl in crate::t0::islets::near(t0, [b.0, b.1, b.2, b.3]).filter(|i| crate::town::geom::poly_gap(d, &i.pts) < 1.0) {
+            for isl in crate::t0::islets::near_in(t0, &world.file.edits, [b.0, b.1, b.2, b.3]).filter(|i| crate::town::geom::poly_gap(d, &i.pts) < 1.0) {
                 islet_decks.push((d.clone(), isl.level.max(isl.water + DECK_CLEARANCE_FT)));
             }
         }
@@ -2367,7 +2428,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Crossings put down by hand (`Edits::crossings`) near this chunk, over whatever is there:
     // a bridge's planks wherever the ground is below its deck, a ford's bed brought up to
     // wading depth, a ferry's jetties and raft (with the generated ferries' below).
-    let hand: Vec<(CrossingShape, f32)> = world
+    let hand: Vec<(CrossingShape, (f32, f32))> = world
         .file
         .edits
         .crossings
@@ -2376,7 +2437,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let r = 0.5 * c.width + JETTY_FT + 40.0;
             overlaps((c.a[0].min(c.b[0]) - r, c.a[1].min(c.b[1]) - r, c.a[0].max(c.b[0]) + r, c.a[1].max(c.b[1]) + r)) && c.problem(g.map_w_ft, g.map_h_ft).is_none()
         })
-        .map(|c| hand_crossing(c, t0))
+        .map(|c| hand_crossing(c, world, t0))
         .collect();
     for (c, top) in hand.iter().filter(|(c, _)| c.kind != ShapeKind::Ferry) {
         let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
@@ -2395,9 +2456,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 if along < 0.0 || along > len || across.abs() > 0.5 * c.size {
                     continue;
                 }
-                if c.kind == ShapeKind::RoadBridge && hh[h] < *top - 0.5 {
-                    lift[h] += *top - hh[h];
-                    hh[h] = *top;
+                let top = deck_level(*top, if len > 0.0 { along / len } else { 0.0 });
+                if c.kind == ShapeKind::RoadBridge && hh[h] < top - 0.5 {
+                    lift[h] += top - hh[h];
+                    hh[h] = top;
                     road_h[h] = 0x80 | 3;
                 } else if c.kind == ShapeKind::Ford && hw[h] > hh[h] && road_h[h] & 0x80 == 0 {
                     hh[h] = hh[h].max(hw[h] - crate::lod::terrain_refine::FORD_DEPTH_FT);
@@ -2965,6 +3027,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let height = interior(&hh);
     let water_level = interior(&hw);
     let dominant = dominant_biome(&biome, &water_level, &height);
+    // A plateau's rock floor is scree, as the map draws it (`payload::shaped`): its boulders and
+    // rubble, no trees (below) or ground cover. (After the chunk's own biome is known.)
+    let on_floor = |k: usize| floor_h.get((k / SQ + 1) * HS + k % SQ + 1).is_some_and(|&f| f);
+    if !floor_h.is_empty() {
+        for k in (0..n).filter(|&k| on_floor(k)) {
+            biome[k] = Biome::Alpine;
+        }
+    }
     // (A park's path doesn't go on under the water, nor over a step steeper than a cliff's grade
     // to a square beside it: it stops at the edge, but where the step is a raised feature's.)
     let on_feature = |h: usize| features.iter().any(|f| crate::town::geom::dist(center(h % HS, h / HS), f.0) <= f.1);
@@ -3084,6 +3154,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 0 => match look_h.get((k / SQ + 1) * HS + k % SQ + 1) {
                     Some(crate::ground::Look::Rock { rim: false }) => chunk.surface[k] = Surface::Rock,
                     Some(crate::ground::Look::Rock { rim: true }) => chunk.surface[k] = Surface::Gravel,
+                    // (A plateau's rock floor is bare rock, never the alpine snow of its biome.)
+                    _ if on_floor(k) => chunk.surface[k] = Surface::Rock,
                     _ => {}
                 },
                 _ => {}
@@ -3150,6 +3222,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         })
         .collect();
     place_objects(&mut chunk, &biome, &slope, &road_near, &yard, &Keep { farm: &farm_h, verge: &verge }, seed, gsx, gsy);
+    if !floor_h.is_empty() {
+        let sq = |o: &Object| (o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1);
+        chunk.objects.retain(|o| !(TREES_AND_COVER.contains(&o.kind) && on_floor(sq(o))));
+    }
     // The land's scatter in a bailey gives way to what the bailey is dressed with (every prop of
     // the layout, not only this chunk's, so a seam cuts nothing differently).
     if !yard_ok.is_empty() {

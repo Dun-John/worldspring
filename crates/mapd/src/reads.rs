@@ -19,7 +19,7 @@ pub fn list() -> Vec<Value> {
             "which": { "type": "string", "enum": ["objects", "clears", "both"], "default": "both" },
             "limit": limit_prop(200, 2000),
         }), &[]) }),
-        json!({ "name": "list_plateaus", "title": "Plateaus and brushed ground", "description": "Plateaus, pits and rock islets (h:; what plateau or islet) with outline, level and edge, and brushed ground blocks (g:) with place and size, world-wide. Returns {items, found}.", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(100, 1000) }), &[]) }),
+        json!({ "name": "list_plateaus", "title": "Plateaus and brushed ground", "description": "Plateaus, pits and rock islets (h:; what plateau or islet) with outline, level and edge, brushed ground blocks (g:) with place and size, and the world's own generated river and coast islets (i:; generated: true, removed: true once taken away with delete_plateau, tower: true if a watchtower stands on it), world-wide. Returns {items, found}.", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(100, 1000), "generated": { "type": "boolean", "default": true, "description": "false leaves out the generated islets" } }), &[]) }),
         json!({ "name": "list_designs", "title": "Designed sites and buildings", "description": "Underground sites (u:) and buildings (b:) with a design made by hand: id, name, what, levels, place. Returns {items, found}.", "inputSchema": schema(json!({ "within": within, "limit": limit_prop(100, 1000) }), &[]) }),
     ]
 }
@@ -112,6 +112,7 @@ fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
 async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
     let area = within(app, a).await?;
     let limit = limit_of(a, 100);
+    let generated = a["generated"].as_bool() != Some(false);
     let v = app
         .worker
         .with(move |ex| {
@@ -124,8 +125,29 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                 let mid = worldgen::town::geom::centroid(&p.pts);
                 if hits(mid, &p.pts) {
                     let mut it = json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts });
+                    if let Some(f) = p.floor {
+                        it["floor"] = json!(f.name());
+                    }
                     if let Some(n) = ex.world.file.edits.renames.get(id) {
                         it["name"] = json!(n);
+                    }
+                    items.push(it);
+                }
+            }
+            if generated {
+                for i in worldgen::t0::islets::islets(&ex.t0) {
+                    if !hits(i.at, &i.pts) {
+                        continue;
+                    }
+                    let mut it = json!({
+                        "id": i.id, "what": "islet", "generated": true, "level_ft": ((i.level as f64 - sea) * 10.0).round() / 10.0, "water_ft": ((i.water as f64 - sea) * 10.0).round() / 10.0,
+                        "x_ft": i.at[0].round(), "y_ft": i.at[1].round(), "radius_ft": i.r.round(), "in": if i.river { "river" } else { "sea or lake" }, "bbox": bbox(&i.pts).map(f64::round), "poly": i.pts,
+                    });
+                    if i.tower {
+                        it["tower"] = json!(true);
+                    }
+                    if ex.world.file.edits.hidden.contains(&i.id) {
+                        it["removed"] = json!(true);
                     }
                     items.push(it);
                 }

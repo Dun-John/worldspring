@@ -333,6 +333,12 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
             if let Ok(p) = crate::ground::plateau_for(&outline, b.pad_ft as f64 + 8.0, 0.0) {
                 e.plateaus.insert("h:det".into(), p);
             }
+            // (And two ponds drawn by hand overlapping south of it: `waters`.)
+            for (k, dx) in [("e:det0", -30.0), ("e:det1", 30.0)] {
+                let (cx, cy) = (corner[0] + dx, corner[1] + 1.4 * half);
+                let pts = vec![[cx - 40.0, cy - 30.0], [cx + 40.0, cy - 30.0], [cx + 40.0, cy + 30.0], [cx - 40.0, cy + 30.0]];
+                e.waters.insert(k.into(), crate::waters::Water { pts, kind: crate::waters::WaterKind::Pond, level: b.pad_ft + 2.0 });
+            }
             let dab = [[corner[0], corner[1] + 2.0 * half]];
             let stroke = crate::ground::Stroke { mode: crate::ground::Brush::Raise, path: &dab, radius_ft: 30.0, height_ft: 10.0, hardness: 0.5, strength: 1.0 };
             let _ = crate::ground::stamp_brush(&mut e.ground, &stroke, &|_, _| 0.0);

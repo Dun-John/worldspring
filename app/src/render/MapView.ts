@@ -3,7 +3,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat, linkSites } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat, linkSites } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
@@ -13,6 +13,7 @@ import { precompile } from './precompile';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
+import { Waters } from './Waters';
 import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
@@ -673,6 +674,11 @@ export class MapView {
     if (this.hexLayer && this.geom) this.hexLayer.set(grid, this.geom.map_w_ft, this.geom.map_h_ft);
   }
 
+  /** Ground and water's surface (ft) at a world point as the finest loaded tile has them, or null. */
+  surfaceAt(x: number, y: number): [number, number] | null {
+    return this.tiles?.surfaceAt(x, y) ?? null;
+  }
+
   setSeaLanes(on: boolean) {
     this.seaLanes = on;
     if (this.lanes) this.lanes.on = on;
@@ -1086,6 +1092,9 @@ export class MapView {
 
   /** The named plateaus' labels as last set (`plateauLabels`). */
   private plateauKey = '';
+  /** Water drawn by hand, above the finest levels (`Waters`), and its labels as last set. */
+  private readonly waterLayer = new Waters();
+  private waterKey = '';
 
   /** The labels hidden: a building drawn by hand hidden by its created id hides its business
    * pin (its building id) too. */
@@ -1173,6 +1182,7 @@ export class MapView {
     this.lastWantKey = '';
     this.geom = geom;
     this.overlay = this.baseOverlay = overlay;
+    this.islets = null;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
     this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);
@@ -1189,6 +1199,8 @@ export class MapView {
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
     this.plateauKey = '';
+    this.waterKey = '';
+    this.waterLayer.set((adjusted ?? world.edits)?.waters);
     this.townHints.clear();
     this.streetHints.clear();
     this.setEdits(adjusted ?? world.edits ?? {}, false);
@@ -1204,6 +1216,7 @@ export class MapView {
     this.refreshMade(false);
     const battle = this.makeBattle(geom, catalog);
     this.app.stage.addChild(this.tiles.container);
+    this.app.stage.addChild(this.waterLayer.container);
     this.app.stage.addChild(this.madeTracks.container);
     this.app.stage.addChild(this.bridgeMarks.container);
     this.app.stage.addChild(this.lanes.container);
@@ -1306,6 +1319,16 @@ export class MapView {
       if (key !== this.plateauKey) {
         this.plateauKey = key;
         this.labels?.setPlateaus(named);
+      }
+    }
+    // Water drawn by hand: drawn above the finest levels, its names at its middle.
+    if (prev.waters !== next.waters) this.waterLayer.set(next.waters);
+    if (prev.waters !== next.waters || pr !== nr) {
+      const named = waterLabels(next);
+      const key = JSON.stringify(named.map((f) => [f.id, f.name, f.x, f.y]));
+      if (key !== this.waterKey) {
+        this.waterKey = key;
+        this.labels?.setWaters(named);
       }
     }
     if (roadNames) queueMicrotask(() => this.askRoads());
@@ -1411,6 +1434,29 @@ export class MapView {
         const e = Math.max(p.edge ?? 0, 5) + 5;
         ground.push([Math.min(...p.pts.map((q) => q[0])) - e, Math.min(...p.pts.map((q) => q[1])) - e, Math.max(...p.pts.map((q) => q[0])) + e, Math.max(...p.pts.map((q) => q[1])) + e]);
       }
+    }
+    // Water drawn by hand: its outline and its bank (`waters::BANK_FT`) round it, as it was and is
+    // (an outline over another cuts the other's shore there too).
+    const pw = prev.waters ?? {};
+    const nw = next.waters ?? {};
+    if (pw !== nw) for (const id of keys('waters', pw, nw)) {
+      const [a, b] = [pw[id], nw[id]];
+      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
+      for (const w of [a, b]) {
+        if (!w) continue;
+        const e = 20;
+        ground.push([Math.min(...w.pts.map((q) => q[0])) - e, Math.min(...w.pts.map((q) => q[1])) - e, Math.max(...w.pts.map((q) => q[0])) + e, Math.max(...w.pts.map((q) => q[1])) + e]);
+      }
+    }
+    // The world's own islets taken away or brought back (`Edits.hidden`, `i:` ids): round each
+    // one, its edge (`ground::ISLET_EDGE_FT`) and a margin. Where they are is asked for once;
+    // before that they are redrawn when it comes (`redrawIslets`).
+    if (prev.hidden !== next.hidden) {
+      const ph = new Set((prev.hidden ?? []).filter((h) => h.startsWith('i:')));
+      const nh = new Set((next.hidden ?? []).filter((h) => h.startsWith('i:')));
+      const flipped = [...ph, ...nh].filter((h) => ph.has(h) !== nh.has(h));
+      if (flipped.length && this.islets) ground.push(...this.isletRects(flipped));
+      else if (flipped.length) void this.redrawIslets(flipped);
     }
     const REACH = 160;
     for (const r of ground) battleRects.push([r[0] - REACH, r[1] - REACH, r[2] + REACH, r[3] + REACH]);
@@ -1528,6 +1574,39 @@ export class MapView {
     if (madeChanged) this.refreshMade(true);
     if (relink) this.relinkHere();
     else if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
+  }
+
+  /** The world's own islets (`GenClient.islets`), once asked for in this world. */
+  private islets: GenIslet[] | null = null;
+
+  /** Round the world's islets with these ids: each one's outline (out to 1.12 of its radius,
+   * `ground::islet_ring`), its edge and a margin. */
+  private isletRects(ids: string[]): Rect[] {
+    return (this.islets ?? []).filter((i) => ids.includes(i.id)).map((i) => {
+      const e = 1.15 * i.r + 6 + 10;
+      return [i.x - e, i.y - e, i.x + e, i.y + e];
+    });
+  }
+
+  /** Islets taken away or brought back before where they are was known: asked for, then their
+   * tiles (the three finest levels) and battlemaps made again. */
+  private async redrawIslets(ids: string[]) {
+    const geom = this.geom;
+    const list = await this.gen.islets().catch(() => null);
+    if (!list || !geom || geom !== this.geom) return;
+    this.islets = list;
+    const ground = this.isletRects(ids);
+    if (!ground.length) return;
+    const REACH = 160;
+    const tileLevel = Math.max(0, geom.max_level - 2);
+    const pad = geom.domain_ft / 2 ** tileLevel / TILE_N;
+    const groundRects: Rect[] = ground.map((r) => [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]);
+    const battleRects: Rect[] = ground.map((r) => [r[0] - REACH, r[1] - REACH, r[2] + REACH, r[3] + REACH]);
+    const epoch = ++this.editEpoch;
+    this.gen.setEdits(this.edits, [], epoch, battleRects, undefined, groundRects);
+    this.tiles?.invalidate(groundRects, tileLevel, epoch, true);
+    this.battle?.invalidate(battleRects, epoch);
+    this.lastWantKey = '';
   }
 
   /** The site in view made again for its paired exits (the sewers' sections all made again). */
@@ -1743,6 +1822,9 @@ export class MapView {
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
+      // (The three finest levels draw it in the terrain: gone over the first half level of them.)
+      const fine = this.geom!.max_level - 2;
+      this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, (level - fine) / 0.5)) : 0);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       this.townTraceSprite.update(this.cam, this.townTrace && !this.interior ? this.townTrace : null);
@@ -2198,6 +2280,35 @@ function linkIn(it: Interior, from: string): { level: number; x: number; y: numb
     if (k) return { level: li, x: k.x, y: k.y };
   }
   return null;
+}
+
+/** Labels for the water drawn by hand that someone named (`e:` renames), at each outline's middle:
+ * a lake's look (an inlet or basin a bay's). */
+export function waterLabels(e: Edits): Feature[] {
+  const out: Feature[] = [];
+  for (const [id, name] of Object.entries(e.renames ?? {})) {
+    const w = id.startsWith('e:') ? e.waters?.[id] : undefined;
+    if (!w || !name || w.pts.length < 3) continue;
+    const f = outlineLabel(id, name, w.pts);
+    out.push({ ...f, kind: w.kind === 'inlet' || w.kind === 'basin' ? 'bay' : 'lake', detail: w.kind });
+  }
+  return out;
+}
+
+/** A label at an outline's middle (its centroid), as wide as the outline. */
+function outlineLabel(id: string, name: string, pts: [number, number][]): Feature {
+  let [a, cx, cy] = [0, 0, 0];
+  for (let k = 0; k < pts.length; k++) {
+    const [x0, y0] = pts[k];
+    const [x1, y1] = pts[(k + 1) % pts.length];
+    const c = x0 * y1 - x1 * y0;
+    [a, cx, cy] = [a + c, cx + (x0 + x1) * c, cy + (y0 + y1) * c];
+  }
+  const xs = pts.map((q) => q[0]);
+  const ys = pts.map((q) => q[1]);
+  const [x, y] = Math.abs(a) > 1e-9 ? [cx / (3 * a), cy / (3 * a)] : [xs.reduce((s, v) => s + v, 0) / xs.length, ys.reduce((s, v) => s + v, 0) / ys.length];
+  const extent = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 40);
+  return { id, kind: 'lake', name, x, y, angle: 0, extent_ft: extent };
 }
 
 /** Labels for the plateaus someone named (`h:` renames), at each outline's middle (its centroid,

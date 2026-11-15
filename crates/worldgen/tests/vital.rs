@@ -2686,6 +2686,7 @@ fn agent_edits_guarantee() {
     ward_edits(&base, &t0);
     ward_castles_by_the_wall(&base, &t0);
     ground_edits(&base);
+    islet_and_deck_edits(&base);
     bridge_shops(&base);
     let sea = base.params().sea_level_ft;
     // Dry open land two miles from a town, clear of every layout.
@@ -3797,7 +3798,77 @@ fn ground_edits(base: &World) {
     for k in 0..SQ * SQ {
         assert!(c.water_level[k] > c.height[k] || dug.water_level[k] <= dug.height[k], "lowering flooded square ({}, {}) of {key:?}", k % SQ, k / SQ);
     }
+    // P6: a pit 30 ft down on open dry ground has a floor of bare rock (`ground::CHASM_FT`);
+    // `floor: ground` keeps the land's own there.
+    let open_sq = |c: &Chunk, k: usize| c.building[k] == 0 && c.urban[k] == 0 && c.water_level[k] <= c.height[k] && c.road_halo[(k / SQ + 1) * HS + k % SQ + 1] == 0;
+    let (key, mid) = settlements
+        .iter()
+        .flat_map(|s| [(0.0, 0.0), (600.0, 0.0), (0.0, 600.0), (-600.0, 0.0), (0.0, -600.0)].map(|d| TileKey::surface(lvl, ((s.x + d.0) / size) as u32, ((s.y + d.1) / size) as u32)))
+        .find_map(|k| {
+            let c = ex.battlemap(k);
+            (12..SQ - 12).flat_map(|j| (12..SQ - 12).map(move |i| (i, j))).find(|&(i, j)| (0..81).all(|d| open_sq(&c, (j + d / 9 - 4) * SQ + i + d % 9 - 4))).map(|(i, j)| (k, j * SQ + i))
+        })
+        .expect("open dry ground for a pit");
+    let c = ex.battlemap(key);
+    let m = centre(&key, mid % SQ, mid / SQ);
+    let hole = [[-25.0, -25.0], [25.0, -25.0], [25.0, 25.0], [-25.0, 25.0]].map(|d| [m[0] + d[0], m[1] + d[1]]);
+    let mut e = Edits::default();
+    e.plateaus.insert("h:chasm".into(), ground::plateau_for(&hole, c.height[mid] as f64 - 30.0, 10.0).unwrap());
+    ex.world.file.edits = e;
+    let dug = ex.battlemap(key);
+    let floor_sq: Vec<usize> = (0..SQ * SQ).filter(|&k| { let q = centre(&key, k % SQ, k / SQ); (q[0] - m[0]).abs() < 20.0 && (q[1] - m[1]).abs() < 20.0 } && open_sq(&c, k)).collect();
+    let rock = |c: &Chunk| floor_sq.iter().filter(|&&k| c.surface[k] == battlemap::Surface::Rock).count();
+    assert!(floor_sq.len() >= 40 && rock(&dug) == floor_sq.len(), "the pit's floor is rock on {} of {} open squares", rock(&dug), floor_sq.len());
+    assert!(floor_sq.iter().all(|&k| dug.surface[k] != battlemap::Surface::Snow), "snow on the pit's rock floor");
+    assert!(dug.objects.iter().all(|o| !(floor_sq.contains(&((o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1))) && matches!(o.kind, battlemap::Kind::TreeDeciduous | battlemap::Kind::Bush | battlemap::Kind::Flowers))), "a plant on the pit's rock floor");
+    ex.world.file.edits.plateaus.get_mut("h:chasm").unwrap().floor = Some(ground::Floor::Ground);
+    let lawn = ex.battlemap(key);
+    assert!(rock(&lawn) <= rock(&c), "a pit with floor: ground draws rock on {} squares (the ground there {})", rock(&lawn), rock(&c));
     ex.world.file.edits = Edits::default();
+
+    // P6: plateaus stack whatever their sizes and ids. A base, a terrace 15 ft above it in two
+    // pieces of one level, and a lower piece inside the terrace (smallest, first by id): the
+    // terrace is flat at its level across its joint and the lower piece, the base flat round it;
+    // renamed, or read over a smaller rectangle, the same bit for bit.
+    {
+        let at = |x0: f64, y0: f64, x1: f64, y1: f64| [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
+        let lv = level as f64;
+        let stack = |ids: [&str; 4]| {
+            let mut e = Edits::default();
+            e.plateaus.insert(ids[0].into(), ground::plateau_for(&at(-60.0, -60.0, 60.0, 60.0), lv, 0.0).unwrap());
+            e.plateaus.insert(ids[1].into(), ground::plateau_for(&at(-30.0, -30.0, 0.0, 30.0), lv + 15.0, 10.0).unwrap());
+            e.plateaus.insert(ids[2].into(), ground::plateau_for(&at(0.0, -30.0, 30.0, 30.0), lv + 15.0, 10.0).unwrap());
+            e.plateaus.insert(ids[3].into(), ground::plateau_for(&at(-10.0, -10.0, 10.0, 10.0), lv + 5.0, 0.0).unwrap());
+            e
+        };
+        let (e, renamed) = (stack(["h:s0", "h:s1", "h:s2", "h:a"]), stack(["h:z0", "h:b1", "h:y2", "h:x"]));
+        let sq0 = |v: f64| (v / SQUARE_FT).floor() as i64;
+        let (gx0, gy0) = (sq0(corner[0] - 70.0), sq0(corner[1] - 70.0));
+        let wide = [corner[0] - 80.0, corner[1] - 80.0, corner[0] + 80.0, corner[1] + 80.0];
+        let (sh, sh2) = (ground::Shaper::build(&e, None, wide, SQUARE_FT).unwrap(), ground::Shaper::build(&renamed, None, wide, SQUARE_FT).unwrap());
+        let (mut terrace, mut base) = (0, 0);
+        for gy in gy0..gy0 + 28 {
+            for gx in gx0..gx0 + 28 {
+                let q = [(gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT];
+                let (dx, dy) = ((q[0] - corner[0]).abs(), (q[1] - corner[1]).abs());
+                let (gr, hw) = (ex.t0.sample(q[0], q[1], SQUARE_FT) as f32, ex.t0.sample_water(q[0], q[1]));
+                let h = sh.at_square(gx, gy, gr, hw).0;
+                assert_eq!(h.to_bits(), sh2.at_square(gx, gy, gr, hw).0.to_bits(), "stacked plateaus: square {q:?} changes with their ids");
+                let small = ground::Shaper::build(&e, None, [q[0] - 1.0, q[1] - 1.0, q[0] + 1.0, q[1] + 1.0], SQUARE_FT);
+                assert_eq!(h.to_bits(), small.map_or(gr, |s| s.at_square(gx, gy, gr, hw).0).to_bits(), "stacked plateaus: square {q:?} differs read over a smaller rectangle");
+                if dx < 30.0 && dy < 30.0 {
+                    assert!((h as f64 - lv - 15.0).abs() < 0.01, "stacked plateaus: terrace square ({dx}, {dy}) from the middle at {h}, not {}", lv + 15.0);
+                    terrace += 1;
+                } else if dx < 60.0 && dy < 60.0 && (dx > 45.0 || dy > 45.0) {
+                    assert!((h as f64 - lv).abs() < 0.01, "stacked plateaus: base square ({dx}, {dy}) from the middle at {h}, not {lv}");
+                    base += 1;
+                } else if dx < 40.0 && dy < 40.0 {
+                    assert!(h as f64 >= lv - 0.01 && h as f64 <= lv + 15.01, "stacked plateaus: the terrace's edge at ({dx}, {dy}) from the middle at {h}");
+                }
+            }
+        }
+        assert!(terrace >= 100 && base >= 100, "too few squares checked ({terrace} on the terrace, {base} on the base)");
+    }
 
     // R5 M20: an islet, a breakwater and a quay built by hand on a shore. The islet's top is dry
     // rock at its level, and a building may stand on it; the breakwater's made ground is dry and
@@ -3929,6 +4000,64 @@ fn ground_edits(base: &World) {
         assert!(pack(&mut ex, k).0 == plain_near[q], "chunk {k:?} differs once the islet and wharves are cleared");
     }
     assert!(agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).is_err(), "a building in the water once the islet is gone");
+
+    // P6: a plateau 12 ft over the water where the islet stood holds a wall and a building.
+    let water = ex.t0.sample_water(islet_at[0], islet_at[1]) as f64;
+    let deck = [[-35.0, -20.0], [35.0, -20.0], [35.0, 20.0], [-35.0, 20.0]].map(|d| [islet_at[0] + d[0], islet_at[1] + d[1]]);
+    let wall = worldgen::world::Created { id: "c:97".into(), kind: "wall".into(), pts: vec![[islet_at[0] - 15.0, islet_at[1]], [islet_at[0] + 15.0, islet_at[1]]], ..Default::default() };
+    let refused = agent::works_spot(&ex.world, &ex.t0, &wall, "c:97", None).err().unwrap_or_default();
+    assert!(refused.contains("in the water"), "a wall over the water: {refused:?}");
+    ex.world.file.edits.plateaus.insert("h:deck".into(), ground::plateau_for(&deck, water + 12.0, 0.0).unwrap());
+    if let Err(e) = agent::works_spot(&ex.world, &ex.t0, &wall, "c:97", None) {
+        panic!("a wall on a plateau over the water refused: {e}");
+    }
+    agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).expect("a building on a plateau over the water");
+    ex.world.file.edits = Edits::default();
+
+    // P6: water outlines. An inlet from 50 ft inland out into the sea at the sea's level: wet on
+    // the battlemap all the way out to the sea's own water (one water at one level), the ground
+    // round it as it was, refused to a building, the tile's samples as generated; two overlapping
+    // ponds on dry land are one water with no bank between them; cleared, as generated.
+    use worldgen::waters::{Water, WaterKind};
+    let k2 = others[2.min(others.len() - 1)];
+    let shore = at(k2);
+    let sea = plain_c.1.water_level[k2 + 8];
+    let inlet = Water { pts: vec![[shore[0] - 50.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] + 15.0], [shore[0] - 50.0, shore[1] + 15.0]], kind: WaterKind::Inlet, level: sea };
+    assert!(inlet.problem().is_none(), "the inlet: {:?}", inlet.problem());
+    ex.world.file.edits.waters.insert("e:inlet".into(), inlet.clone());
+    let (inlet_pack, c) = pack(&mut ex, key);
+    let (j, i0) = (k2 / SQ, k2 % SQ);
+    for i in i0 - 8..=i0 + 16 {
+        let q = j * SQ + i;
+        assert!(wet(&c, q) && (c.water_level[q] - sea).abs() < 0.01, "the inlet: square {} from the shore is not the sea's water ({} over {})", i as i64 - i0 as i64, c.water_level[q], c.height[q]);
+    }
+    for q in [(j - 6) * SQ + i0 - 4, (j + 6) * SQ + i0 - 4, j * SQ + i0 - 14] {
+        assert!(c.height[q] == plain_c.1.height[q] && c.water_level[q] == plain_c.1.water_level[q], "the inlet changed the ground outside it at square {q}");
+    }
+    assert!(agent::building_spot(&ex.world, &ex.t0, &foot([shore[0] - 25.0, shore[1]]), None, "c:99", None).is_err(), "a building in the inlet");
+    let tk = fine(shore);
+    let shaped_tile = ex.terrain_packed(tk);
+    let json = serde_json::to_string(&ex.world.file.edits).unwrap();
+    assert!(serde_json::from_str::<Edits>(&json).unwrap() == ex.world.file.edits, "water outlines through JSON");
+    ex.world.file.edits = Edits::default();
+    let plain_tile = ex.terrain_packed(tk);
+    let samples = 48..48 + PADDED * PADDED * 4;
+    assert!(shaped_tile != plain_tile && shaped_tile[samples.clone()] == plain_tile[samples], "tile {tk:?}: the inlet drawn, its samples as generated");
+    // Two ponds overlapping on dry ground west of the shore, 2 ft above it.
+    let dry = j * SQ + i0 - 40;
+    let (dp, top) = (at(dry), plain_c.1.height[dry]);
+    let pond = |dx: f64| Water { pts: vec![[dp[0] + dx - 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] + 20.0], [dp[0] + dx - 20.0, dp[1] + 20.0]], kind: WaterKind::Pond, level: top + 2.0 };
+    ex.world.file.edits.waters.insert("e:a".into(), pond(-15.0));
+    ex.world.file.edits.waters.insert("e:b".into(), pond(15.0));
+    let c = pack(&mut ex, key).1;
+    for i in dry % SQ - 5..=dry % SQ + 5 {
+        let q = j * SQ + i;
+        assert!(wet(&c, q) && (c.water_level[q] - top - 2.0).abs() < 0.01, "overlapping ponds: square {q} at {} under {}", c.height[q], c.water_level[q]);
+    }
+    let s = worldgen::town::Shore::new(&ex.world, &ex.t0, [dp[0] - 100.0, dp[1] - 100.0, dp[0] + 100.0, dp[1] + 100.0]);
+    assert!(s.wet(dp) && !s.wet([dp[0], dp[1] + 40.0]), "the ponds' shore");
+    ex.world.file.edits = Edits::default();
+    assert!(pack(&mut ex, key).0 == plain_c.0 && inlet_pack != plain_c.0, "the shore's chunk with and without the water outlines");
 }
 
 /// R5 M20: shops on a bridge put down by hand over a river, clear of every layout. Its lots
@@ -3991,7 +4120,7 @@ fn bridge_shops(base: &World) {
     }
     e.created.push(Created { id: "c:0".into(), kind: "building".into(), x: at[0], y: at[1], name: String::new(), poly: lot.clone(), func: Some("tailor".into()), floors: Some(2), on: Some("v:shops".into()), ..Default::default() });
     set(&mut ex, e.clone());
-    let top = worldgen::battlemap::hand_deck_top(&bridge, &ex.t0);
+    let top = worldgen::battlemap::hand_deck_top(&bridge, &ex.world, &ex.t0);
     let li = agent::layout_of(&ex.world, &ex.t0, "c:0").expect("the shop's layout");
     let l = town::layout(&ex.world, &ex.t0, li);
     let b = l.buildings.first().expect("the shop");
@@ -5281,6 +5410,33 @@ fn harbour_ground() {
         towers += 1;
     }
     assert!(towers >= 1, "no islet tower checked");
+}
+
+/// P6 6b: a generated islet taken away (`Edits.hidden`) is no longer one (it leaves the shore and the ground, its id is
+/// stable and brings it back), and a hand bridge's deck climbs from end to end, at most `DECK_GRADE_MAX`.
+fn islet_and_deck_edits(base: &World) {
+    use worldgen::world::{Crossing, CrossingKind};
+    let mut ex = Executor::new(World::new(base.file.clone()).unwrap());
+    let isl = worldgen::t0::islets::islets(&ex.t0).iter().find(|i| i.river).expect("a river islet").clone();
+    assert!(isl.id.starts_with("i:") && isl.id.len() == 10, "an islet's id: {}", isl.id);
+    let r = [isl.at[0] - 5.0, isl.at[1] - 5.0, isl.at[0] + 5.0, isl.at[1] + 5.0];
+    assert!(worldgen::town::Shore::new(&ex.world, &ex.t0, r).on_islet(isl.at), "the generated islet isn't one");
+    ex.world.file.edits.hidden.insert(isl.id.clone());
+    assert!(!worldgen::town::Shore::new(&ex.world, &ex.t0, r).on_islet(isl.at), "the islet taken away is still one");
+    assert!(worldgen::t0::islets::near_in(&ex.t0, &ex.world.file.edits, r).next().is_none(), "near_in lists it");
+    ex.world.file.edits.hidden.remove(&isl.id);
+    assert!(worldgen::town::Shore::new(&ex.world, &ex.t0, r).on_islet(isl.at), "the islet brought back isn't one");
+    // A bridge over dry ground from level ground to a plateau 60 ft up, 200 ft away: the deck climbs, at most 1 in 8.
+    let s = ex.t0.settlements.iter().max_by_key(|s| s.population).unwrap();
+    let a = [s.x + 3000.0, s.y];
+    let b = [a[0] + 200.0, a[1]];
+    let gb = ex.t0.ground_at(b[0], b[1], 5.0) as f32;
+    let outline = [[b[0] - 30.0, b[1] - 30.0], [b[0] + 30.0, b[1] - 30.0], [b[0] + 30.0, b[1] + 30.0], [b[0] - 30.0, b[1] + 30.0]];
+    ex.world.file.edits.plateaus.insert("h:up".into(), worldgen::ground::plateau_for(&outline, gb as f64 + 60.0, 0.0).unwrap());
+    let c = Crossing { kind: CrossingKind::Bridge, a, b, width: 20.0, material: Default::default() };
+    let (da, db) = worldgen::battlemap::hand_deck_ends(&c, &ex.world, &ex.t0);
+    assert!(db > da + 10.0 && (db - da) as f64 <= worldgen::battlemap::DECK_GRADE_MAX * 200.0 + 0.01, "the deck's ends {da} and {db}");
+    assert!(worldgen::battlemap::deck_level((da, db), 0.5) > da && worldgen::battlemap::deck_level((da, db), 0.5) < db, "the deck doesn't climb");
 }
 
 // R5 121

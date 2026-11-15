@@ -12,7 +12,7 @@ use crate::core::{
 };
 
 /// Bump whenever generator output changes for an unchanged world file.
-pub const GEN_VERSION: u32 = 64;
+pub const GEN_VERSION: u32 = 65;
 
 /// Prevailing winds: latitude belts (trades, westerlies, polar easterlies) or one direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,6 +421,10 @@ pub struct Edits {
     /// Plateaus and pits drawn by hand (`h:<id>`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plateaus: BTreeMap<String, crate::ground::Plateau>,
+    /// Water drawn by hand (`e:<id>`): inlets, basins, lakes, ponds and moats, each an outline
+    /// and a level (`waters`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub waters: BTreeMap<String, crate::waters::Water>,
     /// Quays, piers and breakwaters built by hand (`q:<id>`): made ground along or out into the
     /// water, or a deck over it (`wharf`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1745,6 +1749,7 @@ impl Edits {
                 "towns" => self.towns = std::mem::take(&mut part.towns),
                 "ground" => self.ground = std::mem::take(&mut part.ground),
                 "plateaus" => self.plateaus = std::mem::take(&mut part.plateaus),
+                "waters" => self.waters = std::mem::take(&mut part.waters),
                 "wharves" => self.wharves = std::mem::take(&mut part.wharves),
                 "cultures" => self.cultures = std::mem::take(&mut part.cultures),
                 "hexes" => self.hexes = std::mem::take(&mut part.hexes),
@@ -1784,6 +1789,7 @@ impl Edits {
                 "towns" => patch(&mut self.towns, p)?,
                 "ground" => patch(&mut self.ground, p)?,
                 "plateaus" => patch(&mut self.plateaus, p)?,
+                "waters" => patch(&mut self.waters, p)?,
                 "wharves" => patch(&mut self.wharves, p)?,
                 "cultures" => patch(&mut self.cultures, p)?,
                 "hexes" => patch(&mut self.hexes, p)?,
@@ -1798,7 +1804,7 @@ impl Edits {
     pub fn is_empty(&self) -> bool {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
-            && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty()
+            && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty() && self.waters.is_empty()
             && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
             && self.streets.is_empty() && self.links.is_empty()
     }
@@ -1876,6 +1882,7 @@ impl Edits {
             "towns" => Some(one(&mut self.towns, op, field, &key)),
             "ground" => Some(one(&mut self.ground, op, field, &key)),
             "plateaus" => Some(one(&mut self.plateaus, op, field, &key)),
+            "waters" => Some(one(&mut self.waters, op, field, &key)),
             "wharves" => Some(one(&mut self.wharves, op, field, &key)),
             "cultures" => Some(one(&mut self.cultures, op, field, &key)),
             "hexes" => Some(one(&mut self.hexes, op, field, &key)),
@@ -1984,6 +1991,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("towns", Shape::Map),
     ("ground", Shape::Map),
     ("plateaus", Shape::Map),
+    ("waters", Shape::Map),
     ("wharves", Shape::Map),
     ("cultures", Shape::Map),
     ("hexes", Shape::Map),

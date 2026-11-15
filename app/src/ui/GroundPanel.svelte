@@ -22,9 +22,13 @@
     onPlateau: (id: string, p: Plateau) => void;
     onRemove: () => void;
     onZoomIn: () => void;
+    /** The world's own islets, those taken away marked, and taking one away or bringing it back. */
+    islets?: { id: string; x: number; y: number; r: number; river: boolean; removed: boolean; tower: boolean }[];
+    onIslet?: (id: string, removed: boolean) => void;
+    onGoIslet?: (x: number, y: number) => void;
   }
 
-  let { settings = $bindable(), selected, sea, near, inside, peek = false, onPlateau, onRemove, onZoomIn }: Props = $props();
+  let { settings = $bindable(), selected, sea, near, inside, peek = false, onPlateau, onRemove, onZoomIn, islets = [], onIslet = () => {}, onGoIslet = () => {} }: Props = $props();
 
   const MODES: { key: GroundMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'raise', label: 'Raise', icon: 'raise', kbd: 'Q', hint: 'Brush over the ground to lift it, at most by the height below however often you go over it.' },
@@ -55,6 +59,11 @@
     if (!selected) return;
     const { edge: _, ...p } = selected.plateau;
     onPlateau(selected.id, e ? { ...p, edge: e } : p);
+  }
+  function floor(f: string) {
+    if (!selected) return;
+    const { floor: _, ...p } = selected.plateau;
+    onPlateau(selected.id, f === 'rock' || f === 'ground' ? { ...p, floor: f } : p);
   }
 </script>
 
@@ -114,6 +123,17 @@
         </div>
       </details>
     {/if}
+    {#if islets.length}
+      <details class="card" aria-label="The world's islets">
+        <summary>Islets in the world <span class="ws-muted">· {islets.filter((i) => !i.removed).length} of {islets.length}</span></summary>
+        {#each islets as i (i.id)}
+          <div class="ws-row">
+            <button class="ws-chip grow" onclick={() => onGoIslet(i.x, i.y)} title="Fly there">{i.river ? 'River' : 'Coast'} islet, {Math.round(i.r)} ft{i.tower ? ', watchtower' : ''}{i.removed ? ' (taken away)' : ''}</button>
+            <button class="ws-chip" onclick={() => onIslet(i.id, !i.removed)}>{i.removed ? 'Bring back' : 'Take away'}</button>
+          </div>
+        {/each}
+      </details>
+    {/if}
     {#if selected}
       <section class="card" aria-label="Plateau">
         <div class="title">
@@ -133,6 +153,16 @@
           <span>Edge</span><output>{edgeLabel(selected.plateau.edge ?? 0)}</output>
           <input type="range" min="0" max="60" step="5" value={selected.plateau.edge ?? 0} onchange={(e) => edge(Number(e.currentTarget.value))} />
         </label>
+        {#if selected.plateau.kind !== 'islet'}
+          <label class="ws-field">
+            Top
+            <select class="ws-input" value={selected.plateau.floor ?? 'auto'} onchange={(e) => floor(e.currentTarget.value)} title="What its top (a pit's floor) draws as">
+              <option value="auto">Rock on a deep pit's floor</option>
+              <option value="rock">Bare rock</option>
+              <option value="ground">The land round it</option>
+            </select>
+          </label>
+        {/if}
         <div class="row">
           <button class="ws-btn" onclick={onRemove} title="Take it away (Delete)"><Icon name="trash" size={16} /> Take away</button>
         </div>

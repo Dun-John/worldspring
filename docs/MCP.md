@@ -151,6 +151,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `x:<id>` | `x:9a1b7c3d` | Generated battlemap objects taken away (a clear) |
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
 | `h:<id>` | `h:d470a78s` | A plateau, pit or rock islet (ground shaped by hand; an islet says `what: "islet"`) |
+| `e:<id>` | `e:k2v9x0qa` | Water drawn by hand: an inlet, basin, lake, pond or moat (`create_water`) |
 | `q:<id>` | `q:7d0kx3ab` | A quay, pier or breakwater put down by hand (`place_wharf`); a lighthouse or shops stand on it as drawn buildings (`c:`) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 | `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
@@ -1592,7 +1593,7 @@ into a town lays the town out anew (its gates follow its roads): draw roads befo
 Crossings put down by hand (`v:<id>`) join one bank to the other, drawn on the battlemap over what is there. A
 bridge is a walkable deck clear of the water (timber, or old stone), a ford a bed brought up to wading depth under
 stepping stones, a ferry jetties out from each end with a raft between. The ends are exactly where they are given
-(never moved), but an end in a river's water is refused, naming the bank point on that side to use. A crossing takes a
+(never moved), but an end in a river's water is refused, naming the bank point on that side to use. An end on a rock islet (hand-made or the world's) or on a plateau over the water is dry land and passes. A hand bridge's deck climbs straight from the ground (or the water's clearance) at one end to the other, at most 1 in 8, so a long bridge can reach a cliff top (it runs into the cliff face where the climb is capped); shops on it stand at its level where they are. A pier may start on an islet. `raise_islet` reads the water as the battlemap draws it (a spot T0 calls dry but the fine shore floods takes an islet; one it floods but the fine shore dries is dry land). A crossing takes a
 name and notes like a feature (`rename_feature`, `annotate_feature`, `get_feature` with its `v:` id); a named one is
 found by `search_features` (kind `crossing`) and listed in Notes › Gazetteer (nothing is lettered on the map).
 
@@ -2342,7 +2343,15 @@ A plateau or pit, or a change to one. The outline is `poly` (also `outline`), or
 tower (`t:`) or a site (its buildings, towers and walls), its footprint's convex outline grown by `margin_ft`;
 outlines are simplified to at most 48 points. The level is `level_ft` above the sea, or `rise_ft` above the
 ground (as shaped, this plateau left out) at the outline's middle. The reply: `id`, `changed`, `level_ft`,
-`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`. Without `id`, an outline that matches an existing plateau's (the same number of corners, each within 1 ft) is that one: `existing: true`, nothing added; a different `level_ft`, `rise_ft` or `edge_ft` is refused (give its id to change it).
+`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`, `floor`. Without `id`, an outline that matches an existing plateau's (the same number of corners, each within 1 ft) is that one: `existing: true`, nothing added; a different `level_ft`, `rise_ft`, `edge_ft` or `floor` is refused (give its id to change it).
+
+Plateaus stack, whatever order they were made in: where they overlap the highest holds (a lower one inside a
+higher one changes nothing), and a pit (below the ground there) digs through the plateaus round it, the deepest pit
+holding; a plateau inside a pit stands up out of it. Pieces of one level join as one ground (no seam where they
+meet), and each edge eases toward the ground round the whole stack. Walls, castles and buildings may stand where a
+plateau holds the ground above the sea or a lake. The floor: `rock` draws the top as bare rock (scree at its foot) at
+every zoom, `ground` as the land round it; `auto` (the default, not written) is rock on a pit's floor 15 ft or more
+below the ground, the land round it otherwise.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -2353,6 +2362,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 | `level_ft` | number | | Its level above the sea, within 20,000 ft |
 | `rise_ft` | number | 10 | Or its level above the ground at the middle, within 150 ft (below zero: a pit); with `id`, only when given |
 | `edge_ft` | number | 0 | The slope round it, 0 (sheer) to 60 |
+| `floor` | string | `auto` | `auto`, `rock` or `ground`: what its top (a pit's floor) draws as; with `id`, kept unless given |
 
 ```json
 { "name": "set_plateau", "arguments": { "around": "c:3", "margin_ft": 15, "rise_ft": 25, "edge_ft": 0 } }
@@ -2360,14 +2370,24 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 
 ### `list_plateaus`
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
-`{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
+`{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, floor? (rock or ground, if set), x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
-block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
+block's north-west corner), and (unless `generated: false`) the world's own islets in rivers and off coasts
+`{id: "i:<8 hex>", what: "islet", generated: true, level_ft, water_ft, x_ft, y_ft, radius_ft, in: "river" or "sea or lake", tower? (a watchtower stands on it), removed? (taken away), bbox, poly}`.
+`within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 
 ### `delete_plateau`
 Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).
 Its name (`rename_feature`), note and hidden mark go with it; there is no restore (the user's Undo in the app
 brings all of them back).
+
+Also takes the world's own islets (`i:...`, from `list_plateaus`): a hidden mark takes one off the ground, the shore and the
+map (a bridge deck or pier no longer keeps clear of it only where the town's plan already did), and a watchtower on it is
+removed as a building (`removed_towers`, `b:...`). `restore_islets` undoes it.
+
+### `restore_islets`
+Bring the world's own islets (`i:...`) back by `id` or `ids` (all or none) after `delete_plateau` took them away; one not
+taken away is refused. A watchtower taken away with one stays removed (`restore_building`). Returns `{tool, ids}`.
 
 ### `ground_heights`
 Every square of the box reaching `radius_ft` (default 25, at most 200) east, west, north and south of a place:
@@ -2393,6 +2413,46 @@ top (knolls, hollows) and levels road beds under roads.
 | `… is a settlement: a plateau spans at most 1280 ft` | `around` a whole town: give a building or an outline |
 
 ---
+
+## Water drawn by hand
+
+Water inside an outline drawn by hand, as Build › Water draws it: an inlet or basin of the sea, a lake, pond or
+moat. The edits field **`waters`** holds it, by `e:<id>`: `pts` (the outline, 3 to 128 points, rounded to 0.5 ft,
+not crossing itself, spanning at most 5 miles), `kind` (`inlet`, `basin`, `lake`, `pond`, `moat`) and `level` (its
+surface, ft on the world's datum).
+
+How it applies:
+
+- Inside the outline the water stands at its level and the ground falls from the shore to the kind's depth below
+  it over 15 ft (inlet 12 ft, basin 10, lake 8, moat 6, pond 3), at most 150 ft under the ground as generated.
+  Outlines that overlap are one water with one shore (the higher level, the deeper bed); one that reaches the sea
+  or a lake at its level joins it. Plateaus and islets go on top: one drawn over the water stands dry.
+- Battlemaps draw it as water (and its shore); the map draws it at every zoom, in the water's own look; a name
+  given to it (`rename_feature`, or `name`) shows on the map. Buildings, walls and castles keep out of it, and a
+  crossing's end can't be in it. The world's own towns as generated aren't laid out again round it.
+- Limits: a world holds 256 outlines.
+
+### `create_water`
+
+`poly` (or `outline`) and optionally `kind` (default `lake`), `level_ft` (above the sea) and `name`. Without a
+level it takes the sea's or a lake's where the outline reaches one (the highest; the reply's `joins` says which),
+else the sea's for an inlet or basin, else 1 ft under the lowest ground on its shore. The same outline again
+returns the water there (`existing: true`). Returns the water's entry: `id`, `kind`, `level_ft`, `x_ft`, `y_ft`,
+`bbox`, `area_sq_ft`, `points`, `poly`, `name`.
+
+### `update_water`
+
+`id` (`e:…`) and any of `poly`, `kind`, `level_ft`, `name` (empty: none). What is not given stays; a new outline,
+or a kind that changes between the sea's and standing water, finds its level again unless `level_ft` is given.
+
+### `delete_water`
+
+`id` or `ids` (all or none): the water goes with its name, note and hidden mark (no restore; the user's Undo in
+the app brings it back).
+
+### `list_waters`
+
+Every water drawn by hand, as `create_water` returns it (`{items, found}`, `limit` 100 by default).
 
 ## What agents can't do
 

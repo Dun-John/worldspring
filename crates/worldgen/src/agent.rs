@@ -411,8 +411,11 @@ fn creation_spot_inner(world: &World, t0: &T0, kind: &str, under: Option<&str>, 
     if p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft {
         return Err("that place is off the map".to_string());
     }
-    // (On an islet drawn by hand it stays where it was put: the islet is its ground.)
-    let on_islet = !world.file.edits.plateaus.is_empty() && town::Shore::new(world, t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]).on_islet(p);
+    // (On an islet or a plateau over the water it stays where it was put: that is its ground.)
+    let on_islet = !world.file.edits.plateaus.is_empty() && {
+        let sh = town::Shore::new(world, t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]);
+        sh.on_islet(p) || sh.raised(p)
+    };
     let (x, y) = if on_islet { (p[0], p[1]) } else { crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 150.0, t0.cell_ft) };
     let mut p = [x, y];
     if kind == "camp" {
@@ -739,7 +742,9 @@ fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Optio
         if !wet && shore.wet(*p) {
             wet = true;
             let sea = world.params().sea_level_ft + 1.0;
-            out.push(Blocker { kind: Some(if (t0.sample_water(p[0], p[1]) as f64) <= sea { "sea" } else { "lake" }), ..Blocker::plain("water", *p) });
+            let held = crate::waters::holding(&world.file.edits, *p).map(|k| world.file.edits.waters[k].kind);
+            let lake = held.map_or((t0.sample_water(p[0], p[1]) as f64) > sea, |k| !k.of_sea());
+            out.push(Blocker { kind: Some(if lake { "lake" } else { "sea" }), ..Blocker::plain("water", *p) });
             if !all {
                 return out;
             }
@@ -1389,7 +1394,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             return Err(format!("that is in the water: {}", if castle { "draw it on dry land" } else { "end the wall at the shore" }));
         }
         let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);
-        if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 && !shore.on_islet(*p) {
+        if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 && !shore.on_islet(*p) && !shore.raised(*p) {
             return Err(format!("that is in a river: {}", if castle { "draw it on the bank" } else { "end the wall at the bank" }));
         }
     }
@@ -1796,6 +1801,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
             let pts = &edits.plateaus[id].pts;
             Some(geom::centroid(pts))
         }
+        ("e", _) if edits.waters.contains_key(id) => Some(geom::centroid(&edits.waters[id].pts)),
         ("w", [li]) if town::is_settlement(t0, *li) => Some(town::layout(world, t0, *li).center),
         ("t", [li, k]) if *li < town::layout_count(t0) => {
             let l = town::layout(world, t0, *li);
@@ -1990,6 +1996,9 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
     }
     if let Some(w) = world.file.edits.wharves.get(id) {
         return Some(crate::wharf::generated_name(w));
+    }
+    if let Some(w) = world.file.edits.waters.get(id) {
+        return Some(w.kind.name().to_string());
     }
     if id.starts_with("rd:") {
         let i = crate::roadids::road_index(t0, id)?;

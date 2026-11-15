@@ -860,6 +860,26 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
 
 /// Move a point (ft) out of any river channel and off its banks: pushed away from the
 /// nearest point of the finest river curve until it is `margin` ft beyond the bank.
+/// Where (x, y) is within `range` ft of a river's water: its surface there (the nearest point of
+/// the finest curve, sampled every ~20 ft) and the channel's depth in its middle.
+pub fn surface_near(net: &RiverNet, x: f64, y: f64, range: f64, cell_ft: f64) -> Option<(f64, f64)> {
+    // (Out to the widest river's half width.)
+    let pad = range + 600.0;
+    let mut best: Option<(f64, f64, f64)> = None;
+    for (ri, k) in net.segments_near(x - pad, y - pad, x + pad, y + pad, 0.0) {
+        let (r, k) = (&net.rivers[ri as usize], k as usize);
+        let n = ((r.s[k + 1] - r.s[k]) / 20.0).ceil().clamp(8.0, 2000.0) as usize;
+        for j in 0..=n {
+            let c = r.eval(k, j as f64 / n as f64, 2.5, cell_ft);
+            let d = crate::core::sqrt((c.p[0] - x) * (c.p[0] - x) + (c.p[1] - y) * (c.p[1] - y)) - 0.5 * c.w;
+            if best.is_none_or(|b| d < b.0) {
+                best = Some((d, c.z, depth_ft(c.w)));
+            }
+        }
+    }
+    best.filter(|b| b.0 <= range).map(|b| (b.1, b.2))
+}
+
 pub fn clear_of_rivers(net: &RiverNet, x: f64, y: f64, margin: f64, cell_ft: f64) -> (f64, f64) {
     clear_of_rivers_with(net, x, y, margin, cell_ft, &ClearCache::default())
 }

@@ -404,6 +404,8 @@ export interface Edits {
   ground?: Record<string, string>;
   /** `h:<id>` → a plateau or pit drawn by hand (or a rock islet: `kind`). */
   plateaus?: Record<string, Plateau>;
+  /** Water drawn by hand (`e:<id>`: `worldgen::waters`). */
+  waters?: Record<string, Water>;
   /** `q:<id>` → a quay, pier or breakwater built by hand. */
   wharves?: Record<string, Wharf>;
   /** `overland` → the hex grid drawn over the map for a hex crawl (`render/hex.ts`). */
@@ -435,12 +437,25 @@ export interface HexGrid {
 
 /** A flat top or a pit (`worldgen::ground::Plateau`): ground inside `pts` (world ft) eases to
  * `level` (ft); outside, back to the ground over `edge` ft (absent or 0: a sheer step). An
- * `islet` is rock standing out of the water (its outline made from a centre and radius). */
+ * `islet` is rock standing out of the water (its outline made from a centre and radius). `floor`:
+ * what its top draws as (absent: rock on a pit's floor 15 ft or more below the ground). */
 export interface Plateau {
   pts: [number, number][];
   level: number;
   edge?: number;
   kind?: 'plateau' | 'islet';
+  floor?: 'rock' | 'ground';
+}
+
+export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat';
+
+/** Water drawn by hand (`worldgen::waters::Water`): an outline (world ft, 3 to 128 points, rounded
+ * to 0.5 ft, 5 miles across at most) and its surface `level` (ft, the generator's datum). Inside,
+ * the ground falls under it; overlapping outlines are one water. */
+export interface Water {
+  pts: [number, number][];
+  kind: WaterKind;
+  level: number;
 }
 
 export type WharfKind = 'quay' | 'pier' | 'breakwater';
@@ -710,6 +725,17 @@ export interface TownReport {
 /** A generated building changed by hand (`worldgen::world::BuildingEdit`): `at` is its middle
  * as generated (the edit is set aside if another building stands at its id after the town is
  * laid out anew); every option left out is as generated. */
+/** One of the world's own islets (`t0::islets`): rock in a river or off a coast; a watchtower may stand on it. */
+export interface GenIslet {
+  id: string;
+  x: number;
+  y: number;
+  r: number;
+  river: boolean;
+  level: number;
+  tower: { id: string; x: number; y: number } | null;
+}
+
 export interface BuildingEdit {
   at: [number, number];
   removed?: boolean;
@@ -897,6 +923,8 @@ export type Ask =
   /** Shop lots along a bridge, or its shops laid out again after a change (`wharf::shop_lots`,
    * `Edits::follow_crossing`; `input` JSON). */
   | { op: 'bridgelots'; input: string }
+  /** The world's generated islets (`t0::islets`). */
+  | { op: 'islets' }
   /** A hand islet round a point (`wharf::islet_at`). */
   | { op: 'islet'; key: string; x: number; y: number; radius: number; rise: number }
   /** Whether a wharf can be put down, with its lighthouse (`wharf::root_problem`). */

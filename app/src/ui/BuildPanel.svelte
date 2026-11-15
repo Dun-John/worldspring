@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type BuildMode = 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'harbour' | 'clear';
+  export type BuildMode = 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear';
   /** What the app says of a quick placement's ghost. */
   export interface QuickInfo {
     /** Something is ready to place. */
@@ -23,6 +23,8 @@
   import { CROSSING_WIDTH, LOT_SIZES, TOWN_WARDS, NARROW_CROSSING_MAX, WHARF_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial, type WharfKind } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import { SHOP_DEPTH_RANGE, shopsWidth, type CrossSettings } from '../editor/crossing';
+  import type { WaterSettings } from '../editor/water';
+  import type { WaterKind } from '../gen/protocol';
   import { ISLET_RADIUS, ISLET_RISE, type HarbourSettings, type HarbourKind } from '../editor/harbour';
   import type { ClearShape } from '../editor/clearArea';
   import type { LassoSettings, RowSettings, StampSettings } from '../editor/quick';
@@ -50,6 +52,11 @@
     cross: CrossSettings;
     /** The crossing picked (what it is), else putting new ones down. */
     crossEditing: string | null;
+    water: WaterSettings;
+    /** The water picked (its kind and name), else drawing new outlines. */
+    waterPicked: { kind: WaterKind; name: string } | null;
+    onWaterChange: (change: { kind?: WaterKind; name?: string }) => void;
+    onWaterRemove: () => void;
     harbour: HarbourSettings;
     /** The wharf picked (its id), else drawing new ones. */
     harbourPicked: string | null;
@@ -86,6 +93,10 @@
     quick,
     cross = $bindable(),
     crossEditing,
+    water = $bindable(),
+    waterPicked,
+    onWaterChange,
+    onWaterRemove,
     harbour = $bindable(),
     harbourPicked,
     near,
@@ -150,6 +161,7 @@
     { key: 'castle', label: 'Castle', icon: 'castle', title: 'Draw a castle: its walls, gate, keep and yard' },
     { key: 'wall', label: 'Wall', icon: 'wall', title: 'Draw a wall with towers and gates' },
     { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
+    { key: 'water', label: 'Water', icon: 'lake', title: 'Draw an inlet, basin, lake, pond or moat' },
     { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
     { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
   ];
@@ -170,6 +182,14 @@
   function addKind(k: string) {
     if (k && !row.kinds.includes(k)) row.kinds = [...row.kinds, k];
   }
+  const WATERS: { key: WaterKind; label: string; look: string }[] = [
+    { key: 'inlet', label: 'Inlet', look: 'The sea reaching in, at its level.' },
+    { key: 'basin', label: 'Basin', look: 'A harbour basin dug from the sea, at its level.' },
+    { key: 'lake', label: 'Lake', look: 'Standing water, 8 ft deep away from its shore.' },
+    { key: 'pond', label: 'Pond', look: 'Shallow standing water, 3 ft deep.' },
+    { key: 'moat', label: 'Moat', look: 'A moat round a castle or town, 6 ft deep.' },
+  ];
+  const waterKind = $derived(waterPicked?.kind ?? water.kind);
 
   const categories = $derived(funcs ? [...new Set(funcs.businesses.map((b) => b.category))] : []);
 
@@ -435,6 +455,39 @@
       {/if}
       {#if crossEditing}<button class="ws-btn primary block" onclick={onCrossSave}>Save changes</button>{/if}
     {/if}
+  {:else if mode === 'water'}
+    {#if waterPicked}
+      <div class="editing">
+        <span class="grow">Changing the <b>{waterPicked.name || waterPicked.kind}</b></span>
+        <button class="ws-btn" onclick={onWaterRemove} title="Take it away"><Icon name="trash" size={16} /> Remove</button>
+        <button class="ws-btn" onclick={onDone}>Done</button>
+      </div>
+    {/if}
+    <div class="ws-seg" role="radiogroup" aria-label="Water">
+      {#each WATERS as k (k.key)}
+        <button class:on={waterKind === k.key} aria-pressed={waterKind === k.key} onclick={() => (waterPicked ? onWaterChange({ kind: k.key }) : (water = { ...water, kind: k.key }))}>{k.label}</button>
+      {/each}
+    </div>
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to draw it.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    <!-- (On a phone's strip too: its name, and how to draw one, are all there is to it.) -->
+    {#if waterPicked}
+      <label class="ws-field">
+        Name
+        <input class="ws-input" value={waterPicked.name} placeholder="No name" onchange={(e) => onWaterChange({ name: e.currentTarget.value })} />
+      </label>
+    {/if}
+    {#if peek}
+      {#if !waterPicked}<div class="ws-hint">Tap its points, then the first again to close it; tap water drawn earlier to change it.</div>{/if}
+    {:else}
+      <div class="ws-hint">
+        {waterPicked ? 'Pick a kind or a name for it; click outside it to draw another. ' : 'Click its points, then the first again (or double-click) to close it; click water drawn earlier to change it. Outlines that overlap are one water. '}{WATERS.find((k) => k.key === waterKind)?.look}
+      </div>
+    {/if}
   {:else if mode === 'harbour'}
     {#if harbourPicked}
       <div class="editing">
@@ -681,7 +734,7 @@
     outline: 2px solid var(--ink);
     outline-offset: 2px;
   }
-  /* Nine modes in two rows of five: each its icon over its word. */
+  /* Ten modes in two rows of five: each its icon over its word. */
   .modes {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
