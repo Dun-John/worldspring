@@ -1,7 +1,7 @@
 //! Water drawn by hand (`Edits::waters`, `e:<id>`): an inlet, basin, lake, pond or moat, each a
 //! closed outline and a level. Inside the outline the water stands at its level and the ground
 //! falls from the shore to the kind's depth below it over `BANK_FT`; overlapping outlines are one
-//! water (the higher level, the deeper bed), and an outline that reaches the sea or a lake at its
+//! water (one level, the lowest of theirs, and the deeper bed), and an outline that reaches the sea or a lake at its
 //! level joins it. Applied wherever the ground is shaped by hand (`ground::Shaper`, before the
 //! plateaus, so a plateau or islet over it still stands dry), so battlemaps, the finest terrain,
 //! towns' and crossings' shore checks (`town::Shore`) all read the same water. A pure function of
@@ -128,7 +128,7 @@ pub(crate) struct Near<'a> {
 /// shore cut where it runs inside another (any in the world: the same wherever it is read).
 pub(crate) fn near(edits: &crate::world::Edits, rect: [f64; 4]) -> Vec<Near<'_>> {
     let all: Vec<(&Water, [f64; 4])> = edits.waters.values().filter(|w| w.usable()).map(|w| (w, crate::ground::bbox(&w.pts))).collect();
-    let meets = |a: [f64; 4], b: [f64; 4], m: f64| !(a[2] + m < b[0] || a[0] - m > b[2] || a[3] + m < b[1] || a[1] - m > b[3]);
+    let levels = group_levels(&all);
     let mut out = Vec::new();
     for (i, &(w, b)) in all.iter().enumerate() {
         if !meets(b, rect, BANK_FT) {
@@ -160,9 +160,60 @@ pub(crate) fn near(edits: &crate::world::Edits, rect: [f64; 4]) -> Vec<Near<'_>>
                 }
             }
         }
-        out.push(Near { pts: &w.pts, b, level: w.level as f64, depth: w.kind.depth(), shore });
+        out.push(Near { pts: &w.pts, b, level: levels[i] as f64, depth: w.kind.depth(), shore });
     }
     out
+}
+
+fn meets(a: [f64; 4], b: [f64; 4], m: f64) -> bool {
+    !(a[2] + m < b[0] || a[0] - m > b[2] || a[3] + m < b[1] || a[1] - m > b[3])
+}
+
+/// Whether two outlines overlap (their edges cross, or one holds a corner of the other).
+fn overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
+    let edges = |p: &[[f64; 2]]| (0..p.len()).map(move |k| (p[k], p[(k + 1) % p.len()])).collect::<Vec<_>>();
+    let eb = edges(b);
+    edges(a).iter().any(|&(p, q)| eb.iter().any(|&(r, t)| cross_at(p, q, r, t).is_some())) || geom::contains(a, b[0]) || geom::contains(b, a[0])
+}
+
+/// Each outline's level as one water with every outline it overlaps, through others too (the
+/// lowest of them: the merged water's lowest shore, so none stands above its bank).
+fn group_levels(all: &[(&Water, [f64; 4])]) -> Vec<f32> {
+    let n = all.len();
+    let mut root: Vec<usize> = (0..n).collect();
+    fn find(root: &mut [usize], mut i: usize) -> usize {
+        while root[i] != i {
+            root[i] = root[root[i]];
+            i = root[i];
+        }
+        i
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            if meets(all[i].1, all[j].1, 0.0) && overlap(&all[i].0.pts, &all[j].0.pts) {
+                let (a, b) = (find(&mut root, i), find(&mut root, j));
+                root[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let mut low = vec![f32::MAX; n];
+    for i in 0..n {
+        let r = find(&mut root, i);
+        low[r] = low[r].min(all[i].0.level);
+    }
+    (0..n).map(|i| low[find(&mut root, i)]).collect()
+}
+
+/// The usable outlines with their levels as one water (`group_levels`), for `level_in`.
+pub fn grouped(edits: &crate::world::Edits) -> Vec<(&[[f64; 2]], [f64; 4], f32)> {
+    let all: Vec<(&Water, [f64; 4])> = edits.waters.values().filter(|w| w.usable()).map(|w| (w, crate::ground::bbox(&w.pts))).collect();
+    let levels = group_levels(&all);
+    all.iter().zip(levels).map(|(&(w, b), l)| (w.pts.as_slice(), b, l)).collect()
+}
+
+/// The level of the water drawn by hand at `p` among `grouped`, if an outline holds it.
+pub fn level_in(grouped: &[(&[[f64; 2]], [f64; 4], f32)], p: [f64; 2]) -> Option<f32> {
+    grouped.iter().filter(|(pts, b, _)| p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3] && geom::contains(pts, p)).map(|g| g.2).reduce(f32::max)
 }
 
 /// Where segment a-b crosses segment c-d, as a fraction along a-b (None when parallel or apart).
@@ -202,7 +253,7 @@ pub(crate) fn at(near: &[Near], x: f64, y: f64, band: f64) -> Option<(f64, f64)>
 
 /// The level of the water drawn by hand at `p` (world ft), if an outline holds it.
 pub fn level_at(edits: &crate::world::Edits, p: [f64; 2]) -> Option<f32> {
-    edits.waters.values().filter(|w| w.usable()).filter(|w| geom::contains(&w.pts, p)).map(|w| w.level).reduce(f32::max)
+    level_in(&grouped(edits), p)
 }
 
 /// The outline drawn by hand holding `p`, if any (its id; the first by id).

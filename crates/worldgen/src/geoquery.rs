@@ -404,9 +404,10 @@ impl Squares {
         if edits.waters.is_empty() {
             return;
         }
+        let grouped = crate::waters::grouped(edits);
         for k in 0..self.g.len() {
             let (gx, gy) = (self.gx0 + k as i64 % self.w, self.gy0 + k as i64 / self.w);
-            if let Some(l) = crate::waters::level_at(edits, [(gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT]) {
+            if let Some(l) = crate::waters::level_in(&grouped, [(gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT]) {
                 self.still[k] = self.still[k].max(l);
                 self.hw[k] = self.hw[k].max(l);
             }

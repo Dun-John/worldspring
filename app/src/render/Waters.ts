@@ -2,7 +2,7 @@
 // levels (those shape it into the terrain, `payload::shaped`, and draw it as the sea's water). The
 // outlines' fill in the shallow water's colour over an ink rim drawn first, so overlapping outlines
 // are one water with one shore line. An inlet or basin joins the sea's water: its fill only, no rim.
-import { Container, Graphics } from 'pixi.js';
+import { AlphaFilter, Container, Graphics } from 'pixi.js';
 import type { Water } from '../gen/protocol';
 import type { Camera } from './camera';
 
@@ -15,6 +15,7 @@ const RIM_PX = 3;
 export class Waters {
   readonly container = new Container();
   private readonly g = new Graphics();
+  private readonly fader = new AlphaFilter();
   private waters: [string, Water][] = [];
   private key = '';
   /** Outlines drawn last (for checks). */
@@ -39,7 +40,12 @@ export class Waters {
       this.key = '';
       return;
     }
-    this.container.alpha = fade;
+    // Faded as one picture (an alpha on the container would fade each fill alone, and where
+    // outlines overlap the two would show through each other).
+    if (fade < 0.99) {
+      this.fader.alpha = fade;
+      if (!this.container.filters) this.container.filters = [this.fader];
+    } else if (this.container.filters) this.container.filters = null;
     const [x0, y0, x1, y1] = cam.viewRect();
     const key = `${cam.ppf}|${x0}|${y0}|${x1}|${y1}`;
     if (key === this.key) return;
