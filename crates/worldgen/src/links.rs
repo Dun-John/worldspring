@@ -87,7 +87,11 @@ fn feature_name(world: &World, t0: &T0, site: &str) -> Option<String> {
     if crate::sitelinks::dungeon_name(world, t0, li).is_some() {
         return None;
     }
-    crate::agent::name_of(world, t0, &crate::agent::feature_of_layout(world, t0, li)?)
+    // A settlement's undercroft is its own site (named by `name_any`), not the whole town.
+    if li < t0.settlements.len() {
+        return None;
+    }
+    crate::agent::name_of(world, t0, &crate::agent::feature_of_layout(world, t0, li)?).filter(|n| !n.trim().is_empty())
 }
 
 /// Whether an item stays where a link would go (a way, a key, a picture, a hazard, another link).

@@ -411,8 +411,22 @@
     max-width: 16em;
   }
   .locks {
-    flex-wrap: wrap;
-    max-width: 16em;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--tap), 1fr));
+    gap: 2px;
+    max-width: 20em;
+    border: none;
+    overflow: visible;
+    background: transparent;
+  }
+  .locks > button {
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm);
+    background: var(--btn);
+    min-width: var(--tap);
+  }
+  .locks > button:first-child {
+    grid-column: 1 / -1;
   }
   .swatch {
     display: inline-block;
