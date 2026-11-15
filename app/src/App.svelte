@@ -1751,9 +1751,21 @@
   /** The ghost's question in flight, and the newest place asked meanwhile (one at a time, the latest wins). */
   let stampBusy = false;
   let stampNext: Pt | null = null;
+  /** A click's building is being put down: no preview is asked meanwhile. */
+  let stampPlacing = false;
   /** The pointer is at (x, y) in Stamp: the ghost there, or (a click) the building put down. */
   async function stampAt(x: number, y: number, place: boolean, shift: boolean) {
-    if (place) return stampRun(x, y, true, shift);
+    if (place) {
+      // A click always puts down at the click: no queued preview runs after it (it would take the answer's token).
+      stampNext = null;
+      stampPlacing = true;
+      try {
+        return await stampRun(x, y, true, shift);
+      } finally {
+        stampPlacing = false;
+      }
+    }
+    if (stampPlacing) return;
     stampLast = [x, y];
     if (stampBusy) {
       stampNext = [x, y];
@@ -1765,7 +1777,7 @@
       while (at) {
         stampNext = null;
         await stampRun(at[0], at[1], false, false);
-        at = stampNext as Pt | null;
+        at = stampPlacing ? null : (stampNext as Pt | null);
       }
     } finally {
       stampBusy = false;
@@ -1789,12 +1801,11 @@
     tool.ghost = { poly: r.poly, facing: r.facing, ok: true };
     tool.gone = r.removed.map((b) => b.at);
     quick = { can: true, text: `${r.name}${r.removed.length ? `: ${plural(r.removed.length, 'building')} taken away` : ''}${r.moved_ft > 5 ? `, ${Math.round(r.moved_ft)} ft from the click` : ''}`, removed: r.removed.length };
-    if (place) void stampPlace(shift || stampSet.keep);
+    if (place) void stampPlace(shift || stampSet.keep, [x, y]);
   }
 
   /** Put down the ghost's building (with the generated ones under it, if asked): one change. */
-  async function stampPlace(keep: boolean) {
-    const at = stampLast;
+  async function stampPlace(keep: boolean, at: Pt | null = stampLast) {
     const tool = buildArmed?.stamp;
     if (!at || !tool) return;
     const r = await view.gen.stamp(stampAsk(at[0], at[1]));
@@ -2297,6 +2308,7 @@
     }
     const { rects: _, records: __, blocks: ___, problems: ____, lost: _____, ...rest } = report;
     const moved = request.op === 'move_junctions' ? request.moves.length - stayed : undefined;
+    if (request.op === 'back_to_generated') setStreetPlan(null);
     applyEdits(next, { tool: 'edit_streets', id: settlements[i]?.id, name: townName ?? undefined, what, ...rest, op: request.op, ...(moved !== undefined ? { moved } : {}) }, 'user');
     return true;
   }

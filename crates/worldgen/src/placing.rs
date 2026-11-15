@@ -339,19 +339,58 @@ pub fn seed_of(v: &serde_json::Value) -> Result<u64, String> {
 /// What stops an outline from being a plot, in words: a building drawn by hand, water, a river or a road (streets too) under it; the
 /// world's own buildings and squares may be replaced by its fill. `None` when it is free.
 pub fn parcel_blocker(world: &World, t0: &T0, poly: &[P]) -> Option<String> {
-    let (found, _) = agent::spot_blockers(world, t0, poly, None, true).ok()?;
-    let b = found.iter().find(|b| match b.what {
+    let (found, _) = match agent::spot_blockers(world, t0, poly, None, true) {
+        Ok(f) => f,
+        Err(e) => return Some(e),
+    };
+    let hit = found.iter().find(|b| match b.what {
         "building" => !b.removable,
-        "water" | "river" | "road" | "street" => true,
+        "water" | "river" | "road" | "street" | "square" => true,
         _ => false,
-    })?;
-    let what = match b.what {
+    });
+    let (what, kind) = match hit {
+        Some(b) => (b.what, b.kind),
+        None => wet_inside(world, t0, poly)?,
+    };
+    let what = match what {
         "building" => "a building drawn by hand".to_string(),
-        "water" => b.kind.map_or("water", |k| if k == "sea" { "the sea" } else { "a lake" }).to_string(),
+        "water" => kind.map_or("water", |k| if k == "sea" { "the sea" } else { "a lake" }).to_string(),
         "river" => "a river".to_string(),
+        "square" => "a square".to_string(),
         w => format!("a {w}"),
     };
     Some(format!("that outline has {what} in it: a plot is free ground, so draw it clear of that"))
+}
+
+/// Water inside an outline that the walls' probes miss (a pond or a river bend wholly within): its area on a grid of at most 10 ft.
+fn wet_inside(world: &World, t0: &T0, poly: &[P]) -> Option<(&'static str, Option<&'static str>)> {
+    let [x0, y0, x1, y1] = [
+        poly.iter().map(|p| p[0]).fold(f64::MAX, f64::min),
+        poly.iter().map(|p| p[1]).fold(f64::MAX, f64::min),
+        poly.iter().map(|p| p[0]).fold(f64::MIN, f64::max),
+        poly.iter().map(|p| p[1]).fold(f64::MIN, f64::max),
+    ];
+    let step = 10.0_f64.max((x1 - x0).max(y1 - y0) / 80.0);
+    let shore = crate::town::Shore::new(world, t0, [x0, y0, x1, y1]);
+    let sea = world.params().sea_level_ft + 1.0;
+    let mut y = y0 + step * 0.5;
+    while y < y1 {
+        let mut x = x0 + step * 0.5;
+        while x < x1 {
+            let p = [x, y];
+            if geom::contains(poly, p) {
+                if shore.wet(p) {
+                    return Some(("water", Some(if (t0.sample_water(x, y) as f64) <= sea { "sea" } else { "lake" })));
+                }
+                if shore.in_river(p) {
+                    return Some(("river", None));
+                }
+            }
+            x += step;
+        }
+        y += step;
+    }
+    None
 }
 
 fn removal_json(r: &Removal) -> serde_json::Value {
