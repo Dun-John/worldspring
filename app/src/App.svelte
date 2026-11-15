@@ -58,6 +58,7 @@
   import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from './editor/crossing';
   import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from './editor/harbour';
   import { MAX_WATERS, WaterTool, defaultWater, ofSea, shapeShore, waterProblem, type WaterSettings } from './editor/water';
+  import { MAX_PATHS, PathDrawTool, defaultPath, kindWidth, pathProblem, type PathSettings } from './editor/paths';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
   import type { BuildMode, QuickInfo } from './ui/BuildPanel.svelte';
@@ -1455,7 +1456,7 @@
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
     const buildTool =
-      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
+      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
     const town = townOn && townUnderlay.adjust && townUnderlay.visible ? townTraceTool : streetPlan ? streetTool : townTool;
     view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? town ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
@@ -1601,7 +1602,7 @@
   /** One of the world's own being changed: its name, and the menu's choices as it was opened
    * (only what differs from them is changed). */
   let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool; water: WaterTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool; stamp: StampTool; path: PathTool } | null = null;
+  let buildArmed: { tool: BuildTool; cross: CrossingTool; water: WaterTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool; stamp: StampTool; path: PathTool; road: PathDrawTool } | null = null;
   /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
    * own buildings. */
   let buildMode = $state<BuildMode>('building');
@@ -1617,6 +1618,9 @@
   /** Build › Water: the kind new outlines get, and the water picked (its id), else drawing new ones. */
   let water = $state<WaterSettings>(defaultWater());
   let waterPicked = $state<string | null>(null);
+  /** Build › Road: the type, width and name new roads get, and the road picked (its id), else drawing new ones. */
+  let road = $state<PathSettings>(defaultPath());
+  let roadPicked = $state<string | null>(null);
   let harbour = $state<HarbourSettings>(defaultHarbour());
   /** The quay, pier or breakwater picked (its id). */
   let harbourPicked = $state<string | null>(null);
@@ -1743,7 +1747,15 @@
     });
     const stampTool = new StampTool({ at: (x, y, place) => void stampAt(x, y, place), hint: (t) => toast(t) });
     const pathTool = new PathTool({ mode: () => (buildMode === 'lasso' ? 'lasso' : 'row'), changed: (path, done) => void pathChanged(path, done), hint: (t) => toast(t) });
-    buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, clear, works: worksTool, stamp: stampTool, path: pathTool };
+    const roadTool = new PathDrawTool({
+      edits: () => edits,
+      picked: () => roadPicked,
+      width: () => (roadPicked ? (edits.paths?.[roadPicked]?.width ?? kindWidth(edits.paths?.[roadPicked]?.type ?? road.kind)) : road.width),
+      placed: roadPlaced,
+      pick: (id) => (roadPicked = id),
+      hint: (t) => toast(t),
+    });
+    buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, clear, works: worksTool, stamp: stampTool, path: pathTool, road: roadTool };
   }
 
   // Quick placement: Stamp, Row and Plot (Lasso). A ghost follows the generator's answer (the same
@@ -2501,8 +2513,10 @@
     crossEditing = null;
     harbourPicked = null;
     waterPicked = null;
+    roadPicked = null;
     buildArmed?.cross.reset();
     buildArmed?.water.reset();
+    buildArmed?.road.reset();
     buildArmed?.harbour.reset();
     buildArmed?.path.reset();
     if (buildArmed) (buildArmed.stamp.ghost = null), (buildArmed.stamp.gone = []);
@@ -2635,6 +2649,48 @@
     const id = newObjectId('e');
     waterPicked = id;
     applyEdits({ ...edits, waters: { ...(edits.waters ?? {}), [id]: w } }, { tool: 'create_water', id, kind: w.kind }, 'user');
+  }
+
+  /** A line ended in Build › Road: a road of the menu's type, width and name along it. */
+  function roadPlaced(pts: Pt[]) {
+    const r = { pts, type: road.kind, ...(road.width !== kindWidth(road.kind) ? { width: road.width } : {}), ...(road.name.trim() ? { name: road.name.trim() } : {}) };
+    const bad = pathProblem(r);
+    if (bad) return toast(bad);
+    if (Object.keys(edits.paths ?? {}).length >= MAX_PATHS) return toast(`A world holds at most ${MAX_PATHS} roads drawn by hand`);
+    const id = newObjectId('rw');
+    roadPicked = id;
+    applyEdits({ ...edits, paths: { ...(edits.paths ?? {}), [id]: r } }, { tool: 'place_path', id, kind: r.type }, 'user');
+  }
+
+  /** The road picked: another type (its width the type's unless it had its own), width or name. */
+  function changeRoad(change: { kind?: PathSettings['kind']; width?: number; name?: string }) {
+    const id = roadPicked;
+    const r = id ? edits.paths?.[id] : null;
+    if (!id || !r) return;
+    const next = { ...r };
+    if (change.kind && change.kind !== r.type) {
+      next.type = change.kind;
+      if (r.width === undefined || r.width === kindWidth(change.kind)) delete next.width;
+    }
+    if (change.width !== undefined) {
+      if (change.width === kindWidth(next.type)) delete next.width;
+      else next.width = change.width;
+    }
+    if (change.name !== undefined) {
+      if (change.name.trim()) next.name = change.name.trim();
+      else delete next.name;
+    }
+    if (JSON.stringify(next) === JSON.stringify(r)) return;
+    applyEdits({ ...edits, paths: { ...(edits.paths ?? {}), [id]: next } }, { tool: 'place_path', id, kind: next.type, changed: true }, 'user');
+  }
+
+  function removeRoad() {
+    const id = roadPicked;
+    if (!id || !edits.paths?.[id]) return;
+    const { [id]: _gone, ...rest } = edits.paths ?? {};
+    const notes = edits.notes && id in edits.notes ? Object.fromEntries(Object.entries(edits.notes).filter(([k]) => k !== id)) : edits.notes;
+    roadPicked = null;
+    applyEdits({ ...edits, paths: rest, notes }, { tool: 'remove_paths', ids: [id] }, 'user');
   }
 
   /** The water picked: another kind (its level found again when it changes between the sea's
@@ -5016,6 +5072,13 @@
       cross = { ...cross, kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
     },
     buildHarbour: () => setBuildMode('harbour'),
+    buildRoad: () => {
+      if (buildMode !== 'road') return setBuildMode('road');
+      if (roadPicked) return;
+      const order = ['footpath', 'track', 'gravel', 'paved', 'cobbled'] as const;
+      const kind = order[(order.indexOf(road.kind) + 1) % order.length];
+      road = { ...road, kind, width: kindWidth(kind) };
+    },
     buildWorks: (m) => setBuildMode(m),
     buildShape: (k) => {
       if (buildMode === 'castle' && k !== 'tower') return void (works.castleShape = k);
@@ -5024,8 +5087,8 @@
       build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
     },
     buildQuick: (m) => setBuildMode(m),
-    buildFinish: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildArmed?.tool.finish()),
-    buildBack: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back()),
+    buildFinish: () => (buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildArmed?.tool.finish()),
+    buildBack: () => (buildMode === 'road' ? void buildArmed?.road.back() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back()),
     designMode: (m) => {
       // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
       const inBuilding = designer?.building ?? false;
@@ -5074,6 +5137,8 @@
       () => (crossEditing ? ((crossEditing = null), true) : false),
       () => !!buildArmed?.water.reset(),
       () => (waterPicked ? ((waterPicked = null), true) : false),
+      () => !!buildArmed?.road.reset(),
+      () => (roadPicked ? ((roadPicked = null), true) : false),
       () => !!townTool?.reset(),
       () => !!streetTool?.reset(),
       () => (streetBackAsk ? ((streetBackAsk = false), true) : false),
@@ -5387,7 +5452,7 @@
       icon="pencil"
       tabs={[
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a town, ruin, dungeon, cave, mine, tower, camp or inn.' },
-        { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, bridges and fords; clear a town’s own buildings.' },
+        { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, roads, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the selected town or the one in view (U)', hint: 'Re-plan the selected town, or the one in view: its streets, wards, lots and walls.' },
         { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
         { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap outdoors: place, brush, erase, or upload your own.' },
@@ -5443,7 +5508,7 @@
             {near}
             {peek}
             onSave={saveBuilding}
-            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null), (waterPicked = null))}
+            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null), (waterPicked = null), (roadPicked = null))}
             onMode={setBuildMode}
             onCrossSave={saveCrossing}
             onCrossRemove={removeCrossing}
@@ -5451,6 +5516,10 @@
             waterPicked={waterPicked && edits.waters?.[waterPicked] ? { kind: edits.waters[waterPicked].kind, name: edits.renames?.[waterPicked] ?? '' } : null}
             onWaterChange={changeWater}
             onWaterRemove={removeWater}
+            bind:road
+            roadPicked={roadPicked && edits.paths?.[roadPicked] ? { kind: edits.paths[roadPicked].type, width: edits.paths[roadPicked].width ?? kindWidth(edits.paths[roadPicked].type), name: edits.paths[roadPicked].name ?? '' } : null}
+            onRoadChange={changeRoad}
+            onRoadRemove={removeRoad}
             onHarbourRemove={removeWharf}
             bind:harbour
             {harbourPicked}

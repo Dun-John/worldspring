@@ -429,6 +429,8 @@ export interface Edits {
    * `w:<layout>:<sx>:<sy>`, a building's cellar `b:`) and a square on it; each shows on its own map as a
    * `link` item with a way in the level's `links` (`far`). `way` one of `LINK_WAYS`. */
   links?: Record<string, LinkEdit>;
+  /** Roads drawn by hand on the ground (`rw:<id>`: `worldgen::paths`). */
+  paths?: Record<string, DrawnPath>;
 }
 
 /** An overland hex grid (`worldgen::world::HexGrid`; each field left out: its default, `HEX_DEFAULTS`):
@@ -458,6 +460,18 @@ export interface Plateau {
 }
 
 export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat';
+
+/** A road drawn by hand's type (`worldgen::paths::PathKind`). */
+export type PathKind = 'footpath' | 'track' | 'gravel' | 'paved' | 'cobbled';
+
+/** A road drawn by hand (`worldgen::paths::Path`): its points (world ft, 0.5 ft), type, width (ft;
+ * absent: the type's) and name. */
+export interface DrawnPath {
+  pts: [number, number][];
+  type: PathKind;
+  width?: number;
+  name?: string;
+}
 
 /** Water drawn by hand (`worldgen::waters::Water`): an outline (world ft, 3 to 128 points, rounded
  * to 0.5 ft, 5 miles across at most) and its surface `level` (ft, the generator's datum). Inside,
