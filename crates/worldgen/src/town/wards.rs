@@ -417,6 +417,10 @@ pub fn edit_of<'a>(world: &'a World, t0: &T0, index: usize) -> Option<&'a TownEd
         return None;
     }
     let s = super::settlement(t0, index).filter(|s| s.tier >= Tier::Town)?;
+    // (A town laid out by hand has its records instead: its edit is kept only to go back to.)
+    if super::hand::is_hand(world, index) {
+        return None;
+    }
     let e = world.file.edits.towns.get(&key(index))?;
     (!e.is_noop() && dist(e.at, [s.x, s.y]) <= TownEdit::SAME_AT_FT).then_some(e)
 }

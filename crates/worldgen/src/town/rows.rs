@@ -47,6 +47,8 @@ pub(super) struct Side<'a> {
     pub(super) left: bool,
     pub(super) setback: f64,
     pub(super) depth: f64,
+    /// The share of lots left open as yards (`YARD_SHARE` as generated).
+    pub(super) gaps: f64,
 }
 
 /// A straightened run of the street and its band.
@@ -258,7 +260,7 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
             let want = dp.min_sq * libm::pow(1.0 + dp.size_chaos, r1 + r2 - 1.0);
             let mut w = (want / d).clamp(MIN_LOT_FT + 0.5, (2.5 * d).max(24.0));
             since += 1;
-            if yard < YARD_SHARE {
+            if yard < side.gaps {
                 // An alley waiting goes on waiting over a yard, for the next lot, so alleys keep
                 // their spacing.
                 t += (0.6 * w).clamp(8.0, 30.0);
@@ -373,7 +375,7 @@ pub fn qa_rows(world: &World, t0: &T0, index: usize, ward: Ward, seed: u64, rows
         .enumerate()
         .map(|(i, row)| {
             let line = ring(&row.line);
-            let side = Side { line: &line, left: row.left, setback: row.setback, depth: row.depth };
+            let side = Side { line: &line, left: row.left, setback: row.setback, depth: row.depth, gaps: YARD_SHARE };
             let others: Vec<Shape> = avoid.iter().filter(|(t, _)| *t != row.tag).map(|(_, s)| Shape { outer: ring(&s.outer), holes: s.holes.iter().map(|h| ring(h)).collect() }).collect();
             let mut rng = Pcg32::new(seed, 1000 + i as u64);
             let mut l = Layout::empty(index as u32, c, 0.0, Tier::Town);
@@ -388,5 +390,5 @@ pub fn qa_rows(world: &World, t0: &T0, index: usize, ward: Ward, seed: u64, rows
 /// QA only (`towncheck rows`): the bands `qa_rows` lays a row in (world ft or any frame: pure
 /// geometry), one per straightened run.
 pub fn qa_bands(line: &[P], left: bool, setback: f64, depth: f64) -> Vec<Vec<P>> {
-    bands(&Side { line, left, setback, depth })
+    bands(&Side { line, left, setback, depth, gaps: YARD_SHARE })
 }

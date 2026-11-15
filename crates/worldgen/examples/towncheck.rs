@@ -8774,6 +8774,143 @@ fn hand_towns(world: &World, t0: &T0, label: &str, r: &mut Report) {
     hand_built(world, t0, label, &first, r);
 }
 
+/// Roadmap 6 P3b2: each converted town's walls, towers, gates, bridges, squares at junctions,
+/// districts and ways underground against the town's (positions within 1 ft, the same counts);
+/// then laid anew from the wall lines alone (`works` dropped): towers and gates against the
+/// town's (how many more or fewer, told, not a rule).
+fn hand_works(world: &World, t0: &T0, label: &str, first: &std::collections::BTreeMap<usize, String>, hw: &World, originals: &std::collections::BTreeMap<usize, std::rc::Rc<Layout>>, r: &mut Report) {
+    use worldgen::town::geom::dist;
+    use worldgen::town::hand;
+    const WHAT: [&str; 7] = ["walls", "towers", "gates", "gate towers", "bridges missing", "squares at junctions", "quarters"];
+    r.counts(&WHAT.iter().map(|w| format!("hand: {w}")).collect::<Vec<_>>().iter().map(String::as_str).collect::<Vec<_>>());
+    r.counts(&WHAT.iter().map(|w| format!("hand: {w} differing")).collect::<Vec<_>>().iter().map(String::as_str).collect::<Vec<_>>());
+    r.counts(&["hand: bridges", "hand: bridges new (a street over water the town left unbridged)", "hand: entrances", "hand: entrances otherwise many (told)", "laid anew: walled towns", "laid anew: towers more", "laid anew: towers fewer", "laid anew: gates more", "laid anew: gates fewer"]);
+    let near = |a: &[[f64; 2]], b: &[[f64; 2]]| a.len() == b.len() && a.iter().all(|p| b.iter().any(|q| dist(*p, *q) <= 1.0)) && b.iter().all(|p| a.iter().any(|q| dist(*p, *q) <= 1.0));
+    let corners = |l: &Layout| l.plazas.iter().filter(|p| matches!(p.spot, worldgen::town::places::Spot::Corner(_))).map(|p| (format!("{:?} {:?}", p.spot, p.kind), p.pts.clone())).collect::<std::collections::BTreeMap<_, _>>();
+    for (&li, want) in originals {
+        let got = town::base_layout(hw, t0, li);
+        let lists = |l: &Layout| -> [Vec<Vec<[f64; 2]>>; 4] { [l.walls.clone(), vec![l.towers.clone()], vec![l.gates.clone()], vec![l.gate_towers.clone()]] };
+        let (lw, lg) = (lists(want), lists(&got));
+        for (k, (a, b)) in lw.iter().zip(&lg).enumerate() {
+            let n: usize = a.iter().map(|x| x.len()).sum();
+            r.tally(&format!("hand: {}", WHAT[k]), n);
+            if a.len() != b.len() || !a.iter().zip(b).all(|(x, y)| near(x, y)) {
+                r.add(&format!("hand: {} differing", WHAT[k]), 0.0, format!("{label} L{li}: {} against {}", b.iter().map(|x| x.len()).sum::<usize>(), n));
+            }
+        }
+        r.tally("hand: bridges", want.bridges.len());
+        let lost = want.bridges.iter().filter(|d| !got.bridges.iter().any(|e| near(d, e))).count();
+        if lost > 0 {
+            r.add("hand: bridges missing", lost as f64, format!("{label} L{li}: {lost} of {}", want.bridges.len()));
+        }
+        if want.bridges.len() != got.bridges.len() || lost > 0 {
+            let odd: Vec<String> = got.bridges.iter().filter(|e| !want.bridges.iter().any(|d| near(d, e))).map(|e| {
+                let c = worldgen::town::geom::centroid(e);
+                format!("({:.0},{:.0}) {:.0} ft", c[0] - want.center[0], c[1] - want.center[1], dist(e[0], e[1]).max(dist(e[1], e[2])))
+            }).collect();
+            r.add("hand: bridges new (a street over water the town left unbridged)", 0.0, format!("{label} L{li}: {} against {}; new {}", got.bridges.len(), want.bridges.len(), odd.join(" ")));
+        }
+        let (cw, cg) = (corners(want), corners(&got));
+        r.tally("hand: squares at junctions", cw.len());
+        for (k, v) in &cw {
+            if cg.get(k).is_none_or(|g| !near(g, v)) {
+                r.add("hand: squares at junctions differing", 0.0, format!("{label} L{li} {k}"));
+            }
+        }
+        let qn = |l: &Layout| l.quarters.iter().map(|q| format!("{} {:?}", q.name, q.kind)).collect::<std::collections::BTreeSet<_>>();
+        r.tally("hand: quarters", want.quarters.len());
+        if qn(want) != qn(&got) {
+            r.add("hand: quarters differing", 0.0, format!("{label} L{li}: {:?} against {:?}", qn(&got).difference(&qn(want)).collect::<Vec<_>>(), qn(want).difference(&qn(&got)).collect::<Vec<_>>()));
+        }
+        r.tally("hand: entrances", want.entrances.len());
+        if want.entrances.len() != got.entrances.len() {
+            r.add("hand: entrances otherwise many (told)", 0.0, format!("{label} L{li}: {} against {}", got.entrances.len(), want.entrances.len()));
+        }
+    }
+    // Laid anew from the wall lines.
+    let mut file = hw.file.clone();
+    for li in first.keys() {
+        if let Some(o) = file.edits.streets.get_mut(&li.to_string()).and_then(|v| v.as_object_mut()) {
+            o.remove("works");
+        }
+    }
+    let fw = World::new(file).unwrap();
+    for (&li, want) in originals.iter().filter(|(_, l)| !l.walls.is_empty() && !l.towers.is_empty()) {
+        let Some(b) = hand::build_hand(&fw, t0, li) else { continue };
+        r.tally("laid anew: walled towns", 1);
+        let (t, g) = (b.layout.towers.len() as i64 - want.towers.len() as i64, b.layout.gates.len() as i64 - want.gates.len() as i64);
+        r.tally(if t >= 0 { "laid anew: towers more" } else { "laid anew: towers fewer" }, t.unsigned_abs() as usize);
+        r.tally(if g >= 0 { "laid anew: gates more" } else { "laid anew: gates fewer" }, g.unsigned_abs() as usize);
+    }
+    hand_remade(world, t0, label, hw, originals, r);
+}
+
+/// Roadmap 6 P3b2: the converted towns kept through a remake (`remap::remake`, the world remade
+/// with a ruin drawn far from every town): each hand town, found by its header's origin, lays out
+/// the same (buildings, walls, towers, gates, bridges, squares). Then the battlemap guarantee on
+/// chunks of the three largest converted towns (every dry square near cover).
+fn hand_remade(world: &World, t0: &T0, label: &str, hw: &World, originals: &std::collections::BTreeMap<usize, std::rc::Rc<Layout>>, r: &mut Report) {
+    use worldgen::t0::remap;
+    r.counts(&["remake: hand towns", "remake: hand towns laid otherwise", "remake: hand towns lost", "hand battlemap: chunks", "hand battlemap: chunks with no building", "hand battlemap: squares far from cover"]);
+    let (w, h) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let sea = world.params().sea_level_ft;
+    let far = (0..400)
+        .map(|k| [(0.1 + 0.8 * (k % 20) as f64 / 19.0) * w, (0.1 + 0.8 * (k / 20) as f64 / 19.0) * h])
+        .filter(|p| t0.sample(p[0], p[1], 5.0) > sea + 20.0)
+        .map(|p| (t0.settlements.iter().map(|s| dist(p, [s.x, s.y])).fold(f64::MAX, f64::min), p))
+        .max_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((_, p)) = far {
+        let mut b = hw.file.clone();
+        b.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "site", "kind": "ruin", "pts": [p] })).unwrap());
+        let new = World::new(b).unwrap();
+        let (t1, followed) = remap::remake(hw, t0, &new, &[]);
+        let mut nf = new.file.clone();
+        if let Some(f) = followed {
+            nf.edits = f.edits;
+        }
+        let nw = World::new(nf).unwrap();
+        let laid = |l: &Layout| format!("{:?} {:?} {:?} {:?} {:?} {:?}", l.buildings, l.walls, l.towers, l.gates, l.bridges, l.plazas);
+        for &li in originals.keys() {
+            r.tally("remake: hand towns", 1);
+            let origin = &hw.file.edits.streets[&li.to_string()]["origin"];
+            let to = nw.file.edits.streets.iter().filter(|(k, _)| !k.contains('/')).find(|(_, v)| v["origin"] == *origin).and_then(|(k, _)| k.parse::<usize>().ok());
+            match to {
+                None => r.add("remake: hand towns lost", 0.0, format!("{label} L{li}")),
+                Some(to) => {
+                    let (a, b) = (town::base_layout(hw, t0, li), town::base_layout(&nw, &t1, to));
+                    if laid(&a) != laid(&b) {
+                        r.add("remake: hand towns laid otherwise", 0.0, format!("{label} L{li} (now L{to}): {} buildings against {}", b.buildings.len(), a.buildings.len()));
+                    }
+                }
+            }
+        }
+    }
+    // The battlemap guarantee on hand towns.
+    let mut ex = Executor::new(World::new(hw.file.clone()).unwrap());
+    let mut big: Vec<(usize, usize)> = originals.iter().map(|(&li, l)| (l.buildings.len(), li)).collect();
+    big.sort_by(|a, b| b.cmp(a));
+    let size = ex.world.geom.tile_size_ft(ex.world.geom.max_level);
+    for &(_, li) in big.iter().take(3) {
+        let l = town::base_layout(&ex.world, &ex.t0, li);
+        let mut at: Vec<[f64; 2]> = vec![l.center];
+        at.extend(l.buildings.iter().step_by((l.buildings.len() / 3).max(1)).take(3).map(|b| centroid(&b.poly)));
+        at.extend(l.towers.first().copied());
+        for p in at {
+            let key = TileKey::surface(ex.world.geom.max_level, (p[0] / size) as u32, (p[1] / size) as u32);
+            let c = ex.battlemap(key);
+            r.tally("hand battlemap: chunks", 1);
+            if c.building.iter().all(|&b| b == 0) {
+                r.add("hand battlemap: chunks with no building", 0.0, format!("{label} L{li} {key:?}"));
+            }
+            let gap = worldgen::battlemap::cover_distance(&c);
+            let far = (0..SQ * SQ).filter(|&k| c.water_level[k] <= c.height[k] && c.surface[k] != Surface::Planks && gap[k] > worldgen::battlemap::cover_gap(&c, k)).count();
+            if far > 0 {
+                r.add("hand battlemap: squares far from cover", far as f64, format!("{label} L{li} {key:?}: {far}"));
+            }
+        }
+    }
+}
+
 /// Roadmap 6 P3b1: every converted town (`first`: its records) built from its records alone
 /// (`hand::build_hand`, all in one world with their wharves): its buildings against the town's
 /// (missing, extra, differing by field), its blocks' squares, parks, monuments and fields
@@ -8835,7 +8972,9 @@ fn hand_built(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
         let (pw, pg) = (pk(want), pk(got));
         r.tally("hand: parks", pw.len());
         for p in want.parks.iter().filter(|p| !patch(&p.spot)) {
-            r.add("hand: parks of no block (not rebuilt)", 0.0, format!("{label} L{li} {:?} {:?}", p.spot, p.kind));
+            if !got.parks.iter().any(|q| format!("{q:?}") == format!("{p:?}")) {
+                r.add("hand: parks of no block (not rebuilt)", 0.0, format!("{label} L{li} {:?} {:?}", p.spot, p.kind));
+            }
         }
         for (spot, v) in &pw {
             if pg.get(spot) != Some(v) {
@@ -8860,6 +8999,7 @@ fn hand_built(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
             }
         }
     }
+    hand_works(world, t0, label, first, &hw, &originals, r);
     // Every block filled anew, and a row of lots along each side of each town's longest street
     // (clear of the blocks).
     for (_, v) in file.edits.streets.iter_mut() {

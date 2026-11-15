@@ -837,7 +837,7 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     }
     let key = index as u32;
     let Some(fp) = edits_fingerprint(world, key) else { return base };
-    let fp = match wards::fingerprint(world, t0, index) {
+    let fp = match hand::fingerprint(world, t0, index).or_else(|| wards::fingerprint(world, t0, index)) {
         Some(t) => crate::core::rng::hash2(fp, t as i64, 0x70e5),
         None => fp,
     };
@@ -942,7 +942,14 @@ fn rigid(from: &[P], to: &[P]) -> Option<impl Fn(P) -> P> {
 fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
     let mut l = base.clone();
     let mut removed: FastSet<u32> = FastSet::default();
-    let generated = generated_layout(world, t0, l.index as usize);
+    // (A town laid out by hand is its own: its buildings keep their ids by its records.)
+    let made;
+    let generated: &Layout = if hand::is_hand(world, l.index as usize) {
+        base
+    } else {
+        made = generated_layout(world, t0, l.index as usize);
+        &made
+    };
     for (id, e) in building_edits(world, l.index) {
         let Some(i) = l.building_index(id as usize) else { continue };
         if !edit_applies(&l.buildings[i], generated.building(id as usize), e) {
@@ -1011,9 +1018,12 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
             out.push((k.clone(), if li >= crate::world::PARKED_LAYOUT { "set aside when the world was remade or upgraded" } else { "no such place" }));
             continue;
         }
-        match base_layout(world, t0, li).building(id) {
+        let base = base_layout(world, t0, li);
+        // (A town laid out by hand: against itself, as `apply_building_edits` holds it.)
+        let by_hand = hand::is_hand(world, li);
+        match base.building(id) {
             None => out.push((k.clone(), "no such building")),
-            Some(b) if !edit_applies(b, generated_layout(world, t0, li).building(id), e) => out.push((k.clone(), "the town was laid out anew: another building stands at this id")),
+            Some(b) if !(if by_hand { edit_applies(b, Some(b), e) } else { edit_applies(b, generated_layout(world, t0, li).building(id), e) }) => out.push((k.clone(), "the town was laid out anew: another building stands at this id")),
             Some(b) if e.poly.len() >= 3 && !edit_stands(b, e) => out.push((k.clone(), "a square or close cut the building back: its outline drawn by hand is set aside")),
             _ => {}
         }
@@ -1124,12 +1134,13 @@ fn wall_of<'a>(world: &'a World, t0: &T0, index: usize) -> Option<&'a crate::wor
 
 /// A hash of the edits of the towns (settlement indices) a wall reaches; 0 with none.
 fn towns_fp(world: &World, t0: &T0, reached: &[u32]) -> u64 {
-    if world.file.edits.towns.is_empty() {
+    if world.file.edits.towns.is_empty() && world.file.edits.streets.is_empty() {
         return 0;
     }
     let mut h = 0;
     for &i in reached {
-        if let Some(fp) = wards::fingerprint(world, t0, i as usize) {
+        // (A town laid out by hand by all it is built from.)
+        if let Some(fp) = hand::fingerprint(world, t0, i as usize).or_else(|| wards::fingerprint(world, t0, i as usize)) {
             h = hash2(h ^ fp, i as i64, 0x3a11);
         }
     }
@@ -1255,7 +1266,18 @@ pub fn layout_identity(t0: &T0, index: usize) -> u64 {
 pub fn layouts_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<Rc<Layout>> {
     let hit = |x: f64, y: f64, r: f64| x + r >= rect[0] && x - r <= rect[2] && y + r >= rect[1] && y - r <= rect[3];
     let n = t0.settlements.len();
-    let towns = t0.settlements.iter().enumerate().filter(|(_, s)| hit(s.x, s.y, reach(s))).map(|(i, _)| i);
+    let streets = &world.file.edits.streets;
+    // (A town laid out by hand reaches as far as its streets: `hand::bounds`.)
+    let by_hand = |i: usize| if streets.is_empty() { None } else { hand::bounds(streets, i) };
+    let towns = t0
+        .settlements
+        .iter()
+        .enumerate()
+        .filter(|&(i, s)| match by_hand(i) {
+            Some(b) => b[2] >= rect[0] && b[0] <= rect[2] && b[3] >= rect[1] && b[1] <= rect[3],
+            None => hit(s.x, s.y, reach(s)),
+        })
+        .map(|(i, _)| i);
     let pois = t0
         .pois
         .iter()
