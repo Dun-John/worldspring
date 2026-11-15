@@ -8739,7 +8739,7 @@ fn hand_towns(world: &World, t0: &T0, label: &str, r: &mut Report) {
     use worldgen::town::hand;
     const FIELDS: [&str; 14] = ["poly", "ward", "func", "residential", "name", "floors", "pad_ft", "structure", "roof", "look", "id", "parts", "keep", "deck"];
     let fields: Vec<String> = FIELDS.iter().map(|f| format!("buildings differing: {f}")).collect();
-    r.counts(&["towns converted", "edited towns converted", "towns refused", "buildings", "buildings kept by their fill", "buildings stored whole", "buildings missing", "buildings extra", "towns not the same converted again"]);
+    r.counts(&["towns converted", "edited towns converted", "towns refused", "buildings", "buildings kept by their fill", "buildings stored whole", "buildings missing", "buildings extra", "towns not the same converted again", "size class changed by conversion"]);
     r.counts(&fields.iter().map(String::as_str).collect::<Vec<_>>());
     let lis: Vec<usize> = (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town).collect();
     let mut first: Map<usize, String> = Map::new();
@@ -8756,6 +8756,13 @@ fn hand_towns(world: &World, t0: &T0, label: &str, r: &mut Report) {
             r.add("towns not the same converted again", 0.0, format!("{label} L{li}"));
         }
         r.tally("towns converted", 1);
+        // (Its people as its homes count them, against its population as generated.)
+        let people = recs.iter().find(|(k, _)| *k == li.to_string()).and_then(|(_, v)| v["people"].as_u64()).unwrap_or(0) as u32;
+        let s = &t0.settlements[li];
+        r.value("people counted / population", people as f64 / s.population.max(1) as f64, format!("{label} L{li}"));
+        if hand::tier_of_people(people) != s.tier {
+            r.add("size class changed by conversion", 0.0, format!("{label} L{li}: {} {} counted {people}", s.tier.name(), s.population));
+        }
         hand_one(world, t0, li, &recs, label, true, r);
     }
     for &li in lis.iter().take(4) {

@@ -940,10 +940,13 @@ its culture or its name at once. A city, a capital, a port or a fishing village 
 | `name` | string | optional | If left out, it is named in its culture's style. |
 | `culture` | integer | optional | Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 open steppe. Default: the nearest settlement's. |
 | `lives_by` | string | optional | `river`, `mining`, `fortress`, `market`, `farming`, `lumber`, `herding` or `oasis`. Default: from its ground. |
+| `blank` | boolean | optional | `true`: laid out by hand from nothing. The roads that reach it run in as streets to one junction at its centre, and there is nothing else (no blocks, no buildings) until streets are drawn round it; each block they make takes common lots. Its size class (label, icon, lists) and `population` follow the people its homes house, at once; its roads and trade catch up when the world is next remade. The result adds `blank: {layout, streets}`. Default `false`. |
+| `link` | points | optional | A lane of its own: 2 to 64 points (world ft, `[x_ft, y_ft]` or `{x_ft, y_ft}`) from the settlement out to the world's roads; a free end within 60 ft of a road runs on to it and meets it at its level. It is kept as a world lane (`lanes/…` records: two junctions and the lane between them), which battlemaps draw with its bridges and fords. The result adds `lane` (its key). |
 
 ```json
 { "name": "create_settlement", "arguments": { "tier": "village", "at": [2318926, 1121032], "lives_by": "lumber" } }
 { "name": "create_settlement", "arguments": { "tier": "town", "at": { "x_ft": 2318926, "y_ft": 1121032 }, "name": "Pelbridge", "culture": 1 } }
+{ "name": "create_settlement", "arguments": { "tier": "town", "at": [2318926, 1121032], "blank": true } }
 ```
 > *"Add a logging village up in those hills."* · *"Put a market town between Bornworth and the lake."*
 

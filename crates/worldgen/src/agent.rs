@@ -24,7 +24,7 @@ type P = [f64; 2];
 
 const MI: f64 = 5280.0;
 const SETTLEMENT_KINDS: [&str; 4] = ["metropolis", "city", "town", "village"];
-const SITE_KINDS: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+const SITE_KINDS: [&str; 12] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall", "plot"];
 
 thread_local! {
     /// The settlements and sites of the overlay as `(id, kind, name)` in its order, for a T0 read
@@ -75,7 +75,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             angle: 0.0,
             extent_ft: match c.kind.as_str() {
                 "building" => 0.5 * MI,
-                "castle" | "wall" => (2.0 * c.reach()).max(0.5 * MI),
+                "castle" | "wall" | "plot" => (2.0 * c.reach()).max(0.5 * MI),
                 "village" | "town" => if c.kind == "town" { 12.0 * MI } else { 5.0 * MI },
                 _ => 2.0 * MI,
             },
@@ -83,12 +83,67 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             detail: Some(created_detail(c)),
         });
     }
+    for (id, kind, extent, people) in hand_sizes(world, t0) {
+        if let Some(f) = out.iter_mut().find(|f| f.id == id) {
+            f.detail = Some(resized_detail(f.detail.as_deref().unwrap_or(""), f.kind, kind, people));
+            (f.kind, f.extent_ft) = (kind, extent);
+        }
+    }
     for f in &mut out {
         if let Some(n) = edits.renames.get(&f.id) {
             f.name = n.clone();
         }
     }
     out
+}
+
+/// The towns laid out by hand, sized by the people their homes house (`hand::size`) at once, as
+/// their labels, icons and lists show them: (feature id, size class, label extent ft, people).
+/// T0 (its roads, its trade) keeps the settlement as it was until the world is next remade.
+pub fn hand_sizes(world: &World, t0: &T0) -> Vec<(String, &'static str, f64, u32)> {
+    let streets = &world.file.edits.streets;
+    if streets.is_empty() {
+        return Vec::new();
+    }
+    let ids = place_ids(t0);
+    let settled: Vec<&String> = ids.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.1)).map(|g| &g.0).collect();
+    let first = t0.settlements.len() + t0.base_pois;
+    let mut out = Vec::new();
+    for li in streets.keys().filter_map(|k| k.parse::<usize>().ok()) {
+        let id = if li < t0.settlements.len() { settled.get(li).map(|s| s.to_string()) } else { li.checked_sub(first).and_then(|k| world.file.edits.created.get(k)).map(|c| c.id.clone()) };
+        let (Some(id), Some((people, tier))) = (id, town::hand::size(world, li)) else { continue };
+        use crate::t0::settle::Tier;
+        let extent = match tier {
+            Tier::Metropolis => 60.0,
+            Tier::City => 30.0,
+            Tier::Town => 12.0,
+            Tier::Village => 5.0,
+        } * MI;
+        out.push((id, tier.name(), extent, people));
+    }
+    out
+}
+
+/// A settlement's detail (`"<what it lives by> <size>, pop. <n>[, capital]"`) with its size
+/// class and population as its homes now make them.
+pub fn resized_detail(detail: &str, was: &str, now: &str, people: u32) -> String {
+    let (head, tail) = match detail.split_once(", pop. ") {
+        Some((h, rest)) => (h, rest.split_once(", ").map_or(String::new(), |(_, t)| format!(", {t}"))),
+        None => (detail, String::new()),
+    };
+    let head = match head.strip_suffix(was) {
+        Some(h) if !h.is_empty() => format!("{h}{now}"),
+        _ => head.to_string(),
+    };
+    let digits = people.to_string();
+    let mut n = String::new();
+    for (k, ch) in digits.chars().enumerate() {
+        if k > 0 && (digits.len() - k) % 3 == 0 {
+            n.push(',');
+        }
+        n.push(ch);
+    }
+    if head.is_empty() { format!("pop. {n}{tail}") } else { format!("{head}, pop. {n}{tail}") }
 }
 
 /// A feature other than `id` that has the name `name` (as renamed), if any: its id.

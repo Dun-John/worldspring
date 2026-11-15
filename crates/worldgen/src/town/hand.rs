@@ -66,6 +66,10 @@ pub struct HandTown {
     /// Its walls, gates, bridges and squares as converted (`Works`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub works: Option<Works>,
+    /// The people its homes house (`people_of`), set by the change function after each change:
+    /// what its size class follows (`size`). Not read by the builder (left out of `fingerprint`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<u32>,
 }
 
 /// A junction (`/n<id>`), and the square opening there.
@@ -1319,12 +1323,141 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
         roofs: hex(base.roof_seed),
         kept: kept.remove(&usize::MAX),
         works: None,
+        people: Some(people_of(&base)),
     };
     debug_assert!(kept.is_empty(), "every block's buildings go with its block");
     // (And its walls, gates, bridges and squares as they are, while what they stand on stands.)
     let recs: BTreeMap<String, Value> = out.iter().cloned().collect();
     let town = HandTown { works: Some(works_from(&base, works_of(&HandRecords::of(&recs, index)), &corner)), ..town };
     out.push((li.clone(), serde_json::to_value(town).map_err(|e| e.to_string())?));
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// A plot drawn by hand (`Created` kind `plot`, layout `index`): its outline, about its point,
+/// filled as a hand town's block is by its fill (`Created::fill`; none: common lots) fronting no
+/// street, seeded by its id; businesses named as a hand town's are. Its buildings number from 0
+/// as a site's do. The nearest settlement gives a cemetery its looks.
+pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Created) -> Layout {
+    use super::fill::{Block as Region, build_block};
+    let origin = [c.x, c.y];
+    let reach = c.reach();
+    let tier = Tier::Town;
+    let ground = KeptGround::at(world, t0, index, origin, reach, tier, 0);
+    let site = &ground.site;
+    let mut l = Layout::empty(index as u32, origin, reach, tier);
+    l.set_roofs(world, t0, c.culture.unwrap_or_else(|| crate::t0::made::culture_at(t0, c.x, c.y)));
+    let poly: Vec<P> = c.poly.iter().map(|p| sub(*p, origin)).collect();
+    let g = super::clip::region(&poly);
+    let seed = crate::core::hash::fnv64(c.id.as_bytes()) ^ world.seed;
+    let near = |s: &&crate::t0::settle::Settlement| dist([s.x, s.y], origin);
+    let Some(s) = t0.settlements.iter().min_by(|a, b| near(a).total_cmp(&near(b))) else { return l };
+    match c.fill.clone().unwrap_or_default() {
+        BlockFill::Hand | BlockFill::Castle { .. } => {}
+        BlockFill::Generated { ward, lots, reroll, .. } => {
+            let Some(w) = ward_of(&ward) else { return l };
+            let salt = |h: u64| if reroll == 0 { h } else { hash3(h, reroll as i64, 0x7e70, 1) };
+            let mut dp = District::roll(w, salt(hash2(seed, 0, 0xd15)));
+            if let Some(k) = lots.as_deref().and_then(|n| LOT_SIZES.iter().position(|x| *x == n)) {
+                dp.min_sq = District::base(w) * super::wards::LOT_FACTOR[k];
+            }
+            let mut rng = Pcg32::new(salt(hash2(seed, 0, 0x107)), 47);
+            l.blocks.extend(g.iter().map(|x| x.outer.clone()));
+            build_block(site, Region::Region(&g), &[], w, &dp, &mut rng, &mut l, None);
+            businesses(&mut l, 0, w, tier, false, hash2(salt(seed), 0, 0xb05), &[]);
+        }
+        BlockFill::Open { open, style } => {
+            let mut pieces: Vec<(f64, usize)> = g.iter().enumerate().map(|(k, x)| (x.area(), k)).filter(|x| x.0 >= 200.0).collect();
+            pieces.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+            for (pi, &(_, k)) in pieces.iter().enumerate() {
+                let salt = |h: u64| if pi == 0 { h } else { hash2(h, pi as i64, 0x91ec) };
+                let roll = |j: i64| unit(salt(hash3(seed, 0, j, 0x09e)));
+                let cem = || super::cemetery::Style::of(s, index, false);
+                let fill = open_fill(open, style.as_deref(), &[], salt(hash2(seed, 0, 0x9a4c)), cem, &mut || Pcg32::new(salt(hash2(seed, 0, 0xfa)), 61), tier);
+                let mut plots = Vec::new();
+                super::fill_block(site, &g[k].outer, Vec::new(), fill, &roll, super::places::Spot::None, &mut l, &mut plots);
+            }
+        }
+    }
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (k, b) in l.buildings.iter_mut().enumerate() {
+        b.id = k as u32;
+        if b.func.is_some() && b.name.is_none() {
+            for salt in 0..8 {
+                let mut rng = Pcg32::new(hash3(seed, k as i64, 0x4e + salt, 0xb7), 43);
+                b.name = super::sites::trade_name(b.func, &mut rng, t0, origin, names.iter().map(String::as_str));
+                if b.name.as_ref().is_none_or(|n| !names.contains(n)) {
+                    break;
+                }
+            }
+            names.extend(b.name.clone());
+        }
+    }
+    l
+}
+
+/// People a home of each kind (`catalog::RESIDENTIAL`: hovel, house, townhouse, tenement, noble
+/// estate, farmhouse, wizard's tower) houses, counting servants, lodgers and the trades that live
+/// over their shops.
+const PEOPLE_PER_HOME: [u32; 7] = [4, 5, 8, 23, 14, 5, 2];
+
+/// The people a layout's homes house (a hand town's population: `HandTown::people`).
+pub fn people_of(l: &Layout) -> u32 {
+    l.buildings.iter().filter(|b| b.func.is_none()).map(|b| PEOPLE_PER_HOME.get(b.residential as usize).copied().unwrap_or(5)).sum()
+}
+
+/// The size class a population makes (`t0::settle::pop_range`'s floors).
+pub fn tier_of_people(people: u32) -> Tier {
+    let floor = |t: Tier| crate::t0::settle::pop_range(t).0 as u32;
+    [Tier::Metropolis, Tier::City, Tier::Town].into_iter().find(|&t| people >= floor(t)).unwrap_or(Tier::Village)
+}
+
+/// A hand town's population (its homes', as last counted) and the size class it makes: what its
+/// label, icon and lists show at once (T0's roads and trade catch up at the next remake). None
+/// for a layout not laid out by hand or not yet counted.
+pub fn size(world: &World, index: usize) -> Option<(u32, Tier)> {
+    let people = world.file.edits.streets.get(&index.to_string())?.get("people")?.as_u64()? as u32;
+    Some((people, tier_of_people(people)))
+}
+
+/// The records of settlement `index` laid out blank (Roadmap 6, the user's call): a header (`from`
+/// "blank", common lots for the blocks its streets will make) and the roads that reach it running
+/// in as streets to one junction at its centre, nothing else: no blocks, no buildings. Streets
+/// drawn later (`add_street`) make its blocks.
+pub fn blank(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Value)>, String> {
+    let s = super::culture::settlement(world, t0, index).ok_or_else(|| format!("layout {index}: not a settlement"))?;
+    let li = index.to_string();
+    let center = [s.x, s.y];
+    let mut out: Vec<(String, Value)> = Vec::new();
+    out.push((format!("{li}/n0"), serde_json::to_value(Junction { p: center, square: None }).map_err(|e| e.to_string())?));
+    for (k, (e, class)) in super::ends_of(t0, index).into_iter().enumerate() {
+        let p = add(e, center);
+        if dist(p, center) < 20.0 {
+            continue;
+        }
+        let n = k as u32 + 1;
+        // (A road's street as wide as a generated town's main streets run, a track's narrower.)
+        let w = if class >= crate::t0::roads::RoadClass::Road as u8 { 14.0 } else { 10.0 };
+        out.push((format!("{li}/n{n}"), serde_json::to_value(Junction { p, square: None }).map_err(|e| e.to_string())?));
+        let st = Street { a: n, b: 0, bends: Vec::new(), width: w, set_l: 0.5 * w, set_r: 0.5 * w, class: StreetClass::Main, bridge: false };
+        out.push((format!("{li}/e{n}"), serde_json::to_value(st).map_err(|e| e.to_string())?));
+    }
+    let town = HandTown {
+        from: "blank".into(),
+        was: None,
+        seed: hex(s.seed),
+        culture: s.culture,
+        fill: BlockFill::default(),
+        extent: super::urban_radius(s.tier, s.population),
+        origin: center,
+        tier: s.tier as u8,
+        reach: super::reach(&s) + 500.0,
+        roofs: String::new(),
+        kept: None,
+        works: None,
+        people: Some(0),
+    };
+    out.push((li, serde_json::to_value(town).map_err(|e| e.to_string())?));
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
 }
@@ -1930,12 +2063,17 @@ pub fn fingerprint(world: &World, t0: &T0, index: usize) -> Option<u64> {
     h.write(&hash3(world.hash, super::layout_identity(t0, index) as i64, super::culture::mark(world, t0, index), 0x6a4e).to_le_bytes());
     let head = index.to_string();
     let lo = format!("{head}/");
-    for (k, v) in std::iter::once((&head, &edits.streets[&head])).chain(edits.streets.range(lo.clone()..).take_while(|(k, _)| k.starts_with(&lo))) {
+    // (The header but its count of people, which the builder doesn't read.)
+    let mut header = edits.streets[&head].clone();
+    if let Some(o) = header.as_object_mut() {
+        o.remove("people");
+    }
+    for (k, v) in std::iter::once((&head, &header)).chain(edits.streets.range(lo.clone()..).take_while(|(k, _)| k.starts_with(&lo))) {
         h.write(k.as_bytes());
         hash_value(&mut h, v);
     }
     let within = |p: &P| p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
-    for c in edits.created.iter().filter(|c| c.kind == "building" && c.poly.iter().any(within)) {
+    for c in edits.created.iter().filter(|c| (c.kind == "building" || (c.kind == "plot" && !c.removed)) && c.poly.iter().any(within)) {
         h.write(c.id.as_bytes());
         c.poly.iter().for_each(|p| h.write(&[p[0].to_bits().to_le_bytes(), p[1].to_bits().to_le_bytes()].concat()));
     }
@@ -1999,7 +2137,7 @@ fn block_key(ground: u64, id: u32, rec: &Value, g: &[super::clip::Shape], fronts
 }
 
 /// What a block is laid out as, once its ground is known.
-pub(super) fn ward_of(name: &str) -> Option<Ward> {
+pub fn ward_of(name: &str) -> Option<Ward> {
     WARDS.iter().copied().find(|w| w.name() == name)
 }
 
@@ -2011,8 +2149,9 @@ pub(super) fn ward_of(name: &str) -> Option<Ward> {
 pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     use super::clip::{self, Ends, Join, Shape};
     use super::fill::{Block as Region, Front, build_block};
-    let recs = HandRecords::of(&world.file.edits.streets, index);
-    let town = recs.town.as_ref()?;
+    let mut recs = HandRecords::of(&world.file.edits.streets, index);
+    let header = recs.town.clone()?;
+    let town = &header;
     let s = super::culture::settlement(world, t0, index)?;
     let li = index.to_string();
     let origin = town.origin;
@@ -2034,7 +2173,28 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     let template = l.clone();
     let gkey = ground_key(world, t0, index, town, far.max(town.reach));
     let mut problems: Problems = Vec::new();
-    let Faces { graph, faces, outers, rings, holes, face_block } = Faces::of(&recs, origin, &li, &mut problems);
+    let Faces { graph, faces, outers, rings, holes, mut face_block } = Faces::of(&recs, origin, &li, &mut problems);
+    // A face with no block record takes the header's fill (a blank town's first blocks, before
+    // the change function gives them records): numbered on from the records, in face order, and
+    // seeded as the change function seeds a new block.
+    let mut unrecorded: BTreeMap<u32, Value> = BTreeMap::new();
+    if face_block.iter().any(Option::is_none) {
+        let hseed = u64::from_str_radix(&town.seed, 16).unwrap_or(0);
+        let mut next = recs.blocks.keys().next_back().map_or(0, |k| k + 1);
+        for f in 0..faces.len() {
+            if face_block[f].is_some() {
+                continue;
+            }
+            let at = add(inside_point(&rings[f]), origin);
+            let b = Block { at, fill: town.fill.clone(), district: None, seed: hex(hash3(hseed, next as i64, 0xb10c, 1)), generation: 0, pins: Vec::new(), kept: None };
+            unrecorded.insert(next, serde_json::to_value(&b).unwrap_or(Value::Null));
+            recs.blocks.insert(next, b);
+            face_block[f] = Some(next);
+            next += 1;
+        }
+        problems.retain(|p| p.1 != "a block with no record beside this street");
+    }
+    let recs = recs;
     let street = |k: usize| &recs.streets[&graph.segs[k].2];
     let set = |k: usize, left: bool| if left { street(k).set_l } else { street(k).set_r };
     let ring_pts = |f: &Face| f.ring.iter().map(|&v| graph.pts[v]).collect::<Vec<P>>();
@@ -2042,7 +2202,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
     // What no block is built over: buildings drawn by hand, wharves, painted areas.
     let pad = |poly: &[P], d: f64| clip::offset(&clip::region(poly), d, Join::Miter(2.0));
     let mut obstacles: Vec<Shape> = Vec::new();
-    for c in world.file.edits.created.iter().filter(|c| c.kind == "building" && c.poly.len() >= 3) {
+    for c in world.file.edits.created.iter().filter(|c| (c.kind == "building" || (c.kind == "plot" && !c.removed)) && c.poly.len() >= 3) {
         let poly: Vec<P> = c.poly.iter().map(|p| sub(*p, origin)).collect();
         obstacles.extend(pad(&poly, 2.0));
     }
@@ -2270,7 +2430,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
         let biggest = || g.iter().max_by(|x, y| x.area().total_cmp(&y.area())).map(|x| x.outer.clone());
         let built_on = !matches!(rec.fill, BlockFill::Hand | BlockFill::Open { .. });
         // (Filled once for all it reads: the same block comes out the same whatever else changed.)
-        let key = block_key(gkey, id, world.file.edits.streets.get(&format!("{li}/k{id}")).unwrap_or(&Value::Null), g, &fronts);
+        let key = block_key(gkey, id, world.file.edits.streets.get(&format!("{li}/k{id}")).or_else(|| unrecorded.get(&id)).unwrap_or(&Value::Null), g, &fronts);
         let filled = FILLED.with(|c| c.borrow().get(&key).cloned()).unwrap_or_else(|| {
             let mut l = template.clone();
             let mut kept_bs: Vec<Building> = Vec::new();

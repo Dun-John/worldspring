@@ -984,6 +984,17 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
         Some((l, p)) => (l, p),
         None => (super::base_layout(&w2, t0, index), Vec::new()),
     };
+    // Its population counted from its homes as they now stand, and the size class it makes.
+    if let Some(h) = w2.file.edits.streets.get(&li) {
+        let n = hand::people_of(&after_l);
+        if h.get("people").and_then(Value::as_u64) != Some(n as u64) {
+            let mut h = h.clone();
+            h["people"] = json!(n);
+            ch.streets.insert(li.clone(), Some(h));
+        }
+        report["population"] = json!(n);
+        report["class"] = json!(hand::tier_of_people(n).name());
+    }
     let set: Vec<&String> = ch.streets.iter().filter(|x| x.1.is_some()).map(|x| x.0).collect();
     let removed: Vec<&String> = ch.streets.iter().filter(|x| x.1.is_none()).map(|x| x.0).collect();
     let few = |v: &[&String]| if v.len() > 40 { json!({ "count": v.len() }) } else { json!(v) };

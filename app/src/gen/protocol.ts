@@ -159,6 +159,9 @@ export interface Created {
   /** A castle's pieces changed by hand (`worldgen::world::CastlePiece`), by `keep` or a yard
    * building's number (`b:<layout>:<number>`). */
   pieces?: Record<string, CastlePiece>;
+  /** A plot's fill (kind `plot`: an outline `poly` filled as a hand town's block is;
+   * `worldgen::town::hand::BlockFill` as JSON). */
+  fill?: Record<string, unknown>;
 }
 
 /** One of a castle's pieces changed by hand: a building's edit (`at` its middle as built; no

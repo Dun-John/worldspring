@@ -1086,6 +1086,10 @@ pub struct Created {
     /// stands), else a yard building's id in the castle's layout (`b:<layout>:<id>`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pieces: BTreeMap<String, CastlePiece>,
+    /// A plot's fill (Roadmap 6: a free plot drawn by hand, its outline `poly`, filled as a
+    /// hand town's block is: `town::hand::BlockFill`, not a castle; else common lots).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<crate::town::hand::BlockFill>,
 }
 
 /// (R5 towns) One of a castle's pieces changed by hand (`Created::pieces`): its looks, function
@@ -1189,11 +1193,13 @@ pub enum PlotStatus {
 pub const PLOT_STATUSES: [&str; 3] = ["idea", "active", "resolved"];
 
 /// The kinds of site that can be created.
-pub const CREATABLE: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+pub const CREATABLE: [&str; 12] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall", "plot"];
 /// Settlements that can be created without remaking the world (cities keep the remake).
 pub const CREATED_SETTLEMENTS: [&str; 2] = ["village", "town"];
 /// Kinds drawn by hand as a shape (a footprint, an outline, a line), not put at a point.
-pub const DRAWN_KINDS: [&str; 3] = ["building", "castle", "wall"];
+pub const DRAWN_KINDS: [&str; 4] = ["building", "castle", "wall", "plot"];
+/// Widest a plot may be, its point to its farthest corner (ft).
+pub const PLOT_REACH_FT: f64 = 750.0;
 /// Widest a castle may be, corner to corner (ft).
 pub const CASTLE_MAX_FT: f64 = 600.0;
 /// Narrowest a castle may be (ft): room for a curtain, a yard and a keep.
@@ -1241,6 +1247,7 @@ impl Created {
         let named = self.name.trim().is_empty() || self.name.trim() == other.name.trim();
         match self.kind.as_str() {
             "building" => return other.func == self.func && named && same(&other.poly, &self.poly),
+            "plot" => return named && same(&other.poly, &self.poly),
             "castle" => return named && same(&other.poly, &self.poly),
             "wall" => return named && other.closed == self.closed && same(&other.pts, &self.pts),
             _ => {}
@@ -1281,6 +1288,7 @@ impl Created {
         }
                 let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
         match self.kind.as_str() {
+            "plot" => return self.check_plot(),
             "building" if works => return Err("gate, keep, yard_buildings, pts, gates and closed are for castles and walls".into()),
             "building" => return self.check_building(),
             "castle" => return self.check_castle(),
@@ -1359,6 +1367,33 @@ impl Created {
 
     /// A building's options: a simple footprint of 3–64 corners near its point, at least
     /// 10 ft across; storeys, function, roof, tint and structure from their lists.
+    fn check_plot(&self) -> Result<(), String> {
+        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed || !self.pieces.is_empty();
+        if works || self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() || self.structure.is_some() {
+            return Err("a plot has an outline and a fill only".into());
+        }
+        let p = &self.poly;
+        if p.len() < 3 || p.len() > 64 || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
+            return Err("a plot's outline needs 3–64 corners".into());
+        }
+        if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > PLOT_REACH_FT) {
+            return Err(format!("a plot's corners must lie within {PLOT_REACH_FT} ft of its point"));
+        }
+        if crate::town::geom::area(p).abs() < 400.0 || crate::town::geom::obb(p).short < 20.0 {
+            return Err("a plot must be at least 20 ft across".into());
+        }
+        if !simple(p) {
+            return Err("a plot's outline must not cross itself".into());
+        }
+        match &self.fill {
+            Some(crate::town::hand::BlockFill::Castle { .. }) => Err("a plot's fill: generated, hand or open (a castle is drawn as one)".into()),
+            Some(crate::town::hand::BlockFill::Generated { ward, lots, .. }) if crate::town::hand::ward_of(ward).is_none() || lots.as_deref().is_some_and(|l| !LOT_SIZES.contains(&l)) => {
+                Err(format!("a plot's ward: one of {}; lots: one of {}", TOWN_WARDS.join(", "), LOT_SIZES.join(", ")))
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn check_building(&self) -> Result<(), String> {
         if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() {
             return Err("a building has nothing underground: no under, size, levels or theme".into());
@@ -1498,6 +1533,7 @@ impl Created {
         match self.kind.as_str() {
             "castle" => far(&self.poly) + WORKS_MARGIN_FT,
             "wall" => far(&self.pts) + WORKS_MARGIN_FT,
+            "plot" => far(&self.poly) + WORKS_MARGIN_FT,
             _ => crate::town::sites::SITE_REACH_FT,
         }
     }

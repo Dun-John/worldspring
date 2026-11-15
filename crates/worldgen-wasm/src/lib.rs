@@ -58,7 +58,23 @@ impl Ctx {
     /// Edit › Places (`added`: `[layout, stroke]`, the stroke of the pin each stands for).
     pub fn overlay_json(&self) -> String {
         let Some(t0) = &self.t0 else { return "{}".into() };
-        let o = t0.overlay_json();
+        let mut o = t0.overlay_json();
+        // (Towns laid out by hand labelled by the people their homes house: `agent::hand_sizes`.)
+        let sized = worldgen::agent::hand_sizes(&self.world, t0);
+        if !sized.is_empty()
+            && let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&o)
+            && let Some(fs) = v.get_mut("features").and_then(|f| f.as_array_mut())
+        {
+            for (id, kind, extent, people) in sized {
+                if let Some(f) = fs.iter_mut().find(|f| f["id"] == id.as_str()) {
+                    let was = f["kind"].as_str().unwrap_or("").to_string();
+                    f["detail"] = serde_json::json!(worldgen::agent::resized_detail(f["detail"].as_str().unwrap_or(""), &was, kind, people));
+                    f["kind"] = serde_json::json!(kind);
+                    f["extent_ft"] = serde_json::json!(extent);
+                }
+            }
+            o = v.to_string();
+        }
         let ids: Vec<String> = (0..worldgen::town::layout_count(t0)).map(|li| worldgen::town::layout_identity(t0, li)).map(|h| ((h ^ h >> 32) as u32).to_string()).collect();
         let strokes = &self.world.file.sketch.strokes;
         let added: Vec<String> = t0.settlements.iter().enumerate().filter_map(|(li, s)| s.pin.filter(|&k| strokes.get(k as usize).is_some_and(|st| st.added)).map(|k| format!("[{li},{k}]"))).collect();
@@ -408,7 +424,28 @@ impl Ctx {
                     "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
                     "x": s.x, "y": s.y, "culture": s.culture, "lives": s.kind.name(), "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
                     "rect": r.map(|v| v.round()), "track": track, "class": m.class as u8, "width": m.class.width_ft(),
+                    "hand": worldgen::town::hand::size(&self.world, t0.settlements.len() + m.poi).map(|(n, t)| serde_json::json!({ "population": n, "tier": t.name() })),
                 }))
+            })
+            .collect();
+        serde_json::Value::Array(list).to_string()
+    }
+
+    /// The lanes laid by hand outside any town (`T0.lanes`, `t0::made::lanes`), as JSON:
+    /// `[{key, track, class, width, rect}]`: its points `[x, y]` (a free end near a road run on to
+    /// it), road class and bed width (ft), and the rect (x0, y0, x1, y1 ft) its battlemaps change over.
+    pub fn lanes_json(&self) -> String {
+        let Some(t0) = &self.t0 else { return "[]".into() };
+        let list: Vec<serde_json::Value> = t0
+            .lanes
+            .iter()
+            .map(|l| {
+                let mut r = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+                for p in &l.pts {
+                    r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
+                }
+                let track: Vec<[f64; 2]> = l.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect();
+                serde_json::json!({ "key": l.key, "track": track, "class": l.class as u8, "width": l.class.width_ft(), "rect": r.map(|v| v.round()) })
             })
             .collect();
         serde_json::Value::Array(list).to_string()

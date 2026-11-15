@@ -60,7 +60,7 @@ pub const LAYOUT_ID_FIELDS: &[(&str, IdsIn)] = &[
 /// Settlement kinds, as the app's labels have them (`SETTLEMENT_KINDS` in `ui/gazetteer.ts`).
 const SETTLEMENT_KINDS: [&str; 4] = ["metropolis", "city", "town", "village"];
 /// Site kinds, as the app's labels have them (`SITE_KINDS` in `ui/gazetteer.ts`).
-const SITE_KINDS: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+const SITE_KINDS: [&str; 12] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall", "plot"];
 
 /// A named feature of a world (its overlay's): id, kind, label anchor (ft) and size (ft).
 #[derive(Clone, Debug, Serialize, Deserialize)]

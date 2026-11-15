@@ -23,6 +23,8 @@ pub fn list() -> Vec<Value> {
         "name": { "type": "string", "minLength": 1, "maxLength": worldgen::world::NAME_MAX, "description": "If left out, named in its culture's style" },
         "culture": { "type": "integer", "minimum": 0, "maximum": 4, "description": "Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 steppe (default: nearest settlement's)" },
         "lives_by": { "type": "string", "enum": lives_by_kinds(), "description": "What it lives by (default: from its ground)" },
+        "blank": { "type": "boolean", "default": false, "description": "true: laid out by hand from nothing: the roads that reach it run in as streets to one junction at its centre, and nothing else (no blocks, no buildings) until streets are drawn. Its size class follows the people its homes house" },
+        "link": { "type": "array", "items": crate::args::point_schema("A point ({x_ft, y_ft} or [x_ft, y_ft])"), "minItems": 2, "maxItems": 64, "description": "A lane of its own, laid as these points (world ft) from the settlement out to the world's roads (its far end within 60 ft of a road joins it). Kept as world lanes (lanes/... records)" },
     }), &["tier", "at"]) }),
     json!({ "name": "update_settlement", "title": "Change a settlement", "description": "Change a settlement's tier, what it lives by, capital, name or culture. Culture: at once for any, laid out anew in it. One added by hand (c:...) changes at once while an inland village or town (else refused, saying how). The world's own changes the rest by a sketch pin (pending until regenerate, or regenerate: true). Each time it is laid out anew in place: its name, notes, NPCs and plots stay, edits inside are set aside (set_aside).", "inputSchema": schema(json!({
         "id": { "type": "string", "description": "The settlement (a metropolis, city, town or village; c:... for one added by hand)" },
@@ -85,6 +87,22 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
     {
         return Err(format!("lives_by: one of {} (ports and fishing villages need the world remade)", lives_by_kinds().join(", ")));
     }
+    let blank = match &a["blank"] {
+        Value::Null => false,
+        v => v.as_bool().ok_or_else(|| crate::args::bad("blank", "true or false", v))?,
+    };
+    let link: Vec<[f64; 2]> = match &a["link"] {
+        Value::Null => Vec::new(),
+        Value::Array(v) if (2..=64).contains(&v.len()) => {
+            let xy = |p: &Value| match p {
+                Value::Array(q) if q.len() == 2 => Some([q[0].as_f64()?, q[1].as_f64()?]),
+                Value::Object(_) => Some([p["x_ft"].as_f64()?, p["y_ft"].as_f64()?]),
+                _ => None,
+            };
+            v.iter().map(|p| xy(p).filter(|q| q[0].is_finite() && q[1].is_finite()).ok_or_else(|| crate::args::bad("link", "points [x_ft, y_ft] or {x_ft, y_ft}", p))).collect::<Result<_, _>>()?
+        }
+        v => return Err(crate::args::bad("link", "2 to 64 points", v)),
+    };
     let at = crate::tools::place(app, a).await?;
     let asked = a["name"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
@@ -107,6 +125,26 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
             Ok(c)
         })
         .await?;
+    // Laid out blank: its records as they would be once it stands (worked out on the world with it
+    // put in, then taken out again).
+    let records: Vec<(String, Value)> = if blank {
+        let probe = c.clone();
+        app.worker
+            .with_mut(move |ex| {
+                let li = ex.t0.settlements.len() + ex.t0.base_pois + ex.world.file.edits.created.len();
+                ex.world.file.edits.created.push(probe);
+                ex.t0.apply_edits(&ex.world);
+                let recs = worldgen::town::hand::blank(&ex.world, &ex.t0, li);
+                ex.world.file.edits.created.pop();
+                ex.t0.apply_edits(&ex.world);
+                let head = li.to_string();
+                Ok(recs?.into_iter().map(|(k, v)| (k.strip_prefix(&head).unwrap_or(&k).to_string(), v)).collect())
+            })
+            .await?
+    } else {
+        Vec::new()
+    };
+    let first = first_created(app).await?;
     let change = app
         .edit("agent", 0, move |e| {
             if let Some(o) = e.existing_site(&c, at) {
@@ -114,8 +152,24 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             // (Another client may have created a site meanwhile: take the next id.)
             c.id = format!("c:{}", e.created.len());
-            let reply = json!({ "tool": "create_settlement", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
+            let li = first + e.created.len();
+            let mut reply = json!({ "tool": "create_settlement", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
             e.created.push(c);
+            if !records.is_empty() {
+                reply["blank"] = json!({ "layout": li, "streets": records.iter().filter(|r| r.0.contains("/e")).count() });
+                e.streets.extend(records.into_iter().map(|(k, v)| (format!("{li}{k}"), v)));
+            }
+            // (Its own lane out to the roads: two junctions and a lane between them.)
+            if link.len() >= 2 {
+                let lo = format!("{}/", made::LANES_KEY);
+                let next = |t: u8| e.streets.range(lo.clone()..).take_while(|(k, _)| k.starts_with(&lo)).filter_map(|(k, _)| k[lo.len()..].strip_prefix(t as char)?.parse::<u32>().ok()).max().map_or(0, |n| n + 1);
+                let (n, l) = (next(b'n'), next(b'e'));
+                let (a, b) = (link[0], link[link.len() - 1]);
+                e.streets.insert(format!("{lo}n{n}"), json!({ "p": a }));
+                e.streets.insert(format!("{lo}n{}", n + 1), json!({ "p": b }));
+                e.streets.insert(format!("{lo}e{l}"), json!({ "a": n, "b": n + 1, "bends": &link[1..link.len() - 1], "width": 10.0, "set_l": 5.0, "set_r": 5.0 }));
+                reply["lane"] = json!(format!("{lo}e{l}"));
+            }
             Ok(reply)
         })
         .await?;
@@ -123,7 +177,13 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
         return crate::tools::found(app, id.to_string()).await;
     }
     let id = change["id"].as_str().unwrap_or_default().to_string();
-    app.worker.with(move |ex| read_back(ex, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await
+    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await?;
+    for k in ["blank", "lane"] {
+        if !change[k].is_null() {
+            v[k] = change[k].clone();
+        }
+    }
+    Ok(v)
 }
 
 /// `get_feature`'s details of created settlement `id`, with its culture, what it lives by and its
@@ -136,7 +196,7 @@ fn read_back(ex: &worldgen::pipeline::Executor, id: &str) -> Option<Value> {
     let len: f64 = m.track.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt()).sum();
     v["culture"] = json!(c.culture);
     v["lives_by"] = json!(c.lives_by);
-    v["population"] = json!(m.s.population);
+    v["population"] = json!(worldgen::town::hand::size(&ex.world, ex.t0.settlements.len() + m.poi).map_or(m.s.population, |h| h.0));
     v["track_ft"] = if m.track.is_empty() { Value::Null } else { json!(len.round()) };
     Some(v)
 }

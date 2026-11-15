@@ -2452,17 +2452,24 @@ pub(crate) fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, lot: &[P], site:
 fn prepare<'a>(world: &World, t0: &'a T0, index: usize) -> (Site<'a>, Vec<(P, u8)>, Pcg32) {
     let s = settlement(t0, index).expect("layout of a settlement");
     let center = [s.x, s.y];
-    let r = urban_radius(s.tier, s.population);
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
     let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0), world.params().sea_level_ft);
     let rng = Pcg32::new(hash2(world.stream("town"), rng_key(t0, index), s.seed as i64), 31);
-    // (One added by hand meets its own link (a town's at its edge); no network road comes so near it.)
+    (site, ends_of(t0, index), rng)
+}
+
+/// Where the roads reaching settlement `index` come in (local ft from its centre), with their
+/// class: one added by hand meets its own link (a town's at its edge); no network road comes so
+/// near it.
+pub(crate) fn ends_of(t0: &T0, index: usize) -> Vec<(P, u8)> {
+    let s = settlement(t0, index).expect("layout of a settlement");
+    let center = [s.x, s.y];
+    let r = urban_radius(s.tier, s.population);
     let track = index.checked_sub(t0.settlements.len()).and_then(|poi| t0.made.iter().find(|m| m.poi == poi)).and_then(|m| m.track.first());
-    let ends = match track {
+    match track {
         Some(&a) => vec![(sub(a, center), crate::t0::made::link_class(s.tier) as u8)],
         None => road_ends(t0, center, r, road_trim_radius(s.tier, s.population)),
-    };
-    (site, ends, rng)
+    }
 }
 
 /// A town's plan (kept by `wards::plan`), without building it; `None` for a village or a site.

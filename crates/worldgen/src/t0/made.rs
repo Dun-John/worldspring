@@ -111,6 +111,84 @@ pub fn settlement(world: &World, t0: &T0, c: &Created, seed: u64) -> Settlement 
     }
 }
 
+/// How near a world lane's free end must come to a network road to run on and join it (ft).
+pub const LANE_JOIN_FT: f64 = 60.0;
+/// The `Edits.streets` keys of the lanes laid outside any town: `lanes/n<id>` junctions and
+/// `lanes/e<id>` lanes between them (`town::hand::Junction`, `town::hand::Street`).
+pub const LANES_KEY: &str = "lanes";
+
+/// A lane laid by hand outside any town, joining the world's roads (Roadmap 6): its line (world
+/// ft: its junctions and bends; a free end within `LANE_JOIN_FT` of a network road runs on to
+/// it), its surface (ft) at each point (graded over the ground as a created settlement's link,
+/// meeting a road it joins at its level) and its class (a road from 14 ft wide, else a track).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lane {
+    pub key: String,
+    pub pts: Vec<P>,
+    pub z: Vec<f32>,
+    pub class: RoadClass,
+}
+
+/// The world's lanes laid by hand (`LANES_KEY` records), in key order; those whose junctions are
+/// missing left out.
+pub fn lanes(world: &World, t0: &T0) -> Vec<Lane> {
+    use crate::town::hand::{Junction, Street};
+    let streets = &world.file.edits.streets;
+    let lo = format!("{LANES_KEY}/");
+    let mut js: std::collections::BTreeMap<u32, Junction> = Default::default();
+    let mut es: Vec<(String, Street)> = Vec::new();
+    for (k, v) in streets.range(lo.clone()..).take_while(|(k, _)| k.starts_with(&lo)) {
+        let rest = &k[lo.len()..];
+        let Some(id) = rest.get(1..).and_then(|n| n.parse::<u32>().ok()) else { continue };
+        match rest.as_bytes()[0] {
+            b'n' => drop(serde_json::from_value(v.clone()).map(|j| js.insert(id, j))),
+            b'e' => drop(serde_json::from_value(v.clone()).map(|e| es.push((k.clone(), e)))),
+            _ => {}
+        }
+    }
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+    let ends = |j: u32| es.iter().filter(|(_, e)| e.a == j || e.b == j).count();
+    let mut out = Vec::new();
+    for (key, e) in &es {
+        let (Some(a), Some(b)) = (js.get(&e.a), js.get(&e.b)) else { continue };
+        let class = if e.width >= 14.0 { RoadClass::Road } else { RoadClass::Track };
+        let mut line: Vec<P> = std::iter::once(a.p).chain(e.bends.iter().copied()).chain(std::iter::once(b.p)).collect();
+        // (A free end near a road runs on to it, and meets it at its level.)
+        let mut met: [Option<f64>; 2] = [None, None];
+        if ends(e.a) == 1
+            && let Some((q, z)) = nearest_road(t0, a.p, LANE_JOIN_FT)
+        {
+            line.insert(0, q);
+            met[0] = Some(z);
+        }
+        if ends(e.b) == 1
+            && let Some((q, z)) = nearest_road(t0, b.p, LANE_JOIN_FT)
+        {
+            line.push(q);
+            met[1] = Some(z);
+        }
+        line.dedup_by(|x, y| dist(*x, *y) < 0.5);
+        if line.len() < 2 {
+            continue;
+        }
+        let mut pts = vec![line[0]];
+        for q in line.windows(2) {
+            let m = (dist(q[0], q[1]) / 40.0).ceil().max(1.0) as usize;
+            pts.extend((1..=m).map(|j| j as f64 / m as f64).map(|t| [q[0][0] + (q[1][0] - q[0][0]) * t, q[0][1] + (q[1][1] - q[0][1]) * t]));
+        }
+        let mut terrain: Vec<f64> = pts.iter().map(|p| t0.ground_at(p[0], p[1], lattice)).collect();
+        if let Some(z) = met[0] {
+            terrain[0] = z;
+        }
+        if let Some(z) = met[1] {
+            *terrain.last_mut().unwrap() = z;
+        }
+        let z = super::roads::fit_profile(&pts, &terrain, class.max_grade());
+        out.push(Lane { key: key.clone(), pts, z, class });
+    }
+    out
+}
+
 /// The nearest point of a network road within `cap` of `c`: (point, the road's surface there).
 fn nearest_road(t0: &T0, c: P, cap: f64) -> Option<(P, f64)> {
     let mut best: Option<(f64, P, f64)> = None;
@@ -354,6 +432,12 @@ impl<'a> Ground<'a> {
         let hit = |b: [f64; 4]| b[2] >= rect[0] && b[0] <= rect[2] && b[3] >= rect[1] && b[1] <= rect[3];
         let mut pads = Vec::new();
         let mut tracks = Vec::new();
+        for l in &t0.lanes {
+            let pad = LINK_MARGIN_FT;
+            if l.pts.windows(2).any(|s| hit([s[0][0].min(s[1][0]) - pad, s[0][1].min(s[1][1]) - pad, s[0][0].max(s[1][0]) + pad, s[0][1].max(s[1][1]) + pad])) {
+                tracks.push((l.pts.as_slice(), l.z.as_slice(), l.class));
+            }
+        }
         for m in &t0.made {
             let r = crate::town::reach(&m.s);
             let e = crate::town::pad_extent(r);
@@ -606,6 +690,16 @@ fn set_aside_to(edits: &mut crate::world::Edits, li: usize) -> (usize, [(&'stati
     if let Some(t) = edits.towns.remove(&li.to_string()) {
         edits.towns.insert(to.to_string(), t);
         n[5] += 1;
+    }
+    // (A town laid out by hand: its header and records.)
+    let (head, lo) = (li.to_string(), format!("{li}/"));
+    let keys: Vec<String> = edits.streets.range(head.clone()..).take_while(|(k, _)| **k == head || k.starts_with(&lo)).map(|(k, _)| k.clone()).collect();
+    if !keys.is_empty() {
+        n[5] += 1;
+    }
+    for k in keys {
+        let v = edits.streets.remove(&k).expect("listed");
+        edits.streets.insert(format!("{to}{}", &k[head.len()..]), v);
     }
     let hidden: Vec<String> = edits.hidden.iter().filter(|h| relaid(h, li, to).is_some()).cloned().collect();
     for h in hidden {

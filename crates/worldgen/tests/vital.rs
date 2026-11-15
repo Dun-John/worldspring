@@ -5214,3 +5214,136 @@ fn a_culture_change_moves_nothing_else() {
     ex.world.file.edits = e;
     assert_eq!(laid(&ex, li), laid0, "changed back, it is not laid out as before");
 }
+
+/// Towns laid out by hand (Roadmap 6, P3): converting a town gives the same records twice, and its
+/// layout equals the generated one (buildings, ids, walls and towers within 1/64 ft); two unrelated
+/// edits give the same records and layout in either order; a world remade round it keeps it as it
+/// was; its battlemap keeps the guarantee (buildings, cover, seams); a blank town with streets drawn
+/// round its centre builds blocks of homes, and its population is counted from them.
+#[test]
+fn hand_town_guarantee() {
+    use worldgen::t0::{T0, remap, settle::Tier};
+    use worldgen::town::{self, Layout, hand, handedit};
+    let base = World::from_json(&world_json(3)).unwrap();
+    let t0 = T0::generate(&base);
+    let ask = |w: &World, t0: &T0, li: usize, req: &str| -> World {
+        let asked: handedit::HandRequest = serde_json::from_str(req).unwrap();
+        let (ch, _) = handedit::change(w, t0, li, &asked).unwrap_or_else(|e| panic!("L{li} {req}: {e}"));
+        let mut f = w.file.clone();
+        ch.apply(&mut f.edits);
+        World::new(f).unwrap()
+    };
+    let near = |a: f64, b: f64| (a - b).abs() <= 1.0 / 64.0 + 1e-9;
+    let same = |a: &Layout, b: &Layout, what: &str| {
+        let (mut x, mut y) = (a.buildings.iter().collect::<Vec<_>>(), b.buildings.iter().collect::<Vec<_>>());
+        x.sort_by_key(|b| b.id);
+        y.sort_by_key(|b| b.id);
+        assert_eq!(x.len(), y.len(), "{what}: buildings");
+        for (p, q) in x.iter().zip(&y) {
+            assert!(p.id == q.id && p.func == q.func && p.poly.len() == q.poly.len(), "{what}: building {} / {}", p.id, q.id);
+            assert!(p.poly.iter().zip(&q.poly).all(|(u, v)| near(u[0], v[0]) && near(u[1], v[1])), "{what}: building {} moved", p.id);
+        }
+        assert_eq!(a.walls.len(), b.walls.len(), "{what}: walls");
+        for (p, q) in a.walls.iter().zip(&b.walls) {
+            assert!(p.len() == q.len() && p.iter().zip(q).all(|(u, v)| near(u[0], v[0]) && near(u[1], v[1])), "{what}: a wall moved");
+        }
+        assert!(a.towers.len() == b.towers.len() && a.towers.iter().zip(&b.towers).all(|(u, v)| near(u[0], v[0]) && near(u[1], v[1])), "{what}: towers");
+    };
+    // The biggest town (a city's conversion takes long): converted twice the same, as generated.
+    let li = (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier == Tier::Town).max_by_key(|&i| (t0.settlements[i].population, std::cmp::Reverse(i))).expect("a town");
+    assert_eq!(hand::convert(&base, &t0, li).unwrap(), hand::convert(&base, &t0, li).unwrap(), "L{li}: converted otherwise the second time");
+    let w1 = ask(&base, &t0, li, r#"{"op": "lay_out_by_hand"}"#);
+    let gen_l = town::generated_layout(&base, &t0, li);
+    let hand_l = town::base_layout(&w1, &t0, li);
+    same(&hand_l, &gen_l, &format!("L{li} converted"));
+    let (people, tier) = hand::size(&w1, li).expect("counted");
+    assert!(people > 0 && tier >= Tier::Village, "L{li}: {people} people");
+
+    // Two unrelated edits, in either order: a street across one block, another block refilled.
+    let plan = handedit::plan_json(&w1, &t0, li).unwrap();
+    let recs = hand::HandRecords::of(&w1.file.edits.streets, li);
+    let ids = |v: &serde_json::Value| v.as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as u32).collect::<Vec<u32>>()).unwrap_or_default();
+    let lots: Vec<&serde_json::Value> = plan["blocks"].as_array().unwrap().iter().filter(|b| b["fill"]["kind"] == "generated" && ids(&b["streets"]).len() >= 4).collect();
+    let mid = |id: u32| {
+        let st = &recs.streets[&id];
+        let line: Vec<[f64; 2]> = std::iter::once(recs.junctions[&st.a].p).chain(st.bends.iter().copied()).chain([recs.junctions[&st.b].p]).collect();
+        worldgen::town::geom::lerp(line[0], line[1], 0.5)
+    };
+    let a = lots[0];
+    let round = ids(&a["streets"]);
+    let far = round.iter().copied().skip(1).max_by(|x, y| geom_dist(mid(*x), mid(round[0])).total_cmp(&geom_dist(mid(*y), mid(round[0]))).then(y.cmp(x))).unwrap();
+    let (m0, m1) = (mid(round[0]), mid(far));
+    let split = format!(r#"{{"op": "add_street", "points": [[{}, {}], [{}, {}]]}}"#, m0[0], m0[1], m1[0], m1[1]);
+    let b = lots.iter().skip(1).find(|b| ids(&b["streets"]).iter().all(|e| !round.contains(e))).expect("a block apart");
+    let refill = format!(r#"{{"op": "set_block", "block": {}, "fill": {{"kind": "generated", "ward": "craft"}}}}"#, b["id"]);
+    let ab = ask(&ask(&w1, &t0, li, &split), &t0, li, &refill);
+    let ba = ask(&ask(&w1, &t0, li, &refill), &t0, li, &split);
+    assert_eq!(ab.file.edits.streets, ba.file.edits.streets, "L{li}: the order of two unrelated edits changed the records");
+    let edited = town::base_layout(&ab, &t0, li);
+    same(&edited, &town::base_layout(&ba, &t0, li), &format!("L{li} edits in either order"));
+    // Back to generated: the generated town again.
+    same(&town::base_layout(&ask(&ab, &t0, li, r#"{"op": "back_to_generated"}"#), &t0, li), &gen_l, &format!("L{li} back to generated"));
+
+    // A world remade round it (a pin far away): the town as it was laid by hand.
+    let far_s = t0.settlements.iter().max_by(|p, q| geom_dist([p.x, p.y], [t0.settlements[li].x, t0.settlements[li].y]).total_cmp(&geom_dist([q.x, q.y], [t0.settlements[li].x, t0.settlements[li].y]))).unwrap();
+    let mut nf = ab.file.clone();
+    nf.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "pin", "tier": "village", "pts": [[far_s.x + 15_840.0, far_s.y]] })).unwrap());
+    let new = World::new(nf.clone()).unwrap();
+    let (t1, followed) = remap::remake(&ab, &t0, &new, &[]);
+    let edits = followed.map_or_else(|| ab.file.edits.clone(), |f| f.edits);
+    let nl = edits.streets.keys().find_map(|k| k.parse::<usize>().ok()).expect("the hand town's header");
+    assert!(nl < worldgen::world::PARKED_LAYOUT, "L{li}: set aside by the remake");
+    nf.edits = edits;
+    let remade = World::new(nf).unwrap();
+    same(&town::base_layout(&remade, &t1, nl), &edited, &format!("L{li} remade (now L{nl})"));
+
+    // Its battlemap: the chunk at its centre and those east and south of it.
+    {
+        use worldgen::battlemap::{self, HS, SQ};
+        let s = &t0.settlements[li];
+        let mut ex = Executor::new(World::new(ab.file.clone()).unwrap());
+        let g = ex.world.geom.clone();
+        let size = g.tile_size_ft(g.max_level);
+        let key = TileKey::surface(g.max_level, (s.x / size) as u32, (s.y / size) as u32);
+        let c = ex.battlemap(key);
+        assert!(c.building.iter().any(|&b| b != 0), "L{li}: its battlemap at its centre has no buildings");
+        let dry: Vec<bool> = (0..SQ * SQ).map(|k| c.water_level[k] <= c.height[k] && c.surface[k] != battlemap::Surface::Planks).collect();
+        let dist = battlemap::cover_distance(&c);
+        for k in 0..SQ * SQ {
+            assert!(!dry[k] || dist[k] <= battlemap::cover_gap(&c, k), "L{li} {key:?}: square {k} is {} squares from cover", dist[k]);
+        }
+        let east = ex.battlemap(TileKey::surface(key.level, key.x + 1, key.y));
+        let south = ex.battlemap(TileKey::surface(key.level, key.x, key.y + 1));
+        for j in 0..SQ {
+            assert_eq!(c.halo_height[(j + 1) * HS + SQ + 1].to_bits(), east.height[j * SQ].to_bits(), "L{li} {key:?}: battlemap seam at row {j}");
+            assert_eq!(c.halo_height[(SQ + 1) * HS + j + 1].to_bits(), south.height[j].to_bits(), "L{li} {key:?}: battlemap seam at column {j}");
+        }
+    }
+
+    // A blank town (another town's place): its roads in to its centre, then four streets round
+    // the centre make blocks of the header's fill, built on, its people counted from its homes.
+    let lb = (0..t0.settlements.len()).filter(|&i| i != li && t0.settlements[i].tier == Tier::Town).max_by_key(|&i| (t0.settlements[i].population, std::cmp::Reverse(i))).expect("another town");
+    let mut f = base.file.clone();
+    let recs = hand::blank(&base, &t0, lb).unwrap();
+    assert!(recs.iter().all(|(k, _)| !k.contains("/k")), "a blank town has no blocks");
+    f.edits.streets.extend(recs);
+    let mut wb = World::new(f).unwrap();
+    assert!(town::base_layout(&wb, &t0, lb).buildings.is_empty(), "L{lb}: a blank town has buildings");
+    let c = [t0.settlements[lb].x, t0.settlements[lb].y];
+    let r = 260.0;
+    let sq = [[-r, -r], [r, -r], [r, r], [-r, r]].map(|d| [c[0] + d[0], c[1] + d[1]]);
+    for k in 0..4 {
+        let (p, q) = (sq[k], sq[(k + 1) % 4]);
+        wb = ask(&wb, &t0, lb, &format!(r#"{{"op": "add_street", "points": [[{}, {}], [{}, {}]]}}"#, p[0], p[1], q[0], q[1]));
+    }
+    let lbl = town::base_layout(&wb, &t0, lb);
+    assert!(lbl.buildings.len() >= 10, "L{lb}: a blank town with streets drawn built {} buildings", lbl.buildings.len());
+    // (A layout's buildings stand in world ft.)
+    let out = lbl.buildings.iter().flat_map(|b| b.poly.iter()).map(|p| (p[0] - c[0]).abs().max((p[1] - c[1]).abs())).fold(0.0, f64::max);
+    assert!(out <= r, "L{lb}: a building {out:.0} ft out from its centre, outside its streets");
+    let (n, _) = hand::size(&wb, lb).expect("counted");
+    assert_eq!(n, hand::people_of(&lbl), "L{lb}: its people not counted from its homes");
+    assert!(n > 0, "L{lb}: no people");
+    // (The same again from nothing: determinism.)
+    same(&lbl, &town::base_layout(&World::new(wb.file.clone()).unwrap(), &T0::generate(&base), lb), &format!("L{lb} blank, built again"));
+}
