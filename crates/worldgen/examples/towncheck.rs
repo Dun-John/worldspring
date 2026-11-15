@@ -8969,7 +8969,7 @@ fn hand_works(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
     const WHAT: [&str; 7] = ["walls", "towers", "gates", "gate towers", "bridges missing", "squares at junctions", "quarters"];
     r.counts(&WHAT.iter().map(|w| format!("hand: {w}")).collect::<Vec<_>>().iter().map(String::as_str).collect::<Vec<_>>());
     r.counts(&WHAT.iter().map(|w| format!("hand: {w} differing")).collect::<Vec<_>>().iter().map(String::as_str).collect::<Vec<_>>());
-    r.counts(&["hand: bridges", "hand: bridges new (a street over water the town left unbridged)", "hand: entrances", "hand: entrances otherwise many (told)", "laid anew: walled towns", "laid anew: towers more", "laid anew: towers fewer", "laid anew: gates more", "laid anew: gates fewer"]);
+    r.counts(&["hand: bridges", "hand: bridges new (a street over water the town left unbridged)", "hand: entrances", "hand: entrances otherwise many (told)", "laid anew: walled towns", "laid anew: towers more", "laid anew: towers fewer", "laid anew: gates more", "laid anew: gates fewer", "laid anew: castles' towers (generated)", "laid anew: castles' towers"]);
     let near = |a: &[[f64; 2]], b: &[[f64; 2]]| a.len() == b.len() && a.iter().all(|p| b.iter().any(|q| dist(*p, *q) <= 1.0)) && b.iter().all(|p| a.iter().any(|q| dist(*p, *q) <= 1.0));
     let corners = |l: &Layout| l.plazas.iter().filter(|p| matches!(p.spot, worldgen::town::places::Spot::Corner(_))).map(|p| (format!("{:?} {:?}", p.spot, p.kind), p.pts.clone())).collect::<std::collections::BTreeMap<_, _>>();
     for (&li, want) in originals {
@@ -9026,6 +9026,10 @@ fn hand_works(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
         let (t, g) = (b.layout.towers.len() as i64 - want.towers.len() as i64, b.layout.gates.len() as i64 - want.gates.len() as i64);
         r.tally(if t >= 0 { "laid anew: towers more" } else { "laid anew: towers fewer" }, t.unsigned_abs() as usize);
         r.tally(if g >= 0 { "laid anew: gates more" } else { "laid anew: gates fewer" }, g.unsigned_abs() as usize);
+        // (Of them, a castle's own: within its curtain's reach.)
+        let castled = |l: &town::Layout| l.towers.iter().filter(|t| want.castles.iter().any(|c| (t[0] - c.0[0]).hypot(t[1] - c.0[1]) < c.1 + 12.0)).count();
+        r.tally("laid anew: castles' towers (generated)", castled(want));
+        r.tally("laid anew: castles' towers", castled(&b.layout));
     }
     hand_remade(world, t0, label, hw, originals, r);
 }

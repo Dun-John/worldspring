@@ -204,10 +204,15 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         .worker
         .with(move |ex| {
             let skip = agent::layout_of(&ex.world, &ex.t0, &probe.id).filter(|_| !creating);
-            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way, s.in_way_names))
+            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way, s.in_way_names, s.pts))
         })
         .await?;
-    let (p, name, in_way, names) = spot;
+    let (p, name, in_way, names, joined) = spot;
+    // (A wall's ends put onto the walls they meet: a T-join.)
+    let joins = joined.is_some();
+    if let Some(pts) = joined {
+        c.pts = pts;
+    }
     if !in_way.is_empty() && !a["remove_in_way"].as_bool().unwrap_or(false) {
         let ids: Vec<String> = in_way.iter().map(|(id, _)| names.get(id).map_or_else(|| id.clone(), |n| format!("{id} ({n})"))).take(20).collect();
         // (A ring round patches: most stand where one district's lots run across a patch edge.)
@@ -229,6 +234,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
     let tool = if creating { "create_feature" } else { "update_fortification" };
     let removed: Vec<String> = in_way.iter().map(|(id, _)| id.clone()).collect();
     let mut reply = json!({ "tool": tool, "id": c.id, "kind": c.kind, "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
+    let joined_pts = joins.then(|| c.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>());
     if !removed.is_empty() {
         reply["removed"] = json!(removed);
     }
@@ -281,6 +287,10 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         })
         .await?;
     v["tool"] = json!(tool);
+    if let Some(pts) = joined_pts {
+        v["pts"] = json!(pts);
+        v["joined"] = json!("its open ends put onto the walls they meet (T-joins)");
+    }
     if !castle {
         crate::handwalls::reply(app, &mut v, ring_report).await;
     }

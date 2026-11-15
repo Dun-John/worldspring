@@ -92,9 +92,43 @@
   function setFill(fill: BlockFill) {
     if (block) onStreet({ op: 'set_block', block: block.id, fill }, 'fill');
   }
-  function fillKind(k: 'generated' | 'hand' | 'open') {
+  function fillKind(k: 'generated' | 'hand' | 'open' | 'castle') {
     if (!block || block.fill.kind === k) return;
-    setFill(k === 'generated' ? { kind: 'generated', ward: 'common' } : k === 'open' ? { kind: 'open', open: 'lawn' } : { kind: 'hand' });
+    setFill(k === 'generated' ? { kind: 'generated', ward: 'common' } : k === 'open' ? { kind: 'open', open: 'lawn' } : k === 'castle' ? { kind: 'castle' } : { kind: 'hand' });
+  }
+  /** A street's line (world ft): its junctions and bends. */
+  const streetLine = (id: number): P2[] => {
+    const s = streets.streets.find((x) => x.id === id);
+    const at = (j: number) => streets.junctions.find((x) => x.id === j)?.p;
+    const [a, b] = s ? [at(s.a), at(s.b)] : [undefined, undefined];
+    return s && a && b ? [a, ...(s.bends ?? []), b] : [];
+  };
+  /** The point of a street's line nearest the block's middle: where a castle's gate toward it goes. */
+  const gateOn = (id: number): P2 | null => {
+    if (!block) return null;
+    const p = block.at;
+    let best: [number, P2] | null = null;
+    const line = streetLine(id);
+    for (let k = 0; k + 1 < line.length; k++) {
+      const [a, b] = [line[k], line[k + 1]];
+      const d = [b[0] - a[0], b[1] - a[1]];
+      const f = Math.max(0, Math.min(1, ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / Math.max(1e-9, d[0] * d[0] + d[1] * d[1])));
+      const q: P2 = [Math.round(a[0] + d[0] * f), Math.round(a[1] + d[1] * f)];
+      const dq = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (!best || dq < best[0]) best = [dq, q];
+    }
+    return best ? best[1] : null;
+  };
+  /** A castle's gate toward street `id` put in or taken out. */
+  function toggleGate(id: number) {
+    if (!block || block.fill.kind !== 'castle') return;
+    const f = block.fill;
+    const g = gateOn(id);
+    if (!g) return;
+    const gates = f.gates ?? [];
+    const k = gates.findIndex((x) => Math.hypot(x[0] - g[0], x[1] - g[1]) < 1);
+    const next = k >= 0 ? gates.filter((_, i) => i !== k) : [...gates, g].slice(0, 8);
+    setFill({ ...f, gates: next.length ? next : undefined });
   }
   function pickDistrict(e: Event) {
     const el = e.currentTarget as HTMLSelectElement;
@@ -182,6 +216,7 @@
       <button class:on={block.fill.kind === 'generated'} aria-pressed={block.fill.kind === 'generated'} disabled={busy} onclick={() => fillKind('generated')} title="Lots and houses of a ward, laid out for you">Lots</button>
       <button class:on={block.fill.kind === 'hand'} aria-pressed={block.fill.kind === 'hand'} disabled={busy} onclick={() => fillKind('hand')} title="Left empty, for buildings drawn in Build">By hand</button>
       <button class:on={block.fill.kind === 'open'} aria-pressed={block.fill.kind === 'open'} disabled={busy} onclick={() => fillKind('open')} title="Open ground: a square, a park, a market, a cemetery…">Open</button>
+      <button class:on={block.fill.kind === 'castle'} aria-pressed={block.fill.kind === 'castle'} disabled={busy} onclick={() => fillKind('castle')} title="A castle on the block's outline: curtain, towers, keep and yard">Castle</button>
     </div>
     {#if block.fill.kind === 'generated'}
       {@const f = block.fill}
@@ -213,6 +248,42 @@
       <div class="row">
         <button class="ws-btn" disabled={busy} onclick={() => onStreet({ op: 'set_block', block: block.id, reroll: true }, 'reroll')} title="Its lots and buildings laid out another way"><Icon name="dice" size={16} /> Lay out again</button>
       </div>
+    {:else if block.fill.kind === 'castle'}
+      {@const f = block.fill}
+      {#if !block.kept}
+        <div class="ws-field">
+          Keep
+          <div class="ws-seg" role="radiogroup" aria-label="Keep">
+            {#each [['', 'Rolled'], ['square', 'Square'], ['round', 'Round']] as [k, label] (k)}
+              {@const on = (f.keep_shape ?? '') === k}
+              <button class:on aria-pressed={on} disabled={busy} onclick={() => !on && setFill({ ...f, keep_shape: (k || undefined) as 'square' | 'round' | undefined })}>{label}</button>
+            {/each}
+          </div>
+        </div>
+        <div class="ws-field">
+          Moat
+          <div class="ws-seg" role="radiogroup" aria-label="Moat">
+            {#each [['', 'Auto'], ['none', 'None'], ['dry', 'Dry'], ['wet', 'Wet']] as [k, label] (k)}
+              {@const on = (f.moat ?? '') === k}
+              <button class:on aria-pressed={on} disabled={busy} onclick={() => !on && setFill({ ...f, moat: (k || undefined) as 'none' | 'dry' | 'wet' | undefined })}>{label}</button>
+            {/each}
+          </div>
+        </div>
+        {#if block.streets?.length}
+          <div class="ws-field">
+            Gates (none: facing the town's middle)
+            <div class="row">
+              {#each block.streets as id (id)}
+                {@const g = gateOn(id)}
+                {@const on = !!g && (f.gates ?? []).some((x) => Math.hypot(x[0] - g[0], x[1] - g[1]) < 1)}
+                <button class="ws-btn" class:on aria-pressed={on} disabled={busy || !g} onclick={() => toggleGate(id)} title="A gate on the side toward this street">Street {id}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      {:else}
+        <button class="ws-btn" disabled={busy} onclick={() => setFill({ kind: 'castle' })} title="Its curtain, keep and yard built anew from the block's outline: then its keep, moat and gates can be chosen">Build anew</button>
+      {/if}
     {:else if block.fill.kind === 'open'}
       {@const f = block.fill}
       <label class="ws-field">

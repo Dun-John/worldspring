@@ -605,7 +605,9 @@ export type BlockFill =
   | { kind: 'generated'; ward: string; lots?: string; height?: Height; reroll?: number; close?: boolean }
   | { kind: 'hand' }
   | { kind: 'open'; open: OpenKind; style?: string }
-  | { kind: 'castle'; hand?: boolean };
+  /** A castle: as converted (its buildings kept), else built from the block's outline: gates (world ft, each on
+   * the side nearest it, the main one first; none: facing the town's middle), keep and moat (none: rolled). */
+  | { kind: 'castle'; hand?: boolean; gates?: P2[]; keep_shape?: 'square' | 'round'; moat?: 'none' | 'dry' | 'wet' };
 export type P2 = [number, number];
 
 /** A request to `streetchange` (`town::handedit::HandRequest`, `{op, …}`; world ft, ids the plan's numbers). */
@@ -1223,6 +1225,8 @@ export interface NamedPlaces {
   crossings: { id: string; name: string; generated: string; x: number; y: number; length_ft: number }[];
   /** The same for quays, piers and breakwaters (`q:`). */
   wharves?: { id: string; name: string; generated: string; x: number; y: number; length_ft: number }[];
+  /** The walls someone named (`c:` drawn, `<layout>/m<id>` a hand town's), lettered along their lines (world ft). */
+  walls?: { id: string; name: string; pts: [number, number][] }[];
 }
 
 export interface Geom {

@@ -720,8 +720,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 crate::town::wallstyle::Material::Palisade => 5.0,
                 crate::town::wallstyle::Material::Earth => 12.0,
             };
+            // (Roadmap 6 P7: a wall someone named drawn heavier, `agent::named_walls`.)
+            let named: Vec<Vec<[f64; 2]>> = if l.walls.is_empty() { Vec::new() } else { crate::agent::named_walls(world, t0, Some(l.index as usize)).into_iter().map(|n| n.2).collect() };
+            let on_named = |p: [f64; 2]| named.iter().any(|n| n.windows(2).any(|s| crate::town::geom::seg_dist(p, s[0], s[1]) < 8.0));
             for w in &l.walls {
                 let ww = if l.wall_style_at(w[w.len() / 2]).material == l.wall_style.material { ww } else { 9.0 };
+                let ww = if !named.is_empty() && on_named(w[w.len() / 2]) { ww * 1.8 } else { ww };
                 lines.push(w.iter().map(|p| [p[0], p[1], ww, 0.0]).collect());
             }
             for t in &l.towers {

@@ -172,6 +172,16 @@ pub enum BlockFill {
     Castle {
         #[serde(default, skip_serializing_if = "is_false")]
         hand: bool,
+        /// (Roadmap 6 P7) Built from the block's outline (none kept): its gates (world ft, each
+        /// on the side nearest it, the main one first; none: the side facing the town's middle),
+        /// its keep's shape ("square", "round"; none: rolled) and moat ("none", "dry", "wet";
+        /// none: rolled).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        gates: Vec<P>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep_shape: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moat: Option<String>,
     },
 }
 
@@ -248,6 +258,92 @@ pub struct WallLine {
     pub gates: Vec<P>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// (Roadmap 6 P7) The line as the generator laid it, where it came from a town's wall: kept
+    /// while the line is as converted (`look.of`), whatever else changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<WallLook>,
+}
+
+/// A converted wall line's look as generated (world ft, packed): its outline by the town's style
+/// ("straight", "star", "round"), its pieces with the curtains bowed out, its towers, gate towers
+/// and bastions; `of` the hash of the line it was laid from (`line_of`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct WallLook {
+    pub of: String,
+    pub outline: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub walls: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub towers: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gate_towers: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bastions: Vec<String>,
+}
+
+/// A hash (hex) of what a wall line is laid from: its corners, gates and towers (not its name
+/// nor its look).
+pub(super) fn line_of(w: &WallLine) -> String {
+    let mut h = crate::core::hash::Fnv64::default();
+    for p in w.pts.iter().chain(&w.gates) {
+        h.write(&p[0].to_bits().to_le_bytes());
+        h.write(&p[1].to_bits().to_le_bytes());
+    }
+    h.write(&[w.closed as u8, 0xfd]);
+    h.write(&w.spacing.to_bits().to_le_bytes());
+    for t in &w.towers {
+        h.write(&t.to_le_bytes());
+    }
+    hex(h.finish())
+}
+
+/// Each wall run's look as the generator laid it in `l` (world ft): the pieces, towers, gate
+/// towers and bastions nearest it (within a curtain's bow), those of a castle's own curtain inside
+/// its patch (`castled`) left out.
+fn wall_looks(l: &Layout, runs: &[Vec<P>], castled: &[Vec<P>]) -> Vec<Option<WallLook>> {
+    const NEAR: f64 = 75.0;
+    let line_dist = |r: &[P], p: P| r.windows(2).map(|s| seg_dist(p, s[0], s[1])).fold(f64::MAX, f64::min);
+    let nearest = |p: P| (0..runs.len()).map(|k| (line_dist(&runs[k], p), k)).filter(|x| x.0 <= NEAR).min_by(|a, b| a.0.total_cmp(&b.0)).map(|x| x.1);
+    let deep = |p: P| castled.iter().any(|c| contains(c, p) && (0..c.len()).all(|k| seg_dist(p, c[k], c[(k + 1) % c.len()]) > 3.0));
+    let outline = match l.wall_style.outline {
+        super::wallstyle::Outline::Straight => "straight",
+        super::wallstyle::Outline::Star => "star",
+        super::wallstyle::Outline::Round => "round",
+    };
+    let mut out: Vec<WallLook> = (0..runs.len()).map(|_| WallLook { outline: outline.into(), ..WallLook::default() }).collect();
+    let (mut towers, mut gate_towers): (Vec<Vec<P>>, Vec<Vec<P>>) = (vec![Vec::new(); runs.len()], vec![Vec::new(); runs.len()]);
+    for w in &l.walls {
+        let mut votes = vec![0usize; runs.len()];
+        for p in w.iter().filter(|p| !deep(**p)) {
+            if let Some(k) = nearest(*p) {
+                votes[k] += 1;
+            }
+        }
+        if let Some((k, &v)) = votes.iter().enumerate().max_by_key(|x| (*x.1, std::cmp::Reverse(x.0)))
+            && 2 * v > w.len()
+        {
+            out[k].walls.push(pkq(w));
+        }
+    }
+    for (from, to) in [(&l.towers, &mut towers), (&l.gate_towers, &mut gate_towers)] {
+        for t in from.iter().filter(|t| !deep(**t)) {
+            if let Some(k) = nearest(*t) {
+                to[k].push(*t);
+            }
+        }
+    }
+    for b in &l.bastions {
+        if let Some(k) = b.last().and_then(|c| nearest(*c)) {
+            out[k].bastions.push(pk(b));
+        }
+    }
+    out.into_iter()
+        .zip(towers.into_iter().zip(gate_towers))
+        .map(|(mut lk, (t, g))| {
+            (lk.towers, lk.gate_towers) = (pkq(&t), pkq(&g));
+            (!lk.walls.is_empty()).then_some(lk)
+        })
+        .collect()
 }
 
 /// What a converted town's walls, gates, bridges and squares were as laid out (world ft, each list
@@ -391,6 +487,65 @@ pub struct Kept {
     /// `1` or `0` each (none: all).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fields: String,
+    /// (Roadmap 6 P7) A castle's own works as generated (its curtains, towers, mottes), for when
+    /// the town's walls are laid anew from its wall lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curtain: Option<CastleLook>,
+}
+
+/// A converted castle's works inside its block (world ft, packed as `Works`' own).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CastleLook {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub walls: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub towers: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gate_towers: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub castles: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub square: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub forms: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mottes: String,
+}
+
+impl CastleLook {
+    /// What of `l` (world ft) stands inside `cell` (3 ft in and more): None if nothing.
+    fn of(l: &Layout, cell: &[P]) -> Option<CastleLook> {
+        let deep = |p: P| contains(cell, p) && (0..cell.len()).all(|k| seg_dist(p, cell[k], cell[(k + 1) % cell.len()]) > 3.0);
+        let flat = |v: Vec<f64>| pack(&v);
+        let walls: Vec<String> = l.walls.iter().filter(|w| 2 * w.iter().filter(|p| deep(**p)).count() > w.len()).map(|w| pkq(w)).collect();
+        let towers: Vec<P> = l.towers.iter().copied().filter(|t| deep(*t)).collect();
+        let gate_towers: Vec<P> = l.gate_towers.iter().copied().filter(|t| deep(*t)).collect();
+        if walls.is_empty() && towers.is_empty() {
+            return None;
+        }
+        let at_tower = |p: P| towers.iter().chain(&gate_towers).any(|t| dist(*t, p) < 0.01);
+        Some(CastleLook {
+            walls,
+            towers: pkq(&towers),
+            gate_towers: pkq(&gate_towers),
+            castles: flat(l.castles.iter().filter(|c| deep(c.0)).flat_map(|c| [c.0[0], c.0[1], c.1]).collect()),
+            square: flat(l.square_towers.iter().filter(|t| at_tower(t.0)).flat_map(|t| [t.0[0], t.0[1], t.1[0], t.1[1]]).collect()),
+            forms: forms_pk(&l.tower_forms.iter().copied().filter(|f| at_tower(f.0)).collect::<Vec<_>>()),
+            mottes: flat(l.mottes.iter().filter(|m| deep(m.at)).flat_map(|m| [m.at[0], m.at[1], m.top_r, m.foot_r, m.top as f64, m.way[0], m.way[1]]).collect()),
+        })
+    }
+
+    /// Put back into `l` (world ft).
+    fn lay(&self, l: &mut Layout) {
+        let nums = |s: &str| unpack(s).unwrap_or_default();
+        l.walls.extend(self.walls.iter().map(|x| unpk(x)));
+        l.towers.extend(unpk(&self.towers));
+        l.gate_towers.extend(unpk(&self.gate_towers));
+        l.castles.extend(nums(&self.castles).chunks_exact(3).map(|c| ([c[0], c[1]], c[2])));
+        l.square_towers.extend(nums(&self.square).chunks_exact(4).map(|c| ([c[0], c[1]], [c[2], c[3]])));
+        l.tower_forms.extend(forms_unpk(&self.forms));
+        l.mottes.extend(nums(&self.mottes).chunks_exact(7).map(|c| super::Motte { at: [c[0], c[1]], top_r: c[2], foot_r: c[3], top: c[4] as f32, way: [c[5], c[6]] }));
+    }
 }
 
 /// Farmland's plots as `fill_block` cuts them, and their class.
@@ -1287,6 +1442,13 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
             }
         }
     }
+    // (A castle's own works, for its walls laid anew.)
+    for i in (0..cap.cells.len()).filter(|&i| cap.ward[i] == Some(Ward::Castle) && cap.cells[i].len() >= 3) {
+        let cell: Vec<P> = cap.cells[i].iter().map(|p| add(*p, center)).collect();
+        if let Some(c) = CastleLook::of(&base, &cell) {
+            kept.entry(i).or_default().curtain = Some(c.clone());
+        }
+    }
     for i in 0..cap.cells.len() {
         if cap.cells[i].len() < 3 {
             continue;
@@ -1308,7 +1470,7 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
                 };
                 BlockFill::Open { open, style: Some(k.name().into()) }
             }
-            Some(Ward::Castle) => BlockFill::Castle { hand: plan.ward[i] != Some(Ward::Castle) },
+            Some(Ward::Castle) => BlockFill::Castle { hand: plan.ward[i] != Some(Ward::Castle), gates: Vec::new(), keep_shape: None, moat: None },
             Some(w) => BlockFill::Generated { ward: w.name().into(), lots: lot_name(i), height: None, reroll: ch.reroll.get(&i).copied().unwrap_or(0), close: ch.close.get(&i).copied() },
         };
         let open = !matches!(fill, BlockFill::Hand);
@@ -1328,10 +1490,19 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
     // Wall lines: each run of the town's wall, where it stands.
     if cap.walled {
         let pos = |v: usize| corner.get(&v).copied().unwrap_or_else(|| add(plan.mesh.pos[v], center));
+        // (Each run's look as laid: re-laid from its line, it keeps it while the line is as here.)
+        let castled: Vec<Vec<P>> = (0..cap.cells.len()).filter(|&i| cap.ward[i] == Some(Ward::Castle) && cap.cells[i].len() >= 3).map(|i| cap.cells[i].iter().map(|p| add(*p, center)).collect()).collect();
+        let runs: Vec<Vec<P>> = plan
+            .wall_runs
+            .iter()
+            .map(|(chain, closed, _)| chain.iter().chain(chain.first().filter(|_| *closed)).map(|&v| pos(v)).collect())
+            .collect();
+        let mut looks = wall_looks(&base, &runs, &castled);
         for (k, (chain, closed, towers)) in plan.wall_runs.iter().enumerate() {
             let pts: Vec<P> = chain.iter().map(|&v| pos(v)).collect();
             let gates: Vec<P> = cap.gates.iter().map(|g| add(*g, center)).filter(|g| chain.windows(2).any(|w| seg_dist(*g, pos(w[0]), pos(w[1])) < 1.0) || pts.iter().any(|p| dist(*p, *g) < 1.0)).collect();
-            let wall = WallLine { pts, closed: *closed, spacing: base.wall_style.spacing, towers: towers.iter().map(|&t| t as u32).collect(), gates, name: None };
+            let mut wall = WallLine { pts, closed: *closed, spacing: base.wall_style.spacing, towers: towers.iter().map(|&t| t as u32).collect(), gates, name: None, look: None };
+            wall.look = looks[k].take().map(|lk| WallLook { of: line_of(&wall), ..lk });
             put(format!("{li}/m{k}"), serde_json::to_value(wall).map_err(|e| e.to_string())?);
         }
     }
@@ -1662,10 +1833,13 @@ fn crossing(a: P, b: P, c: P, d: P) -> Option<f64> {
 /// The wall lines laid anew (town-local ft): each line's corners, a gate where a street crosses it
 /// or one of its `gates` stands (at a corner within 30 ft, else on the stretch), towers by
 /// `wall_pieces_spaced` (its record's counts per stretch while they fit, else every `spacing`
-/// ft); broken at the river. Returns (pieces, towers, gate towers, gates).
-fn lay_walls(site: &Site, recs: &HandRecords, streets: &[(P, P)], origin: P, spacing: f64) -> (Vec<Vec<P>>, Vec<P>, Vec<P>, Vec<P>) {
+/// ft); broken at the river; a line as converted as the generator laid it (`WallLook`). Returns
+/// (pieces, towers, gate towers, gates, bastions).
+#[allow(clippy::type_complexity)]
+fn lay_walls(site: &Site, recs: &HandRecords, streets: &[(P, P)], origin: P, spacing: f64) -> (Vec<Vec<P>>, Vec<P>, Vec<P>, Vec<P>, Vec<Vec<P>>) {
     const SNAP: f64 = 30.0;
     let mut tmp = Layout::empty(0, [0.0, 0.0], 0.0, Tier::Town);
+    let mut looked: (Vec<Vec<P>>, Vec<P>, Vec<P>, Vec<Vec<P>>) = Default::default();
     let mut gates_at: Vec<P> = Vec::new();
     for w in recs.walls.values() {
         let pts: Vec<P> = w.pts.iter().map(|p| sub(*p, origin)).collect();
@@ -1719,6 +1893,20 @@ fn lay_walls(site: &Site, recs: &HandRecords, streets: &[(P, P)], origin: P, spa
                 corners.extend(ts.iter().map(|&t| (lerp(pts[k], pts[(k + 1) % n], t), true)));
             }
         }
+        // (A line as converted, and crossed by no street where it has no gate: as the generator
+        // laid it, curtains bowed and bastions put out by its outline.)
+        let gates_rec: Vec<P> = w.gates.iter().map(|p| sub(*p, origin)).collect();
+        if let Some(lk) = w.look.as_ref().filter(|lk| lk.of == line_of(w))
+            && corners.iter().filter(|c| c.1).all(|c| gates_rec.iter().any(|g| dist(*g, c.0) < SNAP))
+        {
+            let local = |s: &str| unpk(s).into_iter().map(|p| sub(p, origin)).collect::<Vec<P>>();
+            looked.0.extend(lk.walls.iter().map(|x| local(x)));
+            looked.1.extend(local(&lk.towers));
+            looked.2.extend(local(&lk.gate_towers));
+            looked.3.extend(lk.bastions.iter().map(|x| local(x)));
+            gates_at.extend(gates_rec);
+            continue;
+        }
         gates_at.extend(corners.iter().filter(|c| c.1).map(|c| c.0));
         let counts: Vec<usize> = w.towers.iter().map(|&t| t as usize).collect();
         let along = (plain && start == 0 && !counts.is_empty()).then_some(counts.as_slice());
@@ -1728,7 +1916,70 @@ fn lay_walls(site: &Site, recs: &HandRecords, streets: &[(P, P)], origin: P, spa
         tmp.gate_towers.extend(gate_towers);
     }
     super::walls_off_river(site, &mut tmp, &[]);
-    (tmp.walls, tmp.towers, tmp.gate_towers, gates_at)
+    tmp.walls.extend(looked.0);
+    tmp.towers.extend(looked.1);
+    tmp.gate_towers.extend(looked.2);
+    (tmp.walls, tmp.towers, tmp.gate_towers, gates_at, looked.3)
+}
+
+/// (Roadmap 6 P7) A castle on a block's ground `block` (local ft) of no kept buildings: its
+/// curtain on the outline, gates where asked (world ft) else facing the town's middle, its keep's
+/// shape and moat as asked (else rolled, keyed to the block's seed and roll; a moat within the
+/// block), the keep the castle
+/// and the yard's buildings the barracks, stables and smithy, as one drawn by hand
+/// (`sites::castle_site`). Into `l` (local ft).
+#[allow(clippy::too_many_arguments)]
+fn castle_block(site: &Site, block: &[P], (bseed, gn): (u64, i64), origin: P, gates: &[P], keep_shape: Option<&str>, moat: Option<&str>, l: &mut Layout) {
+    use super::castle::{Asked, KeepShape, Setting};
+    let gates: Vec<P> = gates.iter().take(8).map(|g| sub(*g, origin)).collect();
+    let toward = gates.first().copied().unwrap_or(if contains(block, [0.0, 0.0]) { [0.0, -1000.0] } else { [0.0, 0.0] });
+    let roll = |salt: i64| unit(hash3(bseed, gn, 0xca57, salt));
+    let keep = KeepShape::of(keep_shape);
+    let big = area(block).abs() >= 80_000.0;
+    let moat = match moat {
+        Some("none") => None,
+        Some(k) => super::moat::roll(0.0, roll(2), 1.0, false).map(|m| super::moat::Plan { wet: Some(k == "wet"), ..m }),
+        None => super::moat::roll(roll(1), roll(2), super::moat::odds(roll(3), false, true, big), false),
+    };
+    let set = Setting { follow: false, capital: false, wall_up: false, planned: false, inner: None, hall: false, moat };
+    // (A moat within the block: the curtain drawn in so the moat's outer bank is the block's edge.)
+    let inset: Vec<P>;
+    let block = match moat {
+        Some(m) => {
+            let d = super::moat::BERM + m.width - super::castle::CURTAIN_IN;
+            let pieces = super::clip::offset(&super::clip::region(block), -d, super::clip::Join::Miter(2.0));
+            match pieces.into_iter().max_by(|a, b| a.area().total_cmp(&b.area())) {
+                Some(x) if x.outer.len() >= 3 => {
+                    inset = x.outer;
+                    &inset[..]
+                }
+                _ => return,
+            }
+        }
+        None => block,
+    };
+    let dp = District::roll(Ward::Castle, hash2(bseed, gn, 0xd15));
+    let mut rng = Pcg32::new(hash2(bseed, gn, 0xca5), 53);
+    let asked = Asked { gates, keep, drawn: Vec::new() };
+    super::castle::castle(site, block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), &mut rng, l, true, true, Some(&asked));
+    // The keep (pushed last) is the castle; the yard's buildings by size.
+    let n = l.buildings.len();
+    let kept = l.buildings.last().is_some_and(|b| b.keep.is_some() && b.func.is_none());
+    if kept && let Some(fi) = catalog::index_of("castle") {
+        l.buildings[n - 1].func = Some(fi as u16);
+    }
+    let yard = if kept { n - 1 } else { n };
+    let mut by_size: Vec<usize> = (0..yard).collect();
+    by_size.sort_by(|&a, &b| area(&l.buildings[b].poly).abs().total_cmp(&area(&l.buildings[a].poly).abs()).then(a.cmp(&b)));
+    let trades: &[&str] = if by_size.len() >= 3 { &["barracks", "stables", "blacksmith"] } else { &["stables", "blacksmith"] };
+    for (rank, &bi) in by_size.iter().enumerate() {
+        let big = area(&l.buildings[bi].poly).abs() > 2500.0;
+        let func = trades.get(rank).and_then(|k| catalog::index_of(k));
+        let b = &mut l.buildings[bi];
+        b.func = func.map(|f| f as u16);
+        b.residential = catalog::residential_for(Ward::Castle, big) as u8;
+        b.floors = if func.is_some() { 1 + (rank == 0) as u8 } else { 2 + (rng.next_f64() < 0.4) as u8 };
+    }
 }
 
 /// A square opening at a junction laid anew (town-local ft): an octagon reaching past the
@@ -2509,6 +2760,8 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
         sh.iter().map(|x| Shape { outer: x.outer.iter().map(|p| add(*p, origin)).collect(), holes: x.holes.iter().map(|h| h.iter().map(|p| add(*p, origin)).collect()).collect() }).collect()
     };
     // (Every id pinned in the town, by block: no block's fresh ids take one pinned in another.)
+    // (The castles built on blocks, their curtains, towers and moats put in after the walls.)
+    let mut castles: Vec<Rc<Filled>> = Vec::new();
     let pinned_all: Vec<(u32, u32)> = recs.blocks.iter().flat_map(|(&b, r)| r.pins.iter().map(move |p| (b, p.id))).collect();
     for (f, face) in faces.iter().enumerate() {
         let Some(id) = face_block[f] else { continue };
@@ -2598,7 +2851,12 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                     break 'fill;
                 }
                 match &rec.fill {
-                    BlockFill::Hand | BlockFill::Castle { .. } => {}
+                    BlockFill::Hand => {}
+                    BlockFill::Castle { gates, keep_shape, moat, .. } => {
+                        if let Some(b) = biggest() {
+                            castle_block(site, &b, (bseed, gn), origin, gates, keep_shape.as_deref(), moat.as_deref(), &mut l);
+                        }
+                    }
                     BlockFill::Generated { ward, lots, height, reroll, close } => {
                         let Some(w) = ward_of(ward) else {
                             problems.push((format!("{li}/k{id}"), "no such ward"));
@@ -2693,6 +2951,9 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
             fl
         });
         let fl = &filled.layout;
+        if matches!(rec.fill, BlockFill::Castle { .. }) && rec.kept.is_none() {
+            castles.push(filled.clone());
+        }
         l.buildings.extend(fl.buildings.iter().cloned());
         l.plazas.extend(fl.plazas.iter().cloned());
         l.parks.extend(fl.parks.iter().cloned());
@@ -2828,15 +3089,38 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
         }
         None => {
             let segs: Vec<(P, P)> = graph.segs.iter().filter(|g| recs.streets[&g.2].class != StreetClass::Joint).map(|g| (graph.pts[g.0], graph.pts[g.1])).collect();
-            let (pieces, towers, gate_towers, gates) = lay_walls(site, &recs, &segs, origin, l.wall_style.spacing);
+            let (pieces, towers, gate_towers, gates, bastions) = lay_walls(site, &recs, &segs, origin, l.wall_style.spacing);
             let w = |v: Vec<P>| v.into_iter().map(|p| add(p, origin)).collect::<Vec<P>>();
             l.walls = pieces.into_iter().map(w).collect();
+            l.bastions = bastions.into_iter().map(w).collect();
             l.towers = w(towers);
             l.gate_towers = w(gate_towers);
             l.gates = w(gates);
+            // (Castles kept as converted: their own works.)
+            for c in recs.blocks.values().filter(|b| matches!(b.fill, BlockFill::Castle { .. })).filter_map(|b| b.kept.as_ref()?.curtain.as_ref()) {
+                c.lay(&mut l);
+            }
             let (style, laid) = (l.wall_style, l.towers.clone());
             super::wallstyle::shape_towers(&mut l, &style, &laid, origin, false);
         }
+    }
+    // The castles built on blocks: their curtains, towers, mottes and moats (local ft → world).
+    for fl in &castles {
+        let (c, w) = (&fl.layout, |p: &P| add(*p, origin));
+        l.walls.extend(c.walls.iter().map(|x| x.iter().map(w).collect()));
+        l.towers.extend(c.towers.iter().map(w));
+        l.gate_towers.extend(c.gate_towers.iter().map(w));
+        l.castles.extend(c.castles.iter().map(|x| (w(&x.0), x.1)));
+        l.square_towers.extend(c.square_towers.iter().map(|x| (w(&x.0), x.1)));
+        l.tower_forms.extend(c.tower_forms.iter().map(|x| (w(&x.0), x.1, x.2)));
+        l.mottes.extend(c.mottes.iter().map(|m| super::Motte { at: w(&m.at), way: w(&m.way), ..*m }));
+        l.moats.extend(c.moats.iter().cloned().map(|mut m| {
+            m.shift(origin);
+            m
+        }));
+    }
+    if !castles.is_empty() {
+        super::wallstyle::shape_rest(&mut l, origin);
     }
     // Squares at junctions, and those of no block as converted (quays).
     for (j, kind, pts) in corner_squares {

@@ -828,7 +828,9 @@ taken from the plan as it stands and kept in the world file: corners moved later
 was, until `update_fortification` gets `around_patches` again.
 
 Both must stand on dry land, off river channels, and not cross another wall (the refusal names it: `that crosses
-wall c:4 at (x, y)` or `the town wall of city:…`); a castle also stays off squares, roads and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
+wall c:4 at (x, y)` or `the town wall of city:…`), but an open wall may end on one: an end within 15 ft of another
+wall's line or a castle's curtain (short of it or past it) is put on that line, a T-join with no gap (the result's
+`pts` gives the line as laid, `joined` says so); a castle also stays off squares, roads and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
 refusal, or taken away with it (one change) when `remove_in_way: true`. Corners snap to the 5-ft grid (`snap: false`
 not). Their wall and gate towers have interiors (`t:<layout>:<k>`), and a building drawn on the wall is refused. The
 result also gives `towers`, `gates`, `buildings` and the castle's `keep` (its building id); a wall's also `corners`,
@@ -2269,7 +2271,7 @@ per call. Ids are the numbers `get_street_plan` shows; unknown fields are refuse
 | `set_street` | `street`, `width`, `set_l`, `set_r`, `class`, `bridge` |
 | `move_junctions` | `moves` [{`junction`, `to` or `by`}], all at once (if that breaks the streets, each that does not) |
 | `set_square` | `junction`, `square` (a square kind, or none) |
-| `set_block` | `block`, `fill` ({kind: generated, ward, lots, height, reroll, close} / {kind: hand} / {kind: open, open, style}; `height`: `low` one storey each, `usual` (or none) as its ward has them, `tall` one storey more, up to 4), `district` (empty: none), `seed`, `reroll` |
+| `set_block` | `block`, `fill` ({kind: generated, ward, lots, height, reroll, close} / {kind: hand} / {kind: open, open, style} / {kind: castle, gates, keep_shape, moat}: a castle built from the block's outline, its curtain, towers, keep and yard as a castle drawn by hand (`gates`: up to 8 points in world ft, each a gate on the side nearest it, the main one first, none: facing the town's middle; `keep_shape` `square` or `round`, none rolled; `moat` `none`, `dry` or `wet`, none rolled); a converted castle keeps its buildings and works until its fill is set again; `height`: `low` one storey each, `usual` (or none) as its ward has them, `tall` one storey more, up to 4), `district` (empty: none), `seed`, `reroll` |
 | `add_row` / `remove_row` | `street`, `side` l or r, `depth`, `ward`, `lots`, `gaps`, `seed` / `row` |
 | `add_area` / `remove_area` | `poly`, `open` (plaza, lawn, park, garden, market, cemetery, farmland) / `area` |
 | `add_wall` / `remove_wall` | `pts`, `closed`, `spacing`, `towers`, `gates` [[x, y]], `name` / `wall` |

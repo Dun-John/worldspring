@@ -109,6 +109,17 @@ pub(super) enum KeepShape {
     Drawn(Vec<P>),
 }
 
+impl KeepShape {
+    /// The shape named ("square", "round"; else rolled).
+    pub(super) fn of(name: Option<&str>) -> KeepShape {
+        match name {
+            Some("square") => KeepShape::Square,
+            Some("round") => KeepShape::Round,
+            _ => KeepShape::Rolled,
+        }
+    }
+}
+
 /// How far a castle's own buildings stand from one drawn by hand in its yard (ft).
 const DRAWN_CLEAR: f64 = 8.0;
 /// Gates on a hand castle's curtain this far apart at least (their towers clear of each other).

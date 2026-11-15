@@ -599,10 +599,8 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
         .map(|o| o.poly.iter().map(|q| sub(*q, center)).collect())
         .collect();
     let keep_shape = match (c.keep_shape.as_deref(), c.keep_poly.is_empty()) {
-        (Some("square"), _) => super::castle::KeepShape::Square,
-        (Some("round"), _) => super::castle::KeepShape::Round,
         (Some("drawn") | None, false) => super::castle::KeepShape::Drawn(c.keep_poly.iter().map(|q| sub(*q, center)).collect()),
-        _ => super::castle::KeepShape::Rolled,
+        (k, _) => super::castle::KeepShape::of(k),
     };
     let asked = super::castle::Asked { gates, keep: keep_shape, drawn };
     castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true), Some(&asked));

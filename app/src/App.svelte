@@ -1998,7 +1998,8 @@
     done();
     const name = works.name.trim() || editing?.name || spot.name;
     // (A castle's pieces changed by hand stay through a redraw or new options.)
-    const c: Created = { ...draft, x: spot.x, y: spot.y, name, ...(editing?.pieces ? { pieces: editing.pieces } : {}) };
+    // (A wall's ends put onto the walls they meet: a T-join.)
+    const c: Created = { ...draft, x: spot.x, y: spot.y, name, ...(editing?.pieces ? { pieces: editing.pieces } : {}), ...(spot.pts ? { pts: spot.pts } : {}) };
     const all = { ...(edits.buildings ?? {}) };
     for (const b of spot.in_way) all[b.id] = { at: b.at, removed: true };
     const buildings = spot.in_way.length ? all : edits.buildings;

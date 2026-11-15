@@ -632,7 +632,7 @@ export class MapView {
     const [labels, n] = [this.labels, ++this.roadsAsk];
     void this.gen.named().then((r) => {
       if (this.labels !== labels || n !== this.roadsAsk) return;
-      labels?.setRoads(r.labels);
+      labels?.setRoads(r.labels, r.walls ?? []);
       this.onNamed(r);
     });
   }
@@ -1341,7 +1341,8 @@ export class MapView {
         this.labels?.setWaters(named);
       }
     }
-    if (roadNames) queueMicrotask(() => this.askRoads());
+    // (And the walls someone named: drawn by hand, or a hand town's wall lines.)
+    if (roadNames || createdChanged || prev.streets !== next.streets) queueMicrotask(() => this.askRoads());
     // Inside: the title, level and room names as renamed.
     if (renamed && this.interior) {
       this.redrawInterior();
