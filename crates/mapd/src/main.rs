@@ -30,6 +30,7 @@ mod tools;
 mod streets_edit;
 mod towns;
 mod waters;
+mod paths;
 mod worker;
 mod works;
 
