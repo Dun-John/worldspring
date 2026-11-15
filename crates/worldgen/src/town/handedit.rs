@@ -896,6 +896,17 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
                                 return Err(format!("height: one of {}", hand::HEIGHTS.join(", ")));
                             }
                         }
+                        if let BlockFill::Castle { gates, keep_shape, moat, .. } = f {
+                            if gates.len() > 8 {
+                                return Err("gates: 8 at most".into());
+                            }
+                            if keep_shape.as_deref().is_some_and(|k| !matches!(k, "square" | "round")) {
+                                return Err("keep_shape: square or round (left out: rolled)".into());
+                            }
+                            if moat.as_deref().is_some_and(|m| !matches!(m, "none" | "dry" | "wet")) {
+                                return Err("moat: none, dry or wet (left out: rolled)".into());
+                            }
+                        }
                         b.fill = f.clone();
                         asked.insert(*block);
                     }
@@ -959,7 +970,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
                     }
                     let id = next_id(&after.walls);
                     let spacing = spacing.unwrap_or_else(|| before.walls.values().next().map_or(90.0, |w| w.spacing));
-                    after.walls.insert(id, WallLine { pts: pts.iter().map(pt).collect(), closed: *closed, spacing, towers: towers.clone(), gates: gates.iter().map(pt).collect(), name: name.clone() });
+                    after.walls.insert(id, WallLine { pts: pts.iter().map(pt).collect(), closed: *closed, spacing, towers: towers.clone(), gates: gates.iter().map(pt).collect(), name: name.clone(), look: None });
                     report["wall"] = json!(id);
                 }
                 HandRequest::RemoveWall { wall } => {

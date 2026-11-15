@@ -14,6 +14,7 @@
 
 pub mod belfry;
 mod castle;
+pub use castle::Report as CastleReport;
 mod towerhouse;
 pub mod catalog;
 pub mod geom;
@@ -1119,6 +1120,11 @@ fn raised_fp(world: &World, t0: &T0, index: usize) -> Option<u64> {
             h = hash2(h, q[0].to_bits() as i64, q[1].to_bits() as i64);
         }
     }
+    // (Roadmap 6 P7: a castle drawn by hand with its moat rolled reads the ground as shaped round
+    // it, `sites::shaped_level`.)
+    if world.file.edits.created.get(poi - t0.base_pois).is_some_and(|c| c.kind == "castle" && c.moat.is_none()) && crate::ground::shapes(&world.file.edits) {
+        h = hash2(h, crate::ground::shaped_fp(&world.file.edits, rect) as i64, 0x5a9e);
+    }
     Some(h)
 }
 
@@ -1203,6 +1209,13 @@ pub fn forget_created(old: &[crate::world::Created], new: &[crate::world::Create
     // A settlement added, moved or removed by hand takes its dependents with it: the walls drawn
     // by hand (they may reach it) and its edited copies (its buildings' and wards' edits, by its
     // index, above).
+    // (Roadmap 6 P7) A building drawn by hand, added, moved or removed, takes the castles drawn by
+    // hand round it with it: their yards make room for it (`sites::castle_site`).
+    for k in (0..old.len().max(new.len())).filter(|&k| old.get(k) != new.get(k)) {
+        for b in [old.get(k), new.get(k)].into_iter().flatten().filter(|b| b.kind == "building") {
+            gone.extend(new.iter().enumerate().filter(|(_, c)| c.kind == "castle" && !c.removed && b.poly.iter().any(|q| (q[0] - c.x).hypot(q[1] - c.y) <= c.reach())).map(|(j, _)| (first + j) as u32));
+        }
+    }
     let town = |c: Option<&crate::world::Created>| c.is_some_and(|c| c.is_settlement());
     if (0..old.len().max(new.len())).any(|k| old.get(k) != new.get(k) && (town(old.get(k)) || town(new.get(k)))) {
         gone.extend(new.iter().enumerate().filter(|(_, c)| c.kind == "wall").map(|(k, _)| (first + k) as u32));
@@ -1511,6 +1524,14 @@ impl<'a> Shore<'a> {
         let pad = self.pads.iter().fold(0.0f64, |m, &(x, y, r)| m.max(pad_weight(crate::core::sqrt((p[0] - x) * (p[0] - x) + (p[1] - y) * (p[1] - y)), r)));
         let g = plan.ground(p[0], p[1], true);
         if pad > 0.0 { g + plan.depth(p[0], p[1]) * pad } else { g }
+    }
+
+    /// (Roadmap 6 P7) The ground at `p` as shaped by hand (plateaus, the brush), where shaping
+    /// meets the area (else None).
+    pub fn shaped_ground(&self, p: P) -> Option<f64> {
+        let s = self.shaped.as_ref()?;
+        let g = self.ground(p);
+        Some(s.at_point(p[0], p[1], g as f32, self.t0.sample_water(p[0], p[1])) as f64)
     }
 
     /// Whether `p` is on an islet drawn by hand, above the water there.
@@ -4352,7 +4373,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         moat,
                     };
                     let mut ways_at = l.roads.len();
-                    let mut laid = castle(site, &cblock, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
+                    let mut laid = castle(site, &cblock, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true, None);
                     // (Nor a ring with a corner under 35 degrees between long sides: a wedge of yard.)
                     let spike = |r: &Vec<P>| {
                         let k = r.len();
@@ -4367,7 +4388,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         l.castle_cut = castle::CUT_KEEP;
                         ways_at = l.roads.len();
                         let set = castle::Setting { inner: None, hall: false, ..set };
-                        laid = castle(site, &block, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
+                        laid = castle(site, &block, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true, None);
                     }
                     match &before {
                         Some(was) if moat.is_some() && (laid.is_none() || l.castles.len() < castles_at + 2) => {

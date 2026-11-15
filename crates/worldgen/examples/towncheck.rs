@@ -965,8 +965,8 @@ fn moat_checks(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
         return;
     };
     let kind = if m.wet { "wet" } else { "dry" };
-    let far = add(m.bridge.at, mul(m.bridge.dir, m.bridge.span));
-    r.add(&format!("moats: {kind}"), m.width, format!("{tag}: {:.0} ft wide, drawbridge {} to {}", m.width, at(m.bridge.at), at(far)));
+    let far = add(m.bridges[0].at, mul(m.bridges[0].dir, m.bridges[0].span));
+    r.add(&format!("moats: {kind}"), m.width, format!("{tag}: {:.0} ft wide, drawbridge {} to {}", m.width, at(m.bridges[0].at), at(far)));
     r.tally(&format!("{:?} castles with a {kind} moat", l.tier), 1);
     let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
     let k = |v: f64| (v / size).floor().max(0.0) as u32;
@@ -981,7 +981,7 @@ fn moat_checks(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
                 if !s.inside() {
                     continue;
                 }
-                if m.bridge.covers(p) {
+                if m.bridged(p) {
                     deck += (c.road_halo[(q / SQ + 1) * (SQ + 2) + q % SQ + 1] & 0x80 != 0) as usize;
                     continue;
                 }
@@ -994,10 +994,10 @@ fn moat_checks(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
     r.tally("moat squares", band);
     r.tally(&format!("moat squares deep water ({kind} moats)"), deep);
     if good * 10 < band * 9 {
-        r.add(&format!("{kind} moats under 90% {}", if m.wet { "water" } else { "difficult" }), (band - good) as f64, format!("{tag}: {good} of {band} at {}", at(m.bridge.at)));
+        r.add(&format!("{kind} moats under 90% {}", if m.wet { "water" } else { "difficult" }), (band - good) as f64, format!("{tag}: {good} of {band} at {}", at(m.bridges[0].at)));
     }
     if deck == 0 {
-        r.add("drawbridges with no deck", 1.0, format!("{tag}: at {}", at(m.bridge.at)));
+        r.add("drawbridges with no deck", 1.0, format!("{tag}: at {}", at(m.bridges[0].at)));
     }
 }
 
@@ -4973,9 +4973,15 @@ fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
     r.counts(&["layouts hashed", "edited layouts hashed", "edits refused", "layouts differing", "layouts not in the baseline"]);
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
     let mut lines: Vec<String> = Vec::new();
+    // (P7: a moat's one drawbridge became a list; printed as before, a moat with one compares
+    // with the baseline.)
+    let print = |l: &Layout| {
+        let s = format!("{l:?}");
+        if s.contains("bridges: [Drawbridge {") { s.replace("bridges: [Drawbridge {", "bridge: Drawbridge {").replace("}], pieces: ", "}, pieces: ") } else { s }
+    };
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
-        lines.push(format!("L:{li} {:016x} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len()));
+        lines.push(format!("L:{li} {:016x} {}", fnv64(print(&l).as_bytes()), l.buildings.len()));
         r.tally("layouts hashed", 1);
     }
     let edits: usize = std::env::var("SAME_EDITS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
@@ -4993,7 +4999,7 @@ fn same(ctx: &mut Ctx, label: &str, r: &mut Report) {
         file.edits.towns.insert(town::wards::key(ci), edit);
         let w = World::new(file).unwrap();
         let l = town::layout(&w, t0, ci);
-        lines.push(format!("E:{ci} {:016x} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len()));
+        lines.push(format!("E:{ci} {:016x} {}", fnv64(print(&l).as_bytes()), l.buildings.len()));
         r.tally("edited layouts hashed", 1);
     }
     let dir = std::path::PathBuf::from(std::env::var("SAME_DIR").unwrap_or_else(|_| "target/towncheck-same".into()));
@@ -8993,7 +8999,7 @@ fn hand_works(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
     const WHAT: [&str; 7] = ["walls", "towers", "gates", "gate towers", "bridges missing", "squares at junctions", "quarters"];
     r.counts(&WHAT.iter().map(|w| format!("hand: {w}")).collect::<Vec<_>>().iter().map(String::as_str).collect::<Vec<_>>());
     r.counts(&WHAT.iter().map(|w| format!("hand: {w} differing")).collect::<Vec<_>>().iter().map(String::as_str).collect::<Vec<_>>());
-    r.counts(&["hand: bridges", "hand: bridges new (a street over water the town left unbridged)", "hand: entrances", "hand: entrances otherwise many (told)", "laid anew: walled towns", "laid anew: towers more", "laid anew: towers fewer", "laid anew: gates more", "laid anew: gates fewer"]);
+    r.counts(&["hand: bridges", "hand: bridges new (a street over water the town left unbridged)", "hand: entrances", "hand: entrances otherwise many (told)", "laid anew: walled towns", "laid anew: towers more", "laid anew: towers fewer", "laid anew: gates more", "laid anew: gates fewer", "laid anew: castles' towers (generated)", "laid anew: castles' towers"]);
     let near = |a: &[[f64; 2]], b: &[[f64; 2]]| a.len() == b.len() && a.iter().all(|p| b.iter().any(|q| dist(*p, *q) <= 1.0)) && b.iter().all(|p| a.iter().any(|q| dist(*p, *q) <= 1.0));
     let corners = |l: &Layout| l.plazas.iter().filter(|p| matches!(p.spot, worldgen::town::places::Spot::Corner(_))).map(|p| (format!("{:?} {:?}", p.spot, p.kind), p.pts.clone())).collect::<std::collections::BTreeMap<_, _>>();
     for (&li, want) in originals {
@@ -9050,6 +9056,10 @@ fn hand_works(world: &World, t0: &T0, label: &str, first: &std::collections::BTr
         let (t, g) = (b.layout.towers.len() as i64 - want.towers.len() as i64, b.layout.gates.len() as i64 - want.gates.len() as i64);
         r.tally(if t >= 0 { "laid anew: towers more" } else { "laid anew: towers fewer" }, t.unsigned_abs() as usize);
         r.tally(if g >= 0 { "laid anew: gates more" } else { "laid anew: gates fewer" }, g.unsigned_abs() as usize);
+        // (Of them, a castle's own: within its curtain's reach.)
+        let castled = |l: &town::Layout| l.towers.iter().filter(|t| want.castles.iter().any(|c| (t[0] - c.0[0]).hypot(t[1] - c.0[1]) < c.1 + 12.0)).count();
+        r.tally("laid anew: castles' towers (generated)", castled(want));
+        r.tally("laid anew: castles' towers", castled(&b.layout));
     }
     hand_remade(world, t0, label, hw, originals, r);
 }

@@ -74,6 +74,8 @@ const STYLES: Record<string, KindStyle> = {
   waterfall: { size: 10, fill: WATER, spacing: 0, italic: true, symbol: '≋', minPx: 60, maxPx: 1e9, prio: 33 },
   river: { size: 11, fill: WATER, spacing: 1, italic: true, minPx: 220, maxPx: 1e9, prio: 30, rotate: true },
   road: { size: 10, fill: '#6b3a24', spacing: 1, italic: true, minPx: 220, maxPx: 1e9, prio: 29, rotate: true },
+  /** A wall someone named, along its line (Roadmap 6 P7). */
+  wall_line: { size: 11, fill: '#3e4c5e', spacing: 3, upper: true, minPx: 160, maxPx: 1e9, prio: 31, rotate: true },
   metropolis: { size: 16, fill: INK, spacing: 3, upper: true, bold: true, symbol: '◉', minPx: 16, maxPx: 1e9, prio: 98, pin: true, keep: true },
   city: { size: 14, fill: INK, spacing: 2, upper: true, bold: true, symbol: '●', minPx: 18, maxPx: 1e9, prio: 90, pin: true, keep: true },
   town: { size: 12, fill: INK, spacing: 1, symbol: '●', minPx: 24, maxPx: 1e9, prio: 72, pin: true },
@@ -289,7 +291,7 @@ export class Labels {
 
   /** The roads someone named (stretches named alike joined end to end), lettered along their
    * lines in the road style, once each at the middle: these replace the ones before. */
-  setRoads(list: NamedPlaces['labels']) {
+  setRoads(list: NamedPlaces['labels'], walls: NonNullable<NamedPlaces['walls']> = []) {
     for (let k = this.items.length - 1; k >= 0; k--) {
       if (!this.items[k].road) continue;
       this.unletter(this.items[k]);
@@ -301,6 +303,14 @@ export class Labels {
       const [x, y] = along(r.pts, len / 2);
       const f: Feature = { id: r.id, kind: 'road', name: r.name, x, y, angle: 0, extent_ft: len, detail: 'road' };
       this.items.push({ f, orig: r.name, style: STYLES.road, text: null, path: r.pts, pathLen: len, glyphs: null, road: true });
+    }
+    // (Named walls the same way, in their own style: lettered along the line as a road is.)
+    for (const w of walls) {
+      if (w.pts.length < 2) continue;
+      const len = pathLength(w.pts);
+      const [x, y] = along(w.pts, len / 2);
+      const f: Feature = { id: `wl:${w.id}`, kind: 'wall_line', name: w.name, x, y, angle: 0, extent_ft: len, detail: 'wall' };
+      this.items.push({ f, orig: w.name, style: STYLES.wall_line, text: null, path: w.pts, pathLen: len, glyphs: null, road: true });
     }
     this.sort();
     this.lastZoom = NaN;

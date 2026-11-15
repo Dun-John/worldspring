@@ -1736,7 +1736,7 @@
       gates: (change) => {
         const c = worksSite(worksEditing);
         if (!c) return;
-        void placeWorks('gate' in change ? { kind: 'castle', poly: c.poly, gate: change.gate } : { kind: 'wall', pts: change.pts, gates: change.gates.length ? change.gates : undefined }, true);
+        void placeWorks('sides' in change ? { kind: 'castle', poly: c.poly, gate: change.sides[0], gates: change.sides.length > 1 ? change.sides.slice(1) : undefined } : { kind: 'wall', pts: change.pts, gates: change.gates.length ? change.gates : undefined }, true);
       },
       hint: (t) => toast(t),
     });
@@ -1960,6 +1960,8 @@
     if (!works.keep) o.keep = false;
     if (!works.yardBuildings) o.yard_buildings = false;
     if (works.ruin) o.structure = 'ruin';
+    if (works.keep && works.keepShape !== 'auto') o.keep_shape = works.keepShape;
+    if (works.moat !== 'auto') o.moat = works.moat;
     return o;
   }
 
@@ -1975,7 +1977,9 @@
     if (editing && editing.kind !== shape.kind) return void (done(), toast(`Draw a ${editing.kind} to change it`));
     const id = editing?.id ?? `c:${(edits.created ?? []).length}`;
     const opts: Partial<Created> =
-      keepOpts && editing ? { keep: editing.keep, yard_buildings: editing.yard_buildings, structure: editing.structure, closed: editing.closed } : worksOptions(shape.kind);
+      keepOpts && editing
+        ? { keep: editing.keep, keep_shape: editing.keep_shape, keep_poly: editing.keep_poly, yard_buildings: editing.yard_buildings, moat: editing.moat, structure: editing.structure, closed: editing.closed }
+        : worksOptions(shape.kind);
     const draft = { id, x: 0, y: 0, name: '', ...opts, ...shape } as Created;
     for (const k of Object.keys(draft) as (keyof Created)[]) if (draft[k] === undefined) delete draft[k];
     if (!editing && existingSite(edits, draft, [0, 0])) {
@@ -1994,7 +1998,8 @@
     done();
     const name = works.name.trim() || editing?.name || spot.name;
     // (A castle's pieces changed by hand stay through a redraw or new options.)
-    const c: Created = { ...draft, x: spot.x, y: spot.y, name, ...(editing?.pieces ? { pieces: editing.pieces } : {}) };
+    // (A wall's ends put onto the walls they meet: a T-join.)
+    const c: Created = { ...draft, x: spot.x, y: spot.y, name, ...(editing?.pieces ? { pieces: editing.pieces } : {}), ...(spot.pts ? { pts: spot.pts } : {}) };
     const all = { ...(edits.buildings ?? {}) };
     for (const b of spot.in_way) all[b.id] = { at: b.at, removed: true };
     const buildings = spot.in_way.length ? all : edits.buildings;
@@ -2013,8 +2018,10 @@
   function saveWorks() {
     const c = worksSite(worksEditing);
     if (!c) return;
-    const { keep: _k, yard_buildings: _y, structure: _s, closed: _c, ...rest } = c;
-    void placeWorks({ ...rest, ...worksOptions(c.kind), kind: c.kind as 'castle' | 'wall' });
+    const { keep: _k, keep_shape: _ks, keep_poly: kp, yard_buildings: _y, moat: _m, structure: _s, closed: _c, ...rest } = c;
+    // (A drawn keep keeps its outline while it stays drawn.)
+    const drawn = works.keep && works.keepShape === 'drawn' && kp?.length ? { keep_poly: kp } : {};
+    void placeWorks({ ...rest, ...drawn, ...worksOptions(c.kind), kind: c.kind as 'castle' | 'wall' });
   }
 
   /** Open the build menu on a castle or wall drawn by hand. */
@@ -2024,7 +2031,16 @@
     go('edit', 'build');
     setBuildMode(c.kind as 'castle' | 'wall');
     worksEditing = c.id;
-    works = { castleShape: (c.poly?.length ?? 0) === 4 ? 'rect' : 'poly', keep: c.keep !== false, yardBuildings: c.yard_buildings !== false, ruin: c.structure === 'ruin', closed: !!c.closed, name: '' };
+    works = {
+      castleShape: (c.poly?.length ?? 0) === 4 ? 'rect' : 'poly',
+      keep: c.keep !== false,
+      keepShape: c.keep_shape ?? (c.keep_poly?.length ? 'drawn' : 'auto'),
+      moat: c.moat ?? 'auto',
+      yardBuildings: c.yard_buildings !== false,
+      ruin: c.structure === 'ruin',
+      closed: !!c.closed,
+      name: '',
+    };
   }
 
   // Edit › Streets: the town in view laid out anew by hand (the ward editor, `editor/town.ts`).

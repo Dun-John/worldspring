@@ -1449,10 +1449,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let moats: Vec<crate::town::moat::Moat> = crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]).iter().flat_map(|l| l.moats.clone()).collect();
     let dug = moat::dig(&moats, ox - SQUARE_FT, oy - SQUARE_FT, &mut hh, &mut hw, &mut road_h, &mut lift);
     for m in &moats {
-        let b = &m.bridge;
-        let far = crate::town::geom::add(b.at, crate::town::geom::mul(b.dir, b.span));
-        if owns(crate::town::geom::lerp(b.at, far, 0.5)) {
-            shapes.push(VectorShape { kind: ShapeKind::Drawbridge, size: (b.width / SQUARE_FT) as f32, pts: vec![local(&b.at), local(&far), [m.wet as u8 as f32, 0.0]] });
+        for b in &m.bridges {
+            let far = crate::town::geom::add(b.at, crate::town::geom::mul(b.dir, b.span));
+            if owns(crate::town::geom::lerp(b.at, far, 0.5)) {
+                shapes.push(VectorShape { kind: ShapeKind::Drawbridge, size: (b.width / SQUARE_FT) as f32, pts: vec![local(&b.at), local(&far), [m.wet as u8 as f32, 0.0]] });
+            }
         }
         // A dry ditch's two banks inked along their tops (by the chunk holding each stretch's
         // middle).

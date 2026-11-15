@@ -80,6 +80,11 @@ const REACH: f64 = 1.4;
 #[derive(Clone, Copy, Debug)]
 pub struct Plan {
     pub width: f64,
+    /// (Roadmap 6 P7) Wet or dry as asked (a hand castle's `moat`), else by its ground.
+    pub wet: Option<bool>,
+    /// Whether the ground as shaped by hand (plateaus, the brush) is level enough to hold water
+    /// round it, where shaping reaches it (else the castle's own survey and the moat's line say).
+    pub level: Option<bool>,
 }
 
 impl Plan {
@@ -129,7 +134,8 @@ pub struct Moat {
     pub bound: Vec<P>,
     /// Roads over it on causeways (ends, half width).
     pub causeways: Vec<(P, P, f64)>,
-    pub bridge: Drawbridge,
+    /// Its drawbridges, one at each gate (the main one first).
+    pub bridges: Vec<Drawbridge>,
     /// Its outline at plan zoom: pieces a few feet long (its inner edge to its far edge as `spot`
     /// has them, a dry ditch's bank in it: side by side, round the corners and its towers), none
     /// where the drawbridge or a causeway crosses it (`plan_pieces`); and by piece, its inked edges
@@ -235,12 +241,17 @@ impl Moat {
         (inner, outer)
     }
 
+    /// Whether `p` is on one of its drawbridges.
+    pub fn bridged(&self, p: P) -> bool {
+        self.bridges.iter().any(|b| b.covers(p))
+    }
+
     /// Its banks' wander at `p` (see the module): how far its inner edge stands out past the berm,
     /// its width there and how far a wet moat's bank by its bound widens (ft). None of it by the
     /// drawbridge (`CALM`).
     pub fn sway(&self, p: P) -> (f64, f64, f64) {
-        let b = &self.bridge;
-        let off = seg_dist(p, b.at, add(b.at, mul(b.dir, BERM + REACH * self.width + 2.0 * WANDER_IN + 10.0)));
+        let reach = BERM + REACH * self.width + 2.0 * WANDER_IN + 10.0;
+        let off = self.bridges.iter().map(|b| seg_dist(p, b.at, add(b.at, mul(b.dir, reach)))).fold(f64::MAX, f64::min);
         let calm = crate::core::noise::smoothstep(CALM, CALM + CALM_EASE, off);
         if calm <= 0.0 {
             return (0.0, self.width, 0.0);
@@ -267,7 +278,7 @@ impl Moat {
         if self.wet {
             return Vec::new();
         }
-        let floor = |q: P| self.spot(q).is_some_and(|s| s.inside() && s.outer >= BANK_FT && !self.bridge.covers(q));
+        let floor = |q: P| self.spot(q).is_some_and(|s| s.inside() && s.outer >= BANK_FT && !self.bridged(q));
         let (pieces, inks) = plan_pieces(self, BANK_FT);
         let mut out = Vec::new();
         for (pc, ink) in pieces.iter().zip(inks) {
@@ -303,7 +314,7 @@ impl Moat {
             mv(&mut c.0);
             mv(&mut c.1);
         });
-        mv(&mut self.bridge.at);
+        self.bridges.iter_mut().for_each(|b| mv(&mut b.at));
         self.bbox = [self.bbox[0] + by[0], self.bbox[1] + by[1], self.bbox[2] + by[0], self.bbox[3] + by[1]];
     }
 }
@@ -315,17 +326,27 @@ pub fn odds(age: f64, fortress: bool, strong: bool, great: bool) -> f64 {
     (0.38 + 0.25 * age.clamp(0.0, 1.0) + if fortress { 0.15 } else { 0.0 } + if strong { 0.1 } else { 0.0 } + if great { 0.05 } else { 0.0 }).min(0.9)
 }
 
+/// Whether ground of these heights (ft) holds a wet moat: the castle's inside within `flat` ft
+/// (its survey's own test) and the moat's line within `WET_RELIEF` ft.
+pub fn level_enough(inside: &[f64], line: &[f64], flat: f64) -> bool {
+    let relief = |h: &[f64]| h.iter().fold((f64::MAX, f64::MIN), |r, &v| (r.0.min(v), r.1.max(v)));
+    let ((a, b), (c, d)) = (relief(inside), relief(line));
+    (inside.is_empty() || b - a < flat) && (line.is_empty() || d - c <= WET_RELIEF)
+}
+
 /// A moat by roll (`roll` and `wide` uniform 0-1): `p` its odds, the wider for a great castle.
 pub fn roll(roll: f64, wide: f64, p: f64, great: bool) -> Option<Plan> {
-    (roll < p).then(|| Plan { width: 15.0 + 5.0 * wide + if great { 4.0 } else { 0.0 } })
+    (roll < p).then(|| Plan { width: 15.0 + 5.0 * wide + if great { 4.0 } else { 0.0 }, wet: None, level: None })
 }
 
 /// Lay the moat round a castle's outer curtain (`ring`, local ft; `walled` its sides that are the
-/// town wall), its gate at `gate` (`inward` the way in), within `bound` (empty: none). `flat`: the
-/// castle's ground is (the curtain keeps to its block); `motte`: a shell keep's mound stands in it.
-/// Roads in `l` crossing it but its gate's way get causeways. Pushed to `l.moats`.
+/// town wall), its gates at `gates` (each with the way in there; the main one first), within
+/// `bound` (empty: none). `flat`: the castle's ground is (the curtain keeps to its block); `motte`:
+/// a shell keep's mound stands in it. Roads in `l` crossing it but its gates' ways get causeways.
+/// Pushed to `l.moats`.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: &[P], walled: &[bool], bound: &[P], gate: P, inward: P, flat: bool, motte: bool) {
+pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: &[P], walled: &[bool], bound: &[P], gates: &[(P, P)], flat: bool, motte: bool) {
+    let Some(&(gate, _)) = gates.first() else { return };
     let n = ring.len();
     if n < 3 || walled.len() != n {
         return;
@@ -375,10 +396,10 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
         return;
     }
     let (lo, hi) = heights.iter().fold((f64::MAX, f64::MIN), |r, &h| (r.0.min(h), r.1.max(h)));
-    let wet = near && flat && !motte && hi - lo <= WET_RELIEF;
+    let wet = plan.wet.unwrap_or_else(|| near && !motte && plan.level.unwrap_or(flat && hi - lo <= WET_RELIEF));
     let level = if wet { lo - LEVEL_DOWN } else { lo } as f32;
     // Roads over it on causeways: all but the gate's own way (the drawbridge carries it).
-    let gate_way = |pts: &[P]| pts.first().is_some_and(|p| dist(*p, gate) <= 8.0);
+    let gate_way = |pts: &[P]| pts.first().is_some_and(|p| gates.iter().any(|g| dist(*p, g.0) <= 8.0));
     let causeways: Vec<(P, P, f64)> =
         l.roads.iter().filter(|r| !gate_way(&r.0)).flat_map(|(pts, _, rw)| pts.windows(2).map(move |s| (s[0], s[1], 0.5 * rw))).filter(|&(a, b, _)| (0..n).any(|k| sides[k] && seg_dist(ring[k], a, b).min(seg_dist(a, ring[k], ring[(k + 1) % n])) <= BERM + w + 40.0)).collect();
     let mut moat = Moat {
@@ -390,7 +411,7 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
         towers,
         bound: bound.to_vec(),
         causeways,
-        bridge: Drawbridge { at: gate, dir: mul(inward, -1.0 / len(inward).max(1e-9)), width: BRIDGE_W, span: 0.0 },
+        bridges: gates.iter().map(|&(at, inward)| Drawbridge { at, dir: mul(inward, -1.0 / len(inward).max(1e-9)), width: BRIDGE_W, span: 0.0 }).collect(),
         pieces: Vec::new(),
         inks: Vec::new(),
         banks: Vec::new(),
@@ -404,19 +425,22 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
     }
     // The drawbridge: from the gate out to a foot past the far bank (or the first foot off the moat
     // past its middle).
-    let mut span = BERM + w;
-    let mut seen = false;
-    for f in 0..=((BERM + w + 30.0) as usize) {
-        let q = add(gate, mul(moat.bridge.dir, f as f64));
-        let inside = moat.spot(q).is_some_and(|s| s.inside());
-        if inside {
-            seen = true;
-        } else if seen {
-            span = f as f64 + 1.0;
-            break;
+    for k in 0..moat.bridges.len() {
+        let (at, dir) = (moat.bridges[k].at, moat.bridges[k].dir);
+        let mut span = BERM + w;
+        let mut seen = false;
+        for f in 0..=((BERM + w + 30.0) as usize) {
+            let q = add(at, mul(dir, f as f64));
+            let inside = moat.spot(q).is_some_and(|s| s.inside());
+            if inside {
+                seen = true;
+            } else if seen {
+                span = f as f64 + 1.0;
+                break;
+            }
         }
+        moat.bridges[k].span = span;
     }
-    moat.bridge.span = span;
     (moat.pieces, moat.inks) = plan_pieces(&moat, 0.0);
     moat.banks = moat.bank_lines();
     l.moats.push(moat);
@@ -486,7 +510,7 @@ fn plan_pieces(m: &Moat, cut: f64) -> (Vec<Vec<P>>, Vec<u8>) {
         let (o, o2) = (out_of(k), out_of((k + 1) % n));
         libm::atan2(cross(o, o2), dot(o, o2))
     };
-    let gap = |p: P| m.bridge.covers(p) || m.causeways.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw);
+    let gap = |p: P| m.bridged(p) || m.causeways.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw);
     let (mut pieces, mut inks) = (Vec::new(), Vec::new());
     // Runs: side k (`None`) or the corner after it (`Some(turn)`).
     let mut runs: Vec<(usize, Option<f64>)> = Vec::new();

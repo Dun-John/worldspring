@@ -183,7 +183,7 @@ export class GenClient {
 
   /** Whether a castle or wall drawn by hand can stand there: its point, a name for it and the
    * world's own buildings in its way (to take away with it); null if the generator could not answer. */
-  worksSpot(site: Created): Promise<{ x: number; y: number; name: string; in_way: { id: string; at: [number, number] }[] } | { error: string } | null> {
+  worksSpot(site: Created): Promise<{ x: number; y: number; name: string; in_way: { id: string; at: [number, number] }[]; pts?: [number, number][] } | { error: string } | null> {
     return this.ask({ op: 'works', site }).then((j) => JSON.parse(j));
   }
 

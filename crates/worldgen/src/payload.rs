@@ -380,11 +380,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     push(p, if m.wet { 24 } else { 25 } | (ink as u32) << 8);
                 }
                 // (Its drawbridge, 26: a deck from its berm over the gap to its far end.)
-                let b = &m.bridge;
-                let (g, side) = (crate::town::geom::mul(b.dir, 1.0), crate::town::geom::mul([-b.dir[1], b.dir[0]], 0.5 * b.width));
-                let (a, z) = (crate::town::geom::add(b.at, crate::town::geom::mul(g, crate::town::moat::BERM - 1.0)), crate::town::geom::add(b.at, crate::town::geom::mul(g, b.span)));
-                let deck = [crate::town::geom::add(a, side), crate::town::geom::add(z, side), crate::town::geom::sub(z, side), crate::town::geom::sub(a, side)];
-                push(&deck, 26);
+                for b in &m.bridges {
+                    let (g, side) = (crate::town::geom::mul(b.dir, 1.0), crate::town::geom::mul([-b.dir[1], b.dir[0]], 0.5 * b.width));
+                    let (a, z) = (crate::town::geom::add(b.at, crate::town::geom::mul(g, crate::town::moat::BERM - 1.0)), crate::town::geom::add(b.at, crate::town::geom::mul(g, b.span)));
+                    let deck = [crate::town::geom::add(a, side), crate::town::geom::add(z, side), crate::town::geom::sub(z, side), crate::town::geom::sub(a, side)];
+                    push(&deck, 26);
+                }
             }
             crate::town::village::plan_polys(&l, &mut push);
             crate::town::rural::plan_polys(&l, &mut push);
@@ -719,8 +720,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 crate::town::wallstyle::Material::Palisade => 5.0,
                 crate::town::wallstyle::Material::Earth => 12.0,
             };
+            // (Roadmap 6 P7: a wall someone named drawn heavier, `agent::named_walls`.)
+            let named: Vec<Vec<[f64; 2]>> = if l.walls.is_empty() { Vec::new() } else { crate::agent::named_walls(world, t0, Some(l.index as usize)).into_iter().map(|n| n.2).collect() };
+            let on_named = |p: [f64; 2]| named.iter().any(|n| n.windows(2).any(|s| crate::town::geom::seg_dist(p, s[0], s[1]) < 8.0));
             for w in &l.walls {
                 let ww = if l.wall_style_at(w[w.len() / 2]).material == l.wall_style.material { ww } else { 9.0 };
+                let ww = if !named.is_empty() && on_named(w[w.len() / 2]) { ww * 1.8 } else { ww };
                 lines.push(w.iter().map(|p| [p[0], p[1], ww, 0.0]).collect());
             }
             for t in &l.towers {

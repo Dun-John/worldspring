@@ -110,7 +110,17 @@ function createdDetail(c: Created): string {
     return `created building${opts.length ? ` (${opts.join(', ')})` : ''}`;
   }
   if (c.kind === 'castle') {
-    const opts = [c.structure === 'ruin' && 'ruined', c.keep === false && 'no keep', c.yard_buildings === false && 'an empty yard', c.gate != null && `gate on side ${c.gate}`].filter(Boolean);
+    const sides = [...(c.gate != null ? [c.gate] : []), ...(c.gates ?? [])].filter((g, i, all) => all.indexOf(g) === i);
+    const keep = c.keep_shape ?? (c.keep_poly?.length ? 'drawn' : null);
+    const opts = [
+      c.structure === 'ruin' && 'ruined',
+      c.keep === false && 'no keep',
+      keep && `a ${keep} keep`,
+      c.yard_buildings === false && 'an empty yard',
+      c.moat && (c.moat === 'none' ? 'no moat' : `a ${c.moat} moat`),
+      sides.length === 1 && `gate on side ${sides[0]}`,
+      sides.length > 1 && `gates on sides ${sides.join(', ')}`,
+    ].filter(Boolean);
     return `created castle${opts.length ? ` (${opts.join(', ')})` : ''}`;
   }
   if (c.kind === 'wall') {
@@ -622,7 +632,7 @@ export class MapView {
     const [labels, n] = [this.labels, ++this.roadsAsk];
     void this.gen.named().then((r) => {
       if (this.labels !== labels || n !== this.roadsAsk) return;
-      labels?.setRoads(r.labels);
+      labels?.setRoads(r.labels, r.walls ?? []);
       this.onNamed(r);
     });
   }
@@ -1331,7 +1341,8 @@ export class MapView {
         this.labels?.setWaters(named);
       }
     }
-    if (roadNames) queueMicrotask(() => this.askRoads());
+    // (And the walls someone named: drawn by hand, or a hand town's wall lines.)
+    if (roadNames || createdChanged || prev.streets !== next.streets) queueMicrotask(() => this.askRoads());
     // Inside: the title, level and room names as renamed.
     if (renamed && this.interior) {
       this.redrawInterior();

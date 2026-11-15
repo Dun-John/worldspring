@@ -253,7 +253,13 @@ pub fn created_detail(c: &crate::world::Created) -> String {
             (c.structure.as_deref() == Some("ruin")).then(|| "ruined".to_string()),
             (c.keep == Some(false)).then(|| "no keep".to_string()),
             (c.yard_buildings == Some(false)).then(|| "an empty yard".to_string()),
-            c.gate.map(|g| format!("gate on side {g}")),
+            match c.castle_gates().as_slice() {
+                [] => None,
+                [g] => Some(format!("gate on side {g}")),
+                gs => Some(format!("gates on sides {}", gs.iter().map(|g| g.to_string()).collect::<Vec<_>>().join(", "))),
+            },
+            c.keep_shape.as_deref().or((!c.keep_poly.is_empty()).then_some("drawn")).map(|k| format!("a {k} keep")),
+            c.moat.as_deref().map(|m| if m == "none" { "no moat".to_string() } else { format!("a {m} moat") }),
         ]
         .into_iter()
         .flatten()
@@ -769,7 +775,9 @@ fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Optio
             continue;
         }
         let place = |world: &World| if full { place_of(world, t0, li) } else { (Value::Null, None) };
-        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && polys_overlap(&inner, &b.poly)) {
+        // (A castle drawn by hand: its yard's buildings make room for one drawn there, `town::sites`.)
+        let yard = hand_castle(world, t0, li);
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(yard && b.keep.is_none()) && polys_overlap(&inner, &b.poly)) {
             out.push(building_blocker(world, t0, &l, b, full));
             if enough(all, clear, &out) {
                 return out;
@@ -869,6 +877,11 @@ pub fn spot_blockers(world: &World, t0: &T0, poly: &[P], skip: Option<(usize, Op
 /// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
 /// culture, seeded by its id (else what it is: "House"). A refusal names what is in the way,
 /// where (`spot_blockers` lists them all).
+/// Whether layout `li` is a castle drawn by hand (`Created` kind `castle`).
+fn hand_castle(world: &World, t0: &T0, li: usize) -> bool {
+    li.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.kind == "castle")
+}
+
 pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
     spot_check(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip, false, true).map(|s| (s.0, s.1))
 }
@@ -941,7 +954,8 @@ pub fn nearest_clear(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
         if own == Some(None) {
             continue;
         }
-        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated)) {
+        let yard = hand_castle(world, t0, li);
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated) && !(yard && b.keep.is_none())) {
             let bb = bbox(&b.poly);
             if near(bb) {
                 obst.push(Obst::Area(bb, b.poly.clone()));
@@ -1358,6 +1372,32 @@ pub struct WorksSpot {
     pub in_way: Vec<(String, P)>,
     /// Those of them with a name, by id (for the refusal: "b:5:8 (the Smithy)").
     pub in_way_names: crate::core::hash::FastMap<String, String>,
+    /// (Roadmap 6 P7) A wall's line with its open ends put onto the walls they meet (`WALL_JOIN`):
+    /// None where neither end meets one.
+    pub pts: Option<Vec<P>>,
+    /// (Roadmap 6 P7) A castle's gates asked for that cannot be built: (side, why).
+    pub gates_not_built: Vec<(u32, String)>,
+}
+
+/// An open wall's end this near another wall's line (or a castle's curtain), short of it or past
+/// it, joins it: the end is put on that line (ft).
+pub const WALL_JOIN: f64 = 15.0;
+
+/// The nearest point on the lines `walls` to `p`, within `reach`.
+fn nearest_on_walls(walls: &[&Vec<P>], p: P, reach: f64) -> Option<P> {
+    let mut best: Option<(f64, P)> = None;
+    for w in walls {
+        for s in w.windows(2) {
+            let d = geom::sub(s[1], s[0]);
+            let f = (geom::dot(geom::sub(p, s[0]), d) / geom::dot(d, d).max(1e-9)).clamp(0.0, 1.0);
+            let q = geom::add(s[0], geom::mul(d, f));
+            let dq = geom::dist(p, q);
+            if dq <= reach && best.is_none_or(|b| dq < b.0) {
+                best = Some((dq, q));
+            }
+        }
+    }
+    best.map(|b| b.1)
 }
 
 /// Where a castle (its outline) or a wall (its line) may stand: on the map, on dry land out of
@@ -1366,12 +1406,34 @@ pub struct WorksSpot {
 /// are listed to be taken away with it; a building drawn by hand refuses it. `skip`: its own
 /// layout, when it is being redrawn. Named (the nearest settlement's culture) by its id.
 pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, skip: Option<usize>) -> Result<WorksSpot, String> {
-    use crate::t0::names::{NameKind, Namer};
     let castle = c.kind == "castle";
     let pts: &[P] = if castle { &c.poly } else { &c.pts };
     if pts.len() < 2 {
         return Err(format!("a {} needs at least {} corners", c.kind, if castle { 3 } else { 2 }));
     }
+    // (An open wall's ends near another wall's line, or a castle's curtain, put on it: a T-join.)
+    let mut joined: Option<Vec<P>> = None;
+    let mut ends: Vec<P> = Vec::new();
+    if !castle && !c.closed {
+        let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let r = WALL_JOIN + 1.0;
+        let near = town::layouts_near(world, t0, [b[0] - r, b[1] - r, b[2] + r, b[3] + r]);
+        let walls: Vec<&Vec<P>> = near.iter().filter(|l| Some(l.index as usize) != skip).flat_map(|l| l.walls.iter()).collect();
+        let mut line = pts.to_vec();
+        let last = line.len() - 1;
+        for k in [0, last] {
+            if let Some(q) = nearest_on_walls(&walls, line[k], WALL_JOIN)
+                && geom::dist(q, line[if k == 0 { 1 } else { last - 1 }]) >= 10.0
+            {
+                line[k] = [crate::core::round(q[0] * 64.0) / 64.0, crate::core::round(q[1] * 64.0) / 64.0];
+                ends.push(line[k]);
+            }
+        }
+        if !ends.is_empty() {
+            joined = Some(line);
+        }
+    }
+    let pts: &[P] = joined.as_deref().unwrap_or(pts);
     if pts.iter().any(|p| p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft) {
         return Err("that place is off the map".to_string());
     }
@@ -1400,8 +1462,22 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     }
     // Within this of the line, a building is in the wall's way (the wall's half width and a foot).
     const WALL_CLEAR: f64 = 5.5;
-    let in_line = |poly: &[P]| segs.iter().any(|&(a, b)| poly_seg_dist(poly, a, b) < WALL_CLEAR);
-    let crosses_line = |w: &[P]| w.windows(2).any(|s| segs.iter().any(|&(a, b)| segs_cross(a, b, s[0], s[1]) || geom::seg_dist(s[0], a, b) < 1.0));
+    // (A joined end drawn back clear of what stands against the wall it meets: a castle's ranges.)
+    let back = |p: P, q: P| if ends.contains(&p) { geom::lerp(p, q, (8.0 / geom::dist(p, q).max(1e-9)).min(0.5)) } else { p };
+    let body: Vec<(P, P)> = segs.iter().map(|&(a, b)| (back(a, b), back(b, a))).collect();
+    let in_line = |poly: &[P]| body.iter().any(|&(a, b)| poly_seg_dist(poly, a, b) < WALL_CLEAR);
+    // (Where a joined end meets the other's line, or another wall's end meets this one's, is no
+    // crossing: within the wall's half width of that end.)
+    // (A castle's curtain stands inside its outline, so a wall T-joined onto it ends within `WALL_JOIN` of it.)
+    let tol = if castle { WALL_JOIN } else { 1.0 };
+    let joint = |p: P, w: &[P]| ends.iter().chain([w[0], w[w.len() - 1]].iter().filter(|e| segs.iter().any(|&(a, b)| geom::seg_dist(**e, a, b) < tol))).any(|e| geom::dist(*e, p) < WALL_CLEAR.max(tol));
+    let crosses_line = |w: &[P]| {
+        w.windows(2).any(|s| {
+            segs.iter().any(|&(a, b)| {
+                (segs_cross(a, b, s[0], s[1]) && !joint(seg_meet(a, b, s[0], s[1]), w)) || (geom::seg_dist(s[0], a, b) < 1.0 && !joint(s[0], w)) || (geom::seg_dist(s[1], a, b) < 1.0 && !joint(s[1], w))
+            })
+        })
+    };
     let generated = t0.settlements.len() + t0.base_pois;
     let mut in_way: Vec<(String, P)> = Vec::new();
     let mut in_way_names: crate::core::hash::FastMap<String, String> = Default::default();
@@ -1410,8 +1486,10 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         if Some(li) == skip {
             continue;
         }
+        // (Roadmap 6 P7: a building drawn by hand may stand in a castle's yard, not on its walls.)
+        let drawn = castle && li >= generated && li.checked_sub(generated).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.kind == "building");
         for b in &l.buildings {
-            let hit = if castle { polys_overlap(pts, &b.poly) } else { in_line(&b.poly) };
+            let hit = if castle && !drawn { polys_overlap(pts, &b.poly) } else { in_line(&b.poly) };
             if !hit {
                 continue;
             }
@@ -1428,7 +1506,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
                 in_way.push((id, geom::centroid(&g.poly)));
             }
         }
-        if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().any(|p| geom::contains(pts, *p)))) {
+        if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().enumerate().any(|(k, p)| !(k == 0 || k + 1 == w.len()) | ((0..pts.len()).all(|i| geom::seg_dist(*p, pts[i], pts[(i + 1) % pts.len()]) > WALL_JOIN)) && geom::contains(pts, *p)))) {
             return Err(town::handwall::wall_crossed(world, t0, &l, &segs));
         }
         if castle {
@@ -1456,6 +1534,24 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     }
     in_way.sort_by(|a, b| a.0.cmp(&b.0));
     in_way.dedup_by(|a, b| a.0 == b.0);
+    // (A castle as it would be built: a drawn keep on a tower, a gate or a building drawn in its
+    // yard is refused; the gates asked for that cannot be built, told.)
+    let mut gates_not_built = Vec::new();
+    if castle {
+        let r = town::sites::castle_report(world, t0, c, at);
+        if let Some(why) = r.keep {
+            return Err(format!("the drawn keep stands {why}: draw it clear of the curtain's towers, its gates and the buildings in the yard"));
+        }
+        let sides = c.castle_gates();
+        gates_not_built = r.gates.into_iter().filter_map(|(i, why)| sides.get(i).map(|&g| (g, why))).collect();
+    }
+    Ok(WorksSpot { at, name: works_name(world, t0, castle, at, id), in_way, in_way_names, pts: joined, gates_not_built })
+}
+
+/// The name a castle or wall `id` standing at `at` is given when none is asked for (the nearest
+/// settlement's culture).
+pub fn works_name(world: &World, t0: &T0, castle: bool, at: P, id: &str) -> String {
+    use crate::t0::names::{NameKind, Namer};
     let culture = t0.settlements.iter().min_by(|a, b| (a.x - at[0]).hypot(a.y - at[1]).total_cmp(&(b.x - at[0]).hypot(b.y - at[1]))).map_or(0, |s| s.culture as usize);
     let mut namer = Namer::new(crate::core::hash::fnv64(id.as_bytes()) ^ world.seed);
     let mut word = namer.name(NameKind::Settlement, culture);
@@ -1465,7 +1561,45 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         }
         word = namer.name(NameKind::Settlement, culture);
     }
-    Ok(WorksSpot { at, name: format!("{word} {}", if castle { "Castle" } else { "Wall" }), in_way, in_way_names })
+    format!("{word} {}", if castle { "Castle" } else { "Wall" })
+}
+
+/// (Roadmap 6 P7) The walls someone named, drawn heavier at city scale and lettered along their
+/// lines: walls drawn by hand given a name of their own (not the one `works_name` gives them),
+/// and hand towns' wall lines with a name. (id `c:<n>` or `<layout>/m<id>`, name, line in world
+/// ft, closed lines ending where they began.) With `layout`, only that layout's.
+pub fn named_walls(world: &World, t0: &T0, layout: Option<usize>) -> Vec<(String, String, Vec<P>)> {
+    let generated = t0.settlements.len() + t0.base_pois;
+    let mut out = Vec::new();
+    let e = &world.file.edits;
+    let ring = |pts: &[P], closed: bool| pts.iter().copied().chain(pts.first().copied().filter(|_| closed && pts.len() > 2)).collect::<Vec<P>>();
+    let created: Box<dyn Iterator<Item = (usize, &crate::world::Created)>> = match layout {
+        Some(li) => Box::new(li.checked_sub(generated).and_then(|k| e.created.get(k).map(|c| (k, c))).into_iter()),
+        None => Box::new(e.created.iter().enumerate()),
+    };
+    for (_, c) in created {
+        if c.kind != "wall" || c.removed || c.pts.len() < 2 || c.name.trim().is_empty() || c.name == works_name(world, t0, false, [c.x, c.y], &c.id) {
+            continue;
+        }
+        out.push((c.id.clone(), c.name.trim().to_string(), ring(&c.pts, c.closed)));
+    }
+    let (from, to) = match layout {
+        Some(li) if li >= generated => return out,
+        Some(li) => (format!("{li}/m"), format!("{li}/n")),
+        None => (String::new(), String::from("\u{10ffff}")),
+    };
+    for (key, v) in e.streets.range(from..to) {
+        let Some((li, rest)) = key.split_once('/') else { continue };
+        if !rest.starts_with('m') || rest[1..].parse::<u32>().is_err() || li.parse::<usize>().is_err() {
+            continue;
+        }
+        let Some(name) = v.get("name").and_then(|n| n.as_str()).map(str::trim).filter(|n| !n.is_empty()) else { continue };
+        let pts: Vec<P> = v.get("pts").and_then(|p| serde_json::from_value(p.clone()).ok()).unwrap_or_default();
+        if pts.len() >= 2 {
+            out.push((key.clone(), name.to_string(), ring(&pts, v.get("closed").and_then(|c| c.as_bool()).unwrap_or(false))));
+        }
+    }
+    out
 }
 
 /// `works_spot` as JSON: `{x, y, name, in_way: [{id, at}]}` or `{error}`. The castle or wall is
@@ -1478,7 +1612,16 @@ pub fn works_spot_json(world: &World, t0: &T0, created: &str) -> String {
     };
     let skip = layout_of(world, t0, &c.id);
     match works_spot(world, t0, &c, &c.id, skip) {
-        Ok(s) => json!({ "x": s.at[0], "y": s.at[1], "name": s.name, "in_way": s.in_way.iter().map(|(id, at)| json!({ "id": id, "at": at })).collect::<Vec<_>>() }),
+        Ok(s) => {
+            let mut v = json!({ "x": s.at[0], "y": s.at[1], "name": s.name, "in_way": s.in_way.iter().map(|(id, at)| json!({ "id": id, "at": at })).collect::<Vec<_>>() });
+            if let Some(p) = s.pts {
+                v["pts"] = json!(p);
+            }
+            if !s.gates_not_built.is_empty() {
+                v["gates_not_built"] = json!(s.gates_not_built.iter().map(|(g, why)| json!({ "side": g, "why": why })).collect::<Vec<_>>());
+            }
+            v
+        }
         Err(e) => json!({ "error": e }),
     }
     .to_string()
@@ -1584,6 +1727,17 @@ pub fn polys_overlap_pub(a: &[P], b: &[P]) -> bool {
 /// Whether two polygons share any area (or one holds the other).
 fn polys_overlap(a: &[P], b: &[P]) -> bool {
     a.iter().any(|p| geom::contains(b, *p)) || b.iter().any(|p| geom::contains(a, *p)) || (0..a.len()).any(|i| (0..b.len()).any(|j| segs_cross(a[i], a[(i + 1) % a.len()], b[j], b[(j + 1) % b.len()])))
+}
+
+/// Where lines a-b and c-d meet (a-b's middle if they run alike).
+fn seg_meet(a: P, b: P, c: P, d: P) -> P {
+    let (r, q) = (geom::sub(b, a), geom::sub(d, c));
+    let den = r[0] * q[1] - r[1] * q[0];
+    if den.abs() < 1e-12 {
+        return geom::lerp(a, b, 0.5);
+    }
+    let t = ((c[0] - a[0]) * q[1] - (c[1] - a[1]) * q[0]) / den;
+    geom::add(a, geom::mul(r, t))
 }
 
 fn segs_cross(a: P, b: P, c: P, d: P) -> bool {

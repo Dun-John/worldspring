@@ -111,7 +111,7 @@ pub(super) fn dig(moats: &[Moat], hx0: f64, hy0: f64, hh: &mut [f32], hw: &mut [
                     }
                 }
                 // The drawbridge's deck at the ground's height (over water, a foot above it at least).
-                if m.bridge.covers(p) {
+                if m.bridged(p) {
                     let top = if m.wet { ground.max(level + 1.0) } else { ground.max(hh[h]) };
                     lift[h] += top - hh[h];
                     hh[h] = top;

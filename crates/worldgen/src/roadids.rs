@@ -334,7 +334,9 @@ pub fn named_json(world: &World, t0: &T0) -> Value {
             json!({ "id": id, "name": e.renames.get(id).cloned().unwrap_or_else(|| generated.clone()), "generated": generated, "x": crate::core::round(m[0]), "y": crate::core::round(m[1]), "length_ft": crate::core::round(w.length()) })
         })
         .collect();
-    json!({ "labels": labels, "roads": roads, "crossings": crossings, "wharves": wharves })
+    // (Roadmap 6 P7) The walls someone named, lettered along their lines.
+    let walls: Vec<Value> = crate::agent::named_walls(world, t0, None).into_iter().map(|(id, name, pts)| json!({ "id": id, "name": name, "pts": simplify(&pts, 15.0) })).collect();
+    json!({ "labels": labels, "roads": roads, "crossings": crossings, "wharves": wharves, "walls": walls })
 }
 
 /// The stretches renamed alike, each name once: its stretches in order along the road (ends
