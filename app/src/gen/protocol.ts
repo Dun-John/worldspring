@@ -421,6 +421,9 @@ export type TownWard = (typeof TOWN_WARDS)[number];
 /** Lot sizes, smallest first (`worldgen::world::LOT_SIZES`). */
 export const LOT_SIZES = ['small', 'medium', 'large', 'huge'] as const;
 export type LotSize = (typeof LOT_SIZES)[number];
+/** A generated block fill's storeys (`worldgen::town::hand::HEIGHTS`): one each, the ward's usual, one more. */
+export const HEIGHTS = ['low', 'usual', 'tall'] as const;
+export type Height = (typeof HEIGHTS)[number];
 /** Squares a corner where streets meet can be given (`worldgen::world::SQUARE_KINDS`). */
 export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const;
 export type SquareKind = (typeof SQUARE_KINDS)[number];
@@ -518,7 +521,7 @@ export interface TownWallsByHand {
 export type StreetClass = 'main' | 'street' | 'quay' | 'joint';
 export type OpenKind = 'plaza' | 'lawn' | 'park' | 'garden' | 'market' | 'cemetery' | 'farmland';
 export type BlockFill =
-  | { kind: 'generated'; ward: string; lots?: string; reroll?: number; close?: boolean }
+  | { kind: 'generated'; ward: string; lots?: string; height?: Height; reroll?: number; close?: boolean }
   | { kind: 'hand' }
   | { kind: 'open'; open: OpenKind; style?: string }
   | { kind: 'castle'; hand?: boolean };

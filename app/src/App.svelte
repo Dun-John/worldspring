@@ -2038,16 +2038,35 @@
     if (was !== !!p && townOn) syncTool();
   }
 
+  /** How long a street change may take before the tool is given back (the reply, if it comes, is dropped). */
+  const STREET_WAIT_MS = 60_000;
+
   /** A change asked of the hand town in view: its records applied per key (one step to undo), or why not. */
   async function streetChange(request: StreetRequest, what: string): Promise<boolean> {
     const i = townIndex;
     if (i < 0 || townBusy) return (streetTool?.settled(), false);
     townBusy = true;
-    const r = await view.gen.streetChange(i, request).finally(() => (townBusy = false));
+    // (The reply is computed on the edits as they are now: it applies to these or not at all.)
+    const base = edits;
+    let r: Awaited<ReturnType<typeof view.gen.streetChange>>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const late = new Promise<{ error: string }>((ok) => (timer = setTimeout(() => ok({ error: 'the map took too long to answer: try again' }), STREET_WAIT_MS)));
+      r = await Promise.race([view.gen.streetChange(i, request), late]);
+    } catch (e) {
+      r = { error: `the change failed: ${e instanceof Error ? e.message : String(e)}` };
+    } finally {
+      clearTimeout(timer);
+      townBusy = false;
+    }
     if (i !== townIndex) return (streetTool?.settled(), false);
     if ('error' in r) {
       streetTool?.settled();
       return (toast(r.error.charAt(0).toUpperCase() + r.error.slice(1)), false);
+    }
+    if (edits.streets !== base.streets || edits.wharves !== base.wharves || edits.towns !== base.towns) {
+      streetTool?.settled();
+      return (toast('The map changed meanwhile: try again'), false);
     }
     const { change, report } = r;
     const next: Edits = { ...edits };
@@ -2087,12 +2106,16 @@
   /** The street, painted area or wall picked taken away (false: none of them picked). */
   function deletePicked(): boolean {
     const p = streetPick;
-    if (!p) return false;
-    if (p.kind === 'street') void streetChange({ op: 'delete_street', street: p.id }, 'street');
-    else if (p.kind === 'area') void streetChange({ op: 'remove_area', area: p.id }, 'area');
-    else if (p.kind === 'wall') void streetChange({ op: 'remove_wall', wall: p.id }, 'wall');
+    if (!p || townBusy) return false;
+    let req: StreetRequest;
+    if (p.kind === 'street') req = { op: 'delete_street', street: p.id };
+    else if (p.kind === 'area') req = { op: 'remove_area', area: p.id };
+    else if (p.kind === 'wall') req = { op: 'remove_wall', wall: p.id };
     else return false;
-    streetPick = null;
+    // (The pick stays when the change is refused.)
+    void streetChange(req, p.kind).then((ok) => {
+      if (ok && streetPick === p) streetPick = null;
+    });
     return true;
   }
 
@@ -4653,7 +4676,8 @@
       townTool?.reset();
       streetTool?.reset();
     },
-    townHand: () => !!streetPlan,
+    // (Not while the trace underlay is being adjusted: Backspace/Delete would take a street away.)
+    townHand: () => !!streetPlan && !(townUnderlay.adjust && townUnderlay.visible),
     townStreetFinish: () => (streetTool && streetDrawn ? (streetTool.finish(townMode === 'area'), true) : false),
     townStreetBack: () => !!streetTool?.back(),
     townStreetDelete: () => deletePicked(),

@@ -23,7 +23,7 @@ pub fn list() -> Vec<Value> {
         json!({
             "name": "edit_streets",
             "title": "Lay out streets by hand",
-            "description": "Lay out a town's streets by hand: ops in order (or one as op), ids from get_street_plan, world ft: lay_out_by_hand, back_to_generated, add_street {points, width?, set_l?, set_r?, class?}, delete_street {street}, set_street {street, width?, set_l?, set_r?, class? main|street|quay|joint, bridge?}, move_junctions {moves: [{junction, to|by}]}, set_square {junction, square|none}, set_block {block, fill?, district?, seed?, reroll?}, add_row {street, side l|r, depth, ward, lots?, gaps?}, remove_row {row}, add_area {poly, open}, remove_area {area}, add_wall {pts, closed?, spacing?, towers?, gates?, name?}, remove_wall {wall}. A refusal ends the list. dry_run: first op only. See MCP.md.",
+            "description": "Lay out a town's streets by hand: ops in order (or one as op), ids from get_street_plan, world ft: lay_out_by_hand, back_to_generated, add_street {points, width?, set_l?, set_r?, class?}, delete_street {street}, set_street {street, width?, set_l?, set_r?, class? main|street|quay|joint, bridge?}, move_junctions {moves: [{junction, to|by}]}, set_square {junction, square|none}, set_block {block, fill? {kind generated, ward, lots?, height? low|usual|tall, reroll?, close?} | {kind hand} | {kind open, open, style?}, district?, seed?, reroll?}, add_row {street, side l|r, depth, ward, lots?, gaps?}, remove_row {row}, add_area {poly, open}, remove_area {area}, add_wall {pts, closed?, spacing?, towers?, gates?, name?}, remove_wall {wall}. A refusal ends the list. dry_run: first op only. See MCP.md.",
             "inputSchema": schema(json!({
                 "id": town,
                 "ops": { "type": "array", "items": op.clone(), "minItems": 1 },
@@ -80,6 +80,9 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     if ops.len() > 1 && dry {
         return Err("dry_run takes one op (the next ones depend on the first)".into());
     }
+    // Each change is computed and applied under one hold of the gate (the whole list), so no other
+    // edit can land between a change and the plan it was computed on.
+    let _hold = if crate::batch::active() || dry { None } else { Some(app.gate.lock().await) };
     let mut replies: Vec<Value> = Vec::new();
     for (n, op) in ops.into_iter().enumerate() {
         // (serde ignores extra fields on a variant with none.)
@@ -105,11 +108,15 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
             return Ok(json!({ "tool": "edit_streets", "id": id, "dry_run": true, "results": [report] }));
         }
         let reply = report.clone();
-        app.edit("agent", 0, move |e| {
+        let apply = move |e: &mut worldgen::world::Edits| {
             change.apply(e);
             Ok(reply)
-        })
-        .await?;
+        };
+        if _hold.is_some() {
+            app.edit_now("agent", 0, apply).await?;
+        } else {
+            app.edit("agent", 0, apply).await?;
+        }
         replies.push(report);
     }
     Ok(json!({ "tool": "edit_streets", "id": id, "results": replies }))

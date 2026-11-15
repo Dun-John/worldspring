@@ -145,12 +145,15 @@ pub enum OpenKind {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum BlockFill {
-    /// Lots of a ward (`TOWN_WARDS`), their size (`LOT_SIZES`; none: the ward's usual), rolled
-    /// again `reroll` times, a temple's close round its temple or not (none: where it fits).
+    /// Lots of a ward (`TOWN_WARDS`), their size (`LOT_SIZES`; none: the ward's usual), their
+    /// storeys (`HEIGHTS`; none: the ward's usual), rolled again `reroll` times, a temple's close
+    /// round its temple or not (none: where it fits).
     Generated {
         ward: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lots: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<String>,
         #[serde(default, skip_serializing_if = "is_zero")]
         reroll: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -174,7 +177,7 @@ pub enum BlockFill {
 
 impl Default for BlockFill {
     fn default() -> Self {
-        BlockFill::Generated { ward: "common".into(), lots: None, reroll: 0, close: None }
+        BlockFill::Generated { ward: "common".into(), lots: None, height: None, reroll: 0, close: None }
     }
 }
 
@@ -1292,7 +1295,7 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
                 BlockFill::Open { open, style: Some(k.name().into()) }
             }
             Some(Ward::Castle) => BlockFill::Castle { hand: plan.ward[i] != Some(Ward::Castle) },
-            Some(w) => BlockFill::Generated { ward: w.name().into(), lots: lot_name(i), reroll: ch.reroll.get(&i).copied().unwrap_or(0), close: ch.close.get(&i).copied() },
+            Some(w) => BlockFill::Generated { ward: w.name().into(), lots: lot_name(i), height: None, reroll: ch.reroll.get(&i).copied().unwrap_or(0), close: ch.close.get(&i).copied() },
         };
         let open = !matches!(fill, BlockFill::Hand);
         let block = Block {
@@ -1368,7 +1371,7 @@ pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Creat
     let Some(s) = t0.settlements.iter().min_by(|a, b| near(a).total_cmp(&near(b))) else { return l };
     match c.fill.clone().unwrap_or_default() {
         BlockFill::Hand | BlockFill::Castle { .. } => {}
-        BlockFill::Generated { ward, lots, reroll, .. } => {
+        BlockFill::Generated { ward, lots, height, reroll, .. } => {
             let Some(w) = ward_of(&ward) else { return l };
             let salt = |h: u64| if reroll == 0 { h } else { hash3(h, reroll as i64, 0x7e70, 1) };
             let mut dp = District::roll(w, salt(hash2(seed, 0, 0xd15)));
@@ -1378,7 +1381,9 @@ pub fn plot_layout(world: &World, t0: &T0, index: usize, c: &crate::world::Creat
             let mut rng = Pcg32::new(salt(hash2(seed, 0, 0x107)), 47);
             l.blocks.extend(g.iter().map(|x| x.outer.clone()));
             build_block(site, Region::Region(&g), &[], w, &dp, &mut rng, &mut l, None);
+            home_storeys(&mut l, 0, w, tier, hash2(salt(seed), 0, 0x5707), &[]);
             businesses(&mut l, 0, w, tier, false, hash2(salt(seed), 0, 0xb05), &[]);
+            height_storeys(&mut l, 0, height.as_deref(), &[]);
         }
         BlockFill::Open { open, style } => {
             let mut pieces: Vec<(f64, usize)> = g.iter().enumerate().map(|(k, x)| (x.area(), k)).filter(|x| x.0 >= 200.0).collect();
@@ -2564,7 +2569,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                 }
                 match &rec.fill {
                     BlockFill::Hand | BlockFill::Castle { .. } => {}
-                    BlockFill::Generated { ward, lots, reroll, close } => {
+                    BlockFill::Generated { ward, lots, height, reroll, close } => {
                         let Some(w) = ward_of(ward) else {
                             problems.push((format!("{li}/k{id}"), "no such ward"));
                             break 'fill;
@@ -2594,7 +2599,9 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
                             }
                         }
                         pinned = pin_on(&mut l, first, &rec.pins, origin);
+                        home_storeys(&mut l, first, w, tier, hash2(salt(bseed), gn, 0x5707), &pinned);
                         businesses(&mut l, first, w, tier, s.coastal || s.river || !site.river.is_empty(), hash2(salt(bseed), gn, 0xb05), &pinned);
+                        height_storeys(&mut l, first, height.as_deref(), &pinned);
                     }
                     BlockFill::Open { open, style } => {
                         // (Every piece of its ground, the largest first: each but the first with
@@ -2900,6 +2907,43 @@ fn business_share(w: Ward) -> f64 {
         Ward::Common => 0.04,
         Ward::Noble | Ward::Slum => 0.03,
         _ => 0.0,
+    }
+}
+
+/// What a generated fill's storeys can be set to (`BlockFill::Generated::height`): one storey
+/// each, the ward's usual, one more than usual.
+pub const HEIGHTS: [&str; 3] = ["low", "usual", "tall"];
+
+/// The storeys of the homes of a block of ward `w` laid out anew (`l.buildings[first..]`, but
+/// those pinned), as a town of that size rolls them per ward (`assign_functions`).
+fn home_storeys(l: &mut Layout, first: usize, w: Ward, tier: Tier, key: u64, pinned: &[Option<u32>]) {
+    for k in first..l.buildings.len() {
+        let b = &mut l.buildings[k];
+        if pinned.get(k - first).is_some_and(|p| p.is_some()) || b.func.is_some() || b.keep.is_some() || b.structure != Structure::Roofed {
+            continue;
+        }
+        let r = unit(hash2(key, k as i64, 1));
+        b.floors = match w {
+            Ward::Noble | Ward::Merchant | Ward::Castle => 2 + (r < 0.4) as u8,
+            Ward::Slum | Ward::Common | Ward::Craft | Ward::Docks => 1 + (tier >= Tier::City && r < 0.5) as u8,
+            _ => 1,
+        };
+    }
+}
+
+/// A block's storeys as its fill's `height` asks (after `businesses`): "low" one storey each,
+/// "tall" one more than rolled (to 4); none or "usual" as rolled. Those pinned are left be.
+fn height_storeys(l: &mut Layout, first: usize, height: Option<&str>, pinned: &[Option<u32>]) {
+    let set = |f: u8| match height {
+        Some("low") => 1,
+        Some("tall") => (f + 1).min(4),
+        _ => f,
+    };
+    for k in first..l.buildings.len() {
+        let b = &mut l.buildings[k];
+        if pinned.get(k - first).is_none_or(|p| p.is_none()) && b.keep.is_none() && b.structure == Structure::Roofed {
+            b.floors = set(b.floors);
+        }
     }
 }
 

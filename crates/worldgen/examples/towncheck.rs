@@ -8846,7 +8846,7 @@ fn hand_edits(world: &World, t0: &T0, label: &str, lis: &[usize], r: &mut Report
                         }
                         w = World::new(file).unwrap();
                     }
-                    HandRequest::SetBlock { block: id, fill: Some(hand::BlockFill::Generated { ward: "merchant".into(), lots: None, reroll: 0, close: None }), district: None, seed: None, reroll: false }
+                    HandRequest::SetBlock { block: id, fill: Some(hand::BlockFill::Generated { ward: "merchant".into(), lots: None, height: None, reroll: 0, close: None }), district: None, seed: None, reroll: false }
                 }),
                 "row" => recs.streets.iter().filter_map(|(id, st)| Some((dist(recs.junctions.get(&st.a)?.p, recs.junctions.get(&st.b)?.p), *id))).max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1))).map(|(_, e)| HandRequest::AddRow { street: e, side: "l".into(), depth: 40.0, ward: "common".into(), lots: None, gaps: None, seed: None }),
                 "square" => recs.junctions.iter().find(|(id, j)| j.square.is_none() && recs.streets.values().filter(|s| s.a == **id || s.b == **id).count() >= 3).map(|(id, _)| HandRequest::SetSquare { junction: *id, square: "market".into() }),

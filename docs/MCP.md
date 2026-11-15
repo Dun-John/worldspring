@@ -2222,7 +2222,7 @@ per call. Ids are the numbers `get_street_plan` shows; unknown fields are refuse
 | `set_street` | `street`, `width`, `set_l`, `set_r`, `class`, `bridge` |
 | `move_junctions` | `moves` [{`junction`, `to` or `by`}], all at once (if that breaks the streets, each that does not) |
 | `set_square` | `junction`, `square` (a square kind, or none) |
-| `set_block` | `block`, `fill` ({kind: generated, ward, lots, reroll, close} / {kind: hand} / {kind: open, open, style}), `district` (empty: none), `seed`, `reroll` |
+| `set_block` | `block`, `fill` ({kind: generated, ward, lots, height, reroll, close} / {kind: hand} / {kind: open, open, style}; `height`: `low` one storey each, `usual` (or none) as its ward has them, `tall` one storey more, up to 4), `district` (empty: none), `seed`, `reroll` |
 | `add_row` / `remove_row` | `street`, `side` l or r, `depth`, `ward`, `lots`, `gaps`, `seed` / `row` |
 | `add_area` / `remove_area` | `poly`, `open` (plaza, lawn, park, garden, market, cemetery, farmland) / `area` |
 | `add_wall` / `remove_wall` | `pts`, `closed`, `spacing`, `towers`, `gates` [[x, y]], `name` / `wall` |

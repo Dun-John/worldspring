@@ -64,7 +64,7 @@ export interface KeyContext {
   townMode(m: TownMode): void;
   /** The town brush a step bigger (1) or smaller (-1). */
   townBrush(d: number): void;
-  /** The town in view is laid out by hand (its street graph is shown). */
+  /** The town in view is laid out by hand (its street graph is shown) and its trace underlay isn't being adjusted. */
   townHand(): boolean;
   /** The street, area or wall being drawn ended (false: none). */
   townStreetFinish(): boolean;

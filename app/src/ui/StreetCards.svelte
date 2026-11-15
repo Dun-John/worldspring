@@ -4,7 +4,7 @@
   // away); a junction: the square there; a block: how it is filled (lots of a ward, left for
   // buildings drawn by hand, or open ground) and its district; a painted area or a wall: what it is,
   // and taking it away. Each change is one step to undo.
-  import { LOT_SIZES, type BlockFill, type LotSize, type OpenKind, type StreetClass, type StreetPlan, type StreetRequest, type TownWard } from '../gen/protocol';
+  import { HEIGHTS, LOT_SIZES, type BlockFill, type Height, type LotSize, type OpenKind, type StreetClass, type StreetPlan, type StreetRequest, type TownWard } from '../gen/protocol';
   import { SQUARE_KINDS, type SquareKind } from '../gen/protocol';
   import { OPEN_COLOURS, fillColour, type StreetPick } from '../editor/streets';
   import { WARD_COLOURS } from '../editor/town';
@@ -32,13 +32,15 @@
   const ROW_WARDS = WARDS.filter((w) => w !== 'temple');
   const WARD_LABEL: Partial<Record<TownWard, string>> = { temple: 'Temple', merchant: 'Merchants', craft: 'Craftsmen', noble: 'Nobles', common: 'Common folk', slum: 'Slums', docks: 'Docks', military: 'Barracks', farm: 'Farms' };
   const LOT_LABEL: Record<LotSize, string> = { small: 'Small', medium: 'Medium', large: 'Large', huge: 'Huge' };
+  const HEIGHT_LABEL: Record<Height, string> = { low: 'Low', usual: 'Usual', tall: 'Tall' };
+  const HEIGHT_HINT: Record<Height, string> = { low: 'One storey each', usual: 'As its ward has them', tall: 'One storey more than usual' };
   const SQUARE_LABEL: Record<SquareKind | 'none', string> = { crossroads: 'Widened crossroads', well: 'Well square', fountain: 'Fountain square', green: 'Small green', none: 'No square' };
   const SIDE_LABEL: Record<string, string> = { l: 'left', r: 'right' };
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
   const ft = (v: number) => `${Math.round(v).toLocaleString('en')} ft`;
   const wardName = (w: string) => WARD_LABEL[w as TownWard] ?? w;
   const fillLabel = (f: BlockFill) =>
-    f.kind === 'generated' ? `${wardName(f.ward)}${f.lots ? `, ${f.lots} lots` : ''}` : f.kind === 'open' ? (OPEN_LABEL[f.open] ?? f.open) : f.kind === 'castle' ? 'Castle' : 'Left for buildings drawn by hand';
+    f.kind === 'generated' ? `${wardName(f.ward)}${f.lots ? `, ${f.lots} lots` : ''}${f.height && f.height !== 'usual' ? `, ${f.height}` : ''}` : f.kind === 'open' ? (OPEN_LABEL[f.open] ?? f.open) : f.kind === 'castle' ? 'Castle' : 'Left for buildings drawn by hand';
 
   const street = $derived(pick?.kind === 'street' ? streets.streets.find((x) => x.id === pick.id) : undefined);
   const junction = $derived(pick?.kind === 'junction' ? streets.junctions.find((x) => x.id === pick.id) : undefined);
@@ -180,6 +182,15 @@
           <button class:on={!f.lots} aria-pressed={!f.lots} disabled={busy} onclick={() => f.lots && setFill({ ...f, lots: undefined })} title="As its ward has them">Auto</button>
           {#each LOT_SIZES as l (l)}
             <button class:on={f.lots === l} aria-pressed={f.lots === l} disabled={busy} onclick={() => f.lots !== l && setFill({ ...f, lots: l })}>{LOT_LABEL[l]}</button>
+          {/each}
+        </div>
+      </div>
+      <div class="ws-field">
+        Height
+        <div class="ws-seg" role="radiogroup" aria-label="Height">
+          {#each HEIGHTS as h (h)}
+            {@const on = (f.height ?? 'usual') === h}
+            <button class:on aria-pressed={on} disabled={busy} title={HEIGHT_HINT[h]} onclick={() => !on && setFill({ ...f, height: h === 'usual' ? undefined : h })}>{HEIGHT_LABEL[h]}</button>
           {/each}
         </div>
       </div>
