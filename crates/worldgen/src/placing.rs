@@ -350,7 +350,7 @@ pub fn parcel_blocker(world: &World, t0: &T0, poly: &[P]) -> Option<String> {
     });
     let (what, kind) = match hit {
         Some(b) => (b.what, b.kind),
-        None => wet_inside(world, t0, poly)?,
+        None => hand_water(world, poly).or_else(|| wet_inside(world, t0, poly))?,
     };
     let what = match what {
         "building" => "a building drawn by hand".to_string(),
@@ -360,6 +360,36 @@ pub fn parcel_blocker(world: &World, t0: &T0, poly: &[P]) -> Option<String> {
         w => format!("a {w}"),
     };
     Some(format!("that outline has {what} in it: a plot is free ground, so draw it clear of that"))
+}
+
+/// Water drawn by hand (`Edits.waters`) under an outline: a corner or a grid sample of the plot in an outline, or an outline's corner in the plot.
+fn hand_water(world: &World, poly: &[P]) -> Option<(&'static str, Option<&'static str>)> {
+    let edits = &world.file.edits;
+    let grouped = crate::waters::grouped(edits);
+    if grouped.is_empty() {
+        return None;
+    }
+    let [x0, y0, x1, y1] = [
+        poly.iter().map(|p| p[0]).fold(f64::MAX, f64::min),
+        poly.iter().map(|p| p[1]).fold(f64::MAX, f64::min),
+        poly.iter().map(|p| p[0]).fold(f64::MIN, f64::max),
+        poly.iter().map(|p| p[1]).fold(f64::MIN, f64::max),
+    ];
+    let hit = poly.iter().any(|&p| crate::waters::level_in(&grouped, p).is_some())
+        || grouped.iter().any(|(pts, _, _)| pts.iter().any(|&q| geom::contains(poly, q)));
+    let step = 10.0_f64.max((x1 - x0).max(y1 - y0) / 80.0);
+    let mut y = y0 + step * 0.5;
+    while !hit && y < y1 {
+        let mut x = x0 + step * 0.5;
+        while x < x1 {
+            if geom::contains(poly, [x, y]) && crate::waters::level_in(&grouped, [x, y]).is_some() {
+                return Some(("water", Some("lake")));
+            }
+            x += step;
+        }
+        y += step;
+    }
+    hit.then_some(("water", Some("lake")))
 }
 
 /// Water inside an outline that the walls' probes miss (a pond or a river bend wholly within): its area on a grid of at most 10 ft.
