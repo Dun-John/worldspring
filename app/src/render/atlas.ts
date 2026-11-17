@@ -4219,7 +4219,7 @@ function picketFence(g: Graphics, r: number, rnd: () => number, v: number) {
   ][v];
   const L = 0.5 * PX;
   // The rail runs the whole piece under the palings, so the pieces read as one continuous fence.
-  railLine(g, -L, 0, L, 0, 6, v === 2 ? 0x7a6a4a : WOOD[1]);
+  railLine(g, -L, 0, L, 0, 8, v === 2 ? 0x7a6a4a : WOOD[1]);
   const n = 8;
   const step = (L * 2) / n;
   const gone = v === 3 ? 1 + Math.floor(rnd() * 6) : -1;
@@ -4227,10 +4227,10 @@ function picketFence(g: Graphics, r: number, rnd: () => number, v: number) {
     if (i === gone) continue;
     const x = -L + (i + 0.5) * step;
     const askew = v === 3 && i === gone + 1 ? 0.5 : 0;
-    topBlock(g, x, 0, step - 0.8, 8.6, askew, paint, 1.8);
+    topBlock(g, x, 0, step - 0.8, 12, askew, paint, 1.8);
     if (v === 1 && rnd() < 0.5) g.circle(x + (rnd() - 0.5) * 2, -0.4, 0.9).fill(WOOD[2]);
   }
-  topBlock(g, 0, 0, 7.2, 11.2, 0, paint.map((c) => shade(c, 0.9)), 2.2);
+  topBlock(g, 0, 0, 8, 15, 0, paint.map((c) => shade(c, 0.9)), 2.2);
 }
 
 /** Iron railing along x from above: its top rail a dark bar, six finials' round tops along it (the bars'
@@ -4242,9 +4242,9 @@ function ironRailing(g: Graphics, r: number, rnd: () => number, v: number) {
   const tip = v === 2 ? [0x5e5434, 0x9a8a5a, 0xc4b688] : iron;
   const L = 0.5 * PX;
   // Two rails the whole piece long (the top one broad), a round finial on every bar, a post cap at the middle.
-  railLine(g, -L, -3.4, L, -3.4, 2.6, iron[0]);
-  railLine(g, -L, 0, L, 0, 5.2, iron[1]);
-  g.moveTo(-L, -1.1).lineTo(L, -1.1).stroke({ width: 1.2, color: iron[2] });
+  railLine(g, -L, -5, L, -5, 3.2, iron[0]);
+  railLine(g, -L, 0, L, 0, 7, iron[1]);
+  g.moveTo(-L, -1.5).lineTo(L, -1.5).stroke({ width: 1.2, color: iron[2] });
   const n = 8;
   const step = (L * 2) / n;
   const bent = v === 3 ? Math.floor(rnd() * 2) : -1;
@@ -4252,10 +4252,10 @@ function ironRailing(g: Graphics, r: number, rnd: () => number, v: number) {
     const x = -L + (i + 0.5) * step;
     const y = i === bent ? 4 : 0;
     if (y) g.moveTo(x, 0).lineTo(x, y).stroke({ width: 3.4, color: INK, cap: 'round' });
-    g.circle(x, y, 3.2).fill(tip[1]).stroke({ width: 1.6, color: INK });
+    g.circle(x, y, 4.2).fill(tip[1]).stroke({ width: 1.6, color: INK });
     g.circle(x - 1, y - 1, 1.1).fill(tip[2]);
   }
-  topBlock(g, 0, 0, 9, 11, 0, iron, 2.2);
+  topBlock(g, 0, 0, 11, 15, 0, iron, 2.2);
   g.circle(0, 0, 3.4).fill(tip[1]).stroke({ width: 1.4, color: INK });
   g.circle(-0.8, -0.8, 0.9).fill(tip[2]);
 }
