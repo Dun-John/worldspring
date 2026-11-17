@@ -254,6 +254,46 @@ impl Ctx {
         worldgen::roadcut::cut_json(&self.world, t0, &i.ids, i.restore, i.dry).to_string()
     }
 
+    /// (Roadmap 6 R6) Fences and hedges changed (`fencecut::change`), without changing the edits.
+    /// `input`: `{ids?: [..], op: remove|restore|kind|gate|draw|gap, kind?, at?: [x, y] | [[x, y],
+    /// ..], fence?: Fence, gap?: FenceGap | [FenceGap, ..], dry?: bool}` (`draw` without ids: a new
+    /// `f:`; with one `f:` id: that one replaced; `gap`: new `fg:` ids, in `done`). Gives `fencecut::ChangeOut`: `{fences: {id: Fence | null},
+    /// fence_gaps: {id: FenceGap | null}, towns: {key: TownEdit | null}, rects, site_rects, done,
+    /// refused: [{id, why}]}` (`dry`: only `rects`/`site_rects`/`done`); or `{error}`.
+    pub fn fence_change_json(&self, input: &str) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(input) else { return r#"{"error":"bad input: {ids?, op, kind?, at?, fence?, gap?, dry?}"}"#.into() };
+        let ids: Vec<String> = match &v["ids"] {
+            serde_json::Value::Null => Vec::new(),
+            x => match serde_json::from_value(x.clone()) {
+                Ok(ids) => ids,
+                Err(_) => return r#"{"error":"ids: a list of strings"}"#.into(),
+            },
+        };
+        match worldgen::fencecut::Op::parse(&v) {
+            Ok(op) => worldgen::fencecut::change_json(&self.world, t0, &ids, &op, v["dry"].as_bool().unwrap_or(false)).to_string(),
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
+    }
+
+    /// (Roadmap 6 R6) Every fence and hedge within `r` ft (at most 2,000) of (`x`, `y`)
+    /// (`fencecut::near`): `[{id, kind, length_ft, ends | pts, town?, gone?, gates?, ..}]`.
+    pub fn fences_near_json(&self, x: f64, y: f64, r: f64, limit: u32) -> String {
+        match &self.t0 {
+            Some(t0) => serde_json::Value::Array(worldgen::fencecut::near(&self.world, t0, [x, y], r, limit.max(1) as usize)).to_string(),
+            None => "[]".into(),
+        }
+    }
+
+    /// (Roadmap 6 R6) The towns whose fences are changed by hand, for the Gazetteer
+    /// (`fencecut::changed`): `[{town, name, ids, found}]`.
+    pub fn changed_fences_json(&self) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::fencecut::changed_json(&self.world, t0).to_string(),
+            None => "[]".into(),
+        }
+    }
+
     /// (Roadmap 6 R5) The overlay's `bridges` without the stretches removed by hand (`[[x, y, dx, dy,
     /// class, kind, width], ..]`), for the app once `Edits.removed_roads` changes.
     pub fn bridge_marks_json(&self) -> String {
