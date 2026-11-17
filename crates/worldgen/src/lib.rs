@@ -5,6 +5,7 @@
 //! natively (`mapd`, tests) and as WASM in browser workers, and must produce identical bytes.
 
 pub mod agent;
+mod checks;
 pub mod placing;
 pub mod battlemap;
 pub use worldgen_core as core;
