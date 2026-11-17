@@ -12,13 +12,16 @@
 //!   (`delete_feature`, `Created::removed`);
 //! - `settlement`, `site` (the feature id; a created one's `c:<n>`): removable when created;
 //! - `district` (`d:<layout>:<q>`);
-//! - `road` (`rd:<8 hex>`, a world road stretch), `drawn_road` (`rw:<id>`, `Edits.paths`:
+//! - `road` (`rd:<8 hex>`, a world road stretch; `mt:<8 hex>`, a track to a settlement added by
+//!   hand): removable (`roadcut`, `Edits.removed_roads`); `drawn_road` (`rw:<id>`, `Edits.paths`:
 //!   removable), `crossing` (`v:<id>`: removable), `water` (`e:<id>`: removable), `harbour`
 //!   (`q:<id>`, a quay, pier or breakwater built by hand: removable);
-//! - `street` / `lane` added to a generated town by hand (`ts:<layout>:<id>`, `TownEdit::streets`:
-//!   removable);
-//! - without ids yet: `lane` (a village's), `street` (a town's), `hedge` / `field_wall` (round a
-//!   field), `fence` (a pen's).
+//! - `street` / `lane` of a generated town or village (`tr:<layout>:<8 hex>`, `town::cut`) and
+//!   `path` (`pp:<layout>:<spot>:<j>`, a park's, garden's or cemetery's walk): removable
+//!   (`roadcut`, `TownEdit::removed`); one added to a generated town by hand (`ts:<layout>:<id>`,
+//!   `TownEdit::streets`): removable. Roads, streets and paths removed by hand are left out;
+//! - without ids: a hand town's streets (changed in its street plan), a place's lanes, `hedge` /
+//!   `field_wall` (round a field), `fence` (a pen's).
 
 use std::cell::{Cell, OnceCell};
 
@@ -67,7 +70,7 @@ fn rank(kind: &str) -> u8 {
         "crossing" | "harbour" => 1,
         "building" | "drawn_building" | "tower" => 2,
         "wall" | "fence" => 3,
-        "road" | "drawn_road" | "street" | "lane" => 4,
+        "road" | "drawn_road" | "street" | "lane" | "path" => 4,
         "hedge" | "field_wall" => 5,
         "water" => 6,
         "castle" | "plot" => 7,
@@ -237,21 +240,52 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                 put(d, "district", Some(id.clone()), renamed(&id).or_else(|| Some(q.name.clone())), home.clone(), false, bbox(&pts, 0.0));
             }
         }
-        // Streets and lanes (no ids yet).
+        // Streets and lanes: a generated settlement's with their `tr:` ids (R5), those removed by
+        // hand left out; a town's `l.streets` (its main streets' paths, never drawn) then not listed.
         let lane = if l.tier == Tier::Village { "lane" } else { "street" };
         let half = if l.tier == Tier::Village { 6.0 } else { 10.0 };
-        for s in &l.streets {
+        let generated = town::added::home(world, t0, li).is_some();
+        let cut = if generated { town::cut::Cut::of(world, t0, l) } else { None };
+        let trs: Vec<(u8, usize, u32)> = if generated { town::cut::street_ids(world, t0, l) } else { Vec::new() };
+        let tr = |tag: u8, k: usize| trs.iter().find(|x| x.0 == tag && x.1 == k).map(|x| town::cut::street_id(li, x.2));
+        let gone = |tag: u8, k: usize| cut.as_ref().is_some_and(|c| c.line(tag, k));
+        for (k, s) in l.streets.iter().enumerate() {
+            if (generated && l.tier != Tier::Village) || gone(town::cut::STREETS, k) {
+                continue;
+            }
             if near_box(s, at, r + half) {
-                put(line_d(s, false, at) - half, lane, None, None, home.clone(), false, bbox(s, half));
+                let id = tr(town::cut::STREETS, k);
+                put(line_d(s, false, at) - half, lane, id.clone(), None, home.clone(), id.is_some(), bbox(s, half));
             }
         }
         // (R4: a street added to a generated town has an id, `ts:<layout>:<id>`, and goes with its `TownEdit` street.)
         let added = town::added::ids(world, t0, l);
         for (k, (s, _, w)) in l.roads.iter().enumerate() {
+            if gone(town::cut::ROADS, k) {
+                continue;
+            }
             if near_box(s, at, r + 0.5 * w) {
-                let id = added.iter().find(|x| x.0 == k).map(|x| format!("ts:{li}:{}", x.1));
+                let id = added.iter().find(|x| x.0 == k).map(|x| format!("ts:{li}:{}", x.1)).or_else(|| tr(town::cut::ROADS, k));
                 let removable = id.is_some();
                 put(line_d(s, false, at) - 0.5 * w, lane, id, None, home.clone(), removable, bbox(s, 0.5 * w));
+            }
+        }
+        // (R5) A generated settlement's parks' paths (`pp:`), as their battlemaps lay them out.
+        if generated {
+            for (pk, park) in l.parks.iter().enumerate() {
+                if park.kind == town::ParkKind::Horses || !near_box(&park.pts, at, r) {
+                    continue;
+                }
+                let pc = geom::centroid(&park.pts);
+                let lay = crate::battlemap::park_layout(park, crate::battlemap::land_biome(t0, pc), l.tier >= Tier::City, world.stream("battlemap"));
+                let spot = town::cut::park_spot(l, pk);
+                let gone = cut.as_ref().and_then(|c| c.paths(pk));
+                for (j, (pts, w)) in lay.paths.iter().enumerate() {
+                    if gone.is_some_and(|g| g.contains(&(j as u32))) || !near_box(pts, at, r + 0.5 * w) {
+                        continue;
+                    }
+                    put(line_d(pts, false, at) - 0.5 * w, "path", Some(town::cut::path_id(li, &spot, j)), None, home.clone(), true, bbox(pts, 0.5 * w));
+                }
             }
         }
         // Hedges and dry-stone walls round fields, pens' fences.
@@ -294,12 +328,27 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
         for (ri, d) in roads {
             let rc = &net.roads[ri];
             let id = &ids[ri];
+            if edits.removed_roads.contains(id) {
+                continue;
+            }
             let name = match (edits.renames.get(id), rc.stroke) {
                 (Some(n), _) => Some(n.clone()),
                 (None, Some(_)) => crate::roadids::stretch_name(world, t0, fs.get_or_init(|| crate::agent::features(world, t0)), id, rc),
                 (None, None) => None,
             };
-            put(d, "road", Some(id.clone()), name, None, false, bbox(&rc.pts, 0.5 * rc.class.width_ft()));
+            put(d, "road", Some(id.clone()), name, None, true, bbox(&rc.pts, 0.5 * rc.class.width_ft()));
+        }
+    }
+    // Tracks to settlements added by hand (`mt:`).
+    let tracks: OnceCell<Vec<String>> = OnceCell::new();
+    for (k, m) in t0.made.iter().enumerate() {
+        let half = 0.5 * m.class.width_ft();
+        if m.track.len() < 2 || !near_box(&m.track, at, r + half) {
+            continue;
+        }
+        let id = &tracks.get_or_init(|| crate::t0::made::track_ids(t0))[k];
+        if !edits.removed_roads.contains(id) {
+            put(line_d(&m.track, false, at) - half, "road", Some(id.clone()), None, None, true, bbox(&m.track, half));
         }
     }
     // Drawn by hand: roads, crossings, water, harbour pieces.

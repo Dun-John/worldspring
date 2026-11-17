@@ -799,6 +799,11 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
     match req {
         HandRequest::LayOutByHand => {
             let recs = hand::convert(world, t0, index)?;
+            // (Roadmap 6 R5) Its streets, lanes and paths removed by hand come back (kept for back_to_generated).
+            let back = super::cut::removed_of(world, t0, index).map_or(0, |r| r.len());
+            if back > 0 {
+                report["removed_back"] = json!(back);
+            }
             let lo = format!("{li}/");
             for (k, _) in streets.range(lo.clone()..).take_while(|(k, _)| k.starts_with(&lo)) {
                 ch.streets.insert(k.clone(), None);

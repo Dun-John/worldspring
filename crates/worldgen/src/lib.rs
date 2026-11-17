@@ -34,6 +34,7 @@ pub mod links;
 pub mod payload;
 pub mod pick;
 pub mod pipeline;
+pub mod roadcut;
 pub mod roadids;
 pub mod undersearch;
 /// Wharves (`worldgen-town`), and the water and squares where an islet or a wharf's root goes.

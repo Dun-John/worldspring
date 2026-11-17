@@ -7,7 +7,7 @@ use crate::town::handwall::cut;
 pub use crate::town::pieces::BuildingChange;
 
 /// The streets, walls, squares and world roads in an area (`list_streets`): each layout (settlement or site) in `rect` gives its streets
-/// (`{what: street, settlement, width_ft, kind, pts}`, one added by hand with its `ts:` id), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and
+/// (`{what: street, settlement, width_ft, kind, pts}`, a generated settlement's with its `tr:` id, one added by hand with its `ts:` id), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and
 /// squares (`square`, whole: `kind`, `pts`), then the world's roads (`road`: `id` rd:, `class`, `pts`); lines are cut to the area
 /// (`inside` tells which points are in it), points in whole ft.
 pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> bool) -> Vec<Value> {
@@ -34,12 +34,20 @@ pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> 
             v
         };
         let added = town::added::ids(world, t0, &l);
+        // (R5) A generated settlement's own streets with their `tr:` ids (`removed`: taken off the map by hand).
+        let own = town::added::home(world, t0, li).is_some();
+        let trs = if own { town::cut::street_ids(world, t0, &l) } else { Vec::new() };
+        let cut = if own { town::cut::Cut::of(world, t0, &l) } else { None };
         for (k, (pts, class, w)) in l.roads.iter().enumerate() {
-            let id = added.iter().find(|x| x.0 == k).map(|x| format!("ts:{li}:{}", x.1));
+            let id = added.iter().find(|x| x.0 == k).map(|x| format!("ts:{li}:{}", x.1)).or_else(|| trs.iter().find(|x| x.0 == town::cut::ROADS && x.1 == k).map(|x| town::cut::street_id(li, x.2)));
+            let removed = cut.as_ref().is_some_and(|c| c.road(k));
             for r in clip_runs(pts, inside) {
                 let mut x = json!({ "width_ft": crate::core::round(*w), "kind": street_kind(*class), "pts": pts_json(&r) });
                 if let Some(id) = &id {
                     x["id"] = json!(id);
+                }
+                if removed {
+                    x["removed"] = json!(true);
                 }
                 out.push(with("street", x));
             }

@@ -130,6 +130,9 @@ pub fn roads(world: &World, t0: &T0, near: Option<(P, f64)>, settlement: Option<
             if let Some(n) = world.file.edits.renames.get(&ids[i]) {
                 v["name"] = json!(n);
             }
+            if world.file.edits.removed_roads.contains(&ids[i]) {
+                v["removed"] = json!(true);
+            }
             if let Some(f) = r.stroke.and_then(|s| drawn_road(world, t0, &fs, s)).map(|k| &fs[k]) {
                 let n = name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone());
                 if v["name"].is_null() {
@@ -240,6 +243,10 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
                 let len = *r.s.last().unwrap_or(&0.0);
                 let name = crate::roadids::stretch_name(world, t0, &fs, &ids[ri], r);
                 let mut sv = json!({ "id": ids[ri], "class": crate::roadids::class_name(r.class), "length_mi": mi(len) });
+                // (Roadmap 6 R5: a stretch removed by hand is still walked; traffic is unchanged.)
+                if world.file.edits.removed_roads.contains(&ids[ri]) {
+                    sv["removed"] = json!(true);
+                }
                 if let Some(n) = &name {
                     sv["name"] = json!(n);
                     match follows.last_mut().filter(|f| f["name"] == json!(n) && f["last"] == json!(stretches.len() - 1)) {

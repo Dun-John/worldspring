@@ -156,7 +156,8 @@ pub struct NamedRoad {
 }
 
 /// The roads someone named (`rename_feature rd:…`, stretches still there), by name; hidden
-/// stretches left out with `skip_hidden`. What the map letters (only roads someone named).
+/// stretches and those removed by hand (`Edits.removed_roads`) left out with `skip_hidden`. What
+/// the map letters (only roads someone named).
 pub fn named_roads(world: &World, t0: &T0, skip_hidden: bool) -> Vec<NamedRoad> {
     let e = &world.file.edits;
     if !e.renames.keys().any(|k| k.starts_with("rd:")) {
@@ -165,7 +166,7 @@ pub fn named_roads(world: &World, t0: &T0, skip_hidden: bool) -> Vec<NamedRoad> 
     let ids = road_ids(t0);
     let mut by_name: std::collections::BTreeMap<&String, Vec<usize>> = Default::default();
     for (i, id) in ids.iter().enumerate() {
-        if let Some(n) = e.renames.get(id).filter(|n| !n.trim().is_empty() && !(skip_hidden && e.hidden.contains(id)) && t0.roads.roads[i].pts.len() >= 2) {
+        if let Some(n) = e.renames.get(id).filter(|n| !n.trim().is_empty() && !(skip_hidden && (e.hidden.contains(id) || e.removed_roads.contains(id))) && t0.roads.roads[i].pts.len() >= 2) {
             by_name.entry(n).or_default().push(i);
         }
     }
@@ -259,8 +260,9 @@ fn line_len(pts: &[P]) -> f64 {
 /// by hand (name given, else as generated; `generated`; middle; length).
 pub fn named_json(world: &World, t0: &T0) -> Value {
     let named = named_roads(world, t0, false);
-    // Hidden stretches are left out of the lettering (and the rest re-chained); the same walk serves when none is hidden.
-    let hidden = named.iter().any(|r| r.ids.iter().any(|id| world.file.edits.hidden.contains(id)));
+    // Hidden stretches and removed ones are left out of the lettering (and the rest re-chained); the same walk serves when none is.
+    let e = &world.file.edits;
+    let hidden = named.iter().any(|r| r.ids.iter().any(|id| e.hidden.contains(id) || e.removed_roads.contains(id)));
     let lettered = if hidden { named_roads(world, t0, true) } else { Vec::new() };
     let labels: Vec<Value> = (if hidden { &lettered } else { &named })
         .iter()
@@ -280,7 +282,6 @@ pub fn named_json(world: &World, t0: &T0) -> Value {
             json!({ "id": r.ids[0], "ids": r.ids, "name": r.name, "length_ft": crate::core::round(line_len(&r.pts)), "bbox": b.map(crate::core::round), "generated": generated })
         })
         .collect();
-    let e = &world.file.edits;
     let crossings: Vec<Value> = e
         .crossings
         .iter()
