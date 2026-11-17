@@ -23,6 +23,7 @@ pub mod t0 {
         pub use worldgen_town::town::sites::tower_building;
     }
 }
+pub mod fencecut;
 pub mod gazetteer;
 pub mod geoquery;
 /// Interiors (`worldgen-town`), and an interior by id with the links put down by hand on it.
