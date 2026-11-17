@@ -949,6 +949,8 @@ export type Ask =
   | { op: 'names'; scope: string }
   /** The sites standing in settlements (`agent::parents_json`). */
   | { op: 'parents' }
+  /** Town layout `town`'s members changed by hand, as `members` entries and created places (`town::members::change`); ids as JSON arrays. */
+  | { op: 'members'; town: number; add: string; remove: string }
   /** Where a site can be created near (x, y), and a name for it (`agent::creation_spot`). */
   | { op: 'spot'; kind: string; under?: string; id: string; x: number; y: number }
   /** Whether a building drawn by hand can stand there, its point and a name
@@ -1094,7 +1096,20 @@ export interface Parents {
   n: number;
   base: number;
   pairs: [number, number][];
+  /** Each drawn thing's town (a layout index, past `n` for a town or place made by hand) and why: by the
+   * 300 ft rule (`gap`, with the distance in ft) or by hand. */
+  owners?: [number, number, 'gap' | 'hand', number | null][];
+  /** Generated buildings pushed out of their town: `[place, town, building ids]`. */
+  pushed?: [number, number, string[]][];
+  /** Settlements and places by feature id: `[id, kind, extent ft, people]`. */
+  sizes?: [string, string, number, number][];
 }
+
+/** What `members` answers: the `Edits.members` entries to set (`{}` takes one away), the places to append to
+ * `Edits.created`, and what was left as it was (`why` in plain words). */
+export type MembersChange =
+  | { members: Record<string, { add?: string[]; remove?: string[] }>; created: Created[]; refused: { id: string; why: string }[]; report?: unknown }
+  | { error: string };
 
 export interface PlaceInfo {
   id: string;
@@ -1228,6 +1243,9 @@ export interface Thing {
   town: string | null;
   removable: boolean;
   bbox: [number, number, number, number];
+  /** How it belongs to `town`: the 300 ft rule, by hand, or inside its streets; `gap_ft` is the distance. */
+  why?: 'gap' | 'hand' | 'inside';
+  gap_ft?: number;
 }
 
 /** What a point query or building search returns. */
