@@ -290,7 +290,7 @@ One feature in detail. What comes back depends on the feature:
 |---|---|
 | Any feature | `name`, `kind`, `detail`, position, elevation, `notes`, `hidden` |
 | Any place | `in`: the regions it lies in (continent, range, forest…), and `nearest_settlements` |
-| Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets as generated (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
+| Settlements | `members` (drawn things that belong to the town: `id`, `kind`, `name`, `why`: `gap` or `hand`) and `pushed_out` (`place`, `name`, `buildings`) when there are any; roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets as generated (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
 | Sites | The layout: buildings, and ways underground with their `u:` ids; `settlement`: the town it stands in, or `null` |
 | Buildings and underground sites | Levels and rooms |
 | Buildings | `roof_material`, `roof_shape` and `roof_shade` (as `create_building` takes them; none on battlements or ruins), `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`, and a castle's keep its `pieces` (`kind`: body, round tower, square tower, forebuilding, wing; `poly`), a temple its own (body, transept, apse), whose union `poly` is (drawing a new outline makes it one piece); `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
@@ -2230,6 +2230,7 @@ and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `
 | `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, district, as_generated}]` | | `district`: a district's id (`d:<layout>:<n>`: any patch to any district, apart or not), a name (the district of that name now, any case, else a new district so named: new ones follow the generated ones, so every district keeps its id; one emptied keeps its id with no patches or label) or `"auto"`; a district whose patches change takes its kind from its wards by area (the centre stays the centre) and its label at its largest piece; `rename_feature` renames one; `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
 | `squares` | `[{corner, kind}]` | | `kind`: crossroads, well, fountain, green, `"none"` (no square there) or `"auto"` (as generated); a square opens only at a `junction` |
 | `walls` | `true` \| `false` \| `"auto"` \| `{built, gates_add, gates_remove, towers_add, towers_remove}` | | Walls up, down, or as generated; or by corner: `built` as the plain value, `gates_add`/`gates_remove`: `[corner]`, `towers_add`: `[[corner, next corner, f]]` (`f` 0.05–0.95, default 0.5) or `[corner]` (a tower taken down there, back up), `towers_remove`: `[corner \| "t:<layout>:<n>"]` |
+| `members` | `{add, remove}` (lists of ids) | | What belongs to the town, by hand (see below): `c:<n>` drawn things (`add` joins, `remove` leaves), `b:<layout>:<id>` generated outskirt buildings (`remove` pushes them out into a new place, `add` takes them back). May be given alone |
 | `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` \| `"walls"` | | Back to as generated (`walls`: up or down and every gate and tower set by hand) |
 | `dry_run` | boolean | `false` | Report without changing anything |
 
@@ -2238,6 +2239,20 @@ and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `
 ```
 > *"Put a castle on the ward east of Agentholm's market, and take its walls down."* · *"Make the docks' lots
 > bigger and round off the square by the north gate."*
+
+Membership: a thing drawn by hand (a building, a site) belongs to a town when it stands within 300 ft of the
+town's built edge or of another of its members, so a row of houses drawn outward chains on. It then takes the
+town's look and culture and counts in its lists (sites, shops, people), and a cellar of its own links to the
+city's sewers where it is in reach of the paved streets. `members` is the hand choice, and it beats distance:
+`add` joins a thing however far, `remove` keeps it out however near. A generated building outside the walls
+(sprawl, farm, rural, or in no quarter) can be pushed out with `remove`: the call makes one new place (kind
+`place`, named in the town's culture, shown as a village) that takes them as its own, and the reply says so.
+Buildings inside the wall ring or a quarter are refused, each in `members_refused` (`id`, `why`). The reply's
+`members` says what joined, left or moved out; `dry_run` reports without changing.
+
+```json
+{ "name": "edit_town", "arguments": { "id": "city:6c30c809", "members": { "add": ["c:12"], "remove": ["b:5:340"] } } }
+```
 
 ```json
 { "name": "edit_town", "arguments": { "id": "city:6c30c809", "walls": { "gates_add": [42], "towers_add": [[92, 93, 0.5]] } } }

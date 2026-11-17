@@ -572,6 +572,35 @@ pub(super) fn sites_json(world: &World, t0: &T0, si: usize, underground: bool) -
         .collect()
 }
 
+/// What belongs to settlement `si` by membership (`town::members`): its drawn things
+/// (`{id, kind, name, why}`: "gap" within 300 ft of its edge or a member, "hand" joined by hand) and
+/// the places its outskirts were pushed out into (`{place, name, buildings}`).
+pub(super) fn members_json(world: &World, t0: &T0, si: usize) -> (Vec<Value>, Vec<Value>) {
+    let fs = features(world, t0);
+    let members = town::members::members_of(world, t0, si)
+        .into_iter()
+        .filter_map(|(li, o)| {
+            let id = feature_of_layout(world, t0, li)?;
+            let f = fs.iter().find(|f| f.id == id)?;
+            let why = match o.why {
+                town::Why::Gap(_) => "gap",
+                town::Why::Hand => "hand",
+                town::Why::Inside => "inside",
+            };
+            Some(json!({ "id": id, "kind": f.kind, "name": f.name, "why": why }))
+        })
+        .collect();
+    let pushed = town::members::pushed(world, t0, si)
+        .into_iter()
+        .filter_map(|(pl, ids)| {
+            let id = feature_of_layout(world, t0, pl)?;
+            let name = fs.iter().find(|f| f.id == id).map(|f| f.name.clone()).unwrap_or_default();
+            Some(json!({ "place": id, "name": name, "buildings": ids.iter().map(|b| format!("b:{si}:{b}")).collect::<Vec<_>>() }))
+        })
+        .collect();
+    (members, pushed)
+}
+
 /// The buildings drawn by hand in settlement `si` that have a trade: (`b:<site>:0`, its layout).
 pub(super) fn drawn_businesses(world: &World, t0: &T0, si: usize) -> Vec<(String, std::rc::Rc<town::Layout>)> {
     sites_of(world, t0, si)
