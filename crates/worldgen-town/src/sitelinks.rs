@@ -122,7 +122,7 @@ pub fn dress(world: &World, t0: &T0, layout: usize, it: &mut Interior) {
 }
 
 /// Items `place_way` never takes away for a way: the ways and keys themselves, pictures and hangings.
-pub(crate) const KEPT: [&str; 13] = ["sprite", "trapdoor", "hoist_trapdoor", "link_down", "link_up", "exit", "up", "down", "ladder", "key", "spiral_stair", "tapestry", "banner"];
+pub const KEPT: [&str; 13] = ["sprite", "trapdoor", "hoist_trapdoor", "link_down", "link_up", "exit", "up", "down", "ladder", "key", "spiral_stair", "tapestry", "banner"];
 
 /// Put the way down to a site (item `kind`, `name`, linked `to`) on cellar level `lvl` so it reads at a glance:
 /// on a free floor square whose eight neighbours are free floor of its room (the app draws it bigger than its

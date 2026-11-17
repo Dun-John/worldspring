@@ -980,6 +980,7 @@ dependencies = [
  "worldgen-core",
  "worldgen-model",
  "worldgen-terrain",
+ "worldgen-town",
 ]
 
 [[package]]
@@ -1009,6 +1010,18 @@ dependencies = [
  "serde_json",
  "worldgen-core",
  "worldgen-model",
+]
+
+[[package]]
+name = "worldgen-town"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "serde",
+ "serde_json",
+ "worldgen-core",
+ "worldgen-model",
+ "worldgen-terrain",
 ]
 
 [[package]]

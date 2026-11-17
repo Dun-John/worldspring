@@ -175,7 +175,7 @@ impl Moat {
 
     /// `spot`, as far as `reach` ft off the moat; `kept` false: also past its bound and inside the
     /// curtain (ft short of it less than 0: where the battlemap's water's edge reaches).
-    pub(crate) fn spot_by(&self, p: P, reach: f64, kept: bool) -> Option<Spot> {
+    pub fn spot_by(&self, p: P, reach: f64, kept: bool) -> Option<Spot> {
         let within = contains(&self.ring, p);
         if p[0] < self.bbox[0] - 6.0 || p[1] < self.bbox[1] - 6.0 || p[0] > self.bbox[2] + 6.0 || p[1] > self.bbox[3] + 6.0 || (kept && within) {
             return None;

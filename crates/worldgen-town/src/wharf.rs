@@ -11,7 +11,6 @@ use crate::town::geom;
 use crate::world::{Crossing, CrossingKind, Wharf, WharfKind};
 pub use crate::ground::wharf::{MADE_ABOVE_FT, water, level, dry_side, strips, decks, bounds};
 use crate::ground::wharf::{unit, wetness};
-pub use crate::wharf_site::{water_at, water_over, islet_at, islet_at_fine, root_problem};
 
 type P = [f64; 2];
 

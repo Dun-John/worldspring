@@ -50,7 +50,7 @@ pub const POND_CONE: f64 = 30.0;
 /// The ground `e` ft out from a pond's rim (its water at `level`, its band `band`) where it stands
 /// at `h`: eased down over the band to its banks (0.3 ft over the water, rising a tenth of a foot a
 /// foot), and no steeper than 0.35 from the rim out to `POND_CONE` past the band.
-pub(crate) fn pond_bank(h: f64, e: f64, level: f64, band: f64) -> f64 {
+pub fn pond_bank(h: f64, e: f64, level: f64, band: f64) -> f64 {
     if e >= band + POND_CONE {
         return h;
     }
@@ -61,7 +61,7 @@ pub(crate) fn pond_bank(h: f64, e: f64, level: f64, band: f64) -> f64 {
 }
 
 /// The highest a stream's bank stands `d` ft past its edge (its water at `wl`): three in ten.
-pub(crate) fn stream_bank(wl: f64, d: f64) -> f64 {
+pub fn stream_bank(wl: f64, d: f64) -> f64 {
     wl + 0.3 + 0.3 * d
 }
 
@@ -217,7 +217,7 @@ impl<'a> Clear<'a> {
 }
 
 /// How far `p` is inside `poly` (ft; 0 outside it).
-pub(crate) fn depth(poly: &[P], p: P) -> f64 {
+pub fn depth(poly: &[P], p: P) -> f64 {
     if !contains(poly, p) {
         return 0.0;
     }
@@ -231,7 +231,7 @@ fn foot(kind: Kind) -> f64 {
 }
 
 /// A sprite's turn that sets its front (+y unturned) toward `dir`.
-pub(crate) fn facing(dir: P) -> f32 {
+pub fn facing(dir: P) -> f32 {
     (libm::atan2(dir[1], dir[0]) - std::f64::consts::FRAC_PI_2) as f32
 }
 
@@ -308,7 +308,7 @@ fn bbox_of(pts: &[P]) -> (P, P) {
 }
 
 /// The nearest point of segment `a`–`b` to `p`, and how far along it is (0–1).
-pub(crate) fn project(a: P, b: P, p: P) -> (P, f64) {
+pub fn project(a: P, b: P, p: P) -> (P, f64) {
     let ab = sub(b, a);
     let t = (dot(sub(p, a), ab) / dot(ab, ab).max(1e-9)).clamp(0.0, 1.0);
     (add(a, mul(ab, t)), t)
@@ -729,7 +729,7 @@ pub(crate) fn seam_inside(pr: &(P, f32, Kind, u8, f32)) -> bool {
 
 /// One hedge piece made pieces each wholly inside a chunk, on its line (`seam_split`), `depth` times
 /// over at most (a chunk's corner).
-pub(crate) fn seam_fit(pr: &(P, f32, Kind, u8, f32), depth: u32) -> Vec<(P, f32, Kind, u8, f32)> {
+pub fn seam_fit(pr: &(P, f32, Kind, u8, f32), depth: u32) -> Vec<(P, f32, Kind, u8, f32)> {
     if seam_inside(pr) {
         return vec![*pr];
     }

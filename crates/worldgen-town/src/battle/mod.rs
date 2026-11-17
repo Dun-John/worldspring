@@ -132,12 +132,12 @@ pub enum Atmosphere {
 /// each other along one stretch) and the walls running on from them opposite ways (a castle's
 /// outer and inner gates are not one gatehouse). Paired in order, each with its nearest; a pure function of the
 /// layout, so every chunk finds the same.
-pub(crate) fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
+pub fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
     gateways_on(&l.walls, towers, &l.gates)
 }
 
 /// `gateways` along `walls` (a town's as laid, standing or not), its gates' corners `town_gates`.
-pub(crate) fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, bool)], town_gates: &[[f64; 2]]) -> Vec<([f64; 2], [f64; 2])> {
+pub fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, bool)], town_gates: &[[f64; 2]]) -> Vec<([f64; 2], [f64; 2])> {
     let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
     // Which way the wall runs from each gate tower, where a stretch of it ends there.
     let away: Vec<Option<[f64; 2]>> = gates
@@ -210,7 +210,7 @@ pub enum PlazaFeature {
 
 /// The biome of the land at `p` (world ft): where the map there is the sea's or a lake's (a
 /// town on the shore), the nearest land's round it, out to about a T0 cell, else grassland.
-pub(crate) fn land_biome(t0: &T0, p: [f64; 2]) -> Biome {
+pub fn land_biome(t0: &T0, p: [f64; 2]) -> Biome {
     let at = |q: [f64; 2]| Biome::from_u8(t0.sample_biome(q[0], q[1], t0.biome_warp(q[0], q[1]))[0]);
     let wet = |b: Biome| matches!(b, Biome::Ocean | Biome::Lake);
     std::iter::once(p)
@@ -228,7 +228,7 @@ pub(crate) fn land_biome(t0: &T0, p: [f64; 2]) -> Biome {
 /// What grows on a town's green or close in a biome: its trees, shrubs and small plants (palms
 /// in the desert, acacias on the savanna, conifers in the north, none of a kind where the biome
 /// has none), and whether its trees are few (one or two broadleaves on the steppe's grass).
-pub(crate) fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind], bool) {
+pub fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind], bool) {
     use Kind::*;
     match b {
         Biome::TemperateForest => (&[TreeDeciduous], &[Bush], &[Flowers, Mushrooms], false),

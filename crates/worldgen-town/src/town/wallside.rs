@@ -62,7 +62,7 @@ pub fn outward(l: &Layout) -> Vec<f32> {
 
 /// Each of a star-angled wall's bastions (`Layout::bastions`) as a `ShapeKind::Bastion` vector, by the
 /// chunk that `owns` its middle: its six outline points (`local`, squares), then `[style, 0]`.
-pub(crate) fn bastions(l: &Layout, owns: &dyn Fn(P) -> bool, local: &dyn Fn(&P) -> [f32; 2], shapes: &mut Vec<crate::battle::VectorShape>) {
+pub fn bastions(l: &Layout, owns: &dyn Fn(P) -> bool, local: &dyn Fn(&P) -> [f32; 2], shapes: &mut Vec<crate::battle::VectorShape>) {
     for q in l.bastions.iter().filter(|q| q.len() == 6) {
         let mid = centroid(q);
         if !owns(mid) {
@@ -236,7 +236,7 @@ pub fn bastion_props(q: &[P], thick: f64) -> Vec<super::Prop> {
 /// its points with `[x, y, a, b]`. A wall line (kind 0): a its style's code. A tower (kind 1 or 3, a
 /// tower of `l`'s at its middle): a its style's code with its shape, b the way it faces (radians); a
 /// gate tower its gatehouse's (`gatehouse::House::tower`: square, or a drum round). Anything else: 0, 0.
-pub(crate) fn plan_looks(l: &Layout, lines: &[Vec<[f64; 4]>], looks: &mut Vec<Vec<[f64; 4]>>) {
+pub fn plan_looks(l: &Layout, lines: &[Vec<[f64; 4]>], looks: &mut Vec<Vec<[f64; 4]>>) {
     use super::wallstyle::TowerShape;
     let houses = if l.gate_towers.is_empty() && !l.extra_towers.iter().any(|e| e.1) { Vec::new() } else { super::gatehouse::houses(l) };
     for w in &lines[looks.len().min(lines.len())..] {

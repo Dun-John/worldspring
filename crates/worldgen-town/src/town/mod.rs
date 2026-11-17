@@ -70,7 +70,7 @@ pub use ground::*;
 pub use lined::*;
 pub(crate) use plan::*;
 use build::*;
-pub(crate) use quarters::*;
+pub use quarters::*;
 pub use names::*;
 
 use std::cell::RefCell;

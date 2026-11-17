@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/worldgen-core", "crates/worldgen-model", "crates/worldgen-terrain", "crates/worldgen", "crates/worldgen-wasm", "crates/mapd"]
+members = ["crates/worldgen-core", "crates/worldgen-model", "crates/worldgen-terrain", "crates/worldgen-town", "crates/worldgen", "crates/worldgen-wasm", "crates/mapd"]
 
 [workspace.package]
 edition = "2024"
@@ -11,6 +11,7 @@ license = "UNLICENSED"
 worldgen-core = { path = "crates/worldgen-core" }
 worldgen-model = { path = "crates/worldgen-model" }
 worldgen-terrain = { path = "crates/worldgen-terrain" }
+worldgen-town = { path = "crates/worldgen-town" }
 libm = "0.2.16"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }

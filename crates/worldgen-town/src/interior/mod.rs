@@ -45,7 +45,6 @@ use crate::core::rng::{Pcg32, hash3};
 use crate::t0::T0;
 use crate::town::geom::{self, P, add, dot, mul, sub};
 use crate::town::{self, Layout, Structure};
-pub use crate::links::{generate_id, interior_json};
 
 /// Grid square size (ft) and storey height (ft).
 pub const SQUARE_FT: f64 = 5.0;

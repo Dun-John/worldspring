@@ -141,14 +141,14 @@ pub fn curve(pts: &[P]) -> Vec<P> {
 }
 
 /// A road near an area: its kind, half width (ft) and the stretches of its line meeting the area.
-pub(crate) struct Near {
+pub struct Near {
     pub kind: PathKind,
     pub half: f64,
     pub segs: Vec<(P, P)>,
 }
 
 /// The roads drawn by hand whose band comes within `pad` ft of `rect` (x0, y0, x1, y1), in id order.
-pub(crate) fn near(edits: &Edits, rect: [f64; 4], pad: f64) -> Vec<Near> {
+pub fn near(edits: &Edits, rect: [f64; 4], pad: f64) -> Vec<Near> {
     let mut out = Vec::new();
     for p in edits.paths.values() {
         let b = crate::ground::bbox(&p.pts);
@@ -174,7 +174,7 @@ pub(crate) fn near(edits: &Edits, rect: [f64; 4], pad: f64) -> Vec<Near> {
 
 /// The road whose band (grown by `grow` ft, and at least `min_half` ft each side of its line) holds `p`: the
 /// nearest line's; its kind and how far (ft) `p` is from its line.
-pub(crate) fn at(near: &[Near], p: P, grow: f64, min_half: f64) -> Option<(PathKind, f64)> {
+pub fn at(near: &[Near], p: P, grow: f64, min_half: f64) -> Option<(PathKind, f64)> {
     let mut best: Option<(PathKind, f64)> = None;
     for n in near {
         let reach = (n.half + grow).max(min_half);
