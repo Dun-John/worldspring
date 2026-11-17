@@ -9,7 +9,7 @@
 //! chambers off passages, towers, each piece as high as it rises; so are palaces, noble estates,
 //! temples (a cross with its apse, or a hall ending in one) and monasteries round their cloisters.
 //!
-//! Guarantees (checked in tests/vital.rs): at least two levels, every room reachable from the
+//! Guarantees (checked in tests/vital/interiors.rs): at least two levels, every room reachable from the
 //! front door, stairs aligned across levels, furniture never on a doorway or the stairs.
 
 use serde::Serialize;

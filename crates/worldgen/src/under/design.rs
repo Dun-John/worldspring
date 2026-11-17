@@ -4,7 +4,7 @@
 //! builds a designed site instead of generating it. A design holds only squares, rooms, doors
 //! and items; walls are derived as for a generated site (`Plan::finish`).
 //!
-//! `check` holds a site to the rules every generated one meets (tests/vital.rs): one way in,
+//! `check` holds a site to the rules every generated one meets (tests/vital/underground.rs): one way in,
 //! under the entrance; each level's way down on the same square as the way up below; every
 //! square reached from the way onto the level. The editor and `set_site_design` refuse a design
 //! that breaks them (play mode relies on them).
@@ -741,7 +741,7 @@ fn flood(cells: &[i16], nx: usize, ny: usize, start: usize, natural: bool, doors
 }
 
 /// Squares of a level that are reached from `start` (`reached`: by any walk) but not without climbing a sheer edge
-/// (`height::Floor::sheer`): the walk of `r5_no_climb` in tests/vital.rs.
+/// (`height::Floor::sheer`): the walk of `r5_no_climb` in tests/vital/underground.rs.
 pub fn climb_only(lv: &crate::interior::Level, nx: usize, ny: usize, start: usize, blocks: &[bool], doors: &[(usize, usize)], reached: &[bool]) -> Vec<usize> {
     if lv.floor.is_empty() || lv.floor.len() != nx * ny {
         return Vec::new();
@@ -766,7 +766,7 @@ pub fn climb_only(lv: &crate::interior::Level, nx: usize, ny: usize, start: usiz
     (0..nx * ny).filter(|&q| reached[q] && !seen[q]).collect()
 }
 
-/// The rules every site keeps (generated ones are held to them in tests/vital.rs): the top
+/// The rules every site keeps (generated ones are held to them in tests/vital/underground.rs): the top
 /// level's one way in (under the entrance, `entry`, if given); one way down from each level
 /// but the deepest, on the square of the one way up on the level below; every item on floor,
 /// none on another; every square reached from the way onto its level, around whatever blocks
@@ -1000,7 +1000,7 @@ pub(crate) fn key_counts(keys: &[(usize, usize, u8)], locks: &[(usize, (usize, u
 /// `variant` the lock's colour) has been reached, across the levels by their ways down and up;
 /// in the end every square reached without the locks must be reached with them, and every lock
 /// has one key. Notes, not refusals (the DM can always open a door); generated sites keep it
-/// (tests/vital.rs).
+/// (tests/vital/underground.rs).
 pub fn key_order(it: &Interior) -> Vec<Problem> {
     let (nx, ny) = (it.nx, it.ny);
     let n = it.levels.len();

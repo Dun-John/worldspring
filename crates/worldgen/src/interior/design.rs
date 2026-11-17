@@ -308,7 +308,7 @@ fn door_squares(d: &Door) -> [(isize, isize); 2] {
     if x0 == x1 { [(x0 - 1, y0), (x0, y0)] } else { [(x0, y0 - 1), (x0, y0)] }
 }
 
-/// The rules every building interior keeps (generated ones are held to them in tests/vital.rs):
+/// The rules every building interior keeps (generated ones are held to them in tests/vital/interiors.rs):
 /// one ground floor with one front door; doors to the outside only there, onto open ground; the
 /// stair block on floor on every level it reaches; squares only inside the footprint; no item
 /// off the floor, on another, on the stairs or in a doorway (but a platform, walked over); every

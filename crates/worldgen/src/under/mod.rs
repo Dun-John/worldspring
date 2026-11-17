@@ -21,7 +21,7 @@
 //!
 //! Levels are joined by a way down and a way up on the same square. Every site ends in a boss
 //! chamber on its deepest level, a dead end: nothing else on the level is reached through it.
-//! Guarantees are checked in tests/vital.rs.
+//! Guarantees are checked in tests/vital/underground.rs.
 //!
 //! Layout: this file holds the kinds, themes and sizes, the entrances and `site`, which asks each theme's planner
 //! (`Theme::planner`) for a level; `plan` is the level while it is laid out (`Plan`, `finish`), `kit` the tools every

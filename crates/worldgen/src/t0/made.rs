@@ -134,7 +134,7 @@ pub struct Lane {
 /// The world's lanes laid by hand (`LANES_KEY` records), in key order; those whose junctions are
 /// missing left out.
 pub fn lanes(world: &World, t0: &T0) -> Vec<Lane> {
-    use crate::town::hand::{Junction, Street};
+    use crate::model::town::{Junction, Street};
     let streets = &world.file.edits.streets;
     let lo = format!("{LANES_KEY}/");
     let mut js: std::collections::BTreeMap<u32, Junction> = Default::default();

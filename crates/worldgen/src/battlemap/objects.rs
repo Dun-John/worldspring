@@ -193,7 +193,7 @@ fn off_road_first(c: &Chunk, all: Vec<usize>, keep_off: &[bool]) -> Vec<usize> {
 }
 
 /// The 32x32 windows (top-left squares) whose dry ground is all one tier, leaving out mostly-water
-/// ones: the battlemap guarantee as `tests/vital.rs` checks it.
+/// ones: the battlemap guarantee as `tests/vital/battlemap.rs` checks it.
 fn flat_windows(c: &Chunk) -> Vec<(usize, usize)> {
     const W: usize = 32;
     let n = SQ - W + 1;
@@ -280,7 +280,7 @@ fn by_bounds(c: &Chunk, cells: Vec<usize>, fallback: bool) -> Vec<usize> {
 }
 
 /// The 32x32 windows `enforce` fills: those mostly dry with fewer than three cover objects and
-/// buildings in them (every building with a square in a window, as `tests/vital.rs` counts); with
+/// buildings in them (every building with a square in a window, as `tests/vital/common.rs` counts); with
 /// `feature`, those with no hazard or prop in them. What doesn't change while objects are added
 /// (wet squares, the buildings in each window) is worked out once; the objects as they come.
 struct Windows {
