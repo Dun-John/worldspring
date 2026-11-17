@@ -254,7 +254,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
                 match c.on.as_deref() {
                     Some(on) => {
                         if let Some((top, line)) = crate::wharf::deck_of(world, t0, on).filter(|_| poly.len() >= 3) {
-                            let top = crate::wharf::deck_level_at(world, t0, on, crate::town::geom::centroid(&c.poly)).unwrap_or(top);
+                            let top = crate::wharf::deck_level_at(world, t0, on, crate::town::centroid(&c.poly)).unwrap_or(top);
                             let mut b = drawn(c, poly, top, &mut rng, t0, center);
                             b.deck = Some(line);
                             buildings.push(b);
@@ -407,6 +407,9 @@ fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, 
     b
 }
 
+/// How far a `faces` chord may be from its building's middle (ft).
+const FACES_REACH_FT: f64 = 60.0;
+
 /// (Roadmap 6 R4) What a drawn building's layout `l` fronts on: its created entry's `faces`
 /// chord (world ft; a row's house, toward the row's road).
 pub fn faces(world: &World, t0: &T0, l: &Layout) -> Option<[P; 2]> {
@@ -414,7 +417,9 @@ pub fn faces(world: &World, t0: &T0, l: &Layout) -> Option<[P; 2]> {
         return None;
     }
     let c = crate::sitelinks::created_of(world, t0, l.index as usize)?;
-    c.faces.filter(|_| c.kind == "building" && !c.removed)
+    // (A chord left far behind by a footprint moved since is no front: ignored.)
+    let mid = centroid(&c.poly);
+    c.faces.filter(|f| c.kind == "building" && !c.removed && (c.poly.is_empty() || seg_dist(mid, f[0], f[1]) <= FACES_REACH_FT))
 }
 
 /// A roof material (`roof::MATERIALS`) and shape (`roof::SHAPES`) chosen by hand; each not given

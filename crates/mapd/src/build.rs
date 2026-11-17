@@ -481,6 +481,7 @@ pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result
         let n = p.len().max(1) as f64;
         (c.x, c.y) = (p.iter().map(|q| q[0]).sum::<f64>() / n, p.iter().map(|q| q[1]).sum::<f64>() / n);
         c.poly = p;
+        c.faces = None;
     }
     let opt = |k: &str| a[k].as_str().map(|s| s.trim().to_string());
     if let Some(f) = opt("func") {
