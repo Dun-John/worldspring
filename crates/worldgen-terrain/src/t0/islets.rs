@@ -63,19 +63,6 @@ pub fn near_in<'a>(t0: &'a T0, edits: &'a crate::world::Edits, rect: [f64; 4]) -
     near(t0, rect).filter(move |i| !edits.hidden.contains(&i.id))
 }
 
-/// The watchtower building (`b:<layout>:<id>`, and its middle in world ft) standing on islet `i`, if it has one.
-pub fn tower_building(world: &crate::world::World, t0: &T0, i: &Islet) -> Option<(String, P)> {
-    if !i.tower {
-        return None;
-    }
-    let want = crate::town::catalog::index_of("watchtower").map(|f| f as u16)?;
-    let l = crate::town::layout(world, t0, i.settlement as usize);
-    l.buildings.iter().find_map(|b| {
-        let w = crate::core::geom::centroid(&b.poly);
-        (b.func == Some(want) && dist(w, i.at) <= i.r).then(|| (format!("b:{}:{}", l.index, b.id), w))
-    })
-}
-
 /// The islets of settlement (layout) `index`.
 pub fn of(t0: &T0, index: usize) -> impl Iterator<Item = &Islet> {
     islets(t0).iter().filter(move |i| i.settlement as usize == index)

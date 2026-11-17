@@ -10,6 +10,7 @@ use super::{Building, District, Ground, Layout, Structure, castle, clip_walls, r
 use crate::World;
 use crate::core::rng::{Pcg32, hash2};
 use crate::t0::T0;
+use crate::t0::islets::Islet;
 use crate::t0::settle::{PoiKind, Tier};
 use crate::under::UnderKind;
 pub use crate::model::consts::SITE_REACH_FT;
@@ -869,4 +870,17 @@ pub(super) fn wall_gates(world: &World, t0: &T0, c: &crate::world::Created) -> V
     let mut l = scratch(0);
     wall_site(world, t0, c, center, &mut l);
     super::handwall::gates_of(&l).into_iter().map(|g| add(g, center)).collect()
+}
+
+/// The watchtower building (`b:<layout>:<id>`, and its middle in world ft) standing on islet `i`, if it has one.
+pub fn tower_building(world: &crate::world::World, t0: &T0, i: &Islet) -> Option<(String, P)> {
+    if !i.tower {
+        return None;
+    }
+    let want = crate::town::catalog::index_of("watchtower").map(|f| f as u16)?;
+    let l = crate::town::layout(world, t0, i.settlement as usize);
+    l.buildings.iter().find_map(|b| {
+        let w = crate::core::geom::centroid(&b.poly);
+        (b.func == Some(want) && dist(w, i.at) <= i.r).then(|| (format!("b:{}:{}", l.index, b.id), w))
+    })
 }

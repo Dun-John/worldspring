@@ -702,7 +702,7 @@ fn set_aside_to(edits: &mut crate::world::Edits, li: usize) -> (usize, [(&'stati
     ids.extend(edits.hidden.iter().map(String::as_str));
     ids.extend(edits.npcs.values().filter_map(|n| n.location.as_ref().map(|l| l.id.as_str())));
     ids.extend(edits.plots.values().flat_map(|p| p.anchors.iter().map(String::as_str)));
-    let heads = edits.streets.keys().filter_map(|k| k.split('/').next()).chain(edits.wharves.keys().filter_map(|k| crate::t0::remap::hand_wharf(k).map(|x| x.0)));
+    let heads = edits.streets.keys().filter_map(|k| k.split('/').next()).chain(edits.wharves.keys().filter_map(|k| hand_wharf(k).map(|x| x.0)));
     let towns = edits.towns.keys().map(String::as_str).chain(heads).filter_map(|k| k.parse::<usize>().ok()).filter(|&l| l >= PARKED_LAYOUT);
     let to = ids.into_iter().filter_map(parked).chain(towns).max().map_or(PARKED_LAYOUT, |m| m + 1);
     let mut n = [0; 8];
@@ -835,4 +835,19 @@ pub fn restore(edits: &mut crate::world::Edits, k: usize, first: usize) -> usize
         }
     }
     n
+}
+
+/// A hand town's wharf key's layout number and what follows it (`q:h<n>-<k>`: `<n>`, `-<k>`).
+pub fn hand_wharf(key: &str) -> Option<(&str, &str)> {
+    let rest = key.strip_prefix("q:h")?;
+    let i = rest.find('-')?;
+    bare(&rest[..i]).map(|_| (&rest[..i], &rest[i..]))
+}
+
+/// A town key's layout number (all digits).
+pub fn bare(id: &str) -> Option<u64> {
+    if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    id.parse().ok()
 }

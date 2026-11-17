@@ -1,6 +1,6 @@
 // What the edits hold on a place, where a layout stands, and an upgraded world's edits set
 // aside. A world remade from a changed sketch moves its edits with their places in the generator
-// (`crates/worldgen/src/t0/remap.rs`: `follow_json`), not here.
+// (`crates/worldgen/src/remap.rs`: `follow_json`), not here.
 import type { Edits, Feature, LinkEdit, Npc, Overlay, Plot, Stroke } from '../gen/protocol';
 import { LAYOUT_ID_FIELDS, PARKED_LAYOUT } from '../sync/ops';
 import { SETTLEMENT_KINDS, SITE_KINDS, WAS_ID } from '../ui/gazetteer';

@@ -19,6 +19,8 @@ use crate::core::hash::{FastMap, FastSet};
 use crate::t0::T0;
 use crate::world::{Edits, PARKED_LAYOUT};
 use serde::{Deserialize, Serialize};
+pub use crate::t0::made::hand_wharf;
+use crate::t0::made::bare;
 
 /// How an edits field names places by id.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -199,21 +201,6 @@ fn local_id(id: &str) -> Option<(&str, u64, &str)> {
 fn town_head(key: &str) -> Option<(&str, &str)> {
     let (head, rest) = key.find('/').map_or((key, ""), |i| key.split_at(i));
     bare(head).map(|_| (head, rest))
-}
-
-/// A hand town's wharf key's layout number and what follows it (`q:h<n>-<k>`: `<n>`, `-<k>`).
-pub fn hand_wharf(key: &str) -> Option<(&str, &str)> {
-    let rest = key.strip_prefix("q:h")?;
-    let i = rest.find('-')?;
-    bare(&rest[..i]).map(|_| (&rest[..i], &rest[i..]))
-}
-
-/// A town key's layout number (all digits).
-fn bare(id: &str) -> Option<u64> {
-    if id.is_empty() || !id.bytes().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    id.parse().ok()
 }
 
 /// Ids of buildings, districts, wall towers, sites underground and created sites: never moved to

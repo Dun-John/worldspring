@@ -19,7 +19,6 @@ pub mod made;
 pub mod names;
 pub mod plates;
 pub mod radii;
-pub mod remap;
 pub mod roads;
 pub mod sealanes;
 pub mod settle;

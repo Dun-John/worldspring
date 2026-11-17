@@ -43,7 +43,7 @@ pub fn level(w: &Wharf, t0: &T0) -> f32 {
     }
 }
 
-pub(crate) fn unit(v: P) -> P {
+pub fn unit(v: P) -> P {
     geom::mul(v, 1.0 / geom::len(v).max(1e-9))
 }
 
@@ -57,7 +57,7 @@ fn margin(w: &Wharf) -> f64 {
 
 /// How wet T0 is at `p`: in a river's channel, very; else the standing water's depth there
 /// (negative on dry land).
-pub(crate) fn wetness(t0: &T0, p: P) -> f64 {
+pub fn wetness(t0: &T0, p: P) -> f64 {
     let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 0.0, t0.cell_ft);
     if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 {
         return 1000.0;

@@ -40,7 +40,7 @@ pub fn pad_weight(d: f64, reach: f64) -> f64 {
 }
 
 /// Outskirts (farmland) reach this many urban radii from the centre.
-pub(crate) const OUTSKIRTS: f64 = 2.15;
+pub const OUTSKIRTS: f64 = 2.15;
 
 /// How far (ft) from its centre a place stands in a settlement: its buildings and districts, the
 /// sprawl outside the walls included. Measured over seeds 1–3 in built-up radii: villages'

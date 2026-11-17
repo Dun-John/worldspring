@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 worldgen-core.workspace = true
 worldgen-model.workspace = true
+worldgen-terrain.workspace = true
 libm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1276,7 +1276,7 @@ export interface Geom {
   world_hash: string;
 }
 
-/** Named feature from T0 (crates/worldgen/src/t0/features.rs). */
+/** Named feature from T0 (crates/worldgen-terrain/src/t0/features.rs). */
 export interface Feature {
   id: string;
   kind: string;
