@@ -222,6 +222,35 @@ fn crossing(a: P, b: P, c: P, d: P) -> Option<f64> {
     ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
 }
 
+/// (R4) Line `line` (world ft) with each end that is not within `SNAP_FT` of town `index`'s
+/// streets joined to the nearest point of one within `reach` ft (a point put on there, which
+/// `AddStreet` splits), unless the line crosses that street near the end already.
+pub fn join_ends(world: &World, index: usize, line: &[P], reach: f64) -> Vec<P> {
+    let recs = HandRecords::of(&world.file.edits.streets, index);
+    let mut out = line.to_vec();
+    if out.len() < 2 {
+        return out;
+    }
+    let lines: Vec<Vec<P>> = recs.streets.values().filter_map(|st| line_of(&recs, st)).collect();
+    let join = |end: P| -> Option<P> {
+        if near_junction(&recs, end, SNAP_FT).is_some() || near_street(&recs, end, SNAP_FT).is_some() {
+            return None;
+        }
+        let (_, x) = near_street(&recs, end, reach)?;
+        let d = dist(end, x);
+        let crossed = line.windows(2).any(|s| lines.iter().any(|l| l.windows(2).any(|t| crossing(s[0], s[1], t[0], t[1]).is_some_and(|u| dist(lerp(s[0], s[1], u), end) <= 2.0 * d + SNAP_FT))));
+        (!crossed).then(|| q(x))
+    };
+    let (a, b) = (join(line[0]), join(line[line.len() - 1]));
+    if let Some(a) = a {
+        out.insert(0, a);
+    }
+    if let Some(b) = b {
+        out.push(b);
+    }
+    out
+}
+
 /// The nearest junction within `r` ft of `p` (the lowest id of equals).
 fn near_junction(recs: &HandRecords, p: P, r: f64) -> Option<u32> {
     recs.junctions.iter().map(|(&id, j)| (dist(j.p, p), id)).filter(|x| x.0 <= r).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|x| x.1)
@@ -779,6 +808,25 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
             }
             if world.file.edits.towns.contains_key(&tkey) {
                 ch.towns.insert(tkey, None);
+            }
+            // (R4) Streets added to the town become streets of its graph (joined, split where they cross).
+            let laid = super::added::laid(world, t0, index);
+            if !laid.is_empty() {
+                let mut w = changed_world(world, &ch)?;
+                let mut refused = Vec::new();
+                for (id, pts, width) in laid {
+                    let points = join_ends(&w, index, &super::added::thin(&pts, 0.5), super::added::JOIN_END_FT);
+                    match change(&w, t0, index, &HandRequest::AddStreet { points, width: Some(width), set_l: None, set_r: None, class: Some(StreetClass::Street) }) {
+                        Ok((c, _)) => {
+                            ch.streets.extend(c.streets);
+                            w = changed_world(world, &ch)?;
+                        }
+                        Err(e) => refused.push(json!({ "id": format!("ts:{index}:{id}"), "why": e })),
+                    }
+                }
+                if !refused.is_empty() {
+                    report["streets_refused"] = json!(refused);
+                }
             }
         }
         HandRequest::BackToGenerated => {

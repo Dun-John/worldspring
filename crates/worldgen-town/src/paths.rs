@@ -192,7 +192,7 @@ pub fn at(near: &[Near], p: P, grow: f64, min_half: f64) -> Option<(PathKind, f6
 }
 
 /// Whether outline `poly` (world ft) meets a road's band in `near`.
-pub(crate) fn meets(near: &[Near], poly: &[P]) -> bool {
+pub fn meets(near: &[Near], poly: &[P]) -> bool {
     if poly.len() < 3 {
         return false;
     }

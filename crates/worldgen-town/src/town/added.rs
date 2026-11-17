@@ -204,3 +204,29 @@ pub fn apply(world: &World, t0: &T0, l: &mut Layout) {
         l.roads.push((pts, CLASS, w));
     }
 }
+
+/// Where a street added to layout `li` would be kept from (the `TownEdit::at` its edit needs):
+/// the settlement's centre when it is one (the world's own or added by hand, any tier) not laid
+/// out by hand; else `None` (a hand town's streets are its records, a place has no streets).
+pub fn home(world: &World, t0: &T0, li: usize) -> Option<P> {
+    let s = settlement(t0, li)?;
+    (!hand::is_hand(world, li)).then_some([s.x, s.y])
+}
+
+/// The streets added to `l` (as `town::layout` gives it): (index in `l.roads`, id), in id order.
+/// `apply` pushes them last.
+pub fn ids(world: &World, t0: &T0, l: &Layout) -> Vec<(usize, u32)> {
+    let Some(streets) = of(world, t0, l.index as usize) else { return Vec::new() };
+    let ids: Vec<u32> = streets.iter().filter(|s| s.1.pts.len() >= 2).map(|s| *s.0).collect();
+    let first = l.roads.len().saturating_sub(ids.len());
+    ids.into_iter().enumerate().map(|(k, id)| (first + k, id)).collect()
+}
+
+/// The streets added to layout `li` as laid (`town::layout`): (id, joined line, width ft).
+pub fn laid(world: &World, t0: &T0, li: usize) -> Vec<(u32, Vec<P>, f64)> {
+    if of(world, t0, li).is_none() {
+        return Vec::new();
+    }
+    let l = layout(world, t0, li);
+    ids(world, t0, &l).into_iter().filter_map(|(k, id)| l.roads.get(k).map(|r| (id, r.0.clone(), r.2))).collect()
+}
