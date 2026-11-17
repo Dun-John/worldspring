@@ -1166,7 +1166,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['rowboat', 'fishing boat', 'dock crane', 'net rack', 'ballista', 'market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail']);
+const TURNED = new Set(['rowboat', 'fishing boat', 'dock crane', 'net rack', 'ballista', 'market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail', 'picket fence', 'iron railing', 'stockade', 'gate']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1177,6 +1177,9 @@ const HALF_TURN = new Map([
   ['footbridge', -45],
   ['vegetable row', -135],
   ['wattle fence', -135],
+  ['picket fence', -135],
+  ['iron railing', -135],
+  ['stockade', -135],
   ['lychgate', -135],
   ['tomb slab', -90],
   ['hitching rail', -135],
@@ -1222,6 +1225,8 @@ export const LONG_SHADOW = new Map([
   ['hedge', [1.35, 0.72, 1]],
   ['footbridge', [3.1, 0.85, 1.6]],
   ['wattle fence', [1.0, 0.36, 0.6]],
+  ['picket fence', [1.0, 0.3, 0.5]],
+  ['iron railing', [1.0, 0.26, 0.4]],
   ['vegetable row', [1.9, 0.7, 0.5]],
   ['horse', [1.5, 0.55, 1]],
   ['hitching rail', [2.0, 0.3, 0.6]],
