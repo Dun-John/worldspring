@@ -41,6 +41,8 @@ pub const MAX_GAP_R_FT: f32 = 10.0;
 const MAX_GATES: usize = 64;
 /// A gate's middle stays this far (ft) from a line's ends.
 const GATE_END_FT: f64 = 0.5 * GATE_OPEN_FT;
+/// The farthest (ft) from its line a gate's point may be (a gate is put where the line is nearest).
+const GATE_REACH_FT: f64 = 10.0;
 /// The widest `near` (ft).
 pub const MAX_NEAR_FT: f64 = 2000.0;
 /// The widest `near` that lists parks' hedges (`fh:`; a park is laid out for each).
@@ -184,35 +186,60 @@ pub fn park_runs(world: &World, t0: &T0, l: &Layout, pk: usize) -> Vec<(usize, P
     out
 }
 
-/// A generated run by id (Ok(None): no such run; Err: why not).
-pub fn run_of(world: &World, t0: &T0, id: &str) -> Result<Option<Run>, String> {
-    let Some((li, local)) = fence::parse(id) else { return Ok(None) };
-    if li >= town::layout_count(t0) || !town::is_settlement(t0, li) {
-        return Ok(None);
-    }
-    if town::hand::is_hand(world, li) {
-        return Err("a town laid out by hand: change it in its street plan (Streets tab, edit_streets)".into());
-    }
-    let l = town::layout(world, t0, li);
-    match local.split_once(':') {
-        None => {
-            let Ok(key) = u32::from_str_radix(&local, 16) else { return Ok(None) };
-            let found = fence::sources(&l, t0, fence::EVERYWHERE).into_iter().find(|s| fence::run_key(s.0, s.1, s.2) == key);
-            Ok(found.map(|(tag, a, b, kind)| {
-                let (a, b) = fence::canonical(a, b);
-                Run { li, local, a, b, tag, kind: Some(kind) }
-            }))
+/// What a batch of ids looks up once: a layout's runs by key, a layout's parks by spot, a park's
+/// hedges and rows.
+#[derive(Default)]
+struct Cache {
+    runs: BTreeMap<usize, BTreeMap<u32, (u8, P, P, FenceKind)>>,
+    spots: BTreeMap<usize, BTreeMap<String, usize>>,
+    parks: BTreeMap<(usize, usize), Vec<(usize, P, P, Option<FenceKind>)>>,
+}
+
+impl Cache {
+    /// A generated run by id (Ok(None): no such run; Err: why not).
+    fn run(&mut self, world: &World, t0: &T0, id: &str) -> Result<Option<Run>, String> {
+        let Some((li, local)) = fence::parse(id) else { return Ok(None) };
+        if li >= town::layout_count(t0) || !town::is_settlement(t0, li) {
+            return Ok(None);
         }
-        Some((spot, j)) => {
-            let (Some(pk), Ok(j)) = ((0..l.parks.len()).find(|&k| town::cut::park_spot(&l, k) == spot), j.parse::<usize>()) else { return Ok(None) };
-            Ok(park_runs(world, t0, &l, pk).into_iter().find(|r| r.0 == j).map(|(_, a, b, kind)| Run { li, local, a, b, tag: 0, kind }))
+        if town::hand::is_hand(world, li) {
+            return Err("a town laid out by hand: change it in its street plan (Streets tab, edit_streets)".into());
+        }
+        let l = town::layout(world, t0, li);
+        match local.split_once(':') {
+            None => {
+                let Ok(key) = u32::from_str_radix(&local, 16) else { return Ok(None) };
+                let runs = self.runs.entry(li).or_insert_with(|| {
+                    let mut m = BTreeMap::new();
+                    for s in fence::sources(&l, t0, fence::EVERYWHERE) {
+                        m.entry(fence::run_key(s.0, s.1, s.2)).or_insert(s);
+                    }
+                    m
+                });
+                Ok(runs.get(&key).map(|&(tag, a, b, kind)| {
+                    let (a, b) = fence::canonical(a, b);
+                    Run { li, local, a, b, tag, kind: Some(kind) }
+                }))
+            }
+            Some((spot, j)) => {
+                let spots = self.spots.entry(li).or_insert_with(|| {
+                    let mut m = BTreeMap::new();
+                    for k in 0..l.parks.len() {
+                        m.entry(town::cut::park_spot(&l, k)).or_insert(k);
+                    }
+                    m
+                });
+                let (Some(&pk), Ok(j)) = (spots.get(spot), j.parse::<usize>()) else { return Ok(None) };
+                let runs = self.parks.entry((li, pk)).or_insert_with(|| park_runs(world, t0, &l, pk));
+                Ok(runs.iter().find(|r| r.0 == j).map(|&(_, a, b, kind)| Run { li, local, a, b, tag: 0, kind }))
+            }
         }
     }
 }
 
-/// A town edit that holds nothing but its `at`.
-fn holds_nothing(t: &TownEdit) -> bool {
-    t.is_noop() && t.districts.is_empty() && t.streets.is_empty() && t.removed.is_empty() && t.fences.is_empty()
+/// A generated run by id (Ok(None): no such run; Err: why not).
+pub fn run_of(world: &World, t0: &T0, id: &str) -> Result<Option<Run>, String> {
+    Cache::default().run(world, t0, id)
 }
 
 /// The working copy of the town edits a change makes.
@@ -230,12 +257,24 @@ impl Towns<'_> {
     }
 
     fn put(&mut self, key: String, t: TownEdit) {
-        let v = (!holds_nothing(&t)).then_some(t);
+        let v = (!crate::roadcut::holds_nothing(&t)).then_some(t);
         if v.as_ref() == self.edits.towns.get(&key) {
             self.towns.remove(&key);
         } else {
             self.towns.insert(key, v);
         }
+    }
+
+    /// The change recorded for run `local` of layout `li` dropped, though no run answers to it any
+    /// more (a ward edit moved its ends): whether there was one.
+    fn forget(&mut self, li: usize, local: &str) -> bool {
+        let key = town::wards::key(li);
+        let Some(mut t) = self.get(&key).cloned() else { return false };
+        if t.fences.remove(local).is_none() {
+            return false;
+        }
+        self.put(key, t);
+        true
     }
 
     /// Run `r`'s change (None: as generated) changed by `f` (Err: why not).
@@ -256,15 +295,15 @@ impl Towns<'_> {
 }
 
 /// Where along a line (ft from its first point) `p` falls, kept `GATE_END_FT` from an open line's
-/// ends (None: too short for a gate).
-pub fn along(pts: &[P], closed: bool, p: P) -> Option<f64> {
+/// ends (Err: why not: too short for a gate, or `p` farther than `GATE_REACH_FT` from the line).
+pub fn along(pts: &[P], closed: bool, p: P) -> Result<f64, String> {
     let mut line: Vec<P> = pts.to_vec();
     if closed && pts.len() >= 3 {
         line.push(pts[0]);
     }
     let total: f64 = line.windows(2).map(|w| geom::dist(w[0], w[1])).sum();
     if total < 2.0 * GATE_END_FT + 0.1 {
-        return None;
+        return Err("too short for a gate".into());
     }
     let (mut best, mut s0, mut at) = (f64::MAX, 0.0, 0.0);
     for w in line.windows(2) {
@@ -278,15 +317,15 @@ pub fn along(pts: &[P], closed: bool, p: P) -> Option<f64> {
         }
         s0 += l;
     }
+    if best > GATE_REACH_FT {
+        return Err(format!("the gate's point is {} ft from the line (at most {GATE_REACH_FT})", crate::core::round(best)));
+    }
     let at = if closed { at } else { at.clamp(GATE_END_FT, total - GATE_END_FT) };
-    Some(crate::core::round(at * 10.0) / 10.0)
+    Ok(crate::core::round(at * 10.0) / 10.0)
 }
 
 /// `gates` with one more at `g` (Err: one is there already, or too many).
 fn with_gate(gates: &[f32], g: f64) -> Result<Vec<f32>, String> {
-    if !g.is_finite() {
-        return Err("too short for a gate".into());
-    }
     if gates.iter().any(|&x| (x as f64 - g).abs() < GATE_OPEN_FT) {
         return Err("a gate is there already".into());
     }
@@ -386,6 +425,7 @@ pub fn change(world: &World, t0: &T0, ids: &[String], op: &Op, dry: bool) -> Cha
         _ => {}
     }
     let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut cache = Cache::default();
     for id in ids {
         if !seen.insert(id.as_str()) {
             continue;
@@ -393,9 +433,18 @@ pub fn change(world: &World, t0: &T0, ids: &[String], op: &Op, dry: bool) -> Cha
         let head = id.split(':').next().unwrap_or("");
         match head {
             "fr" | "fh" => {
-                let run = match run_of(world, t0, id) {
+                let run = match cache.run(world, t0, id) {
                     Ok(Some(r)) => r,
                     Ok(None) => {
+                        // (A change whose run lapsed, its ends moved by a ward edit: Restore forgets it.)
+                        if *op == Op::Restore
+                            && !dry
+                            && let Some((li, local)) = fence::parse(id)
+                            && towns.forget(li, &local)
+                        {
+                            out.done.push(id.clone());
+                            continue;
+                        }
                         refuse(&mut out, id, if fence::parse(id).is_some() { "no such fence or hedge" } else { "not a fence id" });
                         continue;
                     }
@@ -430,7 +479,7 @@ pub fn change(world: &World, t0: &T0, ids: &[String], op: &Op, dry: bool) -> Cha
                             c.kind = (Some(*k) != run.kind).then_some(*k);
                         }
                         for p in gates {
-                            c.gates = with_gate(&c.gates, along(&[run.a, run.b], false, *p).unwrap_or(f64::NAN))?;
+                            c.gates = with_gate(&c.gates, along(&[run.a, run.b], false, *p)?)?;
                         }
                         Ok(Some(c))
                     }
@@ -463,7 +512,7 @@ pub fn change(world: &World, t0: &T0, ids: &[String], op: &Op, dry: bool) -> Cha
                         let mut n = Fence { kind: k.unwrap_or(f.kind), ..f.clone() };
                         let mut res = Ok(());
                         for p in gates {
-                            match with_gate(&n.gates, along(&n.pts, n.closed, *p).unwrap_or(f64::NAN)) {
+                            match along(&n.pts, n.closed, *p).and_then(|g| with_gate(&n.gates, g)) {
                                 Ok(g) => n.gates = g,
                                 Err(e) => {
                                     res = Err(e);
@@ -527,21 +576,28 @@ pub struct Changed {
     pub name: Option<String>,
     /// Its changed runs' ids (`fr:`, `fh:`), to bring back with `change(.., Op::Restore)`.
     pub ids: Vec<String>,
-    /// False when its changes are set aside (the town moved, or is laid out by hand now).
+    /// False when its changes are set aside (the town moved, or is laid out by hand now), or when
+    /// every one of them has lapsed.
     pub found: bool,
+    /// Of `ids`, those no run answers to any more (a ward edit moved its ends): Bring back drops them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stale: Vec<String>,
 }
 
 /// Every town with fence changes, in key order.
 pub fn changed(world: &World, t0: &T0) -> Vec<Changed> {
     let mut out = Vec::new();
+    let mut cache = Cache::default();
     for (key, t) in &world.file.edits.towns {
         let Ok(li) = key.parse::<usize>() else { continue };
         if t.fences.is_empty() || li >= town::layout_count(t0) || !town::is_settlement(t0, li) {
             continue;
         }
-        let ids = t.fences.keys().map(|k| if k.contains(':') { format!("fh:{li}:{k}") } else { format!("fr:{li}:{k}") }).collect();
+        let ids: Vec<String> = t.fences.keys().map(|k| if k.contains(':') { format!("fh:{li}:{k}") } else { format!("fr:{li}:{k}") }).collect();
         let name = crate::agent::feature_of_layout(world, t0, li).and_then(|f| crate::agent::name_of(world, t0, &f));
-        out.push(Changed { town: key.clone(), name, ids, found: fence::changes_of(world, t0, li).is_some() });
+        let at = fence::changes_of(world, t0, li).is_some();
+        let stale: Vec<String> = if at { ids.iter().filter(|id| matches!(cache.run(world, t0, id), Ok(None))).cloned().collect() } else { Vec::new() };
+        out.push(Changed { town: key.clone(), name, found: at && stale.len() < ids.len(), ids, stale });
     }
     out
 }
@@ -587,7 +643,7 @@ pub fn near(world: &World, t0: &T0, at: P, r: f64, limit: usize) -> Vec<Value> {
     let mut out: Vec<(f64, Value)> = Vec::new();
     for l in town::layouts_near(world, t0, b) {
         let li = l.index as usize;
-        if !town::is_settlement(t0, li) || town::added::home(world, t0, li).is_none() {
+        if !town::is_settlement(t0, li) || town::added::home(world, t0, li).is_none() || town::hand::is_hand(world, li) {
             continue;
         }
         let changes = world.file.edits.towns.get(&town::wards::key(li)).map(|t| &t.fences);
@@ -672,7 +728,7 @@ pub fn list(world: &World, t0: &T0) -> Value {
     for c in changed(world, t0) {
         let Some(t) = e.towns.get(&c.town) else { continue };
         for (id, (_, ch)) in c.ids.iter().zip(&t.fences) {
-            let mut v = json!({ "id": id, "town": c.name, "found": c.found, "generated": null });
+            let mut v = json!({ "id": id, "town": c.name, "found": c.found && !c.stale.contains(id), "generated": null });
             change_entry(&mut v, Some(ch));
             if let Some(o) = v.as_object_mut() {
                 o.remove("changed_from");

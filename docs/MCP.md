@@ -2625,13 +2625,14 @@ id: cut them with a gap (`remove_objects` takes any of them).
 Kinds and their rules in play: `hedgerow`, `dry_stone_wall`, `wattle`, `low_wall`, `picket`, `iron_railing`: hard
 going, half cover, seen over; `hedge` (clipped): blocks the way, three-quarters cover, seen over; `post_and_rail`:
 hard going, no cover; `stockade`, `high_wall`: block the way and sight. `garden_wall` (a manor's yard, a
-forecourt) is generated only: it can be removed or gapped, not changed in kind, and nothing takes it. A gate is a
-5-ft opening with an open gate leaf (never shut in play).
+forecourt) is generated only: it can be removed or gapped, not changed in kind, and no tool accepts it as a `kind`. A
+gate is an opening of one battlemap square or a little more (5 to 7 ft, its middle moved to the square's) with an open
+gate leaf: open passage for every kind, never shut in play.
 
 ### `place_fence`
 
 Draws a fence or hedge along `points` (2 to 400, world ft; `closed: true` back round to the first), of `kind`
-(required for a new one), with `gates` (points: each a 5-ft gate where the line passes nearest). It crosses roads
+(required for a new one), with `gates` (points: each a gate where the line passes nearest; a point over 10 ft from the line is refused). It crosses roads
 and roofs and stops only at water. With `id`:
 - `f:` a drawn fence changed: what is given replaces it (new `points` or `closed` drop its gates unless given
   again; `kind` or `gates` alone keep the line and add the gates);

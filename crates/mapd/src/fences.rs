@@ -15,7 +15,7 @@ pub fn list() -> Vec<Value> {
     let kinds: Vec<&str> = FenceKind::ALL.iter().filter(|k| **k != FenceKind::GardenWall).map(|k| k.name()).collect();
     let props = json!({
         "id": { "type": "string", "description": "To change: f:, or fr:/fh: (kind, gates)" },
-        "kind": { "type": "string", "enum": kinds, "description": "hedge blocks; stockade, high_wall block sight; post_and_rail no cover; the rest hard going, half cover" },
+        "kind": { "type": "string", "enum": kinds, "description": "hedge blocks the way; stockade, high_wall block sight; post_and_rail no cover; the rest hard going, half cover" },
         "points": { "type": "array", "minItems": 2 },
         "closed": { "type": "boolean" },
         "gates": { "type": "array", "description": "Points for 5-ft gates" },
@@ -130,7 +130,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
                 // (A new line drops its gates unless given again.)
                 let mut n = Fence { kind: kind.unwrap_or(old.kind), pts: pts.unwrap_or(old.pts.clone()), closed: closed.unwrap_or(old.closed), gates: Vec::new() };
                 for p in &gates {
-                    let g = fencecut::along(&n.pts, n.closed, *p).ok_or("too short for a gate")?;
+                    let g = fencecut::along(&n.pts, n.closed, *p)?;
                     n.gates.push(g as f32);
                 }
                 n.gates.sort_by(f32::total_cmp);
@@ -157,7 +157,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
             let kind = kind.ok_or("kind: what it is (hedgerow, picket, low_wall, …)")?;
             let mut n = Fence { kind, pts, closed: closed.unwrap_or(false), gates: Vec::new() };
             for p in &gates {
-                let g = fencecut::along(&n.pts, n.closed, *p).ok_or("too short for a gate")?;
+                let g = fencecut::along(&n.pts, n.closed, *p)?;
                 n.gates.push(g as f32);
             }
             n.gates.sort_by(f32::total_cmp);
