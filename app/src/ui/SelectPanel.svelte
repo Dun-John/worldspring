@@ -92,7 +92,7 @@
           <div class="item" class:open={k === sel.open} role="listitem">
             <button class="head" aria-expanded={k === sel.open} onclick={() => (sel.open = k)}>
               <span class="kind">{word(t)}</span>
-              <span class="grow name">{t.name ?? ''}</span>
+              <span class="grow name">{t.name && t.name.toLowerCase() !== word(t).toLowerCase() ? t.name : ''}</span>
             </button>
             {#if k === sel.open}
               {@const part = sel.partOf(t)}

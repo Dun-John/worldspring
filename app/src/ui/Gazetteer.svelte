@@ -103,6 +103,9 @@
   let withNotes = $state(false);
   /** Only what is kept on places no longer on the map. */
   let showAside = $state(false);
+  /** Removed roads listed before "Show all" (a whole city taken away lists over a thousand). */
+  const ROAD_ROWS = 40;
+  let allRoads = $state(false);
   const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0) + removed.length + removedRoads.length);
   // (Nothing left to show: back to the names.)
   $effect(() => {
@@ -549,7 +552,7 @@
       {#if removedRoads.length}
         <div class="ws-label">Removed roads</div>
         <ul class="list aside">
-          {#each removedRoads as r (r.id)}
+          {#each allRoads ? removedRoads : removedRoads.slice(0, ROAD_ROWS) as r (r.id)}
             {@const place = r.at && ['street', 'lane', 'path'].includes(r.what) ? `in ${r.at}` : r.at}
             {@const words = r.found ? [r.name ? r.what : null, place].filter(Boolean).join(' · ') : 'no longer found'}
             <li class="row">
@@ -561,6 +564,9 @@
               {/if}
             </li>
           {/each}
+          {#if !allRoads && removedRoads.length > ROAD_ROWS}
+            <li class="row"><span class="grow muted">{removedRoads.length - ROAD_ROWS} more</span><button class="ws-btn quiet" onclick={() => (allRoads = true)}>Show all</button></li>
+          {/if}
         </ul>
       {/if}
       {#if aside.length}<div class="hint">Made on towns and sites that came out differently or were taken away: kept in the world, shown nowhere on the map. Delete what you no longer need (Undo brings it back).</div>{/if}

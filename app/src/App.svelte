@@ -2646,13 +2646,14 @@
 
   /** Bring the removed road `id` back (or forget it, if it is not there any more): one step. */
   async function bringBackRoad(id: string) {
+    const forget = removedRoads.find((r) => r.id === id)?.found === false;
     const cut = await view.gen.roadCut([id], true);
     if (!cut) return toast('The map could not answer: try again');
     if ('error' in cut) return toast(sentence(cut.error));
     let next = withCut($state.snapshot(edits) as Edits, cut);
     if (!cut.removed_roads && edits.removed_roads?.includes(id)) next = { ...next, removed_roads: edits.removed_roads.filter((x) => x !== id) };
     for (const k of Object.keys(cut.towns)) view.hintTown(k, cut.towns[k], cut.rects);
-    applyEdits(next, { tool: 'remove_roads', restore: true, ids: [id], also: cut.also.length }, 'user');
+    applyEdits(next, { tool: 'remove_roads', restore: true, forget, ids: [id], also: cut.also.length }, 'user');
   }
 
   /** Restore the deleted village or town `id` where it was (if the spot is still free), with

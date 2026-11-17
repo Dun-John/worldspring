@@ -70,7 +70,6 @@ pub struct Thing {
 /// The widest pick (ft from its middle to its corners) that lists parks' paths (`pp:`): a click or a small box.
 const PARK_PICK_FT: f64 = 400.0;
 
-/// How high a kind lies (lower first).
 /// The most points of a line `Thing::line` keeps.
 const LINE_PTS: usize = 160;
 
@@ -86,6 +85,7 @@ fn clip(pts: &[P], at: P, r: f64) -> Vec<P> {
     (0..LINE_PTS).map(|i| run[i * n / (LINE_PTS - 1)]).collect()
 }
 
+/// How high a kind lies (lower first).
 fn rank(kind: &str) -> u8 {
     match kind {
         "entrance" => 0,
