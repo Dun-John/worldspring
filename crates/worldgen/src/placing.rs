@@ -338,6 +338,7 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
             let depth = ask.depth.unwrap_or_else(|| (area / cl).clamp(22.0, 60.0));
             let mut why = String::new();
             let mut done = false;
+            let mut spot_why = false;
             let q = |p: P, o: f64| {
                 let v = geom::add(p, geom::mul(nrm, o));
                 [crate::core::round(v[0] * 100.0) / 100.0, crate::core::round(v[1] * 100.0) / 100.0]
@@ -378,8 +379,11 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
                         break;
                     }
                     Err(e) => {
-                        if why.is_empty() {
+                        // (What the ground or the town says beats the row's own overlaps: the
+                        // nearer setbacks often only meet the lot before, at a bend.)
+                        if why.is_empty() || !spot_why {
                             why = plain_why(&e);
+                            spot_why = true;
                         }
                     }
                 }

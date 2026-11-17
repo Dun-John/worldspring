@@ -407,8 +407,9 @@ fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, 
     b
 }
 
-/// How far a `faces` chord may be from its building's middle (ft).
-const FACES_REACH_FT: f64 = 60.0;
+/// How far a `faces` chord may be from its building's middle (ft): a row's deepest lot (120)
+/// set back from a wide road, with room to spare.
+const FACES_REACH_FT: f64 = 160.0;
 
 /// (Roadmap 6 R4) What a drawn building's layout `l` fronts on: its created entry's `faces`
 /// chord (world ft; a row's house, toward the row's road).
