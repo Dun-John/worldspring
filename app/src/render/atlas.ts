@@ -13,7 +13,7 @@ export const PX = 64;
 /** Looks per kind. Must divide 256: `battlePrep` packs the turned flag above an object's variant byte. */
 export const VARIANTS = 4;
 /** Kinds with more looks than that (by id; also dividing 256): the market stall, four awnings by four goods. */
-const LOOKS: Record<number, number> = { 36: 16 };
+const LOOKS: Record<number, number> = { 36: 16, 155: 3 };
 /** How many looks a kind has: an object's variant picks `variant % looks(kind)`. */
 export const looks = (id: number): number => LOOKS[id] ?? VARIANTS;
 /** Atlas width: wide enough that the height stays within 4096 too (many phones' largest texture). */
@@ -4183,6 +4183,211 @@ function wattleFence(g: Graphics, r: number, rnd: () => number, v: number) {
   }
 }
 
+// R6 fences and walls: each a five-foot piece along x, set end to end like `wattleFence`. Upright ones
+// (pickets, railings, gates) are drawn from the high angle the upright props use, tops toward -y.
+
+/** A straight line inked twice: a dark line `w + 2.4` wide under one of `color`, so a rail or bar has an
+ * outline along both sides but none across its ends (pieces end to end read as one rail). */
+function railLine(g: Graphics, x0: number, y0: number, x1: number, y1: number, w: number, color: number) {
+  g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w + 2.4, color: INK });
+  g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w, color });
+}
+
+/** Picket fence along x: two rails behind six pointed palings, each lit down its west edge. Whitewashed
+ * (v0), weathered cream with the paint flaking (v1), painted sage green (v2), white with one paling gone
+ * and the next one leaning (v3). */
+function picketFence(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const paint = [
+    [0xb4b0a2, 0xeae6d8, 0xfdfbf2],
+    [0xa49a80, 0xd6ccae, 0xece2c4],
+    [0x627e5e, 0x92b088, 0xc0d8b2],
+    [0xb4b0a2, 0xeae6d8, 0xfdfbf2],
+  ][v];
+  const L = 0.5 * PX;
+  for (const y of [-4.5, 3.5]) railLine(g, -L, y, L, y, 2.4, v === 2 ? 0x7a6a4a : WOOD[1]);
+  const n = 6;
+  const step = (L * 2) / n;
+  const gone = v === 3 ? 1 + Math.floor(rnd() * 4) : -1;
+  for (let i = 0; i < n; i++) {
+    if (i === gone) continue;
+    const x = -L + (i + 0.5) * step;
+    const w = 3.4;
+    const lean = v === 3 && i === gone + 1 ? 3 : 0;
+    g.poly([x - w, 7.5, x - w + lean, -6, x + lean, -11, x + w + lean, -6, x + w, 7.5]).fill(paint[1]).stroke({ width: 2.6, color: INK, join: 'round' });
+    g.poly([x - w + 1, 6.5, x - w + 1 + lean, -5.6, x + lean - 0.4, -9, x - 0.6 + lean * 0.5, 6.5]).fill(paint[2]);
+    g.poly([x + w - 1.2, 6.5, x + w - 1.2 + lean, -5.6, x + w - 2.4 + lean, -5.6, x + w - 2.4, 6.5]).fill(paint[0]);
+    if (v === 1 && rnd() < 0.6) g.circle(x + (rnd() - 0.5) * 3, -2 + rnd() * 6, 1.1 + rnd() * 0.6).fill(WOOD[2]);
+  }
+}
+
+/** Iron railing along x: two stout rails, six bars topped with spear heads, a post at the middle with a
+ * ball on it, in a lighter blue-grey iron that stands off the grass. Plain (v0), weathered paler (v1),
+ * gilded spear heads (v2), one bar bent (v3). */
+function ironRailing(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const iron = v === 1 ? [0x4a5058, 0x7a828c, 0xb0b8c0] : [0x30343c, 0x5e6672, 0x98a2ae];
+  const tip = v === 2 ? [0x8a6a20, 0xd8b048, 0xf4dc8a] : iron;
+  const L = 0.5 * PX;
+  const n = 6;
+  const step = (L * 2) / n;
+  const bent = v === 3 ? Math.floor(rnd() * 2) : -1;
+  for (let i = 0; i < n; i++) {
+    const x = -L + (i + 0.5) * step;
+    const b = i === bent ? 3 : 0;
+    g.moveTo(x, 7.5).quadraticCurveTo(x + b * 1.6, 0, x + b, -7).stroke({ width: 5, color: INK, cap: 'round' });
+    g.moveTo(x, 7.5).quadraticCurveTo(x + b * 1.6, 0, x + b, -7).stroke({ width: 2.4, color: iron[1], cap: 'round' });
+  }
+  for (const y of [-4, 4.5]) railLine(g, -L, y, L, y, 2.8, iron[1]);
+  g.moveTo(-L, -4.6).lineTo(L, -4.6).stroke({ width: 1, color: iron[2] });
+  for (let i = 0; i < n; i++) {
+    const x = -L + (i + 0.5) * step + (i === bent ? 3 : 0);
+    g.poly([x, -13, x + 3.4, -8, x, -5.8, x - 3.4, -8]).fill(tip[1]).stroke({ width: 1.8, color: INK, join: 'round' });
+    g.poly([x, -11.8, x - 2, -8, x, -6.8]).fill(tip[2]);
+  }
+  bevel(g, -4, -3.2, 4, 5, 1.6, iron, 2.4);
+  g.circle(0, -6, 3.4).fill(tip[1]).stroke({ width: 1.8, color: INK });
+  g.circle(-1.1, -7.1, 1.2).fill(tip[2]);
+}
+
+/** Stockade along x: five sharpened logs from above packed side by side, each a cone seen from over its
+ * point (a lit NW half, a shaded SE half, the point a dot), lashed together by a rope. Fresh-cut timber
+ * (v0), older greyer brown (v1), one log taller and paler, new (v2), moss on one log (v3). */
+function stockade(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const wood = v === 1 ? [0x4e3a28, 0x7a6248, 0xa08868, 0xc4ae8a] : WOOD;
+  const L = 0.5 * PX;
+  const n = 5;
+  const step = (L * 2) / n;
+  g.rect(-L, -6, L * 2, 12).fill(shade(wood[0], 0.6));
+  const fresh = v === 2 ? 1 + Math.floor(rnd() * 3) : -1;
+  for (let i = 0; i < n; i++) {
+    const x = -L + (i + 0.5) * step;
+    const y = (rnd() - 0.5) * 1.2;
+    const R = 7.4 + rnd() * 0.5;
+    const t = i === fresh ? WOOD.map((c) => shade(c, 1.15)) : wood;
+    g.circle(x, y, R).fill(t[0]).stroke({ width: OUT, color: INK });
+    // The cone: the lit half to the NW, a shaded half to the SE, a ridge between them to the point.
+    g.moveTo(x, y).arc(x, y, R - 1.2, Math.PI * 0.75, Math.PI * 1.75).closePath().fill(t[2]);
+    g.moveTo(x, y).arc(x, y, R - 1.2, Math.PI * 1.1, Math.PI * 1.45).closePath().fill(t[3]);
+    g.moveTo(x, y).arc(x, y, R - 1.2, Math.PI * -0.25, Math.PI * 0.75).closePath().fill(t[1]);
+    g.circle(x, y, 1.4).fill(INK);
+    if (v === 3 && i === 2) moss(g, x - R * 0.2, y - R * 0.4, R * 0.75, rnd);
+  }
+  railLine(g, -L, 0.5, L, 0.5, 1.6, 0xc8b07a);
+}
+
+/** A mortared wall along x from above, `T` its half width: dark mortar under one row of coping stones
+ * (`rows` 1), or under two rows of facing stones with a narrower raised coping on top (`rows` 2, for the
+ * high wall), each stone lit along its north edge. `v` picks the stone's tone; moss on v1, a chipped
+ * stone on v3. */
+function mortaredWall(g: Graphics, rnd: () => number, v: number, T: number, rows: 1 | 2) {
+  const tones = STONE[v];
+  const L = 0.5 * PX;
+  g.rect(-L, -T, L * 2, T * 2).fill(shade(tones[0], 0.8));
+  const course = (y0: number, y1: number, n: number, t: readonly number[]) => {
+    const cuts = [-L];
+    for (let k = 1; k < n; k++) cuts.push(-L + ((k + (rnd() - 0.5) * 0.4) / n) * L * 2);
+    cuts.push(L);
+    for (let k = 0; k < n; k++) {
+      const [x, w, h] = [cuts[k], cuts[k + 1] - cuts[k], y1 - y0];
+      g.roundRect(x + 0.9, y0 + 0.9, w - 1.8, h - 1.8, 2.5).fill(t[1]);
+      g.roundRect(x + 1.8, y0 + 1.6, w - 3.6, h * 0.42, 2).fill(t[2]);
+      g.circle(x + 3.6 + rnd() * 2, y0 + 3, 1.2).fill({ color: t[3], alpha: 0.8 });
+    }
+  };
+  if (rows === 1) course(-T, T, 3, tones);
+  else {
+    const face = tones.map((t) => shade(t, 0.82));
+    course(-T, -T * 0.1, 3, face);
+    course(T * 0.1, T, 3, face);
+    const c = T * 0.42;
+    g.rect(-L, -c - 1, L * 2, c * 2 + 2).fill(shade(tones[0], 0.85));
+    for (const y of [-c - 1, c + 1]) g.moveTo(-L, y).lineTo(L, y);
+    g.stroke({ width: 2, color: INK });
+    course(-c, c, 3, STONE[(v + 1) % 4].map((t) => shade(t, 1.06)));
+  }
+  for (const y of [-T, T]) g.moveTo(-L, y).lineTo(L, y);
+  g.stroke({ width: rows === 2 ? OUT + 0.6 : OUT, color: INK });
+  if (v === 1) moss(g, -L * 0.4 + rnd() * L * 0.8, -T + 3, Math.max(T * 0.8, 7), rnd);
+  if (v === 3) {
+    const x = -L * 0.5 + rnd() * L;
+    g.poly([x - 4, T - 0.5, x - 1, T - 4.5, x + 4, T - 3.5, x + 6, T - 0.5]).fill(shade(tones[0], 0.7));
+  }
+}
+
+/** Low stone wall along x: one row of coping stones on a wall a little over a foot thick. */
+function lowWall(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  mortaredWall(g, rnd, v, 0.12 * PX, 1);
+}
+
+/** High wall along x: the low wall's stone drawn near twice as thick and heavier inked, two rows of facing
+ * stones under a raised coping in a lighter stone. */
+function highWall(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  mortaredWall(g, rnd, v, 0.24 * PX, 2);
+}
+
+/** Gate, five feet along x between two posts, drawn from the high angle like the pickets. A timber farm gate
+ * of four rails and a brace (v0); a pair of iron gates of spear-topped bars between stone piers with balls
+ * on them (v1); a solid gate of upright planks on two ledges with a ring handle (v2). */
+function gate(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  void rnd;
+  const L = 0.5 * PX;
+  const posts = () => {
+    for (const x of [-L + 3.8, L - 3.8]) {
+      bevel(g, x - 3.8, -5, x + 3.8, 5, 1.8, WOOD, 2.2);
+      g.rect(x - 1.6, -10, 3.2, 5).fill(WOOD[2]).stroke({ width: 1.6, color: INK });
+    }
+  };
+  if (v % 3 === 0) {
+    const [a, b] = [-L + 7, L - 7];
+    for (const y of [-7, -2.5, 2, 6.5]) railLine(g, a, y, b, y, 2.4, WOOD[2]);
+    railLine(g, a + 2, 6.5, b - 2, -7, 2.4, WOOD[2]);
+    for (const x of [a + 1, b - 1]) railLine(g, x, -8.5, x, 8, 2.4, WOOD[1]);
+    g.rect(b - 4, -1.6, 5, 3.2).fill(IRON[1]).stroke({ width: 1.2, color: INK });
+    posts();
+    g.rect(a - 1, -4.4, 3, 2).fill(IRON[2]);
+    g.rect(a - 1, 3, 3, 2).fill(IRON[2]);
+  } else if (v % 3 === 1) {
+    const iron = [0x30343c, 0x5e6672, 0x98a2ae];
+    const [a, b] = [-L + 12, L - 12];
+    const n = 6;
+    for (let i = 0; i <= n; i++) {
+      const x = a + ((b - a) * i) / n;
+      const top = -8 - 3 * Math.cos((Math.PI * x) / (b - a));
+      railLine(g, x, 7, x, top, 2.2, iron[1]);
+      g.poly([x, top - 4.4, x + 2.8, top - 1, x, top + 0.6, x - 2.8, top - 1]).fill(iron[2]).stroke({ width: 1.6, color: INK, join: 'round' });
+    }
+    for (const y of [-4, 4.5]) railLine(g, a, y, b, y, 2.4, iron[1]);
+    g.circle(0, 0.2, 3).stroke({ width: 4, color: INK });
+    g.circle(0, 0.2, 3).stroke({ width: 1.8, color: 0xd8b048 });
+    for (const x of [-L + 6.5, L - 6.5]) {
+      bevel(g, x - 6.5, -7, x + 6.5, 7, 2.4, STONE[1], OUT);
+      g.circle(x, -8.5, 4.4).fill(STONE[1][2]).stroke({ width: 2.2, color: INK });
+      g.circle(x - 1.4, -9.9, 1.7).fill(STONE[1][3]);
+    }
+  } else {
+    const [a, b] = [-L + 7, L - 7];
+    const plank = [0x6a4428, 0x9a6a3e, 0xc0905c];
+    g.rect(a, -8, b - a, 15.5).fill(plank[1]).stroke({ width: OUT, color: INK, join: 'round' });
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const x = a + ((b - a) * i) / n;
+      g.rect(x + 1.2, -7, 2, 13.5).fill({ color: plank[2], alpha: 0.85 });
+      if (i) g.moveTo(x, -8).lineTo(x, 7.5).stroke({ width: 1.8, color: INK, alpha: 0.75 });
+    }
+    for (const y of [-4.5, 3.5]) g.rect(a + 1.5, y - 1.4, b - a - 3, 2.8).fill(plank[0]);
+    g.moveTo(a + 3, 3.5).lineTo(b - 3, -4.5).stroke({ width: 2.6, color: plank[0] });
+    g.circle(b - 6, -0.5, 2.4).stroke({ width: 3.2, color: INK });
+    g.circle(b - 6, -0.5, 2.4).stroke({ width: 1.3, color: IRON[3] });
+    for (const y of [-4.5, 3.5]) g.rect(a - 0.5, y - 1.2, 5.5, 2.4).fill(IRON[1]).stroke({ width: 1, color: INK });
+    posts();
+  }
+}
+
 /** A straw skep from above at (x, y), `R` round: a straw-gold dome, a crescent of shade on the SE, a
  * light on the NW shoulder, two or three coils of its straw rope as arcs, its doorway at the foot
  * (south). */
@@ -5235,6 +5440,13 @@ const DRAW: Record<number, Draw> = {
   143: dockCrane,
   144: netRack,
   145: buoy,
+  // Roadmap 6 fences and walls (`town::fence`), five-foot pieces along x.
+  150: picketFence,
+  151: ironRailing,
+  152: stockade,
+  153: lowWall,
+  154: highWall,
+  155: gate,
 };
 
 /** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */

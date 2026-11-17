@@ -18,6 +18,8 @@
 // `&items=cemetery` (alone; `&panels=`, `&sq=`) shows the cemetery props and a cemetery per culture group.
 // `&items=harbour` (alone; `&sq=`, default 48) shows the harbour batch: boats, bollards, cranes, net racks and buoys on
 // water or a quay, then the vector pieces (breakwater armour, a cog, a lighthouse's lantern) close up and in a harbour.
+// `&items=fences` (alone; `&sq=`, default 48) shows the fence and wall pieces in runs with a gate, and today's hedge,
+// wattle and dry-stone wall beside them.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
@@ -448,6 +450,12 @@ export async function runGallery(target: HTMLElement) {
     y = harbour(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
   }
 
+  // The fences and walls, with a gate in each run (`&items=fences` alone).
+  if (!only && pick?.includes('fences')) {
+    head('Fences: picket, iron railing, stockade, low and high wall in runs with a gate; hedge, wattle, dry wall as today (battlemap)');
+    y = fences(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
+  }
+
   // The countryside's bounds and sails (`&items=countryside`, or with the fruit tree or water wheel kinds).
   if (pick?.includes('countryside') || only?.includes(62) || only?.includes(63)) {
     head('Countryside: hedgerow, dry-stone wall, fence (two chunks side by side, cut at the line between), windmill sails');
@@ -457,6 +465,96 @@ export async function runGallery(target: HTMLElement) {
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
+}
+
+/** The fence and wall kinds (until the generator has them: `town::fence::KINDS`, R6), with a radius in
+ * squares and a height in feet; the gate has three looks. */
+const FENCE_KINDS: KindInfo[] = (
+  [
+    [150, 'picket fence', 0.5, 3.5],
+    [151, 'iron railing', 0.5, 4],
+    [152, 'stockade', 0.55, 10],
+    [153, 'low stone wall', 0.55, 3],
+    [154, 'high wall', 0.6, 8],
+    [155, 'gate', 0.5, 4],
+  ] as const
+).map(([id, name, radius, height_ft]) => ({ id, name, radius, blocks_move: true, blocks_sight: false, cover: 1, difficult: false, height_ft, hazard: null, feature: true }));
+
+/** `&items=fences`: each fence kind as a run of five-foot pieces end to end on grass, its looks in turn,
+ * with a gate in it (the gate's three looks down the rows), and a bent run; then the hedge, wattle and
+ * dry-stone wall drawn today, for comparison; at `sq` px a square. */
+function fences(app: Application, catalog: KindInfo[], root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  const old = [56, 76].map((id) => catalog.find((c) => c.id === id)).filter((k): k is KindInfo => !!k);
+  const kinds = [...FENCE_KINDS.map((k) => catalog.find((c) => c.id === k.id) ?? k), ...old];
+  const atlas = buildAtlas(app.renderer, kinds);
+  const k = sq / PX;
+  const n = Math.min(12, Math.floor((width - 64) / sq));
+  const [rowH, x0] = [2 * sq, 16];
+  let y = y0;
+  const label = (s: string, yy: number) => {
+    if (nolabels) return;
+    const t = new Text({ text: s, style: LABEL });
+    t.position.set(x0, yy);
+    root.addChild(t);
+  };
+  const strip = (h: number) => {
+    const g = new Graphics().rect(x0, y, n * sq + sq, h).fill(GRASS);
+    for (let x = x0 + sq; x < x0 + n * sq + sq - 1; x += sq) g.moveTo(x, y).lineTo(x, y + h);
+    for (let yy = y + sq; yy < y + h - 1; yy += sq) g.moveTo(x0, yy).lineTo(x0 + n * sq + sq, yy);
+    g.stroke({ width: 1, color: 0x000000, alpha: 0.12 });
+    root.addChild(g);
+  };
+  const piece = (id: number, v: number, x: number, yy: number, turn = 0) => {
+    const s = new Sprite(atlas.frames[id][v % looks(id)]);
+    s.anchor.set(0.5);
+    s.scale.set(k);
+    s.rotation = turn;
+    s.position.set(x, yy);
+    root.addChild(s);
+  };
+  const rows: [number, string][] = [...FENCE_KINDS.slice(0, 5), ...old].map((info) => [info.id, info.name]);
+  rows.forEach(([id, name], row) => {
+    const gated = id >= 150;
+    strip(rowH);
+    // Pieces centred on the grid lines' half squares, one after another, a gate in the middle.
+    for (let i = 0; i < n; i++) {
+      const gateHere = gated && i === Math.floor(n / 2);
+      piece(gateHere ? 155 : id, gateHere ? row % 3 : i % 4, x0 + sq + i * sq, y + sq);
+    }
+    y += rowH + 2;
+    label(`${id} ${name}${gated ? `, gate look ${row % 3}` : ''} (looks 0-3 in turn)`, y);
+    y += 22;
+  });
+  // The dry-stone wall drawn today (vector `drawBounds`), straight.
+  strip(rowH);
+  const g = new Graphics();
+  drawBounds(g, [{ kind: DRY_WALL, size: (2.5 / 5) * PX, pts: [0.5 * PX, PX, (n + 0.5) * PX, PX] }], 0, 0, (n + 2) * PX);
+  g.scale.set(k);
+  g.position.set(x0, y);
+  root.addChild(g);
+  y += rowH + 2;
+  label('dry-stone wall (vector, today)', y);
+  y += 22;
+  // A bent run of each new kind: pieces turned along a polyline (as the battlemap lays them).
+  const bend = 3 * sq;
+  strip(bend * 2);
+  const runs = FENCE_KINDS.slice(0, 5);
+  const span = (n * sq) / runs.length;
+  runs.forEach((info, r) => {
+    const pts: [number, number][] = [[x0 + r * span + 0.5 * sq, y + 0.6 * sq], [x0 + r * span + span * 0.5, y + bend * 2 - 0.6 * sq], [x0 + (r + 1) * span, y + 0.8 * sq]];
+    for (let s = 0; s + 1 < pts.length; s++) {
+      const [[ax, ay], [bx, by]] = [pts[s], pts[s + 1]];
+      const len = Math.hypot(bx - ax, by - ay);
+      const m = Math.max(1, Math.round(len / sq));
+      for (let i = 0; i < m; i++) {
+        const t = (i + 0.5) / m;
+        piece(info.id, i, ax + (bx - ax) * t, ay + (by - ay) * t, Math.atan2(by - ay, bx - ax));
+      }
+    }
+  });
+  y += bend * 2 + 2;
+  label('bent runs: picket, iron railing, stockade, low wall, high wall', y);
+  return y + 30;
 }
 
 /** The harbour batch's kinds (until the generator has them: `battlemap::MORE`, R5 M20), with a radius in
