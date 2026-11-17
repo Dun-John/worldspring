@@ -119,6 +119,10 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                     ? c.made_json()
                                     : a.op === 'settlefacts'
                                     ? c.settlement_facts_json(a.id)
+                                    : a.op === 'roadcut'
+                                    ? c.road_cut_json(a.input)
+                                    : a.op === 'removedroads'
+                                    ? c.removed_roads_json()
                                     : a.op === 'madespot'
                                       ? c.settlement_spot_json(a.kind, a.id, a.x, a.y)
                                       : a.op === 'setaside'

@@ -335,14 +335,16 @@ function onEdits(m: Extract<ToCoordinator, { type: 'edits' }>) {
   if (json || patch) for (const gw of workers) gw.w.postMessage({ type: 'edits', json, patch } satisfies ToGen);
   const battleRects = m.battleRects ?? [];
   const groundRects = m.groundRects ?? [];
-  if (!geom || (!m.rects.length && !battleRects.length && !groundRects.length)) return;
+  const allRects = m.allRects ?? [];
+  if (!geom || (!m.rects.length && !battleRects.length && !groundRects.length && !allRects.length)) return;
   const touched = (id: string) => {
     const battle = id.startsWith('b/');
     const [l, x, y] = (battle ? id.slice(2) : id).split('/').map(Number);
-    if (!battle && l < SITE_MIN_LEVEL) return false;
     const ts = geom!.domain_ft / 2 ** l;
     const hit = (r: Rect) => (x + 1) * ts > r[0] && x * ts < r[2] && (y + 1) * ts > r[1] && y * ts < r[3];
-    return m.rects.some(hit) || (battle && battleRects.some(hit));
+    if (!battle && allRects.some(hit)) return true;
+    if (!battle && l < SITE_MIN_LEVEL) return false;
+    return m.rects.some(hit) || (battle && (battleRects.some(hit) || allRects.some(hit)));
   };
   // Ground shaped by hand: the three finest levels' tiles over it are drawn from it.
   const reshaped = (id: string) => {

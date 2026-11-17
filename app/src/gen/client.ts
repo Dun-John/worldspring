@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
+import type { RoadCut, RemovedRoad, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -226,6 +226,17 @@ export class GenClient {
     return this.ask({ op: 'undercat' }).then((j) => JSON.parse(j) as UnderCatalog);
   }
 
+  /** Roads, streets and paths taken off the map (or, with `restore`, brought back), the edits left alone: what to
+   * change in them and what to draw again (`dry`: only the rectangles, for ids in any state); null if the generator could not answer. */
+  roadCut(ids: string[], restore = false, dry = false): Promise<RoadCut | { error: string } | null> {
+    return this.ask({ op: 'roadcut', input: JSON.stringify({ ids, restore, dry }) }).then((j) => JSON.parse(j) as RoadCut | { error: string } | null);
+  }
+
+  /** What was taken off the map by hand. */
+  removedRoads(): Promise<RemovedRoad[]> {
+    return this.ask({ op: 'removedroads' }).then((j) => (JSON.parse(j) as RemovedRoad[] | null) ?? []);
+  }
+
   /** A hand town's street plan, or why it has none. */
   streetPlan(layout: number): Promise<StreetPlan | { error: string }> {
     return this.ask({ op: 'streetplan', layout }).then((j) => (JSON.parse(j) as StreetPlan | { error: string } | null) ?? { error: 'The map could not answer: try again' });
@@ -336,7 +347,7 @@ export class GenClient {
   /** `hint`: the edits these follow and the keys each field's changes touch since (from their
    * ops); used for a field when the workers have that field as it was, so it isn't searched. */
   /** `groundRects`: where the ground was shaped (the three finest levels' tiles draw it). */
-  setEdits(edits: Edits, rects: Rect[], epoch: number, battleRects: Rect[] = [], hint?: { prev: Edits; changed: Record<string, string[]> }, groundRects: Rect[] = []) {
+  setEdits(edits: Edits, rects: Rect[], epoch: number, battleRects: Rect[] = [], hint?: { prev: Edits; changed: Record<string, string[]> }, groundRects: Rect[] = [], allRects: Rect[] = []) {
     // Only the fields that changed (edits are never changed in place: a field that is the same
     // object is unchanged); of a keyed field, only the entries that changed, unless most did.
     const fields: Record<string, string> = {};
@@ -365,7 +376,7 @@ export class GenClient {
       fields[f] = JSON.stringify(b);
     }
     this.sentFields = { ...now };
-    this.send({ type: 'edits', fields, patches, rects, epoch, battleRects, groundRects });
+    this.send({ type: 'edits', fields, patches, rects, epoch, battleRects, groundRects, allRects });
   }
   /** The edits' fields as last sent (by reference). */
   private sentFields: Record<string, unknown> | null = null;

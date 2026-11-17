@@ -444,6 +444,8 @@ export interface Edits {
    * `<layout>/n<id>` a junction, `/e<id>` a street, `/k<id>` a block, `/r<id>` a row, `/a<id>` a
    * painted area, `/m<id>` a wall line; `lanes/…` lanes outside any town. Positions in world ft. */
   streets?: Record<string, unknown>;
+  /** Roads, streets and paths taken off the map by hand (`rd:` stretch, `mt:` track, `tr:` town street or lane, `pp:` park path): the ground shows. */
+  removed_roads?: string[];
   /** Paired exits put down by hand (`j:<id>`; `crates/worldgen/src/links.rs`): two ends, each a
    * level (`l:<site>:<level>`, levels from the bottom: a site underground `u:`/`k:`, a sewer section
    * `w:<layout>:<sx>:<sy>`, a building's cellar `b:`) and a square on it; each shows on its own map as a
@@ -550,6 +552,8 @@ export interface TownEdit {
   squares?: { v: number; at: [number, number]; kind: string }[];
   /** Streets added by hand (a row's road), by id (`ts:<layout>:<id>`): the line (ft), its kind and width. */
   streets?: Record<string, { pts: [number, number][]; type?: string; width?: number }>;
+  /** The town's own streets, lanes and park paths taken off the map by hand (`tr:`, `pp:` ids). */
+  removed?: string[];
 }
 
 /** What a patch of a town can be given (`worldgen::world::TOWN_WARDS`; `empty`: open ground). */
@@ -1021,6 +1025,10 @@ export type Ask =
   | { op: 'made' }
   /** Whether a village or town can be added there (`t0::made::spot`), with what it would be. */
   | { op: 'madespot'; kind: string; id: string; x: number; y: number }
+  /** Roads taken off the map or brought back, the edits left alone (`roadcut::cut`; `input` JSON `{ids, restore?, dry?}`). */
+  | { op: 'roadcut'; input: string }
+  /** What was taken off the map by hand, for the Gazetteer (`roadcut::removed`). */
+  | { op: 'removedroads' }
   /** One of the world's own settlements as its sketch pin would take it (`agent::settlement_facts`). */
   | { op: 'settlefacts'; id: string }
   /** Edits with those of the villages and towns added by hand that they remove, move or lay out
@@ -1255,13 +1263,37 @@ export interface InteriorItem {
   variant?: number;
 }
 
+/** What taking roads away (or bringing them back) does (`roadcut::CutOut`): apply by setting `removed_roads` when
+ * not null, dropping the `paths` (drawn roads, with their notes), and setting or deleting each `towns` key. */
+export interface RoadCut {
+  removed_roads: string[] | null;
+  paths: string[];
+  towns: Record<string, TownEdit | null>;
+  /** Site-level tiles and battlemaps to draw again; `all_rects`: tiles at every level. */
+  rects: Rect[];
+  all_rects: Rect[];
+  done: string[];
+  /** The approaches to towns taken (or brought back) with a stretch. */
+  also: string[];
+  refused: { id: string; why: string }[];
+}
+
+/** A road, street or path taken off the map by hand, for the Gazetteer. `found` false: it is not there any more. */
+export interface RemovedRoad {
+  id: string;
+  name: string | null;
+  what: string;
+  at: string | null;
+  found: boolean;
+}
+
 /** What `pick` finds under or near a point (`worldgen::pick`): topmost first, then nearest. `id` is null
  * for kinds without ids yet (lane, street, hedge, field_wall, fence); `town` the owning settlement's
  * feature id; `removable` where a delete edit exists today; `bbox` world ft x0, y0, x1, y1. */
 export interface Thing {
   kind:
     | 'entrance' | 'building' | 'drawn_building' | 'tower' | 'castle' | 'plot' | 'wall' | 'settlement' | 'site' | 'district'
-    | 'road' | 'drawn_road' | 'crossing' | 'water' | 'harbour' | 'lane' | 'street' | 'hedge' | 'field_wall' | 'fence';
+    | 'road' | 'drawn_road' | 'crossing' | 'water' | 'harbour' | 'lane' | 'street' | 'path' | 'hedge' | 'field_wall' | 'fence';
   id: string | null;
   name: string | null;
   town: string | null;
@@ -2070,9 +2102,9 @@ export type ToCoordinator =
    * edits are not sent whole on every change); `rects` (x0, y0, x1, y1 ft) are where created
    * sites changed: cached site-level tiles and battlemaps there are dropped. Results sent
    * afterwards carry `epoch`. `battleRects`: where only battlemaps change (objects put down or
-   * taken away). `groundRects`: where the ground was shaped by hand: the three finest levels'
+   * taken away). `allRects`: where roads were taken away (tiles at every level). `groundRects`: where the ground was shaped by hand: the three finest levels'
    * tiles there are packed again (their samples, as generated, still serve finer tiles). */
-  | { type: 'edits'; fields: Record<string, string>; patches: Record<string, EditsPatch>; rects: Rect[]; epoch: number; battleRects?: Rect[]; groundRects?: Rect[] };
+  | { type: 'edits'; fields: Record<string, string>; patches: Record<string, EditsPatch>; rects: Rect[]; epoch: number; battleRects?: Rect[]; groundRects?: Rect[]; allRects?: Rect[] };
 
 /** Some entries of a keyed edits field changed: those set (whole) and those taken out. */
 export interface EditsPatch {

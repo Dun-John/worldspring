@@ -1678,6 +1678,16 @@ export class MapView {
       this.placesRect = null;
       this.placesEpoch++;
     }
+    // Roads, streets and paths taken off the map or brought back: drawn again where they ran, at every
+    // zoom (asked of the generator, once it has the edits: `redrawRoads`); names and made links follow.
+    const cutIds: string[] = [];
+    if (prev.removed_roads !== next.removed_roads) {
+      const was = new Set(prev.removed_roads ?? []);
+      const now = new Set(next.removed_roads ?? []);
+      for (const id of [...was, ...now]) if (was.has(id) !== now.has(id)) cutIds.push(id);
+      if (cutIds.some((id) => id.startsWith('mt:'))) madeChanged = true;
+      if (cutIds.length) queueMicrotask(() => this.askRoads());
+    }
     // (Asked once the generators have the edits: after they are sent.)
     if (!send) {
       if (madeChanged) this.refreshMade(false);
@@ -1698,8 +1708,26 @@ export class MapView {
       this.gen.setEdits(next, [], this.editEpoch, [], changed && { prev, changed });
     }
     if (madeChanged) this.refreshMade(true);
+    if (cutIds.length) void this.redrawRoads(cutIds);
     if (relink) this.relinkHere();
     else if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
+  }
+
+  /** Tiles and battlemaps where roads `ids` ran (taken away, or brought back), as the generator says (a dry
+   * `roadCut`): every level for a world road or track, site level for a town's streets and paths. */
+  private async redrawRoads(ids: string[]) {
+    const geom = this.geom;
+    const cut = await this.gen.roadCut(ids, false, true).catch(() => null);
+    if (!cut || 'error' in cut || !geom || geom !== this.geom) return;
+    const rects = cut.rects;
+    const all = cut.all_rects;
+    if (!rects.length && !all.length) return;
+    const epoch = ++this.editEpoch;
+    this.gen.setEdits(this.edits, rects, epoch, [], undefined, [], all);
+    if (all.length) this.tiles?.invalidate(all, 0, epoch);
+    if (rects.length) this.tiles?.invalidate(rects, SITE_MIN_LEVEL, epoch);
+    this.battle?.invalidate([...rects, ...all], epoch);
+    this.lastWantKey = '';
   }
 
   /** The world's own islets (`GenClient.islets`), once asked for in this world. */
