@@ -24,7 +24,9 @@ fn dry_street_in(t0: &T0, c: P, a: P, b: P) -> bool {
 /// outside the section by service passages; a sewage channel down the runs, an outfall
 /// where a tunnel reaches water; the drain shaft down at the far end from the way in (the
 /// grate, else the run nearest the section's middle). None if no street runs here.
-pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate: Option<usize>, last: bool) -> Option<Plan> {
+/// (`members`: the cellars of drawn buildings part of the city, `under::member_links`.)
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate: Option<usize>, last: bool, members: &[(P, String)]) -> Option<Plan> {
     let n = nx * ny;
     let mut p = Plan::new(nx, ny, 0, false);
     let tunnel = p.room("sewer tunnel", 0.0);
@@ -110,6 +112,11 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
             && let Some(k) = square_of(q)
         {
             joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: format!("k:{}:{bi}", l.index), id: String::new(), far: None }, "tunnel", "tunnel to the keep's dungeons"));
+        }
+    }
+    for (q, to) in members {
+        if let Some(k) = square_of(*q) {
+            joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: to.clone(), id: String::new(), far: None }, "ladder", "ladder up into a cellar"));
         }
     }
     for (k, _, _, _) in &joins {

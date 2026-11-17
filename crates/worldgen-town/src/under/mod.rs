@@ -288,7 +288,7 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     let frame = Frame { origin, axis, across, nx, ny };
     let surface = t0.sample(e.at[0], e.at[1], 20.0) as f32;
     let caves = (age, hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, 0xb4ea));
-    let mut it = site(t0, &l, e.kind, format!("u:{layout}:{k}"), (layout as u32, k as u32), frame, depth, Some(entry.1 * nx + entry.0), surface, (theme, s * s), caves, &mut rng)?;
+    let mut it = site(t0, &l, e.kind, format!("u:{layout}:{k}"), (layout as u32, k as u32), frame, depth, Some(entry.1 * nx + entry.0), surface, (theme, s * s), caves, &[], &mut rng)?;
     if e.kind == UnderKind::Cave {
         it.look = look_of(t0, e.at);
     }
@@ -335,7 +335,9 @@ pub fn sewer_site(world: &World, t0: &T0, layout: usize, sx: i64, sy: i64) -> Op
     let surface = t0.sample(origin[0] + 0.5 * s, origin[1] + 0.5 * s, 20.0) as f32;
     let frame = Frame { origin, axis: [1.0, 0.0], across: [0.0, 1.0], nx: n, ny: n };
     let caves = (Age::Living, hash3(world.stream("under.sewer"), town::rng_key(t0, layout), sx, sy ^ 0xb4ea));
-    let mut it = site(t0, &l, UnderKind::Sewer, format!("w:{layout}:{sx}:{sy}"), (layout as u32, 0), frame, 2, grate, surface, (&UNDERCROFT, 1.0), caves, &mut rng)?;
+    // (R3: and the cellars of the buildings drawn by hand part of the city: `member_links`.)
+    let members = member_links(world, t0, &l);
+    let mut it = site(t0, &l, UnderKind::Sewer, format!("w:{layout}:{sx}:{sy}"), (layout as u32, 0), frame, 2, grate, surface, (&UNDERCROFT, 1.0), caves, &members, &mut rng)?;
     it.stone = sewer_stone(&l);
     Some(it)
 }
@@ -401,13 +403,57 @@ pub fn sewer_link_of(t0: &T0, l: &Layout, b: &town::Building) -> Option<P> {
     if l.site || l.tier < crate::t0::settle::Tier::City {
         return None;
     }
+    link_point(t0, l, l.index as usize, b)
+}
+
+/// R3: where the cellar of building `b`, drawn by hand on layout `ml` and part of city `tl`
+/// (`town::members`), meets `tl`'s sewers: as `sewer_link_of`, on `tl`'s paved streets within
+/// reach of it (else none: no sewer is dug out to the outskirts for it).
+pub fn member_link(t0: &T0, tl: &Layout, ml: &Layout, b: &town::Building) -> Option<P> {
+    if tl.site || tl.tier < crate::t0::settle::Tier::City {
+        return None;
+    }
+    link_point(t0, tl, ml.index as usize, b)
+}
+
+/// The cellars of the buildings drawn by hand part of city `l` (`town::members`) that meet its
+/// sewers: (where, `b:<layout>:0`). (The sewers read the drawn things, parent → child, as the
+/// cellars read the city; neither is read by a town's layout.)
+pub fn member_links(world: &World, t0: &T0, l: &Layout) -> Vec<(P, String)> {
+    if l.site || l.tier < crate::t0::settle::Tier::City || world.file.edits.created.is_empty() {
+        return Vec::new();
+    }
+    let first = t0.settlements.len() + t0.base_pois;
+    town::members::members_of(world, t0, l.index as usize)
+        .into_iter()
+        .filter(|m| world.file.edits.created.get(m.0 - first).is_some_and(|c| c.kind == "building"))
+        .filter_map(|(li, _)| {
+            let ml = town::layout(world, t0, li);
+            Some((member_link(t0, l, &ml, ml.building(0)?)?, format!("b:{li}:0")))
+        })
+        .collect()
+}
+
+/// The cellar of building `b` of drawn layout `l` where it meets the sewers of the city it is
+/// part of: (where, the city's layout).
+pub fn member_link_of(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<(P, usize)> {
+    let c = l.index.checked_sub((t0.settlements.len() + t0.base_pois) as u32).and_then(|k| world.file.edits.created.get(k as usize))?;
+    if c.kind != "building" {
+        return None;
+    }
+    let o = town::members::owner(world, t0, l.index as usize).filter(|o| town::is_settlement(t0, o.town))?;
+    Some((member_link(t0, &town::layout(world, t0, o.town), l, b)?, o.town))
+}
+
+/// Where building `b` (rolled by layout `owner`'s key) meets the sewers of streets layout `l`.
+fn link_point(t0: &T0, l: &Layout, owner: usize, b: &town::Building) -> Option<P> {
     // (R5 towns: nor a steppe town's round felt hall, of one storey with no cellar; R5 M20 nor a
     // house on a deck over the water.)
     if b.structure != Structure::Roofed || town::roof::felt_built(b).is_some() || b.deck.is_some() {
         return None;
     }
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
-    let chosen = key.is_some_and(|k| SEWER_CELLARS.contains(&k)) || (b.func.is_none() && crate::core::rng::hash2(town::rng_key(t0, l.index as usize) as u64 ^ 0x5e3e, b.id as i64, 7) % 10 == 0);
+    let chosen = key.is_some_and(|k| SEWER_CELLARS.contains(&k)) || (b.func.is_none() && crate::core::rng::hash2(town::rng_key(t0, owner) as u64 ^ 0x5e3e, b.id as i64, 7) % 10 == 0);
     if !chosen {
         return None;
     }
@@ -450,7 +496,7 @@ pub fn keep_dungeon(world: &World, t0: &T0, layout: usize, bi: usize) -> Option<
     let depth = if nx * ny > 6000 { 3 } else { 2 };
     let surface = cellar.elevation_ft;
     let caves = (Age::Living, hash3(world.stream("under.keep"), town::rng_key(t0, layout), bi as i64, 0xb4ea));
-    site(t0, &l, UnderKind::KeepDungeon, id, (layout as u32, bi as u32), frame, depth, Some(entry), surface, (&KEEP_DUNGEON, 1.0), caves, &mut rng)
+    site(t0, &l, UnderKind::KeepDungeon, id, (layout as u32, bi as u32), frame, depth, Some(entry), surface, (&KEEP_DUNGEON, 1.0), caves, &[], &mut rng)
 }
 
 /// Where a site's grid lies: corner (world ft), unit axes, size in squares.
@@ -479,6 +525,7 @@ fn site(
     surface: f32,
     (theme, area): (&'static Theme, f64),
     (age, caves): (Age, u64),
+    members: &[(P, String)],
     rng: &mut Pcg32,
 ) -> Option<Interior> {
     let (nx, ny) = (f.nx, f.ny);
@@ -492,7 +539,7 @@ fn site(
         let a = arrive.unwrap_or(0);
         let mut p = match theme.planner {
             // (A city's own sewers, not from a theme: its top level follows the streets.)
-            _ if kind == UnderKind::Sewer && d == 0 => sewer(t0, l, f.origin, nx, ny, arrive, last)?,
+            _ if kind == UnderKind::Sewer && d == 0 => sewer(t0, l, f.origin, nx, ny, arrive, last, members)?,
             Planner::Mixed => mixed(nx, ny, a, d, last, theme, area, rng),
             Planner::Dwarven => dwarven(nx, ny, a, d, last, theme, area, rng),
             Planner::Wizard => wizard(nx, ny, a, d, last, theme, area, rng),

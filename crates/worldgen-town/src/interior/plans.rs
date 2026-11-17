@@ -350,10 +350,12 @@ pub(super) fn cellar_links(mut lvl: Option<&mut Level>, world: &World, t0: &T0, 
         [dot(d, sh.u) / SQUARE_FT, dot(d, sh.v) / SQUARE_FT]
     };
     let mut want = Vec::new();
-    if let Some(q) = crate::under::sewer_link_of(t0, l, b) {
+    // (R3: a building drawn by hand part of a city: on its sewers, `under::member_link_of`.)
+    let sewer = if l.site { crate::under::member_link_of(world, t0, l, b) } else { crate::under::sewer_link_of(t0, l, b).map(|q| (q, l.index as usize)) };
+    if let Some((q, city)) = sewer {
         want.push("the trapdoor to the sewers");
         if let Some(lvl) = lvl.as_deref_mut() {
-            place_link(lvl, nx, ny, stairs, grid(q), "trapdoor", "trapdoor to the sewers", crate::under::sewer_id(l.index as usize, q));
+            place_link(lvl, nx, ny, stairs, grid(q), "trapdoor", "trapdoor to the sewers", crate::under::sewer_id(city, q));
         }
     }
     if has_deep_dungeon(b) {
