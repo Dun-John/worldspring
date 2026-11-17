@@ -58,6 +58,10 @@ export interface KeyContext {
   buildQuick(m: 'stamp' | 'row' | 'lasso'): void;
   buildFinish(): void;
   buildBack(): void;
+  /** Build › Select. */
+  buildSelect(): void;
+  /** Select: the thing open taken away (false: none that can be). */
+  selectDelete(): boolean;
   designMode(m: DesignMode): void;
   /** Rooms: the ways across (paired exits) or back to the rooms (false: not here). */
   linksToggle(): boolean;
@@ -168,6 +172,8 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['T', 'tower', 'Round tower'],
   ];
   for (const [key, s, label] of shapes) out.push({ keys: [key], label, group: 'Build', when: edit('build'), run: () => k.buildShape(s) });
+  out.push({ keys: ['A'], label: 'Select (click, drag a box, Shift-drag a lasso)', group: 'Build', when: edit('build'), run: () => k.buildSelect() });
+  out.push({ keys: ['Delete'], label: 'Delete what Select has open', group: 'Build', when: edit('build'), run: () => k.selectDelete() });
   out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when: edit('build'), run: () => k.buildCross() });
   out.push({ keys: ['H'], label: 'Harbour (islet, quay, pier, breakwater)', group: 'Build', when: edit('build'), run: () => k.buildHarbour() });
   out.push({ keys: ['V'], label: 'Road (again: footpath, track, gravel, paved, cobbled)', group: 'Build', when: edit('build'), run: () => k.buildRoad() });

@@ -1045,6 +1045,7 @@ export function buildTools(app: BuildHost) {
 
   /** The armed tool of the mode shown (null while the tab is shut). */
   function tool() {
+    if (buildMode === 'select') return null;
     return buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
   }
 
@@ -1153,6 +1154,7 @@ export function buildTools(app: BuildHost) {
     waterInfo,
     removeWater,
     removeCrossing,
+    pickCrossing,
     removeWharf,
     generatedBuilding,
     withPiece,

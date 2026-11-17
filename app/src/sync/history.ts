@@ -143,6 +143,8 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `${change.changed ? 'changed' : 'raised'} an islet`;
       case 'place_wharf':
         return `${change.changed ? 'changed' : 'put down'} a ${String(change.kind ?? 'wharf')}${change.lighthouse ? ' with a lighthouse' : ''}`;
+      case 'delete_selected':
+        return `took away ${Number(change.count ?? 0)} things`;
       case 'remove_wharves':
         return `took away a ${String(change.kind ?? 'wharf')}`;
       case 'upload_sprite':

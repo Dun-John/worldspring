@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type BuildMode = 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear' | 'road';
+  export type BuildMode = 'select' | 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear' | 'road';
   /** What the app says of a quick placement's ghost. */
   export interface QuickInfo {
     /** Something is ready to place. */
@@ -79,6 +79,8 @@
     onSave: () => void;
     onDone: () => void;
     onMode: (m: BuildMode) => void;
+    /** Select's card (`SelectPanel`), shown in its mode. */
+    select?: import('svelte').Snippet;
     /** Put the stamp, row or plot down. */
     onPlace: () => void;
     /** Drop the row or outline being drawn. */
@@ -97,6 +99,7 @@
     editing,
     handTown = false,
     mode,
+    select,
     works = $bindable(),
     worksEditing,
     clearShape = $bindable(),
@@ -131,6 +134,7 @@
   }: Props = $props();
 
   const MODES: { key: BuildMode; label: string; icon: IconName; title: string }[] = [
+    { key: 'select', label: 'Select', icon: 'pointer', title: 'Choose what is on the map: click, drag a box, Shift-drag a lasso (A)' },
     { key: 'building', label: 'Building', icon: 'building', title: 'Draw a building (B)' },
     { key: 'stamp', label: 'Stamp', icon: 'building', title: 'Set down a building of a kind and size where you click (Q)' },
     { key: 'row', label: 'Row', icon: 'wall', title: 'A row of buildings along a street (E)' },
@@ -153,7 +157,9 @@
       {/each}
     </div>
   {/if}
-  {#if mode === 'castle' || mode === 'wall'}
+  {#if mode === 'select'}
+    {@render select?.()}
+  {:else if mode === 'castle' || mode === 'wall'}
     <WorksPanel {mode} bind:works {worksEditing} {handTown} {onWorksSave} {onDone} {near} {peek} {onZoomIn} />
   {:else if mode === 'clear'}
     <ClearPanel bind:clearShape {near} {peek} {onZoomIn} />
@@ -243,15 +249,15 @@
     outline: 2px solid var(--ink);
     outline-offset: 2px;
   }
-  /* Ten modes in two rows of five: each its icon over its word. */
+  /* Twelve modes in two rows of six: each its icon over its word. */
   .modes {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
   }
-  .modes > button:nth-child(5n + 1) {
+  .modes > button:nth-child(6n + 1) {
     border-left: none;
   }
-  .modes > button:nth-child(n + 6) {
+  .modes > button:nth-child(n + 7) {
     border-top: 1px solid var(--line-soft);
   }
   .modes > button {
