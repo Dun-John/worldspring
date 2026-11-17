@@ -22,15 +22,14 @@ use crate::battle::{Kind, KindInfo, Object, SQUARE_FT};
 use crate::model::fences::{Fence, FenceChange, FenceGap, FenceKind, GATE_OPEN_FT};
 use crate::world::{Edits, TownEdit};
 
-/// The kinds laid in 5-ft sections and a gate's open leaf (the R6 lane's ids, 150-155), with their
-/// rules: the low ones hard going, half cover, seen over; a stockade and a high wall block the way
-/// and sight.
-pub(crate) const KINDS: [(Kind, KindInfo); 6] = [
+/// The kinds laid in 5-ft sections and a gate's open leaf (the R6 lane's ids, 150-152 and 155),
+/// with their rules: the picket and the railing hard going, half cover, seen over; a stockade blocks
+/// the way and sight. (A low stone wall is drawn as a dry-stone wall, a high wall raised as a
+/// garden wall: `drawn_kind`.)
+pub(crate) const KINDS: [(Kind, KindInfo); 4] = [
     (Kind::Picket, crate::battle::k(Kind::Picket, "picket fence", 0.5, false, false, 1, true, 3.5, true)),
     (Kind::IronRailing, crate::battle::k(Kind::IronRailing, "iron railing", 0.5, false, false, 1, true, 4.0, true)),
     (Kind::Stockade, crate::battle::k(Kind::Stockade, "stockade", 0.55, true, true, 3, false, 10.0, true)),
-    (Kind::LowWall, crate::battle::k(Kind::LowWall, "low stone wall", 0.55, false, false, 1, true, 3.0, true)),
-    (Kind::HighWall, crate::battle::k(Kind::HighWall, "high wall", 0.6, true, true, 3, false, 8.0, true)),
     (Kind::Gate, crate::battle::k(Kind::Gate, "gate", 0.5, false, false, 0, false, 4.0, false)),
 ];
 
@@ -242,16 +241,17 @@ pub fn sources(l: &Layout, t0: &T0, near: [f64; 4]) -> Vec<(u8, P, P, FenceKind)
 pub fn drawn_kind(kind: FenceKind) -> RunKind {
     match kind {
         FenceKind::Hedgerow => RunKind::Hedge,
-        FenceKind::DryStoneWall => RunKind::DryWall,
         FenceKind::PostAndRail => RunKind::Fence,
         FenceKind::Hedge => RunKind::Pieces(Kind::Hedge),
         FenceKind::Wattle => RunKind::Pieces(Kind::WattleFence),
-        FenceKind::LowWall => RunKind::Pieces(Kind::LowWall),
+        // (A low stone wall's rules are a dry-stone wall's: drawn as one.)
+        FenceKind::DryStoneWall | FenceKind::LowWall => RunKind::DryWall,
         FenceKind::Picket => RunKind::Pieces(Kind::Picket),
         FenceKind::IronRailing => RunKind::Pieces(Kind::IronRailing),
         FenceKind::Stockade => RunKind::Pieces(Kind::Stockade),
-        // (A garden wall is generated only: one asked for elsewhere stands as a high wall.)
-        FenceKind::GardenWall | FenceKind::HighWall => RunKind::Pieces(Kind::HighWall),
+        // (A garden wall is generated only: one asked for elsewhere stands as a high wall, raised
+        // and drawn as a garden wall.)
+        FenceKind::GardenWall | FenceKind::HighWall => RunKind::Wall,
     }
 }
 
@@ -270,7 +270,7 @@ pub fn run_kind(kind: FenceKind, was: RunKind) -> RunKind {
 #[inline]
 pub fn gate_look(kind: RunKind) -> u8 {
     match kind {
-        RunKind::Pieces(Kind::IronRailing | Kind::HighWall) => 1,
+        RunKind::Pieces(Kind::IronRailing) | RunKind::Wall => 1,
         RunKind::Pieces(Kind::Stockade) => 2,
         _ => 0,
     }
@@ -448,7 +448,7 @@ pub fn garden_walls(walls: Vec<(P, P)>, cut: &FenceCut, gates: &mut Vec<(P, f64,
 /// Runs and gates of `from` (world ft, whole) clipped to the chunk `rect` into `out`.
 pub fn take(from: &Battle, rect: [f64; 4], out: &mut Battle) {
     for &(a, b, kind) in &from.runs {
-        if let Some((p, e)) = rural::clip_seg(a, b, rect)
+        if let Some((p, e)) = rural::clip_seg(a, b, kind.clip(rect))
             && out.runs.len() < rural::MAX_RUNS
         {
             out.runs.push((p, e, kind));
@@ -511,7 +511,7 @@ fn drawn_one(f: &Fence, rect: [f64; 4], near: [f64; 4], wet: &dyn Fn(P) -> bool,
                 match (ok, from) {
                     (true, None) => from = Some(j),
                     (false, Some(fj)) => {
-                        if let Some((x, y)) = rural::clip_seg(lerp(p, r, fj as f64 / m as f64), lerp(p, r, j as f64 / m as f64), rect)
+                        if let Some((x, y)) = rural::clip_seg(lerp(p, r, fj as f64 / m as f64), lerp(p, r, j as f64 / m as f64), kind.clip(rect))
                             && out.runs.len() < rural::MAX_RUNS
                         {
                             out.runs.push((x, y, kind));
@@ -554,7 +554,7 @@ pub fn in_gap(gaps: &[FenceGap], p: P) -> bool {
 /// Whether objects of `kind` are a fence's or a hedge's (the eraser takes them).
 #[inline]
 pub fn is_fence_object(kind: Kind) -> bool {
-    matches!(kind, Kind::Hedge | Kind::WattleFence | Kind::Picket | Kind::IronRailing | Kind::Stockade | Kind::LowWall | Kind::HighWall | Kind::Gate)
+    matches!(kind, Kind::Hedge | Kind::WattleFence | Kind::Picket | Kind::IronRailing | Kind::Stockade | Kind::Gate)
 }
 
 /// The chunk's (origin `ox`, `oy` ft) fence and hedge objects whose middles lie under a gap left out.

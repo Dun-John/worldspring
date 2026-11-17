@@ -34,6 +34,9 @@ pub enum RunKind {
     /// (Roadmap 6 R6) A fence or hedge laid as objects of a kind in 5-ft sections (`fence::objects`):
     /// no shape, its squares' rules the kind's own.
     Pieces(Kind),
+    /// (Roadmap 6 R6) A high wall: raised (`battlemap`, blocking the way and sight) and drawn as a
+    /// manor's garden wall; no marks of its own.
+    Wall,
 }
 
 /// A corral's fence's thickness as the battlemap draws it (ft; its squares as a fence's).
@@ -48,7 +51,15 @@ impl RunKind {
             RunKind::Fence | RunKind::Corral => 0.8,
             RunKind::Pier => 6.0,
             RunKind::Pieces(_) => 0.0,
+            RunKind::Wall => crate::interior::FORE_WALL_FT,
         }
+    }
+
+    /// The rect (world ft) its pieces are cut to for the chunk `rect`: a wall's reach the chunk's
+    /// halo too (its squares there raised as the next chunk raises them), the rest the chunk.
+    #[inline]
+    pub fn clip(self, rect: [f64; 4]) -> [f64; 4] {
+        if self == RunKind::Wall { [rect[0] - SQUARE_FT, rect[1] - SQUARE_FT, rect[2] + SQUARE_FT, rect[3] + SQUARE_FT] } else { rect }
     }
 }
 
@@ -501,7 +512,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
             match (ok, from) {
                 (true, None) => from = Some(j),
                 (false, Some(f)) => {
-                    if let Some((p, q)) = clip_seg(lerp(a, b, f as f64 / m as f64), lerp(a, b, j as f64 / m as f64), rect)
+                    if let Some((p, q)) = clip_seg(lerp(a, b, f as f64 / m as f64), lerp(a, b, j as f64 / m as f64), kind.clip(rect))
                         && out.runs.len() < MAX_RUNS
                     {
                         out.runs.push((p, q, kind));
@@ -703,14 +714,18 @@ fn orchard(f: &[P], angle: f64, rect: [f64; 4], out: &mut Battle) {
 /// The chunk's shapes from `b` (chunk origin `ox`, `oy` ft): each run, each windmill's sails.
 pub fn shapes(b: &Battle, ox: f64, oy: f64, out: &mut Vec<VectorShape>) {
     let local = |p: P| [((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32];
+    let own = [ox, oy, ox + SQ as f64 * SQUARE_FT, oy + SQ as f64 * SQUARE_FT];
     for &(a, e, kind) in &b.runs {
         let sk = match kind {
             RunKind::Hedge | RunKind::HedgeRow => ShapeKind::Hedge,
             RunKind::DryWall | RunKind::Pier => ShapeKind::DryWall,
             RunKind::Fence | RunKind::Corral => ShapeKind::Fence,
+            RunKind::Wall => ShapeKind::GardenWall,
             // (Laid as objects: `fence::objects`.)
             RunKind::Pieces(_) => continue,
         };
+        // (A wall's pieces reach into the halo: drawn to the chunk's edge.)
+        let Some((a, e)) = (if kind == RunKind::Wall { clip_seg(a, e, own) } else { Some((a, e)) }) else { continue };
         // (A corral's fence drawn a third thicker: `countryside.ts` makes it bolder.)
         let ft = if kind == RunKind::Corral { CORRAL_DRAWN_FT } else { kind.ft() };
         // (A field's hedge's third point (1, 0): drawn the cheaper way, `countryside.ts`.)
@@ -747,9 +762,10 @@ pub fn objects(b: &Battle, ox: f64, oy: f64, c: &mut crate::battle::Chunk) {
 }
 
 /// Each square of the chunk (origin `ox`, `oy` ft) a run drawn as a shape crosses, with the run's
-/// kind (one laid as objects keeps its kind's rules: `fence::objects`).
+/// kind (one laid as objects keeps its kind's rules: `fence::objects`; a wall's are its raised
+/// squares').
 fn each_square(b: &Battle, ox: f64, oy: f64, f: &mut dyn FnMut(usize, RunKind)) {
-    for &(a, e, kind) in b.runs.iter().filter(|r| !matches!(r.2, RunKind::Pieces(_))) {
+    for &(a, e, kind) in b.runs.iter().filter(|r| !matches!(r.2, RunKind::Pieces(_) | RunKind::Wall)) {
         let m = (dist(a, e) / (0.25 * SQUARE_FT)).ceil().max(1.0) as usize;
         for j in 0..=m {
             let p = lerp(a, e, j as f64 / m as f64);

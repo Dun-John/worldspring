@@ -66,6 +66,8 @@ const TOWER_FT: f32 = 30.0;
 /// A palace forecourt's low garden wall and its gate's piers (ft).
 const GARDEN_WALL_FT: f32 = 4.0;
 const PIER_FT: f32 = 8.0;
+/// (Roadmap 6 R6) A high wall's height (ft).
+const HIGH_WALL_FT: f32 = 8.0;
 /// Eave height per storey (ft): a building's squares stand this much per floor above its pad.
 const STOREY_FT: f32 = 10.0;
 
@@ -1985,6 +1987,66 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
+    // v63 countryside: hedgerows, dry-stone walls and fences (not on a road or water), orchards,
+    // copses, windmills' sails and water wheels (`town::rural`).
+    let mut rural = crate::town::rural::Battle::default();
+    {
+        let blocked = |p: [f64; 2]| {
+            let (i, j) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
+            if i < -1 || j < -1 || i > SQ as i64 || j > SQ as i64 {
+                return false;
+            }
+            hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0)))
+        };
+        let rect = [ox, oy, ox + chunk_ft, oy + chunk_ft];
+        for l in &rural_ls {
+            let fcut = crate::town::fence::FenceCut::of(world, t0, l);
+            crate::town::rural::battle(l, t0, rect, &blocked, fcut.as_ref(), &mut rural);
+        }
+        // (Roadmap 6 R6: parks' hedges and yard walls changed by hand, fences drawn by hand (cut by
+        // water alone), then the eraser's gaps through all of them.)
+        if !hand_fences.runs.is_empty() || !hand_fences.gates.is_empty() {
+            crate::town::fence::take(&hand_fences, rect, &mut rural);
+        }
+        if !world.file.edits.fences.is_empty() {
+            let wet = |p: [f64; 2]| {
+                let (i, j) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
+                i >= -1 && j >= -1 && i <= SQ as i64 && j <= SQ as i64 && hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize]
+            };
+            crate::town::fence::drawn(&world.file.edits, rect, &wet, &mut rural);
+        }
+        crate::town::fence::cut_gaps(&fence_gaps, &mut rural);
+    }
+    // (Roadmap 6 R6: a high wall, generated run changed or drawn by hand, raised as a garden wall
+    // is, `HIGH_WALL_FT` tall, over the halo too; drawn by `rural::shapes`. A square stands on it
+    // when its middle lies by it and over it, from its start up to short of its end: a gate's
+    // opening always leaves one square free.)
+    for &(a, b, _) in rural.runs.iter().filter(|r| r.2 == crate::town::rural::RunKind::Wall) {
+        let half = 0.5 * crate::interior::FORE_WALL_FT;
+        let l = crate::town::geom::dist(a, b);
+        if l < 1e-6 {
+            continue;
+        }
+        let u = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+        let r = half + 1.5;
+        let (i0, j0, i1, j1) = range((a[0].min(b[0]) - r, a[1].min(b[1]) - r, a[0].max(b[0]) + r, a[1].max(b[1]) + r));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                let d = crate::town::geom::sub(center(i, j), a);
+                let t = crate::town::geom::dot(d, u);
+                if bld_h[h] != 0 || hw[h] > hh[h] || matches!(urb_h[h], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR) || !(0.0..l).contains(&t) || crate::town::geom::cross(u, d).abs() > half + 1.5 {
+                    continue;
+                }
+                urb_h[h] = URBAN_WALL;
+                hh[h] = hh[h].max(ground_h[h] + HIGH_WALL_FT);
+                lift[h] = hh[h] - ground_h[h];
+            }
+        }
+    }
     let road: Vec<u8> = (0..n).map(|k| road_h[(k / SQ + 1) * HS + k % SQ + 1]).collect();
     let interior = |grid: &[f32]| -> Vec<f32> { (0..n).map(|k| grid[(k / SQ + 1) * HS + k % SQ + 1]).collect() };
     let height = interior(&hh);
@@ -2016,36 +2078,6 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         })
         .collect();
 
-    // v63 countryside: hedgerows, dry-stone walls and fences (not on a road or water), orchards,
-    // copses, windmills' sails and water wheels (`town::rural`).
-    let mut rural = crate::town::rural::Battle::default();
-    {
-        let blocked = |p: [f64; 2]| {
-            let (i, j) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
-            if i < -1 || j < -1 || i > SQ as i64 || j > SQ as i64 {
-                return false;
-            }
-            hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0)))
-        };
-        let rect = [ox, oy, ox + chunk_ft, oy + chunk_ft];
-        for l in &rural_ls {
-            let fcut = crate::town::fence::FenceCut::of(world, t0, l);
-            crate::town::rural::battle(l, t0, rect, &blocked, fcut.as_ref(), &mut rural);
-        }
-        // (Roadmap 6 R6: parks' hedges and yard walls changed by hand, fences drawn by hand (cut by
-        // water alone), then the eraser's gaps through all of them.)
-        if !hand_fences.runs.is_empty() || !hand_fences.gates.is_empty() {
-            crate::town::fence::take(&hand_fences, rect, &mut rural);
-        }
-        if !world.file.edits.fences.is_empty() {
-            let wet = |p: [f64; 2]| {
-                let (i, j) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
-                i >= -1 && j >= -1 && i <= SQ as i64 && j <= SQ as i64 && hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize]
-            };
-            crate::town::fence::drawn(&world.file.edits, rect, &wet, &mut rural);
-        }
-        crate::town::fence::cut_gaps(&fence_gaps, &mut rural);
-    }
     crate::town::rural::shapes(&rural, ox, oy, &mut shapes);
     let mut chunk = Chunk {
         key: *key,
@@ -2490,7 +2522,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     };
     // (Nor does anything in the way stand on a flight of steps.)
     let on_steps = |surface: &[Surface], o: &Object| info(o.kind as u16).blocks_move && surface[(o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1)] == Surface::Stairs;
-    let blocked = |c: &Chunk, o: &Object| on_wall(&c.urban, o) || on_steps(&c.surface, o) || in_gate([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], (info(o.kind as u16).radius * o.scale) as f64 * SQUARE_FT);
+    // (A gate's leaf stands in its wall's opening, its middle maybe on a raised square beside it.)
+    let blocked = |c: &Chunk, o: &Object| (o.kind != Kind::Gate && on_wall(&c.urban, o)) || on_steps(&c.surface, o) || in_gate([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], (info(o.kind as u16).radius * o.scale) as f64 * SQUARE_FT);
     {
         let kept: Vec<bool> = chunk.objects.iter().map(|o| !blocked(&chunk, o)).collect();
         let mut it = kept.iter();

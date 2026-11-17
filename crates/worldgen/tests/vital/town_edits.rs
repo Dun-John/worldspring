@@ -1333,7 +1333,8 @@ fn fence_edits() {
         let (i, j) = (4..SQ - 16).flat_map(|j| (4..SQ - 16).map(move |i| (i, j))).find(|&(i, j)| dry(i, j)).expect("a dry spot");
         [ox + i as f64 * SQUARE_FT + 5.0, oy + j as f64 * SQUARE_FT + 5.0]
     };
-    let kinds = [(FenceKind::Picket, Kind::Picket), (FenceKind::IronRailing, Kind::IronRailing), (FenceKind::Stockade, Kind::Stockade), (FenceKind::LowWall, Kind::LowWall), (FenceKind::HighWall, Kind::HighWall)];
+    // (`None`: a low stone wall drawn as a dry-stone wall, a high wall raised as a garden wall.)
+    let kinds = [(FenceKind::Picket, Some(Kind::Picket)), (FenceKind::IronRailing, Some(Kind::IronRailing)), (FenceKind::Stockade, Some(Kind::Stockade)), (FenceKind::LowWall, None), (FenceKind::HighWall, None)];
     let line = |k: usize| (geom::add(drawn_at, [0.0, 10.0 * k as f64]), geom::add(drawn_at, [40.0, 10.0 * k as f64]));
     let keys: Vec<TileKey> = {
         let mut k = vec![key_at(geom::lerp(gone.1, gone.2, 0.5)), key_at(geom::lerp(picket.1, picket.2, 0.5)), key_at(geom::lerp(side.1, side.2, 0.5)), key_at(pieces[0]), spot_key];
@@ -1418,18 +1419,36 @@ fn fence_edits() {
         let now: usize = pieces.iter().map(|&p| objects_near(&c, Kind::Hedge, p, 0.3)).sum();
         assert!(was >= 2 && now == 0, "the park's hedge: {was} pieces before, {now} after");
     }
-    // The fences drawn by hand: sections along each, a stockade's blocking the way and sight, each
-    // gate's square free.
+    // The fences drawn by hand: sections along each (a low wall's hard going, a high wall's raised
+    // squares), a stockade's blocking the way and sight, each gate's square free.
     {
         let c = &chunks[idx(drawn_at)];
-        for (k, &(_, kind)) in kinds.iter().enumerate() {
+        let (ox, oy) = g.tile_origin_ft(&c.key);
+        let sq = |p: P| (((p[1] - oy) / SQUARE_FT).floor() as usize) * SQ + ((p[0] - ox) / SQUARE_FT).floor() as usize;
+        for (k, &(fk, kind)) in kinds.iter().enumerate() {
             let (a, b) = line(k);
-            let along = c.objects.iter().filter(|o| o.kind == kind && geom::seg_dist(to_world(&c, [o.x, o.y]), a, b) < 0.3).count();
-            assert!(along >= 6, "{kind:?}: {along} sections drawn");
             let gp = geom::add(a, [20.0, 0.0]);
-            assert_eq!(objects_near(&c, Kind::Gate, gp, 0.3), 1, "{kind:?}: no gate");
-            assert!(c.objects.iter().filter(|o| o.kind != Kind::Gate && bm::info(o.kind as u16).blocks_move).all(|o| geom_dist(to_world(&c, [o.x, o.y]), gp) >= 2.4), "{kind:?}: the gate's square is blocked");
-            if kind == Kind::Stockade {
+            match (fk, kind) {
+                (_, Some(kind)) => {
+                    let along = c.objects.iter().filter(|o| o.kind == kind && geom::seg_dist(to_world(&c, [o.x, o.y]), a, b) < 0.3).count();
+                    assert!(along >= 6, "{kind:?}: {along} sections drawn");
+                }
+                (FenceKind::LowWall, None) => {
+                    let p = geom::add(a, [7.5, 0.0]);
+                    assert!(shape_near(&c, p, 1.0) && c.edges[sq(p)] & 16 != 0, "the low wall is not drawn or not hard going");
+                    assert!(!shape_near(&c, gp, 2.0), "the low wall runs through its gate");
+                }
+                _ => {
+                    let p = geom::add(a, [7.5, 0.0]);
+                    // (One of the squares either side of the gate's middle is its way through.)
+                    let free = [-2.4, 2.4].iter().any(|&dx| c.urban[sq(geom::add(gp, [dx, 0.0]))] != bm::URBAN_WALL);
+                    assert!(c.urban[sq(p)] == bm::URBAN_WALL && free, "the high wall is not raised, or raised in its gate");
+                    assert!(c.structures.iter().any(|s| s.kind == ShapeKind::GardenWall && s.pts.len() >= 2 && geom::seg_dist(p, to_world(c, s.pts[0]), to_world(c, s.pts[1])) < 1.0), "the high wall is not drawn");
+                }
+            }
+            assert_eq!(objects_near(&c, Kind::Gate, gp, 0.3), 1, "{fk:?}: no gate");
+            assert!(c.objects.iter().filter(|o| o.kind != Kind::Gate && bm::info(o.kind as u16).blocks_move).all(|o| geom_dist(to_world(&c, [o.x, o.y]), gp) >= 2.4), "{fk:?}: the gate's square is blocked");
+            if kind == Some(Kind::Stockade) {
                 let p = geom::add(a, [7.5, 0.0]);
                 assert!(c.objects.iter().any(|o| { let i = bm::info(o.kind as u16); i.blocks_move && i.blocks_sight && geom_dist(to_world(&c, [o.x, o.y]), p) < 2.6 }), "the stockade does not block");
             }

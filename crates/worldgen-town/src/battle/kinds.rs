@@ -98,12 +98,11 @@ pub enum Kind {
     DockCrane = 143,
     NetRack = 144,
     Buoy = 145,
-    // Roadmap 6 R6: fences and walls laid in 5-ft sections, a gate's open leaf (`town::fence`).
+    // Roadmap 6 R6: fences laid in 5-ft sections, a gate's open leaf (`town::fence`; a low stone
+    // wall is drawn as a dry-stone wall, a high wall raised as a garden wall: 153 and 154 unused).
     Picket = 150,
     IronRailing = 151,
     Stockade = 152,
-    LowWall = 153,
-    HighWall = 154,
     Gate = 155,
 }
 
