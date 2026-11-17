@@ -513,7 +513,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         for at_start in [true, false] {
             let c = if at_start { seg[0] } else { seg[seg.len() - 1] };
             if let Some(&s) = town_at_cell.get(&(c as usize)) {
-                let r = crate::town::road_trim_radius(s.tier, s.population) / cell;
+                let r = crate::t0::radii::road_trim_radius(s.tier, s.population) / cell;
                 if !at_start {
                     pts.reverse();
                     wander.reverse();
@@ -567,7 +567,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         i >= 0 && j >= 0 && (i as usize) < w && (j as usize) < h && passable_fn(inp)(j as usize * w + i as usize)
     };
     // Settlements and how far round them a junction stays put (towns' roads end at their edge).
-    let towns: Vec<([f64; 2], f64)> = settlements.iter().map(|s| ([s.x, s.y], crate::town::road_trim_radius(s.tier, s.population).max(0.15 * cell))).collect();
+    let towns: Vec<([f64; 2], f64)> = settlements.iter().map(|s| ([s.x, s.y], crate::t0::radii::road_trim_radius(s.tier, s.population).max(0.15 * cell))).collect();
     // (Routes laid across each other meet where they cross.)
     join_crossings(&mut roads, &towns, cell);
     drop_parallel(&mut roads, &towns);

@@ -19,7 +19,7 @@ use serde::Serialize;
 use crate::World;
 use crate::core::noise::{fbm, smoothstep};
 use crate::core::rng::{Pcg32, hash2, hash3, unit};
-use crate::core::tile::{HALO, PADDED, TILE_N, TileKey};
+use crate::core::tile::{HALO, PADDED, TileKey};
 use crate::lod::terrain_refine::TerrainOut;
 use crate::t0::T0;
 use crate::t0::biome::Biome;
@@ -52,11 +52,10 @@ use objects::*;
 use shore::*;
 pub use plaza::*;
 pub use cover::*;
+pub use crate::model::consts::{SQ, SQUARE_FT, DECK_CLEARANCE_FT};
 
-pub const SQ: usize = TILE_N / 2;
 /// Squares per edge including a one-square halo ring (for seamless rendering gradients).
 pub const HS: usize = SQ + 2;
-pub const SQUARE_FT: f64 = 5.0;
 pub const TIER_FT: f64 = 5.0;
 pub const MAX_COVER_GAP: i32 = 6;
 /// In a castle's yard, whose curtains, towers and buildings are its cover: no dry square of it more
@@ -148,9 +147,6 @@ const GARDEN_WALL_FT: f32 = 4.0;
 const PIER_FT: f32 = 8.0;
 /// Eave height per storey (ft): a building's squares stand this much per floor above its pad.
 const STOREY_FT: f32 = 10.0;
-
-/// Bridge decks sit this far above the water they span.
-pub const DECK_CLEARANCE_FT: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[repr(u8)]

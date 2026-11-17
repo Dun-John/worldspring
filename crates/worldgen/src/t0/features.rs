@@ -934,7 +934,7 @@ impl Builder<'_> {
         };
         // A way down is named for the theme it comes to (as `under::generate` will draw it).
         let theme_of = |p: &super::settle::Poi| {
-            use crate::under::UnderKind;
+            use crate::model::under::UnderKind;
             let drawn_under = || p.stroke.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.under.as_deref()).and_then(UnderKind::parse);
             let under = match p.kind {
                 PoiKind::Cave => Some((UnderKind::Cave, true)),
@@ -999,7 +999,7 @@ impl Builder<'_> {
             let culture = self.culture_at(cx, cy) as u8;
             self.out.settlement_cultures.push(culture);
             self.push_named(kind, names.next().unwrap_or_default(), cx, cy, 0.0, extent, Some(elev.round()), Some(detail));
-            self.radius(crate::town::urban_radius(s.tier, s.population));
+            self.radius(crate::t0::radii::urban_radius(s.tier, s.population));
             // A pinned settlement keeps the name drawn with it.
             self.drawn_name(s.pin);
         }

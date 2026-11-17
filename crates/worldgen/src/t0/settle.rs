@@ -1591,7 +1591,7 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
     for s in settlements.iter_mut() {
         let c = [s.x, s.y];
         let k = s.cell;
-        let reach = crate::town::urban_radius(s.tier, s.population) + 1_500.0;
+        let reach = crate::t0::radii::urban_radius(s.tier, s.population) + 1_500.0;
         // What a reason is worth where the town stands (0: it does not hold there).
         let worth = |r: Reason| -> f64 {
             let v = if (r as usize) < 10 { g.site[k][r as usize] as f64 / 255.0 } else { 0.0 };
@@ -1660,7 +1660,7 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
 /// (point, half width). Those `stays` keeps stand where they are (a pin's set so).
 pub fn snap_to_water(settlements: &mut [Settlement], cell: f64, wet: &dyn Fn(f64, f64) -> bool, river: &dyn Fn(f64, f64) -> Option<([f64; 2], f64)>, stays: &dyn Fn(&Settlement) -> bool) {
     for s in settlements.iter_mut().filter(|s| !stays(s)) {
-        let r = crate::town::urban_radius(s.tier, s.population);
+        let r = crate::t0::radii::urban_radius(s.tier, s.population);
         let inland = 0.33 * r;
         // Nearest shore point by casting rays outward.
         let mut shore: Option<(f64, [f64; 2], [f64; 2])> = None;

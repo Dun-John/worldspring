@@ -89,7 +89,7 @@ pub fn settlement(world: &World, t0: &T0, c: &Created, seed: u64) -> Settlement 
     let population = (lo * libm::pow(hi / lo, unit(hash3(seed, 0x0070_6f70, 0, 0)))) as u32;
     let kind = c.lives_by.as_deref().and_then(SettleKind::parse).filter(|k| !matches!(k, SettleKind::Port | SettleKind::Fishing)).unwrap_or_else(|| kind_at(world, t0, c.x, c.y, tier));
     let culture = c.culture.unwrap_or_else(|| culture_at(t0, c.x, c.y));
-    let r = crate::town::urban_radius(tier, population);
+    let r = crate::t0::radii::urban_radius(tier, population);
     let river = !t0.rivers.segments_near(c.x - r, c.y - r, c.x + r, c.y + r, 0.0).is_empty();
     // (R6 P8) By a sea or lake within its built-up radius: shaped by the shore as a coastal
     // town is.
@@ -219,7 +219,7 @@ pub fn link_class(tier: Tier) -> RoadClass {
 /// its centre (0: its lanes are laid from it, as round a road through a village of the world's
 /// own); a town's stops at its edge (`town::road_trim_radius`), where its streets take over.
 fn link_start(s: &Settlement) -> f64 {
-    if s.tier >= Tier::Town { crate::town::road_trim_radius(s.tier, s.population) } else { 0.0 }
+    if s.tier >= Tier::Town { crate::t0::radii::road_trim_radius(s.tier, s.population) } else { 0.0 }
 }
 
 /// Sways a route (ft, points about 40 ft apart) sideways as the world's own roads bend
@@ -379,7 +379,7 @@ pub fn track(world: &World, t0: &T0, s: &Settlement) -> (Vec<P>, Vec<f32>) {
         && let Some(&q) = pts.iter().find(|p| dist(**p, c) >= 100.0)
     {
         let u = [(c[0] - q[0]) / dist(q, c), (c[1] - q[1]) / dist(q, c)];
-        let r = crate::town::urban_radius(s.tier, s.population);
+        let r = crate::t0::radii::urban_radius(s.tier, s.population);
         let on: Vec<P> = (1..=(0.9 * r / 40.0) as usize).map(|k| [c[0] + u[0] * 40.0 * k as f64, c[1] + u[1] * 40.0 * k as f64]).take_while(|p| !wet_at(*p)).collect();
         pts.splice(0..0, on.into_iter().rev());
     }
@@ -442,8 +442,8 @@ impl<'a> Ground<'a> {
             }
         }
         for m in &t0.made {
-            let r = crate::town::reach(&m.s);
-            let e = crate::town::pad_extent(r);
+            let r = crate::t0::radii::reach(&m.s);
+            let e = crate::t0::radii::pad_extent(r);
             if hit([m.s.x - e, m.s.y - e, m.s.x + e, m.s.y + e]) {
                 pads.push(([m.s.x, m.s.y], r));
             }
@@ -483,7 +483,7 @@ impl<'a> Ground<'a> {
     /// The ground at `(x, y)` over `base` (the terrain's there).
     pub fn at(&self, x: f64, y: f64, base: f32) -> f32 {
         let mut h = base as f64;
-        let w = self.pads.iter().fold(0.0f64, |m, &(c, r)| m.max(crate::town::pad_weight(dist([x, y], c), r)));
+        let w = self.pads.iter().fold(0.0f64, |m, &(c, r)| m.max(crate::t0::radii::pad_weight(dist([x, y], c), r)));
         if w > 0.0 {
             h += (self.t0.ground_at(x, y, self.lattice) - h) * w;
         }

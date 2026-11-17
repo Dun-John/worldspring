@@ -17,6 +17,7 @@ pub mod islets;
 pub mod made;
 pub mod names;
 pub mod plates;
+pub mod radii;
 pub mod remap;
 pub mod roads;
 pub mod sealanes;
@@ -98,7 +99,7 @@ pub struct CreatedSite {
     pub removed: bool,
     /// How far (ft) its layout reaches from its point (`world::Created::reach`).
     pub reach: f64,
-    pub under: Option<crate::under::UnderKind>,
+    pub under: Option<crate::model::under::UnderKind>,
     /// Its site underground: size, levels, theme.
     pub spec: crate::under::SiteSpec,
 }
@@ -615,7 +616,7 @@ impl T0 {
                         if let Some((z, w)) = t0.rivers.crossing_level(q[k], q[k + 1], 0.5 * c.width_ft() + 2.0, cell, &crossings)
                             && roads::crossing_kind(c, w) == roads::CrossingKind::Bridge
                         {
-                            let deck = z + crate::battlemap::DECK_CLEARANCE_FT as f64;
+                            let deck = z + crate::model::consts::DECK_CLEARANCE_FT as f64;
                             floor[k] = floor[k].max(deck);
                             floor[k + 1] = floor[k + 1].max(deck);
                         }
@@ -694,9 +695,9 @@ impl T0 {
         let was = std::mem::take(&mut self.made);
         for (k, c) in world.file.edits.created.iter().enumerate() {
             let kind = settle::PoiKind::parse(&c.kind);
-            let under = c.under.as_deref().and_then(crate::under::UnderKind::parse);
+            let under = c.under.as_deref().and_then(crate::model::under::UnderKind::parse);
             let spec = crate::under::SiteSpec {
-                size: c.size.as_deref().and_then(crate::under::SiteSize::parse),
+                size: c.size.as_deref().and_then(crate::model::under::SiteSize::parse),
                 levels: c.levels,
                 theme: c.theme.as_deref().and_then(crate::under::theme).map(|i| i as u8),
             };
@@ -704,7 +705,7 @@ impl T0 {
             let mut reach = c.reach();
             if kind == settle::PoiKind::Settlement && !c.removed {
                 let s = made::settlement(world, self, c, seed);
-                reach = crate::town::reach(&s);
+                reach = crate::t0::radii::reach(&s);
                 let kept = was.iter().find(|m| m.s.seed == s.seed && m.s.x == s.x && m.s.y == s.y && m.s.tier == s.tier && m.s.population == s.population);
                 let (track, z) = match kept {
                     Some(m) => (m.track.clone(), m.z.clone()),
@@ -724,7 +725,7 @@ impl T0 {
         self.sketched = (0..self.base_pois)
             .filter_map(|i| {
                 let s = world.file.sketch.strokes.get(self.pois[i].stroke? as usize)?;
-                Some((i, CreatedSite { removed: false, reach: crate::town::sites::SITE_REACH_FT, under: s.under.as_deref().and_then(crate::under::UnderKind::parse), spec: Default::default() }))
+                Some((i, CreatedSite { removed: false, reach: crate::model::consts::SITE_REACH_FT, under: s.under.as_deref().and_then(crate::model::under::UnderKind::parse), spec: Default::default() }))
             })
             .collect();
     }

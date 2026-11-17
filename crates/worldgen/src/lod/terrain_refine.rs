@@ -228,9 +228,9 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     let pads: Vec<(f64, f64, f64)> = t0
         .settlements
         .iter()
-        .map(|st| (st.x, st.y, crate::town::reach(st)))
+        .map(|st| (st.x, st.y, crate::t0::radii::reach(st)))
         .filter(|&(x, y, r)| {
-            let e = crate::town::pad_extent(r);
+            let e = crate::t0::radii::pad_extent(r);
             x + e >= tx0 && x - e <= tx1 && y + e >= ty0 && y - e <= ty1
         })
         .collect();
@@ -238,8 +238,8 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     // (reset again by their children) take the valley on a lattice of their own.
     let plan = (!pads.is_empty()).then(|| {
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-        let cell = if 2.0 * s <= crate::town::VALLEY_CELL { crate::town::VALLEY_CELL } else { 4.0 * s };
-        crate::town::PlanGround::new(t0, [tx0, ty0, tx1, ty1], [tx0, ty0, tx1, ty1], lattice, cell)
+        let cell = if 2.0 * s <= crate::lod::plan_ground::VALLEY_CELL { crate::lod::plan_ground::VALLEY_CELL } else { 4.0 * s };
+        crate::lod::plan_ground::PlanGround::new(t0, [tx0, ty0, tx1, ty1], [tx0, ty0, tx1, ty1], lattice, cell)
     });
     let cols = plan.as_ref().map(|p| p.columns(&(-h..=n + h).map(|ci| (gx0 + ci) as f64 * s).collect::<Vec<_>>()));
 
@@ -253,7 +253,7 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
         let ny = (gy0 + cj) as f64 / DETAIL_WAVELENGTH;
         // Pads this row can touch.
         let y = (gy0 + cj) as f64 * s;
-        let row_pads: Vec<(f64, f64, f64)> = pads.iter().copied().filter(|&(_, py, r)| (y - py).abs() < crate::town::pad_extent(r)).collect();
+        let row_pads: Vec<(f64, f64, f64)> = pads.iter().copied().filter(|&(_, py, r)| (y - py).abs() < crate::t0::radii::pad_extent(r)).collect();
         // The planned ground along the row (ground, valley depth), where pads reach it.
         let planned = match (&plan, &cols) {
             (Some(plan), Some(cols)) if !row_pads.is_empty() => plan.row(y, cols),
@@ -310,11 +310,11 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             if !row_pads.is_empty() {
                 let x = (gx0 + ci) as f64 * s;
                 pad = row_pads.iter().fold(0.0f64, |m, &(px, py, r)| {
-                    if (x - px).abs() >= crate::town::pad_extent(r) {
+                    if (x - px).abs() >= crate::t0::radii::pad_extent(r) {
                         return m;
                     }
                     let d = crate::core::sqrt((x - px) * (x - px) + (y - py) * (y - py));
-                    m.max(crate::town::pad_weight(d, r))
+                    m.max(crate::t0::radii::pad_weight(d, r))
                 });
                 detail *= 1.0 - pad;
             }

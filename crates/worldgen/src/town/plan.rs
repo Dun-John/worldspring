@@ -1,6 +1,7 @@
 //! Town plans: road ends and directions, Voronoi patches, `TownPlan` and `plan_town`.
 
 use super::*;
+pub(super) use crate::t0::radii::OUTSKIRTS;
 
 /// What a settlement is laid out from: its ground (`Site`), where its roads arrive (local
 /// coords: the road ends and passes near it), and its random stream.
@@ -162,8 +163,6 @@ pub(super) fn voronoi(sites: &[P], boundary: &[P]) -> Vec<Labeled> {
         .collect()
 }
 
-/// Outskirts (farmland) reach this many urban radii from the centre.
-pub(super) const OUTSKIRTS: f64 = 2.15;
 /// A city's castle patch: room for a castle (its block 18 ft in: at least this many sq ft, and this
 /// many ft across), and what a patch on the town wall gains (ft) against the height of one inside.
 /// (Below zero: towns stand on gentle ground, mostly a little higher at the edge; so about two

@@ -2,28 +2,7 @@
 //! fingerprints, prints and identities.
 
 use super::*;
-
-/// Built-up radius (ft) by tier and population.
-pub fn urban_radius(tier: Tier, population: u32) -> f64 {
-    let p = crate::core::sqrt(population as f64);
-    match tier {
-        Tier::Village => 150.0 + 12.0 * p,
-        Tier::Town => 11.0 * p,
-        Tier::City | Tier::Metropolis => 12.0 * p,
-    }
-}
-
-/// Where network roads stop short of a town (ft from its centre): outside the walls and
-/// most of the sprawl; the town draws the last stretch to its gate.
-pub fn road_trim_radius(tier: Tier, population: u32) -> f64 {
-    1.5 * urban_radius(tier, population)
-}
-
-/// How far a settlement's layout (fields included) can reach from its center.
-pub fn reach(s: &Settlement) -> f64 {
-    let r = urban_radius(s.tier, s.population);
-    if s.tier == Tier::Village { r * 2.2 } else { r * (OUTSKIRTS + 0.15) }
-}
+pub use crate::t0::radii::{urban_radius, road_trim_radius, reach, pad_extent, pad_weight};
 
 /// How far (ft) from its centre a place stands in a settlement: its buildings and districts, the
 /// sprawl outside the walls included. Measured over seeds 1–3 in built-up radii: villages'
@@ -105,20 +84,6 @@ fn best_holder(t0: &T0, p: P, among: impl Iterator<Item = usize>) -> Option<usiz
         }
     }
     best.map(|b| b.1)
-}
-
-/// How far (ft) from its centre a settlement's pad reaches: the terrain eases from the
-/// ground its layout was planned on (all of the layout's reach) back to the land round it
-/// over a broad band, so whatever stands between them (fine detail, a river valley the
-/// land outside lacks) is a gentle slope rather than a rim.
-pub fn pad_extent(reach: f64) -> f64 {
-    reach + (0.6 * reach).max(900.0)
-}
-
-/// The settlement pad's weight at `d` ft from its centre: 1 over the layout, 0 past
-/// `pad_extent`.
-pub fn pad_weight(d: f64, reach: f64) -> f64 {
-    1.0 - crate::core::noise::smoothstep(reach, pad_extent(reach), d)
 }
 
 // ---------------------------------------------------------------------------------------

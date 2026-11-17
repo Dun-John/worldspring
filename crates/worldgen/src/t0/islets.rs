@@ -106,9 +106,9 @@ fn generate(t0: &T0) -> Vec<Islet> {
             continue;
         }
         let c = [s.x, s.y];
-        let reach = crate::town::reach(s);
+        let reach = crate::t0::radii::reach(s);
         let rect = [s.x - reach, s.y - reach, s.x + reach, s.y + reach];
-        let shore = crate::town::Shore::of_t0(t0, rect, lattice);
+        let shore = crate::lod::plan_ground::Shore::of_t0(t0, rect, lattice);
         let roads = road_chords(t0, rect);
         let make = |at: P, r: f64, water: f64, river: bool, k: i64, out: &mut Vec<Islet>| {
             let pts = crate::ground::islet_ring(hash3(s.seed ^ SALT ^ 0x7e, crate::core::round(at[0]) as i64, crate::core::round(at[1]) as i64, k), at, r);

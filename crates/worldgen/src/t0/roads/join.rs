@@ -38,7 +38,7 @@ pub(super) fn track_bends(track: &[u32], w: usize, cell: f64) -> crate::core::ha
 
 /// How far (cells) round a realm's town its villages' tracks keep off, joining its track beyond.
 pub(super) fn realm_keep_out(s: &Settlement, cell: f64) -> f64 {
-    (crate::town::road_trim_radius(s.planned, s.planned_pop) + 1.5 * 5280.0) / cell + 2.0
+    (crate::t0::radii::road_trim_radius(s.planned, s.planned_pop) + 1.5 * 5280.0) / cell + 2.0
 }
 
 /// The realm (its town's index) an isolated village belongs to: the nearest isolated town.

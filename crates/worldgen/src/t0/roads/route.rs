@@ -375,7 +375,7 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 _ => None,
             })
             .map(|i| {
-                let r = if kings { crate::town::urban_radius(settlements[i].planned, settlements[i].planned_pop) / cell + 1.5 } else { ZONE_FT / cell + 1.5 };
+                let r = if kings { crate::t0::radii::urban_radius(settlements[i].planned, settlements[i].planned_pop) / cell + 1.5 } else { ZONE_FT / cell + 1.5 };
                 ((settlements[i].cell % w) as f64, (settlements[i].cell / w) as f64, r)
             })
             .collect();
