@@ -4,7 +4,7 @@
 // planks with a post-and-rail fence; piers as the same planks on pilings.
 import type { Graphics } from 'pixi.js';
 import type { Shape } from '../gen/battlePrep';
-import { PX } from './atlas';
+import { PX } from './scale';
 
 export const INK = 0x1d1a14;
 export const FT = PX / 5;

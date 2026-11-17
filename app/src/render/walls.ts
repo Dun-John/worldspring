@@ -11,7 +11,7 @@
 // bastion), the wall's material (stone, a palisade of stakes, rammed earth) and the gatehouse's form.
 import type { Graphics } from 'pixi.js';
 import type { Shape } from '../gen/battlePrep';
-import { PX } from './atlas';
+import { PX } from './scale';
 import { FT, INK, LX, LY, mix, MOSS, PLUM, rngAt, STONE, WOOD } from './bridges';
 import { gravelPatch } from './furniture';
 
@@ -1676,6 +1676,19 @@ function stakeTops(g: Graphics, stakes: [number, number][], r: number) {
   g.stroke({ width: 1, color: ST[0], alpha: 0.6 });
 }
 
+/** (R6) A stockade's five-foot piece along x (the atlas's stockade, kind 152): a palisade's stakes from
+ * above (`stakeTops`, in timber), three to the piece, a little out of line. */
+export function stockadeStakes(g: Graphics, rnd: () => number) {
+  const prev = ST;
+  ST = TONES[5];
+  const n = 3;
+  const step = PX / n;
+  const stakes: [number, number][] = [];
+  for (let k = 0; k < n; k++) stakes.push([-PX * 0.5 + (k + 0.5) * step + (rnd() - 0.5) * FT * 0.12, (rnd() - 0.5) * FT * 0.14]);
+  stakeTops(g, stakes, STAKE);
+  ST = prev;
+}
+
 /**
  * A palisade's log gate (`GATE_LOG`) between its two log towers: packed earth through the gap, a great post at
  * each side, the two leaves (stakes lashed to rails, their tops seen from above) swung open into the town with
@@ -2126,21 +2139,47 @@ export function drawForecourtGate(g: Graphics, s: Shape) {
   const [ux, uy] = [(bx - ax) / L, (by - ay) / L];
   // Into the forecourt.
   const inward = (ix - ax) * -uy + (iy - ay) * ux >= 0 ? 1 : -1;
-  const [vx, vy] = [-uy * inward, ux * inward];
   const timber = Math.round(s.size / PX) === 1;
-  const rnd = rngAt(ax + bx, ay + by);
+  gateLeaves(g, ax, ay, bx, by, [-uy * inward, ux * inward], timber, PIER_HALF, rngAt(ax + bx, ay + by));
+}
+
+/** (R6) A fence's or wall's gate, five feet along x (the atlas's gate, kind 155): the forecourt gate's two
+ * leaves (`gateLeaves`) hung on the opening's ends and swung open toward +y, timber (looks 0 and 2, 2 the
+ * heavier) or plain iron bars as the railing's (look 1), each end's post top seen from above under its hinge. */
+export function fenceGate(g: Graphics, look: number, rnd: () => number) {
+  const h = PX * 0.5;
+  const timber = look !== 1;
+  // The posts' tops: squares of timber, or of iron for an iron gate.
+  for (const x of [-h, h]) {
+    const r = FT * (timber ? 0.45 : 0.35);
+    g.rect(x - r, -r, r * 2, r * 2).fill(timber ? WOOD[1] : IRON[1]).stroke({ width: 2, color: INK, join: 'round' });
+    g.rect(x - r + 1.2, -r + 1.2, r * 0.9, r * 0.9).fill(timber ? WOOD[2] : IRON[2]);
+  }
+  gateLeaves(g, -h, 0, h, 0, [0, 1], timber, 0, rnd, look === 2 ? 1.2 : 1, true);
+}
+
+/**
+ * A gate's two leaves from above, the opening from `(ax, ay)` to `(bx, by)`, swung open toward `v` (a unit
+ * vector across it): each hung `inset` px toward `v` from its end (a forecourt's on its pier's inner corner,
+ * a fence's on its post), a little past square, mirrored about the gate's axis, its swing marked in dashes, a
+ * soft shadow to the south-east; timber or wrought iron (`timberLeaf`, `ironLeaf`), `thick` times the usual;
+ * `bars`: an iron leaf plain, as the railing it stands in (`barLeaf`).
+ */
+function gateLeaves(g: Graphics, ax: number, ay: number, bx: number, by: number, [vx, vy]: number[], timber: boolean, inset: number, rnd: () => number, thick = 1, bars = false) {
+  const L = Math.hypot(bx - ax, by - ay) || 1;
+  const [ux, uy] = [(bx - ax) / L, (by - ay) / L];
   // Its thickness from above, and its length (the two shut meet in the middle).
-  const th = FT * (timber ? 1 : 0.8);
+  const th = FT * (timber ? 1 : 0.8) * thick;
   const len = L / 2 - FT * 0.2;
   // Open a little past square, both alike.
   const open = (104 * Math.PI) / 180;
   for (const end of [0, 1]) {
     const dir = end ? -1 : 1;
-    // Across the opening toward the other leaf (`dir`), into the forecourt (`v`).
+    // Across the opening toward the other leaf (`dir`), swung toward `v`.
     const way = (t: number): [number, number] => [ux * dir * Math.cos(t) + vx * Math.sin(t), uy * dir * Math.cos(t) + vy * Math.sin(t)];
     // The hinge on the pier's inner corner, the leaf's face flush with the pier's face to the opening.
     const [px, py] = end ? [bx, by] : [ax, ay];
-    const [hx, hy] = [px + vx * (PIER_HALF - th * 0.5) + ux * dir * th * 0.5, py + vy * (PIER_HALF - th * 0.5) + uy * dir * th * 0.5];
+    const [hx, hy] = [px + vx * (inset - th * 0.5) + ux * dir * th * 0.5, py + vy * (inset - th * 0.5) + uy * dir * th * 0.5];
     const [dx, dy] = way(open);
     // Across the leaf, from face to face.
     const [nx, ny] = [-dy, dx];
@@ -2159,8 +2198,18 @@ export function drawForecourtGate(g: Graphics, s: Shape) {
     // (Which face is toward the light: +1 or -1.)
     const sun = lit(nx, ny) >= 0 ? 1 : -1;
     if (timber) timberLeaf(g, P, len, sun, rnd);
+    else if (bars) barLeaf(g, P);
     else ironLeaf(g, P, len, th, sun);
   }
+}
+
+/** A plain iron gate leaf from above, as an iron railing is (`P(p, q)`: along it from the hinge, across it):
+ * its top rail a dark bar, three bars' round tops along it. */
+function barLeaf(g: Graphics, P: (p: number, q: number) => [number, number]) {
+  g.moveTo(...P(0, 0)).lineTo(...P(1, 0)).stroke({ width: FT * 0.28 + 2.4, color: INK, cap: 'round' });
+  g.moveTo(...P(0, 0)).lineTo(...P(1, 0)).stroke({ width: FT * 0.28, color: IRON[1], cap: 'round' });
+  for (const p of [0.3, 0.62, 0.94]) g.circle(...P(p, 0), FT * 0.27).fill(IRON[1]).stroke({ width: 1.5, color: INK });
+  g.circle(...P(0, 0), FT * 0.3).fill(IRON[2]).stroke({ width: 1.4, color: INK });
 }
 
 /** A timber gate leaf from above (`P(p, q)`: along it from the hinge, across it face to face; `sun`

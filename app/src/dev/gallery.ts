@@ -452,7 +452,7 @@ export async function runGallery(target: HTMLElement) {
 
   // The fences and walls, with a gate in each run (`&items=fences` alone).
   if (!only && pick?.includes('fences')) {
-    head('Fences: picket, iron railing, stockade, low and high wall in runs with a gate; hedge, wattle, dry wall as today (battlemap)');
+    head('Fences: picket, iron railing, stockade, low stone wall (dry-stone), high wall (garden wall), each with a gate; hedge, wattle (battlemap)');
     y = fences(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
   }
 
@@ -467,22 +467,21 @@ export async function runGallery(target: HTMLElement) {
   app.renderer.resize(width, y);
 }
 
-/** The fence and wall kinds (until the generator has them: `town::fence::KINDS`, R6), with a radius in
- * squares and a height in feet; the gate has three looks. */
+/** The fence kinds laid in pieces and the gate (until the catalog has them: `town::fence::KINDS`, R6), with a
+ * radius in squares and a height in feet; the gate has three looks. */
 const FENCE_KINDS: KindInfo[] = (
   [
     [150, 'picket fence', 0.5, 3.5],
     [151, 'iron railing', 0.5, 4],
     [152, 'stockade', 0.55, 10],
-    [153, 'low stone wall', 0.55, 3],
-    [154, 'high wall', 0.6, 8],
     [155, 'gate', 0.5, 4],
   ] as const
 ).map(([id, name, radius, height_ft]) => ({ id, name, radius, blocks_move: true, blocks_sight: false, cover: 1, difficult: false, height_ft, hazard: null, feature: true }));
 
-/** `&items=fences`: each fence kind as a run of five-foot pieces end to end on grass, its looks in turn,
- * with a gate in it (the gate's three looks down the rows), and a bent run; then the hedge, wattle and
- * dry-stone wall drawn today, for comparison; at `sq` px a square. */
+/** `&items=fences`: each fence kind as the battlemap draws it on grass, a gate in each run: the pieces' kinds
+ * as five-foot pieces end to end (their looks in turn), the low stone wall as the dry-stone wall's vector and
+ * the high wall as the garden wall's (`drawBounds`, `drawGardenWalls`); then today's hedge and wattle; then
+ * a bent run of each; at `sq` px a square. */
 function fences(app: Application, catalog: KindInfo[], root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
   const old = [56, 76].map((id) => catalog.find((c) => c.id === id)).filter((k): k is KindInfo => !!k);
   const kinds = [...FENCE_KINDS.map((k) => catalog.find((c) => c.id === k.id) ?? k), ...old];
@@ -490,6 +489,7 @@ function fences(app: Application, catalog: KindInfo[], root: Container, y0: numb
   const k = sq / PX;
   const n = Math.min(12, Math.floor((width - 64) / sq));
   const [rowH, x0] = [2 * sq, 16];
+  const gateAt = Math.floor(n / 2);
   let y = y0;
   const label = (s: string, yy: number) => {
     if (nolabels) return;
@@ -512,48 +512,68 @@ function fences(app: Application, catalog: KindInfo[], root: Container, y0: numb
     s.position.set(x, yy);
     root.addChild(s);
   };
-  const rows: [number, string][] = [...FENCE_KINDS.slice(0, 5), ...old].map((info) => [info.id, info.name]);
-  rows.forEach(([id, name], row) => {
-    const gated = id >= 150;
+  // A vector run (atlas px about the strip's corner: one square = PX), drawn by `draw`.
+  const vector = (draw: (g: Graphics) => void, yy: number) => {
+    const g = new Graphics();
+    draw(g);
+    g.scale.set(k);
+    g.position.set(x0, yy);
+    root.addChild(g);
+  };
+  // The vector runs as the battlemap sends them (px): a dry-stone wall 3.75 ft wide, a garden wall 2 ft.
+  const dry = (pts: number[][]) => (g: Graphics) => drawBounds(g, pts.map((p) => ({ kind: DRY_WALL, size: (3.75 / 5) * PX, pts: p })), 0, 0, (n + 2) * PX);
+  const wall = (pts: number[][]) => (g: Graphics) => drawGardenWalls(g, pts.map((p) => ({ kind: 0, size: (2 / 5) * PX, pts: p }) as Shape));
+  // Split about the gate's five feet at the middle of the strip's `gateAt`-th piece.
+  const [ga, gb] = [(gateAt + 0.5) * PX, (gateAt + 1.5) * PX];
+  const rows: [string, number | ((yy: number) => (g: Graphics) => void), number][] = [
+    ['150 picket fence, gate look 0 (looks 0-3 in turn)', 150, 0],
+    ['151 iron railing, gate look 1 (looks 0-3 in turn)', 151, 1],
+    ['152 stockade, gate look 2', 152, 2],
+    ['low stone wall: the dry-stone wall (vector), gate look 0', () => dry([[0.5 * PX, PX, ga, PX], [gb, PX, (n + 0.5) * PX, PX]]), 0],
+    ['high wall: the garden wall (vector, raised 8 ft), gate look 1', () => wall([[0.5 * PX, PX, ga, PX], [gb, PX, (n + 0.5) * PX, PX]]), 1],
+    ...old.map((info) => [`${info.id} ${info.name} (as today, looks 0-3 in turn)`, info.id, -1] as [string, number, number]),
+  ];
+  for (const [name, what, look] of rows) {
     strip(rowH);
-    // Pieces centred on the grid lines' half squares, one after another, a gate in the middle.
-    for (let i = 0; i < n; i++) {
-      const gateHere = gated && i === Math.floor(n / 2);
-      piece(gateHere ? 155 : id, gateHere ? row % 3 : i % 4, x0 + sq + i * sq, y + sq);
+    if (typeof what === 'number') {
+      for (let i = 0; i < n; i++) {
+        const gateHere = look >= 0 && i === gateAt;
+        piece(gateHere ? 155 : what, gateHere ? look : i % 4, x0 + sq + i * sq, y + sq);
+      }
+    } else {
+      vector(what(y), y);
+      piece(155, look, x0 + sq + gateAt * sq, y + sq);
     }
     y += rowH + 2;
-    label(`${id} ${name}${gated ? `, gate look ${row % 3}` : ''} (looks 0-3 in turn)`, y);
+    label(name, y);
     y += 22;
-  });
-  // The dry-stone wall drawn today (vector `drawBounds`), straight.
-  strip(rowH);
-  const g = new Graphics();
-  drawBounds(g, [{ kind: DRY_WALL, size: (2.5 / 5) * PX, pts: [0.5 * PX, PX, (n + 0.5) * PX, PX] }], 0, 0, (n + 2) * PX);
-  g.scale.set(k);
-  g.position.set(x0, y);
-  root.addChild(g);
-  y += rowH + 2;
-  label('dry-stone wall (vector, today)', y);
-  y += 22;
-  // A bent run of each new kind: pieces turned along a polyline (as the battlemap lays them).
+  }
+  // A bent run of each: pieces turned along a polyline (as the battlemap lays them), the walls' vectors.
   const bend = 3 * sq;
   strip(bend * 2);
-  const runs = FENCE_KINDS.slice(0, 5);
-  const span = (n * sq) / runs.length;
-  runs.forEach((info, r) => {
+  const span = (n * sq) / 5;
+  for (let r = 0; r < 5; r++) {
     const pts: [number, number][] = [[x0 + r * span + 0.5 * sq, y + 0.6 * sq], [x0 + r * span + span * 0.5, y + bend * 2 - 0.6 * sq], [x0 + (r + 1) * span, y + 0.8 * sq]];
+    if (r >= 3) {
+      // (In atlas px about the strip's corner.)
+      const q = pts.map(([px, py]) => [(px - x0) / k, (py - y) / k]);
+      const segs = [[...q[0], ...q[1]], [...q[1], ...q[2]]];
+      vector(r === 3 ? dry(segs) : wall(segs), y);
+      continue;
+    }
+    const id = [150, 151, 152][r];
     for (let s = 0; s + 1 < pts.length; s++) {
       const [[ax, ay], [bx, by]] = [pts[s], pts[s + 1]];
       const len = Math.hypot(bx - ax, by - ay);
       const m = Math.max(1, Math.round(len / sq));
       for (let i = 0; i < m; i++) {
         const t = (i + 0.5) / m;
-        piece(info.id, i, ax + (bx - ax) * t, ay + (by - ay) * t, Math.atan2(by - ay, bx - ax));
+        piece(id, i, ax + (bx - ax) * t, ay + (by - ay) * t, Math.atan2(by - ay, bx - ax));
       }
     }
-  });
+  }
   y += bend * 2 + 2;
-  label('bent runs: picket, iron railing, stockade, low wall, high wall', y);
+  label('bent runs: picket, iron railing, stockade, low stone wall, high wall', y);
   return y + 30;
 }
 
