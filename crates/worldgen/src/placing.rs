@@ -346,11 +346,15 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
             for off in offsets {
                 let poly = vec![q(a, off), q(b, off), q(b, off + depth), q(a, off + depth)];
                 if out.lots.iter().any(|l| agent::polys_overlap_pub(&l.poly, &poly)) {
-                    why = "meets another building of the row".into();
+                    if why.is_empty() {
+                        why = "meets another house of the row".into();
+                    }
                     continue;
                 }
                 if band.as_ref().is_some_and(|n| crate::paths::meets(n, &poly)) {
-                    why = "meets the road".into();
+                    if why.is_empty() {
+                        why = "meets the road".into();
+                    }
                     continue;
                 }
                 if let Some(id) = existing(&poly, &func) {
@@ -373,7 +377,11 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
                         done = true;
                         break;
                     }
-                    Err(e) => why = e,
+                    Err(e) => {
+                        if why.is_empty() {
+                            why = plain_why(&e);
+                        }
+                    }
                 }
             }
             if !done {
@@ -393,6 +401,26 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
         out.road = Some(row_road(world, t0, r, &raw, &line, &out.lots, first_id)?);
     }
     Ok(out)
+}
+
+/// A refusal for a person: no ids in brackets, no world-ft points ("that overlaps Inn (b:1:7) in Rizul, at (1, 2)"
+/// becomes "that stands on Inn in Rizul").
+fn plain_why(e: &str) -> String {
+    let mut t = e.to_string();
+    if let Some(i) = t.find(", at (").or_else(|| t.find(" at (")) {
+        t.truncate(i);
+    }
+    while let Some(i) = t.find(" (") {
+        let Some(j) = t[i..].find(')') else { break };
+        if t[i + 2..i + j].contains(' ') {
+            break;
+        }
+        t.replace_range(i..i + j + 1, "");
+    }
+    match t.strip_prefix("that overlaps ") {
+        Some(r) => format!("that stands on {r}"),
+        None => t,
+    }
 }
 
 /// (R4) The road along a row whose lots are laid: in the town the lots would be part of
@@ -446,7 +474,7 @@ fn row_road(world: &World, t0: &T0, r: RowRoadAsk, raw: &[P], line: &[P], lots: 
             }
             let probe = Path { pts: added::thin(&crate::paths::rounded(&joined), 0.5), kind: r.kind, width: r.width, name: None };
             if probe.problem().is_none() && !crate::paths::crossings(world, t0, &probe).is_empty() {
-                return Err("road: a town street can't cross water here".into());
+                return Err("road: a street along a row can't cross water: put a crossing down first".into());
             }
             let near = band(&joined);
             let removed = l.buildings.iter().filter(|b| crate::paths::meets(&near, &b.poly)).map(|b| format!("b:{li}:{}", b.id)).collect();
@@ -460,7 +488,10 @@ fn row_road(world: &World, t0: &T0, r: RowRoadAsk, raw: &[P], line: &[P], lots: 
             if let Some(why) = p.problem() {
                 return Err(format!("road: {why}"));
             }
-            if let Some((id, _)) = world.file.edits.paths.iter().find(|(_, o)| o.pts == p.pts && o.kind == p.kind) {
+            if !crate::paths::crossings(world, t0, &p).is_empty() {
+                return Err("road: a road along a row can't cross water: put a crossing down first".into());
+            }
+            if let Some((id, _)) = world.file.edits.paths.iter().find(|(_, o)| o.pts == p.pts && o.kind == p.kind && o.width == p.width) {
                 return Ok(RowRoad { town: owner, line: p.line().to_vec(), edit: RowRoadEdit::Kept(id.clone()), removed: Vec::new() });
             }
             Ok(RowRoad { town: owner, line: p.line().to_vec(), edit: RowRoadEdit::Path(p), removed: Vec::new() })
