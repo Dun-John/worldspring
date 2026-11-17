@@ -453,6 +453,13 @@ const LONG_FOOTPRINT = new Map([
   // v63 castles: a kitchen garden's rows and wattle fence.
   ['vegetable row', [0.98, 0.3]],
   ['wattle fence', [0.49, 0.12]],
+  // Roadmap 6 R6 fences (`town::fence::KINDS`): pieces end to end, five feet apart.
+  ['picket fence', [0.49, 0.1]],
+  ['iron railing', [0.49, 0.1]],
+  ['stockade', [0.49, 0.22]],
+  ['low stone wall', [0.49, 0.22]],
+  ['high wall', [0.49, 0.22]],
+  ['gate', [0.49, 0.1]],
 ]);
 
 /**
