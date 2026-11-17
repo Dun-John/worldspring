@@ -884,7 +884,7 @@
     const play = u.played ? ` Play starts afresh: version ${u.from} keeps its session.` : '';
     if (!u.anew) return `Upgraded from version ${u.from}: check that your changes still sit where they should.${play}`;
     const changes = aside
-      ? ` ${aside} ${aside === 1 ? 'change' : 'changes'} made on them ${aside === 1 ? 'is' : 'are'} set aside (Notes › Gazetteer › Set aside); names and notes on coasts, rivers, ranges and forests, and objects, G.ground and crossings, stay where they were.`
+      ? ` ${aside} ${aside === 1 ? 'change' : 'changes'} made on them ${aside === 1 ? 'is' : 'are'} set aside (Notes › Gazetteer › Set aside); names and notes on coasts, rivers, ranges and forests, and objects, ground and crossings, stay where they were.`
       : '';
     return `Upgraded to version ${GEN_VERSION}: every town and site came out anew.${changes}${play}`;
   }
@@ -1934,7 +1934,7 @@
         // (As the title inside has them: a sewer section by its network, a site by its town.)
         const li = Number(site.split(':')[1]);
         const own = renames[site] ?? (site.startsWith('w:') ? (renames[`w:${li}`] ?? `Sewers of ${settlementName(li)}`) : null);
-        const siteName = own ?? (/^[uk]:/.test(site) && p?.name ? `${settlementName(li)} · ${p.name}` : (p?.name ?? 'a place below G.ground'));
+        const siteName = own ?? (/^[uk]:/.test(site) && p?.name ? `${settlementName(li)} · ${p.name}` : (p?.name ?? 'a place below ground'));
         linkNames[lv] = { site: siteName, level: q?.name ?? `level ${level + 1}` };
       })();
     }
@@ -3971,7 +3971,7 @@
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a town, ruin, dungeon, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, roads, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the selected town or the one in view (U)', hint: 'Re-plan the selected town, or the one in view: its streets, wards, lots and walls.' },
-        { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s G.ground; draw plateaus, cliffs and pits.' },
+        { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
         { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap outdoors: place, brush, erase, or upload your own.' },
         {
           key: 'design',
@@ -3979,8 +3979,8 @@
           icon: 'room',
           kbd: 'D',
           disabled: !canDesign && !designer && !canLink && !linkOn,
-          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : canLink || linkOn ? 'Put ways across down between places below G.ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
-          hint: linkOn ? 'Ways across: stairs, ladders, passages and more from a square below G.ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
+          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : canLink || linkOn ? 'Put ways across down between places below ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
+          hint: linkOn ? 'Ways across: stairs, ladders, passages and more from a square below ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
         },
       ]}
       tab={shell.tabs.edit}
