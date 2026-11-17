@@ -1236,3 +1236,228 @@ fn road_removal() {
     assert!(levels.iter().map(|&k| ex.terrain_packed(k)).eq(base_packed), "brought back, a tile is not as generated");
     assert_eq!(layouts(&ex), base_layouts, "brought back, a layout is not as generated");
 }
+
+#[test]
+fn fence_edits() {
+    use worldgen::battlemap::{self as bm, Chunk, Kind, SQ, SQUARE_FT, ShapeKind};
+    use worldgen::model::fences::{Fence, FenceChange, FenceGap, FenceKind};
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::{self, ParkKind, fence, geom, places::Spot, wards};
+    use worldgen::world::{BuildingEdit, TownEdit};
+    type P = [f64; 2];
+    let file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
+    let mut ex = Executor::new(World::new(file).unwrap());
+    let g = ex.world.geom.clone();
+    let base_edits = ex.world.file.edits.clone();
+    let seed = ex.world.stream("battlemap");
+    let fine = g.max_level;
+    let fsize = g.tile_size_ft(fine);
+    let key_at = |p: P| TileKey::surface(fine, (p[0] / fsize) as u32, (p[1] / fsize) as u32);
+    let inner = |p: P, m: f64| (0..2).all(|a| (p[a] - (p[a] / fsize).floor() * fsize).min(((p[a] / fsize).floor() + 1.0) * fsize - p[a]) > m);
+    let to_world = |c: &Chunk, q: [f32; 2]| {
+        let (ox, oy) = g.tile_origin_ft(&c.key);
+        [ox + q[0] as f64 * SQUARE_FT, oy + q[1] as f64 * SQUARE_FT]
+    };
+    // (A run's shape within `d` ft of `p`.)
+    let shape_near = |c: &Chunk, p: P, d: f64| {
+        c.structures.iter().any(|s| matches!(s.kind, ShapeKind::Hedge | ShapeKind::DryWall | ShapeKind::Fence) && s.pts.len() >= 2 && geom::seg_dist(p, to_world(c, s.pts[0]), to_world(c, s.pts[1])) < d)
+    };
+    let objects_near = |c: &Chunk, kind: Kind, p: P, d: f64| c.objects.iter().filter(|o| o.kind == kind && geom_dist(to_world(c, [o.x, o.y]), p) < d).count();
+    let digest = |c: &Chunk| format!("{:?}|{:?}|{:?}|{:?}|{:?}", c.height, c.urban, c.structures, c.objects, c.edges);
+    let n = ex.t0.settlements.len();
+    // A village's croft hedges (one to go, one to become a picket fence with a gate) and a field's
+    // side (a gap cut over it), each drawn on its battlemap as generated.
+    let villages: Vec<usize> = (0..n).filter(|&i| ex.t0.settlements[i].tier == Tier::Village).collect();
+    let mut found = None;
+    'v: for &vi in &villages {
+        let l = town::layout(&ex.world, &ex.t0, vi);
+        let srcs = fence::sources(&l, &ex.t0, fence::EVERYWHERE);
+        let long = |s: &(u8, P, P, FenceKind), tag: u8, d: f64| s.0 == tag && geom_dist(s.1, s.2) >= d && inner(geom::lerp(s.1, s.2, 0.5), 60.0);
+        let hedges: Vec<(u8, P, P, FenceKind)> = srcs.iter().copied().filter(|s| long(s, fence::CROFT, 30.0) && s.3 == FenceKind::Hedgerow).collect();
+        let sides: Vec<(u8, P, P, FenceKind)> = srcs.iter().copied().filter(|s| long(s, fence::FIELD, 40.0)).collect();
+        let drawn = |ex: &mut Executor, s: &(u8, P, P, FenceKind)| {
+            let m = geom::lerp(s.1, s.2, 0.5);
+            let c = ex.battlemap(key_at(m));
+            shape_near(&c, m, 1.0) && shape_near(&c, geom::lerp(s.1, s.2, 0.3), 1.0) && shape_near(&c, geom::lerp(s.1, s.2, 0.7), 1.0)
+        };
+        let mut picked: Vec<(u8, P, P, FenceKind)> = Vec::new();
+        for h in &hedges {
+            let far = picked.iter().all(|p| geom_dist(geom::lerp(p.1, p.2, 0.5), geom::lerp(h.1, h.2, 0.5)) > 60.0 && fence::run_key(p.0, p.1, p.2) != fence::run_key(h.0, h.1, h.2));
+            if far && drawn(&mut ex, h) {
+                picked.push(*h);
+                if picked.len() == 2 {
+                    break;
+                }
+            }
+        }
+        if picked.len() < 2 {
+            continue;
+        }
+        for s in &sides {
+            if drawn(&mut ex, s) {
+                found = Some((vi, picked[0], picked[1], *s, srcs.clone()));
+                break 'v;
+            }
+        }
+    }
+    let (vi, gone, picket, side, srcs) = found.expect("a village with croft hedges and a field's side drawn");
+    let gone_key = fence::run_key(gone.0, gone.1, gone.2);
+    let picket_key = fence::run_key(picket.0, picket.1, picket.2);
+    assert_eq!(fence::parse(&fence::fr_id(vi, gone_key)), Some((vi, format!("{gone_key:08x}"))), "a run's id does not read back");
+    // A park's clipped hedge, its pieces on the battlemap.
+    let (pi, spot, pj, pieces) = {
+        let (world, t0) = (&ex.world, &ex.t0);
+        (0..n)
+            .filter(|&i| t0.settlements[i].tier >= Tier::Town)
+            .find_map(|i| {
+                let l = town::layout(world, t0, i);
+                l.parks.iter().enumerate().filter(|(_, p)| p.kind == ParkKind::Formal && p.spot != Spot::None).find_map(|(k, pk)| {
+                    let lay = bm::park_layout(pk, bm::land_biome(t0, geom::centroid(&pk.pts)), l.tier >= Tier::City, seed);
+                    let runs = worldgen::park::hedge_runs(&lay);
+                    runs.iter().enumerate().find_map(|(j, r)| {
+                        let pts: Vec<P> = r.iter().map(|&q| lay.props[q].0).collect();
+                        let one = pts.iter().all(|&p| inner(p, 10.0) && key_at(p) == key_at(pts[0]));
+                        (lay.props[r[0]].2 == Kind::Hedge && r.len() >= 4 && one).then(|| (i, town::cut::park_spot(&l, k), j, pts))
+                    })
+                })
+            })
+            .expect("a formal garden's hedge")
+    };
+    // A dry spot for the fences drawn by hand: one of each kind laid in sections, a gate in each.
+    let vc = { let s = &ex.t0.settlements[vi]; [s.x, s.y] };
+    let spot_key = key_at([vc[0] + fsize, vc[1]]);
+    let drawn_at = {
+        let c = ex.battlemap(spot_key);
+        let (ox, oy) = g.tile_origin_ft(&spot_key);
+        let dry = |i: usize, j: usize| (j..j + 12).all(|y| (i..i + 12).all(|x| c.water_level[y * SQ + x] <= c.height[y * SQ + x]));
+        let (i, j) = (4..SQ - 16).flat_map(|j| (4..SQ - 16).map(move |i| (i, j))).find(|&(i, j)| dry(i, j)).expect("a dry spot");
+        [ox + i as f64 * SQUARE_FT + 5.0, oy + j as f64 * SQUARE_FT + 5.0]
+    };
+    let kinds = [(FenceKind::Picket, Kind::Picket), (FenceKind::IronRailing, Kind::IronRailing), (FenceKind::Stockade, Kind::Stockade), (FenceKind::LowWall, Kind::LowWall), (FenceKind::HighWall, Kind::HighWall)];
+    let line = |k: usize| (geom::add(drawn_at, [0.0, 10.0 * k as f64]), geom::add(drawn_at, [40.0, 10.0 * k as f64]));
+    let keys: Vec<TileKey> = {
+        let mut k = vec![key_at(geom::lerp(gone.1, gone.2, 0.5)), key_at(geom::lerp(picket.1, picket.2, 0.5)), key_at(geom::lerp(side.1, side.2, 0.5)), key_at(pieces[0]), spot_key];
+        k.dedup();
+        k
+    };
+    let layouts = |ex: &Executor| [vi, pi].map(|i| format!("{:?}", *town::layout(&ex.world, &ex.t0, i)));
+    let base_layouts = layouts(&ex);
+    let base_chunks: Vec<Chunk> = keys.iter().map(|&k| ex.battlemap(k)).collect();
+    let base_padded = ex.terrain(keys[0]).padded.clone();
+    let idx = |p: P| keys.iter().position(|&k| k == key_at(p)).unwrap();
+
+    // Every edit at once.
+    let mut e = base_edits.clone();
+    let (sm, sn) = (geom::lerp(side.1, side.2, 0.5), { let d = geom::sub(side.2, side.1); let l = geom_dist(side.1, side.2); [-d[1] / l, d[0] / l] });
+    e.fence_gaps.insert("fg:0".into(), FenceGap { pts: vec![geom::sub(sm, geom::mul(sn, 8.0)), geom::add(sm, geom::mul(sn, 8.0))], r: 4.0 });
+    let pl = geom_dist(picket.1, picket.2);
+    for (li, k, ch) in [
+        (vi, format!("{gone_key:08x}"), FenceChange { gone: true, ..Default::default() }),
+        (vi, format!("{picket_key:08x}"), FenceChange { kind: Some(FenceKind::Picket), gates: vec![(0.5 * pl) as f32], ..Default::default() }),
+        (pi, format!("{spot}:{pj}"), FenceChange { gone: true, ..Default::default() }),
+    ] {
+        let s = &ex.t0.settlements[li];
+        e.towns.entry(wards::key(li)).or_insert_with(|| TownEdit { at: [s.x, s.y], ..Default::default() }).fences.insert(k, ch);
+    }
+    for (k, &(fk, _)) in kinds.iter().enumerate() {
+        let (a, b) = line(k);
+        e.fences.insert(format!("f:{k}"), Fence { kind: fk, pts: vec![a, b], closed: false, gates: vec![20.0] });
+    }
+    ex.world.file.edits = e.clone();
+    town::forget_from(0);
+    assert_eq!(layouts(&ex), base_layouts, "a fence edit changed a layout");
+    town::forget_from(0);
+    let fk = keys[0];
+    let parent = ex.terrain(fk.parent().unwrap());
+    let again = worldgen::lod::terrain_refine::terrain_tile(&ex.world, &ex.t0, &fk, Some(&parent.padded));
+    assert!(again.padded == base_padded, "a fence edit changed the terrain");
+    let chunks: Vec<Chunk> = keys.iter().map(|&k| ex.battlemap(k)).collect();
+    // The run gone: no shape and no hard going along it (away from its ends and every other run).
+    let others: Vec<(P, P)> = srcs.iter().filter(|s| fence::run_key(s.0, s.1, s.2) != gone_key).map(|s| (s.1, s.2)).collect();
+    let check_gone = |chunks: &[Chunk], what: &str| {
+        let c = &chunks[idx(geom::lerp(gone.1, gone.2, 0.5))];
+        let (ox, oy) = g.tile_origin_ft(&c.key);
+        let gl = geom_dist(gone.1, gone.2);
+        let mut on = 0;
+        for t in [0.2, 0.35, 0.5, 0.65, 0.8] {
+            assert!(!shape_near(&c, geom::lerp(gone.1, gone.2, t), 1.0) || others.iter().any(|&(a, b)| geom::seg_dist(geom::lerp(gone.1, gone.2, t), a, b) < 5.0), "{what}: the gone run is still drawn");
+        }
+        for j in 0..SQ {
+            for i in 0..SQ {
+                let p = [ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT];
+                let s = geom::dot(geom::sub(p, gone.1), geom::sub(gone.2, gone.1)) / gl;
+                if geom::seg_dist(p, gone.1, gone.2) < 1.0 && s > 5.0 && s < gl - 5.0 && others.iter().all(|&(a, b)| geom::seg_dist(p, a, b) > 5.0) {
+                    on += 1;
+                    assert_eq!(c.edges[j * SQ + i] & 16, 0, "{what}: the gone run's square at {p:?} is still hard going");
+                }
+            }
+        }
+        assert!(on > 0, "{what}: no square of the gone run to check");
+    };
+    check_gone(&chunks, "removed");
+    // The run made a picket fence, a gate in its middle.
+    {
+        let c = &chunks[idx(geom::lerp(picket.1, picket.2, 0.5))];
+        let along = c.objects.iter().filter(|o| o.kind == Kind::Picket && geom::seg_dist(to_world(&c, [o.x, o.y]), picket.1, picket.2) < 0.5).count();
+        assert!(along >= 3, "the run changed to a picket fence has {along} sections");
+        let (s, e2) = fence::canonical(picket.1, picket.2);
+        let gp = geom::lerp(s, e2, 0.5);
+        assert_eq!(objects_near(&c, Kind::Gate, gp, 0.5), 1, "no gate in the changed run");
+        assert_eq!(objects_near(&c, Kind::Picket, gp, 2.4), 0, "a picket section in the gate");
+    }
+    // The gap over the field's side.
+    {
+        let (b, c) = (&base_chunks[idx(sm)], &chunks[idx(sm)]);
+        assert!(shape_near(&b, sm, 1.0) && !shape_near(&c, sm, 2.0), "the gap did not cut the field's side");
+        assert!(shape_near(&c, geom::lerp(side.1, side.2, 0.2), 1.0) || !shape_near(&b, geom::lerp(side.1, side.2, 0.2), 1.0), "the gap cut more than it covers");
+    }
+    // The park's hedge gone, piece by piece.
+    {
+        let (b, c) = (&base_chunks[idx(pieces[0])], &chunks[idx(pieces[0])]);
+        let was: usize = pieces.iter().map(|&p| objects_near(&b, Kind::Hedge, p, 0.3)).sum();
+        let now: usize = pieces.iter().map(|&p| objects_near(&c, Kind::Hedge, p, 0.3)).sum();
+        assert!(was >= 2 && now == 0, "the park's hedge: {was} pieces before, {now} after");
+    }
+    // The fences drawn by hand: sections along each, a stockade's blocking the way and sight, each
+    // gate's square free.
+    {
+        let c = &chunks[idx(drawn_at)];
+        for (k, &(_, kind)) in kinds.iter().enumerate() {
+            let (a, b) = line(k);
+            let along = c.objects.iter().filter(|o| o.kind == kind && geom::seg_dist(to_world(&c, [o.x, o.y]), a, b) < 0.3).count();
+            assert!(along >= 6, "{kind:?}: {along} sections drawn");
+            let gp = geom::add(a, [20.0, 0.0]);
+            assert_eq!(objects_near(&c, Kind::Gate, gp, 0.3), 1, "{kind:?}: no gate");
+            assert!(c.objects.iter().filter(|o| o.kind != Kind::Gate && bm::info(o.kind as u16).blocks_move).all(|o| geom_dist(to_world(&c, [o.x, o.y]), gp) >= 2.4), "{kind:?}: the gate's square is blocked");
+            if kind == Kind::Stockade {
+                let p = geom::add(a, [7.5, 0.0]);
+                assert!(c.objects.iter().any(|o| { let i = bm::info(o.kind as u16); i.blocks_move && i.blocks_sight && geom_dist(to_world(&c, [o.x, o.y]), p) < 2.6 }), "the stockade does not block");
+            }
+        }
+    }
+    // The same asked the other way round, after the layouts are forgotten.
+    town::forget_from(0);
+    let back: Vec<String> = keys.iter().rev().map(|&k| digest(&ex.battlemap(k))).collect();
+    assert!(back.into_iter().rev().eq(chunks.iter().map(digest)), "the fence edits depend on what was asked first");
+    // An unrelated edit (a building of the village's taken away) keeps every run's id; the removal
+    // still applies.
+    {
+        let l = town::layout(&ex.world, &ex.t0, vi);
+        let b0 = &l.buildings[0];
+        let mut e2 = e.clone();
+        e2.buildings.insert(format!("b:{vi}:{}", b0.id), BuildingEdit { at: geom::centroid(&b0.poly), removed: true, ..Default::default() });
+        ex.world.file.edits = e2;
+        town::forget_from(0);
+        let l2 = town::layout(&ex.world, &ex.t0, vi);
+        assert_ne!(l2.buildings.len(), l.buildings.len(), "the building was not taken away");
+        let ids = |l: &town::Layout| fence::sources(l, &ex.t0, fence::EVERYWHERE).iter().map(|s| fence::run_key(s.0, s.1, s.2)).collect::<Vec<u32>>();
+        assert_eq!(ids(&l2), ids(&l), "an unrelated edit changed the runs' ids");
+        let chunks2: Vec<Chunk> = keys.iter().map(|&k| ex.battlemap(k)).collect();
+        check_gone(&chunks2, "after an unrelated edit");
+    }
+    // Brought back, all is as generated.
+    ex.world.file.edits = base_edits;
+    town::forget_from(0);
+    assert!(keys.iter().map(|&k| digest(&ex.battlemap(k))).eq(base_chunks.iter().map(digest)), "brought back, a battlemap is not as generated");
+    assert_eq!(layouts(&ex), base_layouts, "brought back, a layout is not as generated");
+}
