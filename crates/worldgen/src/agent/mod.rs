@@ -80,7 +80,8 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
     for c in edits.created.iter().filter(|c| !c.removed) {
         out.push(Feature {
             id: c.id.clone(),
-            kind: SITE_KINDS.iter().chain(&SETTLEMENT_KINDS).copied().find(|k| *k == c.kind).unwrap_or("ruin"),
+            // (A place, `town::members`: a village whatever its count.)
+            kind: if c.kind == "place" { "village" } else { SITE_KINDS.iter().chain(&SETTLEMENT_KINDS).copied().find(|k| *k == c.kind).unwrap_or("ruin") },
             name: c.name.clone(),
             x: c.x,
             y: c.y,
@@ -88,14 +89,14 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             extent_ft: match c.kind.as_str() {
                 "building" => 0.5 * MI,
                 "castle" | "wall" | "plot" => (2.0 * c.reach()).max(0.5 * MI),
-                "village" | "town" => if c.kind == "town" { 12.0 * MI } else { 5.0 * MI },
+                "village" | "town" | "place" => if c.kind == "town" { 12.0 * MI } else { 5.0 * MI },
                 _ => 2.0 * MI,
             },
             elev_ft: Some(t0.sample(c.x, c.y, t0.cell_ft).round()),
-            detail: Some(created_detail(c)),
+            detail: Some(if c.kind == "place" { String::new() } else { created_detail(c) }),
         });
     }
-    for (id, kind, extent, people) in hand_sizes(world, t0) {
+    for (id, kind, extent, people) in town_sizes(world, t0) {
         if let Some(f) = out.iter_mut().find(|f| f.id == id) {
             f.detail = Some(resized_detail(f.detail.as_deref().unwrap_or(""), f.kind, kind, people));
             (f.kind, f.extent_ft) = (kind, extent);
@@ -124,16 +125,36 @@ pub fn hand_sizes(world: &World, t0: &T0) -> Vec<(String, &'static str, f64, u32
     for li in streets.keys().filter_map(|k| k.parse::<usize>().ok()) {
         let id = if li < t0.settlements.len() { settled.get(li).map(|s| s.to_string()) } else { li.checked_sub(first).and_then(|k| world.file.edits.created.get(k)).map(|c| c.id.clone()) };
         let (Some(id), Some((people, tier))) = (id, town::hand::size(world, li)) else { continue };
-        use crate::t0::settle::Tier;
-        let extent = match tier {
-            Tier::Metropolis => 60.0,
-            Tier::City => 30.0,
-            Tier::Town => 12.0,
-            Tier::Village => 5.0,
-        } * MI;
-        out.push((id, tier.name(), extent, people));
+        out.push((id, tier.name(), tier_extent(tier), people));
     }
     out
+}
+
+/// `hand_sizes`, and the towns whose people their members change (`town::members::sizes`: drawn
+/// homes joined, generated ones pushed out) at once, and each place (a village, "pop. N").
+pub fn town_sizes(world: &World, t0: &T0) -> Vec<(String, &'static str, f64, u32)> {
+    let mut out = hand_sizes(world, t0);
+    let first = t0.settlements.len() + t0.base_pois;
+    for (li, people, tier) in town::members::sizes(world, t0) {
+        let Some(id) = feature_of_layout(world, t0, li) else { continue };
+        let place = li.checked_sub(first).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.kind == "place");
+        let (kind, extent) = if place { ("village", 5.0 * MI) } else { (tier.name(), tier_extent(tier)) };
+        out.retain(|o| o.0 != id);
+        out.push((id, kind, extent, people));
+    }
+    out
+}
+
+/// A settlement's label reach (ft) by its size class, as its homes make it.
+fn tier_extent(tier: crate::t0::settle::Tier) -> f64 {
+    use crate::t0::settle::Tier;
+    let mi = match tier {
+        Tier::Metropolis => 60.0,
+        Tier::City => 30.0,
+        Tier::Town => 12.0,
+        Tier::Village => 5.0,
+    };
+    mi * MI
 }
 
 /// A settlement's detail (`"<what it lives by> <size>, pop. <n>[, capital]"`) with its size

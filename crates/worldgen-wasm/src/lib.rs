@@ -229,10 +229,30 @@ impl Ctx {
         self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::roadids::named_json(&self.world, t0).to_string())
     }
 
-    /// The sites standing in settlements (`agent::parents_json`): `{n, base, pairs: [[site layout,
-    /// settlement]…]}`, or `null` before T0.
+    /// The sites standing in settlements and the drawn things part of towns (`agent::parents_json`):
+    /// `{n, base, pairs, owners, pushed, sizes}`, or `null` before T0.
     pub fn parents_json(&self) -> String {
-        self.t0.as_ref().map_or_else(|| "null".into(), worldgen::agent::parents_json)
+        self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::agent::parents_json(&self.world, t0))
+    }
+
+    /// Town layout `town`'s members changed by hand (`town::members::change`), without changing
+    /// the edits: `add` and `remove` JSON arrays of ids (`c:<n>`, `b:<layout>:<id>`). Gives
+    /// `{members, created, refused, report}`: the `Edits.members` entries to set (an empty one,
+    /// `{}`, taken away), the created entries to append (a place), the ids not changed
+    /// (`[{id, why}]`) and what it did; or `{error}`.
+    pub fn members_json(&self, town: u32, add: &str, remove: &str) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let ids = |s: &str| serde_json::from_str::<Vec<String>>(s).unwrap_or_default();
+        match worldgen::town::members::change(&self.world, t0, town as usize, &ids(add), &ids(remove)) {
+            Ok(c) => serde_json::json!({
+                "members": c.members,
+                "created": c.created,
+                "refused": c.refused.iter().map(|(id, why)| serde_json::json!({ "id": id, "why": why })).collect::<Vec<_>>(),
+                "report": c.report,
+            })
+            .to_string(),
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
     }
 
     /// Where a site of `kind` (over `under`, if given) can be created near (x, y), with a name

@@ -18,7 +18,7 @@
 //! - without ids yet: `lane` (a village's), `street` (a town's), `hedge` / `field_wall` (round a
 //!   field), `fence` (a pen's).
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 
 use serde::Serialize;
 
@@ -44,8 +44,15 @@ pub struct Thing {
     pub kind: &'static str,
     pub id: Option<String>,
     pub name: Option<String>,
-    /// The owning settlement's feature id, if any.
+    /// The owning settlement's feature id, if any (a drawn thing's by `town::members`; a town's
+    /// building pushed out into a place, the place's).
     pub town: Option<String>,
+    /// Why it is `town`'s: `gap` (a drawn thing within `gap_ft` of the town or its members),
+    /// `hand` (joined, or pushed out, by hand), `inside` (a site of the world's own in its radius).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap_ft: Option<f32>,
     pub removable: bool,
     /// World ft: x0, y0, x1, y1.
     pub bbox: [f64; 4],
@@ -117,14 +124,35 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
     let edits = &world.file.edits;
     let layouts = town::layouts_near(world, t0, [at[0] - r, at[1] - r, at[0] + r, at[1] + r]);
     let mut out: Vec<Found> = Vec::new();
+    // (Why the things put next are their town's: set per layout.)
+    let why_now: Cell<(Option<&'static str>, Option<f32>)> = Cell::new((None, None));
     let mut put = |d: f64, kind: &'static str, id: Option<String>, name: Option<String>, town: Option<String>, removable: bool, bbox: [f64; 4]| {
         if d <= r {
             let seq = out.len();
-            out.push(Found { d: d.max(0.0), seq, thing: Thing { kind, id, name, town, removable, bbox } });
+            let (why, gap_ft) = if town.is_some() { why_now.get() } else { (None, None) };
+            out.push(Found { d: d.max(0.0), seq, thing: Thing { kind, id, name, town, why, gap_ft, removable, bbox } });
         }
     };
     let feature = |li: usize| crate::agent::feature_of_layout(world, t0, li);
-    let owner = |li: usize| if town::is_settlement(t0, li) { feature(li) } else { town::parent_of(t0, li).and_then(feature) };
+    // A layout's town and why: its own; a drawn thing's by membership; a site's of the world's
+    // own the settlement it stands in.
+    let first = t0.settlements.len() + t0.base_pois;
+    let owner = |li: usize| -> (Option<String>, (Option<&'static str>, Option<f32>)) {
+        if town::is_settlement(t0, li) {
+            (feature(li), (None, None))
+        } else if li >= first {
+            match town::members::owner(world, t0, li) {
+                Some(o) => (feature(o.town), match o.why {
+                    town::Why::Gap(g) => (Some("gap"), Some(g)),
+                    town::Why::Hand => (Some("hand"), None),
+                    town::Why::Inside => (Some("inside"), None),
+                }),
+                None => (None, (None, None)),
+            }
+        } else {
+            (town::parent_of(t0, li).and_then(feature), (Some("inside"), None))
+        }
+    };
     let renamed = |id: &str| edits.renames.get(id).cloned();
     // The settlement a drawn thing's middle lies in.
     let town_at = |p: P| {
@@ -138,7 +166,8 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
         let li = l.index as usize;
         let made = crate::sitelinks::created_of(world, t0, li).filter(|c| !c.removed);
         let drawn = made.filter(|c| matches!(c.kind.as_str(), "building" | "castle" | "wall" | "plot"));
-        let home = owner(li);
+        let (home, why) = owner(li);
+        why_now.set(why);
         for e in &l.entrances {
             let d = geom::dist(e.at, at) - ENTRANCE_FT;
             if d > r {
@@ -163,7 +192,16 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                 Some(c) if c.kind == "building" => put(d, "drawn_building", Some(c.id.clone()), renamed(&c.id).or_else(|| Some(c.name.clone())), home.clone(), true, bbox(&b.poly, 0.0)),
                 _ => {
                     let removable = drawn.is_none() && crate::agent::generated_building(t0, &id).is_some();
-                    put(d, "building", Some(id.clone()), renamed(&id).or_else(|| b.name.clone()), home.clone(), removable, bbox(&b.poly, 0.0))
+                    // (Pushed out of its town into a place: the place's, by hand.)
+                    let place = if drawn.is_none() { town::members::building_owner(world, t0, li, b.id) } else { None };
+                    match place {
+                        Some(p) => {
+                            why_now.set((Some("hand"), None));
+                            put(d, "building", Some(id.clone()), renamed(&id).or_else(|| b.name.clone()), feature(p), removable, bbox(&b.poly, 0.0));
+                            why_now.set(why);
+                        }
+                        None => put(d, "building", Some(id.clone()), renamed(&id).or_else(|| b.name.clone()), home.clone(), removable, bbox(&b.poly, 0.0)),
+                    }
                 }
             }
         }
@@ -229,6 +267,7 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
             }
         }
     }
+    why_now.set((None, None));
     // World road stretches.
     let net = &t0.roads;
     let mut roads: Vec<(usize, f64)> = Vec::new();

@@ -605,16 +605,21 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     if let Some(li) = layout_of(world, t0, id) {
         let l = town::layout(world, t0, li);
+        // (Those pushed out into a place among the place's: `town::members`.)
         let mut businesses: Vec<Value> = l
             .buildings
             .iter()
-            .filter(|b| b.func.is_some())
+            .filter(|b| b.func.is_some() && town::members::building_owner(world, t0, li, b.id).is_none())
             .map(|b| json!({ "id": format!("b:{}:{}", l.index, b.id), "name": building_name(world, &l, b), "function": b.label() }))
             .collect();
+        for (id, cl, bi) in pushed_businesses(world, t0, li) {
+            let Some(b) = cl.building(bi as usize) else { continue };
+            businesses.push(json!({ "id": id, "name": building_name(world, &cl, b), "function": b.label() }));
+        }
         let summary = layout_summary(world, t0, &l);
         let mut v = json!({ "districts": summary["districts"], "businesses": [], "underground": summary["underground"] });
         // A settlement's sites too: drawn buildings with a trade among its businesses.
-        if town::is_settlement(t0, li) {
+        if is_town(world, t0, li) {
             for (id, cl) in drawn_businesses(world, t0, li) {
                 let Some(b) = cl.building(0) else { continue };
                 businesses.push(json!({ "id": id, "name": building_name(world, &cl, b), "function": b.label() }));

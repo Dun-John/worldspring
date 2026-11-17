@@ -418,7 +418,7 @@ pub(super) fn authored_at(world: &World, t0: &T0, ids: &[String]) -> (Vec<Value>
 /// Whether an NPC's location or a plot's anchor (`a`) is at place `id`: the place itself, or a
 /// level or room of it (a room of a level too); for a settlement's or site's id, anything in its
 /// layout (`b d t u k w:<layout>:` ids, and their levels and rooms); for a settlement, the same
-/// for each site in it (`town::sites_in`), the sites' own ids included.
+/// for each site in it (`sites_of`: by membership for drawn things), the sites' own ids included.
 pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use<> {
     let mut ids = vec![id.to_string()];
     let mut layouts: Vec<usize> = Vec::new();
@@ -428,8 +428,8 @@ pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use
         layouts.push(t0.settlements.len() + t0.base_pois + k);
     } else if let Some(li) = layout_of(world, t0, id) {
         layouts.push(li);
-        if town::is_settlement(t0, li) {
-            for c in town::sites_in(t0, li) {
+        if is_town(world, t0, li) {
+            for c in sites_of(world, t0, li) {
                 layouts.push(c);
                 ids.extend(feature_of_layout(world, t0, c));
             }
@@ -446,10 +446,51 @@ pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use
     }
 }
 
-/// The settlements' sites, for the app: `{n, base, pairs: [[site layout, settlement]…]}`, with the
-/// counts of settlements and generated sites the layout indices assume (`town::parents`).
-pub fn parents_json(t0: &T0) -> String {
-    json!({ "n": t0.settlements.len(), "base": t0.base_pois, "pairs": town::parents(t0) }).to_string()
+/// The settlements' sites, for the app: `{n, base, pairs, owners, pushed, sizes}`, with the counts
+/// of settlements and generated sites the layout indices assume. `pairs`: `[[site layout,
+/// settlement]…]`, the world's own sites standing in one (`town::parents`) and the drawn things
+/// part of one; `owners`: `[[layout, town layout, "gap"|"hand", ft|null]…]`, every drawn thing
+/// part of a town or a place (`town::members`); `pushed`: `[[place layout, town layout, [building
+/// ids]]…]`; `sizes`: `[[feature id, size class, label extent ft, people]…]` (`town_sizes`).
+pub fn parents_json(world: &World, t0: &T0) -> String {
+    let owners = town::members::owners(world, t0);
+    let first = t0.settlements.len() + t0.base_pois;
+    let mut pairs: Vec<(usize, usize)> = town::parents(t0).into_iter().filter(|p| p.0 < first).collect();
+    pairs.extend(owners.iter().filter(|o| town::is_settlement(t0, o.1.town)).map(|o| (o.0, o.1.town)));
+    pairs.sort_unstable();
+    let why = |o: &town::Owner| match o.why {
+        town::Why::Gap(g) => json!(["gap", (g * 10.0).round() / 10.0]),
+        town::Why::Hand => json!(["hand", null]),
+        town::Why::Inside => json!(["inside", null]),
+    };
+    let owners: Vec<Value> = owners.iter().map(|(li, o)| {
+        let w = why(o);
+        json!([li, o.town, w[0], w[1]])
+    }).collect();
+    let pushed: Vec<Value> = town::members::all_pushed(world, t0).into_iter().map(|(p, t, ids)| json!([p, t, ids])).collect();
+    let sizes: Vec<Value> = town_sizes(world, t0).into_iter().map(|(id, k, e, n)| json!([id, k, e, n])).collect();
+    json!({ "n": t0.settlements.len(), "base": t0.base_pois, "pairs": pairs, "owners": owners, "pushed": pushed, "sizes": sizes }).to_string()
+}
+
+/// Whether layout `li` is a town things can be part of: a settlement, or a place (`town::members`).
+pub(crate) fn is_town(world: &World, t0: &T0, li: usize) -> bool {
+    town::is_settlement(t0, li) || li.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.kind == "place" && !c.removed)
+}
+
+/// The sites in town `si`, by layout: the world's own standing in it (`town::sites_in`) and the
+/// drawn things part of it (`town::members`, which a drawn thing's being in its radius is not).
+pub(crate) fn sites_of(world: &World, t0: &T0, si: usize) -> Vec<usize> {
+    let first = t0.settlements.len() + t0.base_pois;
+    let mut v: Vec<usize> = town::sites_in(t0, si).into_iter().filter(|&li| li < first).collect();
+    v.extend(town::members::members_of(world, t0, si).into_iter().map(|m| m.0));
+    v.sort_unstable();
+    v
+}
+
+/// The town site layout `li` belongs to: a drawn thing's by membership (`town::members::owner`:
+/// a settlement or a place), a site of the world's own the settlement it stands in.
+pub(crate) fn town_of(world: &World, t0: &T0, li: usize) -> Option<usize> {
+    if li >= t0.settlements.len() + t0.base_pois { town::members::owner(world, t0, li).map(|o| o.town) } else { town::parent_of(t0, li) }
 }
 
 /// `{id, name}` of layout `li`'s feature (a settlement or site), or null.
@@ -463,7 +504,7 @@ pub(crate) fn whereabouts(world: &World, t0: &T0, li: usize) -> (Value, Option<V
     if town::is_settlement(t0, li) {
         return (layout_ref(world, t0, li), None);
     }
-    (town::parent_of(t0, li).map_or(Value::Null, |si| layout_ref(world, t0, si)), Some(layout_ref(world, t0, li)))
+    (town_of(world, t0, li).map_or(Value::Null, |si| layout_ref(world, t0, si)), Some(layout_ref(world, t0, li)))
 }
 
 /// Sets `settlement` (and `site`, in a site's layout) on `v` for something in layout `li`.
@@ -513,7 +554,7 @@ fn drawn_building(t0: &T0, li: usize) -> bool {
 /// `underground` their ways underground.
 pub(super) fn sites_json(world: &World, t0: &T0, si: usize, underground: bool) -> Vec<Value> {
     let fs = features(world, t0);
-    town::sites_in(t0, si)
+    sites_of(world, t0, si)
         .into_iter()
         .filter_map(|li| {
             let id = feature_of_layout(world, t0, li)?;
@@ -533,7 +574,7 @@ pub(super) fn sites_json(world: &World, t0: &T0, si: usize, underground: bool) -
 
 /// The buildings drawn by hand in settlement `si` that have a trade: (`b:<site>:0`, its layout).
 pub(super) fn drawn_businesses(world: &World, t0: &T0, si: usize) -> Vec<(String, std::rc::Rc<town::Layout>)> {
-    town::sites_in(t0, si)
+    sites_of(world, t0, si)
         .into_iter()
         .filter(|&li| drawn_building(t0, li))
         .map(|li| (format!("b:{li}:0"), town::layout(world, t0, li)))
@@ -541,9 +582,20 @@ pub(super) fn drawn_businesses(world: &World, t0: &T0, si: usize) -> Vec<(String
         .collect()
 }
 
+/// The generated buildings with a trade pushed out into place `place` (`town::members`): (`b:` id,
+/// its town's layout, its id); none for any other layout.
+pub(super) fn pushed_businesses(world: &World, t0: &T0, place: usize) -> Vec<(String, std::rc::Rc<town::Layout>, u32)> {
+    let mut out = Vec::new();
+    for (_, t, ids) in town::members::all_pushed(world, t0).into_iter().filter(|p| p.0 == place) {
+        let l = town::layout(world, t0, t);
+        out.extend(ids.into_iter().filter(|&id| l.building(id as usize).is_some_and(|b| b.func.is_some())).map(|id| (format!("b:{t}:{id}"), l.clone(), id)));
+    }
+    out
+}
+
 /// The buildings drawn by hand in settlement `si` that are homes (no trade), as `drawn_businesses`.
 fn drawn_homes(world: &World, t0: &T0, si: usize) -> Vec<(String, std::rc::Rc<town::Layout>)> {
-    town::sites_in(t0, si)
+    sites_of(world, t0, si)
         .into_iter()
         .filter(|&li| drawn_building(t0, li))
         .map(|li| (format!("b:{li}:0"), town::layout(world, t0, li)))
@@ -595,9 +647,11 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     for (qi, q) in l.quarters.iter().enumerate() {
         out.push(name_entry(world, format!("d:{li}:{qi}"), "district", q.name.clone(), q.label.get(q.label.len() / 2).copied(), false));
     }
-    for b in l.buildings.iter().filter(|b| b.func.is_some()) {
+    // (Those pushed out into a place listed with it: `pushed_businesses`.)
+    for (id, cl, bi) in l.buildings.iter().filter(|b| b.func.is_some() && town::members::building_owner(world, t0, li, b.id).is_none()).map(|b| (format!("b:{li}:{}", b.id), l.clone(), b.id)).chain(pushed_businesses(world, t0, li)) {
+        let Some(b) = cl.building(bi as usize) else { continue };
         let generated = b.name.clone().unwrap_or_else(|| b.label().to_string());
-        let mut v = name_entry(world, format!("b:{li}:{}", b.id), "building", generated, Some(geom::centroid(&b.poly)), true);
+        let mut v = name_entry(world, id, "building", generated, Some(geom::centroid(&b.poly)), true);
         v["function"] = json!(b.label());
         out.push(v);
     }
@@ -615,7 +669,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
         out.push(name_entry(world, format!("k:{li}:{}", b.id), "underground", "Deep dungeons".into(), Some(geom::centroid(&b.poly)), true));
     }
     // A settlement's buildings drawn by hand that have a trade, as its businesses.
-    if town::is_settlement(t0, li) {
+    if is_town(world, t0, li) {
         for (id, cl) in drawn_businesses(world, t0, li).into_iter().chain(drawn_homes(world, t0, li)) {
             let Some(b) = cl.building(0) else { continue };
             let hidden = is_hidden(world, t0, &id);
@@ -669,8 +723,8 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
         let li = layout_of(world, t0, s).ok_or_else(|| format!("not a settlement or site: {s}"))?;
         let mut v = layout_names(world, t0, li);
         // A settlement's sites (by their own ids; a drawn business is also among the buildings).
-        if town::is_settlement(t0, li) {
-            for c in town::sites_in(t0, li) {
+        if is_town(world, t0, li) {
+            for c in sites_of(world, t0, li) {
                 let (Some(id), Some(p)) = (feature_of_layout(world, t0, c), t0.pois.get(c - t0.settlements.len())) else { continue };
                 let generated = generated_name(world, t0, &id).unwrap_or_default();
                 v.push(name_entry(world, id, "site", generated, Some([p.x, p.y]), false));

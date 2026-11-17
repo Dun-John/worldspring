@@ -53,7 +53,7 @@ pub enum Hit {
     },
 }
 
-fn building_hit(t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, b: &town::Building) -> Hit {
+fn building_hit(world: &World, t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, b: &town::Building) -> Hit {
     let c = geom::centroid(&b.poly);
     let size = b.poly.iter().map(|p| geom::dist(*p, c)).fold(0.0, f64::max) * 2.0;
     // (The capital's palace's on its front range, over its entrance hall: not on its court's
@@ -71,7 +71,7 @@ fn building_hit(t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, b: &tow
     } else {
         c
     };
-    let (district_id, district) = district_at(t0, layouts, l, c).unzip();
+    let (district_id, district) = district_at(world, t0, layouts, l, c).unzip();
     Hit::Building {
         id: format!("b:{}:{}", l.index, b.id),
         settlement: l.index,
@@ -93,13 +93,20 @@ fn quarter_at(l: &town::Layout, p: [f64; 2]) -> Option<usize> {
 }
 
 /// The named district a point of layout `l` lies in (its id and generated name): the layout's own,
-/// else (a site standing in a settlement, `town::parent_of`) the settlement's, when its layout is
-/// among `layouts` (a town reaches past where it holds sites, so those near a point or in an area
-/// have it).
-fn district_at(t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, p: [f64; 2]) -> Option<(String, String)> {
+/// else for a drawn thing part of a settlement (`town::members::district`) the quarter it counts
+/// in, else (a site of the world's own standing in a settlement, `town::parent_of`) the
+/// settlement's, when its layout is among `layouts` (a town reaches past where it holds sites, so
+/// those near a point or in an area have it).
+fn district_at(world: &World, t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, p: [f64; 2]) -> Option<(String, String)> {
     let named = |t: &town::Layout, qi: usize| (format!("d:{}:{qi}", t.index), t.quarters[qi].name.clone());
+    let li = l.index as usize;
     quarter_at(l, p).map(|qi| named(l, qi)).or_else(|| {
-        let si = town::parent_of(t0, l.index as usize)?;
+        if li >= t0.settlements.len() + t0.base_pois {
+            let (_, qi) = town::members::district(world, t0, li)?;
+            let tl = town::layout(world, t0, town::members::owner(world, t0, li)?.town);
+            return qi.filter(|&q| q < tl.quarters.len()).map(|qi| named(&tl, qi));
+        }
+        let si = town::parent_of(t0, li)?;
         let tl = layouts.iter().find(|t| t.index as usize == si)?;
         quarter_at(tl, p).map(|qi| named(tl, qi))
     })
@@ -162,7 +169,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
     for l in &layouts {
         for b in &l.buildings {
             if geom::contains(&b.poly, [x, y]) {
-                return Some(building_hit(t0, &layouts, l, b));
+                return Some(building_hit(world, t0, &layouts, l, b));
             }
         }
     }
@@ -170,7 +177,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
     for l in &layouts {
         for (k, (at, r, gate)) in crate::interior::towers(l).into_iter().enumerate() {
             if geom::dist(at, [x, y]) <= r {
-                let (district_id, district) = district_at(t0, &layouts, l, at).unzip();
+                let (district_id, district) = district_at(world, t0, &layouts, l, at).unzip();
                 return Some(Hit::Building {
                     id: format!("t:{}:{}", l.index, l.tower_id(k)),
                     settlement: l.index,
@@ -258,9 +265,9 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
             }
             let Some(name) = current(&id, b.name.as_deref()) else { continue };
             if name.is_some_and(|n| n.contains(&q)) {
-                by_name.push(building_hit(t0, &layouts, l, b));
+                by_name.push(building_hit(world, t0, &layouts, l, b));
             } else if b.func.is_some() && b.label().to_lowercase().contains(&q) && by_function.len() < limit {
-                by_function.push(building_hit(t0, &layouts, l, b));
+                by_function.push(building_hit(world, t0, &layouts, l, b));
             }
         }
     }
@@ -305,7 +312,7 @@ pub fn in_view(world: &World, t0: &T0, rect: [f64; 4], limit: usize) -> Vec<Hit>
         }
         for b in &l.buildings {
             if b.func.is_some() && inside(geom::centroid(&b.poly)) && shops.len() < limit {
-                shops.push(building_hit(t0, &layouts, l, b));
+                shops.push(building_hit(world, t0, &layouts, l, b));
             }
         }
     }
