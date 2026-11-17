@@ -130,7 +130,7 @@
 //! - `streetsin` (not in `all`; Roadmap 6 R7): walled towns' main streets from their gates: length within 30 ft of
 //!   the town wall's inner face past the first 15 ft (and the part running along it), the straight run from the
 //!   gate before the first piece turning over 20 degrees off the wall's inward normal; a summary line over every
-//!   world with the worst 5 towns (seeds 1-24 to compare). `STREETS_DUMP="L<i> <name>"`: that town's streets
+//!   world with the worst 5 towns (seeds 1-24 to compare). `STREETS_DUMP="L<i> <name>"` (or `all`): that town's streets
 //!   piece by piece (heading against the gate's inward normal, distance to the wall).
 //!
 //! Usage: cargo run --release -p worldgen --example towncheck -- [streetsin|same|fills|rows|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
@@ -1222,7 +1222,7 @@ fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
             if dot(nrm, sub(st[st.len() - 1], g)) < 0.0 {
                 nrm = mul(nrm, -1.0);
             }
-            if std::env::var("STREETS_DUMP").is_ok_and(|v| v == tag) {
+            if std::env::var("STREETS_DUMP").is_ok_and(|v| v == tag || v == "all") {
                 eprintln!("{tag} street {si}: gate {g:?} wall dir {wu:?} normal {nrm:?} half {half}");
                 for w in st.windows(2) {
                     let d = dist(w[0], w[1]);
