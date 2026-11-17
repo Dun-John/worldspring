@@ -4,6 +4,7 @@
 use crate::t0::settle::{Settlement, Tier};
 
 /// Built-up radius (ft) by tier and population.
+#[inline]
 pub fn urban_radius(tier: Tier, population: u32) -> f64 {
     let p = crate::core::sqrt(population as f64);
     match tier {
@@ -15,11 +16,13 @@ pub fn urban_radius(tier: Tier, population: u32) -> f64 {
 
 /// Where network roads stop short of a town (ft from its centre): outside the walls and
 /// most of the sprawl; the town draws the last stretch to its gate.
+#[inline]
 pub fn road_trim_radius(tier: Tier, population: u32) -> f64 {
     1.5 * urban_radius(tier, population)
 }
 
 /// How far a settlement's layout (fields included) can reach from its center.
+#[inline]
 pub fn reach(s: &Settlement) -> f64 {
     let r = urban_radius(s.tier, s.population);
     if s.tier == Tier::Village { r * 2.2 } else { r * (OUTSKIRTS + 0.15) }
@@ -29,12 +32,14 @@ pub fn reach(s: &Settlement) -> f64 {
 /// ground its layout was planned on (all of the layout's reach) back to the land round it
 /// over a broad band, so whatever stands between them (fine detail, a river valley the
 /// land outside lacks) is a gentle slope rather than a rim.
+#[inline]
 pub fn pad_extent(reach: f64) -> f64 {
     reach + (0.6 * reach).max(900.0)
 }
 
 /// The settlement pad's weight at `d` ft from its centre: 1 over the layout, 0 past
 /// `pad_extent`.
+#[inline]
 pub fn pad_weight(d: f64, reach: f64) -> f64 {
     1.0 - crate::core::noise::smoothstep(reach, pad_extent(reach), d)
 }
@@ -46,6 +51,7 @@ pub const OUTSKIRTS: f64 = 2.15;
 /// sprawl outside the walls included. Measured over seeds 1–3 in built-up radii: villages'
 /// buildings reach 1.36; cities' and metropolises' districts 2.12 and 1.90, towns' 2.05 for 95
 /// in 100 (a few river towns' run on past their reach).
+#[inline]
 pub fn holds_radius(s: &Settlement) -> f64 {
     urban_radius(s.tier, s.population) * if s.tier == Tier::Village { 1.4 } else { OUTSKIRTS }
 }

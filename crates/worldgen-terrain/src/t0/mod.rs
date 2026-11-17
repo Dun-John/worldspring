@@ -731,6 +731,7 @@ impl T0 {
     }
 
     /// How cold the ground is at a world position (`under::cold_of` of its nearest cell).
+    #[inline]
     pub fn cold_at(&self, world: &World, x_ft: f64, y_ft: f64) -> crate::model::under::Cold {
         let (w, h) = (self.height.w, self.height.h);
         let (i, j) = (((x_ft / self.cell_ft).round().max(0.0) as usize).min(w - 1), ((y_ft / self.cell_ft).round().max(0.0) as usize).min(h - 1));
@@ -752,6 +753,7 @@ impl T0 {
     }
 
     /// Height (ft) at a world position, prefiltered for sample spacing `spacing_ft`.
+    #[inline]
     pub fn sample(&self, x_ft: f64, y_ft: f64, spacing_ft: f64) -> f64 {
         let mut m = 0;
         while m + 1 < self.mips.len() && self.cell_ft * (1u64 << (m + 1)) as f64 <= spacing_ft {
@@ -768,6 +770,7 @@ impl T0 {
     /// wet/dry mask is at least one half (a smooth contour, not the cell edges), else
     /// `hydro::DRY`. The land side of that contour gets a bank, so the
     /// shoreline sits on it even where the ground is flat (`shore_bank`).
+    #[inline]
     pub fn sample_water(&self, x_ft: f64, y_ft: f64) -> f32 {
         let (level, mask) = self.sample_lake(x_ft, y_ft);
         if mask >= 0.5 { level } else { hydro::DRY }
@@ -776,6 +779,7 @@ impl T0 {
 
 
     /// (level over the wet corners or `DRY`, bilinear wet fraction 0..1).
+    #[inline]
     pub fn sample_lake(&self, x_ft: f64, y_ft: f64) -> (f32, f64) {
         lake_at(&self.water, self.cell_ft, self.biome_seed, x_ft, y_ft)
     }
@@ -784,6 +788,7 @@ impl T0 {
     /// settlement pads and road corridors remove): the banked T0 samples of the last coarse
     /// level (lattice spacing `lattice_ft`), interpolated Catmull-Rom as refinement does, and
     /// banked again at the point.
+    #[inline]
     pub fn ground_at(&self, x_ft: f64, y_ft: f64, lattice_ft: f64) -> f64 {
         self.ground_with(x_ft, y_ft, lattice_ft, true, &mut |i, j| self.ground_node(i, j, lattice_ft))
     }
@@ -863,6 +868,7 @@ impl T0 {
     }
 
     /// Banked T0 sample at lattice node (i, j) of `ground_at`'s lattice.
+    #[inline]
     pub fn ground_node(&self, i: i64, j: i64, lattice_ft: f64) -> f64 {
         let (px, py) = (i as f64 * lattice_ft, j as f64 * lattice_ft);
         let (lw, m) = self.sample_lake(px, py);
@@ -871,6 +877,7 @@ impl T0 {
 
     /// `ground_at` with the lattice nodes supplied by `node` (so callers can cache them);
     /// `bank` false skips the shore bank at the point (callers that know no water is near).
+    #[inline]
     pub fn ground_with(&self, x_ft: f64, y_ft: f64, lattice_ft: f64, bank: bool, node: &mut dyn FnMut(i64, i64) -> f64) -> f64 {
         self.ground_with_nodes(x_ft, y_ft, lattice_ft, bank, node)
     }
@@ -898,6 +905,7 @@ impl T0 {
     /// side of the contour the ground is lifted to at least just above the water, rising
     /// toward the dry corners; the lift fades in with the mask so it is continuous across
     /// cell edges (a cell with no wet corner has mask 0 and no lift).
+    #[inline]
     pub fn shore_bank(h: f64, level: f32, mask: f64) -> f64 {
         if level <= hydro::DRY || mask >= 0.5 {
             return h;
@@ -915,6 +923,7 @@ impl T0 {
     }
 
     /// Domain-warp offset (in T0 cells) that makes biome borders organic instead of blocky.
+    #[inline]
     pub fn biome_warp(&self, x_ft: f64, y_ft: f64) -> (f64, f64) {
         let (cx, cy) = (x_ft / self.cell_ft, y_ft / self.cell_ft);
         (
@@ -925,6 +934,7 @@ impl T0 {
 
     /// Biome texel: [primary, secondary, blend, coast distance (sqrt-encoded)]: the nearest
     /// cell after warping by `warp` (from `biome_warp`, possibly interpolated).
+    #[inline]
     pub fn sample_biome(&self, x_ft: f64, y_ft: f64, warp: (f64, f64)) -> [u8; 4] {
         let (cx, cy) = (x_ft / self.cell_ft, y_ft / self.cell_ft);
         let (wx, wy) = (cx + warp.0, cy + warp.1);
