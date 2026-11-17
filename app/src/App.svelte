@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
+  import type { BuildingEdit, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, SettlementFacts, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
@@ -41,7 +41,6 @@
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
   import PlaceBar from './ui/PlaceBar.svelte';
-  import type { BarAt, HeldView, Placer } from './editor/placing';
   import BuildPanel from './ui/BuildPanel.svelte';
   import TownPanel from './ui/TownPanel.svelte';
   import GroundPanel from './ui/GroundPanel.svelte';
@@ -54,15 +53,14 @@
   import LinkPanel from './ui/LinkPanel.svelte';
   import { belowGround } from './editor/site/model';
   import { buildTools } from './editor/tools/build.svelte';
+  import { objectTools } from './editor/tools/objects.svelte';
   import { streetTools } from './editor/tools/streets.svelte';
   import { type BuildSettings } from './editor/build';
   import { lookOf, shore } from './editor/water';
   import { kindWidth } from './editor/paths';
   import type { BuildMode } from './ui/BuildPanel.svelte';
-  import { defaultScatter, ScatterTool, type ScatterSettings } from './editor/scatter';
-  import { shrink } from './render/customAtlas';
   import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
-  import { assetIds, assetUrl, getAsset, putAsset, shareAssets, unbundleAssets } from './world/assets';
+  import { assetIds, assetUrl, getAsset, shareAssets, unbundleAssets } from './world/assets';
   import Search from './ui/Search.svelte';
   import Toasts, { type Toast } from './ui/Toasts.svelte';
   import { lowMemory } from './ui/support';
@@ -1456,7 +1454,7 @@
   function syncTool() {
     const buildTool = B.tool();
     const town = townOn && townUnderlay.adjust && townUnderlay.visible ? T.townTraceTool : T.streetPlan ? T.streetTool : T.townTool;
-    view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? town ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
+    view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? town ?? groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -1474,7 +1472,7 @@
     const editTab = to === 'edit' ? t : null;
     // (Moving on from Places puts its "Added X" line away.)
     if (editTab !== 'sites') placedName = null;
-    if (editTab !== 'scatter') disarmScatter();
+    if (editTab !== 'scatter') S.disarmScatter();
     if (editTab !== 'build') B.disarmBuild();
     if (editTab !== 'town') T.disarmTown();
     if (editTab !== 'ground') disarmGround();
@@ -1490,7 +1488,7 @@
     }
     shell.section = to;
     if (to && t) (shell.tabs as Record<string, string>)[to] = t;
-    if (editTab === 'scatter') armScatter();
+    if (editTab === 'scatter') S.armScatter();
     if (editTab === 'build') B.armBuild();
     if (editTab === 'town') T.armTown();
     if (editTab === 'ground') armGround();
@@ -1545,7 +1543,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => designSettings, designer: () => designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1759,9 +1757,9 @@
         const p = id.startsWith('b:') ? (c?.building.furniture.find((f) => f.kind === kind) ?? c?.building.props.find((f) => f.kind === kind)) : c?.props.find((f) => f.kind === kind);
         return p ? { name: p.name, blocks: p.blocks } : null;
       },
-      chip: (x, y, text) => chipAt(x, y, text),
-      bar: (at) => (placeBar = at),
-      held: setHeld,
+      chip: (x, y, text) => S.chipAt(x, y, text),
+      bar: (at) => (S.placeBar = at),
+      held: S.setHeld,
       ppf: () => view.cam.ppf,
     });
     // (Still wanted once it has loaded: the same site, the Design tab open.)
@@ -1827,7 +1825,7 @@
       first: () => linkFirst,
       picked: () => linkPicked,
       square: linkSquare,
-      chip: (x, y, text) => chipAt(x, y, text),
+      chip: (x, y, text) => S.chipAt(x, y, text),
     });
     syncTool();
   }
@@ -1995,116 +1993,27 @@
     }
   }
 
-  // Scatter: while its menu is open, the map's pointer puts objects down and takes them away.
-  let scatter = $state<ScatterSettings>(defaultScatter());
-  /** The brush ring under the pointer (screen px). */
-  let ring = $state<{ x: number; y: number; r: number } | null>(null);
-  /** The chip by what is in the hand (screen px). */
-  let chip = $state<{ x: number; y: number; text: string } | null>(null);
-  /** On a touch screen, the place bar by the ghost (world ft), and where it is on screen (kept
-   * under the ghost as the map moves). */
-  let placeBar = $state.raw<BarAt>(null);
-  /** The piece picked up in Objects or Rooms, for the panel's "in hand" row. */
-  let held = $state.raw<HeldView>(null);
-  // (Told on every pointer move: only a change is taken.)
-  const setHeld = (h: HeldView) => {
-    if (h?.name !== held?.name || h?.turn !== held?.turn || h?.turns !== held?.turns || h?.auto !== held?.auto || h?.size !== held?.size || h?.kind !== held?.kind || h?.variant !== held?.variant) held = h;
-  };
-  let placeBarAt = $state<{ x: number; y: number; r: number } | null>(null);
-  /** What places things by hand in the open tab: Objects, or Rooms on Props. */
-  function placer(): Placer | null {
-    // (Inside, Objects has nothing in the hand that shows: its keys go on down, Escape leaves.)
-    if (scatterOn && scatterArmed && !view.interior) return scatterArmed.tool;
-    if (designer && shell.section === 'edit' && shell.tabs.edit === 'design' && designSettings.mode === 'prop') return designer;
-    return null;
-  }
-
-  /** The chip at a world point (none: null text). */
-  function chipAt(x: number, y: number, text: string | null) {
-    if (text === null) return (chip = null);
-    const [sx, sy] = view.cam.worldToPage(x, y);
-    const b = container.getBoundingClientRect();
-    chip = { x: b.left + sx, y: b.top + sy, text };
-  }
-
-  $effect(() => {
-    const at = placeBar;
-    if (!at) return void (placeBarAt = null);
-    let raf = 0;
-    const tick = () => {
-      const [sx, sy] = view.cam.worldToPage(at.x, at.y);
-      const b = container.getBoundingClientRect();
-      const next = { x: b.left + sx, y: b.top + sy, r: at.r * view.cam.ppf };
-      if (!placeBarAt || Math.abs(next.x - placeBarAt.x) + Math.abs(next.y - placeBarAt.y) + Math.abs(next.r - placeBarAt.r) > 0.5) placeBarAt = next;
-      raf = requestAnimationFrame(tick);
-    };
-    untrack(tick);
-    return () => cancelAnimationFrame(raf);
+  // Edit › Objects: its tools, ghost, ring and chip are in `editor/tools/objects.svelte.ts`.
+  const S = objectTools({
+    view,
+    get edits() {
+      return edits;
+    },
+    get designSettings() {
+      return designSettings;
+    },
+    get designer() {
+      return designer;
+    },
+    get scatterOn() {
+      return scatterOn;
+    },
+    get container() {
+      return container;
+    },
+    applyEdits,
+    toast,
   });
-  let scatterArmed: { tool: ScatterTool } | null = null;
-  const placedSprites = $derived.by(() => {
-    const n: Record<string, number> = {};
-    for (const o of Object.values(edits.objects ?? {})) if (typeof o.kind === 'string') n[o.kind.slice(2)] = (n[o.kind.slice(2)] ?? 0) + 1;
-    return n;
-  });
-
-  function armScatter() {
-    if (scatterArmed) return;
-    const tool = new ScatterTool({
-      settings: () => scatter,
-      edits: () => edits,
-      catalog: () => view.battle?.catalog ?? [],
-      objectAt: (x, y) => view.battle?.objectAt(x, y) ?? null,
-      preview: (objs) => view.previewObjects(objs),
-      commit: (objects, cleared, label) => commitObjects(objects, cleared, label),
-      ring: (x, y, r) => {
-        if (r === null) return (ring = null);
-        const [sx, sy] = view.cam.worldToPage(x, y);
-        const b = container.getBoundingClientRect();
-        ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
-      },
-      ghost: (o, ok) => view.battle?.setGhost(o, ok),
-      chip: (x, y, text) => chipAt(x, y, text),
-      bar: (at) => (placeBar = at),
-      held: setHeld,
-      ppf: () => view.cam.ppf,
-      battlemap: () => (view.battle?.stats.alpha ?? 0) > 0 && !view.interior,
-      roofed: (x, y) => !!view.battle?.roofAt(x, y),
-      loaded: (x, y) => !!view.battle?.loadedAt(x, y),
-      hint: (t) => toast(t),
-    });
-    scatterArmed = { tool };
-  }
-
-  function disarmScatter() {
-    scatterArmed?.tool.dispose();
-    scatterArmed = null;
-    ring = null;
-    chip = null;
-    placeBar = null;
-    held = null;
-  }
-
-  // The ghost follows the settings as the panel changes them (kind, turn, size).
-  $effect(() => {
-    void [scatter.mode, scatter.kinds, scatter.kinds.length, scatter.rotation, scatter.scale, scatter.vary];
-    scatterArmed?.tool.refresh();
-  });
-  $effect(() => {
-    void [designSettings.mode, designSettings.prop, designSettings.pw, designSettings.ph, designSettings.back, designSettings.variant];
-    untrack(() => designer)?.refresh();
-  });
-
-  /** Objects put down (or, null, taken away) and generated ones cleared, as one change. */
-  function commitObjects(objects: Record<string, Placed | null>, cleared: Record<string, Clear>, label: { tool: string; count: number; name?: string; changed?: string[] }) {
-    const e = edits;
-    const o = { ...(e.objects ?? {}) };
-    for (const [k, v] of Object.entries(objects)) {
-      if (v) o[k] = v;
-      else delete o[k];
-    }
-    applyEdits({ ...e, objects: o, cleared: { ...(e.cleared ?? {}), ...cleared } }, { ...label, ...(Object.keys(cleared).length ? { clears: Object.keys(cleared).length } : {}) }, 'user');
-  }
 
   // Ground: while its tab is open, the map's pointer brushes the battlemap's ground up, down,
   // smooth or back, or draws plateaus and pits.
@@ -2128,12 +2037,12 @@
       unpreview: () => view.battle?.unpreviewGround(),
       commit: (g, p, label) => commitGround(g, p, label),
       ring: (x, y, r) => {
-        if (r === null) return (ring = null);
+        if (r === null) return (S.ring = null);
         const [sx, sy] = view.cam.worldToPage(x, y);
         const b = container.getBoundingClientRect();
-        ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
+        S.ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
       },
-      chip: (x, y, text) => chipAt(x, y, text),
+      chip: (x, y, text) => S.chipAt(x, y, text),
       select: (id) => (groundSel = id),
       selected: () => groundSel,
       ppf: () => view.cam.ppf,
@@ -2146,8 +2055,8 @@
     groundArmed?.dispose();
     groundArmed = null;
     groundSel = null;
-    ring = null;
-    chip = null;
+    S.ring = null;
+    S.chip = null;
   }
 
   // The ring and chip follow the settings as the panel changes them.
@@ -2182,29 +2091,6 @@
 
   /** A picture as a new kind of object: drawn down to 64 px a square (128 for one square),
    * kept as an asset, described in `Edits.sprites`; then chosen in the menu. */
-  async function uploadSprite(file: File, meta: SpriteMeta) {
-    const canvas = await shrink(file, meta.size <= 1 ? 128 : Math.min(512, Math.round(meta.size * 64)));
-    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('The picture could not be read'))), 'image/png'));
-    const id = await putAsset(blob, meta.name);
-    const e = edits;
-    applyEdits({ ...e, sprites: { ...(e.sprites ?? {}), [id]: meta } }, { tool: 'upload_sprite', id: `s:${id}`, name: meta.name }, 'user');
-    scatter.kinds = [`s:${id}`];
-  }
-
-  /** Change an uploaded sprite's rules, or (null) remove it and every one put down. */
-  function saveSprite(asset: string, meta: SpriteMeta | null) {
-    const e = edits;
-    const sprites = { ...(e.sprites ?? {}) };
-    const name = sprites[asset]?.name ?? asset;
-    if (meta) {
-      sprites[asset] = meta;
-      return applyEdits({ ...e, sprites }, { tool: 'upload_sprite', id: `s:${asset}`, name: meta.name }, 'user');
-    }
-    delete sprites[asset];
-    const objects = Object.fromEntries(Object.entries(e.objects ?? {}).filter(([, o]) => o.kind !== `s:${asset}`));
-    applyEdits({ ...e, sprites, objects }, { tool: 'remove_sprite', id: `s:${asset}`, name }, 'user');
-  }
-
   /** Why the spot under the pointer won't do, while placing a village or town (null: it will). */
   let placeNote = $state<string | null>(null);
   let spotSeq = 0;
@@ -2270,7 +2156,7 @@
     const showRing = (x: number, y: number) => {
       const [sx, sy] = view.cam.worldToPage(x, y);
       const b = container.getBoundingClientRect();
-      ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
+      S.ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
     };
     // (A pin moved waits for a remake: no spot check of a village added at once.)
     const instant = isInstant(c) && !(move && !move.startsWith('c:'));
@@ -2281,7 +2167,7 @@
         if (reach) showRing(x, y);
         if (instant) checkSpot(c, x, y, move ?? undefined);
       },
-      leave: () => ((ring = null), (placeNote = null)),
+      leave: () => ((S.ring = null), (placeNote = null)),
       hoverFollows: true,
       cancel: () => disarmPlace(),
       up: (x, y) => {
@@ -2300,7 +2186,7 @@
     placeNote = null;
     placeTool = null;
     placeArmed = false;
-    ring = null;
+    S.ring = null;
     syncTool();
   }
 
@@ -3666,14 +3552,14 @@
   /** Undo and redo go to the designer's history while it is open, then the sketch's (which has
    * no redo), then the world's edits. */
   function undoAny() {
-    scatterArmed?.tool.putBack();
+    S.scatterArmed?.tool.putBack();
     if (designer) designer.undo();
     else if (sketchOn) sketcher.undo();
     else undo();
   }
 
   function redoAny() {
-    scatterArmed?.tool.putBack();
+    S.scatterArmed?.tool.putBack();
     if (designer) designer.redo();
     else if (!sketchOn) redo();
   }
@@ -3750,10 +3636,10 @@
     },
     sketchTool: (t) => (sketchSettings.tool = t),
     scatterMode: (m) => {
-      scatter.mode = m;
-      if (m === 'place' && scatter.kinds.length > 1) scatter.kinds = [scatter.kinds[0]];
+      S.scatter.mode = m;
+      if (m === 'place' && S.scatter.kinds.length > 1) S.scatter.kinds = [S.scatter.kinds[0]];
     },
-    placing: placer,
+    placing: S.placer,
     buildCross: () => B.keyCross(),
     buildHarbour: () => B.setBuildMode('harbour'),
     buildRoad: () => B.keyRoad(),
@@ -3800,7 +3686,7 @@
         el!.blur();
         return true;
       },
-      () => !!placer()?.escape(),
+      () => !!S.placer()?.escape(),
       () => !!groundArmed?.escape(),
       ...B.escapes,
       () => !!T.townTool?.reset(),
@@ -3848,9 +3734,9 @@
       else if (designer) designer.levelShown();
       // In or out of a building: Objects' hand is put back (it can't be put down in there) and
       // its ghost, chip and ring follow; Ground's ring too.
-      if (scatterArmed) {
-        if (s) scatterArmed.tool.putBack();
-        scatterArmed.tool.refresh();
+      if (S.scatterArmed) {
+        if (s) S.scatterArmed.tool.putBack();
+        S.scatterArmed.tool.refresh();
       }
       groundArmed?.refresh();
     };
@@ -4247,21 +4133,21 @@
         {:else if scatterOn}
           <ScatterPanel
             {peek}
-              bind:settings={scatter}
+              bind:settings={S.scatter}
               catalog={view.battle?.catalog ?? []}
               sprites={edits.sprites ?? {}}
-              placed={placedSprites}
+              placed={S.placedSprites}
               thumbs={() => view.battle?.thumbs()}
               picture={assetUrl}
-              onUpload={uploadSprite}
-              onSprite={saveSprite}
+              onUpload={S.uploadSprite}
+              onSprite={S.saveSprite}
               inside={scatterInside}
               onRooms={furnishHere}
-              {held}
-              onTurn={(d) => scatterArmed?.tool.turn(d, false)}
-              onAuto={() => scatterArmed?.tool.turnReset()}
-              onEmpty={() => scatterArmed?.tool.escape() || (scatter.kinds = [])}
-              onSize={(d) => scatterArmed?.tool.size(d)}
+              held={S.held}
+              onTurn={(d) => S.scatterArmed?.tool.turn(d, false)}
+              onAuto={() => S.scatterArmed?.tool.turnReset()}
+              onEmpty={() => S.scatterArmed?.tool.escape() || (S.scatter.kinds = [])}
+              onSize={(d) => S.scatterArmed?.tool.size(d)}
             />
         {:else if shell.tabs.edit === 'design' && linkOn}
           <LinkPanel
@@ -4295,7 +4181,7 @@
               onSave={saveDesign}
               onReset={resetDesign}
               onProblem={showProblem}
-              {held}
+              held={S.held}
               onLinks={canLink ? openLinks : undefined}
             />
         {:else if shell.tabs.edit === 'design' && !peek}
@@ -4500,15 +4386,15 @@
       <button class="ws-btn" onclick={disarmPlace}>Cancel</button>
     </div>
   {/if}
-  {#if (scatterOn || groundOn || placeArmed) && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatterOn && scatter.mode === 'erase'}></div>{/if}
-  {#if (scatterOn || groundOn || designer) && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
-  {#if placeBar && placeBarAt}
-    {@const p = placer()}
+  {#if (scatterOn || groundOn || placeArmed) && S.ring}<div class="ring" style="left: {S.ring.x - S.ring.r}px; top: {S.ring.y - S.ring.r}px; width: {S.ring.r * 2}px; height: {S.ring.r * 2}px" class:erase={scatterOn && S.scatter.mode === 'erase'}></div>{/if}
+  {#if (scatterOn || groundOn || designer) && S.chip}<div class="hand-chip" style="left: {S.chip.x}px; top: {S.chip.y}px">{S.chip.text}</div>{/if}
+  {#if S.placeBar && S.placeBarAt}
+    {@const p = S.placer()}
     {#if p}
       <PlaceBar
-        at={placeBarAt}
-        holding={placeBar.holding}
-        turns={placeBar.turns}
+        at={S.placeBarAt}
+        holding={S.placeBar.holding}
+        turns={S.placeBar.turns}
         quarter={p === designer}
         onTurn={(d) => p.turn(d, false)}
         onAuto={() => p.turnReset()}
