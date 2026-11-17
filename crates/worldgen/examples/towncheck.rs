@@ -128,7 +128,7 @@
 //!   `SVG_DIR`: a picture a world, up to 6.
 //!
 //! - `streetsin` (not in `all`; Roadmap 6 R7): walled towns' main streets from their gates: length within 30 ft of
-//!   the town wall's inner face past the first 15 ft (and the part running along it), the straight run from the
+//!   the town wall's inner face past the first 40 ft (and the part running along it), the straight run from the
 //!   gate before the first piece turning over 20 degrees off the wall's inward normal; a summary line over every
 //!   world with the worst 5 towns (seeds 1-24 to compare). `STREETS_DUMP="L<i> <name>"` (or `all`): that town's streets
 //!   piece by piece (heading against the gate's inward normal, distance to the wall).
@@ -1134,10 +1134,11 @@ thread_local! {
 }
 
 /// `streetsin` (R7): each walled town's main streets (`Layout::streets`, gate to market square). Hugging: the
-/// length (5-ft steps, past its first 15 ft) whose centre line is within 30 ft of the town wall's inner face
-/// (its centre line less half its thickness); along: the part of that heading within 45 degrees of the
-/// nearest wall piece. Straight run: from the gate to the start of the first piece of the street (3 ft or
-/// longer) heading more than 20 degrees off the gate's inward normal (the wall's within 50 ft of the gate).
+/// length (5-ft steps, past its first 40 ft, which a street square to the wall needs to get 30 ft off it) whose
+/// centre line is within 30 ft of the town wall's inner face (its centre line less half its thickness); along:
+/// the part of that heading within 45 degrees of the nearest wall piece. Straight run: from the gate to the start
+/// of the first piece of the street (3 ft or longer) heading more than 20 degrees off the gate's inward normal (the
+/// wall's within 50 ft of the gate).
 fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
     r.counts(&["walled towns", "main streets", "main streets hugging the wall", "main streets running along the wall", "main streets straight for under 100 ft (longer streets)", "main streets under 100 ft long", "main streets from an open edge (no wall at the gate)"]);
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
@@ -1177,7 +1178,7 @@ fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
                 for k in 0..n {
                     let m = lerp(w[0], w[1], (k as f64 + 0.5) / n as f64);
                     let sm = s + (k as f64 + 0.5) * step;
-                    if sm < 15.0 {
+                    if sm < 40.0 {
                         continue;
                     }
                     let (near, wd) = segs.iter().map(|&(a, b)| (seg_dist(m, a, b), (a, b))).min_by(|x, y| x.0.total_cmp(&y.0)).unwrap();
