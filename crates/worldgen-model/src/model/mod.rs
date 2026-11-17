@@ -3,6 +3,7 @@
 
 pub mod biome;
 pub mod consts;
+pub mod fences;
 pub mod ground;
 pub mod ids;
 pub mod links;

@@ -470,6 +470,14 @@ pub struct Edits {
     /// no longer names a stretch (a remade world) resolves nowhere.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub removed_roads: BTreeSet<String>,
+    /// (Roadmap 6 R6) Fences and hedges drawn by hand (`f:<n>`): drawn on the battlemap only,
+    /// across roads, stopping only at water; nothing is laid out round them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fences: BTreeMap<String, crate::model::fences::Fence>,
+    /// (Roadmap 6 R6) Gaps cut by the eraser (`fg:<n>`), through every fence and hedge under
+    /// them, generated or drawn; kept through remakes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fence_gaps: BTreeMap<String, crate::model::fences::FenceGap>,
 }
 
 /// A town's members set by hand: ids joined to it (`add`: drawn things `c:<n>` from anywhere,
@@ -593,6 +601,12 @@ pub struct TownEdit {
     /// lawn closes over); the plan and the build never see them.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub removed: BTreeSet<String>,
+    /// (Roadmap 6 R6) The town's generated fences and hedges changed by hand (gone, another
+    /// kind, gates), by their local keys (`town::fence`): `<8 hex>` a run (`fr:<layout>:<8 hex>`),
+    /// `<spot>:<j>` a park's hedge or row of topiary (`fh:<layout>:<spot>:<j>`). Drawn only: the
+    /// layout never sees them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fences: BTreeMap<String, crate::model::fences::FenceChange>,
 }
 
 /// (Roadmap 6 R4) A street added to a generated town (`TownEdit::streets`): its centreline
@@ -1503,6 +1517,8 @@ impl Edits {
                 "paths" => self.paths = std::mem::take(&mut part.paths),
                 "members" => self.members = std::mem::take(&mut part.members),
                 "removed_roads" => self.removed_roads = std::mem::take(&mut part.removed_roads),
+                "fences" => self.fences = std::mem::take(&mut part.fences),
+                "fence_gaps" => self.fence_gaps = std::mem::take(&mut part.fence_gaps),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1545,6 +1561,8 @@ impl Edits {
                 "links" => patch(&mut self.links, p)?,
                 "paths" => patch(&mut self.paths, p)?,
                 "members" => patch(&mut self.members, p)?,
+                "fences" => patch(&mut self.fences, p)?,
+                "fence_gaps" => patch(&mut self.fence_gaps, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1557,7 +1575,7 @@ impl Edits {
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty() && self.waters.is_empty()
             && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
             && self.streets.is_empty() && self.links.is_empty() && self.paths.is_empty()
-            && self.members.is_empty() && self.removed_roads.is_empty()
+            && self.members.is_empty() && self.removed_roads.is_empty() && self.fences.is_empty() && self.fence_gaps.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1641,6 +1659,8 @@ impl Edits {
             "links" => Some(one(&mut self.links, op, field, &key)),
             "paths" => Some(one(&mut self.paths, op, field, &key)),
             "members" => Some(one(&mut self.members, op, field, &key)),
+            "fences" => Some(one(&mut self.fences, op, field, &key)),
+            "fence_gaps" => Some(one(&mut self.fence_gaps, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -1753,6 +1773,8 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("paths", Shape::Map),
     ("members", Shape::Map),
     ("removed_roads", Shape::Set),
+    ("fences", Shape::Map),
+    ("fence_gaps", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {
