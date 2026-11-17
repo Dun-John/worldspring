@@ -322,7 +322,7 @@ impl Sketch {
                 return Err("stroke radius must be positive and strength 0–1".into());
             }
             match s.tool {
-                SketchTool::Biome if !s.biome.as_deref().is_some_and(|b| crate::t0::biome::ALL.iter().any(|x| x.name() == b)) => {
+                SketchTool::Biome if !s.biome.as_deref().is_some_and(|b| crate::model::biome::ALL.iter().any(|x| x.name() == b)) => {
                     return Err("a biome stroke needs a biome name".into());
                 }
                 SketchTool::Pin if !s.tier.as_deref().is_some_and(|t| PIN_TIERS.contains(&t)) => return Err("a pin needs a tier: metropolis, city, town or village".into()),
@@ -343,7 +343,7 @@ impl Sketch {
                 _ => {}
             }
             if let Some(u) = &s.under {
-                use crate::under::UnderKind;
+                use crate::model::under::UnderKind;
                 let built = [UnderKind::Dungeon, UnderKind::Crypt, UnderKind::Catacombs];
                 match (s.tool, s.kind.as_deref(), UnderKind::parse(u)) {
                     (SketchTool::Site, Some("ruin"), Some(k)) if built.contains(&k) => {}
@@ -405,7 +405,7 @@ pub struct Edits {
     /// Underground sites designed by hand (`u:<layout>:<k>` → the whole site), built instead of
     /// generated (`under::design`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub designs: BTreeMap<String, crate::under::design::SiteDesign>,
+    pub designs: BTreeMap<String, crate::model::under::SiteDesign>,
     /// Crossings put down by hand (`v:<id>`): a bridge, a ford or a ferry from one point to
     /// another, drawn on the battlemap over what is there.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -421,10 +421,10 @@ pub struct Edits {
     /// Ground brushed by hand (`g:XXXXX:YYYYY`: block indices, zero-padded, x first), applied
     /// where battlemaps and the finest terrain read heights (`ground::Shaper`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub ground: BTreeMap<String, crate::ground::GroundBlock>,
+    pub ground: BTreeMap<String, crate::model::ground::GroundBlock>,
     /// Plateaus and pits drawn by hand (`h:<id>`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plateaus: BTreeMap<String, crate::ground::Plateau>,
+    pub plateaus: BTreeMap<String, crate::model::ground::Plateau>,
     /// Water drawn by hand (`e:<id>`): inlets, basins, lakes, ponds and moats, each an outline
     /// and a level (`waters`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -453,11 +453,11 @@ pub struct Edits {
     /// underground, a sewer section or a building's cellar joined to another such square; each
     /// end shows as a `link` item on its own map (`links::dress`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub links: BTreeMap<String, crate::links::Link>,
+    pub links: BTreeMap<String, crate::model::links::Link>,
     /// Roads drawn by hand on the ground (`rw:<id>`): a footpath, track, gravel road, paved road or
     /// cobbled street along a line (`paths`); the world's road network and towns stay as they are.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub paths: BTreeMap<String, crate::paths::Path>,
+    pub paths: BTreeMap<String, crate::model::paths::Path>,
 }
 
 /// An overland hex grid's settings: `size_mi` across the flats (centre to neighbouring centre),
@@ -765,7 +765,7 @@ impl Crossing {
         if !on(self.a) || !on(self.b) {
             return Some("both ends must be on the map".into());
         }
-        let min = if self.kind == CrossingKind::Ferry { 2.0 * crate::battlemap::JETTY_FT + 20.0 } else { *Self::LENGTH.start() };
+        let min = if self.kind == CrossingKind::Ferry { 2.0 * crate::model::consts::JETTY_FT + 20.0 } else { *Self::LENGTH.start() };
         let len = self.length();
         if len < min || len > *Self::LENGTH.end() {
             return Some(format!("a {} is {min:.0} to {:.0} ft long (this one is {len:.0})", self.kind.name(), Self::LENGTH.end()));
@@ -1119,7 +1119,7 @@ pub struct Created {
     /// A plot's fill (Roadmap 6: a free plot drawn by hand, its outline `poly`, filled as a
     /// hand town's block is: `town::hand::BlockFill`, not a castle; else common lots).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fill: Option<crate::town::hand::BlockFill>,
+    pub fill: Option<crate::model::town::BlockFill>,
 }
 
 /// (R5 towns) One of a castle's pieces changed by hand (`Created::pieces`): its looks, function
@@ -1298,8 +1298,8 @@ impl Created {
     }
 
     /// The kind of site underground (none for towers, camps and inns).
-    pub fn under_kind(&self) -> Option<crate::under::UnderKind> {
-        use crate::under::UnderKind;
+    pub fn under_kind(&self) -> Option<crate::model::under::UnderKind> {
+        use crate::model::under::UnderKind;
         match self.kind.as_str() {
             "ruin" => Some(self.under.as_deref().and_then(UnderKind::parse).unwrap_or(UnderKind::Dungeon)),
             "entrance" => Some(self.under.as_deref().and_then(UnderKind::parse).unwrap_or(UnderKind::Dungeon)),
@@ -1336,7 +1336,7 @@ impl Created {
             "castle" => far(&self.poly) + WORKS_MARGIN_FT,
             "wall" => far(&self.pts) + WORKS_MARGIN_FT,
             "plot" => far(&self.poly) + WORKS_MARGIN_FT,
-            _ => crate::town::sites::SITE_REACH_FT,
+            _ => crate::model::consts::SITE_REACH_FT,
         }
     }
 }
@@ -1363,11 +1363,11 @@ impl Edits {
         }
         // Some(new id, or None if its level is gone) for the site's level and room ids.
         let moved = |id: &str| -> Option<Option<String>> {
-            if let Some((s, li, own)) = crate::agent::split_point_id(id).filter(|(s, _, _)| *s == site) {
+            if let Some((s, li, own)) = crate::model::ids::split_point_id(id).filter(|(s, _, _)| *s == site) {
                 let li = li as isize + delta;
                 return Some((li >= 0).then(|| format!("m:{s}:{li}:{own}")));
             }
-            let (s, li, ri) = crate::agent::split_room_id(id).filter(|(s, _, _)| *s == site)?;
+            let (s, li, ri) = crate::model::ids::split_room_id(id).filter(|(s, _, _)| *s == site)?;
             let li = li as isize + delta;
             Some((li >= 0).then(|| match ri {
                 Some(ri) => format!("r:{s}:{li}:{ri}"),
