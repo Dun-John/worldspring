@@ -32,6 +32,7 @@ pub mod interior {
 }
 pub mod links;
 pub mod payload;
+pub mod pick;
 pub mod pipeline;
 pub mod roadids;
 pub mod undersearch;

@@ -163,6 +163,15 @@ impl Ctx {
         }
     }
 
+    /// Everything within `radius_ft` of a world position, topmost first (`pick::Thing`s as a JSON
+    /// array; empty before T0).
+    pub fn pick_json(&self, x: f64, y: f64, radius_ft: f64) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::pick::pick_json(&self.world, t0, x, y, radius_ft),
+            None => "[]".into(),
+        }
+    }
+
     /// Districts and named buildings matching a search string (JSON array); `rect`
     /// (x0, y0, x1, y1 in ft) limits the search to that area.
     pub fn search_json(&self, q: &str, rect: Option<Vec<f64>>) -> String {
