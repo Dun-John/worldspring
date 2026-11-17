@@ -1575,7 +1575,17 @@ export class MapView {
     if (pt !== nt) for (const key of keys('towns', pt, nt)) {
       if (JSON.stringify(pt[key]) === JSON.stringify(nt[key])) continue;
       const t = this.towns.find((t) => t.index === Number(key));
-      if (!t) continue;
+      if (!t) {
+        // A village (no district labels): only its streets can change; redraw what they reach.
+        const hint = this.townHints.get(key);
+        this.townHints.delete(key);
+        if (hint && hint.edit === JSON.stringify(nt[key] ?? null)) rects.push(...hint.rects);
+        else {
+          const pts = [...Object.values(pt[key]?.streets ?? {}), ...Object.values(nt[key]?.streets ?? {})].flatMap((s) => s.pts);
+          if (pts.length) rects.push([Math.min(...pts.map((p) => p[0])) - 150, Math.min(...pts.map((p) => p[1])) - 150, Math.max(...pts.map((p) => p[0])) + 150, Math.max(...pts.map((p) => p[1])) + 150]);
+        }
+        continue;
+      }
       // (The ward editor's own changes come with what they redraw, worked out by the generator.)
       const hint = this.townHints.get(key);
       this.townHints.delete(key);
