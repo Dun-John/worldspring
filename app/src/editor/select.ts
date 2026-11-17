@@ -118,10 +118,24 @@ export function ringOf(poly: Pt[]): { at: Pt; r: number } {
  * them is. */
 const HOLDERS = new Set<Thing['kind']>(['settlement', 'site', 'district', 'castle', 'plot']);
 
+/** Whether segment a-b crosses c-d. */
+function crosses(a: number[], b: number[], c: number[], d: number[]): boolean {
+  const o = (p: number[], q: number[], r: number[]) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+}
+
+/** Whether a line (a road, street, lane or path as `pick` gives its points near the area) runs through `poly`. */
+function lineThrough(line: number[][], poly: Pt[]): boolean {
+  if (line.some((p) => contains(poly, p[0], p[1]))) return true;
+  for (let i = 0; i + 1 < line.length; i++) for (let j = 0; j < poly.length; j++) if (crosses(line[i], line[i + 1], poly[j], poly[(j + 1) % poly.length])) return true;
+  return false;
+}
+
 /** What of `things` (picked round the area) lies inside it: its box's middle inside (a holder's
- * whole box). Kept in pick's order. */
+ * whole box); a line (road, street, lane, path) when it runs through the area. Kept in pick's order. */
 export function inArea(things: Thing[], poly: Pt[]): Thing[] {
   return things.filter((t) => {
+    if (t.line?.length) return lineThrough(t.line, poly);
     const [x0, y0, x1, y1] = t.bbox;
     if (HOLDERS.has(t.kind)) return contains(poly, x0, y0) && contains(poly, x1, y0) && contains(poly, x1, y1) && contains(poly, x0, y1);
     return contains(poly, (x0 + x1) / 2, (y0 + y1) / 2);
@@ -253,4 +267,27 @@ export function withCut(e: Edits, cut: RoadCut): Edits {
     next.towns = towns;
   }
   return next;
+}
+
+/** `withCut` on edits `next` that `withoutThings` already changed from `before`: a town's edit from the cut was made from `before`,
+ * so what `withoutThings` did to its added streets is kept (a box with a `ts:` street and a `tr:` street of one town keeps both). */
+export function withCutOver(before: Edits, next: Edits, cut: RoadCut): Edits {
+  const out = withCut(next, { ...cut, towns: {} });
+  const keys = Object.keys(cut.towns);
+  if (!keys.length) return out;
+  const towns = { ...(next.towns ?? {}) };
+  for (const k of keys) {
+    const c = cut.towns[k];
+    const mine = next.towns?.[k];
+    if (c) {
+      const { streets: _was, ...rest } = c;
+      const t: TownEdit = { ...rest };
+      // (Its streets as `withoutThings` left them, not as `before` had them.)
+      if (mine?.streets) t.streets = mine.streets;
+      else if (!next.towns?.[k] && before.towns?.[k]?.streets) delete t.streets;
+      towns[k] = t;
+    } else if (!mine?.streets) delete towns[k];
+  }
+  out.towns = towns;
+  return out;
 }

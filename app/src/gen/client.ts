@@ -237,6 +237,11 @@ export class GenClient {
     return this.ask({ op: 'removedroads' }).then((j) => (JSON.parse(j) as RemovedRoad[] | null) ?? []);
   }
 
+  /** The overlay's bridge marks, less the stretches taken off the map. */
+  bridgeMarks(): Promise<number[][]> {
+    return this.ask({ op: 'bridgemarks' }).then((j) => (JSON.parse(j) as number[][] | null) ?? []);
+  }
+
   /** A hand town's street plan, or why it has none. */
   streetPlan(layout: number): Promise<StreetPlan | { error: string }> {
     return this.ask({ op: 'streetplan', layout }).then((j) => (JSON.parse(j) as StreetPlan | { error: string } | null) ?? { error: 'The map could not answer: try again' });

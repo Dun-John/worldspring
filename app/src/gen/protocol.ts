@@ -1029,6 +1029,8 @@ export type Ask =
   | { op: 'roadcut'; input: string }
   /** What was taken off the map by hand, for the Gazetteer (`roadcut::removed`). */
   | { op: 'removedroads' }
+  /** The overlay's bridge marks without the stretches taken off the map (`bridge_marks_json`). */
+  | { op: 'bridgemarks' }
   /** One of the world's own settlements as its sketch pin would take it (`agent::settlement_facts`). */
   | { op: 'settlefacts'; id: string }
   /** Edits with those of the villages and towns added by hand that they remove, move or lay out
@@ -1302,6 +1304,8 @@ export interface Thing {
   /** How it belongs to `town`: the 300 ft rule, by hand, or inside its streets; `gap_ft` is the distance. */
   why?: 'gap' | 'hand' | 'inside';
   gap_ft?: number;
+  /** A line's points near the pick (road, street, lane, path, drawn road), for areas: `editor/select.ts inArea`. */
+  line?: [number, number][];
 }
 
 /** What a point query or building search returns. */

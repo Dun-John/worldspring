@@ -550,7 +550,8 @@
         <div class="ws-label">Removed roads</div>
         <ul class="list aside">
           {#each removedRoads as r (r.id)}
-            {@const words = r.found ? [r.name ? r.what : null, r.at].filter(Boolean).join(' · ') : 'no longer found'}
+            {@const place = r.at && ['street', 'lane', 'path'].includes(r.what) ? `in ${r.at}` : r.at}
+            {@const words = r.found ? [r.name ? r.what : null, place].filter(Boolean).join(' · ') : 'no longer found'}
             <li class="row">
               <span class="grow what" title={words}><b>{r.name ?? (r.found ? r.what : 'A road')}</b> <span class="muted">{words}</span></span>
               {#if r.found}

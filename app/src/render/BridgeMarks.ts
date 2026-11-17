@@ -34,7 +34,7 @@ function roadShown(cls: number, ftpx: number): number {
 export class BridgeMarks {
   readonly container = new Container();
   private readonly g = new Graphics();
-  private readonly rows: BridgeRow[];
+  private rows: BridgeRow[];
   /** Marks drawn last (for checks). */
   drawn = 0;
   private key = '';
@@ -42,6 +42,12 @@ export class BridgeMarks {
   constructor(rows: BridgeRow[]) {
     this.rows = rows.filter((r) => r[5] === KIND_BRIDGE);
     this.container.addChild(this.g);
+  }
+
+  /** The marks again (a road taken off the map or brought back); drawn at the next `update`. */
+  setRows(rows: BridgeRow[]) {
+    this.rows = rows.filter((r) => r[5] === KIND_BRIDGE);
+    this.key = '';
   }
 
   get total(): number {

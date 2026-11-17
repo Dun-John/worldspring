@@ -4,7 +4,7 @@
 // one undo step (`withoutThings` puts the existing deletes together). App keeps `syncTool()`.
 import type { BuildingEdit, Created, Edits, Thing } from '../../gen/protocol';
 import type { Pt } from '../build';
-import { SelectTool, countOf, inArea, keyOf, ringOf, roadIds, underFirst, withCut, withoutThings } from '../select';
+import { SelectTool, countOf, inArea, keyOf, ringOf, roadIds, underFirst, withCutOver, withoutThings } from '../select';
 import type { BuildingHit } from '../../ui/gazetteer';
 
 /** What the Select tool needs from the app. */
@@ -209,23 +209,29 @@ export function selectTools(host: SelectApp) {
       const cut = rids.length ? await host.view.gen.roadCut(rids) : null;
       if (cut && 'error' in cut) return void host.toast(cut.error);
       const cutOk = !!cut && cut.done.length > 0;
-      const kept = can.filter((t) => (t.kind !== 'building' || t.id! in gen) && (!rids.includes(t.id!) || cutOk));
+      const done = new Set(cut && cutOk ? cut.done : []);
+      const kept = can.filter((t) => (t.kind !== 'building' || t.id! in gen) && (!rids.includes(t.id!) || done.has(t.id!)));
       if (!kept.length) return void host.toast(cut?.refused.length ? `Not taken away: ${cut.refused.map((r) => r.why).join('; ')}` : 'The map could not answer: try again');
       const before = host.edits;
+      // (The cut goes in first: its town edits come from `before` and hold only the removals; the street
+      // removals of `withoutThings` are then made on top of them.)
       let { next, towns } = withoutThings(before, kept, gen);
-      if (cut && cutOk) {
-        next = withCut(next, cut);
-        for (const k of Object.keys(cut.towns)) host.view.hintTown(k, cut.towns[k], cut.rects);
-      }
+      if (cut && cutOk) next = withCutOver(before, next, cut);
       if (towns) {
         const r = await host.view.gen.setAside($state.snapshot(before.created ?? []) as Created[], $state.snapshot(next) as Edits);
         if (r && !('error' in r)) next = r.edits;
       }
       if (host.edits !== before) return void host.toast('The map changed meanwhile: try again');
+      if (cut && cutOk) for (const k of Object.keys(cut.towns)) host.view.hintTown(k, cut.towns[k], cut.rects);
       const change = changeOf(kept);
       if (cut && cutOk && cut.also.length) change.also = cut.also.length;
       host.applyEdits(next, change, 'user');
-      notice = cut?.refused.length ? `Not taken away: ${cut.refused.map((r) => r.why).filter((w, i, a) => a.indexOf(w) === i).join('; ')}` : '';
+      // What was taken away is no longer listed (or outlined on the map).
+      const gone = new Set<string>([...kept.map((t) => t.id as string), ...(cut && cutOk ? [...cut.done, ...cut.also] : [])]);
+      things = things.filter((t) => !t.id || !gone.has(t.id));
+      open = Math.min(open, Math.max(0, things.length - 1));
+      notice = cut?.refused.length ? `Not taken away (${cut.refused.length}): ${cut.refused.map((r) => r.why).filter((w, i, a) => a.indexOf(w) === i).join('; ')}` : '';
+      if (notice) host.toast(notice);
     } finally {
       busy = false;
     }

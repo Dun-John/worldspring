@@ -262,6 +262,8 @@ export class MapView {
   renames: Record<string, string> = {};
   /** Settlements (layout order) and which have had their districts asked for. */
   private towns: { x: number; y: number; r: number; index: number; made?: boolean }[] = [];
+  /** The generated villages (no district labels): where a change to their lanes redraws, without a hint. */
+  private villages: { x: number; y: number; r: number; index: number }[] = [];
   /** The villages and towns added by hand as the generator last had them, their tracks' layer,
    * and the latest ask for them (an older answer is dropped). */
   private made: MadeSettlement[] = [];
@@ -1232,10 +1234,11 @@ export class MapView {
     this.placesRect = null;
     // Towns and up get district labels once zoomed in on them (layout order = settlement order).
     const kinds = ['metropolis', 'city', 'town', 'village'];
-    this.towns = overlay.features
+    const settled = overlay.features
       .filter((f) => kinds.includes(f.kind))
-      .map((f, index) => ({ x: f.x, y: f.y, r: 12 * Math.sqrt(Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0)), index, kind: f.kind }))
-      .filter((t) => t.kind !== 'village');
+      .map((f, index) => ({ x: f.x, y: f.y, r: 12 * Math.sqrt(Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0)), index, kind: f.kind }));
+    this.towns = settled.filter((t) => t.kind !== 'village');
+    this.villages = settled.filter((t) => t.kind === 'village');
     this.districtsAsked.clear();
     this.refreshMade(false);
     const battle = this.makeBattle(geom, catalog);
@@ -1582,7 +1585,13 @@ export class MapView {
         if (hint && hint.edit === JSON.stringify(nt[key] ?? null)) rects.push(...hint.rects);
         else {
           const pts = [...Object.values(pt[key]?.streets ?? {}), ...Object.values(nt[key]?.streets ?? {})].flatMap((s) => s.pts);
-          if (pts.length) rects.push([Math.min(...pts.map((p) => p[0])) - 150, Math.min(...pts.map((p) => p[1])) - 150, Math.max(...pts.map((p) => p[0])) + 150, Math.max(...pts.map((p) => p[1])) + 150]);
+          const v = this.villages.find((v) => String(v.index) === key);
+          const removed = JSON.stringify(pt[key]?.removed ?? []) !== JSON.stringify(nt[key]?.removed ?? []);
+          // (Lanes, decks and gravel taken off or back: the village's whole reach, as a town's.)
+          if (removed && v) {
+            const r = 2.3 * v.r + 200;
+            rects.push([v.x - r, v.y - r, v.x + r, v.y + r]);
+          } else if (pts.length) rects.push([Math.min(...pts.map((p) => p[0])) - 150, Math.min(...pts.map((p) => p[1])) - 150, Math.max(...pts.map((p) => p[0])) + 150, Math.max(...pts.map((p) => p[1])) + 150]);
         }
         continue;
       }
@@ -1690,6 +1699,7 @@ export class MapView {
     }
     // (Asked once the generators have the edits: after they are sent.)
     if (!send) {
+      this.refreshBridgeMarks(cutIds);
       if (madeChanged) this.refreshMade(false);
       if (relink) this.relinkHere();
       return;
@@ -1713,10 +1723,20 @@ export class MapView {
     else if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
   }
 
+  /** The overland bridge marks (static in the overlay) asked again, less the stretches taken off, when `ids` hold a world road. */
+  private refreshBridgeMarks(ids: string[]) {
+    const geom = this.geom;
+    if (!ids.some((id) => id.startsWith('rd:'))) return;
+    void this.gen.bridgeMarks().then((rows) => {
+      if (geom === this.geom) this.bridgeMarks?.setRows(rows);
+    }, () => {});
+  }
+
   /** Tiles and battlemaps where roads `ids` ran (taken away, or brought back), as the generator says (a dry
    * `roadCut`): every level for a world road or track, site level for a town's streets and paths. */
   private async redrawRoads(ids: string[]) {
     const geom = this.geom;
+    this.refreshBridgeMarks(ids);
     const cut = await this.gen.roadCut(ids, false, true).catch(() => null);
     if (!cut || 'error' in cut || !geom || geom !== this.geom) return;
     const rects = cut.rects;
