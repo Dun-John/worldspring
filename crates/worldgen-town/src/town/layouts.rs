@@ -106,7 +106,9 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     // (R3: a drawn thing part of a town in the town's look, `members::look`; its town's layout
     // is read, never the other way round.)
     let look = if is_settlement(t0, index) { None } else { members::look(world, t0, index) };
-    if world.file.edits.buildings.is_empty() && roads.is_none() && look.is_none() {
+    // (R4: streets added to a generated town, laid over it: `added`.)
+    let added = added::fingerprint(world, t0, index);
+    if world.file.edits.buildings.is_empty() && roads.is_none() && look.is_none() && added.is_none() {
         return base;
     }
     let key = index as u32;
@@ -114,11 +116,15 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         (Some(f), Some(r)) => crate::core::rng::hash2(f, r as i64, 0x9a75),
         (Some(f), None) => f,
         (None, Some(r)) => crate::core::rng::hash2(world.hash, r as i64, 0x9a76),
-        (None, None) if look.is_some() => world.hash,
+        (None, None) if look.is_some() || added.is_some() => world.hash,
         (None, None) => return base,
     };
     let fp = match look {
         Some(k) => hash2(fp, k.fingerprint() as i64, 0x100c),
+        None => fp,
+    };
+    let fp = match added {
+        Some(a) => hash2(fp, a as i64, 0xadd5),
         None => fp,
     };
     let fp = match hand::fingerprint(world, t0, index).or_else(|| wards::fingerprint(world, t0, index)) {
@@ -136,6 +142,9 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     let mut l = if edits_fingerprint(world, key).is_some() || roads.is_some() { apply_building_edits(world, t0, &base) } else { (*base).clone() };
     if let Some(k) = look {
         k.apply(&mut l);
+    }
+    if added.is_some() {
+        added::apply(world, t0, &mut l);
     }
     let l = Rc::new(l);
     EDITED.with(|c| c.borrow_mut().insert(key, (fp, l.clone(), base.clone())));
@@ -547,13 +556,16 @@ pub fn layouts_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<Rc<Layout>> {
     let streets = &world.file.edits.streets;
     // (A town laid out by hand reaches as far as its streets: `hand::bounds`.)
     let by_hand = |i: usize| if streets.is_empty() { None } else { hand::bounds(streets, i) };
+    // (R4: a town with streets added reaches as far as they do too: `added::bounds`.)
+    let meets = |b: [f64; 4]| b[2] >= rect[0] && b[0] <= rect[2] && b[3] >= rect[1] && b[1] <= rect[3];
+    let by_added = |i: usize| !world.file.edits.towns.is_empty() && added::bounds(&world.file.edits, i).is_some_and(meets);
     let towns = t0
         .settlements
         .iter()
         .enumerate()
         .filter(|&(i, s)| match by_hand(i) {
-            Some(b) => b[2] >= rect[0] && b[0] <= rect[2] && b[3] >= rect[1] && b[1] <= rect[3],
-            None => hit(s.x, s.y, reach(s)),
+            Some(b) => meets(b),
+            None => hit(s.x, s.y, reach(s)) || by_added(i),
         })
         .map(|(i, _)| i);
     let pois = t0
@@ -562,7 +574,7 @@ pub fn layouts_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<Rc<Layout>> {
         .enumerate()
         .filter(|&(i, p)| {
             let c = t0.created_site(i);
-            hit(p.x, p.y, c.map_or(sites::SITE_REACH_FT, |c| c.reach)) && !c.is_some_and(|c| c.removed)
+            (hit(p.x, p.y, c.map_or(sites::SITE_REACH_FT, |c| c.reach)) || by_added(n + i)) && !c.is_some_and(|c| c.removed)
         })
         .map(|(i, _)| n + i);
     towns.chain(pois).map(|i| layout(world, t0, i)).collect()

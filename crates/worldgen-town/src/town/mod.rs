@@ -49,6 +49,7 @@ pub mod rural;
 pub mod cemetery;
 pub mod culture;
 pub mod members;
+pub mod added;
 pub use members::{JOIN_FT, Owner, Why};
 pub mod horses;
 pub mod yurts;

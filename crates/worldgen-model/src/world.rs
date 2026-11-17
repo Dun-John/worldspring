@@ -576,6 +576,30 @@ pub struct TownEdit {
     /// (`town::wallgates`).
     #[serde(default, skip_serializing_if = "WallEdit::is_empty")]
     pub wall: WallEdit,
+    /// (Roadmap 6 R4) Streets added to the town (a row's road), by id (`ts:<layout>:<id>`):
+    /// laid over the built town, their ends joined to its nearest streets (`town::added`). The
+    /// plan never sees them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub streets: BTreeMap<u32, AddedStreet>,
+}
+
+/// (Roadmap 6 R4) A street added to a generated town (`TownEdit::streets`): its centreline
+/// (world ft, as laid), its kind (which sets only its width: it takes the town's own street look)
+/// and width (else the kind's).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AddedStreet {
+    pub pts: Vec<[f64; 2]>,
+    #[serde(rename = "type", default)]
+    pub kind: crate::model::paths::PathKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+}
+
+impl AddedStreet {
+    /// Its width (ft): as recorded, else the kind's.
+    pub fn width_ft(&self) -> f64 {
+        self.width.unwrap_or_else(|| self.kind.width_ft())
+    }
 }
 
 /// Gates and towers of a town's own wall set by hand, by the plan's corners: gates put in at a

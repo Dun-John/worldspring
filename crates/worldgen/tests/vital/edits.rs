@@ -242,6 +242,7 @@ fn agent_edits_guarantee() {
         let k = chunk.buildings.iter().position(|b| b.0 as usize == li).expect("the building is not on the battlemap");
         assert_eq!(chunk.building_polys[k].2, roof, "{}: roof not as chosen", c.id);
     }
+    row_street(&mut ex, &inn);
     let (world, t0) = (&ex.world, &ex.t0);
     let over = ell([at_inn[0] + 10.0, at_inn[1] + 10.0]);
     assert!(agent::building_spot(world, t0, &over, None, "c:99", None).is_err_and(|e| e.contains("overlaps")), "a building drawn over another is allowed");

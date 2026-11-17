@@ -877,3 +877,97 @@ pub(super) fn bridge_shops(base: &World) {
     e.follow_crossing("v:shops", Some(&wide));
     assert!(e.created[0].removed, "the shop stayed when its bridge went");
 }
+
+/// Roadmap 6 R4: a street added to a generated town (a row's road) is one of its streets, its
+/// ends joined to the nearest of the others; the buildings under its band are gone and every
+/// other keeps its id; the layout is the same whatever was asked first; without it the town is
+/// as built; a ward edit keeps it. A drawn house with `faces` fronts that chord.
+pub(super) fn row_street(ex: &mut Executor, house: &worldgen::world::Created) {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::{self, added, geom, wards};
+    use worldgen::world::{AddedStreet, TownEdit};
+    use worldgen::model::paths::PathKind;
+    let t0 = &ex.t0;
+    let ti = (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier == Tier::Town).max_by_key(|&i| t0.settlements[i].population).expect("a town");
+    let s = &t0.settlements[ti];
+    let g = town::layout(&ex.world, t0, ti);
+    let line_d = |p: [f64; 2], pts: &[[f64; 2]]| pts.windows(2).map(|w| worldgen::town::geom::seg_dist(p, w[0], w[1])).fold(f64::MAX, f64::min);
+    // A straight street 120 ft long through a building near the middle, along it, joined at both ends.
+    let mut near: Vec<&worldgen::town::Building> = g.buildings.iter().collect();
+    near.sort_by(|a, b| geom_dist(geom::centroid(&a.poly), g.center).total_cmp(&geom_dist(geom::centroid(&b.poly), g.center)).then(a.id.cmp(&b.id)));
+    let streets = near
+        .iter()
+        .map(|b| {
+            let (c, d) = (geom::centroid(&b.poly), geom::main_axis(&b.poly));
+            let pts = vec![[c[0] - 60.0 * d[0], c[1] - 60.0 * d[1]], [c[0] + 60.0 * d[0], c[1] + 60.0 * d[1]]].into_iter().map(|p| p.map(|v| (v * 2.0).round() * 0.5)).collect();
+            std::collections::BTreeMap::from([(1u32, AddedStreet { pts, kind: PathKind::Paved, width: None })])
+        })
+        .find(|st| added::lines(&g, st)[0].1.len() == 4)
+        .expect("a street that joins at both ends");
+    let laid = added::lines(&g, &streets).remove(0).1;
+    let mut file = ex.world.file.clone();
+    file.edits.towns.insert(wards::key(ti), TownEdit { at: [s.x, s.y], streets: streets.clone(), ..Default::default() });
+    let world = World::new(file).unwrap();
+    assert_eq!(world.hash, ex.world.hash, "an added street changed the world hash");
+    let l = town::layout(&world, t0, ti);
+    let st = l.roads.iter().find(|r| r.0 == laid).expect("the added street is not one of the town's roads");
+    assert!(st.1 == added::CLASS && st.2 == 18.0, "the added street's class {} or width {}", st.1, st.2);
+    let others: Vec<&Vec<[f64; 2]>> = g.roads.iter().map(|r| &r.0).chain(&g.streets).collect();
+    for end in [laid[0], laid[laid.len() - 1]] {
+        assert!(others.iter().any(|o| line_d(end, o) <= 1.0), "an end of the added street at {end:?} meets no street");
+    }
+    let seg_seg = |a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]| {
+        let o = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+        if o(a, b, c) * o(a, b, d) < 0.0 && o(c, d, a) * o(c, d, b) < 0.0 {
+            return 0.0;
+        }
+        geom::seg_dist(a, c, d).min(geom::seg_dist(b, c, d)).min(geom::seg_dist(c, a, b)).min(geom::seg_dist(d, a, b))
+    };
+    let under = |poly: &[[f64; 2]]| geom::contains(poly, laid[0]) || laid.windows(2).any(|w| (0..poly.len()).any(|i| seg_seg(w[0], w[1], poly[i], poly[(i + 1) % poly.len()]) <= 9.0));
+    assert!(l.buildings.iter().all(|b| !under(&b.poly)), "a building stands on the added street");
+    let gone = g.buildings.iter().filter(|b| under(&b.poly)).count();
+    assert!(gone > 0, "no building was under the added street");
+    for b in g.buildings.iter().filter(|b| !under(&b.poly)) {
+        assert!(l.building(b.id as usize).is_some_and(|o| o.poly == b.poly), "b:{ti}:{} moved or went", b.id);
+    }
+    assert_eq!(l.buildings.len() + gone, g.buildings.len(), "buildings not under the street changed");
+    // Pure: the same asked after other layouts round it; without the street, the town as built.
+    let print = format!("{:?}", *l);
+    town::forget_from(0);
+    let c = geom::centroid(&laid);
+    let round = town::layouts_near(&world, t0, [c[0] - 2_000.0, c[1] - 2_000.0, c[0] + 2_000.0, c[1] + 2_000.0]);
+    assert!(round.iter().any(|r| r.index as usize == ti), "layouts_near misses the town");
+    assert_eq!(format!("{:?}", *town::layout(&world, t0, ti)), print, "the town with its street depends on what was asked first");
+    let mut bare = world.file.clone();
+    bare.edits.towns.get_mut(&wards::key(ti)).unwrap().streets.clear();
+    assert_eq!(format!("{:?}", *town::layout(&World::new(bare).unwrap(), t0, ti)), format!("{:?}", *g), "without its street the town is not as built");
+    // A ward edit keeps the street.
+    let (edit, _) = wards::change(&world, t0, ti, &Default::default()).expect("a ward edit");
+    assert_eq!(edit.map(|e| e.streets), Some(streets), "a ward edit dropped the added street");
+
+    // A drawn house (50 by 30 ft where `house` stands) fronts its `faces` chord: its front door
+    // on the side nearest it.
+    let li = worldgen::agent::layout_of(&ex.world, &ex.t0, &house.id).expect("the house's layout");
+    let first = ex.t0.settlements.len() + ex.t0.base_pois;
+    let b0 = house.poly.iter().fold([f64::MAX, f64::MAX], |b, p| [b[0].min(p[0]), b[1].min(p[1])]);
+    let b = [b0[0], b0[1], b0[0] + 50.0, b0[1] + 30.0];
+    let was = ex.world.file.edits.clone();
+    let set = |ex: &mut Executor, e: worldgen::world::Edits| {
+        let old = std::mem::replace(&mut ex.world.file.edits, e).created;
+        ex.t0.apply_edits(&ex.world);
+        town::forget_created(&old, &ex.world.file.edits.created, first);
+    };
+    for (chord, side) in [([[b[0], b[1] - 10.0], [b[2], b[1] - 10.0]], 0usize), ([[b[2] + 10.0, b[1]], [b[2] + 10.0, b[3]]], 1)] {
+        let mut e = was.clone();
+        let c = e.created.iter_mut().find(|c| c.id == house.id).unwrap();
+        (c.poly, c.faces) = (vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]], Some(chord));
+        set(ex, e);
+        let it = worldgen::interior::generate_id(&ex.world, &ex.t0, &format!("b:{li}:0")).expect("the house's interior");
+        let lv = &it.levels[it.entry_level];
+        let d = lv.doors.iter().find(|d| d.kind == "front").expect("a front door");
+        let m = worldgen::interior::to_world(&it, 0.5 * (d.a[0] + d.b[0]) as f64, 0.5 * (d.a[1] + d.b[1]) as f64);
+        let on = if side == 0 { m[1] - b[1] < 6.0 } else { b[2] - m[0] < 6.0 };
+        assert!(on, "the house's front door at {m:?} is not on the side facing its chord {chord:?}");
+    }
+    set(ex, was);
+}
