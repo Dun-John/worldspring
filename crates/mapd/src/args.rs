@@ -115,9 +115,12 @@ fn schemas() -> &'static HashMap<String, Value> {
     static S: OnceLock<HashMap<String, Value>> = OnceLock::new();
     S.get_or_init(|| {
         let list = crate::tools::list();
+        // (Tools replaced but still callable by name, unlisted.)
+        let unlisted = crate::paths::unlisted();
         list.as_array()
             .into_iter()
             .flatten()
+            .chain(&unlisted)
             .filter_map(|t| Some((t["name"].as_str()?.to_string(), t["inputSchema"].clone())))
             .collect()
     })

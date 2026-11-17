@@ -21,9 +21,16 @@ pub fn list() -> Vec<Value> {
     });
     vec![
         json!({ "name": "place_path", "title": "Draw a road", "description": "A road on the ground along a line: shown on the map and battlemap, walked like a road, a ford (footpath, track) or bridge (others) over water; scatter and the world's own town buildings keep off it. The road network and towns don't change. With id, changes one. Returns its rw: id and crossings.", "inputSchema": schema(props, &[]) }),
-        json!({ "name": "remove_paths", "title": "Take roads away", "description": "Roads drawn by hand taken away, by id (rw:...).", "inputSchema": schema(crate::args::ids_props("road id (rw:...)"), &[]) }),
+        json!({ "name": "remove_roads", "title": "Take roads away", "description": "Roads off the map by id (restore: back): stretches (rd:, mt:), town streets (tr:), park paths (pp:), drawn roads (rw:), added streets (ts:); ids from describe_location. Ground shows; buildings, gates, traffic stay. A stretch takes its towns' approaches (also).", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "restore": { "type": "boolean" } }), &["ids"]) }),
         json!({ "name": "list_paths", "title": "Roads drawn by hand", "description": "Roads drawn by hand with their crossings. Returns {items, found}.", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
     ]
+}
+
+/// Tools still callable by name but not listed (replaced): `remove_paths` (by `remove_roads`).
+pub fn unlisted() -> Vec<Value> {
+    let mut t = json!({ "name": "remove_paths", "title": "Take roads away", "description": "Roads drawn by hand taken away, by id (rw:...).", "inputSchema": schema(crate::args::ids_props("road id (rw:...)"), &[]) });
+    t["inputSchema"]["properties"]["world"] = json!({ "type": "string" });
+    vec![t]
 }
 
 /// Run a road tool (None: not one of these).
@@ -31,6 +38,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     Some(match name {
         "place_path" => set(app, a, !a["id"].is_null()).await.map(text),
         "remove_paths" => delete(app, a).await.map(text),
+        "remove_roads" => remove_roads(app, a).await.map(text),
         "list_paths" => list_paths(app, crate::tools::limit_of(a, 100)).await.map(text),
         _ => return None,
     })
@@ -187,4 +195,25 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
         Ok(json!({ "tool": "remove_paths", "ids": ids }))
     })
     .await
+}
+
+/// (Roadmap 6 R5) Roads, streets and paths taken off the map or brought back (`roadcut::cut`),
+/// worked out and applied under one hold of the gate, as one edit (the app's sync sees it).
+async fn remove_roads(app: &Shared, a: &Value) -> Result<Value, String> {
+    let ids = crate::args::ids(a)?;
+    let restore = a["restore"].as_bool().unwrap_or(false);
+    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let out = app.worker.with(move |ex| Ok(worldgen::roadcut::cut(&ex.world, &ex.t0, &ids, restore, false))).await?;
+    let refused: Vec<Value> = out.refused.iter().map(|r| json!({ "id": r.id, "why": r.why })).collect();
+    if out.done.is_empty() {
+        let why: Vec<String> = out.refused.iter().map(|r| format!("{}: {}", r.id, r.why)).collect();
+        return Err(format!("nothing {}: {}", if restore { "restored" } else { "removed" }, why.join("; ")));
+    }
+    let reply = json!({ "tool": "remove_roads", (if restore { "restored" } else { "removed" }): out.done, "also": out.also, "refused": refused });
+    let change = reply.clone();
+    let apply = move |e: &mut Edits| {
+        out.apply(e);
+        Ok(change)
+    };
+    if _hold.is_some() { app.edit_now("agent", 0, apply).await } else { app.edit("agent", 0, apply).await }
 }

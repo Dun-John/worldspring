@@ -375,12 +375,15 @@ What is at a point:
   wall or fence, a road, street or lane, a hedge, water, a castle or plot, a district, a settlement or site), then
   nearest. Each is `{kind, id, name, town, removable, bbox}`: `town` the feature id of the settlement it belongs to
   (null where none), `bbox` its extent `[x0, y0, x1, y1]` in world ft, `removable` true where a tool deletes it
-  (`delete_feature`, `remove_buildings`, `remove_paths`, `remove_crossings`, `delete_water`, `remove_wharves`).
+  (`delete_feature`, `remove_buildings`, `remove_roads`, `remove_crossings`, `delete_water`, `remove_wharves`).
   Kinds and ids: `entrance` (`u:`, a sewer grate `w:`), `building` (`b:`; removable when it is the world's own,
   not a castle's or a plot's), `tower` (`t:`), `drawn_building`, `castle`, `plot`, `wall` (`c:`), `settlement`,
-  `site` (their feature ids; removable when created), `district` (`d:`), `road` (a road stretch `rd:`),
-  `drawn_road` (`rw:`), `crossing` (`v:`), `water` (`e:`), `harbour` (`q:`); and with `id: null`: `lane` (a
-  village's), `street` (a town's), `hedge`, `field_wall` (round a field), `fence` (a pen's).
+  `site` (their feature ids; removable when created), `district` (`d:`), `road` (a road stretch `rd:`, a track to
+  a settlement added by hand `mt:`; removable), `street` / `lane` (a generated town's or village's `tr:`, one added
+  by hand `ts:`; removable), `path` (a park's, garden's or cemetery's walk `pp:`; removable), `drawn_road` (`rw:`),
+  `crossing` (`v:`), `water` (`e:`), `harbour` (`q:`); and with `id: null`: a hand town's streets and a place's
+  lanes, `hedge`, `field_wall` (round a field), `fence` (a pen's). Roads, streets and paths taken away with
+  `remove_roads` are left out.
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -515,7 +518,8 @@ The road network:
 - `items`: the roads between settlements and junctions (stretches), longest first, each with its `id` (`rd:`),
   `class` (king's road, road, track), `length_mi`, its ends `from` and `to` (a settlement's `id` and `name`, or a
   junction's `x_ft`/`y_ft`) and `name` (renamed, else the drawn road's); a drawn road's pieces say which (`road`:
-  its name, and `road_id`; or `drawn: true`);
+  its name, and `road_id`; or `drawn: true`); `removed: true` on a stretch taken off the map (`remove_roads`; routes
+  still use it and mark it so);
 - `found`: how many roads matched (`truncated: true` when `limit` cut the list).
 
 | Parameter | Type | Default | |
@@ -2581,9 +2585,25 @@ what is not given stays (a new type without `width_ft` takes its own width unles
 `type`, `what`, `width_ft`, `name`, `length_ft`, `middle`, `bbox`, `pts`, and `crossings` (`{kind: bridge | ford,
 material, a, b, length_ft}` each).
 
-### `remove_paths`
+### `remove_roads`
 
-`id` or `ids` (all or none): the roads go with their notes (no restore; the user's Undo in the app brings them back).
+`ids`: roads, streets and paths taken off the map, one by one (each id done or refused alone); `restore: true`
+brings them back. What's left is ground: the ground beneath shows, a park's lawn closes over its path, a bridge
+deck on a removed town street goes with it; buildings, lots, a town's gates, traffic and routes stay as they were.
+- `rd:` a world road's stretch (`list_roads`, `describe_location`) and `mt:` the track to a settlement added by
+  hand. A stretch takes the approach street of each generated town it ends at with it, and brings it back with it:
+  those are listed in `also`.
+- `tr:<layout>:<8 hex>` a generated town's or village's own street or lane, `pp:<layout>:<spot>:<j>` a path in one
+  of its parks, gardens or cemeteries (both from `describe_location`'s `things`). Kept while the town is laid out
+  where it was: a ward edit (`edit_town`) that moves a street's ends gives it a new id, and the removal lapses.
+  Laying the town out by hand (`edit_streets` `lay_out_by_hand`) brings them back (its report's `removed_back`
+  says how many), `back_to_generated` takes them away again. A hand town's streets are refused (`edit_streets`
+  changes them).
+- `rw:` a road drawn by hand and `ts:` a street added to a generated town: deleted (with a drawn road's notes);
+  not brought back by `restore` (the user's Undo in the app does).
+
+Returns `{removed | restored, also, refused: [{id, why}]}`; an error when nothing was done. (`remove_paths`, the old
+tool for `rw:` ids, is still accepted.)
 
 ### `list_paths`
 

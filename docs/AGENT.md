@@ -73,6 +73,9 @@ pace.
 | `q:<id>` | A quay, pier or breakwater put down by hand. |
 | `rw:<id>` | A road drawn by hand on the ground: a footpath, track, gravel road, paved road or cobbled street. |
 | `rd:<8 hex>` | A road stretch, made from its two ends: the same across every edit that leaves the roads as generated; renamed and annotated like a feature. |
+| `mt:<8 hex>` | The track from a settlement added by hand to the roads (from its two ends). |
+| `tr:<layout>:<8 hex>`, `pp:<layout>:<spot>:<j>` | A generated town's or village's own street or lane (from its ends); a path in one of its parks, gardens or cemeteries. |
+| `ts:<layout>:<id>` | A street added to a generated town by hand. |
 | `h:<id>`, `g:<x>:<y>` | A plateau or pit; a block of ground brushed by hand (80 ft square, block indices). |
 | `e:<id>` | Water drawn by hand (inlet, basin, lake, pond, moat). |
 
@@ -140,7 +143,8 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `set_plateau`, `delete_plateau` | A plateau or pit: a `poly` (or `outline`), or `around` a building, tower or site (its footprint grown by `margin_ft`), at `level_ft` above the sea or `rise_ft` above the ground there, with an `edge_ft` slope (0: a sheer cliff) and a `floor` (`rock`; by default a pit 15 ft deep or more is rock). Overlapping ones stack (the highest holds; pits dig through). With `id`, changes one; buildings on it stand at its level. |
 | `create_water`, `update_water`, `delete_water` | Water inside an outline (`poly`, `kind` inlet, basin, lake, pond or moat, `level_ft`, `name`): the ground falls under it; overlapping outlines are one water, one reaching the sea or a lake joins it. Ids `e:`. |
 | `list_waters` | Every water drawn by hand (`e:`: outline, kind, level, name). |
-| `place_path`, `remove_paths`, `list_paths` | A road drawn on the ground along a line (`pts`, `type` footpath, track, gravel, paved or cobbled, `width_ft` 3-40, `name`): shown on the map and battlemap, walked like a road, a ford (footpath, track) or bridge (the others) where it meets water; scatter and the world's own buildings keep off it; the road network and towns don't change. With `id`, changes one. Ids `rw:`. |
+| `place_path`, `list_paths` | A road drawn on the ground along a line (`pts`, `type` footpath, track, gravel, paved or cobbled, `width_ft` 3-40, `name`): shown on the map and battlemap, walked like a road, a ford (footpath, track) or bridge (the others) where it meets water; scatter and the world's own buildings keep off it; the road network and towns don't change. With `id`, changes one. Ids `rw:`. |
+| `remove_roads` | Roads, streets and paths off the map by id, or back (`restore`): world stretches (`rd:`, `mt:`), a generated town's streets and lanes (`tr:`), park paths (`pp:`), drawn roads (`rw:`) and streets added by hand (`ts:`; these two not restorable). Only ground is left: buildings, gates, traffic and routes stay. A stretch takes the approach streets of the towns it ends at (`also`). Hand towns' streets are refused (`edit_streets`). |
 | `list_plateaus` | Every plateau or pit (`h:`: outline, level, edge) and brushed ground block (`g:`), world-wide (`{items, found}`, `limit` 100 by default), `within` an area. |
 | `ground_heights` | The ground's height on every square of a box round a place, as generated and as shaped, with the plateaus and brushed blocks there. |
 | `get_site_design` | An underground site (`u:`) or a building's interior (`b:`) as a text plan: rooms by symbol (with a shape drawn: round, octagon, apse, chamfered, cavern), one character per 5-ft square, doors, items and the ways between levels (a building's: its stair block, levels by storey, cellars, doors to the outside). Rooms of kind `open to below` (a hall open two storeys, a keep's yard) and `roof` (a keep's roof inside its walk) have no floor: no doors, no items. |
