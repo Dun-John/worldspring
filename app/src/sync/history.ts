@@ -48,7 +48,9 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `added ${String(change.kind ?? 'settlement')} “${String(change.name ?? nameOf(id))}”`;
       case 'create_building_row': {
         const n = Number(change.count ?? (Array.isArray(change.ids) ? change.ids.length : 0));
-        return `put down ${n === 1 ? 'a building' : `${n} buildings`} in a row`;
+        const rd = change.road === 'street' ? ' and a street' : change.road ? ' and a road' : '';
+        if (!n) return `laid ${change.road === 'street' ? 'a street' : 'a road'} along a row`;
+        return `put down ${n === 1 ? 'a building' : `${n} buildings`}${rd} in a row`;
       }
       case 'create_parcel':
         return change.name ? `made the plot “${String(change.name)}”` : 'made a plot';
@@ -125,6 +127,8 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
       case 'place_path':
         if (change.changed) return 'changed a road';
         return `drew a ${({ footpath: 'footpath', track: 'track', gravel: 'gravel road', paved: 'paved road', cobbled: 'cobbled street' } as Record<string, string>)[String(change.kind)] ?? 'road'}`;
+      case 'remove_town_street':
+        return 'took a street away';
       case 'remove_paths': {
         const n = Array.isArray(change.ids) ? change.ids.length : 1;
         return n === 1 ? 'took a road away' : `took away ${n} roads`;

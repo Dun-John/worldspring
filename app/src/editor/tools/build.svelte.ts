@@ -2,7 +2,7 @@
 // harbours, clearing, Stamp, Row and Plot), the menus' state, the worker ops they call and their
 // undo steps. App keeps `syncTool()` / `go()` and calls `armBuild` / `disarmBuild`.
 import { untrack } from 'svelte';
-import type { BuildingEdit, BuildingFuncs, PieceEdit, Created, Crossing, Edits, Plot, BlockFill, Tint, Water } from '../../gen/protocol';
+import type { BuildingEdit, BuildingFuncs, PieceEdit, Created, Crossing, Edits, Plot, BlockFill, RowRoadAnswer, Tint, Water } from '../../gen/protocol';
 import { TINT_MATERIAL } from '../../gen/protocol';
 import { fillColour } from '../streets';
 import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type BuildShape, type Pt } from '../build';
@@ -233,6 +233,9 @@ export function buildTools(app: BuildHost) {
     quick = { can: false, text: '' };
   }
 
+  /** The row's road, if asked for (the width only past what the kind alone gives). */
+  const roadAsk = () => (rowSet.road.on ? { road: { kind: rowSet.road.kind, width: rowSet.road.width } } : {});
+
   /** The row or outline being drawn changed (`done`: finished). */
   async function pathChanged(path: Pt[], done: boolean) {
     const tool = buildArmed?.path;
@@ -242,25 +245,31 @@ export function buildTools(app: BuildHost) {
       if (path.length < 2) {
         tool.lots = [];
         tool.refused = [];
+        tool.roadLine = null;
         quick = { can: false, text: '' };
         return;
       }
-      const q = { line: path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: (app.edits.created ?? []).length };
+      const q = { line: path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: (app.edits.created ?? []).length, ...roadAsk() };
       const r = await app.view.gen.row(q);
       if (token !== quickToken || buildMode !== 'row') return;
       if (!r || 'error' in r) {
         tool.lots = [];
         tool.refused = [];
+        tool.roadLine = null;
         quick = { can: false, text: r ? sentence(r.error) : 'The map could not answer: try again', bad: true };
         return;
       }
       tool.lots = r.lots.map((l) => l.poly);
       tool.refused = r.refused.map((f) => [f.x, f.y]);
+      tool.roadLine = r.road?.line ?? null;
+      tool.roadWidth = rowSet.road.width;
       const fresh = r.lots.filter((l) => !l.existing).length;
+      const newRoad = !!r.road && !r.road.kept;
       const parts = [`${plural(fresh, 'building')} in ${Math.round(r.length_ft)} ft`];
       if (r.refused_count) parts.push(`${r.refused_count} would not fit (${r.refused[0].why})`);
       if (r.removed.length) parts.push(`${plural(r.removed.length, 'building')} taken away`);
-      quick = { can: done && fresh > 0, text: fresh ? parts.join('; ') : 'All of these are here already', removed: r.removed.length };
+      if (r.road) parts.push(r.road.kept ? 'the road is here already' : r.road.as === 'street' ? 'with a street' : 'with a road');
+      quick = { can: done && (fresh > 0 || newRoad), text: fresh || newRoad ? parts.join('; ') : 'All of these are here already', removed: r.removed.length };
       if (!done && fresh) quick.text += ' · press Enter to finish';
       return;
     }
@@ -301,6 +310,31 @@ export function buildTools(app: BuildHost) {
     app.view.setPlotOutlines(plots.map((c) => ({ poly: c.poly!, color: fillColour((c.fill ?? { kind: 'generated', ward: 'common' }) as BlockFill) })));
   });
 
+  /** `next` with a row's road written: a drawn road, a hand town's street records, or a generated town's edit. */
+  function withRoad(next: Edits, road: RowRoadAnswer): Edits {
+    const out: Edits = { ...next };
+    if (road.path) out.paths = { ...(next.paths ?? {}), [newObjectId('rw')]: road.path };
+    for (const field of ['streets', 'wharves', 'towns'] as const) {
+      const recs = road[field];
+      if (!recs || !Object.keys(recs).length) continue;
+      const m = { ...((next[field] ?? {}) as Record<string, unknown>) };
+      for (const [k, v] of Object.entries(recs)) {
+        if (v === null) delete m[k];
+        else m[k] = v;
+      }
+      (out as Record<string, unknown>)[field] = m;
+    }
+    if (road.towns && road.town != null) {
+      const k = String(road.town);
+      if (road.towns[k]) {
+        const [x0, y0, x1, y1] = road.line.reduce((b, p) => [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])], [Infinity, Infinity, -Infinity, -Infinity]);
+        const w = rowSet.road.width + 160;
+        app.view.hintTown(k, road.towns[k], [[x0 - w, y0 - w, x1 + w, y1 + w]]);
+      }
+    }
+    return out;
+  }
+
   /** The row or plot being drawn, put down: one change. */
   async function quickPlace() {
     if (buildMode === 'stamp') return void stampPlace();
@@ -308,19 +342,22 @@ export function buildTools(app: BuildHost) {
     if (!tool || !tool.finished) return;
     const n = (app.edits.created ?? []).length;
     if (buildMode === 'row') {
-      const q = { line: tool.path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: n };
+      const q = { line: tool.path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: n, ...roadAsk() };
       const r = await app.view.gen.row(q);
       if (!r || 'error' in r) return app.toast(r ? sentence(r.error) : 'The map could not answer: try again');
       const made: Created[] = [];
       for (const l of r.lots) {
         if (l.existing) continue;
-        made.push({ id: `c:${n + made.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, func: l.func, floors: l.floors });
+        made.push({ id: `c:${n + made.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, func: l.func, floors: l.floors, ...(l.faces ? { faces: l.faces } : {}) });
       }
-      if (!made.length) return app.toast('All of these are here already');
+      const road = r.road && !r.road.kept ? r.road : null;
+      if (!made.length && !road) return app.toast('All of these are here already');
       const buildings = { ...(app.edits.buildings ?? {}) };
       for (const b of r.removed) buildings[b.id] = { at: b.at, removed: true };
-      app.applyEdits({ ...app.edits, created: [...(app.edits.created ?? []), ...made], ...(r.removed.length ? { buildings } : {}) }, { tool: 'create_building_row', count: made.length }, 'user');
-      app.toast(`${plural(made.length, 'building')} put down${r.refused_count ? `; ${r.refused_count} would not fit` : ''}`);
+      let next: Edits = { ...app.edits, created: [...(app.edits.created ?? []), ...made], ...(r.removed.length ? { buildings } : {}) };
+      if (road) next = withRoad(next, road);
+      app.applyEdits(next, { tool: 'create_building_row', count: made.length, ...(road ? { road: road.as } : {}) }, 'user');
+      app.toast(`${made.length ? plural(made.length, 'building') : 'A road'} put down${road && made.length ? ` with a ${road.as === 'street' ? 'street' : 'road'}` : ''}${r.refused_count ? `; ${r.refused_count} would not fit` : ''}`);
     } else {
       const poly = tool.path;
       const r = await app.view.gen.parcelCheck(poly);

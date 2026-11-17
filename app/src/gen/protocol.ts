@@ -134,6 +134,8 @@ export interface Created {
   poly?: [number, number][];
   floors?: number;
   func?: string;
+  /** A row's building: the two points of the road it faces. */
+  faces?: [[number, number], [number, number]];
   roof?: RoofStyle;
   tint?: Tint;
   /** Roof material and shape (`ROOF_MATERIALS`, `ROOF_SHAPES`); else the tint's / the roof's, else picked. */
@@ -212,6 +214,8 @@ export interface RowAsk {
   clear: boolean;
   seed: number;
   first_id: number;
+  /** A road along the row (kind: a `PathKind`; width 3-40 ft). */
+  road?: { kind: string; width?: number };
 }
 export interface RowLot {
   poly: [number, number][];
@@ -221,8 +225,24 @@ export interface RowLot {
   floors: number;
   name: string;
   existing: string | null;
+  faces?: [[number, number], [number, number]];
+}
+/** A row's road (`placing::row`): the line as laid, and what writes it (one of `path`, `streets`, `towns`, `kept`). */
+export interface RowRoadAnswer {
+  as: 'road' | 'street';
+  town?: number;
+  line: [number, number][];
+  removed: string[];
+  path?: DrawnPath;
+  streets?: Record<string, unknown | null>;
+  wharves?: Record<string, unknown | null>;
+  towns?: Record<string, TownEdit | null>;
+  street_ids?: string[];
+  street_id?: string;
+  kept?: string;
 }
 export interface RowAnswer {
+  road?: RowRoadAnswer | null;
   lots: RowLot[];
   removed: Removal[];
   refused: { x: number; y: number; why: string }[];
@@ -528,6 +548,8 @@ export interface TownEdit {
   districts?: string[];
   walls?: boolean;
   squares?: { v: number; at: [number, number]; kind: string }[];
+  /** Streets added by hand (a row's road), by id (`ts:<layout>:<id>`): the line (ft), its kind and width. */
+  streets?: Record<string, { pts: [number, number][]; type?: string; width?: number }>;
 }
 
 /** What a patch of a town can be given (`worldgen::world::TOWN_WARDS`; `empty`: open ground). */

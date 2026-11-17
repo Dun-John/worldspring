@@ -27,8 +27,10 @@ export interface RowSettings {
   gaps: number;
   clear: boolean;
   seed: number;
+  /** A road along the row: on, its kind and width (ft). */
+  road: { on: boolean; kind: string; width: number };
 }
-export const defaultRow = (): RowSettings => ({ side: 'both', ward: 'common', kinds: [], depth: 0, gaps: 0.15, clear: false, seed: 0 });
+export const defaultRow = (): RowSettings => ({ side: 'both', ward: 'common', kinds: [], depth: 0, gaps: 0.15, clear: false, seed: 0, road: { on: false, kind: 'cobbled', width: 20 } });
 
 export interface LassoSettings {
   fill: 'generated' | 'hand' | 'open';
@@ -150,6 +152,9 @@ export class PathTool implements PointerTool {
   /** What the app shows over it: lots of a row (footprints), slots refused, the plot's outline met, or the outline is refused. */
   lots: Pt[][] = [];
   refused: Pt[] = [];
+  /** The row's road as laid (ghost) and its width (ft). */
+  roadLine: Pt[] | null = null;
+  roadWidth = 0;
   over: Pt[] | null = null;
   bad = false;
   private cursor: Pt | null = null;
@@ -223,6 +228,7 @@ export class PathTool implements PointerTool {
     this.finished = false;
     this.lots = [];
     this.refused = [];
+    this.roadLine = null;
     this.over = null;
     this.bad = false;
     return had;
@@ -245,6 +251,11 @@ export class PathTool implements PointerTool {
   draw(g: Graphics, cam: Camera) {
     const scr = (p: Pt) => cam.worldToScreen(p[0], p[1]);
     const row = this.host.mode() === 'row';
+    if (this.roadLine && this.roadLine.length >= 2) {
+      const rl = this.roadLine.flatMap((p) => scr(p));
+      g.poly(rl, false).stroke({ width: Math.max(2, this.roadWidth * cam.ppf), color: INK, alpha: 0.18, cap: 'butt', join: 'round' });
+      g.poly(rl, false).stroke({ width: 1.5, color: INK, alpha: 0.7 });
+    }
     for (const l of this.lots) {
       const flat = l.flatMap((p) => scr(p));
       g.poly(flat).fill({ color: INK, alpha: 0.28 });

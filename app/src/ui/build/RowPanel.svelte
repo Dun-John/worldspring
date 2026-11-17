@@ -4,6 +4,7 @@
   import type { RowSettings, StampSettings } from '../../editor/quick';
   import type { QuickInfo } from '../BuildPanel.svelte';
   import ToolPanel from './ToolPanel.svelte';
+  import { PATH_KINDS, PATH_WIDTH } from '../../editor/paths';
   import { WARDS, categoriesOf, label } from './util';
 
   interface Props {
@@ -40,10 +41,28 @@
       <button class:on={row.side === s.key} aria-pressed={row.side === s.key} onclick={() => (row.side = s.key)}>{s.label}</button>
     {/each}
   </div>
+  <label class="switch">
+    <span class="grow">Lay a road along it</span>
+    <input type="checkbox" class="ws-switch" bind:checked={row.road.on} />
+  </label>
+  {#if row.road.on}
+    <div class="ws-seg" role="radiogroup" aria-label="Road kind">
+      {#each PATH_KINDS as k (k.key)}
+        <button class:on={row.road.kind === k.key} aria-pressed={row.road.kind === k.key} onclick={() => (row.road = { ...row.road, kind: k.key, width: k.width })}>{k.label}</button>
+      {/each}
+    </div>
+    <div class="ws-hint">In a town it becomes one of its streets.</div>
+  {/if}
   {#snippet hint()}
     <div class="ws-hint">Drag along a street, or click each corner and press Enter: buildings line the path, facing it, on the side you choose. Left and right are as you walk along it.</div>
   {/snippet}
   {#snippet more()}
+    {#if row.road.on}
+      <label class="slider">
+        <span>Road width</span><output>{row.road.width} ft</output>
+        <input type="range" min={PATH_WIDTH.min} max={PATH_WIDTH.max} step="1" bind:value={row.road.width} />
+      </label>
+    {/if}
     <label class="ws-field">
       Ward
       <select class="ws-input" bind:value={row.ward}>
