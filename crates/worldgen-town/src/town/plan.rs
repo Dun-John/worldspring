@@ -474,19 +474,23 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
     // patch without passing the gate or running along the wall), as square to the wall as can be. Gates are costed
     // where they will stand (a wall gate's corner is flattened onto its neighbours' line); a
     // spoke turning more than 20° off the wall's normal costs more.
-    let in_river = |v: usize| site.near_river(mesh.pos[v], 0.0);
+    // (A corner in the river channel, by its position: also used once the corners have moved.)
+    let in_river = |p: P| site.near_river(p, 0.0);
+    // (The central patch as the plaza will be found, near enough: the castle, chosen once the
+    // gates are, may yet push a plaza that is not the rhombus one patch over. The routing
+    // tests the plaza itself: `is_spoke`.)
     let (joined, central): (Vec<Vec<usize>>, Vec<usize>) = if walled {
         let c = rhombus.then_some(0).filter(|&i| usable(i)).or_else(|| (0..n_inner).filter(|&i| usable(i)).min_by(|&a, &b| len(sites[a]).total_cmp(&len(sites[b]))));
         (joins(&mesh, site, &vf, &usable, &|a, b| on_wall(a, b) || is_river_edge(a, b)), c.map(|c| mesh.faces[c].clone()).unwrap_or_default())
     } else {
         (Vec::new(), Vec::new())
     };
-    // (Whether u reaches the central patch without passing v.)
-    let reaches = |v: usize, u: usize| {
+    // (Whether u reaches one of the corners `to` without passing v.)
+    let reaches = |v: usize, u: usize, to: &[usize]| {
         let mut seen: FastSet<usize> = [v, u].into_iter().collect();
         let mut open = vec![u];
         while let Some(x) = open.pop() {
-            if central.contains(&x) {
+            if to.contains(&x) {
                 return true;
             }
             open.extend(joined[x].iter().copied().filter(|&y| seen.insert(y)));
@@ -494,7 +498,7 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         false
     };
     let spoke_ok = |v: usize, u: usize| {
-        !ring.contains(&u) && !in_river(u) && !is_river_edge(v, u) && vf[v].iter().filter(|&&f| vf[u].contains(&f) && usable(f)).count() == 2 && reaches(v, u)
+        !ring.contains(&u) && !in_river(mesh.pos[u]) && !is_river_edge(v, u) && vf[v].iter().filter(|&&f| vf[u].contains(&f) && usable(f)).count() == 2 && reaches(v, u, &central)
     };
     let flat_at = |v: usize| match ring_nb.get(&v) {
         Some(nb) if nb.len() == 2 => lerp(mesh.pos[nb[0]], mesh.pos[nb[1]], 0.5),
@@ -506,9 +510,16 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         let (t, d) = (sub(pos[nb[1]], pos[nb[0]]), sub(pos[u], at));
         libm::asin((dot(d, t) / (len(d) * len(t)).max(1e-9)).abs().min(1.0))
     };
+    // (Each corner's once: a search to the central patch per side, asked per road end.)
+    let spoke_memo: std::cell::RefCell<FastMap<usize, Option<f64>>> = Default::default();
     let spoke_off = |v: usize| {
+        if let Some(&off) = spoke_memo.borrow().get(&v) {
+            return off;
+        }
         let at = flat_at(v);
-        adj_vertices(&mesh, v).into_iter().filter(|&u| spoke_ok(v, u)).map(|u| off_normal(&mesh.pos, v, at, u)).min_by(f64::total_cmp)
+        let off = adj_vertices(&mesh, v).into_iter().filter(|&u| spoke_ok(v, u)).map(|u| off_normal(&mesh.pos, v, at, u)).min_by(f64::total_cmp);
+        spoke_memo.borrow_mut().insert(v, off);
+        off
     };
     let gate_at = |v: usize| if walled { flat_at(v) } else { mesh.pos[v] };
     // (Whether the approach from road end k to v crosses the wall off v's own sides.)
@@ -529,8 +540,9 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         let mut cands: Vec<usize> = ring.iter().copied().filter(|v| !pinned[*v]).collect();
         cands.sort_by(|&p, &q| dist(mesh.pos[p], *e).total_cmp(&dist(mesh.pos[q], *e)).then(p.cmp(&q)));
         let next_to_gate = |v: usize, gates: &[usize]| ring_nb.get(&v).is_some_and(|nb| nb.iter().any(|x| gates.contains(x)));
-        // The nearest few wall corners, and (costing 150 ft more: a wall gate is preferred) the
-        // nearest corners of the built edge; the cheapest way in wins.
+        // The nearest few wall corners (in a walled town, every other one with a spoke too), and
+        // (costing 150 ft more: a wall gate is preferred) the nearest corners of the built edge
+        // (off the water where any is); the cheapest way in wins.
         let free: Vec<usize> = cands.iter().copied().filter(|&v| !gates.contains(&v) && !next_to_gate(v, &gates)).collect();
         let mut options: Vec<(f64, usize)> = free.iter().copied().take(8).map(|v| (way_cost(k, gate_at(v)), v)).collect();
         // (A walled town's other corners with a spoke too.)
@@ -645,7 +657,6 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
     debug_assert!(castle_face.is_none() || castle_face != plaza, "the castle is never on the market square");
     // Vertices in the river channel; streets cross only by explicit links between the banks
     // (each link is a bridge along the street).
-    let in_river = |v: usize| site.near_river(mesh.pos[v], 0.0);
     let crossing_links = bank_links(&mesh, site, &vf, &usable);
     let mut adj: Graph = FastMap::default();
     for &(a, _, b) in &crossing_links {
@@ -658,7 +669,7 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         let m = face.len();
         for e in 0..m {
             let (a, b) = (face[e], face[(e + 1) % m]);
-            if is_river_edge(a, b) || in_river(a) || in_river(b) {
+            if is_river_edge(a, b) || in_river(mesh.pos[a]) || in_river(mesh.pos[b]) {
                 continue;
             }
             let (pa, pb) = (mesh.pos[a], mesh.pos[b]);
@@ -673,35 +684,39 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
             adj.entry((b as i64, 0)).or_default().push(((a as i64, 0), w));
         }
     }
-    // (A walled town's main streets never run along the wall; from a gate with no way in but
-    // along it, they leave it as soon as they can.)
+    // (A walled town's main streets never run along the wall nor come back to it at another
+    // corner (another gate's, or one a street would meet the wall at off any gate); from a gate
+    // with no way in but along it, they leave it as soon as they can.)
+    let plaza_corners: Vec<usize> = plaza.map(|pz| mesh.faces[pz].clone()).unwrap_or_default();
     let (adj_main, adj_wall): (Graph, Graph) = if walled {
-        let (mut g, mut h) = (adj.clone(), adj.clone());
-        for (k, nbs) in g.iter_mut() {
-            nbs.retain(|x| !on_wall(k.0 as usize, x.0.0 as usize));
-        }
-        for (k, nbs) in h.iter_mut() {
-            for x in nbs.iter_mut().filter(|x| on_wall(k.0 as usize, x.0.0 as usize)) {
-                x.1 *= 4.0;
-            }
-        }
-        (g, h)
+        let wall = |k: &(i64, i64), x: &((i64, i64), f64)| on_wall(k.0 as usize, x.0.0 as usize);
+        let back = |x: &((i64, i64), f64)| ring.contains(&(x.0.0 as usize)) && !plaza_corners.contains(&(x.0.0 as usize));
+        (
+            adj.iter().map(|(k, nbs)| (*k, nbs.iter().copied().filter(|x| !wall(k, x) && !back(x)).collect())).collect(),
+            adj.iter().map(|(k, nbs)| (*k, nbs.iter().map(|&x| if wall(k, &x) { (x.0, x.1 * 4.0) } else { x }).collect())).collect(),
+        )
     } else {
         (Graph::default(), Graph::default())
     };
-    let is_spoke = |g: usize, u: usize| !ring.contains(&u) && vf[g].iter().filter(|&&f| vf[u].contains(&f) && usable(f)).count() == 2 && reaches(g, u);
+    let is_spoke = |g: usize, u: usize| !ring.contains(&u) && vf[g].iter().filter(|&&f| vf[u].contains(&f) && usable(f)).count() == 2 && reaches(g, u, &plaza_corners);
     let mut paths: Vec<Vec<usize>> = Vec::new();
+    // (Spoke ends taken by an earlier gate: another gate shares one only if it has no other.)
+    let mut taken: Vec<usize> = Vec::new();
     if let Some(pz) = plaza {
         let targets: std::collections::BTreeSet<(i64, i64)> = mesh.faces[pz].iter().map(|&v| (v as i64, 0)).collect();
         for &g in &gates {
             let start = (g as i64, 0);
             // (In a walled town: the first step is the spoke for which the street, its length
             // stretched by how far the spoke turns off the wall's normal, is shortest; failing a
-            // spoke, a side going in off the wall, never a bridge.)
+            // spoke, a side going in off the wall, never a bridge. The gate stands where it was
+            // flattened to, so its spoke's turn is measured from there.)
             let mut best: Option<(f64, Vec<(i64, i64)>)> = None;
             if walled && !targets.contains(&start) {
                 let out = adj_main.get(&start).map_or(&[][..], |v| v.as_slice());
                 let mut first: Vec<((i64, i64), f64)> = out.iter().copied().filter(|x| is_spoke(g, x.0.0 as usize)).collect();
+                if first.iter().any(|x| !taken.contains(&(x.0.0 as usize))) {
+                    first.retain(|x| !taken.contains(&(x.0.0 as usize)));
+                }
                 if first.is_empty() {
                     let sides = adj_vertices(&mesh, g);
                     first = out.iter().copied().filter(|x| !ring.contains(&(x.0.0 as usize)) && sides.contains(&(x.0.0 as usize))).collect();
@@ -709,13 +724,22 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
                 for &(u, w) in &first {
                     let Some(rest) = shortest(&adj_main, u, &targets).filter(|p| !p.contains(&start)) else { continue };
                     let cost: f64 = rest.windows(2).map(|x| adj_main[&x[0]].iter().find(|y| y.0 == x[1]).map_or(0.0, |y| y.1)).sum();
-                    let c = (w + cost) * (1.0 + off_normal(&mesh.pos, g, mesh.pos[g], u.0 as usize));
+                    // (Past 20° a spoke costs more, as squaring it may fall short; one whose end
+                    // cannot be moved, a corner of the plaza or the castle's or by the river,
+                    // keeps its turn and costs twice that.)
+                    let ui = u.0 as usize;
+                    let a = off_normal(&mesh.pos, g, mesh.pos[g], ui);
+                    let fixed = pinned[ui] || plaza_corners.contains(&ui) || castle_face.is_some_and(|cf| mesh.faces[cf].contains(&ui));
+                    let c = (w + cost) * (1.0 + a + (if fixed { 4.0 } else { 2.0 }) * (a - 20f64.to_radians()).max(0.0));
                     if best.as_ref().is_none_or(|b| c < b.0) {
                         best = Some((c, std::iter::once(start).chain(rest).collect()));
                     }
                 }
             }
             if let Some(path) = best.map(|b| b.1).or_else(|| shortest(if walled { &adj_wall } else { &adj }, start, &targets)) {
+                if walled && path.len() >= 2 {
+                    taken.push(path[1].0 as usize);
+                }
                 paths.push(path.iter().map(|k| k.0 as usize).collect());
             }
         }
@@ -725,22 +749,70 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
     if let Some(cf) = castle_face {
         keep_v.extend(mesh.faces[cf].iter().copied());
     }
-    // A walled town's spoke is squared to the wall: its inner end moved onto the wall's normal at
-    // the gate, at least 110 ft in (by at most 0.6 of the patch spacing, keeping the patches
-    // convex), and kept there while the street is curved.
+    // A walled town's spoke is squared to the wall. First the gate is slid along the straight line
+    // between its wall neighbours (in its middle 40%) toward the foot of the spoke's inner end, as
+    // far as keeps its patches convex, off the water, and no road's approach crossing the wall.
+    // Then that end is moved toward the wall's normal at the gate, at least 110 ft in: of the spots
+    // tried (on the normal at its own distance in, at its distance along the normal, and part way
+    // to each; at most 0.6 of the patch spacing off), the one squarest to the wall that keeps the
+    // patches convex and is off the river and wet ground. It is kept there while the street is
+    // curved. A corner two gates share is squared to the first.
     let mut spoke_end: Vec<usize> = Vec::new();
     for path in paths.iter().filter(|p| walled && p.len() >= 2 && !ring.contains(&p[1])) {
         let (g, v) = (path[0], path[1]);
         if let Some(nb) = ring_nb.get(&g).filter(|nb| nb.len() == 2)
-            && !(pinned[v] || keep_v.contains(&v) || gates.contains(&v))
+            && !(pinned[v] || keep_v.contains(&v) || gates.contains(&v) || spoke_end.contains(&v))
         {
-            let t = sub(mesh.pos[nb[1]], mesh.pos[nb[0]]);
+            let (a, t) = (mesh.pos[nb[0]], sub(mesh.pos[nb[1]], mesh.pos[nb[0]]));
             let n = mul([-t[1], t[0]], 1.0 / len(t).max(1e-9));
-            let d = sub(mesh.pos[v], mesh.pos[g]);
+            let dry = |q: P| !site.near_river(q, 0.0) && !site.wet(q);
+            let foot = add(a, mul(t, (dot(sub(mesh.pos[v], a), t) / dot(t, t).max(1e-9)).clamp(0.3, 0.7)));
+            // (Whether a road's approach to the gate at q crosses the wall off the gate: its own
+            // sides too, but for their 30 ft at the gate.)
+            let crosses = |q: P| {
+                let x = |p: P, q: P, a: P, b: P| {
+                    let c = |o: P, x: P, y: P| cross(sub(x, o), sub(y, o));
+                    c(p, q, a) * c(p, q, b) < 0.0 && c(a, b, p) * c(a, b, q) < 0.0
+                };
+                let side = |a: usize, b: usize| match (a == g, b == g) {
+                    (true, _) => (lerp(q, mesh.pos[b], (30.0 / dist(q, mesh.pos[b]).max(1e-9)).min(1.0)), mesh.pos[b]),
+                    (_, true) => (mesh.pos[a], lerp(q, mesh.pos[a], (30.0 / dist(q, mesh.pos[a]).max(1e-9)).min(1.0))),
+                    _ => (mesh.pos[a], mesh.pos[b]),
+                };
+                (0..ends.len()).filter(|&k| gate_of[k] == Some(g)).any(|k| {
+                    let curve = approach_curve(ends[k].0, q, heading_of[k]);
+                    ring_edges.iter().map(|&(a, b)| side(a, b)).any(|(a, b)| curve.windows(2).any(|w| x(w[0], w[1], a, b)))
+                })
+            };
+            // (Never beside the castle: its bailey is laid against the wall there.)
+            let by_castle = castle_face.is_some_and(|cf| vf[g].iter().any(|&f| next_to(f, cf)));
+            let crossed = crosses(mesh.pos[g]);
+            if !by_castle
+                && let Some(q) = [1.0, 0.75, 0.5, 0.25].into_iter().map(|f| lerp(mesh.pos[g], foot, f)).find(|&q| dry(q) && mesh.can_move(&vf, g, q) && (crossed || !crosses(q)))
+            {
+                mesh.pos[g] = q;
+            }
+            let (o, p) = (mesh.pos[g], mesh.pos[v]);
+            let d = sub(p, o);
             let n = if dot(n, d) < 0.0 { mul(n, -1.0) } else { n };
-            let target = add(mesh.pos[g], mul(n, len(d).max(110.0)));
-            let moved = dist(target, mesh.pos[v]);
-            mesh.try_move(&vf, v, lerp(mesh.pos[v], target, (0.6 * spacing / moved.max(1e-9)).min(1.0)));
+            let off = |q: P| libm::atan2(cross(n, sub(q, o)).abs(), dot(n, sub(q, o)));
+            let mut best: Option<(f64, f64, P)> = None;
+            for along in [len(d), dot(d, n)] {
+                let target = add(o, mul(n, along.max(110.0)));
+                let to = lerp(p, target, (0.6 * spacing / dist(target, p).max(1e-9)).min(1.0));
+                for f in [1.0, 0.85, 0.7, 0.55, 0.4, 0.25] {
+                    let q = lerp(p, to, f);
+                    let key = (off(q), dist(p, q));
+                    if best.is_none_or(|b| key.0 < b.0 - 1e-9 || (key.0 < b.0 + 1e-9 && key.1 < b.1)) && dry(q) && mesh.can_move(&vf, v, q) {
+                        best = Some((key.0, key.1, q));
+                    }
+                }
+            }
+            if let Some((a, _, q)) = best
+                && a < off(p)
+            {
+                mesh.pos[v] = q;
+            }
         }
         spoke_end.push(v);
     }

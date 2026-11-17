@@ -140,6 +140,11 @@ impl Mesh {
         }
     }
 
+    /// Whether vertex `v` can stand at `q` with every face around it still convex.
+    pub fn can_move(&self, vf: &[Vec<usize>], v: usize, q: P) -> bool {
+        vf[v].iter().all(|&f| self.face_convex(f, Some((v, q))))
+    }
+
     /// Move vertex `v` toward `target`, halving the step up to three times if a face around
     /// it would lose convexity. Returns whether it moved.
     pub fn try_move(&mut self, vf: &[Vec<usize>], v: usize, target: P) -> bool {
