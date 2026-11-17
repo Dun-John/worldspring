@@ -119,7 +119,7 @@
                 </div>
                 {#if sel.fenced(t)}
                   <div class="actions">
-                    <button class="ws-btn" disabled={sel.busy} onclick={() => void sel.change(t)} title="Click on the fence to put a 5 ft gate in it"><Icon name="plus" size={16} /> Add gate</button>
+                    <button class="ws-btn" disabled={sel.busy} onclick={() => void sel.change(t)} title="Opens the Gate tool: click on the fence to put a 5 ft gate in it"><Icon name="plus" size={16} /> Gate tool</button>
                     {#if sel.kindable(t)}
                       <select class="ws-input kind-pick" aria-label="Change kind" disabled={sel.busy} onchange={(e) => { const v = e.currentTarget.value; e.currentTarget.value = ''; if (v) void sel.setKind(t, v as FenceKind); }}>
                         <option value="">Change kind…</option>

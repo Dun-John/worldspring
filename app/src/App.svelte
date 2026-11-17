@@ -1160,6 +1160,8 @@
       // (The view applies the world's edits: names, created sites, hidden labels.)
       await view.loadWorld(world, following ? follow : upgrade?.anew ? repin : undefined);
       overlay = view.overlay;
+      // (The edits came with the world, before its generators had them: ask the fences again.)
+      askChangedFences();
       // (Edits the user chose over those kept replace mapd's copy too; so do those carried over
       // to the world remade, over any copy kept of it from before.)
       const replacing = !o.remade && (replaced || restored || following);
@@ -1641,6 +1643,7 @@
       selection = s;
     },
     toast,
+    dismissToast: dismiss,
     applyEdits,
     syncTool,
     go,
@@ -2659,7 +2662,7 @@
   /** Towns whose fences and hedges were changed by hand (for the Gazetteer). */
   let changedFences = $state<ChangedFences[]>([]);
   let changedFencesSeq = 0;
-  $effect(() => {
+  function askChangedFences() {
     const towns = edits.towns;
     const s = ++changedFencesSeq;
     if (!towns || !Object.values(towns).some((t) => t?.fences)) {
@@ -2668,7 +2671,8 @@
     }
     // (After the generators have the edits.)
     setTimeout(() => void view.gen.changedFences().then((list) => s === changedFencesSeq && (changedFences = list)), 0);
-  });
+  }
+  $effect(askChangedFences);
 
   /** Bring a town's changed fences back (or forget the changes, if they are set aside): one step. */
   async function bringBackFences(key: string) {

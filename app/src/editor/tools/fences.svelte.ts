@@ -11,6 +11,7 @@ import type { BuildHost } from './build.svelte';
 export function fenceTools(app: BuildHost) {
   let fence = $state(defaultFence());
   let busy = false;
+  let hintId = 0;
 
   /** Ask the generator for `input` (`fence_change_json`), make its change as one step; `change` its words for the history. */
   async function run(input: Record<string, unknown>, change: import('../../sync/mapd').Change): Promise<FenceCut | null> {
@@ -37,7 +38,10 @@ export function fenceTools(app: BuildHost) {
     placed: (pts, closed) => void run({ op: 'draw', fence: { kind: fence.kind, pts, ...(closed ? { closed } : {}) } }, { tool: 'place_fence', kind: fence.kind }),
     gate: (at) => void gateAt(at),
     gap: (pts) => void run({ op: 'gap', gap: { pts, r: fence.eraser / 2 } }, { tool: 'remove_fences', gaps: 1 }),
-    hint: (t) => app.toast(t),
+    hint: (t, stay) => {
+      if (hintId) app.dismissToast(hintId);
+      hintId = t ? app.toast(t, undefined, stay ? { sticky: true } : {}) : 0;
+    },
   });
 
   /** A gate in the fence under `at` (the nearest of what `pick` finds there). */
@@ -51,15 +55,8 @@ export function fenceTools(app: BuildHost) {
   /** The fences `ids` made `kind` (a drawn one is replaced, a generated one changed). */
   const change = (ids: string[], kind: FenceKind) => run({ ids, op: 'kind', kind }, { tool: 'place_fence', kind, changed: true, ids });
 
-  const modes: { key: FenceMode; label: string; title: string }[] = [
-    { key: 'draw', label: 'Draw', title: 'Click corners, or drag a line' },
-    { key: 'gate', label: 'Gate', title: 'Click on a fence to put a gate in it' },
-    { key: 'erase', label: 'Erase', title: 'Drag over a stretch to cut a gap in every fence and hedge' },
-  ];
-
   return {
     tool,
-    modes,
     change,
     word: fenceWord,
     get fence() { return fence; },

@@ -17,6 +17,8 @@ export const BATTLE_GROUPS: [string, number[]][] = [
   ['Park & garden', [52, 53, 54, 55, 56, 57, 58, 59, 60, 61]],
   // v63 castles
   ['Kitchen garden & smithy', [75, 76, 77, 78]],
+  // Roadmap 6 fences: the line tool's picket, railing, stockade and gate leaf (a piece or two by hand too)
+  ['Fences', [150, 151, 152, 155]],
   // Roadmap 5 cemeteries
   ['Cemetery', [39, 100, 101, 102, 103, 104, 105]],
   // Roadmap 5 steppe towns' horse parks (the trough, haystack and cart stay in their own groups)

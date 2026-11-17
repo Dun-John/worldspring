@@ -29,6 +29,7 @@ export interface BuildHost {
   readonly firstCreated: number;
   readonly buildOn: boolean;
   selection: import('../../ui/gazetteer').Selection | null;
+  dismissToast(id: number): void;
   toast(text: string, undo?: () => void, more?: Pick<import('../../ui/Toasts.svelte').Toast, 'action' | 'sticky' | 'ms'>): number;
   applyEdits(next: Edits, change: import('../../sync/mapd').Change, author: string, opts?: { record?: boolean; send?: boolean; quiet?: boolean }): void;
   syncTool(): void;
@@ -1110,6 +1111,8 @@ export function buildTools(app: BuildHost) {
   /** F: Build › Fence (again: the next kind). */
   function keyFence() {
     if (buildMode !== 'fence') return setBuildMode('fence');
+    // (Only Draw has a kind to cycle: from Gate or Erase, F goes back to Draw.)
+    if (fences.fence.mode !== 'draw') return void (fences.fence = { ...fences.fence, mode: 'draw' });
     const order = FENCE_KINDS.map((k) => k.key);
     fences.fence = { ...fences.fence, kind: order[(order.indexOf(fences.fence.kind) + 1) % order.length] };
   }

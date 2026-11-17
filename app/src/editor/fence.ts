@@ -65,7 +65,8 @@ export interface FenceHost {
   gate(at: Pt): void;
   /** A stroke let go in Erase mode. */
   gap(pts: Pt[]): void;
-  hint(text: string): void;
+  /** A notice; `stay` keeps it until `hint(null)` (the prompt while a line is being drawn). */
+  hint(text: string | null, stay?: boolean): void;
 }
 
 const MAX_POINTS = 400;
@@ -105,7 +106,7 @@ export class FenceTool implements PointerTool {
     if (this.stroke) {
       const s = endAt(this.stroke, [x, y]);
       this.stroke = null;
-      if (mode === 'erase') return this.host.gap(s.map(round));
+      if (mode === 'erase') return this.host.gap(simplifyOpen(s, MAX_POINTS).map(round));
       const pts: Pt[] = [];
       for (const p of simplifyOpen(s, MAX_POINTS).map(round)) {
         const q = pts[pts.length - 1];
@@ -121,7 +122,7 @@ export class FenceTool implements PointerTool {
     if (mode === 'erase') return this.host.gap([p]);
     if (!this.pts.length) {
       this.pts = [p];
-      return this.host.hint('Click its next corners; press Enter or double-click to end it');
+      return this.host.hint('Click its next corners; press Enter or double-click to end it', true);
     }
     const first = this.pts[0];
     // A click back on its first corner closes it.
@@ -140,6 +141,7 @@ export class FenceTool implements PointerTool {
     if (this.pts.length < 2) return false;
     const pts = this.pts;
     this.pts = [];
+    this.host.hint(null);
     this.host.placed(pts, closed);
     return true;
   }
@@ -152,6 +154,7 @@ export class FenceTool implements PointerTool {
   back(): boolean {
     if (!this.pts.length) return false;
     this.pts.pop();
+    if (!this.pts.length) this.host.hint(null);
     return true;
   }
 
@@ -164,6 +167,7 @@ export class FenceTool implements PointerTool {
   /** Drop the points clicked. True if there were some. */
   reset(): boolean {
     const had = this.pts.length > 0 || !!this.stroke;
+    if (this.pts.length) this.host.hint(null);
     this.pts = [];
     this.stroke = null;
     this.press = null;
