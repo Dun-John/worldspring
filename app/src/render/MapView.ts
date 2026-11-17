@@ -27,6 +27,7 @@ import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
 import { BLOCK, parseKey } from '../editor/groundCodec';
 import { lookOf, shore } from '../editor/water';
+import { fenceBox, fenceId } from '../editor/fence';
 import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
 
 export interface InteriorState {
@@ -1575,8 +1576,16 @@ export class MapView {
     // district labels and business pins asked for again.
     const pt = prev.towns ?? {};
     const nt = next.towns ?? {};
+    const fenceIds: string[] = [];
     if (pt !== nt) for (const key of keys('towns', pt, nt)) {
       if (JSON.stringify(pt[key]) === JSON.stringify(nt[key])) continue;
+      // Only its fences and hedges changed: the generator says what they redraw (`redrawFences`).
+      if (JSON.stringify({ ...pt[key], fences: 0 }) === JSON.stringify({ ...nt[key], fences: 0 }) && (pt[key]?.fences || nt[key]?.fences)) {
+        for (const k of new Set([...Object.keys(pt[key]?.fences ?? {}), ...Object.keys(nt[key]?.fences ?? {})])) {
+          if (JSON.stringify(pt[key]?.fences?.[k]) !== JSON.stringify(nt[key]?.fences?.[k])) fenceIds.push(fenceId(Number(key), k));
+        }
+        continue;
+      }
       const t = this.towns.find((t) => t.index === Number(key));
       if (!t) {
         // A village (no district labels): only its streets can change; redraw what they reach.
@@ -1697,6 +1706,15 @@ export class MapView {
       if (cutIds.some((id) => id.startsWith('mt:'))) madeChanged = true;
       if (cutIds.length) queueMicrotask(() => this.askRoads());
     }
+    // Fences and hedges drawn by hand or gaps cut: round their lines now; a generated run's changes (`fenceIds`) as the generator says.
+    if (prev.fences !== next.fences || prev.fence_gaps !== next.fence_gaps) {
+      for (const [was, now] of [[prev.fences, next.fences], [prev.fence_gaps, next.fence_gaps]] as const) {
+        for (const id of new Set([...Object.keys(was ?? {}), ...Object.keys(now ?? {})])) {
+          if (JSON.stringify(was?.[id]) === JSON.stringify(now?.[id])) continue;
+          for (const f of [was?.[id], now?.[id]]) if (f) battleRects.push(fenceBox(f.pts, 'r' in f && f.r ? f.r : 0));
+        }
+      }
+    }
     // (Asked once the generators have the edits: after they are sent.)
     if (!send) {
       this.refreshBridgeMarks(cutIds);
@@ -1719,6 +1737,7 @@ export class MapView {
     }
     if (madeChanged) this.refreshMade(true);
     if (cutIds.length) void this.redrawRoads(cutIds);
+    if (fenceIds.length) void this.redrawFences(fenceIds);
     if (relink) this.relinkHere();
     else if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
   }
@@ -1747,6 +1766,19 @@ export class MapView {
     if (all.length) this.tiles?.invalidate(all, 0, epoch);
     if (rects.length) this.tiles?.invalidate(rects, SITE_MIN_LEVEL, epoch);
     this.battle?.invalidate([...rects, ...all], epoch);
+    this.lastWantKey = '';
+  }
+
+  /** Battlemaps (and site tiles, for what the plan marks) where generated fences `ids` ran, changed or back, as the generator says (a dry `fenceChange`). */
+  private async redrawFences(ids: string[]) {
+    const geom = this.geom;
+    const cut = await this.gen.fenceChange({ ids, op: 'restore', dry: true }).catch(() => null);
+    if (!cut || 'error' in cut || !geom || geom !== this.geom) return;
+    if (!cut.rects.length && !cut.site_rects.length) return;
+    const epoch = ++this.editEpoch;
+    this.gen.setEdits(this.edits, cut.site_rects, epoch, cut.rects);
+    if (cut.site_rects.length) this.tiles?.invalidate(cut.site_rects, SITE_MIN_LEVEL, epoch);
+    this.battle?.invalidate([...cut.rects, ...cut.site_rects], epoch);
     this.lastWantKey = '';
   }
 

@@ -446,6 +446,9 @@ export interface Edits {
   streets?: Record<string, unknown>;
   /** Roads, streets and paths taken off the map by hand (`rd:` stretch, `mt:` track, `tr:` town street or lane, `pp:` park path): the ground shows. */
   removed_roads?: string[];
+  /** Fences and hedges drawn by hand (`f:<n>`) and the gaps the eraser cut (`fg:<n>`; `worldgen-model::fences`). */
+  fences?: Record<string, Fence>;
+  fence_gaps?: Record<string, FenceGap>;
   /** Paired exits put down by hand (`j:<id>`; `crates/worldgen/src/links.rs`): two ends, each a
    * level (`l:<site>:<level>`, levels from the bottom: a site underground `u:`/`k:`, a sewer section
    * `w:<layout>:<sx>:<sy>`, a building's cellar `b:`) and a square on it; each shows on its own map as a
@@ -554,6 +557,52 @@ export interface TownEdit {
   streets?: Record<string, { pts: [number, number][]; type?: string; width?: number }>;
   /** The town's own streets, lanes and park paths taken off the map by hand (`tr:`, `pp:` ids). */
   removed?: string[];
+  /** The town's generated fences and hedges changed by hand, by their local key (`fencecut`). */
+  fences?: Record<string, FenceChange>;
+}
+
+/** A fence's or hedge's kind, as the world file writes it (`FenceKind`). */
+export type FenceKind = 'hedgerow' | 'hedge' | 'dry_stone_wall' | 'post_and_rail' | 'wattle' | 'garden_wall' | 'low_wall' | 'picket' | 'iron_railing' | 'stockade' | 'high_wall';
+
+/** A fence or hedge drawn by hand: its line (ft; round to its first point when `closed`) and its gates (ft along it from `pts[0]`). */
+export interface Fence {
+  kind: FenceKind;
+  pts: [number, number][];
+  closed?: boolean;
+  gates?: number[];
+}
+
+/** A gap cut by the eraser: discs of radius `r` ft along its stroke. */
+export interface FenceGap {
+  pts: [number, number][];
+  r?: number;
+}
+
+/** A generated run changed by hand: gone, another kind, gates (ft along it). */
+export interface FenceChange {
+  gone?: boolean;
+  kind?: FenceKind;
+  gates?: number[];
+}
+
+/** What changing fences does (`fencecut::ChangeOut`): set (null: delete) each `fences`, `fence_gaps` and `towns` entry in one
+ * edit, draw `rects` (battlemaps) and `site_rects` (site tiles too) again. */
+export interface FenceCut {
+  fences: Record<string, Fence | null>;
+  fence_gaps: Record<string, FenceGap | null>;
+  towns: Record<string, TownEdit | null>;
+  rects: Rect[];
+  site_rects: Rect[];
+  done: string[];
+  refused: { id: string; why: string }[];
+}
+
+/** A town whose fences were changed by hand, for the Gazetteer (`fencecut::changed`). `found` false: set aside (the town moved or is by hand now). */
+export interface ChangedFences {
+  town: string;
+  name: string | null;
+  ids: string[];
+  found: boolean;
 }
 
 /** What a patch of a town can be given (`worldgen::world::TOWN_WARDS`; `empty`: open ground). */
@@ -1029,6 +1078,12 @@ export type Ask =
   | { op: 'roadcut'; input: string }
   /** What was taken off the map by hand, for the Gazetteer (`roadcut::removed`). */
   | { op: 'removedroads' }
+  /** Fences changed, drawn or cut, the edits left alone (`fencecut::change`; `input` JSON as `fence_change_json`). */
+  | { op: 'fencechange'; input: string }
+  /** The fences within `r` ft of a point (`fencecut::near`). */
+  | { op: 'fencesnear'; x: number; y: number; r: number; limit: number }
+  /** The towns whose fences were changed by hand (`fencecut::changed`). */
+  | { op: 'changedfences' }
   /** The overlay's bridge marks without the stretches taken off the map (`bridge_marks_json`). */
   | { op: 'bridgemarks' }
   /** One of the world's own settlements as its sketch pin would take it (`agent::settlement_facts`). */
@@ -1290,12 +1345,12 @@ export interface RemovedRoad {
 }
 
 /** What `pick` finds under or near a point (`worldgen::pick`): topmost first, then nearest. `id` is null
- * for kinds without ids yet (lane, street, hedge, field_wall, fence); `town` the owning settlement's
+ * for kinds without ids yet (lane, street); `town` the owning settlement's
  * feature id; `removable` where a delete edit exists today; `bbox` world ft x0, y0, x1, y1. */
 export interface Thing {
   kind:
     | 'entrance' | 'building' | 'drawn_building' | 'tower' | 'castle' | 'plot' | 'wall' | 'settlement' | 'site' | 'district'
-    | 'road' | 'drawn_road' | 'crossing' | 'water' | 'harbour' | 'lane' | 'street' | 'path' | 'hedge' | 'field_wall' | 'fence';
+    | 'road' | 'drawn_road' | 'crossing' | 'water' | 'harbour' | 'lane' | 'street' | 'path' | 'fence' | 'drawn_fence' | 'fence_gap';
   id: string | null;
   name: string | null;
   town: string | null;
@@ -1306,6 +1361,8 @@ export interface Thing {
   gap_ft?: number;
   /** A line's points near the pick (road, street, lane, path, drawn road), for areas: `editor/select.ts inArea`. */
   line?: [number, number][];
+  /** A fence or hedge's kind (not for topiary rows and gaps). */
+  fence?: FenceKind;
 }
 
 /** What a point query or building search returns. */

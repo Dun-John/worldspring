@@ -123,6 +123,12 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                     ? c.road_cut_json(a.input)
                                     : a.op === 'removedroads'
                                     ? c.removed_roads_json()
+                                    : a.op === 'fencechange'
+                                    ? c.fence_change_json(a.input)
+                                    : a.op === 'fencesnear'
+                                    ? c.fences_near_json(a.x, a.y, a.r, a.limit)
+                                    : a.op === 'changedfences'
+                                    ? c.changed_fences_json()
                                     : a.op === 'bridgemarks'
                                     ? c.bridge_marks_json()
                                     : a.op === 'madespot'

@@ -34,6 +34,8 @@ export const EDIT_FIELDS: Record<string, Shape> = {
   paths: 'map',
   members: 'map',
   removed_roads: 'set',
+  fences: 'map',
+  fence_gaps: 'map',
 };
 
 /** Layout numbers from here up are changes set aside when the world was remade (`PARKED_LAYOUT`

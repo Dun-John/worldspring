@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { RoadCut, RemovedRoad, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
+import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -235,6 +235,17 @@ export class GenClient {
   /** What was taken off the map by hand. */
   removedRoads(): Promise<RemovedRoad[]> {
     return this.ask({ op: 'removedroads' }).then((j) => (JSON.parse(j) as RemovedRoad[] | null) ?? []);
+  }
+
+  /** Fences changed, drawn or cut, the edits left alone (`input` as `fence_change_json`: `{ids?, op, kind?, at?, fence?, gap?, dry?}`);
+   * null if the generator could not answer. */
+  fenceChange(input: Record<string, unknown>): Promise<FenceCut | { error: string } | null> {
+    return this.ask({ op: 'fencechange', input: JSON.stringify(input) }).then((j) => JSON.parse(j) as FenceCut | { error: string } | null);
+  }
+
+  /** The towns whose fences were changed by hand. */
+  changedFences(): Promise<ChangedFences[]> {
+    return this.ask({ op: 'changedfences' }).then((j) => (JSON.parse(j) as ChangedFences[] | null) ?? []);
   }
 
   /** The overlay's bridge marks, less the stretches taken off the map. */
