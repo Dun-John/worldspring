@@ -22,6 +22,8 @@ use crate::core::geom;
 
 pub use crate::model::ground::*;
 
+pub mod wharf;
+
 // ---- evaluation ----
 
 struct Kept<'a> {
@@ -176,7 +178,7 @@ impl<'a> Shaper<'a> {
         // Quays and breakwaters: made ground, raised (never dug) to their level.
         let band = spacing;
         for (k, w) in edits.wharves.iter().filter(|_| t0.is_some()) {
-            let wb = crate::wharf::bounds(w);
+            let wb = wharf::bounds(w);
             if w.kind == crate::world::WharfKind::Pier || wb[2] + band < rect[0] || wb[0] - band > rect[2] || wb[3] + band < rect[1] || wb[1] - band > rect[3] {
                 continue;
             }
@@ -185,8 +187,8 @@ impl<'a> Shaper<'a> {
                 continue;
             }
             let t0 = t0.unwrap();
-            let level = crate::wharf::level(w, t0) as f64;
-            for strip in crate::wharf::strips(w, t0) {
+            let level = wharf::level(w, t0) as f64;
+            for strip in wharf::strips(w, t0) {
                 let b = bbox(&strip);
                 if b[2] + band < rect[0] || b[0] - band > rect[2] || b[3] + band < rect[1] || b[1] - band > rect[3] {
                     continue;

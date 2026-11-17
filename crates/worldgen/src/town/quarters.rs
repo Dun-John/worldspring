@@ -1,6 +1,7 @@
 //! Quarters and their labels, wall pieces, shortest paths, shore runs, piers and wall clipping.
 
 use super::*;
+pub use crate::core::geom::rect;
 
 /// Named districts, after watabou's DistrictBuilder: seeds at the plaza, the castle, parks,
 /// gates, bridges, the riverbank and the docks, plus as many random patches; a random
@@ -512,15 +513,6 @@ pub(super) fn chamfer(poly: &[P], t: f64) -> Vec<P> {
         }
     }
     out
-}
-
-/// Rectangle centred at `c`, long side `w` along `dir`, depth `d`.
-pub(crate) fn rect(c: P, dir: P, w: f64, d: f64) -> Vec<P> {
-    let dl = len(dir).max(1e-9);
-    let u = mul(dir, 1.0 / dl);
-    let v = [-u[1], u[0]];
-    let (hu, hv) = (mul(u, 0.5 * w), mul(v, 0.5 * d));
-    vec![sub(sub(c, hu), hv), sub(add(c, hu), hv), add(add(c, hu), hv), add(sub(c, hu), hv)]
 }
 
 // ---------------------------------------------------------------------------------------

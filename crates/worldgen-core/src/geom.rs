@@ -391,3 +391,12 @@ pub fn union_outline(parts: &[Vec<P>]) -> Option<Vec<P>> {
     let out = clean(&out);
     (out.len() >= 3 && area(&out) > 0.0).then_some(out)
 }
+
+/// Rectangle centred at `c`, long side `w` along `dir`, depth `d`.
+pub fn rect(c: P, dir: P, w: f64, d: f64) -> Vec<P> {
+    let dl = len(dir).max(1e-9);
+    let u = mul(dir, 1.0 / dl);
+    let v = [-u[1], u[0]];
+    let (hu, hv) = (mul(u, 0.5 * w), mul(v, 0.5 * d));
+    vec![sub(sub(c, hu), hv), sub(add(c, hu), hv), add(add(c, hu), hv), add(sub(c, hu), hv)]
+}
