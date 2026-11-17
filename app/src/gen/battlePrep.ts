@@ -457,8 +457,6 @@ const LONG_FOOTPRINT = new Map([
   ['picket fence', [0.49, 0.1]],
   ['iron railing', [0.49, 0.1]],
   ['stockade', [0.49, 0.22]],
-  ['low stone wall', [0.49, 0.22]],
-  ['high wall', [0.49, 0.22]],
   ['gate', [0.49, 0.1]],
 ]);
 
