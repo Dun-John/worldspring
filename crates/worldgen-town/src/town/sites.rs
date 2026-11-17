@@ -407,6 +407,16 @@ fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, 
     b
 }
 
+/// (Roadmap 6 R4) What a drawn building's layout `l` fronts on: its created entry's `faces`
+/// chord (world ft; a row's house, toward the row's road).
+pub fn faces(world: &World, t0: &T0, l: &Layout) -> Option<[P; 2]> {
+    if !l.site {
+        return None;
+    }
+    let c = crate::sitelinks::created_of(world, t0, l.index as usize)?;
+    c.faces.filter(|_| c.kind == "building" && !c.removed)
+}
+
 /// A roof material (`roof::MATERIALS`) and shape (`roof::SHAPES`) chosen by hand; each not given
 /// stays as it is.
 pub fn apply_roof(b: &mut Building, material: Option<&str>, shape: Option<&str>, shade: Option<u8>) {

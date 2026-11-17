@@ -72,6 +72,11 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         Some([a, e]) => (0..4).min_by(|&x, &y| geom::seg_dist(world_at(sides[x][0], sides[x][1]), a, e).total_cmp(&geom::seg_dist(world_at(sides[y][0], sides[y][1]), a, e))).unwrap_or(front),
         None => front,
     };
+    // (Roadmap 6 R4: a row's house opens on its row's road: the side nearest its `faces` chord.)
+    let front = match town::sites::faces(world, t0, l) {
+        Some([a, e]) => (0..4).min_by(|&x, &y| geom::seg_dist(world_at(sides[x][0], sides[x][1]), a, e).total_cmp(&geom::seg_dist(world_at(sides[y][0], sides[y][1]), a, e))).unwrap_or(front),
+        None => front,
+    };
 
     // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room
     // on one storey (no cellar, no stairs).

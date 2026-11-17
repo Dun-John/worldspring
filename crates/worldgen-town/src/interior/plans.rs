@@ -290,10 +290,15 @@ pub(super) fn zone_plan(world: &World, t0: &T0, l: &Layout, settlement: usize, b
     // curtain: no side within 8 ft of the bailey's edge.)
     let bailey: Option<&Vec<P>> = b.keep.and_then(|_| l.plazas.iter().find(|q| q.kind == town::PlazaKind::Bailey && geom::contains(&q.pts, geom::centroid(&b.poly))).map(|q| &q.pts));
     let by_curtain = |w: P| bailey.is_some_and(|q| (0..q.len()).any(|k| geom::seg_dist(w, q[k], q[(k + 1) % q.len()]) < 8.0));
+    // (Roadmap 6 R4: a row's house fronts its `faces` chord, toward the row's road.)
+    let faces = town::sites::faces(world, t0, l);
     let near = |p: P| {
         let w = sh.world_at(p[0], p[1]);
-        let d = street_d(w);
-        let d = if d < 80.0 { d } else { 1e4 + geom::dist(w, l.center) };
+        let d = match faces {
+            Some([a, e]) => geom::seg_dist(w, a, e),
+            None => street_d(w),
+        };
+        let d = if d < 80.0 || faces.is_some() { d } else { 1e4 + geom::dist(w, l.center) };
         if by_curtain(w) { d + 1e6 } else { d }
     };
     let ext_free = |i: isize, j: isize| sh.ext_free(i, j);

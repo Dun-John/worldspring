@@ -1119,6 +1119,10 @@ pub struct Created {
     /// hand town's block is: `town::hand::BlockFill`, not a castle; else common lots).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<crate::model::town::BlockFill>,
+    /// (Roadmap 6 R4) A drawn building's front: the chord (world ft) of the side of its lot that
+    /// faces its row's road; its door and rooms face the side of `poly` nearest it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faces: Option<[[f64; 2]; 2]>,
 }
 
 /// (R5 towns) One of a castle's pieces changed by hand (`Created::pieces`): its looks, function
