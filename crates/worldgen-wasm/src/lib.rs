@@ -235,6 +235,34 @@ impl Ctx {
         self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::agent::parents_json(&self.world, t0))
     }
 
+    /// (Roadmap 6 R5) Roads, streets and paths taken off the map or brought back
+    /// (`roadcut::cut`), without changing the edits. `input`: `{ids: [..], restore?: bool, dry?:
+    /// bool}`. Gives `roadcut::CutOut`: `{removed_roads: [..] | null (unchanged), paths: [rw ids to
+    /// delete], towns: {key: TownEdit | null}, rects, all_rects, done, also, refused: [{id, why}]}`
+    /// (`dry`: only `rects`/`all_rects`/`done`, for ids whatever their state); or `{error}`.
+    pub fn road_cut_json(&self, input: &str) -> String {
+        #[derive(serde::Deserialize)]
+        struct Input {
+            ids: Vec<String>,
+            #[serde(default)]
+            restore: bool,
+            #[serde(default)]
+            dry: bool,
+        }
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let Ok(i) = serde_json::from_str::<Input>(input) else { return r#"{"error":"bad input: {ids, restore?, dry?}"}"#.into() };
+        worldgen::roadcut::cut_json(&self.world, t0, &i.ids, i.restore, i.dry).to_string()
+    }
+
+    /// (Roadmap 6 R5) Everything removed by hand, for the Gazetteer (`roadcut::removed`): `[{id,
+    /// name, what, at, found}]`.
+    pub fn removed_roads_json(&self) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::roadcut::removed_json(&self.world, t0).to_string(),
+            None => "[]".into(),
+        }
+    }
+
     /// Town layout `town`'s members changed by hand (`town::members::change`), without changing
     /// the edits: `add` and `remove` JSON arrays of ids (`c:<n>`, `b:<layout>:<id>`). Gives
     /// `{members, created, refused, report}`: the `Edits.members` entries to set (an empty one,
@@ -512,15 +540,19 @@ impl Ctx {
     /// population, x, y, reach, built, rect, track, class, width}]`, where `reach` is the layout's
     /// (`town::reach`), `built` the built-up radius, `rect` (x0, y0, x1, y1 ft) all its battlemaps
     /// change over (the pad, `town::pad_extent`, and the link's bounds + 30 ft: its bed, banks and
-    /// crossings), `track` its link's points `[x, y]` to the road (empty with none), `class` and
+    /// crossings), `track` its link's points `[x, y]` to the road (empty with none or removed by hand), `class` and
     /// `width` the link's road class and bed width (ft).
     pub fn made_json(&self) -> String {
         let Some(t0) = &self.t0 else { return "[]".into() };
         let edits = &self.world.file.edits.created;
+        // (Roadmap 6 R5) A link removed by hand (`mt:` in `Edits.removed_roads`) is drawn nowhere: no track.
+        let gone = &self.world.file.edits.removed_roads;
+        let ids = if gone.iter().any(|id| id.starts_with("mt:")) { worldgen::t0::made::track_ids(t0) } else { Vec::new() };
         let list: Vec<serde_json::Value> = t0
             .made
             .iter()
-            .filter_map(|m| {
+            .enumerate()
+            .filter_map(|(k, m)| {
                 let c = edits.get(m.poi - t0.base_pois)?;
                 let (s, reach) = (&m.s, worldgen::town::reach(&m.s));
                 let pad = worldgen::town::pad_extent(reach);
@@ -528,7 +560,8 @@ impl Ctx {
                 for p in &m.track {
                     r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
                 }
-                let track: Vec<[f64; 2]> = m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect();
+                let removed = ids.get(k).is_some_and(|id| gone.contains(id));
+                let track: Vec<[f64; 2]> = if removed { Vec::new() } else { m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect() };
                 Some(serde_json::json!({
                     "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
                     "x": s.x, "y": s.y, "culture": s.culture, "lives": s.kind.name(), "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
