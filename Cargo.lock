@@ -977,6 +977,15 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
+ "worldgen-core",
+]
+
+[[package]]
+name = "worldgen-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "serde",
 ]
 
 [[package]]

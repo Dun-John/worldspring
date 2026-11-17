@@ -1,3 +1,6 @@
+//! Worldgen's base layer: exact float ops, hashing, stateless RNG, noise, grids, tile geometry and
+//! plane geometry (points, polygons, clipping). Depends on nothing but libm and serde.
+
 pub mod clip;
 pub mod geom;
 pub mod grid;

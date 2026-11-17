@@ -41,8 +41,8 @@ fn dfade(t: f64) -> f64 {
 /// Gradient noise in roughly [-1, 1]. The value half of `gradient2_d` (same arithmetic, so
 /// the same bits) without the derivative work.
 pub fn gradient2(seed: u64, x: f64, y: f64) -> f64 {
-    let xf = crate::core::floor(x);
-    let yf = crate::core::floor(y);
+    let xf = crate::floor(x);
+    let yf = crate::floor(y);
     let (ix, iy) = (xf as i64, yf as i64);
     let g = [grad(seed, ix, iy), grad(seed, ix + 1, iy), grad(seed, ix, iy + 1), grad(seed, ix + 1, iy + 1)];
     blend(g, x - xf, y - yf)
@@ -66,8 +66,8 @@ fn blend([g00, g10, g01, g11]: [(f64, f64); 4], fx: f64, fy: f64) -> f64 {
 
 /// Gradient noise with analytic derivatives: (value, d/dx, d/dy).
 pub fn gradient2_d(seed: u64, x: f64, y: f64) -> (f64, f64, f64) {
-    let xf = crate::core::floor(x);
-    let yf = crate::core::floor(y);
+    let xf = crate::floor(x);
+    let yf = crate::floor(y);
     let fx = x - xf;
     let fy = y - yf;
     let (ix, iy) = (xf as i64, yf as i64);
@@ -117,8 +117,8 @@ impl Gradient {
     }
     #[inline]
     pub fn at(&mut self, x: f64, y: f64) -> f64 {
-        let xf = crate::core::floor(x);
-        let yf = crate::core::floor(y);
+        let xf = crate::floor(x);
+        let yf = crate::floor(y);
         let (ix, iy) = (xf as i64, yf as i64);
         if self.cell != (ix, iy) {
             let s = self.seed;
@@ -162,7 +162,7 @@ impl Ridged {
     pub fn at(&mut self, x: f64, y: f64) -> f64 {
         let (mut sum, mut amp, mut freq, mut norm, mut weight) = (0.0, 1.0, 1.0, 0.0, 1.0);
         for g in &mut self.0 {
-            let mut r = 1.0 - crate::core::fabs(g.at(x * freq, y * freq));
+            let mut r = 1.0 - crate::fabs(g.at(x * freq, y * freq));
             r *= r;
             sum += r * amp * weight;
             norm += amp;
@@ -192,7 +192,7 @@ pub fn ridged(seed: u64, x: f64, y: f64, octaves: u32) -> f64 {
     let (mut sum, mut amp, mut freq, mut norm, mut weight) = (0.0, 1.0, 1.0, 0.0, 1.0);
     for o in 0..octaves {
         let s = seed.wrapping_add((o as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
-        let mut r = 1.0 - crate::core::fabs(gradient2(s, x * freq, y * freq));
+        let mut r = 1.0 - crate::fabs(gradient2(s, x * freq, y * freq));
         r *= r;
         sum += r * amp * weight;
         norm += amp;

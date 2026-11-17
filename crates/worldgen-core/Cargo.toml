@@ -1,0 +1,9 @@
+[package]
+name = "worldgen-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+libm.workspace = true
+serde.workspace = true

@@ -26,7 +26,7 @@ pub fn cross(a: P, b: P) -> f64 {
 }
 #[inline]
 pub fn len(a: P) -> f64 {
-    crate::core::sqrt(dot(a, a))
+    crate::sqrt(dot(a, a))
 }
 #[inline]
 pub fn dist(a: P, b: P) -> f64 {
@@ -321,7 +321,7 @@ pub fn union_outline(parts: &[Vec<P>]) -> Option<Vec<P>> {
                     }
                     for v in [c, d] {
                         let t = dot(sub(v, a), ab) / l2;
-                        if t > 0.0 && t < 1.0 && cross(ab, sub(v, a)).abs() / crate::core::sqrt(l2) < 1e-4 {
+                        if t > 0.0 && t < 1.0 && cross(ab, sub(v, a)).abs() / crate::sqrt(l2) < 1e-4 {
                             ts.push(t);
                         }
                     }

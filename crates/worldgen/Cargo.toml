@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+worldgen-core.workspace = true
 libm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

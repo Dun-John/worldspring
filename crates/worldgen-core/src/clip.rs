@@ -33,8 +33,8 @@
 #![allow(dead_code)]
 
 use super::geom::{self, P};
-use crate::core::hash::FastMap;
-use crate::core::{ceil, fabs, round, sqrt};
+use crate::hash::FastMap;
+use crate::{ceil, fabs, round, sqrt};
 
 /// Grid steps per foot.
 const SCALE: f64 = 256.0;

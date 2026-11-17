@@ -7,7 +7,7 @@
 pub mod agent;
 pub mod placing;
 pub mod battlemap;
-pub mod core;
+pub use worldgen_core as core;
 pub mod gazetteer;
 pub mod geoquery;
 pub mod ground;
