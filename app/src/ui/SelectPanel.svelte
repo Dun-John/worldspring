@@ -20,6 +20,9 @@
   };
   const can = (t: Thing) => t.removable && !!t.id;
   const all = $derived(sel.things.filter(can));
+  const joinable = $derived(sel.things.filter(sel.memberable));
+  const leavable = $derived(sel.things.filter(sel.leavable));
+  const num = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   /** A click's list shows this many rows; the rest are folded by kind until asked for. */
   const ROWS = 8;
   let unfolded = $state(false);
@@ -30,6 +33,19 @@
   const limit = $derived(unfolded || sel.open >= ROWS ? Infinity : ROWS);
   const rest = $derived(sel.things.slice(limit === Infinity ? sel.things.length : ROWS));
 </script>
+
+{#snippet picker()}
+  {#if sel.choosing}
+    <div class="ws-muted">Join which town?</div>
+    <div class="actions">
+      {#each sel.choosing.options as o (o.id)}
+        <button class="ws-btn" onclick={() => sel.join(sel.choosing!.list, o)}>{o.name}</button>
+      {/each}
+      <button class="ws-btn" onclick={() => sel.cancelChoice()}>Cancel</button>
+    </div>
+  {/if}
+  {#if sel.notice}<div class="ws-muted" role="status">{sel.notice}</div>{/if}
+{/snippet}
 
 <ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}}>
   {#snippet hint()}
@@ -56,6 +72,14 @@
           </div>
         {/each}
       </div>
+      {#if joinable.length}
+        <div class="actions">
+          <button class="ws-btn" disabled={sel.busy} onclick={() => sel.join(joinable)}>Join town ({joinable.length})</button>
+          <button class="ws-btn" disabled={sel.busy || !leavable.length} onclick={() => sel.leave(leavable)}>Leave town{leavable.length ? ` (${leavable.length})` : ''}</button>
+        </div>
+        {@render picker()}
+        <div class="ws-muted">{num(joinable.length, 'thing here can', 'things here can')} be part of a town.</div>
+      {/if}
       <div class="actions">
         <button class="ws-btn danger" disabled={!all.length || sel.busy} onclick={() => void sel.remove(all)}><Icon name="trash" size={16} /> Delete all that can be{all.length ? ` (${all.length})` : ''}</button>
         <button class="ws-btn" onclick={() => sel.clear()}>Clear</button>
@@ -70,8 +94,17 @@
               <span class="grow name">{t.name ?? ''}</span>
             </button>
             {#if k === sel.open}
+              {@const part = sel.partOf(t)}
               <div class="body">
                 {#if town}<div class="ws-muted">in {town}</div>{/if}
+                {#if part}<div class="ws-muted">{part}</div>{/if}
+                {#if sel.memberable(t)}
+                  <div class="actions">
+                    <button class="ws-btn" disabled={sel.busy} onclick={() => sel.join([t])}>Join town</button>
+                    {#if sel.leavable(t)}<button class="ws-btn" disabled={sel.busy} onclick={() => sel.leave([t])}>Leave town</button>{/if}
+                  </div>
+                  {@render picker()}
+                {/if}
                 <div class="actions">
                   {#if can(t)}
                     <button class="ws-btn danger" disabled={sel.busy} onclick={() => void sel.remove([t])}><Icon name="trash" size={16} /> Delete</button>
