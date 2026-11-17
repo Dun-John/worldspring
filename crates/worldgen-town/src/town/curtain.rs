@@ -545,13 +545,22 @@ pub(super) fn bow(
             match done.filter(|_| lv.iter().any(|&k| k < last) || gone.iter().any(|g| *g)) {
                 Some((line, tw)) => {
                     any = true;
-                    // (How far each side bows out over its own stretch.)
+                    // (How far each side bows out over its own stretch: the line taken every
+                    // `TEST_STEP` ft, as a chord bridging a notch has no corner over its sides.)
+                    let dense: Vec<P> = line
+                        .windows(2)
+                        .flat_map(|w| {
+                            let m = crate::core::ceil(dist(w[0], w[1]) / TEST_STEP).max(1.0) as usize;
+                            (0..m).map(move |j| lerp(w[0], w[1], j as f64 / m as f64))
+                        })
+                        .chain(line.last().copied())
+                        .collect();
                     for i in 0..n - 1 {
                         if side[i] == 0.0 {
                             continue;
                         }
                         let (o, l) = (mul(left(u[i]), -side[i]), dist(pts[i], pts[i + 1]));
-                        let b = line.iter().filter(|p| (-30.0..=l + 30.0).contains(&dot(sub(**p, pts[i]), u[i]))).map(|p| dot(sub(*p, pts[i]), o)).fold(0.0, f64::max);
+                        let b = dense.iter().filter(|p| (-30.0..=l + 30.0).contains(&dot(sub(**p, pts[i]), u[i]))).map(|p| dot(sub(*p, pts[i]), o)).fold(0.0, f64::max);
                         let mid = lerp(pts[i], pts[i + 1], 0.5);
                         if b > 0.5 {
                             if let Some(&(va, vb)) = sides.iter().find(|&&(va, vb)| seg_dist(mid, mesh.pos[va], mesh.pos[vb]) < 1e-3) {

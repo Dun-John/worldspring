@@ -81,6 +81,20 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
     } else {
         Default::default()
     };
+    // (The wall's line every 4 ft, which the outskirts' blocks keep off: `insets`.)
+    let wall_dense: Vec<P> = if walled || plan.walled {
+        wall_laid
+            .0
+            .iter()
+            .flat_map(|w| w.windows(2))
+            .flat_map(|s| {
+                let n = crate::core::ceil(dist(s[0], s[1]) / 4.0).max(1.0) as usize;
+                (0..=n).map(move |j| lerp(s[0], s[1], j as f64 / n as f64))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     // (A hand tower's tag where its curtain carried it: the towers laid are those along the
     // straight runs, one for one.)
     if !ch.wall.towers.is_empty() {
@@ -464,12 +478,29 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
                 back[e]
             })
             .collect();
-        // (Outside the town, a side on its wall steps back from the curtain bowed out over it.)
+        // (Outside the town, a side on its wall steps back from the curtain bowed out over it; and
+        // any side the wall's line comes in past, as a curtain bridging a notch bowed out over a
+        // neighbour's side: from the deepest of it in the patch, by the side it is nearest.)
         if i >= n_inner {
             for (e, de) in d.iter_mut().enumerate() {
                 let (va, vb) = edge_v(i, e);
                 if let Some(b) = wall_bows.get(&(va.min(vb), va.max(vb))) {
                     *de = de.max(7.0 + b);
+                }
+            }
+            if !wall_dense.is_empty() {
+                let ccw = area(&c.pts) > 0.0;
+                let inward: Vec<P> = (0..m)
+                    .map(|e| {
+                        let u = sub(c.pts[(e + 1) % m], c.pts[e]);
+                        let u = mul(u, 1.0 / len(u).max(1e-9));
+                        if ccw { [-u[1], u[0]] } else { [u[1], -u[0]] }
+                    })
+                    .collect();
+                let bb = c.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+                for p in wall_dense.iter().filter(|p| p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && contains(&c.pts, **p)) {
+                    let (e, depth) = (0..m).map(|e| (e, dot(sub(*p, c.pts[e]), inward[e]))).min_by(|x, y| x.1.total_cmp(&y.1)).unwrap_or((0, 0.0));
+                    d[e] = d[e].max(7.0 + depth);
                 }
             }
         }
