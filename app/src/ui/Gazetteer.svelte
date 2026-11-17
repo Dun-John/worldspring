@@ -68,8 +68,11 @@
     removed?: { id: string; name: string; what: string }[];
     onRestoreRemoved?: (id: string) => void;
     removedAt?: (layout: number) => string | null;
+    /** Roads, streets and paths taken off the map: brought back, or (`found` false: not there any more) forgotten. */
+    removedRoads?: { id: string; name: string | null; what: string; at: string | null; found: boolean }[];
+    onBringBack?: (id: string) => void;
   }
-  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow, aside = [], asideWhat = () => '', onForget = () => {}, removed = [], onRestoreRemoved = () => {}, removedAt = () => null }: Props = $props();
+  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow, aside = [], asideWhat = () => '', onForget = () => {}, removed = [], onRestoreRemoved = () => {}, removedAt = () => null, removedRoads = [], onBringBack = () => {} }: Props = $props();
 
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
@@ -100,7 +103,7 @@
   let withNotes = $state(false);
   /** Only what is kept on places no longer on the map. */
   let showAside = $state(false);
-  const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0) + removed.length);
+  const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0) + removed.length + removedRoads.length);
   // (Nothing left to show: back to the names.)
   $effect(() => {
     if (!asideN && showAside) showAside = false;
@@ -539,6 +542,22 @@
             <li class="row">
               <span class="grow what" title={r.what}><b>{r.name}</b> <span class="muted">{r.what}</span></span>
               <button class="ws-btn quiet" onclick={() => onRestoreRemoved(r.id)} title="Put it back where it was, with what was set aside when it was deleted"><Icon name="reset" size={14} /> Restore</button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      {#if removedRoads.length}
+        <div class="ws-label">Removed roads</div>
+        <ul class="list aside">
+          {#each removedRoads as r (r.id)}
+            {@const words = r.found ? [r.what, r.at].filter(Boolean).join(' · ') : 'no longer found'}
+            <li class="row">
+              <span class="grow what" title={words}><b>{r.name ?? (r.found ? r.what : 'A road')}</b> <span class="muted">{words}</span></span>
+              {#if r.found}
+                <button class="ws-btn quiet" onclick={() => onBringBack(r.id)} title="Put the road back where it was"><Icon name="reset" size={14} /> Bring back</button>
+              {:else}
+                <button class="ws-btn quiet" onclick={() => onBringBack(r.id)} title="Take it off this list: the road it was on has changed"><Icon name="trash" size={14} /> Forget</button>
+              {/if}
             </li>
           {/each}
         </ul>

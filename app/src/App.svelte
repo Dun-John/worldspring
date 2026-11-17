@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, SettlementFacts, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
+  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, RemovedRoad, SettlementFacts, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
+  import { withCut } from './editor/select';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
@@ -2628,6 +2629,32 @@
       }),
   );
 
+  /** Roads, streets and paths taken off the map, as the generator names them (for the Gazetteer). */
+  let removedRoads = $state<RemovedRoad[]>([]);
+  let removedRoadsSeq = 0;
+  $effect(() => {
+    const ids = edits.removed_roads;
+    void edits.towns;
+    const s = ++removedRoadsSeq;
+    if (!ids?.length) {
+      removedRoads = [];
+      return;
+    }
+    // (After the generators have the edits.)
+    setTimeout(() => void view.gen.removedRoads().then((list) => s === removedRoadsSeq && (removedRoads = list)), 0);
+  });
+
+  /** Bring the removed road `id` back (or forget it, if it is not there any more): one step. */
+  async function bringBackRoad(id: string) {
+    const cut = await view.gen.roadCut([id], true);
+    if (!cut) return toast('The map could not answer: try again');
+    if ('error' in cut) return toast(sentence(cut.error));
+    let next = withCut($state.snapshot(edits) as Edits, cut);
+    if (!cut.removed_roads && edits.removed_roads?.includes(id)) next = { ...next, removed_roads: edits.removed_roads.filter((x) => x !== id) };
+    for (const k of Object.keys(cut.towns)) view.hintTown(k, cut.towns[k], cut.rects);
+    applyEdits(next, { tool: 'remove_roads', restore: true, ids: [id], also: cut.also.length }, 'user');
+  }
+
   /** Restore the deleted village or town `id` where it was (if the spot is still free), with
    * what was set aside when it was deleted. One step. */
   async function restoreSettlement(id: string) {
@@ -4134,6 +4161,8 @@
               onForget={(entries, label) => applyEdits(forgetAside(edits, entries), { tool: 'forget_aside', label }, 'user')}
               removed={removedMade}
               onRestoreRemoved={(id) => void restoreSettlement(id)}
+              {removedRoads}
+              onBringBack={(id) => void bringBackRoad(id)}
               removedAt={(n) => {
                 const c = edits.created?.find((x) => x.removed && x.aside === n);
                 return c ? (renames[c.id] ?? c.name) : null;
