@@ -489,17 +489,10 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
                 }
             }
             if !wall_dense.is_empty() {
-                let ccw = area(&c.pts) > 0.0;
-                let inward: Vec<P> = (0..m)
-                    .map(|e| {
-                        let u = sub(c.pts[(e + 1) % m], c.pts[e]);
-                        let u = mul(u, 1.0 / len(u).max(1e-9));
-                        if ccw { [-u[1], u[0]] } else { [u[1], -u[0]] }
-                    })
-                    .collect();
                 let bb = c.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
                 for p in wall_dense.iter().filter(|p| p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && contains(&c.pts, **p)) {
-                    let (e, depth) = (0..m).map(|e| (e, dot(sub(*p, c.pts[e]), inward[e]))).min_by(|x, y| x.1.total_cmp(&y.1)).unwrap_or((0, 0.0));
+                    // (By distance to each side, not across its line: a patch moved by hand may be concave.)
+                    let (e, depth) = (0..m).map(|e| (e, seg_dist(*p, c.pts[e], c.pts[(e + 1) % m]))).min_by(|x, y| x.1.total_cmp(&y.1)).unwrap_or((0, 0.0));
                     d[e] = d[e].max(7.0 + depth);
                 }
             }
