@@ -20,8 +20,13 @@
 //!   `path` (`pp:<layout>:<spot>:<j>`, a park's, garden's or cemetery's walk; only in picks up to 400 ft out, a click or a small box): removable
 //!   (`roadcut`, `TownEdit::removed`); one added to a generated town by hand (`ts:<layout>:<id>`,
 //!   `TownEdit::streets`): removable. Roads, streets and paths removed by hand are left out;
-//! - without ids: a hand town's streets (changed in its street plan), a place's lanes, `hedge` /
-//!   `field_wall` (round a field), `fence` (a pen's).
+//! - `fence` (a generated run, `fr:<layout>:<8 hex>`, `town::fence`; only in picks up to 1,500 ft
+//!   out) and a park's hedge or row of topiary (`fh:<layout>:<spot>:<j>`, up to 400 ft out), of a
+//!   generated settlement: removable (`fencecut`, `TownEdit::fences`); `drawn_fence` (`f:<n>`,
+//!   `Edits.fences`) and `fence_gap` (`fg:<n>`, `Edits.fence_gaps`): removable. `fence` names its
+//!   kind's key (`FenceKind`); those removed by hand are left out;
+//! - without ids: a hand town's streets (changed in its street plan), a place's lanes, the fences
+//!   of a hand town or a site.
 
 use std::cell::{Cell, OnceCell};
 
@@ -61,7 +66,10 @@ pub struct Thing {
     pub removable: bool,
     /// World ft: x0, y0, x1, y1.
     pub bbox: [f64; 4],
-    /// For a line (road, street, lane, path, drawn road): its points near the pick (at most `LINE_PTS`), so an area can tell
+    /// (R6) A fence's or hedge's kind (`FenceKind` key; None a row of topiary, a gap).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fence: Option<&'static str>,
+    /// For a line (road, street, lane, path, drawn road, fence, gap): its points near the pick (at most `LINE_PTS`), so an area can tell
     /// whether the line runs through it. Only `pick_json` gives it.
     #[serde(skip)]
     pub line: Option<Vec<P>>,
@@ -69,6 +77,9 @@ pub struct Thing {
 
 /// The widest pick (ft from its middle to its corners) that lists parks' paths (`pp:`): a click or a small box.
 const PARK_PICK_FT: f64 = 400.0;
+
+/// The widest pick (ft from its middle to its corners) that lists generated fence runs (`fr:`).
+const FENCE_PICK_FT: f64 = 1500.0;
 
 /// The most points of a line `Thing::line` keeps.
 const LINE_PTS: usize = 160;
@@ -91,9 +102,9 @@ fn rank(kind: &str) -> u8 {
         "entrance" => 0,
         "crossing" | "harbour" => 1,
         "building" | "drawn_building" | "tower" => 2,
-        "wall" | "fence" => 3,
+        "wall" | "drawn_fence" => 3,
         "road" | "drawn_road" | "street" | "lane" | "path" => 4,
-        "hedge" | "field_wall" => 5,
+        "fence" | "fence_gap" => 5,
         "water" => 6,
         "castle" | "plot" => 7,
         "district" => 8,
@@ -126,6 +137,12 @@ fn line_d(pts: &[P], closed: bool, p: P) -> f64 {
     }
 }
 
+/// `s` with its first letter upper case.
+fn cap(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+}
+
 fn mid(pts: &[P]) -> Option<P> {
     pts.get(pts.len() / 2).copied()
 }
@@ -155,12 +172,15 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
     let why_now: Cell<(Option<&'static str>, Option<f32>)> = Cell::new((None, None));
     // (A line's points, set just before the `put` of it.)
     let line_now: Cell<Option<Vec<P>>> = Cell::new(None);
+    // (A fence's kind, set just before the `put` of it.)
+    let fence_now: Cell<Option<&'static str>> = Cell::new(None);
     let mut put = |d: f64, kind: &'static str, id: Option<String>, name: Option<String>, town: Option<String>, removable: bool, bbox: [f64; 4]| {
         let line = line_now.take();
+        let fence = fence_now.take();
         if d <= r {
             let seq = out.len();
             let (why, gap_ft) = if town.is_some() { why_now.get() } else { (None, None) };
-            out.push(Found { d: d.max(0.0), seq, thing: Thing { kind, id, name, town, why, gap_ft, removable, bbox, line } });
+            out.push(Found { d: d.max(0.0), seq, thing: Thing { kind, id, name, town, why, gap_ft, removable, fence, bbox, line } });
         }
     };
     let feature = |li: usize| crate::agent::feature_of_layout(world, t0, li);
@@ -323,21 +343,43 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                 }
             }
         }
-        // Hedges and dry-stone walls round fields, pens' fences.
-        for (f, info) in l.fields.iter().zip(&l.field_info) {
-            let kind = match info.bound {
-                town::fields::FieldBound::Hedge => "hedge",
-                town::fields::FieldBound::Wall => "field_wall",
-                town::fields::FieldBound::None => continue,
-            };
-            if near_box(f, at, r) {
-                put(line_d(f, true, at) - BOUND_HALF_FT, kind, None, None, home.clone(), false, bbox(f, BOUND_HALF_FT));
+        // (R6) Fences and hedges: a generated settlement's runs with their `fr:` ids, its parks'
+        // hedges and topiary rows (`fh:`, a click or a small box); those removed by hand left out.
+        let ids = generated && !town::hand::is_hand(world, li);
+        let fences = if ids { town::fence::changes_of(world, t0, li) } else { None };
+        let change = |local: &str| fences.and_then(|c| c.get(local));
+        if r <= FENCE_PICK_FT {
+            for (tag, a, b, kind) in town::fence::sources(l, t0, [at[0] - r, at[1] - r, at[0] + r, at[1] + r]) {
+                let (a, b) = town::fence::canonical(a, b);
+                let key = town::fence::run_key(tag, a, b);
+                let ch = change(&format!("{key:08x}"));
+                if ch.is_some_and(|c| c.gone) {
+                    continue;
+                }
+                let kind = ch.and_then(|c| c.kind).unwrap_or(kind);
+                line_now.set(Some(vec![a, b]));
+                fence_now.set(Some(kind.name()));
+                let id = ids.then(|| town::fence::fr_id(li, key));
+                put(geom::seg_dist(at, a, b) - BOUND_HALF_FT, "fence", id, Some(cap(kind.label())), home.clone(), ids, bbox(&[a, b], BOUND_HALF_FT));
             }
         }
-        if !l.yurts.is_empty() {
-            let pens = town::yurts::fences(l, [at[0] - r, at[1] - r, at[0] + r, at[1] + r]);
-            if let Some((d, s)) = pens.iter().map(|s| (geom::seg_dist(at, s.0, s.1), s)).min_by(|a, b| a.0.total_cmp(&b.0)) {
-                put(d - BOUND_HALF_FT, "fence", None, None, home.clone(), false, bbox(&[s.0, s.1], BOUND_HALF_FT));
+        if ids && r <= PARK_PICK_FT {
+            for (pk, park) in l.parks.iter().enumerate() {
+                if !near_box(&park.pts, at, r) {
+                    continue;
+                }
+                let spot = town::cut::park_spot(l, pk);
+                for (j, a, b, kind) in crate::fencecut::park_runs(world, t0, l, pk) {
+                    let ch = change(&format!("{spot}:{j}"));
+                    if ch.is_some_and(|c| c.gone) {
+                        continue;
+                    }
+                    let kind = ch.and_then(|c| c.kind).or(kind);
+                    line_now.set(Some(vec![a, b]));
+                    fence_now.set(kind.map(|k| k.name()));
+                    let name = kind.map_or_else(|| "Row of topiary".to_string(), |k| cap(k.label()));
+                    put(geom::seg_dist(at, a, b) - BOUND_HALF_FT, "fence", Some(town::fence::fh_id(li, &spot, j)), Some(name), home.clone(), true, bbox(&[a, b], BOUND_HALF_FT));
+                }
             }
         }
     }
@@ -403,6 +445,21 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
         if near_box(&p.pts, at, r + half) {
             line_now.set(Some(clip(&p.pts, at, r + half)));
             put(line_d(&p.pts, false, at) - half, "drawn_road", Some(id.clone()), renamed(id).or_else(|| p.name.clone()), mid(&p.pts).and_then(town_at), true, bbox(&p.pts, half));
+        }
+    }
+    // (R6) Fences drawn by hand and the eraser's gaps.
+    for (id, f) in &edits.fences {
+        if near_box(&f.pts, at, r + BOUND_HALF_FT) {
+            line_now.set(Some(clip(&f.pts, at, r + BOUND_HALF_FT)));
+            fence_now.set(Some(f.kind.name()));
+            put(line_d(&f.pts, f.closed, at) - BOUND_HALF_FT, "drawn_fence", Some(id.clone()), renamed(id).or_else(|| Some(cap(f.kind.label()))), mid(&f.pts).and_then(town_at), true, bbox(&f.pts, BOUND_HALF_FT));
+        }
+    }
+    for (id, g) in &edits.fence_gaps {
+        let half = g.r as f64;
+        if near_box(&g.pts, at, r + half) {
+            line_now.set(Some(clip(&g.pts, at, r + half)));
+            put(line_d(&g.pts, false, at) - half, "fence_gap", Some(id.clone()), Some("Gap".into()), mid(&g.pts).and_then(town_at), true, bbox(&g.pts, half));
         }
     }
     for (id, c) in &edits.crossings {
