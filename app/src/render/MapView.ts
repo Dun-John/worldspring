@@ -1585,6 +1585,42 @@ export class MapView {
       this.placesRect = null;
       this.placesEpoch++;
     }
+    // Towns' members changed by hand: what joined or left looks as its town's now (or no longer does), so
+    // the town's reach and each thing's own area are made again, with the town's labels and business pins.
+    const pm = prev.members ?? {};
+    const nm = next.members ?? {};
+    if (pm !== nm) {
+      const towns = new Set<number>();
+      const ids = new Set<string>();
+      for (const key of keys('members', pm, nm)) {
+        if (JSON.stringify(pm[key]) === JSON.stringify(nm[key])) continue;
+        towns.add(Number(key));
+        for (const m of [pm[key], nm[key]]) for (const id of [...(m?.add ?? []), ...(m?.remove ?? [])]) ids.add(id);
+      }
+      const made = [...(prev.created ?? []), ...(next.created ?? [])];
+      for (const id of ids) {
+        const c = made.find((x) => x.id === id);
+        if (c) {
+          const pts: [number, number][] = [[c.x - 150, c.y - 150], [c.x + 150, c.y + 150], ...(c.poly ?? []), ...(c.pts ?? [])];
+          rects.push([Math.min(...pts.map((p) => p[0])) - 5, Math.min(...pts.map((p) => p[1])) - 5, Math.max(...pts.map((p) => p[0])) + 5, Math.max(...pts.map((p) => p[1])) + 5]);
+        } else {
+          // (A generated building: the town it was laid out in.)
+          const li = /^b:(\d+):/.exec(id)?.[1];
+          if (li !== undefined) towns.add(Number(li));
+        }
+      }
+      for (const li of towns) {
+        const t = this.towns.find((t) => t.index === li);
+        if (!t) continue;
+        const r = 2.3 * t.r + 200;
+        rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
+        this.districtsAsked.delete(li);
+        this.labels?.forgetTown(li);
+        this.labels?.forgetPlaces(`b:${li}:`);
+      }
+      this.placesRect = null;
+      this.placesEpoch++;
+    }
     // Towns laid out by hand as streets (`Edits.streets`, keys `<li>` and `<li>/…`; `lanes/…` lie
     // outside any town): what their change said it redraws, else all they reach.
     const hs = (prev.streets ?? {}) as Record<string, unknown>;
