@@ -515,7 +515,8 @@ pub fn convert(world: &World, t0: &T0, index: usize) -> Result<Vec<(String, Valu
     let extent = base.buildings.iter().flat_map(|b| b.poly.iter()).chain(corner.values()).map(|p| dist(*p, center)).fold(0.0, f64::max);
     let town = HandTown {
         from: "generated".into(),
-        was: edit.cloned(),
+        // (A streets-only entry is no edit to plan with, yet going back brings its streets again.)
+        was: edit.cloned().or_else(|| world.file.edits.towns.get(&super::super::wards::key(index)).filter(|e| !e.streets.is_empty() && dist(e.at, center) <= TownEdit::SAME_AT_FT).cloned()),
         seed: hex(s.seed),
         culture: s.culture,
         fill: BlockFill::default(),
