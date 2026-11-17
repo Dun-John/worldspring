@@ -458,6 +458,30 @@ pub struct Edits {
     /// cobbled street along a line (`paths`); the world's road network and towns stay as they are.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paths: BTreeMap<String, crate::model::paths::Path>,
+    /// Towns' members set by hand (`<layout>` of a town, a made town or a `place` → `Members`):
+    /// drawn things (`c:<n>`) joined to it or kept out of it, and generated buildings
+    /// (`b:<layout>:<id>`) pushed out of their town into a `place`. Joins within
+    /// `town::members::JOIN_FT` are worked out, never stored (`town::members`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub members: BTreeMap<String, Members>,
+}
+
+/// A town's members set by hand: ids joined to it (`add`: drawn things `c:<n>` from anywhere,
+/// or generated buildings `b:<layout>:<id>` pushed out into this place) and drawn things kept out
+/// of it however near (`remove`: `c:<n>` only). An id is in at most one town's `add`
+/// (`town::members::change` keeps it so).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Members {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub add: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub remove: BTreeSet<String>,
+}
+
+impl Members {
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
 }
 
 /// An overland hex grid's settings: `size_mi` across the flats (centre to neighbouring centre),
@@ -975,8 +999,10 @@ pub struct Created {
     /// `c:<n>`.
     pub id: String,
     /// `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube` or `entrance`; a
-    /// drawn `building`, `castle` or `wall`; or a settlement (`CREATED_SETTLEMENTS`: `village`,
-    /// `town`), added without remaking the world.
+    /// drawn `building`, `castle`, `wall` or `plot`; a settlement (`CREATED_SETTLEMENTS`:
+    /// `village`, `town`), added without remaking the world; or a `place`: a town's generated
+    /// outskirts pushed out into a place of their own (`Edits.members`; no layout of its own, its
+    /// buildings stay in their town's), written only by `town::members::change`.
     pub kind: String,
     pub x: f64,
     pub y: f64,
@@ -1435,6 +1461,7 @@ impl Edits {
                 "streets" => self.streets = std::mem::take(&mut part.streets),
                 "links" => self.links = std::mem::take(&mut part.links),
                 "paths" => self.paths = std::mem::take(&mut part.paths),
+                "members" => self.members = std::mem::take(&mut part.members),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1476,6 +1503,7 @@ impl Edits {
                 "streets" => patch(&mut self.streets, p)?,
                 "links" => patch(&mut self.links, p)?,
                 "paths" => patch(&mut self.paths, p)?,
+                "members" => patch(&mut self.members, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1488,6 +1516,7 @@ impl Edits {
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty() && self.waters.is_empty()
             && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
             && self.streets.is_empty() && self.links.is_empty() && self.paths.is_empty()
+            && self.members.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1570,6 +1599,7 @@ impl Edits {
             "streets" => Some(one(&mut self.streets, op, field, &key)),
             "links" => Some(one(&mut self.links, op, field, &key)),
             "paths" => Some(one(&mut self.paths, op, field, &key)),
+            "members" => Some(one(&mut self.members, op, field, &key)),
             _ => None,
         };
         if let Some(before) = fast {
@@ -1680,6 +1710,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("streets", Shape::Map),
     ("links", Shape::Map),
     ("paths", Shape::Map),
+    ("members", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

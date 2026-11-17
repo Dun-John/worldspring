@@ -431,6 +431,10 @@ export interface Edits {
   links?: Record<string, LinkEdit>;
   /** Roads drawn by hand on the ground (`rw:<id>`: `worldgen::paths`). */
   paths?: Record<string, DrawnPath>;
+  /** Towns' members set by hand (`<layout>` of a town or a `place` → ids joined, `add`, or kept
+   * out however near, `remove`: `worldgen::world::Members`, `town::members`): drawn things `c:<n>`,
+   * and generated buildings `b:<layout>:<id>` pushed out into a place. Joins by distance are never stored. */
+  members?: Record<string, { add?: string[]; remove?: string[] }>;
 }
 
 /** An overland hex grid (`worldgen::world::HexGrid`; each field left out: its default, `HEX_DEFAULTS`):

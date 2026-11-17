@@ -49,11 +49,13 @@ pub fn sites_in(t0: &T0, si: usize) -> Vec<usize> {
     (n..layout_count(t0)).filter(|&li| site_point(t0, li).is_some_and(|p| dist(p, c) < r) && parent_of(t0, li) == Some(si)).collect()
 }
 
-/// A site layout's point (a created site's `x`, `y`), unless it is a settlement or removed.
+/// A site layout's point (a created site's `x`, `y`), unless it is a settlement, a place
+/// (`members`) or removed.
 fn site_point(t0: &T0, li: usize) -> Option<P> {
+    use crate::t0::settle::PoiKind;
     let k = li.checked_sub(t0.settlements.len())?;
     let p = t0.pois.get(k)?;
-    (!t0.created_site(k).is_some_and(|c| c.removed) && p.kind != crate::t0::settle::PoiKind::Settlement).then_some([p.x, p.y])
+    (!t0.created_site(k).is_some_and(|c| c.removed) && !matches!(p.kind, PoiKind::Settlement | PoiKind::Place)).then_some([p.x, p.y])
 }
 
 /// Of the settlements `among` (layouts), the one holding point `p` (nearest for its size, then by index).

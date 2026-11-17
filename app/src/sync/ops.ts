@@ -32,6 +32,7 @@ export const EDIT_FIELDS: Record<string, Shape> = {
   streets: 'map',
   links: 'map',
   paths: 'map',
+  members: 'map',
 };
 
 /** Layout numbers from here up are changes set aside when the world was remade (`PARKED_LAYOUT`
@@ -44,7 +45,7 @@ export const PARKED_LAYOUT = 1_000_000;
  * It mirrors `LAYOUT_ID_FIELDS` in `crates/worldgen/src/remap.rs`, the list a remade world
  * moves with their places (there, in the generator); here for an upgrade (`upgradeEdits`,
  * `restorePinned`). A new field that holds such ids joins both lists. */
-export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plots' | 'towns' | 'townPrefixed' | 'links' | 'handWharves'> = {
+export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plots' | 'towns' | 'townPrefixed' | 'links' | 'handWharves' | 'members'> = {
   renames: 'keys',
   notes: 'keys',
   hidden: 'values',
@@ -57,6 +58,7 @@ export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plot
   plots: 'plots',
   links: 'links',
   wharves: 'handWharves',
+  members: 'members',
 };
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);

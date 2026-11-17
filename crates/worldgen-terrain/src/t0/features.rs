@@ -931,6 +931,8 @@ impl Builder<'_> {
             PoiKind::Wall => ("wall", NameKind::Settlement, 1.0),
             PoiKind::Settlement => ("village", NameKind::Settlement, 3.0),
             PoiKind::Plot => ("plot", NameKind::Settlement, 1.0),
+            // (Listed as a village whatever its count: `town::members`.)
+            PoiKind::Place => ("village", NameKind::Settlement, 3.0),
         };
         // A way down is named for the theme it comes to (as `under::generate` will draw it).
         let theme_of = |p: &super::settle::Poi| {

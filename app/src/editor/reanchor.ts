@@ -15,6 +15,11 @@ function eachId(edits: Edits, f: (id: string) => void) {
     else if (where === 'townPrefixed') for (const k of Object.keys(v)) { const h = townHead(k); if (h) f(`t:${h[0]}`); }
     else if (where === 'handWharves') for (const k of Object.keys(v)) { const h = handWharf(k); if (h) f(`t:${h[0]}`); }
     else if (where === 'values') for (const k of v as string[]) f(k);
+    else if (where === 'members')
+      for (const [k, m] of Object.entries(v as Record<string, { add?: string[]; remove?: string[] }>)) {
+        f(`t:${k}`);
+        for (const id of [...(m.add ?? []), ...(m.remove ?? [])]) f(id);
+      }
     else if (where === 'npcs') for (const n of Object.values(v as Record<string, Npc>)) n.location && f(n.location.id);
     else if (where === 'links') for (const l of Object.values(v as Record<string, LinkEdit>)) {
       f(l.a.level);
@@ -56,6 +61,13 @@ function renamed(edits: Edits, rename: (id: string, bare?: boolean) => string): 
   if (edits.buildings) out.buildings = rekeyed(edits.buildings);
   if (edits.towns) out.towns = rekeyed(edits.towns, true);
   if (edits.cultures) out.cultures = rekeyed(edits.cultures, true);
+  if (edits.members)
+    out.members = Object.fromEntries(
+      Object.entries(edits.members).map(([k, m]) => {
+        const ids = (l?: string[]) => l && [...new Set(l.map((id) => to(id)))].sort();
+        return [to(k, true), { ...m, ...(m.add && { add: ids(m.add) }), ...(m.remove && { remove: ids(m.remove) }) }];
+      }),
+    );
   if (edits.streets)
     out.streets = Object.fromEntries(
       Object.entries(edits.streets).map(([k, v]) => {

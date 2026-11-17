@@ -19,6 +19,10 @@ pub use crate::model::under::ruin_under;
 pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let p = &t0.pois[poi];
     let center = [p.x, p.y];
+    // (A town's outskirts pushed out into a place: its buildings stay in the town's layout.)
+    if p.kind == PoiKind::Place {
+        return Layout { site: true, ..Layout::empty(index, center, 0.0, Tier::Village) };
+    }
     // (Keyed by its seed, or a created site's by its id, not its place in the list: `rng_key`.)
     let key = super::rng_key(t0, t0.settlements.len() + poi);
     let mut rng = Pcg32::new(hash2(world.stream("site"), key, p.seed as i64), 41);
@@ -240,7 +244,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             }
         }
         // (Laid out as a settlement, `town::generate`; never here.)
-        PoiKind::Settlement | PoiKind::Plot => {}
+        PoiKind::Settlement | PoiKind::Plot | PoiKind::Place => {}
         PoiKind::Building => {
             // Drawn by hand: one building, as the world file has it.
             if let Some(c) = created {

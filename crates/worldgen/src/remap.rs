@@ -43,6 +43,9 @@ pub enum IdsIn {
     /// Its keys of a hand town's wharves (`q:h<n>-<k>`, as conversion wrote them before P4), seen as `t:<n>`;
     /// other keys (wharves drawn by hand) name no place.
     HandWharves,
+    /// Its keys are bare layout numbers (a town's, seen as `t:<n>`) and its values hold ids
+    /// (`add`/`remove`: `c:<n>`, `b:<layout>:<id>`).
+    Members,
 }
 
 /// Every edits field that names a place, and how: layout-local ids (`b:<layout>:…`, `d:`, `t:`,
@@ -64,6 +67,7 @@ pub const LAYOUT_ID_FIELDS: &[(&str, IdsIn)] = &[
     ("plots", IdsIn::Plots),
     ("links", IdsIn::Links),
     ("wharves", IdsIn::HandWharves),
+    ("members", IdsIn::Members),
 ];
 
 /// Settlement kinds, as the app's labels have them (`SETTLEMENT_KINDS` in `ui/gazetteer.ts`).
@@ -227,6 +231,10 @@ fn each_id(edits: &Edits, mut f: impl FnMut(&str)) {
             "plots" => edits.plots.values().flat_map(|p| &p.anchors).for_each(|k| f(k)),
             "links" => edits.links.values().flat_map(|l| [&l.a.level, &l.b.level]).for_each(|k| f(k)),
             "wharves" => edits.wharves.keys().filter_map(|k| hand_wharf(k)).for_each(|(li, _)| f(&format!("t:{li}"))),
+            "members" => edits.members.iter().for_each(|(k, m)| {
+                f(&format!("t:{k}"));
+                m.add.iter().chain(&m.remove).for_each(|id| f(id));
+            }),
             _ => unreachable!("a layout-id field each_id doesn't read"),
         }
     }
@@ -254,6 +262,7 @@ fn renamed(edits: &Edits, mut rename: impl FnMut(&str, bool) -> String) -> (Edit
     out.buildings = rekey(&edits.buildings, false, &mut to);
     out.towns = rekey(&edits.towns, true, &mut to);
     out.cultures = rekey(&edits.cultures, true, &mut to);
+    out.members = edits.members.iter().map(|(k, m)| (to(k, true), crate::world::Members { add: m.add.iter().map(|id| to(id, false)).collect(), remove: m.remove.iter().map(|id| to(id, false)).collect() })).collect();
     // (A hand town's records: the layout number before the `/` renamed, the rest kept.)
     out.streets = edits.streets.iter().map(|(k, v)| (town_head(k).map_or_else(|| k.clone(), |(li, rest)| format!("{}{rest}", to(li, true))), v.clone())).collect();
     out.wharves = edits.wharves.iter().map(|(k, v)| (hand_wharf(k).map_or_else(|| k.clone(), |(li, rest)| format!("q:h{}{rest}", to(li, true))), v.clone())).collect();
