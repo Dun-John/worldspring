@@ -106,7 +106,7 @@ pub fn list() -> Vec<Value> {
             "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
             "id": { "type": "string" },
         }), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
-        json!({ "name": "regenerate", "title": "Remake the world", "description": "Remake the world with the sketch's pending changes (a few seconds). Edits on places that come out the same stay; those on places laid out differently, or whose pins were taken away, are set aside (`vanished` says what they said; world_overview's places_removed lists them later). The world gets a new hash; an open app loads it (asking first about unsaved work). Returns the changes kept, set aside and moved, the settlements before and after, and the time.", "inputSchema": schema(json!({}), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
+        json!({ "name": "regenerate", "title": "Remake the world", "description": "Remake the world with the sketch's pending changes (a few seconds). Edits on places that come out the same stay; those on places laid out differently or whose pins went are set aside (`vanished` says what they said; world_overview's places_removed lists them later). The world gets a new hash; an open app loads it, asking first about unsaved work. Returns the changes kept, set aside and moved, the settlements before and after, and the time.", "inputSchema": schema(json!({}), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
     ]
 }
 

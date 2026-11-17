@@ -18,7 +18,7 @@ fn end_schema(description: &str) -> Value {
 
 pub fn list() -> Vec<Value> {
     vec![
-        json!({ "name": "create_link", "title": "Link two places", "description": "Join a square of one place below ground to another's: a site underground (a level or room of u:/k:), a sewer section (w:) or a building's cellar (b:). Each end shows on its own map as a way across (way: stairs, ladder, passage, trapdoor, rope, portal; default stairs) naming the far end; furniture on the square gives way. Both ends must be floor, off the stairs, ways and other links. Returns its id (j:...) and both ends.", "inputSchema": schema(json!({
+        json!({ "name": "create_link", "title": "Link two places", "description": "Join a square of one place below ground to another's: a site underground (a level or room of u:/k:), a sewer section (w:) or a building's cellar (b:). Each end shows on its own map as a way across (way: stairs, ladder, passage, trapdoor, rope, portal; default stairs) naming the far end; furniture there gives way. Both ends must be floor, off the stairs, ways and other links. Returns its id (j:...) and both ends.", "inputSchema": schema(json!({
             "a": end_schema("One end"),
             "b": end_schema("The other end"),
             "way": { "type": "string", "enum": WAYS },
