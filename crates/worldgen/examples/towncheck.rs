@@ -127,7 +127,13 @@
 //!   (the first two towns, twice); lots per 100 ft of a street's side. `ROWS=n`: towns a world (12);
 //!   `SVG_DIR`: a picture a world, up to 6.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [same|fills|rows|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
+//! - `streetsin` (not in `all`; Roadmap 6 R7): walled towns' main streets from their gates: length within 30 ft of
+//!   the town wall's inner face past the first 15 ft (and the part running along it), the straight run from the
+//!   gate before the first piece turning over 20 degrees off the wall's inward normal; a summary line over every
+//!   world with the worst 5 towns (seeds 1-24 to compare). `STREETS_DUMP="L<i> <name>"`: that town's streets
+//!   piece by piece (heading against the gate's inward normal, distance to the wall).
+//!
+//! Usage: cargo run --release -p worldgen --example towncheck -- [streetsin|same|fills|rows|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -1120,6 +1126,157 @@ fn town_ring(ctx: &Ctx, l: &Layout, li: usize, tag: &str, r: &mut Report) {
             r.add("town-wall ring sides with 15 ft+ of dry ground and no wall (gates aside)", bare, format!("{tag}: {bare:.0} ft from {}", at(first.unwrap_or(pa))));
         }
     }
+}
+
+// The worst walled towns by main-street hugging over every world (`streetsin`): ft and where.
+thread_local! {
+    static HUGGERS: std::cell::RefCell<Vec<(f64, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `streetsin` (R7): each walled town's main streets (`Layout::streets`, gate to market square). Hugging: the
+/// length (5-ft steps, past its first 15 ft) whose centre line is within 30 ft of the town wall's inner face
+/// (its centre line less half its thickness); along: the part of that heading within 45 degrees of the
+/// nearest wall piece. Straight run: from the gate to the start of the first piece of the street (3 ft or
+/// longer) heading more than 20 degrees off the gate's inward normal (the wall's within 50 ft of the gate).
+fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
+    r.counts(&["walled towns", "main streets", "main streets hugging the wall", "main streets running along the wall", "main streets straight for under 100 ft (longer streets)", "main streets under 100 ft long", "main streets from an open edge (no wall at the gate)"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let (mut hug_all, mut along_all) = (0.0f64, 0.0f64);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.walls.is_empty() || l.streets.is_empty() {
+            continue;
+        }
+        let castle = Castle::of(&l);
+        let walls: Vec<&[P]> = match &castle {
+            Some(c) => c.town.clone(),
+            None => l.walls.iter().map(|w| w.as_slice()).collect(),
+        };
+        let segs: Vec<(P, P)> = walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).filter(|s| dist(s.0, s.1) > 1e-6).collect();
+        if segs.is_empty() {
+            continue;
+        }
+        r.tally("walled towns", 1);
+        let half = 0.5 * l.wall_style.thickness();
+        let name = worldgen::agent::feature_of_layout(world, t0, li).and_then(|id| worldgen::agent::name_of(world, t0, &id)).unwrap_or_else(|| "?".into());
+        let tag = format!("L{li} {name}");
+        let (mut town_hug, mut worst_street) = (0.0f64, String::new());
+        for (si, st) in l.streets.iter().enumerate() {
+            r.tally("main streets", 1);
+            let total: f64 = st.windows(2).map(|w| dist(w[0], w[1])).sum();
+            let (mut hug, mut along, mut s) = (0.0f64, 0.0f64, 0.0f64);
+            let mut first_hug: Option<P> = None;
+            for w in st.windows(2) {
+                let d = dist(w[0], w[1]);
+                if d < 1e-6 {
+                    continue;
+                }
+                let u = mul(sub(w[1], w[0]), 1.0 / d);
+                let n = (d / 5.0).ceil().max(1.0) as usize;
+                let step = d / n as f64;
+                for k in 0..n {
+                    let m = lerp(w[0], w[1], (k as f64 + 0.5) / n as f64);
+                    let sm = s + (k as f64 + 0.5) * step;
+                    if sm < 15.0 {
+                        continue;
+                    }
+                    let (near, wd) = segs.iter().map(|&(a, b)| (seg_dist(m, a, b), (a, b))).min_by(|x, y| x.0.total_cmp(&y.0)).unwrap();
+                    if near - half <= 30.0 {
+                        hug += step;
+                        first_hug.get_or_insert(m);
+                        let wu = mul(sub(wd.1, wd.0), 1.0 / dist(wd.0, wd.1));
+                        if dot(u, wu).abs() > std::f64::consts::FRAC_1_SQRT_2 {
+                            along += step;
+                        }
+                    }
+                }
+                s += d;
+            }
+            if hug > 0.0 {
+                r.add("main streets hugging the wall", hug, format!("{tag} street {si}: {hug:.0} ft from {}", at(first_hug.unwrap_or(st[0]))));
+            }
+            if along > 0.0 {
+                r.add("main streets running along the wall", along, format!("{tag} street {si}: {along:.0} ft"));
+            }
+            r.value("main streets' hugging ft", hug, format!("{tag} street {si}"));
+            r.value("main streets' along-the-wall ft", along, format!("{tag} street {si}"));
+            hug_all += hug;
+            along_all += along;
+            if hug > 0.0 && (worst_street.is_empty() || hug > town_hug) {
+                worst_street = format!("street {si} {hug:.0} ft");
+            }
+            town_hug += hug;
+            // (The gate's inward normal: the wall pieces within 50 ft of it, their directions summed one way.)
+            let g = st[0];
+            let mut dir = [0.0, 0.0];
+            for &(a, b) in segs.iter().filter(|(a, b)| seg_dist(g, *a, *b) < 50.0) {
+                let v = sub(b, a);
+                dir = if dot(v, dir) < 0.0 { sub(dir, v) } else { add(dir, v) };
+            }
+            if len(dir) < 1e-6 {
+                r.add("main streets from an open edge (no wall at the gate)", 1.0, format!("{tag} street {si} at {}", at(g)));
+                continue;
+            }
+            let wu = mul(dir, 1.0 / len(dir));
+            let mut nrm = [-wu[1], wu[0]];
+            if dot(nrm, sub(st[st.len() - 1], g)) < 0.0 {
+                nrm = mul(nrm, -1.0);
+            }
+            if std::env::var("STREETS_DUMP").is_ok_and(|v| v == tag) {
+                eprintln!("{tag} street {si}: gate {g:?} wall dir {wu:?} normal {nrm:?} half {half}");
+                for w in st.windows(2) {
+                    let d = dist(w[0], w[1]);
+                    let wd = segs.iter().map(|&(a, b)| seg_dist(w[1], a, b)).fold(f64::MAX, f64::min);
+                    eprintln!("  -> {:?} len {d:.0} cos {:.2} wall {wd:.0}", w[1], dot(mul(sub(w[1], w[0]), 1.0 / d.max(1e-9)), nrm));
+                }
+            }
+            let (mut run, mut bent) = (0.0f64, false);
+            for w in st.windows(2) {
+                let d = dist(w[0], w[1]);
+                if d >= 3.0 && dot(mul(sub(w[1], w[0]), 1.0 / d), nrm) < libm::cos(20f64.to_radians()) {
+                    bent = true;
+                    break;
+                }
+                run += d;
+            }
+            r.value("main streets' straight run ft", run, format!("{tag} street {si}"));
+            if total < 100.0 {
+                r.add("main streets under 100 ft long", 100.0 - total, format!("{tag} street {si}: {total:.0} ft"));
+            } else if bent && run < 100.0 {
+                r.add("main streets straight for under 100 ft (longer streets)", 100.0 - run, format!("{tag} street {si}: {run:.0} ft"));
+            }
+        }
+        if town_hug > 0.0 {
+            HUGGERS.with(|h| h.borrow_mut().push((town_hug, format!("{label} {tag}: {town_hug:.0} ft (worst {worst_street})"))));
+        }
+    }
+    r.measure("hugging ft, all streets", false, hug_all, label.to_string());
+    r.measure("along the wall ft, all streets", false, along_all, label.to_string());
+}
+
+/// `streetsin`'s line over every world: hugging and along-the-wall ft summed, and the worst 5 towns.
+fn streets_in_summary(all: &Report) {
+    let count = |label: &str| all.rows.iter().find(|r| r.0 == label).map_or(0, |r| if let Row::Count { n, .. } = r.1 { n } else { 0 });
+    let sum = |label: &str| all.rows.iter().find(|r| r.0 == label).map_or(0.0, |r| if let Row::Values { v } = &r.1 { v.iter().map(|x| x.0).sum() } else { 0.0 });
+    HUGGERS.with(|h| {
+        let mut h = h.borrow_mut();
+        h.sort_by(|a, b| b.0.total_cmp(&a.0));
+        say!(
+            "streetsin summary: {} walled towns, {} main streets; hugging {:.0} ft ({} streets), along the wall {:.0} ft ({} streets); straight under 100 ft: {}; under 100 ft long: {}; open-edge gates: {}",
+            count("walled towns"),
+            count("main streets"),
+            sum("main streets' hugging ft"),
+            count("main streets hugging the wall"),
+            sum("main streets' along-the-wall ft"),
+            count("main streets running along the wall"),
+            count("main streets straight for under 100 ft (longer streets)"),
+            count("main streets under 100 ft long"),
+            count("main streets from an open edge (no wall at the gate)")
+        );
+        for (_, w) in h.iter().take(5) {
+            say!("    {w}");
+        }
+    });
 }
 
 const CASTLE_SPOTS: [&str; 15] = [
@@ -6529,7 +6686,7 @@ fn slums(world: &worldgen::World, t0: &worldgen::t0::T0, label: &str, r: &mut Re
 }
 
 fn main() {
-    const MODES: [&str; 31] = ["slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
+    const MODES: [&str; 32] = ["streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -6583,6 +6740,7 @@ fn main() {
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "handwalls" => handwalls(&mut ctx, &mut r),
                 "wallgates" => wallgates(&mut ctx, &mut r),
+                "streetsin" => streets_in(&mut ctx, &label, &mut r),
                 "castlepieces" => castle_pieces(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
@@ -6608,6 +6766,9 @@ fn main() {
                 all.get_mut(mode).unwrap().print();
             }
         }
+    }
+    if let Some(a) = all.get("streetsin") {
+        streets_in_summary(a);
     }
 }
 
