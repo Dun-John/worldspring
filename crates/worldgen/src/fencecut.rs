@@ -454,9 +454,13 @@ pub fn change(world: &World, t0: &T0, ids: &[String], op: &Op, dry: bool) -> Cha
                     }
                 };
                 let r = rect(&[run.a, run.b], PAD_FT);
-                let to = if run.on_plan() && matches!(op, Op::Remove | Op::Restore) { &mut out.site_rects } else { &mut out.rects };
+                // A run with a plan mark redraws its site's tiles too, besides the battlemaps.
+                let plan = run.on_plan() && matches!(op, Op::Remove | Op::Restore);
                 if dry {
-                    to.push(r);
+                    out.rects.push(r);
+                    if plan {
+                        out.site_rects.push(r);
+                    }
                     out.done.push(id.clone());
                     continue;
                 }
@@ -487,7 +491,10 @@ pub fn change(world: &World, t0: &T0, ids: &[String], op: &Op, dry: bool) -> Cha
                 });
                 match res {
                     Ok(()) => {
-                        to.push(r);
+                        out.rects.push(r);
+                        if plan {
+                            out.site_rects.push(r);
+                        }
                         out.done.push(id.clone());
                     }
                     Err(why) => refuse(&mut out, id, &why),
