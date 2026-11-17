@@ -7,7 +7,7 @@ use crate::town::handwall::cut;
 pub use crate::town::pieces::BuildingChange;
 
 /// The streets, walls, squares and world roads in an area (`list_streets`): each layout (settlement or site) in `rect` gives its streets
-/// (`{what: street, settlement, width_ft, kind, pts}`), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and
+/// (`{what: street, settlement, width_ft, kind, pts}`, one added by hand with its `ts:` id), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and
 /// squares (`square`, whole: `kind`, `pts`), then the world's roads (`road`: `id` rd:, `class`, `pts`); lines are cut to the area
 /// (`inside` tells which points are in it), points in whole ft.
 pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> bool) -> Vec<Value> {
@@ -33,9 +33,15 @@ pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> 
             }
             v
         };
-        for (pts, class, w) in &l.roads {
+        let added = town::added::ids(world, t0, &l);
+        for (k, (pts, class, w)) in l.roads.iter().enumerate() {
+            let id = added.iter().find(|x| x.0 == k).map(|x| format!("ts:{li}:{}", x.1));
             for r in clip_runs(pts, inside) {
-                out.push(with("street", json!({ "width_ft": crate::core::round(*w), "kind": street_kind(*class), "pts": pts_json(&r) })));
+                let mut x = json!({ "width_ft": crate::core::round(*w), "kind": street_kind(*class), "pts": pts_json(&r) });
+                if let Some(id) = &id {
+                    x["id"] = json!(id);
+                }
+                out.push(with("street", x));
             }
         }
         let created = if li >= generated { world.file.edits.created.get(li - generated) } else { None };

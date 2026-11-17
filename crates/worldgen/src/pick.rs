@@ -15,6 +15,8 @@
 //! - `road` (`rd:<8 hex>`, a world road stretch), `drawn_road` (`rw:<id>`, `Edits.paths`:
 //!   removable), `crossing` (`v:<id>`: removable), `water` (`e:<id>`: removable), `harbour`
 //!   (`q:<id>`, a quay, pier or breakwater built by hand: removable);
+//! - `street` / `lane` added to a generated town by hand (`ts:<layout>:<id>`, `TownEdit::streets`:
+//!   removable);
 //! - without ids yet: `lane` (a village's), `street` (a town's), `hedge` / `field_wall` (round a
 //!   field), `fence` (a pen's).
 
@@ -243,9 +245,13 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                 put(line_d(s, false, at) - half, lane, None, None, home.clone(), false, bbox(s, half));
             }
         }
-        for (s, _, w) in &l.roads {
+        // (R4: a street added to a generated town has an id, `ts:<layout>:<id>`, and goes with its `TownEdit` street.)
+        let added = town::added::ids(world, t0, l);
+        for (k, (s, _, w)) in l.roads.iter().enumerate() {
             if near_box(s, at, r + 0.5 * w) {
-                put(line_d(s, false, at) - 0.5 * w, lane, None, None, home.clone(), false, bbox(s, 0.5 * w));
+                let id = added.iter().find(|x| x.0 == k).map(|x| format!("ts:{li}:{}", x.1));
+                let removable = id.is_some();
+                put(line_d(s, false, at) - 0.5 * w, lane, id, None, home.clone(), removable, bbox(s, 0.5 * w));
             }
         }
         // Hedges and dry-stone walls round fields, pens' fences.
