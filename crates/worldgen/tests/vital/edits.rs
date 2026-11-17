@@ -388,6 +388,12 @@ fn agent_edits_guarantee() {
     assert!(!kids["sites"].as_array().unwrap().iter().any(|s| s["id"] == gone_camp.id), "a removed site is among the city's sites");
     let got = agent::get(world, t0, &city).unwrap();
     assert!(got["npcs"].as_array().unwrap().iter().any(|n| n["id"] == "n:host") && got["plots"].as_array().unwrap().iter().any(|p| p["id"] == "p:upstairs"), "the city does not show the inn's NPC and plot");
+    // (R3) Part of the city, its cellar meets the city's sewers, and the sewer section there has
+    // the ladder up into it.
+    let it = worldgen::interior::generate_id(world, t0, &ib).expect("the inn's inside");
+    let w = it.levels.iter().flat_map(|l| &l.links).find(|k| k.to.starts_with(&format!("w:{ci}:"))).map(|k| k.to.clone()).expect("the inn's cellar has no way into the city's sewers");
+    let sec = worldgen::interior::generate_id(world, t0, &w).expect("the sewer section under the inn");
+    assert!(sec.levels.iter().flat_map(|l| &l.links).any(|k| k.to == ib), "the sewers have no ladder up into the inn's cellar ({w})");
     // Found on the map, it is in the city's district there.
     let quarter = town::layout(world, t0, ci).quarters.iter().find(|q| q.patches.iter().any(|p| geom::contains(p, gc))).map(|q| q.name.clone());
     let pins = serde_json::to_value(worldgen::gazetteer::in_view(world, t0, [gc[0] - 50.0, gc[1] - 50.0, gc[0] + 50.0, gc[1] + 50.0], 100)).unwrap();
@@ -863,6 +869,22 @@ fn town_membership() {
 
     let o = owners(&world(row(301.0), &[]), &mut t0, first, false);
     assert!(o.iter().all(Option::is_none), "a row 301 ft from a town's edge is still part of it: {o:?}");
+    // Joined, a house looks the town's (its culture, roofs' age, its own roofs' seed from the
+    // town's) and its homes count among the town's people; 301 ft out, neither.
+    let far = world(row(301.0), &[]);
+    let (fl, fg) = (town::layout(&far, &t0, first), town::generated_layout(&far, &t0, first));
+    assert!(members::look(&far, &t0, first).is_none() && fl.roof_seed == fg.roof_seed && fl.buildings[0].ward == fg.buildings[0].ward, "a house 301 ft out still looks the town's");
+    assert!(members::people(&far, &t0, si).is_none(), "a row 301 ft out counts among the town's people");
+    owners(&near, &mut t0, first, false);
+    let (hl, k) = (town::layout(&near, &t0, first), members::look(&near, &t0, first).expect("a joined house's look"));
+    assert!(k.town == si && k.culture == Some(l.culture) && k.roof_age == l.roof_age && k.roof_seed != l.roof_seed, "a joined house's look is not the town's: {k:?}");
+    assert!((hl.culture, hl.roof_seed, hl.roof_age, Some(hl.buildings[0].ward)) == (l.culture, k.roof_seed, l.roof_age, k.ward) && k.ward.is_some(), "a joined house is not drawn in the town's look");
+    let pop = t0.settlements[si].population;
+    let (people, _) = members::people(&near, &t0, si).expect("the town's people with its members");
+    let homes: u32 = (0..8).map(|k| town::hand::people_of(&town::layout(&near, &t0, first + k))).sum();
+    assert!(homes > 0 && people == pop + homes, "the row's homes do not count among the town's people: {people} vs {pop} + {homes}");
+    let id = worldgen::agent::feature_of_layout(&near, &t0, si).unwrap();
+    assert!(worldgen::agent::town_sizes(&near, &t0).iter().any(|s| s.0 == id && s.3 == people), "the town's size as listed misses its members");
     let o = owners(&world(row(200.0), &[(si, &[], &["c:0"])]), &mut t0, first, false);
     assert_eq!((o[0], o[1].map(|o| o.0)), (None, Some(si)), "a hand Leave did not beat the distance");
     let o = owners(&world(row(301.0), &[(si, &["c:7"], &[])]), &mut t0, first, false);
