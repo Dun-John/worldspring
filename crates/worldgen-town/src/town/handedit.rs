@@ -198,7 +198,7 @@ fn line_of(recs: &HandRecords, st: &Street) -> Option<Vec<P>> {
     Some(std::iter::once(a.p).chain(st.bends.iter().copied()).chain([b.p]).collect())
 }
 
-fn project(p: P, a: P, b: P) -> P {
+pub(super) fn project(p: P, a: P, b: P) -> P {
     let d = sub(b, a);
     let l2 = dot(d, d);
     if l2 <= 1e-12 {
@@ -212,7 +212,7 @@ fn cross2(a: P, b: P) -> f64 {
 }
 
 /// Where segments a-b and c-d cross (the share along a-b), if they do.
-fn crossing(a: P, b: P, c: P, d: P) -> Option<f64> {
+pub(super) fn crossing(a: P, b: P, c: P, d: P) -> Option<f64> {
     let (r, s) = (sub(b, a), sub(d, c));
     let den = cross2(r, s);
     if den.abs() < 1e-12 {

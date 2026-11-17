@@ -101,7 +101,7 @@ fn join_end<'a>(l: &Layout, others: impl Iterator<Item = &'a [P]>, pts: &[P], fi
             if end[0] < a[0].min(b[0]) - JOIN_END_FT || end[0] > a[0].max(b[0]) + JOIN_END_FT || end[1] < a[1].min(b[1]) - JOIN_END_FT || end[1] > a[1].max(b[1]) + JOIN_END_FT {
                 continue;
             }
-            let q = closest(end, a, b);
+            let q = handedit::project(end, a, b);
             let d = dist(end, q);
             if d > JOIN_END_FT || best.is_some_and(|(bd, bq, _)| (d, q[0], q[1]) >= (bd, bq[0], bq[1])) {
                 continue;
@@ -122,27 +122,8 @@ fn join_end<'a>(l: &Layout, others: impl Iterator<Item = &'a [P]>, pts: &[P], fi
     (!crossed).then_some(q)
 }
 
-/// Where segments a-b and c-d cross, if they do.
 fn meet(a: P, b: P, c: P, d: P) -> Option<P> {
-    let (r, s) = (sub(b, a), sub(d, c));
-    let den = cross(r, s);
-    if crate::core::fabs(den) < 1e-12 {
-        return None;
-    }
-    let t = cross(sub(c, a), s) / den;
-    let u = cross(sub(c, a), r) / den;
-    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then(|| add(a, mul(r, t)))
-}
-
-/// The point of segment a-b nearest `p`.
-fn closest(p: P, a: P, b: P) -> P {
-    let ab = sub(b, a);
-    let l2 = dot(ab, ab);
-    if l2 <= 1e-12 {
-        return a;
-    }
-    let t = (dot(sub(p, a), ab) / l2).clamp(0.0, 1.0);
-    add(a, mul(ab, t))
+    handedit::crossing(a, b, c, d).map(|t| add(a, mul(sub(b, a), t)))
 }
 
 /// Whether line `line` (world ft) crosses one of layout `l`'s walls (a town's or a castle's).
