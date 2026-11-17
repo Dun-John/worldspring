@@ -97,14 +97,19 @@ async fn plan(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     let id = a["id"].as_str().ok_or("missing 'id'")?.to_string();
     let dry = a["dry_run"].as_bool().unwrap_or(false);
-    {
+    let members = a.get("members").filter(|m| !m.is_null()).cloned();
+    if members.as_ref().is_some_and(|m| !m.is_object()) {
+        return Err("members: an object {add?, remove?}".into());
+    }
+    let others = a.as_object().is_some_and(|m| m.keys().any(|k| !["id", "dry_run", "world", "members"].contains(&k.as_str())));
+    // (Members alone go to any town, a hand-laid one or a place too; the ward editor's edits to a generated one's.)
+    if members.is_none() || others {
         let town = id.clone();
         let hand = app.worker.with(move |ex| Ok(agent::layout_of(&ex.world, &ex.t0, &town).is_some_and(|l| worldgen::town::hand::is_hand(&ex.world, l)))).await?;
         if hand {
             return Err(format!("{id} is laid out by hand: its streets are changed with edit_streets (get_street_plan reads them; edit_streets op back_to_generated returns it to the ward editor)"));
         }
     }
-    let members = a.get("members").filter(|m| !m.is_null()).cloned();
     let mut req = a.clone();
     if let Some(m) = req.as_object_mut() {
         for k in ["id", "dry_run", "world", "members"] {
@@ -130,7 +135,7 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     let (li, edit, mut report, mchange) = app
         .worker
         .with(move |ex| {
-            let li = town_index(ex, &id)?;
+            let li = if only_members { agent::layout_of(&ex.world, &ex.t0, &id).filter(|&l| agent::is_town(&ex.world, &ex.t0, l)).ok_or_else(|| format!("{id} is not a settlement or a place"))? } else { town_index(ex, &id)? };
             let (edit, report) = if only_members { (None, json!({})) } else { wards::change(&ex.world, &ex.t0, li, &req)? };
             let mchange = if m_add.is_empty() && m_remove.is_empty() { None } else { Some(worldgen::town::members::change(&ex.world, &ex.t0, li, &m_add, &m_remove)?) };
             Ok((li, edit, report, mchange))
@@ -146,6 +151,10 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     if dry {
         report["dry_run"] = json!(true);
         report["edited"] = json!(edit.is_some() || mchange.as_ref().is_some_and(|c| !c.members.is_empty() || !c.created.is_empty()));
+        return Ok(report);
+    }
+    if only_members && mchange.as_ref().is_none_or(|c| c.members.is_empty() && c.created.is_empty()) {
+        report["edited"] = json!(false);
         return Ok(report);
     }
     let key = wards::key(li);

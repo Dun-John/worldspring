@@ -2249,6 +2249,9 @@ city's sewers where it is in reach of the paved streets. `members` is the hand c
 `place`, named in the town's culture, shown as a village) that takes them as its own, and the reply says so.
 Buildings inside the wall ring or a quarter are refused, each in `members_refused` (`id`, `why`). The reply's
 `members` says what joined, left or moved out; `dry_run` reports without changing.
+`members` alone also works for a town laid out by hand and for a place (`id` a place's id), which is how `add`
+takes buildings into a place; a generated building already in a place stays there (refused as already out).
+With other edits in the call the town must be a generated one.
 
 ```json
 { "name": "edit_town", "arguments": { "id": "city:6c30c809", "members": { "add": ["c:12"], "remove": ["b:5:340"] } } }
