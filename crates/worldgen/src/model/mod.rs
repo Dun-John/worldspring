@@ -2,5 +2,9 @@
 //! below terrain and settlements so that `world` needs nothing above it.
 
 pub mod consts;
+pub mod ground;
 pub mod ids;
+pub mod links;
+pub mod paths;
+pub mod town;
 pub mod under;

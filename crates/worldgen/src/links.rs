@@ -5,40 +5,15 @@
 //! furniture under it gives way. Only places a link names change (`dress`, the one hook, in
 //! `interior::generate_id`): a world without links builds as before.
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::interior::{Far, Interior, Item, Level, Link as Way};
 use crate::t0::T0;
 use crate::world::{Edits, World};
+pub use crate::model::links::{End, Link, WAYS};
 
 /// The item kind each end shows as.
 pub const KIND: &str = "link";
-/// How a link goes (its item's name; `variant` is its place here): the first is the default.
-pub const WAYS: [&str; 6] = ["stairs", "ladder", "passage", "trapdoor", "rope", "portal"];
-
-fn stairs() -> String {
-    WAYS[0].into()
-}
-
-/// One end: a level (`l:<site>:<level>`, levels counted from the bottom) and a square on it.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct End {
-    pub level: String,
-    pub x: u16,
-    pub y: u16,
-}
-
-/// A paired exit: two ends, how it goes (`WAYS`) and a name of its own, if it has one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Link {
-    pub a: End,
-    pub b: End,
-    #[serde(default = "stairs")]
-    pub way: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
 
 /// The way's own static name (an unknown one reads as stairs) and its place in `WAYS`.
 pub fn way_of(way: &str) -> (&'static str, usize) {

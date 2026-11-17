@@ -252,14 +252,14 @@ impl Water {
         if !self.pts.iter().all(|p| p[0].is_finite() && p[1].is_finite()) || !self.level.is_finite() || self.level.abs() > 30_000.0 {
             return Some("points and level must be finite (level ±30,000 ft at most)".into());
         }
-        let b = crate::ground::bbox(&self.pts);
+        let b = crate::model::ground::bbox(&self.pts);
         if b[2] - b[0] > MAX_WATER_SPAN_FT || b[3] - b[1] > MAX_WATER_SPAN_FT {
             return Some(format!("an outline spans at most {MAX_WATER_SPAN_FT} ft"));
         }
         if geom::area(&self.pts).abs() < 25.0 {
             return Some("the outline holds no water".into());
         }
-        if crate::ground::crosses_itself(&self.pts) {
+        if crate::model::ground::crosses_itself(&self.pts) {
             return Some("the outline crosses itself".into());
         }
         // (The shaped shore never crosses itself: `shape` shapes less until it doesn't.)
@@ -370,7 +370,7 @@ impl Water {
         if self.levels.len() > MAX_STREAM_LEVELS || self.levels.iter().any(|l| !l.is_finite() || l.abs() > 30_000.0) || !self.levels.is_empty() && self.levels.len() < 2 {
             return Some(format!("a stream's levels are 2 to {MAX_STREAM_LEVELS} finite heights"));
         }
-        let b = crate::ground::bbox(&self.pts);
+        let b = crate::model::ground::bbox(&self.pts);
         if b[2] - b[0] > MAX_WATER_SPAN_FT || b[3] - b[1] > MAX_WATER_SPAN_FT {
             return Some(format!("a line spans at most {MAX_WATER_SPAN_FT} ft"));
         }
@@ -379,7 +379,7 @@ impl Water {
         if len < self.width_ft() || c.windows(2).any(|s| geom::dist(s[0], s[1]) < 0.5) {
             return Some("the line is too short, or has points on top of each other".into());
         }
-        if closed && (crate::ground::crosses_itself(&c) || fabs(geom::area(&c)) < 25.0) {
+        if closed && (crate::model::ground::crosses_itself(&c) || fabs(geom::area(&c)) < 25.0) {
             return Some("the ring crosses itself or holds nothing".into());
         }
         if !band_ok(&c, closed, 0.5 * self.width_ft()) {
@@ -415,7 +415,7 @@ impl Water {
     fn usable(&self) -> bool {
         let least = if self.is_line() { 2 } else { 3 };
         (least..=MAX_WATER_PTS).contains(&self.pts.len()) && self.pts.iter().all(|p| p[0].is_finite() && p[1].is_finite()) && self.level.is_finite() && self.levels.iter().all(|l| l.is_finite()) && {
-            let b = crate::ground::bbox(&self.pts);
+            let b = crate::model::ground::bbox(&self.pts);
             b[2] - b[0] <= MAX_WATER_SPAN_FT && b[3] - b[1] <= MAX_WATER_SPAN_FT
         }
     }
@@ -609,13 +609,13 @@ fn side(c: &[P], h: f64, closed: bool) -> Vec<P> {
 fn band_ok(c: &[P], closed: bool, h: f64) -> bool {
     if !closed {
         let (b, _) = band(c, false, h);
-        return !crate::ground::crosses_itself(&b);
+        return !crate::model::ground::crosses_itself(&b);
     }
     let (outer, inner) = (side(c, h, true), side(c, -h, true));
     let (ao, ai) = (geom::area(&outer), geom::area(&inner));
     let (big, small) = if fabs(ao) >= fabs(ai) { (&outer, &inner) } else { (&inner, &outer) };
     let (ab, asm) = (geom::area(big), geom::area(small));
-    ab * asm > 0.0 && fabs(asm) >= 25.0 && !crate::ground::crosses_itself(big) && !crate::ground::crosses_itself(small) && !edges_cross(big, small) && geom::contains(big, small[0])
+    ab * asm > 0.0 && fabs(asm) >= 25.0 && !crate::model::ground::crosses_itself(big) && !crate::model::ground::crosses_itself(small) && !edges_cross(big, small) && geom::contains(big, small[0])
 }
 
 fn edges_cross(a: &[P], b: &[P]) -> bool {
@@ -651,7 +651,7 @@ thread_local! {
 /// The app mirrors it (`app/src/editor/water.ts` `shapeShore`).
 pub fn shape(pts: &[P], natural: bool) -> Vec<P> {
     let n = pts.len();
-    let ok = |s: &[P]| s.len() >= 3 && s.iter().all(|p| p[0].is_finite() && p[1].is_finite()) && fabs(geom::area(s)) >= 25.0 && !crate::ground::crosses_itself(s);
+    let ok = |s: &[P]| s.len() >= 3 && s.iter().all(|p| p[0].is_finite() && p[1].is_finite()) && fabs(geom::area(s)) >= 25.0 && !crate::model::ground::crosses_itself(s);
     if n < 3 || !pts.iter().all(|p| p[0].is_finite() && p[1].is_finite()) {
         return pts.to_vec();
     }
@@ -807,7 +807,7 @@ const RUN: usize = 16;
 fn shores(edits: &crate::world::Edits) -> Vec<(&Water, Arc<[P]>, [f64; 4], Option<usize>)> {
     edits.waters.values().filter(|w| w.usable()).map(|w| {
         let (s, k) = w.shore_bridge();
-        let b = crate::ground::bbox(&s);
+        let b = crate::model::ground::bbox(&s);
         (w, s, b, k)
     }).collect()
 }
