@@ -4,7 +4,7 @@
 // one undo step (`withoutThings` puts the existing deletes together). App keeps `syncTool()`.
 import type { BuildingEdit, Created, Edits, Thing } from '../../gen/protocol';
 import type { Pt } from '../build';
-import { SelectTool, countOf, inArea, keyOf, ringOf, underFirst, withoutThings } from '../select';
+import { SelectTool, countOf, inArea, keyOf, ringOf, roadIds, underFirst, withCut, withoutThings } from '../select';
 import type { BuildingHit } from '../../ui/gazetteer';
 
 /** What the Select tool needs from the app. */
@@ -171,6 +171,7 @@ export function selectTools(host: SelectApp) {
     if (list.length > 1) return { tool: 'delete_selected', count: list.length, ids: list.map((t) => t.id) };
     const t = list[0];
     const id = t.id as string;
+    if (/^(rd|mt|tr|pp):/.test(id)) return { tool: 'remove_roads', ids: [id] };
     switch (t.kind) {
       case 'building':
         return { tool: 'remove_buildings', removed: [id], count: 1, name: t.name ?? 'a building' };
@@ -203,16 +204,28 @@ export function selectTools(host: SelectApp) {
       answers.forEach((r, k) => {
         if (r && 'edit' in r && r.edit) gen[ids[k]] = r.edit;
       });
-      const kept = can.filter((t) => t.kind !== 'building' || t.id! in gen);
-      if (!kept.length) return void host.toast('The map could not answer: try again');
+      // Roads, streets and paths: the generator says what comes off (and the towns' streets that lead there).
+      const rids = roadIds(can);
+      const cut = rids.length ? await host.view.gen.roadCut(rids) : null;
+      if (cut && 'error' in cut) return void host.toast(cut.error);
+      const cutOk = !!cut && cut.done.length > 0;
+      const kept = can.filter((t) => (t.kind !== 'building' || t.id! in gen) && (!rids.includes(t.id!) || cutOk));
+      if (!kept.length) return void host.toast(cut?.refused.length ? `Not taken away: ${cut.refused.map((r) => r.why).join('; ')}` : 'The map could not answer: try again');
       const before = host.edits;
       let { next, towns } = withoutThings(before, kept, gen);
+      if (cut && cutOk) {
+        next = withCut(next, cut);
+        for (const k of Object.keys(cut.towns)) host.view.hintTown(k, cut.towns[k], cut.rects);
+      }
       if (towns) {
         const r = await host.view.gen.setAside($state.snapshot(before.created ?? []) as Created[], $state.snapshot(next) as Edits);
         if (r && !('error' in r)) next = r.edits;
       }
       if (host.edits !== before) return void host.toast('The map changed meanwhile: try again');
-      host.applyEdits(next, changeOf(kept), 'user');
+      const change = changeOf(kept);
+      if (cut && cutOk && cut.also.length) change.also = cut.also.length;
+      host.applyEdits(next, change, 'user');
+      notice = cut?.refused.length ? `Not taken away: ${cut.refused.map((r) => r.why).filter((w, i, a) => a.indexOf(w) === i).join('; ')}` : '';
     } finally {
       busy = false;
     }
@@ -270,7 +283,7 @@ export function selectTools(host: SelectApp) {
   }
 
   /** Whether `t` has a tool to change it in. */
-  const changeable = (t: Thing) => !['road', 'lane', 'hedge', 'field_wall', 'fence', 'entrance', 'tower'].includes(t.kind);
+  const changeable = (t: Thing) => !['road', 'lane', 'path', 'hedge', 'field_wall', 'fence', 'entrance', 'tower'].includes(t.kind);
 
   /** What an area holds, counted by kind (in pick's order). */
   const counts = $derived.by(() => {

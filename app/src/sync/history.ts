@@ -127,6 +127,12 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
       case 'place_path':
         if (change.changed) return 'changed a road';
         return `drew a ${({ footpath: 'footpath', track: 'track', gravel: 'gravel road', paved: 'paved road', cobbled: 'cobbled street' } as Record<string, string>)[String(change.kind)] ?? 'road'}`;
+      case 'remove_roads': {
+        const n = Array.isArray(change.ids) ? change.ids.length : 1;
+        const also = Number(change.also ?? 0) ? ` (and ${Number(change.also) === 1 ? 'the street leading to its town' : `${Number(change.also)} streets leading to towns`})` : '';
+        if (change.restore) return n === 1 ? 'brought a road back' : `brought ${n} roads back`;
+        return (n === 1 ? 'took a road away' : `took away ${n} roads`) + also;
+      }
       case 'remove_town_street':
         return 'took a street away';
       case 'remove_paths': {

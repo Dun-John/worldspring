@@ -7,7 +7,7 @@
 import type { Graphics } from 'pixi.js';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
-import type { BuildingEdit, Created, Edits, Thing, TownEdit } from '../gen/protocol';
+import type { BuildingEdit, Created, Edits, RoadCut, Thing, TownEdit } from '../gen/protocol';
 import type { Pt } from './build';
 import { contains } from './water';
 
@@ -153,6 +153,7 @@ export const KIND_WORDS: Record<Thing['kind'], [string, string]> = {
   harbour: ['harbour piece', 'harbour pieces'],
   lane: ['lane', 'lanes'],
   street: ['street', 'streets'],
+  path: ['path', 'paths'],
   hedge: ['hedge', 'hedges'],
   field_wall: ['field wall', 'field walls'],
   fence: ['fence', 'fences'],
@@ -227,4 +228,29 @@ export function withoutThings(e: Edits, things: Thing[], gen: Record<string, Bui
   const bs = Object.keys(gen).filter((id) => ids.has(id));
   if (bs.length) next.buildings = { ...(e.buildings ?? {}), ...Object.fromEntries(bs.map((id) => [id, gen[id]])) };
   return { next, towns };
+}
+
+/** The ids of `things` that the road cut takes away (`gen.roadCut`): a world road or track, a town's street or lane, a park's path.
+ * (`withoutThings` leaves these alone.) */
+export const roadIds = (things: Thing[]): string[] => things.filter((t) => t.removable && t.id && /^(rd|mt|tr|pp):/.test(t.id)).map((t) => t.id as string);
+
+/** `e` with a road cut's changes made: the removed list, drawn roads dropped, towns' edits set or deleted. */
+export function withCut(e: Edits, cut: RoadCut): Edits {
+  const next: Edits = { ...e };
+  if (cut.removed_roads) next.removed_roads = cut.removed_roads;
+  if (cut.paths.length && e.paths) {
+    next.paths = Object.fromEntries(Object.entries(e.paths).filter(([k]) => !cut.paths.includes(k)));
+    if (e.notes) next.notes = Object.fromEntries(Object.entries(e.notes).filter(([k]) => !cut.paths.includes(k)));
+  }
+  const keys = Object.keys(cut.towns);
+  if (keys.length) {
+    const towns = { ...(e.towns ?? {}) };
+    for (const k of keys) {
+      const t = cut.towns[k];
+      if (t) towns[k] = t;
+      else delete towns[k];
+    }
+    next.towns = towns;
+  }
+  return next;
 }
