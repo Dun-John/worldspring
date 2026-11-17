@@ -22,19 +22,20 @@ pub fn list() -> Vec<Value> {
         "towers_add": { "type": "array", "items": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }] } },
         "towers_remove": { "type": "array", "items": tower_ref },
     } });
+    let ids = json!({ "type": "array", "items": { "type": "string" } });
     let town = json!({ "type": "string", "description": "The town or city (its id; villages have no wards)" });
     vec![
         json!({
             "name": "get_town_plan",
             "title": "A town's wards",
-            "description": "A town's or city's plan as the ward editor sees it: patches (number, middle, corners, ward, lots, district, neighbours, merge, reroll, close, park; what was set by hand or refused), corners (number, place, pinned, gate, wall, junction where a square can open, square), districts, max_move_ft and the walls. within limits it to patches whose middle is in a rectangle. See MCP.md > Towns laid out anew.",
+            "description": "A town's or city's plan as the ward editor sees it: patches (number, middle, corners, ward, lots, district, neighbours, merge, reroll, close, park; what was set by hand or refused), corners (number, place, pinned, gate, wall, junction where a square can open, square), districts, max_move_ft and the walls. within limits it to patches whose middle is in a rectangle. See MCP.md > Towns.",
             "inputSchema": schema(json!({ "id": town, "within": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0_ft, y0_ft, x1_ft, y1_ft]" } }), &["id"]),
             "annotations": { "readOnlyHint": true },
         }),
         json!({
             "name": "edit_town",
             "title": "Lay out a town anew",
-            "description": "Change a town's or city's layout as the ward editor does; give any of: moves (corners to or by a place), equalize (patch numbers), relax (corners round a point), patches (ward, lots, merge_with, reroll, close, park, district; \"auto\" puts a field back), squares (where streets meet), walls, reset. Corners go only as far as keeps every patch convex. The reply says how many corners went all the way, patches_changed (each patch and what), districts_changed, functions_lost, renames_carried and renames_lost. dry_run reports without changing. See MCP.md > Towns laid out anew.",
+            "description": "Change a town's or city's layout as the ward editor does; give any of: moves (corners to or by a place), equalize (patch numbers), relax (corners round a point), patches (ward, lots, merge_with, reroll, close, park, district; \"auto\" puts a field back), squares (where streets meet), walls, reset, members (see MCP.md > Towns). Corners go only as far as keeps every patch convex. The reply: corners moved all the way, patches_changed, districts_changed, functions_lost, renames_carried, renames_lost. dry_run reports only. See MCP.md > Towns.",
             "inputSchema": schema(json!({
                 "id": town,
                 "moves": { "type": "array", "items": { "type": "object", "properties": { "corner": { "type": "integer", "minimum": 0 }, "to": pt, "by": pt, "as_generated": { "type": "boolean" } }, "required": ["corner"] } },
@@ -57,6 +58,7 @@ pub fn list() -> Vec<Value> {
                 }, "required": ["corner", "kind"] } },
                 "walls": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }, walls], "description": "true, false or \"auto\" (as generated), or {built, gates_add, gates_remove (corners), towers_add ([corner, next corner, f 0.05-0.95] or a corner), towers_remove (corner or t:<layout>:<n>)}; the reply's wall says what was added, removed and refused (why)" },
                 "reset": { "type": "string", "enum": ["all", "corners", "patches", "squares", "walls"] },
+                "members": { "type": "object", "properties": { "add": ids.clone(), "remove": ids }, "description": "Hand choice: c:<n> drawn things (add joins, remove leaves); b:<layout>:<id> outskirt buildings (remove pushes them out into a new place, add takes them back)" },
                 "dry_run": { "type": "boolean", "default": false },
             }), &["id"]),
         }),
@@ -102,9 +104,10 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
             return Err(format!("{id} is laid out by hand: its streets are changed with edit_streets (get_street_plan reads them; edit_streets op back_to_generated returns it to the ward editor)"));
         }
     }
+    let members = a.get("members").filter(|m| !m.is_null()).cloned();
     let mut req = a.clone();
     if let Some(m) = req.as_object_mut() {
-        for k in ["id", "dry_run", "world"] {
+        for k in ["id", "dry_run", "world", "members"] {
             m.remove(k);
         }
     }
@@ -112,22 +115,37 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     if let Some(at) = req["relax"].get("at").cloned() {
         req["relax"]["at"] = json!(crate::args::point(app, "relax.at", &at).await?);
     }
+    let only_members = members.is_some() && req.as_object().is_some_and(|m| m.is_empty());
     let req: wards::TownRequest = serde_json::from_value(req).map_err(|e| e.to_string())?;
+    let ids_of = |k: &str| -> Result<Vec<String>, String> {
+        let v = &members.as_ref().map(|m| m[k].clone()).unwrap_or(Value::Null);
+        match v {
+            Value::Null => Ok(Vec::new()),
+            Value::Array(a) => a.iter().map(|x| x.as_str().map(str::to_string).ok_or_else(|| format!("members.{k}: ids (strings)"))).collect(),
+            _ => Err(format!("members.{k}: an array of ids")),
+        }
+    };
+    let (m_add, m_remove) = (ids_of("add")?, ids_of("remove")?);
     let town = id.clone();
-    let (li, edit, mut report) = app
+    let (li, edit, mut report, mchange) = app
         .worker
         .with(move |ex| {
             let li = town_index(ex, &id)?;
-            let (edit, report) = wards::change(&ex.world, &ex.t0, li, &req)?;
-            Ok((li, edit, report))
+            let (edit, report) = if only_members { (None, json!({})) } else { wards::change(&ex.world, &ex.t0, li, &req)? };
+            let mchange = if m_add.is_empty() && m_remove.is_empty() { None } else { Some(worldgen::town::members::change(&ex.world, &ex.t0, li, &m_add, &m_remove)?) };
+            Ok((li, edit, report, mchange))
         })
         .await?;
+    if let Some(c) = &mchange {
+        report["members"] = c.report.clone();
+        report["members_refused"] = json!(c.refused.iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>());
+    }
     report["tool"] = json!("edit_town");
     report["id"] = json!(town);
     report["layout"] = json!(li);
     if dry {
         report["dry_run"] = json!(true);
-        report["edited"] = json!(edit.is_some());
+        report["edited"] = json!(edit.is_some() || mchange.as_ref().is_some_and(|c| !c.members.is_empty() || !c.created.is_empty()));
         return Ok(report);
     }
     let key = wards::key(li);
@@ -135,10 +153,22 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     // (R5 towns: renames and notes go with the buildings that take their place.)
     let carried: Vec<(String, String)> = report["renames_carried"].as_array().into_iter().flatten().filter_map(|c| Some((c["from"].as_str()?.to_string(), c["to"].as_str()?.to_string()))).collect();
     app.edit("agent", 0, move |e| {
-        match edit {
-            Some(t) => e.towns.insert(key, t),
-            None => e.towns.remove(&key),
-        };
+        if !only_members {
+            match edit {
+                Some(t) => e.towns.insert(key, t),
+                None => e.towns.remove(&key),
+            };
+        }
+        if let Some(c) = mchange {
+            for (k, v) in c.members {
+                if v.is_empty() {
+                    e.members.remove(&k);
+                } else {
+                    e.members.insert(k, v);
+                }
+            }
+            e.created.extend(c.created);
+        }
         for (from, to) in carried {
             if let Some(n) = e.renames.remove(&from) {
                 e.renames.insert(to.clone(), n);

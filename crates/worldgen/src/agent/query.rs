@@ -333,6 +333,13 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
                 v["layout"]["wards_edited"] = json!(town::wards::edit_of(world, t0, li).is_some());
             }
             v["sites"] = json!(sites_json(world, t0, li, false));
+            let (members, pushed_out) = members_json(world, t0, li);
+            if !members.is_empty() {
+                v["members"] = json!(members);
+            }
+            if !pushed_out.is_empty() {
+                v["pushed_out"] = json!(pushed_out);
+            }
         } else {
             v["settlement"] = whereabouts(world, t0, li).0;
             // (A created site's ways underground, as its settlement's sites list has them; an entrance in a building says which.)
