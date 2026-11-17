@@ -9,6 +9,7 @@ worldgen-core.workspace = true
 worldgen-model.workspace = true
 worldgen-terrain.workspace = true
 worldgen-town.workspace = true
+worldgen-battlemap.workspace = true
 libm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

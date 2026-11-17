@@ -7,8 +7,7 @@
 pub mod agent;
 pub mod placing;
 pub mod remap;
-pub mod battlemap;
-use worldgen_town::battle;
+pub use worldgen_battlemap::battlemap;
 pub use worldgen_core as core;
 pub use worldgen_model::{model, waters};
 pub use worldgen_town::world;

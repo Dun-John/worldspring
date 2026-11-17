@@ -977,6 +977,20 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
+ "worldgen-battlemap",
+ "worldgen-core",
+ "worldgen-model",
+ "worldgen-terrain",
+ "worldgen-town",
+]
+
+[[package]]
+name = "worldgen-battlemap"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "serde",
+ "serde_json",
  "worldgen-core",
  "worldgen-model",
  "worldgen-terrain",
