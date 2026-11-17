@@ -2019,8 +2019,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     // (Roadmap 6 R6: a high wall, generated run changed or drawn by hand, raised as a garden wall
     // is, `HIGH_WALL_FT` tall, over the halo too; drawn by `rural::shapes`. A square stands on it
-    // when its middle lies by it and over it, from its start up to short of its end: a gate's
-    // opening always leaves one square free.)
+    // when its middle lies by it and over it, from its start up to short of its end, none on a
+    // building's entrance: a gate's opening (`fence::gate_span`) always leaves one square free.)
     for &(a, b, _) in rural.runs.iter().filter(|r| r.2 == crate::town::rural::RunKind::Wall) {
         let half = 0.5 * crate::interior::FORE_WALL_FT;
         let l = crate::town::geom::dist(a, b);
@@ -2038,7 +2038,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 let h = j * HS + i;
                 let d = crate::town::geom::sub(center(i, j), a);
                 let t = crate::town::geom::dot(d, u);
-                if bld_h[h] != 0 || hw[h] > hh[h] || matches!(urb_h[h], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR) || !(0.0..l).contains(&t) || crate::town::geom::cross(u, d).abs() > half + 1.5 {
+                if bld_h[h] != 0 || ent_h[h] || hw[h] > hh[h] || matches!(urb_h[h], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR) || !(0.0..l).contains(&t) || crate::town::geom::cross(u, d).abs() > half + 1.5 {
                     continue;
                 }
                 urb_h[h] = URBAN_WALL;

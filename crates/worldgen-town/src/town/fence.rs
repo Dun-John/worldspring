@@ -48,6 +48,10 @@ const SECTION_FT: f64 = 5.0;
 const DRAWN_PIECE_FT: f64 = 4.0;
 /// What is left of a run between cuts shorter than this (ft) goes.
 const SLIVER_FT: f64 = 0.5;
+/// What a gate's opening is wider than the square it frees (ft, a side).
+const GATE_MARGIN_FT: f64 = 0.5;
+/// The most runs hand-made fences (a changed run, a drawn line) add to a chunk's generated ones.
+const MAX_HAND_RUNS: usize = 600;
 
 #[inline]
 fn q(p: P) -> (i64, i64) {
@@ -344,11 +348,30 @@ fn gap_spans(a: P, b: P, gaps: &[FenceGap], out: &mut Vec<(f64, f64)>) {
     }
 }
 
-/// The segment from `a` to `b` minus its gates (ft from `a`, each a `GATE_OPEN_FT` opening) and the
+/// Where the opening of a gate asked for `g` ft from `a` on the run to `b` lies: (its middle ft from
+/// `a`, half its width). A gate is open passage: the opening frees the whole battlemap square (the
+/// lattice's, 5 ft) the gate falls in, so the middle moves to that square's (at most ~3.5 ft along
+/// the line) and the opening is a square's reach along the line wide (5 ft straight, 7 ft slanted).
+fn gate_span(a: P, b: P, g: f64) -> (f64, f64) {
+    let l = dist(a, b).max(1e-9);
+    let u = mul(sub(b, a), 1.0 / l);
+    let p = lerp(a, b, g / l);
+    let c = [(crate::core::floor(p[0] / SQUARE_FT) + 0.5) * SQUARE_FT, (crate::core::floor(p[1] / SQUARE_FT) + 0.5) * SQUARE_FT];
+    let t = dot(sub(c, a), u).clamp(0.0, l);
+    (t, 0.5 * GATE_OPEN_FT * (crate::core::fabs(u[0]) + crate::core::fabs(u[1])) + GATE_MARGIN_FT)
+}
+
+/// The segment from `a` to `b` minus its gates (ft from `a`, each an opening: `gate_span`) and the
 /// gaps' strokes: what stands, exact (stubs under `SLIVER_FT` left out).
 pub fn subtract(a: P, b: P, gates: &[f32], gaps: &[FenceGap]) -> Vec<(P, P)> {
     let l = dist(a, b);
-    let mut cuts: Vec<(f64, f64)> = gates.iter().map(|&g| (g as f64 - 0.5 * GATE_OPEN_FT, g as f64 + 0.5 * GATE_OPEN_FT)).collect();
+    let mut cuts: Vec<(f64, f64)> = gates
+        .iter()
+        .map(|&g| {
+            let (t, h) = gate_span(a, b, g as f64);
+            (t - h, t + h)
+        })
+        .collect();
     gap_spans(a, b, gaps, &mut cuts);
     if cuts.is_empty() {
         return vec![(a, b)];
@@ -376,7 +399,7 @@ pub fn subtract(a: P, b: P, gates: &[f32], gaps: &[FenceGap]) -> Vec<(P, P)> {
 pub fn gate_points(a: P, b: P, gates: &[f32]) -> Vec<(P, f64)> {
     let l = dist(a, b);
     let turn = libm::atan2(b[1] - a[1], b[0] - a[0]);
-    gates.iter().map(|&g| g as f64).filter(|&g| g > 0.0 && g < l).map(|g| (lerp(a, b, g / l.max(1e-9)), turn)).collect()
+    gates.iter().map(|&g| g as f64).filter(|&g| g >= 0.0 && g < l).map(|g| (lerp(a, b, gate_span(a, b, g).0 / l.max(1e-9)), turn)).collect()
 }
 
 /// A park's hedge's or topiary row's ends (`park::hedge_runs`, its places in `lay.props`): a hedge
@@ -438,7 +461,7 @@ pub fn garden_walls(walls: Vec<(P, P)>, cut: &FenceCut, gates: &mut Vec<(P, f64,
             Some(ch) => {
                 let (s, e) = canonical(a, b);
                 out.extend(subtract(s, e, &ch.gates, &[]));
-                gates.extend(gate_points(s, e, &ch.gates).into_iter().map(|(p, t)| (p, t, 0)));
+                gates.extend(gate_points(s, e, &ch.gates).into_iter().map(|(p, t)| (p, t, gate_look(RunKind::Wall))));
             }
         }
     }
@@ -449,7 +472,7 @@ pub fn garden_walls(walls: Vec<(P, P)>, cut: &FenceCut, gates: &mut Vec<(P, f64,
 pub fn take(from: &Battle, rect: [f64; 4], out: &mut Battle) {
     for &(a, b, kind) in &from.runs {
         if let Some((p, e)) = rural::clip_seg(a, b, kind.clip(rect))
-            && out.runs.len() < rural::MAX_RUNS
+            && out.runs.len() < rural::MAX_RUNS + MAX_HAND_RUNS
         {
             out.runs.push((p, e, kind));
         }
@@ -512,7 +535,7 @@ fn drawn_one(f: &Fence, rect: [f64; 4], near: [f64; 4], wet: &dyn Fn(P) -> bool,
                     (true, None) => from = Some(j),
                     (false, Some(fj)) => {
                         if let Some((x, y)) = rural::clip_seg(lerp(p, r, fj as f64 / m as f64), lerp(p, r, j as f64 / m as f64), kind.clip(rect))
-                            && out.runs.len() < rural::MAX_RUNS
+                            && out.runs.len() < rural::MAX_RUNS + MAX_HAND_RUNS
                         {
                             out.runs.push((x, y, kind));
                         }
