@@ -14,6 +14,7 @@ pub mod flood;
 pub mod hydro;
 pub mod islands;
 pub mod islets;
+pub mod layout_index;
 pub mod made;
 pub mod names;
 pub mod plates;
@@ -101,7 +102,7 @@ pub struct CreatedSite {
     pub reach: f64,
     pub under: Option<crate::model::under::UnderKind>,
     /// Its site underground: size, levels, theme.
-    pub spec: crate::under::SiteSpec,
+    pub spec: crate::model::under::SiteSpec,
 }
 
 /// A coarse picture of a world (see `T0::preview`).
@@ -696,10 +697,10 @@ impl T0 {
         for (k, c) in world.file.edits.created.iter().enumerate() {
             let kind = settle::PoiKind::parse(&c.kind);
             let under = c.under.as_deref().and_then(crate::model::under::UnderKind::parse);
-            let spec = crate::under::SiteSpec {
+            let spec = crate::model::under::SiteSpec {
                 size: c.size.as_deref().and_then(crate::model::under::SiteSize::parse),
                 levels: c.levels,
-                theme: c.theme.as_deref().and_then(crate::under::theme).map(|i| i as u8),
+                theme: c.theme.as_deref().and_then(crate::model::under::theme).map(|i| i as u8),
             };
             let seed = crate::core::hash::fnv64(c.id.as_bytes()) ^ world.seed;
             let mut reach = c.reach();
@@ -731,14 +732,14 @@ impl T0 {
     }
 
     /// How cold the ground is at a world position (`under::cold_of` of its nearest cell).
-    pub fn cold_at(&self, world: &World, x_ft: f64, y_ft: f64) -> crate::under::Cold {
+    pub fn cold_at(&self, world: &World, x_ft: f64, y_ft: f64) -> crate::model::under::Cold {
         let (w, h) = (self.height.w, self.height.h);
         let (i, j) = (((x_ft / self.cell_ft).round().max(0.0) as usize).min(w - 1), ((y_ft / self.cell_ft).round().max(0.0) as usize).min(h - 1));
-        crate::under::cold_of(self.biome.get(i, j), self.height.get(i, j), world.params().sea_level_ft)
+        crate::model::under::cold_of(self.biome.get(i, j), self.height.get(i, j), world.params().sea_level_ft)
     }
 
     /// The coldness at a wild site's point (layout `layout`: the points of interest follow the settlements); No for a town.
-    pub fn cold_of_layout(&self, world: &World, layout: usize) -> crate::under::Cold {
+    pub fn cold_of_layout(&self, world: &World, layout: usize) -> crate::model::under::Cold {
         layout.checked_sub(self.settlements.len()).and_then(|p| self.pois.get(p)).map_or(Default::default(), |p| self.cold_at(world, p.x, p.y))
     }
 

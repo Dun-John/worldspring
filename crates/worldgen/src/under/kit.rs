@@ -4,6 +4,7 @@
 use crate::core::rng::Pcg32;
 use crate::interior::Item;
 use crate::under::*;
+pub use crate::model::under::Wetness;
 
 pub(crate) fn neighbours(k: usize, nx: usize, ny: usize) -> impl Iterator<Item = usize> {
     let (i, j) = (k % nx, k / nx);
@@ -1217,25 +1218,6 @@ impl Ground {
     pub fn unreached(&self) -> usize {
         let seen = self.reach(self.start, true, &|k| self.blocked[k]);
         (0..self.cells.len()).filter(|&k| self.cells[k] >= 0 && !self.blocked[k] && !seen[k]).count()
-    }
-}
-
-/// How much water a theme has.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Wetness {
-    Dry,
-    Wet,
-    Flooded,
-}
-
-impl Wetness {
-    /// The noise heights over which a square is shallow and deep water (`water_at`; over 1: never).
-    pub fn bands(self) -> (f64, f64) {
-        match self {
-            Wetness::Dry => (2.0, 2.0),
-            Wetness::Wet => (0.62, 0.72),
-            Wetness::Flooded => (0.42, 0.56),
-        }
     }
 }
 

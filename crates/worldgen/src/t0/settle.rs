@@ -1893,7 +1893,7 @@ fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
 fn dwarven_ground(inp: &Inputs, k: usize, seed: u64) -> bool {
     let world = inp.world;
     // (Never a cave: the cold only matters to ice.)
-    if crate::under::wild_theme(world, seed, crate::town::sites::ruin_under(world, seed), true, crate::under::Cold::No) != "dwarven_hall" {
+    if crate::model::under::wild_theme(world, seed, crate::model::under::ruin_under(world, seed), true, crate::model::under::Cold::No) != "dwarven_hall" {
         return true;
     }
     let (w, h, sea) = (inp.w, inp.h, world.params().sea_level_ft);

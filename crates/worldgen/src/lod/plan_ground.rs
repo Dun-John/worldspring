@@ -169,7 +169,7 @@ impl<'a> Shore<'a> {
         let lattice_ft = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
         let mut shore = Self::of_t0(t0, rect, lattice_ft);
         shore.islets = crate::ground::islets_in(&world.file.edits, rect);
-        shore.shaped = crate::ground::Shaper::build(&world.file.edits, None, rect, crate::battlemap::SQUARE_FT);
+        shore.shaped = crate::ground::Shaper::build(&world.file.edits, None, rect, crate::model::consts::SQUARE_FT);
         // (R5 M20: and the world's own islets, `t0::islets`.)
         shore.islets.extend(crate::t0::islets::near_in(t0, &world.file.edits, rect).map(|i| (i.pts.clone(), i.level, i.bbox)));
         shore

@@ -111,7 +111,7 @@ impl Places {
     /// sites: they never count).
     pub fn of(t0: &T0) -> Places {
         let features = t0.extra.as_ref().map_or_else(Vec::new, |e| e.overlay.features.iter().map(|f| Place { id: f.id.clone(), kind: f.kind.into(), x: f.x, y: f.y, extent_ft: f.extent_ft, name: f.name.clone() }).collect());
-        let ids = (0..crate::town::layout_count(t0)).map(|li| fold(crate::town::layout_identity(t0, li))).collect();
+        let ids = (0..crate::t0::layout_index::layout_count(t0)).map(|li| fold(crate::t0::layout_index::layout_identity(t0, li))).collect();
         Places { features, first_created: Some(t0.settlements.len() + t0.base_pois), layout_ids: Some(ids), pinned: Vec::new() }
     }
 

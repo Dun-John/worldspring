@@ -10,7 +10,6 @@ use super::biome::Biome;
 use super::roads::RoadClass;
 use super::settle::{Reason, SettleKind, Settlement, Tier};
 use crate::World;
-use crate::town;
 use crate::core::noise::{fbm, gradient2, smoothstep};
 use crate::core::rng::{hash3, unit};
 use crate::world::Created;
@@ -563,7 +562,7 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
     let c = Created { id: id.to_string(), kind: kind.to_string(), x, y, ..Default::default() };
     let seed = crate::core::hash::fnv64(id.as_bytes()) ^ world.seed;
     let s = settlement(world, t0, &c, seed);
-    let (reach, holds) = (town::reach(&s), town::holds_radius(&s));
+    let (reach, holds) = (crate::t0::radii::reach(&s), crate::t0::radii::holds_radius(&s));
     if x - reach < 0.0 || y - reach < 0.0 || x + reach > mw || y + reach > mh {
         return Err("that is too near the edge of the map".to_string());
     }
@@ -576,7 +575,7 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
     if (q.0 - x).abs() + (q.1 - y).abs() > 0.01 {
         return Err("that is in a river: put it on the bank".to_string());
     }
-    let inland = SETTLEMENT_INLAND * town::urban_radius(s.tier, s.population);
+    let inland = SETTLEMENT_INLAND * crate::t0::radii::urban_radius(s.tier, s.population);
     if shore_within(world, t0, at, inland + SETTLEMENT_SHORE_MARGIN_FT).is_some() {
         return Err(format!("that is on the water's edge: a village or town by a shore stands at least {} ft inland of it (ports and fishing villages need the world remade)", (crate::core::ceil((inland + SETTLEMENT_SHORE_MARGIN_FT) / 50.0) * 50.0) as i64));
     }
@@ -584,12 +583,12 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
     // or restored) and sites.
     let n = t0.settlements.len();
     let own = world.file.edits.created.iter().position(|c| c.id == id).map(|k| n + t0.base_pois + k);
-    for li in 0..town::layout_count(t0) {
+    for li in 0..crate::t0::layout_index::layout_count(t0) {
         if Some(li) == own {
             continue;
         }
-        if let Some(o) = town::settlement(t0, li) {
-            if dist([o.x, o.y], at) < town::reach(o) + reach + SETTLEMENT_GAP_FT {
+        if let Some(o) = crate::t0::layout_index::settlement(t0, li) {
+            if dist([o.x, o.y], at) < crate::t0::radii::reach(o) + reach + SETTLEMENT_GAP_FT {
                 return Err("that is too near another settlement".to_string());
             }
             continue;
@@ -599,7 +598,7 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
         if made.is_some_and(|m| m.removed) {
             continue;
         }
-        if dist([p.x, p.y], at) < made.map_or(town::sites::SITE_REACH_FT, |m| m.reach) + reach + SETTLEMENT_SITE_GAP_FT {
+        if dist([p.x, p.y], at) < made.map_or(crate::model::consts::SITE_REACH_FT, |m| m.reach) + reach + SETTLEMENT_SITE_GAP_FT {
             return Err("that is too near another site".to_string());
         }
     }
@@ -645,7 +644,7 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
 /// created site `id`; 0 if it is none (or removed).
 pub fn built_radius(world: &World, t0: &T0, id: &str) -> f64 {
     let Some(k) = world.file.edits.created.iter().position(|c| c.id == id) else { return 0.0 };
-    t0.made.iter().find(|m| m.poi == t0.base_pois + k).map_or(0.0, |m| town::urban_radius(m.s.tier, m.s.population))
+    t0.made.iter().find(|m| m.poi == t0.base_pois + k).map_or(0.0, |m| crate::t0::radii::urban_radius(m.s.tier, m.s.population))
 }
 
 /// A name for a village or town added by hand (`id` its `c:<n>`, which seeds it), in naming

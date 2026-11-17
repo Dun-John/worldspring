@@ -10,10 +10,6 @@ use crate::under::grow::{Grower, Piece, ROOMS_GROWING, Side, Spec, Template, fil
 use crate::under::themes::keep::CELL;
 use crate::under::*;
 
-/// The cult's passages (the theme's passage kind): the rings, their gates, what is dug or grown off them. Kept clear
-/// (no kit) and floored apart from the rooms between, so each ring and its gate stands out.
-pub(crate) const RING: &str = "ring corridor";
-
 /// The chamber at a level's heart (the boss chamber on the deepest).
 const CHAMBER_KIND: &str = "ritual chamber";
 

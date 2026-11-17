@@ -44,7 +44,7 @@ pub use convert::*;
 pub use plot::*;
 pub use graph::*;
 pub use build::*;
-pub use crate::model::town::{BlockFill, OpenKind};
+pub use crate::model::town::{BlockFill, Junction, OpenKind, Street, StreetClass};
 use crate::model::town::{is_false, is_zero};
 
 // ---------------------------------------------------------------------------------------
@@ -96,51 +96,6 @@ pub struct HandTown {
     /// again (ids pinned from it can't meet a new block's). None: one past the highest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_block: Option<u32>,
-}
-
-/// A junction (`/n<id>`), and the square opening there.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Junction {
-    pub p: P,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub square: Option<String>,
-}
-
-/// What a street is (`Street::class`).
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum StreetClass {
-    /// A main street (from a gate to the market, over a bridge).
-    Main,
-    #[default]
-    Street,
-    /// A quay along the water.
-    Quay,
-    /// No street: two blocks of one district meet (both setbacks 0).
-    Joint,
-}
-
-impl StreetClass {
-    fn is_street(&self) -> bool {
-        *self == StreetClass::Street
-    }
-}
-
-/// A street (`/e<id>`) from junction `a` to `b` by its bends; its paved width, and how far the
-/// blocks on its left and right (looking from `a` to `b`) stand back from its line.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Street {
-    pub a: u32,
-    pub b: u32,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bends: Vec<P>,
-    pub width: f64,
-    pub set_l: f64,
-    pub set_r: f64,
-    #[serde(default, skip_serializing_if = "StreetClass::is_street")]
-    pub class: StreetClass,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub bridge: bool,
 }
 
 /// A building pinned to its place (`Block::pins`): what carries something (a name, notes) keeps

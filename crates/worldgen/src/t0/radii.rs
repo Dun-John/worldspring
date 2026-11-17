@@ -41,3 +41,11 @@ pub fn pad_weight(d: f64, reach: f64) -> f64 {
 
 /// Outskirts (farmland) reach this many urban radii from the centre.
 pub(crate) const OUTSKIRTS: f64 = 2.15;
+
+/// How far (ft) from its centre a place stands in a settlement: its buildings and districts, the
+/// sprawl outside the walls included. Measured over seeds 1–3 in built-up radii: villages'
+/// buildings reach 1.36; cities' and metropolises' districts 2.12 and 1.90, towns' 2.05 for 95
+/// in 100 (a few river towns' run on past their reach).
+pub fn holds_radius(s: &Settlement) -> f64 {
+    urban_radius(s.tier, s.population) * if s.tier == Tier::Village { 1.4 } else { OUTSKIRTS }
+}

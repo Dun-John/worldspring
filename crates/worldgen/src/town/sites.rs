@@ -8,17 +8,12 @@ use super::catalog::{self, Ward};
 use super::geom::*;
 use super::{Building, District, Ground, Layout, Structure, castle, clip_walls, rect, wall_pieces};
 use crate::World;
-use crate::core::rng::{Pcg32, hash2, unit};
+use crate::core::rng::{Pcg32, hash2};
 use crate::t0::T0;
 use crate::t0::settle::{PoiKind, Tier};
 use crate::under::UnderKind;
 pub use crate::model::consts::SITE_REACH_FT;
-
-/// What a generated ruin's way down comes to: a dungeon under the hold or its crypt, from the
-/// site's seed alone (v63: placement asks it before the site is laid out).
-pub fn ruin_under(world: &World, seed: u64) -> UnderKind {
-    if unit(hash2(world.stream("site.under"), 0, seed as i64)) < 0.5 { UnderKind::Dungeon } else { UnderKind::Crypt }
-}
+pub use crate::model::under::ruin_under;
 
 pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let p = &t0.pois[poi];
