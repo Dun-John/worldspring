@@ -59,6 +59,7 @@ pub struct Change {
 
 /// The town layout created thing `li` is part of (None: none, or `li` is no drawn thing).
 pub fn owner(world: &World, t0: &T0, li: usize) -> Option<Owner> {
+    item_at_layout(world, t0, li)?;
     let idx = index(world, t0);
     let &i = idx.of_layout.get(&li)?;
     let c = idx.comp[i as usize];
@@ -68,11 +69,17 @@ pub fn owner(world: &World, t0: &T0, li: usize) -> Option<Owner> {
 
 /// The place generated building `b:<li>:<id>` was pushed out into, if it was.
 pub fn building_owner(world: &World, t0: &T0, li: usize, id: u32) -> Option<usize> {
+    if world.file.edits.members.is_empty() {
+        return None;
+    }
     index(world, t0).pushed.get(&(li, id)).copied()
 }
 
 /// The drawn things part of town `town` (layouts, ascending), and why.
 pub fn members_of(world: &World, t0: &T0, town: usize) -> Vec<(usize, Owner)> {
+    if world.file.edits.created.is_empty() {
+        return Vec::new();
+    }
     let idx = index(world, t0);
     let towns = town_rects(world, t0, &idx);
     let Some(t) = towns.iter().find(|t| t.li == town) else { return Vec::new() };
@@ -91,6 +98,9 @@ pub fn members_of(world: &World, t0: &T0, town: usize) -> Vec<(usize, Owner)> {
 
 /// The places town `town`'s buildings were pushed out into: (place layout, building ids), by layout.
 pub fn pushed(world: &World, t0: &T0, town: usize) -> Vec<(usize, Vec<u32>)> {
+    if world.file.edits.members.is_empty() {
+        return Vec::new();
+    }
     let idx = index(world, t0);
     let mut by: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
     for (&(li, id), &place) in &idx.pushed {
@@ -102,6 +112,23 @@ pub fn pushed(world: &World, t0: &T0, town: usize) -> Vec<(usize, Vec<u32>)> {
         .map(|(p, mut ids)| {
             ids.sort_unstable();
             (p, ids)
+        })
+        .collect()
+}
+
+/// Every place's buildings pushed out: (place layout, town layout, building ids), by place, then town.
+pub fn all_pushed(world: &World, t0: &T0) -> Vec<(usize, usize, Vec<u32>)> {
+    if world.file.edits.members.is_empty() {
+        return Vec::new();
+    }
+    let mut by: BTreeMap<(usize, usize), Vec<u32>> = BTreeMap::new();
+    for (&(li, id), &place) in &index(world, t0).pushed {
+        by.entry((place, li)).or_default().push(id);
+    }
+    by.into_iter()
+        .map(|((p, t), mut ids)| {
+            ids.sort_unstable();
+            (p, t, ids)
         })
         .collect()
 }
@@ -137,8 +164,15 @@ pub fn district(world: &World, t0: &T0, li: usize) -> Option<(Option<bool>, Opti
 /// counted, a place's buildings') plus its members' homes, less the homes pushed out of it. None
 /// when membership changes nothing (no members, none pushed out, not a place).
 pub fn people(world: &World, t0: &T0, town: usize) -> Option<(u32, Tier)> {
+    if world.file.edits.created.is_empty() {
+        return None;
+    }
+    people_with(world, t0, town, &members_of(world, t0, town), &pushed(world, t0, town))
+}
+
+/// `people`, given the town's members and the buildings pushed out of it.
+fn people_with(world: &World, t0: &T0, town: usize, joined: &[(usize, Owner)], out: &[(usize, Vec<u32>)]) -> Option<(u32, Tier)> {
     let place = place_of(world, t0, town).is_some();
-    let (joined, out) = (members_of(world, t0, town), pushed(world, t0, town));
     if !place && joined.is_empty() && out.is_empty() {
         return None;
     }
@@ -153,6 +187,125 @@ pub fn people(world: &World, t0: &T0, town: usize) -> Option<(u32, Tier)> {
     let less: u32 = out.iter().flat_map(|(_, ids)| ids).filter_map(|&id| l.building(id as usize)).map(hand::people_in).sum();
     let n = (own + more).saturating_sub(less);
     Some((n, hand::tier_of_people(n)))
+}
+
+/// Every drawn thing's owner, by layout (those part of no town left out): `owner` for all at once.
+pub fn owners(world: &World, t0: &T0) -> Vec<(usize, Owner)> {
+    if world.file.edits.created.is_empty() {
+        return Vec::new();
+    }
+    let idx = index(world, t0);
+    let towns = town_rects(world, t0, &idx);
+    let mut out = Vec::new();
+    for (c, comp) in idx.comps.iter().enumerate() {
+        let hand = comp.items.iter().any(|i| idx.hand.contains_key(i));
+        let reach = grow(comp.bbox, JOIN_FT);
+        if !hand && !towns.iter().any(|t| overlaps(t.rect, reach)) {
+            continue;
+        }
+        let owners = resolve(world, t0, &idx, &towns, c as u32);
+        out.extend(comp.items.iter().zip(owners.iter()).filter_map(|(&i, o)| o.map(|o| (idx.items[i as usize].li, o))));
+    }
+    out.sort_by_key(|o| o.0);
+    out
+}
+
+/// The towns whose people membership changes (`people`), by layout: (town, people, size class).
+/// From `owners` and the buildings pushed out, each town's members read once.
+pub fn sizes(world: &World, t0: &T0) -> Vec<(usize, u32, Tier)> {
+    if world.file.edits.created.is_empty() {
+        return Vec::new();
+    }
+    let mut joined: BTreeMap<usize, Vec<(usize, Owner)>> = BTreeMap::new();
+    for o in owners(world, t0) {
+        joined.entry(o.1.town).or_default().push(o);
+    }
+    let idx = index(world, t0);
+    let mut out: BTreeMap<usize, Vec<(usize, Vec<u32>)>> = BTreeMap::new();
+    for (&(li, id), &place) in &idx.pushed {
+        let e = out.entry(li).or_default();
+        match e.iter_mut().find(|p| p.0 == place) {
+            Some(p) => p.1.push(id),
+            None => e.push((place, vec![id])),
+        }
+    }
+    let first = t0.settlements.len() + t0.base_pois;
+    let places = world.file.edits.created.iter().enumerate().filter(|(_, c)| c.kind == "place" && !c.removed).map(|(k, _)| first + k);
+    let towns: BTreeSet<usize> = joined.keys().chain(out.keys()).copied().chain(places).collect();
+    towns.into_iter().filter_map(|t| people_with(world, t0, t, joined.get(&t).map_or(&[][..], |v| v), out.get(&t).map_or(&[][..], |v| v)).map(|(n, tier)| (t, n, tier))).collect()
+}
+
+/// How a drawn thing part of a town looks the town's (`look`): its culture, its roofs' age, its
+/// own roofs' seed (the town's salted by the thing: every drawn building is building 0) and, for
+/// a drawn building, the ward of the town's nearest building.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    pub town: usize,
+    /// None: its own (a plot's culture chosen by hand).
+    pub culture: Option<u8>,
+    pub roof_seed: u64,
+    pub roof_age: u8,
+    pub ward: Option<Ward>,
+}
+
+impl Look {
+    /// A hash of it, for a layout's cache fingerprint.
+    pub fn fingerprint(&self) -> u64 {
+        let w = self.ward.map_or(0xff, |w| w as i64);
+        hash3(self.roof_seed, self.town as i64, (self.culture.map_or(0xff, |c| c as i64)) << 16 | (self.roof_age as i64) << 8 | w, 0x100c)
+    }
+
+    /// Layout `l` (the drawn thing's) in it.
+    pub fn apply(&self, l: &mut Layout) {
+        if let Some(c) = self.culture {
+            l.culture = c;
+        }
+        l.roof_seed = self.roof_seed;
+        l.roof_age = self.roof_age;
+        if let Some(w) = self.ward {
+            l.buildings.iter_mut().for_each(|b| b.ward = w);
+        }
+    }
+}
+
+thread_local! {
+    /// By drawn thing's layout: the index key and town layouts its look was read from, and it.
+    static LOOKS: RefCell<FastMap<usize, (u64, Vec<Rc<Layout>>, Look)>> = RefCell::new(FastMap::default());
+}
+
+/// How created thing `li` looks as part of its town (None: part of none, or no drawn thing).
+pub fn look(world: &World, t0: &T0, li: usize) -> Option<Look> {
+    let c = item_at_layout(world, t0, li)?;
+    let o = owner(world, t0, li)?;
+    let idx = index(world, t0);
+    let ls = edge_layouts(world, t0, &idx, o.town);
+    let tl = ls.first()?;
+    if let Some(l) = LOOKS.with(|m| m.borrow().get(&li).filter(|e| e.0 == idx.key && e.2.town == o.town && e.1.len() == ls.len() && e.1.iter().zip(&ls).all(|(a, b)| Rc::ptr_eq(a, b))).map(|e| e.2)) {
+        return Some(l);
+    }
+    let ward = (c.kind == "building").then(|| {
+        let mid = geom::mean(&idx.items[idx.of_layout[&li] as usize].shape.pts);
+        let mine = |l: &Layout, b: &Building| match place_of(world, t0, o.town) {
+            Some(_) => idx.pushed.get(&(l.index as usize, b.id)) == Some(&o.town),
+            None => !idx.pushed.contains_key(&(l.index as usize, b.id)),
+        };
+        ls.iter().flat_map(|l| l.buildings.iter().filter(move |b| mine(l, b)).map(move |b| (geom::dist(geom::centroid(&b.poly), mid), l.index, b.id, b.ward))).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))).map(|x| x.3)
+    });
+    let look = Look { town: o.town, culture: (c.culture.is_none() || c.kind != "plot").then_some(tl.culture), roof_seed: hash2(tl.roof_seed, rng_key(t0, li), 0x100c), roof_age: tl.roof_age, ward: ward.flatten() };
+    LOOKS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() > 4096 {
+            m.clear();
+        }
+        m.insert(li, (idx.key, ls, look));
+    });
+    Some(look)
+}
+
+/// Layout `li`'s created entry if it is a drawn thing standing (an item), from the file alone.
+fn item_at_layout<'a>(world: &'a World, t0: &T0, li: usize) -> Option<&'a Created> {
+    let k = li.checked_sub(t0.settlements.len() + t0.base_pois)?;
+    world.file.edits.created.get(k).filter(|c| !c.removed && crate::world::CREATABLE.contains(&c.kind.as_str()))
 }
 
 /// Town `town`'s members changed by hand: `add` joins drawn things (`c:<n>`) to it, or into a
@@ -412,6 +565,8 @@ thread_local! {
     static INDEX: RefCell<Option<Rc<Index>>> = const { RefCell::new(None) };
     /// By (index key, component).
     static RESOLVED: RefCell<FastMap<(u64, u32), Resolved>> = RefCell::new(FastMap::default());
+    /// The towns' reach (`town_rects`), by index key.
+    static RECTS: RefCell<Option<(u64, Rc<Vec<Town>>)>> = const { RefCell::new(None) };
 }
 
 /// A created entry that is an item: a drawn thing standing (`world::CREATABLE`), by id.
@@ -547,7 +702,21 @@ fn build_index(world: &World, t0: &T0, key: u64) -> Index {
 }
 
 /// Every town (settlements, those added by hand, places), by layout, and how far each may reach.
-fn town_rects(world: &World, t0: &T0, idx: &Index) -> Vec<Town> {
+/// (Kept while the index holds and no street is drawn by hand: a hand town's streets are no
+/// part of its key.)
+fn town_rects(world: &World, t0: &T0, idx: &Index) -> Rc<Vec<Town>> {
+    let keep = world.file.edits.streets.is_empty();
+    if keep && let Some(t) = RECTS.with(|r| r.borrow().as_ref().filter(|e| e.0 == idx.key).map(|e| e.1.clone())) {
+        return t;
+    }
+    let t = Rc::new(town_rects_now(world, t0, idx));
+    if keep {
+        RECTS.with(|r| *r.borrow_mut() = Some((idx.key, t.clone())));
+    }
+    t
+}
+
+fn town_rects_now(world: &World, t0: &T0, idx: &Index) -> Vec<Town> {
     let edits = &world.file.edits;
     let first = t0.settlements.len() + t0.base_pois;
     let streets = &edits.streets;

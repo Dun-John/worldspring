@@ -79,7 +79,9 @@ fn best_holder(t0: &T0, p: P, among: impl Iterator<Item = usize>) -> Option<usiz
 
 thread_local! {
     static CACHE: RefCell<(u64, FastMap<u32, Rc<Layout>>)> = RefCell::new((0, FastMap::default()));
-    static EDITED: RefCell<FastMap<u32, (u64, Rc<Layout>)>> = RefCell::new(FastMap::default());
+    /// (With the base layout each was made from: one built anew, as a wall's after the streets it
+    /// reads changed, is edited anew whatever the fingerprint.)
+    static EDITED: RefCell<FastMap<u32, (u64, Rc<Layout>, Rc<Layout>)>> = RefCell::new(FastMap::default());
     /// What each wall drawn by hand read when its layout was built (`WallDeps`), by layout index.
     static WALLS: RefCell<FastMap<u32, WallDeps>> = RefCell::new(FastMap::default());
     /// The islets a created site's layout read (`raised_fp`) when it was built, by layout index.
@@ -101,7 +103,10 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     // (Roads drawn by hand take the world's own buildings off their band: a settlement's, not a
     // town laid out by hand's nor a building drawn by hand.)
     let roads = if world.file.edits.paths.is_empty() || !is_settlement(t0, index) || hand::is_hand(world, index) { None } else { crate::paths::fingerprint(&world.file.edits, base.bbox, 0.0) };
-    if world.file.edits.buildings.is_empty() && roads.is_none() {
+    // (R3: a drawn thing part of a town in the town's look, `members::look`; its town's layout
+    // is read, never the other way round.)
+    let look = if is_settlement(t0, index) { None } else { members::look(world, t0, index) };
+    if world.file.edits.buildings.is_empty() && roads.is_none() && look.is_none() {
         return base;
     }
     let key = index as u32;
@@ -109,7 +114,12 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         (Some(f), Some(r)) => crate::core::rng::hash2(f, r as i64, 0x9a75),
         (Some(f), None) => f,
         (None, Some(r)) => crate::core::rng::hash2(world.hash, r as i64, 0x9a76),
+        (None, None) if look.is_some() => world.hash,
         (None, None) => return base,
+    };
+    let fp = match look {
+        Some(k) => hash2(fp, k.fingerprint() as i64, 0x100c),
+        None => fp,
     };
     let fp = match hand::fingerprint(world, t0, index).or_else(|| wards::fingerprint(world, t0, index)) {
         Some(t) => crate::core::rng::hash2(fp, t as i64, 0x70e5),
@@ -120,11 +130,15 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         0 => fp,
         c => hash2(fp, c, 0xc017),
     };
-    if let Some(l) = EDITED.with(|c| c.borrow().get(&key).filter(|e| e.0 == fp).map(|e| e.1.clone())) {
+    if let Some(l) = EDITED.with(|c| c.borrow().get(&key).filter(|e| e.0 == fp && Rc::ptr_eq(&e.2, &base)).map(|e| e.1.clone())) {
         return l;
     }
-    let l = Rc::new(apply_building_edits(world, t0, &base));
-    EDITED.with(|c| c.borrow_mut().insert(key, (fp, l.clone())));
+    let mut l = if edits_fingerprint(world, key).is_some() || roads.is_some() { apply_building_edits(world, t0, &base) } else { (*base).clone() };
+    if let Some(k) = look {
+        k.apply(&mut l);
+    }
+    let l = Rc::new(l);
+    EDITED.with(|c| c.borrow_mut().insert(key, (fp, l.clone(), base.clone())));
     l
 }
 
