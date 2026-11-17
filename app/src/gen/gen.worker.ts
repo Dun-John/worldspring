@@ -53,7 +53,9 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
       const answer = (): string =>
         a.op === 'query'
           ? c.query_json(a.x, a.y)
-          : a.op === 'search'
+          : a.op === 'pick'
+            ? c.pick_json(a.x, a.y, a.radius)
+            : a.op === 'search'
             ? c.search_json(a.q, a.rect ? new Float64Array(a.rect) : undefined)
             : a.op === 'inview'
               ? c.in_view_json(...a.rect)

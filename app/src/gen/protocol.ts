@@ -927,6 +927,8 @@ export interface SpriteMeta {
 /** Gazetteer questions answered by a generator worker (see `worldgen::gazetteer`). */
 export type Ask =
   | { op: 'query'; x: number; y: number }
+  /** Everything within `radius` ft of (x, y), topmost first (`pick::pick`). */
+  | { op: 'pick'; x: number; y: number; radius: number }
   /** `rect` (x0, y0, x1, y1 ft) limits the search to that area. */
   | { op: 'search'; q: string; rect?: [number, number, number, number] }
   | { op: 'districts'; settlement: number }
@@ -1206,6 +1208,20 @@ export interface InteriorItem {
   /** Set in a design: one of its looks (0-3; more for a few: `looksOf`); absent: picked by position.
    * A `key`'s is its colour (1-7, the lock's `lock`). */
   variant?: number;
+}
+
+/** What `pick` finds under or near a point (`worldgen::pick`): topmost first, then nearest. `id` is null
+ * for kinds without ids yet (lane, street, hedge, field_wall, fence); `town` the owning settlement's
+ * feature id; `removable` where a delete edit exists today; `bbox` world ft x0, y0, x1, y1. */
+export interface Thing {
+  kind:
+    | 'entrance' | 'building' | 'drawn_building' | 'tower' | 'castle' | 'plot' | 'wall' | 'settlement' | 'site' | 'district'
+    | 'road' | 'drawn_road' | 'crossing' | 'water' | 'harbour' | 'lane' | 'street' | 'hedge' | 'field_wall' | 'fence';
+  id: string | null;
+  name: string | null;
+  town: string | null;
+  removable: boolean;
+  bbox: [number, number, number, number];
 }
 
 /** What a point query or building search returns. */
