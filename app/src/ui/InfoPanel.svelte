@@ -22,7 +22,7 @@
     settlementName: (index: number) => string;
     /** Where a layout is: the settlement it is or its site stands in, and its site (a site's
      * layout); null where there is none. */
-    whereOf: (index: number) => { town: Ref | null; site: Ref | null };
+    whereOf: (index: number, id?: string) => { town: Ref | null; site: Ref | null };
     /** A site's settlement (for a selected map feature; null: none). */
     parent?: Ref | null;
     /** The selected building was drawn by hand. */
@@ -105,8 +105,8 @@
 
   /** Where a building is: its site (unless it is the building, drawn by hand), its district,
    * and its settlement (a link); else (a building drawn out of town) its own name. */
-  function buildingWhere(li: number, district: string | null, districtId: string | null) {
-    const { town, site } = whereOf(li);
+  function buildingWhere(li: number, district: string | null, districtId: string | null, id?: string) {
+    const { town, site } = whereOf(li, id);
     const within = [drawn ? null : site?.name, district ? ((districtId && renames[districtId]) || district) : null].filter(Boolean).join(', ');
     return { town, within: within || (town ? '' : settlementName(li)) };
   }
@@ -196,7 +196,7 @@
         <div class="muted">{mi(d.x)} mi E, {mi(d.y)} mi S</div>
       {:else}
         {@const b = selection.hit}
-        {@const w = buildingWhere(b.settlement, b.district, b.district_id)}
+        {@const w = buildingWhere(b.settlement, b.district, b.district_id, b.id)}
         <div>{b.floors} {b.floors === 1 ? 'storey' : 'storeys'}{drawn ? '' : ` · ${b.ward} ward`}</div>
         <div>in {w.within}{#if w.town}{w.within ? ', ' : ''}{@render link(w.town)}{/if}</div>
         <div class="muted">{mi(b.x)} mi E, {mi(b.y)} mi S</div>

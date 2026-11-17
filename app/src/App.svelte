@@ -320,30 +320,54 @@
   // The settlement each site stands in (site layout → settlement layout), worked out by the
   // generator from T0, for the overlay it was asked about: a new overlay (sites created, moved or
   // deleted, or another world) has none until its own answer comes, so indices never go stale.
-  let parentsFor = $state.raw<{ overlay: Overlay; of: Map<number, number> } | null>(null);
+  // The same answer says which town each thing drawn by hand belongs to (a town or a place made by
+  // hand too: a layout index past the settlements), the generated buildings pushed out into a place,
+  // and the size of each settlement and place with its members.
+  type ParentsFor = { overlay: Overlay; of: Map<number, number>; pushed: Map<string, number>; sizes: Map<string, { kind: string; extent: number; people: number }> };
+  let parentsFor = $state.raw<ParentsFor | null>(null);
   const parentOf = $derived(parentsFor && parentsFor.overlay === overlay ? parentsFor.of : new Map<number, number>());
-  /** The sites in each settlement (layout indices, ascending). */
+  /** The place each pushed-out generated building (`b:<layout>:<id>`) now belongs to (layout index). */
+  const pushedTo = $derived(parentsFor && parentsFor.overlay === overlay ? parentsFor.pushed : new Map<string, number>());
+  const sizeOf = $derived(parentsFor && parentsFor.overlay === overlay ? parentsFor.sizes : new Map<string, { kind: string; extent: number; people: number }>());
+  /** The things in each town, or sites in each settlement (layout indices, ascending). */
   const sitesOf = $derived.by(() => {
     const m = new Map<number, number[]>();
     for (const [li, si] of parentOf) m.set(si, [...(m.get(si) ?? []), li]);
     return m;
   });
+  // (Asked again when what decides it changes: sites, what is drawn, towns' streets and members.)
+  const parentsKey = $derived([overlay, edits.created, edits.members, edits.buildings, edits.towns, edits.streets] as const);
+  let parentsAsk = 0;
   $effect(() => {
     const o = overlay;
+    void parentsKey.map(() => 0);
     if (!o) return;
     const [n, base] = [settlements.length, sites.length];
+    const ask = ++parentsAsk;
     void view.gen.parents().then((p) => {
-      if (overlay !== o || !p) return;
+      if (overlay !== o || !p || ask !== parentsAsk) return;
       // (Counted differently, the indices would name the wrong places: none is better.)
       const agree = p.n === n && p.base === base;
       if (!agree) console.warn(`[places] the generator counts ${p.n} settlements and ${p.base} sites, the map ${n} and ${base}: sites are not listed under settlements`);
-      parentsFor = { overlay: o, of: new Map(agree ? p.pairs : []) };
+      const of = new Map<number, number>(agree ? p.pairs : []);
+      const pushed = new Map<string, number>();
+      if (agree) {
+        for (const [li, town] of p.owners ?? []) of.set(li, town);
+        for (const [place, , ids] of p.pushed ?? []) for (const id of ids) pushed.set(id, place);
+      }
+      const sizes = new Map((agree ? (p.sizes ?? []) : []).map(([id, kind, extent, people]) => [id, { kind, extent, people }] as const));
+      parentsFor = { overlay: o, of, pushed, sizes };
     });
   });
   // Search and breadcrumbs leave hidden features out (a new object per edit: names change in place).
   const shown = $derived.by<Overlay | null>(() => {
     const hidden = new Set(placeHidden);
-    return overlay ? { ...overlay, features: overlay.features.filter((f) => !hidden.has(f.id)) } : null;
+    // (A settlement's size class and people as its members make them.)
+    const sized = (f: Feature): Feature => {
+      const s = sizeOf.get(f.id);
+      return s ? { ...f, kind: s.kind, extent_ft: s.extent, detail: f.detail?.replace(/pop\. [\d,]+/, `pop. ${s.people.toLocaleString('en-US')}`) } : f;
+    };
+    return overlay ? { ...overlay, features: overlay.features.filter((f) => !hidden.has(f.id)).map(sized) } : null;
   });
   // Roads someone named and crossings put down by hand, as places for search and the gazetteer
   // (asked again whenever names, hidden places or crossings change).
@@ -1639,6 +1663,11 @@
     toast,
     applyEdits,
     go,
+    townChoices: () =>
+      (overlay?.features ?? [])
+        .filter((f) => SETTLEMENT_KINDS.includes(f.kind))
+        .map((f) => ({ id: f.id, name: renames[f.id] ?? f.name, layout: layoutIndexOf(f.id), x: f.x, y: f.y, extent: sizeOf.get(f.id)?.extent ?? f.extent_ft }))
+        .filter((t) => t.layout >= 0),
   });
 
   /** The building drawn by hand behind an id: its created id, or its building id (`b:<layout>:0`). */
@@ -2712,7 +2741,7 @@
   /** The sites standing in a settlement (by its id), hidden ones too. */
   function placesIn(id: string): Feature[] {
     const li = layoutIndexOf(id);
-    if (li < 0 || li >= settlements.length) return [];
+    if (li < 0 || !isTown(li)) return [];
     return (sitesOf.get(li) ?? []).map(layoutFeature).filter((f): f is Feature => !!f);
   }
 
@@ -2770,6 +2799,9 @@
     return li < settlements.length ? li : (parentOf.get(li) ?? -1);
   }
 
+  /** Whether layout `li` is a town for what stands in it: a settlement, or a town or place made by hand with things in it. */
+  const isTown = (li: number) => li < settlements.length || (sitesOf.get(li)?.length ?? 0) > 0 || layoutFeature(li)?.id.startsWith('c:') === true && SETTLEMENT_KINDS.includes(layoutFeature(li)!.kind);
+
   /** Where something in a layout is, by name: the settlement it is or stands in, else its site. */
   function whereName(li: number): string {
     const t = townOf(li);
@@ -2800,7 +2832,7 @@
     const li = pair && !pair.entry.removed ? pair.li : layoutIndexOf(id);
     if (li >= 0) {
       layouts.add(li);
-      for (const c of li < settlements.length ? (sitesOf.get(li) ?? []) : []) {
+      for (const c of isTown(li) ? (sitesOf.get(li) ?? []) : []) {
         layouts.add(c);
         const f = layoutFeature(c);
         if (f) ids.add(f.id);
@@ -2820,7 +2852,7 @@
   const placesHere = $derived.by(() => {
     if (selection?.kind !== 'feature') return [];
     const li = layoutIndexOf(selection.feature.id);
-    if (li < 0 || li >= settlements.length) return [];
+    if (li < 0 || !isTown(li)) return [];
     const hidden = new Set(placeHidden);
     return (sitesOf.get(li) ?? [])
       .map(layoutFeature)
@@ -4185,7 +4217,11 @@
       notes={placeNotes}
       noteKey={placeKey}
       {settlementName}
-      whereOf={(li) => ({ town: layoutRef(townOf(li)), site: li >= settlements.length ? layoutRef(li) : null })}
+      whereOf={(li, id) => {
+        // (A generated building pushed out is in its place, not its town.)
+        const place = id ? pushedTo.get(id) : undefined;
+        return place !== undefined ? { town: layoutRef(place), site: null } : { town: layoutRef(townOf(li)), site: li >= settlements.length ? layoutRef(li) : null };
+      }}
       parent={sel.kind === 'feature' && layoutIndexOf(sel.feature.id) >= settlements.length ? layoutRef(townOf(layoutIndexOf(sel.feature.id))) : null}
       drawn={sel.kind === 'building' && !!drawnBuilding(sel.hit.id)}
       {placesHere}
