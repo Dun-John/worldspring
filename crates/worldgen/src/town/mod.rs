@@ -17,8 +17,8 @@ mod castle;
 pub use castle::Report as CastleReport;
 mod towerhouse;
 pub mod catalog;
-pub mod geom;
-pub mod clip;
+pub use crate::core::geom;
+pub use crate::core::clip;
 mod rows;
 /// QA only (`towncheck rows`): rows of lots along a street, not used by generation.
 pub use rows::{QaRow, QaRowOut, qa_bands, qa_rows};

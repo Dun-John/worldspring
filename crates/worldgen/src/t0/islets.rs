@@ -15,7 +15,7 @@
 use crate::core::rng::{hash3, unit};
 use crate::t0::T0;
 use crate::t0::settle::Tier;
-use crate::town::geom::{add, dist, mul, seg_dist};
+use crate::core::geom::{add, dist, mul, seg_dist};
 
 type P = [f64; 2];
 
@@ -71,7 +71,7 @@ pub fn tower_building(world: &crate::world::World, t0: &T0, i: &Islet) -> Option
     let want = crate::town::catalog::index_of("watchtower").map(|f| f as u16)?;
     let l = crate::town::layout(world, t0, i.settlement as usize);
     l.buildings.iter().find_map(|b| {
-        let w = crate::town::geom::centroid(&b.poly);
+        let w = crate::core::geom::centroid(&b.poly);
         (b.func == Some(want) && dist(w, i.at) <= i.r).then(|| (format!("b:{}:{}", l.index, b.id), w))
     })
 }

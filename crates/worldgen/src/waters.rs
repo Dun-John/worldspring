@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::noise::smoothstep;
 use crate::core::{fabs, floor, sqrt};
-use crate::town::geom;
+use crate::core::geom;
 
 type P = [f64; 2];
 

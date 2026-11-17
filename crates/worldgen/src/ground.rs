@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::core::noise::smoothstep;
-use crate::town::geom;
+use crate::core::geom;
 
 /// Squares per block side (80 ft).
 pub const BLOCK: i64 = 16;

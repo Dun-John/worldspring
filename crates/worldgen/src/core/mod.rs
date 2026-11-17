@@ -1,3 +1,5 @@
+pub mod clip;
+pub mod geom;
 pub mod grid;
 pub mod hash;
 pub mod noise;

@@ -528,7 +528,7 @@ impl BuildingEdit {
         if self.removed {
             return Ok(());
         }
-        let c = crate::town::geom::centroid(&self.poly);
+        let c = crate::core::geom::centroid(&self.poly);
         let probe = Created {
             kind: "building".into(),
             x: if self.poly.is_empty() { self.at[0] } else { c[0] },
@@ -1417,7 +1417,7 @@ impl Created {
         if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > PLOT_REACH_FT) {
             return Err(format!("a plot's corners must lie within {PLOT_REACH_FT} ft of its point"));
         }
-        if crate::town::geom::area(p).abs() < 400.0 || crate::town::geom::obb(p).short < 20.0 {
+        if crate::core::geom::area(p).abs() < 400.0 || crate::core::geom::obb(p).short < 20.0 {
             return Err("a plot must be at least 20 ft across".into());
         }
         if !simple(p) {
@@ -1445,7 +1445,7 @@ impl Created {
         if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > BUILDING_REACH_FT) {
             return Err(format!("a building's corners must lie within {BUILDING_REACH_FT} ft of its point"));
         }
-        if crate::town::geom::area(p).abs() < 100.0 || crate::town::geom::obb(p).short < 10.0 {
+        if crate::core::geom::area(p).abs() < 100.0 || crate::core::geom::obb(p).short < 10.0 {
             return Err("a building must be at least 10 ft across".into());
         }
         if !simple(p) {
@@ -1479,7 +1479,7 @@ impl Created {
     /// (concave or not), `CASTLE_MIN_FT` to `CASTLE_MAX_FT` across, its gates on its sides, its
     /// keep's shape (a drawn one inside the outline), its moat; ruined or not.
     fn check_castle(&self) -> Result<(), String> {
-        use crate::town::geom::obb;
+        use crate::core::geom::obb;
         if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() {
             return Err("a castle takes its outline (poly), gate or gates, keep, keep_shape, keep_poly, moat, yard_buildings and structure".into());
         }
@@ -1510,7 +1510,7 @@ impl Created {
         }
         // (Its curtain, drawn in from the outline, in one piece: a neck too narrow for it would
         // leave a lobe without walls.)
-        if !crate::town::clip::is_convex(p) && crate::town::clip::inset_edges(p, &vec![CASTLE_NECK_FT; m]).iter().filter(|s| s.area().abs() >= 1.0).count() > 1 {
+        if !crate::core::clip::is_convex(p) && crate::core::clip::inset_edges(p, &vec![CASTLE_NECK_FT; m]).iter().filter(|s| s.area().abs() >= 1.0).count() > 1 {
             return Err(format!("a castle's outline is too narrow at a neck for its walls: make it {:.0} ft across there at least", 2.0 * CASTLE_NECK_FT));
         }
         if self.gate.is_some_and(|g| g as usize >= m) {
@@ -1541,12 +1541,12 @@ impl Created {
                 if k.len() < 3 || k.len() > 32 || k.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) || !simple(k) {
                     return Err("keep_poly: 3–32 corners, not crossing itself".into());
                 }
-                if obb(k).short < 20.0 || crate::town::geom::area(k).abs() < 600.0 {
+                if obb(k).short < 20.0 || crate::core::geom::area(k).abs() < 600.0 {
                     return Err("a drawn keep is at least 20 ft across".into());
                 }
                 // (All of it, not only its corners: an edge may cross a notch.)
-                let room = crate::town::clip::offset(&crate::town::clip::region(p), -12.0, crate::town::clip::Join::Miter(2.0));
-                let out = crate::town::clip::area(&crate::town::clip::difference(&crate::town::clip::region(k), &room));
+                let room = crate::core::clip::offset(&crate::core::clip::region(p), -12.0, crate::core::clip::Join::Miter(2.0));
+                let out = crate::core::clip::area(&crate::core::clip::difference(&crate::core::clip::region(k), &room));
                 if k.iter().any(|q| inside_by(p, *q) < 12.0) || out > 1.0 {
                     return Err("a drawn keep stands inside the castle's outline, 12 ft or more in from its walls".into());
                 }
@@ -1638,13 +1638,13 @@ impl Created {
 /// How far `q` lies inside polygon `p` (ft; negative outside).
 fn inside_by(p: &[[f64; 2]], q: [f64; 2]) -> f64 {
     let n = p.len();
-    let d = (0..n).map(|i| crate::town::geom::seg_dist(q, p[i], p[(i + 1) % n])).fold(f64::MAX, f64::min);
-    if crate::town::geom::contains(p, q) { d } else { -d }
+    let d = (0..n).map(|i| crate::core::geom::seg_dist(q, p[i], p[(i + 1) % n])).fold(f64::MAX, f64::min);
+    if crate::core::geom::contains(p, q) { d } else { -d }
 }
 
 /// Whether a polygon's sides cross only at shared corners.
 fn simple(p: &[[f64; 2]]) -> bool {
-    use crate::town::geom::{cross, sub};
+    use crate::core::geom::{cross, sub};
     let n = p.len();
     let crosses = |a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]| {
         let (d1, d2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
@@ -1727,7 +1727,7 @@ impl Edits {
                 let c = &mut self.created[k];
                 match lots[s].get(n).filter(|_| n < per_side[s]) {
                     Some((lot, _)) => {
-                        let m = crate::town::geom::centroid(lot);
+                        let m = crate::core::geom::centroid(lot);
                         (c.poly, c.x, c.y) = (lot.clone(), m[0], m[1]);
                     }
                     None => c.removed = true,
