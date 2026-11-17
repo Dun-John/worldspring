@@ -6,6 +6,7 @@
 
 pub mod agent;
 mod checks;
+mod wharf_site;
 pub mod placing;
 pub mod remap;
 pub mod battlemap;

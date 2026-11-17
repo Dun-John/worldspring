@@ -418,7 +418,7 @@ pub fn ring_cuts(ring: &[P], lanes: &[(P, P)]) -> Vec<Vec<f64>> {
 }
 
 /// Where the segment a→b crosses p→q, as a fraction along a→b.
-fn cut(a: P, b: P, p: P, q: P) -> Option<f64> {
+pub fn cut(a: P, b: P, p: P, q: P) -> Option<f64> {
     let (r, s) = (sub(b, a), sub(q, p));
     let d = cross(r, s);
     if d.abs() < 1e-9 {
@@ -433,30 +433,6 @@ fn cut(a: P, b: P, p: P, q: P) -> Option<f64> {
 /// walls are built in that town's style.
 pub fn town_of_wall<'a>(t0: &'a T0, center: P) -> Option<&'a Settlement> {
     t0.settlements.iter().chain(t0.made.iter().map(|m| &m.s)).filter(|s| dist([s.x, s.y], center) <= super::reach(s)).min_by(|a, b| dist([a.x, a.y], center).total_cmp(&dist([b.x, b.y], center)))
-}
-
-/// Why a castle's or wall's line is refused where it meets the walls of layout `l`: the wall's id
-/// (a wall or castle drawn by hand, else the town's own walls) and where (world ft).
-pub fn wall_crossed(world: &World, t0: &T0, l: &super::Layout, segs: &[(P, P)]) -> String {
-    let id = crate::agent::feature_of_layout(world, t0, l.index as usize).unwrap_or_else(|| format!("layout {}", l.index));
-    let what = if l.site { format!("wall {id}") } else { format!("the town wall of {id}") };
-    let mut at: Option<P> = None;
-    'find: for w in &l.walls {
-        for s in w.windows(2) {
-            for &(a, b) in segs {
-                if let Some(t) = cut(a, b, s[0], s[1]) {
-                    at = Some(lerp(a, b, t));
-                    break 'find;
-                }
-                if seg_dist(s[0], a, b) < 1.0 {
-                    at = Some(s[0]);
-                    break 'find;
-                }
-            }
-        }
-    }
-    let at = at.or_else(|| l.walls.iter().flatten().next().copied()).unwrap_or([0.0, 0.0]);
-    format!("that crosses {what} at ({:.0}, {:.0})", at[0], at[1])
 }
 
 /// The gates of a wall's layout (world ft): each pair of gate towers (52 ft apart, `wall_pieces`)

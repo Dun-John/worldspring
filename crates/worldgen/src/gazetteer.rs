@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::World;
 use crate::t0::T0;
 use crate::town::{self, catalog::CATALOG, geom};
+pub use crate::town::places::DistrictLabel;
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -262,15 +263,6 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
     districts.extend(by_function);
     districts.truncate(limit);
     districts
-}
-
-/// A settlement's named districts for map labels: id, name, kind and label baseline.
-#[derive(Serialize)]
-pub struct DistrictLabel {
-    pub id: String,
-    pub name: String,
-    pub kind: &'static str,
-    pub path: Vec<[f64; 2]>,
 }
 
 pub fn districts_json(world: &World, t0: &T0, settlement: usize) -> String {

@@ -7,7 +7,7 @@
 
 use serde_json::{Value, json};
 
-use crate::interior::{Far, Interior, Item, Level, Link as Way};
+use crate::interior::{Far, Interior, Item, Level, Link as Way, generated_id};
 use crate::t0::T0;
 use crate::world::{Edits, World};
 pub use crate::model::links::{End, Link, WAYS};
@@ -173,4 +173,19 @@ pub fn problems(world: &World, t0: &T0, key: &str, l: &Link) -> Vec<String> {
         }
     }
     out
+}
+
+/// Interior by id: `b:<settlement>:<building>` or `t:<settlement>:<tower>` (wall towers,
+/// then gate towers, of that layout).
+pub fn generate_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
+    let mut it = generated_id(world, t0, id)?;
+    // (Paired exits put down by hand on its levels.)
+    if !world.file.edits.links.is_empty() {
+        crate::links::dress(world, t0, id, &mut it);
+    }
+    Some(it)
+}
+
+pub fn interior_json(world: &World, t0: &T0, id: &str) -> String {
+    serde_json::to_string(&generate_id(world, t0, id)).expect("serializable")
 }

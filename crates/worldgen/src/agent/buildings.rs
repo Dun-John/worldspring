@@ -2,6 +2,9 @@
 
 use super::*;
 use crate::world::BuildingEditChecks;
+use crate::town::geom::{lerp, seg_dist};
+use crate::town::handwall::cut;
+pub use crate::town::pieces::BuildingChange;
 
 /// The streets, walls, squares and world roads in an area (`list_streets`): each layout (settlement or site) in `rect` gives its streets
 /// (`{what: street, settlement, width_ft, kind, pts}`), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and
@@ -116,23 +119,6 @@ pub fn generated_buildings_in(world: &World, t0: &T0, poly: &[P]) -> Vec<(String
         }
     }
     out
-}
-
-/// What may change on a generated building (`update_building`): each `None` stays as it is;
-/// `Some("")` (or `auto`, or for `structure` the generated one) goes back to as generated.
-#[derive(Clone, Debug, Default, serde::Deserialize)]
-#[serde(default)]
-pub struct BuildingChange {
-    pub func: Option<String>,
-    pub floors: Option<u8>,
-    pub poly: Option<Vec<P>>,
-    pub roof: Option<String>,
-    pub tint: Option<String>,
-    pub material: Option<String>,
-    pub shape: Option<String>,
-    /// `Some(None)`: back to picked.
-    pub shade: Option<Option<u8>>,
-    pub structure: Option<String>,
 }
 
 /// Generated building `id`'s edit with `change` made: checked (a new footprint as a drawn
@@ -381,7 +367,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             }
         }
         if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().enumerate().any(|(k, p)| !(k == 0 || k + 1 == w.len()) | ((0..pts.len()).all(|i| geom::seg_dist(*p, pts[i], pts[(i + 1) % pts.len()]) > WALL_JOIN)) && geom::contains(pts, *p)))) {
-            return Err(town::handwall::wall_crossed(world, t0, &l, &segs));
+            return Err(wall_crossed(world, t0, &l, &segs));
         }
         if castle {
             if l.plazas.iter().any(|p| polys_overlap(pts, &p.pts)) {
@@ -638,4 +624,28 @@ pub fn creation_spot_json(world: &World, t0: &T0, kind: &str, under: Option<&str
         Err(e) => json!({ "error": e }),
     }
     .to_string()
+}
+
+/// Why a castle's or wall's line is refused where it meets the walls of layout `l`: the wall's id
+/// (a wall or castle drawn by hand, else the town's own walls) and where (world ft).
+pub fn wall_crossed(world: &World, t0: &T0, l: &crate::town::Layout, segs: &[(P, P)]) -> String {
+    let id = crate::agent::feature_of_layout(world, t0, l.index as usize).unwrap_or_else(|| format!("layout {}", l.index));
+    let what = if l.site { format!("wall {id}") } else { format!("the town wall of {id}") };
+    let mut at: Option<P> = None;
+    'find: for w in &l.walls {
+        for s in w.windows(2) {
+            for &(a, b) in segs {
+                if let Some(t) = cut(a, b, s[0], s[1]) {
+                    at = Some(lerp(a, b, t));
+                    break 'find;
+                }
+                if seg_dist(s[0], a, b) < 1.0 {
+                    at = Some(s[0]);
+                    break 'find;
+                }
+            }
+        }
+    }
+    let at = at.or_else(|| l.walls.iter().flatten().next().copied()).unwrap_or([0.0, 0.0]);
+    format!("that crosses {what} at ({:.0}, {:.0})", at[0], at[1])
 }

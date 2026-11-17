@@ -45,6 +45,7 @@ use crate::core::rng::{Pcg32, hash3};
 use crate::t0::T0;
 use crate::town::geom::{self, P, add, dot, mul, sub};
 use crate::town::{self, Layout, Structure};
+pub use crate::links::{generate_id, interior_json};
 
 /// Grid square size (ft) and storey height (ft).
 pub const SQUARE_FT: f64 = 5.0;
@@ -424,18 +425,7 @@ pub fn to_grid(it: &Interior, p: P) -> [f64; 2] {
     [dot(d, it.axis) / SQUARE_FT, dot(d, it.across) / SQUARE_FT]
 }
 
-/// Interior by id: `b:<settlement>:<building>` or `t:<settlement>:<tower>` (wall towers,
-/// then gate towers, of that layout).
-pub fn generate_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
-    let mut it = generated_id(world, t0, id)?;
-    // (Paired exits put down by hand on its levels.)
-    if !world.file.edits.links.is_empty() {
-        crate::links::dress(world, t0, id, &mut it);
-    }
-    Some(it)
-}
-
-fn generated_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
+pub fn generated_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
     let mut parts = id.split(':');
     let kind = parts.next()?;
     let s: usize = parts.next()?.parse().ok()?;
@@ -454,10 +444,6 @@ fn generated_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
         "w" => crate::under::sewer_site(world, t0, s, k as i64, parts.next()?.parse().ok()?),
         _ => None,
     }
-}
-
-pub fn interior_json(world: &World, t0: &T0, id: &str) -> String {
-    serde_json::to_string(&generate_id(world, t0, id)).expect("serializable")
 }
 
 /// Height of the wall walk and of a tower's top above the ground (as on the battlemap).

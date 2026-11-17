@@ -7,6 +7,7 @@ use super::geom::{centroid, dist};
 use super::{Layout, Structure, catalog, sites};
 use crate::World;
 use crate::core::hash::FastSet;
+use crate::core::geom::P;
 use crate::core::rng::{Pcg32, hash2};
 use crate::t0::T0;
 use crate::world::{BuildingEdit, BuildingEditChecks, CastlePiece, Created};
@@ -164,7 +165,7 @@ pub fn not_generated(world: &World, t0: &T0, id: &str) -> String {
 /// The edit of castle piece `p` with `change` made (`name`: `Some("")` back to as built), and
 /// what it changes into: `None` when it is then as built. Footprints stay the castle's; a
 /// ruin has no storeys.
-pub fn piece_edit(world: &World, p: &Piece, change: &crate::agent::BuildingChange, name: Option<&str>) -> Result<Option<CastlePiece>, String> {
+pub fn piece_edit(world: &World, p: &Piece, change: &BuildingChange, name: Option<&str>) -> Result<Option<CastlePiece>, String> {
     let c = &world.file.edits.created[p.created];
     let Some(at) = p.at else { return Err(format!("b:{}:{} was taken away from {}: restore it first (restore_building)", p.layout, p.id, p.castle_name)) };
     if change.poly.is_some() {
@@ -238,4 +239,21 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String, &'static str)> 
         }
     }
     out
+}
+
+/// What may change on a generated building (`update_building`): each `None` stays as it is;
+/// `Some("")` (or `auto`, or for `structure` the generated one) goes back to as generated.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct BuildingChange {
+    pub func: Option<String>,
+    pub floors: Option<u8>,
+    pub poly: Option<Vec<P>>,
+    pub roof: Option<String>,
+    pub tint: Option<String>,
+    pub material: Option<String>,
+    pub shape: Option<String>,
+    /// `Some(None)`: back to picked.
+    pub shade: Option<Option<u8>>,
+    pub structure: Option<String>,
 }

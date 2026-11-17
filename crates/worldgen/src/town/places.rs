@@ -27,6 +27,7 @@ use crate::core::hash::FastMap;
 use crate::t0::T0;
 use crate::t0::names::Namer;
 use crate::t0::settle::Tier;
+use serde::Serialize;
 
 /// What a square's or park's id is keyed by (`Plaza::spot`, `Park::spot`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -684,7 +685,7 @@ pub fn search(world: &crate::World, t0: &T0, q: &str, kind: Option<&str>, limit:
 
 /// The map's labels for a town's squares on patches, parks and gates (the app shows a gate's once
 /// it is renamed), with the district labels (`gazetteer::districts_json`).
-pub fn labels(world: &crate::World, t0: &T0, l: &Layout) -> Vec<crate::gazetteer::DistrictLabel> {
+pub fn labels(world: &crate::World, t0: &T0, l: &Layout) -> Vec<DistrictLabel> {
     of(world, t0, l)
         .into_iter()
         .filter(|p| !p.label.is_empty())
@@ -694,7 +695,16 @@ pub fn labels(world: &crate::World, t0: &T0, l: &Layout) -> Vec<crate::gazetteer
                 ("gate", _) => "gate",
                 (k, _) => k,
             };
-            crate::gazetteer::DistrictLabel { id: p.id, name: p.name, kind, path: p.label }
+            DistrictLabel { id: p.id, name: p.name, kind, path: p.label }
         })
         .collect()
+}
+
+/// A settlement's named districts for map labels: id, name, kind and label baseline.
+#[derive(Serialize)]
+pub struct DistrictLabel {
+    pub id: String,
+    pub name: String,
+    pub kind: &'static str,
+    pub path: Vec<[f64; 2]>,
 }
