@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Placed, Plateau, Plot, SettlementFacts, SpriteMeta, StreetPlan, StreetRequest, BlockFill, P2, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams, OpenKind, GenIslet, Water, WaterKind } from './gen/protocol';
-  import { TINT_MATERIAL } from './gen/protocol';
+  import type { BuildingEdit, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, SettlementFacts, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
@@ -42,31 +41,26 @@
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
   import PlaceBar from './ui/PlaceBar.svelte';
-  import type { BarAt, HeldView, Placer } from './editor/placing';
   import BuildPanel from './ui/BuildPanel.svelte';
   import TownPanel from './ui/TownPanel.svelte';
   import GroundPanel from './ui/GroundPanel.svelte';
-  import { defaultGround, GroundTool, type GroundSettings } from './editor/ground';
-  import { TownTool, type TownMode } from './editor/town';
-  import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, fillColour, isDrawMode, pickIn, type StreetPick } from './editor/streets';
+  import { type TownMode } from './editor/town';
+  import { type StreetPick } from './editor/streets';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { endSite, LinkTool, newLinkId } from './editor/links';
   import LinkPanel from './ui/LinkPanel.svelte';
   import { belowGround } from './editor/site/model';
-  import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
-  import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from './editor/crossing';
-  import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from './editor/harbour';
-  import { MAX_WATERS, WaterTool, centre, defaultWater, depthOf, flows, isDug, isLine, legacy, lookOf, ofSea, shore, streamLevels, streamSamples, waterProblem, widthOf, type WaterSettings } from './editor/water';
-  import { MAX_PATHS, PathDrawTool, defaultPath, kindWidth, pathProblem, type PathSettings } from './editor/paths';
-  import { ClearAreaTool, type ClearShape } from './editor/clearArea';
-  import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
-  import type { BuildMode, QuickInfo } from './ui/BuildPanel.svelte';
-  import { PathTool, StampTool, defaultLasso, defaultRow, defaultStamp, type LassoSettings, type RowSettings, type StampSettings } from './editor/quick';
-  import { defaultScatter, newObjectId, ScatterTool, type ScatterSettings } from './editor/scatter';
-  import { shrink } from './render/customAtlas';
+  import { buildTools } from './editor/tools/build.svelte';
+  import { groundTools } from './editor/tools/ground.svelte';
+  import { objectTools } from './editor/tools/objects.svelte';
+  import { streetTools } from './editor/tools/streets.svelte';
+  import { type BuildSettings } from './editor/build';
+  import { lookOf, shore } from './editor/water';
+  import { kindWidth } from './editor/paths';
+  import type { BuildMode } from './ui/BuildPanel.svelte';
   import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
-  import { assetIds, assetUrl, getAsset, putAsset, shareAssets, unbundleAssets } from './world/assets';
+  import { assetIds, assetUrl, getAsset, shareAssets, unbundleAssets } from './world/assets';
   import Search from './ui/Search.svelte';
   import Toasts, { type Toast } from './ui/Toasts.svelte';
   import { lowMemory } from './ui/support';
@@ -887,7 +881,7 @@
     const play = u.played ? ` Play starts afresh: version ${u.from} keeps its session.` : '';
     if (!u.anew) return `Upgraded from version ${u.from}: check that your changes still sit where they should.${play}`;
     const changes = aside
-      ? ` ${aside} ${aside === 1 ? 'change' : 'changes'} made on them ${aside === 1 ? 'is' : 'are'} set aside (Notes › Gazetteer › Set aside); names and notes on coasts, rivers, ranges and forests, and objects, ground and crossings, stay where they were.`
+      ? ` ${aside} ${aside === 1 ? 'change' : 'changes'} made on them ${aside === 1 ? 'is' : 'are'} set aside (Notes › Gazetteer › Set aside); names and notes on coasts, rivers, ranges and forests, and objects, G.ground and crossings, stay where they were.`
       : '';
     return `Upgraded to version ${GEN_VERSION}: every town and site came out anew.${changes}${play}`;
   }
@@ -1458,10 +1452,9 @@
   /** The map's pointer goes to the first of: a place being picked, a site being placed, the
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
-    const buildTool =
-      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
-    const town = townOn && townUnderlay.adjust && townUnderlay.visible ? townTraceTool : streetPlan ? streetTool : townTool;
-    view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? town ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
+    const buildTool = B.tool();
+    const town = townOn && townUnderlay.adjust && townUnderlay.visible ? T.townTraceTool : T.streetPlan ? T.streetTool : T.townTool;
+    view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? town ?? G.groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -1479,10 +1472,10 @@
     const editTab = to === 'edit' ? t : null;
     // (Moving on from Places puts its "Added X" line away.)
     if (editTab !== 'sites') placedName = null;
-    if (editTab !== 'scatter') disarmScatter();
-    if (editTab !== 'build') disarmBuild();
-    if (editTab !== 'town') disarmTown();
-    if (editTab !== 'ground') disarmGround();
+    if (editTab !== 'scatter') S.disarmScatter();
+    if (editTab !== 'build') B.disarmBuild();
+    if (editTab !== 'town') T.disarmTown();
+    if (editTab !== 'ground') G.disarmGround();
     if (editTab !== 'sites') disarmPlace();
     if (editTab !== 'design') disarmLinks();
     // (Where no rooms can be designed, Rooms puts ways across down.)
@@ -1495,10 +1488,10 @@
     }
     shell.section = to;
     if (to && t) (shell.tabs as Record<string, string>)[to] = t;
-    if (editTab === 'scatter') armScatter();
-    if (editTab === 'build') armBuild();
-    if (editTab === 'town') armTown();
-    if (editTab === 'ground') armGround();
+    if (editTab === 'scatter') S.armScatter();
+    if (editTab === 'build') B.armBuild();
+    if (editTab === 'town') T.armTown();
+    if (editTab === 'ground') G.armGround();
     if (editTab === 'design' && !designer && !linkOn) void openDesigner();
     if (editTab === 'design' && linkOn) armLinks();
     if (to === 'world' && t === 'sketch' && !sketchOn) enterSketch();
@@ -1550,7 +1543,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), editGenerated: (h: BuildingHit) => editGenerated(h), saveGenerated: () => saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(build, o), generatedActions: (h: BuildingHit) => generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), streets: () => ({ plan: streetPlan, pick: streetPick, tool: streetTool, drawn: streetDrawn }), streetChange: (r: StreetRequest) => streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (streetPick = p), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => designSettings, designer: () => designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1596,37 +1589,35 @@
   }
 
   // Build: while its tab is open, the map's pointer draws buildings (or redraws the one being
-  // changed).
-  let build = $state<BuildSettings>(defaultBuild());
-  let buildFuncs = $state<BuildingFuncs | null>(null);
-  /** The building being changed: one drawn by hand (its created id) or one of the world's own
-   * (its building id, `b:<layout>:<id>`). */
-  let buildEditing = $state<string | null>(null);
-  /** One of the world's own being changed: its name, and the menu's choices as it was opened
-   * (only what differs from them is changed). */
-  let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool; water: WaterTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool; stamp: StampTool; path: PathTool; road: PathDrawTool } | null = null;
-  /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
-   * own buildings. */
-  let buildMode = $state<BuildMode>('building');
-  let works = $state<WorksSettings>(defaultWorks());
-  /** The castle or wall drawn by hand being changed (its created id). */
-  let worksEditing = $state<string | null>(null);
-  /** The world's own buildings standing where a castle or wall would go: take them away with it? */
-  let inWayAsk = $state<{ what: string; count: number; choose: (go: boolean) => void } | null>(null);
-  let clearShape = $state<ClearShape>('box');
-  let cross = $state<CrossSettings>(defaultCross());
-  /** The crossing put down by hand being changed (its id). */
-  let crossEditing = $state<string | null>(null);
-  /** Build › Water: the kind new outlines get, and the water picked (its id), else drawing new ones. */
-  let water = $state<WaterSettings>(defaultWater());
-  let waterPicked = $state<string | null>(null);
-  /** Build › Road: the type, width and name new roads get, and the road picked (its id), else drawing new ones. */
-  let road = $state<PathSettings>(defaultPath());
-  let roadPicked = $state<string | null>(null);
-  let harbour = $state<HarbourSettings>(defaultHarbour());
-  /** The quay, pier or breakwater picked (its id). */
-  let harbourPicked = $state<string | null>(null);
+  // changed); its tools, menus and changes are in `editor/tools/build.svelte.ts`.
+  const B = buildTools({
+    view,
+    get edits() {
+      return edits;
+    },
+    get renames() {
+      return renames;
+    },
+    get firstCreated() {
+      return firstCreated;
+    },
+    get buildOn() {
+      return buildOn;
+    },
+    get selection() {
+      return selection;
+    },
+    set selection(s) {
+      selection = s;
+    },
+    toast,
+    applyEdits,
+    syncTool,
+    go,
+    drawnBuilding,
+    drawnBuildingId,
+    fitDesign,
+  });
 
   /** The building drawn by hand behind an id: its created id, or its building id (`b:<layout>:0`). */
   function drawnBuilding(id: string): Created | null {
@@ -1697,1406 +1688,48 @@
     return { designs: edits.designs, aside: 'Its inside, designed by hand, can’t follow the new storeys: set aside' };
   }
 
-  function armBuild() {
-    if (buildArmed) return;
-    if (!buildFuncs) void view.gen.buildingFuncs().then((f) => (buildFuncs = f));
-    const tool = new BuildTool({
-      shape: () => build.shape,
-      drawn: (poly) => void buildDrawn(poly),
-      hint: (t) => toast(t),
-    });
-    const crossTool = new CrossingTool({
-      settings: () => cross,
-      edits: () => edits,
-      picked: () => crossEditing,
-      placed: crossPlaced,
-      pick: pickCrossing,
-      hint: (t) => toast(t),
-    });
-    const waterTool = new WaterTool({
-      edits: () => edits,
-      picked: () => waterPicked,
-      brush: () => water.brush,
-      dug: () => water.dug,
-      width: () => water.width,
-      placed: waterPlaced,
-      pick: (id) => (waterPicked = id),
-      hint: (t) => toast(t),
-    });
-    const harbourTool = new HarbourTool({
-      settings: () => harbour,
-      edits: () => edits,
-      picked: () => harbourPicked,
-      islet: (at) => void harbourIslet(at),
-      wharf: (a, b) => void harbourWharf(a, b),
-      pick: (id) => (harbourPicked = id),
-      hint: (t) => toast(t),
-    });
-    const clear = new ClearAreaTool({
-      shape: () => clearShape,
-      drawn: (poly) => void clearArea(poly),
-      hint: (t) => toast(t),
-    });
-    const worksTool = new WorksTool({
-      mode: () => (buildMode === 'castle' ? 'castle' : 'wall'),
-      settings: () => works,
-      editing: () => worksSite(worksEditing),
-      castle: (poly, gate) => void placeWorks({ kind: 'castle', poly, ...(gate != null ? { gate } : {}) }),
-      wall: (pts, gates, closed) => void placeWorks({ kind: 'wall', pts, ...(gates.length ? { gates } : {}), ...(closed ? { closed } : {}) }),
-      gates: (change) => {
-        const c = worksSite(worksEditing);
-        if (!c) return;
-        void placeWorks('sides' in change ? { kind: 'castle', poly: c.poly, gate: change.sides[0], gates: change.sides.length > 1 ? change.sides.slice(1) : undefined } : { kind: 'wall', pts: change.pts, gates: change.gates.length ? change.gates : undefined }, true);
-      },
-      hint: (t) => toast(t),
-    });
-    const stampTool = new StampTool({ at: (x, y, place) => void stampAt(x, y, place), hint: (t) => toast(t) });
-    const pathTool = new PathTool({ mode: () => (buildMode === 'lasso' ? 'lasso' : 'row'), changed: (path, done) => void pathChanged(path, done), hint: (t) => toast(t) });
-    const roadTool = new PathDrawTool({
-      edits: () => edits,
-      picked: () => roadPicked,
-      width: () => (roadPicked ? (edits.paths?.[roadPicked]?.width ?? kindWidth(edits.paths?.[roadPicked]?.type ?? road.kind)) : road.width),
-      placed: roadPlaced,
-      pick: (id) => (roadPicked = id),
-      hint: (t) => toast(t),
-    });
-    buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, clear, works: worksTool, stamp: stampTool, path: pathTool, road: roadTool };
-  }
 
-  // Quick placement: Stamp, Row and Plot (Lasso). A ghost follows the generator's answer (the same
-  // `placing` code the agent tools use); each placing is one change (one undo step).
-  let stampSet = $state<StampSettings>(defaultStamp());
-  let rowSet = $state<RowSettings>(defaultRow());
-  let lassoSet = $state<LassoSettings>(defaultLasso());
-  let quick = $state<QuickInfo>({ can: false, text: '' });
-  /** The newest preview asked for (an older answer is dropped). */
-  let quickToken = 0;
-  /** Where the stamp's ghost was last asked for. */
-  let stampLast: Pt | null = null;
-  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
-
-  function stampAsk(x: number, y: number) {
-    return { x, y, func: build.func, size: stampSet.size, clear: stampSet.clear, ...(stampSet.facing != null ? { facing: stampSet.facing } : {}), id: `c:${(edits.created ?? []).length}` };
-  }
-
-  /** The ghost's question in flight, and the newest place asked meanwhile (one at a time, the latest wins). */
-  let stampBusy = false;
-  let stampNext: Pt | null = null;
-  /** A click's building is being put down: no preview is asked meanwhile. */
-  let stampPlacing = false;
-  /** The pointer is at (x, y) in Stamp: the ghost there, or (a click) the building put down. */
-  async function stampAt(x: number, y: number, place: boolean) {
-    if (place) {
-      // A click always puts down at the click: no queued preview runs after it (it would take the answer's token).
-      stampNext = null;
-      stampPlacing = true;
-      try {
-        return await stampRun(x, y, true);
-      } finally {
-        stampPlacing = false;
-      }
-    }
-    if (stampPlacing) return;
-    stampLast = [x, y];
-    if (stampBusy) {
-      stampNext = [x, y];
-      return;
-    }
-    stampBusy = true;
-    try {
-      let at: Pt | null = [x, y];
-      while (at) {
-        stampNext = null;
-        await stampRun(at[0], at[1], false);
-        at = stampPlacing ? null : (stampNext as Pt | null);
-      }
-    } finally {
-      stampBusy = false;
-    }
-  }
-
-  async function stampRun(x: number, y: number, place: boolean) {
-    const tool = buildArmed?.stamp;
-    if (!tool || buildMode !== 'stamp') return;
-    stampLast = [x, y];
-    const token = ++quickToken;
-    const r = await view.gen.stamp(stampAsk(x, y));
-    if (token !== quickToken || buildMode !== 'stamp') return;
-    if (!r) return void (quick = { can: false, text: 'The map could not answer: try again', bad: true });
-    if ('error' in r) {
-      tool.ghost = null;
-      tool.gone = [];
-      quick = { can: false, text: sentence(r.error), bad: true };
-      return place ? toast(quick.text) : undefined;
-    }
-    tool.ghost = { poly: r.poly, facing: r.facing, ok: true };
-    tool.gone = r.removed.map((b) => b.at);
-    quick = { can: true, text: `${r.name}${r.removed.length ? `: ${plural(r.removed.length, 'building')} taken away` : ''}${r.moved_ft > 5 ? `, ${Math.round(r.moved_ft)} ft from the click` : ''}`, removed: r.removed.length };
-    if (place) void stampPlace([x, y]);
-  }
-
-  /** Put down the ghost's building (with the generated ones under it, if asked): one change; Stamp stays on. */
-  async function stampPlace(at: Pt | null = stampLast) {
-    const tool = buildArmed?.stamp;
-    if (!at || !tool) return;
-    const r = await view.gen.stamp(stampAsk(at[0], at[1]));
-    if (!r || 'error' in r) return toast(r ? sentence(r.error) : 'The map could not answer: try again');
-    const id = `c:${(edits.created ?? []).length}`;
-    const opts = buildOptions(build);
-    const old = existingSite(edits, { id, kind: 'building', x: 0, y: 0, name: '', poly: r.poly }, [0, 0]);
-    if (old) return toast(`${old.name} is already here`);
-    // (With generated buildings to take away the stamp's own answer holds the spot: the plain check would refuse them.)
-    const spot = r.removed.length ? { x: r.x, y: r.y, name: r.name } : await view.gen.buildingSpot(r.poly, opts.func, id);
-    if (!spot) return toast('The map could not answer: try again');
-    if ('error' in spot) return toast(sentence(spot.short ?? spot.error));
-    const c: Created = { id, kind: 'building', x: spot.x, y: spot.y, name: build.name.trim() || spot.name, poly: r.poly, ...opts };
-    const buildings = { ...(edits.buildings ?? {}) };
-    for (const b of r.removed) buildings[b.id] = { at: b.at, removed: true };
-    applyEdits({ ...edits, created: [...(edits.created ?? []), c], ...(r.removed.length ? { buildings } : {}) }, { tool: 'place_stamp', id, name: c.name }, 'user');
-    build.name = '';
-    tool.ghost = null;
-    tool.gone = [];
-    quick = { can: false, text: '' };
-  }
-
-  /** The row or outline being drawn changed (`done`: finished). */
-  async function pathChanged(path: Pt[], done: boolean) {
-    const tool = buildArmed?.path;
-    if (!tool) return;
-    const token = ++quickToken;
-    if (buildMode === 'row') {
-      if (path.length < 2) {
-        tool.lots = [];
-        tool.refused = [];
-        quick = { can: false, text: '' };
-        return;
-      }
-      const q = { line: path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: (edits.created ?? []).length };
-      const r = await view.gen.row(q);
-      if (token !== quickToken || buildMode !== 'row') return;
-      if (!r || 'error' in r) {
-        tool.lots = [];
-        tool.refused = [];
-        quick = { can: false, text: r ? sentence(r.error) : 'The map could not answer: try again', bad: true };
-        return;
-      }
-      tool.lots = r.lots.map((l) => l.poly);
-      tool.refused = r.refused.map((f) => [f.x, f.y]);
-      const fresh = r.lots.filter((l) => !l.existing).length;
-      const parts = [`${plural(fresh, 'building')} in ${Math.round(r.length_ft)} ft`];
-      if (r.refused_count) parts.push(`${r.refused_count} would not fit (${r.refused[0].why})`);
-      if (r.removed.length) parts.push(`${plural(r.removed.length, 'building')} taken away`);
-      quick = { can: done && fresh > 0, text: fresh ? parts.join('; ') : 'All of these are here already', removed: r.removed.length };
-      if (!done && fresh) quick.text += ' · press Enter to finish';
-      return;
-    }
-    // Plot: only a finished outline is checked.
-    tool.over = null;
-    tool.bad = false;
-    if (!done) return void (quick = { can: false, text: '' });
-    const r = await view.gen.parcelCheck(path);
-    if (token !== quickToken || buildMode !== 'lasso') return;
-    if (!r) return void (quick = { can: false, text: 'The map could not answer: try again', bad: true });
-    if ('error' in r) {
-      tool.bad = true;
-      tool.over = r.over ?? null;
-      return void (quick = { can: false, text: sentence(r.error), bad: true });
-    }
-    quick = { can: true, text: 'Ready: this outline can be a plot' };
-  }
-
-  /** The row's settings changed: lay it again over the same path. */
-  $effect(() => {
-    void JSON.stringify(rowSet);
-    void edits.created?.length;
-    const tool = buildArmed?.path;
-    if (buildMode === 'row' && tool && tool.path.length >= 2) untrack(() => void pathChanged(tool.path, tool.finished));
-  });
-  /** The stamp's settings changed: the ghost again where it was. */
-  $effect(() => {
-    void stampSet.size;
-    void stampSet.clear;
-    void stampSet.facing;
-    void build.func;
-    if (buildMode === 'stamp' && stampLast) untrack(() => void stampAt(stampLast![0], stampLast![1], false));
+  // Edit › Streets: the town in view laid out anew by hand; its tools, state and changes are in
+  // `editor/tools/streets.svelte.ts`.
+  const T = streetTools({
+    view,
+    get edits() {
+      return edits;
+    },
+    get renames() {
+      return renames;
+    },
+    get firstCreated() {
+      return firstCreated;
+    },
+    get hud() {
+      return hud;
+    },
+    get overlay() {
+      return overlay;
+    },
+    get world() {
+      return world;
+    },
+    get settlements() {
+      return settlements;
+    },
+    get townOn() {
+      return townOn;
+    },
+    get selection() {
+      return selection;
+    },
+    applyEdits,
+    toast,
+    go,
+    syncTool,
+    layoutFeature,
+    layoutIndexOf,
+    flyToSize,
+    choose,
   });
 
-  /** Plots drawn by hand outlined while Build is open, each in its fill's colour. */
-  $effect(() => {
-    const plots = buildOn ? (edits.created ?? []).filter((c) => c.kind === 'plot' && !c.removed && (c.poly?.length ?? 0) >= 3) : [];
-    view.setPlotOutlines(plots.map((c) => ({ poly: c.poly!, color: fillColour((c.fill ?? { kind: 'generated', ward: 'common' }) as BlockFill) })));
-  });
-
-  /** The row or plot being drawn, put down: one change. */
-  async function quickPlace() {
-    if (buildMode === 'stamp') return void stampPlace();
-    const tool = buildArmed?.path;
-    if (!tool || !tool.finished) return;
-    const n = (edits.created ?? []).length;
-    if (buildMode === 'row') {
-      const q = { line: tool.path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: n };
-      const r = await view.gen.row(q);
-      if (!r || 'error' in r) return toast(r ? sentence(r.error) : 'The map could not answer: try again');
-      const made: Created[] = [];
-      for (const l of r.lots) {
-        if (l.existing) continue;
-        made.push({ id: `c:${n + made.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, func: l.func, floors: l.floors });
-      }
-      if (!made.length) return toast('All of these are here already');
-      const buildings = { ...(edits.buildings ?? {}) };
-      for (const b of r.removed) buildings[b.id] = { at: b.at, removed: true };
-      applyEdits({ ...edits, created: [...(edits.created ?? []), ...made], ...(r.removed.length ? { buildings } : {}) }, { tool: 'create_building_row', count: made.length }, 'user');
-      toast(`${plural(made.length, 'building')} put down${r.refused_count ? `; ${r.refused_count} would not fit` : ''}`);
-    } else {
-      const poly = tool.path;
-      const r = await view.gen.parcelCheck(poly);
-      if (!r || 'error' in r) return toast(r ? sentence(r.error) : 'The map could not answer: try again');
-      const fill: Record<string, unknown> =
-        lassoSet.fill === 'generated'
-          ? { kind: 'generated', ward: lassoSet.ward, ...(lassoSet.lots ? { lots: lassoSet.lots } : {}), ...(lassoSet.reroll ? { reroll: lassoSet.reroll } : {}) }
-          : lassoSet.fill === 'hand'
-            ? { kind: 'hand' }
-            : { kind: 'open', open: lassoSet.open };
-      const c: Created = { id: `c:${n}`, kind: 'plot', x: r.x, y: r.y, name: lassoSet.name.trim(), poly, fill };
-      if (existingSite(edits, c, [c.x, c.y])) return toast('There is a plot here already');
-      // (The world's own buildings under it give way to its fill, in the same change.)
-      const removed = r.removed ?? [];
-      const buildings = { ...(edits.buildings ?? {}) };
-      for (const b of removed) buildings[b.id] = { at: b.at, removed: true };
-      applyEdits({ ...edits, created: [...(edits.created ?? []), c], ...(removed.length ? { buildings } : {}) }, { tool: 'create_parcel', id: c.id, name: c.name }, 'user');
-      toast(`Plot made${removed.length ? `; ${plural(removed.length, 'building')} taken away for it` : ''}`);
-    }
-    tool.reset();
-    quick = { can: false, text: '' };
-  }
-
-  function quickDrop() {
-    buildArmed?.path.reset();
-    quick = { can: false, text: '' };
-  }
-
-  /** A castle or wall drawn by hand, by its created id. */
-  function worksSite(id: string | null): Created | null {
-    const c = id ? edits.created?.find((x) => x.id === id) : null;
-    return c && !c.removed && (c.kind === 'castle' || c.kind === 'wall') ? c : null;
-  }
-
-  /** A castle's or wall's options from the menu (its outline, line and gates aside). */
-  function worksOptions(kind: string): Partial<Created> {
-    if (kind === 'wall') return works.closed ? { closed: true } : {};
-    const o: Partial<Created> = {};
-    if (!works.keep) o.keep = false;
-    if (!works.yardBuildings) o.yard_buildings = false;
-    if (works.ruin) o.structure = 'ruin';
-    if (works.keep && works.keepShape !== 'auto') o.keep_shape = works.keepShape;
-    if (works.moat !== 'auto') o.moat = works.moat;
-    return o;
-  }
-
-  /** A castle or wall drawn, or the one being changed drawn again or given new options or gates
-   * (`keepOpts`: with its options as they were): checked by the generator; the world's own
-   * buildings in its way go with it, in the same change, if the user says so. */
-  async function placeWorks(shape: Partial<Created> & { kind: 'castle' | 'wall' }, keepOpts = false) {
-    const tool = buildArmed?.works;
-    const done = () => {
-      if (tool) tool.pending = null;
-    };
-    const editing = worksSite(worksEditing);
-    if (editing && editing.kind !== shape.kind) return void (done(), toast(`Draw a ${editing.kind} to change it`));
-    const id = editing?.id ?? `c:${(edits.created ?? []).length}`;
-    const opts: Partial<Created> =
-      keepOpts && editing
-        ? { keep: editing.keep, keep_shape: editing.keep_shape, keep_poly: editing.keep_poly, yard_buildings: editing.yard_buildings, moat: editing.moat, structure: editing.structure, closed: editing.closed }
-        : worksOptions(shape.kind);
-    const draft = { id, x: 0, y: 0, name: '', ...opts, ...shape } as Created;
-    for (const k of Object.keys(draft) as (keyof Created)[]) if (draft[k] === undefined) delete draft[k];
-    if (!editing && existingSite(edits, draft, [0, 0])) {
-      done();
-      return toast('That is already here');
-    }
-    const spot = await view.gen.worksSpot(draft);
-    if (!spot) return void (done(), toast('The map could not answer: try again'));
-    if ('error' in spot) return void (done(), toast(spot.error.charAt(0).toUpperCase() + spot.error.slice(1)));
-    const what = shape.kind;
-    if (spot.in_way.length) {
-      const go = await new Promise<boolean>((choose) => (inWayAsk = { what, count: spot.in_way.length, choose }));
-      inWayAsk = null;
-      if (!go) return void done();
-    }
-    done();
-    const name = works.name.trim() || editing?.name || spot.name;
-    // (A castle's pieces changed by hand stay through a redraw or new options.)
-    // (A wall's ends put onto the walls they meet: a T-join.)
-    const c: Created = { ...draft, x: spot.x, y: spot.y, name, ...(editing?.pieces ? { pieces: editing.pieces } : {}), ...(spot.pts ? { pts: spot.pts } : {}) };
-    const all = { ...(edits.buildings ?? {}) };
-    for (const b of spot.in_way) all[b.id] = { at: b.at, removed: true };
-    const buildings = spot.in_way.length ? all : edits.buildings;
-    if (editing) {
-      const created = (edits.created ?? []).map((x) => (x.id === c.id ? c : x));
-      applyEdits({ ...edits, created, buildings }, { tool: 'update_feature', id: c.id, name }, 'user');
-    } else {
-      // (Numbered as it is added: another site may have come in meanwhile.)
-      c.id = `c:${(edits.created ?? []).length}`;
-      applyEdits({ ...edits, created: [...(edits.created ?? []), c], buildings }, { tool: 'create_feature', id: c.id, kind: what, name }, 'user');
-    }
-    works.name = '';
-  }
-
-  /** The castle or wall being changed gets the menu's options (its outline, line and gates stay). */
-  function saveWorks() {
-    const c = worksSite(worksEditing);
-    if (!c) return;
-    const { keep: _k, keep_shape: _ks, keep_poly: kp, yard_buildings: _y, moat: _m, structure: _s, closed: _c, ...rest } = c;
-    // (A drawn keep keeps its outline while it stays drawn.)
-    const drawn = works.keep && works.keepShape === 'drawn' && kp?.length ? { keep_poly: kp } : {};
-    void placeWorks({ ...rest, ...drawn, ...worksOptions(c.kind), kind: c.kind as 'castle' | 'wall' });
-  }
-
-  /** Open the build menu on a castle or wall drawn by hand. */
-  function editWorks(id: string) {
-    const c = worksSite(id);
-    if (!c) return;
-    go('edit', 'build');
-    setBuildMode(c.kind as 'castle' | 'wall');
-    worksEditing = c.id;
-    works = {
-      castleShape: (c.poly?.length ?? 0) === 4 ? 'rect' : 'poly',
-      keep: c.keep !== false,
-      keepShape: c.keep_shape ?? (c.keep_poly?.length ? 'drawn' : 'auto'),
-      moat: c.moat ?? 'auto',
-      yardBuildings: c.yard_buildings !== false,
-      ruin: c.structure === 'ruin',
-      closed: !!c.closed,
-      name: '',
-    };
-  }
-
-  // Edit › Streets: the town in view laid out anew by hand (the ward editor, `editor/town.ts`).
-  let townTool = $state.raw<TownTool | null>(null);
-  let townMode = $state<TownMode>('select');
-  /** The brush's size, in patch widths. */
-  let townSize = $state(1);
-  /** The town in view (its layout index), its plan, the patch picked. */
-  let townIndex = $state(-1);
-  let townPlan = $state.raw<TownPlan | null>(null);
-  let townNote = $state('');
-  let townPatch = $state<number | null>(null);
-  /** The corner picked (a square where streets meet), if any: picked instead of a patch. */
-  let townCorner = $state<number | null>(null);
-  /** Why the last gate or tower asked for was refused. */
-  let townWallWhy = $state('');
-  $effect(() => {
-    void townCorner;
-    townWallWhy = '';
-  });
-  let townMerging = $state(false);
-  let townBusy = $state(false);
-  // A town laid out by hand (`Edits.streets`): its street graph (`editor/streets.ts`) in place of the ward editor.
-  let streetTool = $state.raw<StreetTool | null>(null);
-  let streetPlan = $state.raw<StreetPlan | null>(null);
-  let streetPick = $state<StreetPick | null>(null);
-  /** The points of the street being drawn; the class streets drawn get. */
-  let streetDrawn = $state(0);
-  let streetClass = $state<'main' | 'street'>('street');
-  /** What areas painted are; a wall drawn's towers apart (ft; null: as the town has them) and name. */
-  let streetOpen = $state<OpenKind>('lawn');
-  let wallSpacing = $state<number | null>(null);
-  let wallName = $state('');
-  // The town's trace picture (session-only, DM-only): shown over the map with the tab open, fitted
-  // round the town in view; Adjust hands the map's pointer to its handles.
-  $effect(() => {
-    view.townTrace = townOn ? townUnderlay : null;
-  });
-  $effect(() => {
-    const f = townIndex >= 0 ? settlements[townIndex] : null;
-    if (!f) return;
-    // (Round the town's box: its middle, a little larger.)
-    const b = townBox();
-    if (b) townUnderlay.setHome((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 1.1 * Math.max(b[2] - b[0], 300), 1.1 * Math.max(b[3] - b[1], 300));
-    else townUnderlay.setHome(f.x, f.y, 5000, 5000);
-  });
-  $effect(() => {
-    void [townOn, townUnderlay.adjust, townUnderlay.visible];
-    untrack(() => syncTool());
-  });
-  const townTraceTool: PointerTool = {
-    down: (x, y, e) => e.button === 0 && townUnderlay.adjustDown(x, y, view.cam.ppf),
-    move: (x, y) => townUnderlay.adjustMove(x, y),
-    up: () => townUnderlay.adjustUp(),
-    cancel: () => townUnderlay.adjustUp(),
-    hover: () => {},
-  };
-  /** "Back to generated" waiting for its answer. */
-  let streetBackAsk = $state(false);
-  /** Whether the town in view is laid out by hand. */
-  const townHand = $derived(townIndex >= 0 && !!edits.streets?.[String(townIndex)]);
-  /** The edits' streets as last seen, and how often they have changed (the plan is read again). */
-  let streetsSeen: unknown = null;
-  let streetsEpoch = 0;
-  /** What the plan shown was read for: the town and its edit. */
-  let townRead = '';
-  let townAsked = 0;
-  const townSelected = $derived(townPlan?.patches.find((p) => p.patch === townPatch) ?? null);
-  const townCornerPicked = $derived(townPlan?.corners.find((c) => c.corner === townCorner) ?? null);
-  const townName = $derived.by(() => {
-    const f = townIndex >= 0 ? layoutFeature(townIndex) : null;
-    return f ? (renames[f.id] ?? f.name) : null;
-  });
-  const townNear = $derived(streetPlan ? (hud?.ftPerPx ?? 99) <= 1 / DOTS_PPF : !!townPlan && townPlan.max_move_ft / (hud?.ftPerPx ?? 99) >= 40);
-
-  function armTown() {
-    if (townTool) return;
-    townTool = new TownTool({
-      mode: () => (isDrawMode(townMode) ? 'select' : townMode),
-      radius: () => townSize * (townPlan?.max_move_ft ?? 300),
-      selected: () => townPatch,
-      selectedCorner: () => townCorner,
-      corner: (v) => {
-        townCorner = v;
-        townPatch = null;
-        townMerging = false;
-        showTownCorner(v);
-      },
-      moved: (moves) => void townChange({ moves }, 'corners'),
-      equalize: (patches) => void townChange({ equalize: patches }, 'equalize'),
-      hint: (t) => toast(t),
-    });
-    townTool.setPlan(townPlan);
-    streetTool = new StreetTool({
-      mode: () => townMode,
-      radius: () => townSize * HAND_BRUSH_FT,
-      picked: () => streetPick,
-      pick: (p) => (streetPick = p),
-      change: (req, what) => void streetChange(req, what),
-      drawClass: () => streetClass,
-      areaKind: () => streetOpen,
-      wallOpts: () => ({ spacing: wallSpacing, name: wallName }),
-      drawing: (n) => (streetDrawn = n),
-      hint: (t) => toast(t),
-    });
-    streetTool.setPlan(streetPlan);
-    townRead = '';
-  }
-
-  /** A settlement card's Streets button: null (not a settlement), or whether its layout can be edited. */
-  function streetsCard(f: Feature): { ok: boolean; why: string } | null {
-    const li = layoutIndexOf(f.id);
-    if (li < 0 || !(li < settlements.length || (li >= firstCreated && (f.kind === 'village' || f.kind === 'town')))) return null;
-    if (!view.hasTown(li)) return { ok: false, why: 'Villages grow along their roads' };
-    return { ok: true, why: 'Lay out its streets, walls and wards' };
-  }
-
-  function openStreets(f: Feature) {
-    void choose({ kind: 'feature', feature: f }, true);
-    go('edit', 'town');
-  }
-
-  function disarmTown() {
-    townTool = null;
-    streetTool = null;
-    streetPick = null;
-    streetDrawn = 0;
-    townMerging = false;
-    townPatch = null;
-    townCorner = null;
-  }
-
-  /** The town the selection is (its layout index), else -1: a village has no streets to edit, so it is none. */
-  function selectedTown(s: Selection | null): number {
-    if (s?.kind !== 'feature') return -1;
-    const li = layoutIndexOf(s.feature.id);
-    return li >= 0 && view.hasTown(li) ? li : -1;
-  }
-  /** "Change town" was pressed: the next click on the map picks the town. */
-  let townPicking = $state(false);
-  $effect(() => {
-    if (!townOn) townPicking = false;
-  });
-
-  // The town edited, while the tab is open: the selected settlement's, else the one at the middle of the
-  // map as seen (above a phone's sheet, not under it).
-  $effect(() => {
-    const c = hud?.center;
-    void overlay;
-    const s = selection;
-    const top = shell.sheetTop;
-    if (!townOn || !c || townBusy) return;
-    let i = selectedTown(s);
-    if (i < 0) {
-      const dy = shell.phone && Number.isFinite(top) ? ((top - window.innerHeight) / 2) * (hud?.ftPerPx ?? 0) : 0;
-      i = view.townAt(c.x, c.y + dy);
-    }
-    if (i !== untrack(() => townIndex)) {
-      townIndex = i;
-      townPatch = null;
-      townCorner = null;
-      townMerging = false;
-      streetPick = null;
-      untrack(() => streetTool)?.reset();
-    }
-  });
-
-  // Its plan, read again when the town or its edit changes (here, by undo, from elsewhere) or
-  // the world is made again.
-  $effect(() => {
-    if (!townOn || !townTool || !overlay) return;
-    const i = townIndex;
-    if (edits.streets !== streetsSeen) {
-      streetsSeen = edits.streets;
-      streetsEpoch++;
-    }
-    const edit = townHand ? `hand ${streetsEpoch}` : JSON.stringify(edits.towns?.[String(i)] ?? null);
-    const key = `${i}|${edit}|${view.geom?.world_hash ?? world.seed}|${overlay.features.length}`;
-    if (key === townRead) return;
-    townRead = key;
-    void untrack(() => readTownPlan(i));
-  });
-
-  async function readTownPlan(i: number) {
-    const asked = ++townAsked;
-    if (i < 0) {
-      townPlan = null;
-      townNote = 'Go to a town, city or metropolis to re-plan it (villages grow along their roads). New towns are added in Edit › Places.';
-      townTool?.setPlan(null);
-      setStreetPlan(null);
-      return;
-    }
-    if (untrack(() => townHand)) return readStreetPlan(i, asked);
-    if (!townPlan || townPlan.layout !== i) townNote = 'Reading the town’s plan…';
-    const r = await view.gen.townPlan(i);
-    if (asked !== townAsked) return;
-    if ('error' in r) {
-      townPlan = null;
-      townNote = r.error.charAt(0).toUpperCase() + r.error.slice(1);
-    } else {
-      townPlan = r;
-      if (townPatch !== null && !r.patches.some((p) => p.patch === townPatch)) townPatch = null;
-      if (townCorner !== null && !r.corners.some((c) => c.corner === townCorner)) townCorner = null;
-    }
-    townTool?.setPlan(townPlan);
-    setStreetPlan(null);
-  }
-
-  /** A hand town's street graph read (in place of the ward editor's plan). */
-  async function readStreetPlan(i: number, asked: number) {
-    if (!streetPlan || streetPlan.layout !== i) townNote = 'Reading the town’s streets…';
-    const r = await view.gen.streetPlan(i);
-    if (asked !== townAsked) return;
-    townPlan = null;
-    townTool?.setPlan(null);
-    if ('error' in r) {
-      townNote = r.error.charAt(0).toUpperCase() + r.error.slice(1);
-      return setStreetPlan(null);
-    }
-    const p = streetPick;
-    if (p && !pickIn(r, p)) streetPick = null;
-    setStreetPlan(r);
-  }
-
-  function setStreetPlan(p: StreetPlan | null) {
-    const was = !!streetPlan;
-    streetPlan = p;
-    streetTool?.setPlan(p);
-    if (!p) streetPick = null;
-    // (The map's tool: the street graph's, or the ward editor's.)
-    if (was !== !!p && townOn) syncTool();
-  }
-
-  /** How long a street change may take before the tool is given back (the reply, if it comes, is dropped). */
-  const STREET_WAIT_MS = 60_000;
-
-  /** A change asked of the hand town in view: its records applied per key (one step to undo), or why not. */
-  async function streetChange(request: StreetRequest, what: string): Promise<boolean> {
-    const i = townIndex;
-    if (i < 0 || townBusy) return (streetTool?.settled(), false);
-    townBusy = true;
-    // (The reply is computed on the edits as they are now: it applies to these or not at all.)
-    const base = edits;
-    let r: Awaited<ReturnType<typeof view.gen.streetChange>>;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const late = new Promise<{ error: string }>((ok) => (timer = setTimeout(() => ok({ error: 'the map took too long to answer: try again' }), STREET_WAIT_MS)));
-      r = await Promise.race([view.gen.streetChange(i, request), late]);
-    } catch (e) {
-      r = { error: `the change failed: ${e instanceof Error ? e.message : String(e)}` };
-    } finally {
-      clearTimeout(timer);
-      townBusy = false;
-    }
-    if (i !== townIndex) return (streetTool?.settled(), false);
-    if ('error' in r) {
-      streetTool?.settled();
-      return (toast(r.error.charAt(0).toUpperCase() + r.error.slice(1)), false);
-    }
-    // (Also what the change reads besides: the sites and obstacles, cultures, buildings, crossings.)
-    const read = ['streets', 'wharves', 'towns', 'created', 'cultures', 'buildings', 'crossings'] as const;
-    if (read.some((f) => edits[f] !== base[f])) {
-      streetTool?.settled();
-      return (toast('The map changed meanwhile: try again'), false);
-    }
-    const { change, report } = r;
-    const next: Edits = { ...edits };
-    let any = false;
-    for (const field of ['streets', 'wharves', 'towns'] as const) {
-      const recs = change[field];
-      if (!recs || !Object.keys(recs).length) continue;
-      const out = { ...((edits[field] ?? {}) as Record<string, unknown>) };
-      for (const [k, v] of Object.entries(recs)) {
-        if (v === null) delete out[k];
-        else out[k] = v;
-      }
-      (next as Record<string, unknown>)[field] = out;
-      any = true;
-    }
-    if (!any) {
-      streetTool?.settled();
-      return (toast('Nothing changed'), false);
-    }
-    const key = String(i);
-    if (change.streets) view.hintStreets(key, change.streets, report.rects);
-    if (change.towns && key in change.towns) view.hintTown(key, change.towns[key] ?? null, report.rects);
-    const stayed = Array.isArray(report.stayed) ? report.stayed.length : 0;
-    if (stayed) toast(`${stayed === 1 ? 'A junction stays' : `${stayed} junctions stay`} put: moved, ${stayed === 1 ? 'it' : 'they'} would cross the streets`);
-    if (report.lost?.length) toast(`Gone with their buildings: ${report.lost.map((l) => l.name || l.what).join(', ')}`);
-    if (request.op === 'back_to_generated' || request.op === 'lay_out_by_hand') {
-      streetPick = null;
-      townPatch = null;
-      townCorner = null;
-    }
-    const { rects: _, records: __, blocks: ___, problems: ____, lost: _____, ...rest } = report;
-    const moved = request.op === 'move_junctions' ? request.moves.length - stayed : undefined;
-    if (request.op === 'back_to_generated') setStreetPlan(null);
-    applyEdits(next, { tool: 'edit_streets', id: settlements[i]?.id, name: townName ?? undefined, what, ...rest, op: request.op, ...(moved !== undefined ? { moved } : {}) }, 'user');
-    return true;
-  }
-
-  /** The street, painted area or wall picked taken away (false: none of them picked). */
-  function deletePicked(): boolean {
-    const p = streetPick;
-    if (!p) return false;
-    // (Busy: a change is on its way; the key is swallowed, not passed on.)
-    if (townBusy) return true;
-    let req: StreetRequest;
-    if (p.kind === 'street') req = { op: 'delete_street', street: p.id };
-    else if (p.kind === 'area') req = { op: 'remove_area', area: p.id };
-    else if (p.kind === 'wall') req = { op: 'remove_wall', wall: p.id };
-    else return false;
-    // (The pick stays when the change is refused.)
-    void streetChange(req, p.kind).then((ok) => {
-      if (ok && streetPick === p) streetPick = null;
-    });
-    return true;
-  }
-
-  /** Several changes asked in turn (each its own step to undo); stops at the first refused. */
-  async function streetChanges(reqs: StreetRequest[], what: string) {
-    for (const r of reqs) if (!(await streetChange(r, what))) return;
-  }
-
-  /** A click on the map with the tab open: a square or a patch picked, or the neighbour to join. */
-  function townPick(x: number, y: number) {
-    if (streetPlan) {
-      streetPick = streetTool?.pickAt(x, y) ?? null;
-      return;
-    }
-    const p = townTool?.patchAt(x, y) ?? null;
-    if (townMerging && townSelected) {
-      townMerging = false;
-      if (p === null || p === townSelected.patch) return;
-      if (!townSelected.neighbours.includes(p)) return void toast('Pick a patch next to it');
-      void townChange({ patches: [{ patch: townSelected.patch, merge_with: p }] }, 'merge');
-      return;
-    }
-    townCorner = townTool?.squareAt(x, y) ?? null;
-    townPatch = townCorner === null ? p : null;
-    if (townCorner !== null) showTownCorner(townCorner);
-  }
-
-  /** On a phone, the corner picked is brought up out from under the sheet (into the top third). */
-  function showTownCorner(v: number) {
-    const at = townPlan?.corners.find((c) => c.corner === v)?.at;
-    if (!shell.phone || !at) return;
-    const [, y0, , y1] = view.cam.viewRect();
-    if (at[1] > y0 + 0.4 * (y1 - y0)) view.flyTo({ cx: view.cam.cx, cy: view.cam.cy + at[1] - (y0 + 0.3 * (y1 - y0)), zoom: view.cam.zoom });
-  }
-
-  /** A change asked of the town in view: made (one step to undo), or why not. */
-  async function townChange(request: TownRequest, what: string) {
-    const i = townIndex;
-    townWallWhy = '';
-    if (i < 0 || townBusy) return void townTool?.settled();
-    townBusy = true;
-    const r = await view.gen.townChange(i, request).finally(() => (townBusy = false));
-    if (i !== townIndex) return void townTool?.settled();
-    if ('error' in r) {
-      townTool?.settled();
-      return void toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
-    }
-    const key = String(i);
-    townWallWhy = (r.report.wall?.refused ?? []).map((x) => x.why).join('; ');
-    if (JSON.stringify(edits.towns?.[key] ?? null) === JSON.stringify(r.edit)) {
-      townTool?.settled();
-      return void toast(what === 'corners' ? 'Nothing moved: the patches round those corners must stay convex' : townWallWhy ? townWallWhy.charAt(0).toUpperCase() + townWallWhy.slice(1) : 'Nothing changed');
-    }
-    const towns = { ...(edits.towns ?? {}) };
-    if (r.edit) towns[key] = r.edit;
-    else delete towns[key];
-    view.hintTown(key, r.edit, r.report.rects);
-    // A renamed or noted building handed on to its successor: name and note move in the same step.
-    let renames = edits.renames;
-    let notes = edits.notes;
-    for (const c of r.report.renames_carried ?? []) {
-      if (renames && c.from in renames) {
-        renames = { ...renames, [c.to]: renames[c.from] };
-        delete renames[c.from];
-      }
-      if (notes && c.from in notes) {
-        notes = { ...notes, [c.to]: notes[c.from] };
-        delete notes[c.from];
-      }
-    }
-    const lost = r.report.renames_lost ?? [];
-    if (lost.length) toast(`Kept on the old id: ${lost.map((l) => l.name).join(', ')}`);
-    applyEdits({ ...edits, towns, ...(renames ? { renames } : {}), ...(notes ? { notes } : {}) }, { tool: 'edit_town', id: settlements[i]?.id, name: townName ?? undefined, what, ...townReport(r.report) }, 'user');
-  }
-
-  /** What a change did, for its description (`describe`), as an agent's reply has it. */
-  function townReport(r: TownReport): Partial<TownReport> {
-    const { rects: _, ...rest } = r;
-    return rest;
-  }
-
-  function townZoomIn() {
-    const f = settlements[townIndex];
-    if (f) flyToSize(f.x, f.y, townSpan());
-  }
-
-  /** The town in view's span (ft): its box's larger side (`townBox`), else 5,000. */
-  function townSpan(): number {
-    const b = townBox();
-    return b ? Math.max(b[2] - b[0], b[3] - b[1], 600) : 5000;
-  }
-
-  /** The town in view's box (x0, y0, x1, y1 ft): the corners of its built blocks (not farmland or
-   *  empty ones) laid by hand, else of its patches in town; null when neither is known. */
-  function townBox(): [number, number, number, number] | null {
-    let pts: P2[] = [];
-    if (streetPlan?.junctions.length) {
-      const at = new Map(streetPlan.junctions.map((j) => [j.id, j.p]));
-      const ends = new Map(streetPlan.streets.map((st) => [st.id, [st.a, st.b]]));
-      const built = (f: BlockFill) => (f.kind === 'generated' ? f.ward !== 'farm' && f.ward !== 'village' : f.kind !== 'hand' && !(f.kind === 'open' && f.open === 'farmland'));
-      for (const b of streetPlan.blocks.filter((b) => built(b.fill))) {
-        const js = (b.streets ?? []).flatMap((id) => ends.get(id) ?? []);
-        pts.push(...(js.length ? js.map((j) => at.get(j)).filter((p): p is P2 => !!p) : [b.at]));
-      }
-      if (!pts.length) pts = streetPlan.junctions.map((j) => j.p);
-    } else if (townPlan) {
-      const at = new Map(townPlan.corners.map((c) => [c.corner, c.at]));
-      pts = townPlan.patches.filter((p) => p.in_town).flatMap((p) => p.corners.map((v) => at.get(v) ?? p.at));
-    }
-    if (!pts.length) return null;
-    const xs = pts.map((p) => p[0]);
-    const ys = pts.map((p) => p[1]);
-    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-  }
-
-  function disarmBuild() {
-    buildArmed = null;
-    worksEditing = null;
-    buildEditing = null;
-    genEditing = null;
-    crossEditing = null;
-    harbourPicked = null;
-  }
-
-  function setBuildMode(m: BuildMode) {
-    buildMode = m;
-    worksEditing = null;
-    buildArmed?.works.reset();
-    buildEditing = null;
-    genEditing = null;
-    crossEditing = null;
-    harbourPicked = null;
-    waterPicked = null;
-    roadPicked = null;
-    buildArmed?.cross.reset();
-    buildArmed?.water.reset();
-    buildArmed?.road.reset();
-    buildArmed?.harbour.reset();
-    buildArmed?.path.reset();
-    if (buildArmed) (buildArmed.stamp.ghost = null), (buildArmed.stamp.gone = []);
-    stampLast = null;
-    quickToken++;
-    quick = { can: false, text: '' };
-    syncTool();
-  }
-
-  /** The shops standing on a crossing now (their created ids). */
-  const shopsOn = (id: string): Created[] => (edits.created ?? []).filter((c) => c.on === id && !c.removed && c.kind === 'building');
-
-  /** `edits.created` with the shops on crossing `id` taken away (they stay in the list, removed). */
-  const withoutShops = (id: string): Created[] => (edits.created ?? []).map((c) => (c.on === id && !c.removed && c.kind === 'building' ? { ...c, removed: true } : c));
-
-  /** `created` with shops laid along bridge `c` (`id`) as the menu's depth says; or why not. */
-  async function withShops(id: string, c: Crossing, created: Created[]): Promise<Created[] | string> {
-    const r = await view.gen.bridgeLots(c, { depth: cross.shopDepth, frontage: SHOP_FRONT_FT, lane: cross.shopLane, vary: cross.shopVary, id });
-    if (!r) return 'The map could not answer: try again';
-    if ('error' in r) return r.error.replace(/^shops: /, '').replace(/^./, (x) => x.toUpperCase());
-    const out = [...created];
-    for (const lot of r.lots) {
-      const x = lot.poly.reduce((s, p) => s + p[0], 0) / lot.poly.length;
-      const y = lot.poly.reduce((s, p) => s + p[1], 0) / lot.poly.length;
-      out.push({ id: `c:${out.length}`, kind: 'building', x, y, name: '', poly: lot.poly, floors: lot.floors, func: lot.func, on: id });
-    }
-    return out;
-  }
-
-  /** Both banks clicked: a new crossing there, or the one being changed moved there; a bridge
-   * with its shops (laid out again if it had them) as one change. */
-  async function crossPlaced(a: Pt, b: Pt) {
-    const c: Crossing = crossingOf(cross, a, b);
-    const withShopsOn = cross.shops && c.kind === 'bridge';
-    if (withShopsOn) c.width = Math.max(c.width, shopsWidth(cross.shopDepth, cross.shopLane));
-    const problem = crossingProblem(c);
-    if (problem) return toast(problem);
-    const editing = crossEditing && edits.crossings?.[crossEditing] ? crossEditing : null;
-    const id = editing ?? newObjectId('v');
-    const next: Edits = { ...edits, crossings: { ...(edits.crossings ?? {}), [id]: c } };
-    const had = editing ? shopsOn(editing).length > 0 : false;
-    if (withShopsOn || had) {
-      let created: Created[] | string = edits.created ?? [];
-      if (editing && had && withShopsOn) {
-        const r = await view.gen.followBridge(id, c, edits.crossings?.[id], created);
-        created = !r ? 'The map could not answer: try again' : 'error' in r ? r.error : r.created;
-      } else {
-        if (had) created = withoutShops(id);
-        if (withShopsOn) created = await withShops(id, c, created);
-      }
-      if (typeof created === 'string') return toast(created);
-      next.created = created;
-    }
-    applyEdits(next, { tool: 'place_crossing', id, kind: c.kind, changed: !!editing }, 'user');
-  }
-
-  /** A crossing put down earlier was clicked: the menu shows it, to change or take away. */
-  function pickCrossing(id: string) {
-    const c = edits.crossings?.[id];
-    if (!c) return;
-    crossEditing = id;
-    const shops = shopsOn(id);
-    // (Their depth as they stand: the first one's short side across the deck.)
-    const sides = shops.map((s) => {
-      const q = s.poly ?? [];
-      return q.length >= 4 ? [Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]), Math.hypot(q[2][0] - q[1][0], q[2][1] - q[1][1])] : [0, 0];
-    });
-    const depths = sides.map((d) => Math.min(d[0], d[1]));
-    const depth = depths.length ? Math.max(...depths) : cross.shopDepth;
-    const vary = depths.length > 0 && (Math.max(...depths) - Math.min(...depths) > 0.5 || sides.some((d) => Math.abs(Math.max(d[0], d[1]) - Math.max(sides[0][0], sides[0][1])) > 0.5));
-    cross = { kind: c.kind, width: c.width, material: c.material ?? 'timber', shops: shops.length > 0, shopDepth: Math.max(10, Math.min(40, Math.round(depth))), shopLane: cross.shopLane, shopVary: depths.length ? vary : cross.shopVary };
-  }
-
-  /** The crossing being changed gets the menu's kind, width and material (its ends stay); its
-   * shops follow it, or go (the toggle off) or come (on). */
-  async function saveCrossing() {
-    const id = crossEditing;
-    const c = id ? edits.crossings?.[id] : null;
-    if (!c || !id) return;
-    const next: Crossing = crossingOf(cross, c.a, c.b);
-    const withShopsOn = cross.shops && next.kind === 'bridge';
-    if (withShopsOn) next.width = Math.max(next.width, shopsWidth(cross.shopDepth, cross.shopLane));
-    const problem = crossingProblem(next);
-    if (problem) return toast(problem);
-    const out: Edits = { ...edits, crossings: { ...(edits.crossings ?? {}), [id]: next } };
-    const had = shopsOn(id).length > 0;
-    if (withShopsOn || had) {
-      let created: Created[] | string = edits.created ?? [];
-      if (had && withShopsOn) {
-        const r = await view.gen.followBridge(id, next, c, created);
-        created = !r ? 'The map could not answer: try again' : 'error' in r ? r.error : r.created;
-      } else {
-        if (had) created = withoutShops(id);
-        if (withShopsOn) created = await withShops(id, next, created);
-      }
-      if (typeof created === 'string') return toast(created);
-      out.created = created;
-    }
-    applyEdits(out, { tool: 'place_crossing', id, kind: next.kind, changed: true }, 'user');
-  }
-
-  /** The level an outline takes (as `mapd`'s `create_water`): the water's where it reaches the sea
-   * or a lake (the highest), else the sea's for a legacy inlet or basin, else 1 ft under the lowest
-   * ground on its shore, as the loaded tiles have them. Water with no kind reaches the sea within
-   * 4 ft of its shore (read out there too) and then stands at its level exactly, else half a foot
-   * over it at least (so it looks the sea's only where it joins it). */
-  function waterLevel(w: Water): number {
-    const sea = view.geom?.sea_level_ft ?? 0;
-    const modern = !legacy(w);
-    // Along its shore as shaped (`Water::shore`), at most 96 points of it.
-    const sh = shore(w);
-    const every = Math.max(1, Math.ceil(sh.length / 96));
-    const pts = sh.filter((_, i) => i % every === 0);
-    const n = pts.length;
-    const per = Math.max(1, Math.floor(96 / n));
-    let a2 = 0;
-    for (let i = 0; i < n; i++) a2 += pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1];
-    const out = modern ? (a2 > 0 ? -4 : 4) : 0;
-    let [wet, low] = [-Infinity, Infinity];
-    for (let i = 0; i < n; i++) {
-      const [a, b] = [pts[i], pts[(i + 1) % n]];
-      const l = Math.max(1e-9, Math.hypot(b[0] - a[0], b[1] - a[1]));
-      const [ox, oy] = [((b[1] - a[1]) / l) * out, (-(b[0] - a[0]) / l) * out];
-      for (let s = 0; s < per; s++) {
-        const t = s / per;
-        const [x, y] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-        const at = view.surfaceAt(x, y);
-        if (at) {
-          if (at[1] > at[0]) wet = Math.max(wet, at[1]);
-          low = Math.min(low, at[0]);
-        }
-        const o = out ? view.surfaceAt(x + ox, y + oy) : null;
-        if (o && o[1] > o[0]) wet = Math.max(wet, o[1]);
-      }
-    }
-    if (wet > -Infinity) return modern && wet <= sea + 1 ? sea : Math.round(wet * 10) / 10;
-    if (ofSea(w) || low === Infinity) return sea;
-    return Math.round(Math.max(modern ? sea + 0.5 : sea, low - 1) * 10) / 10;
-  }
-
-  /** A stream's levels along its line (`waters::stream_levels`), as the loaded tiles have the ground. */
-  function streamLevelsOf(w: Water): number[] {
-    const sea = view.geom?.sea_level_ft ?? 0;
-    const at = streamSamples(centre(w)).map(([x, y]): [number, number | null] => {
-      const a = view.surfaceAt(x, y);
-      return a ? [a[0], a[1] > a[0] ? a[1] : null] : [sea + 1, null];
-    });
-    return streamLevels(at, sea);
-  }
-
-  /** Water as the tool draws it (no kind: its look follows it): a polygon, or a brushed line of
-   * the width set (`closed`: a ring); its level kept from `prev` while its points and whether it
-   * flows stay. */
-  function waterOf(pts: Pt[], o: { line: boolean; closed: boolean; width?: number; depth: number; dug: boolean }, prev?: Water): Water {
-    const base: Water = { pts, level: 0, depth: o.depth, dug: o.dug, ...(o.line ? { line: true, width: o.width, ...(o.closed ? { closed: true } : {}) } : {}) };
-    if (flows(base)) {
-      base.levels = prev?.levels?.length && flows(prev) && prev.pts === pts ? prev.levels : streamLevelsOf(base);
-      base.level = Math.max(...base.levels);
-    } else base.level = prev && !flows(prev) && prev.pts === pts ? prev.level : waterLevel(base);
-    return base;
-  }
-
-  /** Water drawn in Build › Water: of the shape, width, depth and shore set. */
-  function waterPlaced(pts: Pt[], closed = false) {
-    const w = waterOf(pts, { line: water.brush, closed: water.brush && closed, width: water.brush ? water.width : undefined, depth: water.depth, dug: water.dug });
-    const bad = waterProblem(w);
-    if (bad) return toast(bad);
-    if (Object.keys(edits.waters ?? {}).length >= MAX_WATERS) return toast(`A world holds at most ${MAX_WATERS} waters`);
-    const id = newObjectId('e');
-    waterPicked = id;
-    applyEdits({ ...edits, waters: { ...(edits.waters ?? {}), [id]: w } }, { tool: 'create_water', id, kind: lookOf(w, view.geom?.sea_level_ft ?? 0).kind }, 'user');
-  }
-
-  /** A line ended in Build › Road: a road of the menu's type, width and name along it. */
-  function roadPlaced(pts: Pt[]) {
-    const r = { pts, type: road.kind, ...(road.width !== kindWidth(road.kind) ? { width: road.width } : {}), ...(road.name.trim() ? { name: road.name.trim() } : {}) };
-    const bad = pathProblem(r);
-    if (bad) return toast(bad);
-    if (Object.keys(edits.paths ?? {}).length >= MAX_PATHS) return toast(`A world holds at most ${MAX_PATHS} roads drawn by hand`);
-    const id = newObjectId('rw');
-    roadPicked = id;
-    applyEdits({ ...edits, paths: { ...(edits.paths ?? {}), [id]: r } }, { tool: 'place_path', id, kind: r.type }, 'user');
-  }
-
-  /** The road picked: another type (its width the type's unless it had its own), width or name. */
-  function changeRoad(change: { kind?: PathSettings['kind']; width?: number; name?: string }) {
-    const id = roadPicked;
-    const r = id ? edits.paths?.[id] : null;
-    if (!id || !r) return;
-    const next = { ...r };
-    if (change.kind && change.kind !== r.type) {
-      next.type = change.kind;
-      if (r.width === undefined || r.width === kindWidth(change.kind)) delete next.width;
-    }
-    if (change.width !== undefined) {
-      if (change.width === kindWidth(next.type)) delete next.width;
-      else next.width = change.width;
-    }
-    if (change.name !== undefined) {
-      if (change.name.trim()) next.name = change.name.trim();
-      else delete next.name;
-    }
-    if (JSON.stringify(next) === JSON.stringify(r)) return;
-    applyEdits({ ...edits, paths: { ...(edits.paths ?? {}), [id]: next } }, { tool: 'place_path', id, kind: next.type, changed: true }, 'user');
-  }
-
-  function removeRoad() {
-    const id = roadPicked;
-    if (!id || !edits.paths?.[id]) return;
-    const { [id]: _gone, ...rest } = edits.paths ?? {};
-    const notes = edits.notes && id in edits.notes ? Object.fromEntries(Object.entries(edits.notes).filter(([k]) => k !== id)) : edits.notes;
-    roadPicked = null;
-    applyEdits({ ...edits, paths: rest, notes }, { tool: 'remove_paths', ids: [id] }, 'user');
-  }
-
-  /** The water picked: another width, depth or shore (water made with a kind loses it, keeping
-   * its depth and shore), or name. */
-  function changeWater(change: { name?: string; width?: number; depth?: number; dug?: boolean }) {
-    const id = waterPicked;
-    const w = id ? edits.waters?.[id] : null;
-    if (!id || !w) return;
-    let next = edits;
-    const width = change.width !== undefined && isLine(w) && change.width !== widthOf(w) ? change.width : undefined;
-    const depth = change.depth !== undefined && change.depth !== depthOf(w) ? change.depth : undefined;
-    const dug = change.dug !== undefined && change.dug !== isDug(w) ? change.dug : undefined;
-    if (width !== undefined || depth !== undefined || dug !== undefined) {
-      const nw = waterOf(w.pts, { line: isLine(w), closed: !!w.closed && !flows(w), width: isLine(w) ? (width ?? widthOf(w)) : undefined, depth: depth ?? depthOf(w), dug: dug ?? isDug(w) }, w);
-      const bad = waterProblem(nw);
-      if (bad) return toast(bad);
-      next = { ...next, waters: { ...(next.waters ?? {}), [id]: nw } };
-    }
-    if (change.name !== undefined && change.name.trim() !== (edits.renames?.[id] ?? '')) {
-      const { [id]: _was, ...renames } = edits.renames ?? {};
-      next = { ...next, renames: change.name.trim() ? { ...renames, [id]: change.name.trim() } : renames };
-    }
-    if (next !== edits) applyEdits(next, { tool: 'update_water', id }, 'user');
-  }
-
-  /** The picked water for the panel: its look, name, width (a line's), depth and shore. */
-  function waterInfo(w: Water, name: string) {
-    return { look: lookOf(w, view?.geom?.sea_level_ft ?? 0).kind, name, width: isLine(w) ? widthOf(w) : null, depth: depthOf(w), dug: isDug(w) };
-  }
-
-  function removeWater() {
-    const id = waterPicked;
-    if (!id || !edits.waters?.[id]) return;
-    const { [id]: _gone, ...rest } = edits.waters ?? {};
-    const drop = <T,>(m: Record<string, T> | undefined) => {
-      if (!m || !(id in m)) return m;
-      const { [id]: _x, ...r } = m;
-      return r;
-    };
-    waterPicked = null;
-    applyEdits({ ...edits, waters: rest, renames: drop(edits.renames), notes: drop(edits.notes), hidden: edits.hidden?.filter((h) => h !== id) }, { tool: 'delete_water', ids: [id] }, 'user');
-  }
-
-  function removeCrossing() {
-    const id = crossEditing;
-    const c = id ? edits.crossings?.[id] : null;
-    if (!id || !c) return;
-    const { [id]: _gone, ...rest } = edits.crossings ?? {};
-    crossEditing = null;
-    // (Its shops go with it.)
-    applyEdits({ ...edits, crossings: rest, ...(shopsOn(id).length ? { created: withoutShops(id) } : {}) }, { tool: 'remove_crossings', ids: [id], kind: c.kind }, 'user');
-  }
-
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-  /** An islet clicked: raised there (the generator says where one can stand). */
-  async function harbourIslet(at: Pt) {
-    const key = newObjectId('h');
-    const r = await view.gen.islet(key, at[0], at[1], harbour.radius, harbour.rise);
-    if (!r) return toast('The map could not answer: try again');
-    if ('error' in r) return toast(cap(r.error));
-    applyEdits({ ...edits, plateaus: { ...(edits.plateaus ?? {}), [key]: r.plateau } }, { tool: 'raise_islet', id: key, changed: false }, 'user');
-  }
-
-  /** A quay, pier or breakwater dragged: checked (its root on the bank, a lighthouse's place), then
-   * put down with its lighthouse as one change. */
-  async function harbourWharf(a: Pt, b: Pt) {
-    const w = wharfOf(harbour, a, b);
-    const problem = wharfProblem(w);
-    if (problem) return toast(problem);
-    const lighthouse = w.kind === 'breakwater' && harbour.lighthouse;
-    const r = await view.gen.wharfCheck(w, lighthouse);
-    if (!r) return toast('The map could not answer: try again');
-    if ('error' in r) return toast(cap(r.error));
-    const id = newObjectId('q');
-    const next: Edits = { ...edits, wharves: { ...(edits.wharves ?? {}), [id]: w } };
-    if (r.lighthouse) {
-      const l = r.lighthouse;
-      const created = edits.created ?? [];
-      next.created = [...created, { id: `c:${created.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, floors: 3, func: 'lighthouse', on: id }];
-    }
-    applyEdits(next, { tool: 'place_wharf', id, kind: w.kind, changed: false, lighthouse: !!r.lighthouse }, 'user');
-  }
-
-  /** The wharf picked is taken away, its lighthouse with it. */
-  function removeWharf() {
-    const id = harbourPicked;
-    const w = id ? edits.wharves?.[id] : null;
-    if (!id || !w) return;
-    const { [id]: _gone, ...rest } = edits.wharves ?? {};
-    harbourPicked = null;
-    applyEdits({ ...edits, wharves: rest, ...(shopsOn(id).length ? { created: withoutShops(id) } : {}) }, { tool: 'remove_wharves', ids: [id], kind: w.kind }, 'user');
-  }
-
-  /** One of the world's own buildings (not drawn by hand) behind a building id. */
-  function generatedBuilding(id: string): boolean {
-    const m = /^b:(\d+):(\d+)$/.exec(id);
-    return !!m && (Number(m[1]) < firstCreated || castleOfPiece(id) >= 0);
-  }
-
-  /** Where in `edits.created` the castle made by hand is whose keep or yard building a building
-   * id is (-1: it is not one). */
-  function castleOfPiece(id: string): number {
-    const m = /^b:(\d+):\d+$/.exec(id);
-    const k = m ? Number(m[1]) - firstCreated : -1;
-    const c = k >= 0 ? edits.created?.[k] : undefined;
-    return c?.kind === 'castle' && !c.removed ? k : -1;
-  }
-
-  /** `created` with a castle's piece set as the generator answered (null: as generated). */
-  function withPiece(p: PieceEdit): Created[] {
-    return (edits.created ?? []).map((c) => {
-      if (c.id !== p.castle) return c;
-      const { pieces: old, ...rest } = c;
-      const pieces = { ...(old ?? {}) };
-      if (p.edit) pieces[p.key] = p.edit;
-      else delete pieces[p.key];
-      return Object.keys(pieces).length ? { ...rest, pieces } : rest;
-    });
-  }
-
-  /** A building edit's answer in words when it is a refusal (or none), else null. */
-  function refusal(r: unknown): string | null {
-    if (!r) return 'The map could not answer: try again';
-    const e = (r as { error?: string }).error;
-    return e === undefined ? null : e.charAt(0).toUpperCase() + e.slice(1);
-  }
-
-  /** The world's own buildings with their middle in an area drawn: taken away (one change). */
-  async function clearArea(poly: Pt[]) {
-    const tool = buildArmed?.clear;
-    const found = await view.gen.buildingsIn(poly);
-    if (tool) tool.pending = null;
-    if (!found.length) return toast('No buildings of the town’s own there (drawn ones go with Delete)');
-    const all = { ...(edits.buildings ?? {}) };
-    for (const b of found) all[b.id] = { at: b.at, removed: true };
-    const removed = found.map((b) => b.id);
-    applyEdits({ ...edits, buildings: all }, { tool: 'remove_buildings', removed, count: removed.length }, 'user');
-    if (selection?.kind === 'building' && removed.includes(selection.hit.id)) selection = null;
-  }
-
-  /** A business's or home's key from what a building is called (its label). */
-  async function funcKey(label: string): Promise<string> {
-    buildFuncs ??= await view.gen.buildingFuncs();
-    const l = label.toLowerCase();
-    return buildFuncs.businesses.find((b) => b.name.toLowerCase() === l)?.key ?? buildFuncs.homes.find((h) => h.name.toLowerCase() === l)?.key ?? 'house';
-  }
-
-  /** Whether the castle piece selected has an edit (Restore is offered then only): asked of the
-   * generator, which knows which of the castle's pieces it is (the keep's key is not its id). */
-  let pieceChanged = $state({ id: '', has: false });
-  $effect(() => {
-    const sel = selection;
-    const id = sel?.kind === 'building' ? sel.hit.id : '';
-    const k = id ? castleOfPiece(id) : -1;
-    const own = id.split(':')[2];
-    if (k < 0) return void (pieceChanged = { id: '', has: false });
-    if (edits.created?.[k]?.pieces?.[own]) return void (pieceChanged = { id, has: true });
-    void pieceEdit(id).then((e) => {
-      if (selection === sel) pieceChanged = { id, has: !!e };
-    });
-  });
-
-  /** A castle piece's edit so far (the generator knows which of the castle's pieces it is). */
-  async function pieceEdit(id: string): Promise<BuildingEdit | undefined> {
-    const r = await view.gen.buildingEdit(id, {});
-    return r && 'piece' in r ? (r.piece.edit ?? undefined) : undefined;
-  }
-
-  /** Open the build menu on one of the world's own buildings. */
-  async function editGenerated(hit: BuildingHit) {
-    const k = castleOfPiece(hit.id);
-    const e = k >= 0 ? await pieceEdit(hit.id) : edits.buildings?.[hit.id];
-    const settings: BuildSettings = {
-      shape: 'rect',
-      func: e?.func ?? (await funcKey(hit.function)),
-      floors: hit.floors,
-      roof: (e?.roof ?? '') as BuildSettings['roof'],
-      material: (e?.material ?? (e?.tint ? TINT_MATERIAL[e.tint as Tint] : '')) as BuildSettings['material'],
-      rshape: (e?.shape ?? '') as BuildSettings['rshape'],
-      shade: e?.shade ?? '',
-      ruin: hit.ward !== 'underground' && (e?.structure === 'ruin' || hit.function.toLowerCase() === 'ruined building'),
-      name: '',
-    };
-    go('edit', 'build');
-    if (buildMode !== 'building') setBuildMode('building');
-    buildEditing = hit.id;
-    genEditing = { name: hitName(hit, renames), was: settings };
-    build = { ...settings };
-  }
-
-  /** The world's own building being changed gets the menu's choices (what differs from when it
-   * was opened), and a footprint drawn. */
-  async function saveGenerated(poly?: Pt[]) {
-    const id = buildEditing;
-    const g = genEditing;
-    if (!id || !g) return;
-    const change: Record<string, unknown> = {};
-    if (build.func !== g.was.func) change.func = build.func;
-    if (build.floors !== g.was.floors) change.floors = build.floors;
-    if (build.roof !== g.was.roof) change.roof = build.roof || 'auto';
-    if (build.material !== g.was.material) {
-      change.material = build.material || 'auto';
-      if (edits.buildings?.[id]?.tint) change.tint = 'auto';
-    }
-    if (build.rshape !== g.was.rshape) change.shape = build.rshape || 'auto';
-    if (build.shade !== g.was.shade) {
-      change.shade = build.shade === '' ? 'auto' : build.shade;
-      if (edits.buildings?.[id]?.tint) change.tint = 'auto';
-    }
-    if (build.ruin !== g.was.ruin) change.structure = build.ruin ? 'ruin' : 'roofed';
-    if (poly) change.poly = poly;
-    const name = build.name.trim();
-    const piece = castleOfPiece(id) >= 0;
-    // (A castle's piece keeps its name with its other changes.)
-    if (piece && name) change.name = name;
-    const r = await view.gen.buildingEdit(id, change);
-    if (buildArmed) buildArmed.tool.pending = null;
-    if (!r || 'error' in r) return toast(refusal(r) ?? '');
-    const all = { ...(edits.buildings ?? {}) };
-    if ('edit' in r) {
-      if (r.edit) all[id] = r.edit;
-      else delete all[id];
-    }
-    const created = 'piece' in r ? withPiece(r.piece) : edits.created;
-    const renamesNext = name && !piece ? { ...(edits.renames ?? {}), [id]: name } : edits.renames;
-    // Its inside designed by hand: new storeys follow (in the same step); a new footprint sets
-    // the design aside (it comes back with the footprint).
-    const designed = edits.designs?.[id];
-    let designs = edits.designs;
-    let aside = '';
-    if (designed && (poly || change.structure === 'ruin')) aside = 'Its inside, designed by hand, no longer fits: set aside';
-    else if (designed && change.floors !== undefined) ({ designs, aside } = await fitDesign(id, build.floors));
-    applyEdits({ ...edits, buildings: all, renames: renamesNext, designs, created }, { tool: 'update_building', id, name: name || g.name }, 'user');
-    if (aside) toast(aside);
-    genEditing = { name: name || g.name, was: { ...build, name: '' } };
-    build.name = '';
-    // The info panel and the build menu show it as it is now (a new trade brings a new name).
-    const s = selection;
-    const fp = 'edit' in r ? r.edit?.poly : undefined;
-    const at = 'piece' in r ? r.piece.edit?.at : r.edit?.at;
-    const c = fp?.length ? fp.reduce((a, p) => [a[0] + p[0] / fp.length, a[1] + p[1] / fp.length], [0, 0]) : at ? at : null;
-    const hit = c && (await view.gen.query(c[0], c[1]));
-    if (hit?.kind !== 'building' || hit.id !== id) return;
-    if (buildEditing === id && genEditing) genEditing = { ...genEditing, name: hitName(hit, edits.renames ?? {}) };
-    if (s?.kind === 'building' && s.hit.id === id && selection === s) selection = { kind: 'building', hit };
-  }
-
-  /** The info panel's actions for one of the world's own buildings: change it in the build menu,
-   * take it away, put it back as generated. */
-  function generatedActions(hit: BuildingHit) {
-    const id = hit.id;
-    return {
-      onEdit: () => void editGenerated(hit),
-      onRemove: async () => {
-        const r = await view.gen.buildingEdit(id, { remove: true });
-        if (!r || 'error' in r) return toast(refusal(r) ?? '');
-        const change = { tool: 'remove_buildings', removed: [id], count: 1, name: hitName(hit, renames) };
-        if ('piece' in r) applyEdits({ ...edits, created: withPiece(r.piece) }, change, 'user');
-        else if (r.edit) applyEdits({ ...edits, buildings: { ...(edits.buildings ?? {}), [id]: r.edit } }, change, 'user');
-        else return;
-        if (buildEditing === id) ((buildEditing = null), (genEditing = null));
-        selection = null;
-      },
-      onRestore: (castleOfPiece(id) >= 0 ? pieceChanged.id === id && pieceChanged.has : !!edits.buildings?.[id])
-        ? async () => {
-            if (castleOfPiece(id) >= 0) {
-              // (The castle's piece goes back as generated, its name too.)
-              // (A yard building taken away has no keep to be mistaken for: its number is its key.)
-              const k = castleOfPiece(id);
-              const castle = edits.created?.[k];
-              const own = id.split(':')[2];
-              let key = castle?.pieces?.[own] ? own : '';
-              if (!key) {
-                const r = await view.gen.buildingEdit(id, {});
-                if (!r || !('piece' in r)) return toast(refusal(r) ?? '');
-                key = r.piece.key;
-              }
-              if (!castle?.pieces?.[key]) return toast('It is as generated already');
-              applyEdits({ ...edits, created: withPiece({ castle: castle.id, key, keep: key === 'keep', edit: null }) }, { tool: 'restore_building', id }, 'user');
-            } else {
-              const { [id]: _gone, ...rest } = edits.buildings ?? {};
-              applyEdits({ ...edits, buildings: rest }, { tool: 'restore_building', id }, 'user');
-            }
-            if (buildEditing === id) ((buildEditing = null), (genEditing = null));
-            void view.gen.query(hit.x, hit.y).then((h) => {
-              if (h?.kind === 'building' && selection?.kind === 'building' && selection.hit.id === id) selection = { kind: 'building', hit: h };
-            });
-          }
-        : undefined,
-    };
-  }
-
-  /** A footprint drawn: a new building there, or the one being changed moved there. */
-  async function buildDrawn(poly: Pt[]) {
-    const tool = buildArmed?.tool;
-    if (buildEditing && genEditing) return saveGenerated(poly);
-    const editing = buildEditing ? drawnBuilding(buildEditing) : null;
-    const id = editing?.id ?? `c:${(edits.created ?? []).length}`;
-    const opts = buildOptions(build);
-    // The same building again: that one.
-    const old = editing ? null : existingSite(edits, { id, kind: 'building', x: 0, y: 0, name: '', poly }, [0, 0]);
-    if (old) {
-      if (tool) tool.pending = null;
-      toast(`${old.name} is already here`);
-      return;
-    }
-    const spot = await view.gen.buildingSpot(poly, opts.func, id);
-    if (tool) tool.pending = null;
-    if (!spot) return toast('The map could not answer: try again');
-    if ('error' in spot) return toast((spot.short ?? spot.error).charAt(0).toUpperCase() + (spot.short ?? spot.error).slice(1));
-    const name = build.name.trim();
-    if (editing) {
-      const c: Created = { id: editing.id, kind: 'building', x: spot.x, y: spot.y, name: name || editing.name, poly, ...opts };
-      const created = (edits.created ?? []).map((x) => (x.id === c.id ? c : x));
-      applyEdits({ ...edits, created }, { tool: 'update_building', id: c.id, name: c.name }, 'user');
-      if (edits.designs?.[drawnBuildingId(c.id)]) toast('Its inside, designed by hand, no longer fits: set aside');
-      return void reselect(c);
-    }
-    // (Numbered as it is added: another site may have come in meanwhile.)
-    const nid = `c:${(edits.created ?? []).length}`;
-    const c: Created = { id: nid, kind: 'building', x: spot.x, y: spot.y, name: name || spot.name, poly, ...opts };
-    applyEdits({ ...edits, created: [...(edits.created ?? []), c] }, { tool: 'create_building', id: nid, name: c.name }, 'user');
-    build.name = '';
-  }
-
-  /** Change the building being edited to the menu's choices (its footprint stays). Its inside,
-   * if designed by hand, follows new storeys (in the same step). */
-  async function saveBuilding() {
-    if (genEditing) return void saveGenerated();
-    const c = buildEditing ? drawnBuilding(buildEditing) : null;
-    if (!c) return;
-    const { roof: _r, tint: _t, material: _m, shape: _h, shade: _d, structure: _s, ...rest } = c;
-    const next: Created = { ...rest, ...buildOptions(build), name: build.name.trim() || c.name };
-    const bid = drawnBuildingId(c.id);
-    let designs = edits.designs;
-    let aside = '';
-    if (edits.designs?.[bid] && next.structure === 'ruin' && c.structure !== 'ruin') aside = 'Its inside, designed by hand, no longer fits: set aside';
-    else if ((next.floors ?? 1) !== (c.floors ?? 1)) ({ designs, aside } = await fitDesign(bid, next.floors ?? 1));
-    if (drawnBuilding(c.id) !== c) return;
-    const created = (edits.created ?? []).map((x) => (x.id === c.id ? next : x));
-    applyEdits({ ...edits, created, designs }, { tool: 'update_building', id: c.id, name: next.name }, 'user');
-    if (aside) toast(aside);
-    void reselect(next);
-  }
-
-  /** The info panel shows a building drawn by hand as it is now (after a change to it). */
-  async function reselect(c: Created) {
-    const s = selection;
-    if (s?.kind !== 'building' || drawnBuilding(s.hit.id)?.id !== c.id) return;
-    const hit = await view.gen.query(c.x, c.y);
-    if (hit?.kind === 'building' && selection === s) selection = { kind: 'building', hit };
-  }
-
-  /** Open the build menu on a building drawn by hand. */
-  function editBuilding(id: string) {
-    const c = drawnBuilding(id);
-    if (!c) return;
-    go('edit', 'build');
-    buildEditing = c.id;
-    build = settingsOf(c, (c.poly?.length ?? 0) >= 12 ? 'tower' : 'rect');
-  }
 
   // The dungeon designer: while it is open, the map's pointer changes the site we are in (a
   // draft, saved into the edits on Save).
@@ -3124,9 +1757,9 @@
         const p = id.startsWith('b:') ? (c?.building.furniture.find((f) => f.kind === kind) ?? c?.building.props.find((f) => f.kind === kind)) : c?.props.find((f) => f.kind === kind);
         return p ? { name: p.name, blocks: p.blocks } : null;
       },
-      chip: (x, y, text) => chipAt(x, y, text),
-      bar: (at) => (placeBar = at),
-      held: setHeld,
+      chip: (x, y, text) => S.chipAt(x, y, text),
+      bar: (at) => (S.placeBar = at),
+      held: S.setHeld,
       ppf: () => view.cam.ppf,
     });
     // (Still wanted once it has loaded: the same site, the Design tab open.)
@@ -3192,7 +1825,7 @@
       first: () => linkFirst,
       picked: () => linkPicked,
       square: linkSquare,
-      chip: (x, y, text) => chipAt(x, y, text),
+      chip: (x, y, text) => S.chipAt(x, y, text),
     });
     syncTool();
   }
@@ -3279,7 +1912,7 @@
         // (As the title inside has them: a sewer section by its network, a site by its town.)
         const li = Number(site.split(':')[1]);
         const own = renames[site] ?? (site.startsWith('w:') ? (renames[`w:${li}`] ?? `Sewers of ${settlementName(li)}`) : null);
-        const siteName = own ?? (/^[uk]:/.test(site) && p?.name ? `${settlementName(li)} · ${p.name}` : (p?.name ?? 'a place below ground'));
+        const siteName = own ?? (/^[uk]:/.test(site) && p?.name ? `${settlementName(li)} · ${p.name}` : (p?.name ?? 'a place below G.ground'));
         linkNames[lv] = { site: siteName, level: q?.name ?? `level ${level + 1}` };
       })();
     }
@@ -3309,7 +1942,7 @@
     let built: { edit: BuildingEdit | null } | { piece: PieceEdit } | null = null;
     if (floors !== null && !drawn) {
       const r = await view.gen.buildingEdit(d.id, { floors });
-      if (!r || 'error' in r) return toast(refusal(r) ?? '');
+      if (!r || 'error' in r) return toast(B.refusal(r) ?? '');
       built = r;
       if (designer !== d) return;
     }
@@ -3319,7 +1952,7 @@
       if (built.edit) buildings[d.id] = built.edit;
       else delete buildings[d.id];
     }
-    const created = built && 'piece' in built ? withPiece(built.piece) : drawn && floors !== null ? (e.created ?? []).map((x) => (x.id === drawn.id ? { ...x, floors } : x)) : e.created;
+    const created = built && 'piece' in built ? B.withPiece(built.piece) : drawn && floors !== null ? (e.created ?? []).map((x) => (x.id === drawn.id ? { ...x, floors } : x)) : e.created;
     // (Levels dug or filled in below: names and places on the others follow them.)
     applyEdits({ ...shiftLevels(e, d.id, d.shift), buildings, created, designs: { ...(e.designs ?? {}), [d.id]: draft } }, { tool: 'set_site_design', id: d.id, name: inside?.name }, 'user');
     d.markSaved();
@@ -3360,215 +1993,45 @@
     }
   }
 
-  // Scatter: while its menu is open, the map's pointer puts objects down and takes them away.
-  let scatter = $state<ScatterSettings>(defaultScatter());
-  /** The brush ring under the pointer (screen px). */
-  let ring = $state<{ x: number; y: number; r: number } | null>(null);
-  /** The chip by what is in the hand (screen px). */
-  let chip = $state<{ x: number; y: number; text: string } | null>(null);
-  /** On a touch screen, the place bar by the ghost (world ft), and where it is on screen (kept
-   * under the ghost as the map moves). */
-  let placeBar = $state.raw<BarAt>(null);
-  /** The piece picked up in Objects or Rooms, for the panel's "in hand" row. */
-  let held = $state.raw<HeldView>(null);
-  // (Told on every pointer move: only a change is taken.)
-  const setHeld = (h: HeldView) => {
-    if (h?.name !== held?.name || h?.turn !== held?.turn || h?.turns !== held?.turns || h?.auto !== held?.auto || h?.size !== held?.size || h?.kind !== held?.kind || h?.variant !== held?.variant) held = h;
-  };
-  let placeBarAt = $state<{ x: number; y: number; r: number } | null>(null);
-  /** What places things by hand in the open tab: Objects, or Rooms on Props. */
-  function placer(): Placer | null {
-    // (Inside, Objects has nothing in the hand that shows: its keys go on down, Escape leaves.)
-    if (scatterOn && scatterArmed && !view.interior) return scatterArmed.tool;
-    if (designer && shell.section === 'edit' && shell.tabs.edit === 'design' && designSettings.mode === 'prop') return designer;
-    return null;
-  }
-
-  /** The chip at a world point (none: null text). */
-  function chipAt(x: number, y: number, text: string | null) {
-    if (text === null) return (chip = null);
-    const [sx, sy] = view.cam.worldToPage(x, y);
-    const b = container.getBoundingClientRect();
-    chip = { x: b.left + sx, y: b.top + sy, text };
-  }
-
-  $effect(() => {
-    const at = placeBar;
-    if (!at) return void (placeBarAt = null);
-    let raf = 0;
-    const tick = () => {
-      const [sx, sy] = view.cam.worldToPage(at.x, at.y);
-      const b = container.getBoundingClientRect();
-      const next = { x: b.left + sx, y: b.top + sy, r: at.r * view.cam.ppf };
-      if (!placeBarAt || Math.abs(next.x - placeBarAt.x) + Math.abs(next.y - placeBarAt.y) + Math.abs(next.r - placeBarAt.r) > 0.5) placeBarAt = next;
-      raf = requestAnimationFrame(tick);
-    };
-    untrack(tick);
-    return () => cancelAnimationFrame(raf);
-  });
-  let scatterArmed: { tool: ScatterTool } | null = null;
-  const placedSprites = $derived.by(() => {
-    const n: Record<string, number> = {};
-    for (const o of Object.values(edits.objects ?? {})) if (typeof o.kind === 'string') n[o.kind.slice(2)] = (n[o.kind.slice(2)] ?? 0) + 1;
-    return n;
+  // Edit › Objects: its tools, ghost, ring and chip are in `editor/tools/objects.svelte.ts`.
+  const S = objectTools({
+    view,
+    get edits() {
+      return edits;
+    },
+    get designSettings() {
+      return designSettings;
+    },
+    get designer() {
+      return designer;
+    },
+    get scatterOn() {
+      return scatterOn;
+    },
+    get container() {
+      return container;
+    },
+    applyEdits,
+    toast,
   });
 
-  function armScatter() {
-    if (scatterArmed) return;
-    const tool = new ScatterTool({
-      settings: () => scatter,
-      edits: () => edits,
-      catalog: () => view.battle?.catalog ?? [],
-      objectAt: (x, y) => view.battle?.objectAt(x, y) ?? null,
-      preview: (objs) => view.previewObjects(objs),
-      commit: (objects, cleared, label) => commitObjects(objects, cleared, label),
-      ring: (x, y, r) => {
-        if (r === null) return (ring = null);
-        const [sx, sy] = view.cam.worldToPage(x, y);
-        const b = container.getBoundingClientRect();
-        ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
-      },
-      ghost: (o, ok) => view.battle?.setGhost(o, ok),
-      chip: (x, y, text) => chipAt(x, y, text),
-      bar: (at) => (placeBar = at),
-      held: setHeld,
-      ppf: () => view.cam.ppf,
-      battlemap: () => (view.battle?.stats.alpha ?? 0) > 0 && !view.interior,
-      roofed: (x, y) => !!view.battle?.roofAt(x, y),
-      loaded: (x, y) => !!view.battle?.loadedAt(x, y),
-      hint: (t) => toast(t),
-    });
-    scatterArmed = { tool };
-  }
-
-  function disarmScatter() {
-    scatterArmed?.tool.dispose();
-    scatterArmed = null;
-    ring = null;
-    chip = null;
-    placeBar = null;
-    held = null;
-  }
-
-  // The ghost follows the settings as the panel changes them (kind, turn, size).
-  $effect(() => {
-    void [scatter.mode, scatter.kinds, scatter.kinds.length, scatter.rotation, scatter.scale, scatter.vary];
-    scatterArmed?.tool.refresh();
-  });
-  $effect(() => {
-    void [designSettings.mode, designSettings.prop, designSettings.pw, designSettings.ph, designSettings.back, designSettings.variant];
-    untrack(() => designer)?.refresh();
+  // Edit › Ground: its brush and changes are in `editor/tools/ground.svelte.ts`.
+  const G = groundTools({
+    view,
+    objects: S,
+    get container() {
+      return container;
+    },
+    get edits() {
+      return edits;
+    },
+    get hud() {
+      return hud;
+    },
+    applyEdits,
+    toast,
   });
 
-  /** Objects put down (or, null, taken away) and generated ones cleared, as one change. */
-  function commitObjects(objects: Record<string, Placed | null>, cleared: Record<string, Clear>, label: { tool: string; count: number; name?: string; changed?: string[] }) {
-    const e = edits;
-    const o = { ...(e.objects ?? {}) };
-    for (const [k, v] of Object.entries(objects)) {
-      if (v) o[k] = v;
-      else delete o[k];
-    }
-    applyEdits({ ...e, objects: o, cleared: { ...(e.cleared ?? {}), ...cleared } }, { ...label, ...(Object.keys(cleared).length ? { clears: Object.keys(cleared).length } : {}) }, 'user');
-  }
-
-  // Ground: while its tab is open, the map's pointer brushes the battlemap's ground up, down,
-  // smooth or back, or draws plateaus and pits.
-  let ground = $state<GroundSettings>(defaultGround());
-  /** The plateau chosen (Choose). */
-  let groundSel = $state<string | null>(null);
-  let groundArmed: GroundTool | null = null;
-  /** The battlemap is showing (the ground can be shaped). */
-  const groundNear = $derived((hud?.ftPerPx ?? 99) < 0.7);
-  const groundChosen = $derived(groundSel && edits.plateaus?.[groundSel] ? { id: groundSel, plateau: edits.plateaus[groundSel] } : null);
-
-  function armGround() {
-    if (groundArmed) return;
-    groundArmed = new GroundTool({
-      settings: () => ground,
-      edits: () => edits,
-      battlemap: () => (view.battle?.stats.alpha ?? 0) > 0 && !view.interior,
-      ground: (gx, gy) => view.battle?.groundAt(gx, gy) ?? null,
-      sea: () => view.geom?.sea_level_ft ?? 0,
-      preview: (box, at) => view.battle?.previewGround(box, at),
-      unpreview: () => view.battle?.unpreviewGround(),
-      commit: (g, p, label) => commitGround(g, p, label),
-      ring: (x, y, r) => {
-        if (r === null) return (ring = null);
-        const [sx, sy] = view.cam.worldToPage(x, y);
-        const b = container.getBoundingClientRect();
-        ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
-      },
-      chip: (x, y, text) => chipAt(x, y, text),
-      select: (id) => (groundSel = id),
-      selected: () => groundSel,
-      ppf: () => view.cam.ppf,
-      hint: (t) => toast(t),
-    });
-  }
-
-  function disarmGround() {
-    groundArmed?.cancel();
-    groundArmed?.dispose();
-    groundArmed = null;
-    groundSel = null;
-    ring = null;
-    chip = null;
-  }
-
-  // The ring and chip follow the settings as the panel changes them.
-  $effect(() => {
-    void [ground.mode, ground.radius, ground.offset];
-    untrack(() => groundArmed)?.refresh();
-  });
-
-  /** Ground blocks brushed (or, null, cleared) and plateaus set or taken away, as one change. */
-  function commitGround(blocks: Record<string, string | null>, plateaus: Record<string, Plateau | null>, label: { tool: string; mode?: string; count?: number; changed?: boolean }) {
-    const e = edits;
-    const g = { ...(e.ground ?? {}) };
-    for (const [k, v] of Object.entries(blocks)) {
-      if (v) g[k] = v;
-      else delete g[k];
-    }
-    const h = { ...(e.plateaus ?? {}) };
-    for (const [k, v] of Object.entries(plateaus)) {
-      if (v) h[k] = v;
-      else delete h[k];
-    }
-    const next: Edits = { ...e };
-    if (Object.keys(blocks).length) next.ground = g;
-    if (Object.keys(plateaus).length) next.plateaus = h;
-    // (A plateau taken away takes its name, note and hidden mark: Undo brings them back.)
-    const gone = Object.keys(plateaus).filter((k) => !plateaus[k]);
-    if (gone.some((k) => e.renames?.[k] !== undefined)) next.renames = Object.fromEntries(Object.entries(e.renames!).filter(([k]) => !gone.includes(k)));
-    if (gone.some((k) => e.notes?.[k] !== undefined)) next.notes = Object.fromEntries(Object.entries(e.notes!).filter(([k]) => !gone.includes(k)));
-    if (gone.some((k) => e.hidden?.includes(k))) next.hidden = e.hidden!.filter((k) => !gone.includes(k));
-    applyEdits(next, label, 'user');
-  }
-
-  /** A picture as a new kind of object: drawn down to 64 px a square (128 for one square),
-   * kept as an asset, described in `Edits.sprites`; then chosen in the menu. */
-  async function uploadSprite(file: File, meta: SpriteMeta) {
-    const canvas = await shrink(file, meta.size <= 1 ? 128 : Math.min(512, Math.round(meta.size * 64)));
-    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('The picture could not be read'))), 'image/png'));
-    const id = await putAsset(blob, meta.name);
-    const e = edits;
-    applyEdits({ ...e, sprites: { ...(e.sprites ?? {}), [id]: meta } }, { tool: 'upload_sprite', id: `s:${id}`, name: meta.name }, 'user');
-    scatter.kinds = [`s:${id}`];
-  }
-
-  /** Change an uploaded sprite's rules, or (null) remove it and every one put down. */
-  function saveSprite(asset: string, meta: SpriteMeta | null) {
-    const e = edits;
-    const sprites = { ...(e.sprites ?? {}) };
-    const name = sprites[asset]?.name ?? asset;
-    if (meta) {
-      sprites[asset] = meta;
-      return applyEdits({ ...e, sprites }, { tool: 'upload_sprite', id: `s:${asset}`, name: meta.name }, 'user');
-    }
-    delete sprites[asset];
-    const objects = Object.fromEntries(Object.entries(e.objects ?? {}).filter(([, o]) => o.kind !== `s:${asset}`));
-    applyEdits({ ...e, sprites, objects }, { tool: 'remove_sprite', id: `s:${asset}`, name }, 'user');
-  }
 
   /** Why the spot under the pointer won't do, while placing a village or town (null: it will). */
   let placeNote = $state<string | null>(null);
@@ -3635,7 +2098,7 @@
     const showRing = (x: number, y: number) => {
       const [sx, sy] = view.cam.worldToPage(x, y);
       const b = container.getBoundingClientRect();
-      ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
+      S.ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
     };
     // (A pin moved waits for a remake: no spot check of a village added at once.)
     const instant = isInstant(c) && !(move && !move.startsWith('c:'));
@@ -3646,7 +2109,7 @@
         if (reach) showRing(x, y);
         if (instant) checkSpot(c, x, y, move ?? undefined);
       },
-      leave: () => ((ring = null), (placeNote = null)),
+      leave: () => ((S.ring = null), (placeNote = null)),
       hoverFollows: true,
       cancel: () => disarmPlace(),
       up: (x, y) => {
@@ -3665,7 +2128,7 @@
     placeNote = null;
     placeTool = null;
     placeArmed = false;
-    ring = null;
+    S.ring = null;
     syncTool();
   }
 
@@ -4087,11 +2550,11 @@
     const drawn =
       c.kind === 'building'
         ? {
-            onEdit: () => editBuilding(id),
+            onEdit: () => B.editBuilding(id),
             onGoIn: c.structure === 'ruin' ? undefined : () => void view.enterBuilding(`b:${li}:0`),
           }
         : c.kind === 'castle' || c.kind === 'wall'
-          ? { onEdit: () => editWorks(id) }
+          ? { onEdit: () => B.editWorks(id) }
           : {};
     const hiddenNow = placeHidden.includes(id);
     const under = !['tower', 'camp', 'waystation', 'building', 'castle', 'wall', 'village', 'town'].includes(c.kind);
@@ -4996,14 +3459,14 @@
   }
 
   async function pick(x: number, y: number, sx: number, sy: number) {
-    if (townOn && townPicking) {
-      townPicking = false;
+    if (townOn && T.townPicking) {
+      T.townPicking = false;
       const f = layoutFeature(view.townAt(x, y));
       if (f) void choose({ kind: 'feature', feature: f }, false);
       else toast('No town there');
       return;
     }
-    if (townOn && townTool) return townPick(x, y);
+    if (townOn && T.townTool) return T.townPick(x, y);
     view.markRoom(null);
     const seq = ++selectSeq;
     const f = view.labels?.hit(sx, sy);
@@ -5031,14 +3494,14 @@
   /** Undo and redo go to the designer's history while it is open, then the sketch's (which has
    * no redo), then the world's edits. */
   function undoAny() {
-    scatterArmed?.tool.putBack();
+    S.scatterArmed?.tool.putBack();
     if (designer) designer.undo();
     else if (sketchOn) sketcher.undo();
     else undo();
   }
 
   function redoAny() {
-    scatterArmed?.tool.putBack();
+    S.scatterArmed?.tool.putBack();
     if (designer) designer.redo();
     else if (!sketchOn) redo();
   }
@@ -5085,7 +3548,7 @@
     linking: () => linkOn && !!linkPicked,
     linkRemove: () => linkPicked && removeLink(linkPicked),
     inside: () => !!view.interior,
-    building: () => !!buildArmed,
+    building: () => !!B.buildArmed,
     tokensSelected: () => play.selection.size > 0,
     toggle,
     editTabTo: (t) => go('edit', t),
@@ -5115,34 +3578,18 @@
     },
     sketchTool: (t) => (sketchSettings.tool = t),
     scatterMode: (m) => {
-      scatter.mode = m;
-      if (m === 'place' && scatter.kinds.length > 1) scatter.kinds = [scatter.kinds[0]];
+      S.scatter.mode = m;
+      if (m === 'place' && S.scatter.kinds.length > 1) S.scatter.kinds = [S.scatter.kinds[0]];
     },
-    placing: placer,
-    buildCross: () => {
-      if (buildMode !== 'crossing') return setBuildMode('crossing');
-      const order = ['bridge', 'ford', 'ferry'] as const;
-      const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
-      cross = { ...cross, kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
-    },
-    buildHarbour: () => setBuildMode('harbour'),
-    buildRoad: () => {
-      if (buildMode !== 'road') return setBuildMode('road');
-      if (roadPicked) return;
-      const order = ['footpath', 'track', 'gravel', 'paved', 'cobbled'] as const;
-      const kind = order[(order.indexOf(road.kind) + 1) % order.length];
-      road = { ...road, kind, width: kindWidth(kind) };
-    },
-    buildWorks: (m) => setBuildMode(m),
-    buildShape: (k) => {
-      if (buildMode === 'castle' && k !== 'tower') return void (works.castleShape = k);
-      if (buildMode !== 'building') setBuildMode('building');
-      // A round tower is a wizard's tower unless it was something else already.
-      build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
-    },
-    buildQuick: (m) => setBuildMode(m),
-    buildFinish: () => (buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildMode === 'water' ? buildArmed?.water.finish() : buildArmed?.tool.finish()),
-    buildBack: () => (buildMode === 'road' ? void buildArmed?.road.back() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back()),
+    placing: S.placer,
+    buildCross: () => B.keyCross(),
+    buildHarbour: () => B.setBuildMode('harbour'),
+    buildRoad: () => B.keyRoad(),
+    buildWorks: (m) => B.setBuildMode(m),
+    buildShape: (k) => B.keyShape(k),
+    buildQuick: (m) => B.setBuildMode(m),
+    buildFinish: () => B.finish(),
+    buildBack: () => B.back(),
     designMode: (m) => {
       // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
       const inBuilding = designer?.building ?? false;
@@ -5150,20 +3597,20 @@
       designSettings = { ...designSettings, mode: m };
     },
     townMode: (m) => {
-      townMode = m;
-      townMerging = false;
-      townTool?.reset();
-      streetTool?.reset();
+      T.townMode = m;
+      T.townMerging = false;
+      T.townTool?.reset();
+      T.streetTool?.reset();
     },
     // (Not while the trace underlay is being adjusted: Backspace/Delete would take a street away.)
-    townHand: () => !!streetPlan && !(townUnderlay.adjust && townUnderlay.visible),
-    townStreetFinish: () => (streetTool && streetDrawn ? (streetTool.finish(townMode === 'area'), true) : false),
-    townStreetBack: () => !!streetTool?.back(),
-    townStreetDelete: () => deletePicked(),
-    townBrush: (d) => (townSize = Math.max(0.25, Math.min(4, townSize * (d > 0 ? 1.15 : 1 / 1.15)))),
-    groundMode: (m) => (ground.mode = m),
-    groundBrush: (d) => groundArmed?.size(d),
-    groundRemove: () => !!groundArmed?.remove(),
+    townHand: () => !!T.streetPlan && !(townUnderlay.adjust && townUnderlay.visible),
+    townStreetFinish: () => (T.streetTool && T.streetDrawn ? (T.streetTool.finish(T.townMode === 'area'), true) : false),
+    townStreetBack: () => !!T.streetTool?.back(),
+    townStreetDelete: () => T.deletePicked(),
+    townBrush: (d) => (T.townSize = Math.max(0.25, Math.min(4, T.townSize * (d > 0 ? 1.15 : 1 / 1.15)))),
+    groundMode: (m) => (G.ground.mode = m),
+    groundBrush: (d) => G.groundArmed?.size(d),
+    groundRemove: () => !!G.groundArmed?.remove(),
     playTool: (t) => play.setTool(t),
     removeTokens: () => play.removeSelected(),
     newToken: () => play.newTokenAtPointer(),
@@ -5181,27 +3628,18 @@
         el!.blur();
         return true;
       },
-      () => !!placer()?.escape(),
-      () => !!groundArmed?.escape(),
-      () => !!buildArmed?.tool.reset(),
-      () => !!buildArmed?.path.reset(),
-      () => !!buildArmed?.works.reset(),
-      () => (worksEditing ? ((worksEditing = null), true) : false),
-      () => !!buildArmed?.cross.reset(),
-      () => (crossEditing ? ((crossEditing = null), true) : false),
-      () => !!buildArmed?.water.reset(),
-      () => (waterPicked ? ((waterPicked = null), true) : false),
-      () => !!buildArmed?.road.reset(),
-      () => (roadPicked ? ((roadPicked = null), true) : false),
-      () => !!townTool?.reset(),
-      () => !!streetTool?.reset(),
-      () => (streetBackAsk ? ((streetBackAsk = false), true) : false),
-      () => (townOn && streetPick ? ((streetPick = null), true) : false),
+      () => !!S.placer()?.escape(),
+      () => !!G.groundArmed?.escape(),
+      ...B.escapes,
+      () => !!T.townTool?.reset(),
+      () => !!T.streetTool?.reset(),
+      () => (T.streetBackAsk ? ((T.streetBackAsk = false), true) : false),
+      () => (townOn && T.streetPick ? ((T.streetPick = null), true) : false),
       () => (sketchOn && tracer.picking ? ((tracer.picking = null), true) : false),
       () => (sketchOn && underlay.adjust ? ((underlay.adjust = false), true) : false),
       () => (townOn && townUnderlay.adjust ? ((townUnderlay.adjust = false), true) : false),
-      () => (townMerging ? ((townMerging = false), true) : false),
-      () => (townOn && (townPatch !== null || townCorner !== null) ? ((townPatch = null), (townCorner = null), true) : false),
+      () => (T.townMerging ? ((T.townMerging = false), true) : false),
+      () => (townOn && (T.townPatch !== null || T.townCorner !== null) ? ((T.townPatch = null), (T.townCorner = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
       () => (linkOn && (linkFirst || linkPicked) ? ((linkFirst = linkPicked = null), true) : false),
@@ -5238,11 +3676,11 @@
       else if (designer) designer.levelShown();
       // In or out of a building: Objects' hand is put back (it can't be put down in there) and
       // its ghost, chip and ring follow; Ground's ring too.
-      if (scatterArmed) {
-        if (s) scatterArmed.tool.putBack();
-        scatterArmed.tool.refresh();
+      if (S.scatterArmed) {
+        if (s) S.scatterArmed.tool.putBack();
+        S.scatterArmed.tool.refresh();
       }
-      groundArmed?.refresh();
+      G.groundArmed?.refresh();
     };
     view.onPick = (x, y, sx, sy) => void pick(x, y, sx, sy);
     view.onPlaces = (on) => setPlaces(on);
@@ -5508,7 +3946,7 @@
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a town, ruin, dungeon, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, roads, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the selected town or the one in view (U)', hint: 'Re-plan the selected town, or the one in view: its streets, wards, lots and walls.' },
-        { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
+        { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s G.ground; draw plateaus, cliffs and pits.' },
         { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap outdoors: place, brush, erase, or upload your own.' },
         {
           key: 'design',
@@ -5516,8 +3954,8 @@
           icon: 'room',
           kbd: 'D',
           disabled: !canDesign && !designer && !canLink && !linkOn,
-          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : canLink || linkOn ? 'Put ways across down between places below ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
-          hint: linkOn ? 'Ways across: stairs, ladders, passages and more from a square below ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
+          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : canLink || linkOn ? 'Put ways across down between places below G.ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
+          hint: linkOn ? 'Ways across: stairs, ladders, passages and more from a square below G.ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
         },
       ]}
       tab={shell.tabs.edit}
@@ -5542,93 +3980,93 @@
           />
         {:else if buildOn}
           <BuildPanel
-            bind:settings={build}
-            funcs={buildFuncs}
-            editing={buildEditing ? (genEditing?.name ?? drawnBuilding(buildEditing)?.name ?? null) : null}
-            mode={buildMode}
-            bind:works
-            worksEditing={worksSite(worksEditing)?.name ?? null}
-            handTown={!!streetPlan}
-            onWorksSave={saveWorks}
-            bind:clearShape
-            bind:stamp={stampSet}
-            bind:row={rowSet}
-            bind:lasso={lassoSet}
-            {quick}
-            onPlace={quickPlace}
-            onDrop={quickDrop}
-            bind:cross
-            crossEditing={crossEditing ? (edits.crossings?.[crossEditing]?.kind ?? null) : null}
+            bind:settings={B.build}
+            funcs={B.buildFuncs}
+            editing={B.buildEditing ? (B.genEditing?.name ?? drawnBuilding(B.buildEditing)?.name ?? null) : null}
+            mode={B.buildMode}
+            bind:works={B.works}
+            worksEditing={B.worksSite(B.worksEditing)?.name ?? null}
+            handTown={!!T.streetPlan}
+            onWorksSave={B.saveWorks}
+            bind:clearShape={B.clearShape}
+            bind:stamp={B.stampSet}
+            bind:row={B.rowSet}
+            bind:lasso={B.lassoSet}
+            quick={B.quick}
+            onPlace={B.quickPlace}
+            onDrop={B.quickDrop}
+            bind:cross={B.cross}
+            crossEditing={B.crossEditing ? (edits.crossings?.[B.crossEditing]?.kind ?? null) : null}
             {near}
             {peek}
-            onSave={saveBuilding}
-            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null), (waterPicked = null), (roadPicked = null))}
-            onMode={setBuildMode}
-            onCrossSave={saveCrossing}
-            onCrossRemove={removeCrossing}
-            bind:water
-            waterPicked={waterPicked && edits.waters?.[waterPicked] ? waterInfo(edits.waters[waterPicked], edits.renames?.[waterPicked] ?? '') : null}
-            onWaterChange={changeWater}
-            onWaterRemove={removeWater}
-            bind:road
-            roadPicked={roadPicked && edits.paths?.[roadPicked] ? { kind: edits.paths[roadPicked].type, width: edits.paths[roadPicked].width ?? kindWidth(edits.paths[roadPicked].type), name: edits.paths[roadPicked].name ?? '' } : null}
-            onRoadChange={changeRoad}
-            onRoadRemove={removeRoad}
-            onHarbourRemove={removeWharf}
-            bind:harbour
-            {harbourPicked}
+            onSave={B.saveBuilding}
+            onDone={B.done}
+            onMode={B.setBuildMode}
+            onCrossSave={B.saveCrossing}
+            onCrossRemove={B.removeCrossing}
+            bind:water={B.water}
+            waterPicked={B.waterPicked && edits.waters?.[B.waterPicked] ? B.waterInfo(edits.waters[B.waterPicked], edits.renames?.[B.waterPicked] ?? '') : null}
+            onWaterChange={B.changeWater}
+            onWaterRemove={B.removeWater}
+            bind:road={B.road}
+            roadPicked={B.roadPicked && edits.paths?.[B.roadPicked] ? { kind: edits.paths[B.roadPicked].type, width: edits.paths[B.roadPicked].width ?? kindWidth(edits.paths[B.roadPicked].type), name: edits.paths[B.roadPicked].name ?? '' } : null}
+            onRoadChange={B.changeRoad}
+            onRoadRemove={B.removeRoad}
+            onHarbourRemove={B.removeWharf}
+            bind:harbour={B.harbour}
+            harbourPicked={B.harbourPicked}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 0.5)) })}
           />
         {:else if townOn}
           <TownPanel
-            plan={townPlan}
-            name={townName}
-            note={townNote}
-            mode={townMode}
-            bind:size={townSize}
-            selected={townSelected}
-            corner={townCornerPicked}
-            merging={townMerging}
-            busy={townBusy}
-            near={townNear}
-            wallWhy={townWallWhy}
+            plan={T.townPlan}
+            name={T.townName}
+            note={T.townNote}
+            mode={T.townMode}
+            bind:size={T.townSize}
+            selected={T.townSelected}
+            corner={T.townCornerPicked}
+            merging={T.townMerging}
+            busy={T.townBusy}
+            near={T.townNear}
+            wallWhy={T.townWallWhy}
             {peek}
-            onMode={(m) => ((townMode = m), (townMerging = false), townTool?.reset(), streetTool?.reset())}
-            streets={streetPlan}
-            {streetPick}
-            {streetDrawn}
-            bind:streetClass
-            bind:streetOpen
-            bind:wallSpacing
-            bind:wallName
-            onStreets={(reqs, what) => void streetChanges(reqs, what)}
-            onLayOut={() => void streetChange({ op: 'lay_out_by_hand' }, 'lay out')}
-            onBack={() => (streetBackAsk = true)}
-            onStreet={(req, what) => void streetChange(req, what)}
-            onStreetFinish={(closed) => streetTool?.finish(closed)}
-            onStreetBack={() => streetTool?.back()}
-            onStreetPick={(p) => (streetPick = p)}
-            onChange={(req, what) => void townChange(req, what)}
-            onMerge={() => (townMerging = !townMerging)}
-            onZoomIn={townZoomIn}
-            picking={townPicking}
-            onChangeTown={() => (townPicking = !townPicking)}
+            onMode={(m) => ((T.townMode = m), (T.townMerging = false), T.townTool?.reset(), T.streetTool?.reset())}
+            streets={T.streetPlan}
+            streetPick={T.streetPick}
+            streetDrawn={T.streetDrawn}
+            bind:streetClass={T.streetClass}
+            bind:streetOpen={T.streetOpen}
+            bind:wallSpacing={T.wallSpacing}
+            bind:wallName={T.wallName}
+            onStreets={(reqs, what) => void T.streetChanges(reqs, what)}
+            onLayOut={() => void T.streetChange({ op: 'lay_out_by_hand' }, 'lay out')}
+            onBack={() => (T.streetBackAsk = true)}
+            onStreet={(req, what) => void T.streetChange(req, what)}
+            onStreetFinish={(closed) => T.streetTool?.finish(closed)}
+            onStreetBack={() => T.streetTool?.back()}
+            onStreetPick={(p) => (T.streetPick = p)}
+            onChange={(req, what) => void T.townChange(req, what)}
+            onMerge={() => (T.townMerging = !T.townMerging)}
+            onZoomIn={T.townZoomIn}
+            picking={T.townPicking}
+            onChangeTown={() => (T.townPicking = !T.townPicking)}
             names={renames}
             hiddenIds={edits.hidden ?? []}
             onRename={rename}
             onHide={setHidden}
-            onPatch={(p) => ((townPatch = p), (townCorner = null))}
+            onPatch={(p) => ((T.townPatch = p), (T.townCorner = null))}
           />
         {:else if groundOn}
           <GroundPanel
-            bind:settings={ground}
-            selected={groundChosen}
+            bind:settings={G.ground}
+            selected={G.groundChosen}
             sea={view.geom?.sea_level_ft ?? 0}
-            near={groundNear}
+            near={G.groundNear}
             inside={!!inside}
             {peek}
-            onPlateau={(id, p) => groundArmed?.change(id, p)}
-            onRemove={() => groundArmed?.remove()}
+            onPlateau={(id, p) => G.groundArmed?.change(id, p)}
+            onRemove={() => G.groundArmed?.remove()}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 2)) })}
             islets={genIslets.map((i) => ({ id: i.id, x: i.x, y: i.y, r: i.r, river: i.river, removed: (edits.hidden ?? []).includes(i.id), tower: !!i.tower }))}
             onIslet={setIslet}
@@ -5637,21 +4075,21 @@
         {:else if scatterOn}
           <ScatterPanel
             {peek}
-              bind:settings={scatter}
+              bind:settings={S.scatter}
               catalog={view.battle?.catalog ?? []}
               sprites={edits.sprites ?? {}}
-              placed={placedSprites}
+              placed={S.placedSprites}
               thumbs={() => view.battle?.thumbs()}
               picture={assetUrl}
-              onUpload={uploadSprite}
-              onSprite={saveSprite}
+              onUpload={S.uploadSprite}
+              onSprite={S.saveSprite}
               inside={scatterInside}
               onRooms={furnishHere}
-              {held}
-              onTurn={(d) => scatterArmed?.tool.turn(d, false)}
-              onAuto={() => scatterArmed?.tool.turnReset()}
-              onEmpty={() => scatterArmed?.tool.escape() || (scatter.kinds = [])}
-              onSize={(d) => scatterArmed?.tool.size(d)}
+              held={S.held}
+              onTurn={(d) => S.scatterArmed?.tool.turn(d, false)}
+              onAuto={() => S.scatterArmed?.tool.turnReset()}
+              onEmpty={() => S.scatterArmed?.tool.escape() || (S.scatter.kinds = [])}
+              onSize={(d) => S.scatterArmed?.tool.size(d)}
             />
         {:else if shell.tabs.edit === 'design' && linkOn}
           <LinkPanel
@@ -5685,7 +4123,7 @@
               onSave={saveDesign}
               onReset={resetDesign}
               onProblem={showProblem}
-              {held}
+              held={S.held}
               onLinks={canLink ? openLinks : undefined}
             />
         {:else if shell.tabs.edit === 'design' && !peek}
@@ -5844,15 +4282,15 @@
         ? createdActions(sel.feature.id)
         : sel.kind === 'building' && drawnBuilding(sel.hit.id)
           ? createdActions(sel.hit.id)
-          : sel.kind === 'building' && generatedBuilding(sel.hit.id)
-            ? generatedActions(sel.hit)
+          : sel.kind === 'building' && B.generatedBuilding(sel.hit.id)
+            ? B.generatedActions(sel.hit)
             : sel.kind === 'feature' && SETTLEMENT_KINDS.includes(sel.feature.kind)
               ? { hidden: placeHidden.includes(sel.feature.id), onHide: (hide: boolean) => setHidden(sel.feature.id, hide) }
               : {}}
       onUnsettle={sel.kind === 'feature' ? unsettleAction(sel.feature.id) : undefined}
       settle={sel.kind === 'feature' ? settleCard(sel.feature) : null}
-      streets={sel.kind === 'feature' ? streetsCard(sel.feature) : undefined}
-      onStreets={sel.kind === 'feature' ? () => openStreets(sel.feature) : undefined}
+      streets={sel.kind === 'feature' ? T.streetsCard(sel.feature) : undefined}
+      onStreets={sel.kind === 'feature' ? () => T.openStreets(sel.feature) : undefined}
       onFly={() => selection && flyToSelection(selection)}
       onClose={() => (selection = null)}
       onEnter={async () => {
@@ -5890,15 +4328,15 @@
       <button class="ws-btn" onclick={disarmPlace}>Cancel</button>
     </div>
   {/if}
-  {#if (scatterOn || groundOn || placeArmed) && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatterOn && scatter.mode === 'erase'}></div>{/if}
-  {#if (scatterOn || groundOn || designer) && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
-  {#if placeBar && placeBarAt}
-    {@const p = placer()}
+  {#if (scatterOn || groundOn || placeArmed) && S.ring}<div class="ring" style="left: {S.ring.x - S.ring.r}px; top: {S.ring.y - S.ring.r}px; width: {S.ring.r * 2}px; height: {S.ring.r * 2}px" class:erase={scatterOn && S.scatter.mode === 'erase'}></div>{/if}
+  {#if (scatterOn || groundOn || designer) && S.chip}<div class="hand-chip" style="left: {S.chip.x}px; top: {S.chip.y}px">{S.chip.text}</div>{/if}
+  {#if S.placeBar && S.placeBarAt}
+    {@const p = S.placer()}
     {#if p}
       <PlaceBar
-        at={placeBarAt}
-        holding={placeBar.holding}
-        turns={placeBar.turns}
+        at={S.placeBarAt}
+        holding={S.placeBar.holding}
+        turns={S.placeBar.turns}
         quarter={p === designer}
         onTurn={(d) => p.turn(d, false)}
         onAuto={() => p.turnReset()}
@@ -5961,7 +4399,7 @@
       {#if q.others}<p class="ws-muted">Changes to towns and sites that come out differently are set aside. Undo starts afresh.</p>{/if}
     </Choice>
   {/if}
-  {#if streetBackAsk}
+  {#if T.streetBackAsk}
     <Choice
       title="Back to the generated streets?"
       icon="reset"
@@ -5969,16 +4407,16 @@
         { label: 'Cancel', value: 'no', kind: 'quiet' },
         { label: 'Back to generated', value: 'yes', kind: 'danger' },
       ]}
-      onChoose={(v) => ((streetBackAsk = false), v === 'yes' && void streetChange({ op: 'back_to_generated' }, 'back'))}
+      onChoose={(v) => ((T.streetBackAsk = false), v === 'yes' && void T.streetChange({ op: 'back_to_generated' }, 'back'))}
     >
       <p>
-        {townName ?? 'The town'} is laid out again as it was before it was laid out by hand: every street, block and junction drawn or moved since goes
+        {T.townName ?? 'The town'} is laid out again as it was before it was laid out by hand: every street, block and junction drawn or moved since goes
         (with the ward editor’s changes from before, if any). Undo brings them back.
       </p>
     </Choice>
   {/if}
-  {#if inWayAsk}
-    {@const ask = inWayAsk}
+  {#if B.inWayAsk}
+    {@const ask = B.inWayAsk}
     <Choice
       title="Buildings in the way"
       icon={ask.what === 'castle' ? 'castle' : 'wall'}

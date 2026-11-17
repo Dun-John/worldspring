@@ -6,6 +6,7 @@
 import type { Graphics } from 'pixi.js';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
+import { dragTo } from './line';
 import type { Pt } from './build';
 
 export type StampSize = 'small' | 'usual' | 'large';
@@ -168,12 +169,7 @@ export class PathTool implements PointerTool {
   move(x: number, y: number) {
     this.cursor = [x, y];
     if (!this.from) return;
-    if (!this.drag) {
-      if (Math.hypot(x - this.from[0], y - this.from[1]) < DRAG_FT) return;
-      this.drag = [this.from];
-    }
-    const last = this.drag[this.drag.length - 1];
-    if (Math.hypot(x - last[0], y - last[1]) >= STEP_FT) this.drag.push([x, y]);
+    this.drag = dragTo(this.drag, this.from, [x, y], DRAG_FT, STEP_FT);
   }
 
   up(x: number, y: number) {
