@@ -34,6 +34,7 @@ pub struct Deck {
 
 impl Deck {
     /// The deck level (ft) `t` (0 to 1) of the way along it from `a`.
+    #[inline]
     pub fn level(&self, t: f64) -> f32 {
         let (s0, s1) = self.span;
         deck_level(self.ends, if s1 - s0 > 1e-9 { (t - s0) / (s1 - s0) } else { 0.5 })
@@ -104,6 +105,7 @@ fn hand_deck(c: &crate::world::Crossing, world: &World, t0: &T0) -> (Deck, f32) 
 }
 
 /// The deck level (ft) `t` (0 to 1) of the way along a deck with ends `(a, b)`.
+#[inline]
 pub fn deck_level(ends: (f32, f32), t: f64) -> f32 {
     ends.0 + (ends.1 - ends.0) * t.clamp(0.0, 1.0) as f32
 }

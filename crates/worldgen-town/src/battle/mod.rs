@@ -67,6 +67,7 @@ pub enum Surface {
 }
 
 impl Surface {
+    #[inline]
     pub fn is_road(self) -> bool {
         matches!(self, Surface::Cobble | Surface::Road | Surface::Planks | Surface::Stairs)
     }
@@ -247,6 +248,7 @@ pub fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind],
 
 /// A dry square's beach (`Surface::Sand`, whatever the biome): within 3 ft of the sea beside it
 /// (`depth`: its water's level over it; `level` that water's), on gentle ground.
+#[inline]
 pub fn beach(depth: f64, level: f64, sea: f64, slope: f64) -> bool {
     depth > -3.0 && level <= sea + 0.5 && slope < 0.15
 }

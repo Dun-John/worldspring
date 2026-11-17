@@ -241,6 +241,7 @@ static MORE: [&[(Kind, KindInfo)]; 5] = [
     &crate::town::harbour::KINDS,
 ];
 
+#[inline]
 fn more() -> impl Iterator<Item = &'static (Kind, KindInfo)> {
     MORE.iter().flat_map(|t| t.iter())
 }
@@ -251,10 +252,12 @@ pub fn catalog() -> impl Iterator<Item = &'static KindInfo> {
 }
 
 /// The kind with a catalog id.
+#[inline]
 pub fn kind_of(id: u16) -> Option<Kind> {
     KINDS.get((id as usize).checked_sub(1)?).copied().or_else(|| more().find(|m| m.1.id == id).map(|m| m.0))
 }
 
+#[inline]
 pub fn info(kind: u16) -> &'static KindInfo {
     let i = (kind as usize).saturating_sub(1);
     if i < CATALOG.len() {

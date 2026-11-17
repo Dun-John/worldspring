@@ -50,6 +50,7 @@ pub const POND_CONE: f64 = 30.0;
 /// The ground `e` ft out from a pond's rim (its water at `level`, its band `band`) where it stands
 /// at `h`: eased down over the band to its banks (0.3 ft over the water, rising a tenth of a foot a
 /// foot), and no steeper than 0.35 from the rim out to `POND_CONE` past the band.
+#[inline]
 pub fn pond_bank(h: f64, e: f64, level: f64, band: f64) -> f64 {
     if e >= band + POND_CONE {
         return h;
@@ -61,6 +62,7 @@ pub fn pond_bank(h: f64, e: f64, level: f64, band: f64) -> f64 {
 }
 
 /// The highest a stream's bank stands `d` ft past its edge (its water at `wl`): three in ten.
+#[inline]
 pub fn stream_bank(wl: f64, d: f64) -> f64 {
     wl + 0.3 + 0.3 * d
 }
@@ -94,11 +96,13 @@ pub struct Swell {
 
 impl Swell {
     /// How far it reaches from its middle (ft).
+    #[inline]
     pub fn reach(&self) -> f64 {
         self.r * self.el
     }
 
     /// How far it lifts the ground at `p` (ft): smoothly from its rise at the middle to 0 at its edge.
+    #[inline]
     pub fn lift(&self, p: P) -> f32 {
         let d = sub(p, self.at);
         let (a, b) = (dot(d, self.axis) / self.el, (d[1] * self.axis[0] - d[0] * self.axis[1]) * self.el);
@@ -217,6 +221,7 @@ impl<'a> Clear<'a> {
 }
 
 /// How far `p` is inside `poly` (ft; 0 outside it).
+#[inline]
 pub fn depth(poly: &[P], p: P) -> f64 {
     if !contains(poly, p) {
         return 0.0;
@@ -231,6 +236,7 @@ fn foot(kind: Kind) -> f64 {
 }
 
 /// A sprite's turn that sets its front (+y unturned) toward `dir`.
+#[inline]
 pub fn facing(dir: P) -> f32 {
     (libm::atan2(dir[1], dir[0]) - std::f64::consts::FRAC_PI_2) as f32
 }
@@ -308,6 +314,7 @@ fn bbox_of(pts: &[P]) -> (P, P) {
 }
 
 /// The nearest point of segment `a`–`b` to `p`, and how far along it is (0–1).
+#[inline]
 pub fn project(a: P, b: P, p: P) -> (P, f64) {
     let ab = sub(b, a);
     let t = (dot(sub(p, a), ab) / dot(ab, ab).max(1e-9)).clamp(0.0, 1.0);

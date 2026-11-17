@@ -91,6 +91,7 @@ pub struct Chunk {
 
 impl Chunk {
     /// An object's tactical rules (a built-in kind's, or an uploaded sprite's).
+    #[inline]
     pub fn info(&self, o: &Object) -> &KindInfo {
         match o.sprite {
             0 => info(o.kind as u16),
@@ -99,6 +100,7 @@ impl Chunk {
     }
 
     /// An object's name.
+    #[inline]
     pub fn name(&self, o: &Object) -> &str {
         match o.sprite {
             0 => info(o.kind as u16).name,
