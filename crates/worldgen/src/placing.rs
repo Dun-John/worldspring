@@ -8,7 +8,9 @@ use crate::core::rng::Pcg32;
 use crate::t0::T0;
 use crate::t0::settle::Tier;
 use crate::town::{self, catalog, geom, hand};
-use crate::world::{BUILDING_HOMES, CreatedChecks, World};
+use crate::model::paths::{Path, PathKind};
+use crate::paths::PathLine;
+use crate::world::{AddedStreet, BUILDING_HOMES, CreatedChecks, TownEdit, World};
 
 type P = [f64; 2];
 
@@ -166,6 +168,51 @@ pub struct RowAsk<'a> {
     pub gaps: f64,
     pub clear: bool,
     pub seed: u64,
+    /// (R4) A road laid along it too: the houses set back half its width and facing it.
+    pub road: Option<RowRoadAsk>,
+}
+
+/// (R4) The road a row asks for along it: its kind and width (ft; else the kind's).
+#[derive(Clone, Copy)]
+pub struct RowRoadAsk {
+    pub kind: PathKind,
+    pub width: Option<f64>,
+}
+
+impl RowRoadAsk {
+    pub fn width_ft(&self) -> f64 {
+        self.width.unwrap_or_else(|| self.kind.width_ft())
+    }
+}
+
+/// (R4) What a row's road writes: a road drawn by hand (`Edits.paths`, its id the writer's), the
+/// street records of a town laid out by hand, or a generated town's edit with the street added
+/// (`Edits.towns` key, the whole edit, the street's id); `Kept`: the same road is there already.
+pub enum RowRoadEdit {
+    Path(Path),
+    Hand(town::handedit::HandChange, Vec<u32>),
+    Town(String, TownEdit, u32),
+    Kept(String),
+}
+
+/// (R4) A row's road: the town it is part of (layout), its line as laid (ends joined), the edit
+/// and the town's buildings taken off its band (`b:<layout>:<id>`).
+pub struct RowRoad {
+    pub town: Option<usize>,
+    pub line: Vec<P>,
+    pub edit: RowRoadEdit,
+    pub removed: Vec<String>,
+}
+
+impl RowRoad {
+    /// "road" (drawn by hand) or "street" (a town's).
+    pub fn as_str(&self) -> &'static str {
+        match &self.edit {
+            RowRoadEdit::Path(_) => "road",
+            RowRoadEdit::Kept(id) if id.starts_with("rw") => "road",
+            _ => "street",
+        }
+    }
 }
 
 /// One building of a row.
@@ -176,6 +223,8 @@ pub struct RowLot {
     pub floors: u8,
     /// The building of the same footprint a row made earlier (`c:<n>`): nothing is added for it.
     pub existing: Option<String>,
+    /// The chord of the line it fronts (`Created::faces`).
+    pub faces: [P; 2],
 }
 
 /// A row laid: the lots, the removals they need (each building once), and the slots refused (`[x, y, why]`, at most 12 kept).
@@ -185,6 +234,7 @@ pub struct RowOut {
     pub refused: Vec<(P, String)>,
     pub refused_count: usize,
     pub length_ft: f64,
+    pub road: Option<RowRoad>,
 }
 
 fn home_for(ward: &str) -> &'static str {
@@ -231,6 +281,15 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
     if line.len() < 2 {
         return Err("along: at least two points apart".into());
     }
+    // (With a road, the lots are cut along its line: the curve through the points.)
+    let raw = line.clone();
+    let line = if ask.road.is_some() { crate::paths::curve(&line) } else { line };
+    let half = ask.road.map(|r| 0.5 * r.width_ft());
+    let offsets = match half {
+        Some(h) => [h, h + 4.0, h + 10.0, h + 18.0],
+        None => [7.0, 12.0, 18.0, 26.0],
+    };
+    let band = ask.road.map(|r| vec![crate::paths::Near { kind: r.kind, half: 0.5 * r.width_ft() - 0.1, segs: line.windows(2).map(|s| (s[0], s[1])).collect() }]);
     let mut cum = vec![0.0];
     for w in line.windows(2) {
         cum.push(cum.last().unwrap() + geom::len(geom::sub(w[1], w[0])));
@@ -247,7 +306,7 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
     }
     // The kinds to draw from without a list: businesses the ward can have in a town (not the big ones).
     let shops: Vec<&str> = catalog::CATALOG.iter().filter(|f| f.wards.contains(&ward) && !f.big && f.min_tier <= Tier::Town).map(|f| f.key).collect();
-    let mut out = RowOut { lots: Vec::new(), removed: Vec::new(), refused: Vec::new(), refused_count: 0, length_ft: total };
+    let mut out = RowOut { lots: Vec::new(), removed: Vec::new(), refused: Vec::new(), refused_count: 0, length_ft: total, road: None };
     let mut seen: Vec<String> = Vec::new();
     for &left in &ask.sides {
         // (Keyed on the side, so "right" alone lays what "both" lays on its right.)
@@ -279,19 +338,24 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
             let depth = ask.depth.unwrap_or_else(|| (area / cl).clamp(22.0, 60.0));
             let mut why = String::new();
             let mut done = false;
-            for off in [7.0, 12.0, 18.0, 26.0] {
-                let q = |p: P, o: f64| {
-                    let v = geom::add(p, geom::mul(nrm, o));
-                    [crate::core::round(v[0] * 100.0) / 100.0, crate::core::round(v[1] * 100.0) / 100.0]
-                };
+            let q = |p: P, o: f64| {
+                let v = geom::add(p, geom::mul(nrm, o));
+                [crate::core::round(v[0] * 100.0) / 100.0, crate::core::round(v[1] * 100.0) / 100.0]
+            };
+            let faces = [q(a, 0.0), q(b, 0.0)];
+            for off in offsets {
                 let poly = vec![q(a, off), q(b, off), q(b, off + depth), q(a, off + depth)];
                 if out.lots.iter().any(|l| agent::polys_overlap_pub(&l.poly, &poly)) {
                     why = "meets another building of the row".into();
                     continue;
                 }
+                if band.as_ref().is_some_and(|n| crate::paths::meets(n, &poly)) {
+                    why = "meets the road".into();
+                    continue;
+                }
                 if let Some(id) = existing(&poly, &func) {
                     let mid = geom::centroid(&poly);
-                    out.lots.push(RowLot { poly, mid, func: func.clone(), floors, existing: Some(id) });
+                    out.lots.push(RowLot { poly, mid, func: func.clone(), floors, existing: Some(id), faces });
                     done = true;
                     break;
                 }
@@ -305,7 +369,7 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
                                 out.removed.push(r);
                             }
                         }
-                        out.lots.push(RowLot { poly, mid, func: func.clone(), floors, existing: None });
+                        out.lots.push(RowLot { poly, mid, func: func.clone(), floors, existing: None, faces });
                         done = true;
                         break;
                     }
@@ -325,7 +389,123 @@ pub fn row(world: &World, t0: &T0, ask: &RowAsk, first_id: usize, existing: &dyn
         let why = out.refused.first().map(|r| format!(" (first refusal: {})", r.1)).unwrap_or_default();
         return Err(format!("no building fits along that path{why}"));
     }
+    if let Some(r) = ask.road {
+        out.road = Some(row_road(world, t0, r, &raw, &line, &out.lots, first_id)?);
+    }
     Ok(out)
+}
+
+/// (R4) The road along a row whose lots are laid: in the town the lots would be part of
+/// (`members::would_own`) a street of it (a hand town's street graph, joined at its ends and
+/// split where it crosses; a generated town's added street), else a road drawn by hand (`raw`:
+/// the points asked). Refused: a town street over water or through the town wall, a town with
+/// `added::MAX_ADDED` streets added, a street the hand town's graph refuses.
+fn row_road(world: &World, t0: &T0, r: RowRoadAsk, raw: &[P], line: &[P], lots: &[RowLot], first_id: usize) -> Result<RowRoad, String> {
+    use town::{added, handedit};
+    let polys: Vec<Vec<P>> = lots.iter().map(|l| l.poly.clone()).collect();
+    let owner = town::members::would_own(world, t0, &polys).map(|o| o.0);
+    let laid = added::thin(&crate::paths::rounded(line), 0.5);
+    let w = r.width_ft();
+    let band = |pts: &[P]| vec![crate::paths::Near { kind: r.kind, half: 0.5 * w, segs: pts.windows(2).map(|s| (s[0], s[1])).collect() }];
+    match owner {
+        Some(li) if hand::is_hand(world, li) => {
+            // (Its lots in the world first, so the blocks laid again keep off them.)
+            let mut file = world.file.clone();
+            for (k, l) in lots.iter().filter(|l| l.existing.is_none()).enumerate() {
+                let c = crate::world::Created { id: format!("c:{}", first_id + k), kind: "building".into(), x: l.mid[0], y: l.mid[1], poly: l.poly.clone(), func: Some(l.func.clone()), floors: Some(l.floors), faces: Some(l.faces), ..Default::default() };
+                file.edits.created.push(c);
+            }
+            let w2 = World::new(file)?;
+            let points = handedit::join_ends(&w2, li, &laid, added::JOIN_END_FT);
+            let req = handedit::HandRequest::AddStreet { points: points.clone(), width: Some(w), set_l: None, set_r: None, class: Some(hand::StreetClass::Street) };
+            let (ch, report) = handedit::change(&w2, t0, li, &req).map_err(|e| format!("road: the town's streets refuse it: {e}"))?;
+            let made: Vec<u32> = report["streets_added"].as_array().map(|v| v.iter().filter_map(|x| x.as_u64().map(|x| x as u32)).collect()).unwrap_or_default();
+            Ok(RowRoad { town: Some(li), line: points, edit: RowRoadEdit::Hand(ch, made), removed: Vec::new() })
+        }
+        Some(li) if added::home(world, t0, li).is_some() => {
+            let at = added::home(world, t0, li).unwrap_or_default();
+            let key = town::wards::key(li);
+            let mut e = match world.file.edits.towns.get(&key) {
+                Some(e) if geom::dist(e.at, at) > TownEdit::SAME_AT_FT => return Err("road: the town was laid out elsewhere since its streets were edited: open it in Streets first".into()),
+                Some(e) => e.clone(),
+                None => TownEdit { at, ..Default::default() },
+            };
+            let st = AddedStreet { pts: laid, kind: r.kind, width: r.width };
+            if let Some((&id, _)) = e.streets.iter().find(|(_, o)| **o == st) {
+                let line = added::laid(world, t0, li).into_iter().find(|x| x.0 == id).map(|x| x.1).unwrap_or_else(|| st.pts.clone());
+                return Ok(RowRoad { town: Some(li), line, edit: RowRoadEdit::Kept(format!("ts:{li}:{id}")), removed: Vec::new() });
+            }
+            if e.streets.len() >= added::MAX_ADDED {
+                return Err(format!("road: a town takes at most {} streets added by hand", added::MAX_ADDED));
+            }
+            let id = e.streets.keys().next_back().map_or(1, |k| k + 1);
+            let l = town::layout(world, t0, li);
+            let joined = added::lines(&l, &std::collections::BTreeMap::from([(id, st.clone())])).pop().map_or_else(|| st.pts.clone(), |x| x.1);
+            if added::crosses_wall(&l, &joined) {
+                return Err("road: the street would run through the town wall: open a gate there first (Streets › gates)".into());
+            }
+            let probe = Path { pts: added::thin(&crate::paths::rounded(&joined), 0.5), kind: r.kind, width: r.width, name: None };
+            if probe.problem().is_none() && !crate::paths::crossings(world, t0, &probe).is_empty() {
+                return Err("road: a town street can't cross water here".into());
+            }
+            let near = band(&joined);
+            let removed = l.buildings.iter().filter(|b| crate::paths::meets(&near, &b.poly)).map(|b| format!("b:{li}:{}", b.id)).collect();
+            e.streets.insert(id, st);
+            Ok(RowRoad { town: Some(li), line: joined, edit: RowRoadEdit::Town(key, e, id), removed })
+        }
+        _ => {
+            let pts = crate::paths::rounded(raw);
+            let pts = if pts.len() > crate::paths::MAX_PATH_PTS { added::thin(&pts, 0.5) } else { pts };
+            let p = Path { pts, kind: r.kind, width: r.width, name: None };
+            if let Some(why) = p.problem() {
+                return Err(format!("road: {why}"));
+            }
+            if let Some((id, _)) = world.file.edits.paths.iter().find(|(_, o)| o.pts == p.pts && o.kind == p.kind) {
+                return Ok(RowRoad { town: owner, line: p.line().to_vec(), edit: RowRoadEdit::Kept(id.clone()), removed: Vec::new() });
+            }
+            Ok(RowRoad { town: owner, line: p.line().to_vec(), edit: RowRoadEdit::Path(p), removed: Vec::new() })
+        }
+    }
+}
+
+/// (R4) A row's road as JSON: `{as: "road"|"street", town?, line, removed, kept?, path? (a road
+/// drawn by hand: the writer gives it its `rw:` id), streets?/wharves? (a hand town's records to
+/// set, null: removed), towns? (`{key: TownEdit}`), street_id? (`ts:<layout>:<id>`), street_ids?
+/// (a hand town's new `e` numbers)}`.
+pub fn row_road_json(r: &RowRoad) -> serde_json::Value {
+    let mut v = serde_json::json!({ "as": r.as_str(), "line": r.line, "removed": r.removed });
+    if let Some(t) = r.town {
+        v["town"] = serde_json::json!(t);
+    }
+    match &r.edit {
+        RowRoadEdit::Path(p) => v["path"] = serde_json::json!(p),
+        RowRoadEdit::Hand(ch, made) => {
+            for (k, x) in ch.to_json().as_object().cloned().unwrap_or_default() {
+                v[k] = x;
+            }
+            v["street_ids"] = serde_json::json!(made);
+        }
+        RowRoadEdit::Town(key, e, id) => {
+            v["towns"] = serde_json::json!({ key.clone(): e });
+            v["street_id"] = serde_json::json!(format!("ts:{}:{id}", r.town.unwrap_or_default()));
+        }
+        RowRoadEdit::Kept(id) => v["kept"] = serde_json::json!(id),
+    }
+    v
+}
+
+/// (R4) A row's road from JSON (`{kind, width?}`; absent or null: none): a path kind, 3-40 ft.
+pub fn road_of(v: &serde_json::Value) -> Result<Option<RowRoadAsk>, String> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    let names = || PathKind::ALL.iter().map(|k| k.name()).collect::<Vec<_>>().join(", ");
+    let kind = v["kind"].as_str().and_then(PathKind::parse).ok_or_else(|| format!("road.kind: one of {}", names()))?;
+    let width = match &v["width"] {
+        serde_json::Value::Null => None,
+        w => Some(w.as_f64().filter(|w| (3.0..=40.0).contains(w)).ok_or("road.width: 3 to 40 ft")?),
+    };
+    Ok(Some(RowRoadAsk { kind, width }))
 }
 
 /// A row's seed from JSON: absent is 0; a negative or fractional number is refused.
@@ -451,8 +631,9 @@ pub fn stamp_json(world: &World, t0: &T0, input: &str) -> String {
     go().unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string()
 }
 
-/// A row as the app asks for it, as JSON. Input `{line, side?: "left"|"right"|"both", ward?, kinds?, depth?, gaps?, clear?, seed?, first_id}`;
-/// output `{lots: [{poly, x, y, func, floors, name, existing?}], removed, refused: [{x, y, why}], refused_count, length_ft}` or `{error}`.
+/// A row as the app asks for it, as JSON. Input `{line, side?: "left"|"right"|"both", ward?, kinds?, depth?, gaps?, clear?, seed?, first_id,
+/// road?: {kind, width?}}`; output `{lots: [{poly, x, y, func, floors, name, existing?, faces}], removed, refused: [{x, y, why}],
+/// refused_count, length_ft, road: null | row_road_json}` or `{error}`.
 pub fn row_json(world: &World, t0: &T0, input: &str) -> String {
     let go = || -> Result<serde_json::Value, String> {
         let a: serde_json::Value = serde_json::from_str(input).map_err(|e| e.to_string())?;
@@ -466,7 +647,8 @@ pub fn row_json(world: &World, t0: &T0, input: &str) -> String {
         let ward = a["ward"].as_str().unwrap_or("common");
         let n = a["first_id"].as_u64().unwrap_or(0) as usize;
         let depth = a["depth"].as_f64().map(|d| d.clamp(DEPTH_RANGE.0, DEPTH_RANGE.1));
-        let ask = RowAsk { line: &line, sides, depth, kinds, ward, gaps: a["gaps"].as_f64().unwrap_or(0.15).clamp(0.0, 0.5), clear: a["clear"].as_bool().unwrap_or(false), seed: seed_of(&a["seed"])? };
+        let road = road_of(&a["road"])?;
+        let ask = RowAsk { line: &line, sides, depth, kinds, ward, gaps: a["gaps"].as_f64().unwrap_or(0.15).clamp(0.0, 0.5), clear: a["clear"].as_bool().unwrap_or(false), seed: seed_of(&a["seed"])?, road };
         let edits = &world.file.edits;
         let existing = |poly: &[P], func: &str| {
             let probe = crate::world::Created { kind: "building".into(), poly: poly.to_vec(), func: Some(func.to_string()), ..Default::default() };
@@ -484,12 +666,12 @@ pub fn row_json(world: &World, t0: &T0, input: &str) -> String {
                     k += 1;
                     agent::spot_name(world, t0, &l.poly, Some(&l.func), &format!("c:{}", n + k - 1))
                 };
-                serde_json::json!({ "poly": l.poly, "x": l.mid[0], "y": l.mid[1], "func": l.func, "floors": l.floors, "name": name, "existing": l.existing })
+                serde_json::json!({ "poly": l.poly, "x": l.mid[0], "y": l.mid[1], "func": l.func, "floors": l.floors, "name": name, "existing": l.existing, "faces": l.faces })
             })
             .collect();
         Ok(serde_json::json!({ "lots": lots, "removed": out.removed.iter().map(removal_json).collect::<Vec<_>>(),
             "refused": out.refused.iter().map(|(p, why)| serde_json::json!({ "x": p[0], "y": p[1], "why": why })).collect::<Vec<_>>(),
-            "refused_count": out.refused_count, "length_ft": out.length_ft }))
+            "refused_count": out.refused_count, "length_ft": out.length_ft, "road": out.road.as_ref().map(row_road_json) }))
     };
     go().unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string()
 }
