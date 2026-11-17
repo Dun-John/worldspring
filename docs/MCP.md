@@ -375,15 +375,18 @@ What is at a point:
   wall or fence, a road, street or lane, a hedge, water, a castle or plot, a district, a settlement or site), then
   nearest. Each is `{kind, id, name, town, removable, bbox}`: `town` the feature id of the settlement it belongs to
   (null where none), `bbox` its extent `[x0, y0, x1, y1]` in world ft, `removable` true where a tool deletes it
-  (`delete_feature`, `remove_buildings`, `remove_roads`, `remove_crossings`, `delete_water`, `remove_wharves`).
+  (`delete_feature`, `remove_buildings`, `remove_roads`, `remove_fences`, `remove_crossings`, `delete_water`,
+  `remove_wharves`).
   Kinds and ids: `entrance` (`u:`, a sewer grate `w:`), `building` (`b:`; removable when it is the world's own,
   not a castle's or a plot's), `tower` (`t:`), `drawn_building`, `castle`, `plot`, `wall` (`c:`), `settlement`,
   `site` (their feature ids; removable when created), `district` (`d:`), `road` (a road stretch `rd:`, a track to
   a settlement added by hand `mt:`; removable), `street` / `lane` (a generated town's or village's `tr:`, one added
   by hand `ts:`; removable), `path` (a park's, garden's or cemetery's walk `pp:`; removable), `drawn_road` (`rw:`),
-  `crossing` (`v:`), `water` (`e:`), `harbour` (`q:`); and with `id: null`: a hand town's streets and a place's
-  lanes, `hedge`, `field_wall` (round a field), `fence` (a pen's). Roads, streets and paths taken away with
-  `remove_roads` are left out.
+  `crossing` (`v:`), `water` (`e:`), `harbour` (`q:`), `fence` (a generated settlement's fence, hedge or wall run
+  `fr:`, within 1,500 ft; a park's hedge or row of topiary `fh:`, within 400 ft; removable), `drawn_fence` (`f:`)
+  and `fence_gap` (`fg:`); a fence's `fence` names its kind (`hedgerow`, `picket`…; none for topiary or a gap).
+  With `id: null`: a hand town's streets, a place's lanes, the fences of a hand town or a site. Roads, streets and
+  paths taken away with `remove_roads`, and fences with `remove_fences`, are left out.
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -2608,6 +2611,51 @@ tool for `rw:` ids, is still accepted.)
 ### `list_paths`
 
 Every road drawn by hand, as `place_path` returns it (`{items, found}`, `limit` 100 by default).
+
+### Fences and hedges
+
+Every fence, hedge and garden wall a settlement generates (round fields, crofts, yards, the churchyard and
+cemetery, corrals, pens, manor yards) is a run with an id, `fr:<layout>:<8 hex>`, from its source and its two ends;
+a park's clipped hedge or row of topiary is `fh:<layout>:<spot>:<j>`. A ward edit that moves a run's ends gives it
+a new id (its change lapses). Fences drawn by hand are `f:<n>`, the eraser's gaps `fg:<n>`. Only the battlemap
+draws them (and the plan's corral, pen and churchyard marks): fields, plots, gates, haystacks and animals stay as
+generated. A palace forecourt's walls, a castle kitchen's wattle, lone topiary and a temple close's bushes have no
+id: cut them with a gap (`remove_objects` takes any of them).
+
+Kinds and their rules in play: `hedgerow`, `dry_stone_wall`, `wattle`, `low_wall`, `picket`, `iron_railing`: hard
+going, half cover, seen over; `hedge` (clipped): blocks the way, three-quarters cover, seen over; `post_and_rail`:
+hard going, no cover; `stockade`, `high_wall`: block the way and sight. `garden_wall` (a manor's yard, a
+forecourt) is generated only: it can be removed or gapped, not changed in kind, and nothing takes it. A gate is a
+5-ft opening with an open gate leaf (never shut in play).
+
+### `place_fence`
+
+Draws a fence or hedge along `points` (2 to 400, world ft; `closed: true` back round to the first), of `kind`
+(required for a new one), with `gates` (points: each a 5-ft gate where the line passes nearest). It crosses roads
+and roofs and stops only at water. With `id`:
+- `f:` a drawn fence changed: what is given replaces it (new `points` or `closed` drop its gates unless given
+  again; `kind` or `gates` alone keep the line and add the gates);
+- `fr:` / `fh:` a generated run: `kind` (back to its own kind: as generated) and/or `gates` (added; `points` are
+  refused). A garden wall keeps its kind; a hand town's runs are refused (`edit_streets` changes the town).
+
+Returns a drawn fence's `{id, kind, length_ft, pts, closed?, gates? (ft along the line)}`, or a run's `{id, kind,
+gates}`. A gate within 5 ft of another is refused.
+
+### `remove_fences`
+
+`ids` (at most 500 a call; more is refused whole) taken away one by one, each done or refused alone: `fr:` /
+`fh:` a generated run gone whole (`restore: true` brings it back as generated, dropping its kind and gates too),
+`f:` a drawn fence deleted, `fg:` a gap dropped (neither brought back by `restore`: the user's Undo does). `gaps`:
+`[{points, width_ft? (1 to 20, default 5)}]` cut every fence and hedge under the stroke, generated or drawn, and
+stay through remakes. Returns `{removed | restored, gaps (the new fg: ids), refused: [{id, why}]}`; an error when
+nothing was done.
+
+### `list_fences`
+
+Without `at`: every drawn fence, gap and changed run (`{id, town, found, gone?, kind?, gates?}`; `found` false when
+its town's edits are set aside). With `at` (and `radius_ft`, default 200, at most 2,000): every fence and hedge
+near, nearest first: runs `{id, kind, length_ft, ends, town, gone?, gates?, changed_from?}` (parks' hedges within
+400 ft), drawn fences and gaps. `{items, found}`, `limit` 100 by default.
 
 ## What agents can't do
 
