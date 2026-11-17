@@ -960,6 +960,8 @@ export type Ask =
   | { op: 'funcs' }
   /** A generated building's edit with a change made, or its removal (`agent::building_edit_json`). */
   | { op: 'bedit'; id: string; change: string }
+  /** The same for many buildings at once: the answers in a list, in order. */
+  | { op: 'bedits'; ids: string[]; change: string }
   /** The generated buildings with their middle inside a polygon (`agent::generated_buildings_in`). */
   | { op: 'bin'; poly: [number, number][] }
   | { op: 'works'; site: Created }

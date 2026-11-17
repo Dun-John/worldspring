@@ -107,9 +107,13 @@ struct Found {
     thing: Thing,
 }
 
+/// The widest ring asked over (ft): the app's largest box. `describe_location` asks no more than
+/// its schema's 500.
+pub const MAX_RADIUS_FT: f64 = 6000.0;
+
 /// Everything within `radius_ft` of `at`: topmost first, then nearest (see the module doc).
 pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
-    let r = radius_ft.max(0.0);
+    let r = radius_ft.clamp(0.0, MAX_RADIUS_FT);
     let edits = &world.file.edits;
     let layouts = town::layouts_near(world, t0, [at[0] - r, at[1] - r, at[0] + r, at[1] + r]);
     let mut out: Vec<Found> = Vec::new();
@@ -141,9 +145,7 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                 continue;
             }
             let (id, name) = if e.kind == crate::under::UnderKind::Sewer {
-                let o = crate::under::sewer_section(e.at);
-                let s = crate::under::SEWER_SECTION_FT;
-                (format!("w:{}:{}:{}", l.index, (o[0] / s) as i64, (o[1] / s) as i64), None)
+                (crate::gazetteer::sewer_id(l.index, e.at), None)
             } else {
                 let id = format!("u:{}:{}", l.index, e.id);
                 let name = renamed(&id).or_else(|| crate::sitelinks::dungeon_name(world, t0, li));

@@ -4,11 +4,11 @@
 // one undo step (`withoutThings` puts the existing deletes together). App keeps `syncTool()`.
 import type { BuildingEdit, Created, Edits, Thing } from '../../gen/protocol';
 import type { Pt } from '../build';
-import { SelectTool, countOf, inArea, keyOf, ringOf, withoutThings } from '../select';
+import { SelectTool, countOf, inArea, keyOf, ringOf, underFirst, withoutThings } from '../select';
 import type { BuildingHit } from '../../ui/gazetteer';
 
 /** What the Select tool needs from the app. */
-export interface SelectHost {
+export interface SelectApp {
   readonly view: import('../../render/MapView').MapView;
   readonly edits: Edits;
   readonly build: import('./build.svelte').BuildTools;
@@ -20,21 +20,25 @@ export interface SelectHost {
   go(to: import('../../ui/shell/layout.svelte').Section | null, tab?: string): void;
 }
 
-/** A click asks `pick` this far round it (screen px). */
-const CLICK_PX = 8;
+/** A click asks `pick` this far round it (screen px), but never over `MAX_PICK_FT`. */
+const PICK_PX = 8;
+const MAX_PICK_FT = 60;
 /** The widest area asked over (ft from its middle to its corners). */
 const MAX_AREA_FT = 6000;
 
-export function selectTools(host: SelectHost) {
+export function selectTools(host: SelectApp) {
   /** What a click found (topmost first), or what an area holds. */
-  let things = $state<Thing[]>([]);
+  let things = $state.raw<Thing[]>([]);
   /** The one open in the card (a click's list). */
   let open = $state(0);
   /** Where the click was, and how far round it was asked. */
   let at = $state<{ p: Pt; r: number } | null>(null);
   /** The area dragged. */
   let area = $state<Pt[] | null>(null);
+  /** A drag draws a lasso (else a box). */
+  let lasso = $state(false);
   let busy = $state(false);
+  let changing = 0;
   let armed: SelectTool | null = null;
   let seq = 0;
 
@@ -47,6 +51,7 @@ export function selectTools(host: SelectHost) {
       drawn: (poly) => void drag(poly),
       shown: () => (area ? things.slice(0, 300) : things[open] ? [things[open]] : []).map((t) => t.bbox),
       area: () => area,
+      lasso: () => lasso,
     });
     return armed;
   }
@@ -57,9 +62,10 @@ export function selectTools(host: SelectHost) {
   };
 
   async function click(p: Pt) {
-    const r = CLICK_PX * ftPerPx();
+    const r = PICK_PX * ftPerPx();
+    if (r > MAX_PICK_FT) return host.toast('Zoom in to select');
     const s = ++seq;
-    const found = unique(await host.view.gen.pick(p[0], p[1], r));
+    const found = underFirst(unique(await host.view.gen.pick(p[0], p[1], r)), p, r);
     if (s !== seq) return;
     area = null;
     at = { p, r };
@@ -88,7 +94,7 @@ export function selectTools(host: SelectHost) {
       const s = ++seq;
       void host.view.gen.pick(p[0], p[1], r).then((found) => {
         if (s !== seq) return;
-        things = unique(found);
+        things = underFirst(unique(found), p, r);
         open = Math.max(0, things.findIndex((t) => keyOf(t) === key));
       });
     } else if (area) {
@@ -141,11 +147,11 @@ export function selectTools(host: SelectHost) {
     busy = true;
     try {
       const gen: Record<string, BuildingEdit> = {};
-      for (const t of can) {
-        if (t.kind !== 'building') continue;
-        const r = await host.view.gen.buildingEdit(t.id as string, { remove: true });
-        if (r && 'edit' in r && r.edit) gen[t.id as string] = r.edit;
-      }
+      const ids = can.filter((t) => t.kind === 'building').map((t) => t.id as string);
+      const answers = ids.length ? ((await host.view.gen.buildingEdits(ids, { remove: true })) ?? []) : [];
+      answers.forEach((r, k) => {
+        if (r && 'edit' in r && r.edit) gen[ids[k]] = r.edit;
+      });
       const kept = can.filter((t) => t.kind !== 'building' || t.id! in gen);
       if (!kept.length) return void host.toast('The map could not answer: try again');
       const before = host.edits;
@@ -179,8 +185,10 @@ export function selectTools(host: SelectHost) {
       case 'building': {
         B.setBuildMode('building');
         const [x0, y0, x1, y1] = t.bbox;
+        const token = ++changing;
         const hit = await host.view.gen.query((x0 + x1) / 2, (y0 + y1) / 2);
-        if (hit?.kind === 'building' && hit.id === id) void B.editGenerated(hit as BuildingHit);
+        // (Still wanted: nothing else asked for meanwhile, and Build still on Building.)
+        if (token === changing && B.buildMode === 'building' && hit?.kind === 'building' && hit.id === id) void B.editGenerated(hit as BuildingHit);
         return;
       }
       case 'drawn_road':
@@ -246,6 +254,12 @@ export function selectTools(host: SelectHost) {
     },
     get area() {
       return area;
+    },
+    get lasso() {
+      return lasso;
+    },
+    set lasso(v) {
+      lasso = v;
     },
     get busy() {
       return busy;

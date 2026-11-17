@@ -16,7 +16,7 @@ import type { BuildMode, QuickInfo } from '../../ui/BuildPanel.svelte';
 import { PathTool, StampTool, defaultLasso, defaultRow, defaultStamp, type LassoSettings, type RowSettings, type StampSettings } from '../quick';
 import { newObjectId } from '../scatter';
 import { type Change } from '../../sync/mapd';
-import { hitName, type BuildingHit } from '../../ui/gazetteer';
+import { hitName, sentence, type BuildingHit } from '../../ui/gazetteer';
 import { existingSite } from '../../world/world';
 
 /** What the Build tools need from the app. */
@@ -37,7 +37,6 @@ export interface BuildHost {
 }
 
 export function buildTools(app: BuildHost) {
-  const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
   // Build: while its tab is open, the map's pointer draws buildings (or redraws the one being
   // changed).

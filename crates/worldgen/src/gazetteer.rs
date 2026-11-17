@@ -123,6 +123,12 @@ fn district_hit(l: &town::Layout, qi: usize) -> Hit {
 /// How near (ft) a point must be to an underground entrance to pick it.
 const ENTRANCE_PICK_FT: f64 = 12.0;
 
+/// The id of the sewer section holding a grate: `w:<layout>:<sx>:<sy>` (the section's corner over its size, floored).
+pub fn sewer_id(layout: impl std::fmt::Display, at: [f64; 2]) -> String {
+    let (o, s) = (crate::under::sewer_section(at), crate::under::SEWER_SECTION_FT);
+    format!("w:{}:{}:{}", layout, crate::core::floor(o[0] / s) as i64, crate::core::floor(o[1] / s) as i64)
+}
+
 /// The way underground at a point, else the building, else the district, else the
 /// settlement whose built-up area contains it.
 pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
@@ -132,8 +138,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
             if geom::dist(e.at, [x, y]) <= ENTRANCE_PICK_FT {
                 // A sewer grate opens onto its section of the sewers.
                 let id = if e.kind == crate::under::UnderKind::Sewer {
-                    let o = crate::under::sewer_section(e.at);
-                    format!("w:{}:{}:{}", l.index, (o[0] / crate::under::SEWER_SECTION_FT) as i64, (o[1] / crate::under::SEWER_SECTION_FT) as i64)
+                    sewer_id(l.index, e.at)
                 } else {
                     format!("u:{}:{}", l.index, e.id)
                 };

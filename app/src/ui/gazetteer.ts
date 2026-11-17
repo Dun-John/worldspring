@@ -8,6 +8,9 @@ export type DistrictHit = Extract<Hit, { kind: 'district' }>;
 
 export type Selection = { kind: 'feature'; feature: Feature } | { kind: 'building'; hit: BuildingHit } | { kind: 'district'; hit: DistrictHit };
 
+/** A text with its first letter capital. */
+export const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export const SETTLEMENT_KINDS = ['metropolis', 'city', 'town', 'village'];
 
 /** A layout-local id set aside when the world was remade (`PARKED_LAYOUT` and up): it names no

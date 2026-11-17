@@ -89,6 +89,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                           ? building_funcs_json()
                           : a.op === 'bedit'
                           ? c.building_edit_json(a.id, a.change)
+                          : a.op === 'bedits'
+                          ? JSON.stringify(a.ids.map((id) => JSON.parse(c.building_edit_json(id, a.change))))
                           : a.op === 'bin'
                           ? c.buildings_in_json(JSON.stringify(a.poly))
                           : a.op === 'works'

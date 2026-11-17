@@ -74,7 +74,7 @@
   import PicturePicker, { type PictureItem } from './play/PicturePicker.svelte';
   import { describe, tidy, type Step } from './sync/history';
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
-  import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
+  import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, sentence, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameSketch, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, ownHash, PINNED, renumberedSince } from './world/versions';
   import { asideCount, asideList, asideWhat, forgetAside, isAside } from './world/setaside';
@@ -1956,7 +1956,6 @@
   /** A village or town goes in at once, unless it is to be a realm's capital. */
   const isInstant = (c: SiteChoice) => !!c.settlement && (c.settlement.tier === 'village' || c.settlement.tier === 'town') && !c.settlement.capital;
 
-  const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
   /** Ask the generator whether a village or town can go under the pointer (at most one question
    * in flight; the last answer wins). */

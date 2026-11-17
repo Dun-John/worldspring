@@ -181,6 +181,11 @@ export class GenClient {
     return this.ask({ op: 'bedit', id, change: JSON.stringify(change) }).then((j) => JSON.parse(j));
   }
 
+  /** `buildingEdit` for many buildings in one round trip: the answers in order (null: not answered). */
+  buildingEdits(ids: string[], change: object): Promise<({ edit: BuildingEdit | null } | { piece: PieceEdit } | { error: string })[] | null> {
+    return this.ask({ op: 'bedits', ids, change: JSON.stringify(change) }).then((j) => JSON.parse(j));
+  }
+
   /** The world's own buildings with their middle inside a polygon (ft): ids and middles as generated. */
   buildingsIn(poly: [number, number][]): Promise<{ id: string; at: [number, number] }[]> {
     return this.ask({ op: 'bin', poly }).then((j) => JSON.parse(j) ?? []);

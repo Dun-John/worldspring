@@ -2,7 +2,7 @@
   // Edit › Build › Select: what a click found (the top one open: its kind, name and town, Delete
   // and Change), or what a box or lasso holds, counted by kind, with "Delete all that can be".
   import type { SelectTools } from '../editor/tools/select.svelte';
-  import { KIND_WORDS } from '../editor/select';
+  import { KIND_WORDS, foldedWords } from '../editor/select';
   import type { Thing } from '../gen/protocol';
   import Icon from './Icon.svelte';
   import ToolPanel from './build/ToolPanel.svelte';
@@ -20,15 +20,28 @@
   };
   const can = (t: Thing) => t.removable && !!t.id;
   const all = $derived(sel.things.filter(can));
+  /** A click's list shows this many rows; the rest are folded by kind until asked for. */
+  const ROWS = 8;
+  let unfolded = $state(false);
+  $effect(() => {
+    void sel.things;
+    unfolded = false;
+  });
+  const limit = $derived(unfolded || sel.open >= ROWS ? Infinity : ROWS);
+  const rest = $derived(sel.things.slice(limit === Infinity ? sel.things.length : ROWS));
 </script>
 
 <ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}}>
   {#snippet hint()}
     {#if !sel.things.length}
       <div class="ws-hint">
-        {sel.area ? 'Nothing there to choose.' : 'Click something on the map to see what it is. Drag a box, or Shift-drag a lasso, to choose all inside it.'}
+        {sel.area ? 'Nothing there to choose.' : 'Click something on the map to see what it is. Drag a box, or a lasso (Shift-drag), to choose all inside it.'}
       </div>
     {/if}
+    <div class="ws-seg" role="radiogroup" aria-label="Drag draws">
+      <button class:on={!sel.lasso} role="radio" aria-checked={!sel.lasso} onclick={() => (sel.lasso = false)}>Box</button>
+      <button class:on={sel.lasso} role="radio" aria-checked={sel.lasso} onclick={() => (sel.lasso = true)}>Lasso</button>
+    </div>
   {/snippet}
   {#snippet peekHint()}
     {#if sel.things.length}<div class="ws-hint">{sel.area ? `${sel.things.length} chosen` : word(sel.things[sel.open] ?? sel.things[0])}</div>{/if}
@@ -49,7 +62,7 @@
       </div>
     {:else if sel.things.length}
       <div class="sel-list" role="list" aria-label="What is here">
-        {#each sel.things as t, k (k)}
+        {#each sel.things.slice(0, limit) as t, k (k)}
           {@const town = sel.townName(t)}
           <div class="item" class:open={k === sel.open} role="listitem">
             <button class="head" aria-expanded={k === sel.open} onclick={() => (sel.open = k)}>
@@ -71,6 +84,9 @@
             {/if}
           </div>
         {/each}
+        {#if rest.length}
+          <button class="head more" onclick={() => (unfolded = true)}><span class="grow">{rest.length} more: {foldedWords(rest)}</span><span class="ws-muted">Show</span></button>
+        {/if}
       </div>
     {/if}
   {/snippet}

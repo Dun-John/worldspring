@@ -9,6 +9,7 @@ import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import type { BuildingEdit, Created, Edits, Thing } from '../gen/protocol';
 import type { Pt } from './build';
+import { contains } from './water';
 
 /** What the tool needs from the app. */
 export interface SelectHost {
@@ -22,6 +23,8 @@ export interface SelectHost {
   shown(): [number, number, number, number][];
   /** The area last chosen, shown until it is cleared. */
   area(): Pt[] | null;
+  /** Whether a drag draws a lasso (else a box); Shift does as well. */
+  lasso(): boolean;
 }
 
 /** Under this (screen px) a press and release is a click. */
@@ -40,7 +43,7 @@ export class SelectTool implements PointerTool {
   down(x: number, y: number, e: PointerEvent): boolean {
     if (e.button !== 0) return false;
     this.dragging = true;
-    this.lasso = e.shiftKey;
+    this.lasso = e.shiftKey || this.host.lasso();
     this.path = [[x, y]];
     return true;
   }
@@ -111,16 +114,6 @@ export function ringOf(poly: Pt[]): { at: Pt; r: number } {
   return { at, r: Math.max(...poly.map((p) => Math.hypot(p[0] - at[0], p[1] - at[1]))) };
 }
 
-function inside(poly: Pt[], x: number, y: number): boolean {
-  let hit = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [xi, yi] = poly[i];
-    const [xj, yj] = poly[j];
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
-  }
-  return hit;
-}
-
 /** Kinds that hold others (a town, its districts, a place): inside an area only when all of
  * them is. */
 const HOLDERS = new Set<Thing['kind']>(['settlement', 'site', 'district', 'castle', 'plot']);
@@ -130,9 +123,15 @@ const HOLDERS = new Set<Thing['kind']>(['settlement', 'site', 'district', 'castl
 export function inArea(things: Thing[], poly: Pt[]): Thing[] {
   return things.filter((t) => {
     const [x0, y0, x1, y1] = t.bbox;
-    if (HOLDERS.has(t.kind)) return inside(poly, x0, y0) && inside(poly, x1, y0) && inside(poly, x1, y1) && inside(poly, x0, y1);
-    return inside(poly, (x0 + x1) / 2, (y0 + y1) / 2);
+    if (HOLDERS.has(t.kind)) return contains(poly, x0, y0) && contains(poly, x1, y0) && contains(poly, x1, y1) && contains(poly, x0, y1);
+    return contains(poly, (x0 + x1) / 2, (y0 + y1) / 2);
   });
+}
+
+/** Things round a click, those whose box holds the point first (else in pick's order). */
+export function underFirst(things: Thing[], p: Pt, slack: number): Thing[] {
+  const under = (t: Thing) => p[0] >= t.bbox[0] - slack && p[0] <= t.bbox[2] + slack && p[1] >= t.bbox[1] - slack && p[1] <= t.bbox[3] + slack;
+  return [...things.filter(under), ...things.filter((t) => !under(t))];
 }
 
 /** A kind in plain words. */
@@ -161,6 +160,13 @@ export const KIND_WORDS: Record<Thing['kind'], [string, string]> = {
 
 /** One of a kind or many, in words: "3 roads". */
 export const countOf = (kind: Thing['kind'], n: number) => `${n} ${KIND_WORDS[kind][n === 1 ? 0 : 1]}`;
+
+/** What a list holds, counted by kind, most first: "12 towers, 30 buildings". */
+export function foldedWords(things: Thing[]): string {
+  const by = new Map<Thing['kind'], number>();
+  for (const t of things) by.set(t.kind, (by.get(t.kind) ?? 0) + 1);
+  return [...by].sort((a, b) => b[1] - a[1]).map(([k, n]) => countOf(k, n)).join(', ');
+}
 
 /** The same thing listed twice (a drawn building is a building and a created entry). */
 export const keyOf = (t: Thing) => `${t.kind}|${t.id ?? t.bbox.join(',')}`;
