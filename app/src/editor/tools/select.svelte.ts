@@ -180,6 +180,10 @@ export function selectTools(host: SelectApp) {
         return { tool: 'delete_water', ids: [id] };
       case 'crossing':
         return { tool: 'remove_crossings', ids: [id], kind: host.edits.crossings?.[id]?.kind };
+      case 'street':
+      case 'lane':
+        if (id.startsWith('ts:')) return { tool: 'remove_town_street', id };
+        return { tool: 'delete_feature', id };
       case 'harbour':
         return { tool: 'remove_wharves', ids: [id], kind: host.edits.wharves?.[id]?.kind };
       default:

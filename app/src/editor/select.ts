@@ -7,7 +7,7 @@
 import type { Graphics } from 'pixi.js';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
-import type { BuildingEdit, Created, Edits, Thing } from '../gen/protocol';
+import type { BuildingEdit, Created, Edits, Thing, TownEdit } from '../gen/protocol';
 import type { Pt } from './build';
 import { contains } from './water';
 
@@ -207,6 +207,23 @@ export function withoutThings(e: Edits, things: Thing[], gen: Record<string, Bui
   if (rw.length || ws.length) next.notes = drop(e.notes, [...rw, ...ws]);
   if (vs.length) next.crossings = drop(e.crossings, vs);
   if (qs.length) next.wharves = drop(e.wharves, qs);
+  const added = of('ts:');
+  if (added.length && e.towns) {
+    // A street added to a generated town (`TownEdit.streets`): its entry goes; a town edit holding nothing else goes with it.
+    const towns = { ...e.towns };
+    for (const id of added) {
+      const [, li, n] = id.split(':');
+      const t = towns[li];
+      if (!t?.streets || !(n in t.streets)) continue;
+      const { [n]: _gone, ...rest } = t.streets;
+      const edit: TownEdit = { ...t, streets: rest };
+      if (!Object.keys(rest).length) delete edit.streets;
+      const empty = Object.entries(edit).every(([k, v]) => k === 'at' || v == null || (Array.isArray(v) ? !v.length : typeof v === 'object' ? !Object.keys(v).length : false));
+      if (empty) delete towns[li];
+      else towns[li] = edit;
+    }
+    next.towns = towns;
+  }
   const bs = Object.keys(gen).filter((id) => ids.has(id));
   if (bs.length) next.buildings = { ...(e.buildings ?? {}), ...Object.fromEntries(bs.map((id) => [id, gen[id]])) };
   return { next, towns };
