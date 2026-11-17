@@ -3361,7 +3361,7 @@ function waterWheel(g: Graphics, r: number) {
 
 /** Hedge, along x: a section a little over five feet long, clipped nearly square at its ends, so sections
  * placed five feet apart overlap and read as one hedge; a lumpy top lit along its north side, leaves picked
- * out, a darker foot along the south. Clipped box (v0), dark yew (v1), hawthorn in flower (v2), overgrown
+ * out. Clipped box (v0), dark yew (v1), hawthorn in flower (v2), overgrown
  * with shoots sticking out (v3). */
 function hedge(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
@@ -3385,7 +3385,6 @@ function hedge(g: Graphics, r: number, rnd: () => number, v: number) {
   g.fill(tones[1]);
   smooth(g, pts.map((p, i) => (i % 2 ? p * 0.35 - W * 0.42 : p * 0.9 - 1.5)));
   g.fill({ color: tones[2], alpha: 0.85 });
-  g.moveTo(-L + 4, W - 2.5).lineTo(L - 4, W - 2.5).stroke({ width: 2.4, color: shade(tones[0], 0.7), alpha: 0.9, cap: 'round' });
   // Leaves: light ones on the lit side of the top, dark ones toward the shade.
   for (let i = 0; i < 38; i++) {
     const x = -L + 4 + rnd() * (L * 2 - 8);
@@ -3406,7 +3405,7 @@ function hedge(g: Graphics, r: number, rnd: () => number, v: number) {
     // curved stem with two to four leaves, some lying along the hedge.
     const at = [-0.7, -0.55, 0.2 + 0.2 * rnd(), 0.65, -0.1].slice(0, 3 + Math.floor(rnd() * 3));
     at.forEach((f, i) => {
-      const side = i % 3 === 1 ? 1 : -1;
+      const side = -1; // (all on the north edge: straight down, nothing hangs off a south face)
       const x0 = f * L;
       const y0 = side * (W - 3);
       const len = (0.12 + 0.12 * rnd()) * PX;

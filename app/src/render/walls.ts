@@ -1933,8 +1933,8 @@ const coping = (l: number, rnd: () => number) => {
 
 /**
  * A forecourt's low garden wall (`ShapeKind::GardenWall`, one straight segment each, `size` thick):
- * a short soft shadow (it stands about 4 ft), a saddle-backed coping of flat stones along its top,
- * the face toward the light sunlit and the other shaded, joints across it, the odd tuft of moss; a
+ * a short soft shadow (it stands about 4 ft), a coping of flat stones along its top seen straight down,
+ * joints across it, the odd tuft of moss; a
  * bold ink outline. Segments meeting end to end are mitred into one neat corner; a free end (at a
  * gate pier or the building's wall) is cut square.
  */
@@ -1986,7 +1986,7 @@ export function drawGardenWalls(g: Graphics, walls: Shape[]) {
     for (let k = 0; k < segs.length; k++) g.poly(outline(k).map((v) => v + reach * f));
     g.fill({ color: 0x000000, alpha });
   }
-  // The coping in blocks, each in two faces either side of the ridge, lit as they face.
+  // The coping in blocks, one flat top each, joints between.
   segs.forEach((s, k) => {
     const [A, B] = ends[k];
     const l = lit(-s.uy, s.ux);
@@ -2002,18 +2002,16 @@ export function drawGardenWalls(g: Graphics, walls: Shape[]) {
     };
     const lefts = cuts.map((_, i) => edge(i, 1));
     const rights = cuts.map((_, i) => edge(i, -1));
-    const ridge = cuts.map((a) => at(s, a, 0));
     for (let i = 0; i + 1 < cuts.length; i++) {
-      g.poly([...ridge[i], ...ridge[i + 1], ...lefts[i + 1], ...lefts[i]]).fill(coping(l, s.rnd));
-      g.poly([...ridge[i], ...ridge[i + 1], ...rights[i + 1], ...rights[i]]).fill(coping(-l, s.rnd));
+      // Seen straight down: one flat top (no second face to read as the wall's side), the sun only warming it.
+      g.poly([...lefts[i], ...lefts[i + 1], ...rights[i + 1], ...rights[i]]).fill(coping(l * 0.3, s.rnd));
     }
     // The sunlit arris along the edge toward the light.
     const sun = l >= 0 ? 1 : -1;
     g.moveTo(...at(s, A.mitred ? s.half : 0, sun * (s.half - FT * 0.28))).lineTo(...at(s, B.mitred ? s.l - s.half : s.l, sun * (s.half - FT * 0.28)));
     g.stroke({ width: FT * 0.35, color: STONE[3], alpha: 0.55 * Math.abs(l) });
-    // The ridge and the joints across it, a mitred end's joint too.
-    g.moveTo(...ridge[0]).lineTo(...ridge[ridge.length - 1]);
-    for (let i = 1; i + 1 < cuts.length; i++) g.moveTo(...lefts[i]).lineTo(...ridge[i]).lineTo(...rights[i]);
+    // The joints across it, a mitred end's joint too.
+    for (let i = 1; i + 1 < cuts.length; i++) g.moveTo(...lefts[i]).lineTo(...rights[i]);
     g.stroke({ width: 1.6, color: STONE[0], alpha: 0.95, join: 'round' });
     for (const [E, P] of [
       [A, [s.x0, s.y0]],

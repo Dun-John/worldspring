@@ -517,7 +517,8 @@ function drawDryWalls(g: Graphics, rs: Run[]) {
     // The stones on each face, joints staggered between the faces, in three tones per face.
     const len = FT * 1.35;
     for (const sd of [1, -1] as const) {
-      const l = sd * r.lit;
+      // (Seen straight down: both rows of stone tops nearly one tone, no darker face on the south side.)
+      const l = sd * r.lit * 0.25;
       const buckets: number[][][] = [[], [], []];
       // (The joints on a lattice of world position, the next node along the piece `dir` on.)
       const dir = r.cu > 0 ? 1 : -1;
