@@ -1,5 +1,5 @@
 //! Agent edits: the edits guarantee, hand castle options, created sites in a remade
-//! world, islets and decks.
+//! world, islets and decks, town membership.
 
 use super::*;
 
@@ -793,3 +793,120 @@ fn islet_and_deck_edits(base: &World) {
 }
 
 // R5 121
+
+/// Town membership (R3): a row of drawn buildings 200 ft from a town's edge joins it (joins
+/// chain, past 300 ft from the edge) and leaves it 301 ft out; a hand Leave beats the distance and
+/// a hand Join beats it; of two towns the nearest wins; the answers are the same whatever is
+/// asked first; buildings pushed out of a town make a place that keeps its `c:` id and buildings
+/// when the world is remade.
+#[test]
+fn town_membership() {
+    use worldgen::t0::{T0, remap};
+    use worldgen::town::{self, Why, members};
+    use worldgen::world::{Created, Members};
+    let file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
+    let base = World::new(file.clone()).unwrap();
+    let mut t0 = T0::generate(&base);
+    let (n, first) = (t0.settlements.len(), t0.settlements.len() + t0.base_pois);
+    let pos: Vec<[f64; 2]> = t0.settlements.iter().map(|s| [s.x, s.y]).collect();
+    let towns: Vec<bool> = t0.settlements.iter().map(|s| s.tier.name() == "town").collect();
+    let at = |i: usize| pos[i];
+    // A town far from any other whose quarters reach no farther east than its edge (its buildings
+    // and walls), and the easternmost point of that edge.
+    let lone = |i: usize| (0..n).filter(|&j| j != i).map(|j| geom_dist(at(i), at(j))).fold(f64::MAX, f64::min);
+    let east = |pts: &mut dyn Iterator<Item = [f64; 2]>| pts.max_by(|a, b| a[0].total_cmp(&b[0])).unwrap_or([f64::MIN, 0.0]);
+    let edge_of = |l: &town::Layout| east(&mut l.buildings.iter().flat_map(|b| b.poly.iter().copied()).chain(l.walls.iter().flatten().copied()));
+    let mut by_lone: Vec<usize> = (0..n).filter(|&i| towns[i]).collect();
+    by_lone.sort_by(|&a, &b| lone(b).total_cmp(&lone(a)));
+    let si = by_lone.into_iter().find(|&i| {
+        let l = town::layout(&base, &t0, i);
+        east(&mut l.quarters.iter().flat_map(|q| q.patches.iter().flatten().copied()))[0] <= edge_of(&l)[0]
+    }).expect("a town");
+    let sj = (0..n).find(|&j| j != si).unwrap();
+    let l = town::layout(&base, &t0, si);
+    let edge = edge_of(&l);
+    let house = |k: usize, x: f64, y: f64| Created { id: format!("c:{k}"), kind: "building".into(), x: x + 10.0, y, name: format!("House {k}"), poly: vec![[x, y - 10.0], [x + 20.0, y - 10.0], [x + 20.0, y + 10.0], [x, y + 10.0]], ..Default::default() };
+    // Eight 20-ft houses 20 ft apart, the first `out` ft east of the town's edge.
+    let row = |out: f64| (0..8).map(|k| house(k, edge[0] + out + 40.0 * k as f64, edge[1])).collect::<Vec<_>>();
+    let world = |created: Vec<Created>, members: &[(usize, &[&str], &[&str])]| {
+        let mut f = file.clone();
+        f.edits.created = created;
+        for &(town, add, remove) in members {
+            let set = |l: &[&str]| l.iter().map(|s| s.to_string()).collect();
+            f.edits.members.insert(town.to_string(), Members { add: set(add), remove: set(remove) });
+        }
+        World::new(f).unwrap()
+    };
+    fn owners(w: &World, t0: &mut T0, first: usize, rev: bool) -> Vec<Option<(usize, Why)>> {
+        t0.apply_edits(w);
+        worldgen::town::forget_from(first);
+        let mut ks: Vec<usize> = (0..w.file.edits.created.len()).collect();
+        if rev {
+            ks.reverse();
+        }
+        let mut out: Vec<(usize, Option<(usize, Why)>)> = ks.into_iter().map(|k| (k, members::owner(w, t0, first + k).map(|o| (o.town, o.why)))).collect();
+        out.sort_by_key(|o| o.0);
+        out.into_iter().map(|o| o.1).collect()
+    }
+    let all = |town: usize, o: &[Option<(usize, Why)>]| o.iter().all(|o| o.is_some_and(|o| o.0 == town));
+
+    let near = world(row(200.0), &[]);
+    let o = owners(&near, &mut t0, first, false);
+    assert!(all(si, &o), "a row 200 ft from a town's edge did not join it: {o:?}");
+    assert!(matches!(o[0], Some((_, Why::Gap(g))) if (g - 200.0).abs() < 0.5), "the row's first house is not 200 ft from the edge: {:?}", o[0]);
+    assert_eq!(o[7], Some((si, Why::Gap(20.0))), "the house 480 ft out did not join through its neighbour");
+    let listed: Vec<usize> = members::members_of(&near, &t0, si).into_iter().map(|m| m.0).collect();
+    assert_eq!(listed, (first..first + 8).collect::<Vec<_>>(), "the town's members are not the row");
+    // The same answers whatever is asked first (another world asked in between empties the memos).
+    owners(&world(row(301.0), &[]), &mut t0, first, false);
+    assert_eq!(owners(&near, &mut t0, first, true), o, "membership hangs on what was asked first");
+
+    let o = owners(&world(row(301.0), &[]), &mut t0, first, false);
+    assert!(o.iter().all(Option::is_none), "a row 301 ft from a town's edge is still part of it: {o:?}");
+    let o = owners(&world(row(200.0), &[(si, &[], &["c:0"])]), &mut t0, first, false);
+    assert_eq!((o[0], o[1].map(|o| o.0)), (None, Some(si)), "a hand Leave did not beat the distance");
+    let o = owners(&world(row(301.0), &[(si, &["c:7"], &[])]), &mut t0, first, false);
+    assert_eq!((o[7], o[0]), (Some((si, Why::Hand)), Some((si, Why::Gap(20.0)))), "a hand Join did not beat the distance, or the row did not follow it");
+
+    // Of two towns, the nearer: houses joined by hand to each, 400 ft apart in open country, and
+    // one more between them, nearer the first or the second.
+    let sea = base.params().sea_level_ft;
+    let spot = (0..n * 8)
+        .map(|k| {
+            let a = (k % 8) as f64 * std::f64::consts::TAU / 8.0;
+            [at(k / 8)[0] + 10_560.0 * libm::cos(a), at(k / 8)[1] + 10_560.0 * libm::sin(a)]
+        })
+        .find(|p| t0.sample(p[0], p[1], 20.0) > sea && town::layouts_near(&base, &t0, [p[0] - 1_200.0, p[1] - 1_200.0, p[0] + 1_200.0, p[1] + 1_200.0]).is_empty())
+        .expect("open country");
+    for (x, town) in [(150.0, si), (250.0, sj)] {
+        let o = owners(&world(vec![house(0, spot[0], spot[1]), house(1, spot[0] + 400.0, spot[1]), house(2, spot[0] + x, spot[1])], &[(si, &["c:0"], &[]), (sj, &["c:1"], &[])]), &mut t0, first, false);
+        assert_eq!(o[2].map(|o| o.0), Some(town), "a house {x} ft along did not join the nearer town");
+    }
+
+    // Buildings pushed out of the town: one new place, kept with its buildings when the world is
+    // remade with one more site (every created layout one number on).
+    t0.apply_edits(&base);
+    let ids: Vec<String> = l.buildings.iter().map(|b| format!("b:{si}:{}", b.id)).filter(|id| members::change(&base, &t0, si, &[], std::slice::from_ref(id)).is_ok_and(|c| c.refused.is_empty())).take(2).collect();
+    assert_eq!(ids.len(), 2, "no building on the town's outskirts may be pushed out");
+    let c = members::change(&base, &t0, si, &[], &ids).unwrap();
+    assert!(c.refused.is_empty() && c.created.len() == 1 && c.created[0].kind == "place", "pushing out made no place: {:?}", c.report);
+    let mut f = file.clone();
+    f.edits.created = c.created;
+    f.edits.members = c.members.into_iter().filter(|e| !e.1.is_empty()).collect();
+    let pw = World::new(f).unwrap();
+    t0.apply_edits(&pw);
+    let bids: Vec<u32> = ids.iter().map(|id| id.rsplit(':').next().unwrap().parse().unwrap()).collect();
+    assert_eq!(members::pushed(&pw, &t0, si), vec![(first, bids.clone())], "the place does not hold the buildings pushed out");
+    assert_eq!(members::building_owner(&pw, &t0, si, bids[0]), Some(first));
+    let far = (0..n).filter(|&i| i != si).max_by(|&a, &b| geom_dist(at(a), at(si)).total_cmp(&geom_dist(at(b), at(si)))).map(|i| [at(i)[0] + 3_000.0, at(i)[1]]).unwrap();
+    let mut b = pw.file.clone();
+    b.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "site", "kind": "ruin", "pts": [far] })).unwrap());
+    let (mut t1, followed) = remap::remake(&pw, &t0, &World::new(b.clone()).unwrap(), &[]);
+    b.edits = followed.expect("the remake moved the place").edits;
+    let rw = World::new(b).unwrap();
+    t1.apply_edits(&rw);
+    let moved = t1.settlements.len() + t1.base_pois;
+    assert_eq!(moved, first + 1, "the site drawn did not move the created places along");
+    assert!(rw.file.edits.created[0].id == "c:0" && rw.file.edits.created[0].kind == "place", "the place lost its id");
+    assert_eq!(members::pushed(&rw, &t1, si), vec![(moved, bids)], "the place lost its buildings when the world was remade");
+}

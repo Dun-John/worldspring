@@ -48,6 +48,8 @@ pub mod rural;
 // R5 towns
 pub mod cemetery;
 pub mod culture;
+pub mod members;
+pub use members::{JOIN_FT, Owner, Why};
 pub mod horses;
 pub mod yurts;
 // R5 towns: districts drawn by hand, and renames kept when a patch is laid out anew.

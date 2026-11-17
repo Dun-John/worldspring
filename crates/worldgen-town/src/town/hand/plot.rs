@@ -126,7 +126,12 @@ const PEOPLE_PER_HOME: [u32; 7] = [4, 5, 8, 23, 14, 5, 2];
 
 /// The people a layout's homes house (a hand town's population: `HandTown::people`).
 pub fn people_of(l: &Layout) -> u32 {
-    l.buildings.iter().filter(|b| b.func.is_none()).map(|b| PEOPLE_PER_HOME.get(b.residential as usize).copied().unwrap_or(5)).sum()
+    l.buildings.iter().map(people_in).sum()
+}
+
+/// The people a building houses: a home's (`PEOPLE_PER_HOME`), else none.
+pub fn people_in(b: &Building) -> u32 {
+    if b.func.is_some() { 0 } else { PEOPLE_PER_HOME.get(b.residential as usize).copied().unwrap_or(5) }
 }
 
 /// A hand town's people as layout `l` (its homes now) houses them: a converted town's population
