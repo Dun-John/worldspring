@@ -181,9 +181,13 @@ pub struct RoadPoint {
     pub z: f64,
 }
 
+#[derive(Clone)]
 pub struct RoadPiece {
     pub class: RoadClass,
     pub pts: Vec<RoadPoint>,
+    /// (Roadmap 6 R5) The stretch it is part of (index in `RoadNet::roads`); `u32::MAX` for a
+    /// created settlement's link (`t0::made`). Never drawn or hashed: only what removal asks.
+    pub road: u32,
 }
 
 /// Where a road crosses a river (both as sampled for a tile): the point, the road's unit
@@ -309,7 +313,7 @@ pub fn pieces(net: &RoadNet, rect: [f64; 4], pad: f64, spacing: f64) -> Vec<Road
         }
         pts.push(r.eval(k1, 1.0, spacing, net.cell_ft));
         if pts.len() >= 2 {
-            out.push(RoadPiece { class: r.class, pts });
+            out.push(RoadPiece { class: r.class, pts, road: ri });
         }
     }
     out
@@ -387,6 +391,129 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usiz
         };
     }
     mask
+}
+
+/// The road mask alone, as `carve` gives it (class + 1 per sample within half the road's width
+/// and half a sample, the best class where roads meet; 0 none), the heights left as they are.
+pub fn mask_of(pieces: &[RoadPiece], dim: usize, origin: [f64; 2], spacing: f64) -> Vec<u8> {
+    let mut mask = vec![0u8; dim * dim];
+    for piece in pieces {
+        let reach = 0.5 * piece.class.width_ft() + 0.5 * spacing;
+        let c = piece.class as u8 + 1;
+        for seg in piece.pts.windows(2) {
+            let (a, b) = (seg[0].p, seg[1].p);
+            let (sx0, sx1) = ((a[0].min(b[0]) - reach - origin[0]) / spacing, (a[0].max(b[0]) + reach - origin[0]) / spacing);
+            let (sy0, sy1) = ((a[1].min(b[1]) - reach - origin[1]) / spacing, (a[1].max(b[1]) + reach - origin[1]) / spacing);
+            if sx1 < 0.0 || sy1 < 0.0 || sx0 > (dim - 1) as f64 || sy0 > (dim - 1) as f64 {
+                continue;
+            }
+            let (ix0, ix1) = (sx0.ceil().max(0.0) as usize, (sx1.floor() as usize).min(dim - 1));
+            let (iy0, iy1) = (sy0.ceil().max(0.0) as usize, (sy1.floor() as usize).min(dim - 1));
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = (dx * dx + dy * dy).max(1e-9);
+            for iy in iy0..=iy1 {
+                let py = origin[1] + iy as f64 * spacing;
+                for ix in ix0..=ix1 {
+                    let px = origin[0] + ix as f64 * spacing;
+                    let t = (((px - a[0]) * dx + (py - a[1]) * dy) / len2).clamp(0.0, 1.0);
+                    let (cx, cy) = (a[0] + dx * t - px, a[1] + dy * t - py);
+                    if crate::core::sqrt(cx * cx + cy * cy) <= reach {
+                        let k = iy * dim + ix;
+                        mask[k] = if mask[k] == 0 { c } else { mask[k].min(c) };
+                    }
+                }
+            }
+        }
+    }
+    mask
+}
+
+// ---------------------------------------------------------------------------------------
+// Stretch ids, and stretches removed by hand (Roadmap 6 R5).
+
+/// How finely a stretch's ends are told apart (ft).
+const END_FT: f64 = 10.0;
+
+fn q(p: [f64; 2]) -> (i64, i64) {
+    (crate::core::round(p[0] / END_FT) as i64, crate::core::round(p[1] / END_FT) as i64)
+}
+
+/// A stretch's id before stretches with the same ends are told apart: its two ends, either way
+/// round, hashed (32 bits).
+pub fn ends_key(pts: &[[f64; 2]]) -> u32 {
+    let (a, b) = (q(pts.first().copied().unwrap_or_default()), q(pts.last().copied().unwrap_or_default()));
+    let (a, b) = if a <= b { (a, b) } else { (b, a) };
+    (hash2(hash2(0x52D1_D5, a.0, a.1), b.0, b.1) & 0xffff_ffff) as u32
+}
+
+/// Each stretch's id number (`rd:<8 hex>` as `road_ids` writes it), in `net.roads` order
+/// (`distinct`, keyed by `ends_key`, told apart by length and middle point).
+pub fn road_keys(net: &RoadNet) -> Vec<u32> {
+    let tie = |r: &RoadCurve| {
+        let n = r.pts.len();
+        let m = if n == 0 { (0, 0) } else { q(r.pts[n / 2]).min(q(r.pts[(n - 1) / 2])) };
+        (crate::core::round(*r.s.last().unwrap_or(&0.0)) as i64, m)
+    };
+    distinct(net.roads.iter().map(|r| (ends_key(&r.pts), tie(r))).collect())
+}
+
+/// Ids for things keyed by their ends (`(key, tie)` per thing, in list order): things with the
+/// same key are ordered by `tie` (length, then middle point) and the later ones re-hashed, so
+/// the ids depend on the things there, not on the order they are listed in. (Stretches'
+/// `rd:`; a town's streets' `tr:`, `town::cut`.)
+pub fn distinct(keyed: Vec<(u32, (i64, (i64, i64)))>) -> Vec<u32> {
+    let mut order: Vec<(u32, (i64, (i64, i64)), usize)> = keyed.iter().enumerate().map(|(i, &(k, t))| (k, t, i)).collect();
+    order.sort_unstable();
+    let mut taken: crate::core::hash::FastSet<u32> = Default::default();
+    let mut out = vec![0u32; keyed.len()];
+    for (key, _, i) in order {
+        let mut id = key;
+        let mut k = 1;
+        while !taken.insert(id) {
+            id = (hash2(key as u64, k, 0x7D) & 0xffff_ffff) as u32;
+            k += 1;
+        }
+        out[i] = id;
+    }
+    out
+}
+
+/// Each stretch's id (`rd:<8 hex>`), in `net.roads` order (`road_keys`).
+pub fn road_ids(net: &RoadNet) -> Vec<String> {
+    road_keys(net).into_iter().map(|id| format!("rd:{id:08x}")).collect()
+}
+
+/// The number an `rd:<8 hex>` id holds.
+#[inline]
+pub fn parse_id(id: &str) -> Option<u32> {
+    id.strip_prefix("rd:").filter(|h| h.len() == 8 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))).and_then(|h| u32::from_str_radix(h, 16).ok())
+}
+
+/// A tile's roads and road mask as drawn (`TerrainOut::roads`, `road_mask`): the stretches
+/// removed by hand (`Edits.removed_roads`, `T0::gone_roads`) left out, so the ground beneath
+/// shows. Borrowed, nothing made, unless a removed stretch has a piece in the tile; then its
+/// pieces are dropped and the mask is made again from the rest (`mask_of`). The carving stays:
+/// heights, corridors and everything laid on them are as generated.
+pub struct Kept<'a> {
+    pub roads: std::borrow::Cow<'a, [RoadPiece]>,
+    pub mask: std::borrow::Cow<'a, [u8]>,
+}
+
+/// The tile `key`'s roads as drawn (see `Kept`).
+pub fn kept<'a>(world: &crate::World, t0: &crate::t0::T0, tile: &'a super::terrain_refine::TerrainOut, key: &crate::core::tile::TileKey) -> Kept<'a> {
+    use crate::core::tile::{HALO, PADDED, TILE_N};
+    use std::borrow::Cow;
+    let gone = t0.gone_roads(world).filter(|g| tile.roads.iter().any(|r| g.contains(&r.road)));
+    let Some(gone) = gone else { return Kept { roads: Cow::Borrowed(&tile.roads), mask: Cow::Borrowed(&tile.road_mask) } };
+    let roads: Vec<RoadPiece> = tile.roads.iter().filter(|r| !gone.contains(&r.road)).cloned().collect();
+    let mask = if tile.road_mask.is_empty() {
+        Vec::new()
+    } else {
+        let s = world.geom.spacing_ft(key.level);
+        let origin = [(key.x as i64 * TILE_N as i64 - HALO as i64) as f64 * s, (key.y as i64 * TILE_N as i64 - HALO as i64) as f64 * s];
+        mask_of(&roads, PADDED, origin, s)
+    };
+    Kept { roads: Cow::Owned(roads), mask: Cow::Owned(mask) }
 }
 
 /// Roads are routed on the T0 grid, where a river is a line; at fine levels it meanders

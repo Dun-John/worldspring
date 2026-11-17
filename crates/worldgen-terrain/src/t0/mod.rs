@@ -89,6 +89,9 @@ pub struct T0 {
     ground_cache: std::sync::OnceLock<(f64, std::sync::Arc<(Vec<f64>, i64, i64)>)>,
     /// The world's islets by its cities (`islets::islets`), worked out on first use.
     pub(crate) islets: std::sync::OnceLock<Vec<islets::Islet>>,
+    /// (Roadmap 6 R5) Each stretch's index in `roads.roads` by its `rd:` id's number
+    /// (`lod::roads::road_keys`), worked out on first use (`gone_roads`).
+    road_index: std::sync::OnceLock<crate::core::hash::FastMap<u32, u32>>,
     /// Generation-time products; `None` when loaded from bytes in another worker.
     pub extra: Option<T0Extra>,
 }
@@ -629,6 +632,7 @@ impl T0 {
         };
         t0.roads = RoadNet::new(curves, map_w, map_h, cell);
         t0.ground_cache = Default::default();
+        t0.road_index = Default::default();
         for (s, &c) in settlements.iter_mut().zip(&overlay.settlement_cultures) {
             s.culture = c;
         }
@@ -653,7 +657,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), lanes: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), lanes: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), road_index: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -732,6 +736,22 @@ impl T0 {
 
     /// How cold the ground is at a world position (`under::cold_of` of its nearest cell).
     #[inline]
+    /// (Roadmap 6 R5) The stretch an `rd:` id names (its index in `roads.roads`).
+    pub fn road_index(&self, id: &str) -> Option<usize> {
+        let index = self.road_index.get_or_init(|| crate::lod::roads::road_keys(&self.roads).into_iter().enumerate().map(|(i, k)| (k, i as u32)).collect());
+        crate::lod::roads::parse_id(id).and_then(|k| index.get(&k)).map(|&i| i as usize)
+    }
+
+    /// (Roadmap 6 R5) The stretches removed by hand (`Edits.removed_roads`: indices in
+    /// `roads.roads`), or None when none is (ids that no longer name one are passed over).
+    pub fn gone_roads(&self, world: &World) -> Option<crate::core::hash::FastSet<u32>> {
+        let ids = &world.file.edits.removed_roads;
+        if ids.is_empty() {
+            return None;
+        }
+        Some(ids.iter().filter_map(|id| self.road_index(id)).map(|i| i as u32).collect())
+    }
+
     pub fn cold_at(&self, world: &World, x_ft: f64, y_ft: f64) -> crate::model::under::Cold {
         let (w, h) = (self.height.w, self.height.h);
         let (i, j) = (((x_ft / self.cell_ft).round().max(0.0) as usize).min(w - 1), ((y_ft / self.cell_ft).round().max(0.0) as usize).min(h - 1));

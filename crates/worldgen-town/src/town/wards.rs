@@ -1298,8 +1298,8 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     let local = |p: [f64; 2]| sub(p, center);
     let world_pt = |p: P| add(p, center);
     // (R5 towns: an edit kept for its emptied districts alone, changing nothing, still holds their ids.)
-    // (Roadmap 6 R4: or for its added streets, which the plan never sees.)
-    let kept = || world.file.edits.towns.get(&key(index)).filter(|e| (!e.districts.is_empty() || !e.streets.is_empty()) && dist(e.at, center) <= TownEdit::SAME_AT_FT);
+    // (Roadmap 6 R4: or for its added streets, which the plan never sees; R5: or its removals.)
+    let kept = || world.file.edits.towns.get(&key(index)).filter(|e| (!e.districts.is_empty() || !e.streets.is_empty() || !e.removed.is_empty()) && dist(e.at, center) <= TownEdit::SAME_AT_FT);
     let mut e = edit_of(world, t0, index).or_else(kept).cloned().unwrap_or_default();
     let e0 = e.clone();
     // Keep only what still applies (a stale part would be set aside anyway).
@@ -1700,7 +1700,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             report["renames_lost"] = json!(lost.iter().map(|(a, n)| json!({ "id": format!("b:{index}:{a}"), "name": n })).collect::<Vec<_>>());
         }
     }
-    Ok(((!e.is_noop() || !e.districts.is_empty() || !e.streets.is_empty()).then_some(e), report))
+    Ok(((!e.is_noop() || !e.districts.is_empty() || !e.streets.is_empty() || !e.removed.is_empty()).then_some(e), report))
 }
 
 /// `change` as JSON: `{edit, report}` or `{error}` (for the app's worker).
@@ -1723,8 +1723,9 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
             continue;
         };
         let Some(s) = super::settlement(t0, index) else { continue };
-        // (A village's entry holding only added streets is no ward edit: `town::added`.)
-        let streets_only = e.is_noop() && e.districts.is_empty() && !e.streets.is_empty();
+        // (A village's entry holding only added streets is no ward edit: `town::added`; nor one
+        // holding only removals, `town::cut`.)
+        let streets_only = e.is_noop() && e.districts.is_empty() && (!e.streets.is_empty() || !e.removed.is_empty());
         if s.tier < Tier::Town && streets_only && dist(e.at, [s.x, s.y]) <= TownEdit::SAME_AT_FT {
             continue;
         } else if s.tier < Tier::Town {

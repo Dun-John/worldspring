@@ -464,6 +464,12 @@ pub struct Edits {
     /// `town::members::JOIN_FT` are worked out, never stored (`town::members`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub members: BTreeMap<String, Members>,
+    /// (Roadmap 6 R5) Stretches of the world's road network removed by hand (`rd:<8 hex>`,
+    /// `lod::roads::road_ids`): drawn nowhere (the ground beneath shows, their bridges and fords
+    /// go), while everything laid out on them stays (traffic, routes, towns' gates). An id that
+    /// no longer names a stretch (a remade world) resolves nowhere.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub removed_roads: BTreeSet<String>,
 }
 
 /// A town's members set by hand: ids joined to it (`add`: drawn things `c:<n>` from anywhere,
@@ -581,6 +587,12 @@ pub struct TownEdit {
     /// plan never sees them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub streets: BTreeMap<u32, AddedStreet>,
+    /// (Roadmap 6 R5) The town's own streets, lanes and park paths removed by hand, by their
+    /// local keys (`town::cut`): `<8 hex>` a street or lane (`tr:<layout>:<8 hex>`), `<spot>:<j>`
+    /// a park's path (`pp:<layout>:<spot>:<j>`). Drawn nowhere (the ground beneath shows, a park's
+    /// lawn closes over); the plan and the build never see them.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub removed: BTreeSet<String>,
 }
 
 /// (Roadmap 6 R4) A street added to a generated town (`TownEdit::streets`): its centreline
@@ -1490,6 +1502,7 @@ impl Edits {
                 "links" => self.links = std::mem::take(&mut part.links),
                 "paths" => self.paths = std::mem::take(&mut part.paths),
                 "members" => self.members = std::mem::take(&mut part.members),
+                "removed_roads" => self.removed_roads = std::mem::take(&mut part.removed_roads),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1544,7 +1557,7 @@ impl Edits {
             && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty() && self.waters.is_empty()
             && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
             && self.streets.is_empty() && self.links.is_empty() && self.paths.is_empty()
-            && self.members.is_empty()
+            && self.members.is_empty() && self.removed_roads.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1739,6 +1752,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("links", Shape::Map),
     ("paths", Shape::Map),
     ("members", Shape::Map),
+    ("removed_roads", Shape::Set),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

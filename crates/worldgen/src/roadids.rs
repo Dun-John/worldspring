@@ -13,8 +13,6 @@ use serde_json::{Value, json};
 
 use crate::World;
 use crate::agent::{feature_of_layout, name_of};
-use crate::core::hash::FastSet;
-use crate::core::rng::hash2;
 use crate::lod::roads::RoadCurve;
 use crate::t0::T0;
 use crate::t0::features::Feature;
@@ -24,8 +22,6 @@ use crate::world::{Crossing, CrossingKind};
 type P = [f64; 2];
 
 const MI: f64 = 5280.0;
-/// How finely a stretch's ends are told apart (ft).
-const END_FT: f64 = 10.0;
 /// The most points a stretch's line is given as.
 const LINE_POINTS: usize = 40;
 
@@ -33,50 +29,18 @@ fn mi(ft: f64) -> f64 {
     crate::core::round(ft / MI * 10.0) / 10.0
 }
 
-fn q(p: P) -> (i64, i64) {
-    (crate::core::round(p[0] / END_FT) as i64, crate::core::round(p[1] / END_FT) as i64)
-}
+/// (The ids are worked out in `worldgen-terrain`, `lod::roads`, where removal is drawn.)
+pub use crate::lod::roads::ends_key;
 
-/// A stretch's id before stretches with the same ends are told apart: its two ends, either way
-/// round, hashed (32 bits).
-pub fn ends_key(pts: &[P]) -> u32 {
-    let (a, b) = (q(pts.first().copied().unwrap_or_default()), q(pts.last().copied().unwrap_or_default()));
-    let (a, b) = if a <= b { (a, b) } else { (b, a) };
-    (hash2(hash2(0x52D1_D5, a.0, a.1), b.0, b.1) & 0xffff_ffff) as u32
-}
-
-/// Each stretch's id (`rd:<8 hex>`), in `t0.roads.roads` order. Stretches with the same key
-/// (the same ends) are ordered by length and middle point and the later ones re-hashed, so the
-/// ids depend on the stretches there, not on the order they are listed in.
+/// Each stretch's id (`rd:<8 hex>`), in `t0.roads.roads` order (`lod::roads::road_ids`).
+#[inline]
 pub fn road_ids(t0: &T0) -> Vec<String> {
-    let rs = &t0.roads.roads;
-    let tie = |r: &RoadCurve| {
-        let n = r.pts.len();
-        let m = if n == 0 { (0, 0) } else { q(r.pts[n / 2]).min(q(r.pts[(n - 1) / 2])) };
-        (crate::core::round(*r.s.last().unwrap_or(&0.0)) as i64, m)
-    };
-    let mut order: Vec<(u32, (i64, (i64, i64)), usize)> = rs.iter().enumerate().map(|(i, r)| (ends_key(&r.pts), tie(r), i)).collect();
-    order.sort_unstable();
-    let mut taken: FastSet<u32> = FastSet::default();
-    let mut out = vec![String::new(); rs.len()];
-    for (key, _, i) in order {
-        let mut id = key;
-        let mut k = 1;
-        while !taken.insert(id) {
-            id = (hash2(key as u64, k, 0x7D) & 0xffff_ffff) as u32;
-            k += 1;
-        }
-        out[i] = format!("rd:{id:08x}");
-    }
-    out
+    crate::lod::roads::road_ids(&t0.roads)
 }
 
 /// The stretch an `rd:` id names (its index in `t0.roads.roads`).
 pub fn road_index(t0: &T0, id: &str) -> Option<usize> {
-    if !id.starts_with("rd:") {
-        return None;
-    }
-    road_ids(t0).iter().position(|r| r == id)
+    t0.road_index(id)
 }
 
 pub fn class_name(c: crate::t0::roads::RoadClass) -> &'static str {

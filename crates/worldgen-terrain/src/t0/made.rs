@@ -425,7 +425,21 @@ pub struct Ground<'a> {
     t0: &'a T0,
     lattice: f64,
     pads: Vec<(P, f64)>,
-    tracks: Vec<(&'a [P], &'a [f32], RoadClass)>,
+    /// (Its line, surface, class, and drawn: not removed by hand, `track_ids`.)
+    tracks: Vec<(&'a [P], &'a [f32], RoadClass, bool)>,
+}
+
+/// (Roadmap 6 R5) Each created settlement's link's id (`mt:<8 hex>`), in `t0.made` order: its
+/// ends, either way round, as a stretch's `rd:` (`lod::roads::ends_key`, `distinct`), so it stays
+/// while the link runs where it did.
+pub fn track_ids(t0: &T0) -> Vec<String> {
+    let keyed = t0.made.iter().map(|m| {
+        let n = m.track.len();
+        let mid = if n == 0 { (0, 0) } else { (crate::core::round(m.track[n / 2][0]) as i64, crate::core::round(m.track[n / 2][1]) as i64) };
+        let length: f64 = m.track.windows(2).map(|w| dist(w[0], w[1])).sum();
+        (crate::lod::roads::ends_key(&m.track) ^ 0x6D74_0000, (crate::core::round(length) as i64, mid))
+    });
+    crate::lod::roads::distinct(keyed.collect()).into_iter().map(|id| format!("mt:{id:08x}")).collect()
 }
 
 impl<'a> Ground<'a> {
@@ -434,13 +448,15 @@ impl<'a> Ground<'a> {
         let hit = |b: [f64; 4]| b[2] >= rect[0] && b[0] <= rect[2] && b[3] >= rect[1] && b[1] <= rect[3];
         let mut pads = Vec::new();
         let mut tracks = Vec::new();
+        let removed = &world.file.edits.removed_roads;
+        let ids = if removed.iter().any(|id| id.starts_with("mt:")) { track_ids(t0) } else { Vec::new() };
         for l in &t0.lanes {
             let pad = LINK_MARGIN_FT;
             if l.pts.windows(2).any(|s| hit([s[0][0].min(s[1][0]) - pad, s[0][1].min(s[1][1]) - pad, s[0][0].max(s[1][0]) + pad, s[0][1].max(s[1][1]) + pad])) {
-                tracks.push((l.pts.as_slice(), l.z.as_slice(), l.class));
+                tracks.push((l.pts.as_slice(), l.z.as_slice(), l.class, true));
             }
         }
-        for m in &t0.made {
+        for (k, m) in t0.made.iter().enumerate() {
             let r = crate::t0::radii::reach(&m.s);
             let e = crate::t0::radii::pad_extent(r);
             if hit([m.s.x - e, m.s.y - e, m.s.x + e, m.s.y + e]) {
@@ -448,7 +464,7 @@ impl<'a> Ground<'a> {
             }
             let pad = LINK_MARGIN_FT;
             if m.track.windows(2).any(|s| hit([s[0][0].min(s[1][0]) - pad, s[0][1].min(s[1][1]) - pad, s[0][0].max(s[1][0]) + pad, s[0][1].max(s[1][1]) + pad])) {
-                tracks.push((m.track.as_slice(), m.z.as_slice(), m.class));
+                tracks.push((m.track.as_slice(), m.z.as_slice(), m.class, !ids.get(k).is_some_and(|id| removed.contains(id))));
             }
         }
         if pads.is_empty() && tracks.is_empty() {
@@ -458,9 +474,10 @@ impl<'a> Ground<'a> {
     }
 
     /// The nearest link: (distance past its edge, negative on it; its surface there; its class).
-    fn track_near(&self, p: P) -> Option<(f64, f64, RoadClass)> {
+    /// (Removed ones too, unless `drawn`.)
+    fn track_near(&self, p: P, drawn: bool) -> Option<(f64, f64, RoadClass)> {
         let mut best: Option<(f64, f64, RoadClass)> = None;
-        for &(pts, z, class) in &self.tracks {
+        for &(pts, z, class, _) in self.tracks.iter().filter(|t| t.3 || !drawn) {
             let half = 0.5 * class.width_ft();
             let reach = half + TRACK_EASE_FT;
             for k in 0..pts.len() - 1 {
@@ -486,22 +503,22 @@ impl<'a> Ground<'a> {
         if w > 0.0 {
             h += (self.t0.ground_at(x, y, self.lattice) - h) * w;
         }
-        if let Some((e, z, _)) = self.track_near([x, y]) {
+        if let Some((e, z, _)) = self.track_near([x, y], false) {
             let k = 1.0 - smoothstep(2.5, TRACK_EASE_FT, e);
             h += (z - h) * k;
         }
         h as f32
     }
 
-    /// The class of the link `(x, y)` is on, if any.
+    /// The class of the link `(x, y)` is on, if any (one removed by hand, none: its ground shows).
     pub fn on_track(&self, x: f64, y: f64) -> Option<RoadClass> {
-        self.track_near([x, y]).filter(|t| t.0 < 0.0).map(|t| t.2)
+        self.track_near([x, y], true).filter(|t| t.0 < 0.0).map(|t| t.2)
     }
 
     /// The links near here as road pieces (for their river crossings: bridges and fords as the
-    /// world's own roads have them).
+    /// world's own roads have them); none for one removed by hand.
     pub fn pieces(&self) -> Vec<crate::lod::roads::RoadPiece> {
-        self.tracks.iter().map(|&(pts, z, class)| crate::lod::roads::RoadPiece { class, pts: pts.iter().zip(z).map(|(&p, &z)| crate::lod::roads::RoadPoint { p, z: z as f64 }).collect() }).collect()
+        self.tracks.iter().filter(|t| t.3).map(|&(pts, z, class, _)| crate::lod::roads::RoadPiece { class, pts: pts.iter().zip(z).map(|(&p, &z)| crate::lod::roads::RoadPoint { p, z: z as f64 }).collect(), road: u32::MAX }).collect()
     }
 }
 
