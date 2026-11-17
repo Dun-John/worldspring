@@ -1580,7 +1580,7 @@ export class MapView {
     if (pt !== nt) for (const key of keys('towns', pt, nt)) {
       if (JSON.stringify(pt[key]) === JSON.stringify(nt[key])) continue;
       // Only its fences and hedges changed: the generator says what they redraw (`redrawFences`).
-      if (JSON.stringify({ ...pt[key], fences: 0 }) === JSON.stringify({ ...nt[key], fences: 0 }) && (pt[key]?.fences || nt[key]?.fences)) {
+      if (JSON.stringify({ ...pt[key], fences: 0, at: 0 }) === JSON.stringify({ ...nt[key], fences: 0, at: 0 }) && (pt[key]?.fences || nt[key]?.fences)) {
         for (const k of new Set([...Object.keys(pt[key]?.fences ?? {}), ...Object.keys(nt[key]?.fences ?? {})])) {
           if (JSON.stringify(pt[key]?.fences?.[k]) !== JSON.stringify(nt[key]?.fences?.[k])) fenceIds.push(fenceId(Number(key), k));
         }
