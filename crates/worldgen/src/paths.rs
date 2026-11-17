@@ -41,14 +41,21 @@ const BANK_REACH_FT: f64 = 6.0;
 const MAX_SPAN_FT: f64 = 300.0;
 const CACHE: usize = 256;
 
-impl Path {
+/// `Path`'s width, checks and line, here above the model crate (`model::paths`).
+pub trait PathLine {
+    fn width_ft(&self) -> f64;
+    fn problem(&self) -> Option<String>;
+    fn line(&self) -> Arc<[P]>;
+}
+
+impl PathLine for Path {
     /// Its width (ft), within `MIN_WIDTH_FT`..`MAX_WIDTH_FT`.
-    pub fn width_ft(&self) -> f64 {
+    fn width_ft(&self) -> f64 {
         self.width.filter(|w| w.is_finite()).unwrap_or(self.kind.width_ft()).clamp(MIN_WIDTH_FT, MAX_WIDTH_FT)
     }
 
     /// What is wrong with it, if anything (checked when one is made; the generator skips one with a problem).
-    pub fn problem(&self) -> Option<String> {
+    fn problem(&self) -> Option<String> {
         let n = self.pts.len();
         if !(2..=MAX_PATH_PTS).contains(&n) {
             return Some(format!("a road has 2 to {MAX_PATH_PTS} points, not {n}"));
@@ -72,7 +79,7 @@ impl Path {
     }
 
     /// The line as every reader takes it (`curve` of the points; the same `Arc` for the same points while cached).
-    pub fn line(&self) -> Arc<[P]> {
+    fn line(&self) -> Arc<[P]> {
         LINES.with(|c| {
             let mut c = c.borrow_mut();
             if let Some((_, l)) = c.iter().find(|(p, _)| p.as_slice() == self.pts.as_slice()) {

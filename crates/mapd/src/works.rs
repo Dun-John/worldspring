@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::town::pieces;
-use worldgen::world::{BuildingEdit, CASTLE_MAX_FT, CASTLE_MAX_GATES, CASTLE_MIN_FT, CastlePiece, Created, KEEP_SHAPES, MOATS, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
+use worldgen::world::{BuildingEdit, CASTLE_MAX_FT, CASTLE_MAX_GATES, CASTLE_MIN_FT, CastlePiece, Created, CreatedChecks, KEEP_SHAPES, MOATS, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
 
 use crate::Shared;
 use crate::tools::{found, schema, text};

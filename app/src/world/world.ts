@@ -1,4 +1,4 @@
-// World files on the main thread: defaults (mirroring crates/worldgen/src/world.rs), the
+// World files on the main thread: defaults (mirroring crates/worldgen-model/src/world.rs), the
 // shareable URL form, and file import/export.
 import type { Created, Edits, WorldFile, WorldParams } from '../gen/protocol';
 import { EDIT_FIELDS } from '../sync/ops';

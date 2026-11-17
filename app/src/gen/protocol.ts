@@ -7,7 +7,7 @@ import type { EditOp } from '../sync/ops';
 
 export type Wind = 'belts' | 'from_west' | 'from_east';
 
-/** Mirrors `worldgen::WorldParams` (crates/worldgen/src/world.rs). */
+/** Mirrors `worldgen::WorldParams` (crates/worldgen-model/src/world.rs). */
 export interface WorldParams {
   width_mi: number;
   height_mi: number;

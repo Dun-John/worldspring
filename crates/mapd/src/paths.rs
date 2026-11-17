@@ -2,7 +2,7 @@
 //! paved roads and cobbled streets drawn on the ground along a line (`worldgen::paths`).
 
 use serde_json::{Value, json};
-use worldgen::paths::{self, Path, PathKind};
+use worldgen::paths::{self, Path, PathKind, PathLine};
 use worldgen::world::{CrossingKind, Edits};
 
 use crate::Shared;

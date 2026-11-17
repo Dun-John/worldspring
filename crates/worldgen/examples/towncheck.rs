@@ -144,6 +144,8 @@ use worldgen::t0::T0;
 use worldgen::town::catalog::Ward;
 use worldgen::town::geom::{add, area, centroid, contains, cross, dist, dot, len, lerp, mean, mul, seg_dist, sub};
 use worldgen::town::{self, Layout, PlazaKind};
+use worldgen::under::design::SiteDesignOps;
+use worldgen::world::CreatedChecks;
 use worldgen::{World, interior};
 
 type P = [f64; 2];

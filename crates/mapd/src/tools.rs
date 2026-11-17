@@ -4,8 +4,9 @@
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::core::tile::TileKey;
+use worldgen::under::design::SiteDesignOps;
 use worldgen::under::{MAX_LEVELS, SiteSize, THEMES, UnderKind};
-use worldgen::world::{CREATABLE, Created, Edits, Note};
+use worldgen::world::{CREATABLE, Created, CreatedChecks, Edits, Note};
 
 use crate::Shared;
 

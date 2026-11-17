@@ -20,6 +20,7 @@
 //! and mines' layouts; hazards (share, mean, kinds) and second ways in (share, secret); CHECK lines where a throne
 //! stands outside keep dungeons, dungeons and dwarven halls, a ritual circle outside temples and cults, or a chamber
 //! has more than one second way in.
+use worldgen::under::design::SiteDesignOps;
 use worldgen::{World, WorldFile, interior, town};
 
 fn main() {

@@ -16,6 +16,7 @@ use crate::core::{
 use crate::lod::terrain_refine::{TerrainOut, terrain_tile};
 use crate::payload::pack_terrain;
 use crate::t0::T0;
+use crate::under::design::SiteDesignOps;
 
 pub const KIND_TERRAIN: u32 = 1;
 pub const KIND_BATTLEMAP: u32 = 2;

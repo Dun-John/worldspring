@@ -9,7 +9,7 @@ use crate::World;
 use crate::core::hash::FastSet;
 use crate::core::rng::{Pcg32, hash2};
 use crate::t0::T0;
-use crate::world::{BuildingEdit, CastlePiece, Created};
+use crate::world::{BuildingEdit, BuildingEditChecks, CastlePiece, Created};
 
 /// The keep's place in a castle's buildings (pushed last; the only one laid out as a keep).
 pub fn keep_index(l: &Layout) -> Option<usize> {

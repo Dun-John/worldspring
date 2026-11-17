@@ -8,7 +8,7 @@ use crate::core::rng::Pcg32;
 use crate::t0::T0;
 use crate::t0::settle::Tier;
 use crate::town::{self, catalog, geom, hand};
-use crate::world::{BUILDING_HOMES, World};
+use crate::world::{BUILDING_HOMES, CreatedChecks, World};
 
 type P = [f64; 2];
 

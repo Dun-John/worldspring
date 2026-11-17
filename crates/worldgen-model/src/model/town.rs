@@ -67,11 +67,11 @@ pub enum OpenKind {
     Farmland,
 }
 
-pub(crate) fn is_false(b: &bool) -> bool {
+pub fn is_false(b: &bool) -> bool {
     !*b
 }
 
-pub(crate) fn is_zero(v: &u32) -> bool {
+pub fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 

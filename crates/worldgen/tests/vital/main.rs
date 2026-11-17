@@ -4,6 +4,8 @@
 use worldgen::core::tile::{HALO, TILE_N, TileKey};
 use worldgen::lod::terrain_refine::padded_index;
 use worldgen::pipeline::{Executor, det_report};
+use worldgen::under::design::SiteDesignOps;
+use worldgen::world::{CreatedChecks, FollowCrossing};
 use worldgen::{World, WorldFile};
 
 mod common;

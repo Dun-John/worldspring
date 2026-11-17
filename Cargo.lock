@@ -978,6 +978,7 @@ dependencies = [
  "serde",
  "serde_json",
  "worldgen-core",
+ "worldgen-model",
 ]
 
 [[package]]
@@ -986,6 +987,16 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "serde",
+]
+
+[[package]]
+name = "worldgen-model"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "serde",
+ "serde_json",
+ "worldgen-core",
 ]
 
 [[package]]

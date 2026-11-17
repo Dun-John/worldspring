@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::town::roof;
-use worldgen::world::{BUILDING_HOMES, Created, MAX_FLOORS, ROOFS, STRUCTURES, TINTS};
+use worldgen::world::{BUILDING_HOMES, Created, CreatedChecks, MAX_FLOORS, ROOFS, STRUCTURES, TINTS};
 
 use crate::Shared;
 use crate::tools::{found, schema, text};

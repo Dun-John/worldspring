@@ -3,11 +3,29 @@
 
 use crate::world::*;
 
-impl Created {
+/// `Created::check`, here above the model crate: it checks against the town and underground lists.
+pub trait CreatedChecks {
+    fn check(&self) -> Result<(), String>;
+}
+
+/// `BuildingEdit::check`, here since it checks as a drawn building's (`Created::check`).
+pub trait BuildingEditChecks {
+    fn check(&self) -> Result<(), String>;
+}
+
+trait Parts {
+    fn check_settlement(&self) -> Result<(), String>;
+    fn check_plot(&self) -> Result<(), String>;
+    fn check_building(&self) -> Result<(), String>;
+    fn check_castle(&self) -> Result<(), String>;
+    fn check_wall(&self) -> Result<(), String>;
+}
+
+impl CreatedChecks for Created {
     /// Whether its options make sense: a kind that can be created, what lies beneath only for
     /// ruins (built sites) and entrances, size, levels and a theme of its site's kind only
     /// where there is a site underground.
-    pub fn check(&self) -> Result<(), String> {
+    fn check(&self) -> Result<(), String> {
         use crate::under::{MAX_LEVELS, SiteSize, THEMES, UnderKind};
         if CREATED_SETTLEMENTS.contains(&self.kind.as_str()) {
             return self.check_settlement();
@@ -71,7 +89,9 @@ impl Created {
         }
         Ok(())
     }
+}
 
+impl Parts for Created {
     /// A settlement's options: a culture and what it lives by (not by the shore), nothing else.
     fn check_settlement(&self) -> Result<(), String> {
         let shaped = !self.poly.is_empty() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed;
@@ -161,9 +181,7 @@ impl Created {
         }
         Ok(())
     }
-}
 
-impl Created {
     /// A castle's options: an outline of 3–32 corners round its point that doesn't cross itself
     /// (concave or not), `CASTLE_MIN_FT` to `CASTLE_MAX_FT` across, its gates on its sides, its
     /// keep's shape (a drawn one inside the outline), its moat; ruined or not.
@@ -298,6 +316,35 @@ impl Created {
             return Err(format!("gates: corners of the line, 0 to {}", n - 1));
         }
         Ok(())
+    }
+}
+
+impl BuildingEditChecks for BuildingEdit {
+    /// Whether its options make sense (as a drawn building's).
+    fn check(&self) -> Result<(), String> {
+        if !self.at[0].is_finite() || !self.at[1].is_finite() {
+            return Err("at: the building's centre as generated".into());
+        }
+        if self.removed {
+            return Ok(());
+        }
+        let c = crate::core::geom::centroid(&self.poly);
+        let probe = Created {
+            kind: "building".into(),
+            x: if self.poly.is_empty() { self.at[0] } else { c[0] },
+            y: if self.poly.is_empty() { self.at[1] } else { c[1] },
+            poly: if self.poly.is_empty() { vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]].into_iter().map(|q| [q[0] + self.at[0] - 10.0, q[1] + self.at[1] - 10.0]).collect() } else { self.poly.clone() },
+            floors: self.floors,
+            func: self.func.clone(),
+            roof: self.roof.clone(),
+            tint: self.tint.clone(),
+            material: self.material.clone(),
+            shape: self.shape.clone(),
+            shade: self.shade,
+            structure: self.structure.clone(),
+            ..Default::default()
+        };
+        probe.check()
     }
 }
 

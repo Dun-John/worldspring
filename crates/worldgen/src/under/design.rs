@@ -25,9 +25,14 @@ use crate::town;
 pub use crate::model::under::{SiteDesign, DesignLevel, DesignRoom, DesignItem};
 
 
-impl DesignItem {
+/// `DesignItem::posed`, here above the model crate (`model::under`).
+pub trait DesignItemPose {
+    fn posed(&self, it: Item) -> Item;
+}
+
+impl DesignItemPose for DesignItem {
     /// The built item with this one's facing and look (a `back` past 3 is read as none).
-    pub fn posed(&self, mut it: Item) -> Item {
+    fn posed(&self, mut it: Item) -> Item {
         it.back = self.back.filter(|&b| b < 4);
         it.variant = self.variant.map(|v| v.min(crate::interior::item_looks(it.kind) - 1));
         it
@@ -160,24 +165,44 @@ pub fn catalog_json() -> String {
     json!({ "props": props, "rooms": rooms, "themes": themes, "boss": BOSS, "max_levels": MAX_LEVELS, "building": crate::interior::design::catalog() }).to_string()
 }
 
-impl SiteDesign {
-    pub fn under_kind(&self) -> Option<UnderKind> {
+/// `SiteDesign`'s building, checks and edits, here above the model crate (`model::under`).
+pub trait SiteDesignOps {
+    fn under_kind(&self) -> Option<UnderKind>;
+    fn is_building(&self) -> bool;
+    fn below_ground(&self) -> usize;
+    fn from_interior(it: &Interior) -> SiteDesign;
+    fn shape_problems(&self) -> Vec<Problem>;
+    fn build(&self, id: &str, settlement: u32, building: u32, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> Interior;
+    fn problems(&self, world: &World, t0: &T0, id: &str) -> Result<(Interior, Vec<Problem>), String>;
+    fn add_doors(&mut self, level: Option<usize>);
+    fn furnish(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, seed: u64);
+    fn unfitted(&self, it: &Interior) -> Vec<Problem>;
+    fn set_shape_checked(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, shape: u8) -> Result<(), String>;
+    fn set_shape(&mut self, level: usize, room: usize, shape: u8) -> Result<(), String>;
+}
+
+trait SiteDesignPlan {
+    fn plan(&self, lv: &DesignLevel, kind: UnderKind, nx: usize, ny: usize, sprites: &mut Sprites) -> Plan;
+}
+
+impl SiteDesignOps for SiteDesign {
+    fn under_kind(&self) -> Option<UnderKind> {
         UnderKind::parse(&self.kind)
     }
 
     /// A building's interior (`interior::design`), not a site underground.
-    pub fn is_building(&self) -> bool {
+    fn is_building(&self) -> bool {
         self.kind == BUILDING
     }
 
     /// Its levels below ground (a building's cellars; every level of a site): those dug or
     /// filled in at the bottom renumber the rest (`Edits::shift_levels`).
-    pub fn below_ground(&self) -> usize {
+    fn below_ground(&self) -> usize {
         if self.is_building() { self.levels.iter().filter(|l| l.z < 0).count() } else { self.levels.len() }
     }
 
     /// A copy of a site as it is: the design that builds it again, exactly.
-    pub fn from_interior(it: &Interior) -> SiteDesign {
+    fn from_interior(it: &Interior) -> SiteDesign {
         let kind = UnderKind::CREATABLE.into_iter().find(|k| k.name() == it.function).unwrap_or(UnderKind::Dungeon);
         let top = it.levels.last();
         let entry = top.and_then(|l| l.furniture.iter().find(|f| f.kind == "exit")).map(|f| [f.x, f.y]).unwrap_or([0, 0]);
@@ -243,7 +268,7 @@ impl SiteDesign {
 
     /// What can't be read at all (sizes, kinds, cells): a design with such a problem is built
     /// as well as it can be, but never saved.
-    pub fn shape_problems(&self) -> Vec<Problem> {
+    fn shape_problems(&self) -> Vec<Problem> {
         let mut out = Vec::new();
         let bad = |level: usize, text: String| Problem {
             level,
@@ -299,7 +324,7 @@ impl SiteDesign {
     }
 
     /// The site it builds (`id` `u:<layout>:<k>`; uploaded pictures' rules `metas`).
-    pub fn build(&self, id: &str, settlement: u32, building: u32, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> Interior {
+    fn build(&self, id: &str, settlement: u32, building: u32, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> Interior {
         let kind = self.under_kind().unwrap_or(UnderKind::Dungeon);
         let (nx, ny) = (self.nx.clamp(1, MAX_SIDE) as usize, self.ny.clamp(1, MAX_SIDE) as usize);
         let n = self.levels.len();
@@ -337,66 +362,9 @@ impl SiteDesign {
         }
     }
 
-    /// A level as the generators lay one out (rooms, doors, items), for `Plan::finish`.
-    fn plan(&self, lv: &DesignLevel, kind: UnderKind, nx: usize, ny: usize, sprites: &mut Sprites) -> Plan {
-        let mut p = Plan::new(nx, ny, 0, lv.natural);
-        for r in &lv.rooms {
-            let ri = p.room(room_kind(&r.kind).unwrap_or(CHAMBER), r.raise_ft as f32);
-            p.rooms[ri as usize].shape = r.shape;
-        }
-        let rooms = p.rooms.len() as i16;
-        p.cells = decode(&lv.cells, nx * ny).unwrap_or_else(|| vec![-1; nx * ny]);
-        for c in p.cells.iter_mut() {
-            if *c >= rooms {
-                *c = -1;
-            }
-        }
-        for &[x, y, side, flags] in &lv.doors {
-            let Some((a, b)) = door_squares(x, y, side, nx, ny) else { continue };
-            let (ra, rb) = (p.cells[a], p.cells[b]);
-            if ra < 0 || rb < 0 || ra == rb {
-                continue;
-            }
-            p.door(a, b);
-            if flags & 1 != 0 {
-                p.secret.insert((a, b));
-            } else if flags & 8 != 0 {
-                p.gaps.insert((a.min(b), a.max(b)));
-            } else if flags & PORTCULLIS != 0 {
-                p.portcullis.insert((a, b));
-            }
-            if lock_of(flags) != 0 {
-                p.locks.insert((a, b), lock_of(flags));
-            }
-        }
-        let (down_name, up_name) = kind.ways();
-        for f in &lv.items {
-            let (x, y, w, h) = (f.x as usize, f.y as usize, f.w.max(1) as usize, f.h.max(1) as usize);
-            if x + w > nx || y + h > ny {
-                continue;
-            }
-            if let Some(a) = sprite_asset(&f.kind) {
-                p.put(f.posed(sprites.item(a, x, y, w, h)));
-                continue;
-            }
-            let Some(k) = item_kind(&f.kind) else { continue };
-            let it = match k {
-                "exit" => Item::new("exit", kind.entrance_name(), x, y, 1, 1, 0, false, 0.0, None),
-                "up" => Item::new("up", up_name, x, y, 1, 1, 0, false, 0.0, None),
-                "down" => Item::new("down", down_name, x, y, 1, 1, 0, false, 0.0, None),
-                "lava" => lava(x, y),
-                _ => item(k, x, y, w, h),
-            };
-            p.put(f.posed(it));
-        }
-        // The way onto the level, for furnishing's reachability.
-        p.up = arrival(&p.items, nx).unwrap_or(0);
-        p
-    }
-
     /// Everything wrong with it (shape first; then the rules of `check`, a building's of
     /// `interior::design::check`), with what it builds.
-    pub fn problems(&self, world: &World, t0: &T0, id: &str) -> Result<(Interior, Vec<Problem>), String> {
+    fn problems(&self, world: &World, t0: &T0, id: &str) -> Result<(Interior, Vec<Problem>), String> {
         if self.is_building() {
             return crate::interior::design::problems(world, t0, id, self);
         }
@@ -410,7 +378,7 @@ impl SiteDesign {
     /// Doors wherever a room can't be reached otherwise: from the way onto each level, the
     /// middle of the wall to the nearest room cut off, until every room is reached (or nothing
     /// cut off touches anything reached).
-    pub fn add_doors(&mut self, level: Option<usize>) {
+    fn add_doors(&mut self, level: Option<usize>) {
         let (nx, ny) = (self.nx as usize, self.ny as usize);
         let building = self.is_building();
         let stairs = building.then(|| crate::interior::design::stairs_of(self)).map(|s| s[1] * nx + s[0]);
@@ -458,7 +426,7 @@ impl SiteDesign {
     /// Room `room` of level `level` of site `id` furnished from its kit (a boss chamber's set
     /// piece; a building's, `interior::design::furnish`) where that fits round what is already
     /// there; `seed` picks the arrangement.
-    pub fn furnish(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, seed: u64) {
+    fn furnish(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, seed: u64) {
         if self.is_building() {
             return crate::interior::design::furnish(self, world, t0, id, level, room, seed);
         }
@@ -488,7 +456,7 @@ impl SiteDesign {
 
     /// Rooms given a shape that `it` (what the design builds) draws square: their squares don't
     /// fill it (or a building's cavern). Noted, not refused.
-    pub fn unfitted(&self, it: &Interior) -> Vec<Problem> {
+    fn unfitted(&self, it: &Interior) -> Vec<Problem> {
         let building = self.is_building();
         let n = self.levels.len();
         let mut out = Vec::new();
@@ -516,7 +484,7 @@ impl SiteDesign {
     /// `set_shape`, held to the rules (`problems`, as site or building `id` of `world`): refused,
     /// with nothing changed, when the change breaks one more than the design already did (each
     /// kind of problem counted, whatever its numbers: a stretch already cut off may change size).
-    pub fn set_shape_checked(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, shape: u8) -> Result<(), String> {
+    fn set_shape_checked(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, shape: u8) -> Result<(), String> {
         let blocking = |d: &SiteDesign| -> Result<Vec<(String, String)>, String> {
             Ok(d.problems(world, t0, id)?.1.into_iter().filter(|p| p.blocking).map(|p| (p.text.chars().filter(|c| !c.is_ascii_digit()).collect(), p.text)).collect())
         };
@@ -538,7 +506,7 @@ impl SiteDesign {
     /// room beside them); rock inside it joins the room (a building's only within its walls: where
     /// another level has floor). Other rooms keep theirs. Refused, with nothing changed, when the
     /// squares can't be made the shape's (another room or the walls in the way).
-    pub fn set_shape(&mut self, level: usize, room: usize, shape: u8) -> Result<(), String> {
+    fn set_shape(&mut self, level: usize, room: usize, shape: u8) -> Result<(), String> {
         use crate::interior::shape;
         let (nx, ny) = (self.nx as usize, self.ny as usize);
         let building = self.is_building();
@@ -656,6 +624,65 @@ impl SiteDesign {
             })
         });
         Ok(())
+    }
+}
+
+impl SiteDesignPlan for SiteDesign {
+    /// A level as the generators lay one out (rooms, doors, items), for `Plan::finish`.
+    fn plan(&self, lv: &DesignLevel, kind: UnderKind, nx: usize, ny: usize, sprites: &mut Sprites) -> Plan {
+        let mut p = Plan::new(nx, ny, 0, lv.natural);
+        for r in &lv.rooms {
+            let ri = p.room(room_kind(&r.kind).unwrap_or(CHAMBER), r.raise_ft as f32);
+            p.rooms[ri as usize].shape = r.shape;
+        }
+        let rooms = p.rooms.len() as i16;
+        p.cells = decode(&lv.cells, nx * ny).unwrap_or_else(|| vec![-1; nx * ny]);
+        for c in p.cells.iter_mut() {
+            if *c >= rooms {
+                *c = -1;
+            }
+        }
+        for &[x, y, side, flags] in &lv.doors {
+            let Some((a, b)) = door_squares(x, y, side, nx, ny) else { continue };
+            let (ra, rb) = (p.cells[a], p.cells[b]);
+            if ra < 0 || rb < 0 || ra == rb {
+                continue;
+            }
+            p.door(a, b);
+            if flags & 1 != 0 {
+                p.secret.insert((a, b));
+            } else if flags & 8 != 0 {
+                p.gaps.insert((a.min(b), a.max(b)));
+            } else if flags & PORTCULLIS != 0 {
+                p.portcullis.insert((a, b));
+            }
+            if lock_of(flags) != 0 {
+                p.locks.insert((a, b), lock_of(flags));
+            }
+        }
+        let (down_name, up_name) = kind.ways();
+        for f in &lv.items {
+            let (x, y, w, h) = (f.x as usize, f.y as usize, f.w.max(1) as usize, f.h.max(1) as usize);
+            if x + w > nx || y + h > ny {
+                continue;
+            }
+            if let Some(a) = sprite_asset(&f.kind) {
+                p.put(f.posed(sprites.item(a, x, y, w, h)));
+                continue;
+            }
+            let Some(k) = item_kind(&f.kind) else { continue };
+            let it = match k {
+                "exit" => Item::new("exit", kind.entrance_name(), x, y, 1, 1, 0, false, 0.0, None),
+                "up" => Item::new("up", up_name, x, y, 1, 1, 0, false, 0.0, None),
+                "down" => Item::new("down", down_name, x, y, 1, 1, 0, false, 0.0, None),
+                "lava" => lava(x, y),
+                _ => item(k, x, y, w, h),
+            };
+            p.put(f.posed(it));
+        }
+        // The way onto the level, for furnishing's reachability.
+        p.up = arrival(&p.items, nx).unwrap_or(0);
+        p
     }
 }
 
@@ -1901,10 +1928,15 @@ fn coords(s: &str) -> Option<(u16, u16)> {
     Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
 }
 
-impl SiteDesign {
+/// `SiteDesign::settle_ways`, here above the model crate (`model::under`).
+pub trait SiteDesignWays {
+    fn settle_ways(&mut self);
+}
+
+impl SiteDesignWays for SiteDesign {
     /// Fill in ways that can go only one place: the way in at the entry (top level), a way up
     /// under the way down from the level above; none down from the deepest level.
-    pub fn settle_ways(&mut self) {
+    fn settle_ways(&mut self) {
         let n = self.levels.len();
         if let Some(deep) = self.levels.first_mut() {
             deep.items.retain(|f| f.kind != "down");

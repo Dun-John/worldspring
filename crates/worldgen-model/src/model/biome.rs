@@ -73,6 +73,7 @@ impl Biome {
         }
     }
 
+    #[inline]
     pub fn from_u8(v: u8) -> Biome {
         ALL.get(v as usize).copied().unwrap_or(Biome::Grassland)
     }

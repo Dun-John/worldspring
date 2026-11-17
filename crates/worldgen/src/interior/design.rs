@@ -18,7 +18,7 @@ use crate::core::hash::fnv64;
 use crate::core::rng::{Pcg32, hash3};
 use crate::t0::T0;
 use crate::town::{self, Layout, Structure};
-use crate::under::design::{DesignItem, DesignLevel, DesignRoom, Problem, SiteDesign, decode, encode};
+use crate::under::design::{DesignItem, DesignItemPose, DesignLevel, DesignRoom, Problem, SiteDesign, SiteDesignOps, decode, encode};
 
 /// `SiteDesign::kind` of a building's design.
 pub const BUILDING: &str = "building";

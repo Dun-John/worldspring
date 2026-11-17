@@ -5,7 +5,7 @@ import type { Edits } from '../gen/protocol';
 
 export type EditOp = { op: 'set'; field: string; key: string; value: unknown } | { op: 'unset'; field: string; key: string };
 
-/** How a field's entries are keyed (mirrors `EDIT_FIELDS` in crates/worldgen/src/world.rs):
+/** How a field's entries are keyed (mirrors `EDIT_FIELDS` in crates/worldgen-model/src/world.rs):
  * `map` an object by id, `set` a sorted list of ids, `list` entries whose ids are
  * `<prefix>:<index>` (never shortened; removing marks an entry `removed`). */
 type Shape = 'map' | 'set' | 'list';

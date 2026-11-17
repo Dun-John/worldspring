@@ -5,7 +5,7 @@
 use serde_json::{Value, json};
 use worldgen::core::hash::fnv64;
 use worldgen::interior::design as building;
-use worldgen::under::design::{self, SiteDesign};
+use worldgen::under::design::{self, SiteDesign, SiteDesignOps};
 
 use crate::Shared;
 use crate::tools::{arg_str, schema, text};

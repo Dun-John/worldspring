@@ -508,13 +508,18 @@ pub fn mid(w: &Wharf) -> P {
     w.pts.first().copied().unwrap_or([0.0, 0.0])
 }
 
-impl crate::world::Edits {
+/// `Edits::follow_crossing`, here above the model crate (`world`).
+pub trait FollowCrossing {
+    fn follow_crossing(&mut self, id: &str, old: Option<&Crossing>) -> Vec<String>;
+}
+
+impl FollowCrossing for crate::world::Edits {
     /// (R5 M20) Shops follow their bridge: the drawn buildings `on` crossing `id` once it has
     /// changed (`old`: it as it was, if known). Gone, or no longer a bridge: they are removed.
     /// Its ends or width changed: they are laid out again on it (`wharf::bridge_lots`, as deep
     /// and as long as they were), each side's in order along it; those left without a lot are
     /// removed. Returns the ids of the shops changed.
-    pub fn follow_crossing(&mut self, id: &str, old: Option<&Crossing>) -> Vec<String> {
+    fn follow_crossing(&mut self, id: &str, old: Option<&Crossing>) -> Vec<String> {
         use crate::wharf;
         let shops: Vec<usize> = (0..self.created.len()).filter(|&k| self.created[k].on.as_deref() == Some(id) && !self.created[k].removed && self.created[k].kind == "building").collect();
         if shops.is_empty() {

@@ -6,7 +6,7 @@
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::t0::made;
-use worldgen::world::{CREATED_SETTLEMENTS, Created, PIN_KINDS, PIN_TIERS};
+use worldgen::world::{CREATED_SETTLEMENTS, Created, CreatedChecks, PIN_KINDS, PIN_TIERS};
 
 use crate::Shared;
 use crate::tools::{schema, text};

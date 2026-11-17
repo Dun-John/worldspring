@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use worldgen::ground::{self, PlateauKind};
 use worldgen::town::geom;
 use worldgen::wharf;
-use worldgen::world::{Created, CrossingMaterial, Edits, Wharf, WharfKind};
+use worldgen::world::{Created, CreatedChecks, CrossingMaterial, Edits, Wharf, WharfKind};
 
 use crate::Shared;
 use crate::notebook::new_id;

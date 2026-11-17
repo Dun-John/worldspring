@@ -15,7 +15,7 @@ use worldgen::geoquery::Squares;
 use worldgen::pipeline::Executor;
 use worldgen::t0::{T0, settle::Tier};
 use worldgen::town::{self, handedit};
-use worldgen::world::{Created, Edits, PIN_KINDS};
+use worldgen::world::{Created, CreatedChecks, Edits, PIN_KINDS};
 use worldgen::{World, WorldFile};
 
 type P = [f64; 2];

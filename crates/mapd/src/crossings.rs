@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 use worldgen::roadids::crossing_json;
 use worldgen::wharf;
-use worldgen::world::{Crossing, CrossingKind, CrossingMaterial, Edits};
+use worldgen::world::{Crossing, CrossingKind, CrossingMaterial, Edits, FollowCrossing};
 
 use crate::Shared;
 use crate::notebook::new_id;

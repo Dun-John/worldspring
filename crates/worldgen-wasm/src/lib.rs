@@ -6,6 +6,7 @@ use worldgen::World;
 use worldgen::core::{hash::fnv64, tile::TileKey};
 use worldgen::lod::terrain_refine::terrain_tile;
 use worldgen::payload::pack_terrain;
+use worldgen::world::FollowCrossing;
 use worldgen::pipeline::{JobKey, deps};
 use worldgen::t0::T0;
 

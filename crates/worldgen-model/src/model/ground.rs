@@ -9,7 +9,7 @@ use crate::core::geom;
 
 /// Squares per block side (80 ft).
 pub const BLOCK: i64 = 16;
-pub(crate) const CELLS: usize = (BLOCK * BLOCK) as usize;
+pub const CELLS: usize = (BLOCK * BLOCK) as usize;
 /// Blocks a world may hold (~0.35 sq mi brushed).
 pub const MAX_BLOCKS: usize = 1500;
 /// Blocks one stroke may touch (one batch of ops).
@@ -22,7 +22,7 @@ pub const MAX_EDGE_FT: f32 = 60.0;
 pub const MAX_SHIFT_FT: f64 = 150.0;
 /// A block's values are tenths of a foot, at most this far either way (150 ft).
 pub const MAX_ADD: i32 = 1500;
-pub(crate) const SQUARE_FT: f64 = 5.0;
+pub const SQUARE_FT: f64 = 5.0;
 
 /// 16 × 16 squares of brushed change, tenths of a foot, row-major. On the wire one string:
 /// base64url (no padding) of zigzag-delta varints, a 0 delta followed by a byte counting the
@@ -189,11 +189,12 @@ impl Plateau {
     }
 }
 
-pub(crate) fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
+#[inline]
+pub fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
     pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
-pub(crate) fn crosses_itself(pts: &[[f64; 2]]) -> bool {
+pub fn crosses_itself(pts: &[[f64; 2]]) -> bool {
     let n = pts.len();
     let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
     for i in 0..n {
@@ -355,6 +356,7 @@ pub fn shaped_fp(edits: &crate::world::Edits, rect: [f64; 4]) -> u64 {
 }
 
 /// A block's key: block indices zero-padded, x first (one column of blocks is one key range).
+#[inline]
 pub fn block_key(bx: i64, by: i64) -> String {
     format!("g:{bx:05}:{by:05}")
 }
@@ -367,6 +369,7 @@ pub fn parse_key(k: &str) -> Option<(i64, i64)> {
 }
 
 /// The brushed change of global square (gx, gy), ft.
+#[inline]
 pub fn added(ground: &BTreeMap<String, GroundBlock>, gx: i64, gy: i64) -> f64 {
     if gx < 0 || gy < 0 {
         return 0.0;

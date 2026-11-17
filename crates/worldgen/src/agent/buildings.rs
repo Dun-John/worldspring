@@ -1,6 +1,7 @@
 //! Buildings and works: streets in a box, building edits, wall works spots, overlap tests.
 
 use super::*;
+use crate::world::BuildingEditChecks;
 
 /// The streets, walls, squares and world roads in an area (`list_streets`): each layout (settlement or site) in `rect` gives its streets
 /// (`{what: street, settlement, width_ft, kind, pts}`), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and

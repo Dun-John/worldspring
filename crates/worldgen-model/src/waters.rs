@@ -781,7 +781,7 @@ pub fn rounded(pts: &[[f64; 2]]) -> Vec<[f64; 2]> {
 /// A water outline that meets an area, looked up once (`ground::Shaper`): its shore is its
 /// edges' pieces outside every other outline (overlapping outlines are one water), in runs of
 /// `RUN` with the box round each run.
-pub(crate) struct Near {
+pub struct Near {
     pts: Arc<[P]>,
     b: [f64; 4],
     level: f64,
@@ -814,7 +814,7 @@ fn shores(edits: &crate::world::Edits) -> Vec<(&Water, Arc<[P]>, [f64; 4], Optio
 
 /// The usable outlines meeting `rect` (world ft, and a bank's width round it), each with its
 /// shore cut where it runs inside another (any in the world: the same wherever it is read).
-pub(crate) fn near(edits: &crate::world::Edits, rect: [f64; 4]) -> Vec<Near> {
+pub fn near(edits: &crate::world::Edits, rect: [f64; 4]) -> Vec<Near> {
     let all = shores(edits);
     let levels = group_levels(&all);
     let mut out = Vec::new();
@@ -946,14 +946,14 @@ fn cross_at(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Option<f64> {
     ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
 }
 
-pub(crate) fn bounds(near: &[Near]) -> Option<[f64; 4]> {
+pub fn bounds(near: &[Near]) -> Option<[f64; 4]> {
     near.iter().map(|n| n.b).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
 }
 
 /// At (x, y): the water's level and the bed under it, of the outlines holding the point (the
 /// highest level, the deepest bed), the bed falling from the shore of them all (`band` ft at
 /// least: `BANK_FT`), or None.
-pub(crate) fn at(near: &[Near], x: f64, y: f64, band: f64) -> Option<(f64, f64)> {
+pub fn at(near: &[Near], x: f64, y: f64, band: f64) -> Option<(f64, f64)> {
     let least = band;
     let band = band.max(BANK_FT);
     let inside = |n: &Near| x >= n.b[0] && x <= n.b[2] && y >= n.b[1] && y <= n.b[3] && geom::contains(&n.pts, [x, y]);
@@ -982,7 +982,7 @@ pub(crate) fn at(near: &[Near], x: f64, y: f64, band: f64) -> Option<(f64, f64)>
 
 /// Beside the water drawn by hand, within `reach` ft of its shore (at a point no water holds):
 /// the look of the nearest (the sea at `sea` ft), how far its shore is and its level there.
-pub(crate) fn edge(near: &[Near], x: f64, y: f64, reach: f64, sea: f64) -> Option<(Look, f64, f64)> {
+pub fn edge(near: &[Near], x: f64, y: f64, reach: f64, sea: f64) -> Option<(Look, f64, f64)> {
     let mut best: Option<(&Near, f64)> = None;
     for n in near.iter().filter(|n| x >= n.b[0] - reach && x <= n.b[2] + reach && y >= n.b[1] - reach && y <= n.b[3] + reach) {
         for (r, rb) in n.runs.iter().enumerate() {

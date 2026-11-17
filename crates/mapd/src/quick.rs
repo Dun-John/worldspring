@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::placing;
 use worldgen::town::geom;
-use worldgen::world::{Created, LOT_SIZES, TOWN_WARDS};
+use worldgen::world::{Created, CreatedChecks, LOT_SIZES, TOWN_WARDS};
 
 use crate::Shared;
 use crate::tools::{found, schema, text};

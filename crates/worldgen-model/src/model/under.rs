@@ -64,7 +64,7 @@ impl UnderKind {
     }
 
     /// The way between levels (down, up).
-    pub(crate) fn ways(self) -> (&'static str, &'static str) {
+    pub fn ways(self) -> (&'static str, &'static str) {
         match self {
             UnderKind::Dungeon | UnderKind::Crypt | UnderKind::Catacombs | UnderKind::KeepDungeon => ("stairs down", "stairs up"),
             UnderKind::Sewer => ("drain shaft: ladder down 20 ft", "drain shaft: ladder up 20 ft"),
@@ -98,7 +98,7 @@ impl SiteSize {
     }
 
     /// Grid scale (each side).
-    pub(crate) fn scale(self) -> f64 {
+    pub fn scale(self) -> f64 {
         [0.75, 1.0, 1.3, 1.6][self as usize]
     }
 }
@@ -163,11 +163,11 @@ pub struct DesignLevel {
     pub landing: Option<[u16; 2]>,
 }
 
-pub(crate) fn is_zero(z: &i8) -> bool {
+pub fn is_zero(z: &i8) -> bool {
     *z == 0
 }
 
-pub(crate) fn is_false(b: &bool) -> bool {
+pub fn is_false(b: &bool) -> bool {
     !*b
 }
 
@@ -209,19 +209,19 @@ pub struct Theme {
     /// The kind of site it is for.
     pub kind: UnderKind,
     /// The room the level is entered by (top level).
-    pub(crate) first: &'static str,
-    pub(crate) kinds: &'static [&'static str],
-    pub(crate) passage: &'static str,
+    pub first: &'static str,
+    pub kinds: &'static [&'static str],
+    pub passage: &'static str,
     /// Room count: at least, and up to this many more (a medium site).
-    pub(crate) rooms: (usize, u32),
+    pub rooms: (usize, u32),
     /// Corridors this many squares wide.
-    pub(crate) corridor: usize,
+    pub corridor: usize,
     /// Natural levels: a raised chamber.
-    pub(crate) ledge: &'static str,
+    pub ledge: &'static str,
     /// What lays out its levels.
-    pub(crate) planner: Planner,
+    pub planner: Planner,
     /// How much water stands in it (laid by its planner: `Plan::water`).
-    pub(crate) water: Wetness,
+    pub water: Wetness,
 }
 
 /// Which planner (`themes`) lays out a theme's levels.
@@ -345,14 +345,14 @@ pub const FORTRESS: &str = "collapsed_fortress";
 /// wilds) about half the levels get one; under a living town, keep or city about one site in ten; a site made by hand
 /// never.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Age {
+pub enum Age {
     Ruin,
     Living,
     Made,
 }
 
 /// Under a large keep: prisons, stores, old crypts and a way out.
-pub(crate) const KEEP_DUNGEON: Theme = Theme { planner: Planner::Keep, ..built(
+pub const KEEP_DUNGEON: Theme = Theme { planner: Planner::Keep, ..built(
     "keep",
     UnderKind::KeepDungeon,
     "landing",
@@ -362,7 +362,7 @@ pub(crate) const KEEP_DUNGEON: Theme = Theme { planner: Planner::Keep, ..built(
     1,
 ) };
 /// Below a city's sewers.
-pub(crate) const UNDERCROFT: Theme = Theme {
+pub const UNDERCROFT: Theme = Theme {
     planner: Planner::Undercroft,
     ..built("undercroft", UnderKind::Sewer, "drain chamber", &["cistern", "overflow chamber", "smugglers' cache", "old vault", "rat warren", "flooded hall"], "culvert", (9, 5), 1)
 };
@@ -385,7 +385,7 @@ pub struct SiteSpec {
 }
 
 /// A generated site's grid (squares, medium size), and the sizes and levels it is chosen from.
-pub(crate) fn ranges(kind: UnderKind) -> ((usize, usize), (SiteSize, SiteSize), (u8, u8)) {
+pub fn ranges(kind: UnderKind) -> ((usize, usize), (SiteSize, SiteSize), (u8, u8)) {
     use SiteSize::*;
     match kind {
         UnderKind::Dungeon => ((44, 36), (Small, Large), (2, 4)),

@@ -520,33 +520,6 @@ impl BuildingEdit {
     /// How far (ft) the building at its id may stand from `at` and still be the one edited.
     pub const SAME_AT_FT: f64 = 3.0;
 
-    /// Whether its options make sense (as a drawn building's).
-    pub fn check(&self) -> Result<(), String> {
-        if !self.at[0].is_finite() || !self.at[1].is_finite() {
-            return Err("at: the building's centre as generated".into());
-        }
-        if self.removed {
-            return Ok(());
-        }
-        let c = crate::core::geom::centroid(&self.poly);
-        let probe = Created {
-            kind: "building".into(),
-            x: if self.poly.is_empty() { self.at[0] } else { c[0] },
-            y: if self.poly.is_empty() { self.at[1] } else { c[1] },
-            poly: if self.poly.is_empty() { vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]].into_iter().map(|q| [q[0] + self.at[0] - 10.0, q[1] + self.at[1] - 10.0]).collect() } else { self.poly.clone() },
-            floors: self.floors,
-            func: self.func.clone(),
-            roof: self.roof.clone(),
-            tint: self.tint.clone(),
-            material: self.material.clone(),
-            shape: self.shape.clone(),
-            shade: self.shade,
-            structure: self.structure.clone(),
-            ..Default::default()
-        };
-        probe.check()
-    }
-
     /// Whether it changes nothing (every option as generated).
     pub fn is_noop(&self) -> bool {
         !self.removed && self.func.is_none() && self.floors.is_none() && self.poly.is_empty() && self.roof.is_none() && self.tint.is_none() && self.material.is_none() && self.shape.is_none() && self.shade.is_none() && self.structure.is_none()
