@@ -413,7 +413,7 @@ pub const TAIGA_SNOW_FT: f64 = 4750.0;
 /// The ground's coldness from a T0 cell's biome (the packed `T0::biome` value) and height (ft, as stored in
 /// `T0::height`, an `f32`). The one rule every caller shares (`T0::cold_at`; the namer, with its own grids).
 pub fn cold_of(biome: u32, height_ft: f32, sea_ft: f64) -> Cold {
-    use crate::t0::biome::Biome;
+    use crate::model::biome::Biome;
     match Biome::from_u8((biome & 0xff) as u8) {
         Biome::Ice => Cold::Glacier,
         Biome::Alpine | Biome::Tundra => Cold::Snowy,
