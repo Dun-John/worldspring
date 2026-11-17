@@ -44,7 +44,6 @@
   import BuildPanel from './ui/BuildPanel.svelte';
   import TownPanel from './ui/TownPanel.svelte';
   import GroundPanel from './ui/GroundPanel.svelte';
-  import { defaultGround, GroundTool, type GroundSettings } from './editor/ground';
   import { type TownMode } from './editor/town';
   import { type StreetPick } from './editor/streets';
   import DesignPanel from './ui/DesignPanel.svelte';
@@ -53,6 +52,7 @@
   import LinkPanel from './ui/LinkPanel.svelte';
   import { belowGround } from './editor/site/model';
   import { buildTools } from './editor/tools/build.svelte';
+  import { groundTools } from './editor/tools/ground.svelte';
   import { objectTools } from './editor/tools/objects.svelte';
   import { streetTools } from './editor/tools/streets.svelte';
   import { type BuildSettings } from './editor/build';
@@ -881,7 +881,7 @@
     const play = u.played ? ` Play starts afresh: version ${u.from} keeps its session.` : '';
     if (!u.anew) return `Upgraded from version ${u.from}: check that your changes still sit where they should.${play}`;
     const changes = aside
-      ? ` ${aside} ${aside === 1 ? 'change' : 'changes'} made on them ${aside === 1 ? 'is' : 'are'} set aside (Notes › Gazetteer › Set aside); names and notes on coasts, rivers, ranges and forests, and objects, ground and crossings, stay where they were.`
+      ? ` ${aside} ${aside === 1 ? 'change' : 'changes'} made on them ${aside === 1 ? 'is' : 'are'} set aside (Notes › Gazetteer › Set aside); names and notes on coasts, rivers, ranges and forests, and objects, G.ground and crossings, stay where they were.`
       : '';
     return `Upgraded to version ${GEN_VERSION}: every town and site came out anew.${changes}${play}`;
   }
@@ -1454,7 +1454,7 @@
   function syncTool() {
     const buildTool = B.tool();
     const town = townOn && townUnderlay.adjust && townUnderlay.visible ? T.townTraceTool : T.streetPlan ? T.streetTool : T.townTool;
-    view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? town ?? groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
+    view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? buildTool ?? town ?? G.groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -1475,7 +1475,7 @@
     if (editTab !== 'scatter') S.disarmScatter();
     if (editTab !== 'build') B.disarmBuild();
     if (editTab !== 'town') T.disarmTown();
-    if (editTab !== 'ground') disarmGround();
+    if (editTab !== 'ground') G.disarmGround();
     if (editTab !== 'sites') disarmPlace();
     if (editTab !== 'design') disarmLinks();
     // (Where no rooms can be designed, Rooms puts ways across down.)
@@ -1491,7 +1491,7 @@
     if (editTab === 'scatter') S.armScatter();
     if (editTab === 'build') B.armBuild();
     if (editTab === 'town') T.armTown();
-    if (editTab === 'ground') armGround();
+    if (editTab === 'ground') G.armGround();
     if (editTab === 'design' && !designer && !linkOn) void openDesigner();
     if (editTab === 'design' && linkOn) armLinks();
     if (to === 'world' && t === 'sketch' && !sketchOn) enterSketch();
@@ -1912,7 +1912,7 @@
         // (As the title inside has them: a sewer section by its network, a site by its town.)
         const li = Number(site.split(':')[1]);
         const own = renames[site] ?? (site.startsWith('w:') ? (renames[`w:${li}`] ?? `Sewers of ${settlementName(li)}`) : null);
-        const siteName = own ?? (/^[uk]:/.test(site) && p?.name ? `${settlementName(li)} · ${p.name}` : (p?.name ?? 'a place below ground'));
+        const siteName = own ?? (/^[uk]:/.test(site) && p?.name ? `${settlementName(li)} · ${p.name}` : (p?.name ?? 'a place below G.ground'));
         linkNames[lv] = { site: siteName, level: q?.name ?? `level ${level + 1}` };
       })();
     }
@@ -2015,82 +2015,24 @@
     toast,
   });
 
-  // Ground: while its tab is open, the map's pointer brushes the battlemap's ground up, down,
-  // smooth or back, or draws plateaus and pits.
-  let ground = $state<GroundSettings>(defaultGround());
-  /** The plateau chosen (Choose). */
-  let groundSel = $state<string | null>(null);
-  let groundArmed: GroundTool | null = null;
-  /** The battlemap is showing (the ground can be shaped). */
-  const groundNear = $derived((hud?.ftPerPx ?? 99) < 0.7);
-  const groundChosen = $derived(groundSel && edits.plateaus?.[groundSel] ? { id: groundSel, plateau: edits.plateaus[groundSel] } : null);
-
-  function armGround() {
-    if (groundArmed) return;
-    groundArmed = new GroundTool({
-      settings: () => ground,
-      edits: () => edits,
-      battlemap: () => (view.battle?.stats.alpha ?? 0) > 0 && !view.interior,
-      ground: (gx, gy) => view.battle?.groundAt(gx, gy) ?? null,
-      sea: () => view.geom?.sea_level_ft ?? 0,
-      preview: (box, at) => view.battle?.previewGround(box, at),
-      unpreview: () => view.battle?.unpreviewGround(),
-      commit: (g, p, label) => commitGround(g, p, label),
-      ring: (x, y, r) => {
-        if (r === null) return (S.ring = null);
-        const [sx, sy] = view.cam.worldToPage(x, y);
-        const b = container.getBoundingClientRect();
-        S.ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
-      },
-      chip: (x, y, text) => S.chipAt(x, y, text),
-      select: (id) => (groundSel = id),
-      selected: () => groundSel,
-      ppf: () => view.cam.ppf,
-      hint: (t) => toast(t),
-    });
-  }
-
-  function disarmGround() {
-    groundArmed?.cancel();
-    groundArmed?.dispose();
-    groundArmed = null;
-    groundSel = null;
-    S.ring = null;
-    S.chip = null;
-  }
-
-  // The ring and chip follow the settings as the panel changes them.
-  $effect(() => {
-    void [ground.mode, ground.radius, ground.offset];
-    untrack(() => groundArmed)?.refresh();
+  // Edit › Ground: its brush and changes are in `editor/tools/ground.svelte.ts`.
+  const G = groundTools({
+    view,
+    objects: S,
+    get container() {
+      return container;
+    },
+    get edits() {
+      return edits;
+    },
+    get hud() {
+      return hud;
+    },
+    applyEdits,
+    toast,
   });
 
-  /** Ground blocks brushed (or, null, cleared) and plateaus set or taken away, as one change. */
-  function commitGround(blocks: Record<string, string | null>, plateaus: Record<string, Plateau | null>, label: { tool: string; mode?: string; count?: number; changed?: boolean }) {
-    const e = edits;
-    const g = { ...(e.ground ?? {}) };
-    for (const [k, v] of Object.entries(blocks)) {
-      if (v) g[k] = v;
-      else delete g[k];
-    }
-    const h = { ...(e.plateaus ?? {}) };
-    for (const [k, v] of Object.entries(plateaus)) {
-      if (v) h[k] = v;
-      else delete h[k];
-    }
-    const next: Edits = { ...e };
-    if (Object.keys(blocks).length) next.ground = g;
-    if (Object.keys(plateaus).length) next.plateaus = h;
-    // (A plateau taken away takes its name, note and hidden mark: Undo brings them back.)
-    const gone = Object.keys(plateaus).filter((k) => !plateaus[k]);
-    if (gone.some((k) => e.renames?.[k] !== undefined)) next.renames = Object.fromEntries(Object.entries(e.renames!).filter(([k]) => !gone.includes(k)));
-    if (gone.some((k) => e.notes?.[k] !== undefined)) next.notes = Object.fromEntries(Object.entries(e.notes!).filter(([k]) => !gone.includes(k)));
-    if (gone.some((k) => e.hidden?.includes(k))) next.hidden = e.hidden!.filter((k) => !gone.includes(k));
-    applyEdits(next, label, 'user');
-  }
 
-  /** A picture as a new kind of object: drawn down to 64 px a square (128 for one square),
-   * kept as an asset, described in `Edits.sprites`; then chosen in the menu. */
   /** Why the spot under the pointer won't do, while placing a village or town (null: it will). */
   let placeNote = $state<string | null>(null);
   let spotSeq = 0;
@@ -3666,9 +3608,9 @@
     townStreetBack: () => !!T.streetTool?.back(),
     townStreetDelete: () => T.deletePicked(),
     townBrush: (d) => (T.townSize = Math.max(0.25, Math.min(4, T.townSize * (d > 0 ? 1.15 : 1 / 1.15)))),
-    groundMode: (m) => (ground.mode = m),
-    groundBrush: (d) => groundArmed?.size(d),
-    groundRemove: () => !!groundArmed?.remove(),
+    groundMode: (m) => (G.ground.mode = m),
+    groundBrush: (d) => G.groundArmed?.size(d),
+    groundRemove: () => !!G.groundArmed?.remove(),
     playTool: (t) => play.setTool(t),
     removeTokens: () => play.removeSelected(),
     newToken: () => play.newTokenAtPointer(),
@@ -3687,7 +3629,7 @@
         return true;
       },
       () => !!S.placer()?.escape(),
-      () => !!groundArmed?.escape(),
+      () => !!G.groundArmed?.escape(),
       ...B.escapes,
       () => !!T.townTool?.reset(),
       () => !!T.streetTool?.reset(),
@@ -3738,7 +3680,7 @@
         if (s) S.scatterArmed.tool.putBack();
         S.scatterArmed.tool.refresh();
       }
-      groundArmed?.refresh();
+      G.groundArmed?.refresh();
     };
     view.onPick = (x, y, sx, sy) => void pick(x, y, sx, sy);
     view.onPlaces = (on) => setPlaces(on);
@@ -4004,7 +3946,7 @@
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a town, ruin, dungeon, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, roads, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the selected town or the one in view (U)', hint: 'Re-plan the selected town, or the one in view: its streets, wards, lots and walls.' },
-        { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
+        { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s G.ground; draw plateaus, cliffs and pits.' },
         { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap outdoors: place, brush, erase, or upload your own.' },
         {
           key: 'design',
@@ -4012,8 +3954,8 @@
           icon: 'room',
           kbd: 'D',
           disabled: !canDesign && !designer && !canLink && !linkOn,
-          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : canLink || linkOn ? 'Put ways across down between places below ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
-          hint: linkOn ? 'Ways across: stairs, ladders, passages and more from a square below ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
+          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : canLink || linkOn ? 'Put ways across down between places below G.ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
+          hint: linkOn ? 'Ways across: stairs, ladders, passages and more from a square below G.ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
         },
       ]}
       tab={shell.tabs.edit}
@@ -4117,14 +4059,14 @@
           />
         {:else if groundOn}
           <GroundPanel
-            bind:settings={ground}
-            selected={groundChosen}
+            bind:settings={G.ground}
+            selected={G.groundChosen}
             sea={view.geom?.sea_level_ft ?? 0}
-            near={groundNear}
+            near={G.groundNear}
             inside={!!inside}
             {peek}
-            onPlateau={(id, p) => groundArmed?.change(id, p)}
-            onRemove={() => groundArmed?.remove()}
+            onPlateau={(id, p) => G.groundArmed?.change(id, p)}
+            onRemove={() => G.groundArmed?.remove()}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 2)) })}
             islets={genIslets.map((i) => ({ id: i.id, x: i.x, y: i.y, r: i.r, river: i.river, removed: (edits.hidden ?? []).includes(i.id), tower: !!i.tower }))}
             onIslet={setIslet}

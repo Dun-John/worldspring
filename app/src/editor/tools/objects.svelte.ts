@@ -134,6 +134,8 @@ export function objectTools(host: ObjectsHost) {
     host.applyEdits({ ...e, objects: o, cleared: { ...(e.cleared ?? {}), ...cleared } }, { ...label, ...(Object.keys(cleared).length ? { clears: Object.keys(cleared).length } : {}) }, 'user');
   }
 
+  /** A picture as a new kind of object: drawn down to 64 px a square (128 for one square),
+   * kept as an asset, described in `Edits.sprites`; then chosen in the menu. */
   async function uploadSprite(file: File, meta: SpriteMeta) {
     const canvas = await shrink(file, meta.size <= 1 ? 128 : Math.min(512, Math.round(meta.size * 64)));
     const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('The picture could not be read'))), 'image/png'));
