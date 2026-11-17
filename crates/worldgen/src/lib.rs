@@ -17,6 +17,7 @@ pub mod paths;
 pub mod interior;
 pub mod links;
 pub mod lod;
+pub mod model;
 pub mod park;
 pub mod payload;
 pub mod pipeline;

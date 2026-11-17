@@ -12,9 +12,7 @@ use crate::core::rng::{Pcg32, hash2, unit};
 use crate::t0::T0;
 use crate::t0::settle::{PoiKind, Tier};
 use crate::under::UnderKind;
-
-/// How far a POI layout reaches from its point (ft).
-pub const SITE_REACH_FT: f64 = 260.0;
+pub use crate::model::consts::SITE_REACH_FT;
 
 /// What a generated ruin's way down comes to: a dungeon under the hold or its crypt, from the
 /// site's seed alone (v63: placement asks it before the site is laid out).

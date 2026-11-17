@@ -1,6 +1,7 @@
 //! Names and notes: positions, ids, NPC and plot rows, where things are, place names.
 
 use super::*;
+pub use crate::model::ids::{split_room_id, split_point_id};
 
 /// The created site a layout id was deleted with: `b:<layout>:..`, `d:`, `t:`, `u:`, `k:`, `w:`, `l:`
 /// and `r:` ids of a site whose `c:` entry is removed (layout numbers stay, so the ids are retired).
@@ -203,26 +204,6 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
         ("sq" | "gt", _) => town::places::find(world, t0, id).map(|x| x.1.at),
         _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
     }
-}
-
-/// A level's or room's id split into its site, level and room: `l:<site>:<level>`,
-/// `r:<site>:<level>:<room>`.
-pub fn split_room_id(id: &str) -> Option<(&str, usize, Option<usize>)> {
-    if let Some(rest) = id.strip_prefix("l:") {
-        let (site, lv) = rest.rsplit_once(':')?;
-        return Some((site, lv.parse().ok()?, None));
-    }
-    let (head, room) = id.strip_prefix("r:")?.rsplit_once(':')?;
-    let (site, lv) = head.rsplit_once(':')?;
-    Some((site, lv.parse().ok()?, Some(room.parse().ok()?)))
-}
-
-/// A point note's id split into its site, level and own id: `m:<site>:<level>:<id>` (the
-/// site id is everything between).
-pub fn split_point_id(id: &str) -> Option<(&str, usize, &str)> {
-    let (head, own) = id.strip_prefix("m:")?.rsplit_once(':')?;
-    let (site, lv) = head.rsplit_once(':')?;
-    Some((site, lv.parse().ok()?, own))
 }
 
 /// The site and level of a level, room or point note id (`l:`, `r:`, `m:`).

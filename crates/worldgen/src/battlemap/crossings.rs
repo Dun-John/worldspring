@@ -1,9 +1,8 @@
 //! Bridges, fords, ferries and jetties: crossing shapes, decks and their levels.
 
 use super::*;
+pub use crate::model::consts::JETTY_FT;
 
-/// A ferry's jetties (ft), from the ends of its line back to its banks.
-pub const JETTY_FT: f64 = 24.0;
 pub const JETTY_WIDTH_FT: f64 = 9.0;
 
 /// A street square steps up once shaping leaves it climbing at least `g_on` along its street (and
