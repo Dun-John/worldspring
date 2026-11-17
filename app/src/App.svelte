@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, LinkEdit, LinkEnd, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, SettlementFacts, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
+  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, SettlementFacts, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
@@ -48,7 +48,7 @@
   import { type StreetPick } from './editor/streets';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
-  import { endSite, LinkTool, newLinkId } from './editor/links';
+  import { linkTools } from './editor/tools/links.svelte';
   import LinkPanel from './ui/LinkPanel.svelte';
   import { belowGround } from './editor/site/model';
   import { buildTools } from './editor/tools/build.svelte';
@@ -1459,7 +1459,7 @@
     const selTool = B.buildArmed && B.buildMode === 'select' ? Sel.arm() : null;
     if (!selTool && Sel.tool) Sel.disarm();
     const town = townOn && townUnderlay.adjust && townUnderlay.visible ? T.townTraceTool : T.streetPlan ? T.streetTool : T.townTool;
-    view.tool = pickTool ?? placeTool ?? designer ?? (linkOn ? linkTool : null) ?? selTool ?? buildTool ?? town ?? G.groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
+    view.tool = pickTool ?? placeTool ?? designer ?? (L.linkOn ? L.linkTool : null) ?? selTool ?? buildTool ?? town ?? G.groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -1467,7 +1467,7 @@
   function go(to: Section | null, tab?: string) {
     const t = to && to !== 'play' ? (tab ?? shell.tabs[to]) : undefined;
     if (busy && (to === 'edit' || to === 'play')) return;
-    if (to === 'edit' && t === 'design' && !designer && !canDesign && !canLink && !linkOn) return toast(playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it');
+    if (to === 'edit' && t === 'design' && !designer && !canDesign && !L.canLink && !L.linkOn) return toast(playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it');
     const keepSketch = to === 'world';
     const keepDesign = to === 'edit' && t === 'design';
     if (sketchOn && !keepSketch && sketchDirty()) return ask('sketch', () => go(to, tab));
@@ -1482,9 +1482,9 @@
     if (editTab !== 'town') T.disarmTown();
     if (editTab !== 'ground') G.disarmGround();
     if (editTab !== 'sites') disarmPlace();
-    if (editTab !== 'design') disarmLinks();
+    if (editTab !== 'design') L.disarmLinks();
     // (Where no rooms can be designed, Rooms puts ways across down.)
-    else if (!designer && !canDesign) linkOn = true;
+    else if (!designer && !canDesign) L.linkOn = true;
     pickTool = null;
     if (to && to !== shell.section) {
       shell.collapsed = false;
@@ -1497,8 +1497,8 @@
     if (editTab === 'build') B.armBuild();
     if (editTab === 'town') T.armTown();
     if (editTab === 'ground') G.armGround();
-    if (editTab === 'design' && !designer && !linkOn) void openDesigner();
-    if (editTab === 'design' && linkOn) armLinks();
+    if (editTab === 'design' && !designer && !L.linkOn) void openDesigner();
+    if (editTab === 'design' && L.linkOn) L.armLinks();
     if (to === 'world' && t === 'sketch' && !sketchOn) enterSketch();
     if (to === 'play') startPlay();
     syncTool();
@@ -1548,7 +1548,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), sel: () => Sel, editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => designSettings, designer: () => designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), sel: () => Sel, links: () => L, editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => designSettings, designer: () => designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1805,139 +1805,32 @@
     syncTool();
   }
 
-  // Rooms › Ways across (paired exits, `Edits.links`): the first end put down, the way and name for
-  // the next, the one picked (to change or take away), and why an end was left off.
-  let linkOn = $state(false);
-  let linkFirst = $state<LinkEnd | null>(null);
-  let linkWay = $state('stairs');
-  let linkName = $state('');
-  let linkPicked = $state<string | null>(null);
-  let linkNote = $state<string | null>(null);
-  /** Level ids (`l:`) named for the panel: the site's name and the level's. */
-  let linkNames = $state<Record<string, { site: string; level: string }>>({});
-  /** An end's name for the panel: its level's, and its site's unless that is the place in view. */
-  function endName(lv: string): string {
-    const n = linkNames[lv];
-    if (!n) return '…';
-    // (A sewer end always carries the sewers' name: its sections have no names of their own.)
-    const site = endSite(lv).site;
-    return site === inside?.id && !site.startsWith('w:') ? n.level : `${n.site} · ${n.level}`;
-  }
-  let linkTool: LinkTool | null = null;
-  /** In a place a way across can go: below ground, or a building with cellars (not while playing). */
-  const canLink = $derived(!!inside && !playOn && (/^[uwk]:/.test(inside.id) || (inside.id.startsWith('b:') && inside.levels.some((l) => l.z < 0))));
-
-  /** Rooms on its ways across (the designer shut first; unsaved rooms asked about). */
-  function openLinks() {
-    if (designer?.dirty) return ask('design', openLinks);
-    linkOn = true;
-    if (designer) closeDesigner();
-    go('edit', 'design');
-  }
-
-  /** Back from the ways across to designing the rooms. */
-  function closeLinks() {
-    disarmLinks();
-    go('edit', 'design');
-  }
-
-  function armLinks() {
-    linkTool ??= new LinkTool(view, {
-      edits: () => edits,
-      first: () => linkFirst,
-      picked: () => linkPicked,
-      square: linkSquare,
-      chip: (x, y, text) => S.chipAt(x, y, text),
-    });
-    syncTool();
-  }
-
-  function disarmLinks() {
-    if (!linkOn) return;
-    linkOn = false;
-    [linkFirst, linkPicked, linkNote] = [null, null, null];
-    syncTool();
-  }
-
-  /** A square picked with the ways-across tool: the first end, the second (the link is put down),
-   * or an end of one put down earlier (it is picked). */
-  function linkSquare(end: LinkEnd, id: string | null) {
-    linkNote = null;
-    if (!linkFirst) {
-      [linkPicked, linkFirst] = id ? [id, null] : [null, end];
-      return;
-    }
-    const a = linkFirst;
-    if (id || (end.level === a.level && end.x === a.x && end.y === a.y)) return toast('That square has a way across already: pick another for the other end');
-    linkFirst = null;
-    const jid = newLinkId();
-    const link: LinkEdit = { a, b: end, way: linkWay, ...(linkName.trim() ? { name: linkName.trim() } : {}) };
-    applyEdits({ ...edits, links: { ...(edits.links ?? {}), [jid]: link } }, { tool: 'create_link', id: jid, way: linkWay }, 'user');
-    linkName = '';
-    linkPicked = jid;
-    void checkLink(jid, link);
-  }
-
-  /** Whether both ends of a link just put down took it (an end on stairs, a way, a hazard or a
-   * square that is not floor is left off): if not, say so. */
-  async function checkLink(id: string, l: LinkEdit) {
-    const off: string[] = [];
-    for (const e of [l.a, l.b]) {
-      const { site, level } = endSite(e.level);
-      const it = await view.gen.interior(site);
-      if (!it?.levels[level]?.links?.some((k) => k.id === id)) off.push(endName(e.level));
-    }
-    if (edits.links?.[id] === l && off.length) linkNote = `No way across shows at ${off.join(' or ')}: that square has stairs, a way on, a hazard or another way across. Take it away and pick another square.`;
-  }
-
-  function changeLink(id: string, patch: { way?: string; name?: string }) {
-    const l = edits.links?.[id];
-    if (!l) return;
-    const next: LinkEdit = { ...l, ...patch };
-    if (!next.name) delete next.name;
-    applyEdits({ ...edits, links: { ...(edits.links ?? {}), [id]: next } }, { tool: 'create_link', id, way: next.way, changed: true }, 'user');
-  }
-
-  function removeLink(id: string) {
-    const { [id]: _, ...rest } = edits.links ?? {};
-    if (!_) return;
-    applyEdits({ ...edits, links: rest }, { tool: 'delete_link', id }, 'user');
-    if (linkPicked === id) linkPicked = null;
-    linkNote = null;
-  }
-
-  /** The ways across with an end in the place in view (in the sewers, anywhere in the network), and the one picked. */
-  const linksHere = $derived.by(() => {
-    const id = inside?.id ?? '';
-    const net = /^w:(\d+):/.exec(id);
-    const at = (level: string) => {
-      const site = endSite(level).site;
-      return site === id || (!!net && site.startsWith(`w:${net[1]}:`));
-    };
-    return Object.entries(edits.links ?? {})
-      .filter(([k, l]) => k === linkPicked || at(l.a.level) || at(l.b.level))
-      .map(([k, l]) => ({ id: k, link: l, a: endName(l.a.level), b: endName(l.b.level) }));
-  });
-
-  // Each level the panel names, asked for once ("Undermountain · Level 2"; renamed: as renamed).
-  $effect(() => {
-    if (!linkOn) return;
-    const want = new Set<string>();
-    for (const l of linksHere) [l.link.a.level, l.link.b.level].forEach((v) => want.add(v));
-    if (linkFirst) want.add(linkFirst.level);
-    for (const lv of want) {
-      if (lv in linkNames) continue;
-      linkNames[lv] = { site: '…', level: '…' };
-      void (async () => {
-        const { site, level } = endSite(lv);
-        const [p, q] = await Promise.all([placeInfo(site), placeInfo(lv)]);
-        // (As the title inside has them: a sewer section by its network, a site by its town.)
-        const li = Number(site.split(':')[1]);
-        const own = renames[site] ?? (site.startsWith('w:') ? (renames[`w:${li}`] ?? `Sewers of ${settlementName(li)}`) : null);
-        const siteName = own ?? (/^[uk]:/.test(site) && p?.name ? `${settlementName(li)} · ${p.name}` : (p?.name ?? 'a place below ground'));
-        linkNames[lv] = { site: siteName, level: q?.name ?? `level ${level + 1}` };
-      })();
-    }
+  const L = linkTools({
+    view,
+    get edits() {
+      return edits;
+    },
+    get renames() {
+      return renames;
+    },
+    get inside() {
+      return inside;
+    },
+    get playOn() {
+      return playOn;
+    },
+    get designer() {
+      return designer;
+    },
+    ask: (kind, proceed) => ask(kind, proceed),
+    closeDesigner,
+    go,
+    syncTool,
+    chipAt: (x, y, text) => S.chipAt(x, y, text),
+    placeInfo,
+    settlementName,
+    toast,
+    applyEdits,
   });
 
   /** Shut the designer; unsaved changes are dropped (the site shown as saved). */
@@ -1948,7 +1841,7 @@
     designer = null;
     view.designing = null;
     // (Shut while its tab is showing: Edit falls back to Places, unless on to the ways across.)
-    if (shell.tabs.edit === 'design' && !linkOn) shell.tabs.edit = 'sites';
+    if (shell.tabs.edit === 'design' && !L.linkOn) shell.tabs.edit = 'sites';
     syncTool();
     if (d.dirty && view.interior?.interior.id === d.id) void view.enterBuilding(d.id, { level: view.interior.currentLevel });
   }
@@ -3562,13 +3455,13 @@
     sketching: () => sketchOn,
     designing: () => !!designer,
     linksToggle: () => {
-      if (linkOn ? !canDesign : !canLink) return false;
-      if (linkOn) closeLinks();
-      else openLinks();
+      if (L.linkOn ? !canDesign : !L.canLink) return false;
+      if (L.linkOn) L.closeLinks();
+      else L.openLinks();
       return true;
     },
-    linking: () => linkOn && !!linkPicked,
-    linkRemove: () => linkPicked && removeLink(linkPicked),
+    linking: () => L.linkOn && !!L.linkPicked,
+    linkRemove: () => L.linkPicked && L.removeLink(L.linkPicked),
     inside: () => !!view.interior,
     building: () => !!B.buildArmed,
     tokensSelected: () => play.selection.size > 0,
@@ -3667,7 +3560,7 @@
       () => (townOn && (T.townPatch !== null || T.townCorner !== null) ? ((T.townPatch = null), (T.townCorner = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
-      () => (linkOn && (linkFirst || linkPicked) ? ((linkFirst = linkPicked = null), true) : false),
+      () => (L.linkOn && (L.linkFirst || L.linkPicked) ? ((L.linkFirst = L.linkPicked = null), true) : false),
       () => (designer ? (go('edit', 'sites'), true) : false),
       () => (shell.phone && shell.card ? ((shell.card = false), true) : false),
       () => (noteSel ? (closeNote(), true) : false),
@@ -3978,9 +3871,9 @@
           label: 'Rooms',
           icon: 'room',
           kbd: 'D',
-          disabled: !canDesign && !designer && !canLink && !linkOn,
-          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : canLink || linkOn ? 'Put ways across down between places below ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
-          hint: linkOn ? 'Ways across: stairs, ladders, passages and more from a square below ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
+          disabled: !canDesign && !designer && !L.canLink && !L.linkOn,
+          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : L.canLink || L.linkOn ? 'Put ways across down between places below ground (D)' : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
+          hint: L.linkOn ? 'Ways across: stairs, ladders, passages and more from a square below ground to another level or place.' : 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
         },
       ]}
       tab={shell.tabs.edit}
@@ -4118,21 +4011,21 @@
               onEmpty={() => S.scatterArmed?.tool.escape() || (S.scatter.kinds = [])}
               onSize={(d) => S.scatterArmed?.tool.size(d)}
             />
-        {:else if shell.tabs.edit === 'design' && linkOn}
+        {:else if shell.tabs.edit === 'design' && L.linkOn}
           <LinkPanel
             {peek}
             here={inside ? `${inside.name} · ${inside.levels[inside.level]?.name ?? ''}` : ''}
-            first={linkFirst ? endName(linkFirst.level) : null}
-            bind:way={linkWay}
-            bind:name={linkName}
-            links={linksHere}
-            picked={linkPicked}
-            note={linkNote}
-            onPick={(id) => ((linkPicked = id), (linkFirst = null))}
-            onChange={changeLink}
-            onRemove={removeLink}
-            onDrop={() => (linkFirst = null)}
-            onRooms={canDesign ? closeLinks : undefined}
+            first={L.linkFirst ? L.endName(L.linkFirst.level) : null}
+            bind:way={L.linkWay}
+            bind:name={L.linkName}
+            links={L.linksHere}
+            picked={L.linkPicked}
+            note={L.linkNote}
+            onPick={(id) => ((L.linkPicked = id), (L.linkFirst = null))}
+            onChange={L.changeLink}
+            onRemove={L.removeLink}
+            onDrop={() => (L.linkFirst = null)}
+            onRooms={canDesign ? L.closeLinks : undefined}
           />
         {:else if designer}
           <DesignPanel
@@ -4151,7 +4044,7 @@
               onReset={resetDesign}
               onProblem={showProblem}
               held={S.held}
-              onLinks={canLink ? openLinks : undefined}
+              onLinks={L.canLink ? L.openLinks : undefined}
             />
         {:else if shell.tabs.edit === 'design' && !peek}
           <div class="empty"><p>Opening the designer…</p></div>
