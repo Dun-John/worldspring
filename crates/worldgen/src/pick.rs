@@ -17,7 +17,7 @@
 //!   removable), `crossing` (`v:<id>`: removable), `water` (`e:<id>`: removable), `harbour`
 //!   (`q:<id>`, a quay, pier or breakwater built by hand: removable);
 //! - `street` / `lane` of a generated town or village (`tr:<layout>:<8 hex>`, `town::cut`) and
-//!   `path` (`pp:<layout>:<spot>:<j>`, a park's, garden's or cemetery's walk): removable
+//!   `path` (`pp:<layout>:<spot>:<j>`, a park's, garden's or cemetery's walk; only in picks up to 400 ft out, a click or a small box): removable
 //!   (`roadcut`, `TownEdit::removed`); one added to a generated town by hand (`ts:<layout>:<id>`,
 //!   `TownEdit::streets`): removable. Roads, streets and paths removed by hand are left out;
 //! - without ids: a hand town's streets (changed in its street plan), a place's lanes, `hedge` /
@@ -61,9 +61,31 @@ pub struct Thing {
     pub removable: bool,
     /// World ft: x0, y0, x1, y1.
     pub bbox: [f64; 4],
+    /// For a line (road, street, lane, path, drawn road): its points near the pick (at most `LINE_PTS`), so an area can tell
+    /// whether the line runs through it. Only `pick_json` gives it.
+    #[serde(skip)]
+    pub line: Option<Vec<P>>,
 }
 
+/// The widest pick (ft from its middle to its corners) that lists parks' paths (`pp:`): a click or a small box.
+const PARK_PICK_FT: f64 = 400.0;
+
 /// How high a kind lies (lower first).
+/// The most points of a line `Thing::line` keeps.
+const LINE_PTS: usize = 160;
+
+/// The part of `pts` that runs within `r` of `at` (the run from the first to the last segment that does), thinned to `LINE_PTS`.
+fn clip(pts: &[P], at: P, r: f64) -> Vec<P> {
+    let near = |w: &[P]| w[0][0].min(w[1][0]) <= at[0] + r && w[0][0].max(w[1][0]) >= at[0] - r && w[0][1].min(w[1][1]) <= at[1] + r && w[0][1].max(w[1][1]) >= at[1] - r;
+    let (Some(a), Some(b)) = (pts.windows(2).position(near), pts.windows(2).rposition(near)) else { return Vec::new() };
+    let run = &pts[a..=b + 1];
+    if run.len() <= LINE_PTS {
+        return run.to_vec();
+    }
+    let n = run.len() - 1;
+    (0..LINE_PTS).map(|i| run[i * n / (LINE_PTS - 1)]).collect()
+}
+
 fn rank(kind: &str) -> u8 {
     match kind {
         "entrance" => 0,
@@ -131,11 +153,14 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
     let mut out: Vec<Found> = Vec::new();
     // (Why the things put next are their town's: set per layout.)
     let why_now: Cell<(Option<&'static str>, Option<f32>)> = Cell::new((None, None));
+    // (A line's points, set just before the `put` of it.)
+    let line_now: Cell<Option<Vec<P>>> = Cell::new(None);
     let mut put = |d: f64, kind: &'static str, id: Option<String>, name: Option<String>, town: Option<String>, removable: bool, bbox: [f64; 4]| {
+        let line = line_now.take();
         if d <= r {
             let seq = out.len();
             let (why, gap_ft) = if town.is_some() { why_now.get() } else { (None, None) };
-            out.push(Found { d: d.max(0.0), seq, thing: Thing { kind, id, name, town, why, gap_ft, removable, bbox } });
+            out.push(Found { d: d.max(0.0), seq, thing: Thing { kind, id, name, town, why, gap_ft, removable, bbox, line } });
         }
     };
     let feature = |li: usize| crate::agent::feature_of_layout(world, t0, li);
@@ -246,8 +271,14 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
         let half = if l.tier == Tier::Village { 6.0 } else { 10.0 };
         let generated = town::added::home(world, t0, li).is_some();
         let cut = if generated { town::cut::Cut::of(world, t0, l) } else { None };
-        let trs: Vec<(u8, usize, u32)> = if generated { town::cut::street_ids(world, t0, l) } else { Vec::new() };
-        let tr = |tag: u8, k: usize| trs.iter().find(|x| x.0 == tag && x.1 == k).map(|x| town::cut::street_id(li, x.2));
+        // (The ids are worked out once, when a line in reach asks for its own.)
+        let trs: std::cell::OnceCell<Vec<(u8, usize, u32)>> = std::cell::OnceCell::new();
+        let tr = |tag: u8, k: usize| {
+            if !generated {
+                return None;
+            }
+            trs.get_or_init(|| town::cut::street_ids(world, t0, l)).iter().find(|x| x.0 == tag && x.1 == k).map(|x| town::cut::street_id(li, x.2))
+        };
         let gone = |tag: u8, k: usize| cut.as_ref().is_some_and(|c| c.line(tag, k));
         for (k, s) in l.streets.iter().enumerate() {
             if (generated && l.tier != Tier::Village) || gone(town::cut::STREETS, k) {
@@ -255,6 +286,7 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
             }
             if near_box(s, at, r + half) {
                 let id = tr(town::cut::STREETS, k);
+                line_now.set(Some(clip(s, at, r + half)));
                 put(line_d(s, false, at) - half, lane, id.clone(), None, home.clone(), id.is_some(), bbox(s, half));
             }
         }
@@ -267,11 +299,13 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
             if near_box(s, at, r + 0.5 * w) {
                 let id = added.iter().find(|x| x.0 == k).map(|x| format!("ts:{li}:{}", x.1)).or_else(|| tr(town::cut::ROADS, k));
                 let removable = id.is_some();
+                line_now.set(Some(clip(s, at, r + 0.5 * w)));
                 put(line_d(s, false, at) - 0.5 * w, lane, id, None, home.clone(), removable, bbox(s, 0.5 * w));
             }
         }
         // (R5) A generated settlement's parks' paths (`pp:`), as their battlemaps lay them out.
-        if generated {
+        // (A park is laid out for each one in reach, so only for a click or a box of a few parks: `PARK_PICK_FT`.)
+        if generated && r <= PARK_PICK_FT {
             for (pk, park) in l.parks.iter().enumerate() {
                 if park.kind == town::ParkKind::Horses || !near_box(&park.pts, at, r) {
                     continue;
@@ -284,6 +318,7 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                     if gone.is_some_and(|g| g.contains(&(j as u32))) || !near_box(pts, at, r + 0.5 * w) {
                         continue;
                     }
+                    line_now.set(Some(clip(pts, at, r + 0.5 * w)));
                     put(line_d(pts, false, at) - 0.5 * w, "path", Some(town::cut::path_id(li, &spot, j)), None, home.clone(), true, bbox(pts, 0.5 * w));
                 }
             }
@@ -336,6 +371,16 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                 (None, Some(_)) => crate::roadids::stretch_name(world, t0, fs.get_or_init(|| crate::agent::features(world, t0)), id, rc),
                 (None, None) => None,
             };
+            if d <= r {
+                line_now.set(Some(clip(&rc.pts, at, r + 0.5 * rc.class.width_ft())));
+            }
+            // (Its class first, then its name if it has one: "King's road (Old Salt Way)".)
+            let class = crate::roadids::class_name(rc.class);
+            let class = format!("{}{}", class[..1].to_uppercase(), &class[1..]);
+            let name = Some(match name {
+                Some(n) => format!("{class} ({n})"),
+                None => class,
+            });
             put(d, "road", Some(id.clone()), name, None, true, bbox(&rc.pts, 0.5 * rc.class.width_ft()));
         }
     }
@@ -348,13 +393,15 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
         }
         let id = &tracks.get_or_init(|| crate::t0::made::track_ids(t0))[k];
         if !edits.removed_roads.contains(id) {
-            put(line_d(&m.track, false, at) - half, "road", Some(id.clone()), None, None, true, bbox(&m.track, half));
+            line_now.set(Some(clip(&m.track, at, r + half)));
+            put(line_d(&m.track, false, at) - half, "road", Some(id.clone()), Some("Track".into()), None, true, bbox(&m.track, half));
         }
     }
     // Drawn by hand: roads, crossings, water, harbour pieces.
     for (id, p) in &edits.paths {
         let half = 0.5 * p.width.unwrap_or_else(|| p.kind.width_ft());
         if near_box(&p.pts, at, r + half) {
+            line_now.set(Some(clip(&p.pts, at, r + half)));
             put(line_d(&p.pts, false, at) - half, "drawn_road", Some(id.clone()), renamed(id).or_else(|| p.name.clone()), mid(&p.pts).and_then(town_at), true, bbox(&p.pts, half));
         }
     }
@@ -391,5 +438,12 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
 }
 
 pub fn pick_json(world: &World, t0: &T0, x: f64, y: f64, radius_ft: f64) -> String {
-    serde_json::to_string(&pick(world, t0, [x, y], radius_ft)).expect("serializable")
+    let things = pick(world, t0, [x, y], radius_ft);
+    let mut v = serde_json::to_value(&things).expect("serializable");
+    for (t, j) in things.iter().zip(v.as_array_mut().into_iter().flatten()) {
+        if let Some(l) = t.line.as_ref().filter(|l| !l.is_empty()) {
+            j["line"] = serde_json::json!(l);
+        }
+    }
+    v.to_string()
 }

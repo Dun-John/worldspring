@@ -734,8 +734,6 @@ impl T0 {
             .collect();
     }
 
-    /// How cold the ground is at a world position (`under::cold_of` of its nearest cell).
-    #[inline]
     /// (Roadmap 6 R5) The stretch an `rd:` id names (its index in `roads.roads`).
     pub fn road_index(&self, id: &str) -> Option<usize> {
         let index = self.road_index.get_or_init(|| crate::lod::roads::road_keys(&self.roads).into_iter().enumerate().map(|(i, k)| (k, i as u32)).collect());
@@ -752,6 +750,8 @@ impl T0 {
         Some(ids.iter().filter_map(|id| self.road_index(id)).map(|i| i as u32).collect())
     }
 
+    /// How cold the ground is at a world position (`under::cold_of` of its nearest cell).
+    #[inline]
     pub fn cold_at(&self, world: &World, x_ft: f64, y_ft: f64) -> crate::model::under::Cold {
         let (w, h) = (self.height.w, self.height.h);
         let (i, j) = (((x_ft / self.cell_ft).round().max(0.0) as usize).min(w - 1), ((y_ft / self.cell_ft).round().max(0.0) as usize).min(h - 1));
@@ -1043,9 +1043,17 @@ impl T0 {
     /// river's width (ft). Found as the battlemap finds them (`RiverNet::crossing_level`), narrowed
     /// down along the stretch of road that meets the water.
     pub fn bridge_marks(&self) -> Vec<[f64; 7]> {
+        self.bridge_marks_but(None)
+    }
+
+    /// `bridge_marks` without the stretches in `gone` (`gone_roads`: removed by hand).
+    pub fn bridge_marks_but(&self, gone: Option<&crate::core::hash::FastSet<u32>>) -> Vec<[f64; 7]> {
         let cache = crate::lod::rivers::CrossingCache::default();
         let mut out = Vec::new();
-        for r in &self.roads.roads {
+        for (ri, r) in self.roads.roads.iter().enumerate() {
+            if gone.is_some_and(|g| g.contains(&(ri as u32))) {
+                continue;
+            }
             let first = out.len();
             // The places along the road that meet the water, with the road's direction there.
             let mut hits: Vec<([f64; 2], f64, [f64; 2])> = Vec::new();

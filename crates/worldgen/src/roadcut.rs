@@ -33,7 +33,7 @@ const PAD_FT: f64 = 50.0;
 const APPROACH_FT: f64 = 2.0;
 /// The most boxes one line is redrawn as.
 const MAX_BOXES: usize = 39;
-/// The most ids one call takes.
+/// The most ids one MCP call takes (`cut` takes any number: the app's Select box can hold thousands).
 pub const MAX_IDS: usize = 500;
 
 #[derive(Clone, Debug, Serialize)]
@@ -241,7 +241,7 @@ pub fn cut(world: &World, t0: &T0, ids: &[String], restore: bool, dry: bool) -> 
     let tracks = if ids.iter().any(|id| id.starts_with("mt:")) { crate::t0::made::track_ids(t0) } else { Vec::new() };
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     let refuse = |out: &mut CutOut, id: &str, why: &str| out.refused.push(Refused { id: id.to_string(), why: why.to_string() });
-    for id in ids.iter().take(MAX_IDS) {
+    for id in ids {
         if !seen.insert(id.as_str()) {
             continue;
         }
@@ -377,9 +377,6 @@ pub fn cut(world: &World, t0: &T0, ids: &[String], restore: bool, dry: bool) -> 
             _ => refuse(&mut out, id, "not a road, street or path id (rd:, mt:, tr:, pp:, rw:, ts:)"),
         }
     }
-    if ids.len() > MAX_IDS {
-        out.refused.push(Refused { id: String::new(), why: format!("at most {MAX_IDS} ids a call: the rest were left") });
-    }
     if !dry {
         if gone != e.removed_roads {
             out.removed_roads = Some(gone);
@@ -444,6 +441,10 @@ pub fn removed(world: &World, t0: &T0) -> Vec<Removed> {
     }
     for (key, t) in &e.towns {
         let Ok(li) = key.parse::<usize>() else { continue };
+        // (A town laid out by hand keeps its `removed` only for taking it back to generated.)
+        if town::hand::is_hand(world, li) {
+            continue;
+        }
         for local in &t.removed {
             let id = if local.contains(':') { format!("pp:{li}:{local}") } else { format!("tr:{li}:{local}") };
             let found = town::cut::removed_of(world, t0, li).is_some_and(|r| r.contains(local)) && matches!(town_line(world, t0, &id), Ok(Some(_)));

@@ -202,6 +202,9 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn remove_roads(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
     let restore = a["restore"].as_bool().unwrap_or(false);
+    if ids.len() > worldgen::roadcut::MAX_IDS {
+        return Err(format!("at most {} ids a call (got {}): nothing was changed", worldgen::roadcut::MAX_IDS, ids.len()));
+    }
     let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
     let out = app.worker.with(move |ex| Ok(worldgen::roadcut::cut(&ex.world, &ex.t0, &ids, restore, false))).await?;
     let refused: Vec<Value> = out.refused.iter().map(|r| json!({ "id": r.id, "why": r.why })).collect();

@@ -254,6 +254,14 @@ impl Ctx {
         worldgen::roadcut::cut_json(&self.world, t0, &i.ids, i.restore, i.dry).to_string()
     }
 
+    /// (Roadmap 6 R5) The overlay's `bridges` without the stretches removed by hand (`[[x, y, dx, dy,
+    /// class, kind, width], ..]`), for the app once `Edits.removed_roads` changes.
+    pub fn bridge_marks_json(&self) -> String {
+        let Some(t0) = &self.t0 else { return "[]".into() };
+        let marks = t0.bridge_marks_but(t0.gone_roads(&self.world).as_ref());
+        serde_json::to_string(&marks.iter().map(|b| [b[0].round(), b[1].round(), (b[2] * 100.0).round() / 100.0, (b[3] * 100.0).round() / 100.0, b[4], b[5], b[6].round()]).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
+    }
+
     /// (Roadmap 6 R5) Everything removed by hand, for the Gazetteer (`roadcut::removed`): `[{id,
     /// name, what, at, found}]`.
     pub fn removed_roads_json(&self) -> String {
