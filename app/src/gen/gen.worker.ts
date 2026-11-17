@@ -69,6 +69,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                     ? c.parents_json()
                     : a.op === 'members'
                     ? c.members_json(a.town, a.add, a.remove)
+                    : a.op === 'reach'
+                    ? c.reach_json(a.ids, a.within)
                     : a.op === 'spot'
                       ? c.creation_spot_json(a.kind, a.under, a.id, a.x, a.y)
                       : a.op === 'bridgelots'

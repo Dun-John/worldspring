@@ -951,6 +951,8 @@ export type Ask =
   | { op: 'parents' }
   /** Town layout `town`'s members changed by hand, as `members` entries and created places (`town::members::change`); ids as JSON arrays. */
   | { op: 'members'; town: number; add: string; remove: string }
+  /** The towns things could join and whether a generated building may leave its town (`town::members::join_reach`); ids as a JSON array. */
+  | { op: 'reach'; ids: string; within: number }
   /** Where a site can be created near (x, y), and a name for it (`agent::creation_spot`). */
   | { op: 'spot'; kind: string; under?: string; id: string; x: number; y: number }
   /** Whether a building drawn by hand can stand there, its point and a name

@@ -141,6 +141,8 @@ function createdFeature(c: Created, population?: number): Feature {
   // population in its detail once known, as theirs: the breadcrumbs size a settlement by it.)
   const extent = c.kind === 'building' ? 0.5 * 5280 : c.kind === 'castle' || c.kind === 'wall' ? Math.max(2 * (siteReach(c) - 100), 0.5 * 5280) : c.kind === 'plot' ? 2 * (siteReach(c) - 100) : (MADE_EXTENT_MI[c.kind] ?? 2) * 5280;
   const detail = createdDetail(c) + (isMade(c) && population ? `, pop. ${population.toLocaleString('en-US')}` : '');
+  // (A place, `town::members`: a village whatever its count, as `worldgen::agent::features` lists it.)
+  if (c.kind === 'place') return { id: c.id, kind: 'village', name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: 5 * 5280, detail: '' };
   return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: extent, detail };
 }
 

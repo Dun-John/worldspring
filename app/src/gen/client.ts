@@ -125,6 +125,11 @@ export class GenClient {
     return this.ask({ op: 'members', town, add: JSON.stringify(add), remove: JSON.stringify(remove) }).then((j) => JSON.parse(j) as MembersChange | null);
   }
 
+  /** The towns each thing (`c:<n>`, `b:<layout>:<id>`) could join, within `within` ft of their edge, nearest first, and why a generated building may not leave its town; null if the generator could not answer. */
+  reach(ids: string[], within: number): Promise<Record<string, { towns: [number, number][]; push: string | null }> | null> {
+    return this.ask({ op: 'reach', ids: JSON.stringify(ids), within }).then((j) => JSON.parse(j));
+  }
+
   /** Where a site of `kind` can be created near (x, y), and a name for it; null if the
    * generator could not answer. */
   spot(kind: string, under: string | undefined, id: string, x: number, y: number): Promise<{ x: number; y: number; name: string } | { error: string } | null> {

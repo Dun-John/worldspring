@@ -1666,7 +1666,7 @@
     townChoices: () =>
       (overlay?.features ?? [])
         .filter((f) => SETTLEMENT_KINDS.includes(f.kind))
-        .map((f) => ({ id: f.id, name: renames[f.id] ?? f.name, layout: layoutIndexOf(f.id), x: f.x, y: f.y, extent: sizeOf.get(f.id)?.extent ?? f.extent_ft }))
+        .map((f) => ({ id: f.id, name: renames[f.id] ?? f.name, layout: layoutIndexOf(f.id), place: layoutIndexOf(f.id) >= firstCreated }))
         .filter((t) => t.layout >= 0),
   });
 

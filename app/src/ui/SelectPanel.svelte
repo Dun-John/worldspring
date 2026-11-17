@@ -20,8 +20,9 @@
   };
   const can = (t: Thing) => t.removable && !!t.id;
   const all = $derived(sel.things.filter(can));
-  const joinable = $derived(sel.things.filter(sel.memberable));
-  const leavable = $derived(sel.things.filter(sel.leavable));
+  const joinable = $derived(sel.things.filter(sel.joinable));
+  const leavable = $derived(sel.things.filter((t) => sel.leavable(t) && !sel.leaveBlock(t)));
+  const partOfTown = $derived(sel.things.filter((t) => sel.joinable(t) || sel.leavable(t)));
   const num = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   /** A click's list shows this many rows; the rest are folded by kind until asked for. */
   const ROWS = 8;
@@ -72,13 +73,13 @@
           </div>
         {/each}
       </div>
-      {#if joinable.length}
+      {#if joinable.length || leavable.length}
         <div class="actions">
-          <button class="ws-btn" disabled={sel.busy} onclick={() => sel.join(joinable)}>Join town ({joinable.length})</button>
+          {#if joinable.length}<button class="ws-btn" disabled={sel.busy} onclick={() => sel.join(joinable)}>Join town ({joinable.length})</button>{/if}
           <button class="ws-btn" disabled={sel.busy || !leavable.length} onclick={() => sel.leave(leavable)}>Leave town{leavable.length ? ` (${leavable.length})` : ''}</button>
         </div>
         {@render picker()}
-        <div class="ws-muted">{num(joinable.length, 'thing here can', 'things here can')} be part of a town.</div>
+        <div class="ws-muted">{num(partOfTown.length, 'thing here can', 'things here can')} be part of a town.</div>
       {/if}
       <div class="actions">
         <button class="ws-btn danger" disabled={!all.length || sel.busy} onclick={() => void sel.remove(all)}><Icon name="trash" size={16} /> Delete all that can be{all.length ? ` (${all.length})` : ''}</button>
@@ -98,11 +99,13 @@
               <div class="body">
                 {#if town}<div class="ws-muted">in {town}</div>{/if}
                 {#if part}<div class="ws-muted">{part}</div>{/if}
-                {#if sel.memberable(t)}
+                {#if sel.joinable(t) || sel.leavable(t)}
+                  {@const block = sel.leaveBlock(t)}
                   <div class="actions">
-                    <button class="ws-btn" disabled={sel.busy} onclick={() => sel.join([t])}>Join town</button>
-                    {#if sel.leavable(t)}<button class="ws-btn" disabled={sel.busy} onclick={() => sel.leave([t])}>Leave town</button>{/if}
+                    {#if sel.joinable(t)}<button class="ws-btn" disabled={sel.busy} onclick={() => sel.join([t])}>Join town</button>{/if}
+                    {#if sel.leavable(t)}<button class="ws-btn" disabled={sel.busy || !!block} title={block ?? undefined} onclick={() => sel.leave([t])}>Leave town</button>{/if}
                   </div>
+                  {#if block}<div class="ws-muted">Can't leave: {block.charAt(0).toLowerCase() + block.slice(1)}</div>{/if}
                   {@render picker()}
                 {/if}
                 <div class="actions">

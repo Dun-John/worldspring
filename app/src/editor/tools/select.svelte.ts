@@ -18,20 +18,24 @@ export interface SelectApp {
   toast(text: string, undo?: () => void, more?: Pick<import('../../ui/Toasts.svelte').Toast, 'action' | 'sticky' | 'ms'>): number;
   applyEdits(next: Edits, change: import('../../sync/mapd').Change, author: string, opts?: { record?: boolean; send?: boolean; quiet?: boolean }): void;
   go(to: import('../../ui/shell/layout.svelte').Section | null, tab?: string): void;
-  /** The settlements and places a thing can join (layout index, middle, reach in ft). */
+  /** The settlements and places a thing can join (by layout index; `place`: a place made by pushing buildings out). */
   townChoices(): TownChoice[];
+}
+
+/** What `gen.reach` says of a thing: the towns within `OFFER_FT` of it (layout, gap ft) and why a generated building may not leave its town. */
+export interface Reach {
+  towns: [number, number][];
+  push: string | null;
 }
 
 export interface TownChoice {
   id: string;
   name: string;
   layout: number;
-  x: number;
-  y: number;
-  extent: number;
+  place: boolean;
 }
 
-/** Towns this close to a thing's edge (ft) are offered when it joins; the generator decides what is near enough. */
+/** Towns whose edge is this close to a thing (ft) are offered when it joins (`gen.reach` measures it). */
 const OFFER_FT = 800;
 
 /** A click asks `pick` this far round it (screen px), but never over `MAX_PICK_FT`. */
@@ -56,11 +60,24 @@ export function selectTools(host: SelectApp) {
   let notice = $state('');
   /** Towns to choose from for a Join (when several are in reach). */
   let choosing = $state.raw<{ list: Thing[]; options: TownChoice[] } | null>(null);
+  /** What the generator says each chosen thing could join and whether it may leave its town (by id). */
+  let reach = $state.raw<Record<string, Reach>>({});
+  let reachSeq = 0;
   let changing = 0;
   let armed: SelectTool | null = null;
   let seq = 0;
 
   const ftPerPx = () => 1 / host.view.cam.ppf;
+
+  /** Ask which towns each chosen thing that can be part of one could join (Join's offers, Leave's reasons). */
+  function loadReach(found: Thing[]) {
+    const ids = found.filter((t) => t.id && (t.id.startsWith('c:') || t.id.startsWith('b:')) && (t.kind === 'building' || t.kind === 'drawn_building' || t.kind === 'castle' || t.kind === 'plot' || t.kind === 'wall')).map((t) => t.id as string).slice(0, 300);
+    const s = ++reachSeq;
+    if (!ids.length) return void (reach = {});
+    void host.view.gen.reach(ids, OFFER_FT).then((r) => {
+      if (s === reachSeq) reach = r ?? {};
+    });
+  }
 
   function arm(): SelectTool {
     armed ??= new SelectTool({
@@ -91,6 +108,7 @@ export function selectTools(host: SelectApp) {
     at = { p, r };
     things = found;
     open = 0;
+    loadReach(found);
   }
 
   async function drag(poly: Pt[]) {
@@ -105,6 +123,7 @@ export function selectTools(host: SelectApp) {
     choosing = null;
     things = found;
     open = 0;
+    loadReach(found);
   }
 
   /** The edits changed (here, by undo, by an agent): what is listed is asked for again. */
@@ -118,6 +137,7 @@ export function selectTools(host: SelectApp) {
         if (s !== seq) return;
         things = underFirst(unique(found), p, r);
         open = Math.max(0, things.findIndex((t) => keyOf(t) === key));
+        loadReach(things);
       });
     } else if (area) {
       const poly = area;
@@ -126,6 +146,7 @@ export function selectTools(host: SelectApp) {
       void host.view.gen.pick(ring.at[0], ring.at[1], ring.r).then((found) => {
         if (s !== seq) return;
         things = inArea(unique(found), poly);
+        loadReach(things);
       });
     }
   }
@@ -134,6 +155,8 @@ export function selectTools(host: SelectApp) {
   function clear(): boolean {
     const had = !!at || !!area || things.length > 0;
     seq++;
+    reachSeq++;
+    reach = {};
     things = [];
     at = null;
     area = null;
@@ -259,9 +282,24 @@ export function selectTools(host: SelectApp) {
   });
 
   /** What can be part of a town: things drawn by hand (not a town or place itself) and generated buildings (`b:`). */
-  const memberable = (t: Thing) => !!t.id && ((t.kind === 'building' && t.id.startsWith('b:')) || (['drawn_building', 'castle', 'plot', 'wall'].includes(t.kind) && t.id.startsWith('c:')));
-  /** Whether `t` is in a town now (so it can leave it). */
-  const leavable = (t: Thing) => memberable(t) && !!t.town && host.townChoices().some((c) => c.id === t.town);
+  const drawn = (t: Thing) => !!t.id && ['drawn_building', 'castle', 'plot', 'wall'].includes(t.kind) && t.id.startsWith('c:');
+  /** A generated building is only moved between places and its town (it can be pushed out of its own). */
+  const generated = (t: Thing) => !!t.id && t.kind === 'building' && t.id.startsWith('b:');
+  const memberable = (t: Thing) => drawn(t) || generated(t);
+  const inTown = (t: Thing) => (t.town && t.town !== t.id ? host.townChoices().find((c) => c.id === t.town) : undefined);
+  /** The towns `t` could join: those within reach, nearest first, but the one it is in; generated buildings only move to places or back. */
+  function options(t: Thing): TownChoice[] {
+    const r = t.id ? reach[t.id] : undefined;
+    if (!r) return [];
+    const all = host.townChoices();
+    return r.towns.map(([layout]) => all.find((c) => c.layout === layout)).filter((c): c is TownChoice => !!c && c.id !== t.town);
+  }
+  /** Whether Join is on offer for `t`: it has a town in reach it is not in. */
+  const joinable = (t: Thing) => memberable(t) && options(t).length > 0 && (drawn(t) || !!inTown(t)?.place);
+  /** Why `t` cannot leave its town, if it cannot (a generated building the generator would refuse). */
+  const leaveBlock = (t: Thing): string | null => (generated(t) && !inTown(t)?.place ? (t.id ? reach[t.id]?.push ?? null : null) : null);
+  /** Whether `t` is in a town now (so it can leave it): a drawn thing in one, a generated building in its own (pushed out) or out in a place (back). */
+  const leavable = (t: Thing) => memberable(t) && !!inTown(t);
 
   /** The card's line on whose part a thing is: "Part of X · within N ft", "· by hand", or "Not part of a town"; null where it does not apply. */
   function partOf(t: Thing): string | null {
@@ -269,20 +307,13 @@ export function selectTools(host: SelectApp) {
     if (!t.town || t.town === t.id) return 'Not part of a town';
     const name = host.nameOf(t.town);
     if (t.why === 'hand') return `Part of ${name} · by hand`;
-    if (t.why === 'gap' && t.gap_ft !== undefined) return `Part of ${name} · within ${Math.round(t.gap_ft).toLocaleString('en-US')} ft`;
+    if (t.why === 'gap' && t.gap_ft !== undefined) {
+      const ft = Math.round(t.gap_ft).toLocaleString('en-US');
+      return t.gap_ft < 1 ? `Part of ${name}` : `Part of ${name} · ${ft} ft from its edge or from a member`;
+    }
     return `Part of ${name}`;
   }
 
-  /** Towns near a thing, nearest edge first: those within reach, else the nearest. */
-  function nearTowns(t: Thing): TownChoice[] {
-    const [x, y] = [(t.bbox[0] + t.bbox[2]) / 2, (t.bbox[1] + t.bbox[3]) / 2];
-    const ranked = host
-      .townChoices()
-      .map((c) => ({ c, edge: Math.hypot(c.x - x, c.y - y) - c.extent }))
-      .sort((a, b) => a.edge - b.edge);
-    const near = ranked.filter((r) => r.edge <= OFFER_FT).slice(0, 4);
-    return (near.length ? near : ranked.slice(0, 1)).map((r) => r.c);
-  }
 
   /** Make `town`'s members `add`ed or `remove`d (ids), as one undo step; says plainly what was not done. */
   async function setMembers(town: TownChoice | { layout: number; name: string }, ids: string[], join: boolean, note = '') {
@@ -303,7 +334,7 @@ export function selectTools(host: SelectApp) {
       const done = ids.length - r.refused.length;
       if (r.refused.length) notice = (note ? `${note}. ` : '') + (r.refused.length === 1 ? r.refused[0].why : `${r.refused.length} left as they were: ${r.refused[0].why}`);
       if (host.edits !== before) return void (notice = 'The map changed meanwhile: try again');
-      if (done <= 0) return;
+      if (done <= 0 || (!Object.keys(r.members).length && !r.created.length)) return;
       const next: Edits = { ...before, members, created: r.created.length ? [...(before.created ?? []), ...(r.created as Created[])] : before.created };
       if (!Object.keys(members).length) delete next.members;
       host.applyEdits(next, { tool: 'set_town_members', join, count: done, town: town.name, ids }, 'user');
@@ -314,20 +345,21 @@ export function selectTools(host: SelectApp) {
 
   /** Put `list` (those that can) into a town: the nearest, or one of those in reach picked from a short list. */
   function join(list: Thing[], pick?: TownChoice) {
-    const can = list.filter(memberable);
+    const can = list.filter(joinable);
     if (!can.length || busy) return;
     if (!pick) {
-      const options = nearTowns(can[0]);
-      if (options.length > 1) return void (choosing = { list: can, options });
-      pick = options[0];
+      const opts = options(can[0]);
+      if (opts.length > 1) return void (choosing = { list: can, options: opts });
+      pick = opts[0];
     }
-    if (!pick) return void (notice = 'There is no town to join');
-    void setMembers(pick, can.map((t) => t.id as string), true);
+    const to = pick;
+    const ids = can.filter((t) => t.town !== to.id).map((t) => t.id as string);
+    void setMembers(to, ids, true);
   }
 
   /** Take `list` (those in a town) out of it: those of the first one's town, or a lone place for a generated building. */
   function leave(list: Thing[]) {
-    const can = list.filter(leavable);
+    const can = list.filter((t) => leavable(t) && !leaveBlock(t));
     if (!can.length || busy) return;
     const town = can[0].town!;
     const same = can.filter((t) => t.town === town);
@@ -339,7 +371,9 @@ export function selectTools(host: SelectApp) {
   return {
     arm,
     memberable,
+    joinable,
     leavable,
+    leaveBlock,
     partOf,
     join,
     leave,

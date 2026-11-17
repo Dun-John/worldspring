@@ -56,6 +56,9 @@ body {
     --tap: 44px;
   }
 }
+:root[data-layout='phone'] {
+  --tap: 44px;
+}
 
 .ws-panel {
   box-sizing: border-box;
