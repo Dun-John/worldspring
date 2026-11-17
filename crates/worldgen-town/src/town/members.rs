@@ -446,7 +446,7 @@ pub fn join_reach(world: &World, t0: &T0, id: &str, within: f64) -> (Vec<(usize,
             continue;
         }
         let ls = edge_layouts(world, t0, &idx, t.li);
-        let g = edge_gap(&shape, &edge(t0, &idx, t.li, &ls));
+        let g = edge_gap(&shape, &edge(t0, &idx, t.li, &ls), within);
         if g <= within {
             out.push((t.li, g));
         }
@@ -458,7 +458,7 @@ pub fn join_reach(world: &World, t0: &T0, id: &str, within: f64) -> (Vec<(usize,
     (out, building.and_then(|b| b.1))
 }
 
-const INSIDE: &str = "Inside the town: draw the town's edge in Streets";
+const INSIDE: &str = "It stands inside the town (move the town's edge in Streets to leave it out)";
 
 /// Whether distance alone would join drawn thing `id` to town `town`: within `JOIN_FT` of its
 /// edge, or of a member that is.
@@ -467,7 +467,7 @@ fn by_distance(world: &World, t0: &T0, town: usize, id: &str) -> bool {
     let Some(k) = world.file.edits.created.iter().position(|c| c.id == id) else { return false };
     let Some(&i) = idx.of_layout.get(&(t0.settlements.len() + t0.base_pois + k)) else { return false };
     let e = edge(t0, &idx, town, &edge_layouts(world, t0, &idx, town));
-    if edge_gap(&idx.items[i as usize].shape, &e) <= JOIN_FT {
+    if edge_gap(&idx.items[i as usize].shape, &e, JOIN_FT) <= JOIN_FT {
         return true;
     }
     idx.near[i as usize].iter().any(|&(j, _)| owner(world, t0, idx.items[j as usize].li).is_some_and(|o| o.town == town))
@@ -640,9 +640,9 @@ fn index_key(world: &World, t0: &T0) -> u64 {
     let mut sum = 0u64;
     for (k, c) in edits.created.iter().enumerate() {
         let k = k as u64 + 1;
-        sum = sum.wrapping_add(k.wrapping_mul(c.x.to_bits() ^ c.y.to_bits().rotate_left(7) ^ (c.removed as u64) ^ c.kind.len() as u64));
-        for p in c.poly.iter().chain(&c.pts) {
-            sum = sum.wrapping_add(k.wrapping_mul(p[0].to_bits() ^ p[1].to_bits().rotate_left(13)));
+        sum = sum.wrapping_add(k.wrapping_mul(c.x.to_bits() ^ c.y.to_bits().rotate_left(7) ^ (c.removed as u64) ^ c.kind.bytes().fold(0u64, |h, b| h.rotate_left(5) ^ b as u64)));
+        for (j, p) in c.poly.iter().chain(&c.pts).enumerate() {
+            sum = sum.wrapping_add(k.wrapping_mul(p[0].to_bits() ^ p[1].to_bits().rotate_left(13)).rotate_left(j as u32 % 64));
         }
     }
     let mut ids = 0usize;
@@ -860,12 +860,12 @@ fn edge(t0: &T0, idx: &Index, town: usize, layouts: &[Rc<Layout>]) -> Edge {
     Edge { shapes, inside }
 }
 
-/// How far item shape `s` lies from a town's edge (0 inside it; MAX beyond `JOIN_FT`'s reach).
-fn edge_gap(s: &Shape, e: &Edge) -> f64 {
+/// How far item shape `s` lies from a town's edge (0 inside it; MAX beyond `reach_ft`).
+fn edge_gap(s: &Shape, e: &Edge, reach_ft: f64) -> f64 {
     if e.inside.iter().any(|q| overlaps(q.bbox, s.bbox) && s.pts.iter().any(|&p| contains(&q.pts, p))) {
         return 0.0;
     }
-    let reach = grow(s.bbox, JOIN_FT);
+    let reach = grow(s.bbox, reach_ft);
     e.shapes.iter().filter(|o| overlaps(reach, o.bbox)).map(|o| gap(s, o)).fold(f64::MAX, f64::min)
 }
 
@@ -913,7 +913,7 @@ fn resolve(world: &World, t0: &T0, idx: &Index, all: &[Town], c: u32) -> Rc<[Opt
             if owners[n].is_some() || idx.kept_out.contains(&(i, t)) {
                 continue;
             }
-            let g = edge_gap(&idx.items[i as usize].shape, &e);
+            let g = edge_gap(&idx.items[i as usize].shape, &e, JOIN_FT);
             if g <= JOIN_FT {
                 heap.push(Reverse((g.to_bits(), t, i)));
             }

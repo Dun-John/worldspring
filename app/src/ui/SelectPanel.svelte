@@ -105,7 +105,7 @@
                     {#if sel.joinable(t)}<button class="ws-btn" disabled={sel.busy} onclick={() => sel.join([t])}>Join town</button>{/if}
                     {#if sel.leavable(t)}<button class="ws-btn" disabled={sel.busy || !!block} title={block ?? undefined} onclick={() => sel.leave([t])}>Leave town</button>{/if}
                   </div>
-                  {#if block}<div class="ws-muted">Can't leave: {block.charAt(0).toLowerCase() + block.slice(1)}</div>{/if}
+                  {#if block}<div class="ws-muted">Can't leave: {block.charAt(0).toLowerCase() + block.slice(1)}.</div>{/if}
                   {@render picker()}
                 {/if}
                 <div class="actions">
