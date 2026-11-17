@@ -10,21 +10,21 @@ use crate::tools::{listed, schema, text};
 
 fn end_schema(description: &str) -> Value {
     json!({ "type": "object", "description": description, "properties": {
-        "at": { "type": "string", "description": "A level (l:<site>:<level>, from the bottom), a room (r:<site>:<level>:<room>), or a site: u:/k: (its top level), w:<layout>:<sx>:<sy> (a sewer section), b: (its cellar)" },
-        "x": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "Square, as get_site_design's plan numbers them (a room alone, or a site alone: the free square nearest its middle)" },
+        "at": { "type": "string", "description": "A level (l:<site>:<level>, from the bottom), a room (r:<site>:<level>:<room>), or a site: u:/k: (top level), w:<layout>:<sx>:<sy> (sewer section), b: (cellar)" },
+        "x": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "Square as get_site_design's plan numbers them (a room or site alone: its free square nearest its middle)" },
         "y": { "type": "integer", "minimum": 0, "maximum": 4095 },
     }, "required": ["at"] })
 }
 
 pub fn list() -> Vec<Value> {
     vec![
-        json!({ "name": "create_link", "title": "Link two places", "description": "Join a square of one place below ground to another's: a site underground (a level or room of u:/k:), a sewer section (w:) or a building's cellar (b:). Each end shows on its own map as a way across (way: stairs, ladder, passage, trapdoor, rope, portal; default stairs) naming the far end; furniture there gives way. Both ends must be floor, off the stairs, ways and other links. Returns its id (j:...) and both ends.", "inputSchema": schema(json!({
+        json!({ "name": "create_link", "title": "Link two places", "description": "Join a square of one place below ground to another's: a site underground (a level or room of u:/k:), a sewer section (w:) or a building's cellar (b:). Each end shows on its map as a way across (way: stairs, ladder, passage, trapdoor, rope, portal; default stairs) naming the far end; furniture gives way. Both ends must be floor, off the stairs, ways and other links. Returns its id (j:...) and both ends.", "inputSchema": schema(json!({
             "a": end_schema("One end"),
             "b": end_schema("The other end"),
             "way": { "type": "string", "enum": WAYS },
             "name": { "type": "string", "description": "Its own name (shown with the far end's)" },
         }), &["a", "b"]) }),
-        json!({ "name": "list_links", "title": "Links", "description": "The links put down by hand: id, way, name and both ends (level, site, square, name). of: those with an end in a site or level; near: those with an end below a place (its sewer section, or a site or building within 100 ft); check: each with the problems that keep an end from showing (empty: both show). Returns {items, found}.", "inputSchema": schema(json!({
+        json!({ "name": "list_links", "title": "Links", "description": "Links put down by hand: id, way, name and both ends (level, site, square, name). of: those with an end in a site or level; near: those with an end below a place (its sewer section, or a site or building within 100 ft); check: each with the problems that keep an end from showing (empty: both show).", "inputSchema": schema(json!({
             "of": { "type": "string", "description": "A site (u:, k:, w:, b:) or one of its levels (l:)" },
             "near": crate::args::point_schema("A place"),
             "check": { "type": "boolean", "default": false },

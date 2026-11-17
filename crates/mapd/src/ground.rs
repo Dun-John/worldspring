@@ -22,10 +22,10 @@ use crate::tools::{schema, text};
 const MAX_READ_FT: f64 = 200.0;
 
 pub fn list() -> Vec<Value> {
-    let pt = crate::args::point_schema("A point: {x_ft, y_ft} or [x_ft, y_ft] (world ft)");
+    let pt = crate::args::point_schema("{x_ft, y_ft} or [x_ft, y_ft]");
     let at = crate::args::point_schema("A place (id, point or [x, y] in ft)");
     vec![
-        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground with a round brush: raise, lower, smooth, or restore toward the generated ground (plateaus stay). A dab (at, radius_ft) or a stroke (path, width_ft); buildings, streets and walls follow. At most 48 blocks of 80 ft a stroke, 1500 a world. Returns the blocks changed and the ground's range (ft).", "inputSchema": schema(json!({
+        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground, a round brush: raise, lower, smooth, or restore toward the generated ground (plateaus stay). A dab (at, radius_ft) or a stroke (path, width_ft); buildings, streets and walls follow. At most 48 blocks of 80 ft a stroke, 1500 a world. Returns the blocks changed and the ground's range (ft).", "inputSchema": schema(json!({
             "mode": { "type": "string", "enum": ["raise", "lower", "smooth", "restore"] },
             "at": at,
             "radius_ft": { "type": "number", "minimum": 2.5, "maximum": 200, "default": 15, "description": "A dab's radius" },
@@ -35,7 +35,7 @@ pub fn list() -> Vec<Value> {
             "hardness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "0 soft to 1 hard" },
             "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
         }), &["mode"]) }),
-        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: the ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Overlapping plateaus stack: the highest holds, a pit digs through them (the deepest holds), same-level pieces join. floor: rock draws the top as bare rock at every zoom (auto, the default: rock on a pit's floor 15 ft or more below the ground). Give poly (at most 48 points, 1280 ft across) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes it. Returns its id (h:...).", "inputSchema": schema(json!({
+        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Overlaps stack: the highest holds, a pit digs through (the deepest holds), same levels join. floor: rock draws bare rock at every zoom (auto, default: a pit's floor 15+ ft down). Give poly (at most 48 points, 1280 ft across) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes it. Returns its id (h:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A plateau to change (h:...)" },
             "poly": { "type": "array", "minItems": 3, "items": pt },
             "around": { "type": "string", "description": "A building, tower or site (its footprint)" },

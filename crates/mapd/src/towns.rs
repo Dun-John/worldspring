@@ -28,14 +28,14 @@ pub fn list() -> Vec<Value> {
         json!({
             "name": "get_town_plan",
             "title": "A town's wards",
-            "description": "A town's or city's plan as the ward editor sees it: patches (number, middle, corners, ward, lots, district, neighbours, merge, reroll, close, park; what was set by hand or refused), corners (number, place, pinned, gate, wall, junction where a square can open, square), districts, max_move_ft and the walls. within limits it to patches whose middle is in a rectangle. See MCP.md > Towns.",
+            "description": "A town's or city's plan as the ward editor sees it: patches (number, middle, corners, ward, lots, district, neighbours, merge, reroll, close, park; what was set by hand or refused), corners (number, place, pinned, gate, wall, junction where a square can open, square), districts, max_move_ft and the walls. within: only patches whose middle is in a rectangle. See MCP.md > Towns.",
             "inputSchema": schema(json!({ "id": town, "within": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0_ft, y0_ft, x1_ft, y1_ft]" } }), &["id"]),
             "annotations": { "readOnlyHint": true },
         }),
         json!({
             "name": "edit_town",
             "title": "Lay out a town anew",
-            "description": "Change a town's or city's layout as the ward editor does; give any of: moves (corners to or by a place), equalize (patch numbers), relax (corners round a point), patches (ward, lots, merge_with, reroll, close, park, district; \"auto\" puts a field back), squares (where streets meet), walls, reset, members (see MCP.md > Towns). Corners go only as far as keeps every patch convex. The reply: corners moved all the way, patches_changed, districts_changed, functions_lost, renames_carried, renames_lost. dry_run reports only. See MCP.md > Towns.",
+            "description": "Change a town's or city's layout as the ward editor does; give any of: moves (corners to or by a place), equalize (patch numbers), relax (corners round a point), patches (ward, lots, merge_with, reroll, close, park, district; \"auto\" puts a field back), squares (where streets meet), walls, reset, members. Corners go only as far as keeps every patch convex. dry_run reports only. See MCP.md > Towns.",
             "inputSchema": schema(json!({
                 "id": town,
                 "moves": { "type": "array", "items": { "type": "object", "properties": { "corner": { "type": "integer", "minimum": 0 }, "to": pt, "by": pt, "as_generated": { "type": "boolean" } }, "required": ["corner"] } },
@@ -56,9 +56,9 @@ pub fn list() -> Vec<Value> {
                     "corner": { "type": "integer", "minimum": 0, "description": "A corner where three streets or more meet (junction in get_town_plan)" },
                     "kind": { "type": "string", "enum": ([SQUARE_KINDS.as_slice(), &["none", "auto"]].concat()), "description": "The square opened there; none for no square, auto as generated" },
                 }, "required": ["corner", "kind"] } },
-                "walls": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }, walls], "description": "true, false or \"auto\" (as generated), or {built, gates_add, gates_remove (corners), towers_add ([corner, next corner, f 0.05-0.95] or a corner), towers_remove (corner or t:<layout>:<n>)}; the reply's wall says what was added, removed and refused (why)" },
+                "walls": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }, walls], "description": "true, false or \"auto\" (as generated), or {built, gates_add, gates_remove (corners), towers_add ([corner, next corner, f 0.05-0.95] or a corner), towers_remove (corner or t:<layout>:<n>)}" },
                 "reset": { "type": "string", "enum": ["all", "corners", "patches", "squares", "walls"] },
-                "members": { "type": "object", "properties": { "add": ids.clone(), "remove": ids }, "description": "Hand choice: c:<n> drawn things (add joins, remove leaves); b:<layout>:<id> outskirt buildings (remove pushes them out into a new place, add takes them back)" },
+                "members": { "type": "object", "properties": { "add": ids.clone(), "remove": ids }, "description": "By hand: c:<n> drawn things (add joins, remove leaves); b:<layout>:<id> outskirt buildings (remove pushes out into a new place, add takes back)" },
                 "dry_run": { "type": "boolean", "default": false },
             }), &["id"]),
         }),

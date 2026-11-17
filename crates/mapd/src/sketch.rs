@@ -81,7 +81,7 @@ fn stroke_props(with_tool: bool) -> Value {
         "wards": { "type": "array", "items": { "type": "string" }, "maxItems": WARDS_MAX, "description": "District names, central first" },
         "added": { "type": "boolean", "description": "true (default): beside the world's settlements; false: in place of one" },
         "replaces": { "type": "string", "enum": PIN_TIERS, "description": "With added false: tier of the world's settlement (within 3 mi) it replaces" },
-        "on_water": { "type": "boolean", "description": "true (default): a port, fishing village or river town is moved onto its shore or beside its river as the world's own are; false: it stays where the pin is (on heights above its river, say)" },
+        "on_water": { "type": "boolean", "description": "true (default): a port, fishing village or river town moves onto its shore or river as the world's own do; false: it stays at the pin (on heights above its river, say)" },
     });
     if with_tool {
         p["tool"] = json!({ "type": "string", "enum": TOOLS, "description": "What the stroke makes (sea is cut out of land; range runs along the line, river down from its first point)" });
@@ -95,18 +95,18 @@ pub fn list() -> Vec<Value> {
     let ro = json!({ "readOnlyHint": true, "openWorldHint": false });
     let pending = "Stored at once, but the world is not remade until regenerate (results say pending: true).";
     vec![
-        json!({ "name": "get_sketch", "title": "The sketch", "description": "The world's sketch: the strokes that steer generation (land, sea, ranges, rivers, biomes, settlement pins, roads...), each with its id (sk:..., for update_sketch_stroke and delete_sketch_stroke), tool, points (ft) and options. With changes not regenerated yet: pending: true and what changed (added, changed, removed). A changed stroke gets a new id.", "inputSchema": schema(json!({
+        json!({ "name": "get_sketch", "title": "The sketch", "description": "The world's sketch: the strokes that steer generation (land, sea, ranges, rivers, biomes, settlement pins, roads...), each with its id (sk:...), tool, points (ft) and options. Changes not regenerated yet: pending: true and what changed (added, changed, removed). A changed stroke gets a new id.", "inputSchema": schema(json!({
             "tool": { "type": "string", "enum": ["land", "sea", "range", "river", "biome", "pin", "road", "massif", "elevation", "lake", "volcano", "site", "region"], "description": "Only strokes of this tool" },
             "points": { "type": "boolean", "default": true, "description": "false: each stroke's point count and bounding box instead of its points" },
             "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 },
         }), &[]), "annotations": ro }),
-        json!({ "name": "create_sketch_stroke", "title": "Draw in the sketch", "description": format!("Add a stroke to the world's sketch: land or sea (an outline or a band along a path), a range or river along a path, a forest or biome painted over an outline, a road along a path (it joins the settlements beside it) or a settlement pin. Stored at once; the world is remade by regenerate (results say pending: true). The same stroke again adds nothing (existing: true)."), "inputSchema": schema(stroke_props(true), &["tool"]), "annotations": { "openWorldHint": false, "idempotentHint": true } }),
+        json!({ "name": "create_sketch_stroke", "title": "Draw in the sketch", "description": format!("Add a stroke to the world's sketch: land or sea (an outline or a band along a path), a range or river along a path, a forest or biome painted over an outline, a road along a path (it joins the settlements beside it) or a settlement pin. Stored at once; regenerate remakes the world (pending: true till then). The same stroke again adds nothing (existing: true)."), "inputSchema": schema(stroke_props(true), &["tool"]), "annotations": { "openWorldHint": false, "idempotentHint": true } }),
         json!({ "name": "update_sketch_stroke", "title": "Change a stroke", "description": format!("Change a sketch stroke: its points (path, or a pin's at) and options; what is not given stays. Returns its new id. {pending}"), "inputSchema": schema(stroke_props(false), &["id"]), "annotations": { "openWorldHint": false } }),
         json!({ "name": "delete_sketch_stroke", "title": "Erase strokes", "description": format!("Take strokes out of the sketch (all or none). A pin's settlement is taken away by regenerate and its edits set aside. Stored at once; remade by regenerate (pending: true)."), "inputSchema": schema(json!({
             "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
             "id": { "type": "string" },
         }), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
-        json!({ "name": "regenerate", "title": "Remake the world", "description": "Remake the world with the sketch's pending changes (a few seconds). Edits on places that come out the same stay; those on places laid out differently or whose pins went are set aside (`vanished` says what they said; world_overview's places_removed lists them later). The world gets a new hash; an open app loads it, asking first about unsaved work. Returns the changes kept, set aside and moved, the settlements before and after, and the time.", "inputSchema": schema(json!({}), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
+        json!({ "name": "regenerate", "title": "Remake the world", "description": "Remake the world with the sketch's pending changes (a few seconds). Edits on places that come out the same stay; the rest are set aside (`vanished` says what they said; later in world_overview's places_removed). The world gets a new hash; an open app loads it (asking first about unsaved work). Returns the changes kept, set aside and moved, settlements before and after, the time.", "inputSchema": schema(json!({}), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
     ]
 }
 

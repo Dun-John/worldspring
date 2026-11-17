@@ -28,7 +28,7 @@ pub fn list() -> Vec<Value> {
             "material": { "type": "string", "enum": ["timber", "stone"] },
             "lighthouse": { "type": "boolean" },
         }), &[]) }),
-        json!({ "name": "list_wharves", "title": "Quays, piers and breakwaters", "description": "The wharves put down by hand, with the buildings on them. Returns {items, found}.", "inputSchema": schema(json!({
+        json!({ "name": "list_wharves", "title": "Quays, piers and breakwaters", "description": "The wharves put down by hand, with the buildings on them.", "inputSchema": schema(json!({
             "within": crate::args::area_light("Only inside: a box, polygon or circle {at, radius_ft}"),
             "limit": limit_prop(200, 2000),
         }), &[]) }),

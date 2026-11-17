@@ -64,7 +64,7 @@ pub fn point_schema(description: &str) -> Value {
 
 /// The `at` property of the tools in `PLACE_TOOLS`.
 pub fn at_props() -> Value {
-    json!({ "at": point_schema("A place: an id, a name, {x_ft, y_ft} or [x_ft, y_ft]") })
+    json!({ "at": point_schema("An id, a name, {x_ft, y_ft} or [x_ft, y_ft]") })
 }
 
 /// `field: rule, got X` (X as JSON, cut short).
@@ -249,7 +249,7 @@ pub fn item(single: bool, i: usize) -> String {
 pub fn ids_props(what: &str) -> Value {
     json!({
         "id": { "type": "string", "description": format!("One {what} (or ids)") },
-        "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Several (all or none), or id" },
+        "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Several (all or none)" },
     })
 }
 

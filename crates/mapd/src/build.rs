@@ -16,7 +16,7 @@ pub(crate) fn props() -> Value {
         "poly": { "type": "array", "minItems": 3, "maxItems": 64, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "Corners [x_ft, y_ft] in order" },
         "rect": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "width_ft": { "type": "number" }, "depth_ft": { "type": "number" }, "angle_deg": { "type": "number", "default": 0 } }, "required": ["x_ft", "y_ft", "width_ft", "depth_ft"], "description": "A rectangle about its middle" },
         "circle": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "radius_ft": { "type": "number" }, "sides": { "type": "integer", "minimum": 8, "maximum": 32, "default": 16 } }, "required": ["x_ft", "y_ft", "radius_ft"], "description": "Or a round tower" },
-        "snap": { "type": "boolean", "default": true, "description": "Snap corners to the 5-ft grid" },
+        "snap": { "type": "boolean", "default": true, "description": "Snap to the 5-ft grid" },
         "name": { "type": "string" },
         "func": { "type": "string", "description": "A home or business key (docs/MCP.md); default house" },
         "floors": { "type": "integer", "minimum": 1, "maximum": MAX_FLOORS },
@@ -24,7 +24,7 @@ pub(crate) fn props() -> Value {
         "tint": { "type": "string", "enum": ([TINTS.as_slice(), &["auto"]].concat()), "description": "Roof colour (auto: picked)" },
         "material": { "type": "string", "enum": ([roof::MATERIALS.as_slice(), &["auto"]].concat()) },
         "shape": { "type": "string", "enum": ([roof::SHAPES.as_slice(), &["auto"]].concat()) },
-        "shade": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 4 }, { "type": "string", "enum": ["auto"] }], "description": "Variant 0-4 of the material\'s colours (2 the usual); auto: picked" },
+        "shade": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 4 }, { "type": "string", "enum": ["auto"] }], "description": "Colour variant 0-4 (2 the usual); auto: picked" },
         "structure": { "type": "string", "enum": STRUCTURES },
     })
 }
@@ -52,7 +52,7 @@ pub fn list() -> Vec<Value> {
         m.insert("within".into(), crate::args::area_schema("Buildings whose middle lies inside: [x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}", 1.0e6));
     }
     vec![
-        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares. It gets an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). Refusals name what is in the way; clear: true takes away the world's own buildings. check_building_spot tests first.", "inputSchema": schema(create, &[]) }),
+        json!({ "name": "create_building", "title": "Build", "description": "A building drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares; with an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). Refusals name what is in the way; clear: true takes away the world's own buildings. check_building_spot tests first.", "inputSchema": schema(create, &[]) }),
         json!({ "name": "update_building", "title": "Change a building", "description": "Change a building drawn by hand (c:<n>), one of the world's own (b:<layout>:<id>), or a hand-made castle's keep or yard building: footprint (checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; auto goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
         json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not: blockers (what, id, where) and nearest_clear, the footprint moved to the nearest clear spot.", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away the world's own buildings (delete_feature does drawn ones): by id or ids (b:<layout>:<id>) or every one whose middle lies inside within. Others keep their ids. restore_building brings them back.", "inputSchema": schema(remove, &[]) }),

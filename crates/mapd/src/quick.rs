@@ -43,7 +43,7 @@ pub fn list() -> Vec<Value> {
             { "type": "object", "properties": { "width_ft": { "type": "number", "minimum": 10, "maximum": 400 }, "depth_ft": { "type": "number", "minimum": 10, "maximum": 400 } }, "required": ["width_ft", "depth_ft"], "description": "Or the footprint, width along the street" },
         ], "description": "Default usual" }));
         m.insert("at".into(), crate::args::point_schema("Where: an id, a name, {x_ft, y_ft} or [x_ft, y_ft]"));
-        m.insert("facing".into(), json!({ "type": "number", "minimum": 0, "maximum": 360, "description": "The direction its front looks, degrees (0 = +x, 90 = +y): placed there turned that way; left out, it fronts the nearest street" }));
+        m.insert("facing".into(), json!({ "type": "number", "minimum": 0, "maximum": 360, "description": "Its front's direction, degrees (0 = +x, 90 = +y); left out, it fronts the nearest street" }));
         m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way" }));
         m.insert("preview".into(), json!({ "type": "boolean", "default": false, "description": "Only say where it would land (nothing is made)" }));
     }
@@ -65,7 +65,7 @@ pub fn list() -> Vec<Value> {
         "poly": points_schema(3, 64, "Corners [x_ft, y_ft] in order, within 750 ft of their middle"),
         "fill": fill_schema(),
         "name": { "type": "string" },
-        "snap": { "type": "boolean", "default": true, "description": "Snap corners to the 5-ft grid" },
+        "snap": { "type": "boolean", "default": true, "description": "Snap to the 5-ft grid" },
     });
     let mut update = parcel.clone();
     if let Some(m) = update.as_object_mut() {
@@ -75,7 +75,7 @@ pub fn list() -> Vec<Value> {
         m.remove("id");
     }
     vec![
-        json!({ "name": "place_stamp", "title": "Place a building", "description": "Set one building of a kind (house, inn, smithy, ...) and size (small, usual, large or width x depth) down at a point: fronting the nearest street, square to it, set back as lots are, clear of everything else (or turned to facing, moved to the nearest clear spot). clear: true takes away the world's own buildings it stands on. Returns the building (c:<n>, b:<layout>:0) with width_ft, depth_ft and facing_deg; preview: true only says where it would land.", "inputSchema": schema(stamp, &["kind", "at"]) }),
+        json!({ "name": "place_stamp", "title": "Place a building", "description": "Set one building of a kind (house, inn, smithy, ...) and size (small, usual, large or width x depth) at a point: fronting the nearest street, square to it, set back as lots are, clear of the rest (or turned to facing, moved to the nearest clear spot). clear: true takes away the world's own buildings under it. Returns the building (c:<n>, b:<layout>:0), width_ft, depth_ft, facing_deg; preview: true only says where it would land.", "inputSchema": schema(stamp, &["kind", "at"]) }),
         json!({ "name": "create_building_row", "title": "Line a street with buildings", "description": "A row of buildings along a path or a road stretch, one or both sides: lots in turn (widths by the ward, a seeded mix of kinds and storeys, gaps), each fronting the path, clear of all else. Up to 100, one edit; slots that do not fit are in refused. Repeating it adds nothing.", "inputSchema": schema(row, &["along"]) }),
         json!({ "name": "create_parcel", "title": "Mark a plot", "description": "A free plot of ground with a fill, drawn as an outline: generated lots of a ward, left empty for buildings by hand, or open ground. Returns its id (c:<n>); delete_feature removes it, update_parcel changes it. (create_plot is a notebook plot point.)", "inputSchema": schema(parcel, &["poly"]) }),
         json!({ "name": "update_parcel", "title": "Change a plot", "description": "Change a plot made with create_parcel: its outline, fill or name. Fields left out stay.", "inputSchema": schema(update, &["id"]) }),

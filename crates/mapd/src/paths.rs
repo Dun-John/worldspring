@@ -20,9 +20,9 @@ pub fn list() -> Vec<Value> {
         "name": { "type": "string" },
     });
     vec![
-        json!({ "name": "place_path", "title": "Draw a road", "description": "A road on the ground along a line: shown on the map and battlemap, walked like a road, a ford (footpath, track) or bridge (others) over water; scatter and the world's own town buildings keep off it. The road network and towns don't change. With id, changes one. Returns its rw: id and crossings.", "inputSchema": schema(props, &[]) }),
+        json!({ "name": "place_path", "title": "Draw a road", "description": "A road on the ground along a line: on the map and battlemap, walked like a road, a ford (footpath, track) or bridge (others) over water; scatter and the world's own town buildings keep off it. The network and towns stay. With id, changes one. Returns its rw: id and crossings.", "inputSchema": schema(props, &[]) }),
         json!({ "name": "remove_roads", "title": "Take roads away", "description": "Roads off the map by id (restore: back): stretches (rd:, mt:), town streets (tr:), park paths (pp:), drawn roads (rw:), added streets (ts:); ids from describe_location. Ground shows; buildings, gates, traffic stay. A stretch takes its towns' approaches (also).", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 }, "restore": { "type": "boolean" } }), &["ids"]) }),
-        json!({ "name": "list_paths", "title": "Roads drawn by hand", "description": "Roads drawn by hand with their crossings. Returns {items, found}.", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
+        json!({ "name": "list_paths", "title": "Roads drawn by hand", "description": "Roads drawn by hand with their crossings.", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
     ]
 }
 

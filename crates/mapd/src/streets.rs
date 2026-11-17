@@ -14,7 +14,7 @@ pub fn list() -> Vec<Value> {
     vec![json!({
         "name": "list_streets",
         "title": "Streets in an area",
-        "description": "Streets, walls, squares and world roads (rd:) in an area whose bounding box is at most 3,000 ft across, per settlement or site, with width, kind and line (cut to the area). Returns {items, found}.",
+        "description": "Streets, walls, squares and world roads (rd:) in an area whose bounding box is at most 3,000 ft across, per settlement or site, with width, kind and line (cut to the area).",
         "inputSchema": schema(json!({
             "within": area_light("Box [x0, y0, x1, y1], polygon [[x, y], ...] or circle {at, radius_ft}"),
             "what": { "type": "string", "enum": ["street", "wall", "square", "road"] },

@@ -11,16 +11,16 @@ use crate::args::{Area, area, area_light};
 use crate::tools::{limit_of, limit_prop, listed, schema, text};
 
 pub fn list() -> Vec<Value> {
-    let within = area_light("Only inside: a box [x0, y0, x1, y1], a polygon [[x, y], ...] or a circle {at, radius_ft}");
+    let within = area_light("Only inside: box [x0, y0, x1, y1], polygon [[x, y], ...] or circle {at, radius_ft}");
     vec![
-        json!({ "name": "list_objects", "title": "Objects put down", "description": "Objects put on battlemaps by hand (o:) and generated ones taken away (x:), world-wide, with ids, kinds and places. Returns {items, found}.", "inputSchema": schema(json!({
+        json!({ "name": "list_objects", "title": "Objects put down", "description": "Objects put on battlemaps by hand (o:) and generated ones taken away (x:), world-wide, with ids, kinds and places.", "inputSchema": schema(json!({
             "within": within.clone(),
             "kinds": { "type": "array", "items": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }] }, "description": "Only these kinds" },
             "which": { "type": "string", "enum": ["objects", "clears", "both"], "default": "both" },
             "limit": limit_prop(200, 2000),
         }), &[]) }),
-        json!({ "name": "list_plateaus", "title": "Plateaus and brushed ground", "description": "Plateaus, pits and rock islets (h:; what plateau or islet) with outline, level and edge, brushed ground blocks (g:) with place and size, and the world's own generated river and coast islets (i:; generated: true, removed: true once taken away with delete_plateau, tower: true if a watchtower stands on it), world-wide. Returns {items, found}.", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(100, 1000), "generated": { "type": "boolean", "default": true, "description": "false leaves out the generated islets" } }), &[]) }),
-        json!({ "name": "list_designs", "title": "Designed sites and buildings", "description": "Underground sites (u:) and buildings (b:) with a design made by hand: id, name, what, levels, place. Returns {items, found}.", "inputSchema": schema(json!({ "within": within, "limit": limit_prop(100, 1000) }), &[]) }),
+        json!({ "name": "list_plateaus", "title": "Plateaus and brushed ground", "description": "Plateaus, pits and rock islets (h:; what plateau or islet) with outline, level and edge; brushed ground blocks (g:) with place and size; the world's own river and coast islets (i:; generated, removed once taken away with delete_plateau, tower if a watchtower stands on it).", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(100, 1000), "generated": { "type": "boolean", "default": true, "description": "false leaves out the generated islets" } }), &[]) }),
+        json!({ "name": "list_designs", "title": "Designed sites and buildings", "description": "Underground sites (u:) and buildings (b:) with a design made by hand: id, name, what, levels, place.", "inputSchema": schema(json!({ "within": within, "limit": limit_prop(100, 1000) }), &[]) }),
     ]
 }
 

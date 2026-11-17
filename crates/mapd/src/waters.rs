@@ -18,7 +18,7 @@ use crate::tools::{listed, schema, text};
 const LEVEL_SAMPLES: usize = 96;
 
 pub fn list() -> Vec<Value> {
-    let pt = crate::args::point_schema("A point: {x_ft, y_ft} or [x_ft, y_ft] (world ft)");
+    let pt = crate::args::point_schema("{x_ft, y_ft} or [x_ft, y_ft]");
     let kinds: Vec<&str> = WaterKind::ALL.iter().map(|k| k.name()).collect();
     let props = |with_id: bool| {
         let mut p = json!({
