@@ -7,7 +7,7 @@
 import type { Graphics } from 'pixi.js';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
-import type { BuildingEdit, Created, Edits, RoadCut, Thing, TownEdit } from '../gen/protocol';
+import type { BuildingEdit, Created, Edits, FenceCut, RoadCut, Thing, TownEdit } from '../gen/protocol';
 import type { Pt } from './build';
 import { contains } from './water';
 
@@ -168,9 +168,9 @@ export const KIND_WORDS: Record<Thing['kind'], [string, string]> = {
   lane: ['lane', 'lanes'],
   street: ['street', 'streets'],
   path: ['path', 'paths'],
-  hedge: ['hedge', 'hedges'],
-  field_wall: ['field wall', 'field walls'],
   fence: ['fence', 'fences'],
+  drawn_fence: ['fence drawn by hand', 'fences drawn by hand'],
+  fence_gap: ['gap cut in fences', 'gaps cut in fences'],
 };
 
 /** One of a kind or many, in words: "3 roads". */
@@ -290,4 +290,43 @@ export function withCutOver(before: Edits, next: Edits, cut: RoadCut): Edits {
   }
   out.towns = towns;
   return out;
+}
+
+/** The ids of `things` that fence changes take (`gen.fenceChange`): a generated run (`fr:`, `fh:`), a fence drawn by hand (`f:`) or a gap (`fg:`). */
+export const fenceIds = (things: Thing[]): string[] => things.filter((t) => t.removable && t.id && /^(fr|fh|f|fg):/.test(t.id)).map((t) => t.id as string);
+
+/** `e` with a fence change made: drawn fences and gaps set or dropped (with their notes), and each town's `fences` set; the rest of a town's
+ * edit stays as `e` has it (so it can follow a road cut's). */
+export function withFence(e: Edits, cut: FenceCut): Edits {
+  const next: Edits = { ...e };
+  for (const field of ['fences', 'fence_gaps'] as const) {
+    const changes = cut[field] as Record<string, unknown>;
+    if (!Object.keys(changes).length) continue;
+    const now: Record<string, unknown> = { ...(e[field] ?? {}) };
+    for (const [id, v] of Object.entries(changes)) {
+      if (v) now[id] = v;
+      else delete now[id];
+    }
+    (next as Record<string, unknown>)[field] = now;
+    if (!Object.keys(now).length) delete next[field];
+  }
+  const gone = [...Object.entries(cut.fences), ...Object.entries(cut.fence_gaps)].filter(([, v]) => !v).map(([id]) => id);
+  if (gone.length && e.notes) next.notes = Object.fromEntries(Object.entries(e.notes).filter(([k]) => !gone.includes(k)));
+  if (gone.length && e.hidden) next.hidden = e.hidden.filter((k) => !gone.includes(k));
+  const keys = Object.keys(cut.towns);
+  if (keys.length) {
+    const towns = { ...(e.towns ?? {}) };
+    for (const k of keys) {
+      const f = cut.towns[k];
+      const base = towns[k] ?? (f ? { at: f.at } : null);
+      if (!base) continue;
+      const t: TownEdit = { ...base };
+      if (f?.fences) t.fences = f.fences;
+      else delete t.fences;
+      if (Object.keys(t).some((x) => x !== 'at')) towns[k] = t;
+      else delete towns[k];
+    }
+    next.towns = towns;
+  }
+  return next;
 }

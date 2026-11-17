@@ -134,6 +134,22 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         if (change.restore) return n === 1 ? 'brought a road back' : `brought ${n} roads back`;
         return (n === 1 ? 'took a road away' : `took away ${n} roads`) + also;
       }
+      case 'place_fence': {
+        const kinds: Record<string, string> = { hedgerow: 'hedgerow', hedge: 'clipped hedge', dry_stone_wall: 'dry-stone wall', post_and_rail: 'post-and-rail fence', wattle: 'wattle fence', garden_wall: 'garden wall', low_wall: 'low stone wall', picket: 'picket fence', iron_railing: 'iron railing', stockade: 'stockade', high_wall: 'high wall' };
+        const kind = kinds[String(change.kind)];
+        const n = Array.isArray(change.ids) ? change.ids.length : 1;
+        if (change.gate) return 'put a gate in a fence';
+        if (change.changed) return kind ? `${n === 1 ? 'changed a fence' : `changed ${n} fences`} to ${/^[aeiou]/.test(kind) ? 'an' : 'a'} ${kind}` : 'changed a fence';
+        return `drew ${kind ? (/^[aeiou]/.test(kind) ? 'an ' : 'a ') + kind : 'a fence'}`;
+      }
+      case 'remove_fences': {
+        const n = Array.isArray(change.ids) ? change.ids.length : Number(change.count ?? 1);
+        const gaps = Array.isArray(change.gaps) ? change.gaps.length : Number(change.gaps ?? 0);
+        if (change.forget) return 'forgot fences that were changed';
+        if (change.restore) return n === 1 ? 'brought a fence back' : `brought ${n} fences back`;
+        if (gaps && !n) return gaps === 1 ? 'cut a gap in the fences' : `cut ${gaps} gaps in the fences`;
+        return (n === 1 ? 'took a fence away' : `took away ${n} fences`) + (gaps ? ' and cut a gap' : '');
+      }
       case 'remove_town_street':
         return 'took a street away';
       case 'remove_paths': {

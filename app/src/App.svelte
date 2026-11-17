@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, RemovedRoad, SettlementFacts, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
-  import { withCut } from './editor/select';
+  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, ChangedFences, RemovedRoad, SettlementFacts, TownEdit, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
+  import { withCut, withFence } from './editor/select';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
@@ -2656,6 +2656,39 @@
     applyEdits(next, { tool: 'remove_roads', restore: true, forget, ids: [id], also: cut.also.length }, 'user');
   }
 
+  /** Towns whose fences and hedges were changed by hand (for the Gazetteer). */
+  let changedFences = $state<ChangedFences[]>([]);
+  let changedFencesSeq = 0;
+  $effect(() => {
+    const towns = edits.towns;
+    const s = ++changedFencesSeq;
+    if (!towns || !Object.values(towns).some((t) => t?.fences)) {
+      changedFences = [];
+      return;
+    }
+    // (After the generators have the edits.)
+    setTimeout(() => void view.gen.changedFences().then((list) => s === changedFencesSeq && (changedFences = list)), 0);
+  });
+
+  /** Bring a town's changed fences back (or forget the changes, if they are set aside): one step. */
+  async function bringBackFences(key: string) {
+    const row = changedFences.find((c) => c.town === key);
+    if (!row) return;
+    if (!row.found) {
+      const { fences: _set, ...rest } = edits.towns?.[key] ?? { at: [0, 0] as [number, number] };
+      // (A town's edit holding only its place is no edit.)
+      const towns = { ...(edits.towns ?? {}) };
+      if (Object.keys(rest).some((k) => k !== 'at')) towns[key] = rest as TownEdit;
+      else delete towns[key];
+      return applyEdits({ ...($state.snapshot(edits) as Edits), towns }, { tool: 'remove_fences', restore: true, forget: true, ids: row.ids }, 'user');
+    }
+    const out = await view.gen.fenceChange({ ids: row.ids, op: 'restore' });
+    if (!out) return toast('The map could not answer: try again');
+    if ('error' in out) return toast(sentence(out.error));
+    if (!out.done.length) return toast(`Not brought back: ${[...new Set(out.refused.map((r) => r.why))].join('; ')}`);
+    applyEdits(withFence($state.snapshot(edits) as Edits, out), { tool: 'remove_fences', restore: true, ids: row.ids }, 'user');
+  }
+
   /** Restore the deleted village or town `id` where it was (if the spot is still free), with
    * what was set aside when it was deleted. One step. */
   async function restoreSettlement(id: string) {
@@ -3559,6 +3592,7 @@
     buildCross: () => B.keyCross(),
     buildHarbour: () => B.setBuildMode('harbour'),
     buildRoad: () => B.keyRoad(),
+    buildFence: () => B.keyFence(),
     buildWorks: (m) => B.setBuildMode(m),
     buildShape: (k) => B.keyShape(k),
     buildQuick: (m) => B.setBuildMode(m),
@@ -3990,6 +4024,7 @@
             onRoadChange={B.changeRoad}
             onRoadRemove={B.removeRoad}
             onHarbourRemove={B.removeWharf}
+            bind:fence={B.fences.fence}
             bind:harbour={B.harbour}
             harbourPicked={B.harbourPicked}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 0.5)) })}
@@ -4164,6 +4199,8 @@
               onRestoreRemoved={(id) => void restoreSettlement(id)}
               {removedRoads}
               onBringBack={(id) => void bringBackRoad(id)}
+              {changedFences}
+              onBringBackFences={(key) => void bringBackFences(key)}
               removedAt={(n) => {
                 const c = edits.created?.find((x) => x.removed && x.aside === n);
                 return c ? (renames[c.id] ?? c.name) : null;

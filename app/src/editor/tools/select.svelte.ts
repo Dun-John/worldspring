@@ -4,7 +4,7 @@
 // one undo step (`withoutThings` puts the existing deletes together). App keeps `syncTool()`.
 import type { BuildingEdit, Created, Edits, Thing } from '../../gen/protocol';
 import type { Pt } from '../build';
-import { SelectTool, countOf, inArea, keyOf, ringOf, roadIds, underFirst, withCutOver, withoutThings } from '../select';
+import { SelectTool, countOf, fenceIds, inArea, keyOf, ringOf, roadIds, underFirst, withCutOver, withFence, withoutThings } from '../select';
 import type { BuildingHit } from '../../ui/gazetteer';
 
 /** What the Select tool needs from the app. */
@@ -172,6 +172,7 @@ export function selectTools(host: SelectApp) {
     const t = list[0];
     const id = t.id as string;
     if (/^(rd|mt|tr|pp):/.test(id)) return { tool: 'remove_roads', ids: [id] };
+    if (/^(fr|fh|f|fg):/.test(id)) return { tool: 'remove_fences', ids: [id] };
     switch (t.kind) {
       case 'building':
         return { tool: 'remove_buildings', removed: [id], count: 1, name: t.name ?? 'a building' };
@@ -210,13 +211,20 @@ export function selectTools(host: SelectApp) {
       if (cut && 'error' in cut) return void host.toast(cut.error);
       const cutOk = !!cut && cut.done.length > 0;
       const done = new Set(cut && cutOk ? cut.done : []);
-      const kept = can.filter((t) => (t.kind !== 'building' || t.id! in gen) && (!rids.includes(t.id!) || done.has(t.id!)));
-      if (!kept.length) return void host.toast(cut?.refused.length ? `Not taken away: ${cut.refused.map((r) => r.why).join('; ')}` : 'The map could not answer: try again');
+      // Fences, hedges and walls (and gaps cut in them), by the same kind of answer.
+      const fids = fenceIds(can);
+      const fcut = fids.length ? await host.view.gen.fenceChange({ ids: fids, op: 'remove' }) : null;
+      if (fcut && 'error' in fcut) return void host.toast(fcut.error);
+      const fenceOk = !!fcut && fcut.done.length > 0;
+      const fdone = new Set(fcut && fenceOk ? fcut.done : []);
+      const kept = can.filter((t) => (t.kind !== 'building' || t.id! in gen) && (!rids.includes(t.id!) || done.has(t.id!)) && (!fids.includes(t.id!) || fdone.has(t.id!)));
+      if (!kept.length) return void host.toast([...(cut?.refused ?? []), ...(fcut?.refused ?? [])].length ? `Not taken away: ${[...(cut?.refused ?? []), ...(fcut?.refused ?? [])].map((r) => r.why).join('; ')}` : 'The map could not answer: try again');
       const before = host.edits;
       // (The cut goes in first: its town edits come from `before` and hold only the removals; the street
       // removals of `withoutThings` are then made on top of them.)
       let { next, towns } = withoutThings(before, kept, gen);
       if (cut && cutOk) next = withCutOver(before, next, cut);
+      if (fcut && fenceOk) next = withFence(next, fcut);
       if (towns) {
         const r = await host.view.gen.setAside($state.snapshot(before.created ?? []) as Created[], $state.snapshot(next) as Edits);
         if (r && !('error' in r)) next = r.edits;
@@ -225,12 +233,14 @@ export function selectTools(host: SelectApp) {
       if (cut && cutOk) for (const k of Object.keys(cut.towns)) host.view.hintTown(k, cut.towns[k], cut.rects);
       const change = changeOf(kept);
       if (cut && cutOk && cut.also.length) change.also = cut.also.length;
+      if (list.length > 1 && fids.length) change.fences = fids.length;
       host.applyEdits(next, change, 'user');
       // What was taken away is no longer listed (or outlined on the map).
       const gone = new Set<string>([...kept.map((t) => t.id as string), ...(cut && cutOk ? [...cut.done, ...cut.also] : [])]);
+      const refusedAll = [...(cut?.refused ?? []), ...(fcut?.refused ?? [])];
       things = things.filter((t) => !t.id || !gone.has(t.id));
       open = Math.min(open, Math.max(0, things.length - 1));
-      notice = cut?.refused.length ? `Not taken away (${cut.refused.length}): ${cut.refused.map((r) => r.why).filter((w, i, a) => a.indexOf(w) === i).join('; ')}` : '';
+      notice = refusedAll.length ? `Not taken away (${refusedAll.length}): ${refusedAll.map((r) => r.why).filter((w, i, a) => a.indexOf(w) === i).join('; ')}` : '';
       if (notice) host.toast(notice);
     } finally {
       busy = false;
@@ -261,6 +271,11 @@ export function selectTools(host: SelectApp) {
         if (token === changing && B.buildMode === 'building' && hit?.kind === 'building' && hit.id === id) void B.editGenerated(hit as BuildingHit);
         return;
       }
+      case 'fence':
+      case 'drawn_fence':
+        B.setBuildMode('fence');
+        B.fences.fence = { ...B.fences.fence, mode: 'gate' };
+        return;
       case 'drawn_road':
         B.setBuildMode('road');
         B.roadPicked = id;
@@ -289,7 +304,15 @@ export function selectTools(host: SelectApp) {
   }
 
   /** Whether `t` has a tool to change it in. */
-  const changeable = (t: Thing) => !['road', 'lane', 'path', 'hedge', 'field_wall', 'fence', 'entrance', 'tower'].includes(t.kind);
+  const changeable = (t: Thing) => !['road', 'lane', 'path', 'fence', 'drawn_fence', 'fence_gap', 'entrance', 'tower'].includes(t.kind);
+  /** Whether `t` is a fence or hedge the card can give another kind or a gate (not a gap, not where it is not removable). */
+  const fenced = (t: Thing) => (t.kind === 'fence' || t.kind === 'drawn_fence') && t.removable && !!t.id;
+  /** Whether `t`'s kind can be changed (a generated garden wall keeps its own). */
+  const kindable = (t: Thing) => fenced(t) && t.fence !== 'garden_wall';
+  /** The fence `t` made another kind. */
+  const setKind = (t: Thing, kind: import('../../gen/protocol').FenceKind) => (t.id ? host.build.fences.change([t.id], kind).then((out) => {
+    if (out?.done.length) things = things.filter((x) => x.id !== t.id);
+  }) : undefined);
 
   /** What an area holds, counted by kind (in pick's order). */
   const counts = $derived.by(() => {
@@ -452,6 +475,9 @@ export function selectTools(host: SelectApp) {
     },
     change,
     changeable,
+    fenced,
+    kindable,
+    setKind,
     townName: (t: Thing) => (t.town && t.town !== t.id ? host.nameOf(t.town) : null),
   };
 }

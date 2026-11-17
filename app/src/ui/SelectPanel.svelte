@@ -3,7 +3,8 @@
   // and Change), or what a box or lasso holds, counted by kind, with "Delete all that can be".
   import type { SelectTools } from '../editor/tools/select.svelte';
   import { KIND_WORDS, foldedWords } from '../editor/select';
-  import type { Thing } from '../gen/protocol';
+  import { FENCE_KINDS } from '../editor/fence';
+  import type { FenceKind, Thing } from '../gen/protocol';
   import Icon from './Icon.svelte';
   import ToolPanel from './build/ToolPanel.svelte';
 
@@ -116,6 +117,17 @@
                   {/if}
                   {#if sel.changeable(t)}<button class="ws-btn" onclick={() => void sel.change(t)}><Icon name="pencil" size={16} /> Change</button>{/if}
                 </div>
+                {#if sel.fenced(t)}
+                  <div class="actions">
+                    <button class="ws-btn" disabled={sel.busy} onclick={() => void sel.change(t)} title="Click on the fence to put a 5 ft gate in it"><Icon name="plus" size={16} /> Add gate</button>
+                    {#if sel.kindable(t)}
+                      <select class="ws-input kind-pick" aria-label="Change kind" disabled={sel.busy} onchange={(e) => { const v = e.currentTarget.value; e.currentTarget.value = ''; if (v) void sel.setKind(t, v as FenceKind); }}>
+                        <option value="">Change kind…</option>
+                        {#each FENCE_KINDS.filter((k) => k.key !== t.fence) as k (k.key)}<option value={k.key}>{k.label}</option>{/each}
+                      </select>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/if}
           </div>
@@ -179,6 +191,10 @@
     flex-direction: column;
     gap: 6px;
     padding: 0 8px 8px;
+  }
+  .kind-pick {
+    width: auto;
+    max-width: 100%;
   }
   .actions {
     display: flex;

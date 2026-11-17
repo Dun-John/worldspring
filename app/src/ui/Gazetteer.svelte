@@ -71,8 +71,11 @@
     /** Roads, streets and paths taken off the map: brought back, or (`found` false: not there any more) forgotten. */
     removedRoads?: { id: string; name: string | null; what: string; at: string | null; found: boolean }[];
     onBringBack?: (id: string) => void;
+    /** A town's fences and hedges changed by hand: brought back, or (`found` false: set aside) forgotten. */
+    changedFences?: { town: string; name: string | null; ids: string[]; found: boolean }[];
+    onBringBackFences?: (town: string) => void;
   }
-  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow, aside = [], asideWhat = () => '', onForget = () => {}, removed = [], onRestoreRemoved = () => {}, removedAt = () => null, removedRoads = [], onBringBack = () => {} }: Props = $props();
+  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow, aside = [], asideWhat = () => '', onForget = () => {}, removed = [], onRestoreRemoved = () => {}, removedAt = () => null, removedRoads = [], onBringBack = () => {}, changedFences = [], onBringBackFences = () => {} }: Props = $props();
 
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
@@ -106,7 +109,7 @@
   /** Removed roads listed before "Show all" (a whole city taken away lists over a thousand). */
   const ROAD_ROWS = 40;
   let allRoads = $state(false);
-  const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0) + removed.length + removedRoads.length);
+  const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0) + removed.length + removedRoads.length + changedFences.length);
   // (Nothing left to show: back to the names.)
   $effect(() => {
     if (!asideN && showAside) showAside = false;
@@ -567,6 +570,21 @@
           {#if !allRoads && removedRoads.length > ROAD_ROWS}
             <li class="row"><span class="grow muted">{removedRoads.length - ROAD_ROWS} more</span><button class="ws-btn quiet" onclick={() => (allRoads = true)}>Show all</button></li>
           {/if}
+        </ul>
+      {/if}
+      {#if changedFences.length}
+        <div class="ws-label">Fences changed</div>
+        <ul class="list aside">
+          {#each changedFences as c (c.town)}
+            <li class="row">
+              <span class="grow what"><b>Fences changed in {c.name ?? 'a town'}</b> <span class="muted">{c.ids.length}{c.found ? '' : ' · no longer found'}</span></span>
+              {#if c.found}
+                <button class="ws-btn quiet" onclick={() => onBringBackFences(c.town)} title="Put every changed fence and hedge of this town back as it was"><Icon name="reset" size={14} /> Bring back</button>
+              {:else}
+                <button class="ws-btn quiet" onclick={() => onBringBackFences(c.town)} title="Take it off this list: the town has changed"><Icon name="trash" size={14} /> Forget</button>
+              {/if}
+            </li>
+          {/each}
         </ul>
       {/if}
       {#if aside.length}<div class="hint">Made on towns and sites that came out differently or were taken away: kept in the world, shown nowhere on the map. Delete what you no longer need (Undo brings it back).</div>{/if}
