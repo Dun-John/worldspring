@@ -461,19 +461,18 @@ pub fn parents_json(world: &World, t0: &T0) -> String {
     let why = |o: &town::Owner| match o.why {
         town::Why::Gap(g) => json!(["gap", (g * 10.0).round() / 10.0]),
         town::Why::Hand => json!(["hand", null]),
-        town::Why::Inside => json!(["inside", null]),
     };
     let owners: Vec<Value> = owners.iter().map(|(li, o)| {
         let w = why(o);
         json!([li, o.town, w[0], w[1]])
     }).collect();
-    let pushed: Vec<Value> = town::members::all_pushed(world, t0).into_iter().map(|(p, t, ids)| json!([p, t, ids])).collect();
+    let pushed: Vec<Value> = town::members::all_pushed(world, t0).into_iter().map(|(p, t, ids)| json!([p, t, ids.into_iter().map(|id| format!("b:{t}:{id}")).collect::<Vec<_>>()])).collect();
     let sizes: Vec<Value> = town_sizes(world, t0).into_iter().map(|(id, k, e, n)| json!([id, k, e, n])).collect();
     json!({ "n": t0.settlements.len(), "base": t0.base_pois, "pairs": pairs, "owners": owners, "pushed": pushed, "sizes": sizes }).to_string()
 }
 
 /// Whether layout `li` is a town things can be part of: a settlement, or a place (`town::members`).
-pub(crate) fn is_town(world: &World, t0: &T0, li: usize) -> bool {
+pub fn is_town(world: &World, t0: &T0, li: usize) -> bool {
     town::is_settlement(t0, li) || li.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.kind == "place" && !c.removed)
 }
 
@@ -585,7 +584,6 @@ pub(super) fn members_json(world: &World, t0: &T0, si: usize) -> (Vec<Value>, Ve
             let why = match o.why {
                 town::Why::Gap(_) => "gap",
                 town::Why::Hand => "hand",
-                town::Why::Inside => "inside",
             };
             Some(json!({ "id": id, "kind": f.kind, "name": f.name, "why": why }))
         })

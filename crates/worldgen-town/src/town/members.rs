@@ -34,8 +34,6 @@ pub enum Why {
     Gap(f32),
     /// Joined by hand (`Edits.members`).
     Hand,
-    /// A site of the world's own standing in the town (`town::parent_of`; never an item here).
-    Inside,
 }
 
 /// The town a thing is part of (its layout: a settlement, a town added by hand or a place) and why.
@@ -161,16 +159,8 @@ pub fn district(world: &World, t0: &T0, li: usize) -> Option<(Option<bool>, Opti
 }
 
 /// Town `town`'s people and size class with its members: its own (T0's, a hand town's as last
-/// counted, a place's buildings') plus its members' homes, less the homes pushed out of it. None
-/// when membership changes nothing (no members, none pushed out, not a place).
-pub fn people(world: &World, t0: &T0, town: usize) -> Option<(u32, Tier)> {
-    if world.file.edits.created.is_empty() {
-        return None;
-    }
-    people_with(world, t0, town, &members_of(world, t0, town), &pushed(world, t0, town))
-}
-
-/// `people`, given the town's members and the buildings pushed out of it.
+/// counted, a place's buildings') plus its members' homes, less the homes pushed out of it, given
+/// them. None when membership changes nothing (no members, none pushed out, not a place).
 fn people_with(world: &World, t0: &T0, town: usize, joined: &[(usize, Owner)], out: &[(usize, Vec<u32>)]) -> Option<(u32, Tier)> {
     let place = place_of(world, t0, town).is_some();
     if !place && joined.is_empty() && out.is_empty() {
@@ -334,13 +324,13 @@ pub fn change(world: &World, t0: &T0, town: usize, add: &[String], remove: &[Str
         e.add.insert(id.to_string());
     };
     let building = |id: &str| -> Result<(usize, u32, Rc<Layout>), &'static str> {
-        let (li, b) = building_id(id).ok_or("not a drawn thing nor a generated building")?;
+        let (li, b) = building_id(id).ok_or("Not a drawn thing nor a generated building")?;
         if !is_settlement(t0, li) {
-            return Err("not a town's building");
+            return Err("Not a town's building");
         }
         let l = layout(world, t0, li);
         if l.building(b as usize).is_none() {
-            return Err("no such building");
+            return Err("No such building");
         }
         Ok((li, b, l))
     };
@@ -367,14 +357,18 @@ pub fn change(world: &World, t0: &T0, town: usize, add: &[String], remove: &[Str
                     refused.push((id.clone(), INSIDE));
                 }
             }
-            Ok(_) => refused.push((id.clone(), "a generated building stays with its own town")),
+            Ok(_) => refused.push((id.clone(), "A generated building stays with its own town")),
         }
     }
     for id in remove {
         if item_of(world, id).is_some() {
+            // (A `remove` only where distance would join it: else dropping the `add` is all.)
+            let near = by_distance(world, t0, town, id);
             let e = m.entry(key.clone()).or_default();
             e.add.remove(id.as_str());
-            e.remove.insert(id.clone());
+            if near {
+                e.remove.insert(id.clone());
+            }
             left.push(id);
             continue;
         }
@@ -384,9 +378,10 @@ pub fn change(world: &World, t0: &T0, town: usize, add: &[String], remove: &[Str
                 if m.get_mut(&key).is_some_and(|e| e.add.remove(id.as_str())) {
                     left.push(id);
                 } else {
-                    refused.push((id.clone(), "not in this place"));
+                    refused.push((id.clone(), "Not in this place"));
                 }
             }
+            Ok((li, b, _)) if li == town && index(world, t0).pushed.contains_key(&(li, b)) => refused.push((id.clone(), "Already out in a place")),
             Ok((li, b, l)) if li == town => {
                 let bd = l.building(b as usize).unwrap();
                 if may_push(&l, bd) {
@@ -396,7 +391,7 @@ pub fn change(world: &World, t0: &T0, town: usize, add: &[String], remove: &[Str
                     refused.push((id.clone(), INSIDE));
                 }
             }
-            Ok(_) => refused.push((id.clone(), "not this town's building")),
+            Ok(_) => refused.push((id.clone(), "Not this town's building")),
         }
     }
     // The buildings pushed out: one new place, at their middle.
@@ -426,7 +421,57 @@ pub fn change(world: &World, t0: &T0, town: usize, add: &[String], remove: &[Str
     Ok(Change { members, created, refused, report })
 }
 
-const INSIDE: &str = "inside the town: draw the town's edge in Streets";
+/// What thing `id` (`c:<n>` or `b:<layout>:<id>`) could join: the towns whose edge lies within
+/// `within` ft of it (layout, gap ft; nearest first, ties by layout), and, for a generated
+/// building, why it may not be pushed out of its town (None: it may, or it is out already).
+/// Both from the file and the layouts alone, as `owner` is.
+pub fn join_reach(world: &World, t0: &T0, id: &str, within: f64) -> (Vec<(usize, f64)>, Option<&'static str>) {
+    let idx = index(world, t0);
+    let first = t0.settlements.len() + t0.base_pois;
+    let (shape, building) = if let Some(k) = world.file.edits.created.iter().position(|c| c.id == id).filter(|_| item_of(world, id).is_some()) {
+        let Some(&i) = idx.of_layout.get(&(first + k)) else { return (Vec::new(), None) };
+        (idx.items[i as usize].shape.clone(), None)
+    } else if let Some((li, b)) = building_id(id).filter(|b| is_settlement(t0, b.0)) {
+        let l = layout(world, t0, li);
+        let Some(bd) = l.building(b as usize) else { return (Vec::new(), None) };
+        let push = if idx.pushed.contains_key(&(li, b)) || may_push(&l, bd) { None } else { Some(INSIDE) };
+        (Shape::new(bd.poly.clone(), true), Some((li, push)))
+    } else {
+        return (Vec::new(), None);
+    };
+    let towns = town_rects(world, t0, &idx);
+    let mut out: Vec<(usize, f64)> = Vec::new();
+    for t in towns.iter().filter(|t| overlaps(t.rect, grow(shape.bbox, within))) {
+        if building.is_some() && is_settlement(t0, t.li) {
+            continue;
+        }
+        let ls = edge_layouts(world, t0, &idx, t.li);
+        let g = edge_gap(&shape, &edge(t0, &idx, t.li, &ls));
+        if g <= within {
+            out.push((t.li, g));
+        }
+    }
+    if let Some((li, _)) = building {
+        out.push((li, 0.0));
+    }
+    out.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    (out, building.and_then(|b| b.1))
+}
+
+const INSIDE: &str = "Inside the town: draw the town's edge in Streets";
+
+/// Whether distance alone would join drawn thing `id` to town `town`: within `JOIN_FT` of its
+/// edge, or of a member that is.
+fn by_distance(world: &World, t0: &T0, town: usize, id: &str) -> bool {
+    let idx = index(world, t0);
+    let Some(k) = world.file.edits.created.iter().position(|c| c.id == id) else { return false };
+    let Some(&i) = idx.of_layout.get(&(t0.settlements.len() + t0.base_pois + k)) else { return false };
+    let e = edge(t0, &idx, town, &edge_layouts(world, t0, &idx, town));
+    if edge_gap(&idx.items[i as usize].shape, &e) <= JOIN_FT {
+        return true;
+    }
+    idx.near[i as usize].iter().any(|&(j, _)| owner(world, t0, idx.items[j as usize].li).is_some_and(|o| o.town == town))
+}
 
 /// Whether generated building `b` of town layout `l` may be pushed out of it: outside its wall
 /// ring when walled; else on its outskirts (a `Sprawl` quarter or none, or a farm's or the
@@ -562,11 +607,12 @@ struct Resolved {
 }
 
 thread_local! {
+    static KEY: RefCell<Option<((u64, usize, usize, usize, usize, u64, usize, usize), u64)>> = const { RefCell::new(None) };
     static INDEX: RefCell<Option<Rc<Index>>> = const { RefCell::new(None) };
     /// By (index key, component).
     static RESOLVED: RefCell<FastMap<(u64, u32), Resolved>> = RefCell::new(FastMap::default());
     /// The towns' reach (`town_rects`), by index key.
-    static RECTS: RefCell<Option<(u64, Rc<Vec<Town>>)>> = const { RefCell::new(None) };
+    static RECTS: RefCell<Option<((u64, u64), Rc<Vec<Town>>)>> = const { RefCell::new(None) };
 }
 
 /// A created entry that is an item: a drawn thing standing (`world::CREATABLE`), by id.
@@ -589,6 +635,35 @@ fn building_id(id: &str) -> Option<(usize, u32)> {
 /// What the index is built from: the world, its layout numbering, the created entries and the
 /// members set by hand.
 fn index_key(world: &World, t0: &T0) -> u64 {
+    // (A cheap pass first: the same buffers, lengths and coordinate sums give the key as last time.)
+    let edits = &world.file.edits;
+    let mut sum = 0u64;
+    for (k, c) in edits.created.iter().enumerate() {
+        let k = k as u64 + 1;
+        sum = sum.wrapping_add(k.wrapping_mul(c.x.to_bits() ^ c.y.to_bits().rotate_left(7) ^ (c.removed as u64) ^ c.kind.len() as u64));
+        for p in c.poly.iter().chain(&c.pts) {
+            sum = sum.wrapping_add(k.wrapping_mul(p[0].to_bits() ^ p[1].to_bits().rotate_left(13)));
+        }
+    }
+    let mut ids = 0usize;
+    for (k, e) in &edits.members {
+        let mut h = crate::core::hash::Fnv64::default();
+        h.write(k.as_bytes());
+        e.add.iter().for_each(|i| h.write(i.as_bytes()));
+        h.write(&[0xff]);
+        e.remove.iter().for_each(|i| h.write(i.as_bytes()));
+        ids = ids.wrapping_add(h.finish() as usize);
+    }
+    let quick = (world.hash, edits.created.as_ptr() as usize, edits.created.len(), edits.members.len(), ids, sum, t0.settlements.len(), t0.base_pois);
+    if let Some(k) = KEY.with(|c| c.borrow().filter(|e| e.0 == quick).map(|e| e.1)) {
+        return k;
+    }
+    let key = index_key_now(world, t0);
+    KEY.with(|c| *c.borrow_mut() = Some((quick, key)));
+    key
+}
+
+fn index_key_now(world: &World, t0: &T0) -> u64 {
     let mut h = crate::core::hash::Fnv64::default();
     let edits = &world.file.edits;
     for v in [world.hash, t0.settlements.len() as u64, t0.base_pois as u64, edits.created.len() as u64] {
@@ -702,18 +777,36 @@ fn build_index(world: &World, t0: &T0, key: u64) -> Index {
 }
 
 /// Every town (settlements, those added by hand, places), by layout, and how far each may reach.
-/// (Kept while the index holds and no street is drawn by hand: a hand town's streets are no
-/// part of its key.)
+/// (Kept while the index and the hand-laid streets' points hold: `streets_key`.)
 fn town_rects(world: &World, t0: &T0, idx: &Index) -> Rc<Vec<Town>> {
-    let keep = world.file.edits.streets.is_empty();
-    if keep && let Some(t) = RECTS.with(|r| r.borrow().as_ref().filter(|e| e.0 == idx.key).map(|e| e.1.clone())) {
+    let key = (idx.key, streets_key(&world.file.edits.streets));
+    if let Some(t) = RECTS.with(|r| r.borrow().as_ref().filter(|e| e.0 == key).map(|e| e.1.clone())) {
         return t;
     }
     let t = Rc::new(town_rects_now(world, t0, idx));
-    if keep {
-        RECTS.with(|r| *r.borrow_mut() = Some((idx.key, t.clone())));
-    }
+    RECTS.with(|r| *r.borrow_mut() = Some((key, t.clone())));
     t
+}
+
+/// What a hand town's reach is read from (`hand::bounds`): its entries' keys, origins, extents,
+/// points and bends, hashed without building anything.
+fn streets_key(streets: &BTreeMap<String, Value>) -> u64 {
+    if streets.is_empty() {
+        return 0;
+    }
+    let mut h = crate::core::hash::Fnv64::default();
+    let num = |h: &mut crate::core::hash::Fnv64, v: Option<&Value>| h.write(&v.and_then(Value::as_f64).unwrap_or(f64::NAN).to_bits().to_le_bytes());
+    for (k, v) in streets {
+        for x in [v.get("origin").and_then(|o| o.get(0)), v.get("origin").and_then(|o| o.get(1)), v.get("extent"), v.get("p").and_then(|p| p.get(0)), v.get("p").and_then(|p| p.get(1))] {
+            num(&mut h, x);
+        }
+        for p in v.get("bends").and_then(Value::as_array).into_iter().flatten() {
+            num(&mut h, p.get(0));
+            num(&mut h, p.get(1));
+        }
+        h.write(k.as_bytes());
+    }
+    h.finish()
 }
 
 fn town_rects_now(world: &World, t0: &T0, idx: &Index) -> Vec<Town> {
@@ -837,7 +930,7 @@ fn resolve(world: &World, t0: &T0, idx: &Index, all: &[Town], c: u32) -> Rc<[Opt
     let owners: Rc<[Option<Owner>]> = owners.into();
     RESOLVED.with(|r| {
         let mut r = r.borrow_mut();
-        if r.len() > 512 {
+        if r.len() > 64 {
             r.clear();
         }
         r.insert((idx.key, c), Resolved { towns, layouts, owners: owners.clone() });

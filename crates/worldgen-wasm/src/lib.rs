@@ -255,6 +255,22 @@ impl Ctx {
         }
     }
 
+    /// Where each of the things `ids` (JSON array of `c:<n>` / `b:<layout>:<id>`) could join: `{id:
+    /// {towns: [[layout, gap_ft]], push: null | why not}}`, the towns within `within` ft nearest
+    /// first (`town::members::join_reach`).
+    pub fn reach_json(&self, ids: &str, within: f64) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let ids = serde_json::from_str::<Vec<String>>(ids).unwrap_or_default();
+        let m: serde_json::Map<String, serde_json::Value> = ids
+            .into_iter()
+            .map(|id| {
+                let (towns, push) = worldgen::town::members::join_reach(&self.world, t0, &id, within);
+                (id, serde_json::json!({ "towns": towns, "push": push }))
+            })
+            .collect();
+        serde_json::Value::Object(m).to_string()
+    }
+
     /// Where a site of `kind` (over `under`, if given) can be created near (x, y), with a name
     /// for it: `{x, y, name}` or `{error}` (`agent::creation_spot`).
     pub fn creation_spot_json(&self, kind: &str, under: Option<String>, id: &str, x: f64, y: f64) -> String {

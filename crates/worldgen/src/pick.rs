@@ -145,7 +145,6 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
                 Some(o) => (feature(o.town), match o.why {
                     town::Why::Gap(g) => (Some("gap"), Some(g)),
                     town::Why::Hand => (Some("hand"), None),
-                    town::Why::Inside => (Some("inside"), None),
                 }),
                 None => (None, (None, None)),
             }

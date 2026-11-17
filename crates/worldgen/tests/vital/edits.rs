@@ -874,13 +874,17 @@ fn town_membership() {
     let far = world(row(301.0), &[]);
     let (fl, fg) = (town::layout(&far, &t0, first), town::generated_layout(&far, &t0, first));
     assert!(members::look(&far, &t0, first).is_none() && fl.roof_seed == fg.roof_seed && fl.buildings[0].ward == fg.buildings[0].ward, "a house 301 ft out still looks the town's");
-    assert!(members::people(&far, &t0, si).is_none(), "a row 301 ft out counts among the town's people");
+    assert!(!members::sizes(&far, &t0).iter().any(|s| s.0 == si), "a row 301 ft out counts among the town's people");
     owners(&near, &mut t0, first, false);
     let (hl, k) = (town::layout(&near, &t0, first), members::look(&near, &t0, first).expect("a joined house's look"));
     assert!(k.town == si && k.culture == Some(l.culture) && k.roof_age == l.roof_age && k.roof_seed != l.roof_seed, "a joined house's look is not the town's: {k:?}");
     assert!((hl.culture, hl.roof_seed, hl.roof_age, Some(hl.buildings[0].ward)) == (l.culture, k.roof_seed, l.roof_age, k.ward) && k.ward.is_some(), "a joined house is not drawn in the town's look");
+    // Its roofs are rolled afresh (the town's seed salted by the house), by the town's ward's wealth.
+    let roofs = |w: &World| (0..8).map(|k| town::roof::look(&town::layout(w, &t0, first + k), &town::layout(w, &t0, first + k).buildings[0])).collect::<Vec<_>>();
+    let (joined, alone) = (roofs(&near), roofs(&far));
+    assert!(joined.iter().zip(&alone).any(|(a, b)| a != b), "joined houses' roofs are as when alone: {joined:?}");
     let pop = t0.settlements[si].population;
-    let (people, _) = members::people(&near, &t0, si).expect("the town's people with its members");
+    let people = members::sizes(&near, &t0).iter().find(|s| s.0 == si).expect("the town's people with its members").1;
     let homes: u32 = (0..8).map(|k| town::hand::people_of(&town::layout(&near, &t0, first + k))).sum();
     assert!(homes > 0 && people == pop + homes, "the row's homes do not count among the town's people: {people} vs {pop} + {homes}");
     let id = worldgen::agent::feature_of_layout(&near, &t0, si).unwrap();
