@@ -364,9 +364,15 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // (R5 M20: town bridges' decks over an islet and their flat level; lined bridges' spans.)
     let mut islet_decks: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
     let mut lined_decks: Vec<Vec<[f64; 2]>> = Vec::new();
+    // (Roadmap 6 R6: parks' hedges and manors' yard walls changed by hand, as whole runs (world ft)
+    // and gates' leaves, for `town::rural` below; the eraser's gaps.)
+    let mut hand_fences = crate::town::rural::Battle::default();
+    let fence_gaps: Vec<crate::model::fences::FenceGap> = world.file.edits.fence_gaps.values().cloned().collect();
     for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
         // (Roadmap 6 R5: its streets, lanes, decks and park paths removed by hand, drawn nowhere.)
         let cut = crate::town::cut::Cut::of(world, t0, &l);
+        // (Roadmap 6 R6: its fences and hedges changed by hand.)
+        let fcut = crate::town::fence::FenceCut::of(world, t0, &l);
         let cut_deck = |k: usize| cut.as_ref().is_some_and(|c| c.deck(k));
         if l.culture % 5 == 4 {
             steppe_any = true;
@@ -623,7 +629,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 continue;
             }
             let pb = land_biome(t0, crate::town::geom::centroid(&pk.pts));
-            let lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
+            let mut lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
+            // (Roadmap 6 R6: its hedges and topiary rows changed by hand: gone, or laid again as runs.)
+            if let Some(ch) = fcut.as_ref().and_then(|c| c.park(pki)) {
+                crate::town::fence::park_change(&mut lay, ch, &mut hand_fences);
+            }
             // (Roadmap 6 R5: its paths removed by hand left out of the gravel, the lawn closing over;
             // what stands by them stays.)
             let gone = cut.as_ref().and_then(|c| c.paths(pki));
@@ -910,7 +920,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let mut fore_piers: Vec<([f64; 2], [f64; 2])> = Vec::new();
         let mut fore_gates: Vec<[[f64; 2]; 3]> = Vec::new();
         let mut walks: Vec<[[f64; 2]; 4]> = Vec::new();
-        fore_walls.extend(crate::town::village::wall_runs(&l));
+        match &fcut {
+            Some(c) => fore_walls.extend(crate::town::fence::garden_walls(crate::town::village::wall_runs(&l), c, &mut hand_fences.gates)),
+            None => fore_walls.extend(crate::town::village::wall_runs(&l)),
+        }
         for b in l.buildings.iter().filter(|b| crate::town::palace::merges(&l, b)) {
             let bb = bbox(&b.poly);
             if !overlaps((bb.0 - 40.0, bb.1 - 40.0, bb.2 + 40.0, bb.3 + 40.0)) {
@@ -1128,6 +1141,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 let half = (0.5 * l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5)).thickness()).max(2.1);
                 raise(seg[0], seg[1], half, URBAN_WALL, WALL_FT, None, &mut urb_h, &mut hh, &mut lift);
             }
+        }
+        // (Roadmap 6 R6: the eraser's gaps through garden walls.)
+        if !fence_gaps.is_empty() {
+            fore_walls = fore_walls.into_iter().flat_map(|(a, b)| crate::town::fence::subtract(a, b, &[], &fence_gaps)).collect();
         }
         // A palace's forecourt: its low garden wall, the gate's piers (`interior::FORE_WALL_FT`,
         // `FORE_PIER_FT`); the gate's opening between them clear.
@@ -2010,9 +2027,24 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
             hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0)))
         };
+        let rect = [ox, oy, ox + chunk_ft, oy + chunk_ft];
         for l in &rural_ls {
-            crate::town::rural::battle(l, t0, [ox, oy, ox + chunk_ft, oy + chunk_ft], &blocked, &mut rural);
+            let fcut = crate::town::fence::FenceCut::of(world, t0, l);
+            crate::town::rural::battle(l, t0, rect, &blocked, fcut.as_ref(), &mut rural);
         }
+        // (Roadmap 6 R6: parks' hedges and yard walls changed by hand, fences drawn by hand (cut by
+        // water alone), then the eraser's gaps through all of them.)
+        if !hand_fences.runs.is_empty() || !hand_fences.gates.is_empty() {
+            crate::town::fence::take(&hand_fences, rect, &mut rural);
+        }
+        if !world.file.edits.fences.is_empty() {
+            let wet = |p: [f64; 2]| {
+                let (i, j) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
+                i >= -1 && j >= -1 && i <= SQ as i64 && j <= SQ as i64 && hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize]
+            };
+            crate::town::fence::drawn(&world.file.edits, rect, &wet, &mut rural);
+        }
+        crate::town::fence::cut_gaps(&fence_gaps, &mut rural);
     }
     crate::town::rural::shapes(&rural, ox, oy, &mut shapes);
     let mut chunk = Chunk {
@@ -2237,6 +2269,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     };
     place_town_props(&mut chunk, seed, gsx, gsy, &rowless);
     crate::town::rural::objects(&rural, ox, oy, &mut chunk);
+    crate::town::fence::objects(&rural, ox, oy, &mut chunk.objects);
     // v63 countryside: haystacks in stack yards and by field gates (`farm`), each in the chunk holding
     // its middle, on its field's or croft's open ground, off what stands there already.
     {
@@ -2548,6 +2581,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // moves nothing elsewhere) and plateaus get no knolls (`shaped`: empty when nothing is).
     let shaped: Vec<bool> = if shaper.is_some() { (0..n).map(|k| plat_w[(k / SQ + 1) * HS + k % SQ + 1] >= 0.5).collect() } else { Vec::new() };
     let before = if shaped.is_empty() { Vec::new() } else { chunk.height.clone() };
+    // (Roadmap 6 R6: the eraser's gaps through hedges' and fences' pieces, before the guarantee
+    // counts its cover.)
+    crate::town::fence::gap_objects(&fence_gaps, ox, oy, &mut chunk.objects);
     let set_out = chunk.objects.len();
     chunk.yard = bailey.clone();
     // (The guarantee counts hedgerows and dry-stone walls as cover, and gives a village's green its

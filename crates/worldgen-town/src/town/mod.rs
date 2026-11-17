@@ -51,6 +51,7 @@ pub mod culture;
 pub mod members;
 pub mod added;
 pub mod cut;
+pub mod fence;
 pub use members::{JOIN_FT, Owner, Why};
 pub mod horses;
 pub mod yurts;

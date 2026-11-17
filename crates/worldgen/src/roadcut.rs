@@ -89,7 +89,7 @@ impl CutOut {
 
 /// A town edit that holds nothing but its `at`.
 fn holds_nothing(t: &TownEdit) -> bool {
-    t.is_noop() && t.districts.is_empty() && t.streets.is_empty() && t.removed.is_empty()
+    t.is_noop() && t.districts.is_empty() && t.streets.is_empty() && t.removed.is_empty() && t.fences.is_empty()
 }
 
 /// A line's boxes (at most `MAX_BOXES`, each over a run of its points), padded by `pad`.

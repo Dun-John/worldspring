@@ -98,6 +98,13 @@ pub enum Kind {
     DockCrane = 143,
     NetRack = 144,
     Buoy = 145,
+    // Roadmap 6 R6: fences and walls laid in 5-ft sections, a gate's open leaf (`town::fence`).
+    Picket = 150,
+    IronRailing = 151,
+    Stockade = 152,
+    LowWall = 153,
+    HighWall = 154,
+    Gate = 155,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -199,7 +206,7 @@ pub const CATALOG: [KindInfo; 63] = [
     k(Kind::Pond, "pond", 2.0, false, false, 0, true, 0.0, true),
     k(Kind::Bench, "bench", 0.55, false, false, 1, true, 3.0, true),
     k(Kind::Flowerbed, "flowerbed", 1.0, false, false, 0, true, 1.0, true),
-    k(Kind::Hedge, "hedge", 0.6, true, true, 2, false, 6.0, true),
+    k(Kind::Hedge, "hedge", 0.6, true, false, 2, false, 6.0, true),
     k(Kind::Topiary, "topiary", 0.55, true, false, 1, false, 6.0, true),
     k(Kind::Gazebo, "gazebo", 1.6, false, false, 1, false, 12.0, true),
     k(Kind::Bandstand, "bandstand", 2.0, false, false, 1, false, 14.0, true),
@@ -230,7 +237,7 @@ const KINDS: [Kind; 63] = [
 ];
 
 /// Kinds past `CATALOG`, with explicit ids (each lane's range, `docs/lane-common.md`).
-static MORE: [&[(Kind, KindInfo)]; 5] = [
+static MORE: [&[(Kind, KindInfo)]; 6] = [
     // v63 castles
     &kitchen::KINDS,
     // R5 towns
@@ -239,6 +246,8 @@ static MORE: [&[(Kind, KindInfo)]; 5] = [
     &crate::town::wallside::KINDS,
     // R5 M20
     &crate::town::harbour::KINDS,
+    // Roadmap 6 R6
+    &crate::town::fence::KINDS,
 ];
 
 #[inline]

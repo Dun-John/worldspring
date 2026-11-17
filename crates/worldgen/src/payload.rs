@@ -395,6 +395,9 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
             // (Roadmap 6 R5: its decks and park paths removed by hand drawn nowhere.)
             let cut = crate::town::cut::Cut::of(world, t0, &l);
+            // (Roadmap 6 R6: the marks of corrals, pens and the churchyard's wall removed by hand
+            // left out.)
+            let fence_gone = crate::town::fence::FenceCut::of(world, t0, &l).map(|c| c.plan_gone(&l, t0)).unwrap_or_default();
             for f in &l.fields {
                 push(f, 2);
             }
@@ -411,7 +414,11 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     push(&deck, 26);
                 }
             }
-            crate::town::village::plan_polys(&l, &mut push);
+            if fence_gone.is_empty() {
+                crate::town::village::plan_polys(&l, &mut push);
+            } else {
+                crate::town::village::plan_polys(&l, &mut |p, c| if !crate::town::fence::plan_mark_gone(&fence_gone, p, c) { push(p, c) });
+            }
             crate::town::rural::plan_polys(&l, &mut push);
             // A green (a village's or a town's) and a temple's close are the ground round them, as
             // on the battlemap; a town's squares are paved.
@@ -436,7 +443,11 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 whole.set(Some(true));
                 // R5 towns (114): a horse park's trodden ground and its corrals' fences.
                 if pk.kind == crate::town::ParkKind::Horses {
-                    crate::town::horses::plan_polys(pk, &mut push);
+                    if fence_gone.is_empty() {
+                        crate::town::horses::plan_polys(pk, &mut push);
+                    } else {
+                        crate::town::horses::plan_polys(pk, &mut |p, c| if !crate::town::fence::plan_mark_gone(&fence_gone, p, c) { push(p, c) });
+                    }
                     whole.set(None);
                     continue;
                 }
@@ -543,7 +554,11 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 // (A layout of one building drawn by hand: `Created` kind building, `town::sites::drawn`.)
                 let drawn = l.site && (l.index as usize).checked_sub(t0.settlements.len()).and_then(|p| t0.pois.get(p)).is_some_and(|p| p.kind == crate::t0::settle::PoiKind::Building);
                 // R5 towns (115): the yurts' trodden ground and pens, under the buildings.
-                crate::town::yurts::plan_polys(&l, &mut push);
+                if fence_gone.is_empty() {
+                    crate::town::yurts::plan_polys(&l, &mut push);
+                } else {
+                    crate::town::yurts::plan_polys(&l, &mut |p, c| if !crate::town::fence::plan_mark_gone(&fence_gone, p, c) { push(p, c) });
+                }
                 for b in &l.buildings {
                     // v63 underground: a ruin as its broken walls, rubble and floor (`battlemap::ruin_plan`).
                     if b.structure == crate::town::Structure::Ruin {

@@ -1669,3 +1669,58 @@ fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg32) -> Park
     unseal(poly, &mut out, 0);
     out
 }
+
+/// (Roadmap 6 R6) A park's hedges and rows of topiary as whole runs, by their places in
+/// `lay.props` (each a run's `fh:<layout>:<spot>:<j>`, `j` its place here): the hedges first, each
+/// its pieces in order (one turn, within 1e-3; each within `HEDGE_STEP_FT` of the run's last
+/// along its line), then the topiary standing in a row (three or more evenly along a line, up to
+/// `TOPIARY_STEP_FT` apart; one left alone stays a prop). Pure in the layout.
+pub fn hedge_runs(lay: &ParkLayout) -> Vec<Vec<usize>> {
+    const HEDGE_STEP_FT: f64 = 5.5;
+    const TOPIARY_STEP_FT: f64 = 30.0;
+    let props = &lay.props;
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut run: Vec<usize> = Vec::new();
+    for (k, pr) in props.iter().enumerate().filter(|(_, p)| p.2 == Kind::Hedge) {
+        let joins = run.last().is_some_and(|&l| {
+            let last = &props[l];
+            let u = [libm::cos(last.1 as f64), libm::sin(last.1 as f64)];
+            let d = sub(pr.0, last.0);
+            crate::core::fabs((pr.1 - last.1) as f64) <= 1e-3 && len(d) <= HEDGE_STEP_FT && crate::core::fabs(cross(u, d)) <= 0.5
+        });
+        if !joins && !run.is_empty() {
+            out.push(std::mem::take(&mut run));
+        }
+        run.push(k);
+    }
+    if !run.is_empty() {
+        out.push(std::mem::take(&mut run));
+    }
+    let tops: Vec<usize> = props.iter().enumerate().filter(|(_, p)| p.2 == Kind::Topiary).map(|(k, _)| k).collect();
+    let mut i = 0;
+    while i < tops.len() {
+        let mut j = i + 1;
+        if j < tops.len() {
+            let (a, b) = (props[tops[i]].0, props[tops[j]].0);
+            let step = dist(a, b);
+            if step > 1.0 && step <= TOPIARY_STEP_FT {
+                let u = mul(sub(b, a), 1.0 / step);
+                j += 1;
+                while j < tops.len() {
+                    let (p, q) = (props[tops[j - 1]].0, props[tops[j]].0);
+                    if crate::core::fabs(dist(p, q) - step) > 1.0 || crate::core::fabs(cross(u, sub(q, a))) > 0.5 || dot(u, sub(q, p)) <= 0.0 {
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+        }
+        if j - i >= 3 {
+            out.push(tops[i..j].to_vec());
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}

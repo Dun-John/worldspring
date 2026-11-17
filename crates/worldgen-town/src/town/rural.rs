@@ -31,6 +31,9 @@ pub enum RunKind {
     Corral,
     /// A cemetery's gate pier: a dry-stone wall's short, thicker stretch (`cemetery::bounds`).
     Pier,
+    /// (Roadmap 6 R6) A fence or hedge laid as objects of a kind in 5-ft sections (`fence::objects`):
+    /// no shape, its squares' rules the kind's own.
+    Pieces(Kind),
 }
 
 /// A corral's fence's thickness as the battlemap draws it (ft; its squares as a fence's).
@@ -44,6 +47,7 @@ impl RunKind {
             RunKind::DryWall => 3.75,
             RunKind::Fence | RunKind::Corral => 0.8,
             RunKind::Pier => 6.0,
+            RunKind::Pieces(_) => 0.0,
         }
     }
 }
@@ -59,10 +63,12 @@ pub struct Battle {
     pub sails: Vec<(P, f64, f64, bool)>,
     /// Water wheels (middle, the way the mill's wall runs, the mill to its left).
     pub wheels: Vec<(P, P)>,
+    /// (Roadmap 6 R6) Gates put in by hand: an open leaf (middle, the line's turn, its look).
+    pub gates: Vec<(P, f64, u8)>,
 }
 
 /// Runs and trees a chunk holds at most (every layout round it together).
-const MAX_RUNS: usize = 900;
+pub(crate) const MAX_RUNS: usize = 900;
 const MAX_TREES: usize = 1200;
 /// An orchard's rows apart and its trees apart along a row (ft).
 const ORCHARD_ROW_FT: f64 = 22.0;
@@ -364,7 +370,7 @@ fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
     o1 * o2 < 0.0 && o3 * o4 < 0.0
 }
 
-fn clip_seg(a: P, b: P, r: [f64; 4]) -> Option<(P, P)> {
+pub(crate) fn clip_seg(a: P, b: P, r: [f64; 4]) -> Option<(P, P)> {
     let d = sub(b, a);
     let (mut t0, mut t1) = (0.0f64, 1.0f64);
     for (p, q) in [(-d[0], a[0] - r[0]), (d[0], r[2] - a[0]), (-d[1], a[1] - r[1]), (d[1], r[3] - a[1])] {
@@ -424,8 +430,9 @@ fn gate(f: &[P], ways: &[(P, P, f64)]) -> P {
 /// What a chunk (`rect`, world ft) takes from layout `l`: runs (pieces of 4 ft or so: not on a road
 /// or water, `blocked`, not in a building, not where a lower field already runs one, a gap at each
 /// field's gate), its orchards' and copses' trees, sails and wheels (each in the chunk holding its
-/// middle).
-pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, out: &mut Battle) {
+/// middle). (Roadmap 6 R6) Each source's run goes as `cut` says (`fence::FenceCut`: gone,
+/// another kind, gates put in; None: as generated).
+pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, cut: Option<&super::fence::FenceCut>, out: &mut Battle) {
     let near = grow(rect, 8.0);
     if !hits(l.bbox, near) && !l.crofts.iter().any(|p| hits(bbox(&p.pts), near)) {
         return;
@@ -505,6 +512,29 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
             }
         }
     };
+    // (Roadmap 6 R6: a run as changed by hand: gone, another kind, its gates cut out, their leaves
+    // in the chunk holding them.)
+    let emit = |tag: u8, a: P, b: P, kind: RunKind, keep: &dyn Fn(P) -> bool, out: &mut Battle| {
+        let Some(ch) = cut.and_then(|c| c.run(tag, a, b)) else {
+            return piece_runs(a, b, kind, keep, out);
+        };
+        if ch.gone {
+            return;
+        }
+        let kind = ch.kind.map_or(kind, |k| super::fence::run_kind(k, kind));
+        if ch.gates.is_empty() {
+            return piece_runs(a, b, kind, keep, out);
+        }
+        let (s, e) = super::fence::canonical(a, b);
+        for (p, q) in super::fence::subtract(s, e, &ch.gates, &[]) {
+            piece_runs(p, q, kind, keep, out);
+        }
+        for (p, turn) in super::fence::gate_points(s, e, &ch.gates) {
+            if inside(p) && !blocked(p) {
+                out.gates.push((p, turn, super::fence::gate_look(kind)));
+            }
+        }
+    };
     // Fields: hedged or walled, each shared side once (the lower field's), a gate each.
     for (bi, &(i, _)) in bounded.iter().enumerate() {
         let f = &l.fields[i];
@@ -520,7 +550,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
                 })
         };
         for k in 0..f.len() {
-            piece_runs(f[k], f[(k + 1) % f.len()], kind, &keep, out);
+            emit(super::fence::FIELD, f[k], f[(k + 1) % f.len()], kind, &keep, out);
         }
     }
     // Fields' rows inside them along their furrows (`rows`), a gap at each of their gates; none
@@ -547,7 +577,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
                 let s = dist(a, p);
                 gates.iter().all(|&g| (s - g).abs() > ROW_GATE_HALF) && clump.is_none_or(|(c, r)| dist(p, c) > 1.15 * r + 6.0) && mills.iter().all(|&m| dist(p, m) > SAIL_FT + 8.0)
             };
-            piece_runs(a, b, kind, &keep, out);
+            emit(super::fence::ROW, a, b, kind, &keep, out);
         }
     }
     // A village's crofts' and yards' hedges and fences, and its churchyard's low wall (the manor's
@@ -560,7 +590,16 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
                 Bound::Wall if plot == PlotKind::Churchyard => RunKind::DryWall,
                 Bound::Wall => continue,
             };
-            piece_runs(a, b, kind, &|_| true, out);
+            emit(super::fence::CROFT, a, b, kind, &|_| true, out);
+        }
+        // (Roadmap 6 R6: a walled manor's yard wall changed to another kind, drawn as that kind's
+        // run; as a garden wall it is raised: `fence::garden_walls`.)
+        if let Some(c) = cut {
+            for (a, b) in super::village::wall_runs(l) {
+                if c.run(super::fence::GARDEN, a, b).is_some_and(|ch| !ch.gone && ch.kind.is_some_and(|k| k != crate::model::fences::FenceKind::GardenWall)) {
+                    emit(super::fence::GARDEN, a, b, RunKind::DryWall, &|_| true, out);
+                }
+            }
         }
     }
     // R5 towns: a cemetery's low wall or hedge, a gap at its gate (`cemetery::bounds`).
@@ -571,19 +610,19 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
                 super::cemetery::Bound::Pier => RunKind::Pier,
                 _ => RunKind::DryWall,
             };
-            piece_runs(a, b, kind, &|_| true, out);
+            emit(super::fence::CEMETERY, a, b, kind, &|_| true, out);
         }
     }
     // R5 towns (114): a horse park's corrals, post and rail, a gap at each gate (`horses::bounds`).
     if l.parks.iter().any(|p| p.kind == super::ParkKind::Horses && hits(bbox(&p.pts), near)) {
         for (a, b) in super::horses::bounds(l, near) {
-            piece_runs(a, b, RunKind::Corral, &|_| true, out);
+            emit(super::fence::CORRAL, a, b, RunKind::Corral, &|_| true, out);
         }
     }
     // R5 towns (115): the small pens beside some yurts, post and rail, a gap at each gate.
     if l.yurts.iter().any(|y| y.pen.is_some()) && hits(l.bbox, near) {
         for (a, b) in super::yurts::fences(l, near) {
-            piece_runs(a, b, RunKind::Corral, &|_| true, out);
+            emit(super::fence::PEN, a, b, RunKind::Corral, &|_| true, out);
         }
     }
     // Orchards in rows along their furrows; copses.
@@ -669,6 +708,8 @@ pub fn shapes(b: &Battle, ox: f64, oy: f64, out: &mut Vec<VectorShape>) {
             RunKind::Hedge | RunKind::HedgeRow => ShapeKind::Hedge,
             RunKind::DryWall | RunKind::Pier => ShapeKind::DryWall,
             RunKind::Fence | RunKind::Corral => ShapeKind::Fence,
+            // (Laid as objects: `fence::objects`.)
+            RunKind::Pieces(_) => continue,
         };
         // (A corral's fence drawn a third thicker: `countryside.ts` makes it bolder.)
         let ft = if kind == RunKind::Corral { CORRAL_DRAWN_FT } else { kind.ft() };
@@ -705,9 +746,10 @@ pub fn objects(b: &Battle, ox: f64, oy: f64, c: &mut crate::battle::Chunk) {
     }
 }
 
-/// Each square of the chunk (origin `ox`, `oy` ft) a run crosses, with the run's kind.
+/// Each square of the chunk (origin `ox`, `oy` ft) a run drawn as a shape crosses, with the run's
+/// kind (one laid as objects keeps its kind's rules: `fence::objects`).
 fn each_square(b: &Battle, ox: f64, oy: f64, f: &mut dyn FnMut(usize, RunKind)) {
-    for &(a, e, kind) in &b.runs {
+    for &(a, e, kind) in b.runs.iter().filter(|r| !matches!(r.2, RunKind::Pieces(_))) {
         let m = (dist(a, e) / (0.25 * SQUARE_FT)).ceil().max(1.0) as usize;
         for j in 0..=m {
             let p = lerp(a, e, j as f64 / m as f64);

@@ -3965,7 +3965,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         }
         let mut bt = worldgen::town::rural::Battle::default();
         let bb = l.crofts.iter().flat_map(|p| p.pts.iter()).fold([l.center[0] - 10.0, l.center[1] - 10.0, l.center[0] + 10.0, l.center[1] + 10.0], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-        worldgen::town::rural::battle(&l, t0, [bb[0] - 20.0, bb[1] - 20.0, bb[2] + 20.0, bb[3] + 20.0], &|_| false, &mut bt);
+        worldgen::town::rural::battle(&l, t0, [bb[0] - 20.0, bb[1] - 20.0, bb[2] + 20.0, bb[3] + 20.0], &|_| false, None, &mut bt);
         near_dump(&l, &bt, &tag);
         plot_checks(&l, &bt, &tag, r);
         for &(a, e, _) in &bt.runs {
@@ -4152,7 +4152,7 @@ fn fields_rows(l: &Layout, t0: &T0, tag: &str, r: &mut Report) {
         for bx in bx0..=bx1 {
             let mut bt = rural::Battle::default();
             let rect = [bx as f64 * blk, by as f64 * blk, (bx + 1) as f64 * blk, (by + 1) as f64 * blk];
-            rural::battle(l, t0, rect, &|_| false, &mut bt);
+            rural::battle(l, t0, rect, &|_| false, None, &mut bt);
             r.measure("runs in a chunk (most, of the 900 a chunk holds)", false, bt.runs.len() as f64, format!("{tag} block ({bx},{by})"));
             for &(a, e, kind) in &bt.runs {
                 if matches!(kind, rural::RunKind::Fence | rural::RunKind::Corral) {
