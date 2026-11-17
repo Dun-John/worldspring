@@ -96,7 +96,7 @@ export function curve(pts: Pt[]): Pt[] {
 }
 
 /** An open line's points thinned (Douglas-Peucker, both ends kept) to at most `max`. */
-function simplifyOpen(pts: Pt[], max: number): Pt[] {
+export function simplifyOpen(pts: Pt[], max: number): Pt[] {
   if (pts.length <= 2) return pts;
   for (let tol = 1.5; ; tol *= 1.5) {
     const keep = pts.map((_, i) => i === 0 || i === pts.length - 1);

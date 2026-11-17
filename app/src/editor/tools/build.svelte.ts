@@ -10,6 +10,8 @@ import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross,
 import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from '../harbour';
 import { MAX_WATERS, WaterTool, centre, defaultWater, depthOf, flows, isDug, isLine, legacy, lookOf, ofSea, shore, streamLevels, streamSamples, waterProblem, widthOf, type WaterSettings } from '../water';
 import { MAX_PATHS, PathDrawTool, defaultPath, kindWidth, pathProblem, type PathSettings } from '../paths';
+import { FENCE_KINDS } from '../fence';
+import { fenceTools } from './fences.svelte';
 import { ClearAreaTool, type ClearShape } from '../clearArea';
 import { WorksTool, defaultWorks, type WorksSettings } from '../works';
 import type { BuildMode, QuickInfo } from '../../ui/BuildPanel.svelte';
@@ -37,6 +39,8 @@ export interface BuildHost {
 }
 
 export function buildTools(app: BuildHost) {
+  // Build › Fence: its own controller (the tool and the changes it makes).
+  const fences = fenceTools(app);
 
   // Build: while its tab is open, the map's pointer draws buildings (or redraws the one being
   // changed).
@@ -505,6 +509,7 @@ export function buildTools(app: BuildHost) {
     buildArmed?.cross.reset();
     buildArmed?.water.reset();
     buildArmed?.road.reset();
+    fences.tool.reset();
     buildArmed?.harbour.reset();
     buildArmed?.path.reset();
     if (buildArmed) (buildArmed.stamp.ghost = null), (buildArmed.stamp.gone = []);
@@ -1084,6 +1089,7 @@ export function buildTools(app: BuildHost) {
   /** The armed tool of the mode shown (null while the tab is shut). */
   function tool() {
     if (buildMode === 'select') return null;
+    if (buildMode === 'fence') return fences.tool;
     return buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
   }
 
@@ -1101,6 +1107,12 @@ export function buildTools(app: BuildHost) {
     const kind = order[(order.indexOf(road.kind) + 1) % order.length];
     road = { ...road, kind, width: kindWidth(kind) };
   }
+  /** F: Build › Fence (again: the next kind). */
+  function keyFence() {
+    if (buildMode !== 'fence') return setBuildMode('fence');
+    const order = FENCE_KINDS.map((k) => k.key);
+    fences.fence = { ...fences.fence, kind: order[(order.indexOf(fences.fence.kind) + 1) % order.length] };
+  }
   function keyShape(k: BuildShape) {
     if (buildMode === 'castle' && k !== 'tower') return void (works.castleShape = k);
     if (buildMode !== 'building') setBuildMode('building');
@@ -1108,9 +1120,9 @@ export function buildTools(app: BuildHost) {
     build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
   }
   /** Enter: the line or outline drawn ends (Stamp: the ghost is put down). */
-  const finish = () => (buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildMode === 'water' ? buildArmed?.water.finish() : buildArmed?.tool.finish());
+  const finish = () => (buildMode === 'fence' ? void fences.tool.finish() : buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildMode === 'water' ? buildArmed?.water.finish() : buildArmed?.tool.finish());
   /** Backspace: a corner taken back. */
-  const back = () => (buildMode === 'road' ? void buildArmed?.road.back() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back());
+  const back = () => (buildMode === 'fence' ? void fences.tool.back() : buildMode === 'road' ? void buildArmed?.road.back() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back());
   /** Escape, in turn: a line being drawn dropped, then what is picked put down. */
   const escapes: (() => boolean)[] = [
     () => !!buildArmed?.tool.reset(),
@@ -1122,6 +1134,7 @@ export function buildTools(app: BuildHost) {
     () => !!buildArmed?.water.reset(),
     () => (waterPicked ? ((waterPicked = null), true) : false),
     () => !!buildArmed?.road.reset(),
+    () => !!fences.tool.reset(),
     () => (roadPicked ? ((roadPicked = null), true) : false),
   ];
   /** The menu's Done: nothing changed any more. */
@@ -1131,6 +1144,8 @@ export function buildTools(app: BuildHost) {
     tool,
     keyCross,
     keyRoad,
+    keyFence,
+    fences,
     keyShape,
     finish,
     back,

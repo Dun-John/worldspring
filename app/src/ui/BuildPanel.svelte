@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type BuildMode = 'select' | 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear' | 'road';
+  export type BuildMode = 'select' | 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear' | 'road' | 'fence';
   /** What the app says of a quick placement's ghost. */
   export interface QuickInfo {
     /** Something is ready to place. */
@@ -20,6 +20,7 @@
   import type { WaterSettings } from '../editor/water';
   import type { PathSettings } from '../editor/paths';
   import type { HarbourSettings } from '../editor/harbour';
+  import type { FenceSettings } from '../editor/fence';
   import type { ClearShape } from '../editor/clearArea';
   import type { LassoSettings, RowSettings, StampSettings } from '../editor/quick';
   import type { WorksSettings } from '../editor/works';
@@ -27,6 +28,7 @@
   import Icon from './Icon.svelte';
   import BuildingPanel from './build/BuildingPanel.svelte';
   import ClearPanel from './build/ClearPanel.svelte';
+  import FencePanel from './build/FencePanel.svelte';
   import CrossingPanel from './build/CrossingPanel.svelte';
   import HarbourPanel from './build/HarbourPanel.svelte';
   import PlotPanel from './build/PlotPanel.svelte';
@@ -69,6 +71,7 @@
     roadPicked: { kind: PathKind; width: number; name: string } | null;
     onRoadChange: (change: { kind?: PathKind; width?: number; name?: string }) => void;
     onRoadRemove: () => void;
+    fence: FenceSettings;
     harbour: HarbourSettings;
     /** The wharf picked (its id), else drawing new ones. */
     harbourPicked: string | null;
@@ -117,6 +120,7 @@
     roadPicked,
     onRoadChange,
     onRoadRemove,
+    fence = $bindable(),
     harbour = $bindable(),
     harbourPicked,
     near,
@@ -144,6 +148,7 @@
     { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
     { key: 'water', label: 'Water', icon: 'lake', title: 'Brush or outline water, of a width and depth' },
     { key: 'road', label: 'Road', icon: 'road', title: 'Draw a footpath, track, gravel road, paved road or cobbled street (V)' },
+    { key: 'fence', label: 'Fence', icon: 'wall', title: 'Draw a hedge, fence or wall, put a gate in one, or cut a gap (F)' },
     { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
     { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
   ];
@@ -173,6 +178,8 @@
     <WaterPanel bind:water {waterPicked} {onWaterChange} {onWaterRemove} {onDone} {near} {peek} {onZoomIn} />
   {:else if mode === 'road'}
     <RoadPanel bind:road {roadPicked} {onRoadChange} {onRoadRemove} {onDone} {near} {peek} {onZoomIn} />
+  {:else if mode === 'fence'}
+    <FencePanel bind:fence {near} {peek} {onZoomIn} />
   {:else if mode === 'harbour'}
     <HarbourPanel bind:harbour {harbourPicked} {onHarbourRemove} {onDone} {near} {peek} {onZoomIn} />
   {:else if mode === 'stamp'}
@@ -249,24 +256,24 @@
     outline: 2px solid var(--ink);
     outline-offset: 2px;
   }
-  /* Twelve modes in two rows of six: each its icon over its word. */
+  /* Thirteen modes in two rows of seven: each its icon over its word. */
   .modes {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, 1fr);
   }
-  .modes > button:nth-child(6n + 1) {
+  .modes > button:nth-child(7n + 1) {
     border-left: none;
   }
-  .modes > button:nth-child(n + 7) {
+  .modes > button:nth-child(n + 8) {
     border-top: 1px solid var(--line-soft);
   }
   .modes > button {
     flex-direction: column;
     gap: 0;
     padding: 4px 2px;
-    font-size: 11px;
+    font-size: 10px;
     min-width: 0;
-    padding-inline: 1px;
+    padding-inline: 0;
   }
   .build :global(.switch) {
     display: flex;

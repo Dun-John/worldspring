@@ -52,6 +52,8 @@ export interface KeyContext {
   buildHarbour(): void;
   /** Build › Road (again: the next type). */
   buildRoad(): void;
+  /** Build › Fence (again: the next kind). */
+  buildFence(): void;
   /** Castles or walls. */
   buildWorks(m: 'castle' | 'wall'): void;
   /** Stamp, row or plot. */
@@ -177,13 +179,14 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when: edit('build'), run: () => k.buildCross() });
   out.push({ keys: ['H'], label: 'Harbour (islet, quay, pier, breakwater)', group: 'Build', when: edit('build'), run: () => k.buildHarbour() });
   out.push({ keys: ['V'], label: 'Road (again: footpath, track, gravel, paved, cobbled)', group: 'Build', when: edit('build'), run: () => k.buildRoad() });
+  out.push({ keys: ['F'], label: 'Fence (draw, gate, erase; again: the next kind)', group: 'Build', when: edit('build'), run: () => k.buildFence() });
   out.push({ keys: ['Q'], label: 'Stamp (a building of a kind and size)', group: 'Build', when: edit('build'), run: () => k.buildQuick('stamp') });
   out.push({ keys: ['E'], label: 'Row of buildings along a street', group: 'Build', when: edit('build'), run: () => k.buildQuick('row') });
   out.push({ keys: ['L'], label: 'Plot (draw round it, fill it)', group: 'Build', when: edit('build'), run: () => k.buildQuick('lasso') });
   out.push({ keys: ['K'], label: 'Castle', group: 'Build', when: edit('build'), run: () => k.buildWorks('castle') });
   out.push({ keys: ['W'], label: 'Wall', group: 'Build', when: edit('build'), run: () => k.buildWorks('wall') });
   out.push(
-    { keys: ['Enter'], label: 'Finish the polygon, castle, wall, row or plot', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
+    { keys: ['Enter'], label: 'Finish the polygon, castle, wall, fence, row or plot', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
     { keys: ['Backspace'], label: 'Take a corner back', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildBack() },
   );
   const town: [string, TownMode, string][] = [
