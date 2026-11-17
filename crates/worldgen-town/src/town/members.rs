@@ -458,6 +458,39 @@ pub fn join_reach(world: &World, t0: &T0, id: &str, within: f64) -> (Vec<(usize,
     (out, building.and_then(|b| b.1))
 }
 
+/// (R4) The town a drawn thing not yet in the file would be part of (outlines `polys`, world ft:
+/// a row's lots, as one thing), by the rule `owner` follows: the towns whose edge lies within
+/// `JOIN_FT` of it, or that own a drawn thing within `JOIN_FT` of it; the nearest (layout, gap
+/// ft), ties to the lower layout. No hand entry can name it yet, so that is the whole rule.
+pub fn would_own(world: &World, t0: &T0, polys: &[Vec<P>]) -> Option<(usize, f64)> {
+    let shapes: Vec<Shape> = polys.iter().filter(|p| p.len() > 2).map(|p| Shape::new(p.clone(), true)).collect();
+    let bbox = shapes.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, s| [b[0].min(s.bbox[0]), b[1].min(s.bbox[1]), b[2].max(s.bbox[2]), b[3].max(s.bbox[3])]);
+    if shapes.is_empty() {
+        return None;
+    }
+    let reach = grow(bbox, JOIN_FT);
+    let idx = index(world, t0);
+    let mut best: Option<(f64, usize)> = None;
+    let mut take = |g: f64, t: usize| {
+        if g <= JOIN_FT && best.is_none_or(|b| g.total_cmp(&b.0).then(t.cmp(&b.1)).is_lt()) {
+            best = Some((g, t));
+        }
+    };
+    for t in town_rects(world, t0, &idx).iter().filter(|t| overlaps(t.rect, reach)) {
+        let e = edge(t0, &idx, t.li, &edge_layouts(world, t0, &idx, t.li));
+        take(shapes.iter().map(|s| edge_gap(s, &e, JOIN_FT)).fold(f64::MAX, f64::min), t.li);
+    }
+    for it in idx.items.iter().filter(|it| overlaps(it.shape.bbox, reach)) {
+        let g = shapes.iter().filter(|s| overlaps(grow(s.bbox, JOIN_FT), it.shape.bbox)).map(|s| gap(s, &it.shape)).fold(f64::MAX, f64::min);
+        if g <= JOIN_FT
+            && let Some(o) = owner(world, t0, it.li)
+        {
+            take(g, o.town);
+        }
+    }
+    best.map(|(g, t)| (t, g))
+}
+
 const INSIDE: &str = "It stands inside the town (move the town's edge in Streets to leave it out)";
 
 /// Whether distance alone would join drawn thing `id` to town `town`: within `JOIN_FT` of its
