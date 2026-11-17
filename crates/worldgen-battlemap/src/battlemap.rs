@@ -148,7 +148,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // links' river crossings as the network's.
     let made = crate::t0::made::Ground::new(world, t0, [ox - 2.0 * SQUARE_FT, oy - 2.0 * SQUARE_FT, ox + (SQ + 2) as f64 * SQUARE_FT, oy + (SQ + 2) as f64 * SQUARE_FT]);
     let made_roads = made.as_ref().map_or(Vec::new(), |m| m.pieces());
-    let mut crossings = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces);
+    // (Roadmap 6 R5: the network's stretches removed by hand left out, their bridges and fords
+    // with them; the ground beneath shows, as carved.)
+    let kept = crate::lod::roads::kept(world, t0, tile, key);
+    let (tile_roads, tile_mask): (&[crate::lod::roads::RoadPiece], &[u8]) = (&kept.roads, &kept.mask);
+    let mut crossings = crate::lod::roads::river_crossings(tile_roads, &tile.pieces);
     crossings.extend(crate::lod::roads::river_crossings(&made_roads, &tile.pieces));
     let mut crossing_shapes: Vec<CrossingShape> = crossings.iter().map(|x| crossing_shape(x, tile)).collect();
     merge_bridges(&crossings, &mut crossing_shapes);
@@ -189,7 +193,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     look_h[h] = look;
                 }
             }
-            road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
+            road_h[h] = tile_mask.get(c).copied().unwrap_or(0);
             if road_h[h] == 0
                 && let Some(class) = made.as_ref().and_then(|m| m.on_track(x, y))
             {
@@ -202,7 +206,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if road_h[h] != 0 && hw[h] > hh[h] {
                 // The deck carries the road at its own level (its embankments reach the
                 // banks), at least clear of the water.
-                let top = (hw[h] + DECK_CLEARANCE_FT).max(road_level(&tile.roads, [x, y]).or_else(|| road_level(&made_roads, [x, y])).unwrap_or(f32::MIN));
+                let top = (hw[h] + DECK_CLEARANCE_FT).max(road_level(tile_roads, [x, y]).or_else(|| road_level(&made_roads, [x, y])).unwrap_or(f32::MIN));
                 lift[h] = top - hh[h];
                 hh[h] = top;
                 road_h[h] |= 0x80;
@@ -361,6 +365,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut islet_decks: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
     let mut lined_decks: Vec<Vec<[f64; 2]>> = Vec::new();
     for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
+        // (Roadmap 6 R5: its streets, lanes, decks and park paths removed by hand, drawn nowhere.)
+        let cut = crate::town::cut::Cut::of(world, t0, &l);
+        let cut_deck = |k: usize| cut.as_ref().is_some_and(|c| c.deck(k));
         if l.culture % 5 == 4 {
             steppe_any = true;
         } else {
@@ -404,12 +411,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
-        for d in l.bridges.iter().chain(&l.piers) {
+        for d in l.bridges.iter().enumerate().filter(|(k, _)| !cut_deck(*k)).map(|(_, d)| d).chain(&l.piers) {
             stamp(d, URBAN_DECK, &mut urb_h);
         }
         // R5 M20: a bridge over one of the world's islets runs flat over it, at the islet's top
         // or clear of its water, whichever is higher (`islet_decks`, after the decks are lifted).
-        for d in l.bridges.iter().filter(|d| overlaps(bbox(d))) {
+        for d in l.bridges.iter().enumerate().filter(|(k, d)| !cut_deck(*k) && overlaps(bbox(d))).map(|(_, d)| d) {
             let b = bbox(d);
             for isl in crate::t0::islets::near_in(t0, &world.file.edits, [b.0, b.1, b.2, b.3]).filter(|i| crate::town::geom::poly_gap(d, &i.pts) < 1.0) {
                 islet_decks.push((d.clone(), isl.level.max(isl.water + DECK_CLEARANCE_FT)));
@@ -590,7 +597,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // Parks: a lawn (a formal garden's mown), gravel paths and rounds on it; its pond, stream
         // and raised tier, round features raised a tier and what it sets out (laid out whole by
         // every chunk it reaches, so they agree).
-        for pk in &l.parks {
+        for (pki, pk) in l.parks.iter().enumerate() {
             let b = bbox(&pk.pts);
             if !overlaps((b.0 - 20.0, b.1 - 20.0, b.2 + 20.0, b.3 + 20.0)) {
                 continue;
@@ -617,6 +624,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
             let pb = land_biome(t0, crate::town::geom::centroid(&pk.pts));
             let lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
+            // (Roadmap 6 R5: its paths removed by hand left out of the gravel, the lawn closing over;
+            // what stands by them stays.)
+            let gone = cut.as_ref().and_then(|c| c.paths(pki));
+            let paths: Vec<&(Vec<[f64; 2]>, f64)> = lay.paths.iter().enumerate().filter(|(j, _)| !gone.is_some_and(|g| g.contains(&(*j as u32)))).map(|(_, p)| p).collect();
             // R5 towns: a cemetery's ground is a churchyard's (its rows its own, nothing added), its
             // walks gravel, what it sets out on it (`town::cemetery`).
             if pk.kind == crate::town::ParkKind::Cemetery {
@@ -624,7 +635,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 churchyards.push(pk.pts.clone());
                 // (A foot and a half wider than drawn: a slanting walk stays a ribbon once the ground
                 // smooths its squares.)
-                for (a, e, half) in lay.paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 1.5))) {
+                for (a, e, half) in paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 1.5))) {
                     let (i0, j0, i1, j1) = range((a[0].min(e[0]) - half, a[1].min(e[1]) - half, a[0].max(e[0]) + half, a[1].max(e[1]) + half));
                     if i1 < 0.0 || j1 < 0.0 {
                         continue;
@@ -664,7 +675,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // A square is gravel where a path's or a round's edge reaches past its middle (a path a
             // little wider than drawn, so a slanting one stays joined), but under a gazebo.
             let reserved = |p: [f64; 2]| lay.reserved.iter().any(|&(c, r)| crate::town::geom::dist(p, c) < r);
-            let segs = lay.paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 0.6)));
+            let segs = paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 0.6)));
             for (a, e, half) in segs.chain(lay.rounds.iter().map(|&(c, r)| (c, c, r))) {
                 let (i0, j0, i1, j1) = range((a[0].min(e[0]) - half, a[1].min(e[1]) - half, a[0].max(e[0]) + half, a[1].max(e[1]) + half));
                 if i1 < 0.0 || j1 < 0.0 {
@@ -786,6 +797,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // ground wherever they run, inside the walls or out.
         let hand = shaper.is_some() && l.tier >= crate::town::stairs::STAIR_TIER;
         for (ri, (pts, _, width)) in l.roads.iter().enumerate() {
+            if cut.as_ref().is_some_and(|c| c.road(ri)) {
+                continue;
+            }
             let half = 0.5 * width;
             for (si, seg) in pts.windows(2).enumerate() {
                 let b = (seg[0][0].min(seg[1][0]) - half, seg[0][1].min(seg[1][1]) - half, seg[0][0].max(seg[1][0]) + half, seg[0][1].max(seg[1][1]) + half);
@@ -865,7 +879,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         if l.tier == crate::t0::settle::Tier::Village {
             // Village lanes (10 ft wide).
-            for lane in &l.streets {
+            for (lk, lane) in l.streets.iter().enumerate() {
+                if cut.as_ref().is_some_and(|c| c.street(lk)) {
+                    continue;
+                }
                 for seg in lane.windows(2) {
                     let b = (seg[0][0].min(seg[1][0]) - 5.0, seg[0][1].min(seg[1][1]) - 5.0, seg[0][0].max(seg[1][0]) + 5.0, seg[0][1].max(seg[1][1]) + 5.0);
                     if !overlaps(b) {
@@ -1207,7 +1224,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         // Deck style: 0 pier, else `bridge_style`.
         let style = |d: &Vec<[f64; 2]>| bridge_style(seed, &l, d);
-        for (d, size) in l.bridges.iter().map(|d| (d, style(d))).chain(l.piers.iter().map(|d| (d, 0.0))) {
+        for (d, size) in l.bridges.iter().enumerate().filter(|(k, _)| !cut_deck(*k)).map(|(_, d)| (d, style(d))).chain(l.piers.iter().map(|d| (d, 0.0))) {
             if owns(crate::town::geom::centroid(d)) {
                 shapes.push(VectorShape { kind: ShapeKind::Deck, size, pts: d.iter().map(local).collect() });
             }
@@ -1991,7 +2008,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if i < -1 || j < -1 || i > SQ as i64 || j > SQ as i64 {
                 return false;
             }
-            hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile.road_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0)))
+            hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0)))
         };
         for l in &rural_ls {
             crate::town::rural::battle(l, t0, [ox, oy, ox + chunk_ft, oy + chunk_ft], &blocked, &mut rural);
@@ -2153,7 +2170,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let inside = i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64;
             // (Roads drawn by hand too: their band, a pure function of where the square is.)
             let drawn = || !path_near.is_empty() && crate::paths::at(&path_near, [ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT], 0.0, PATH_MIN_HALF_FT).is_some();
-            tile.road_mask.get(sidx(i, j)).is_some_and(|&r| r != 0) || (inside && chunk.urban[j as usize * SQ + i as usize] == URBAN_STREET) || drawn()
+            tile_mask.get(sidx(i, j)).is_some_and(|&r| r != 0) || (inside && chunk.urban[j as usize * SQ + i as usize] == URBAN_STREET) || drawn()
                 || (!inside && i >= -1 && j >= -1 && i <= SQ as i64 && j <= SQ as i64 && urb_h[(j + 1) as usize * HS + (i + 1) as usize] == URBAN_STREET)
         })
         .collect();

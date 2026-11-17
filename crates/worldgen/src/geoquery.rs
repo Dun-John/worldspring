@@ -534,6 +534,9 @@ struct Lattice {
     step: f64,
     last: (i64, i64),
     tiles: FastMap<(i64, i64), Rc<TerrainOut>>,
+    /// (Roadmap 6 R5) Each tile's road mask as drawn (`lod::roads::kept`), while stretches are
+    /// removed by hand.
+    masks: FastMap<(i64, i64), Rc<Vec<u8>>>,
 }
 
 impl Lattice {
@@ -542,7 +545,7 @@ impl Lattice {
         let g = &ex.world.geom;
         let level = (g.first_refine_level..=g.max_level).find(|&l| g.spacing_ft(l) <= step_ft + 1e-6).unwrap_or(g.max_level);
         let step = g.spacing_ft(level);
-        Lattice { level, step, last: ((g.map_w_ft / step) as i64, (g.map_h_ft / step) as i64), tiles: FastMap::default() }
+        Lattice { level, step, last: ((g.map_w_ft / step) as i64, (g.map_h_ft / step) as i64), tiles: FastMap::default(), masks: FastMap::default() }
     }
 
     fn index(&self, p: P) -> (i64, i64) {
@@ -559,15 +562,20 @@ impl Lattice {
 
     /// The tile and the padded index holding sample (i, j) (clamped to the map).
     fn sample(&mut self, ex: &mut Executor, i: i64, j: i64) -> (&TerrainOut, usize) {
+        let (at, c) = self.locate(ex, i, j);
+        let level = self.level;
+        (self.tiles.entry(at).or_insert_with(|| ex.terrain(TileKey::surface(level, at.0 as u32, at.1 as u32))), c)
+    }
+
+    /// The tile (x, y) and the padded index holding sample (i, j) (clamped to the map).
+    fn locate(&self, ex: &Executor, i: i64, j: i64) -> ((i64, i64), usize) {
         let (i, j) = (i.clamp(0, self.last.0), j.clamp(0, self.last.1));
         let n = TILE_N as i64;
         let (nx, ny) = ex.world.geom.tiles_across(self.level);
         let (tx, ty) = (i.div_euclid(n).min(nx as i64 - 1), j.div_euclid(n).min(ny as i64 - 1));
-        let level = self.level;
-        let tile = self.tiles.entry((tx, ty)).or_insert_with(|| ex.terrain(TileKey::surface(level, tx as u32, ty as u32)));
         let c = (j - ty * n) as usize;
         let r = (i - tx * n) as usize;
-        (tile, (c + HALO) * PADDED + r + HALO)
+        ((tx, ty), (c + HALO) * PADDED + r + HALO)
     }
 
     /// The ground (ft) at sample (i, j).
@@ -577,9 +585,20 @@ impl Lattice {
     }
 
     /// Whether a road is carved at sample (i, j) (None: this tile carries no road mask).
+    /// (Roadmap 6 R5: stretches removed by hand carry none.)
     fn road(&mut self, ex: &mut Executor, i: i64, j: i64) -> Option<bool> {
-        let (t, c) = self.sample(ex, i, j);
-        t.road_mask.get(c).map(|&m| m != 0)
+        if ex.world.file.edits.removed_roads.is_empty() {
+            let (t, c) = self.sample(ex, i, j);
+            return t.road_mask.get(c).map(|&m| m != 0);
+        }
+        let (at, c) = self.locate(ex, i, j);
+        if !self.masks.contains_key(&at) {
+            let key = TileKey::surface(self.level, at.0 as u32, at.1 as u32);
+            let t = self.sample(ex, i, j).0;
+            let mask = Rc::new(crate::lod::roads::kept(&ex.world, &ex.t0, t, &key).mask.into_owned());
+            self.masks.insert(at, mask);
+        }
+        self.masks[&at].get(c).map(|&m| m != 0)
     }
 }
 
@@ -1093,10 +1112,12 @@ pub fn road_surface(ex: &mut Executor, p: P, reach_ft: f64) -> Option<(f64, P)> 
 // ---------------------------------------------------------------------------------------
 // Roads.
 
-fn road_dist(t0: &T0, p: P, max_ft: f64) -> Option<(f64, usize, usize, f64, P)> {
+/// (Roadmap 6 R5: stretches removed by hand passed over.)
+fn road_dist(world: &World, t0: &T0, p: P, max_ft: f64) -> Option<(f64, usize, usize, f64, P)> {
     let net = &t0.roads;
+    let gone = t0.gone_roads(world).unwrap_or_default();
     let mut best: Option<(f64, usize, usize, f64, P)> = None;
-    for (ri, k) in net.segments_near([p[0] - max_ft, p[1] - max_ft, p[0] + max_ft, p[1] + max_ft], 0.0) {
+    for (ri, k) in net.segments_near([p[0] - max_ft, p[1] - max_ft, p[0] + max_ft, p[1] + max_ft], 0.0).into_iter().filter(|s| !gone.contains(&s.0)) {
         let r = &net.roads[ri as usize];
         let (ri, k) = (ri as usize, k as usize);
         let n = ((r.s[k + 1] - r.s[k]) / 250.0).ceil().clamp(2.0, 60.0) as usize;
@@ -1176,7 +1197,7 @@ pub fn nearest(ex: &mut Executor, p: P, what: &str, max_ft: f64) -> Result<Value
             }
             None => none(),
         },
-        "road" => match road_dist(t0, p, max_ft) {
+        "road" => match road_dist(world, t0, p, max_ft) {
             Some((d, ri, k, t, q)) => {
                 let ids = crate::roadids::road_ids(t0);
                 let fs = crate::agent::features(world, t0);

@@ -140,7 +140,13 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     let town_roads: Vec<Vec<[f64; 4]>> = if key.level >= SITE_MIN_LEVEL {
         crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size])
             .iter()
-            .flat_map(|l| l.roads.iter().map(|(pts, class, w)| pts.iter().map(|p| [p[0], p[1], *w, *class as f64]).collect::<Vec<_>>()).chain(crate::town::village::plan_lanes(l)).collect::<Vec<_>>())
+            .flat_map(|l| {
+                // (Roadmap 6 R5: its streets and lanes removed by hand left out.)
+                let cut = crate::town::cut::Cut::of(world, t0, l);
+                let roads = l.roads.iter().enumerate().filter(|(k, _)| !cut.as_ref().is_some_and(|c| c.road(*k))).map(|(_, (pts, class, w))| pts.iter().map(|p| [p[0], p[1], *w, *class as f64]).collect::<Vec<_>>());
+                let lanes = crate::town::village::plan_lanes(l).into_iter().enumerate().filter(|(k, _)| !cut.as_ref().is_some_and(|c| c.street(*k))).map(|(_, v)| v);
+                roads.chain(lanes).collect::<Vec<_>>()
+            })
             .collect()
     } else {
         Vec::new()
@@ -150,8 +156,10 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     let cell = 0.5 * size / TILE_N as f64;
     // Over a ferry's river the road is the ferry's line (class 5, drawn dashed), from the level
     // where a crossing is a few samples across.
+    // (Roadmap 6 R5: the network's stretches removed by hand drawn nowhere.)
+    let kept = crate::lod::roads::kept(world, t0, tile, key);
     let ferries: Vec<_> = if key.level >= FERRY_MIN_LEVEL {
-        crate::lod::roads::river_crossings(&tile.roads, &tile.pieces).into_iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Ferry).collect()
+        crate::lod::roads::river_crossings(&kept.roads, &tile.pieces).into_iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Ferry).collect()
     } else {
         Vec::new()
     };
@@ -169,7 +177,7 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
         ox,
         oy,
         size,
-        tile.roads.iter().map(|r| decimate(r.pts.iter().map(|c| [c.p[0], c.p[1], r.class.width_ft(), class_at(r, c.p)]).collect(), cell)).chain(town_roads)
+        kept.roads.iter().map(|r| decimate(r.pts.iter().map(|c| [c.p[0], c.p[1], r.class.width_ft(), class_at(r, c.p)]).collect(), cell)).chain(town_roads)
             // (Ferries over the sea: their lines from `FERRY_MIN_LEVEL`, `t0::ferries`.)
             .chain(crate::t0::ferries::tile_lines(world, t0, [ox, oy, ox + size, oy + size], size / 16.0, key.level >= FERRY_MIN_LEVEL)),
     );
@@ -295,8 +303,9 @@ fn ears(poly: &[[f64; 2]]) -> Vec<Vec<[f64; 2]>> {
 
 /// Decks (world ft polygons) where network roads bridge rivers: along the road, over the
 /// channel at the crossing's angle with a landing each side, as wide as the road plus 4 ft.
-fn road_bridges(tile: &TerrainOut) -> Vec<Vec<[f64; 2]>> {
-    crate::lod::roads::river_crossings(&tile.roads, &tile.pieces)
+/// (Roadmap 6 R5: none on a stretch removed by hand.)
+fn road_bridges(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<Vec<[f64; 2]>> {
+    crate::lod::roads::river_crossings(&crate::lod::roads::kept(world, t0, tile, key).roads, &tile.pieces)
         .iter()
         .filter(|c| c.kind == crate::t0::roads::CrossingKind::Bridge)
         .map(|c| crate::town::rect(c.at, c.u, c.w / c.sin + 24.0, c.class.width_ft() + 4.0))
@@ -361,7 +370,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
         if key.level >= BUILDING_MIN_LEVEL {
             // (R5 M20: none under a metropolis's lined bridge, which carries the road on.)
             let lined: Vec<Vec<[f64; 2]>> = crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]).iter().filter_map(|l| l.lined.as_ref().map(|d| d.0.clone())).collect();
-            for d in road_bridges(tile) {
+            for d in road_bridges(world, t0, key, tile) {
                 if !lined.iter().any(|deck| crate::town::geom::contains(deck, crate::town::geom::centroid(&d))) {
                     push(&d, 6);
                 }
@@ -384,6 +393,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
         }
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
+            // (Roadmap 6 R5: its decks and park paths removed by hand drawn nowhere.)
+            let cut = crate::town::cut::Cut::of(world, t0, &l);
             for f in &l.fields {
                 push(f, 2);
             }
@@ -417,7 +428,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             // paths and rounds, the pond and the stream, a formal garden's parterres and its basins,
             // planters and daises, the gazebo or bandstand, the trees' crowns and the beds (once
             // buildings are drawn).
-            for pk in l.parks.iter().filter(|_| key.level >= BUILDING_MIN_LEVEL) {
+            for (pki, pk) in l.parks.iter().enumerate().filter(|_| key.level >= BUILDING_MIN_LEVEL) {
                 let pc = crate::town::geom::centroid(&pk.pts);
                 if !owns(pc) {
                     continue;
@@ -444,7 +455,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     whole.set(None);
                     continue;
                 }
-                for (pts, w) in &lay.paths {
+                let gone = cut.as_ref().and_then(|c| c.paths(pki));
+                for (_, (pts, w)) in lay.paths.iter().enumerate().filter(|(j, _)| !gone.is_some_and(|g| g.contains(&(*j as u32)))) {
                     for q in pts.windows(2) {
                         let d = crate::town::geom::sub(q[1], q[0]);
                         let l = crate::town::geom::len(d);
@@ -507,7 +519,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             // under it left out, so the street runs on over it between its houses.)
             // (A stone bridge's deck with bit 20 set, as the battlemap builds it: `battlemap::bridge_style`.)
             let lined = l.lined.as_ref().map(|(deck, _)| deck);
-            let bridges = l.bridges.iter().map(|d| (d, (crate::battlemap::bridge_style(world.stream("battlemap"), &l, d) >= 2.0) as u32));
+            let bridges = l.bridges.iter().enumerate().filter(|(k, _)| !cut.as_ref().is_some_and(|c| c.deck(*k))).map(|(_, d)| (d, (crate::battlemap::bridge_style(world.stream("battlemap"), &l, d) >= 2.0) as u32));
             for (d, stone) in bridges.chain(l.piers.iter().map(|d| (d, 0))) {
                 match lined {
                     Some(deck) if deck == d => push(d, 46),
