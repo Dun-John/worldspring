@@ -129,8 +129,10 @@
 //!
 //! - `streetsin` (not in `all`; Roadmap 6 R7): walled towns' main streets from their gates: length within 30 ft of
 //!   the town wall's inner face past the first 40 ft (and the part running along it), the straight run from the
-//!   gate before the first piece turning over 20 degrees off the wall's inward normal; a summary line over every
-//!   world with the worst 5 towns (seeds 1-24 to compare). `STREETS_DUMP="L<i> <name>"` (or `all`): that town's streets
+//!   gate before the first piece turning over 20 degrees off the wall's inward normal, the first 100 ft's heading
+//!   off that normal (median, over 20 and 30 degrees); a summary line over every
+//!   world with the worst 5 towns (seeds 1-24 to compare); `STREETS_OFF=1`: every street over 20 degrees off square,
+//!   to stderr. `STREETS_DUMP="L<i> <name>"` (or `all`): that town's streets
 //!   piece by piece (heading against the gate's inward normal, distance to the wall).
 //!
 //! Usage: cargo run --release -p worldgen --example towncheck -- [streetsin|same|fills|rows|castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
@@ -1138,9 +1140,10 @@ thread_local! {
 /// centre line is within 30 ft of the town wall's inner face (its centre line less half its thickness); along:
 /// the part of that heading within 45 degrees of the nearest wall piece. Straight run: from the gate to the start
 /// of the first piece of the street (3 ft or longer) heading more than 20 degrees off the gate's inward normal (the
-/// wall's within 50 ft of the gate).
+/// line best fitting the wall within 50 ft of the gate, turned toward the walls' mean point). Off square: the chord from the gate to the
+/// street's point 100 ft along (its end if shorter) against that normal.
 fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
-    r.counts(&["walled towns", "main streets", "main streets hugging the wall", "main streets running along the wall", "main streets straight for under 100 ft (longer streets)", "main streets under 100 ft long", "main streets from an open edge (no wall at the gate)"]);
+    r.counts(&["walled towns", "main streets", "main streets hugging the wall", "main streets hugging and running along the wall", "main streets straight for under 100 ft (longer streets)", "main streets under 100 ft long", "main streets from an open edge (no wall at the gate)", "main streets' first 100 ft over 20 deg off square", "main streets' first 100 ft over 30 deg off square"]);
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
     let (mut hug_all, mut along_all) = (0.0f64, 0.0f64);
     for li in 0..town::layout_count(t0) {
@@ -1159,6 +1162,9 @@ fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
         }
         r.tally("walled towns", 1);
         let half = 0.5 * l.wall_style.thickness();
+        // (The town's middle, to orient each gate's normal inward: the walls' points averaged.)
+        let pts: Vec<P> = walls.iter().flat_map(|w| w.iter().copied()).collect();
+        let centre = mul(pts.iter().fold([0.0, 0.0], |a, &p| add(a, p)), 1.0 / pts.len() as f64);
         let name = worldgen::agent::feature_of_layout(world, t0, li).and_then(|id| worldgen::agent::name_of(world, t0, &id)).unwrap_or_else(|| "?".into());
         let tag = format!("L{li} {name}");
         let (mut town_hug, mut worst_street) = (0.0f64, String::new());
@@ -1197,7 +1203,7 @@ fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
                 r.add("main streets hugging the wall", hug, format!("{tag} street {si}: {hug:.0} ft from {}", at(first_hug.unwrap_or(st[0]))));
             }
             if along > 0.0 {
-                r.add("main streets running along the wall", along, format!("{tag} street {si}: {along:.0} ft"));
+                r.add("main streets hugging and running along the wall", along, format!("{tag} street {si}: {along:.0} ft"));
             }
             r.value("main streets' hugging ft", hug, format!("{tag} street {si}"));
             r.value("main streets' along-the-wall ft", along, format!("{tag} street {si}"));
@@ -1207,24 +1213,62 @@ fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
                 worst_street = format!("street {si} {hug:.0} ft");
             }
             town_hug += hug;
-            // (The gate's inward normal: the wall pieces within 50 ft of it, their directions summed one way.)
+            // (The gate's inward normal: across the line the wall within 50 ft of it best follows, its
+            // points every 2 ft taken (the gate towers' short pieces barely turn it).)
             let g = st[0];
-            let mut dir = [0.0, 0.0];
-            for &(a, b) in segs.iter().filter(|(a, b)| seg_dist(g, *a, *b) < 50.0) {
-                let v = sub(b, a);
-                dir = if dot(v, dir) < 0.0 { sub(dir, v) } else { add(dir, v) };
-            }
-            if len(dir) < 1e-6 {
+            let near: Vec<P> = segs
+                .iter()
+                .filter(|(a, b)| seg_dist(g, *a, *b) < 50.0)
+                .flat_map(|&(a, b)| {
+                    let n = (dist(a, b) / 2.0).ceil().max(1.0) as usize;
+                    (0..=n).map(move |j| lerp(a, b, j as f64 / n as f64))
+                })
+                .filter(|p| dist(*p, g) < 50.0)
+                .collect();
+            let m = mul(near.iter().fold([0.0, 0.0], |a, &p| add(a, p)), 1.0 / near.len().max(1) as f64);
+            let (sxx, syy, sxy) = near.iter().fold((0.0, 0.0, 0.0), |c, p| {
+                let d = sub(*p, m);
+                (c.0 + d[0] * d[0], c.1 + d[1] * d[1], c.2 + d[0] * d[1])
+            });
+            if near.len() < 2 || sxx + syy < 1e-6 {
                 r.add("main streets from an open edge (no wall at the gate)", 1.0, format!("{tag} street {si} at {}", at(g)));
                 continue;
             }
-            let wu = mul(dir, 1.0 / len(dir));
+            let th = 0.5 * libm::atan2(2.0 * sxy, sxx - syy);
+            let wu = [libm::cos(th), libm::sin(th)];
             let mut nrm = [-wu[1], wu[0]];
-            if dot(nrm, sub(st[st.len() - 1], g)) < 0.0 {
+            if dot(nrm, sub(centre, g)) < 0.0 {
                 nrm = mul(nrm, -1.0);
+            }
+            // (Squareness: the chord over the first 100 ft (or the whole street) against the inward normal.)
+            let (mut s, mut p100) = (0.0f64, st[st.len() - 1]);
+            for w in st.windows(2) {
+                let d = dist(w[0], w[1]);
+                if s + d >= 100.0 {
+                    p100 = lerp(w[0], w[1], (100.0 - s) / d.max(1e-9));
+                    break;
+                }
+                s += d;
+            }
+            if dist(p100, g) > 1e-6 {
+                let c = dot(mul(sub(p100, g), 1.0 / dist(p100, g)), nrm).clamp(-1.0, 1.0);
+                let off = libm::acos(c).to_degrees();
+                r.value("main streets' first 100 ft, deg off square", off, format!("{tag} street {si}"));
+                if off > 20.0 {
+                    r.add("main streets' first 100 ft over 20 deg off square", off, format!("{tag} street {si}: {off:.0} deg at {}", at(g)));
+                }
+                if off > 20.0 && std::env::var("STREETS_OFF").is_ok() {
+                    eprintln!("off {label} {tag} street {si}: {off:.0} deg, hug {hug:.0} ft, at {}", at(g));
+                }
+                if off > 30.0 {
+                    r.add("main streets' first 100 ft over 30 deg off square", off, format!("{tag} street {si}: {off:.0} deg at {}", at(g)));
+                }
             }
             if std::env::var("STREETS_DUMP").is_ok_and(|v| v == tag || v == "all") {
                 eprintln!("{tag} street {si}: gate {g:?} wall dir {wu:?} normal {nrm:?} half {half}");
+                for &(a, b) in segs.iter().filter(|(a, b)| seg_dist(g, *a, *b) < 50.0) {
+                    eprintln!("  wall piece {a:?} -> {b:?} ({:.0} ft)", dist(a, b));
+                }
                 for w in st.windows(2) {
                     let d = dist(w[0], w[1]);
                     let wd = segs.iter().map(|&(a, b)| seg_dist(w[1], a, b)).fold(f64::MAX, f64::min);
@@ -1259,20 +1303,28 @@ fn streets_in(ctx: &mut Ctx, label: &str, r: &mut Report) {
 fn streets_in_summary(all: &Report) {
     let count = |label: &str| all.rows.iter().find(|r| r.0 == label).map_or(0, |r| if let Row::Count { n, .. } = r.1 { n } else { 0 });
     let sum = |label: &str| all.rows.iter().find(|r| r.0 == label).map_or(0.0, |r| if let Row::Values { v } = &r.1 { v.iter().map(|x| x.0).sum() } else { 0.0 });
+    let median = |label: &str| {
+        let mut v: Vec<f64> = all.rows.iter().find(|r| r.0 == label).map_or(Vec::new(), |r| if let Row::Values { v } = &r.1 { v.iter().map(|x| x.0).collect() } else { Vec::new() });
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
+    };
     HUGGERS.with(|h| {
         let mut h = h.borrow_mut();
         h.sort_by(|a, b| b.0.total_cmp(&a.0));
         say!(
-            "streetsin summary: {} walled towns, {} main streets; hugging {:.0} ft ({} streets), along the wall {:.0} ft ({} streets); straight under 100 ft: {}; under 100 ft long: {}; open-edge gates: {}",
+            "streetsin summary: {} walled towns, {} main streets; hugging {:.0} ft ({} streets), of which along the wall {:.0} ft ({} streets); straight under 100 ft: {}; under 100 ft long: {}; open-edge gates: {}; first 100 ft off square: median {:.1} deg, over 20 deg {}, over 30 deg {}",
             count("walled towns"),
             count("main streets"),
             sum("main streets' hugging ft"),
             count("main streets hugging the wall"),
             sum("main streets' along-the-wall ft"),
-            count("main streets running along the wall"),
+            count("main streets hugging and running along the wall"),
             count("main streets straight for under 100 ft (longer streets)"),
             count("main streets under 100 ft long"),
-            count("main streets from an open edge (no wall at the gate)")
+            count("main streets from an open edge (no wall at the gate)"),
+            median("main streets' first 100 ft, deg off square"),
+            count("main streets' first 100 ft over 20 deg off square"),
+            count("main streets' first 100 ft over 30 deg off square")
         );
         for (_, w) in h.iter().take(5) {
             say!("    {w}");
