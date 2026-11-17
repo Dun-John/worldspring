@@ -38,6 +38,7 @@ pub fn lerp(a: P, b: P, t: f64) -> P {
 }
 
 /// Signed area (positive when counter-clockwise in a y-up frame).
+#[inline]
 pub fn area(poly: &[P]) -> f64 {
     let n = poly.len();
     (0..n).map(|i| cross(poly[i], poly[(i + 1) % n])).sum::<f64>() * 0.5
@@ -62,11 +63,13 @@ pub fn centroid(poly: &[P]) -> P {
 
 /// The mean of a polygon's corners: a box's middle, exact far from the origin (where `centroid`'s
 /// products lose feet on a small one).
+#[inline]
 pub fn mean(poly: &[P]) -> P {
     let s = poly.iter().fold([0.0, 0.0], |acc, p| add(acc, *p));
     mul(s, 1.0 / poly.len().max(1) as f64)
 }
 
+#[inline]
 pub fn contains(poly: &[P], p: P) -> bool {
     let n = poly.len();
     let mut inside = false;
@@ -82,6 +85,7 @@ pub fn contains(poly: &[P], p: P) -> bool {
 }
 
 /// Distance from `p` to segment `ab`.
+#[inline]
 pub fn seg_dist(p: P, a: P, b: P) -> f64 {
     let ab = sub(b, a);
     let t = (dot(sub(p, a), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
@@ -89,6 +93,7 @@ pub fn seg_dist(p: P, a: P, b: P) -> f64 {
 }
 
 /// The least distance between the outlines of two polygons (0 where they cross).
+#[inline]
 pub fn poly_gap(a: &[P], b: &[P]) -> f64 {
     let o = |p: P, q: P, r: P| cross(sub(q, p), sub(r, p));
     let mut best = f64::MAX;
@@ -136,6 +141,7 @@ pub fn clip(poly: &Labeled, n: P, c: f64, label: i32) -> Labeled {
 }
 
 /// Keep the part of a plain polygon where `dot(p, n) <= c`.
+#[inline]
 pub fn clip_plain(poly: &[P], n: P, c: f64) -> Vec<P> {
     let lp = Labeled { pts: poly.to_vec(), labels: vec![-1; poly.len()] };
     clip(&lp, n, c, -1).pts
@@ -168,6 +174,7 @@ pub fn inset(poly: &[P], d: &[f64]) -> Vec<P> {
 }
 
 /// Split a convex polygon by the line through `p` with direction `dir`.
+#[inline]
 pub fn split(poly: &[P], p: P, dir: P) -> (Vec<P>, Vec<P>) {
     let n = [-dir[1], dir[0]];
     let c = dot(p, n);
@@ -175,6 +182,7 @@ pub fn split(poly: &[P], p: P, dir: P) -> (Vec<P>, Vec<P>) {
 }
 
 /// Longest edge direction (unit) of a polygon — lots are cut across it.
+#[inline]
 pub fn main_axis(poly: &[P]) -> P {
     let m = poly.len();
     let mut best = ([1.0, 0.0], 0.0);
@@ -189,6 +197,7 @@ pub fn main_axis(poly: &[P]) -> P {
 }
 
 /// Extent of a polygon along a unit direction.
+#[inline]
 pub fn extent(poly: &[P], dir: P) -> (f64, f64) {
     poly.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(dot(*p, dir)), hi.max(dot(*p, dir))))
 }
@@ -276,6 +285,7 @@ pub fn hull(mut pts: Vec<P>) -> Vec<P> {
 }
 
 /// Regular polygon approximating a circle.
+#[inline]
 pub fn circle(c: P, r: f64, n: usize) -> Vec<P> {
     (0..n)
         .map(|i| {

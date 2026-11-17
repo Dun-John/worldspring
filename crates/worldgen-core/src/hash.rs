@@ -3,12 +3,14 @@
 pub struct Fnv64(u64);
 
 impl Default for Fnv64 {
+    #[inline]
     fn default() -> Self {
         Self(0xcbf2_9ce4_8422_2325)
     }
 }
 
 impl Fnv64 {
+    #[inline]
     pub fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.0 ^= b as u64;
@@ -16,17 +18,20 @@ impl Fnv64 {
         }
     }
 
+    #[inline]
     pub fn write_f32s(&mut self, v: &[f32]) {
         for x in v {
             self.write(&x.to_le_bytes());
         }
     }
 
+    #[inline]
     pub fn finish(&self) -> u64 {
         self.0
     }
 }
 
+#[inline]
 pub fn fnv64(bytes: &[u8]) -> u64 {
     let mut h = Fnv64::default();
     h.write(bytes);

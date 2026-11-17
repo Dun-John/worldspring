@@ -61,11 +61,13 @@ pub struct Shape {
 
 impl Shape {
     /// A shape with no holes.
+    #[inline]
     pub fn ring(outer: Vec<P>) -> Self {
         Shape { outer, holes: Vec::new() }
     }
 
     /// Area: the outer's less the holes' (for canonical shapes).
+    #[inline]
     pub fn area(&self) -> f64 {
         geom::area(&self.outer) + self.holes.iter().map(|h| geom::area(h)).sum::<f64>()
     }
@@ -96,39 +98,47 @@ pub enum Ends {
 
 /// A ring (either orientation) as a canonical region; a ring crossing itself keeps the parts it
 /// winds round anticlockwise once it is turned to run anticlockwise overall.
+#[inline]
 pub fn region(ring: &[P]) -> Vec<Shape> {
     normalize(&[Shape::ring(ring.to_vec())])
 }
 
 /// The canonical form of a set of shapes: their union.
+#[inline]
 pub fn normalize(set: &[Shape]) -> Vec<Shape> {
     run(set, &[], Op::Union)
 }
 
 /// The union of many shapes (the same as `normalize`).
+#[inline]
 pub fn union_all(set: &[Shape]) -> Vec<Shape> {
     run(set, &[], Op::Union)
 }
 
+#[inline]
 pub fn union(a: &[Shape], b: &[Shape]) -> Vec<Shape> {
     run(a, b, Op::Union)
 }
 
+#[inline]
 pub fn intersection(a: &[Shape], b: &[Shape]) -> Vec<Shape> {
     run(a, b, Op::Inter)
 }
 
 /// What of `a` is not in `b`.
+#[inline]
 pub fn difference(a: &[Shape], b: &[Shape]) -> Vec<Shape> {
     run(a, b, Op::Diff)
 }
 
 /// Total area of canonical shapes.
+#[inline]
 pub fn area(set: &[Shape]) -> f64 {
     set.iter().map(Shape::area).sum()
 }
 
 /// Whether a point is inside canonical shapes (in an outer and in none of its holes).
+#[inline]
 pub fn contains(set: &[Shape], p: P) -> bool {
     set.iter().any(|s| geom::contains(&s.outer, p) && !s.holes.iter().any(|h| geom::contains(h, p)))
 }
@@ -458,6 +468,7 @@ pub fn split(set: &[Shape], p: P, dir: P) -> (Vec<Shape>, Vec<Shape>) {
 /// cut is checked exactly against every edge before it is made. Where no cut can be found (never in
 /// clipcheck) a piece is split along the whole line of an edge instead. Pieces are convex within
 /// 1/256 ft (`is_convex`) and together the region, to a grid step along the cuts.
+#[inline]
 pub fn convex_pieces(set: &[Shape]) -> Vec<Vec<P>> {
     let mut out: Vec<Vec<I>> = Vec::new();
     for s in normalize(set) {

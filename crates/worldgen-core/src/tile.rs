@@ -36,10 +36,12 @@ pub struct TileKey {
 }
 
 impl TileKey {
+    #[inline]
     pub fn surface(level: u8, x: u32, y: u32) -> Self {
         Self { layer: LAYER_SURFACE, level, x, y }
     }
 
+    #[inline]
     pub fn parent(&self) -> Option<TileKey> {
         (self.level > 0).then(|| TileKey { level: self.level - 1, x: self.x / 2, y: self.y / 2, ..*self })
     }
@@ -92,24 +94,29 @@ impl WorldGeom {
         g
     }
 
+    #[inline]
     pub fn tile_size_ft(&self, level: u8) -> f64 {
         self.domain_ft / (1u64 << level) as f64
     }
 
+    #[inline]
     pub fn spacing_ft(&self, level: u8) -> f64 {
         self.tile_size_ft(level) / TILE_N as f64
     }
 
+    #[inline]
     pub fn tile_origin_ft(&self, key: &TileKey) -> (f64, f64) {
         let s = self.tile_size_ft(key.level);
         (key.x as f64 * s, key.y as f64 * s)
     }
 
+    #[inline]
     pub fn tiles_across(&self, level: u8) -> (u32, u32) {
         let s = self.tile_size_ft(level);
         ((self.map_w_ft / s).ceil().max(1.0) as u32, (self.map_h_ft / s).ceil().max(1.0) as u32)
     }
 
+    #[inline]
     pub fn tile_in_map(&self, key: &TileKey) -> bool {
         let (nx, ny) = self.tiles_across(key.level);
         key.level <= self.max_level && key.x < nx && key.y < ny

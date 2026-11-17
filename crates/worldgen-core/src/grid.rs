@@ -44,6 +44,7 @@ pub fn cr_weights(t: f64) -> [f64; 4] {
 
 impl Grid<f32> {
     /// Bicubic (Catmull-Rom) sample in grid-index coordinates, clamped at the edges.
+    #[inline]
     pub fn sample_cubic(&self, x: f64, y: f64) -> f64 {
         let xf = crate::floor(x);
         let yf = crate::floor(y);

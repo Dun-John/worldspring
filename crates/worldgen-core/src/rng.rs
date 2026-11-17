@@ -33,6 +33,7 @@ pub fn signed(h: u64) -> f64 {
 }
 
 /// Derive a named sub-seed so independent generators never share random streams.
+#[inline]
 pub fn stream(seed: u64, name: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in name.bytes() {
@@ -49,6 +50,7 @@ pub struct Pcg32 {
 }
 
 impl Pcg32 {
+    #[inline]
     pub fn new(seed: u64, seq: u64) -> Self {
         let mut r = Self { state: 0, inc: (seq << 1) | 1 };
         r.next_u32();
@@ -59,14 +61,17 @@ impl Pcg32 {
 
     /// Its whole state (`from_state` makes the same stream again: a hand town's block kept as it
     /// was laid out, `town::hand`).
+    #[inline]
     pub fn state(&self) -> (u64, u64) {
         (self.state, self.inc)
     }
 
+    #[inline]
     pub fn from_state(state: u64, inc: u64) -> Self {
         Self { state, inc }
     }
 
+    #[inline]
     pub fn next_u32(&mut self) -> u32 {
         let old = self.state;
         self.state = old.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(self.inc);
@@ -76,17 +81,20 @@ impl Pcg32 {
     }
 
     /// Uniform in [0, 1).
+    #[inline]
     pub fn next_f64(&mut self) -> f64 {
         let hi = (self.next_u32() as u64) << 21;
         let lo = (self.next_u32() >> 11) as u64;
         (hi | lo) as f64 * (1.0 / (1u64 << 53) as f64)
     }
 
+    #[inline]
     pub fn range(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (hi - lo) * self.next_f64()
     }
 
     /// Uniform integer in [0, n).
+    #[inline]
     pub fn below(&mut self, n: u32) -> u32 {
         ((self.next_u32() as u64 * n as u64) >> 32) as u32
     }

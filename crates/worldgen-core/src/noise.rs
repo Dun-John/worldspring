@@ -40,6 +40,7 @@ fn dfade(t: f64) -> f64 {
 
 /// Gradient noise in roughly [-1, 1]. The value half of `gradient2_d` (same arithmetic, so
 /// the same bits) without the derivative work.
+#[inline]
 pub fn gradient2(seed: u64, x: f64, y: f64) -> f64 {
     let xf = crate::floor(x);
     let yf = crate::floor(y);
@@ -112,6 +113,7 @@ pub struct Gradient {
 }
 
 impl Gradient {
+    #[inline]
     pub fn new(seed: u64) -> Gradient {
         Gradient { seed, cell: (i64::MIN, i64::MIN), g: [(0.0, 0.0); 4] }
     }
@@ -137,9 +139,11 @@ pub struct Fbm {
 }
 
 impl Fbm {
+    #[inline]
     pub fn new(seed: u64, octaves: u32, lacunarity: f64, gain: f64) -> Fbm {
         Fbm { octaves: (0..octaves).map(|o| Gradient::new(seed.wrapping_add((o as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)))).collect(), lacunarity, gain }
     }
+    #[inline]
     pub fn at(&mut self, x: f64, y: f64) -> f64 {
         let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
         for g in &mut self.octaves {
@@ -156,9 +160,11 @@ impl Fbm {
 pub struct Ridged(Vec<Gradient>);
 
 impl Ridged {
+    #[inline]
     pub fn new(seed: u64, octaves: u32) -> Ridged {
         Ridged((0..octaves).map(|o| Gradient::new(seed.wrapping_add((o as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)))).collect())
     }
+    #[inline]
     pub fn at(&mut self, x: f64, y: f64) -> f64 {
         let (mut sum, mut amp, mut freq, mut norm, mut weight) = (0.0, 1.0, 1.0, 0.0, 1.0);
         for g in &mut self.0 {
@@ -175,6 +181,7 @@ impl Ridged {
 }
 
 /// Fractal Brownian motion, normalized to roughly [-1, 1].
+#[inline]
 pub fn fbm(seed: u64, x: f64, y: f64, octaves: u32, lacunarity: f64, gain: f64) -> f64 {
     let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
     for o in 0..octaves {
@@ -188,6 +195,7 @@ pub fn fbm(seed: u64, x: f64, y: f64, octaves: u32, lacunarity: f64, gain: f64) 
 }
 
 /// Ridged multifractal in roughly [0, 1]: sharp crests, for mountain ranges.
+#[inline]
 pub fn ridged(seed: u64, x: f64, y: f64, octaves: u32) -> f64 {
     let (mut sum, mut amp, mut freq, mut norm, mut weight) = (0.0, 1.0, 1.0, 0.0, 1.0);
     for o in 0..octaves {
