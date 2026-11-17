@@ -267,9 +267,10 @@ export function buildTools(app: BuildHost) {
       const newRoad = !!r.road && !r.road.kept;
       const parts = [`${plural(fresh, 'building')} in ${Math.round(r.length_ft)} ft`];
       if (r.refused_count) parts.push(`${r.refused_count} would not fit (${r.refused[0].why})`);
-      if (r.removed.length) parts.push(`${plural(r.removed.length, 'building')} taken away`);
+      const gone = r.removed.length + (r.road && !r.road.kept ? r.road.removed.length : 0);
+      if (gone) parts.push(`${plural(gone, 'building')} taken away`);
       if (r.road) parts.push(r.road.kept ? 'the road is here already' : r.road.as === 'street' ? 'with a street' : 'with a road');
-      quick = { can: done && (fresh > 0 || newRoad), text: fresh || newRoad ? parts.join('; ') : 'All of these are here already', removed: r.removed.length };
+      quick = { can: done && (fresh > 0 || newRoad), text: fresh || newRoad ? parts.join('; ') : 'All of these are here already', removed: gone };
       if (!done && fresh) quick.text += ' · press Enter to finish';
       return;
     }
@@ -357,7 +358,8 @@ export function buildTools(app: BuildHost) {
       let next: Edits = { ...app.edits, created: [...(app.edits.created ?? []), ...made], ...(r.removed.length ? { buildings } : {}) };
       if (road) next = withRoad(next, road);
       app.applyEdits(next, { tool: 'create_building_row', count: made.length, ...(road ? { road: road.as } : {}) }, 'user');
-      app.toast(`${made.length ? plural(made.length, 'building') : 'A road'} put down${road && made.length ? ` with a ${road.as === 'street' ? 'street' : 'road'}` : ''}${r.refused_count ? `; ${r.refused_count} would not fit` : ''}`);
+      // (The history toast says what went down, with Undo; only what did not fit is added.)
+      if (r.refused_count) app.toast(`${r.refused_count} would not fit`);
     } else {
       const poly = tool.path;
       const r = await app.view.gen.parcelCheck(poly);
