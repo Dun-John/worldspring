@@ -1537,7 +1537,19 @@ square to its chord with its front 7, 12, 18 or 26 ft off the line (the first th
 another of the row, is skipped and listed. Up to 100 buildings (`note` says it stopped). Returns `{count, ids, lots: [{id, kind,
 floors, x_ft, y_ft, poly}], refused_count, refused?: [{x_ft, y_ft, why}] (12 at most), removed?, length_ft}`; the same call again returns
 the same ids and adds nothing. `preview: true` returns the lots without ids and makes nothing. Each building is `c:<n>` (delete_feature
-takes one away; one change per call).
+takes one away; one change per call). Each building of a row faces the line it was laid along (its door side).
+
+`road: {kind, width?}` (a path kind: footpath, track, gravel, paved, cobbled; `width` 3 to 40 ft, else the kind's) also lays a road
+along the row, in the same change: the line is the smooth curve through the points, the lots are set back half the road's width
+(then 4, 10, 18 ft more) and kept off its band. Where the lots would be part of a town (the membership rule of `edit_town` members:
+within 300 ft of its edge or of one of its members), the road is one of the town's streets: in a generated town or village an added
+street (`ts:<layout>:<id>`, listed by `list_streets` with that id; its ends joined to the nearest street within 100 ft unless a
+wall is in the way; the town's own buildings on its band give way; it takes the town's street look, the kind setting its width
+only); in a town laid out by hand, streets of its plan (joined at their ends, split where they cross others). Elsewhere it is a
+road drawn by hand (`rw:`, as `place_path` makes). Refused with an `rd:` along, and for a town street over water, through the town
+wall (open a gate first) or past 64 added streets in one town. The reply's `road` is `{as: road|street, id, town?, line_pts,
+removed?}` (`id`: the `rw:` or `ts:` id, or a hand town's new street numbers; `removed`: the town's buildings taken off; `line` with
+`preview`). Laying the town out by hand (`edit_streets` `lay_out_by_hand`) turns added streets into streets of its plan.
 
 ### `create_parcel`
 A free plot of ground drawn as an outline (`Created` kind `plot`, built like a hand block). `poly` (required, 3 to 64 corners, simple, at

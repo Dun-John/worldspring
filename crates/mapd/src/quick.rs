@@ -4,6 +4,7 @@
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::placing;
+use worldgen::model::paths::PathKind;
 use worldgen::town::geom;
 use worldgen::world::{Created, CreatedChecks, LOT_SIZES, TOWN_WARDS};
 
@@ -49,15 +50,16 @@ pub fn list() -> Vec<Value> {
     let mut row = crate::build::props();
     if let Some(m) = row.as_object_mut() {
         m.retain(|_, _| false);
-        m.insert("along".into(), json!({ "oneOf": [points_schema(2, 200, "A path [x_ft, y_ft] ..."), { "type": "string", "description": "A road stretch id (rd:..., list_roads)" }], "description": "The path to line: points, or a road stretch id" }));
-        m.insert("side".into(), json!({ "type": "string", "enum": ["left", "right", "both"], "default": "both", "description": "Left or right of the direction of travel (left is [-dy, dx])" }));
-        m.insert("depth".into(), json!({ "type": "number", "minimum": placing::DEPTH_RANGE.0, "maximum": placing::DEPTH_RANGE.1, "description": "Lot depth, ft (default by the ward's lot area, 22 to 60)" }));
-        m.insert("kinds".into(), json!({ "type": "array", "minItems": 1, "maxItems": 24, "items": { "type": "string" }, "description": "Business or home keys to mix; left out, homes of the ward with now and then a business" }));
+        m.insert("along".into(), json!({ "oneOf": [points_schema(2, 200, "[x_ft, y_ft] ..."), { "type": "string", "description": "rd:... (list_roads)" }], "description": "Points or a road stretch id" }));
+        m.insert("side".into(), json!({ "type": "string", "enum": ["left", "right", "both"], "default": "both", "description": "Left is [-dy, dx]" }));
+        m.insert("depth".into(), json!({ "type": "number", "minimum": placing::DEPTH_RANGE.0, "maximum": placing::DEPTH_RANGE.1, "description": "Lot depth ft (default by the ward)" }));
+        m.insert("kinds".into(), json!({ "type": "array", "minItems": 1, "maxItems": 24, "items": { "type": "string" }, "description": "Business or home keys to mix (default the ward's homes, now and then a business)" }));
         m.insert("ward".into(), json!({ "type": "string", "enum": TOWN_WARDS, "default": "common", "description": "Sets lot widths, storeys and the mix" }));
-        m.insert("gaps".into(), json!({ "type": "number", "minimum": 0, "maximum": 0.5, "default": 0.15, "description": "The share of slots left empty (alleys, yards)" }));
-        m.insert("seed".into(), json!({ "type": "integer", "minimum": 0, "description": "Another mix of widths and kinds for the same path" }));
+        m.insert("gaps".into(), json!({ "type": "number", "minimum": 0, "maximum": 0.5, "default": 0.15, "description": "Share of slots left empty" }));
+        m.insert("seed".into(), json!({ "type": "integer", "minimum": 0, "description": "Another mix for the same path" }));
         m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way" }));
-        m.insert("preview".into(), json!({ "type": "boolean", "default": false, "description": "Only list the lots (nothing is made)" }));
+        m.insert("road".into(), json!({ "type": "object", "properties": { "kind": { "type": "string", "enum": PathKind::ALL.map(|k| k.name()) }, "width": { "type": "number", "minimum": 3, "maximum": 40 } }, "required": ["kind"], "description": "Also a road along it, the houses set back half its width: in a town a street of it, else a drawn road. Not with rd: along" }));
+        m.insert("preview".into(), json!({ "type": "boolean", "default": false, "description": "Only list the lots" }));
     }
     let mut parcel = json!({
         "poly": points_schema(3, 64, "Corners [x_ft, y_ft] in order, within 750 ft of their middle"),
@@ -74,7 +76,7 @@ pub fn list() -> Vec<Value> {
     }
     vec![
         json!({ "name": "place_stamp", "title": "Place a building", "description": "Set one building of a kind (house, inn, smithy, ...) and size (small, usual, large or width x depth) down at a point: fronting the nearest street, square to it, set back as lots are, clear of everything else (or turned to facing, moved to the nearest clear spot). clear: true takes away the world's own buildings it stands on. Returns the building (c:<n>, b:<layout>:0) with width_ft, depth_ft and facing_deg; preview: true only says where it would land.", "inputSchema": schema(stamp, &["kind", "at"]) }),
-        json!({ "name": "create_building_row", "title": "Line a street with buildings", "description": "Draw a row of buildings along a path or a road stretch, on one or both sides: lots cut one after another (widths from the ward's lot area, a seeded mix of kinds and storeys, empty slots between), each fronting the path, set past its bed, clear of everything else. Up to 100 buildings, all in one edit; slots that do not fit are listed in refused. Repeating the call adds nothing. preview: true lists the lots only.", "inputSchema": schema(row, &["along"]) }),
+        json!({ "name": "create_building_row", "title": "Line a street with buildings", "description": "A row of buildings along a path or a road stretch, one or both sides: lots in turn (widths by the ward, a seeded mix of kinds and storeys, gaps), each fronting the path, clear of all else. Up to 100, one edit; slots that do not fit are in refused. Repeating it adds nothing.", "inputSchema": schema(row, &["along"]) }),
         json!({ "name": "create_parcel", "title": "Mark a plot", "description": "A free plot of ground with a fill, drawn as an outline: generated lots of a ward, left empty for buildings by hand, or open ground. Returns its id (c:<n>); delete_feature removes it, update_parcel changes it. (create_plot is a notebook plot point.)", "inputSchema": schema(parcel, &["poly"]) }),
         json!({ "name": "update_parcel", "title": "Change a plot", "description": "Change a plot made with create_parcel: its outline, fill or name. Fields left out stay.", "inputSchema": schema(update, &["id"]) }),
     ]
@@ -151,6 +153,10 @@ async fn road_line(app: &Shared, id: String) -> Result<Vec<[f64; 2]>, String> {
 }
 
 async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
+    let road = placing::road_of(&a["road"])?;
+    if road.is_some() && a["along"].is_string() {
+        return Err("road: give along as points (a road stretch is a road already)".into());
+    }
     let line: Vec<[f64; 2]> = match &a["along"] {
         Value::String(id) => road_line(app, id.clone()).await?,
         Value::Array(p) => p.iter().map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?])).collect::<Option<Vec<_>>>().ok_or("along: points as [x_ft, y_ft]")?,
@@ -178,7 +184,7 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
     let out = app
         .worker
         .with(move |ex| {
-            let ask = placing::RowAsk { line: &line, sides, depth, kinds, ward: &ward, gaps, clear, seed };
+            let ask = placing::RowAsk { line: &line, sides, depth, kinds, ward: &ward, gaps, clear, seed, road };
             let edits = &ex.world.file.edits;
             let existing = |poly: &[[f64; 2]], func: &str| {
                 let probe = Created { kind: "building".into(), poly: poly.to_vec(), func: Some(func.to_string()), ..Default::default() };
@@ -228,9 +234,22 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
     if clear {
         reply["removed"] = json!(out.removed.iter().map(|r| r.to_json()).collect::<Vec<_>>());
     }
+    if let Some(r) = &out.road {
+        let mut v = json!({ "as": r.as_str(), "line_pts": r.line.len() });
+        if let Some(t) = r.town {
+            v["town"] = json!(t);
+        }
+        if !r.removed.is_empty() {
+            v["removed"] = json!(r.removed);
+        }
+        reply["road"] = v;
+    }
     if preview {
         reply["preview"] = json!(true);
         reply["lots"] = json!(lots_json(&[]));
+        if let Some(r) = &out.road {
+            reply["road"]["line"] = json!(r.line.iter().map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>());
+        }
         return Ok(reply);
     }
     let new: Vec<Created> = out
@@ -238,14 +257,33 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
         .iter()
         .zip(&names)
         .filter(|(l, _)| l.existing.is_none())
-        .map(|(l, name)| Created { kind: "building".into(), x: l.mid[0], y: l.mid[1], name: name.clone(), poly: l.poly.clone(), func: Some(l.func.clone()), floors: Some(l.floors), ..Default::default() })
+        .map(|(l, name)| Created { kind: "building".into(), x: l.mid[0], y: l.mid[1], name: name.clone(), poly: l.poly.clone(), func: Some(l.func.clone()), floors: Some(l.floors), faces: Some(l.faces), ..Default::default() })
         .collect();
     for c in &new {
         c.check()?;
     }
     let removed = out.removed;
+    let road = out.road.map(|r| (r.town, r.edit));
     let change = app
         .edit("agent", 0, move |e| {
+            // The road in the same edit as the lots (one undo step).
+            let road_id = match road {
+                None => None,
+                Some((_, placing::RowRoadEdit::Path(p))) => {
+                    let id = crate::notebook::new_id("rw");
+                    e.paths.insert(id.clone(), p);
+                    Some(json!(id))
+                }
+                Some((_, placing::RowRoadEdit::Hand(ch, made))) => {
+                    ch.apply(e);
+                    Some(json!(made.iter().map(|n| format!("e{n}")).collect::<Vec<_>>()))
+                }
+                Some((t, placing::RowRoadEdit::Town(key, te, id))) => {
+                    e.towns.insert(key, te);
+                    Some(json!(format!("ts:{}:{id}", t.unwrap_or_default())))
+                }
+                Some((_, placing::RowRoadEdit::Kept(id))) => Some(json!(id)),
+            };
             let mut ids = Vec::new();
             for mut c in new {
                 if let Some(o) = e.existing_site(&c, [c.x, c.y]) {
@@ -259,9 +297,12 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
             for r in removed {
                 e.buildings.insert(r.id, worldgen::world::BuildingEdit { at: r.at, removed: true, ..Default::default() });
             }
-            Ok(json!({ "ids": ids }))
+            Ok(json!({ "ids": ids, "road": road_id }))
         })
         .await?;
+    if !change["road"].is_null() {
+        reply["road"]["id"] = change["road"].clone();
+    }
     // The ids in lot order (an existing lot keeps its own).
     let mut fresh = change["ids"].as_array().cloned().unwrap_or_default().into_iter().map(|v| v.as_str().unwrap_or_default().to_string());
     let ids: Vec<String> = out.lots.iter().map(|l| l.existing.clone().unwrap_or_else(|| fresh.next().unwrap_or_default())).collect();
