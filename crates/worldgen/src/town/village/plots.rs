@@ -113,18 +113,18 @@ pub(super) fn green_props(site: &Site, seed: u64, well: P, r: f64, roads: &[(Vec
         })
     };
     let a0 = std::f64::consts::TAU * h(0);
-    let mut put = |at: P, kind: crate::battlemap::Kind, variant: u8, scale: f64, rot: f64| {
+    let mut put = |at: P, kind: crate::battle::Kind, variant: u8, scale: f64, rot: f64| {
         l.props.push(super::super::Prop { at: add(at, site.center), rot: rot as f32, kind, variant, scale: scale as f32 });
     };
     // (A pond 11-14 ft across the radius, half way out; a tree on the far side, nearer the edge.)
     let pond_r = 11.0 + 3.0 * h(1);
     let pond = (h(2) < 0.55).then(|| spot(a0, 0.5 * r, pond_r)).flatten();
     if let Some(p) = pond {
-        put(p, crate::battlemap::Kind::Pond, 0, pond_r / 10.0, std::f64::consts::TAU * h(3));
+        put(p, crate::battle::Kind::Pond, 0, pond_r / 10.0, std::f64::consts::TAU * h(3));
     }
     let tree_r = 6.0 + 2.0 * h(4);
     if let Some(p) = spot(a0 + std::f64::consts::PI, (0.62 * r).min(r - tree_r - 2.0), tree_r) {
-        let kind = if pond.is_some() && h(5) < 0.5 { crate::battlemap::Kind::TreeWillow } else { crate::battlemap::Kind::TreeDeciduous };
+        let kind = if pond.is_some() && h(5) < 0.5 { crate::battle::Kind::TreeWillow } else { crate::battle::Kind::TreeDeciduous };
         put(p, kind, (h(6) * 4.0) as u8, 0.9 + 0.35 * h(7), std::f64::consts::TAU * h(8));
     }
 }

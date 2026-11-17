@@ -662,7 +662,7 @@ fn nets(s: &Settlement, l: &mut Layout) {
         l.props.push(Prop {
             at,
             rot,
-            kind: crate::battlemap::Kind::NetRack,
+            kind: crate::battle::Kind::NetRack,
             variant: (hash2(s.seed, 0x4e7, 2) >> 20) as u8 & 3,
             scale: 1.0,
         });
@@ -670,8 +670,8 @@ fn nets(s: &Settlement, l: &mut Layout) {
 }
 
 /// The harbour things' rules on the battlemap (ids 140-145, M20's range).
-pub(crate) const KINDS: [(crate::battlemap::Kind, crate::battlemap::KindInfo); 6] = {
-    use crate::battlemap::{Kind, KindInfo};
+pub(crate) const KINDS: [(crate::battle::Kind, crate::battle::KindInfo); 6] = {
+    use crate::battle::{Kind, KindInfo};
     const fn k(id: Kind, name: &'static str, radius: f32, blocks_move: bool, cover: u8, difficult: bool, height_ft: f32) -> KindInfo {
         KindInfo {
             id: id as u16,

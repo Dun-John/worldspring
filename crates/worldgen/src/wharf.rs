@@ -212,7 +212,7 @@ pub fn lay_shops(e: &mut crate::world::Edits, id: &str, c: &crate::world::Crossi
 pub fn deck_of(world: &crate::world::World, t0: &T0, on: &str) -> Option<(f32, [P; 2])> {
     let (map_w, map_h) = (world.geom.map_w_ft, world.geom.map_h_ft);
     if let Some(c) = world.file.edits.crossings.get(on).filter(|c| on.starts_with("v:") && c.kind == crate::world::CrossingKind::Bridge && c.problem(map_w, map_h).is_none()) {
-        return Some((crate::battlemap::hand_deck_top(c, world, t0), [c.a, c.b]));
+        return Some((crate::battle::hand_deck_top(c, world, t0), [c.a, c.b]));
     }
     let w = world.file.edits.wharves.get(on).filter(|w| on.starts_with("q:") && w.kind != WharfKind::Quay && w.problem(map_w, map_h).is_none())?;
     Some((level(w, t0), [w.pts[0], *w.pts.last()?]))
@@ -224,7 +224,7 @@ pub fn deck_level_at(world: &crate::world::World, t0: &T0, on: &str, p: P) -> Op
     let Some(c) = world.file.edits.crossings.get(on).filter(|_| on.starts_with("v:")) else { return Some(top) };
     let len = c.length().max(1e-6);
     let t = ((p[0] - line[0][0]) * (line[1][0] - line[0][0]) + (p[1] - line[0][1]) * (line[1][1] - line[0][1])) / (len * len);
-    Some(crate::battlemap::hand_deck_ends(c, world, t0).level(t))
+    Some(crate::battle::hand_deck_ends(c, world, t0).level(t))
 }
 
 /// The hand bridge whose deck footprint `poly` (world ft) stands wholly on, if one: its id, and
@@ -313,7 +313,7 @@ pub fn islet_at(world: &crate::world::World, t0: &T0, key: &str, at: P, radius_f
 /// `islet_at` by the fine shore (as a battlemap draws the water at `at`: `ground::islet_for_fine`), for the agent's tool.
 pub fn islet_at_fine(ex: &mut crate::pipeline::Executor, key: &str, at: P, radius_ft: f64, rise_ft: f64) -> Result<(crate::ground::Plateau, WaterAt), String> {
     let sq = crate::geoquery::Squares::round(ex, [at[0] - 3.0, at[1] - 3.0, at[0] + 3.0, at[1] + 3.0], 0);
-    let fine = sq.at(crate::core::floor(at[0] / crate::battlemap::SQUARE_FT) as i64, crate::core::floor(at[1] / crate::battlemap::SQUARE_FT) as i64).map(|k| (sq.hw[k], sq.g[k]));
+    let fine = sq.at(crate::core::floor(at[0] / crate::battle::SQUARE_FT) as i64, crate::core::floor(at[1] / crate::battle::SQUARE_FT) as i64).map(|k| (sq.hw[k], sq.g[k]));
     let (world, t0) = (&ex.world, &ex.t0);
     let p = crate::ground::islet_for_fine(key, at, radius_ft, rise_ft, t0, fine)?;
     let w = water_over(world, t0, at).or_else(|| {
@@ -336,7 +336,7 @@ pub fn root_problem(ex: &mut crate::pipeline::Executor, w: &Wharf) -> Option<Str
     sq.add_waters(&ex.world.file.edits);
     let ground = sq.shaped(&ex.world.file.edits, Some(&ex.t0));
     let wet_sq = |q: P| {
-        let k = sq.at(crate::core::floor(q[0] / crate::battlemap::SQUARE_FT) as i64, crate::core::floor(q[1] / crate::battlemap::SQUARE_FT) as i64);
+        let k = sq.at(crate::core::floor(q[0] / crate::battle::SQUARE_FT) as i64, crate::core::floor(q[1] / crate::battle::SQUARE_FT) as i64);
         k.is_some_and(|k| sq.hw[k] > ground[k])
     };
     if !wet_sq(p) || !wet_sq(back) {
@@ -359,7 +359,7 @@ pub fn root_problem(ex: &mut crate::pipeline::Executor, w: &Wharf) -> Option<Str
     let dry = (1..=120).flat_map(|k| (0..16).map(move |a| (k as f64 * 5.0, a))).find_map(|(d, a)| {
         let t = std::f64::consts::TAU * a as f64 / 16.0;
         let q = [p[0] + d * libm::cos(t), p[1] + d * libm::sin(t)];
-        let k = big.at(crate::core::floor(q[0] / crate::battlemap::SQUARE_FT) as i64, crate::core::floor(q[1] / crate::battlemap::SQUARE_FT) as i64)?;
+        let k = big.at(crate::core::floor(q[0] / crate::battle::SQUARE_FT) as i64, crate::core::floor(q[1] / crate::battle::SQUARE_FT) as i64)?;
         (big.hw[k] <= big.g[k]).then_some(q)
     });
     let near = dry.map_or_else(String::new, |q| format!(": the nearest dry ground is at about {}", where_(q)));

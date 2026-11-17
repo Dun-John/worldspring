@@ -14,7 +14,6 @@
 //!   yard and on a field, where walls and hedgerows are the cover).
 //! Open water far from shore is exempt (cells that are entirely deep water).
 
-use serde::Serialize;
 
 use crate::World;
 use crate::core::noise::{fbm, smoothstep};
@@ -36,35 +35,21 @@ mod kitchen;
 mod moat;
 // v63 countryside: where haystacks stand (stack yards, by field gates).
 mod farm;
-mod kinds;
-mod chunk;
 mod ground;
 mod crossings;
 mod objects;
 mod shore;
 mod plaza;
 mod cover;
-pub use kinds::*;
-pub use chunk::*;
 pub use ground::*;
 pub use crossings::*;
 use objects::*;
 use shore::*;
-pub use plaza::*;
+use plaza::*;
 pub use cover::*;
+pub use crate::battle::*;
 pub use crate::model::consts::{SQ, SQUARE_FT, DECK_CLEARANCE_FT};
 
-/// Squares per edge including a one-square halo ring (for seamless rendering gradients).
-pub const HS: usize = SQ + 2;
-pub const TIER_FT: f64 = 5.0;
-pub const MAX_COVER_GAP: i32 = 6;
-/// In a castle's yard, whose curtains, towers and buildings are its cover: no dry square of it more
-/// than this from cover, and a window of it (most of its squares) holding any of them needs no more
-/// (`cover_gap`, `works_cover`).
-pub const YARD_COVER_GAP: i32 = 12;
-/// On a field (v63 countryside), where its hedgerows and walls are the cover (`town::rural::rows`
-/// split a field at most about 110 ft apart): how far a square may be from cover.
-pub const FIELD_COVER_GAP: i32 = 12;
 const COVER_CELL: usize = 8;
 const TIER_CELL: usize = 16;
 /// A road drawn by hand marks the squares within at least this (ft) of its line, so a narrow one is a
@@ -74,71 +59,7 @@ const PATH_MIN_HALF_FT: f64 = 3.6;
 /// Micro-relief feature grid (squares).
 const RELIEF_CELL: i64 = 20;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[repr(u8)]
-pub enum Surface {
-    Grass = 0,
-    ForestFloor,
-    DryGrass,
-    Sand,
-    Snow,
-    Rock,
-    Mud,
-    Ash,
-    Salt,
-    Dirt,
-    Shallow,
-    Deep,
-    Lava,
-    Ice,
-    /// King's road paving.
-    Cobble,
-    /// Packed-earth road or track.
-    Road,
-    /// Bridge deck.
-    Planks,
-    /// A building (its roof; interiors come with M5).
-    Roof,
-    /// Cropland.
-    Field,
-    /// A flight of steps on a steep paved street (cities and up).
-    Stairs,
-    /// A park's gravel paths.
-    Gravel,
-}
-
-impl Surface {
-    pub fn is_road(self) -> bool {
-        matches!(self, Surface::Cobble | Surface::Road | Surface::Planks | Surface::Stairs)
-    }
-}
-
-/// Settlement ground under a square (`Chunk::urban`).
-pub const URBAN_STREET: u8 = 1;
-pub const URBAN_FIELD: u8 = 2;
-pub const URBAN_PLAZA: u8 = 3;
-pub const URBAN_GRAVEYARD: u8 = 4;
-pub const URBAN_RUIN: u8 = 5;
-/// Bridge deck or pier.
-pub const URBAN_DECK: u8 = 6;
-/// Town wall (a raised stone wall-walk) and towers.
-pub const URBAN_WALL: u8 = 7;
-pub const URBAN_TOWER: u8 = 8;
-/// Ground at the mouth of a way underground (kept clear of plants and props).
-pub const URBAN_ENTRANCE: u8 = 9;
-/// Packed earth trodden bare (a camp's clearing).
-pub const URBAN_YARD: u8 = 10;
-/// A lawn in town (a green, a temple's close, a park): the ground's own, with no wild scatter.
-pub const URBAN_PARK: u8 = 11;
-/// A park's gravel paths and rounds (kept clear of what the guarantee adds).
-pub const URBAN_PATH: u8 = 12;
 // v63 countryside
-/// A village's toft and croft, a manor's or a shrine's yard (`town::village`): the ground's own,
-/// grass for forest floor, no wild scatter.
-pub const URBAN_CROFT: u8 = 13;
-/// A tower's open floor inside its ring of wall, and its door (item 104, `town::wallstyle::raster`):
-/// stone underfoot, open to the sky on the battlemap.
-pub const URBAN_TOWER_FLOOR: u8 = 14;
 /// Wall-walk and tower-top heights above the ground (ft).
 const WALL_FT: f32 = 20.0;
 const TOWER_FT: f32 = 30.0;
@@ -147,21 +68,6 @@ const GARDEN_WALL_FT: f32 = 4.0;
 const PIER_FT: f32 = 8.0;
 /// Eave height per storey (ft): a building's squares stand this much per floor above its pad.
 const STOREY_FT: f32 = 10.0;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[repr(u8)]
-pub enum Atmosphere {
-    None = 0,
-    Mist,
-    Fog,
-    Fireflies,
-    Snowfall,
-    BlowingSand,
-    Embers,
-    HeatHaze,
-    FallingLeaves,
-    Drizzle,
-}
 
 /// A keep piece's code in the payload: 0 body, 1 round tower, 2 square tower, 3 forebuilding, 4
 /// wing (its top, `town::keep_tops` with its donjon's end, in the high four bits).
@@ -175,73 +81,6 @@ fn part_code(kind: crate::town::PartKind) -> u8 {
         K::Wing => 4,
         K::Apse => APSE_PART,
     }
-}
-
-/// The gates in a layout's walls as pairs of gate towers (world ft; `towers` as
-/// `interior::towers` gives them): two gate towers 36 to 54 ft apart (a passage at least 6 ft
-/// wide between them), each beyond the other's wall (the towers of two gates side by side face
-/// each other along one stretch) and the walls running on from them opposite ways (a castle's
-/// outer and inner gates are not one gatehouse). Paired in order, each with its nearest; a pure function of the
-/// layout, so every chunk finds the same.
-pub(crate) fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
-    gateways_on(&l.walls, towers, &l.gates)
-}
-
-/// `gateways` along `walls` (a town's as laid, standing or not), its gates' corners `town_gates`.
-pub(crate) fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, bool)], town_gates: &[[f64; 2]]) -> Vec<([f64; 2], [f64; 2])> {
-    let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
-    // Which way the wall runs from each gate tower, where a stretch of it ends there.
-    let away: Vec<Option<[f64; 2]>> = gates
-        .iter()
-        .map(|&g| {
-            let at = |p: [f64; 2]| (p[0] - g[0]) * (p[0] - g[0]) + (p[1] - g[1]) * (p[1] - g[1]) < 0.25;
-            walls.iter().filter(|w| w.len() >= 2).find_map(|w| {
-                let n = w.len();
-                if at(w[0]) {
-                    Some([w[1][0] - g[0], w[1][1] - g[1]])
-                } else if at(w[n - 1]) {
-                    Some([w[n - 2][0] - g[0], w[n - 2][1] - g[1]])
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
-    let mut used = vec![false; gates.len()];
-    let mut out = Vec::new();
-    for i in 0..gates.len() {
-        if used[i] {
-            continue;
-        }
-        let mut best: Option<(f64, usize)> = None;
-        for j in i + 1..gates.len() {
-            let v = [gates[j][0] - gates[i][0], gates[j][1] - gates[i][1]];
-            let d = crate::core::sqrt(v[0] * v[0] + v[1] * v[1]);
-            let beyond = |a: Option<[f64; 2]>, s: f64| a.is_none_or(|a| s * (a[0] * v[0] + a[1] * v[1]) < 0.0);
-            // (The wall runs on from each the opposite way: not two gates of two curtains, one
-            // behind the other.)
-            let apart = match (away[i], away[j]) {
-                (Some(a), Some(b)) => a[0] * b[0] + a[1] * b[1] < 0.0,
-                _ => true,
-            };
-            // (A town gate midway between them: theirs, whichever way the wall runs on, as across
-            // the point of a sharp corner, `wallgates::spread_sharp`.)
-            let mid = [0.5 * (gates[i][0] + gates[j][0]), 0.5 * (gates[i][1] + gates[j][1])];
-            let gate_between = town_gates.iter().any(|g| (g[0] - mid[0]).abs() + (g[1] - mid[1]).abs() < 1.0);
-            if used[j] || !(36.0..=54.0).contains(&d) || (!gate_between && ((away[i].is_none() && away[j].is_none()) || !beyond(away[i], 1.0) || !beyond(away[j], -1.0) || !apart)) {
-                continue;
-            }
-            if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, j));
-            }
-        }
-        if let Some((_, j)) = best {
-            used[i] = true;
-            used[j] = true;
-            out.push((gates[i], gates[j]));
-        }
-    }
-    out
 }
 
 /// Micro-relief feature from its grid cell (pure function of the cell): center (global

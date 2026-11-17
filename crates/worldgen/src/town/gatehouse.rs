@@ -178,14 +178,14 @@ pub(super) fn bent_blocks(l: &Layout, walls: &[Vec<P>], gate_towers: &[P]) -> Ve
         return Vec::new();
     }
     let towers: Vec<(P, f64, bool)> = gate_towers.iter().map(|&t| (t, 15.0, true)).collect();
-    crate::battlemap::gateways_on(walls, &towers, &l.gates).into_iter().map(|(a, b)| framed(l, a, b, [0.0, 0.0])).filter(|h| !h.castle && h.form == Form::Bent && h.len() >= BENT_MIN_LEN).filter_map(|h| h.block()).collect()
+    crate::battle::gateways_on(walls, &towers, &l.gates).into_iter().map(|(a, b)| framed(l, a, b, [0.0, 0.0])).filter(|h| !h.castle && h.form == Form::Bent && h.len() >= BENT_MIN_LEN).filter_map(|h| h.block()).collect()
 }
 
 /// The gatehouses of `l`, in the order `battlemap::gateways` pairs their towers: a pure function of the
 /// layout, so every chunk finds the same.
 pub fn houses(l: &Layout) -> Vec<House> {
     let towers = crate::interior::towers(l);
-    crate::battlemap::gateways(l, &towers)
+    crate::battle::gateways(l, &towers)
         .into_iter()
         .map(|(a, b)| {
             let mut h = framed(l, a, b, l.center);

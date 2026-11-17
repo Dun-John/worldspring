@@ -13,7 +13,7 @@ use super::fields::{FieldBound, FieldUse};
 use super::geom::*;
 use super::village::{Bound, PlotKind};
 use super::{Building, Layout, Site, Structure, rect};
-use crate::battlemap::{Kind, Object, SQ, SQUARE_FT, ShapeKind, URBAN_FIELD, VectorShape};
+use crate::battle::{Kind, Object, SQ, SQUARE_FT, ShapeKind, URBAN_FIELD, VectorShape};
 use crate::core::rng::{hash3, unit};
 use crate::t0::biome::Biome;
 use crate::t0::settle::{Settlement, Tier};
@@ -527,7 +527,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     // through a copse or under a windmill's sails. A walled field's are walls, an unbounded field's
     // hedges but on cold or dry ground (walls).
     let stony = matches!(
-        crate::battlemap::land_biome(t0, l.center),
+        crate::battle::land_biome(t0, l.center),
         Biome::Alpine | Biome::Tundra | Biome::ColdDesert | Biome::Ice | Biome::Steppe | Biome::HotDesert | Biome::SaltFlat | Biome::Savanna
     );
     // (The sails turn in front of the tower, `sail_front`: their tips reach ~31 ft from its middle.)
@@ -588,7 +588,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     }
     // Orchards in rows along their furrows; copses.
     if hits(l.bbox, near) {
-        let (trees, _, _, _) = crate::battlemap::greenery(crate::battlemap::land_biome(t0, l.center));
+        let (trees, _, _, _) = crate::battle::greenery(crate::battle::land_biome(t0, l.center));
         for (i, f) in l.fields.iter().enumerate() {
             let fb = bbox(f);
             if !hits(fb, rect) {
@@ -686,7 +686,7 @@ pub fn shapes(b: &Battle, ox: f64, oy: f64, out: &mut Vec<VectorShape>) {
 
 /// The chunk's trees and wheels from `b`: a tree on open field ground (not on a building, a road
 /// or water), a wheel wherever it is (on the water by the mill).
-pub fn objects(b: &Battle, ox: f64, oy: f64, c: &mut crate::battlemap::Chunk) {
+pub fn objects(b: &Battle, ox: f64, oy: f64, c: &mut crate::battle::Chunk) {
     let at = |p: P| (((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32);
     for &(p, kind, scale, variant) in &b.trees {
         let (x, y) = at(p);

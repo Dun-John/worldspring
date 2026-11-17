@@ -9,6 +9,7 @@ mod checks;
 pub mod placing;
 pub mod remap;
 pub mod battlemap;
+mod battle;
 pub use worldgen_core as core;
 pub use worldgen_model::{model, waters};
 /// The world file and `World` (`worldgen-model`), with the extension traits that check and

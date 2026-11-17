@@ -2,7 +2,7 @@
 //! vegetables and herbs in a wattle fence by the kitchen, a beehive or two against it; an anvil
 //! with its quench tub before the smithy. (Topiary and flowerbeds are a palace's: `palace::gardens`.)
 
-use super::{Kind, KindInfo, SQUARE_FT, info, k};
+use super::{Kind, SQUARE_FT, info};
 use crate::core::rng::{hash2, unit};
 use crate::town::Building;
 use crate::town::geom::{add, area, centroid, dist, dot, lerp, mul, seg_dist, sub};
@@ -12,15 +12,6 @@ type Prop = (P, f32, Kind, u8, f32);
 /// Room for something `r` ft round at a place, clear of what is `placed` (and of the building at
 /// `own` in the bailey's list by a little): `dress_bailey`'s `free`.
 type Free<'a> = &'a dyn Fn(&[(P, f64)], P, f64, Option<usize>) -> bool;
-
-/// The kinds (the castles lane's ids, 75-87), with their rules: rows and the fence are low, seen
-/// across and stepped over (difficult); a skep and an anvil are stood round.
-pub(super) const KINDS: [(Kind, KindInfo); 4] = [
-    (Kind::VegRow, k(Kind::VegRow, "vegetable row", 1.0, false, false, 0, true, 1.5, true)),
-    (Kind::WattleFence, k(Kind::WattleFence, "wattle fence", 0.55, false, false, 1, true, 3.0, true)),
-    (Kind::Beehive, k(Kind::Beehive, "beehive", 0.45, true, false, 1, false, 3.0, true)),
-    (Kind::Anvil, k(Kind::Anvil, "anvil", 0.6, true, false, 1, false, 3.0, true)),
-];
 
 /// A row's length (a `VegRow` at scale 1), a fence piece's, ft.
 const ROW: f64 = 10.0;

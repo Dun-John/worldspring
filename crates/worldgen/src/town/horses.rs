@@ -14,7 +14,7 @@
 
 use super::geom::*;
 use super::{Layout, Park, ParkKind};
-use crate::battlemap::{Kind, KindInfo};
+use crate::battle::{Kind, KindInfo};
 use crate::core::rng::{Pcg32, hash2};
 use crate::park::ParkLayout;
 
@@ -542,7 +542,7 @@ pub fn plan(pk: &Park) -> Option<Plan> {
 
 /// How far (ft, either way along the world's axes) the battlemap's guarantee lets a spot be from
 /// cover: its `MAX_COVER_GAP` squares, a square to spare.
-const COVER_FT: f64 = (crate::battlemap::MAX_COVER_GAP as f64 - 1.0) * crate::battlemap::SQUARE_FT - 1.0;
+const COVER_FT: f64 = (crate::battle::MAX_COVER_GAP as f64 - 1.0) * crate::battle::SQUARE_FT - 1.0;
 
 /// Where to try a cover prop round a spot: on it, then 8, 16 and 22 ft out every eighth of a turn.
 const RINGS: [P; 25] = {
@@ -557,7 +557,7 @@ const RINGS: [P; 25] = {
 
 /// Whether two spots lie in one battlemap chunk (the guarantee reads each chunk's cover alone).
 fn same_chunk(a: P, b: P) -> bool {
-    let c = crate::battlemap::SQ as f64 * crate::battlemap::SQUARE_FT;
+    let c = crate::battle::SQ as f64 * crate::battle::SQUARE_FT;
     let k = |v: f64| crate::core::floor(v / c);
     k(a[0]) == k(b[0]) && k(a[1]) == k(b[1])
 }

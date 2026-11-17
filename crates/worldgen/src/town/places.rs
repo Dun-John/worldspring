@@ -502,7 +502,7 @@ fn clear_line(l: &Layout, poly: &[P], name: Option<[f64; 4]>) -> Vec<P> {
 /// boundary; the longest such run near the main walk, kept wider of them all where one is long enough
 /// (empty: none).
 fn cemetery_line(l: &Layout, pk: &super::Park) -> Vec<P> {
-    use crate::battlemap::Kind;
+    use crate::battle::Kind;
     use super::cemetery::{KURGAN_R, YEW_R};
     let Some(pl) = super::cemetery::plan(pk) else { return Vec::new() };
     if pl.walks.is_empty() || pl.boundary.len() < 3 {

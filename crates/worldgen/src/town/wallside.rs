@@ -62,7 +62,7 @@ pub fn outward(l: &Layout) -> Vec<f32> {
 
 /// Each of a star-angled wall's bastions (`Layout::bastions`) as a `ShapeKind::Bastion` vector, by the
 /// chunk that `owns` its middle: its six outline points (`local`, squares), then `[style, 0]`.
-pub(crate) fn bastions(l: &Layout, owns: &dyn Fn(P) -> bool, local: &dyn Fn(&P) -> [f32; 2], shapes: &mut Vec<crate::battlemap::VectorShape>) {
+pub(crate) fn bastions(l: &Layout, owns: &dyn Fn(P) -> bool, local: &dyn Fn(&P) -> [f32; 2], shapes: &mut Vec<crate::battle::VectorShape>) {
     for q in l.bastions.iter().filter(|q| q.len() == 6) {
         let mid = centroid(q);
         if !owns(mid) {
@@ -71,14 +71,14 @@ pub(crate) fn bastions(l: &Layout, owns: &dyn Fn(P) -> bool, local: &dyn Fn(&P) 
         let ws = l.wall_style_at(mid);
         let mut pts: Vec<[f32; 2]> = q.iter().map(local).collect();
         pts.push([ws.code(super::wallstyle::TowerShape::Round) as f32, 0.0]);
-        shapes.push(crate::battlemap::VectorShape { kind: crate::battlemap::ShapeKind::Bastion, size: (ws.thickness() / crate::battlemap::SQUARE_FT) as f32, pts });
+        shapes.push(crate::battle::VectorShape { kind: crate::battle::ShapeKind::Bastion, size: (ws.thickness() / crate::battle::SQUARE_FT) as f32, pts });
     }
 }
 
 /// A bastion's props (the user, 2026-11-11): a ballista and a pile of its shot stones (ids 108-109,
 /// the towns lane's range), with the crates and barrels already in the catalog.
-pub(crate) const KINDS: [(crate::battlemap::Kind, crate::battlemap::KindInfo); 2] = {
-    use crate::battlemap::{Kind, KindInfo};
+pub(crate) const KINDS: [(crate::battle::Kind, crate::battle::KindInfo); 2] = {
+    use crate::battle::{Kind, KindInfo};
     const fn k(id: Kind, name: &'static str, radius: f32, blocks_move: bool, cover: u8, difficult: bool, height_ft: f32) -> KindInfo {
         KindInfo { id: id as u16, name, radius, blocks_move, blocks_sight: false, cover, difficult, height_ft, hazard: None, feature: true }
     }
@@ -111,7 +111,7 @@ fn frame(q: &[P]) -> (P, P, P) {
 /// squares under its middle: every square of the top can still be walked to from the ramp, as
 /// `towncheck walls` checks). A pure function of the outline.
 pub fn bastion_props(q: &[P], thick: f64) -> Vec<super::Prop> {
-    use crate::battlemap::{Kind, SQUARE_FT, info};
+    use crate::battle::{Kind, SQUARE_FT, info};
     let mut out: Vec<super::Prop> = Vec::new();
     if q.len() != 6 {
         return out;

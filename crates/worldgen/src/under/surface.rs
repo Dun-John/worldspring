@@ -54,7 +54,7 @@ pub fn entrance_style(world: &World, t0: &T0, l: &Layout, e: &Entrance) -> Optio
 /// The ground a barrow's mound covers (kept clear of trees and relief): an oval from just before
 /// the doorway to 5 squares in, 4 across.
 pub fn barrow_ground(e: &Entrance) -> Vec<P> {
-    let sq = crate::battlemap::SQUARE_FT;
+    let sq = crate::battle::SQUARE_FT;
     let side = [-e.dir[1], e.dir[0]];
     (0..16)
         .map(|k| {

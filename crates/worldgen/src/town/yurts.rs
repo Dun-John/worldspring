@@ -12,7 +12,7 @@
 
 use super::geom::*;
 use super::{Building, Layout, Prop, Site, Structure, roof};
-use crate::battlemap::Kind;
+use crate::battle::Kind;
 use crate::core::hash::FastMap;
 use crate::core::rng::{hash3, unit};
 

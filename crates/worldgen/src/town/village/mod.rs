@@ -9,7 +9,7 @@
 use super::catalog::{self, Ward};
 use super::geom::*;
 use super::{Building, Layout, Plaza, PlazaKind, Site, Structure, chamfer, overlaps_or_crosses, piers_along, point_along, polar_pt, rect, rotate, shore_run, split_field, temple, voronoi};
-use crate::battlemap::{URBAN_CROFT, URBAN_GRAVEYARD, URBAN_YARD};
+use crate::battle::{URBAN_CROFT, URBAN_GRAVEYARD, URBAN_YARD};
 use crate::core::hash::FastMap;
 use crate::core::rng::{Pcg32, hash3, unit};
 use crate::t0::biome::Biome;
@@ -462,7 +462,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     let church = s.population >= 200 || rng.next_f64() < 0.2;
     let big_church = s.population >= 380 && rng.next_f64() < 0.5;
     let manor = (s.population >= 300 && rng.next_f64() < 0.75) || rng.next_f64() < 0.12;
-    let hedge_share = hedged(crate::battlemap::land_biome(t0, site.center));
+    let hedge_share = hedged(crate::battle::land_biome(t0, site.center));
     let green_hull = if reach_out.is_empty() { Vec::new() } else { hull(circle(well, green, 24).into_iter().chain(reach_out).collect()) };
     let mut g = Ground { site, lanes: LaneGrid::new(&lanes), plots: Vec::new(), boxes: Vec::new(), green: (well, green), green_hull };
     // The church in its churchyard by the green, else a shrine in its yard.

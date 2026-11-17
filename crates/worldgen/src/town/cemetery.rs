@@ -23,7 +23,7 @@
 use super::geom::*;
 use super::wards::Changes;
 use super::{Building, Layout, Park, ParkKind, Site, Structure, TownPlan, Ward, wallstyle};
-use crate::battlemap::{Kind, KindInfo};
+use crate::battle::{Kind, KindInfo};
 use crate::core::rng::{Pcg32, hash2, hash3, unit};
 use crate::park::ParkLayout;
 use crate::t0::settle::{Settlement, Tier};

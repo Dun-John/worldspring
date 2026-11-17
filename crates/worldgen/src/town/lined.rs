@@ -69,7 +69,7 @@ pub(super) fn lined_bridge(site: &Site, s: &Settlement, over: &[(f64, P, P, f64,
     if crate::t0::islets::near(site.t0, bb).any(|i| poly_gap(&world_deck, &i.pts) < 10.0) {
         return;
     }
-    let level = crate::battlemap::deck_top(a, b, site.t0);
+    let level = crate::battle::deck_top(a, b, site.t0);
     // (The street's own plain deck over the span, which ran 5 ft past each bank, goes: the lined deck carries the street on, ending at the banks.)
     l.bridges.retain(|d| !geom::contains(&deck, geom::centroid(d)));
     l.bridges.push(deck.clone());

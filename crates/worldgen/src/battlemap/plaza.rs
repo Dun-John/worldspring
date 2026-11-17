@@ -43,21 +43,6 @@ pub(super) fn lawn_room(c: &Chunk, park: &[u8]) -> Vec<u8> {
     d
 }
 
-/// Round raised features on town squares (the battlemap draws each).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlazaFeature {
-    /// A round stone dais with steps (a speaker's platform).
-    Dais = 0,
-    /// A fountain: a raised stone basin with a central jet.
-    Fountain = 1,
-    /// A raised round planter with a tree in it.
-    Planter = 2,
-    /// A market cross on a stepped round plinth.
-    Cross = 3,
-    /// A low bank of trodden earth, hoof-worn round its edge (a steppe town's dais: R5 towns, 114).
-    Mound = 4,
-}
-
 /// How a market fills its square: half-extents (ft, ranges) of the part round the well it keeps
 /// to, the share of its cells left open, the spacing of stalls along a block's edge (ft) and the
 /// share of stalls left out.
@@ -310,23 +295,6 @@ pub(super) fn dress_main(pl: &crate::town::Plaza, l: &crate::town::Layout, room:
     }
 }
 
-/// The biome of the land at `p` (world ft): where the map there is the sea's or a lake's (a
-/// town on the shore), the nearest land's round it, out to about a T0 cell, else grassland.
-pub(crate) fn land_biome(t0: &T0, p: [f64; 2]) -> Biome {
-    let at = |q: [f64; 2]| Biome::from_u8(t0.sample_biome(q[0], q[1], t0.biome_warp(q[0], q[1]))[0]);
-    let wet = |b: Biome| matches!(b, Biome::Ocean | Biome::Lake);
-    std::iter::once(p)
-        .chain([300.0, 1000.0, 2500.0, 4500.0, 7000.0].into_iter().flat_map(|r| {
-            (0..8).map(move |k| {
-                let t = std::f64::consts::TAU * k as f64 / 8.0;
-                [p[0] + r * libm::cos(t), p[1] + r * libm::sin(t)]
-            })
-        }))
-        .map(at)
-        .find(|&b| !wet(b))
-        .unwrap_or(Biome::Grassland)
-}
-
 /// How much larger than its place a square's market cross is drawn (its steps and cross read from
 /// afar; the squares keep room for it).
 pub(super) const MARKET_CROSS_SCALE: f32 = 1.35;
@@ -334,26 +302,6 @@ pub(super) const MARKET_CROSS_SCALE: f32 = 1.35;
 /// A square's market cross's footprint radius (ft), as drawn.
 pub(super) fn cross_ft() -> f64 {
     MARKET_CROSS_SCALE as f64 * foot(Kind::MarketCross)
-}
-
-/// What grows on a town's green or close in a biome: its trees, shrubs and small plants (palms
-/// in the desert, acacias on the savanna, conifers in the north, none of a kind where the biome
-/// has none), and whether its trees are few (one or two broadleaves on the steppe's grass).
-pub(crate) fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind], bool) {
-    use Kind::*;
-    match b {
-        Biome::TemperateForest => (&[TreeDeciduous], &[Bush], &[Flowers, Mushrooms], false),
-        Biome::TemperateRainforest => (&[TreeDeciduous, TreeConifer], &[Bush, Thicket], &[Mushrooms], false),
-        Biome::Grassland => (&[TreeDeciduous], &[Bush], &[Flowers, TallGrass], false),
-        Biome::Steppe => (&[TreeDeciduous], &[Bush], &[TallGrass], true),
-        Biome::Savanna => (&[TreeAcacia], &[Bush], &[TallGrass], false),
-        Biome::Jungle => (&[TreePalm, TreeJungle], &[Bush, Thicket], &[Flowers], false),
-        Biome::HotDesert | Biome::SaltFlat => (&[TreePalm], &[Cactus], &[], false),
-        Biome::Taiga | Biome::Alpine | Biome::Tundra | Biome::ColdDesert | Biome::Ice => (&[TreeConifer], &[Bush], &[], false),
-        Biome::Swamp => (&[TreeWillow], &[Bush], &[Reeds], false),
-        Biome::Blight | Biome::Ashland | Biome::Volcanic => (&[TreeDead], &[], &[], false),
-        Biome::Ocean | Biome::Lake => (&[TreeDeciduous], &[Bush], &[], false),
-    }
 }
 
 /// A castle's well where its keep's court has no spot with 25 ft of room (`dress_bailey`): with

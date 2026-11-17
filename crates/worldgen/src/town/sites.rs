@@ -162,7 +162,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
                 UnderKind::Cave | UnderKind::Mine => ([0.0, 0.0], uphill([0.0, 0.0]).unwrap_or_else(|| any_dir(&mut rng))),
                 UnderKind::LavaTube => ([0.0, 0.0], uphill([0.0, 0.0]).map(|u| mul(u, -1.0)).unwrap_or_else(|| any_dir(&mut rng))),
                 _ => {
-                    let sq = crate::battlemap::SQUARE_FT;
+                    let sq = crate::battle::SQUARE_FT;
                     let snap = |v: f64| crate::core::floor(v / sq) * sq + 0.5 * sq - v;
                     ([snap(center[0]), snap(center[1])], [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]][rng.below(4) as usize])
                 }
@@ -180,7 +180,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             // A clearing trodden bare round a stone-ringed fire; tents round it with their
             // doors to the fire (the leader's pavilion a little farther out); bedrolls and the
             // firewood by the fire in the gaps between tents, a cart with its stores at the edge.
-            use crate::battlemap::Kind;
+            use crate::battle::Kind;
             use std::f64::consts::{PI, TAU};
             let r = rng.range(32.0, 42.0);
             let a0 = rng.range(0.0, TAU);

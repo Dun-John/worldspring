@@ -124,7 +124,7 @@ pub struct KindInfo {
     pub feature: bool,
 }
 
-pub(super) const fn k(id: Kind, name: &'static str, radius: f32, blocks_move: bool, blocks_sight: bool, cover: u8, difficult: bool, height_ft: f32, feature: bool) -> KindInfo {
+pub const fn k(id: Kind, name: &'static str, radius: f32, blocks_move: bool, blocks_sight: bool, cover: u8, difficult: bool, height_ft: f32, feature: bool) -> KindInfo {
     KindInfo { id: id as u16, name, radius, blocks_move, blocks_sight, cover, difficult, height_ft, hazard: None, feature }
 }
 
@@ -211,7 +211,7 @@ pub const CATALOG: [KindInfo; 63] = [
 ];
 
 /// What a rock floor keeps off: every tree and the ground's plants.
-pub(super) const TREES_AND_COVER: [Kind; 16] = [
+pub const TREES_AND_COVER: [Kind; 16] = [
     Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
     Kind::Thicket, Kind::FallenLog, Kind::Stump, Kind::Reeds, Kind::Cactus, Kind::TallGrass, Kind::Flowers, Kind::Brambles,
 ];

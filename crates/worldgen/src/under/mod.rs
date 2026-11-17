@@ -214,7 +214,7 @@ pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
             // A mausoleum over the stair among the graves, square to the headstone rows (the
             // battlemap grid): 4 squares deep, 3 wide, its door at `at` (a square's centre).
             // It runs along the yard's long side, whichever way fits.
-            let sq = crate::battlemap::SQUARE_FT;
+            let sq = crate::battle::SQUARE_FT;
             let at = [crate::core::floor(c[0] / sq) * sq + 0.5 * sq, crate::core::floor(c[1] / sq) * sq + 0.5 * sq];
             let (x0, y0, x1, y1) = b.poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
             let flip = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };

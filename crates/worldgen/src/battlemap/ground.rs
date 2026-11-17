@@ -111,12 +111,6 @@ pub(super) fn surface_for(b: Biome, slope: f64) -> Surface {
     }
 }
 
-/// A dry square's beach (`Surface::Sand`, whatever the biome): within 3 ft of the sea beside it
-/// (`depth`: its water's level over it; `level` that water's), on gentle ground.
-pub fn beach(depth: f64, level: f64, sea: f64, slope: f64) -> bool {
-    depth > -3.0 && level <= sea + 0.5 && slope < 0.15
-}
-
 /// Whether a dry square's ground is sand: a beach (`beach`), or the biome's own (a hot desert's,
 /// or the sea's or a lake's by their shores).
 pub fn sand_ground(b: Biome, depth: f64, level: f64, sea: f64, slope: f64) -> bool {

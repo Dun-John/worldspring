@@ -30,7 +30,7 @@
 //! A pure function of the park (its outline, sides, ground and key), its biome and the seed, so
 //! every chunk and tile that asks lays out the same.
 
-use crate::battlemap::{Kind, PlazaFeature};
+use crate::battle::{Kind, PlazaFeature};
 use crate::core::hash::FastMap;
 use crate::core::noise::fbm;
 use crate::core::rng::{Pcg32, hash2, hash3, unit};
@@ -227,7 +227,7 @@ pub(crate) fn depth(poly: &[P], p: P) -> f64 {
 
 /// A footprint radius (ft) of a kind at scale 1.
 fn foot(kind: Kind) -> f64 {
-    crate::battlemap::info(kind as u16).radius as f64 * crate::battlemap::SQUARE_FT
+    crate::battle::info(kind as u16).radius as f64 * crate::battle::SQUARE_FT
 }
 
 /// A sprite's turn that sets its front (+y unturned) toward `dir`.
@@ -385,7 +385,7 @@ fn edge_at(poly: &[P], p: P) -> usize {
 /// What grows in a park in a biome: its trees and shrubs (as a town's green has them; something in
 /// their place where the biome has none), its small plants, and whether its trees are few.
 fn plants(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind], bool) {
-    let (trees, shrubs, small, few) = crate::battlemap::greenery(b);
+    let (trees, shrubs, small, few) = crate::battle::greenery(b);
     (if trees.is_empty() { &[Kind::TreeDeciduous] } else { trees }, if shrubs.is_empty() { &[Kind::Bush] } else { shrubs }, small, few)
 }
 
@@ -644,7 +644,7 @@ fn formal(p: &Park, biome: Biome, city: bool, rng: &mut Pcg32) -> ParkLayout {
 }
 
 /// A battlemap chunk's side (ft): play mode blocks a chunk's squares by its own objects only.
-const CHUNK_FT: f64 = crate::battlemap::SQ as f64 * crate::battlemap::SQUARE_FT;
+const CHUNK_FT: f64 = crate::battle::SQ as f64 * crate::battle::SQUARE_FT;
 
 /// The squares (on the world's 5-ft grid) a prop blocks as play mode has it: a hedge every square its
 /// piece is drawn across (`battlePrep` LONG_FOOTPRINT), anything else that blocks the squares within
@@ -652,7 +652,7 @@ const CHUNK_FT: f64 = crate::battlemap::SQ as f64 * crate::battlemap::SQUARE_FT;
 fn blocked_squares(pr: &(P, f32, Kind, u8, f32), out: &mut Vec<(i64, i64)>) {
     let start = out.len();
     blocked_any(pr, out);
-    let n = crate::battlemap::SQ as i64;
+    let n = crate::battle::SQ as i64;
     let chunk = |v: f64| crate::core::floor(v / CHUNK_FT) as i64;
     let (cx, cy) = (chunk(pr.0[0]), chunk(pr.0[1]));
     let mut k = start;
@@ -667,7 +667,7 @@ fn blocked_squares(pr: &(P, f32, Kind, u8, f32), out: &mut Vec<(i64, i64)>) {
 
 fn blocked_any(pr: &(P, f32, Kind, u8, f32), out: &mut Vec<(i64, i64)>) {
     let (at, rot, kind, _, scale) = *pr;
-    let inf = crate::battlemap::info(kind as u16);
+    let inf = crate::battle::info(kind as u16);
     if !inf.blocks_move {
         return;
     }
@@ -831,7 +831,7 @@ fn unseal(region: &[P], out: &mut ParkLayout, from: usize) {
         let Some(k) = (0..w * h).find(|&k| !seen[k] && !block[k]) else { return };
         let p = centre(k % w, k / w);
         let near = (from..out.props.len())
-            .filter(|&q| crate::battlemap::info(out.props[q].2 as u16).blocks_move && out.props[q].2 != Kind::GardenStatue)
+            .filter(|&q| crate::battle::info(out.props[q].2 as u16).blocks_move && out.props[q].2 != Kind::GardenStatue)
             .min_by(|&a, &b| dist(out.props[a].0, p).total_cmp(&dist(out.props[b].0, p)).then(a.cmp(&b)));
         match near {
             Some(q) => {

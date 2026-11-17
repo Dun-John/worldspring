@@ -551,7 +551,7 @@ impl ParkGround {
 pub struct Prop {
     pub at: P,
     pub rot: f32,
-    pub kind: crate::battlemap::Kind,
+    pub kind: crate::battle::Kind,
     pub variant: u8,
     pub scale: f32,
 }

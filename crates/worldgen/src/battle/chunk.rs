@@ -200,13 +200,13 @@ pub enum ShapeKind {
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
 /// bare (no tower on it), a gate tower, a ruin's works.
-pub(super) const WALL_BARE_A: u8 = 1;
-pub(super) const WALL_BARE_B: u8 = 2;
-pub(super) const WALL_GATE: u8 = 1;
-pub(super) const WALL_RUINED: u8 = 4;
+pub const WALL_BARE_A: u8 = 1;
+pub const WALL_BARE_B: u8 = 2;
+pub const WALL_GATE: u8 = 1;
+pub const WALL_RUINED: u8 = 4;
 /// A square tower (`Layout::square_towers`); the flags' second value is the way its sides run
 /// (radians).
-pub(super) const WALL_SQUARE: u8 = 8;
+pub const WALL_SQUARE: u8 = 8;
 
 /// The code of a palace's court among a building's pieces (`Chunk::building_parts`, after a keep's
 /// `part_code`s): open to the sky, the roof a range along each side round it.

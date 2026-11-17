@@ -108,7 +108,7 @@ fn sand_kind(site: &Site, sea: f64, w: P) -> u8 {
         if water - h > -3.0 && water <= sea + 0.5 {
             let d = |o: P| site.height(add(p, o)) - site.height(sub(p, o));
             let (gx, gy) = (d([5.0, 0.0]) / 5.0, d([0.0, 5.0]) / 5.0);
-            if crate::battlemap::beach(water - h, water, sea, crate::core::sqrt(gx * gx + gy * gy)) {
+            if crate::battle::beach(water - h, water, sea, crate::core::sqrt(gx * gx + gy * gy)) {
                 return 1;
             }
         }
@@ -294,7 +294,7 @@ const STEEP: f64 = 0.05;
 /// Every field's info, from its place and the ground under it (`fields` in world ft, `l.center` the
 /// settlement's middle, `site` planned round it).
 pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
-    let biome = crate::battlemap::land_biome(site.t0, l.center);
+    let biome = crate::battle::land_biome(site.t0, l.center);
     let t0 = site.t0;
     let (wall0, hedge0): (f64, f64) = match biome {
         Biome::Alpine | Biome::Tundra | Biome::ColdDesert | Biome::Ice => (0.75, 0.0),
