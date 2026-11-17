@@ -13,6 +13,7 @@ import type { Graphics } from 'pixi.js';
 import type { Edits, Water, WaterKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
+import { dragTo, endAt } from './line';
 
 export type Pt = [number, number];
 
@@ -551,12 +552,7 @@ export class WaterTool implements PointerTool {
     this.cursor = [x, y];
     const press = this.press;
     if (!press || this.pts.length) return;
-    if (!this.stroke) {
-      if (Math.hypot(x - press[0], y - press[1]) < 6 * this.fpp) return;
-      this.stroke = [press];
-    }
-    const last = this.stroke[this.stroke.length - 1];
-    if (Math.hypot(x - last[0], y - last[1]) >= Math.max(FREEHAND_FT, 3 * this.fpp)) this.stroke.push([x, y]);
+    this.stroke = dragTo(this.stroke, press, [x, y], 6 * this.fpp, Math.max(FREEHAND_FT, 3 * this.fpp));
   }
 
   up(x: number, y: number) {
@@ -583,9 +579,8 @@ export class WaterTool implements PointerTool {
   private endStroke(x: number, y: number) {
     const s = this.stroke!;
     this.stroke = null;
-    const end: Pt = [x, y];
     const lastPt = s[s.length - 1];
-    if (Math.hypot(x - lastPt[0], y - lastPt[1]) > 1) s.push(end);
+    endAt(s, [x, y]);
     let length = 0;
     for (let i = 1; i < s.length; i++) length += Math.hypot(s[i][0] - s[i - 1][0], s[i][1] - s[i - 1][1]);
     const gap = Math.hypot(x - s[0][0], y - s[0][1]);

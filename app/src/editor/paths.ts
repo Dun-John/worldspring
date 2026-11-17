@@ -8,6 +8,7 @@ import type { Graphics } from 'pixi.js';
 import type { DrawnPath, Edits, PathKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
+import { dragTo, endAt } from './line';
 
 export type Pt = [number, number];
 
@@ -174,12 +175,7 @@ export class PathDrawTool implements PointerTool {
     this.cursor = [x, y];
     const press = this.press;
     if (!press || this.pts.length) return;
-    if (!this.stroke) {
-      if (Math.hypot(x - press[0], y - press[1]) < 6 * this.fpp) return;
-      this.stroke = [press];
-    }
-    const last = this.stroke[this.stroke.length - 1];
-    if (Math.hypot(x - last[0], y - last[1]) >= Math.max(FREEHAND_FT, 3 * this.fpp)) this.stroke.push([x, y]);
+    this.stroke = dragTo(this.stroke, press, [x, y], 6 * this.fpp, Math.max(FREEHAND_FT, 3 * this.fpp));
   }
 
   up(x: number, y: number) {
@@ -202,8 +198,7 @@ export class PathDrawTool implements PointerTool {
   private endStroke(x: number, y: number) {
     const s = this.stroke!;
     this.stroke = null;
-    const lastPt = s[s.length - 1];
-    if (Math.hypot(x - lastPt[0], y - lastPt[1]) > 1) s.push([x, y]);
+    endAt(s, [x, y]);
     const pts: Pt[] = [];
     for (const p of simplifyOpen(s, MAX_PATH_PTS).map(round)) {
       const q = pts[pts.length - 1];
