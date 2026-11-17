@@ -747,8 +747,9 @@ fn water(ex: &mut Executor, p: P, pa: &Patch, k: usize) -> Option<Value> {
 }
 
 /// `describe_location`: what is at a point, with the ground there as the battlemap draws it (elevation, under_water,
-/// slope over 40 ft, the water near and the coast found on refined terrain).
-pub fn describe(ex: &mut Executor, p: P) -> Value {
+/// slope over 40 ft, the water near and the coast found on refined terrain), and the things within `things_ft`
+/// (`pick`: topmost first).
+pub fn describe(ex: &mut Executor, p: P, things_ft: f64) -> Value {
     let mut v = crate::agent::describe(&ex.world, &ex.t0, p[0], p[1]);
     let sea = ex.world.params().sea_level_ft as f32;
     let (pa, k) = here(ex, p);
@@ -757,6 +758,7 @@ pub fn describe(ex: &mut Executor, p: P) -> Value {
     v["slope_deg"] = json!(r1(pa.slope(k, 4) * 10.0) / 10.0);
     v["water"] = water(ex, p, &pa, k).unwrap_or(Value::Null);
     v["coast"] = coast(ex, p, COAST_NEAR_FT).unwrap_or(Value::Null);
+    v["things"] = json!(crate::pick::pick(&ex.world, &ex.t0, p, things_ft));
     v
 }
 

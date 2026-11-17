@@ -369,11 +369,23 @@ What is at a point:
 - `slope_deg`: the slope on the battlemap's squares over 40 ft (20 ft either side);
 - `water`: a river within 1,000 ft (`{kind: "river", id, name, width_ft, banks: [[x, y], [x, y]] (the bank on the point's side first), distance_ft (to the water's edge; 0 in it), in_water}`), or a lake or the sea (`{kind: "lake" | "sea", id?, name? (the smallest named body there), in_water, distance_ft, shore? ({x_ft, y_ft}; in the water, `shore_ft` is how far it is)}`), whichever is nearer; null where there is none. `in_water` is the battlemap's square at the point (a bank point from `nearest river` or `banks` is on the water's edge, wet or dry by a foot or two); a lake's or the sea's edge is found on samples 20 ft apart and placed on the 5-ft squares;
 - `coast`: the nearest coast of the sea within 5 miles, found on the battlemap's ground as `nearest` `coast` (`{distance_ft, x_ft, y_ft, shore: "cliff" | "beach", rise_ft, inland_ft, in_sea}`); null where there is none;
-- the nearest settlements.
+- the nearest settlements;
+- `things`: everything within `radius_ft` of the point, drawn by hand or generated, topmost first (what lies under
+  the point before what is only near it; a way underground, then a crossing or harbour piece, a building or tower, a
+  wall or fence, a road, street or lane, a hedge, water, a castle or plot, a district, a settlement or site), then
+  nearest. Each is `{kind, id, name, town, removable, bbox}`: `town` the feature id of the settlement it belongs to
+  (null where none), `bbox` its extent `[x0, y0, x1, y1]` in world ft, `removable` true where a tool deletes it
+  (`delete_feature`, `remove_buildings`, `remove_paths`, `remove_crossings`, `delete_water`, `remove_wharves`).
+  Kinds and ids: `entrance` (`u:`, a sewer grate `w:`), `building` (`b:`; removable when it is the world's own,
+  not a castle's or a plot's), `tower` (`t:`), `drawn_building`, `castle`, `plot`, `wall` (`c:`), `settlement`,
+  `site` (their feature ids; removable when created), `district` (`d:`), `road` (a road stretch `rd:`),
+  `drawn_road` (`rw:`), `crossing` (`v:`), `water` (`e:`), `harbour` (`q:`); and with `id: null`: `lane` (a
+  village's), `street` (a town's), `hedge`, `field_wall` (round a field), `fence` (a pen's).
 
 | Parameter | Type | | |
 |---|---|---|---|
 | `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `radius_ft` | number, 0 to 500 | default 15 | how far `things` reaches |
 
 ```json
 { "name": "describe_location", "arguments": { "x_ft": 2310194, "y_ft": 4127619 } }
