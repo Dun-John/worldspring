@@ -14,6 +14,7 @@
 </script>
 
 <script lang="ts">
+  import { NEW_UI } from './shell/layout.svelte';
   // Short notices at the bottom of the map: edits made (by you or an agent), with Undo.
   interface Props {
     toasts: Toast[];
@@ -22,7 +23,7 @@
   let { toasts, onDismiss }: Props = $props();
 </script>
 
-<div class="toasts" role="status" aria-live="polite">
+<div class="toasts" class:new={NEW_UI} role="status" aria-live="polite">
   {#each toasts as t (t.id)}
     <div class="toast">
       <span>{t.text}</span>
@@ -71,6 +72,15 @@
     border-radius: 4px;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
     font: 13px/1.35 Georgia, 'Times New Roman', serif;
+  }
+  /* `?ui=new`, phones: the sheet's width, not a narrow column over the map. */
+  :global(:root[data-layout='phone']) .toasts.new {
+    width: calc(100vw - 16px);
+  }
+  :global(:root[data-layout='phone']) .toasts.new .toast {
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
   }
   button {
     border: 1px solid #8a7a60;
