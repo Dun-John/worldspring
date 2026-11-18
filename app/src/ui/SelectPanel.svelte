@@ -7,12 +7,12 @@
   import type { FenceKind, Thing } from '../gen/protocol';
   import Icon from './Icon.svelte';
   import ToolPanel from './build/ToolPanel.svelte';
-  import { NEW_UI, shell } from './shell/layout.svelte';
+  import { shell } from './shell/layout.svelte';
 
   interface Props {
     sel: SelectTools;
     peek?: boolean;
-    /** `?ui=new`: plain Select, or Join or leave a town (only what can be part of one, Join and
+    /** plain Select, or Join or leave a town (only what can be part of one, Join and
      * Leave first). */
     purpose?: 'all' | 'members';
   }
@@ -61,17 +61,6 @@
     <button class:on={sel.lasso} role="radio" aria-checked={sel.lasso} onclick={() => (sel.lasso = true)}>Lasso</button>
   </div>
 {/snippet}
-{#snippet hint()}
-  {#if !sel.things.length}
-    <div class="ws-hint">
-      {sel.area ? 'Nothing there to choose.' : 'Click something on the map to see what it is. Drag a box, or a lasso (Shift-drag), to choose all inside it.'}
-    </div>
-  {/if}
-  {@render drag()}
-{/snippet}
-{#snippet peekHint()}
-  {#if sel.things.length}<div class="ws-hint">{sel.area ? `${sel.things.length} chosen` : word(sel.things[sel.open] ?? sel.things[0])}</div>{/if}
-{/snippet}
 {#snippet joinLeave()}
   {#if joinable.length || leavable.length}
     <div class="actions">
@@ -83,10 +72,10 @@
   {/if}
 {/snippet}
 
-<!-- (`?ui=new`: the card is not folded away; the strip's line says what to do.) -->
-<ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}} hint={NEW_UI ? undefined : hint} peekHint={NEW_UI ? undefined : peekHint} more={NEW_UI ? undefined : card}>
-  <!-- (`?ui=new`: the card first, what to act on; on a phone it shows with the sheet at its lowest.) -->
-  {#if NEW_UI && (!peek || shell.phone)}
+<!-- (The card is not folded away; the strip's line says what to do.) -->
+<ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}}>
+  <!-- (The card first, what to act on; on a phone it shows with the sheet at its lowest.) -->
+  {#if (!peek || shell.phone)}
     {@render card()}
     {#if sel.area && !sel.things.length}<div class="ws-hint">{members ? 'Nothing there can be part of a town.' : 'Nothing there to choose.'}</div>{/if}
     {#if !peek}{@render drag()}{/if}
@@ -101,8 +90,8 @@
           <div class="row">
             <span class="grow">{c.words}</span>
             {#if c.can < c.n}<span class="ws-muted">{c.can ? `${c.can} can be removed` : "can't be removed yet"}</span>{/if}
-            <!-- (`?ui=new`: each kind's own Delete, in place of Build › Clear.) -->
-            {#if NEW_UI && c.can && sel.counts.length > 1}<button class="ws-btn quiet danger kind-del" disabled={sel.busy} onclick={() => sel.removeKind(c.kind)} title="Delete {countOf(c.kind, c.can)}" aria-label="Delete {countOf(c.kind, c.can)}"><Icon name="trash" size={16} /></button>{/if}
+            <!-- (Each kind's own Delete, in place of Build › Clear.) -->
+            {#if c.can && sel.counts.length > 1}<button class="ws-btn quiet danger kind-del" disabled={sel.busy} onclick={() => sel.removeKind(c.kind)} title="Delete {countOf(c.kind, c.can)}" aria-label="Delete {countOf(c.kind, c.can)}"><Icon name="trash" size={16} /></button>{/if}
           </div>
         {/each}
       </div>

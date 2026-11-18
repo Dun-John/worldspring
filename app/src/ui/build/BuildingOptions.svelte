@@ -11,7 +11,7 @@
     /** The building being changed (its name), else drawing new ones. */
     editing: string | null;
     onSave: () => void;
-    /** `?ui=new`: the main options (what it is, Save) shown, the rest under More options; `floors`:
+    /** the main options (what it is, Save) shown, the rest under More options; `floors`:
      * which of the two its storeys go with. */
     part?: 'all' | 'main' | 'rest';
     floors?: 'main' | 'rest';

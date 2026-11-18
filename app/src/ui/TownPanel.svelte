@@ -18,7 +18,6 @@
   import { HAND_BRUSH_FT, isDrawMode, type StreetPick } from '../editor/streets';
   import Icon from './Icon.svelte';
   import MoreFold from './shell/MoreFold.svelte';
-  import { NEW_UI } from './shell/layout.svelte';
   import type { IconName } from './icons';
 
   interface Props {
@@ -74,8 +73,8 @@
     onStreetFinish?: (closed?: boolean) => void;
     onStreetBack?: () => void;
     onStreetPick?: (p: StreetPick | null) => void;
-    /** `?ui=new`: which tool the panel is, Streets (no walls) or Town wall (the walls and their
-     * corners only); unset, all of it (the old layout). */
+    /** which tool the panel is, Streets (no walls) or Town wall (the walls and their
+     * corners only); unset, all of it. */
     part?: 'streets' | 'walls' | null;
   }
 
@@ -85,12 +84,12 @@
 
   const MODES: { key: TownMode; label: string; was?: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
-    { key: 'displace', label: NEW_UI ? 'Push' : 'Displace', was: 'Displace', icon: 'move', kbd: 'Q', hint: 'Drag: the corners in the ring go with you, those in its middle all the way.' },
-    { key: 'liquify', label: NEW_UI ? 'Smudge' : 'Liquify', was: 'Liquify', icon: 'liquify', kbd: 'L', hint: 'Drag: the corners under the ring are smudged along.' },
-    { key: 'bloat', label: NEW_UI ? 'Grow' : 'Bloat', was: 'Bloat', icon: 'bloat', kbd: 'O', hint: 'Press and drag: the patches round where you pressed swell, the further you drag the more.' },
-    { key: 'pinch', label: NEW_UI ? 'Shrink' : 'Pinch', was: 'Pinch', icon: 'pinch', kbd: 'I', hint: 'Press and drag: the patches round where you pressed shrink, the further you drag the more.' },
-    { key: 'relax', label: NEW_UI ? 'Soften' : 'Relax', was: 'Relax', icon: 'relax', kbd: 'R', hint: 'Scrub over the town: each corner eases toward the middle of its neighbours.' },
-    { key: 'equalize', label: NEW_UI ? 'Even out' : 'Equalize', was: 'Equalize', icon: 'polygon', kbd: 'E', hint: 'Click or drag over patches: each is made more regular.' },
+    { key: 'displace', label: 'Push', was: 'Displace', icon: 'move', kbd: 'Q', hint: 'Drag: the corners in the ring go with you, those in its middle all the way.' },
+    { key: 'liquify', label: 'Smudge', was: 'Liquify', icon: 'liquify', kbd: 'L', hint: 'Drag: the corners under the ring are smudged along.' },
+    { key: 'bloat', label: 'Grow', was: 'Bloat', icon: 'bloat', kbd: 'O', hint: 'Press and drag: the patches round where you pressed swell, the further you drag the more.' },
+    { key: 'pinch', label: 'Shrink', was: 'Pinch', icon: 'pinch', kbd: 'I', hint: 'Press and drag: the patches round where you pressed shrink, the further you drag the more.' },
+    { key: 'relax', label: 'Soften', was: 'Relax', icon: 'relax', kbd: 'R', hint: 'Scrub over the town: each corner eases toward the middle of its neighbours.' },
+    { key: 'equalize', label: 'Even out', was: 'Equalize', icon: 'polygon', kbd: 'E', hint: 'Click or drag over patches: each is made more regular.' },
   ];
 
   const WARD_LABEL: Record<TownWard, string> = {
@@ -260,7 +259,7 @@
     {#if reshapeOpen}
       <div class="menu ws-panel" role="menu" aria-label="Reshape">
         {#each reshape as m (m.key)}
-          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((reshapeOpen = false), onMode(m.key))} title={NEW_UI && m.was ? `Was ${m.was}` : undefined}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
+          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((reshapeOpen = false), onMode(m.key))} title={m.was ? `Was ${m.was}` : undefined}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
         {/each}
       </div>
     {/if}
@@ -393,7 +392,6 @@
       </section>
     {/if}
     {/snippet}
-    {#if !NEW_UI}{@render districts()}{/if}
     {#if selected && streets_}
       <section class="card" aria-label="Patch">
         <div class="title">

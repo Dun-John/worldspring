@@ -229,7 +229,7 @@ body {
   cursor: default;
 }
 
-/* R8 frame (?ui=new): Dock tab strips, Play and Sketch tool rows share the group row's metrics; the
+/* R8 frame: Dock tab strips, Play and Sketch tool rows share the group row's metrics; the
  * hint under a strip is always shown; pressed buttons read like selected tabs. */
 .ws-strip > button[aria-pressed='true'] {
   color: var(--ink);

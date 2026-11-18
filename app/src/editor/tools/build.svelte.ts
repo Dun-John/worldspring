@@ -12,7 +12,6 @@ import { MAX_WATERS, WaterTool, centre, defaultWater, depthOf, flows, isDug, isL
 import { MAX_PATHS, PathDrawTool, defaultPath, kindWidth, pathProblem, type PathSettings } from '../paths';
 import { FENCE_KINDS } from '../fence';
 import { fenceTools } from './fences.svelte';
-import { ClearAreaTool, type ClearShape } from '../clearArea';
 import { WorksTool, defaultWorks, type WorksSettings } from '../works';
 import type { BuildMode, QuickInfo } from '../../ui/BuildPanel.svelte';
 import { PathTool, StampTool, defaultLasso, defaultRow, defaultStamp, type LassoSettings, type RowSettings, type StampSettings } from '../quick';
@@ -53,7 +52,7 @@ export function buildTools(app: BuildHost) {
   /** One of the world's own being changed: its name, and the menu's choices as it was opened
    * (only what differs from them is changed). */
   let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool; water: WaterTool; harbour: HarbourTool; clear: ClearAreaTool; works: WorksTool; stamp: StampTool; path: PathTool; road: PathDrawTool } | null = null;
+  let buildArmed: { tool: BuildTool; cross: CrossingTool; water: WaterTool; harbour: HarbourTool; works: WorksTool; stamp: StampTool; path: PathTool; road: PathDrawTool } | null = null;
   /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
    * own buildings. */
   let buildMode = $state<BuildMode>('building');
@@ -62,7 +61,6 @@ export function buildTools(app: BuildHost) {
   let worksEditing = $state<string | null>(null);
   /** The world's own buildings standing where a castle or wall would go: take them away with it? */
   let inWayAsk = $state<{ what: string; count: number; choose: (go: boolean) => void } | null>(null);
-  let clearShape = $state<ClearShape>('box');
   let cross = $state<CrossSettings>(defaultCross());
   /** The crossing put down by hand being changed (its id). */
   let crossEditing = $state<string | null>(null);
@@ -111,11 +109,6 @@ export function buildTools(app: BuildHost) {
       pick: (id) => (harbourPicked = id),
       hint: (t) => app.toast(t),
     });
-    const clear = new ClearAreaTool({
-      shape: () => clearShape,
-      drawn: (poly) => void clearArea(poly),
-      hint: (t) => app.toast(t),
-    });
     const worksTool = new WorksTool({
       mode: () => (buildMode === 'castle' ? 'castle' : 'wall'),
       settings: () => works,
@@ -139,7 +132,7 @@ export function buildTools(app: BuildHost) {
       pick: (id) => (roadPicked = id),
       hint: (t) => app.toast(t),
     });
-    buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, clear, works: worksTool, stamp: stampTool, path: pathTool, road: roadTool };
+    buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, works: worksTool, stamp: stampTool, path: pathTool, road: roadTool };
   }
 
   // Quick placement: Stamp, Row and Plot (Lasso). A ghost follows the generator's answer (the same
@@ -147,7 +140,7 @@ export function buildTools(app: BuildHost) {
   let stampSet = $state<StampSettings>(defaultStamp());
   let rowSet = $state<RowSettings>(defaultRow());
   let lassoSet = $state<LassoSettings>(defaultLasso());
-  /** `?ui=new`: the plot drawn by hand being changed from Select (its created id): its fill, ward,
+  /** the plot drawn by hand being changed from Select (its created id): its fill, ward,
    * lots, layout and name rewritten in place as they are set, one step to undo each. */
   let plotEditing = $state<string | null>(null);
   let plotTimer: ReturnType<typeof setTimeout> | null = null;
@@ -922,19 +915,6 @@ export function buildTools(app: BuildHost) {
     return e === undefined ? null : e.charAt(0).toUpperCase() + e.slice(1);
   }
 
-  /** The world's own buildings with their middle in an area drawn: taken away (one change). */
-  async function clearArea(poly: Pt[]) {
-    const tool = buildArmed?.clear;
-    const found = await app.view.gen.buildingsIn(poly);
-    if (tool) tool.pending = null;
-    if (!found.length) return app.toast('No buildings of the town’s own there (drawn ones go with Delete)');
-    const all = { ...(app.edits.buildings ?? {}) };
-    for (const b of found) all[b.id] = { at: b.at, removed: true };
-    const removed = found.map((b) => b.id);
-    app.applyEdits({ ...app.edits, buildings: all }, { tool: 'remove_buildings', removed, count: removed.length }, 'user');
-    if (app.selection?.kind === 'building' && removed.includes(app.selection.hit.id)) app.selection = null;
-  }
-
   /** A business's or home's key from what a building is called (its label). */
   async function funcKey(label: string): Promise<string> {
     buildFuncs ??= await app.view.gen.buildingFuncs();
@@ -1161,7 +1141,7 @@ export function buildTools(app: BuildHost) {
   function tool() {
     if (buildMode === 'select') return null;
     if (buildMode === 'fence') return fences.tool;
-    return buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'clear' ? buildArmed.clear : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
+    return buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
   }
 
   /** The keymap's Build keys: the crossing's kind and the road's type go round; a shape key. */
@@ -1171,7 +1151,7 @@ export function buildTools(app: BuildHost) {
     const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
     cross = { ...cross, kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
   }
-  /** `?ui=new`: H again on Docks & islets, the next kind (islet, quay, pier, breakwater). */
+  /** H again on Docks & islets, the next kind (islet, quay, pier, breakwater). */
   function keyHarbour() {
     if (buildMode !== 'harbour') return setBuildMode('harbour');
     if (harbourPicked) return;
@@ -1298,14 +1278,11 @@ export function buildTools(app: BuildHost) {
     generatedBuilding,
     withPiece,
     refusal,
-    clearArea,
     editGenerated,
     saveGenerated,
     generatedActions,
     saveBuilding,
     editBuilding,
-    get clearShape() { return clearShape; },
-    set clearShape(v) { clearShape = v; },
   };
 }
 

@@ -5,7 +5,7 @@ import { untrack } from 'svelte';
 import type { Edits, Feature, StreetPlan, StreetRequest, BlockFill, P2, TownPlan, TownReport, TownRequest, OpenKind } from '../../gen/protocol';
 import { townUnderlay } from '../trace/underlay.svelte';
 import { type PointerTool } from '../../render/MapView';
-import { NEW_UI, shell } from '../../ui/shell/layout.svelte';
+import { shell } from '../../ui/shell/layout.svelte';
 import { TownTool, type TownMode } from '../town';
 import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, isDrawMode, pickIn, type StreetPick } from '../streets';
 import { type Change } from '../../sync/mapd';
@@ -38,9 +38,9 @@ export function streetTools(host: StreetsHost) {
   // Edit › Streets: the town in view laid out anew by hand (the ward editor, `editor/town.ts`).
   let townTool = $state.raw<TownTool | null>(null);
   let townMode = $state<TownMode>('select');
-  /** `?ui=new`: which tool Streets' panel is, its streets or the town wall (the panel's part, 8b-1b). */
+  /** which tool Streets' panel is, its streets or the town wall (the panel's part, 8b-1b). */
   let townPart = $state<'streets' | 'walls'>('streets');
-  /** `?ui=new`: what Select's Change asked to have chosen once the town's plan is read (a district
+  /** what Select's Change asked to have chosen once the town's plan is read (a district
    * by its id, else the patch or the hand street at a point). */
   let townFocus: { layout: number; district?: string; at: [number, number] } | null = null;
   /** The brush's size, in patch widths. */
@@ -113,11 +113,10 @@ export function streetTools(host: StreetsHost) {
   });
   const townNear = $derived(streetPlan ? (host.hud?.ftPerPx ?? 99) <= 1 / DOTS_PPF : !!townPlan && townPlan.max_move_ft / (host.hud?.ftPerPx ?? 99) >= 40);
 
-  // `?ui=new`: Town wall is the walls only (a hand town's opens on drawing its wall); Streets has no wall drawing.
+  // Town wall is the walls only (a hand town's opens on drawing its wall); Streets has no wall drawing.
   $effect(() => {
     const part = townPart;
     const hand = !!streetPlan;
-    if (!NEW_UI) return;
     untrack(() => {
       const want: TownMode | null = part === 'walls' ? (hand ? 'wall' : 'select') : townMode === 'wall' ? 'select' : null;
       if (want && townMode !== want) {

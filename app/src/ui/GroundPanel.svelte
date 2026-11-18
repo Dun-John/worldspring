@@ -6,8 +6,7 @@
   import type { GroundMode, GroundSettings } from '../editor/ground';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
-  import { NEW_UI, foldOpen, remember, remembered, setFold, shell } from './shell/layout.svelte';
-  import IsletList from './IsletList.svelte';
+  import { foldOpen, setFold, shell } from './shell/layout.svelte';
 
   interface Props {
     settings: GroundSettings;
@@ -23,19 +22,15 @@
     onPlateau: (id: string, p: Plateau) => void;
     onRemove: () => void;
     onZoomIn: () => void;
-    /** The world's own islets, those taken away marked, and taking one away or bringing it back. */
-    islets?: import('./IsletList.svelte').Islet[];
-    onIslet?: (id: string, removed: boolean) => void;
-    onGoIslet?: (x: number, y: number) => void;
   }
 
-  let { settings = $bindable(), selected, sea, near, inside, peek = false, onPlateau, onRemove, onZoomIn, islets = [], onIslet = () => {}, onGoIslet = () => {} }: Props = $props();
+  let { settings = $bindable(), selected, sea, near, inside, peek = false, onPlateau, onRemove, onZoomIn }: Props = $props();
 
   const MODES: { key: GroundMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'raise', label: 'Raise', icon: 'raise', kbd: 'Q', hint: 'Brush over the ground to lift it, at most by the height below however often you go over it.' },
     { key: 'lower', label: 'Lower', icon: 'lower', kbd: 'W', hint: 'Brush over the ground to sink it. Dry ground never sinks under the water beside it.' },
     { key: 'smooth', label: 'Smooth', icon: 'relax', kbd: 'E', hint: 'Brush over bumps and steps to ease them toward the ground round them.' },
-    { key: 'restore', label: NEW_UI ? 'Put back' : 'Restore', icon: 'reset', kbd: 'R', hint: 'Brush to take brushed changes back toward the ground as generated (plateaus stay).' },
+    { key: 'restore', label: 'Put back', icon: 'reset', kbd: 'R', hint: 'Brush to take brushed changes back toward the ground as generated (plateaus stay).' },
     { key: 'plateau', label: 'Plateau', icon: 'plateau', kbd: 'L', hint: 'Drag a loop round the ground: inside it becomes flat at the level shown. Start on a plateau to extend it.' },
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a plateau or pit to change its level or edge, or take it away.' },
   ];
@@ -71,7 +66,7 @@
 <div class="ground">
   <div class="ws-seg modes" role="radiogroup" aria-label="Tool">
     {#each MODES as m (m.key)}
-      <button class:on={settings.mode === m.key} aria-pressed={settings.mode === m.key} onclick={() => (settings.mode = m.key)} title="{m.label}{NEW_UI && m.key === 'restore' ? ' (was Restore)' : ''} ({m.kbd})"><Icon name={m.icon} size={16} />{m.label}</button>
+      <button class:on={settings.mode === m.key} aria-pressed={settings.mode === m.key} onclick={() => (settings.mode = m.key)} title="{m.label}{m.key === 'restore' ? ' (was Restore)' : ''} ({m.kbd})"><Icon name={m.icon} size={16} />{m.label}</button>
     {/each}
   </div>
   {#if inside}
@@ -85,8 +80,8 @@
   {#if !peek}
     <div class="ws-hint">{hint}</div>
     {#if brush}
-      <details class="ws-group" open={NEW_UI ? foldOpen('ground') : remembered('ground.brush', true)} ontoggle={(e) => (NEW_UI ? setFold('ground', e.currentTarget.open) : remember('ground.brush', e.currentTarget.open))}>
-        <summary>{NEW_UI ? 'More options' : 'Brush settings'}</summary>
+      <details class="ws-group" open={foldOpen('ground')} ontoggle={(e) => setFold('ground', e.currentTarget.open)}>
+        <summary>More options</summary>
         <div class="ws-group-body">
           <label class="slider">
             <span>Radius</span><output>{settings.radius} ft</output>
@@ -110,8 +105,8 @@
         </div>
       </details>
     {:else if settings.mode === 'plateau'}
-      <details class="ws-group" open={NEW_UI ? foldOpen('ground') : remembered('ground.plateau', true)} ontoggle={(e) => (NEW_UI ? setFold('ground', e.currentTarget.open) : remember('ground.plateau', e.currentTarget.open))}>
-        <summary>{NEW_UI ? 'More options' : 'New plateau'}</summary>
+      <details class="ws-group" open={foldOpen('ground')} ontoggle={(e) => setFold('ground', e.currentTarget.open)}>
+        <summary>More options</summary>
         <div class="ws-group-body">
           <label class="slider">
             <span>{settings.offset < 0 ? 'Dug below the ground' : 'Above the ground'}</span><output>{signed(settings.offset)}</output>
@@ -124,8 +119,6 @@
         </div>
       </details>
     {/if}
-    <!-- (`?ui=new`: the world's islets are in Docks & islets.) -->
-    {#if !NEW_UI}<IsletList {islets} {onIslet} {onGoIslet} />{/if}
     {#if selected}
       <section class="card" aria-label="Plateau">
         <div class="title">

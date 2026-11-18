@@ -1,15 +1,14 @@
 <script lang="ts">
-  // The place line: what the ghost would put down (or why not), and its button. `?ui=new`: the
-  // button runs the sheet's width, and while it can't be used the line says why.
+  // The place line: what the ghost would put down (or why not), and its button. The button
+  // runs the sheet's width, and while it can't be used the line says why.
   import type { QuickInfo } from '../BuildPanel.svelte';
-  import { NEW_UI } from '../shell/layout.svelte';
 
   let { quick, action, onPlace }: { quick: QuickInfo; action: string; onPlace: () => void } = $props();
 </script>
 
-<div class="quick" class:bad={quick.bad} class:stack={NEW_UI}>
-  <span class="grow">{quick.text || (NEW_UI && !quick.can ? 'Click the map to choose a spot first.' : '')}</span>
-  <button class="ws-btn primary" class:block={NEW_UI} onclick={onPlace} disabled={!quick.can}>{action}</button>
+<div class="quick stack" class:bad={quick.bad}>
+  <span class="grow">{quick.text || (!quick.can ? 'Click the map to choose a spot first.' : '')}</span>
+  <button class="ws-btn primary" class:block={true} onclick={onPlace} disabled={!quick.can}>{action}</button>
 </div>
 
 <style>

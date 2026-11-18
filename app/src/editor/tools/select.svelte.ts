@@ -20,7 +20,7 @@ export interface SelectApp {
   go(to: import('../../ui/shell/layout.svelte').Section | null, tab?: string): void;
   /** The settlements and places a thing can join (by layout index; `place`: a place made by pushing buildings out). */
   townChoices(): TownChoice[];
-  /** `?ui=new` (the old layout leaves them out): open an Edit tool; Change opened one (its Done goes
+  /** Open an Edit tool; Change opened one (its Done goes
    * back to Select); `t`'s town opened in Streets with `t` chosen, or in Town wall; whether `t` is a
    * town whose streets can be edited; `t`'s info card. */
   openTool?(key: import('../../ui/shell/editTools').ToolKey): boolean;
@@ -74,7 +74,7 @@ export function selectTools(host: SelectApp) {
   let changing = 0;
   let armed: SelectTool | null = null;
   let seq = 0;
-  /** `?ui=new`: plain Select, or Join or leave a town (only what can join listed: the panel's part, 8b-1b). */
+  /** plain Select, or Join or leave a town (only what can join listed: the panel's part, 8b-1b). */
   let purpose = $state<'all' | 'members'>('all');
 
   const ftPerPx = () => 1 / host.view.cam.ppf;
@@ -257,7 +257,7 @@ export function selectTools(host: SelectApp) {
     }
   }
 
-  /** The tool that made `t` opened, with it chosen where that tool can choose one (`?ui=new`: its
+  /** The tool that made `t` opened, with it chosen where that tool can choose one (Its
    * Done comes back here). */
   async function change(t: Thing) {
     if (host.openTool) {
@@ -348,7 +348,7 @@ export function selectTools(host: SelectApp) {
     if (out?.done.length) things = things.filter((x) => x.id !== t.id);
   }) : undefined);
 
-  /** `?ui=new`: Join or leave a town lists only what can be part of one. */
+  /** Join or leave a town lists only what can be part of one. */
   const shown = $derived(purpose === 'members' ? things.filter((t) => memberable(t)) : things);
 
   /** What an area holds, counted by kind (in pick's order). */
@@ -523,7 +523,7 @@ export function selectTools(host: SelectApp) {
     setKind,
     /** The area's things of one kind taken away (those that can be), as one step (Select's per-kind Delete). */
     removeKind: (kind: Thing['kind']) => void remove(shown.filter((t) => t.kind === kind)),
-    /** `?ui=new`: the card's extra links (none in the old layout). */
+    /** The card's extra links (Select's Info and Change). */
     get links() {
       return { info: host.info, openTown: host.openTown, hasStreets: host.hasStreets };
     },

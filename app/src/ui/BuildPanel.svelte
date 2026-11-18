@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type BuildMode = 'select' | 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'clear' | 'road' | 'fence';
+  export type BuildMode = 'select' | 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'road' | 'fence';
   /** What the app says of a quick placement's ghost. */
   export interface QuickInfo {
     /** Something is ready to place. */
@@ -21,14 +21,10 @@
   import type { PathSettings } from '../editor/paths';
   import type { HarbourSettings } from '../editor/harbour';
   import type { FenceSettings } from '../editor/fence';
-  import type { ClearShape } from '../editor/clearArea';
   import type { LassoSettings, RowSettings, StampSettings } from '../editor/quick';
   import type { WorksSettings } from '../editor/works';
   import type { BuildingFuncs, PathKind, WaterKind } from '../gen/protocol';
-  import Icon from './Icon.svelte';
-  import { NEW_UI } from './shell/layout.svelte';
   import BuildingPanel from './build/BuildingPanel.svelte';
-  import ClearPanel from './build/ClearPanel.svelte';
   import FencePanel from './build/FencePanel.svelte';
   import CrossingPanel from './build/CrossingPanel.svelte';
   import HarbourPanel from './build/HarbourPanel.svelte';
@@ -38,22 +34,19 @@
   import StampPanel from './build/StampPanel.svelte';
   import WaterPanel from './build/WaterPanel.svelte';
   import WorksPanel from './build/WorksPanel.svelte';
-  import type { IconName } from './icons';
 
   interface Props {
     settings: BuildSettings;
     funcs: BuildingFuncs | null;
     /** The building being changed (its name), else drawing new ones. */
     editing: string | null;
-    /** Buildings, castles, walls, crossings, or clearing the world's own buildings. */
+    /** The tool open (Edit's tool row picks it). */
     mode: BuildMode;
     works: WorksSettings;
     /** The castle or wall being changed (its name), else drawing new ones. */
     worksEditing: string | null;
     /** The view is over a town laid out by hand. */
     handTown?: boolean;
-    /** Clear area: a box dragged, or a lasso drawn. */
-    clearShape: ClearShape;
     stamp: StampSettings;
     row: RowSettings;
     lasso: LassoSettings;
@@ -95,10 +88,10 @@
     onHarbourRemove: () => void;
     /** Fly in close enough to draw. */
     onZoomIn: () => void;
-    /** `?ui=new`: the plot being changed (its name), from Select's Change. */
+    /** The plot being changed (its name), from Select's Change. */
     plotEditing?: string | null;
     onPlotRemove?: () => void;
-    /** `?ui=new`: the world's own islets, listed in Docks & islets. */
+    /** The world's own islets, listed in Docks & islets. */
     islets?: import('./IsletList.svelte').Islet[];
     onIslet?: (id: string, removed: boolean) => void;
     onGoIslet?: (x: number, y: number) => void;
@@ -113,7 +106,6 @@
     select,
     works = $bindable(),
     worksEditing,
-    clearShape = $bindable(),
     stamp = $bindable(),
     row = $bindable(),
     lasso = $bindable(),
@@ -150,38 +142,13 @@
     onGoIslet,
   }: Props = $props();
 
-  const MODES: { key: BuildMode; label: string; icon: IconName; title: string }[] = [
-    { key: 'select', label: 'Select', icon: 'pointer', title: 'Choose what is on the map: click, drag a box, Shift-drag a lasso (A)' },
-    { key: 'building', label: 'Building', icon: 'building', title: 'Draw a building (B)' },
-    { key: 'stamp', label: 'Stamp', icon: 'building', title: 'Set down a building of a kind and size where you click (Q)' },
-    { key: 'row', label: 'Row', icon: 'wall', title: 'A row of buildings along a street (E)' },
-    { key: 'lasso', label: 'Plot', icon: 'polygon', title: 'Draw round a plot and fill it (L)' },
-    { key: 'castle', label: 'Castle', icon: 'castle', title: 'Draw a castle: its walls, gate, keep and yard' },
-    { key: 'wall', label: 'Wall', icon: 'wall', title: 'A wall standing on its own, anywhere: towers and gates where you click' },
-    { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
-    { key: 'water', label: 'Water', icon: 'lake', title: 'Brush or outline water, of a width and depth' },
-    { key: 'road', label: 'Road', icon: 'road', title: 'Draw a footpath, track, gravel road, paved road or cobbled street (V)' },
-    { key: 'fence', label: 'Fence', icon: 'wall', title: 'Draw a hedge, fence or wall, put a gate in one, or cut a gap (F)' },
-    { key: 'harbour', label: 'Harbour', icon: 'waves', title: 'Islets, quays, piers and breakwaters (H)' },
-    { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
-  ];
 </script>
 
 <div class="build">
-  <!-- (`?ui=new`: the modes are Edit's tool row instead.) -->
-  {#if !peek && !NEW_UI}
-    <div class="ws-seg modes" role="radiogroup" aria-label="What to build">
-      {#each MODES as m (m.key)}
-        <button class:on={mode === m.key} aria-pressed={mode === m.key} onclick={() => onMode(m.key)} title={m.title}><Icon name={m.icon} size={16} />{m.label}</button>
-      {/each}
-    </div>
-  {/if}
   {#if mode === 'select'}
     {@render select?.()}
   {:else if mode === 'castle' || mode === 'wall'}
-    <WorksPanel {mode} bind:works {worksEditing} {handTown} {onWorksSave} {onDone} {near} {peek} {onZoomIn} onMode={NEW_UI ? onMode : undefined} />
-  {:else if mode === 'clear'}
-    <ClearPanel bind:clearShape {near} {peek} {onZoomIn} />
+    <WorksPanel {mode} bind:works {worksEditing} {handTown} {onWorksSave} {onDone} {near} {peek} {onZoomIn} {onMode} />
   {:else if mode === 'row'}
     <RowPanel bind:row bind:stamp {funcs} {quick} {onPlace} {onDrop} {near} {peek} {onZoomIn} />
   {:else if mode === 'lasso'}
@@ -269,25 +236,6 @@
   .build :global(.swatch.on) {
     outline: 2px solid var(--ink);
     outline-offset: 2px;
-  }
-  /* Thirteen modes in two rows of seven: each its icon over its word. */
-  .modes {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-  }
-  .modes > button:nth-child(7n + 1) {
-    border-left: none;
-  }
-  .modes > button:nth-child(n + 8) {
-    border-top: 1px solid var(--line-soft);
-  }
-  .modes > button {
-    flex-direction: column;
-    gap: 0;
-    padding: 4px 2px;
-    font-size: 10px;
-    min-width: 0;
-    padding-inline: 0;
   }
   .build :global(.switch) {
     display: flex;

@@ -1,6 +1,6 @@
 <script lang="ts">
   // The world's own islets, those taken away marked: fly to one, take it away or bring it back.
-  // Shown by Edit › Ground (the old layout) or Docks & islets (`?ui=new`).
+  // Shown by Docks & islets.
   export interface Islet {
     id: string;
     x: number;

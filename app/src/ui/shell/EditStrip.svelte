@@ -1,5 +1,5 @@
 <script lang="ts">
-  // `?ui=new`: Edit's strip under the dock's header, the group row (five things to change) and
+  // Edit's strip under the dock's header, the group row (five things to change) and
   // the tool row of the group shown, then the open tool's one-line hint until it has been used.
   // With Select open the row shows the last group's tools, none lit, each one tap away.
   import Icon from '../Icon.svelte';

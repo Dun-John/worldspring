@@ -5,7 +5,6 @@
   import type { IconName } from '../icons';
   import ToolPanel from './ToolPanel.svelte';
   import IsletList, { type Islet } from '../IsletList.svelte';
-  import { NEW_UI } from '../shell/layout.svelte';
 
   interface Props {
     harbour: HarbourSettings;
@@ -16,7 +15,7 @@
     near: boolean;
     peek?: boolean;
     onZoomIn: () => void;
-    /** `?ui=new`: the world's own islets (moved here from Ground). */
+    /** the world's own islets (moved here from Ground). */
     islets?: Islet[];
     onIslet?: (id: string, removed: boolean) => void;
     onGoIslet?: (x: number, y: number) => void;
@@ -72,6 +71,6 @@
         <label class="switch"><span class="grow">Lighthouse at its tip</span><input type="checkbox" class="ws-switch" bind:checked={harbour.lighthouse} /></label>
       {/if}
     {/if}
-    {#if NEW_UI}<IsletList {islets} {onIslet} {onGoIslet} />{/if}
+    <IsletList {islets} {onIslet} {onGoIslet} />
   {/snippet}
 </ToolPanel>

@@ -3,9 +3,6 @@
 // a bottom sheet and a tab bar; everything else (short landscape phones too) a dock on the right.
 import { EDIT_TOOLS, type GroupKey, type ToolKey } from './editTools';
 
-/** `?ui=new`: Edit grouped by thing (Roadmap 6 R8), until the user approves it. Every switch on
- * it is `if (NEW_UI)` or a prop that defaults to the old layout, so taking it out is a grep. */
-export const NEW_UI = typeof location !== 'undefined' && new URLSearchParams(location.search).get('ui') === 'new';
 export type Section = 'world' | 'edit' | 'notes' | 'play';
 export type WorldTab = 'generate' | 'sketch' | 'library';
 export type EditTab = 'sites' | 'build' | 'town' | 'ground' | 'scatter' | 'design';
@@ -71,7 +68,7 @@ class Shell {
   tabs = $state<Tabs>({ world: 'generate', edit: 'sites', notes: 'npcs' });
   /** Desktop: the dock folded down to its header and tool strip. */
   collapsed = $state(false);
-  snap = $state<Snap>(NEW_UI ? 'peek' : 'half');
+  snap = $state<Snap>('peek');
   /** Phones: the sheet shows the selected place's card over the open panel. */
   card = $state(false);
   menu = $state<'main' | 'layers' | null>(null);
@@ -85,9 +82,9 @@ class Shell {
    * window's edges while there is none), for what floats over the map beside it. */
   sheetTop = $state(Infinity);
   dockLeft = $state(Infinity);
-  /** `?ui=new`: the Edit group whose tools the tool row shows (the open tool's, or the last one picked). */
+  /** the Edit group whose tools the tool row shows (the open tool's, or the last one picked). */
   group = $state<GroupKey>('settlements');
-  /** `?ui=new`: the Edit tool open (App's, worked out from the panels), else null. */
+  /** the Edit tool open (App's, worked out from the panels), else null. */
   toolNow: () => ToolKey | null = () => null;
   /** Tools used since their hints were last shown (the rest are read from storage). */
   private used = $state<Partial<Record<ToolKey, boolean>>>({});
@@ -147,7 +144,7 @@ export function remember(key: string, open: boolean) {
   store(`ui.open.${key}`, open ? '1' : '0');
 }
 
-/** `?ui=new`: whether a tool's "More options" fold is open (shut at first), as this viewer left it
+/** whether a tool's "More options" fold is open (shut at first), as this viewer left it
  * (the same key `ToolPanel` keeps). */
 export function foldOpen(tool: string): boolean {
   return stored(`ws-fold:tool:${tool}`) === 'open';

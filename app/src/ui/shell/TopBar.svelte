@@ -4,7 +4,7 @@
   import type { Snippet } from 'svelte';
   import type { Crumb } from '../gazetteer';
   import Icon from '../Icon.svelte';
-  import { NEW_UI, shell } from './layout.svelte';
+  import { shell } from './layout.svelte';
 
   interface Props {
     crumbs: Crumb[];
@@ -27,7 +27,7 @@
 </script>
 
 <div class="top" bind:clientHeight={height}>
-  <div class="box" class:nu={NEW_UI}>
+  <div class="box">
     <button class="ws-icon-btn menu-btn" class:on={menuOpen} onclick={onMenu} aria-label="Menu" aria-expanded={menuOpen} title="Menu"><Icon name="menu" /></button>
     {@render search()}
     <Icon name="search" size={16} />
@@ -76,10 +76,6 @@
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     color: var(--ink-3);
-  }
-  .box.nu {
-    box-sizing: border-box;
-    min-height: calc(var(--tap) + 8px);
   }
   .menu-btn.on {
     background: var(--btn-hover);

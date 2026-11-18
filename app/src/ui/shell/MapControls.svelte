@@ -6,7 +6,7 @@
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
   import { mac } from './shortcuts';
-  import { NEW_UI, shell } from './layout.svelte';
+  import { shell } from './layout.svelte';
   import { HEX_OFFSET_MI, HEX_OPACITY, HEX_SIZE_MI, HEX_WIDTH_PX, type Hex } from '../../render/hex';
 
   interface Props {
@@ -17,7 +17,7 @@
     battlemap: boolean;
     canUndo: boolean;
     undoLabel: string | null;
-    /** ?ui=new: Redo too, on wide screens. */
+    /** Redo too, on wide screens. */
     canRedo?: boolean;
     redoLabel?: string | null;
     onRedo?: () => void;
@@ -65,7 +65,7 @@
   {#if north}
     <button class="ctl" class:on={north.on} onclick={() => north.set(!north.on)} aria-label="North up" aria-pressed={north.on} title={north.on ? 'Back to the map as it lies (Shift+N)' : 'Turn the plan north up (Shift+N)'}><Icon name="north" /></button>
   {/if}
-  {#if NEW_UI && !shell.phone}
+  {#if !shell.phone}
     <div class="stack">
       <button class="ctl" onclick={onUndo} disabled={!canUndo} aria-label="Undo" title={undoLabel ? `Undo: ${undoLabel} (${ctrl}Z)` : `Undo (${ctrl}Z)`}><Icon name="undo" /></button>
       <button class="ctl" onclick={onRedo} disabled={!canRedo} aria-label="Redo" title={redoLabel ? `Redo: ${redoLabel} (${ctrl}Y)` : `Redo (${ctrl}Y)`}><Icon name="redo" /></button>

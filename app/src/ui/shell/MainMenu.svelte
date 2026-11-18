@@ -4,7 +4,7 @@
   import type { WorldFile } from '../../gen/protocol';
   import { download } from '../../world/world';
   import Icon from '../Icon.svelte';
-  import { NEW_UI, shell } from './layout.svelte';
+  import { shell } from './layout.svelte';
 
   interface Props {
     world: WorldFile;
@@ -31,7 +31,6 @@
     <div class="brand">Worldspring</div>
     <div class="ws-muted">Seed {world.seed} · {size}</div>
   </div>
-  {#if NEW_UI}
     <div class="blk">This world</div>
     <button role="menuitem" onclick={() => act(onNewWorld)}><Icon name="globe" /> New world<span class="sub">seed and settings</span></button>
     <button role="menuitem" onclick={() => act(onLibrary)}><Icon name="folder" /> Library<span class="sub">saved worlds, open a file</span></button>
@@ -46,19 +45,6 @@
       <Icon name="activity" /> Performance stats
       <input type="checkbox" class="ws-switch" checked={shell.stats} onchange={(e) => shell.setStats(e.currentTarget.checked)} />
     </label>
-  {:else}
-  <button role="menuitem" onclick={() => act(onNewWorld)}><Icon name="globe" /> New world<span class="sub">seed and settings</span></button>
-  <button role="menuitem" onclick={() => act(onLibrary)}><Icon name="folder" /> Library<span class="sub">saved worlds, open a file</span></button>
-  <button role="menuitem" onclick={() => act(() => download(world, `world-${world.seed}`))}><Icon name="download" /> Download this world</button>
-  {#if playing}<button role="menuitem" onclick={() => act(onPlayers)}><Icon name="monitor" /> Players' window</button>{/if}
-  <hr />
-  <a role="menuitem" href="https://discord.gg/8ZS4nHWWVv" target="_blank" rel="noopener" onclick={onClose}><Icon name="chat" /> Discord community<span class="sub">help, ideas, bugs</span></a>
-  {#if !touchOnly}<button role="menuitem" onclick={() => act(() => (shell.help = true))}><Icon name="keyboard" /> Keyboard shortcuts<kbd class="ws-kbd">?</kbd></button>{/if}
-  <label class="row">
-    <Icon name="activity" /> Performance stats
-    <input type="checkbox" class="ws-switch" checked={shell.stats} onchange={(e) => shell.setStats(e.currentTarget.checked)} />
-  </label>
-  {/if}
 </div>
 
 <style>
@@ -127,10 +113,5 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-3);
-  }
-  hr {
-    border: none;
-    border-top: 1px solid var(--line-faint);
-    margin: 4px 0;
   }
 </style>

@@ -1,4 +1,4 @@
-// Edit grouped by thing (`?ui=new`): every tool once, with its group, name, key, icon and the
+// Edit grouped by thing: every tool once, with its group, name, key, icon and the
 // one line it shows until it has been used, and the tab, mode and part of the panel it opens.
 // It feeds the strip (`EditStrip.svelte`), the keymap's openers and the shortcuts sheet. Which
 // tool is open is worked out from the panels' state (`toolOf`), never kept on its own.
@@ -104,7 +104,7 @@ export function toolOf(s: ToolState): ToolKey {
     case 'design':
       return s.linkOn ? 'stairs' : 'rooms';
   }
-  if (s.buildMode === 'select' || s.buildMode === 'clear') return s.selectPurpose === 'members' ? 'members' : 'select';
+  if (s.buildMode === 'select') return s.selectPurpose === 'members' ? 'members' : 'select';
   if (s.buildMode === 'castle' || s.buildMode === 'wall') return 'works';
   return EDIT_TOOLS.find((t) => t.tab === 'build' && t.mode === s.buildMode)?.key ?? 'draw';
 }

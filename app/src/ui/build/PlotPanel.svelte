@@ -15,7 +15,7 @@
     near: boolean;
     peek?: boolean;
     onZoomIn: () => void;
-    /** `?ui=new`: the plot being changed (its name), opened by Select's Change; its settings are written as they are set. */
+    /** the plot being changed (its name), opened by Select's Change; its settings are written as they are set. */
     editing?: string | null;
     onRemove?: () => void;
     onDone?: () => void;

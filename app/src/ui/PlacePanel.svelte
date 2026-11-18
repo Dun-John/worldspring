@@ -29,7 +29,6 @@
   import { PIN_KINDS } from '../editor/sketcher';
   import Icon from './Icon.svelte';
   import MoreFold from './shell/MoreFold.svelte';
-  import { NEW_UI } from './shell/layout.svelte';
   import type { IconName } from './icons';
 
   interface Props {
@@ -60,7 +59,7 @@
 
   type Group = 'Settlements' | 'Underground' | 'On the surface';
 
-  const STAIR_LOOK = NEW_UI ? 'A stair down into the underground; nothing is built above it' : 'Stairs down, nothing above';
+  const STAIR_LOOK = 'A stair down into the underground; nothing is built above it';
 
   /** The choices: what each makes (`Created` kind, and what lies beneath). */
   const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; tier?: PinTier; group: Group; look: string }[] = [
@@ -171,9 +170,7 @@
         <div class="ws-hint">Village and town are added at once. City and metropolis (↻) remake the world round them.{#if tier && !instant} Port and fishing need a shore, so a village or town cannot have them.{/if}</div>
       {/if}
     {/each}
-    {#if !NEW_UI}
-      <div class="ws-hint">{choice.look}</div>
-    {:else if memory.touched}
+    {#if memory.touched}
       <div class="ws-hint">{choice.look}</div>
     {/if}
     {#snippet economy()}
@@ -233,22 +230,15 @@
             {#each SITE_SIZES as s (s)}<button class:on={size === s} onclick={() => (size = s)}>{label(s)}</button>{/each}
           </div>
         </div>
-        {#if !NEW_UI}{@render levelsRow()}{/if}
       {/if}
     {/snippet}
-    {#if NEW_UI}
-      <!-- (`?ui=new`: the kind and its size show; economy, district names, levels and the name fold.) -->
-      {@render kindOptions()}
-      <MoreFold tool="places">
-        {@render economy()}
-        {#if underKind}{@render levelsRow()}{/if}
-        {@render nameField()}
-      </MoreFold>
-    {:else}
+    <!-- (The kind and its size show; economy, district names, levels and the name fold.) -->
+    {@render kindOptions()}
+    <MoreFold tool="places">
       {@render economy()}
-      {@render kindOptions()}
+      {#if underKind}{@render levelsRow()}{/if}
       {@render nameField()}
-    {/if}
+    </MoreFold>
     {#if tier && instant}
       <div class="towns">
         <Icon name="check" size={16} />
@@ -264,7 +254,7 @@
     {/if}
   {/if}
   </div>
-  <div class="foot" class:newui={NEW_UI}>
+  <div class="foot">
   {#if armed}
     <div class="armed">
       <span class="grow">{note ?? `Click on the map to place the ${choice.label.toLowerCase()}`}</span>
@@ -274,7 +264,7 @@
     <button class="ws-btn block" class:primary={memory.touched} onclick={place} disabled={!memory.touched || (!!tier && !instant && playing)} title={tier && !instant && playing ? 'Stop playing to remake the world' : !memory.touched ? 'Pick a type above first' : undefined}
       ><Icon name="pin" size={16} /> Place {peek ? `a ${choice.label.toLowerCase()}` : 'on map'}</button
     >
-    {#if NEW_UI && !memory.touched}<div class="ws-muted why">Pick a kind above first, then click the map.</div>{/if}
+    {#if !memory.touched}<div class="ws-muted why">Pick a kind above first, then click the map.</div>{/if}
   {/if}
   </div>
 </div>
@@ -335,7 +325,7 @@
     border-top: 1px solid var(--line-faint);
     background: var(--paper-solid);
   }
-  .foot.newui :global(button.block:disabled) {
+  .foot :global(button.block:disabled) {
     opacity: 1;
     color: var(--ink-2);
     border-style: dashed;

@@ -1,12 +1,10 @@
 <script lang="ts">
   // The frame every Build tool's panel shares: what is being changed (Done, Remove), the tool's
-  // strip, "Zoom in" while too far out, the one-line hint, its options (a "More options" fold
-  // when `fold`, open or shut as last left for this tool), and the place / start-over line.
-  // `?ui=new`: every tool's options fold (shut at first) and its hint goes last in the fold, the
-  // strip's one-line hint saying what to do first.
+  // strip, "Zoom in" while too far out, the one-line hint, its options (a "More options" fold, shut at first and as last left for this tool, the hint last in it, the
+  // strip's one-line hint saying what to do first), and the place / start-over line.
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
-  import { NEW_UI, shell } from '../shell/layout.svelte';
+  import { shell } from '../shell/layout.svelte';
   import QuickLine from './QuickLine.svelte';
   import type { QuickInfo } from '../BuildPanel.svelte';
 
@@ -28,13 +26,9 @@
     /** Under the zoom line, folded down too. */
     always?: Snippet;
     hint?: Snippet;
-    /** The hint after the options, not before. */
-    hintAfter?: boolean;
     /** The hint while folded down. */
     peekHint?: Snippet;
     more?: Snippet;
-    /** The options in a "More options" fold (starts open). */
-    fold?: boolean;
     /** A start-over line (`startExtra` before its button). */
     startOver?: boolean;
     startExtra?: Snippet;
@@ -45,15 +39,15 @@
     onPlace?: () => void;
   }
 
-  let { title, near, peek = false, zoomText = 'Zoom in to draw.', onZoomIn, changing, onRemove, onDone, children, always, hint, hintAfter = false, peekHint, more, fold = false, startOver = false, startExtra, onDrop, quick, place, onPlace }: Props = $props();
+  let { title, near, peek = false, zoomText = 'Zoom in to draw.', onZoomIn, changing, onRemove, onDone, children, always, hint, peekHint, more, startOver = false, startExtra, onDrop, quick, place, onPlace }: Props = $props();
 
-  const key = $derived(NEW_UI ? `ws-fold:tool:${shell.toolNow() ?? title}` : `ws-fold:build:${title}`);
+  const key = $derived(`ws-fold:tool:${shell.toolNow() ?? title}`);
   function readOpen(k: string): boolean {
     try {
       const v = localStorage.getItem(k);
-      return NEW_UI ? v === 'open' : v !== 'shut';
+      return v === 'open';
     } catch {
-      return !NEW_UI;
+      return false;
     }
   }
   let open = $derived(readOpen(key));
@@ -84,28 +78,15 @@
 {@render always?.()}
 {#if peek}
   {@render peekHint?.()}
-  <!-- (`?ui=new`: Place stays in reach with the sheet down.) -->
-  {#if NEW_UI && place && quick && onPlace}<QuickLine {quick} action={place} {onPlace} />{/if}
+  <!-- (Place stays in reach with the sheet down.) -->
+  {#if place && quick && onPlace}<QuickLine {quick} action={place} {onPlace} />{/if}
 {:else}
-  {#if NEW_UI}
-    {#if more || hint}
-      <details class="more" {open} ontoggle={toggled}>
-        <summary>More options</summary>
-        {@render more?.()}
-        {@render hint?.()}
-      </details>
-    {/if}
-  {:else}
-    {#if !hintAfter}{@render hint?.()}{/if}
-    {#if more && fold}
-      <details class="more" {open} ontoggle={toggled}>
-        <summary>More options</summary>
-        {@render more()}
-      </details>
-    {:else}
+  {#if more || hint}
+    <details class="more" {open} ontoggle={toggled}>
+      <summary>More options</summary>
       {@render more?.()}
-    {/if}
-    {#if hintAfter}{@render hint?.()}{/if}
+      {@render hint?.()}
+    </details>
   {/if}
   {#if startOver}
     <div class="ws-seg">

@@ -6,7 +6,6 @@
   import { PAINT_BIOMES } from '../world/world';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
-  import { NEW_UI } from '../ui/shell/layout.svelte';
   import { underlay } from './trace/underlay.svelte';
   import { KIND_LABEL, tracer } from './trace/tracer.svelte';
   import { TRACE_KINDS, type TraceKind } from './trace/types';
@@ -194,9 +193,9 @@
 </script>
 
 <div class="sketch">
-  <div class={NEW_UI ? 'ws-strip' : 'tools'} role="toolbar" aria-label="Sketch tools">
+  <div class="ws-strip" role="toolbar" aria-label="Sketch tools">
     {#each TOOLS as [id, icon, label, key] (id)}
-      <button class={NEW_UI ? '' : 'ws-icon-btn'} aria-pressed={settings.tool === id} title="{label} ({key})" aria-label={label} onclick={() => (settings.tool = id)}><Icon name={icon} size={18} /></button>
+      <button aria-pressed={settings.tool === id} title="{label} ({key})" aria-label={label} onclick={() => (settings.tool = id)}><Icon name={icon} size={18} /></button>
     {/each}
   </div>
   {#if !peek}
@@ -417,14 +416,6 @@
     gap: 8px;
     color: var(--ink);
     font: 13px/1.4 var(--font);
-  }
-  .tools {
-    display: grid;
-    grid-template-columns: repeat(8, 1fr);
-    gap: 2px;
-  }
-  .tools .ws-icon-btn {
-    width: auto;
   }
   .what {
     line-height: 1.35;
