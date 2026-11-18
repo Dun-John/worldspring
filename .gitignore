@@ -1,5 +1,5 @@
 /target
-node_modules/
+node_modules
 /app/dist
 /app/src/gen/pkg
 .DS_Store
