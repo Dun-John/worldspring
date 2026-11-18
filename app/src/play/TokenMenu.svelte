@@ -98,7 +98,7 @@
   {#if one}
     {@const t = one}
     <div class="ws-row">
-      <input class="ws-input grow name" value={t.name} oninput={(e) => play.updateToken(t.id, { name: (e.target as HTMLInputElement).value })} onkeydown={key} aria-label="Name" />
+      <input class="ws-input ws-grow name" value={t.name} oninput={(e) => play.updateToken(t.id, { name: (e.target as HTMLInputElement).value })} onkeydown={key} aria-label="Name" />
       {#if t.kind === 'character'}
         <select class="ws-input" value={t.size} onchange={(e) => play.updateToken(t.id, { size: Number((e.target as HTMLSelectElement).value) || 1 })} aria-label="Size">
           {#each SIZES as n (n)}<option value={n}>{sizeLabel(n)}</option>{/each}
@@ -113,10 +113,10 @@
   </div>
   {#if one}
     {@const t = one}
-    <label class="switch"><span class="grow">Hidden <span class="ws-muted">· only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => play.updateToken(t.id, { hidden: checked(e) })} /></label>
+    <label class="ws-switchrow"><span class="ws-grow">Hidden <span class="ws-muted">· only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => play.updateToken(t.id, { hidden: checked(e) })} /></label>
     {#if t.kind === 'character'}
-      <label class="switch"><span class="grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={!!t.vision} onchange={(e) => play.updateToken(t.id, { vision: checked(e) })} /></label>
-      <label class="switch" title="The players' window goes where it is and keeps it in the middle"><span class="grow">Players’ view follows</span><input type="checkbox" class="ws-switch" checked={following === t.id} onchange={(e) => play.setFollowTarget(checked(e) ? t.id : null)} /></label>
+      <label class="ws-switchrow"><span class="ws-grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={!!t.vision} onchange={(e) => play.updateToken(t.id, { vision: checked(e) })} /></label>
+      <label class="ws-switchrow" title="The players' window goes where it is and keeps it in the middle"><span class="ws-grow">Players’ view follows</span><input type="checkbox" class="ws-switch" checked={following === t.id} onchange={(e) => play.setFollowTarget(checked(e) ? t.id : null)} /></label>
       <button class="ws-btn item" role="menuitem" onclick={() => onPicture([t.id])}><Icon name="image" size={16} /> Picture…</button>
     {/if}
     {#if across}
@@ -127,8 +127,8 @@
     <button class="ws-btn item" role="menuitem" onclick={() => hideAll(anyShown)}><Icon name="eye" size={16} /> {anyShown ? 'Hide' : 'Show'}</button>
   {/if}
   <div class="ws-row">
-    <button class="ws-btn grow" role="menuitem" onclick={duplicate} title="Duplicate (Ctrl+D)">Duplicate</button>
-    <button class="ws-btn danger grow" role="menuitem" onclick={remove} title="Remove (Delete)"><Icon name="trash" size={16} /> Remove{one ? '' : ` (${tokens.length})`}</button>
+    <button class="ws-btn ws-grow" role="menuitem" onclick={duplicate} title="Duplicate (Ctrl+D)">Duplicate</button>
+    <button class="ws-btn danger ws-grow" role="menuitem" onclick={remove} title="Remove (Delete)"><Icon name="trash" size={16} /> Remove{one ? '' : ` (${tokens.length})`}</button>
   </div>
 </div>
 
@@ -151,16 +151,6 @@
   .name,
   .count {
     font-weight: bold;
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
-  }
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
   }
   .item {
     justify-content: flex-start;

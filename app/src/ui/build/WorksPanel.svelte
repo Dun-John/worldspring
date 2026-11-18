@@ -70,7 +70,7 @@
   {#snippet more()}
     {#if mode === 'castle'}
       <label class="switch">
-        <span class="grow">Keep<span class="ws-muted"> · the castle’s great tower in the yard</span></span>
+        <span class="ws-grow">Keep<span class="ws-muted"> · the castle’s great tower in the yard</span></span>
         <input type="checkbox" class="ws-switch" bind:checked={works.keep} />
       </label>
       {#if works.keep}
@@ -88,16 +88,16 @@
         {/each}
       </div>
       <label class="switch">
-        <span class="grow">Yard buildings<span class="ws-muted"> · barracks, stables, a smithy along the walls</span></span>
+        <span class="ws-grow">Yard buildings<span class="ws-muted"> · barracks, stables, a smithy along the walls</span></span>
         <input type="checkbox" class="ws-switch" bind:checked={works.yardBuildings} />
       </label>
       <label class="switch">
-        <span class="grow">In ruins<span class="ws-muted"> · broken walls, roofless</span></span>
+        <span class="ws-grow">In ruins<span class="ws-muted"> · broken walls, roofless</span></span>
         <input type="checkbox" class="ws-switch" bind:checked={works.ruin} />
       </label>
     {:else}
       <label class="switch">
-        <span class="grow">Closed ring<span class="ws-muted"> · the last corner joins the first</span></span>
+        <span class="ws-grow">Closed ring<span class="ws-muted"> · the last corner joins the first</span></span>
         <input type="checkbox" class="ws-switch" bind:checked={works.closed} />
       </label>
     {/if}

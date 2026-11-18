@@ -70,10 +70,10 @@
     {/each}
   </div>
   {#if inside}
-    <div class="zoom"><span class="grow">Go back out to shape the ground.</span></div>
+    <div class="zoom"><span class="ws-grow">Go back out to shape the ground.</span></div>
   {:else if !near}
     <div class="zoom">
-      <span class="grow">Zoom in to the battlemap to shape the ground.</span>
+      <span class="ws-grow">Zoom in to the battlemap to shape the ground.</span>
       <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
     </div>
   {/if}
@@ -83,22 +83,22 @@
       <details class="ws-group" open={foldOpen('ground')} ontoggle={(e) => setFold('ground', e.currentTarget.open)}>
         <summary>More options</summary>
         <div class="ws-group-body">
-          <label class="slider">
+          <label class="ws-slider">
             <span>Radius</span><output>{settings.radius} ft</output>
             <input type="range" min="5" max="60" step="2.5" bind:value={settings.radius} />
           </label>
           {#if settings.mode === 'raise' || settings.mode === 'lower'}
-            <label class="slider">
+            <label class="ws-slider">
               <span>Height</span><output>{settings.height} ft{settings.height === 5 ? ' · a tier' : ''}</output>
               <input type="range" min="1" max="20" step="1" bind:value={settings.height} />
             </label>
           {:else}
-            <label class="slider">
+            <label class="ws-slider">
               <span>Strength</span><output>{Math.round(settings.strength * 100)}%</output>
               <input type="range" min="0.1" max="1" step="0.05" bind:value={settings.strength} />
             </label>
           {/if}
-          <label class="slider">
+          <label class="ws-slider">
             <span>Hardness</span><output>{settings.hardness < 0.25 ? 'soft' : settings.hardness > 0.75 ? 'hard' : 'medium'}</output>
             <input type="range" min="0" max="1" step="0.05" bind:value={settings.hardness} />
           </label>
@@ -108,11 +108,11 @@
       <details class="ws-group" open={foldOpen('ground')} ontoggle={(e) => setFold('ground', e.currentTarget.open)}>
         <summary>More options</summary>
         <div class="ws-group-body">
-          <label class="slider">
+          <label class="ws-slider">
             <span>{settings.offset < 0 ? 'Dug below the ground' : 'Above the ground'}</span><output>{signed(settings.offset)}</output>
             <input type="range" min="-40" max="40" step="1" bind:value={settings.offset} />
           </label>
-          <label class="slider">
+          <label class="ws-slider">
             <span>Edge</span><output>{edgeLabel(settings.edge)}</output>
             <input type="range" min="0" max="60" step="5" bind:value={settings.edge} />
           </label>
@@ -123,7 +123,7 @@
       <section class="card" aria-label="Plateau">
         <div class="title">
           <Icon name="plateau" size={16} />
-          <span class="grow"><b>Plateau</b><span class="ws-muted">&nbsp;· {size(selected.plateau)}</span></span>
+          <span class="ws-grow"><b>Plateau</b><span class="ws-muted">&nbsp;· {size(selected.plateau)}</span></span>
         </div>
         <div class="ws-field">
           Level above the sea
@@ -134,7 +134,7 @@
             <button class="ws-icon-btn" onclick={() => level(selected.plateau.level - sea + 5)} title="5 ft higher" aria-label="5 ft higher"><Icon name="plus" size={16} /></button>
           </div>
         </div>
-        <label class="slider">
+        <label class="ws-slider">
           <span>Edge</span><output>{edgeLabel(selected.plateau.edge ?? 0)}</output>
           <input type="range" min="0" max="60" step="5" value={selected.plateau.edge ?? 0} onchange={(e) => edge(Number(e.currentTarget.value))} />
         </label>
@@ -164,10 +164,6 @@
     gap: 8px;
     color: var(--ink);
     font: 13px/1.4 var(--font);
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .title {
     display: flex;
@@ -204,20 +200,5 @@
     gap: 0;
     padding: 4px 1px;
     font-size: 11px;
-  }
-  .slider {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    font-size: 12px;
-  }
-  .slider output {
-    font: 11px var(--mono);
-    color: var(--ink-2);
-  }
-  .slider input {
-    grid-column: 1 / 3;
-    width: 100%;
-    margin: 0;
   }
 </style>

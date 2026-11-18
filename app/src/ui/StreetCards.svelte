@@ -152,7 +152,7 @@
 
 {#if street}
   <section class="card" aria-label="Street">
-    <div class="title"><span class="grow"><b>{CLASS_LABEL[street.class]}</b><span class="ws-muted"> · {ft(street.width)} wide, set back {ft(street.set_l)} and {ft(street.set_r)}{street.bridge ? ', a bridge' : ''}</span></span></div>
+    <div class="title"><span class="ws-grow"><b>{CLASS_LABEL[street.class]}</b><span class="ws-muted"> · {ft(street.width)} wide, set back {ft(street.set_l)} and {ft(street.set_r)}{street.bridge ? ', a bridge' : ''}</span></span></div>
     <div class="ws-seg" role="radiogroup" aria-label="Class">
       {#each CLASSES as c (c)}
         <button class:on={street.class === c} aria-pressed={street.class === c} disabled={busy} onclick={() => street.class !== c && onStreet({ op: 'set_street', street: street.id, class: c }, 'class')}>{CLASS_SHORT[c]}</button>
@@ -168,7 +168,7 @@
       {#each rows as r (r.id)}
         <div class="line">
           <span class="dot" style:background={hex(WARD_COLOURS[r.ward as TownWard] ?? WARD_COLOURS.common)}></span>
-          <span class="grow">{wardName(r.ward)} on the {SIDE_LABEL[r.side] ?? r.side}, {ft(r.depth)} deep</span>
+          <span class="ws-grow">{wardName(r.ward)} on the {SIDE_LABEL[r.side] ?? r.side}, {ft(r.depth)} deep</span>
           <button class="ws-icon-btn" disabled={busy} onclick={() => onStreet({ op: 'remove_row', row: r.id }, 'row')} title="Take this row away" aria-label="Take this row away"><Icon name="trash" size={16} /></button>
         </div>
       {/each}
@@ -191,7 +191,7 @@
   </section>
 {:else if junction}
   <section class="card" aria-label="Junction">
-    <div class="title"><span class="grow"><b>{junction.streets <= 1 ? 'A dead end' : `Where ${junction.streets} streets meet`}</b>{#if junction.square}<span class="ws-muted"> · {SQUARE_LABEL[junction.square as SquareKind] ?? junction.square}</span>{/if}</span></div>
+    <div class="title"><span class="ws-grow"><b>{junction.streets <= 1 ? 'A dead end' : `Where ${junction.streets} streets meet`}</b>{#if junction.square}<span class="ws-muted"> · {SQUARE_LABEL[junction.square as SquareKind] ?? junction.square}</span>{/if}</span></div>
     {#if junction.streets >= 2}
       <label class="ws-field">
         Square
@@ -209,7 +209,7 @@
   <section class="card" aria-label="Block">
     <div class="title">
       <span class="dot" style:background={hex(fillColour(block.fill))}></span>
-      <span class="grow"><b>{fillLabel(block.fill)}</b>{#if block.district}<span class="ws-muted"> · {names[block.district] ?? block.district}</span>{/if}</span>
+      <span class="ws-grow"><b>{fillLabel(block.fill)}</b>{#if block.district}<span class="ws-muted"> · {names[block.district] ?? block.district}</span>{/if}</span>
     </div>
     {#if block.kept}<span class="ws-muted">Its buildings as they were laid out, until its streets or fill change.</span>{/if}
     <div class="ws-seg" role="radiogroup" aria-label="Fill">
@@ -302,7 +302,7 @@
       </select>
       {#if naming}
         <div class="row">
-          <input class="ws-input grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
+          <input class="ws-input ws-grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
           <button class="ws-btn" disabled={busy || !newName.trim()} onclick={makeDistrict}>Make</button>
           <button class="ws-btn" disabled={busy} onclick={() => (naming = false)}>Cancel</button>
         </div>
@@ -313,7 +313,7 @@
   <section class="card" aria-label="Area">
     <div class="title">
       <span class="dot" style:background={hex(OPEN_COLOURS[area.open] ?? WARD_COLOURS.park)}></span>
-      <span class="grow"><b>{OPEN_LABEL[area.open] ?? area.open}</b><span class="ws-muted"> · painted over its block</span></span>
+      <span class="ws-grow"><b>{OPEN_LABEL[area.open] ?? area.open}</b><span class="ws-muted"> · painted over its block</span></span>
     </div>
     <label class="ws-field">
       Kind
@@ -327,7 +327,7 @@
   </section>
 {:else if wall}
   <section class="card" aria-label="Wall">
-    <div class="title"><span class="grow"><b>{wall.name || 'A wall'}</b><span class="ws-muted"> · {wall.closed ? 'closed round' : 'open at its ends'}{wall.spacing ? `, towers ${ft(wall.spacing)} apart` : ''}</span></span></div>
+    <div class="title"><span class="ws-grow"><b>{wall.name || 'A wall'}</b><span class="ws-muted"> · {wall.closed ? 'closed round' : 'open at its ends'}{wall.spacing ? `, towers ${ft(wall.spacing)} apart` : ''}</span></span></div>
     <span class="ws-muted">{#if !wallCrossings && !wall.gates.length}No street crosses it yet, so it has no gate: a gate opens wherever a street crosses it.{:else}Gates open where streets cross it ({wallCrossings}){wall.gates.length ? `, and ${wall.gates.length === 1 ? 'one more' : `${wall.gates.length} more`} put in by hand` : ''}.{/if}</span>
     <span class="ws-muted">Click the wall to add a gate there; click a gate to take it away. Gates also open wherever a street crosses it.</span>
     <div class="nums">
@@ -340,12 +340,7 @@
   </section>
 {/if}
 
-<style>
-  .grow {
-    flex: 1;
-    min-width: 0;
-  }
-  .title,
+<style>  .title,
   .line {
     display: flex;
     align-items: center;

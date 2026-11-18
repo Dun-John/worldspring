@@ -7,7 +7,7 @@
 </script>
 
 <div class="quick stack" class:bad={quick.bad}>
-  <span class="grow">{quick.text || (!quick.can ? 'Click the map to choose a spot first.' : '')}</span>
+  <span class="ws-grow">{quick.text || (!quick.can ? 'Click the map to choose a spot first.' : '')}</span>
   <button class="ws-btn primary" class:block={true} onclick={onPlace} disabled={!quick.can}>{action}</button>
 </div>
 

@@ -63,7 +63,7 @@
 
 {#if changing}
   <div class="editing">
-    <span class="grow">{@render changing()}</span>
+    <span class="ws-grow">{@render changing()}</span>
     {#if onRemove}<button class="ws-btn" onclick={onRemove} title="Take it away"><Icon name="trash" size={16} /> Remove</button>{/if}
     <button class="ws-btn" onclick={onDone}>Done</button>
   </div>
@@ -71,7 +71,7 @@
 {@render children?.()}
 {#if !near}
   <div class="zoom">
-    <span class="grow">{zoomText}</span>
+    <span class="ws-grow">{zoomText}</span>
     <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
   </div>
 {/if}

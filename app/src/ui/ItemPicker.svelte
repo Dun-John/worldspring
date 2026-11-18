@@ -170,7 +170,7 @@
 
 <div class="picker">
   <div class="top">
-    <input class="ws-input grow" type="search" placeholder="Find…" bind:value={find} onkeydown={keydown} aria-label="Find by name or group (Enter takes the first)" />
+    <input class="ws-input ws-grow" type="search" placeholder="Find…" bind:value={find} onkeydown={keydown} aria-label="Find by name or group (Enter takes the first)" />
     <div class="ws-seg" role="radiogroup" aria-label="Show as">
       <button class:on={view === 'pictures'} aria-pressed={view === 'pictures'} title="Pictures in groups" aria-label="Pictures" onclick={() => setView('pictures')}><Icon name="grid" size={16} /></button>
       <button class:on={view === 'az'} aria-pressed={view === 'az'} title="One list, A–Z" aria-label="A to Z" onclick={() => setView('az')}><Icon name="list" size={16} /></button>
@@ -256,10 +256,6 @@
     display: flex;
     gap: 4px;
     align-items: center;
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .chips {
     display: flex;

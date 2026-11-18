@@ -44,7 +44,7 @@
   {/snippet}
   {#snippet more()}
     <label class="switch">
-      <span class="grow">Clear the way<span class="ws-muted"> · the town’s own buildings under it go</span></span>
+      <span class="ws-grow">Clear the way<span class="ws-muted"> · the town’s own buildings under it go</span></span>
       <input type="checkbox" class="ws-switch" bind:checked={stamp.clear} />
     </label>
     <BuildingOptions bind:settings {funcs} {editing} {onSave} part="rest" floors="rest" />

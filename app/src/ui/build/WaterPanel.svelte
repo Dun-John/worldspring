@@ -45,7 +45,7 @@
     </div>
   {/if}
   {#if waterLine}
-    <label class="slider">
+    <label class="ws-slider">
       <span>Width</span><output>{waterWidth} ft</output>
       <input
         type="range"
@@ -60,7 +60,7 @@
       />
     </label>
   {/if}
-  <label class="slider">
+  <label class="ws-slider">
     <span>Depth</span><output>{waterDepth} ft</output>
     <input
       type="range"

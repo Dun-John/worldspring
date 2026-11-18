@@ -35,7 +35,7 @@
     {/each}
   </div>
   {#snippet more()}
-    <label class="slider">
+    <label class="ws-slider">
       <span>Width</span><output>{roadW} ft</output>
       <input
         type="range"

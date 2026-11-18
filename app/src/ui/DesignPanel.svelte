@@ -247,7 +247,7 @@
       </div>
     {/if}
     {#if settings.mode === 'room' || settings.mode === 'rect' || settings.mode === 'corridor' || settings.mode === 'stairs' || settings.mode === 'wall'}
-      <label class="switch"><span class="grow">Add doors where a room would be shut off</span><input type="checkbox" class="ws-switch" bind:checked={settings.autoDoors} /></label>
+      <label class="switch"><span class="ws-grow">Add doors where a room would be shut off</span><input type="checkbox" class="ws-switch" bind:checked={settings.autoDoors} /></label>
     {/if}
     {#if settings.mode === 'door'}
       <div class="ws-field">
@@ -293,20 +293,20 @@
       <section class="card">
         <div class="ws-label">Room chosen</div>
         <div class="ws-row">
-          <label class="ws-field grow">
+          <label class="ws-field ws-grow">
             Kind
             <select class="ws-input" value={room.kind} onchange={(e) => designer.setRoom(ri, { kind: e.currentTarget.value })}>
               {#if !(catalog?.rooms ?? []).includes(room.kind)}<option value={room.kind}>{cap(room.kind)}</option>{/if}
               {#each [...own, ...others] as k (k)}<option value={k}>{cap(k)}</option>{/each}
             </select>
           </label>
-          <label class="ws-field grow">
+          <label class="ws-field ws-grow">
             Name
             <input class="ws-input" value={renames[roomId] ?? ''} placeholder={cap(room.kind)} onchange={(e) => onRename(roomId, e.currentTarget.value.trim())} />
           </label>
         </div>
         <div class="ws-row">
-          <label class="ws-field grow">
+          <label class="ws-field ws-grow">
             Shape
             <select class="ws-input" value={isApse(room.shape) ? APSE_N : (room.shape ?? 0)} onchange={(e) => {
                 // (Shown as the room is until the change is taken: a refused one leaves it so.)
@@ -327,7 +327,7 @@
             </div>
           </div>
           <label class="switch">
-            <span class="grow">The boss chamber</span>
+            <span class="ws-grow">The boss chamber</span>
             <input type="checkbox" class="ws-switch" checked={room.kind === BOSS} onchange={(e) => designer.setRoom(ri, { kind: e.currentTarget.checked ? BOSS : (own.find((k) => k !== BOSS && k !== theme?.passage) ?? 'chamber') })} />
           </label>
         {/if}
@@ -341,7 +341,7 @@
 
     <details class="ws-group" open={remembered('design.site', !!blocking)} ontoggle={(e) => remember('design.site', e.currentTarget.open)}>
       <summary>
-        <span class="grow">{building ? 'Building' : 'Site'}</span>
+        <span class="ws-grow">{building ? 'Building' : 'Site'}</span>
         {#if problems.length}<span class="badge" class:blocking={blocking > 0}>{problems.length} {problems.length === 1 ? 'problem' : 'problems'}</span>{:else}<span class="ok">keeps every rule</span>{/if}
       </summary>
       <div class="ws-group-body">
@@ -379,7 +379,7 @@
     <button class="ws-icon-btn" onclick={() => designer.undo()} disabled={!now.canUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Icon name="undo" /></button>
     <button class="ws-icon-btn" onclick={() => designer.redo()} disabled={!now.canRedo} title="Redo (Ctrl+Y)" aria-label="Redo"><Icon name="redo" /></button>
     {#if saved && !peek}<button class="ws-btn quiet" class:danger={sure === 'reset'} onclick={() => twice('reset', onReset)} title={building ? 'Drop the design: the inside as generated' : 'Drop the design: the site as generated'}>{sure === 'reset' ? 'Drop the design?' : 'As generated'}</button>{/if}
-    <span class="grow"></span>
+    <span class="ws-grow"></span>
     <button class="ws-btn primary" onclick={onSave} disabled={!now.dirty || blocking > 0} title={saveWhy}>{blocking ? `Save (${blocking} to fix)` : 'Save'}</button>
   </div>
 </div>
@@ -394,10 +394,6 @@
   }
   .site {
     font-size: 14px;
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .wrap {
     flex-wrap: wrap;

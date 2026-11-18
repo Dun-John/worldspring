@@ -202,21 +202,21 @@
     <div class="what"><b>{tool[2]}</b> <span class="ws-hint">{tool[4]}</span></div>
 
     {#if settings.tool === 'elevation'}
-      <label class="slider">
+      <label class="ws-slider">
         <span>Raise by</span>
         <output>{feet(settings.delta)}</output>
         <input type="range" min="-3000" max="5000" step="100" bind:value={settings.delta} />
       </label>
     {/if}
     {#if brushKey && !(settings.tool === 'biome' && settings.fill)}
-      <label class="slider">
+      <label class="ws-slider">
         <span>{brushLabel}</span>
         <output>{settings.radiusMi[brushKey]} mi</output>
         <input type="range" min={settings.tool === 'river' ? 1 : 2} max={settings.tool === 'river' ? 8 : settings.tool === 'massif' || settings.tool === 'elevation' ? 40 : 80} step="1" bind:value={settings.radiusMi[brushKey]} />
       </label>
     {/if}
     {#if hasStrength}
-      <label class="slider">
+      <label class="ws-slider">
         <span>{settings.tool === 'river' || settings.tool === 'volcano' ? 'Size' : 'Height'}</span>
         <output>{strength}</output>
         <input type="range" min="0.1" max="1" step="0.05" bind:value={settings.strength} />
@@ -244,7 +244,7 @@
           <input class="ws-input" type="number" step="50" bind:value={settings.level} />
         </label>
       {/if}
-      <label class="switch"><span class="grow">Salt lake (no outflow)</span><input type="checkbox" class="ws-switch" bind:checked={settings.salt} /></label>
+      <label class="ws-switchrow"><span class="grow">Salt lake (no outflow)</span><input type="checkbox" class="ws-switch" bind:checked={settings.salt} /></label>
     {/if}
     {#if settings.tool === 'biome'}
       <label class="ws-field">
@@ -277,7 +277,7 @@
           {#each PIN_KINDS as [k, label] (k)}<option value={k}>{label}</option>{/each}
         </select>
       </label>
-      <label class="switch"><span class="grow">The realm's capital</span><input type="checkbox" class="ws-switch" bind:checked={settings.capital} /></label>
+      <label class="ws-switchrow"><span class="grow">The realm's capital</span><input type="checkbox" class="ws-switch" bind:checked={settings.capital} /></label>
       <input class="ws-input" placeholder="District names, central first (optional)" bind:value={settings.wards} aria-label="District names, separated by commas" />
     {/if}
     {#if settings.tool === 'site'}
@@ -350,7 +350,7 @@
         {#if !underlay.image}
           <div class="ws-muted">Or drop a picture on the map. It lies under the sketch to trace from, for this session only: it is never saved or shared.</div>
         {:else}
-          <label class="slider"><span>Opacity</span><output>{Math.round(underlay.opacity * 100)}%</output><input type="range" min="0.05" max="1" step="0.05" bind:value={underlay.opacity} /></label>
+          <label class="ws-slider"><span>Opacity</span><output>{Math.round(underlay.opacity * 100)}%</output><input type="range" min="0.05" max="1" step="0.05" bind:value={underlay.opacity} /></label>
           <div class="ws-row">
             <button class="ws-btn" onclick={() => underlay.fit()}>Fit to map</button>
             <button class="ws-btn" aria-pressed={underlay.adjust} class:primary={underlay.adjust} onclick={() => ((underlay.adjust = !underlay.adjust), underlay.adjust && (tracer.picking = null))} title="Drag the picture to move it; a corner to scale; the round handle to turn (Esc leaves)">Adjust</button>
@@ -380,9 +380,9 @@
                   {#if k === 'forest'}
                     <label class="ws-field">Biome<select class="ws-input" bind:value={tracer.biome} onchange={() => tracer.version++}>{#each FOREST_BIOMES as [id, label] (id)}<option value={id}>{label}</option>{/each}</select></label>
                   {/if}
-                  <label class="slider"><span>Tolerance</span><output>{Math.round(tracer.params[k].threshold * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].threshold} /></label>
-                  <label class="slider"><span>Smoothing</span><output>{Math.round(tracer.params[k].smooth * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].smooth} /></label>
-                  <label class="slider"><span>Minimum size</span><output>{tracer.params[k].minSize}</output><input type="range" min="0" max="1" step="0.005" value={sizeToSlider(tracer.params[k].minSize)} oninput={(e) => (tracer.params[k].minSize = sliderToSize(e.currentTarget.valueAsNumber))} /></label>
+                  <label class="ws-slider"><span>Tolerance</span><output>{Math.round(tracer.params[k].threshold * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].threshold} /></label>
+                  <label class="ws-slider"><span>Smoothing</span><output>{Math.round(tracer.params[k].smooth * 100)}%</output><input type="range" min="0" max="1" step="0.01" bind:value={tracer.params[k].smooth} /></label>
+                  <label class="ws-slider"><span>Minimum size</span><output>{tracer.params[k].minSize}</output><input type="range" min="0" max="1" step="0.005" value={sizeToSlider(tracer.params[k].minSize)} oninput={(e) => (tracer.params[k].minSize = sliderToSize(e.currentTarget.valueAsNumber))} /></label>
                   <button class="ws-btn" onclick={() => tracer.reset(k)}>Reset these</button>
                 </div>
               </details>
@@ -420,21 +420,6 @@
   .what {
     line-height: 1.35;
   }
-  .slider {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    font-size: 12px;
-  }
-  .slider output {
-    font: 11px var(--mono);
-    color: var(--ink-2);
-  }
-  .slider input {
-    grid-column: 1 / 3;
-    width: 100%;
-    margin: 0;
-  }
   .bar {
     border-top: 1px solid var(--line-faint);
     padding-top: 6px;
@@ -461,12 +446,6 @@
   .foot {
     display: flex;
     gap: 6px;
-  }
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
   }
   .nums {
     display: grid;

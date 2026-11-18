@@ -136,7 +136,7 @@
   {#if added && !armed}
     <div class="towns added">
       <Icon name="check" size={16} />
-      <span class="grow">{added}</span>
+      <span class="ws-grow">{added}</span>
       {#if onTakeBack}<button class="ws-btn quiet" onclick={onTakeBack} disabled={playing} title={playing ? 'Stop playing to remake the world' : 'Make the world again without it'}>Take back</button>{/if}
       <button class="ws-btn" onclick={place} title="Place another {choice.label.toLowerCase()}">Place another</button>
       {#if onDone}<button class="ws-btn quiet" onclick={onDone}>Done</button>{/if}
@@ -188,7 +188,7 @@
     {/snippet}
     {#snippet levelsRow()}
       <div class="ws-row">
-        <div class="ws-field grow">
+        <div class="ws-field ws-grow">
           Levels
           <div class="stepper">
             <button class="ws-icon-btn" onclick={() => (levels = Math.max(0, levels - 1))} disabled={levels === 0} aria-label="Fewer levels"><Icon name="minus" size={16} /></button>
@@ -197,7 +197,7 @@
           </div>
         </div>
         {#if themes.length > 1}
-          <label class="ws-field grow">
+          <label class="ws-field ws-grow">
             Theme
             <select class="ws-input" bind:value={theme}>
               <option value="">Any</option>
@@ -242,13 +242,13 @@
     {#if tier && instant}
       <div class="towns">
         <Icon name="check" size={16} />
-        <span class="grow">Added at once: nothing else moves.{onTowns ? ' Several at once: World › Sketch.' : ''}</span>
+        <span class="ws-grow">Added at once: nothing else moves.{onTowns ? ' Several at once: World › Sketch.' : ''}</span>
         {#if onTowns}<button class="ws-btn" onclick={onTowns}>Sketch</button>{/if}
       </div>
     {:else if tier}
       <div class="towns">
         <Icon name="reset" size={16} />
-        <span class="grow">{playing ? 'Stop playing to remake the world.' : `${remakes}: towns and roads near it may move.`}{onTowns ? ' Several at once: World › Sketch.' : ''}</span>
+        <span class="ws-grow">{playing ? 'Stop playing to remake the world.' : `${remakes}: towns and roads near it may move.`}{onTowns ? ' Several at once: World › Sketch.' : ''}</span>
         {#if onTowns}<button class="ws-btn" onclick={onTowns}>Sketch</button>{/if}
       </div>
     {/if}
@@ -257,7 +257,7 @@
   <div class="foot">
   {#if armed}
     <div class="armed">
-      <span class="grow">{note ?? `Click on the map to place the ${choice.label.toLowerCase()}`}</span>
+      <span class="ws-grow">{note ?? `Click on the map to place the ${choice.label.toLowerCase()}`}</span>
       <button class="ws-btn" onclick={() => ((memory.touched = false), onCancel())}>Cancel</button>
     </div>
   {:else}
@@ -333,10 +333,6 @@
   .why {
     padding-top: 4px;
     text-align: center;
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .stepper {
     display: flex;

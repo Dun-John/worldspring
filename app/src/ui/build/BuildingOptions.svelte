@@ -94,7 +94,7 @@
   </div>
 </div>
 <label class="switch">
-  <span class="grow">In ruins<span class="ws-muted"> · no roof, no way in</span></span>
+  <span class="ws-grow">In ruins<span class="ws-muted"> · no roof, no way in</span></span>
   <input type="checkbox" class="ws-switch" bind:checked={settings.ruin} />
 </label>
 <label class="ws-field">

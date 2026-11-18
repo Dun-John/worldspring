@@ -222,7 +222,7 @@
     {@const id = current}
     <div class="ws-row top">
       <button class="ws-btn quiet back" onclick={() => (current = null)}><Icon name="chevron-left" size={16} /> NPCs</button>
-      <span class="grow"></span>
+      <span class="ws-grow"></span>
       {#if npc.location}<button class="ws-btn" onclick={() => onGo(id)} title="Go to where they are"><Icon name="target" size={16} /> Go to</button>{/if}
       <div class="more-wrap">
         <button class="ws-icon-btn" onclick={() => ((more = !more), (confirmDelete = false))} aria-label="More" aria-expanded={more}><Icon name="more" /></button>
@@ -240,13 +240,13 @@
         {#if npc.portrait && pictures[npc.portrait]}<img src={pictures[npc.portrait]} alt="" />{:else}<Icon name="user" size={30} />{/if}
         <input type="file" accept="image/*" onchange={portrait} hidden />
       </label>
-      <div class="grow col">
+      <div class="ws-grow col">
         <input class="ws-input title" value={npc.name} onchange={(e) => setNpc({ name: val(e).trim() || npc.name })} aria-label="Name" />
         <div class="ws-row">
           <select class="ws-input stance" value={npc.attitude.stance} onchange={(e) => setNpc({ attitude: { ...npc.attitude, stance: val(e) as Stance } })} aria-label="Attitude toward the players" style:color={STANCE_COLOR[npc.attitude.stance]}>
             {#each STANCES as s (s)}<option value={s}>{s}</option>{/each}
           </select>
-          <input class="ws-input grow" placeholder="Status (alive, missing…)" value={npc.status ?? ''} onchange={(e) => setNpc({ status: val(e).trim() || undefined })} aria-label="Status" />
+          <input class="ws-input ws-grow" placeholder="Status (alive, missing…)" value={npc.status ?? ''} onchange={(e) => setNpc({ status: val(e).trim() || undefined })} aria-label="Status" />
         </div>
       </div>
     </div>
@@ -275,7 +275,7 @@
   {:else if plot && current}
     <div class="ws-row top">
       <button class="ws-btn quiet back" onclick={() => (current = null)}><Icon name="chevron-left" size={16} /> Plots</button>
-      <span class="grow"></span>
+      <span class="ws-grow"></span>
       <button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} onclick={remove}><Icon name="trash" size={16} /> {confirmDelete ? 'Delete for good?' : 'Delete'}</button>
     </div>
     <input class="ws-input title" value={plot.title} onchange={(e) => setPlot({ title: val(e).trim() || plot.title })} aria-label="Title" />
@@ -319,7 +319,7 @@
     <label class="ws-field">Tags<input class="ws-input" value={plot.tags.join(', ')} onchange={(e) => setPlot({ tags: tagList(val(e)) })} placeholder="comma, separated" /></label>
   {:else}
     <div class="ws-row">
-      <input class="ws-input grow" type="search" placeholder={tab === 'npcs' ? 'Find NPCs…' : 'Find plots…'} bind:value={q} aria-label="Search the notebook" />
+      <input class="ws-input ws-grow" type="search" placeholder={tab === 'npcs' ? 'Find NPCs…' : 'Find plots…'} bind:value={q} aria-label="Search the notebook" />
       <button class="ws-btn primary" onclick={create}><Icon name="plus" size={16} /> {tab === 'npcs' ? 'NPC' : 'Plot'}</button>
     </div>
     <div class="chips">
@@ -375,10 +375,6 @@
     gap: 8px;
     color: var(--ink);
     font: 13px/1.4 var(--font);
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .col {
     display: flex;

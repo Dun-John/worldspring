@@ -151,7 +151,7 @@
       <section>
         <div class="ws-label">New token</div>
         <div class="ws-row">
-          <input class="ws-input grow" value={v.draft.name} oninput={(e) => setDraft({ name: (e.target as HTMLInputElement).value })} aria-label="New token's name" />
+          <input class="ws-input ws-grow" value={v.draft.name} oninput={(e) => setDraft({ name: (e.target as HTMLInputElement).value })} aria-label="New token's name" />
           {#if v.draft.kind === 'character'}
             <select class="ws-input" value={v.draft.size} onchange={(e) => setDraft({ size: value(e) })} aria-label="Size">
               {#each SIZES as n (n)}<option value={n}>{sizeLabel(n)}</option>{/each}
@@ -176,7 +176,7 @@
           {#each SHAPES as [s, label] (s)}<button class:on={v.shapeKind === s} onclick={() => setShape(s, null)}>{label}</button>{/each}
         </div>
         <div class="ws-row">
-          <div class="swatches grow">
+          <div class="swatches ws-grow">
             {#each SHAPE_COLORS as c (c)}
               <button class="sw" class:on={v.shapeColor === c} style:background={hex(c)} aria-label="Colour" onclick={() => setShape(null, c)}></button>
             {/each}
@@ -193,11 +193,11 @@
           {#if v.inside}<button class:on={v.fogRooms} onclick={() => setFog({ rooms: !v.fogRooms })} title="Click a room to reveal or hide all of it">Whole rooms</button>{/if}
         </div>
         {#if !(v.inside && v.fogRooms)}
-          <label class="slider"><span>Brush</span><output>{formatDistance(v.fogRadius, v.grid)}</output><input type="range" min="1" max="12" value={v.fogRadius} oninput={(e) => setFog({ radius: value(e) })} /></label>
+          <label class="ws-slider"><span>Brush</span><output>{formatDistance(v.fogRadius, v.grid)}</output><input type="range" min="1" max="12" value={v.fogRadius} oninput={(e) => setFog({ radius: value(e) })} /></label>
         {/if}
         <div class="ws-row">
-          {#if v.inside}<button class="ws-btn grow" onclick={() => play.fogAll(true)}>Reveal all</button>{/if}
-          <button class="ws-btn grow" onclick={() => play.fogAll(false)} title="Hide everything here again, including what the characters have seen">Hide all</button>
+          {#if v.inside}<button class="ws-btn ws-grow" onclick={() => play.fogAll(true)}>Reveal all</button>{/if}
+          <button class="ws-btn ws-grow" onclick={() => play.fogAll(false)} title="Hide everything here again, including what the characters have seen">Hide all</button>
         </div>
         {#if !v.settings.fog}<div class="ws-hint warn">Fog is off here: the players see everything.</div>{/if}
         <div class="ws-hint">Shift-drag does the opposite.</div>
@@ -209,8 +209,8 @@
           <button class:on={!v.hexReveal} onclick={() => ((play.hexReveal = false), play.onChange())}>Hide</button>
         </div>
         <div class="ws-row">
-          <button class="ws-btn grow" onclick={() => play.hexAll(true)} disabled={v.hexAll && !v.hexSeen}>Reveal all</button>
-          <button class="ws-btn grow" onclick={() => play.hexAll(false)} disabled={!v.hexAll && !v.hexSeen}>Hide all</button>
+          <button class="ws-btn ws-grow" onclick={() => play.hexAll(true)} disabled={v.hexAll && !v.hexSeen}>Reveal all</button>
+          <button class="ws-btn ws-grow" onclick={() => play.hexAll(false)} disabled={!v.hexAll && !v.hexSeen}>Hide all</button>
         </div>
         {#if v.inside}<div class="ws-hint warn">Hexes are explored on the surface map.</div>{/if}
         {#if v.hexMode !== 'crawl'}<div class="ws-hint warn">The players see every hex: set Hexes for players to Crawl.</div>{/if}
@@ -223,7 +223,7 @@
     {#if v.count > 1}
       <section class="card">
         <div class="ws-row">
-          <b class="grow">{v.count} tokens selected</b>
+          <b class="ws-grow">{v.count} tokens selected</b>
           <button class="ws-btn" onclick={() => play.select(null)}>Deselect</button>
           <button class="ws-btn danger" onclick={() => play.removeSelected()}>Remove</button>
         </div>
@@ -234,7 +234,7 @@
       <section class="card">
         <div class="ws-label">Selected</div>
         <div class="ws-row">
-          <input class="ws-input grow name" value={t.name} oninput={(e) => patch(t, { name: (e.target as HTMLInputElement).value })} aria-label="Name" />
+          <input class="ws-input ws-grow name" value={t.name} oninput={(e) => patch(t, { name: (e.target as HTMLInputElement).value })} aria-label="Name" />
           {#if t.kind === 'character'}
             <select class="ws-input" value={t.size} onchange={(e) => patch(t, { size: value(e) })} aria-label="Size">
               {#each SIZES as n (n)}<option value={n}>{sizeLabel(n)}</option>{/each}
@@ -244,10 +244,10 @@
         <div class="ws-seg tight">
           {#each ROLES as [k, label] (k)}<button class:on={(t.kind === 'light' ? 'light' : roleOf(t)) === k} onclick={() => setRole(t, k)}>{label}</button>{/each}
         </div>
-        <label class="switch"><span class="grow">Hidden<span class="ws-muted"> · only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => patch(t, { hidden: checked(e) })} /></label>
+        <label class="ws-switchrow"><span class="ws-grow">Hidden<span class="ws-muted"> · only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => patch(t, { hidden: checked(e) })} /></label>
         {#if t.kind === 'character'}
-          <label class="switch"><span class="grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={!!t.vision} onchange={(e) => patch(t, { vision: checked(e) })} /></label>
-          <label class="switch" title="The players' window goes where it is and keeps it in the middle"><span class="grow">Players’ view follows</span><input type="checkbox" class="ws-switch" checked={v.target === t.id} onchange={(e) => play.setFollowTarget(checked(e) ? t.id : null)} /></label>
+          <label class="ws-switchrow"><span class="ws-grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={!!t.vision} onchange={(e) => patch(t, { vision: checked(e) })} /></label>
+          <label class="ws-switchrow" title="The players' window goes where it is and keeps it in the middle"><span class="ws-grow">Players’ view follows</span><input type="checkbox" class="ws-switch" checked={v.target === t.id} onchange={(e) => play.setFollowTarget(checked(e) ? t.id : null)} /></label>
           <div class="swatches">
             {#each TOKEN_COLORS as c (c)}
               <button class="sw" class:on={t.color === c} style:background={hex(c)} aria-label="Colour" onclick={() => patch(t, { color: c })}></button>
@@ -255,12 +255,12 @@
           </div>
         {/if}
         <div class="ws-row">
-          <label class="ws-field grow" title="How far its light reaches (lights the dark)">
+          <label class="ws-field ws-grow" title="How far its light reaches (lights the dark)">
             Light ({v.grid.unit})
             <input class="ws-input" type="number" min="0" step={v.grid.scale} value={Math.round((t.light ?? 0) * v.grid.scale * 10) / 10} onchange={(e) => patch(t, { light: value(e) / v.grid.scale || undefined })} />
           </label>
           {#if v.levels.length > 1}
-            <label class="ws-field grow" title="Move it to another floor of this building">
+            <label class="ws-field ws-grow" title="Move it to another floor of this building">
               Floor
               <select class="ws-input" value={Number(t.loc.slice(t.loc.lastIndexOf('@') + 1))} onchange={(e) => play.tokenToLevel(t.id, value(e))}>
                 {#each v.levels as l (l.i)}<option value={l.i}>{l.name}</option>{/each}
@@ -276,7 +276,7 @@
             <button class="ws-btn" onclick={() => play.onPickPicture([t.id])}><Icon name="image" size={16} /> Picture…</button>
             {#if t.image}<button class="ws-btn quiet" onclick={() => void play.setTokenImage(t.id, null)}>No picture</button>{/if}
           {/if}
-          <span class="grow"></span>
+          <span class="ws-grow"></span>
           <button class="ws-btn danger" onclick={() => play.removeToken(t.id)}><Icon name="trash" size={16} /> Remove</button>
         </div>
       </section>
@@ -285,7 +285,7 @@
     <section>
       <div class="ws-label">Players</div>
       <div class="ws-row">
-        <button class="ws-btn grow" onclick={() => play.openPlayerWindow()}><Icon name="monitor" size={16} /> {v.players ? 'Players’ window ✓' : 'Players’ window'}</button>
+        <button class="ws-btn ws-grow" onclick={() => play.openPlayerWindow()}><Icon name="monitor" size={16} /> {v.players ? 'Players’ window ✓' : 'Players’ window'}</button>
         <button class="ws-btn" onclick={() => play.sendCamera(true)} title="Bring the players' view to yours">Show my view</button>
       </div>
       <div class="ws-seg tight" role="radiogroup" aria-label="The players' view">
@@ -297,7 +297,7 @@
       <div class="ws-hint">Follow me: their view goes where you look. Follow party: it keeps the party in view. Locked: they can't move it.</div>
       {#if v.following !== null}
         <div class="ws-row following">
-          <Icon name="eye" size={16} /><span class="grow">Following <b>{v.following || 'a token'}</b></span>
+          <Icon name="eye" size={16} /><span class="ws-grow">Following <b>{v.following || 'a token'}</b></span>
           <button class="ws-btn quiet" onclick={() => play.setFollowTarget(null)} title="Their view follows yours again">Stop</button>
         </div>
       {/if}
@@ -309,16 +309,16 @@
         {#each HEX_MODES as [m, label, title] (m)}<button class:on={v.hexMode === m} {title} onclick={() => play.setHexMode(m)}>{label}</button>{/each}
       </div>
       {#if v.hexMode === 'crawl'}
-        <label class="switch"><Icon name="hex" size={16} /><span class="grow">Party reveals the ring of six<span class="sub">A PC entering a hex explores the hexes round it too</span></span><input type="checkbox" class="ws-switch" checked={v.hexRing} onchange={(e) => play.setHexRing(checked(e))} /></label>
+        <label class="ws-switchrow"><Icon name="hex" size={16} /><span class="ws-grow">Party reveals the ring of six<span class="sub">A PC entering a hex explores the hexes round it too</span></span><input type="checkbox" class="ws-switch" checked={v.hexRing} onchange={(e) => play.setHexRing(checked(e))} /></label>
         <div class="ws-hint">{v.hexAll ? (v.hexSeen ? `Every hex explored but ${v.hexSeen} hidden again.` : 'Every hex explored.') : `${v.hexSeen} ${v.hexSeen === 1 ? 'hex' : 'hexes'} explored.`} PCs moving on the map explore the hex they enter; the Hexes tool reveals or hides more.</div>
       {/if}
     </section>
 
     <section>
       <div class="ws-label">This location</div>
-      <label class="switch"><Icon name="cloud" size={16} /><span class="grow">Fog of war<span class="sub">Players see only what is revealed or seen here</span></span><input type="checkbox" class="ws-switch" checked={v.settings.fog} onchange={(e) => play.setSettingsHere({ fog: checked(e) })} /></label>
-      <label class="switch"><Icon name="moon" size={16} /><span class="grow">Dark<span class="sub">Characters see only what light reaches</span></span><input type="checkbox" class="ws-switch" checked={v.settings.dark} onchange={(e) => play.setSettingsHere({ dark: checked(e) })} /></label>
-      <label class="switch"><Icon name="eye" size={16} /><span class="grow">Line of sight<span class="sub">Players see what their tokens see (everywhere)</span></span><input type="checkbox" class="ws-switch" checked={v.los} onchange={(e) => play.dispatch({ t: 'settings', los: checked(e) })} /></label>
+      <label class="ws-switchrow"><Icon name="cloud" size={16} /><span class="ws-grow">Fog of war<span class="sub">Players see only what is revealed or seen here</span></span><input type="checkbox" class="ws-switch" checked={v.settings.fog} onchange={(e) => play.setSettingsHere({ fog: checked(e) })} /></label>
+      <label class="ws-switchrow"><Icon name="moon" size={16} /><span class="ws-grow">Dark<span class="sub">Characters see only what light reaches</span></span><input type="checkbox" class="ws-switch" checked={v.settings.dark} onchange={(e) => play.setSettingsHere({ dark: checked(e) })} /></label>
+      <label class="ws-switchrow"><Icon name="eye" size={16} /><span class="ws-grow">Line of sight<span class="sub">Players see what their tokens see (everywhere)</span></span><input type="checkbox" class="ws-switch" checked={v.los} onchange={(e) => play.dispatch({ t: 'settings', los: checked(e) })} /></label>
     </section>
 
     <details class="ws-group" open={remembered('play.table', false)} ontoggle={(e) => remember('play.table', e.currentTarget.open)}>
@@ -327,7 +327,7 @@
         <div class="ws-row">
           <label class="ws-field">1 square =<input class="ws-input num" type="number" min="0.1" step="0.5" value={v.grid.scale} onchange={(e) => value(e) > 0 && play.setGrid({ scale: value(e) })} /></label>
           <label class="ws-field">Unit<input class="ws-input num" value={v.grid.unit} onchange={(e) => play.setGrid({ unit: (e.target as HTMLInputElement).value.trim() })} /></label>
-          <label class="ws-field grow">Diagonals
+          <label class="ws-field ws-grow">Diagonals
             <select class="ws-input" value={v.grid.measure} onchange={(e) => play.setGrid({ measure: (e.target as HTMLSelectElement).value as Measure })}>
               {#each MEASURES as [m, label] (m)}<option value={m}>{label}</option>{/each}
             </select>
@@ -364,10 +364,6 @@
     color: var(--ink);
     font: 13px/1.4 var(--font);
   }
-  .grow {
-    flex: 1;
-    min-width: 0;
-  }
   .where {
     font-size: 12px;
     color: var(--ink-2);
@@ -400,13 +396,7 @@
   .name {
     font-weight: bold;
   }
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-  }
-  .switch .sub {
+  .ws-switchrow .sub {
     display: block;
     font-size: 11px;
     color: var(--ink-3);
@@ -428,21 +418,6 @@
   }
   .sw.on {
     box-shadow: 0 0 0 2px #38bdf8;
-  }
-  .slider {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    font-size: 12px;
-  }
-  .slider output {
-    font: 11px var(--mono);
-    color: var(--ink-2);
-  }
-  .slider input {
-    grid-column: 1 / 3;
-    width: 100%;
-    margin: 0;
   }
   .num {
     width: 60px;

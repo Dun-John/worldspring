@@ -88,7 +88,7 @@
       <div class="sel-list" aria-label="What is inside">
         {#each sel.counts as c (c.kind)}
           <div class="row">
-            <span class="grow">{c.words}</span>
+            <span class="ws-grow">{c.words}</span>
             {#if c.can < c.n}<span class="ws-muted">{c.can ? `${c.can} can be removed` : "can't be removed yet"}</span>{/if}
             <!-- (Each kind's own Delete, in place of Build › Clear.) -->
             {#if c.can && sel.counts.length > 1}<button class="ws-btn quiet danger kind-del" disabled={sel.busy} onclick={() => sel.removeKind(c.kind)} title="Delete {countOf(c.kind, c.can)}" aria-label="Delete {countOf(c.kind, c.can)}"><Icon name="trash" size={16} /></button>{/if}
@@ -107,7 +107,7 @@
           <div class="item" class:open={k === sel.open} role="listitem">
             <button class="head" aria-expanded={k === sel.open} onclick={() => (sel.open = k)}>
               <span class="kind">{word(t)}</span>
-              <span class="grow name">{t.name && t.name.toLowerCase() !== word(t).toLowerCase() ? t.name : ''}</span>
+              <span class="ws-grow name">{t.name && t.name.toLowerCase() !== word(t).toLowerCase() ? t.name : ''}</span>
             </button>
             {#if k === sel.open}
               {@const part = sel.partOf(t)}
@@ -154,7 +154,7 @@
           </div>
         {/each}
         {#if rest.length}
-          <button class="head more" onclick={() => (unfolded = true)}><span class="grow">{rest.length} more: {foldedWords(rest)}</span><span class="ws-muted">Show</span></button>
+          <button class="head more" onclick={() => (unfolded = true)}><span class="ws-grow">{rest.length} more: {foldedWords(rest)}</span><span class="ws-muted">Show</span></button>
         {/if}
       </div>
     {/if}
@@ -201,10 +201,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .body {
     display: flex;

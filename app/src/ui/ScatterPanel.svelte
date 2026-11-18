@@ -178,8 +178,8 @@
     </div>
     <label class="ws-field">Name <input class="ws-input" bind:value={form.meta.name} /></label>
     <div class="ws-row">
-      <label class="ws-field grow">Size (squares) <input class="ws-input" type="number" min="0.2" max="40" step="0.5" bind:value={form.meta.size} /></label>
-      <label class="ws-field grow">Height (ft) <input class="ws-input" type="number" min="0" step="1" bind:value={form.meta.height_ft} /></label>
+      <label class="ws-field ws-grow">Size (squares) <input class="ws-input" type="number" min="0.2" max="40" step="0.5" bind:value={form.meta.size} /></label>
+      <label class="ws-field ws-grow">Height (ft) <input class="ws-input" type="number" min="0" step="1" bind:value={form.meta.height_ft} /></label>
     </div>
     <div class="ws-field">
       Cover
@@ -187,9 +187,9 @@
         {#each COVER as c, i (c)}<button class:on={form.meta.cover === i} onclick={() => form && (form.meta.cover = i)}>{c === 'Three-quarters' ? '¾' : c}</button>{/each}
       </div>
     </div>
-    <label class="switch"><span class="grow">Blocks movement</span><input type="checkbox" class="ws-switch" bind:checked={form.meta.blocks_move} /></label>
-    <label class="switch"><span class="grow">Blocks sight</span><input type="checkbox" class="ws-switch" bind:checked={form.meta.blocks_sight} /></label>
-    <label class="switch"><span class="grow">Difficult terrain</span><input type="checkbox" class="ws-switch" bind:checked={form.meta.difficult} /></label>
+    <label class="switch"><span class="ws-grow">Blocks movement</span><input type="checkbox" class="ws-switch" bind:checked={form.meta.blocks_move} /></label>
+    <label class="switch"><span class="ws-grow">Blocks sight</span><input type="checkbox" class="ws-switch" bind:checked={form.meta.blocks_sight} /></label>
+    <label class="switch"><span class="ws-grow">Difficult terrain</span><input type="checkbox" class="ws-switch" bind:checked={form.meta.difficult} /></label>
     {#if error}<div class="error">{error}</div>{/if}
     <div class="ws-row end">
       <button class="ws-btn" onclick={closeForm}>Cancel</button>
@@ -205,7 +205,7 @@
     </div>
     {#if inside}
       <div class="inside">
-        <span class="grow">
+        <span class="ws-grow">
           {#if inside === 'building'}You’re inside: objects go on the battlemap outside. Furniture and traps go in Rooms.
           {:else if inside === 'site'}You’re underground: objects go on the battlemap above. Props and traps go in Rooms.
           {:else}Go back out to put objects down.{/if}
@@ -251,30 +251,30 @@
         <summary>More options</summary>
         <div class="ws-group-body">
           {#if settings.mode !== 'erase'}
-            <label class="slider">
+            <label class="ws-slider">
               <span>Size</span><output>{settings.scale.toFixed(2)}×</output>
               <input type="range" min="0.5" max="2.5" step="0.05" bind:value={settings.scale} />
             </label>
-            <label class="switch"><span class="grow">Vary each one a little</span><input type="checkbox" class="ws-switch" bind:checked={settings.vary} /></label>
+            <label class="switch"><span class="ws-grow">Vary each one a little</span><input type="checkbox" class="ws-switch" bind:checked={settings.vary} /></label>
             <div class="ws-row">
-              <label class="switch grow"><span class="grow">Turn at random</span><input type="checkbox" class="ws-switch" checked={settings.rotation === null} onchange={(e) => (settings.rotation = e.currentTarget.checked ? null : 0)} /></label>
+              <label class="switch ws-grow"><span class="ws-grow">Turn at random</span><input type="checkbox" class="ws-switch" checked={settings.rotation === null} onchange={(e) => (settings.rotation = e.currentTarget.checked ? null : 0)} /></label>
               {#if settings.rotation !== null}<input class="ws-input deg" type="number" step="15" bind:value={settings.rotation} aria-label="Turn (degrees)" />°{/if}
             </div>
           {/if}
           {#if settings.mode !== 'place'}
-            <label class="slider">
+            <label class="ws-slider">
               <span>Radius</span><output>{settings.radius} ft</output>
               <input type="range" min="5" max="60" step="2.5" bind:value={settings.radius} />
             </label>
           {/if}
           {#if settings.mode === 'brush'}
-            <label class="slider">
+            <label class="ws-slider">
               <span>Spacing</span><output>{settings.spacing} ft</output>
               <input type="range" min="2.5" max="40" step="2.5" bind:value={settings.spacing} />
             </label>
           {/if}
           {#if settings.mode === 'erase'}
-            <label class="switch"><span class="grow">Only the chosen kinds</span><input type="checkbox" class="ws-switch" bind:checked={settings.onlyChosen} /></label>
+            <label class="switch"><span class="ws-grow">Only the chosen kinds</span><input type="checkbox" class="ws-switch" bind:checked={settings.onlyChosen} /></label>
           {/if}
         </div>
       </details>
@@ -315,10 +315,6 @@
     color: var(--ink);
     font: 13px/1.4 var(--font);
   }
-  .grow {
-    flex: 1;
-    min-width: 0;
-  }
   .end {
     justify-content: flex-end;
   }
@@ -339,21 +335,6 @@
     background: none;
     color: inherit;
     cursor: pointer;
-  }
-  .slider {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    font-size: 12px;
-  }
-  .slider output {
-    font: 11px var(--mono);
-    color: var(--ink-2);
-  }
-  .slider input {
-    grid-column: 1 / 3;
-    width: 100%;
-    margin: 0;
   }
   .switch {
     display: flex;

@@ -42,7 +42,7 @@
     {/each}
   </div>
   <label class="switch">
-    <span class="grow">Lay a road along it</span>
+    <span class="ws-grow">Lay a road along it</span>
     <input type="checkbox" class="ws-switch" bind:checked={row.road.on} />
   </label>
   {#if row.road.on}
@@ -58,7 +58,7 @@
   {/snippet}
   {#snippet more()}
     {#if row.road.on}
-      <label class="slider">
+      <label class="ws-slider">
         <span>Road width</span><output>{row.road.width} ft</output>
         <input type="range" min={PATH_WIDTH.min} max={PATH_WIDTH.max} step="1" bind:value={row.road.width} />
       </label>
@@ -91,11 +91,11 @@
         {/if}
       </select>
     </div>
-    <label class="slider">
+    <label class="ws-slider">
       <span>Depth</span><output>{row.depth ? `${row.depth} ft` : 'By the ward'}</output>
       <input type="range" min="0" max="120" step="5" bind:value={row.depth} />
     </label>
-    <label class="slider">
+    <label class="ws-slider">
       <span>Gaps</span><output>{Math.round(row.gaps * 100)}%</output>
       <input type="range" min="0" max="0.5" step="0.05" bind:value={row.gaps} />
     </label>
@@ -105,7 +105,7 @@
       {/each}
     </div>
     <label class="switch">
-      <span class="grow">Clear the way<span class="ws-muted"> · the town’s own buildings in it go</span></span>
+      <span class="ws-grow">Clear the way<span class="ws-muted"> · the town’s own buildings in it go</span></span>
       <input type="checkbox" class="ws-switch" bind:checked={row.clear} />
     </label>
   {/snippet}

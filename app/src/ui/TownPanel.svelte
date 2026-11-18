@@ -233,7 +233,7 @@
 <div class="town">
   {#if !peek}
     <div class="head">
-      <span class="grow">{#if name}<b>{name}</b>{:else}<span class="ws-muted">No town in view</span>{/if}{#if plan?.edited}<span class="ws-muted"> · laid out by hand</span>{/if}</span>
+      <span class="ws-grow">{#if name}<b>{name}</b>{:else}<span class="ws-muted">No town in view</span>{/if}{#if plan?.edited}<span class="ws-muted"> · laid out by hand</span>{/if}</span>
       <button class="ws-btn quiet" class:on={picking} aria-pressed={picking} onclick={onChangeTown} title="Then click a town on the map">{picking ? 'Click a town…' : 'Change town'}</button>
     </div>
   {/if}
@@ -252,26 +252,26 @@
     {#if drawOpen && hand}
       <div class="menu ws-panel" role="menu" aria-label="Draw">
         {#each DRAWS.filter((d) => (part === 'walls' ? d.key === 'wall' : part === 'streets' ? d.key !== 'wall' : true)) as m (m.key)}
-          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((drawOpen = false), onMode(m.key))}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
+          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((drawOpen = false), onMode(m.key))}><Icon name={m.icon} size={16} /><span class="ws-grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
         {/each}
       </div>
     {/if}
     {#if reshapeOpen}
       <div class="menu ws-panel" role="menu" aria-label="Reshape">
         {#each reshape as m (m.key)}
-          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((reshapeOpen = false), onMode(m.key))} title={m.was ? `Was ${m.was}` : undefined}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
+          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((reshapeOpen = false), onMode(m.key))} title={m.was ? `Was ${m.was}` : undefined}><Icon name={m.icon} size={16} /><span class="ws-grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
         {/each}
       </div>
     {/if}
   </div>
   {#if !plan && !streets}
     <div class="zoom">
-      <span class="grow">{note}</span>
+      <span class="ws-grow">{note}</span>
       {#if name && !near}<button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>{/if}
     </div>
   {:else if !near}
     <div class="zoom">
-      <span class="grow">Zoom in to see its {hand ? 'streets' : 'patches'}.</span>
+      <span class="ws-grow">Zoom in to see its {hand ? 'streets' : 'patches'}.</span>
       <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
     </div>
   {/if}
@@ -288,7 +288,7 @@
           {#each Object.keys(OPEN_LABEL) as k (k)}<option value={k}>{OPEN_LABEL[k as OpenKind]}</option>{/each}
         </select>
       {/if}
-      <span class="grow ws-muted">{streetDrawn ? `${plural(streetDrawn, mode === 'area' ? 'corner' : 'point')}` : ''}</span>
+      <span class="ws-grow ws-muted">{streetDrawn ? `${plural(streetDrawn, mode === 'area' ? 'corner' : 'point')}` : ''}</span>
       <button class="ws-btn" disabled={!streetDrawn} onclick={onStreetBack} title="Take the last point back (Backspace)"><Icon name="undo" size={16} /> Back</button>
       {#if mode === 'wall'}
         <button class="ws-btn" disabled={busy || streetDrawn < 3} onclick={() => onStreetFinish?.(true)} title="Close the wall round to its first point"><Icon name="polygon" size={16} /> Close</button>
@@ -305,19 +305,19 @@
   {#if !peek && streets}
     <div class="ws-hint">{hint}{mode === 'select' || mode === 'street' ? '' : ' Applied when you let go.'}</div>
     {#if brush}
-      <label class="slider">
+      <label class="ws-slider">
         <span>Brush</span><output>{ft(2 * size * HAND_BRUSH_FT)} across</output>
         <input type="range" min="0.25" max="4" step="0.05" bind:value={size} />
       </label>
     {/if}
     {#if streets_}
     <section class="card" aria-label="Streets">
-      <div class="title"><span class="grow"><b>Laid out by hand</b><span class="ws-muted"> · {plural(streets.streets.length, 'street')}, {plural(streets.junctions.length, 'junction')}, {plural(streets.blocks.length, 'block')}</span></span></div>
+      <div class="title"><span class="ws-grow"><b>Laid out by hand</b><span class="ws-muted"> · {plural(streets.streets.length, 'street')}, {plural(streets.junctions.length, 'junction')}, {plural(streets.blocks.length, 'block')}</span></span></div>
       {#if streets.problems.length}
         <div class="problems" aria-label="Problems">
           {#each streets.problems.slice(0, 12) as p (p.key + p.why)}
             {@const pk = problemPick(p.key)}
-            <button class="ws-btn quiet bad" disabled={!pk} onclick={() => pk && onStreetPick?.(pk)}><Icon name="target" size={16} /><span class="grow">{problemWhat(p.key)}: {p.why}</span></button>
+            <button class="ws-btn quiet bad" disabled={!pk} onclick={() => pk && onStreetPick?.(pk)}><Icon name="target" size={16} /><span class="ws-grow">{problemWhat(p.key)}: {p.why}</span></button>
           {/each}
           {#if streets.problems.length > 12}<span class="ws-muted">and {streets.problems.length - 12} more</span>{/if}
         </div>
@@ -344,15 +344,15 @@
       <div class="ws-hint">{hint}{mode === 'select' ? '' : ' Applied when you let go.'}</div>
     {/if}
     {#if brush}
-      <label class="slider">
+      <label class="ws-slider">
         <span>Brush</span><output>{ft(2 * size * plan.max_move_ft)} across</output>
         <input type="range" min="0.25" max="4" step="0.05" bind:value={size} />
       </label>
     {/if}
     {#if walls_}
     <section class="card" aria-label="Walls">
-      <label class="switch">
-        <span class="grow"><b>Walls</b><span class="ws-muted"> · {plan.walls.generated ? 'it was built with walls' : 'it was built without'}</span></span>
+      <label class="ws-switchrow">
+        <span class="ws-grow"><b>Walls</b><span class="ws-muted"> · {plan.walls.generated ? 'it was built with walls' : 'it was built without'}</span></span>
         <input type="checkbox" class="ws-switch" checked={plan.walls.built} disabled={busy} onchange={(e) => onChange({ walls: (e.currentTarget as HTMLInputElement).checked }, 'walls')} />
       </label>
       {#if plan.walls.built}
@@ -364,15 +364,15 @@
     {#snippet districts()}
     {#if plan.districts?.length}
       <section class="card" aria-label="Districts">
-        <div class="title"><span class="grow"><b>Districts</b></span></div>
+        <div class="title"><span class="ws-grow"><b>Districts</b></span></div>
         <div class="dists">
         {#each districtList as d (d.id)}
           <div class="dist">
             {#if renaming === d.id}
-              <input class="ws-input grow" type="text" maxlength="80" bind:value={renameTo} aria-label="District name" onkeydown={(e) => (e.key === 'Enter' ? saveRename() : e.key === 'Escape' && (renaming = null))} />
+              <input class="ws-input ws-grow" type="text" maxlength="80" bind:value={renameTo} aria-label="District name" onkeydown={(e) => (e.key === 'Enter' ? saveRename() : e.key === 'Escape' && (renaming = null))} />
               <button class="ws-btn" onclick={saveRename}>Save</button>
             {:else}
-              <button class="ws-btn quiet grow name" class:dim={hiddenIds.includes(d.id)} title="Pick its first patch" onclick={() => d.patches[0] !== undefined && onPatch?.(d.patches[0])}>{districtName(d) || 'Unnamed'}<span class="ws-muted"> · {d.kind}, {plural(d.patches.length, 'patch')}</span></button>
+              <button class="ws-btn quiet ws-grow name" class:dim={hiddenIds.includes(d.id)} title="Pick its first patch" onclick={() => d.patches[0] !== undefined && onPatch?.(d.patches[0])}>{districtName(d) || 'Unnamed'}<span class="ws-muted"> · {d.kind}, {plural(d.patches.length, 'patch')}</span></button>
               <button class="ws-icon-btn" aria-label="Rename {districtName(d)}" title="Rename" onclick={() => ((renaming = d.id), (renameTo = districtName(d)))}><Icon name="pencil" size={16} /></button>
               <button class="ws-icon-btn" aria-label={hiddenIds.includes(d.id) ? 'Show on the map' : 'Hide from the map'} title={hiddenIds.includes(d.id) ? 'Show its name on the map' : 'Hide its name from the map'} onclick={() => onHide?.(d.id, !hiddenIds.includes(d.id))}><Icon name={hiddenIds.includes(d.id) ? 'eye-off' : 'eye'} size={16} /></button>
             {/if}
@@ -384,7 +384,7 @@
         </div>
         {#if naming && selected}
           <div class="row">
-            <input class="ws-input grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
+            <input class="ws-input ws-grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
             <button class="ws-btn" disabled={busy || !newName.trim()} onclick={makeDistrict}>Make</button>
             <button class="ws-btn" disabled={busy} onclick={() => (naming = false)}>Cancel</button>
           </div>
@@ -396,7 +396,7 @@
       <section class="card" aria-label="Patch">
         <div class="title">
           <span class="dot" style:background={hex(WARD_COLOURS[selected.ward])}></span>
-          <span class="grow"><b>{selected.district?.name ?? (selected.in_town ? 'A patch of the town' : 'Outside the town')}</b></span>
+          <span class="ws-grow"><b>{selected.district?.name ?? (selected.in_town ? 'A patch of the town' : 'Outside the town')}</b></span>
         </div>
         <label class="ws-field">
           Ward
@@ -419,7 +419,7 @@
             </select>
             {#if naming}
               <div class="row">
-                <input class="ws-input grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
+                <input class="ws-input ws-grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
                 <button class="ws-btn" disabled={busy || !newName.trim()} onclick={makeDistrict}>Make</button>
                 <button class="ws-btn" disabled={busy} onclick={() => (naming = false)}>Cancel</button>
               </div>
@@ -460,8 +460,8 @@
           <button class="ws-btn" disabled={busy} onclick={() => set([{ patch: selected.patch, as_generated: true }], 'patch')} title="Ward, lots, district and layout as generated"><Icon name="reset" size={16} /> As generated</button>
         </div>
         {#if selected.ward === 'temple'}
-          <label class="switch" title={selected.close ? undefined : selected.close_refused}>
-            <span class="grow">Close round the temple<span class="ws-muted"> · {selected.close || !selected.close_refused ? 'open ground round the temple and its hedged churchyard, the houses round it kept' : selected.close_refused}</span></span>
+          <label class="ws-switchrow" title={selected.close ? undefined : selected.close_refused}>
+            <span class="ws-grow">Close round the temple<span class="ws-muted"> · {selected.close || !selected.close_refused ? 'open ground round the temple and its hedged churchyard, the houses round it kept' : selected.close_refused}</span></span>
             <input type="checkbox" class="ws-switch" checked={!!selected.close} disabled={busy || (!selected.close && !!selected.close_refused)} onchange={(e) => set([{ patch: selected.patch, close: (e.currentTarget as HTMLInputElement).checked }], 'close')} />
           </label>
         {/if}
@@ -471,7 +471,7 @@
       <section class="card" aria-label="Corner">
         <div class="title">
           <span class="dot" style:background={corner.square ? hex(SQUARE_COLOURS[corner.square]) : 'transparent'}></span>
-          <span class="grow"><b>{corner.square ? SQUARE_LABEL[corner.square] : corner.junction ? 'Where streets meet' : 'A corner'}</b></span>
+          <span class="ws-grow"><b>{corner.square ? SQUARE_LABEL[corner.square] : corner.junction ? 'Where streets meet' : 'A corner'}</b></span>
         </div>
         {#if !streets_}
           <!-- (Town wall: only the wall's gate and towers.) -->
@@ -513,7 +513,7 @@
           </div>
           {#each handTowers as t (t.id)}
             <div class="row">
-              <span class="grow ws-muted">Hand tower {t.id.split(':')[2]} on {t.corners.join('–')}</span>
+              <span class="ws-grow ws-muted">Hand tower {t.id.split(':')[2]} on {t.corners.join('–')}</span>
               <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_remove: [t.id] }, 'tower')}>Remove</button>
             </div>
           {/each}
@@ -534,7 +534,7 @@
     {#snippet planMore()}
     <section class="card" aria-label="Lay out by hand">
       <div class="row">
-        <span class="grow"><b>Streets by hand</b><span class="ws-muted"> · draw, split, join and move its streets one by one; its blocks follow them</span></span>
+        <span class="ws-grow"><b>Streets by hand</b><span class="ws-muted"> · draw, split, join and move its streets one by one; its blocks follow them</span></span>
         <button class="ws-btn" disabled={busy} onclick={onLayOut} title="Its streets as they are now, to change by hand"><Icon name="road" size={16} /> Lay out by hand</button>
       </div>
     </section>
@@ -578,10 +578,6 @@
     gap: 8px;
     color: var(--ink);
     font: 13px/1.4 var(--font);
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .head,
   .title {
@@ -674,21 +670,6 @@
   .dist .dim {
     opacity: 0.55;
   }
-  .slider {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    font-size: 12px;
-  }
-  .slider output {
-    font: 11px var(--mono);
-    color: var(--ink-2);
-  }
-  .slider input {
-    grid-column: 1 / 3;
-    width: 100%;
-    margin: 0;
-  }
   .problems {
     display: flex;
     flex-direction: column;
@@ -710,11 +691,5 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 6px;
-  }
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
   }
 </style>

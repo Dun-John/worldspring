@@ -499,7 +499,7 @@
     {@const note = notes[id]}
     <div class="ws-row top">
       <button class="ws-btn quiet back" onclick={() => (current = null)}><Icon name="chevron-left" size={16} /> Gazetteer</button>
-      <span class="grow"></span>
+      <span class="ws-grow"></span>
       <button class="ws-btn" onclick={() => onShow(id)}><Icon name="target" size={16} /> Show on map</button>
       {#if note}<button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} onclick={() => (confirmDelete ? ((confirmDelete = false), onNote(id, null, placeName(id))) : (confirmDelete = true))} title="Delete the note">{#if confirmDelete}Delete the note?{:else}<Icon name="trash" size={16} />{/if}</button>{/if}
     </div>
@@ -519,8 +519,8 @@
       <div class="was-line"><span class="ws-muted">Generated: {generated}</span><button class="ws-btn quiet" onclick={() => onRename(id, '')}><Icon name="reset" size={14} /> Back to it</button></div>
     {/if}
     {#if featureById.has(id)}
-      <label class="switch">
-        <span class="grow">Hidden<span class="ws-muted"> · on both maps and in search</span></span>
+      <label class="ws-switchrow">
+        <span class="ws-grow">Hidden<span class="ws-muted"> · on both maps and in search</span></span>
         <input type="checkbox" class="ws-switch" checked={hiddenSet.has(id)} onchange={(e) => onHide(id, e.currentTarget.checked)} />
       </label>
     {/if}
@@ -546,7 +546,7 @@
         <ul class="list aside">
           {#each removed as r (r.id)}
             <li class="row">
-              <span class="grow what" title={r.what}><b>{r.name}</b> <span class="muted">{r.what}</span></span>
+              <span class="ws-grow what" title={r.what}><b>{r.name}</b> <span class="muted">{r.what}</span></span>
               <button class="ws-btn quiet" onclick={() => onRestoreRemoved(r.id)} title="Put it back where it was, with what was set aside when it was deleted"><Icon name="reset" size={14} /> Restore</button>
             </li>
           {/each}
@@ -559,7 +559,7 @@
             {@const place = r.at && ['street', 'lane', 'path'].includes(r.what) ? `in ${r.at}` : r.at}
             {@const words = r.found ? [r.name ? r.what : null, place].filter(Boolean).join(' · ') : 'no longer found'}
             <li class="row">
-              <span class="grow what" title={words}><b>{r.name ?? (r.found ? r.what : 'A road')}</b> <span class="muted">{words}</span></span>
+              <span class="ws-grow what" title={words}><b>{r.name ?? (r.found ? r.what : 'A road')}</b> <span class="muted">{words}</span></span>
               {#if r.found}
                 <button class="ws-btn quiet" onclick={() => onBringBack(r.id)} title="Put the road back where it was"><Icon name="reset" size={14} /> Bring back</button>
               {:else}
@@ -568,7 +568,7 @@
             </li>
           {/each}
           {#if !allRoads && removedRoads.length > ROAD_ROWS}
-            <li class="row"><span class="grow muted">{removedRoads.length - ROAD_ROWS} more</span><button class="ws-btn quiet" onclick={() => (allRoads = true)}>Show all</button></li>
+            <li class="row"><span class="ws-grow muted">{removedRoads.length - ROAD_ROWS} more</span><button class="ws-btn quiet" onclick={() => (allRoads = true)}>Show all</button></li>
           {/if}
         </ul>
       {/if}
@@ -577,7 +577,7 @@
         <ul class="list aside">
           {#each changedFences as c (c.town)}
             <li class="row">
-              <span class="grow what"><b>Fences changed in {c.name ?? 'a town'}</b> <span class="muted">{c.ids.length}{c.found ? '' : ' · no longer found'}</span></span>
+              <span class="ws-grow what"><b>Fences changed in {c.name ?? 'a town'}</b> <span class="muted">{c.ids.length}{c.found ? '' : ' · no longer found'}</span></span>
               {#if c.found}
                 <button class="ws-btn quiet" onclick={() => onBringBackFences(c.town)} title="Put every changed fence and hedge of this town back as it was"><Icon name="reset" size={14} /> Bring back</button>
               {:else}
@@ -593,13 +593,13 @@
           {@const name = asideName(g, i)}
           <li>
             <div class="row head">
-              <span class="group grow">{name}</span>
+              <span class="group ws-grow">{name}</span>
               <button class="ws-btn quiet" onclick={() => onForget(g.entries, `Deleted what was set aside on ${name}`)} title="Delete everything kept on this place">Delete all</button>
             </div>
             <ul>
               {#each g.entries as x (`${x.field}|${x.key}|${x.id}`)}
                 <li class="row">
-                  <span class="grow what">{asideWhat(x)}</span>
+                  <span class="ws-grow what">{asideWhat(x)}</span>
                   <button class="ws-icon-btn" onclick={() => onForget([x], `Deleted: ${asideWhat(x)}`)} title="Delete" aria-label="Delete"><Icon name="trash" size={14} /></button>
                 </li>
               {/each}
@@ -674,10 +674,6 @@
   .back {
     padding-left: 2px;
   }
-  .grow {
-    flex: 1;
-    min-width: 0;
-  }
   .title {
     font-size: 16px;
     font-weight: bold;
@@ -687,12 +683,6 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-  }
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
   }
   .here {
     min-width: 0;
@@ -764,10 +754,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .aside .grow {
-    flex: 1;
-    min-width: 0;
   }
   .aside .group {
     text-transform: none;

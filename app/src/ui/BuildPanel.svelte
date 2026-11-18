@@ -170,23 +170,7 @@
   {/if}
 </div>
 
-<style>
-  .build :global(.slider) {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    font-size: 12px;
-  }
-  .build :global(.slider) :global(output) {
-    font: 11px var(--mono);
-    color: var(--ink-2);
-  }
-  .build :global(.slider) :global(input) {
-    grid-column: 1 / 3;
-    width: 100%;
-    margin: 0;
-  }
-  .build :global(.switch) {
+<style>  .build :global(.switch) {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -199,10 +183,6 @@
     gap: 8px;
     color: var(--ink);
     font: 13px/1.4 var(--font);
-  }
-  .build :global(.grow) {
-    flex: 1;
-    min-width: 0;
   }
   .build :global(.stepper) {
     display: flex;

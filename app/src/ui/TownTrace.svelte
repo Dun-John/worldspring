@@ -27,13 +27,13 @@
   <summary>Trace a plan</summary>
   <div class="ws-group-body">
     <div class="ws-row">
-      <label class="ws-btn grow filebtn"><Icon name="image" size={16} /> {u.image ? 'Replace…' : 'Choose a picture…'}<input type="file" accept="image/*" hidden onchange={pickImage} /></label>
+      <label class="ws-btn ws-grow filebtn"><Icon name="image" size={16} /> {u.image ? 'Replace…' : 'Choose a picture…'}<input type="file" accept="image/*" hidden onchange={pickImage} /></label>
       {#if u.image}<button class="ws-btn" onclick={() => u.remove()}>Remove</button>{/if}
     </div>
     {#if !u.image}
       <div class="ws-muted">Or drop a picture on the map. It lies over the town to lay its streets on, for this session only: it is never saved or shown to the players.</div>
     {:else}
-      <label class="slider"><span>Opacity</span><output>{Math.round(u.opacity * 100)}%</output><input type="range" min="0.05" max="1" step="0.05" bind:value={u.opacity} /></label>
+      <label class="ws-slider"><span>Opacity</span><output>{Math.round(u.opacity * 100)}%</output><input type="range" min="0.05" max="1" step="0.05" bind:value={u.opacity} /></label>
       <div class="ws-row">
         <button class="ws-btn" onclick={() => u.fit()}>Fit to town</button>
         <button class="ws-btn" aria-pressed={u.adjust} class:primary={u.adjust} onclick={() => (u.adjust = !u.adjust)} title="Drag the picture to move it; a corner to scale; the round handle to turn (Esc leaves)">Adjust</button>
@@ -53,28 +53,8 @@
   </div>
 </details>
 
-<style>
-  .grow {
-    flex: 1;
-    min-width: 0;
-  }
-  .filebtn {
+<style>  .filebtn {
     cursor: pointer;
-  }
-  .slider {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    font-size: 12px;
-  }
-  .slider output {
-    font: 11px var(--mono);
-    color: var(--ink-2);
-  }
-  .slider input {
-    grid-column: 1 / 3;
-    width: 100%;
-    margin: 0;
   }
   .nums {
     display: grid;

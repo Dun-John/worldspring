@@ -127,7 +127,7 @@
 <div class="gen">
   {#if sketching}<div class="banner"><Icon name="sketch" size={16} /> Sketching: Generate uses your sketch.</div>{/if}
   <div class="ws-row seed">
-    <label class="ws-field grow">
+    <label class="ws-field ws-grow">
       Seed
       <input class="ws-input" type="number" min="0" bind:value={draft.seed} onkeydown={(e) => e.key === 'Enter' && onGenerate()} />
     </label>
@@ -143,7 +143,7 @@
     {@const n = changedIn(g)}
     <details class="ws-group" open={remembered(`gen.${g.key}`, g.open)} ontoggle={(e) => remember(`gen.${g.key}`, e.currentTarget.open)}>
       <summary>
-        <span class="grow">{g.label}</span>
+        <span class="ws-grow">{g.label}</span>
         {#if n}<span class="count">{n} changed</span>
           <button class="ws-icon-btn small" title="Back to the defaults" aria-label="Reset {g.label}" onclick={(e) => (e.preventDefault(), reset(g))}><Icon name="reset" size={14} /></button>{/if}
       </summary>
@@ -182,7 +182,7 @@
   {/each}
   <details class="ws-group" open={remembered('gen.biomes', false)} ontoggle={(e) => remember('gen.biomes', e.currentTarget.open)}>
     <summary>
-      <span class="grow">Biome mix</span>
+      <span class="ws-grow">Biome mix</span>
       {#if biomesChanged}<span class="count">{biomesChanged} changed</span>
         <button class="ws-icon-btn small" title="Back to the defaults" aria-label="Reset the biome mix" onclick={(e) => (e.preventDefault(), (draft.p.biome_weights = {}))}><Icon name="reset" size={14} /></button>{/if}
     </summary>
@@ -200,7 +200,7 @@
 
   <div class="foot">
     <button class="ws-btn quiet" onclick={() => (draft.p = { ...DEFAULT_PARAMS, biome_weights: {} })} title="Every setting back to its default">Defaults</button>
-    <button class="ws-btn primary grow" onclick={onGenerate} disabled={busy} title={seconds ? `Takes about ${seconds} s` : undefined}>{sketching ? 'Generate from sketch' : 'Generate world'}</button>
+    <button class="ws-btn primary ws-grow" onclick={onGenerate} disabled={busy} title={seconds ? `Takes about ${seconds} s` : undefined}>{sketching ? 'Generate from sketch' : 'Generate world'}</button>
   </div>
 </div>
 
@@ -209,10 +209,6 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-  }
-  .grow {
-    flex: 1;
-    min-width: 0;
   }
   .seed {
     align-items: flex-end;

@@ -48,16 +48,16 @@
   {/snippet}
   {#snippet more()}
     {#if harbour.kind === 'islet'}
-      <label class="slider">
+      <label class="ws-slider">
         <span>Radius</span><output>{harbour.radius} ft</output>
         <input type="range" min={ISLET_RADIUS[0]} max={ISLET_RADIUS[1]} step="5" bind:value={harbour.radius} />
       </label>
-      <label class="slider">
+      <label class="ws-slider">
         <span>Rise over the water</span><output>{harbour.rise} ft</output>
         <input type="range" min={ISLET_RISE[0]} max={ISLET_RISE[1]} step="1" bind:value={harbour.rise} />
       </label>
     {:else if wharfRange}
-      <label class="slider">
+      <label class="ws-slider">
         <span>Width</span><output>{harbour.width} ft</output>
         <input type="range" min={wharfRange[0]} max={wharfRange[1]} step="1" bind:value={harbour.width} />
       </label>
@@ -68,7 +68,7 @@
         </div>
       {/if}
       {#if harbour.kind === 'breakwater'}
-        <label class="switch"><span class="grow">Lighthouse at its tip</span><input type="checkbox" class="ws-switch" bind:checked={harbour.lighthouse} /></label>
+        <label class="switch"><span class="ws-grow">Lighthouse at its tip</span><input type="checkbox" class="ws-switch" bind:checked={harbour.lighthouse} /></label>
       {/if}
     {/if}
     <IsletList {islets} {onIslet} {onGoIslet} />
