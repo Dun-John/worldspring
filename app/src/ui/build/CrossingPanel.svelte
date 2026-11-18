@@ -21,10 +21,10 @@
 
   let { cross = $bindable(), crossEditing, onCrossSave, onCrossRemove, onDone, near, peek = false, onZoomIn }: Props = $props();
 
-  const KINDS: { key: CrossingKind; label: string; icon: IconName; kbd: string; look: string; width: number }[] = [
-    { key: 'bridge', label: 'Bridge', icon: 'bridge', kbd: '1', look: 'A deck clear of the water, walked like a road.', width: 12 },
-    { key: 'ford', label: 'Ford', icon: 'ford', kbd: '2', look: 'The bed brought up to wading depth, stepping stones across.', width: 10 },
-    { key: 'ferry', label: 'Ferry', icon: 'ferry', kbd: '3', look: 'A jetty out from each bank, a raft on a rope between. At least 68 ft.', width: 12 },
+  const KINDS: { key: CrossingKind; label: string; icon: IconName; look: string; width: number }[] = [
+    { key: 'bridge', label: 'Bridge', icon: 'bridge', look: 'A deck clear of the water, walked like a road.', width: 12 },
+    { key: 'ford', label: 'Ford', icon: 'ford', look: 'The bed brought up to wading depth, stepping stones across.', width: 10 },
+    { key: 'ferry', label: 'Ferry', icon: 'ferry', look: 'A jetty out from each bank, a raft on a rope between. At least 68 ft.', width: 12 },
   ];
   const MATERIALS: { key: CrossingMaterial; label: string; look: string }[] = [
     { key: 'timber', label: 'Timber', look: 'A timber deck clear of the water, walked like a road.' },
@@ -54,7 +54,7 @@
         class:on={cross.kind === k.key}
         aria-pressed={cross.kind === k.key}
         onclick={() => (cross = { ...cross, kind: k.key, width: crossEditing ? cross.width : k.width })}
-        title="{k.label} ({k.kbd})"><Icon name={k.icon} size={16} />{k.label}</button
+        title="{k.label} (X again)"><Icon name={k.icon} size={16} />{k.label}</button
       >
     {/each}
   </div>
