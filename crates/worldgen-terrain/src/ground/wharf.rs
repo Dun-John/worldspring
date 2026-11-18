@@ -43,9 +43,7 @@ pub fn level(w: &Wharf, t0: &T0) -> f32 {
     }
 }
 
-pub fn unit(v: P) -> P {
-    geom::mul(v, 1.0 / geom::len(v).max(1e-9))
-}
+pub use geom::unit;
 
 /// How far from its line (ft) a wharf's water is looked for.
 fn margin(w: &Wharf) -> f64 {

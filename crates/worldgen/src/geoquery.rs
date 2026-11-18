@@ -68,15 +68,6 @@ fn closest_on_seg(p: P, a: P, b: P) -> P {
     [a[0] + t * d[0], a[1] + t * d[1]]
 }
 
-fn orient(a: P, b: P, c: P) -> f64 {
-    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-}
-
-fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
-    let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
-    (o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0)
-}
-
 impl Region {
     pub fn contains(&self, p: P) -> bool {
         match self {
@@ -130,7 +121,7 @@ impl Region {
             Region::Circle(c, r) => geom::seg_dist_or_start(*c, a, b) <= *r,
             _ => {
                 let q = self.corners();
-                (0..q.len()).any(|i| segs_cross(a, b, q[i], q[(i + 1) % q.len()]))
+                (0..q.len()).any(|i| geom::segs_cross_sign(a, b, q[i], q[(i + 1) % q.len()]))
             }
         }
     }

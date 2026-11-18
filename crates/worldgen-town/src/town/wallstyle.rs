@@ -343,10 +343,6 @@ pub fn shape_rest(l: &mut Layout, inside: P) {
     shape_towers(l, &style, &rest, inside, false);
 }
 
-fn same(a: P, b: P) -> bool {
-    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() < 1e-6
-}
-
 /// A tower's outline (anticlockwise): `r` its radius (a square's or an octagon's half width), `dir` the
 /// way its sides run (a D: the way it faces).
 pub fn footprint(shape: TowerShape, at: P, r: f64, dir: P) -> Vec<P> {

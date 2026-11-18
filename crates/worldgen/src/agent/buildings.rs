@@ -348,7 +348,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     let crosses_line = |w: &[P]| {
         w.windows(2).any(|s| {
             segs.iter().any(|&(a, b)| {
-                (segs_cross(a, b, s[0], s[1]) && !joint(seg_meet(a, b, s[0], s[1]), w)) || (geom::seg_dist(s[0], a, b) < 1.0 && !joint(s[0], w)) || (geom::seg_dist(s[1], a, b) < 1.0 && !joint(s[1], w))
+                (geom::segs_cross_mul(a, b, s[0], s[1]) && !joint(seg_meet(a, b, s[0], s[1]), w)) || (geom::seg_dist(s[0], a, b) < 1.0 && !joint(s[0], w)) || (geom::seg_dist(s[1], a, b) < 1.0 && !joint(s[1], w))
             })
         })
     };
@@ -600,7 +600,7 @@ pub fn polys_overlap_pub(a: &[P], b: &[P]) -> bool {
 
 /// Whether two polygons share any area (or one holds the other).
 pub(super) fn polys_overlap(a: &[P], b: &[P]) -> bool {
-    a.iter().any(|p| geom::contains(b, *p)) || b.iter().any(|p| geom::contains(a, *p)) || (0..a.len()).any(|i| (0..b.len()).any(|j| segs_cross(a[i], a[(i + 1) % a.len()], b[j], b[(j + 1) % b.len()])))
+    a.iter().any(|p| geom::contains(b, *p)) || b.iter().any(|p| geom::contains(a, *p)) || (0..a.len()).any(|i| (0..b.len()).any(|j| geom::segs_cross_mul(a[i], a[(i + 1) % a.len()], b[j], b[(j + 1) % b.len()])))
 }
 
 /// Where lines a-b and c-d meet (a-b's middle if they run alike).
@@ -614,16 +614,10 @@ fn seg_meet(a: P, b: P, c: P, d: P) -> P {
     geom::add(a, geom::mul(r, t))
 }
 
-fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
-    let (d1, d2) = (geom::cross(geom::sub(b, a), geom::sub(c, a)), geom::cross(geom::sub(b, a), geom::sub(d, a)));
-    let (d3, d4) = (geom::cross(geom::sub(d, c), geom::sub(a, c)), geom::cross(geom::sub(d, c), geom::sub(b, c)));
-    d1 * d2 < 0.0 && d3 * d4 < 0.0
-}
-
 /// Distance from a segment to a polygon (0 when it crosses or lies inside).
 pub(super) fn poly_seg_dist(poly: &[P], a: P, b: P) -> f64 {
     let n = poly.len();
-    if geom::contains(poly, a) || geom::contains(poly, b) || (0..n).any(|i| segs_cross(poly[i], poly[(i + 1) % n], a, b)) {
+    if geom::contains(poly, a) || geom::contains(poly, b) || (0..n).any(|i| geom::segs_cross_mul(poly[i], poly[(i + 1) % n], a, b)) {
         return 0.0;
     }
     let to_edges = (0..n).flat_map(|i| [geom::seg_dist(a, poly[i], poly[(i + 1) % n]), geom::seg_dist(b, poly[i], poly[(i + 1) % n])]);

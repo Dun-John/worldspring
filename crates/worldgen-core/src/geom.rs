@@ -33,6 +33,29 @@ pub fn dist(a: P, b: P) -> f64 {
     len(sub(a, b))
 }
 #[inline]
+pub fn unit(v: P) -> P {
+    mul(v, 1.0 / len(v).max(1e-9))
+}
+/// Two points within a hair of each other (L1 distance under 1e-6).
+#[inline]
+pub fn same(a: P, b: P) -> bool {
+    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() < 1e-6
+}
+/// Segments `ab` and `cd` properly cross: the products of side signs are negative.
+#[inline]
+pub fn segs_cross_mul(a: P, b: P, c: P, d: P) -> bool {
+    let (d1, d2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
+    let (d3, d4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+/// Same, by the sign (`> 0`) of each side: a point exactly on the other line counts as one side.
+#[inline]
+pub fn segs_cross_sign(a: P, b: P, c: P, d: P) -> bool {
+    let (d1, d2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
+    let (d3, d4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
+    (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0)
+}
+#[inline]
 pub fn lerp(a: P, b: P, t: f64) -> P {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
 }

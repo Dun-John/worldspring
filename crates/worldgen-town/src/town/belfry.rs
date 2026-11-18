@@ -7,7 +7,7 @@
 //! floor. A town laid out anew keeps a hall's belfry where the hall stands as generated, else raises
 //! it again from the hall's footprint (the same rules).
 
-use super::geom::{P, add, area, cross, dist, dot, mul, obb, seg_dist, sub, union_outline};
+use super::geom::{P, add, area, cross, dist, dot, mul, obb, seg_dist, segs_cross_sign, sub, union_outline};
 use super::{Building, Layout, Part, PartKind, Structure, Ward, catalog};
 use crate::t0::settle::Tier;
 
@@ -142,16 +142,10 @@ fn free(l: &Layout, b: &Building, p: &[P]) -> bool {
     l.buildings.iter().filter(|o| o.id != b.id).all(|o| !overlaps(p, &o.poly)) && l.grounds.iter().filter(|g| inn_ground(g)).all(|g| !overlaps(p, &g.1)) && l.walls.iter().all(|w| w.windows(2).all(|s| p.iter().all(|&q| seg_dist(q, s[0], s[1]) > 5.0)))
 }
 
-fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
-    let (d1, d2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
-    let (d3, d4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
-    (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0)
-}
-
 /// Whether two polygons overlap (an edge of one crossing the other's, or one inside the other).
 fn overlaps(p: &[P], q: &[P]) -> bool {
     if q.len() < 3 {
         return false;
     }
-    p.iter().any(|&x| super::geom::contains(q, x)) || q.iter().any(|&x| super::geom::contains(p, x)) || (0..p.len()).any(|k| (0..q.len()).any(|m| segs_cross(p[k], p[(k + 1) % p.len()], q[m], q[(m + 1) % q.len()])))
+    p.iter().any(|&x| super::geom::contains(q, x)) || q.iter().any(|&x| super::geom::contains(p, x)) || (0..p.len()).any(|k| (0..q.len()).any(|m| segs_cross_sign(p[k], p[(k + 1) % p.len()], q[m], q[(m + 1) % q.len()])))
 }

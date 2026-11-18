@@ -34,21 +34,6 @@ pub struct Bastions {
     pub dropped: u32,
 }
 
-fn unit(v: P) -> P {
-    mul(v, 1.0 / len(v).max(1e-9))
-}
-
-fn same(a: P, b: P) -> bool {
-    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() < 1e-6
-}
-
-/// Two segments cross (not just touch).
-fn crosses(p: P, q: P, r: P, t: P) -> bool {
-    let c = |a: P, b: P, x: P| cross(sub(b, a), sub(x, a));
-    let (d1, d2, d3, d4) = (c(p, q, r), c(p, q, t), c(r, t, p), c(r, t, q));
-    d1 * d2 < 0.0 && d3 * d4 < 0.0
-}
-
 /// The wall's pieces as laid, tidied: a piece ending on another's line (where the two meet, a
 /// corner of one dropped or rounded off the other, or exactly on it) stopped half a foot short of it
 /// instead of a hair across; a tower stood twice where a run passes one corner twice, once.
@@ -66,7 +51,7 @@ pub(super) fn tidy(pieces: &mut [Vec<P>], towers: &mut Vec<P>) {
                     let own = j == i && (if first { k == 0 } else { k + 2 == n });
                     // (Or ending on it, off its corners: a hair either way as it is moved.)
                     let on = seg_dist(e, sg[0], sg[1]) < 0.25 && dist(e, sg[0]) > 0.25 && dist(e, sg[1]) > 0.25;
-                    if own || !(on || crosses(e, q, sg[0], sg[1])) {
+                    if own || !(on || segs_cross_mul(e, q, sg[0], sg[1])) {
                         continue;
                     }
                     // (Where the end's stretch meets that line.)
@@ -175,7 +160,7 @@ pub fn bastions(pieces: &mut [Vec<P>], towers: &mut Vec<P>, gates: &[P], most: u
             let near_wall = pieces.iter().enumerate().any(|(p, w)| {
                 w.windows(2).enumerate().any(|(k, sg)| {
                     let own = p == j.p && (k + 1 == j.k || k == j.k);
-                    !own && edges.iter().any(|&(a, b)| crosses(a, b, sg[0], sg[1]) || seg_dist(sg[0], a, b) < 12.0 || seg_dist(a, sg[0], sg[1]) < 12.0)
+                    !own && edges.iter().any(|&(a, b)| segs_cross_mul(a, b, sg[0], sg[1]) || seg_dist(sg[0], a, b) < 12.0 || seg_dist(a, sg[0], sg[1]) < 12.0)
                 })
             });
             let near_tower = towers.iter().any(|t| !same(*t, j.v) && edges.iter().any(|&(a, b)| seg_dist(*t, a, b) < 16.0));
@@ -367,7 +352,7 @@ pub fn off_bastions(bastions: &[Vec<P>], poly: &[P]) -> bool {
             && (0..n).all(|k| {
                 let (a, b) = (q[k], q[(k + 1) % n]);
                 let m = poly.len();
-                (0..m).all(|j| seg_dist(poly[j], a, b) >= reach && seg_dist(a, poly[j], poly[(j + 1) % m]) >= reach && !crosses(a, b, poly[j], poly[(j + 1) % m]))
+                (0..m).all(|j| seg_dist(poly[j], a, b) >= reach && seg_dist(a, poly[j], poly[(j + 1) % m]) >= reach && !segs_cross_mul(a, b, poly[j], poly[(j + 1) % m]))
             })
     })
 }

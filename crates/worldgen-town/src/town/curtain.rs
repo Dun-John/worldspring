@@ -35,14 +35,6 @@ const TEST_STEP: f64 = 4.0;
 const CELL: f64 = 48.0;
 const PAD: f64 = 32.0;
 
-fn unit(v: P) -> P {
-    mul(v, 1.0 / len(v).max(1e-9))
-}
-
-fn same(a: P, b: P) -> bool {
-    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() < 1e-6
-}
-
 fn left(u: P) -> P {
     [-u[1], u[0]]
 }

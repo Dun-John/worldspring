@@ -1214,10 +1214,6 @@ pub(super) fn request(world: &World, t0: &T0, index: usize, plan: &TownPlan, cen
     Ok(a)
 }
 
-fn unit(v: P) -> P {
-    mul(v, 1.0 / len(v).max(1e-9))
-}
-
 /// Why a tower can't go up at `at` on the wall running `along` (world ft), in town `l` as it stands.
 fn tower_why(l: &Layout, index: usize, at: P, along: P) -> Option<String> {
     const R: f64 = 11.0;

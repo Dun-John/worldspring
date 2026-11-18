@@ -359,12 +359,6 @@ fn windmills(site: &Site, s: &Settlement, l: &mut Layout) {
 }
 
 /// The part of the segment a-b inside `r` (Liang-Barsky).
-fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
-    let (o1, o2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
-    let (o3, o4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
-    o1 * o2 < 0.0 && o3 * o4 < 0.0
-}
-
 pub(crate) fn clip_seg(a: P, b: P, r: [f64; 4]) -> Option<(P, P)> {
     let d = sub(b, a);
     let (mut t0, mut t1) = (0.0f64, 1.0f64);
@@ -472,7 +466,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         let (u, ul) = (sub(b, a), dist(a, b).max(1e-9));
         ways.iter().any(|&(s, e, half)| {
             let d = [seg_dist(a, s, e), seg_dist(b, s, e), seg_dist(s, a, b), seg_dist(e, a, b)].into_iter().fold(f64::MAX, f64::min);
-            if d < half + 2.5 || segs_cross(a, b, s, e) {
+            if d < half + 2.5 || segs_cross_mul(a, b, s, e) {
                 return true;
             }
             let (v, vl) = (sub(e, s), dist(s, e).max(1e-9));
