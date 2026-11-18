@@ -89,7 +89,16 @@ fn building_hit(world: &World, t0: &T0, layouts: &[Rc<town::Layout>], l: &town::
 }
 
 fn quarter_at(l: &town::Layout, p: [f64; 2]) -> Option<usize> {
-    l.quarters.iter().position(|q| q.patches.iter().any(|poly| geom::contains(poly, p)))
+    // (A patch's bounding box first: a point outside it, edges included, is outside the patch.)
+    let near = |poly: &Vec<[f64; 2]>| {
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for v in poly {
+            lo = [lo[0].min(v[0]), lo[1].min(v[1])];
+            hi = [hi[0].max(v[0]), hi[1].max(v[1])];
+        }
+        p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1]
+    };
+    l.quarters.iter().position(|q| q.patches.iter().any(|poly| near(poly) && geom::contains(poly, p)))
 }
 
 /// The named district a point of layout `l` lies in (its id and generated name): the layout's own,
@@ -244,6 +253,8 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
         }
         Some(edits.renames.get(id).map(String::as_str).or(generated).map(str::to_lowercase))
     };
+    // (Without a rename or a hidden mark on a building, ids aren't looked up: skip building them.)
+    let has_b_edits = edits.renames.keys().chain(edits.hidden.iter()).any(|k| k.starts_with("b:"));
     for l in &layouts {
         for qi in 0..l.quarters.len() {
             // (R5 towns: a district emptied by hand has no label.)
@@ -254,8 +265,8 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
             }
         }
         for b in &l.buildings {
-            let id = format!("b:{}:{}", l.index, b.id);
-            let renamed = edits.renames.contains_key(&id);
+            let id = if has_b_edits { format!("b:{}:{}", l.index, b.id) } else { String::new() };
+            let renamed = has_b_edits && edits.renames.contains_key(&id);
             if b.func.is_none() && !renamed {
                 continue;
             }
@@ -263,9 +274,13 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
             if !inside(c[0], c[1]) {
                 continue;
             }
-            let Some(name) = current(&id, b.name.as_deref()) else { continue };
+            let name = if has_b_edits { current(&id, b.name.as_deref()) } else { Some(b.name.as_deref().map(str::to_lowercase)) };
+            let Some(name) = name else { continue };
             if name.is_some_and(|n| n.contains(&q)) {
-                by_name.push(building_hit(world, t0, &layouts, l, b));
+                // (Only the first `limit` of the answer are kept: districts, then these.)
+                if by_name.len() < limit {
+                    by_name.push(building_hit(world, t0, &layouts, l, b));
+                }
             } else if b.func.is_some() && b.label().to_lowercase().contains(&q) && by_function.len() < limit {
                 by_function.push(building_hit(world, t0, &layouts, l, b));
             }
