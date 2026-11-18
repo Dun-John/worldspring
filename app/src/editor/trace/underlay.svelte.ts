@@ -4,8 +4,8 @@
 // Two of them: the sketch's (`underlay`, over the whole map) and Edit › Streets' (`townUnderlay`,
 // a town's plan to lay its streets over, fitted round the town in view).
 import { imageToWorld, worldToImage, type TraceImage, type TraceXform } from './types';
+import { MI } from '../units';
 
-const MI = 5280;
 /** Handle size and the rotate handle's reach (screen px). */
 export const HANDLE_PX = 9;
 export const ROTATE_PX = 30;

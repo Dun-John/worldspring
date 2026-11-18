@@ -117,7 +117,6 @@ fn door_out(f: &Frame, z: &Zones, inside: &dyn Fn((isize, isize)) -> bool, groun
 }
 
 /// The body's squares (a belfry's are its stair hall's).
-
 fn body_of(sh: &Shell) -> Vec<bool> {
     sh.inside.clone()
 }

@@ -14,9 +14,9 @@
 // At most `MAX_STROKES` shapes (the smallest dropped), each simplified (Douglas-Peucker) until the
 // whole result fits `POINT_BUDGET`.
 import type { Stroke } from '../../gen/protocol';
+import { MI } from '../units';
 import { imageToWorld, TRACE_KINDS, type TraceKind, type TraceParams, type TraceRequest, type TraceResult } from './types';
 
-const MI = 5280;
 /** The longest side traced (px); larger pictures are box-downsampled first. */
 export const MAX_SIDE = 2048;
 /** The most points the strokes may hold in all (T0 regenerates from them). */

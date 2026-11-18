@@ -9,6 +9,7 @@ import type { DrawnPath, Edits, PathKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
+import { FREEHAND_FT } from './units';
 import { segDist } from './geom';
 
 export type Pt = [number, number];
@@ -145,7 +146,6 @@ export interface PathHost {
   hint(text: string): void;
 }
 
-const FREEHAND_FT = 15;
 const round = (p: Pt): Pt => [Math.round(p[0] * 2) / 2, Math.round(p[1] * 2) / 2];
 
 export class PathDrawTool implements PointerTool {

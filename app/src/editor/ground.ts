@@ -9,6 +9,7 @@
 // touches. A loop's level is the plateau's it starts on, else the ground there plus the offset.
 import type { Edits, Plateau } from '../gen/protocol';
 import type { Camera } from '../render/camera';
+import { SQUARE_FT } from '../render/scale';
 import type { Graphics } from 'pixi.js';
 import type { PointerTool } from '../render/MapView';
 import { added, BLOCK, blockKey, encode, MAX_ADD, MAX_BLOCKS, MAX_EDGE_FT, MAX_PLATEAU_PTS, MAX_PLATEAU_SPAN_FT, MAX_STROKE_BLOCKS, values } from './groundCodec';
@@ -37,7 +38,6 @@ export interface GroundSettings {
 export const defaultGround = (): GroundSettings => ({ mode: 'raise', radius: 15, height: 5, hardness: 0.5, strength: 0.5, offset: 10, edge: 0 });
 
 export const MAX_PLATEAUS = 256;
-const SQUARE_FT = 5;
 
 /** What the tool needs from the app. */
 export interface GroundHost {

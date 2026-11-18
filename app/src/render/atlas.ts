@@ -3,7 +3,7 @@
 // battlemap assets. Drawn once into one mipmapped texture (frames padded apart so no mip level
 // blends two of them) so objects render as instanced particles.
 // Frames are addressed by kind id and variant, so generated art can replace them later.
-import { PX } from './scale';
+import { PX, MIP_LEVELS, PAD } from './scale';
 import { Texture, Graphics, type Renderer, Container, Rectangle } from 'pixi.js';
 import { ballista, shotStones } from './fortProps';
 import type { KindInfo } from '../gen/client';
@@ -38,10 +38,6 @@ const LOOKS: Record<number, number> = { 36: 16, 155: 3 };
 export const looks = (id: number): number => LOOKS[id] ?? VARIANTS;
 /** Atlas width: wide enough that the height stays within 4096 too (many phones' largest texture). */
 const ATLAS_W = 4096;
-/** Mip levels kept (full size down to 1/8), and the empty gap round every frame, on a grid of the same
- * size, so that even the smallest level never blends two frames. */
-const MIP_LEVELS = 4;
-const PAD = 1 << (MIP_LEVELS - 1);
 
 export interface Atlas {
   /** frames[kindId][variant] */

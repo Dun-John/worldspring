@@ -18,6 +18,7 @@ import type { SquareKind, TownPlan, TownWard } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dist, inside, lerp } from './geom';
+import { GRAB_PX } from './units';
 
 export type TownMode = 'select' | 'street' | 'area' | 'wall' | 'displace' | 'liquify' | 'bloat' | 'pinch' | 'relax' | 'equalize';
 type Pt = [number, number];
@@ -50,7 +51,6 @@ export const SQUARE_COLOURS: Record<SquareKind, number> = {
 /** A brush's corners within the middle half of its ring move all the way (Displace). */
 const SOFT = 0.5;
 /** Grabbing a corner: within this many screen px. */
-const GRAB_PX = 10;
 /** Patches smaller than this on screen (px across) aren't drawn. */
 const MIN_PATCH_PX = 10;
 

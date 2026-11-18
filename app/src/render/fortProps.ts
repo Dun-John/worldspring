@@ -7,8 +7,8 @@
 
 import type { Graphics } from 'pixi.js';
 import { PX } from './atlas';
+import { INK } from './pen';
 
-const INK = 0x1d1a14;
 // (Ink widths by size, set when a sprite is drawn: `atlas.ts` imports this module, so PX is read late.)
 let OUT = 0;
 let LINE = 0;

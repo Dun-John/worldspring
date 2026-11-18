@@ -2,11 +2,10 @@ import { Graphics } from 'pixi.js';
 import { ROOF_INK, SQ, type Shape } from '../../gen/battlePrep';
 import { DIFFICULT, BLOCKS, OPAQUE } from '../../play/vision';
 import { PX } from '../atlas';
+import { SQUARE_FT } from '../scale';
 import { drawBounds, drawSails, isBound, SAILS } from '../countryside';
 import { drawCaveMouth, drawThemedEntrance } from '../entrances';
 import { drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawWalls, drawWallTower, GATE_DEPTH } from '../walls';
-
-export const SQUARE_FT = 5;
 
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;

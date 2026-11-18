@@ -5,6 +5,7 @@
   import type { Conflict, RoadKind, SiteKind, VolcanoActivity, VolcanoKind } from '../gen/protocol';
   import { PAINT_BIOMES } from '../world/world';
   import Icon from '../ui/Icon.svelte';
+  import { MI } from './units';
   import type { IconName } from '../ui/icons';
   import { underlay } from './trace/underlay.svelte';
   import { KIND_LABEL, tracer } from './trace/tracer.svelte';
@@ -37,7 +38,6 @@
   const points = $derived((void version, sketcher.strokes.reduce((n, s) => n + s.pts.length, 0)));
   const canUndo = $derived((void version, sketcher.canUndo));
   let clearing = $state(false);
-  const MI = 5280;
   async function pickImage(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     const f = input.files?.[0];

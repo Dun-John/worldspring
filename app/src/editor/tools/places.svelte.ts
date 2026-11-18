@@ -7,7 +7,8 @@ import type { Created, Edits, Feature, Overlay, Stroke, WorldFile } from '../../
 import type { PointerTool } from '../../render/MapView';
 import { shell, type Ask, type Remake } from '../../ui/shell/layout.svelte';
 import type { SiteChoice } from '../../ui/PlacePanel.svelte';
-import { MI, pinStroke, type PinTier } from '../sketcher';
+import { MI } from '../units';
+import { pinStroke, type PinTier } from '../sketcher';
 import { madeCount, madeOn, type MadeOn } from '../reanchor';
 import { tokensIn, type Carried } from '../../play/carry';
 import type { PlayState } from '../../play/state';

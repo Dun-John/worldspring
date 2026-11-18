@@ -1,7 +1,8 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
+import { INK } from '../pen';
 
-export const INK = 0x1d1a14;
+export { INK };
 /** Ink outline and inner line widths, in squares (about 3 and 1.6 px at 64 px a square). */
 export const OUT = 0.045;
 export const LINE = 0.025;

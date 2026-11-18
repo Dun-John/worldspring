@@ -126,6 +126,8 @@ export const TERRACE = 'roof terrace';
 export const PLATFORMS = new Set(['low_dais', 'garden_path']);
 
 export const TILE_N = 256;
+/** Tile levels that draw site layouts (`payload::SITE_MIN_LEVEL`). */
+export const SITE_MIN_LEVEL = 9;
 export const TILE_SAMPLES = TILE_N + 1;
 export const HALO = 4;
 export const KIND_TERRAIN = 1;

@@ -15,11 +15,8 @@
 // Each draws into `g` and leaves its transform as it was.
 import type { Graphics } from 'pixi.js';
 import { oval, PX, rng, shade } from './atlas';
+import { INK, FT, OUT, LINE } from './pen';
 
-const INK = 0x1d1a14;
-const FT = PX / 5;
-const OUT = 0.045 * PX;
-const LINE = 0.025 * PX;
 /** Pale rubble (limestone, granite): dark, mid, light, sunlit. */
 const RUBBLE = [0x8c8678, 0xb8b0a0, 0xd6cebc, 0xece6d6];
 const WOOD = [0x5c3b22, 0x8a5a32, 0xb98552, 0xe0b47a];

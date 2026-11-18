@@ -155,7 +155,6 @@ pub fn arch_front(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Opt
 
 /// `court_of` with the court's pieces (`Court`); a monastery's garth (`garth_plan`); a coaching inn's
 /// yard (`yard_plan`); None for every
-
 /// other building.
 pub fn court_plan(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<Court> {
     if town::palace::is_monastery(b) {

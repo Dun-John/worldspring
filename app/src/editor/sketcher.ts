@@ -1,8 +1,8 @@
 // The sketch being drawn (before it is generated): tools and their settings, freehand strokes
 // from pointer input (thinned while drawing, simplified when done), erasing and undo.
 import type { PinKind, RoadKind, SiteKind, Stroke, VolcanoActivity, VolcanoKind } from '../gen/protocol';
+import { MI } from './units';
 
-export const MI = 5280;
 
 /** Editor tools; each makes strokes of one kind (`erase` removes them). */
 export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'massif' | 'elevation' | 'river' | 'lake' | 'biome' | 'volcano' | 'pin' | 'site' | 'region' | 'road' | 'erase';

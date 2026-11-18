@@ -14,6 +14,7 @@ import type { Edits, Water, WaterKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
+import { FREEHAND_FT } from './units';
 import { contains } from './geom';
 export { contains };
 
@@ -442,7 +443,6 @@ function fillet(pts: Pt[]): Pt[] {
 }
 
 /** Freehand outlines are sampled this far apart (ft) at least. */
-const FREEHAND_FT = 15;
 
 /** An open line with points dropped while it stays within `tol` ft of them, the tolerance raised
  * until at most `max` (Douglas-Peucker). */

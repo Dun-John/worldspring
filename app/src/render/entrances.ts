@@ -1,6 +1,7 @@
 import type { Graphics } from "pixi.js";
 import { ROOF_INK } from "../gen/battlePrep";
 import { PX } from "./atlas";
+import { OUT, LINE } from "./pen";
 
 /**
  * Ways underground drawn by the theme they come to (v63, styles 4-6 of `size = kind + 16 × style`,
@@ -159,8 +160,6 @@ function drawBarrow(g: Graphics, at: At, rnd: () => number) {
 }
 
 /** Outline widths (px): `OUT` round shapes over half a square, `LINE` for parts and joints. */
-const OUT = 0.045 * PX;
-const LINE = 0.025 * PX;
 
 /**
  * A dressed stone block (`pts`: its corners, px, either winding): filled, a crescent of shade

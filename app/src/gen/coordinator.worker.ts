@@ -18,6 +18,7 @@ import {
   type ToCoordinator,
   type ToGen,
   type WantTile,
+  SITE_MIN_LEVEL,
 } from './protocol';
 
 const CACHE_MAX = 200;
@@ -67,8 +68,6 @@ let editFields: Record<string, unknown> = {};
 /** The overlay's settlements and sites, for the workers that load T0 without the overlay. */
 let placesJson = '[]';
 let epoch = 0;
-/** Cached tiles at levels below this don't draw site layouts (`payload::SITE_MIN_LEVEL`). */
-const SITE_MIN_LEVEL = 9;
 let jobsDone = 0;
 let msTotal = 0;
 

@@ -17,6 +17,7 @@ import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { WARD_COLOURS, type TownMode } from './town';
 import { dist, inside, lerp } from './geom';
+import { GRAB_PX } from './units';
 
 type Pt = [number, number];
 
@@ -36,7 +37,6 @@ export function pickIn(plan: StreetPlan, p: StreetPick): boolean {
 /** The brush's radius at size 1 (ft): about a block across. */
 export const HAND_BRUSH_FT = 150;
 /** Grabbing a junction or a street: within this many screen px. */
-const GRAB_PX = 10;
 /** A point drawn snaps to a junction or a street within this many screen px (or the plan's
  * `snap_ft`, if more). */
 const SNAP_PX = 12;

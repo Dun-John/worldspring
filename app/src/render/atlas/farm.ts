@@ -1,4 +1,5 @@
 import { PX } from '../scale';
+import { OUT, LINE } from '../pen';
 import { Graphics } from 'pixi.js';
 import { stockadeStakes, fenceGate } from '../walls';
 import { INK, WOOD, oval, shade } from './common';
@@ -10,9 +11,7 @@ import { endGrain } from './wood';
 
 // v63 castles: a castle's kitchen garden (rows, a wattle fence, skeps) and its smithy's anvil.
 
-/** Ink widths by size (the sprite style rule): outlines of shapes over half a square, of smaller ones. */
-export const OUT = 0.045 * PX;
-export const LINE = 0.025 * PX;
+export { OUT, LINE };
 
 /** A round leafy head (a cabbage, a herb clump) at (x, y): lobes inked as one, dark under, lit toward
  * the NW, a few lobes picked out lighter. */

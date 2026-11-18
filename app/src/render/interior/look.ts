@@ -1,11 +1,11 @@
 import { ROOF_SLOPE, OPEN_BELOW, TERRACE, type InteriorItem, type InteriorLevel } from '../../gen/protocol';
 import { VARIED, UNDER_DRAWN, PLATFORMS } from '../furniture';
 import { Graphics, GlProgram } from 'pixi.js';
+import { INK } from '../pen';
 import vertex from '../shaders/terrain.vert?raw';
 import undergroundFragment from '../shaders/underground.frag?raw';
 import { YURT_ROOMS, type Pt } from '../roomShapes';
 
-export const SQUARE_FT = 5;
 /** Underground props drawn against the wall beside them (their look depends on its side). */
 export const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
 /** Underground props with a back against a wall (a dais's throne; a collapsed wall, the wall it fell from). */
@@ -38,7 +38,7 @@ export function sharedKind(kind: string, underground: boolean): string | undefin
 }
 /** Props scattered differently per placement: one of four variants, picked by position. */
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
-export const INK = 0x1d1a14;
+export { INK };
 /** A lock's colour 1-31 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. */
 export const LOCK_COLORS = [0x9a958b, 0xd8412f, 0xe8892a, 0xe8cc2a, 0x3fae52, 0x2f86d8, 0x9a56d4, 0xf0ece0];
 /** Colours 8-31 step round the hue wheel (`MAX_LOCK`), in lightness bands so neighbours differ. */

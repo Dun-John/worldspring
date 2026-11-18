@@ -1,4 +1,6 @@
-import { PX } from '../scale';
+import { INK, FT } from '../pen';
+
+export { INK, FT };
 
 export function rng(seed: number): () => number {
   let a = seed >>> 0;
@@ -11,7 +13,6 @@ export function rng(seed: number): () => number {
   };
 }
 
-export const INK = 0x1d1a14;
 
 export function shade(color: number, f: number): number {
   const r = Math.min(255, Math.max(0, ((color >> 16) & 255) * f));
@@ -47,7 +48,6 @@ export function oval(cx: number, cy: number, rx: number, ry: number, rot: number
 }
 
 /** Atlas pixels per foot. */
-export const FT = PX / 5;
 /** Worked wood (barrels, carts, stalls, posts) and iron: [dark, mid, light, sunlit]. */
 export const WOOD = [0x5c3b22, 0x8a5a32, 0xb98552, 0xe0b47a];
 export const IRON = [0x34363c, 0x4a4e56, 0x6e7278, 0x9aa0a6];

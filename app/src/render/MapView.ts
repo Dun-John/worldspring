@@ -3,7 +3,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, halfToFloat, linkSites } from '../gen/protocol';
+import { type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, SITE_MIN_LEVEL, halfToFloat, linkSites } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
@@ -80,8 +80,6 @@ const STAGE_WEIGHT: [string, number][] = [
   ['done', 0.048],
 ];
 
-/** Tile levels that draw site layouts (`payload::SITE_MIN_LEVEL`). */
-const SITE_MIN_LEVEL = 9;
 /** Sea lanes fade out between these many levels before the site plans (`SITE_MIN_LEVEL`). */
 const LANE_FADE: [number, number] = [1.3, 0.4];
 /** A wall's length (ft). */

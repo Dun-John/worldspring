@@ -1,15 +1,12 @@
 // Atlas for building furniture and underground props, filled as items are first seen: each look
 // (a key naming everything its drawing depends on) is drawn once with InteriorLayer's own drawing
 // code into a mipmapped page, then shown as sprites. Pages are kept per renderer for the session.
+import { MIP_LEVELS, PAD } from './scale';
 import { Container, Graphics, Matrix, Rectangle, RenderTexture, Texture, type Renderer } from 'pixi.js';
 
 /** Atlas resolution: pixels per 5-ft square (as the battlemap atlas). */
 export const ITEM_PX = 64;
 const PAGE = 2048;
-/** Mip levels kept, and the empty gap round every frame on a grid of the same size, so that no
- * level blends two frames. */
-const MIP_LEVELS = 4;
-const PAD = 1 << (MIP_LEVELS - 1);
 
 /** A drawn look: its texture, and where its top-left sits relative to the item's origin, in squares. */
 export interface ItemFrame {

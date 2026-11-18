@@ -1,6 +1,7 @@
 import { FT, LX, LY, mix, PLUM, INK, STONE } from '../bridges';
 import type { Shape } from '../../gen/battlePrep';
 import { PX } from '../scale';
+import { OUT, LINE } from '../pen';
 import type { Graphics } from 'pixi.js';
 
 /** The walk and a tower's top: flags between the stone's mid and light tones. */
@@ -97,8 +98,7 @@ export const brick = () => ST === TONES[3];
 export const stoneTone = (rnd: () => number) => () => (rnd() < 0.35 ? ST[2] : ST[1]);
 
 /** Outlines by size (assets/STYLE_GUIDE.md): a shape over about half a square across, and smaller parts. */
-export const OUT = 0.045 * PX;
-export const LINE = 0.025 * PX;
+export { OUT, LINE };
 
 /** A wall's, tower's or gate's look, decoded from its style (`WallStyle::code`): its culture group (0 North,
  * 1 West, 2 South, 3 Dry, 4 Steppe), tower shape, material, merlons, stone, gatehouse; rich and poor are in the

@@ -10,10 +10,10 @@ import { getImage } from './session';
 import { FOG_N, roleOf, settingsOf, type GridSettings, type Shape, type Token } from './state';
 import { bitAt, shapeLabel, shapeOutline, type Bitmap } from './vision';
 import type { PlayController } from './controller';
+import { INK } from '../render/pen';
 
 /** Local drawing units per square (tokens, shapes, rulers). */
 const TPX = 64;
-const INK = 0x1d1a14;
 const SELECT = 0x38bdf8;
 /** A PC's pin on screen (px, x `tableScale`): PCs drawn smaller on the surface stay this size. */
 export const PIN = 24;

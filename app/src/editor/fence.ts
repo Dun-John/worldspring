@@ -9,6 +9,7 @@ import type { FenceKind, Rect } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
+import { FREEHAND_FT } from './units';
 import { simplifyOpen } from './paths';
 
 export type Pt = [number, number];
@@ -70,7 +71,6 @@ export interface FenceHost {
 }
 
 const MAX_POINTS = 400;
-const FREEHAND_FT = 15;
 const round = (p: Pt): Pt => [Math.round(p[0] * 2) / 2, Math.round(p[1] * 2) / 2];
 
 export class FenceTool implements PointerTool {

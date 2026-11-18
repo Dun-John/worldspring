@@ -5,9 +5,9 @@
 import type { Graphics } from 'pixi.js';
 import type { Shape } from '../gen/battlePrep';
 import { PX } from './scale';
+import { INK, FT } from './pen';
 
-export const INK = 0x1d1a14;
-export const FT = PX / 5;
+export { INK, FT };
 /** Towards the light (north-west, the upper left of the screen). */
 export const LX = -Math.SQRT1_2;
 export const LY = -Math.SQRT1_2;

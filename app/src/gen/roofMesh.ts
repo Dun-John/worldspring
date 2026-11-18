@@ -4,13 +4,14 @@ import earcut from 'earcut';
 import { FELT, roofRgb, ROOF_MATERIAL_RGB, YURT_FELT } from './protocol';
 import { domeSpots, frame, isConvex, ridgeEnds, roofParts, roundOutline as roundEaves, signedArea, straighten } from './roofGeom';
 import type { ColorMesh, Roof } from './battlePrep';
+import { PX } from '../render/scale';
+import { INK, FT } from '../render/pen';
 
-/** Texture pixels per square (matches `atlas.PX`). */
-export const PX = 64;
+export { PX };
 
 // Roof tints: terracotta, slate, thatch, weathered shingle, moss.
 export const ROOF_TINTS = [0x995742, 0x5c6470, 0xa88b5c, 0x7a6656, 0x7f7b54];
-export const ROOF_INK = 0x1d1a14;
+export const ROOF_INK = INK;
 /** Ink weights (chunk px): round a roof between the big props' (stalls, carts: 0.055 sq), a little over the
  * sprites' `LINE` inside it (0.032); never thinner on screen than at 29 px a square (`colormesh.vert`),
  * as the mipmapped sprites' ink. */
@@ -40,7 +41,6 @@ function clipHalf(pts: number[], ox: number, oy: number, nx: number, ny: number)
 }
 
 /** Chunk pixels per foot. */
-const FT = PX / 5;
 /** The roof pattern code of soot round a smithy's chimney (`colormesh.frag`; materials are 0-11). */
 const SOOT = 12;
 
