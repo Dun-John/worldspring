@@ -29,9 +29,6 @@
 //! regions only, so the same input with rings permuted, reversed or starting elsewhere gives the
 //! same bits.
 
-// Nothing in generation calls this yet: it is the geometry for P3's hand-laid towns (town/hand.rs).
-#![allow(dead_code)]
-
 use super::geom::{self, P};
 use crate::hash::FastMap;
 use crate::{ceil, fabs, round, sqrt};

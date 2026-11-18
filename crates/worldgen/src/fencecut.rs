@@ -237,11 +237,6 @@ impl Cache {
     }
 }
 
-/// A generated run by id (Ok(None): no such run; Err: why not).
-pub fn run_of(world: &World, t0: &T0, id: &str) -> Result<Option<Run>, String> {
-    Cache::default().run(world, t0, id)
-}
-
 /// The working copy of the town edits a change makes.
 struct Towns<'a> {
     edits: &'a Edits,

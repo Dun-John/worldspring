@@ -18,12 +18,6 @@ impl Fnv64 {
         }
     }
 
-    #[inline]
-    pub fn write_f32s(&mut self, v: &[f32]) {
-        for x in v {
-            self.write(&x.to_le_bytes());
-        }
-    }
 
     #[inline]
     pub fn finish(&self) -> u64 {

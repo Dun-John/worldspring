@@ -144,18 +144,6 @@ pub(super) fn kept_from(ground: &KeptGround, kept: &Kept, raw: &[Building]) -> R
     Ok(out)
 }
 
-/// Block `block` of hand town `index`: its kept buildings (world ft, id order), from its record
-/// alone (none if it keeps none).
-pub fn kept_buildings(world: &World, t0: &T0, index: usize, block: u32) -> Result<Vec<Building>, String> {
-    let recs = HandRecords::of(&world.file.edits.streets, index);
-    let town = recs.town.as_ref().ok_or("not a hand town")?;
-    let b = recs.blocks.get(&block).ok_or("no such block")?;
-    match &b.kept {
-        Some(k) => kept_on(&KeptGround::of(world, t0, index, town), k),
-        None => Ok(Vec::new()),
-    }
-}
-
 /// The fields two buildings differ in (exactly: every float by its bits).
 pub fn differs(a: &Building, b: &Building) -> Vec<&'static str> {
     let mut out = Vec::new();

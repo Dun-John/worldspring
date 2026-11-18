@@ -116,9 +116,4 @@ impl WorldGeom {
         ((self.map_w_ft / s).ceil().max(1.0) as u32, (self.map_h_ft / s).ceil().max(1.0) as u32)
     }
 
-    #[inline]
-    pub fn tile_in_map(&self, key: &TileKey) -> bool {
-        let (nx, ny) = self.tiles_across(key.level);
-        key.level <= self.max_level && key.x < nx && key.y < ny
-    }
 }
