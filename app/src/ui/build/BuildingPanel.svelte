@@ -9,6 +9,7 @@
   import type { IconName } from '../icons';
   import BuildingOptions from './BuildingOptions.svelte';
   import ToolPanel from './ToolPanel.svelte';
+  import { NEW_UI } from '../shell/layout.svelte';
 
   interface Props {
     settings: BuildSettings;
@@ -45,10 +46,12 @@
       <button class:on={settings.shape === s.key} aria-pressed={settings.shape === s.key} onclick={() => shape(s.key)} title="{s.label} ({s.kbd})"><Icon name={s.icon} size={16} />{s.label}</button>
     {/each}
   </div>
+  <!-- (`?ui=new`: what it is and its storeys show; its roof and the rest fold.) -->
+  {#if NEW_UI && !peek}<BuildingOptions bind:settings {funcs} {editing} {onSave} part="main" />{/if}
   {#snippet hint()}
     <div class="ws-hint">{editing ? 'Draw on the map to move or reshape it: ' : ''}{SHAPES.find((s) => s.key === settings.shape)?.hint}</div>
   {/snippet}
   {#snippet more()}
-    <BuildingOptions bind:settings {funcs} {editing} {onSave} />
+    <BuildingOptions bind:settings {funcs} {editing} {onSave} part={NEW_UI ? 'rest' : 'all'} />
   {/snippet}
 </ToolPanel>

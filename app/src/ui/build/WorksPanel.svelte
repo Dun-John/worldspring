@@ -6,6 +6,7 @@
   import type { WorksSettings } from '../../editor/works';
   import Icon from '../Icon.svelte';
   import ToolPanel from './ToolPanel.svelte';
+  import { NEW_UI } from '../shell/layout.svelte';
 
   const KEEP_SHAPES: { key: KeepShape | 'auto'; label: string; title: string }[] = [
     { key: 'auto', label: 'Any keep', title: 'A keep of the castle’s own kind (now and then a shell keep on a mound)' },
@@ -32,14 +33,22 @@
     near: boolean;
     peek?: boolean;
     onZoomIn: () => void;
+    /** `?ui=new`: Castle & walls is one tool, a switch between the two. */
+    onMode?: (m: 'castle' | 'wall') => void;
   }
 
-  let { mode, works = $bindable(), worksEditing, handTown = false, onWorksSave, onDone, near, peek = false, onZoomIn }: Props = $props();
+  let { mode, works = $bindable(), worksEditing, handTown = false, onWorksSave, onDone, near, peek = false, onZoomIn, onMode }: Props = $props();
 </script>
 
 {#snippet changing()}Changing <b>{worksEditing}</b>{/snippet}
 
 <ToolPanel title={mode === 'castle' ? 'Castle' : 'Wall'} {near} {peek} zoomText="Zoom in to draw." {onZoomIn} changing={worksEditing ? changing : undefined} {onDone}>
+  {#if NEW_UI && onMode && !worksEditing}
+    <div class="ws-seg" role="radiogroup" aria-label="Castle or wall">
+      <button class:on={mode === 'castle'} role="radio" aria-checked={mode === 'castle'} onclick={() => mode !== 'castle' && onMode('castle')} title="A castle: its walls, gate, keep and yard (K)"><Icon name="castle" size={16} />Castle</button>
+      <button class:on={mode === 'wall'} role="radio" aria-checked={mode === 'wall'} onclick={() => mode !== 'wall' && onMode('wall')} title="A wall standing on its own, anywhere (W)"><Icon name="wall" size={16} />Wall</button>
+    </div>
+  {/if}
   {#if mode === 'castle'}
     <div class="ws-seg" role="radiogroup" aria-label="Outline">
       <button class:on={works.castleShape === 'rect'} aria-pressed={works.castleShape === 'rect'} onclick={() => (works.castleShape = 'rect')} title="Rectangle (R)"><Icon name="square" size={16} />Rectangle</button>
@@ -97,6 +106,10 @@
       Name
       <input class="ws-input" bind:value={works.name} placeholder={worksEditing ? '' : 'Named for the place if left empty'} />
     </label>
-    {#if worksEditing}<button class="ws-btn primary block" onclick={onWorksSave}>Save changes</button>{/if}
+    {#if worksEditing && !NEW_UI}<button class="ws-btn primary block" onclick={onWorksSave}>Save changes</button>{/if}
+  {/snippet}
+  {#snippet always()}
+    <!-- (`?ui=new`: Save stays out of the fold.) -->
+    {#if worksEditing && NEW_UI && !peek}<button class="ws-btn primary block" onclick={onWorksSave}>Save changes</button>{/if}
   {/snippet}
 </ToolPanel>

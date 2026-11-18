@@ -6,7 +6,8 @@
   import type { GroundMode, GroundSettings } from '../editor/ground';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
-  import { remember, remembered, shell } from './shell/layout.svelte';
+  import { NEW_UI, foldOpen, remember, remembered, setFold, shell } from './shell/layout.svelte';
+  import IsletList from './IsletList.svelte';
 
   interface Props {
     settings: GroundSettings;
@@ -23,7 +24,7 @@
     onRemove: () => void;
     onZoomIn: () => void;
     /** The world's own islets, those taken away marked, and taking one away or bringing it back. */
-    islets?: { id: string; x: number; y: number; r: number; river: boolean; removed: boolean; tower: boolean }[];
+    islets?: import('./IsletList.svelte').Islet[];
     onIslet?: (id: string, removed: boolean) => void;
     onGoIslet?: (x: number, y: number) => void;
   }
@@ -34,7 +35,7 @@
     { key: 'raise', label: 'Raise', icon: 'raise', kbd: 'Q', hint: 'Brush over the ground to lift it, at most by the height below however often you go over it.' },
     { key: 'lower', label: 'Lower', icon: 'lower', kbd: 'W', hint: 'Brush over the ground to sink it. Dry ground never sinks under the water beside it.' },
     { key: 'smooth', label: 'Smooth', icon: 'relax', kbd: 'E', hint: 'Brush over bumps and steps to ease them toward the ground round them.' },
-    { key: 'restore', label: 'Restore', icon: 'reset', kbd: 'R', hint: 'Brush to take brushed changes back toward the ground as generated (plateaus stay).' },
+    { key: 'restore', label: NEW_UI ? 'Put back' : 'Restore', icon: 'reset', kbd: 'R', hint: 'Brush to take brushed changes back toward the ground as generated (plateaus stay).' },
     { key: 'plateau', label: 'Plateau', icon: 'plateau', kbd: 'L', hint: 'Drag a loop round the ground: inside it becomes flat at the level shown. Start on a plateau to extend it.' },
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a plateau or pit to change its level or edge, or take it away.' },
   ];
@@ -70,7 +71,7 @@
 <div class="ground">
   <div class="ws-seg modes" role="radiogroup" aria-label="Tool">
     {#each MODES as m (m.key)}
-      <button class:on={settings.mode === m.key} aria-pressed={settings.mode === m.key} onclick={() => (settings.mode = m.key)} title="{m.label} ({m.kbd})"><Icon name={m.icon} size={16} />{m.label}</button>
+      <button class:on={settings.mode === m.key} aria-pressed={settings.mode === m.key} onclick={() => (settings.mode = m.key)} title="{m.label}{NEW_UI && m.key === 'restore' ? ' (was Restore)' : ''} ({m.kbd})"><Icon name={m.icon} size={16} />{m.label}</button>
     {/each}
   </div>
   {#if inside}
@@ -84,8 +85,8 @@
   {#if !peek}
     <div class="ws-hint">{hint}</div>
     {#if brush}
-      <details class="ws-group" open={remembered('ground.brush', true)} ontoggle={(e) => remember('ground.brush', e.currentTarget.open)}>
-        <summary>Brush settings</summary>
+      <details class="ws-group" open={NEW_UI ? foldOpen('ground') : remembered('ground.brush', true)} ontoggle={(e) => (NEW_UI ? setFold('ground', e.currentTarget.open) : remember('ground.brush', e.currentTarget.open))}>
+        <summary>{NEW_UI ? 'More options' : 'Brush settings'}</summary>
         <div class="ws-group-body">
           <label class="slider">
             <span>Radius</span><output>{settings.radius} ft</output>
@@ -109,8 +110,8 @@
         </div>
       </details>
     {:else if settings.mode === 'plateau'}
-      <details class="ws-group" open={remembered('ground.plateau', true)} ontoggle={(e) => remember('ground.plateau', e.currentTarget.open)}>
-        <summary>New plateau</summary>
+      <details class="ws-group" open={NEW_UI ? foldOpen('ground') : remembered('ground.plateau', true)} ontoggle={(e) => (NEW_UI ? setFold('ground', e.currentTarget.open) : remember('ground.plateau', e.currentTarget.open))}>
+        <summary>{NEW_UI ? 'More options' : 'New plateau'}</summary>
         <div class="ws-group-body">
           <label class="slider">
             <span>{settings.offset < 0 ? 'Dug below the ground' : 'Above the ground'}</span><output>{signed(settings.offset)}</output>
@@ -123,17 +124,8 @@
         </div>
       </details>
     {/if}
-    {#if islets.length}
-      <details class="card" aria-label="The world's islets">
-        <summary>Islets in the world <span class="ws-muted">· {islets.filter((i) => !i.removed).length} of {islets.length}</span></summary>
-        {#each islets as i (i.id)}
-          <div class="ws-row">
-            <button class="ws-chip grow" onclick={() => onGoIslet(i.x, i.y)} title="Fly there">{i.river ? 'River' : 'Coast'} islet, {Math.round(i.r)} ft{i.tower ? ', watchtower' : ''}{i.removed ? ' (taken away)' : ''}</button>
-            <button class="ws-chip" onclick={() => onIslet(i.id, !i.removed)}>{i.removed ? 'Bring back' : 'Take away'}</button>
-          </div>
-        {/each}
-      </details>
-    {/if}
+    <!-- (`?ui=new`: the world's islets are in Docks & islets.) -->
+    {#if !NEW_UI}<IsletList {islets} {onIslet} {onGoIslet} />{/if}
     {#if selected}
       <section class="card" aria-label="Plateau">
         <div class="title">

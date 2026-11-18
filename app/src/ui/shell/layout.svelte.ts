@@ -146,3 +146,13 @@ export function remembered(key: string, fallback: boolean): boolean {
 export function remember(key: string, open: boolean) {
   store(`ui.open.${key}`, open ? '1' : '0');
 }
+
+/** `?ui=new`: whether a tool's "More options" fold is open (shut at first), as this viewer left it
+ * (the same key `ToolPanel` keeps). */
+export function foldOpen(tool: string): boolean {
+  return stored(`ws-fold:tool:${tool}`) === 'open';
+}
+
+export function setFold(tool: string, open: boolean) {
+  store(`ws-fold:tool:${tool}`, open ? 'open' : 'shut');
+}

@@ -11,15 +11,23 @@
     /** The building being changed (its name), else drawing new ones. */
     editing: string | null;
     onSave: () => void;
+    /** `?ui=new`: the main options (what it is, Save) shown, the rest under More options; `floors`:
+     * which of the two its storeys go with. */
+    part?: 'all' | 'main' | 'rest';
+    floors?: 'main' | 'rest';
   }
 
-  let { settings = $bindable(), funcs, editing, onSave }: Props = $props();
+  let { settings = $bindable(), funcs, editing, onSave, part = 'all', floors = 'main' }: Props = $props();
+  const main = $derived(part !== 'rest');
+  const rest = $derived(part !== 'main');
+  const storeys = $derived(part === 'all' || part === floors);
 
   const ROOF_LABEL: Record<string, string> = { hip: 'Pitched', battlements: 'Battlements', cone: 'Cone' };
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
   const categories = $derived(categoriesOf(funcs));
 </script>
 
+{#if main}
 <label class="ws-field">
   What it is
   <select class="ws-input" bind:value={settings.func}>
@@ -37,6 +45,8 @@
     {/if}
   </select>
 </label>
+{/if}
+{#if storeys}
 <div class="ws-field">
   Storeys
   <div class="stepper">
@@ -45,6 +55,8 @@
     <button class="ws-icon-btn" onclick={() => (settings.floors = Math.min(MAX_FLOORS, settings.floors + 1))} disabled={settings.floors >= MAX_FLOORS} aria-label="One storey more"><Icon name="plus" size={16} /></button>
   </div>
 </div>
+{/if}
+{#if rest}
 <div class="ws-field">
   Roof
   <div class="ws-seg">
@@ -89,4 +101,5 @@
   Name
   <input class="ws-input" bind:value={settings.name} placeholder={editing ? '' : 'Named for its trade if left empty'} />
 </label>
-{#if editing}<button class="ws-btn primary block" onclick={onSave}>Save changes</button>{/if}
+{/if}
+{#if editing && main}<button class="ws-btn primary block" onclick={onSave}>Save changes</button>{/if}

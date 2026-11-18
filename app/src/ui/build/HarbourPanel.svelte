@@ -4,6 +4,8 @@
   import { ISLET_RADIUS, ISLET_RISE, type HarbourSettings, type HarbourKind } from '../../editor/harbour';
   import type { IconName } from '../icons';
   import ToolPanel from './ToolPanel.svelte';
+  import IsletList, { type Islet } from '../IsletList.svelte';
+  import { NEW_UI } from '../shell/layout.svelte';
 
   interface Props {
     harbour: HarbourSettings;
@@ -14,9 +16,13 @@
     near: boolean;
     peek?: boolean;
     onZoomIn: () => void;
+    /** `?ui=new`: the world's own islets (moved here from Ground). */
+    islets?: Islet[];
+    onIslet?: (id: string, removed: boolean) => void;
+    onGoIslet?: (x: number, y: number) => void;
   }
 
-  let { harbour = $bindable(), harbourPicked, onHarbourRemove, onDone, near, peek = false, onZoomIn }: Props = $props();
+  let { harbour = $bindable(), harbourPicked, onHarbourRemove, onDone, near, peek = false, onZoomIn, islets = [], onIslet = () => {}, onGoIslet = () => {} }: Props = $props();
 
   const HARBOUR: { key: HarbourKind; label: string; icon: IconName; look: string }[] = [
     { key: 'islet', label: 'Islet', icon: 'mountain', look: 'Click in a river, lake or the sea: a rock islet rises there. A building, tower or castle may stand on it.' },
@@ -66,5 +72,6 @@
         <label class="switch"><span class="grow">Lighthouse at its tip</span><input type="checkbox" class="ws-switch" bind:checked={harbour.lighthouse} /></label>
       {/if}
     {/if}
+    {#if NEW_UI}<IsletList {islets} {onIslet} {onGoIslet} />{/if}
   {/snippet}
 </ToolPanel>

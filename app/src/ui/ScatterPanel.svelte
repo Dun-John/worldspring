@@ -15,7 +15,7 @@
   import type { IconName } from './icons';
   import InHand from './InHand.svelte';
   import ItemPicker, { type PickItem } from './ItemPicker.svelte';
-  import { remember, remembered, shell } from './shell/layout.svelte';
+  import { NEW_UI, foldOpen, remember, remembered, setFold, shell } from './shell/layout.svelte';
 
   interface Props {
     settings: ScatterSettings;
@@ -246,8 +246,9 @@
     {/if}
     {#if !peek}
       <div class="ws-hint">{MODES.find((m) => m[0] === settings.mode)?.[4]}</div>
-      <details class="ws-group" open={remembered('scatter.brush', false)} ontoggle={(e) => remember('scatter.brush', e.currentTarget.open)}>
-        <summary>{settings.mode === 'erase' ? 'Eraser settings' : settings.mode === 'place' ? 'More size and turn' : 'Brush settings'}</summary>
+      <!-- (`?ui=new`: the tool's "More options", remembered as the other tools' are.) -->
+      <details class="ws-group" open={NEW_UI ? foldOpen('trees') : remembered('scatter.brush', false)} ontoggle={(e) => (NEW_UI ? setFold('trees', e.currentTarget.open) : remember('scatter.brush', e.currentTarget.open))}>
+        <summary>{NEW_UI ? 'More options' : settings.mode === 'erase' ? 'Eraser settings' : settings.mode === 'place' ? 'More size and turn' : 'Brush settings'}</summary>
         <div class="ws-group-body">
           {#if settings.mode !== 'erase'}
             <label class="slider">

@@ -28,6 +28,8 @@
   import { SITE_SIZES, THEMES, type SiteSize } from '../gen/protocol';
   import { PIN_KINDS } from '../editor/sketcher';
   import Icon from './Icon.svelte';
+  import MoreFold from './shell/MoreFold.svelte';
+  import { NEW_UI } from './shell/layout.svelte';
   import type { IconName } from './icons';
 
   interface Props {
@@ -168,6 +170,7 @@
       {/if}
     {/each}
     <div class="ws-hint">{choice.look}</div>
+    {#snippet economy()}
     {#if tier}
       <label class="ws-field">
         Economy
@@ -179,22 +182,8 @@
         <input class="ws-input" placeholder="District names, central first (optional)" bind:value={wards} aria-label="District names, separated by commas" />
       {/if}
     {/if}
-    {#if pick === 'ruin'}
-      <div class="ws-field">
-        Beneath
-        <div class="ws-seg">
-          {#each RUIN_UNDER as u (u)}<button class:on={ruinUnder === u} onclick={() => ((ruinUnder = u), (theme = ''))}>{label(u)}</button>{/each}
-        </div>
-      </div>
-    {/if}
-    {#if underKind}
-      <div class="ws-field">
-        Size
-        <div class="ws-seg">
-          <button class:on={size === ''} onclick={() => (size = '')}>Any</button>
-          {#each SITE_SIZES as s (s)}<button class:on={size === s} onclick={() => (size = s)}>{label(s)}</button>{/each}
-        </div>
-      </div>
+    {/snippet}
+    {#snippet levelsRow()}
       <div class="ws-row">
         <div class="ws-field grow">
           Levels
@@ -214,11 +203,46 @@
           </label>
         {/if}
       </div>
-    {/if}
+    {/snippet}
+    {#snippet nameField()}
     <label class="ws-field">
       Name
       <input class="ws-input" bind:value={name} placeholder="Named for you if left empty" />
     </label>
+    {/snippet}
+    {#snippet kindOptions()}
+      {#if pick === 'ruin'}
+        <div class="ws-field">
+          Beneath
+          <div class="ws-seg">
+            {#each RUIN_UNDER as u (u)}<button class:on={ruinUnder === u} onclick={() => ((ruinUnder = u), (theme = ''))}>{label(u)}</button>{/each}
+          </div>
+        </div>
+      {/if}
+      {#if underKind}
+        <div class="ws-field">
+          Size
+          <div class="ws-seg">
+            <button class:on={size === ''} onclick={() => (size = '')}>Any</button>
+            {#each SITE_SIZES as s (s)}<button class:on={size === s} onclick={() => (size = s)}>{label(s)}</button>{/each}
+          </div>
+        </div>
+        {#if !NEW_UI}{@render levelsRow()}{/if}
+      {/if}
+    {/snippet}
+    {#if NEW_UI}
+      <!-- (`?ui=new`: the kind and its size show; economy, district names, levels and the name fold.) -->
+      {@render kindOptions()}
+      <MoreFold tool="places">
+        {@render economy()}
+        {#if underKind}{@render levelsRow()}{/if}
+        {@render nameField()}
+      </MoreFold>
+    {:else}
+      {@render economy()}
+      {@render kindOptions()}
+      {@render nameField()}
+    {/if}
     {#if tier && instant}
       <div class="towns">
         <Icon name="check" size={16} />

@@ -8,6 +8,7 @@
   import BuildingOptions from './BuildingOptions.svelte';
   import QuickLine from './QuickLine.svelte';
   import ToolPanel from './ToolPanel.svelte';
+  import { NEW_UI } from '../shell/layout.svelte';
 
   interface Props {
     stamp: StampSettings;
@@ -32,12 +33,14 @@
   ] as const;
 </script>
 
-<ToolPanel title="Stamp" {near} {peek} {onZoomIn}>
+<!-- (`?ui=new`: what it is and Place it show; its storeys, roof and the rest fold.) -->
+<ToolPanel title="Stamp" {near} {peek} {onZoomIn} {...NEW_UI ? { quick, place: 'Place it', onPlace } : {}}>
   <div class="ws-seg" role="radiogroup" aria-label="Size">
     {#each STAMP_SIZES as z (z.key)}
       <button class:on={stamp.size === z.key} aria-pressed={stamp.size === z.key} onclick={() => (stamp.size = z.key)}>{z.label}</button>
     {/each}
   </div>
+  {#if NEW_UI && !peek}<BuildingOptions bind:settings {funcs} {editing} {onSave} part="main" floors="rest" />{/if}
   {#snippet hint()}
     <div class="ws-hint">Click to set one down, fronting the nearest street. The ghost shows where it lands and which way it faces. Each click puts down another.</div>
   {/snippet}
@@ -46,7 +49,11 @@
       <span class="grow">Clear the way<span class="ws-muted"> · the town’s own buildings under it go</span></span>
       <input type="checkbox" class="ws-switch" bind:checked={stamp.clear} />
     </label>
-    <QuickLine {quick} action="Place it" {onPlace} />
-    <BuildingOptions bind:settings {funcs} {editing} {onSave} />
+    {#if NEW_UI}
+      <BuildingOptions bind:settings {funcs} {editing} {onSave} part="rest" floors="rest" />
+    {:else}
+      <QuickLine {quick} action="Place it" {onPlace} />
+      <BuildingOptions bind:settings {funcs} {editing} {onSave} />
+    {/if}
   {/snippet}
 </ToolPanel>
