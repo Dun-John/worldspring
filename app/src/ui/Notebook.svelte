@@ -1,6 +1,4 @@
 <script lang="ts" module>
-  import type { Npc, Plot } from '../gen/protocol';
-
   /** The place selected or entered: NPCs can be put there, plots tied to it. */
   export interface Here {
     id: string;
@@ -8,25 +6,16 @@
     /** Inside a building or site: the level in view. */
     level?: number;
   }
-
-  /** A new NPC or plot id: random, so the app and an agent creating at once never collide. */
-  export function newNoteId(prefix: 'n' | 'p'): string {
-    const b = new Uint8Array(8);
-    crypto.getRandomValues(b);
-    return `${prefix}:${[...b].map((x) => '0123456789abcdefghijklmnopqrstuvwxyz'[x % 36]).join('')}`;
-  }
-
-  export const blankNpc = (name = 'New NPC'): Npc => ({ name, appearance: '', mannerisms: '', attitude: { stance: 'neutral', text: '' }, goals: '', notes: '', tags: [] });
-  export const blankPlot = (title = 'New plot point'): Plot => ({ title, text: '', status: 'idea', anchors: [], npcs: [], tags: [] });
 </script>
 
 <script lang="ts">
   // The DM's notebook: NPCs (who they are, how they feel about the players, where they are) and
   // plot points tied to places and NPCs (notes on places are in the Gazetteer). Agents read and
   // write the same entries through mapd. Fields save when they lose focus.
-  import { PLOT_STATUSES, STANCES, type PlaceInfo, type PlotStatus, type Stance } from '../gen/protocol';
+  import { PLOT_STATUSES, STANCES, type Npc, type PlaceInfo, type Plot, type PlotStatus, type Stance } from '../gen/protocol';
   import { assetUrl, putAsset } from '../world/assets';
   import { listedName, unnamed } from './gazetteer';
+  import { blankNpc, blankPlot, newNoteId } from './notes';
   import type { NotesTab } from './shell/layout.svelte';
   import Icon from './Icon.svelte';
 

@@ -2,7 +2,6 @@
   import { onMount, untrack } from 'svelte';
   import type { BenchResult } from './dev/bench';
   import type { Conflict, Created, Edits, Feature, NamedPlaces, Npc, Overlay, Plateau, Plot, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
-  import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
   import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
@@ -37,16 +36,13 @@
   import InfoPanel from './ui/InfoPanel.svelte';
   import NoteCard from './ui/NoteCard.svelte';
   import NoteList from './ui/NoteList.svelte';
-  import Gazetteer from './ui/Gazetteer.svelte';
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
   import PlaceBar from './ui/PlaceBar.svelte';
   import BuildPanel from './ui/BuildPanel.svelte';
-  import TownPanel from './ui/TownPanel.svelte';
   import GroundPanel from './ui/GroundPanel.svelte';
   import { type TownMode } from './editor/town';
   import { type StreetPick } from './editor/streets';
-  import DesignPanel from './ui/DesignPanel.svelte';
   import { linkTools } from './editor/tools/links.svelte';
   import LinkPanel from './ui/LinkPanel.svelte';
   import { buildTools } from './editor/tools/build.svelte';
@@ -63,7 +59,9 @@
   import { lookOf, shore } from './editor/water';
   import { kindWidth } from './editor/paths';
   import type { BuildMode } from './ui/BuildPanel.svelte';
-  import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
+  import type { Here } from './ui/Notebook.svelte';
+  import { blankNpc, blankPlot, newNoteId } from './ui/notes';
+  import { lazy } from './ui/lazy.svelte';
   import { assetIds, assetUrl, getAsset, shareAssets, unbundleAssets } from './world/assets';
   import Search from './ui/Search.svelte';
   import Toasts, { type Toast } from './ui/Toasts.svelte';
@@ -71,7 +69,6 @@
   import { MapdSync, markSynced, syncedStamp, type Change } from './sync/mapd';
   import { carrySession, sessionLayouts, type Carried } from './play/carry';
   import { PlayController } from './play/controller';
-  import PlayPanel from './play/PlayPanel.svelte';
   import TokenMenu from './play/TokenMenu.svelte';
   import PicturePicker, { type PictureItem } from './play/PicturePicker.svelte';
   import { describe, tidy, type Step } from './sync/history';
@@ -87,6 +84,16 @@
   import { noteChanges, noteExported, unexported } from './world/exported';
 
   type Note = { text: string; tags?: string[]; at?: [number, number] };
+
+  // Panels loaded the first time they open (each its own chunk, out of the first download).
+  const Panels = {
+    sketch: lazy(() => import('./editor/SketchPanel.svelte')),
+    town: lazy(() => import('./ui/TownPanel.svelte')),
+    design: lazy(() => import('./ui/DesignPanel.svelte')),
+    gazetteer: lazy(() => import('./ui/Gazetteer.svelte')),
+    notebook: lazy(() => import('./ui/Notebook.svelte')),
+    play: lazy(() => import('./play/PlayPanel.svelte')),
+  };
 
   const params = new URLSearchParams(location.search);
   // (Its keys come from the shortcuts below.)
@@ -3047,7 +3054,8 @@
     >
       {#snippet children(peek)}
         {#if shell.tabs.world === 'sketch' && sketchOn}
-          <SketchPanel
+          {@const SketchPanel = Panels.sketch.c}
+          {#if SketchPanel}<SketchPanel
             {sketcher}
             bind:settings={sketchSettings}
             version={sketchVersion}
@@ -3060,7 +3068,7 @@
             onConflict={(c) => flyToSize(c.x, c.y, 60 * 5280)}
             onGenerate={() => exitSketch(true)}
             onStop={stopSketch}
-          />
+          />{/if}
         {:else if !peek}
           {#if shell.tabs.world === 'generate'}
             <GenerateTab
@@ -3177,7 +3185,8 @@
             {#snippet select()}<SelectPanel sel={Sel} {peek} purpose={Sel.purpose} />{/snippet}
           </BuildPanel>
         {:else if townOn}
-          <TownPanel
+          {@const TownPanel = Panels.town.c}
+          {#if TownPanel}<TownPanel
             plan={T.townPlan}
             name={T.townName}
             note={T.townNote}
@@ -3216,7 +3225,7 @@
             onHide={N.setHidden}
             onPatch={(p) => ((T.townPatch = p), (T.townCorner = null))}
             part={T.townPart}
-          />
+          />{/if}
         {:else if groundOn}
           <GroundPanel
             bind:settings={G.ground}
@@ -3265,7 +3274,8 @@
             onRooms={canDesign ? L.closeLinks : undefined}
           />
         {:else if D.designer}
-          <DesignPanel
+          {@const DesignPanel = Panels.design.c}
+          {#if DesignPanel}<DesignPanel
             {peek}
               designer={D.designer}
               version={D.designVersion}
@@ -3282,7 +3292,7 @@
               onProblem={D.showProblem}
               held={S.held}
               onLinks={L.canLink ? L.openLinks : undefined}
-            />
+            />{/if}
         {:else if shell.tabs.edit === 'design' && !peek}
           <div class="empty"><p>Opening the designer…</p></div>
         {/if}
@@ -3310,7 +3320,8 @@
         {:else if notebookFocus.tab === 'notes'}
           <NoteList rows={N.noteRows} onOpen={(id) => void N.goNote(id)} />
         {:else if notebookFocus.tab === 'gazetteer'}
-          {#if overlay}
+          {@const Gazetteer = Panels.gazetteer.c}
+          {#if overlay && Gazetteer}
             <Gazetteer
               features={namedFeatures.length ? [...overlay.features, ...namedFeatures] : overlay.features}
               {renames}
@@ -3351,7 +3362,8 @@
             />
           {/if}
         {:else}
-          <Notebook
+          {@const Notebook = Panels.notebook.c}
+          {#if Notebook}<Notebook
             {npcs}
             {plots}
             {renames}
@@ -3368,14 +3380,15 @@
             onToken={(id) => void dropToken(id)}
             onError={(t) => toast(t)}
             onFocus={openNotebook}
-          />
+          />{/if}
         {/if}
       {/snippet}
     </Dock>
   {:else if shell.section === 'play'}
     <Dock waiting={Q.waitBar} title="Play" icon="pawn" onClose={() => go(null)} actions={stopPlaying} ask={shell.ask ? askBar : undefined}>
       {#snippet children(peek)}
-        <PlayPanel {play} version={playVersion} {peek} />
+        {@const PlayPanel = Panels.play.c}
+        {#if PlayPanel}<PlayPanel {play} version={playVersion} {peek} />{/if}
       {/snippet}
     </Dock>
   {:else if shell.ask}

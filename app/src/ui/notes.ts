@@ -1,7 +1,7 @@
 // Notes on places, rooms (`r:<site>:<level>:<room>`) and points in rooms (`m:<site>:<level>:<id>`,
 // the note's `at` in the location's own grid units). One kind of note: text and free tags, of
 // which a few are quick picks. Always the DM's: none of it goes to the players' window.
-import type { Note } from '../gen/protocol';
+import type { Note, Npc, Plot } from '../gen/protocol';
 import type { IconName } from './icons';
 
 /** The quick-pick tags (the order the chips show in). */
@@ -76,3 +76,13 @@ export function noteMarkers(notes: Record<string, Note> | undefined): NoteMarker
   }
   return out;
 }
+
+/** A new NPC or plot id: random, so the app and an agent creating at once never collide. */
+export function newNoteId(prefix: 'n' | 'p'): string {
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  return `${prefix}:${[...b].map((x) => '0123456789abcdefghijklmnopqrstuvwxyz'[x % 36]).join('')}`;
+}
+
+export const blankNpc = (name = 'New NPC'): Npc => ({ name, appearance: '', mannerisms: '', attitude: { stance: 'neutral', text: '' }, goals: '', notes: '', tags: [] });
+export const blankPlot = (title = 'New plot point'): Plot => ({ title, text: '', status: 'idea', anchors: [], npcs: [], tags: [] });
