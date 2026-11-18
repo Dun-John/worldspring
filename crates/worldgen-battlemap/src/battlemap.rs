@@ -26,6 +26,31 @@ use crate::t0::roads::CrossingKind;
 
 /// A park laid out (`town::Park`): what a park's chunks and tiles draw.
 pub use crate::park::layout as park_layout;
+
+thread_local! {
+    // Parks laid out (`park_layout`) by (layout index, park), so a park reaching several chunks is
+    // laid out once: kept with its layout (the same `Rc`, so the same park) and the other inputs.
+    static PARKS: std::cell::RefCell<crate::core::hash::FastMap<(u32, usize), (std::rc::Rc<crate::town::Layout>, Biome, bool, u64, std::rc::Rc<crate::park::ParkLayout>)>> = Default::default();
+}
+
+/// Park `pki` of layout `l` laid out (`park_layout`), remembered.
+fn park_laid(l: &std::rc::Rc<crate::town::Layout>, pki: usize, biome: Biome, city: bool, seed: u64) -> std::rc::Rc<crate::park::ParkLayout> {
+    use std::rc::Rc;
+    let key = (l.index, pki);
+    if let Some(lay) = PARKS.with(|m| m.borrow().get(&key).filter(|e| Rc::ptr_eq(&e.0, l) && e.1 == biome && e.2 == city && e.3 == seed).map(|e| e.4.clone())) {
+        return lay;
+    }
+    let lay = Rc::new(park_layout(&l.parks[pki], biome, city, seed));
+    PARKS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() > 256 {
+            m.clear();
+        }
+        m.insert(key, (l.clone(), biome, city, seed, lay.clone()));
+    });
+    lay
+}
+
 // v63 underground: a ruin's plan at site zoom; small closed relief drawn soft.
 pub mod ruin_plan;
 mod soft_relief;
@@ -635,10 +660,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 continue;
             }
             let pb = land_biome(t0, crate::town::geom::centroid(&pk.pts));
-            let mut lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
+            let mut lay = park_laid(&l, pki, pb, l.tier >= crate::t0::settle::Tier::City, seed);
             // (Roadmap 6 R6: its hedges and topiary rows changed by hand: gone, or laid again as runs.)
             if let Some(ch) = fcut.as_ref().and_then(|c| c.park(pki)) {
-                crate::town::fence::park_change(&mut lay, ch, &mut hand_fences);
+                crate::town::fence::park_change(std::rc::Rc::make_mut(&mut lay), ch, &mut hand_fences);
             }
             // (Roadmap 6 R5: its paths removed by hand left out of the gravel, the lawn closing over;
             // what stands by them stays.)
