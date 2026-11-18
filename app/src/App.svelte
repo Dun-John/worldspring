@@ -1522,7 +1522,7 @@
     if (to && to !== shell.section) {
       shell.collapsed = false;
       shell.card = false;
-      shell.snap = 'half';
+      shell.snap = NEW_UI && shell.phone && to === 'edit' ? 'peek' : 'half';
     }
     shell.section = to;
     if (to && t) (shell.tabs as Record<string, string>)[to] = t;

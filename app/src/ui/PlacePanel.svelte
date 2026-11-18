@@ -60,15 +60,17 @@
 
   type Group = 'Settlements' | 'Underground' | 'On the surface';
 
+  const STAIR_LOOK = NEW_UI ? 'A stair down into the underground; nothing is built above it' : 'Stairs down, nothing above';
+
   /** The choices: what each makes (`Created` kind, and what lies beneath). */
   const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; tier?: PinTier; group: Group; look: string }[] = [
     { key: 'village', label: 'Village', icon: 'home', kind: 'settlement', tier: 'village', group: 'Settlements', look: 'A few dozen to a few hundred souls. Added at once' },
     { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand. Added at once' },
     { key: 'city', label: 'City', icon: 'castle', kind: 'settlement', tier: 'city', group: 'Settlements', look: 'Thousands, walled, with sewers below' },
     { key: 'metropolis', label: 'Metropolis', icon: 'wards', kind: 'settlement', tier: 'metropolis', group: 'Settlements', look: 'Tens of thousands: a great city' },
-    { key: 'dungeon', label: 'Dungeon', icon: 'stairs', kind: 'entrance', under: 'dungeon', group: 'Underground', look: 'A stair down into the underground; nothing is built above it' },
-    { key: 'crypt', label: 'Crypt', icon: 'skull', kind: 'entrance', under: 'crypt', group: 'Underground', look: 'A stair down into the underground; nothing is built above it' },
-    { key: 'catacombs', label: 'Catacombs', icon: 'skull', kind: 'entrance', under: 'catacombs', group: 'Underground', look: 'A stair down into the underground; nothing is built above it' },
+    { key: 'dungeon', label: 'Dungeon', icon: 'stairs', kind: 'entrance', under: 'dungeon', group: 'Underground', look: STAIR_LOOK },
+    { key: 'crypt', label: 'Crypt', icon: 'skull', kind: 'entrance', under: 'crypt', group: 'Underground', look: STAIR_LOOK },
+    { key: 'catacombs', label: 'Catacombs', icon: 'skull', kind: 'entrance', under: 'catacombs', group: 'Underground', look: STAIR_LOOK },
     { key: 'cave', label: 'Cave', icon: 'cave', kind: 'cave', group: 'Underground', look: 'A cave mouth' },
     { key: 'mine', label: 'Mine', icon: 'pick', kind: 'mine', group: 'Underground', look: 'An adit with a miners’ shed' },
     { key: 'lava_tube', label: 'Lava tube', icon: 'flame', kind: 'lava_tube', group: 'Underground', look: 'A skylight into the tube' },
