@@ -1107,14 +1107,18 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // the town side (`wallstyle::raster`, on the global lattice: every chunk lays the same).
         // (Every tower's ring first: one standing into another's floor walls it there.)
         let (gx0, gy0) = (crate::core::round(hx0 / SQUARE_FT) as i64, crate::core::round(hy0 / SQUARE_FT) as i64);
-        let rasters: Vec<crate::town::wallstyle::Raster> = crate::interior::towers(&l)
+        // (`l`'s gatehouses and towers, once: pure in `l`.)
+        let houses = crate::town::gatehouse::houses(&l);
+        let towers = crate::interior::towers(&l);
+        let rasters: Vec<crate::town::wallstyle::Raster> = towers
             .iter()
             .filter(|&&(t, r, _)| {
                 let reach = r * std::f64::consts::SQRT_2 + 2.0;
                 overlaps((t[0] - reach, t[1] - reach, t[0] + reach, t[1] + reach))
             })
-            .map(|&(t, r, gate)| crate::town::wallstyle::tower_raster(&l, t, r, gate, SQUARE_FT).1)
-            .chain(crate::town::gatehouse::rasters(&crate::town::gatehouse::houses(&l), SQUARE_FT))
+            .map(|&(t, r, gate)| crate::town::wallstyle::tower_raster_in(&l, &houses, t, r, gate, SQUARE_FT).1)
+            // (Only a gate block with a square in the halo: no other could set one.)
+            .chain(crate::town::gatehouse::rasters_in(&houses, SQUARE_FT, [gx0, gy0, gx0 + HS as i64 - 1, gy0 + HS as i64 - 1]))
             .collect();
         for ring in [true, false] {
             for ras in &rasters {
@@ -1160,7 +1164,6 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // The same structures as vectors, each drawn by the one chunk that owns its middle. Walls
         // and towers carry a point of flags (`WALL_*`): a wall's ends standing bare (no tower on
         // them: where a ruin's stretch fell), a gate tower, a ruin's works.
-        let towers = crate::interior::towers(&l);
         let ruined = !l.buildings.is_empty() && l.buildings.iter().all(|b| b.structure == crate::town::Structure::Ruin);
         let ruin_bit = if ruined { WALL_RUINED } else { 0 };
         let near = |p: [f64; 2], q: [f64; 2], r: f64| (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) <= r * r;
@@ -1182,7 +1185,6 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
         crate::town::wallside::bastions(&l, &owns, &local, &mut shapes);
-        let houses = crate::town::gatehouse::houses(&l);
         for &(t, r, gate) in &towers {
             if owns(t) {
                 // (A square tower: its flag, and the way its sides run as an angle; a D's the way it faces,

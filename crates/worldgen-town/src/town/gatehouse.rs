@@ -212,13 +212,22 @@ pub fn of_tower(houses: &[House], t: P) -> Option<(&House, bool)> {
 /// lattice): `RING` (blocking) every square within 1.5 ft of the block whose middle is off the way
 /// through; the way's squares 0 (the ground as laid: the street).
 pub fn rasters(houses: &[House], sq: f64) -> Vec<Raster> {
+    rasters_in(houses, sq, [i64::MIN, i64::MIN, i64::MAX, i64::MAX])
+}
+
+/// `rasters`, only those with a square in `cells` (the lattice squares `i0, j0, i1, j1`, inclusive),
+/// in the same order.
+pub fn rasters_in(houses: &[House], sq: f64, cells: [i64; 4]) -> Vec<Raster> {
     let mut out = Vec::new();
     for h in houses {
         let Some(block) = h.block() else { continue };
-        let legs = h.passage();
         let bb = bbox(&block);
         let (i0, j0) = (crate::core::floor((bb[0] - 2.0) / sq) as i64, crate::core::floor((bb[1] - 2.0) / sq) as i64);
         let (i1, j1) = (crate::core::floor((bb[2] + 2.0) / sq) as i64, crate::core::floor((bb[3] + 2.0) / sq) as i64);
+        if i1 < cells[0] || j1 < cells[1] || i0 > cells[2] || j0 > cells[3] {
+            continue;
+        }
+        let legs = h.passage();
         let (nx, ny) = ((i1 - i0 + 1) as usize, (j1 - j0 + 1) as usize);
         let n = block.len();
         let cells = (0..nx * ny)

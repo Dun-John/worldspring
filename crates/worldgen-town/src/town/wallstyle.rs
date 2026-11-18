@@ -531,7 +531,12 @@ fn leads_out(poly: &[P], sq: f64, mid: &dyn Fn(i64, i64) -> P, open: &dyn Fn(i64
 /// A tower of `l` (`interior::towers`: centre, radius, gate tower) on the battlemap (`raster`): its
 /// shape and squares, its door onto ground no building, wall or other tower stands on.
 pub fn tower_raster(l: &Layout, t: P, r: f64, gate: bool, sq: f64) -> (TowerShape, Raster) {
-    let (shape, _, poly, inward) = tower_outline(l, t, r, gate);
+    tower_raster_in(l, &if gate { super::gatehouse::houses(l) } else { Vec::new() }, t, r, gate, sq)
+}
+
+/// `tower_raster` with `l`'s gatehouses (`gatehouse::houses`) already found.
+pub fn tower_raster_in(l: &Layout, gatehouses: &[super::gatehouse::House], t: P, r: f64, gate: bool, sq: f64) -> (TowerShape, Raster) {
+    let (shape, _, poly, inward) = tower_outline_in(l, gatehouses, t, r, gate);
     let near = |q: &P| dist(*q, t) < r + 120.0;
     let houses: Vec<&Vec<P>> = l.buildings.iter().filter(|b| b.poly.iter().any(near)).map(|b| &b.poly).collect();
     let walls: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2)).filter(|s| seg_dist(t, s[0], s[1]) < r + 60.0).map(|s| (s[0], s[1])).collect();
@@ -541,7 +546,7 @@ pub fn tower_raster(l: &Layout, t: P, r: f64, gate: bool, sq: f64) -> (TowerShap
     // (A wall's squares: within half its thickness and 1.5 ft, as `battlemap` raises it.)
     let reach = (0.5 * l.wall_style_at(t).thickness()).max(2.1) + 1.5;
     // (A bent entrance's gate block beside a gate tower: closed ground.)
-    let blocks: Vec<Vec<P>> = if gate { super::gatehouse::houses(l).iter().filter_map(|h| h.block()).filter(|b| b.iter().any(|q| dist(*q, t) < r + 60.0)).collect() } else { Vec::new() };
+    let blocks: Vec<Vec<P>> = if gate { gatehouses.iter().filter_map(|h| h.block()).filter(|b| b.iter().any(|q| dist(*q, t) < r + 60.0)).collect() } else { Vec::new() };
     let open = |p: P| {
         free(p)
             && !walls.iter().any(|&(a, b)| seg_dist(p, a, b) <= reach)
@@ -562,11 +567,16 @@ pub fn tower_raster(l: &Layout, t: P, r: f64, gate: bool, sq: f64) -> (TowerShap
 /// is set (`footprint`), its outline, and the way in to its door (the castle yard for a castle's tower,
 /// else the town's middle, as its interior's guardroom door faces).
 pub fn tower_outline(l: &Layout, t: P, r: f64, gate: bool) -> (TowerShape, P, Vec<P>, P) {
+    tower_outline_in(l, &if gate { super::gatehouse::houses(l) } else { Vec::new() }, t, r, gate)
+}
+
+/// `tower_outline` with `l`'s gatehouses (`gatehouse::houses`) already found.
+pub fn tower_outline_in(l: &Layout, gatehouses: &[super::gatehouse::House], t: P, r: f64, gate: bool) -> (TowerShape, P, Vec<P>, P) {
     let inside = l.castles.iter().find(|(c, rad)| dist(*c, t) < rad * 1.3).map_or(l.center, |c| c.0);
     let d = sub(inside, t);
     let inward = if len(d) < 1e-6 { [0.0, 1.0] } else { mul(d, 1.0 / len(d)) };
     // (A gate tower is its gatehouse's: `gatehouse::House::tower`.)
-    if gate && let Some((h, second)) = super::gatehouse::of_tower(&super::gatehouse::houses(l), t) {
+    if gate && let Some((h, second)) = super::gatehouse::of_tower(gatehouses, t) {
         let (shape, dir, _, poly) = h.tower(second);
         return (shape, dir, poly, inward);
     }
