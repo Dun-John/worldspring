@@ -251,61 +251,9 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
     let is_river_edge = |a: usize, b: usize| river_edge.contains(&(a.min(b), a.max(b)));
     let pinned: Vec<bool> = (0..mesh.pos.len()).map(|v| site.near_river(mesh.pos[v], 0.3 * spacing) || vf[v].iter().any(|&f| wet[f])).collect();
 
-    // Wall ring: edges of city patches that face the outskirts (open where water guards: not on a
-    // side along the river; one the river crosses has its wall cut at the banks, `walls_off_river`).
-    let along_river = |a: usize, b: usize| is_river_edge(a, b) && [0.25, 0.75].iter().all(|&t| site.near_river(lerp(mesh.pos[a], mesh.pos[b], t), 2.0));
     let walled = s.tier >= Tier::City || rng.next_f64() < 0.4 || s.isolated;
-    let mut edge_next: BTreeMap<usize, usize> = BTreeMap::new();
-    for i in (0..n_inner).filter(|&i| usable(i)) {
-        let (face, lb) = (&mesh.faces[i], &mesh.labels[i]);
-        let m = face.len();
-        for e in 0..m {
-            let nb = lb[e];
-            let outside = !inner(nb) || wet[nb as usize];
-            let (a, b) = (face[e], face[(e + 1) % m]);
-            if outside && !by_water[i][e] && !along_river(a, b) {
-                edge_next.insert(a, b);
-            }
-        }
-    }
-    let targets: std::collections::BTreeSet<usize> = edge_next.values().copied().collect();
-    let mut used: std::collections::BTreeSet<usize> = Default::default();
-    let mut chains: Vec<(Vec<usize>, bool)> = Vec::new();
-    // Open chains (broken by water) start where nothing leads in; then closed loops.
-    let starts: Vec<usize> = edge_next.keys().copied().filter(|k| !targets.contains(k)).chain(edge_next.keys().copied()).collect();
-    for start in starts {
-        if used.contains(&start) {
-            continue;
-        }
-        let mut chain = vec![start];
-        let mut cur = start;
-        let mut closed = false;
-        while let Some(&nx) = edge_next.get(&cur) {
-            if !used.insert(cur) {
-                break;
-            }
-            if nx == start {
-                closed = true;
-                break;
-            }
-            chain.push(nx);
-            cur = nx;
-        }
-        // (A run of one side, between the water at both ends, if a long one.)
-        if chain.len() >= 3 || (chain.len() == 2 && dist(mesh.pos[chain[0]], mesh.pos[chain[1]]) >= 50.0) {
-            chains.push((chain, closed));
-        }
-    }
-    chains.sort_by_key(|(c, _)| std::cmp::Reverse(c.len()));
-    let ring: std::collections::BTreeSet<usize> = chains.iter().flat_map(|(c, _)| c.iter().copied()).collect();
-    // (The wall's own sides: pairs of corners next along a chain.)
-    let ring_edges: std::collections::BTreeSet<(usize, usize)> = chains
-        .iter()
-        .flat_map(|(c, closed)| {
-            let n = c.len();
-            (0..if *closed { n } else { n - 1 }).map(move |k| (c[k].min(c[(k + 1) % n]), c[k].max(c[(k + 1) % n])))
-        })
-        .collect();
+    // Wall ring: its runs, every corner on them, its sides (`wallring::chains`).
+    let (chains, ring, ring_edges) = wallring::chains(site, &mesh, n_inner, &wet, &by_water, &usable, &is_river_edge);
     let on_wall = |a: usize, b: usize| ring_edges.contains(&(a.min(b), a.max(b)));
 
     // Gates where roads arrive (or two, if none do).

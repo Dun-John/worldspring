@@ -68,6 +68,7 @@ mod ground;
 mod lined;
 mod plan;
 mod seeds;
+mod wallring;
 mod build;
 mod approach;
 mod quays;
