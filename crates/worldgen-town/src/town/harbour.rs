@@ -221,7 +221,8 @@ pub(super) fn harbour(site: &Site, s: &Settlement, index: usize, l: &mut Layout,
         l.moles = g.moles.clone();
         for h in g.buildings.iter().filter(|b| is_lighthouse(b)) {
             let at = l.buildings.partition_point(|b| b.id < h.id);
-            if l.buildings.get(at).is_none_or(|b| b.id != h.id) && l.buildings.iter().all(|b| poly_gap(&b.poly, &h.poly) > 0.5) {
+            let hb = bbox(&h.poly);
+            if l.buildings.get(at).is_none_or(|b| b.id != h.id) && l.buildings.iter().all(|b| !boxes_meet(grow(bbox(&b.poly), 1.5), hb) || poly_gap(&b.poly, &h.poly) > 0.5) {
                 l.buildings.insert(at, h.clone());
             }
         }
@@ -657,7 +658,9 @@ fn nets(s: &Settlement, l: &mut Layout) {
     let u = mul(sub(t, r), 1.0 / dist(r, t).max(1e-9));
     let side = if unit(hash2(0x4e7_5ac, s.seed as i64, 0)) < 0.5 { 1.0 } else { -1.0 };
     let at = add(sub(r, mul(u, 10.0)), mul([-u[1], u[0]], side * 12.0));
-    if l.buildings.iter().all(|b| poly_gap(&b.poly, &rect(at, [-u[1], u[0]], 12.0, 6.0)) > 2.0) {
+    let spot = rect(at, [-u[1], u[0]], 12.0, 6.0);
+    let sb = bbox(&spot);
+    if l.buildings.iter().all(|b| !boxes_meet(grow(bbox(&b.poly), 3.0), sb) || poly_gap(&b.poly, &spot) > 2.0) {
         let rot = libm::atan2(u[0], -u[1]) as f32;
         l.props.push(Prop {
             at,

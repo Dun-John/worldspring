@@ -693,7 +693,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     fresh.retain(|k| !placed.contains(k));
     for k in fresh.clone() {
         let Some(f) = l.buildings[k].func else { continue };
-        if let Some(j) = (0..l.buildings.len()).find(|&j| !fresh.contains(&j) && patch[j] == patch[k] && l.buildings[j].func == Some(f) && l.buildings[j].structure == Structure::Roofed) {
+        if let Some(j) = (0..l.buildings.len()).find(|&j| patch[j] == patch[k] && l.buildings[j].func == Some(f) && l.buildings[j].structure == Structure::Roofed && !fresh.contains(&j)) {
             let new_id = l.buildings[k].id;
             (l.buildings[k].id, l.buildings[k].name) = (l.buildings[j].id, l.buildings[j].name.take());
             let b = &mut l.buildings[j];

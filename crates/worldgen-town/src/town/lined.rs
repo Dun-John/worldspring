@@ -133,7 +133,8 @@ pub(super) fn bridge_houses(index: usize, l: &mut Layout) {
             if area(&poly) < 0.0 {
                 poly.reverse();
             }
-            if l.buildings.iter().any(|o| poly_gap(&o.poly, &poly) < 0.5) {
+            let pb = bbox(&poly);
+            if l.buildings.iter().any(|o| boxes_meet(grow(bbox(&o.poly), 1.5), pb) && poly_gap(&o.poly, &poly) < 0.5) {
                 continue;
             }
             lots.push((poly, t - 0.5 * front, h));

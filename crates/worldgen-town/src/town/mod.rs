@@ -1215,7 +1215,8 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
             let generated = generated_layout(world, t0, index);
             for h in generated.buildings.iter().filter(|b| b.deck.is_some()) {
                 let at = l.buildings.partition_point(|b| b.id < h.id);
-                if l.buildings.get(at).is_none_or(|b| b.id != h.id) && l.buildings.iter().all(|b| poly_gap(&b.poly, &h.poly) > 0.5) {
+                let hb = bbox(&h.poly);
+                if l.buildings.get(at).is_none_or(|b| b.id != h.id) && l.buildings.iter().all(|b| !boxes_meet(grow(bbox(&b.poly), 1.5), hb) || poly_gap(&b.poly, &h.poly) > 0.5) {
                     l.buildings.insert(at, h.clone());
                 }
             }

@@ -89,7 +89,7 @@ pub fn is_inn(b: &Building) -> bool {
 /// every caravanserai, a town's biggest inn, a city's two, a metropolis' three: so only one with its
 /// ground in layout `l`, `Layout::grounds`; not one drawn by hand, nor one whose outline was).
 pub fn is_coaching(l: &Layout, b: &Building) -> bool {
-    if !l.grounds.iter().any(|g| g.0 == b.id) || b.poly.len() != 4 || !b.parts.is_empty() || b.keep.is_some() || b.structure != Structure::Roofed || !is_inn(b) {
+    if !is_inn(b) || !l.grounds.iter().any(|g| g.0 == b.id) || b.poly.len() != 4 || !b.parts.is_empty() || b.keep.is_some() || b.structure != Structure::Roofed {
         return false;
     }
     let o = obb(&b.poly);
