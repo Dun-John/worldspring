@@ -4,10 +4,10 @@
 // ripple lines, beaches, map symbols (forest canopy, conifers, marsh, sand, tufts, scree),
 // slope hachures, ink contours and coastline, paper grain.
 //
-// uWorld: the tile's origin (ft) and size (ft), for fields anchored to the world (tundra snow).
-// uSeed: the world's seed as two 16-bit halves.
 // uTex:  f16 (h - uBase, dh/dx, dh/dy, water - uBase) per sample.
 // uBio:  u8 (primary biome, secondary biome, blend, coast distance sqrt-encoded) per sample.
+// uTundra: tundra's ground texture (`tundraTexture.ts`: heather, grass shade, -, grass light),
+//        repeating every TUNDRA_CELLS pattern cells. (Its snow is drawn on battlemaps only.)
 // Symbol patterns live in two world-anchored octaves (uPat0/uPat1: origin mod 256 in cells,
 // cells per tile) blended by uPatMix, so they stay put while panning and zooming.
 
@@ -18,6 +18,7 @@ out vec4 finalColor;
 
 uniform highp sampler2D uTex;
 uniform highp sampler2D uBio;
+uniform highp sampler2D uTundra;
 
 // Per tile.
 uniform float uBase;
@@ -27,7 +28,6 @@ uniform vec2 uGrainOrigin;
 uniform float uTilePx;
 uniform vec4 uPat0;
 uniform vec4 uPat1;
-uniform vec4 uWorld;
 
 // Per frame.
 uniform float uExag;
@@ -37,7 +37,6 @@ uniform float uIndexEvery;
 uniform float uFtPerPx;
 uniform float uPatMix;
 uniform float uPatAlpha;
-uniform vec2 uSeed;
 
 const vec3 INK = vec3(0.20, 0.18, 0.16);
 const vec3 CONTOUR_INK = vec3(0.42, 0.33, 0.24);
@@ -49,7 +48,7 @@ const vec3 PALETTE[19] = vec3[19](
     vec3(0.54, 0.63, 0.66), // ocean
     vec3(0.62, 0.72, 0.74), // lake
     vec3(0.95, 0.95, 0.93), // ice
-    vec3(0.80, 0.80, 0.66), // tundra (grass and snow patches, heather among the grass, see `moorTone`)
+    vec3(0.80, 0.80, 0.66), // tundra (painted grass with heather: see `tundraTone`)
     vec3(0.74, 0.71, 0.64), // alpine
     vec3(0.64, 0.69, 0.57), // taiga
     vec3(0.68, 0.74, 0.54), // temperate forest
@@ -67,12 +66,13 @@ const vec3 PALETTE[19] = vec3[19](
     vec3(0.60, 0.56, 0.51)  // ashlands
 );
 
-// Symbol per biome: 0 none, 1 canopy, 2 conifer, 3 dense canopy, 4 marsh, 5 sand, 6 sparse dots, 7 tufts, 8 scree,
-// 9 heath (heather clumps and grass tufts).
-const int SYMBOL[19] = int[19](0, 0, 0, 9, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
-const vec3 HEATHER = vec3(0.79, 0.74, 0.70);
-const vec3 MOOR_GRASS = vec3(0.75, 0.79, 0.60);
-const vec3 SNOW = vec3(0.94, 0.95, 0.94);
+// Symbol per biome: 0 none, 1 canopy, 2 conifer, 3 dense canopy, 4 marsh, 5 sand, 6 sparse dots, 7 tufts, 8 scree.
+const int SYMBOL[19] = int[19](0, 0, 0, 7, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
+const vec3 TUNDRA_PALE = vec3(0.88, 0.89, 0.80);
+const vec3 HEATHER_DAB = vec3(0.78, 0.72, 0.74);
+// Tundra: `uTundra` repeats every this many pattern cells (a divisor of 256: seamless where the
+// pattern origin wraps).
+const float TUNDRA_CELLS = 16.0;
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -208,22 +208,6 @@ vec4 symbol(vec2 p, int kind, float aa) {
         l = min(l, segment(d, vec2(0.1, 0.08), vec2(0.04, -0.08)));
         return vec4(0.0, 1.0 - smoothstep(0.0, aa, l), 0.0, 0.0);
     }
-    if (kind == 9) {
-        // Heath: a few low heather clumps (three lobes, inked), grass tufts between them (tundra:
-        // drawn on its grass only).
-        if (h.x < 0.035) {
-            float r = 0.14 + 0.04 * h.y;
-            float sd = min(min(length(d - vec2(-0.6, 0.25) * r), length(d - vec2(0.6, 0.25) * r)), length(d + vec2(0.0, 0.45) * r)) - r;
-            float fill = 1.0 - smoothstep(-aa, 0.0, sd);
-            float ink = 1.0 - smoothstep(0.0, aa * 1.4, abs(sd));
-            float shade = smoothstep(r - aa, r + aa, length(d + vec2(0.35 * r, 0.6 * r)));
-            return vec4(fill, ink, (0.25 + 0.5 * shade) * fill, 0.0);
-        }
-        if (h.x > 0.13) return vec4(0.0);
-        float l = min(segment(d, vec2(-0.07, 0.05), vec2(-0.03, -0.06)), segment(d, vec2(0.0, 0.05), vec2(0.0, -0.07)));
-        l = min(l, segment(d, vec2(0.07, 0.05), vec2(0.03, -0.06)));
-        return vec4(0.0, 0.8 * (1.0 - smoothstep(0.0, aa, l)), 0.0, 0.0);
-    }
     if (kind == 8) {
         if (h.x > 0.45) return vec4(0.0);
         float a = h.y * 6.2831;
@@ -233,71 +217,13 @@ vec4 symbol(vec2 p, int kind, float aa) {
     return vec4(0.0);
 }
 
-// Tundra snow: the battlemap's field (`t0::biome::tundra_snow`, same constants and 32-bit hashing,
-// so the map and the battlemaps agree on where snow lies) at world position w (ft). An octave
-// fades to its mean (a warp to nothing) once its wavelength is under ~12 px, so it never shimmers.
-uint snowHash(uint h) {
-    h ^= h >> 16;
-    h *= 0x7feb352du;
-    h ^= h >> 15;
-    h *= 0x846ca68bu;
-    return h ^ (h >> 16);
+// Tundra: pale frosted grass, faintly painted by the ground texture `d` (`uTundra`, both pattern
+// octaves crossfaded like the symbols): lit humps, shaded tussocks, the odd heather dab.
+vec3 tundraTone(vec3 col, vec4 d) {
+    vec3 grass = mix(col, TUNDRA_PALE, 0.45);
+    grass *= 1.0 + 0.06 * d.a - 0.10 * d.g;
+    return mix(grass, grass * (HEATHER_DAB / TUNDRA_PALE), 0.3 * d.r);
 }
-
-float snowNoise(vec2 p, uint s) {
-    vec2 i = floor(p);
-    vec2 f = p - i;
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    ivec2 c = ivec2(i);
-    uint x0 = uint(c.x) * 0x9e3779b1u, x1 = uint(c.x + 1) * 0x9e3779b1u;
-    uint y0 = uint(c.y) * 0x85ebca77u, y1 = uint(c.y + 1) * 0x85ebca77u;
-    float a = float(snowHash(x0 ^ y0 ^ s) >> 8u);
-    float b = float(snowHash(x1 ^ y0 ^ s) >> 8u);
-    float d = float(snowHash(x0 ^ y1 ^ s) >> 8u);
-    float e = float(snowHash(x1 ^ y1 ^ s) >> 8u);
-    return mix(mix(a, b, u.x), mix(d, e, u.x), u.y) / 16777216.0;
-}
-
-float snowFade(float wavelength) {
-    return clamp((wavelength / uFtPerPx - 4.0) / 8.0, 0.0, 1.0);
-}
-
-float tundraSnow(vec2 w) {
-    uint seed = uint(uSeed.x) | (uint(uSeed.y) << 16u);
-    uint s[8];
-    for (int k = 1; k < 8; k++) s[k] = snowHash(seed + uint(k) * 0x632be5abu);
-    vec2 r = vec2(0.8 * w.x - 0.6 * w.y, 0.6 * w.x + 0.8 * w.y);
-    r += 700.0 * snowFade(2600.0) * (vec2(snowNoise(r / 2600.0, s[1]), snowNoise(r / 2600.0, s[2])) - 0.5);
-    float f = snowFade(520.0);
-    if (f > 0.0) r += 160.0 * f * (vec2(snowNoise(r / 520.0, s[3]), snowNoise(r / 520.0, s[4])) - 0.5);
-    float n = 0.55 * mix(0.5, snowNoise(r / 1500.0, s[5]), snowFade(1500.0));
-    n += 0.3 * mix(0.5, snowNoise(r / 620.0, s[6]), snowFade(620.0));
-    f = snowFade(240.0);
-    return n + 0.15 * (f > 0.0 ? mix(0.5, snowNoise(r / 240.0, s[7]), f) : 0.5);
-}
-
-// Tundra tone at pattern coordinate p (cells): big soft patches of grass and of snow, with a
-// little heather among the grass. `world` is `tundraSnow` here and `near` how much of it to
-// use: zoomed far out (where its octaves have faded) the patches come from pattern noise
-// instead, a few to a screen. The pattern noise is world-anchored and seamless: its lattice is
-// turned 45 degrees by a whole-number matrix and repeats every 256 cells like the pattern
-// origin, its coordinates warped by a slower noise of the same period so outlines wind.
-// `snow` is set to the snow cover (0..1); soft edges, no ink.
-vec3 moorTone(vec3 col, vec2 p, float world, float near, out float snow) {
-    vec2 r = vec2(p.x + p.y, p.y - p.x);
-    r += 20.0 * (vec2(pnoise(r / 64.0 + 13.0, 4.0), pnoise(r / 64.0 + 29.0, 4.0)) - 0.5);
-    r += 6.0 * (vec2(pnoise(r / 16.0 + 41.0, 16.0), pnoise(r / 16.0 + 53.0, 16.0)) - 0.5);
-    float n = 0.65 * pnoise(r / 32.0, 8.0) + 0.25 * pnoise(r / 16.0 + 3.0, 16.0) + 0.1 * pnoise(r / 8.0 + 9.0, 32.0);
-    float m = near < 1.0 ? 0.6 * pnoise(r / 32.0 + 5.0, 8.0) + 0.3 * pnoise(r / 16.0 + 7.0, 16.0) + 0.1 * pnoise(r / 8.0 + 17.0, 32.0) : 0.5;
-    // Edges soft, ~40 px wide: the world field's are sharpened as it is zoomed in (it changes
-    // about 0.0005 a foot), the pattern field's stay at a few cells.
-    float w = mix(0.03, clamp(0.008 * uFtPerPx, 0.005, 0.03), near);
-    snow = smoothstep(0.5 - w, 0.5 + w, mix(m, world, near));
-    vec3 grass = mix(col, col * (MOOR_GRASS / PALETTE[3]), 0.6);
-    grass = mix(grass, grass * (HEATHER / PALETTE[3]), 0.35 * smoothstep(0.58, 0.72, n));
-    return mix(grass, SNOW, 0.8 * snow);
-}
-
 void main() {
     if (vLocal.x > uMapEnd.x || vLocal.y > uMapEnd.y) discard;
     vec4 t = texture(uTex, vUV);
@@ -319,24 +245,24 @@ void main() {
     float coastFt = coastEnc * coastEnc * COAST_ENCODE_FT;
 
     float slope = length(g);
+    // Pattern coordinates (cells) of both octaves, and their screen gradients (taken here, outside
+    // any branch, for the tundra texture's reads under one).
+    vec2 p0 = uPat0.xy + vLocal * uPat0.z;
+    vec2 p1 = uPat1.xy + vLocal * uPat1.z;
+    vec2 lx = dFdx(vLocal);
+    vec2 ly = dFdy(vLocal);
     vec3 col;
-    float moor = 0.0;
-    float snowy = 0.0;
     if (wet) {
         float d = clamp(depth / 6000.0, 0.0, 1.0);
         col = mix(vec3(0.70, 0.78, 0.77), vec3(0.52, 0.62, 0.66), sqrt(d));
     } else {
         col = mix(PALETTE[b1], PALETTE[b2], blend * 0.5);
-        // Tundra: grass and snow patches, the two pattern octaves crossfaded.
-        moor = (b1 == 3 ? 1.0 - blend * 0.5 : 0.0) + (b2 == 3 ? blend * 0.5 : 0.0);
+        // Tundra: its painted grass (`tundraTone`).
+        float moor = (b1 == 3 ? 1.0 - blend * 0.5 : 0.0) + (b2 == 3 ? blend * 0.5 : 0.0);
         if (moor > 0.0) {
-            float near = snowFade(1500.0);
-            float world = near > 0.0 ? tundraSnow(uWorld.xy + vLocal * uWorld.z) : 0.5;
-            float sn0, sn1;
-            vec3 m0 = moorTone(col, uPat0.xy + vLocal * uPat0.z, world, near, sn0);
-            vec3 m1 = moorTone(col, uPat1.xy + vLocal * uPat1.z, world, near, sn1);
-            col = mix(col, mix(m0, m1, uPatMix), moor);
-            snowy = mix(sn0, sn1, uPatMix);
+            float k0 = uPat0.z / TUNDRA_CELLS, k1 = uPat1.z / TUNDRA_CELLS;
+            vec4 d = mix(textureGrad(uTundra, p0 / TUNDRA_CELLS, lx * k0, ly * k0), textureGrad(uTundra, p1 / TUNDRA_CELLS, lx * k1, ly * k1), uPatMix);
+            col = mix(col, tundraTone(col, d), moor);
         }
         float above = h - water;
         bool beachy = b1 != 2 && b1 != 3 && b1 != 5 && b1 != 14;
@@ -352,8 +278,6 @@ void main() {
 
     // Map symbols, blended across two octaves; ecotones dither between the two biomes.
     if (!wet && uPatAlpha > 0.0) {
-        vec2 p0 = uPat0.xy + vLocal * uPat0.z;
-        vec2 p1 = uPat1.xy + vLocal * uPat1.z;
         float aa0 = max(fwidth(p0.x), 1e-4);
         float aa1 = max(fwidth(p1.x), 1e-4);
         // Symbol lattices turned ~20 deg so rows don't line up with the screen. The matrix entries are
@@ -379,8 +303,6 @@ void main() {
             s1 *= clamp((uPatMix * 1.1 - 0.05 - hash21(c1 + 13.1)) * 20.0, 0.0, 1.0);
         }
         vec4 s = (s0 + s1 * (1.0 - max(s0.x, s0.y))) * uPatAlpha;
-        // Tundra's heath symbols only on its grass, never on the snow.
-        if (moor > 0.0) s *= 1.0 - smoothstep(0.25, 0.5, snowy);
         col *= 1.0 - 0.16 * s.w;
         // Crown fill: a little darker and more saturated than the ground, then shaded.
         vec3 crown = col * 0.78;

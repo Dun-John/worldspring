@@ -153,11 +153,10 @@ pub fn local_slope(w: usize, h: usize, height: &[f64], i: usize, j: usize, cell_
 }
 
 /// Where snow lies on tundra: big soft patches of snow and of grass, a pure function of world
-/// position (ft) and the world's seed. The map's terrain shader draws the same field
-/// (`terrain.frag` `tundraSnow`, same constants, 32-bit integer hashing so both agree bit for bit
-/// on the lattice); battlemaps lay `Surface::Snow` where it passes `TUNDRA_SNOW_AT`. Value noise
-/// on a turned lattice, its coordinates warped twice so outlines wind; three octaves (1,500, 620
-/// and 240 ft). Returns 0..1, about half of it over the threshold.
+/// position (ft) and the world's seed. Battlemaps lay `Surface::Snow` where it passes
+/// `TUNDRA_SNOW_AT`; the map shows none (its tundra is one painted grass texture). Value noise on a
+/// turned lattice, its coordinates warped twice so outlines wind; three octaves (1,500, 620 and
+/// 240 ft). Returns 0..1, about half of it over the threshold.
 pub fn tundra_snow(seed: u32, x: f64, y: f64) -> f64 {
     let (mut rx, mut ry) = (0.8 * x - 0.6 * y, 0.6 * x + 0.8 * y);
     let s = |k: u32| snow_hash(seed.wrapping_add(k.wrapping_mul(0x632b_e5ab)));
@@ -173,7 +172,7 @@ pub fn tundra_snow(seed: u32, x: f64, y: f64) -> f64 {
 /// `tundra_snow` at or over this: snow.
 pub const TUNDRA_SNOW_AT: f64 = 0.5;
 
-/// lowbias32 (Chris Wellons): the 32-bit mix the shader mirrors.
+/// lowbias32 (Chris Wellons): a 32-bit mix.
 fn snow_hash(mut h: u32) -> u32 {
     h ^= h >> 16;
     h = h.wrapping_mul(0x7feb_352d);

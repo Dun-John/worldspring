@@ -83,7 +83,7 @@ pub(super) fn atmosphere_for(b: Biome, h: u64) -> Atmosphere {
 }
 
 /// Whether tundra square `k` of the chunk at (`ox`, `oy`) lies in a snow patch
-/// (`t0::biome::tundra_snow` at the square's centre; the map draws the same patches).
+/// (`t0::biome::tundra_snow` at the square's centre; only battlemaps show the snow).
 pub(super) fn tundra_snowy(world: &World, ox: f64, oy: f64, k: usize) -> bool {
     let (x, y) = (ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT);
     crate::t0::biome::tundra_snow(world.file.seed, x, y) >= crate::t0::biome::TUNDRA_SNOW_AT
