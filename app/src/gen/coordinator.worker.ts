@@ -3,12 +3,11 @@
 // The main thread only ever receives render-ready tiles.
 import type { PreparedChunk } from './battlePrep';
 import init, { Ctx, battlemap_catalog_json } from './pkg/worldgen_wasm.js';
+import { buildRiverGeometry, buildSiteGeometry } from './tileGeometry';
 import {
   KIND_BATTLEMAP,
   KIND_TERRAIN,
   battleId,
-  buildRiverGeometry,
-  buildSiteGeometry,
   parseTerrain,
   tileId,
   type FromCoordinator,

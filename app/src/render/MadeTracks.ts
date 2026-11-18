@@ -4,7 +4,8 @@
 // at every zoom. The layer lies under the battlemap, which draws the link itself and covers it
 // where it is built.
 import { Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
-import { buildRiverGeometry, type MadeSettlement } from '../gen/protocol';
+import type { MadeSettlement } from '../gen/protocol';
+import { buildRiverGeometry } from '../gen/tileGeometry';
 import type { Camera } from './camera';
 import roadFragment from './shaders/tileroad.frag?raw';
 import roadVertex from './shaders/tileroad.vert?raw';

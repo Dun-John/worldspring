@@ -5,7 +5,8 @@
 // street) and its own width, so it reads as one of the world's at every zoom. The layer lies under
 // the battlemap, which draws the road on its squares and covers it where it is built.
 import { Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
-import { buildRiverGeometry, type DrawnPath, type PathKind } from '../gen/protocol';
+import type { DrawnPath, PathKind } from '../gen/protocol';
+import { buildRiverGeometry } from '../gen/tileGeometry';
 import { curve, pathWidth } from '../editor/paths';
 import type { Camera } from './camera';
 import roadFragment from './shaders/tileroad.frag?raw';

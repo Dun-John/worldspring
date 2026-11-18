@@ -3,7 +3,8 @@
 // tile for every spot (never blank), fades new tiles in, and keeps a GPU LRU.
 import { BufferImageSource, Container, Geometry, GlProgram, Mesh, RenderTexture, Shader, Texture, UniformGroup, type Renderer } from 'pixi.js';
 import type { GenClient } from '../gen/client';
-import { TILE_N, TILE_SAMPLES, buildRiverGeometry, buildSiteGeometry, halfToFloat, tileId, type Geom, type Rect, type RiverGeometry, type TileMsg, type WantTile } from '../gen/protocol';
+import { TILE_N, TILE_SAMPLES, halfToFloat, tileId, type Geom, type Rect, type TileMsg, type WantTile } from '../gen/protocol';
+import { buildRiverGeometry, buildSiteGeometry, type RiverGeometry } from '../gen/tileGeometry';
 import type { Camera } from './camera';
 import fragment from './shaders/terrain.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
