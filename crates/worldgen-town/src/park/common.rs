@@ -112,48 +112,21 @@ fn square_crossings(pts: &[P], stream: &[P], bridges: &[(P, P)]) -> (Vec<P>, Vec
     (out, found)
 }
 
-pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg32) -> ParkLayout {
+/// A common's pond (`out.pond`) in the lowest hollow that holds one, and its hub (`hub`) moved
+/// clear of it or deeper in: the hub, and the pond as its middle, its water's level and its band.
+fn lay_pond(
+    p: &Park,
+    o: &Obb,
+    inside: &[(P, f64)],
+    steep: bool,
+    rim: impl Fn(f64) -> f64,
+    rmax: f64,
+    mut hub: P,
+    rng: &mut Pcg32,
+    out: &mut ParkLayout,
+) -> (P, Option<(P, f64, f64)>) {
     let poly = &p.pts;
     let g = &p.ground;
-    let mut out = ParkLayout::default();
-    let mut clear = Clear::new(poly);
-    let o = obb(poly);
-    let c = centroid(poly);
-    let m = poly.len();
-    let size = crate::core::sqrt(area(poly).abs());
-    let (trees, shrubs, small, few) = plants(biome);
-    out.bench = [0, 1, 1, 3][rng.below(4) as usize];
-    let lamp = [0, 1, 2][rng.below(3) as usize];
-    const PATH_W: f64 = 7.0;
-    // The ground inside it (dry points of its grid at least 20 ft in): low, high, and how steep.
-    let inside: Vec<(P, f64)> = (0..g.ny)
-        .flat_map(|j| (0..g.nx).map(move |i| (i, j)))
-        .filter(|&(i, j)| !g.wet[j * g.nx + i] && depth(poly, g.point(i, j)) >= 20.0)
-        .map(|(i, j)| (g.point(i, j), g.h[j * g.nx + i] as f64))
-        .collect();
-    let lowest = inside.iter().copied().min_by(|a, b| a.1.total_cmp(&b.1));
-    let highest = inside.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
-    let slope = match (lowest, highest) {
-        (Some(lo), Some(hi)) if dist(lo.0, hi.0) > 20.0 => (hi.1 - lo.1) / dist(lo.0, hi.0),
-        _ => 0.0,
-    };
-    let steep = slope > 0.1;
-
-    // The hub, a little off the middle.
-    let mut hub = add(c, [(rng.next_f64() - 0.5) * 0.15 * o.short, (rng.next_f64() - 0.5) * 0.15 * o.short]);
-    // The pond: in the lowest hollow that holds one (its level a little below the lowest ground
-    // round its rim; the ground further round no more than 7 ft above it, its banks eased out far
-    // enough to be no steeper than one in two), clear of the water.
-    let rp = (0.13 * size).clamp(16.0, 40.0);
-    let shape = (rng.range(0.0, std::f64::consts::TAU), rng.range(0.0, std::f64::consts::TAU), rng.range(0.0, std::f64::consts::PI), rng.range(1.1, 1.4));
-    // The pond's rim radius at angle `t`: an ellipse (`el` to 1 / `el` across, along `ax`), wobbled.
-    let rim = move |t: f64| {
-        let (a, b, ax, el) = shape;
-        let (cs, sn) = (libm::cos(t - ax), libm::sin(t - ax));
-        let ellipse = 1.0 / crate::core::sqrt(cs * cs / (el * el) + sn * sn * el * el);
-        rp * (1.0 + 0.14 * libm::sin(2.0 * t + a) + 0.08 * libm::sin(3.0 * t + b)) * ellipse
-    };
-    let rmax = (0..32).map(|k| rim(std::f64::consts::TAU * k as f64 / 32.0)).fold(0.0, f64::max);
     let ring = |pc: P, f: f64| -> Vec<f64> {
         (0..16)
             .map(|k| {
@@ -214,7 +187,6 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
             None => pond = None,
         }
     }
-    let pond_c = pond.map(|x| x.0);
     if let Some((pc, level, band)) = pond {
         let pts: Vec<P> = (0..28)
             .map(|k| {
@@ -224,6 +196,53 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
             .collect();
         out.pond = Some(Pond { pts, centre: pc, level: level as f32, band });
     }
+    (hub, pond)
+}
+
+pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg32) -> ParkLayout {
+    let poly = &p.pts;
+    let g = &p.ground;
+    let mut out = ParkLayout::default();
+    let mut clear = Clear::new(poly);
+    let o = obb(poly);
+    let c = centroid(poly);
+    let m = poly.len();
+    let size = crate::core::sqrt(area(poly).abs());
+    let (trees, shrubs, small, few) = plants(biome);
+    out.bench = [0, 1, 1, 3][rng.below(4) as usize];
+    let lamp = [0, 1, 2][rng.below(3) as usize];
+    const PATH_W: f64 = 7.0;
+    // The ground inside it (dry points of its grid at least 20 ft in): low, high, and how steep.
+    let inside: Vec<(P, f64)> = (0..g.ny)
+        .flat_map(|j| (0..g.nx).map(move |i| (i, j)))
+        .filter(|&(i, j)| !g.wet[j * g.nx + i] && depth(poly, g.point(i, j)) >= 20.0)
+        .map(|(i, j)| (g.point(i, j), g.h[j * g.nx + i] as f64))
+        .collect();
+    let lowest = inside.iter().copied().min_by(|a, b| a.1.total_cmp(&b.1));
+    let highest = inside.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
+    let slope = match (lowest, highest) {
+        (Some(lo), Some(hi)) if dist(lo.0, hi.0) > 20.0 => (hi.1 - lo.1) / dist(lo.0, hi.0),
+        _ => 0.0,
+    };
+    let steep = slope > 0.1;
+
+    // The hub, a little off the middle.
+    let hub = add(c, [(rng.next_f64() - 0.5) * 0.15 * o.short, (rng.next_f64() - 0.5) * 0.15 * o.short]);
+    // The pond: in the lowest hollow that holds one (its level a little below the lowest ground
+    // round its rim; the ground further round no more than 7 ft above it, its banks eased out far
+    // enough to be no steeper than one in two), clear of the water.
+    let rp = (0.13 * size).clamp(16.0, 40.0);
+    let shape = (rng.range(0.0, std::f64::consts::TAU), rng.range(0.0, std::f64::consts::TAU), rng.range(0.0, std::f64::consts::PI), rng.range(1.1, 1.4));
+    // The pond's rim radius at angle `t`: an ellipse (`el` to 1 / `el` across, along `ax`), wobbled.
+    let rim = move |t: f64| {
+        let (a, b, ax, el) = shape;
+        let (cs, sn) = (libm::cos(t - ax), libm::sin(t - ax));
+        let ellipse = 1.0 / crate::core::sqrt(cs * cs / (el * el) + sn * sn * el * el);
+        rp * (1.0 + 0.14 * libm::sin(2.0 * t + a) + 0.08 * libm::sin(3.0 * t + b)) * ellipse
+    };
+    let rmax = (0..32).map(|k| rim(std::f64::consts::TAU * k as f64 / 32.0)).fold(0.0, f64::max);
+    let (hub, pond) = lay_pond(p, &o, &inside, steep, rim, rmax, hub, rng, &mut out);
+    let pond_c = pond.map(|x| x.0);
     let band = pond.map_or(0.0, |x| x.2);
     // Out of the pond: a point inside it (or within `margin` of its rim) pushed out to the rim and
     // the margin.
