@@ -70,6 +70,7 @@ mod plan;
 mod seeds;
 mod wallring;
 mod shanty;
+mod groups;
 mod build;
 mod approach;
 mod quays;
