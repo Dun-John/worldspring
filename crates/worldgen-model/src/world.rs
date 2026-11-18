@@ -1578,16 +1578,6 @@ impl Edits {
             && self.members.is_empty() && self.removed_roads.is_empty() && self.fences.is_empty() && self.fence_gaps.is_empty()
     }
 
-    /// The NPCs found at `id` (placed there).
-    pub fn npcs_at<'a>(&'a self, id: &'a str) -> impl Iterator<Item = (&'a String, &'a Npc)> + 'a {
-        self.npcs.iter().filter(move |(_, n)| n.location.as_ref().is_some_and(|l| l.id == id))
-    }
-
-    /// The plots anchored at `id`.
-    pub fn plots_at<'a>(&'a self, id: &'a str) -> impl Iterator<Item = (&'a String, &'a Plot)> + 'a {
-        self.plots.iter().filter(move |(_, p)| p.anchors.iter().any(|a| a == id))
-    }
-
     /// The ops that turn these edits into `to`.
     pub fn diff(&self, to: &Edits) -> Vec<EditOp> {
         let (a, b) = (serde_json::to_value(self).unwrap_or_default(), serde_json::to_value(to).unwrap_or_default());
