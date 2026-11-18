@@ -9,7 +9,7 @@
 use crate::core::rng::{hash3, unit};
 use crate::town::Layout;
 use crate::town::fields::FieldUse;
-use crate::town::geom::{add, bbox, centroid, contains, dist, lerp, mul, outline_dist, seg_dist, sub};
+use crate::town::geom::{add, bbox, boxes_meet, centroid, contains, dist, grow, lerp, mul, outline_dist, seg_dist, sub};
 use crate::town::village::PlotKind;
 
 type P = [f64; 2];
@@ -41,10 +41,13 @@ pub(super) fn stacks(l: &Layout, rect: [f64; 4], out: &mut Vec<(P, f32, f32)>) {
         b[0] <= near[2] && near[0] <= b[2] && b[1] <= near[3] && near[1] <= b[3]
     };
     let inside = |p: P| p[0] >= rect[0] && p[0] < rect[2] && p[1] >= rect[1] && p[1] < rect[3];
-    let in_building = |p: P, r: f64| l.buildings.iter().any(|b| contains(&b.poly, p) || outline_dist(&b.poly, p) < r);
+    // The buildings a stack keeps 6 ft clear of: those whose box, 7 ft wider, meets `rect` (only
+    // stacks inside it are kept) and, for each `p`, holds it (farther ones are more than 6 ft off).
+    let blds: Vec<(&[P], [f64; 4])> = l.buildings.iter().map(|b| (&b.poly[..], grow(bbox(&b.poly), 7.0))).filter(|&(_, bb)| boxes_meet(bb, rect)).collect();
+    let in_building = |p: P| blds.iter().any(|&(poly, bb)| p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && (contains(poly, p) || outline_dist(poly, p) < 6.0));
     let mut put = |pts: &[(P, f64)], seed: u64, plot: &[P], keep: &dyn Fn(P) -> bool| {
         for (j, &(p, scale)) in pts.iter().enumerate() {
-            if !contains(plot, p) || outline_dist(plot, p) < EDGE_FT || in_building(p, 6.0) || !keep(p) {
+            if !contains(plot, p) || outline_dist(plot, p) < EDGE_FT || in_building(p) || !keep(p) {
                 continue;
             }
             if inside(p) {
