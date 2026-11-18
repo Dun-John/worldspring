@@ -18,6 +18,20 @@ pub struct Ctx {
     json: String,
 }
 
+impl Ctx {
+    /// Runs `f` on the T0 made in this context, or gives `none` (the JSON each caller answers with before T0).
+    fn with_t0(&self, none: &str, f: impl FnOnce(&T0) -> String) -> String {
+        match &self.t0 {
+            Some(t0) => f(t0),
+            None => none.into(),
+        }
+    }
+
+    fn loaded(&self) -> Result<&T0, JsError> {
+        self.t0.as_ref().ok_or_else(|| JsError::new("T0 not loaded"))
+    }
+}
+
 #[wasm_bindgen]
 impl Ctx {
     #[wasm_bindgen(constructor)]
@@ -58,31 +72,32 @@ impl Ctx {
     /// can tell which places a remade world lays out the same; and the settlements added from
     /// Edit › Places (`added`: `[layout, stroke]`, the stroke of the pin each stands for).
     pub fn overlay_json(&self) -> String {
-        let Some(t0) = &self.t0 else { return "{}".into() };
-        let mut o = t0.overlay_json();
-        // (Towns laid out by hand labelled by the people their homes house: `agent::hand_sizes`.)
-        let sized = worldgen::agent::hand_sizes(&self.world, t0);
-        if !sized.is_empty()
-            && let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&o)
-            && let Some(fs) = v.get_mut("features").and_then(|f| f.as_array_mut())
-        {
-            for (id, kind, extent, people) in sized {
-                if let Some(f) = fs.iter_mut().find(|f| f["id"] == id.as_str()) {
-                    let was = f["kind"].as_str().unwrap_or("").to_string();
-                    f["detail"] = serde_json::json!(worldgen::agent::resized_detail(f["detail"].as_str().unwrap_or(""), &was, kind, people));
-                    f["kind"] = serde_json::json!(kind);
-                    f["extent_ft"] = serde_json::json!(extent);
+        self.with_t0("{}", |t0| {
+            let mut o = t0.overlay_json();
+            // (Towns laid out by hand labelled by the people their homes house: `agent::hand_sizes`.)
+            let sized = worldgen::agent::hand_sizes(&self.world, t0);
+            if !sized.is_empty()
+                && let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&o)
+                && let Some(fs) = v.get_mut("features").and_then(|f| f.as_array_mut())
+            {
+                for (id, kind, extent, people) in sized {
+                    if let Some(f) = fs.iter_mut().find(|f| f["id"] == id.as_str()) {
+                        let was = f["kind"].as_str().unwrap_or("").to_string();
+                        f["detail"] = serde_json::json!(worldgen::agent::resized_detail(f["detail"].as_str().unwrap_or(""), &was, kind, people));
+                        f["kind"] = serde_json::json!(kind);
+                        f["extent_ft"] = serde_json::json!(extent);
+                    }
                 }
+                o = v.to_string();
             }
-            o = v.to_string();
-        }
-        let ids: Vec<String> = (0..worldgen::town::layout_count(t0)).map(|li| worldgen::town::layout_identity(t0, li)).map(|h| ((h ^ h >> 32) as u32).to_string()).collect();
-        let strokes = &self.world.file.sketch.strokes;
-        let added: Vec<String> = t0.settlements.iter().enumerate().filter_map(|(li, s)| s.pin.filter(|&k| strokes.get(k as usize).is_some_and(|st| st.added)).map(|k| format!("[{li},{k}]"))).collect();
-        match o.strip_suffix('}') {
-            Some(head) => format!("{head},\"first_created\":{},\"layout_ids\":[{}],\"added\":[{}]}}", self.first_created(), ids.join(","), added.join(",")),
-            None => o,
-        }
+            let ids: Vec<String> = (0..worldgen::town::layout_count(t0)).map(|li| worldgen::town::layout_identity(t0, li)).map(|h| ((h ^ h >> 32) as u32).to_string()).collect();
+            let strokes = &self.world.file.sketch.strokes;
+            let added: Vec<String> = t0.settlements.iter().enumerate().filter_map(|(li, s)| s.pin.filter(|&k| strokes.get(k as usize).is_some_and(|st| st.added)).map(|k| format!("[{li},{k}]"))).collect();
+            match o.strip_suffix('}') {
+                Some(head) => format!("{head},\"first_created\":{},\"layout_ids\":[{}],\"added\":[{}]}}", self.first_created(), ids.join(","), added.join(",")),
+                None => o,
+            }
+        })
     }
 
     /// The overlay's settlements and sites (`[{id, kind, name}]`, overlay order) for a worker that
@@ -148,7 +163,7 @@ impl Ctx {
     /// Generate the battlemap chunk for a finest-level tile; `parent` is the parent terrain
     /// tile's padded heights.
     pub fn gen_battlemap(&self, level: u8, x: u32, y: u32, parent: Vec<f32>) -> Result<Vec<u8>, JsError> {
-        let t0 = self.t0.as_ref().ok_or_else(|| JsError::new("T0 not loaded"))?;
+        let t0 = self.loaded()?;
         let key = TileKey::surface(level, x, y);
         let tile = terrain_tile(&self.world, t0, &key, Some(&parent));
         let chunk = worldgen::battlemap::generate(&self.world, t0, &key, &tile);
@@ -157,55 +172,40 @@ impl Ctx {
 
     /// What is at a world position: a building or a settlement (JSON, or `null`).
     pub fn query_json(&self, x: f64, y: f64) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::gazetteer::query_json(&self.world, t0, x, y),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::gazetteer::query_json(&self.world, t0, x, y))
     }
 
     /// Everything within `radius_ft` of a world position, topmost first (`pick::Thing`s as a JSON
     /// array; empty before T0).
     pub fn pick_json(&self, x: f64, y: f64, radius_ft: f64) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::pick::pick_json(&self.world, t0, x, y, radius_ft),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| worldgen::pick::pick_json(&self.world, t0, x, y, radius_ft))
     }
 
     /// Districts and named buildings matching a search string (JSON array); `rect`
     /// (x0, y0, x1, y1 in ft) limits the search to that area.
     pub fn search_json(&self, q: &str, rect: Option<Vec<f64>>) -> String {
         let rect = rect.filter(|r| r.len() == 4).map(|r| [r[0], r[1], r[2], r[3]]);
-        match &self.t0 {
-            Some(t0) => worldgen::gazetteer::search_json(&self.world, t0, q, rect),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| worldgen::gazetteer::search_json(&self.world, t0, q, rect))
     }
 
     /// Underground sites matching a query (`undersearch::search_json`): `filters` is JSON
     /// `{kinds, levels_min, levels_max, sizes, rect, near, radius_ft, hidden, limit}` (any left
     /// out); `{items, found, truncated}`, `{error}` for a bad filter, `null` before T0.
     pub fn under_search_json(&self, q: &str, filters: &str) -> String {
-        self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::undersearch::search_json(&self.world, t0, q, filters))
+        self.with_t0("null", |t0| worldgen::undersearch::search_json(&self.world, t0, q, filters))
     }
 
     /// An interior by id (`b:<settlement>:<building>` or `t:<settlement>:<tower>`), JSON or
     /// `null` for what can't be entered.
     pub fn interior_json(&self, id: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::interior::interior_json(&self.world, t0, id),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::interior::interior_json(&self.world, t0, id))
     }
 
     /// An underground site as a design, for the designer: `design` (JSON) or the site's own,
     /// changed by `action` (doors where needed, a room furnished, back to the generated site),
     /// with what it builds and its problems (`under::design::design_json`).
     pub fn design_json(&self, id: &str, design: Option<String>, action: Option<String>) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::under::design::design_json(&self.world, t0, id, design.as_deref(), action.as_deref()),
-            None => r#"{"error":"the world is still being made"}"#.into(),
-        }
+        self.with_t0(r#"{"error":"the world is still being made"}"#, |t0| worldgen::under::design::design_json(&self.world, t0, id, design.as_deref(), action.as_deref()))
     }
 
     /// A place by id (any feature, building, district or site): `{id, name, x, y}` or `null`.
@@ -217,22 +217,19 @@ impl Ctx {
     /// What can be renamed in a layout (`scope` its index: districts, businesses, towers, sites
     /// underground) or in a building or site (`scope` its id: levels and rooms), JSON array.
     pub fn names_json(&self, scope: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::agent::names_json(&self.world, t0, scope),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| worldgen::agent::names_json(&self.world, t0, scope))
     }
 
     /// The roads someone named and the crossings put down by hand, for the map's labels, search
     /// and the gazetteer (`roadids::named_json`), JSON; `null` before T0.
     pub fn named_json(&self) -> String {
-        self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::roadids::named_json(&self.world, t0).to_string())
+        self.with_t0("null", |t0| worldgen::roadids::named_json(&self.world, t0).to_string())
     }
 
     /// The sites standing in settlements and the drawn things part of towns (`agent::parents_json`):
     /// `{n, base, pairs, owners, pushed, sizes}`, or `null` before T0.
     pub fn parents_json(&self) -> String {
-        self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::agent::parents_json(&self.world, t0))
+        self.with_t0("null", |t0| worldgen::agent::parents_json(&self.world, t0))
     }
 
     /// (Roadmap 6 R5) Roads, streets and paths taken off the map or brought back
@@ -249,9 +246,10 @@ impl Ctx {
             #[serde(default)]
             dry: bool,
         }
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let Ok(i) = serde_json::from_str::<Input>(input) else { return r#"{"error":"bad input: {ids, restore?, dry?}"}"#.into() };
-        worldgen::roadcut::cut_json(&self.world, t0, &i.ids, i.restore, i.dry).to_string()
+        self.with_t0("null", |t0| {
+            let Ok(i) = serde_json::from_str::<Input>(input) else { return r#"{"error":"bad input: {ids, restore?, dry?}"}"#.into() };
+            worldgen::roadcut::cut_json(&self.world, t0, &i.ids, i.restore, i.dry).to_string()
+        })
     }
 
     /// (Roadmap 6 R6) Fences and hedges changed (`fencecut::change`), without changing the edits.
@@ -261,54 +259,47 @@ impl Ctx {
     /// fence_gaps: {id: FenceGap | null}, towns: {key: TownEdit | null}, rects, site_rects, done,
     /// refused: [{id, why}]}` (`dry`: only `rects`/`site_rects`/`done`); or `{error}`.
     pub fn fence_change_json(&self, input: &str) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(input) else { return r#"{"error":"bad input: {ids?, op, kind?, at?, fence?, gap?, dry?}"}"#.into() };
-        let ids: Vec<String> = match &v["ids"] {
-            serde_json::Value::Null => Vec::new(),
-            x => match serde_json::from_value(x.clone()) {
-                Ok(ids) => ids,
-                Err(_) => return r#"{"error":"ids: a list of strings"}"#.into(),
-            },
-        };
-        match worldgen::fencecut::Op::parse(&v) {
-            Ok(op) => worldgen::fencecut::change_json(&self.world, t0, &ids, &op, v["dry"].as_bool().unwrap_or(false)).to_string(),
-            Err(e) => serde_json::json!({ "error": e }).to_string(),
-        }
+        self.with_t0("null", |t0| {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(input) else { return r#"{"error":"bad input: {ids?, op, kind?, at?, fence?, gap?, dry?}"}"#.into() };
+            let ids: Vec<String> = match &v["ids"] {
+                serde_json::Value::Null => Vec::new(),
+                x => match serde_json::from_value(x.clone()) {
+                    Ok(ids) => ids,
+                    Err(_) => return r#"{"error":"ids: a list of strings"}"#.into(),
+                },
+            };
+            match worldgen::fencecut::Op::parse(&v) {
+                Ok(op) => worldgen::fencecut::change_json(&self.world, t0, &ids, &op, v["dry"].as_bool().unwrap_or(false)).to_string(),
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
+            }
+        })
     }
 
     /// (Roadmap 6 R6) Every fence and hedge within `r` ft (at most 2,000) of (`x`, `y`)
     /// (`fencecut::near`): `[{id, kind, length_ft, ends | pts, town?, gone?, gates?, ..}]`.
     pub fn fences_near_json(&self, x: f64, y: f64, r: f64, limit: u32) -> String {
-        match &self.t0 {
-            Some(t0) => serde_json::Value::Array(worldgen::fencecut::near(&self.world, t0, [x, y], r, limit.max(1) as usize)).to_string(),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| serde_json::Value::Array(worldgen::fencecut::near(&self.world, t0, [x, y], r, limit.max(1) as usize)).to_string())
     }
 
     /// (Roadmap 6 R6) The towns whose fences are changed by hand, for the Gazetteer
     /// (`fencecut::changed`): `[{town, name, ids, found}]`.
     pub fn changed_fences_json(&self) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::fencecut::changed_json(&self.world, t0).to_string(),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| worldgen::fencecut::changed_json(&self.world, t0).to_string())
     }
 
     /// (Roadmap 6 R5) The overlay's `bridges` without the stretches removed by hand (`[[x, y, dx, dy,
     /// class, kind, width], ..]`), for the app once `Edits.removed_roads` changes.
     pub fn bridge_marks_json(&self) -> String {
-        let Some(t0) = &self.t0 else { return "[]".into() };
-        let marks = t0.bridge_marks_but(t0.gone_roads(&self.world).as_ref());
-        serde_json::to_string(&marks.iter().map(|b| [b[0].round(), b[1].round(), (b[2] * 100.0).round() / 100.0, (b[3] * 100.0).round() / 100.0, b[4], b[5], b[6].round()]).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
+        self.with_t0("[]", |t0| {
+            let marks = t0.bridge_marks_but(t0.gone_roads(&self.world).as_ref());
+            serde_json::to_string(&marks.iter().map(|b| [b[0].round(), b[1].round(), (b[2] * 100.0).round() / 100.0, (b[3] * 100.0).round() / 100.0, b[4], b[5], b[6].round()]).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
+        })
     }
 
     /// (Roadmap 6 R5) Everything removed by hand, for the Gazetteer (`roadcut::removed`): `[{id,
     /// name, what, at, found}]`.
     pub fn removed_roads_json(&self) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::roadcut::removed_json(&self.world, t0).to_string(),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| worldgen::roadcut::removed_json(&self.world, t0).to_string())
     }
 
     /// Town layout `town`'s members changed by hand (`town::members::change`), without changing
@@ -317,43 +308,42 @@ impl Ctx {
     /// `{}`, taken away), the created entries to append (a place), the ids not changed
     /// (`[{id, why}]`) and what it did; or `{error}`.
     pub fn members_json(&self, town: u32, add: &str, remove: &str) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let ids = |s: &str| serde_json::from_str::<Vec<String>>(s).unwrap_or_default();
-        match worldgen::town::members::change(&self.world, t0, town as usize, &ids(add), &ids(remove)) {
-            Ok(c) => serde_json::json!({
-                "members": c.members,
-                "created": c.created,
-                "refused": c.refused.iter().map(|(id, why)| serde_json::json!({ "id": id, "why": why })).collect::<Vec<_>>(),
-                "report": c.report,
-            })
-            .to_string(),
-            Err(e) => serde_json::json!({ "error": e }).to_string(),
-        }
+        self.with_t0("null", |t0| {
+            let ids = |s: &str| serde_json::from_str::<Vec<String>>(s).unwrap_or_default();
+            match worldgen::town::members::change(&self.world, t0, town as usize, &ids(add), &ids(remove)) {
+                Ok(c) => serde_json::json!({
+                    "members": c.members,
+                    "created": c.created,
+                    "refused": c.refused.iter().map(|(id, why)| serde_json::json!({ "id": id, "why": why })).collect::<Vec<_>>(),
+                    "report": c.report,
+                })
+                .to_string(),
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
+            }
+        })
     }
 
     /// Where each of the things `ids` (JSON array of `c:<n>` / `b:<layout>:<id>`) could join: `{id:
     /// {towns: [[layout, gap_ft]], push: null | why not}}`, the towns within `within` ft nearest
     /// first (`town::members::join_reach`).
     pub fn reach_json(&self, ids: &str, within: f64) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let ids = serde_json::from_str::<Vec<String>>(ids).unwrap_or_default();
-        let m: serde_json::Map<String, serde_json::Value> = ids
-            .into_iter()
-            .map(|id| {
-                let (towns, push) = worldgen::town::members::join_reach(&self.world, t0, &id, within);
-                (id, serde_json::json!({ "towns": towns, "push": push }))
-            })
-            .collect();
-        serde_json::Value::Object(m).to_string()
+        self.with_t0("null", |t0| {
+            let ids = serde_json::from_str::<Vec<String>>(ids).unwrap_or_default();
+            let m: serde_json::Map<String, serde_json::Value> = ids
+                .into_iter()
+                .map(|id| {
+                    let (towns, push) = worldgen::town::members::join_reach(&self.world, t0, &id, within);
+                    (id, serde_json::json!({ "towns": towns, "push": push }))
+                })
+                .collect();
+            serde_json::Value::Object(m).to_string()
+        })
     }
 
     /// Where a site of `kind` (over `under`, if given) can be created near (x, y), with a name
     /// for it: `{x, y, name}` or `{error}` (`agent::creation_spot`).
     pub fn creation_spot_json(&self, kind: &str, under: Option<String>, id: &str, x: f64, y: f64) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::agent::creation_spot_json(&self.world, t0, kind, under.as_deref(), id, [x, y]),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::agent::creation_spot_json(&self.world, t0, kind, under.as_deref(), id, [x, y]))
     }
 
     /// Whether a building drawn by hand (footprint `[[x, y], …]` JSON, ft) can stand there, its
@@ -361,10 +351,7 @@ impl Ctx {
     /// created id, so reshaping one skips itself).
     pub fn building_spot_json(&self, poly: &str, func: Option<String>, id: &str) -> String {
         let Ok(poly) = serde_json::from_str::<Vec<[f64; 2]>>(poly) else { return r#"{"error":"bad footprint"}"#.into() };
-        match &self.t0 {
-            Some(t0) => worldgen::agent::building_spot_json(&self.world, t0, &poly, func.as_deref(), id),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::agent::building_spot_json(&self.world, t0, &poly, func.as_deref(), id))
     }
 
     /// Shop lots for a crossing (`{crossing, rows?: {depth, frontage, lane?}}` JSON) as `wharf::shop_lots` lays them:
@@ -423,24 +410,26 @@ impl Ctx {
 
     /// The world's generated islets (`t0::islets`): `[{id, x, y, r, river, level, tower: {id, x, y} | null}]`.
     pub fn islets_json(&self) -> String {
-        let Some(t0) = &self.t0 else { return "[]".into() };
-        let v: Vec<_> = worldgen::t0::islets::islets(t0)
-            .iter()
-            .map(|i| {
-                let tower = worldgen::t0::islets::tower_building(&self.world, t0, i).map(|(id, at)| serde_json::json!({ "id": id, "x": at[0], "y": at[1] }));
-                serde_json::json!({ "id": i.id, "x": i.at[0], "y": i.at[1], "r": i.r, "river": i.river, "level": i.level, "tower": tower })
-            })
-            .collect();
-        serde_json::to_string(&v).unwrap_or_else(|_| "[]".into())
+        self.with_t0("[]", |t0| {
+            let v: Vec<_> = worldgen::t0::islets::islets(t0)
+                .iter()
+                .map(|i| {
+                    let tower = worldgen::t0::islets::tower_building(&self.world, t0, i).map(|(id, at)| serde_json::json!({ "id": id, "x": at[0], "y": at[1] }));
+                    serde_json::json!({ "id": i.id, "x": i.at[0], "y": i.at[1], "r": i.r, "river": i.river, "level": i.level, "tower": tower })
+                })
+                .collect();
+            serde_json::to_string(&v).unwrap_or_else(|_| "[]".into())
+        })
     }
 
     /// A hand islet round (x, y) (`wharf::islet_at`): `{plateau, water: {kind, name, depth_ft}}` or `{error}`.
     pub fn islet_json(&self, key: &str, x: f64, y: f64, radius: f64, rise: f64) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        match worldgen::wharf::islet_at(&self.world, t0, key, [x, y], radius, rise) {
-            Ok((p, w)) => serde_json::json!({ "plateau": p, "water": { "kind": w.kind, "id": w.id, "name": w.name, "depth_ft": w.depth_ft } }).to_string(),
-            Err(e) => serde_json::json!({ "error": e }).to_string(),
-        }
+        self.with_t0("null", |t0| {
+            match worldgen::wharf::islet_at(&self.world, t0, key, [x, y], radius, rise) {
+                Ok((p, w)) => serde_json::json!({ "plateau": p, "water": { "kind": w.kind, "id": w.id, "name": w.name, "depth_ft": w.depth_ft } }).to_string(),
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
+            }
+        })
     }
 
     /// Whether a wharf (`Wharf` JSON) can be put down: `{}` with, for a breakwater asked to have one (`lighthouse`), its
@@ -481,107 +470,71 @@ impl Ctx {
     /// `pts`, `closed`) can stand there: `{x, y, name, in_way: [{id, at}]}` (the world's own
     /// buildings in its way) or `{error}` (`agent::works_spot_json`).
     pub fn works_spot_json(&self, created: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::agent::works_spot_json(&self.world, t0, created),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::agent::works_spot_json(&self.world, t0, created))
     }
 
     /// A generated building's edit with a change made (`{func, floors, poly, roof, tint,
     /// structure}`, or `{remove: true}`): `{edit}` (null: as generated) or `{error}`
     /// (`agent::building_edit_json`).
     pub fn building_edit_json(&self, id: &str, change: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::agent::building_edit_json(&self.world, t0, id, change),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::agent::building_edit_json(&self.world, t0, id, change))
     }
 
     /// A town's plan for the ward editor (`town::wards::plan_json`): patches, corners, walls,
     /// or `{error}`.
     pub fn town_plan_json(&self, layout: u32) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::town::wards::plan_json(&self.world, t0, layout as usize).unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string(),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::town::wards::plan_json(&self.world, t0, layout as usize).unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string())
     }
 
     /// A town changed as asked (`town::wards::TownRequest` JSON), without changing the edits:
     /// `{edit, report}` (the town's edit then, null: as generated; what it does, with the
     /// rectangles to draw again) or `{error}`.
     pub fn town_change_json(&self, layout: u32, request: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::town::wards::change_json(&self.world, t0, layout as usize, request),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::town::wards::change_json(&self.world, t0, layout as usize, request))
     }
 
     /// A building of a kind set down at a point as `placing::stamp` does (input and output JSON: `placing::stamp_json`).
     pub fn stamp_json(&self, input: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::placing::stamp_json(&self.world, t0, input),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::placing::stamp_json(&self.world, t0, input))
     }
 
     /// A hand town's street plan for the street editor (`town::handedit::plan_json`): header,
     /// junctions, streets, blocks, rows, areas, walls, problems; or `{error}`.
     pub fn street_plan_json(&self, layout: u32) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::town::handedit::plan_json(&self.world, t0, layout as usize).unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string(),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::town::handedit::plan_json(&self.world, t0, layout as usize).unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string())
     }
 
     /// A row of buildings along a path as `placing::row` lays it (`placing::row_json`).
     pub fn row_json(&self, input: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::placing::row_json(&self.world, t0, input),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::placing::row_json(&self.world, t0, input))
     }
 
     /// A hand town's streets changed as asked (`town::handedit::HandRequest` JSON), without
     /// changing the edits: `{change, report}` or `{error}`.
     pub fn street_change_json(&self, layout: u32, request: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::town::handedit::change_json(&self.world, t0, layout as usize, request),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::town::handedit::change_json(&self.world, t0, layout as usize, request))
     }
 
     /// Whether an outline can be a plot (`placing::parcel_check_json`).
     pub fn parcel_check_json(&self, input: &str) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::placing::parcel_check_json(&self.world, t0, input),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::placing::parcel_check_json(&self.world, t0, input))
     }
 
     /// The generated buildings with their middle inside a polygon (`[[x, y], …]` JSON, ft):
     /// `[{id, at}]` (`agent::generated_buildings_in`).
     pub fn buildings_in_json(&self, poly: &str) -> String {
         let Ok(poly) = serde_json::from_str::<Vec<[f64; 2]>>(poly) else { return "[]".into() };
-        match &self.t0 {
-            Some(t0) => worldgen::agent::generated_buildings_in_json(&self.world, t0, &poly),
-            None => "null".into(),
-        }
+        self.with_t0("null", |t0| worldgen::agent::generated_buildings_in_json(&self.world, t0, &poly))
     }
 
     /// Districts and businesses inside a rectangle (x0, y0, x1, y1 in ft), JSON array.
     pub fn in_view_json(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::gazetteer::in_view_json(&self.world, t0, [x0, y0, x1, y1]),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| worldgen::gazetteer::in_view_json(&self.world, t0, [x0, y0, x1, y1]))
     }
 
     /// A settlement's named districts for labels (JSON array).
     pub fn districts_json(&self, settlement: u32) -> String {
-        match &self.t0 {
-            Some(t0) => worldgen::gazetteer::districts_json(&self.world, t0, settlement as usize),
-            None => "[]".into(),
-        }
+        self.with_t0("[]", |t0| worldgen::gazetteer::districts_json(&self.world, t0, settlement as usize))
     }
 
     /// The villages and towns added by hand (`T0.made`), as JSON: `[{id, layout, tier,
@@ -591,64 +544,67 @@ impl Ctx {
     /// crossings), `track` its link's points `[x, y]` to the road (empty with none or removed by hand), `class` and
     /// `width` the link's road class and bed width (ft).
     pub fn made_json(&self) -> String {
-        let Some(t0) = &self.t0 else { return "[]".into() };
-        let edits = &self.world.file.edits.created;
-        // (Roadmap 6 R5) A link removed by hand (`mt:` in `Edits.removed_roads`) is drawn nowhere: no track.
-        let gone = &self.world.file.edits.removed_roads;
-        let ids = if gone.iter().any(|id| id.starts_with("mt:")) { worldgen::t0::made::track_ids(t0) } else { Vec::new() };
-        let list: Vec<serde_json::Value> = t0
-            .made
-            .iter()
-            .enumerate()
-            .filter_map(|(k, m)| {
-                let c = edits.get(m.poi - t0.base_pois)?;
-                let (s, reach) = (&m.s, worldgen::town::reach(&m.s));
-                let pad = worldgen::town::pad_extent(reach);
-                let mut r = [s.x - pad, s.y - pad, s.x + pad, s.y + pad];
-                for p in &m.track {
-                    r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
-                }
-                let removed = ids.get(k).is_some_and(|id| gone.contains(id));
-                let track: Vec<[f64; 2]> = if removed { Vec::new() } else { m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect() };
-                Some(serde_json::json!({
-                    "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
-                    "x": s.x, "y": s.y, "culture": s.culture, "lives": s.kind.name(), "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
-                    "rect": r.map(|v| v.round()), "track": track, "class": m.class as u8, "width": m.class.width_ft(),
-                    "hand": worldgen::town::hand::size(&self.world, t0.settlements.len() + m.poi).map(|(n, t)| serde_json::json!({ "population": n, "tier": t.name() })),
-                }))
-            })
-            .collect();
-        serde_json::Value::Array(list).to_string()
+        self.with_t0("[]", |t0| {
+            let edits = &self.world.file.edits.created;
+            // (Roadmap 6 R5) A link removed by hand (`mt:` in `Edits.removed_roads`) is drawn nowhere: no track.
+            let gone = &self.world.file.edits.removed_roads;
+            let ids = if gone.iter().any(|id| id.starts_with("mt:")) { worldgen::t0::made::track_ids(t0) } else { Vec::new() };
+            let list: Vec<serde_json::Value> = t0
+                .made
+                .iter()
+                .enumerate()
+                .filter_map(|(k, m)| {
+                    let c = edits.get(m.poi - t0.base_pois)?;
+                    let (s, reach) = (&m.s, worldgen::town::reach(&m.s));
+                    let pad = worldgen::town::pad_extent(reach);
+                    let mut r = [s.x - pad, s.y - pad, s.x + pad, s.y + pad];
+                    for p in &m.track {
+                        r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
+                    }
+                    let removed = ids.get(k).is_some_and(|id| gone.contains(id));
+                    let track: Vec<[f64; 2]> = if removed { Vec::new() } else { m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect() };
+                    Some(serde_json::json!({
+                        "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
+                        "x": s.x, "y": s.y, "culture": s.culture, "lives": s.kind.name(), "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
+                        "rect": r.map(|v| v.round()), "track": track, "class": m.class as u8, "width": m.class.width_ft(),
+                        "hand": worldgen::town::hand::size(&self.world, t0.settlements.len() + m.poi).map(|(n, t)| serde_json::json!({ "population": n, "tier": t.name() })),
+                    }))
+                })
+                .collect();
+            serde_json::Value::Array(list).to_string()
+        })
     }
 
     /// The lanes laid by hand outside any town (`T0.lanes`, `t0::made::lanes`), as JSON:
     /// `[{key, track, class, width, rect}]`: its points `[x, y]` (a free end near a road run on to
     /// it), road class and bed width (ft), and the rect (x0, y0, x1, y1 ft) its battlemaps change over.
     pub fn lanes_json(&self) -> String {
-        let Some(t0) = &self.t0 else { return "[]".into() };
-        let list: Vec<serde_json::Value> = t0
-            .lanes
-            .iter()
-            .map(|l| {
-                let mut r = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-                for p in &l.pts {
-                    r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
-                }
-                let track: Vec<[f64; 2]> = l.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect();
-                serde_json::json!({ "key": l.key, "track": track, "class": l.class as u8, "width": l.class.width_ft(), "rect": r.map(|v| v.round()) })
-            })
-            .collect();
-        serde_json::Value::Array(list).to_string()
+        self.with_t0("[]", |t0| {
+            let list: Vec<serde_json::Value> = t0
+                .lanes
+                .iter()
+                .map(|l| {
+                    let mut r = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+                    for p in &l.pts {
+                        r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
+                    }
+                    let track: Vec<[f64; 2]> = l.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect();
+                    serde_json::json!({ "key": l.key, "track": track, "class": l.class as u8, "width": l.class.width_ft(), "rect": r.map(|v| v.round()) })
+                })
+                .collect();
+            serde_json::Value::Array(list).to_string()
+        })
     }
 
     /// One of the world's own settlements as its sketch pin would take it
     /// (`agent::settlement_facts`), or `{error}`.
     pub fn settlement_facts_json(&self, id: &str) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        match worldgen::agent::settlement_facts(&self.world, t0, id) {
-            Ok(v) => v.to_string(),
-            Err(e) => serde_json::json!({ "error": e }).to_string(),
-        }
+        self.with_t0("null", |t0| {
+            match worldgen::agent::settlement_facts(&self.world, t0, id) {
+                Ok(v) => v.to_string(),
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
+            }
+        })
     }
 
     /// Whether a village or town (`kind`; `id` its `c:<n>`) can be added at (x, y) without
@@ -656,34 +612,36 @@ impl Ctx {
     /// `create_settlement` makes it (from the ground), or `{error}`.
     pub fn settlement_spot_json(&self, kind: &str, id: &str, x: f64, y: f64) -> String {
         use worldgen::t0::made;
-        let Some(t0) = &self.t0 else { return "null".into() };
-        match made::spot(&self.world, t0, kind, id, [x, y]) {
-            Ok(()) => {
-                let culture = made::culture_at(t0, x, y);
-                let lives_by = worldgen::world::PIN_KINDS[made::kind_at(&self.world, t0, x, y, made::tier_of(kind)) as usize];
-                serde_json::json!({ "x": x, "y": y, "name": made::name(&self.world, t0, id, culture), "culture": culture, "lives_by": lives_by }).to_string()
+        self.with_t0("null", |t0| {
+            match made::spot(&self.world, t0, kind, id, [x, y]) {
+                Ok(()) => {
+                    let culture = made::culture_at(t0, x, y);
+                    let lives_by = worldgen::world::PIN_KINDS[made::kind_at(&self.world, t0, x, y, made::tier_of(kind)) as usize];
+                    serde_json::json!({ "x": x, "y": y, "name": made::name(&self.world, t0, id, culture), "culture": culture, "lives_by": lives_by }).to_string()
+                }
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
             }
-            Err(e) => serde_json::json!({ "error": e }).to_string(),
-        }
+        })
     }
 
     /// `edits` (JSON) with the edits of every village or town added by hand that `old_created`
     /// (JSON, the created sites before) had and `edits` removes, moves or lays out anew set aside
     /// (`t0::made::set_aside_changed`): `{edits, moved}`, or `{error}`.
     pub fn set_aside_changed_json(&self, old_created: &str, edits: &str) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let old: Vec<worldgen::world::Created> = match serde_json::from_str(old_created) {
-            Ok(v) => v,
-            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
-        };
-        let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
-            Ok(v) => v,
-            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
-        };
-        let by = worldgen::t0::made::set_aside_changed_by_field(&old, &mut edits, t0.settlements.len() + t0.base_pois);
-        let moved: usize = by.iter().map(|a| a.1).sum();
-        let by: serde_json::Map<String, serde_json::Value> = by.iter().filter(|a| a.1 > 0).map(|a| (a.0.to_string(), a.1.into())).collect();
-        serde_json::json!({ "edits": edits, "moved": moved, "by": by }).to_string()
+        self.with_t0("null", |t0| {
+            let old: Vec<worldgen::world::Created> = match serde_json::from_str(old_created) {
+                Ok(v) => v,
+                Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+            };
+            let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+                Ok(v) => v,
+                Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+            };
+            let by = worldgen::t0::made::set_aside_changed_by_field(&old, &mut edits, t0.settlements.len() + t0.base_pois);
+            let moved: usize = by.iter().map(|a| a.1).sum();
+            let by: serde_json::Map<String, serde_json::Value> = by.iter().filter(|a| a.1 > 0).map(|a| (a.0.to_string(), a.1.into())).collect();
+            serde_json::json!({ "edits": edits, "moved": moved, "by": by }).to_string()
+        })
     }
 
     /// `edits` (JSON) with the deleted village or town `id` (a `c:<n>`) restored where it was, if
@@ -691,24 +649,25 @@ impl Ctx {
     /// brought back where it fits (`t0::made::restore`): `{edits, back}`, or `{error}`.
     pub fn restore_made_json(&self, id: &str, edits: &str) -> String {
         use worldgen::t0::made;
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
-            Ok(v) => v,
-            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
-        };
-        let Some(k) = edits.created.iter().position(|c| c.id == id && c.removed && c.is_settlement()) else {
-            return serde_json::json!({ "error": format!("{id} is not a deleted village or town") }).to_string();
-        };
-        let c = edits.created[k].clone();
-        if let Err(e) = made::spot(&self.world, t0, &c.kind, &c.id, [c.x, c.y]) {
-            return serde_json::json!({ "error": format!("its place is taken: {e}") }).to_string();
-        }
-        if let Some(o) = edits.existing_site(&c, [c.x, c.y]) {
-            return serde_json::json!({ "error": format!("its place is taken: {} is the same site", o.name) }).to_string();
-        }
-        edits.created[k].removed = false;
-        let back = made::restore(&mut edits, k, t0.settlements.len() + t0.base_pois);
-        serde_json::json!({ "edits": edits, "back": back }).to_string()
+        self.with_t0("null", |t0| {
+            let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+                Ok(v) => v,
+                Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+            };
+            let Some(k) = edits.created.iter().position(|c| c.id == id && c.removed && c.is_settlement()) else {
+                return serde_json::json!({ "error": format!("{id} is not a deleted village or town") }).to_string();
+            };
+            let c = edits.created[k].clone();
+            if let Err(e) = made::spot(&self.world, t0, &c.kind, &c.id, [c.x, c.y]) {
+                return serde_json::json!({ "error": format!("its place is taken: {e}") }).to_string();
+            }
+            if let Some(o) = edits.existing_site(&c, [c.x, c.y]) {
+                return serde_json::json!({ "error": format!("its place is taken: {} is the same site", o.name) }).to_string();
+            }
+            edits.created[k].removed = false;
+            let back = made::restore(&mut edits, k, t0.settlements.len() + t0.base_pois);
+            serde_json::json!({ "edits": edits, "back": back }).to_string()
+        })
     }
 
     /// `edits` (JSON) with settlement layout `layout` laid out in culture `culture` (0-4;
@@ -718,37 +677,39 @@ impl Ctx {
     /// Changes nothing here: the app applies `edits` as one change. Without `culture`: `{from}`,
     /// the culture it is laid out in now.
     pub fn set_culture_json(&self, layout: u32, culture: Option<u8>, edits: &str) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
-            Ok(v) => v,
-            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
-        };
-        let li = layout as usize;
-        let Some(to) = culture else {
-            let now = worldgen::town::culture::override_in(&edits, t0, li).or_else(|| worldgen::town::settlement(t0, li).map(|s| s.culture));
-            return match now {
-                Some(c) => serde_json::json!({ "from": worldgen::town::culture::NAMES[c as usize % 5] }).to_string(),
-                None => serde_json::json!({ "error": format!("layout {li}: not a settlement") }).to_string(),
+        self.with_t0("null", |t0| {
+            let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+                Ok(v) => v,
+                Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
             };
-        };
-        match worldgen::town::culture::change(&mut edits, t0, li, to) {
-            Ok(c) => {
-                let mut v = c.to_json();
-                v["edits"] = serde_json::to_value(&edits).unwrap_or_default();
-                v.to_string()
+            let li = layout as usize;
+            let Some(to) = culture else {
+                let now = worldgen::town::culture::override_in(&edits, t0, li).or_else(|| worldgen::town::settlement(t0, li).map(|s| s.culture));
+                return match now {
+                    Some(c) => serde_json::json!({ "from": worldgen::town::culture::NAMES[c as usize % 5] }).to_string(),
+                    None => serde_json::json!({ "error": format!("layout {li}: not a settlement") }).to_string(),
+                };
+            };
+            match worldgen::town::culture::change(&mut edits, t0, li, to) {
+                Ok(c) => {
+                    let mut v = c.to_json();
+                    v["edits"] = serde_json::to_value(&edits).unwrap_or_default();
+                    v.to_string()
+                }
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
             }
-            Err(e) => serde_json::json!({ "error": e }).to_string(),
-        }
+        })
     }
 
     /// The fingerprints a remake of this world needs (`t0::remap::prints_before`): of the layouts
     /// `edits` (JSON) name and `played` (a play session's), below the first created one, as
     /// `[[layout, print]…]`; `null` before T0 or for edits that don't read.
     pub fn remake_prints_json(&self, edits: &str, played: Vec<u32>) -> String {
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let Ok(edits) = serde_json::from_str::<worldgen::world::Edits>(edits) else { return "null".into() };
-        let also: Vec<usize> = played.iter().map(|&li| li as usize).collect();
-        serde_json::to_string(&worldgen::t0::remap::prints_before(&self.world, t0, &edits, &also)).expect("serializable")
+        self.with_t0("null", |t0| {
+            let Ok(edits) = serde_json::from_str::<worldgen::world::Edits>(edits) else { return "null".into() };
+            let also: Vec<usize> = played.iter().map(|&li| li as usize).collect();
+            serde_json::to_string(&worldgen::t0::remap::prints_before(&self.world, t0, &edits, &also)).expect("serializable")
+        })
     }
 
     /// Edits made on the world before following their places into this one, remade
@@ -771,19 +732,20 @@ impl Ctx {
             #[serde(default)]
             played: Vec<usize>,
         }
-        let Some(t0) = &self.t0 else { return "null".into() };
-        let a: Input = match serde_json::from_str(input) {
-            Ok(v) => v,
-            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
-        };
-        let (followed, targets) = remap::follow_into(&self.world, t0, &a.edits, &a.before, &a.was, &a.gone, &a.played);
-        let followed = followed.map(|f| serde_json::json!({ "ops": a.edits.diff(&f.edits), "kept": f.kept, "parked": f.parked + f.aside, "removed": f.removed, "moved": f.moved, "vanished": f.vanished }));
-        serde_json::json!({ "followed": followed, "targets": targets }).to_string()
+        self.with_t0("null", |t0| {
+            let a: Input = match serde_json::from_str(input) {
+                Ok(v) => v,
+                Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+            };
+            let (followed, targets) = remap::follow_into(&self.world, t0, &a.edits, &a.before, &a.was, &a.gone, &a.played);
+            let followed = followed.map(|f| serde_json::json!({ "ops": a.edits.diff(&f.edits), "kept": f.kept, "parked": f.parked + f.aside, "removed": f.removed, "moved": f.moved, "vanished": f.vanished }));
+            serde_json::json!({ "followed": followed, "targets": targets }).to_string()
+        })
     }
 
     /// Generate one terrain tile. `parent` is the parent's padded heights for refined levels.
     pub fn gen_terrain(&self, level: u8, x: u32, y: u32, parent: Option<Vec<f32>>) -> Result<Vec<u8>, JsError> {
-        let t0 = self.t0.as_ref().ok_or_else(|| JsError::new("T0 not loaded"))?;
+        let t0 = self.loaded()?;
         let key = TileKey::surface(level, x, y);
         let tile = terrain_tile(&self.world, t0, &key, parent.as_deref());
         Ok(pack_terrain(&self.world, t0, &key, &tile))
