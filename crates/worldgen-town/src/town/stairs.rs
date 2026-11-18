@@ -508,7 +508,7 @@ fn along(line: &[P], cum: &[f64], s: f64) -> (P, P) {
 }
 
 fn bbox(poly: &[P], pad: f64) -> [f64; 4] {
-    let r = poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+    let r = super::geom::bbox(poly);
     [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]
 }
 

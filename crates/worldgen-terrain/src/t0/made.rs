@@ -10,15 +10,12 @@ use super::biome::Biome;
 use super::roads::RoadClass;
 use super::settle::{Reason, SettleKind, Settlement, Tier};
 use crate::World;
+use crate::core::geom::dist;
 use crate::core::noise::{fbm, gradient2, smoothstep};
 use crate::core::rng::{hash3, unit};
 use crate::world::Created;
 
 type P = [f64; 2];
-
-fn dist(a: P, b: P) -> f64 {
-    crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]))
-}
 
 /// The farthest a created settlement may lie from the nearest road for a track to join it
 /// (ft, straight line from its centre): 10 mi. `spot` refuses a place farther.

@@ -92,6 +92,40 @@ pub fn seg_dist(p: P, a: P, b: P) -> f64 {
     dist(p, add(a, mul(ab, t)))
 }
 
+/// Distance from `p` to segment `ab`, measured from `a` when the segment has no length (unlike
+/// `seg_dist`, which floors the squared length at 1e-12: the two differ below that).
+#[inline]
+pub fn seg_dist_or_start(p: P, a: P, b: P) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    dist(p, [a[0] + t * dx, a[1] + t * dy])
+}
+
+/// The least distance from `p` to the closed outline of `poly` (not 0 inside; `f64::MAX` when empty).
+#[inline]
+pub fn outline_dist(poly: &[P], p: P) -> f64 {
+    (0..poly.len()).map(|k| seg_dist(p, poly[k], poly[(k + 1) % poly.len()])).fold(f64::MAX, f64::min)
+}
+
+/// The bounding box (x0, y0, x1, y1) of `pts` (`[MAX, MAX, MIN, MIN]` when empty).
+#[inline]
+pub fn bbox(pts: &[P]) -> [f64; 4] {
+    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
+}
+
+/// Whether two boxes (x0, y0, x1, y1) meet, touching included.
+#[inline]
+pub fn boxes_meet(a: [f64; 4], b: [f64; 4]) -> bool {
+    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+}
+
+/// Box `b` grown by `d` on every side.
+#[inline]
+pub fn grow(b: [f64; 4], d: f64) -> [f64; 4] {
+    [b[0] - d, b[1] - d, b[2] + d, b[3] + d]
+}
+
 /// The least distance between the outlines of two polygons (0 where they cross).
 #[inline]
 pub fn poly_gap(a: &[P], b: &[P]) -> f64 {

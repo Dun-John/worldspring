@@ -164,18 +164,10 @@ fn good(lot: &[P], dp: &District, n: P, c: f64) -> bool {
     la >= dp.min_sq / 4.0 && o.short >= MIN_LOT_FT && la >= 0.62 * o.long * o.short && fronts(lot, n, c)
 }
 
-fn bbox(poly: &[P]) -> [f64; 4] {
-    poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])])
-}
-
-fn meets(a: &[f64; 4], b: &[f64; 4]) -> bool {
-    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
-}
-
 /// The shapes to avoid whose bounds meet `bb`, cloned only when there are any: `cand` holds
 /// places in `avoid` with their bounds.
 fn near(avoid: &[Shape], cand: &[(usize, [f64; 4])], bb: &[f64; 4]) -> Vec<Shape> {
-    cand.iter().filter(|(_, b)| meets(b, bb)).map(|&(i, _)| avoid[i].clone()).collect()
+    cand.iter().filter(|(_, b)| boxes_meet(*b, *bb)).map(|&(i, _)| avoid[i].clone()).collect()
 }
 
 /// `lot` less the avoided shapes near it: the lot itself when they take nothing, else the
@@ -215,7 +207,7 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
     });
     // The avoided shapes near the row, by place and bounds; each run looks only at those near its
     // own band (a diagonal street's whole row can span the town).
-    let row_avoid: Vec<(usize, [f64; 4])> = avoid.iter().enumerate().map(|(i, sh)| (i, bbox(&sh.outer))).filter(|(_, b)| meets(b, &all)).collect();
+    let row_avoid: Vec<(usize, [f64; 4])> = avoid.iter().enumerate().map(|(i, sh)| (i, bbox(&sh.outer))).filter(|(_, b)| boxes_meet(*b, all)).collect();
     let alley_every = |rng: &mut Pcg32| crate::core::round(dp.block_size * (0.5 + rng.next_f64())).max(2.0) as u32;
     let mut every = alley_every(rng);
     let mut since = 0u32;
@@ -235,7 +227,7 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
         // little past a band cut on the bisector at a bend.)
         let band_bb = bbox(&run.band);
         let band_bb = [band_bb[0] - ALLEY_FT, band_bb[1] - ALLEY_FT, band_bb[2] + ALLEY_FT, band_bb[3] + ALLEY_FT];
-        let cand: Vec<(usize, [f64; 4])> = row_avoid.iter().filter(|(_, b)| meets(b, &band_bb)).copied().collect();
+        let cand: Vec<(usize, [f64; 4])> = row_avoid.iter().filter(|(_, b)| boxes_meet(*b, band_bb)).copied().collect();
         let (a, u, n) = (run.a, run.u, run.n);
         // The street line as `build_block` has its lines: normal toward the street, the lot on
         // the side where `dot(p, sn) <= sc`.
@@ -295,7 +287,7 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
             close_kept.sort_unstable();
             close_kept.dedup();
             let lot_shape = [Shape::ring(lot.clone())];
-            let over = close_kept.iter().any(|&i| meets(&kept[i].2, &bb) && clip::area(&clip::intersection(&lot_shape, &[Shape::ring(kept[i].0.clone())])) > 1.0);
+            let over = close_kept.iter().any(|&i| boxes_meet(kept[i].2, bb) && clip::area(&clip::intersection(&lot_shape, &[Shape::ring(kept[i].0.clone())])) > 1.0);
             if over {
                 continue;
             }

@@ -113,7 +113,7 @@ fn rank(kind: &str) -> u8 {
 }
 
 fn bbox(pts: &[P], pad: f64) -> [f64; 4] {
-    let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let b = geom::bbox(pts);
     [crate::core::floor(b[0] - pad), crate::core::floor(b[1] - pad), crate::core::ceil(b[2] + pad), crate::core::ceil(b[3] + pad)]
 }
 

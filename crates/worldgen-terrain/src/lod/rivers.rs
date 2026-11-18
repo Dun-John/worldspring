@@ -12,6 +12,7 @@
 //! order-independent `min`) and raises the water surface to the river level (`max`), and
 //! `strips` returns the curve as polylines for the renderer.
 
+use crate::core::geom::dist;
 use crate::core::noise::{gradient2, smoothstep};
 use crate::core::rng::hash2;
 
@@ -891,11 +892,6 @@ fn capsule_row(a: [f64; 2], b: [f64; 2], r: f64, y: f64) -> Option<(f64, f64)> {
 /// How far (ft) from its centre line a river `w` ft wide carves at a level of `spacing`.
 pub fn carve_reach(w: f64, spacing: f64, reach_samples: f64) -> f64 {
     w * 0.5 + (reach_samples * spacing).max(3.0 * w)
-}
-
-#[inline]
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
-    crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]))
 }
 
 /// Move a point (ft) out of any river channel and off its banks: pushed away from the

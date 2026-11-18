@@ -13,6 +13,7 @@ use std::collections::BinaryHeap;
 
 use super::roads::{Inputs, Routed};
 use super::settle::Settlement;
+use crate::core::geom::dist;
 use crate::core::sqrt;
 
 /// The most water a ferry crosses, shore to shore (miles), and the least ("about 4 miles": the
@@ -139,10 +140,6 @@ impl PartialOrd for Node {
     fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
         Some(self.cmp(o))
     }
-}
-
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
-    sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]))
 }
 
 /// The ferries `roads::build` builds, from the routes found (`paths`): per settled island at

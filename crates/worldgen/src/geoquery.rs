@@ -61,13 +61,6 @@ fn poly_has(q: &[P], p: P) -> bool {
     inside
 }
 
-fn seg_dist(p: P, a: P, b: P) -> f64 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = dx * dx + dy * dy;
-    let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    geom::dist(p, [a[0] + t * dx, a[1] + t * dy])
-}
-
 fn closest_on_seg(p: P, a: P, b: P) -> P {
     let d = [b[0] - a[0], b[1] - a[1]];
     let l = d[0] * d[0] + d[1] * d[1];
@@ -123,7 +116,7 @@ impl Region {
             Region::Circle(c, r) => geom::dist(p, *c) - r,
             _ => {
                 let q = self.corners();
-                (0..q.len()).map(|i| seg_dist(p, q[i], q[(i + 1) % q.len()])).fold(f64::MAX, f64::min)
+                (0..q.len()).map(|i| geom::seg_dist_or_start(p, q[i], q[(i + 1) % q.len()])).fold(f64::MAX, f64::min)
             }
         }
     }
@@ -134,7 +127,7 @@ impl Region {
             return true;
         }
         match self {
-            Region::Circle(c, r) => seg_dist(*c, a, b) <= *r,
+            Region::Circle(c, r) => geom::seg_dist_or_start(*c, a, b) <= *r,
             _ => {
                 let q = self.corners();
                 (0..q.len()).any(|i| segs_cross(a, b, q[i], q[(i + 1) % q.len()]))

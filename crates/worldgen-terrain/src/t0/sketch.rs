@@ -22,6 +22,7 @@ use super::biome::{ALL as BIOMES, Biome};
 use super::hydro::NO_LAKE;
 use super::settle::{PoiKind, SettleKind, Tier};
 use crate::World;
+use crate::core::geom::seg_dist_or_start;
 use crate::core::hash::FastMap;
 use crate::core::noise::{fbm, ridged, smoothstep};
 use crate::world::{SketchTool, Stroke};
@@ -88,14 +89,6 @@ impl Raster {
     }
 }
 
-fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = dx * dx + dy * dy;
-    let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    let (qx, qy) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
-    crate::core::sqrt(qx * qx + qy * qy)
-}
-
 /// Distance (ft) from every grid point to a polyline (closed: back to its start), up to
 /// `reach`; farther points get `reach`.
 fn distance(g: Raster, pts: &[[f64; 2]], closed: bool, reach: f64) -> Vec<f32> {
@@ -117,7 +110,7 @@ fn distance(g: Raster, pts: &[[f64; 2]], closed: bool, reach: f64) -> Vec<f32> {
         for j in j0..=j1 {
             for i in i0..=i1 {
                 let k = j * g.w + i;
-                let v = seg_dist([i as f64 * g.cell, j as f64 * g.cell], a, b) as f32;
+                let v = seg_dist_or_start([i as f64 * g.cell, j as f64 * g.cell], a, b) as f32;
                 if v < d[k] {
                     d[k] = v;
                 }

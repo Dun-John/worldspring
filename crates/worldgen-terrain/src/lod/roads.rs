@@ -5,6 +5,7 @@
 //! The curve is the same at every level that carves (the wander's shortest wavelength is
 //! resolved at all carving spacings), so fine tiles keep the road where coarse ones put it.
 
+use crate::core::geom::{dist, seg_dist};
 use crate::core::noise::{gradient2, smoothstep};
 use crate::core::rng::hash2;
 use crate::t0::roads::RoadClass;
@@ -766,14 +767,4 @@ pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft
     })
 }
 
-fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = (dx * dx + dy * dy).max(1e-12);
-    let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0);
-    dist(p, [a[0] + dx * t, a[1] + dy * t])
-}
-
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
-    crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]))
-}
 

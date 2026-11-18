@@ -21,6 +21,7 @@ mod plots;
 mod plan;
 
 use lanes::*;
+use lanes::grow;
 use ring::*;
 pub(super) use plots::*;
 pub use plan::*;
@@ -150,14 +151,6 @@ impl LaneGrid {
             })
         })
     }
-}
-
-fn bbox(poly: &[P]) -> [f64; 4] {
-    poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
-}
-
-fn boxes_meet(a: [f64; 4], b: [f64; 4]) -> bool {
-    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
 }
 
 /// The area two convex polygons share (`a` clipped by each of `b`'s sides).

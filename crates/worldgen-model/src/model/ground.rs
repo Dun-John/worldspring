@@ -189,10 +189,7 @@ impl Plateau {
     }
 }
 
-#[inline]
-pub fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
-    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
-}
+pub use crate::core::geom::bbox;
 
 pub fn crosses_itself(pts: &[[f64; 2]]) -> bool {
     let n = pts.len();

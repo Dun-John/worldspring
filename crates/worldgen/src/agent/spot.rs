@@ -263,10 +263,7 @@ pub(super) fn named(t0: &T0, n: &str) -> bool {
     t0.extra.as_ref().is_some_and(|e| e.overlay.features.iter().any(|f| f.name == n))
 }
 
-/// The bounding box (x0, y0, x1, y1) of `pts`.
-pub(super) fn bbox(pts: &[P]) -> [f64; 4] {
-    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
-}
+pub(super) use crate::core::geom::bbox;
 
 /// The most blockers `spot_blockers` lists (a longer scan is cut and says so).
 const BLOCKER_CAP: usize = 300;

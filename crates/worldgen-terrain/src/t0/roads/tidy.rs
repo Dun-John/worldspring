@@ -231,9 +231,9 @@ fn cut_spikes(r: &mut RoadPath) {
         }
         let (mut i, mut j) = (k - 1, k + 1);
         loop {
-            if i >= 1 && j + 1 < r.pts.len() && seg_dist(r.pts[i - 1], r.pts[j], r.pts[j + 1]) < TOL {
+            if i >= 1 && j + 1 < r.pts.len() && seg_dist_or_start(r.pts[i - 1], r.pts[j], r.pts[j + 1]) < TOL {
                 i -= 1;
-            } else if i >= 1 && j + 1 < r.pts.len() && seg_dist(r.pts[j + 1], r.pts[i - 1], r.pts[i]) < TOL {
+            } else if i >= 1 && j + 1 < r.pts.len() && seg_dist_or_start(r.pts[j + 1], r.pts[i - 1], r.pts[i]) < TOL {
                 j += 1;
             } else {
                 break;
@@ -260,7 +260,4 @@ fn cut_spikes(r: &mut RoadPath) {
     }
 }
 
-#[inline]
-pub(super) fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
-    crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]))
-}
+pub(super) use crate::core::geom::dist;

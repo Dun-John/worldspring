@@ -200,22 +200,6 @@ fn lobes(c: P, r: f64) -> [(P, f64); 4] {
     [(c, 0.75 * r), lobe(0.0), lobe(1.0), lobe(2.0)]
 }
 
-fn outline_dist(poly: &[P], p: P) -> f64 {
-    (0..poly.len()).map(|k| seg_dist(p, poly[k], poly[(k + 1) % poly.len()])).fold(f64::MAX, f64::min)
-}
-
-fn bbox(poly: &[P]) -> [f64; 4] {
-    poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
-}
-
-fn hits(a: [f64; 4], b: [f64; 4]) -> bool {
-    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
-}
-
-fn grow(b: [f64; 4], m: f64) -> [f64; 4] {
-    [b[0] - m, b[1] - m, b[2] + m, b[3] + m]
-}
-
 fn is_func(b: &Building, key: &str) -> bool {
     b.func.is_some_and(|f| catalog::CATALOG.get(f as usize).is_some_and(|c| c.key == key))
 }
@@ -408,7 +392,7 @@ pub(crate) fn clip_seg(a: P, b: P, r: [f64; 4]) -> Option<(P, P)> {
 fn gate(f: &[P], ways: &[(P, P, f64)]) -> P {
     let n = f.len();
     let fb = grow(bbox(f), 50.0);
-    let ways: Vec<(P, P, f64)> = ways.iter().copied().filter(|&(a, b, half)| hits(grow(bbox(&[a, b]), half), fb)).collect();
+    let ways: Vec<(P, P, f64)> = ways.iter().copied().filter(|&(a, b, half)| boxes_meet(grow(bbox(&[a, b]), half), fb)).collect();
     let room = 0.5 * GATE_FT + GATE_CORNER_FT;
     let mut best = (45.0, None);
     for k in 0..n {
@@ -445,7 +429,7 @@ fn gate(f: &[P], ways: &[(P, P, f64)]) -> P {
 /// another kind, gates put in; None: as generated).
 pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, cut: Option<&super::fence::FenceCut>, out: &mut Battle) {
     let near = grow(rect, 8.0);
-    if !hits(l.bbox, near) && !l.crofts.iter().any(|p| hits(bbox(&p.pts), near)) {
+    if !boxes_meet(l.bbox, near) && !l.crofts.iter().any(|p| boxes_meet(bbox(&p.pts), near)) {
         return;
     }
     let inside = |p: P| p[0] >= rect[0] && p[0] < rect[2] && p[1] >= rect[1] && p[1] < rect[3];
@@ -458,7 +442,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         .enumerate()
         .filter(|&(i, _)| l.field_info.get(i).is_some_and(|x| x.bound != FieldBound::None))
         .map(|(i, f)| (i, bbox(f)))
-        .filter(|&(_, b)| hits(b, near))
+        .filter(|&(_, b)| boxes_meet(b, near))
         .collect();
     let wide = bounded.iter().fold(grow(rect, 30.0), |a, &(_, b)| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
     let wide = grow(wide, 80.0);
@@ -467,17 +451,17 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         .iter()
         .flat_map(|(pts, _, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w)))
         .chain(l.streets.iter().flat_map(|st| st.windows(2).map(|q| (q[0], q[1], 0.5 * super::village::LANE_W))))
-        .filter(|&(a, b, _)| hits(bbox(&[a, b]), wide))
+        .filter(|&(a, b, _)| boxes_meet(bbox(&[a, b]), wide))
         .collect();
     // (And the world's roads by it, as the village took them: `village`.)
     for (ri, k) in t0.roads.segments_near(wide, 0.0) {
         let rc = &t0.roads.roads[ri as usize];
         let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 40.0).ceil().clamp(1.0, 400.0) as usize;
         let pts: Vec<P> = (0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p).collect();
-        ways.extend(pts.windows(2).map(|q| (q[0], q[1], 0.5 * rc.class.width_ft())).filter(|&(a, b, _)| hits(bbox(&[a, b]), wide)));
+        ways.extend(pts.windows(2).map(|q| (q[0], q[1], 0.5 * rc.class.width_ft())).filter(|&(a, b, _)| boxes_meet(bbox(&[a, b]), wide)));
     }
     // (Its roofs: a run stops `ROOF_FT` short of one.)
-    let blds: Vec<&Vec<P>> = l.buildings.iter().filter(|b| b.structure == Structure::Roofed).map(|b| &b.poly).filter(|p| hits(grow(bbox(p), ROOF_FT + 4.0), near)).collect();
+    let blds: Vec<&Vec<P>> = l.buildings.iter().filter(|b| b.structure == Structure::Roofed).map(|b| &b.poly).filter(|p| boxes_meet(grow(bbox(p), ROOF_FT + 4.0), near)).collect();
     let by_roof = |a: P, b: P| {
         let piece = [a, b];
         blds.iter().any(|q| contains(q, a) || contains(q, b) || poly_gap(q, &piece) < ROOF_FT)
@@ -496,16 +480,16 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         })
     };
     // (Nothing runs over a village's green.)
-    let greens: Vec<&Vec<P>> = l.plazas.iter().filter(|p| p.kind == super::PlazaKind::Green && hits(grow(bbox(&p.pts), 4.0), near)).map(|p| &p.pts).collect();
+    let greens: Vec<&Vec<P>> = l.plazas.iter().filter(|p| p.kind == super::PlazaKind::Green && boxes_meet(grow(bbox(&p.pts), 4.0), near)).map(|p| &p.pts).collect();
     let piece_runs = |a: P, b: P, kind: RunKind, keep: &dyn Fn(P) -> bool, out: &mut Battle| {
-        if !hits(bbox(&[a, b]), near) {
+        if !boxes_meet(bbox(&[a, b]), near) {
             return;
         }
         let m = (dist(a, b) / 4.0).ceil().max(1.0) as usize;
         let mut from: Option<usize> = None;
         for j in 0..=m {
             let mid = lerp(a, b, (j as f64 + 0.5) / m as f64);
-            let ok = j < m && hits([mid[0], mid[1], mid[0], mid[1]], mids) && keep(mid) && !blocked(mid) && !greens.iter().any(|g| contains(g, mid)) && {
+            let ok = j < m && boxes_meet([mid[0], mid[1], mid[0], mid[1]], mids) && keep(mid) && !blocked(mid) && !greens.iter().any(|g| contains(g, mid)) && {
                 let (p, q) = (lerp(a, b, j as f64 / m as f64), lerp(a, b, (j + 1) as f64 / m as f64));
                 !on_way(p, q) && !by_roof(p, q)
             };
@@ -574,7 +558,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     // (The sails turn in front of the tower, `sail_front`: their tips reach ~31 ft from its middle.)
     let mills: Vec<P> = l.buildings.iter().filter(|b| windmill(b)).map(|b| centroid(&b.poly)).collect();
     for (i, f) in l.fields.iter().enumerate() {
-        if !hits(bbox(f), near) {
+        if !boxes_meet(bbox(f), near) {
             continue;
         }
         let kind = match l.field_info.get(i).map(|x| x.bound) {
@@ -593,7 +577,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     }
     // A village's crofts' and yards' hedges and fences, and its churchyard's low wall (the manor's
     // yard wall is raised as a garden wall's).
-    if l.crofts.iter().any(|p| hits(bbox(&p.pts), near)) {
+    if l.crofts.iter().any(|p| boxes_meet(bbox(&p.pts), near)) {
         for (a, b, bound, plot) in super::village::bounds(l) {
             let kind = match bound {
                 Bound::Hedge => RunKind::Hedge,
@@ -614,7 +598,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         }
     }
     // R5 towns: a cemetery's low wall or hedge, a gap at its gate (`cemetery::bounds`).
-    if l.parks.iter().any(|p| p.kind == super::ParkKind::Cemetery && hits(bbox(&p.pts), near)) {
+    if l.parks.iter().any(|p| p.kind == super::ParkKind::Cemetery && boxes_meet(bbox(&p.pts), near)) {
         for (a, b, bound) in super::cemetery::bounds(l) {
             let kind = match bound {
                 super::cemetery::Bound::Hedge => RunKind::Hedge,
@@ -625,23 +609,23 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         }
     }
     // R5 towns (114): a horse park's corrals, post and rail, a gap at each gate (`horses::bounds`).
-    if l.parks.iter().any(|p| p.kind == super::ParkKind::Horses && hits(bbox(&p.pts), near)) {
+    if l.parks.iter().any(|p| p.kind == super::ParkKind::Horses && boxes_meet(bbox(&p.pts), near)) {
         for (a, b) in super::horses::bounds(l, near) {
             emit(super::fence::CORRAL, a, b, RunKind::Corral, &|_| true, out);
         }
     }
     // R5 towns (115): the small pens beside some yurts, post and rail, a gap at each gate.
-    if l.yurts.iter().any(|y| y.pen.is_some()) && hits(l.bbox, near) {
+    if l.yurts.iter().any(|y| y.pen.is_some()) && boxes_meet(l.bbox, near) {
         for (a, b) in super::yurts::fences(l, near) {
             emit(super::fence::PEN, a, b, RunKind::Corral, &|_| true, out);
         }
     }
     // Orchards in rows along their furrows; copses.
-    if hits(l.bbox, near) {
+    if boxes_meet(l.bbox, near) {
         let (trees, _, _, _) = crate::battle::greenery(crate::battle::land_biome(t0, l.center));
         for (i, f) in l.fields.iter().enumerate() {
             let fb = bbox(f);
-            if !hits(fb, rect) {
+            if !boxes_meet(fb, rect) {
                 continue;
             }
             let Some(info) = l.field_info.get(i) else { continue };

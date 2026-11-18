@@ -56,7 +56,7 @@ pub fn realm_of(settlements: &[Settlement], i: usize) -> Option<usize> {
 
 /// Distance (cells) from a point to a polyline.
 pub(super) fn line_dist(p: [f64; 2], line: &[[f64; 2]]) -> f64 {
-    line.windows(2).map(|w| seg_dist(p, w[0], w[1])).fold(f64::INFINITY, f64::min)
+    line.windows(2).map(|w| seg_dist_or_start(p, w[0], w[1])).fold(f64::INFINITY, f64::min)
 }
 
 /// Whether `p` is within `tol` of the polyline (`line_dist(p, line) < tol`, skipping segments
@@ -64,16 +64,11 @@ pub(super) fn line_dist(p: [f64; 2], line: &[[f64; 2]]) -> f64 {
 pub(super) fn near_line(p: [f64; 2], line: &[[f64; 2]], tol: f64) -> bool {
     line.windows(2).any(|w| {
         let (a, b) = (w[0], w[1]);
-        p[0] >= a[0].min(b[0]) - tol && p[0] <= a[0].max(b[0]) + tol && p[1] >= a[1].min(b[1]) - tol && p[1] <= a[1].max(b[1]) + tol && seg_dist(p, a, b) < tol
+        p[0] >= a[0].min(b[0]) - tol && p[0] <= a[0].max(b[0]) + tol && p[1] >= a[1].min(b[1]) - tol && p[1] <= a[1].max(b[1]) + tol && seg_dist_or_start(p, a, b) < tol
     })
 }
 
-pub(super) fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = dx * dx + dy * dy;
-    let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    dist(p, [a[0] + t * dx, a[1] + t * dy])
-}
+pub(super) use crate::core::geom::seg_dist_or_start;
 
 /// Whether segment a–b crosses the polyline.
 /// Two roads that cross away from settlements (routes laid across each other between grid

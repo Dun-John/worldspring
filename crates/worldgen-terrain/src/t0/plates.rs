@@ -9,6 +9,7 @@
 //! across the map, y in [0, aspect]): it is fractal, and every size gets a whole landmass.
 
 use crate::World;
+use crate::core::geom::dist;
 use crate::core::noise::{Fbm, Ridged, smoothstep};
 use crate::core::rng::Pcg32;
 
@@ -243,11 +244,6 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
 #[inline]
 fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])
-}
-
-#[inline]
-fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
-    crate::core::sqrt(dist2(a, b))
 }
 
 /// Threshold such that exactly `fraction` of `values` lies above it.

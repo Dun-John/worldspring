@@ -549,7 +549,7 @@ pub(super) fn drop_lenses(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], 
                     break;
                 }
             }
-            let near = |x: [f64; 2]| way.iter().any(|&e| roads[e].pts.windows(2).any(|w| seg_dist(x, w[0], w[1]) < NEAR));
+            let near = |x: [f64; 2]| way.iter().any(|&e| roads[e].pts.windows(2).any(|w| seg_dist_or_start(x, w[0], w[1]) < NEAR));
             let along = set.iter().all(|&i| {
                 let r = &roads[i];
                 let s = arc(&r.pts);

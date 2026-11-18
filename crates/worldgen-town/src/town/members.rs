@@ -84,7 +84,7 @@ pub fn members_of(world: &World, t0: &T0, town: usize) -> Vec<(usize, Owner)> {
     let mut out = Vec::new();
     for (c, comp) in idx.comps.iter().enumerate() {
         let hand = comp.items.iter().any(|i| idx.hand.get(i) == Some(&town));
-        if !hand && !overlaps(t.rect, grow(comp.bbox, JOIN_FT)) {
+        if !hand && !boxes_meet(t.rect, grow(comp.bbox, JOIN_FT)) {
             continue;
         }
         let owners = resolve(world, t0, &idx, &towns, c as u32);
@@ -190,7 +190,7 @@ pub fn owners(world: &World, t0: &T0) -> Vec<(usize, Owner)> {
     for (c, comp) in idx.comps.iter().enumerate() {
         let hand = comp.items.iter().any(|i| idx.hand.contains_key(i));
         let reach = grow(comp.bbox, JOIN_FT);
-        if !hand && !towns.iter().any(|t| overlaps(t.rect, reach)) {
+        if !hand && !towns.iter().any(|t| boxes_meet(t.rect, reach)) {
             continue;
         }
         let owners = resolve(world, t0, &idx, &towns, c as u32);
@@ -441,7 +441,7 @@ pub fn join_reach(world: &World, t0: &T0, id: &str, within: f64) -> (Vec<(usize,
     };
     let towns = town_rects(world, t0, &idx);
     let mut out: Vec<(usize, f64)> = Vec::new();
-    for t in towns.iter().filter(|t| overlaps(t.rect, grow(shape.bbox, within))) {
+    for t in towns.iter().filter(|t| boxes_meet(t.rect, grow(shape.bbox, within))) {
         if building.is_some() && is_settlement(t0, t.li) {
             continue;
         }
@@ -476,12 +476,12 @@ pub fn would_own(world: &World, t0: &T0, polys: &[Vec<P>]) -> Option<(usize, f64
             best = Some((g, t));
         }
     };
-    for t in town_rects(world, t0, &idx).iter().filter(|t| overlaps(t.rect, reach)) {
+    for t in town_rects(world, t0, &idx).iter().filter(|t| boxes_meet(t.rect, reach)) {
         let e = edge(t0, &idx, t.li, &edge_layouts(world, t0, &idx, t.li));
         take(shapes.iter().map(|s| edge_gap(s, &e, JOIN_FT)).fold(f64::MAX, f64::min), t.li);
     }
-    for it in idx.items.iter().filter(|it| overlaps(it.shape.bbox, reach)) {
-        let g = shapes.iter().filter(|s| overlaps(grow(s.bbox, JOIN_FT), it.shape.bbox)).map(|s| gap(s, &it.shape)).fold(f64::MAX, f64::min);
+    for it in idx.items.iter().filter(|it| boxes_meet(it.shape.bbox, reach)) {
+        let g = shapes.iter().filter(|s| boxes_meet(grow(s.bbox, JOIN_FT), it.shape.bbox)).map(|s| gap(s, &it.shape)).fold(f64::MAX, f64::min);
         if g <= JOIN_FT
             && let Some(o) = owner(world, t0, it.li)
         {
@@ -580,18 +580,6 @@ fn gap(a: &Shape, b: &Shape) -> f64 {
         }
     }
     best
-}
-
-fn outline_dist(poly: &[P], p: P) -> f64 {
-    (0..poly.len()).map(|i| seg_dist(p, poly[i], poly[(i + 1) % poly.len()])).fold(f64::MAX, f64::min)
-}
-
-fn grow(b: [f64; 4], d: f64) -> [f64; 4] {
-    [b[0] - d, b[1] - d, b[2] + d, b[3] + d]
-}
-
-fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool {
-    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
 }
 
 // ---------------------------------------------------------------------------------------
@@ -751,7 +739,7 @@ fn build_index(world: &World, t0: &T0, key: u64) -> Index {
         let mut seen: FastSet<u32> = FastSet::default();
         for c in cells(reach) {
             for &j in grid.get(&c).into_iter().flatten() {
-                if j as usize <= i || !seen.insert(j) || !overlaps(reach, items[j as usize].shape.bbox) {
+                if j as usize <= i || !seen.insert(j) || !boxes_meet(reach, items[j as usize].shape.bbox) {
                     continue;
                 }
                 let g = gap(&it.shape, &items[j as usize].shape);
@@ -895,11 +883,11 @@ fn edge(t0: &T0, idx: &Index, town: usize, layouts: &[Rc<Layout>]) -> Edge {
 
 /// How far item shape `s` lies from a town's edge (0 inside it; MAX beyond `reach_ft`).
 fn edge_gap(s: &Shape, e: &Edge, reach_ft: f64) -> f64 {
-    if e.inside.iter().any(|q| overlaps(q.bbox, s.bbox) && s.pts.iter().any(|&p| contains(&q.pts, p))) {
+    if e.inside.iter().any(|q| boxes_meet(q.bbox, s.bbox) && s.pts.iter().any(|&p| contains(&q.pts, p))) {
         return 0.0;
     }
     let reach = grow(s.bbox, reach_ft);
-    e.shapes.iter().filter(|o| overlaps(reach, o.bbox)).map(|o| gap(s, o)).fold(f64::MAX, f64::min)
+    e.shapes.iter().filter(|o| boxes_meet(reach, o.bbox)).map(|o| gap(s, o)).fold(f64::MAX, f64::min)
 }
 
 /// The owners of component `c`'s items (in its order): a greedy claim, nearest first, over
@@ -907,7 +895,7 @@ fn edge_gap(s: &Shape, e: &Edge, reach_ft: f64) -> f64 {
 fn resolve(world: &World, t0: &T0, idx: &Index, all: &[Town], c: u32) -> Rc<[Option<Owner>]> {
     let comp = &idx.comps[c as usize];
     let reach = grow(comp.bbox, JOIN_FT);
-    let mut towns: Vec<usize> = all.iter().filter(|t| overlaps(t.rect, reach)).map(|t| t.li).collect();
+    let mut towns: Vec<usize> = all.iter().filter(|t| boxes_meet(t.rect, reach)).map(|t| t.li).collect();
     towns.extend(comp.items.iter().filter_map(|i| idx.hand.get(i)));
     towns.sort_unstable();
     towns.dedup();

@@ -425,14 +425,6 @@ impl FaceInfo {
     }
 }
 
-fn bbox(pts: &[P]) -> [f64; 4] {
-    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
-}
-
-fn boxes_meet(a: &[f64; 4], b: &[f64; 4]) -> bool {
-    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
-}
-
 fn face_infos(recs: &HandRecords, origin: P, li: &str) -> Vec<FaceInfo> {
     let mut problems = Problems::new();
     let fs = Faces::of(recs, origin, li, &mut problems);
@@ -539,7 +531,7 @@ fn reconcile(world: &World, index: usize, l: &Layout, before: &HandRecords, afte
                 return Vec::new();
             }
             let reg = clip::region(&fa[f].ring);
-            let mut v: Vec<(f64, u32)> = fb.iter().filter(|g| g.block.is_some() && boxes_meet(&g.bbox, &fa[f].bbox)).map(|g| (clip::area(&clip::intersection(&reg, &clip::region(&g.ring))), g.block.unwrap_or(0))).filter(|x| x.0 > 1.0).collect();
+            let mut v: Vec<(f64, u32)> = fb.iter().filter(|g| g.block.is_some() && boxes_meet(g.bbox, fa[f].bbox)).map(|g| (clip::area(&clip::intersection(&reg, &clip::region(&g.ring))), g.block.unwrap_or(0))).filter(|x| x.0 > 1.0).collect();
             v.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
             v
         })
@@ -707,7 +699,7 @@ fn refresh_works(after: &mut HandRecords, before: &HandRecords, rings: &[Vec<P>]
     let touched = |pts: &[P]| {
         let b = bbox(pts);
         let reg = clip::region(pts);
-        world_rings.iter().any(|(r, rb)| boxes_meet(rb, &b) && clip::area(&clip::intersection(&reg, r)) > 1.0)
+        world_rings.iter().any(|(r, rb)| boxes_meet(*rb, b) && clip::area(&clip::intersection(&reg, r)) > 1.0)
     };
     w.plazas.retain(|x| !touched(&hand::unpk(&x.1)));
     w.parks.retain(|x| !touched(&hand::unpk(&x.1)));
@@ -1185,7 +1177,7 @@ fn op_name(r: &HandRequest) -> &'static str {
 fn blocks_under(recs: &HandRecords, origin: P, li: &str, poly: &[P]) -> Vec<u32> {
     let local: Vec<P> = poly.iter().map(|p| sub(*p, origin)).collect();
     let (reg, b) = (clip::region(&local), bbox(&local));
-    face_infos(recs, origin, li).into_iter().filter(|f| boxes_meet(&f.bbox, &b) && clip::area(&clip::intersection(&reg, &clip::region(&f.ring))) > 1.0).filter_map(|f| f.block).collect()
+    face_infos(recs, origin, li).into_iter().filter(|f| boxes_meet(f.bbox, b) && clip::area(&clip::intersection(&reg, &clip::region(&f.ring))) > 1.0).filter_map(|f| f.block).collect()
 }
 
 /// `change` as JSON: `{change: {streets, wharves, towns}, report}` or `{error}` (for the app's

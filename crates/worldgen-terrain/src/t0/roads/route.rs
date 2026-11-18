@@ -96,7 +96,7 @@ pub(super) fn drawn_routes(inp: &Inputs) -> DrawnRoutes {
                 let (j0, j1) = ((seg[0][1].min(seg[1][1]) - 2.0).floor().max(0.0) as usize, ((seg[0][1].max(seg[1][1]) + 2.0).ceil() as usize).min(h - 1));
                 for j in j0..=j1 {
                     for i in i0..=i1 {
-                        if seg_dist([i as f64, j as f64], seg[0], seg[1]) <= 1.1 {
+                        if seg_dist_or_start([i as f64, j as f64], seg[0], seg[1]) <= 1.1 {
                             blocked[j * w + i] = true;
                         }
                     }

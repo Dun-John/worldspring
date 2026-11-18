@@ -9,7 +9,7 @@
 use crate::core::rng::{hash3, unit};
 use crate::town::Layout;
 use crate::town::fields::FieldUse;
-use crate::town::geom::{add, centroid, contains, dist, lerp, mul, seg_dist, sub};
+use crate::town::geom::{add, centroid, contains, dist, lerp, mul, outline_dist, seg_dist, sub};
 use crate::town::village::PlotKind;
 
 type P = [f64; 2];
@@ -25,10 +25,6 @@ const EDGE_FT: f64 = 5.0;
 
 fn key(p: P, salt: i64) -> u64 {
     hash3(0x4a75_7ac5, crate::core::round(p[0]) as i64, crate::core::round(p[1]) as i64, salt)
-}
-
-fn outline_dist(poly: &[P], p: P) -> f64 {
-    (0..poly.len()).map(|k| seg_dist(p, poly[k], poly[(k + 1) % poly.len()])).fold(f64::MAX, f64::min)
 }
 
 fn unit_v(v: P) -> P {

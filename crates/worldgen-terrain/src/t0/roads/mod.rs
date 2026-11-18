@@ -914,7 +914,7 @@ impl<'a> NearLine<'a> {
         let tol = self.tol;
         self.segs[self.start[b] as usize..self.start[b + 1] as usize].iter().any(|&k| {
             let (a, b) = (self.line[k as usize], self.line[k as usize + 1]);
-            p[0] >= a[0].min(b[0]) - tol && p[0] <= a[0].max(b[0]) + tol && p[1] >= a[1].min(b[1]) - tol && p[1] <= a[1].max(b[1]) + tol && seg_dist(p, a, b) < tol
+            p[0] >= a[0].min(b[0]) - tol && p[0] <= a[0].max(b[0]) + tol && p[1] >= a[1].min(b[1]) - tol && p[1] <= a[1].max(b[1]) + tol && seg_dist_or_start(p, a, b) < tol
         })
     }
 }
