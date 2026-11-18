@@ -11,6 +11,7 @@ mod build;
 mod crossings;
 mod design;
 mod fences;
+mod finds;
 mod geo;
 mod ground;
 mod harbour;
