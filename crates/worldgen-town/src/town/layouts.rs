@@ -553,12 +553,26 @@ pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
 pub fn layouts_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<Rc<Layout>> {
     let hit = |x: f64, y: f64, r: f64| x + r >= rect[0] && x - r <= rect[2] && y + r >= rect[1] && y - r <= rect[3];
     let n = t0.settlements.len();
-    let streets = &world.file.edits.streets;
-    // (A town laid out by hand reaches as far as its streets: `hand::bounds`.)
-    let by_hand = |i: usize| if streets.is_empty() { None } else { hand::bounds(streets, i) };
-    // (R4: a town with streets added reaches as far as they do too: `added::bounds`.)
+    let edits = &world.file.edits;
     let meets = |b: [f64; 4]| b[2] >= rect[0] && b[0] <= rect[2] && b[3] >= rect[1] && b[1] <= rect[3];
-    let by_added = |i: usize| !world.file.edits.towns.is_empty() && added::bounds(&world.file.edits, i).is_some_and(meets);
+    // (Bounds by layout index, from the edit maps' header keys: no key built per settlement.)
+    let keyed = |keys: &mut dyn Iterator<Item = &String>, bounds: &dyn Fn(usize) -> Option<[f64; 4]>| {
+        let mut m: FastMap<usize, [f64; 4]> = FastMap::default();
+        for k in keys {
+            if let Some(i) = k.parse::<usize>().ok().filter(|i| i.to_string() == *k) {
+                if let Some(b) = bounds(i) {
+                    m.insert(i, b);
+                }
+            }
+        }
+        m
+    };
+    // (A town laid out by hand reaches as far as its streets: `hand::bounds`.)
+    let hand_b = keyed(&mut edits.streets.keys(), &|i| hand::bounds(&edits.streets, i));
+    let by_hand = |i: usize| hand_b.get(&i).copied();
+    // (R4: a town with streets added reaches as far as they do too: `added::bounds`.)
+    let added_b = keyed(&mut edits.towns.keys(), &|i| added::bounds(edits, i));
+    let by_added = |i: usize| added_b.get(&i).copied().is_some_and(meets);
     let towns = t0
         .settlements
         .iter()
