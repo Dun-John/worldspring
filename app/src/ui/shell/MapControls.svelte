@@ -5,7 +5,8 @@
   // where there is no keyboard: undo and Layers (pinch zooms).
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
-  import { shell } from './layout.svelte';
+  import { mac } from './shortcuts';
+  import { NEW_UI, shell } from './layout.svelte';
   import { HEX_OFFSET_MI, HEX_OPACITY, HEX_SIZE_MI, HEX_WIDTH_PX, type Hex } from '../../render/hex';
 
   interface Props {
@@ -16,6 +17,10 @@
     battlemap: boolean;
     canUndo: boolean;
     undoLabel: string | null;
+    /** ?ui=new: Redo too, on wide screens. */
+    canRedo?: boolean;
+    redoLabel?: string | null;
+    onRedo?: () => void;
     onGrid: (on: boolean) => void;
     onPlaces: (on: boolean) => void;
     onSeaLanes: (on: boolean) => void;
@@ -33,8 +38,9 @@
     /** Inside: the markers of notes put down at points (the DM's). */
     roomNotes?: { on: boolean; set: (on: boolean) => void };
   }
-  let { grid, places, seaLanes, hexes, battlemap, canUndo, undoLabel, onGrid, onPlaces, onSeaLanes, onHexes, onHexGrid, onZoom, onWhole, onUndo, floors, north, roomNotes }: Props = $props();
+  let { grid, places, seaLanes, hexes, battlemap, canUndo, undoLabel, canRedo = false, redoLabel = null, onRedo, onGrid, onPlaces, onSeaLanes, onHexes, onHexGrid, onZoom, onWhole, onUndo, floors, north, roomNotes }: Props = $props();
 
+  const ctrl = mac ? '⌘' : 'Ctrl+';
   const layers = $derived(shell.menu === 'layers');
   let hexOpen = $state(false);
   /** A slider's value while it is dragged (changed in the edits when let go: one undo step). */
@@ -59,7 +65,12 @@
   {#if north}
     <button class="ctl" class:on={north.on} onclick={() => north.set(!north.on)} aria-label="North up" aria-pressed={north.on} title={north.on ? 'Back to the map as it lies (Shift+N)' : 'Turn the plan north up (Shift+N)'}><Icon name="north" /></button>
   {/if}
-  {#if shell.phone && canUndo}
+  {#if NEW_UI && !shell.phone}
+    <div class="stack">
+      <button class="ctl" onclick={onUndo} disabled={!canUndo} aria-label="Undo" title={undoLabel ? `Undo: ${undoLabel} (${ctrl}Z)` : `Undo (${ctrl}Z)`}><Icon name="undo" /></button>
+      <button class="ctl" onclick={onRedo} disabled={!canRedo} aria-label="Redo" title={redoLabel ? `Redo: ${redoLabel} (${ctrl}Y)` : `Redo (${ctrl}Y)`}><Icon name="redo" /></button>
+    </div>
+  {:else if shell.phone && canUndo}
     <button class="ctl" onclick={onUndo} aria-label="Undo" title={undoLabel ? `Undo: ${undoLabel}` : 'Undo'}><Icon name="undo" /></button>
   {/if}
   <div class="layers-wrap">
@@ -189,7 +200,11 @@
     box-shadow: var(--shadow);
     cursor: pointer;
   }
-  .ctl:hover {
+  .ctl:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .ctl:hover:not(:disabled) {
     background: var(--btn-hover);
   }
   .ctl.on {

@@ -3,7 +3,7 @@
   // the tab bar along the bottom on phones (undo is with the map controls there).
   import Icon from '../Icon.svelte';
   import { mac } from './shortcuts';
-  import { SECTIONS, shell, type Section } from './layout.svelte';
+  import { NEW_UI, SECTIONS, shell, type Section } from './layout.svelte';
 
   interface Props {
     /** A play session is running. */
@@ -29,7 +29,7 @@
   });
 </script>
 
-<nav class="bar" class:phone={shell.phone} aria-label="Sections" bind:clientHeight={height} bind:clientWidth={width}>
+<nav class="bar" class:nu={NEW_UI} class:phone={shell.phone} aria-label="Sections" bind:clientHeight={height} bind:clientWidth={width}>
   <div class="tabs">
     {#each SECTIONS as s (s.key)}
       <button
@@ -48,7 +48,7 @@
       </button>
     {/each}
   </div>
-  {#if !shell.phone}
+  {#if !shell.phone && !NEW_UI}
     <span class="sep"></span>
     <button class="ws-icon-btn" onclick={onUndo} disabled={!canUndo} aria-label="Undo" title={undoLabel ? `Undo: ${undoLabel} (${ctrl}Z)` : `Undo (${ctrl}Z)`}><Icon name="undo" /></button>
     <button class="ws-icon-btn" onclick={onRedo} disabled={!canRedo} aria-label="Redo" title={redoLabel ? `Redo: ${redoLabel} (${ctrl}Y)` : `Redo (${ctrl}Y)`}><Icon name="redo" /></button>
@@ -120,6 +120,11 @@
     align-self: stretch;
     margin: 3px 4px;
     background: var(--line-faint);
+  }
+  /* ?ui=new: the same height as the top bar (--tap + 8 px) and gutter; Undo and Redo are with the map controls. */
+  .bar.nu:not(.phone) {
+    box-sizing: border-box;
+    min-height: calc(var(--tap) + 8px);
   }
   /* Narrow screens: the tabs show their icons only. */
   @media (max-width: 1100px) {

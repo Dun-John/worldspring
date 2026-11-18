@@ -229,6 +229,24 @@ body {
   cursor: default;
 }
 
+/* R8 frame (?ui=new): Dock tab strips, Play and Sketch tool rows share the group row's metrics; the
+ * hint under a strip is always shown; pressed buttons read like selected tabs. */
+.ws-strip > button[aria-pressed='true'] {
+  color: var(--ink);
+  font-weight: bold;
+  border-bottom-color: var(--accent);
+}
+.ws-strip.icons > button {
+  min-width: 0;
+}
+.ws-strip.pad {
+  padding: 0 6px;
+}
+.ws-strip .badge {
+  color: var(--accent);
+  font-weight: bold;
+}
+
 .ws-input {
   box-sizing: border-box;
   min-width: 0;

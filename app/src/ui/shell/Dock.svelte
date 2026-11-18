@@ -23,7 +23,7 @@
   // (peek), half the screen and all of it. The body is told when only the strip shows.
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
-  import { shell, type Snap } from './layout.svelte';
+  import { NEW_UI, shell, type Snap } from './layout.svelte';
 
   interface Props {
     title: string;
@@ -135,6 +135,24 @@
     </header>
     {#if strip}
       {@render strip(peek)}
+    {:else if tabs?.length && NEW_UI}
+      <div class="ws-strip pad" role="tablist">
+        {#each tabs as t (t.key)}
+          <button
+            role="tab"
+            aria-selected={tab === t.key}
+            class:on={tab === t.key}
+            disabled={t.disabled && tab !== t.key}
+            title={t.title ?? (t.kbd ? `${t.label} (${t.kbd})` : t.label)}
+            onclick={() => onTab?.(t.key)}
+          >
+            {#if t.icon}<Icon name={t.icon} size={16} />{/if}
+            <span>{t.label}{#if t.badge}<span class="badge" title={t.badge.title}> {t.badge.text}</span>{/if}{#if t.dot}<i class="dot"></i>{/if}</span>
+          </button>
+        {/each}
+      </div>
+      {@const hint = tabs.find((t) => t.key === tab)?.hint}
+      {#if hint && !peek}<div class="ws-hint sub">{hint}</div>{/if}
     {:else if tabs?.length}
       <!-- Five tabs or more: only the open one keeps its icon, so every label fits a narrow dock. -->
       <div class="tabs" class:many={tabs.length >= 5} role="tablist">
