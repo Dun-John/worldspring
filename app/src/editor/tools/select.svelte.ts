@@ -66,6 +66,8 @@ export function selectTools(host: SelectApp) {
   let changing = 0;
   let armed: SelectTool | null = null;
   let seq = 0;
+  /** `?ui=new`: plain Select, or Join or leave a town (only what can join listed: the panel's part, 8b-1b). */
+  let purpose = $state<'all' | 'members'>('all');
 
   const ftPerPx = () => 1 / host.view.cam.ppf;
 
@@ -434,6 +436,12 @@ export function selectTools(host: SelectApp) {
     },
     get tool() {
       return armed;
+    },
+    get purpose() {
+      return purpose;
+    },
+    set purpose(v) {
+      purpose = v;
     },
     disarm() {
       clear();

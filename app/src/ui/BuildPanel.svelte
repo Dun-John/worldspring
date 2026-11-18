@@ -26,6 +26,7 @@
   import type { WorksSettings } from '../editor/works';
   import type { BuildingFuncs, PathKind, WaterKind } from '../gen/protocol';
   import Icon from './Icon.svelte';
+  import { NEW_UI } from './shell/layout.svelte';
   import BuildingPanel from './build/BuildingPanel.svelte';
   import ClearPanel from './build/ClearPanel.svelte';
   import FencePanel from './build/FencePanel.svelte';
@@ -155,7 +156,8 @@
 </script>
 
 <div class="build">
-  {#if !peek}
+  <!-- (`?ui=new`: the modes are Edit's tool row instead.) -->
+  {#if !peek && !NEW_UI}
     <div class="ws-seg modes" role="radiogroup" aria-label="What to build">
       {#each MODES as m (m.key)}
         <button class:on={mode === m.key} aria-pressed={mode === m.key} onclick={() => onMode(m.key)} title={m.title}><Icon name={m.icon} size={16} />{m.label}</button>

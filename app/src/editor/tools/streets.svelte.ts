@@ -38,6 +38,8 @@ export function streetTools(host: StreetsHost) {
   // Edit › Streets: the town in view laid out anew by hand (the ward editor, `editor/town.ts`).
   let townTool = $state.raw<TownTool | null>(null);
   let townMode = $state<TownMode>('select');
+  /** `?ui=new`: which tool Streets' panel is, its streets or the town wall (the panel's part, 8b-1b). */
+  let townPart = $state<'streets' | 'walls'>('streets');
   /** The brush's size, in patch widths. */
   let townSize = $state(1);
   /** The town in view (its layout index), its plan, the patch picked. */
@@ -470,6 +472,8 @@ export function streetTools(host: StreetsHost) {
     set townTool(v) { townTool = v; },
     get townMode() { return townMode; },
     set townMode(v) { townMode = v; },
+    get townPart() { return townPart; },
+    set townPart(v) { townPart = v; },
     get townSize() { return townSize; },
     set townSize(v) { townSize = v; },
     get townIndex() { return townIndex; },

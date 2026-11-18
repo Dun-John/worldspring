@@ -27,7 +27,9 @@
   import Icon from './ui/Icon.svelte';
   import Readout from './ui/shell/Readout.svelte';
   import DevStats from './ui/shell/DevStats.svelte';
-  import { SECTIONS, shell, store, stored, type Ask, type NotesTab, type Remake, type Section } from './ui/shell/layout.svelte';
+  import { NEW_UI, SECTIONS, shell, store, stored, type Ask, type NotesTab, type Remake, type Section } from './ui/shell/layout.svelte';
+  import EditStrip from './ui/shell/EditStrip.svelte';
+  import { TOOL, toolOf, type ToolKey } from './ui/shell/editTools';
   import Confirm from './ui/shell/Confirm.svelte';
   import { UndoHistory } from './ui/shell/history.svelte';
   import FloorSelector from './ui/FloorSelector.svelte';
@@ -471,6 +473,8 @@
     if (sel?.kind === 'building' && drawnPair(sel.hit.id)?.entry.removed) selection = null;
     saveUrl();
     changed();
+    // (`?ui=new`: the tool's first change puts its one-line hint away.)
+    if (author === 'user' && editTool) shell.markUsed(editTool);
     if (opts.send !== false) sync.ops(ops, change);
     const label = describe(change, author, nameOf);
     if (opts.record === false) {
@@ -1534,7 +1538,39 @@
   /** A section's button or key: open it, or shut it if it is open (a folded dock unfolds). */
   function toggle(s: Section) {
     if (shell.section === s && shell.collapsed) shell.collapsed = false;
+    else if (NEW_UI && s === 'edit' && shell.section !== 'edit') openTool('select');
     else go(shell.section === s ? null : s);
+  }
+
+  /** `?ui=new`: open an Edit tool, its panel (`go`) then its mode or part; false if it didn't
+   * open, or waits on a question (answered, it carries on to the tool). Opening Edit lands on
+   * Select. A tool opened by Select's Change goes back to Select on Done (`select.svelte.ts`). */
+  function openTool(key: ToolKey): boolean {
+    const t = TOOL[key];
+    if (busy) return false;
+    if (toolsOff[key]) return (toast(toolsOff[key]!), false);
+    const there = shell.section === 'edit' && shell.tabs.edit === t.tab;
+    if (t.links !== undefined && there) {
+      // Rooms ⇄ its stairs and passages: the designer's unsaved rooms are asked about first.
+      if (t.links && !L.linkOn) L.openLinks();
+      else if (!t.links && L.linkOn && canDesign) L.closeLinks();
+      return shell.tabs.edit === 'design' && L.linkOn === t.links;
+    }
+    // (Stairs from elsewhere: Rooms opens on them, not the designer.)
+    if (t.links && !there) L.linkOn = true;
+    const asked = shell.ask;
+    go('edit', t.tab);
+    if (shell.section !== 'edit' || shell.tabs.edit !== t.tab) {
+      if (t.links) L.disarmLinks();
+      const a = shell.ask;
+      if (a && a !== asked) shell.ask = { ...a, proceed: () => (a.proceed(), void openTool(key)) };
+      return false;
+    }
+    T.townPart = t.part ?? 'streets';
+    Sel.purpose = t.purpose ?? 'all';
+    if (t.mode && B.buildMode !== t.mode && !(key === 'works' && B.buildMode === 'wall')) B.setBuildMode(t.mode);
+    syncTool();
+    return true;
   }
 
   /** A tab's button: open it, or shut the panel if that tab is showing. */
@@ -1575,7 +1611,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), sel: () => Sel, links: () => L, editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => designSettings, designer: () => designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, openTool, editTool: () => editTool, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), sel: () => Sel, links: () => L, editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => designSettings, designer: () => designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1978,6 +2014,22 @@
     },
     applyEdits,
     toast,
+  });
+
+  // `?ui=new`: the Edit tool open, worked out from the panels (`ui/shell/editTools.ts`); the
+  // tool row follows it to its group.
+  const editTool = $derived<ToolKey | null>(
+    NEW_UI && shell.section === 'edit' ? toolOf({ tab: shell.tabs.edit, buildMode: B.buildMode, townPart: T.townPart, selectPurpose: Sel.purpose, linkOn: L.linkOn }) : null,
+  );
+  shell.toolNow = () => editTool;
+  $effect(() => {
+    const g = editTool && TOOL[editTool].group;
+    if (g) shell.group = g;
+  });
+  /** `?ui=new`: the tools that can't be used here, with why. */
+  const toolsOff = $derived<Partial<Record<ToolKey, string>>>({
+    ...(!canDesign && !designer ? { rooms: playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms' } : {}),
+    ...(!L.canLink && !L.linkOn ? { stairs: playOn ? 'Stop playing to put stairs and passages down' : 'Go down into a site, or a building’s cellar, to join it to another level or place' } : {}),
   });
 
 
@@ -3603,6 +3655,8 @@
     buildFinish: () => B.finish(),
     buildBack: () => B.back(),
     buildSelect: () => B.setBuildMode('select'),
+    editTool: () => editTool,
+    openTool,
     selectDelete: () => Sel.removeOpen(),
     designMode: (m) => {
       // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
@@ -3658,9 +3712,11 @@
       () => (placeArmed ? (disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
       () => (L.linkOn && (L.linkFirst || L.linkPicked) ? ((L.linkFirst = L.linkPicked = null), true) : false),
-      () => (designer ? (go('edit', 'sites'), true) : false),
+      () => (designer ? (NEW_UI ? openTool('select') : go('edit', 'sites'), true) : false),
       () => (shell.phone && shell.card ? ((shell.card = false), true) : false),
       () => (noteSel ? (closeNote(), true) : false),
+      // (`?ui=new`: with nothing in progress, back to Select before leaving the building.)
+      () => (editTool && editTool !== 'select' ? (openTool('select'), true) : false),
       () => (view.interior ? (leaveSite(), true) : false),
       () => (selection ? ((selection = null), true) : false),
     ],
@@ -3953,11 +4009,22 @@
       {/snippet}
     </Dock>
   {:else if shell.section === 'edit'}
+    <!-- `?ui=new`: Select in the header, the groups and tools in place of the tabs. -->
+    {#snippet selectButton()}
+      <button class="ws-btn quiet select" class:on={editTool === 'select'} aria-pressed={editTool === 'select'} onclick={() => openTool('select')} title="{TOOL.select.label} (A): {TOOL.select.hint}">
+        <Icon name="pointer" size={16} />Select<kbd class="ws-kbd">A</kbd>
+      </button>
+    {/snippet}
+    {#snippet editStrip(peek: boolean)}
+      <EditStrip tool={editTool} {peek} off={toolsOff} onTool={(t) => void openTool(t)} />
+    {/snippet}
     <Dock
       waiting={waitBar}
-      title="Edit"
+      title={NEW_UI && editTool ? TOOL[editTool].label : 'Edit'}
       icon="pencil"
-      tabs={[
+      strip={NEW_UI ? editStrip : undefined}
+      actions={NEW_UI ? selectButton : undefined}
+      tabs={NEW_UI ? undefined : [
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a town, ruin, dungeon, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, roads, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the selected town or the one in view (U)', hint: 'Re-plan the selected town, or the one in view: its streets, wards, lots and walls.' },
@@ -4633,6 +4700,17 @@
     right: 12px;
     z-index: var(--z-menu);
     width: min(340px, calc(100vw - 24px));
+  }
+  /* `?ui=new`: Select in Edit's header, lit while it is the tool. */
+  .select {
+    gap: 4px;
+  }
+  .select.on {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+  .select .ws-kbd {
+    margin-left: 2px;
   }
   .empty {
     display: flex;

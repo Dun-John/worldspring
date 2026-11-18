@@ -3,6 +3,7 @@
   // touch screens, the gestures too.
   import Icon from '../Icon.svelte';
   import { keyLabel, type Shortcut } from './shortcuts';
+  import { NEW_UI } from './layout.svelte';
 
   interface Props {
     list: Shortcut[];
@@ -10,8 +11,25 @@
   }
   let { list, onClose }: Props = $props();
 
-  const ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Ground', 'Objects', 'Placing', 'Rooms', 'Play'];
-  const NOTES: Record<string, string> = {
+  const OLD_ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Ground', 'Objects', 'Placing', 'Rooms', 'Play'];
+  /** `?ui=new`: the tools' keys, then each tool's own under its name. */
+  const NEW_ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit tools', 'Select', 'Draw a building', 'Drawing', 'Streets', 'Ground', 'Trees & props', 'Placing', 'Rooms', 'Stairs & passages', 'Play'];
+  const ORDER = NEW_UI ? NEW_ORDER : OLD_ORDER;
+  const NEW_NOTES: Record<string, string> = {
+    Sketch: 'While sketching',
+    'Edit tools': 'In Edit, from any tool that doesn’t use the letter itself',
+    Select: 'Edit › Select',
+    'Draw a building': 'Edit › Buildings › Draw a building',
+    Drawing: 'Draw, Castle & walls, Row, Fill an area, Road, Water, Fences',
+    Streets: 'Edit › Settlements › Streets',
+    Ground: 'Edit › Land › Ground, on the battlemap',
+    'Trees & props': 'Edit › Land › Trees & props',
+    Placing: 'Trees & props, or Rooms’ furniture: on the piece held, pointed at or chosen',
+    Rooms: 'Edit › Rooms, inside a building or site',
+    'Stairs & passages': 'Edit › Rooms › Stairs & passages',
+    Play: 'While playing, with Play (or no panel) open',
+  };
+  const OLD_NOTES: Record<string, string> = {
     Sketch: 'While sketching',
     Edit: 'With Edit open',
     Build: 'Edit › Build',
@@ -22,10 +40,11 @@
     Rooms: 'Edit › Rooms, inside a building or site',
     Play: 'While playing, with Play (or no panel) open',
   };
+  const NOTES = NEW_UI ? NEW_NOTES : OLD_NOTES;
   /** What each section is for, for a first look. */
   const WHERE: [string, string][] = [
     ['World', 'Make the world: settings, the sketch (coasts, mountains, rivers, towns, roads), the library. Generating remakes the world.'],
-    ['Edit', 'Change it in place: places, buildings, streets, the ground, objects, rooms.'],
+    ['Edit', NEW_UI ? 'Change it in place: settlements, buildings, roads and water, the land, rooms. Select (A) shows what anything is.' : 'Change it in place: places, buildings, streets, the ground, objects, rooms.'],
     ['Notes', 'Your NPCs and plots, and the Gazetteer: every name to rename, places to hide from the map, your notes on places.'],
     ['Play', 'Run a session: tokens, fog, the players’ window.'],
   ];

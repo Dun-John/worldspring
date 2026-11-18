@@ -1,6 +1,7 @@
 // Every keyboard shortcut of the map's window, built from what App knows and can do. Letters
 // belong to the panel that is open (play's tools while a session runs with no other panel), so
-// none is live twice.
+// none is live twice. `?ui=new`: each Edit tool's key opens it from any Edit tool that doesn't
+// use that letter itself (the openers, last, live only while no other binding has the key).
 import type { EditTool } from '../../editor/sketcher';
 import type { ScatterMode } from '../../editor/scatter';
 import type { BuildShape } from '../../editor/build';
@@ -9,7 +10,8 @@ import type { DesignMode } from '../../editor/site/designer';
 import type { TownMode } from '../../editor/town';
 import type { GroundMode } from '../../editor/ground';
 import type { Tool as PlayTool } from '../../play/controller';
-import type { EditTab, Section } from './layout.svelte';
+import { NEW_UI, type EditTab, type Section } from './layout.svelte';
+import { TOOL, type ToolKey } from './editTools';
 import type { Shortcut } from './shortcuts';
 
 export interface KeyContext {
@@ -62,6 +64,10 @@ export interface KeyContext {
   buildBack(): void;
   /** Build › Select. */
   buildSelect(): void;
+  /** `?ui=new`: the Edit tool open, else null. */
+  editTool(): ToolKey | null;
+  /** `?ui=new`: open an Edit tool (false: it didn't open, or a question was asked first). */
+  openTool(t: ToolKey): boolean;
   /** Select: the thing open taken away (false: none that can be). */
   selectDelete(): boolean;
   designMode(m: DesignMode): void;
@@ -99,6 +105,9 @@ export interface KeyContext {
 }
 
 const STEP = 120;
+
+/** A shortcuts group's name, the old layout's or `?ui=new`'s. */
+const grp = (old: string, neu: string) => (NEW_UI ? neu : old);
 
 export function buildKeymap(k: KeyContext): Shortcut[] {
   const edit = (tab?: EditTab) => () => k.section() === 'edit' && (!tab || k.editTab() === tab);
@@ -167,36 +176,28 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['C', 'scatter', 'Objects'],
     ['D', 'design', 'Rooms'],
   ];
-  for (const [key, t, label] of tabs) out.push({ keys: [key], label, group: 'Edit', when: edit(), run: () => k.editTabTo(t) });
+  if (!NEW_UI) for (const [key, t, label] of tabs) out.push({ keys: [key], label, group: 'Edit', when: edit(), run: () => k.editTabTo(t) });
   const shapes: [string, BuildShape, string][] = [
     ['R', 'rect', 'Rectangle'],
     ['O', 'poly', 'Polygon'],
     ['T', 'tower', 'Round tower'],
   ];
-  for (const [key, s, label] of shapes) out.push({ keys: [key], label, group: 'Build', when: edit('build'), run: () => k.buildShape(s) });
-  out.push({ keys: ['A'], label: 'Select (click, drag a box, Shift-drag a lasso)', group: 'Build', when: edit('build'), run: () => k.buildSelect() });
-  out.push({ keys: ['Delete'], label: 'Delete what Select has open', group: 'Build', when: edit('build'), run: () => k.selectDelete() });
-  out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when: edit('build'), run: () => k.buildCross() });
-  out.push({ keys: ['H'], label: 'Harbour (islet, quay, pier, breakwater)', group: 'Build', when: edit('build'), run: () => k.buildHarbour() });
-  out.push({ keys: ['V'], label: 'Road (again: footpath, track, gravel, paved, cobbled)', group: 'Build', when: edit('build'), run: () => k.buildRoad() });
-  out.push({ keys: ['F'], label: 'Fence (draw, gate, erase; again: the next kind)', group: 'Build', when: edit('build'), run: () => k.buildFence() });
-  out.push({ keys: ['Q'], label: 'Stamp (a building of a kind and size)', group: 'Build', when: edit('build'), run: () => k.buildQuick('stamp') });
-  out.push({ keys: ['E'], label: 'Row of buildings along a street', group: 'Build', when: edit('build'), run: () => k.buildQuick('row') });
-  out.push({ keys: ['L'], label: 'Plot (draw round it, fill it)', group: 'Build', when: edit('build'), run: () => k.buildQuick('lasso') });
-  out.push({ keys: ['K'], label: 'Castle', group: 'Build', when: edit('build'), run: () => k.buildWorks('castle') });
-  out.push({ keys: ['W'], label: 'Wall', group: 'Build', when: edit('build'), run: () => k.buildWorks('wall') });
+  for (const [key, s, label] of shapes) out.push({ keys: [key], label, group: grp('Build', 'Draw a building'), when: edit('build'), run: () => k.buildShape(s) });
+  if (!NEW_UI) out.push({ keys: ['A'], label: 'Select (click, drag a box, Shift-drag a lasso)', group: 'Build', when: edit('build'), run: () => k.buildSelect() });
+  out.push({ keys: ['Delete'], label: 'Delete what Select has open', group: grp('Build', 'Select'), when: edit('build'), run: () => k.selectDelete() });
+  if (!NEW_UI) buildModes(k, out, edit('build'));
   out.push(
-    { keys: ['Enter'], label: 'Finish the polygon, castle, wall, fence, row or plot', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
-    { keys: ['Backspace'], label: 'Take a corner back', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildBack() },
+    { keys: ['Enter'], label: 'Finish the polygon, castle, wall, fence, row or plot', group: grp('Build', 'Drawing'), when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
+    { keys: ['Backspace'], label: 'Take a corner back', group: grp('Build', 'Drawing'), when: () => edit('build')() && k.building(), run: () => k.buildBack() },
   );
   const town: [string, TownMode, string][] = [
     ['V', 'select', 'Choose a patch, drag a corner'],
-    ['Q', 'displace', 'Displace'],
-    ['L', 'liquify', 'Liquify'],
-    ['O', 'bloat', 'Bloat'],
-    ['I', 'pinch', 'Pinch'],
-    ['R', 'relax', 'Relax'],
-    ['E', 'equalize', 'Equalize'],
+    ['Q', 'displace', grp('Displace', 'Push (Displace)')],
+    ['L', 'liquify', grp('Liquify', 'Smudge (Liquify)')],
+    ['O', 'bloat', grp('Bloat', 'Grow (Bloat)')],
+    ['I', 'pinch', grp('Pinch', 'Shrink (Pinch)')],
+    ['R', 'relax', grp('Relax', 'Soften (Relax)')],
+    ['E', 'equalize', grp('Equalize', 'Even out (Equalize)')],
   ];
   for (const [key, m, label] of town) out.push({ keys: [key], label, group: 'Streets', when: edit('town'), run: () => k.townMode(m) });
   const hand = () => edit('town')() && k.townHand();
@@ -216,7 +217,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['Q', 'raise', 'Raise'],
     ['W', 'lower', 'Lower'],
     ['E', 'smooth', 'Smooth'],
-    ['R', 'restore', 'Restore'],
+    ['R', 'restore', grp('Restore', 'Put back (Restore)')],
     ['L', 'plateau', 'Plateau (drag a loop)'],
     ['V', 'select', 'Choose a plateau'],
   ];
@@ -231,10 +232,10 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['W', 'brush', 'Brush'],
     ['E', 'erase', 'Erase'],
   ];
-  for (const [key, m, label] of modes) out.push({ keys: [key], label, group: 'Objects', when: edit('scatter'), run: () => k.scatterMode(m) });
+  for (const [key, m, label] of modes) out.push({ keys: [key], label, group: grp('Objects', 'Trees & props'), when: edit('scatter'), run: () => k.scatterMode(m) });
   out.push(
-    { keys: [']'], label: 'Bigger (brush: wider)', group: 'Objects', repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(1) },
-    { keys: ['['], label: 'Smaller (brush: narrower)', group: 'Objects', repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(-1) },
+    { keys: [']'], label: 'Bigger (brush: wider)', group: grp('Objects', 'Trees & props'), repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(1) },
+    { keys: ['['], label: 'Smaller (brush: narrower)', group: grp('Objects', 'Trees & props'), repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(-1) },
   );
   // Placing: on what the hand shows (the piece held, the one a click would pick up, or the
   // chosen item's ghost); Delete on the piece held, else the one pointed at (also with an item
@@ -269,8 +270,8 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   ];
   const designing = () => edit('design')() && k.designing();
   for (const [key, m, label] of design) out.push({ keys: typeof key === 'string' ? [key] : key, label, group: 'Rooms', when: designing, run: () => k.designMode(m) });
-  out.push({ keys: ['J'], label: 'Ways across between levels and places below ground (again: back to the rooms)', group: 'Rooms', when: edit('design'), run: () => void k.linksToggle() });
-  out.push({ keys: ['Delete', 'Backspace'], label: 'Take the way across chosen away', group: 'Rooms', when: () => edit('design')() && k.linking(), run: () => k.linkRemove() });
+  if (!NEW_UI) out.push({ keys: ['J'], label: 'Ways across between levels and places below ground (again: back to the rooms)', group: 'Rooms', when: edit('design'), run: () => void k.linksToggle() });
+  out.push({ keys: ['Delete', 'Backspace'], label: grp('Take the way across chosen away', 'Take the stair or passage chosen away'), group: grp('Rooms', 'Stairs & passages'), when: () => edit('design')() && k.linking(), run: () => k.linkRemove() });
   out.push({ keys: ['Ctrl+S'], label: 'Save the design', group: 'Rooms', inInputs: true, when: designing, run: () => k.saveDesign() });
   const tools: [string, PlayTool, string][] = [
     ['V', 'select', 'Select and move'],
@@ -286,5 +287,57 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   out.push({ keys: ['Ctrl+D'], label: 'Duplicate the selected tokens', group: 'Play', when: () => playing() && k.tokensSelected(), run: () => k.duplicateTokens() });
   out.push({ keys: ['Ctrl+C'], label: 'Copy the selected tokens', group: 'Play', when: () => playing() && k.tokensSelected(), run: () => k.copyTokens() });
   out.push({ keys: ['Ctrl+V'], label: 'Paste tokens at the pointer', group: 'Play', when: playing, run: () => k.pasteTokens() });
+  // (The openers read the other bindings, not each other.)
+  if (NEW_UI) out.push(...openers(k, [...out], edit()));
+  return out;
+}
+
+/** The old layout's Build modes, live with Build open. */
+function buildModes(k: KeyContext, out: Shortcut[], when: () => boolean) {
+  out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when, run: () => k.buildCross() });
+  out.push({ keys: ['H'], label: 'Harbour (islet, quay, pier, breakwater)', group: 'Build', when, run: () => k.buildHarbour() });
+  out.push({ keys: ['V'], label: 'Road (again: footpath, track, gravel, paved, cobbled)', group: 'Build', when, run: () => k.buildRoad() });
+  out.push({ keys: ['F'], label: 'Fence (draw, gate, erase; again: the next kind)', group: 'Build', when, run: () => k.buildFence() });
+  out.push({ keys: ['Q'], label: 'Stamp (a building of a kind and size)', group: 'Build', when, run: () => k.buildQuick('stamp') });
+  out.push({ keys: ['E'], label: 'Row of buildings along a street', group: 'Build', when, run: () => k.buildQuick('row') });
+  out.push({ keys: ['L'], label: 'Plot (draw round it, fill it)', group: 'Build', when, run: () => k.buildQuick('lasso') });
+  out.push({ keys: ['K'], label: 'Castle', group: 'Build', when, run: () => k.buildWorks('castle') });
+  out.push({ keys: ['W'], label: 'Wall', group: 'Build', when, run: () => k.buildWorks('wall') });
+}
+
+/** `?ui=new`: each Edit tool's key opens it, live in Edit while no other binding has the key
+ * (Streets, Ground, Trees & props and the designer keep their letters). Again on the tool open:
+ * the next kind (Road, Crossing, Fences), or back (Stairs & passages to the rooms). */
+function openers(k: KeyContext, owners: Shortcut[], inEdit: () => boolean): Shortcut[] {
+  const free = (key: string) => () => inEdit() && !owners.some((s) => s.keys.includes(key) && (!s.when || s.when()));
+  const open = (t: ToolKey, again?: () => void) => () => {
+    if (again && k.editTool() === t) again();
+    else k.openTool(t);
+  };
+  const list: [string, ToolKey, (() => void) | undefined, string?][] = [
+    ['A', 'select', undefined, 'Select (click, drag a box, Shift-drag a lasso)'],
+    ['S', 'places', undefined],
+    ['U', 'streets', undefined],
+    ['Shift+U', 'townwall', undefined],
+    ['Shift+J', 'members', undefined],
+    ['B', 'draw', undefined],
+    ['Q', 'single', undefined],
+    ['E', 'row', undefined],
+    ['L', 'fill', undefined],
+    ['V', 'road', () => k.buildRoad(), 'Road (again: footpath, track, gravel, paved, cobbled)'],
+    ['X', 'crossing', () => k.buildCross(), 'Crossing (again: bridge, ford, ferry)'],
+    ['I', 'water', undefined],
+    ['H', 'docks', undefined],
+    ['M', 'ground', undefined],
+    ['F', 'fences', () => k.buildFence(), 'Fences & hedges (draw, gate, erase; again: the next kind)'],
+    ['C', 'trees', undefined],
+    ['D', 'rooms', undefined],
+    ['J', 'stairs', () => void k.linksToggle(), 'Stairs & passages (again: back to the rooms)'],
+  ];
+  const out: Shortcut[] = list.map(([key, t, again, label]) => ({ keys: [key], label: label ?? TOOL[t].label, group: 'Edit tools', when: free(key), run: open(t, again) }));
+  // Castle & walls: K a castle, W a wall on its own.
+  for (const [key, m, label] of [['K', 'castle', 'Castle'], ['W', 'wall', 'Wall on its own']] as const) {
+    out.push({ keys: [key], label: `Castle & walls: ${label.toLowerCase()}`, group: 'Edit tools', when: free(key), run: () => void (k.openTool('works') && k.buildWorks(m)) });
+  }
   return out;
 }

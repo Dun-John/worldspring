@@ -2,8 +2,11 @@
   // The frame every Build tool's panel shares: what is being changed (Done, Remove), the tool's
   // strip, "Zoom in" while too far out, the one-line hint, its options (a "More options" fold
   // when `fold`, open or shut as last left for this tool), and the place / start-over line.
+  // `?ui=new`: every tool's options fold (shut at first) and its hint goes last in the fold, the
+  // strip's one-line hint saying what to do first.
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
+  import { NEW_UI, shell } from '../shell/layout.svelte';
   import QuickLine from './QuickLine.svelte';
   import type { QuickInfo } from '../BuildPanel.svelte';
 
@@ -44,12 +47,13 @@
 
   let { title, near, peek = false, zoomText = 'Zoom in to draw.', onZoomIn, changing, onRemove, onDone, children, always, hint, hintAfter = false, peekHint, more, fold = false, startOver = false, startExtra, onDrop, quick, place, onPlace }: Props = $props();
 
-  const key = $derived(`ws-fold:build:${title}`);
+  const key = $derived(NEW_UI ? `ws-fold:tool:${shell.toolNow() ?? title}` : `ws-fold:build:${title}`);
   function readOpen(k: string): boolean {
     try {
-      return localStorage.getItem(k) !== 'shut';
+      const v = localStorage.getItem(k);
+      return NEW_UI ? v === 'open' : v !== 'shut';
     } catch {
-      return true;
+      return !NEW_UI;
     }
   }
   let open = $derived(readOpen(key));
@@ -80,17 +84,29 @@
 {@render always?.()}
 {#if peek}
   {@render peekHint?.()}
+  <!-- (`?ui=new`: Place stays in reach with the sheet down.) -->
+  {#if NEW_UI && place && quick && onPlace}<QuickLine {quick} action={place} {onPlace} />{/if}
 {:else}
-  {#if !hintAfter}{@render hint?.()}{/if}
-  {#if more && fold}
-    <details class="more" {open} ontoggle={toggled}>
-      <summary>More options</summary>
-      {@render more()}
-    </details>
+  {#if NEW_UI}
+    {#if more || hint}
+      <details class="more" {open} ontoggle={toggled}>
+        <summary>More options</summary>
+        {@render more?.()}
+        {@render hint?.()}
+      </details>
+    {/if}
   {:else}
-    {@render more?.()}
+    {#if !hintAfter}{@render hint?.()}{/if}
+    {#if more && fold}
+      <details class="more" {open} ontoggle={toggled}>
+        <summary>More options</summary>
+        {@render more()}
+      </details>
+    {:else}
+      {@render more?.()}
+    {/if}
+    {#if hintAfter}{@render hint?.()}{/if}
   {/if}
-  {#if hintAfter}{@render hint?.()}{/if}
   {#if startOver}
     <div class="ws-seg">
       {@render startExtra?.()}
