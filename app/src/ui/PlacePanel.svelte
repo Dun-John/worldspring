@@ -66,9 +66,9 @@
     { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand. Added at once' },
     { key: 'city', label: 'City', icon: 'castle', kind: 'settlement', tier: 'city', group: 'Settlements', look: 'Thousands, walled, with sewers below' },
     { key: 'metropolis', label: 'Metropolis', icon: 'wards', kind: 'settlement', tier: 'metropolis', group: 'Settlements', look: 'Tens of thousands: a great city' },
-    { key: 'dungeon', label: 'Dungeon', icon: 'stairs', kind: 'entrance', under: 'dungeon', group: 'Underground', look: 'Stairs down, nothing above' },
-    { key: 'crypt', label: 'Crypt', icon: 'skull', kind: 'entrance', under: 'crypt', group: 'Underground', look: 'Stairs down, nothing above' },
-    { key: 'catacombs', label: 'Catacombs', icon: 'skull', kind: 'entrance', under: 'catacombs', group: 'Underground', look: 'Stairs down, nothing above' },
+    { key: 'dungeon', label: 'Dungeon', icon: 'stairs', kind: 'entrance', under: 'dungeon', group: 'Underground', look: 'A stair down into the underground; nothing is built above it' },
+    { key: 'crypt', label: 'Crypt', icon: 'skull', kind: 'entrance', under: 'crypt', group: 'Underground', look: 'A stair down into the underground; nothing is built above it' },
+    { key: 'catacombs', label: 'Catacombs', icon: 'skull', kind: 'entrance', under: 'catacombs', group: 'Underground', look: 'A stair down into the underground; nothing is built above it' },
     { key: 'cave', label: 'Cave', icon: 'cave', kind: 'cave', group: 'Underground', look: 'A cave mouth' },
     { key: 'mine', label: 'Mine', icon: 'pick', kind: 'mine', group: 'Underground', look: 'An adit with a miners’ shed' },
     { key: 'lava_tube', label: 'Lava tube', icon: 'flame', kind: 'lava_tube', group: 'Underground', look: 'A skylight into the tube' },
@@ -169,7 +169,11 @@
         <div class="ws-hint">Village and town are added at once. City and metropolis (↻) remake the world round them.{#if tier && !instant} Port and fishing need a shore, so a village or town cannot have them.{/if}</div>
       {/if}
     {/each}
-    <div class="ws-hint">{choice.look}</div>
+    {#if !NEW_UI}
+      <div class="ws-hint">{choice.look}</div>
+    {:else if memory.touched}
+      <div class="ws-hint">{choice.look}</div>
+    {/if}
     {#snippet economy()}
     {#if tier}
       <label class="ws-field">
@@ -258,7 +262,7 @@
     {/if}
   {/if}
   </div>
-  <div class="foot">
+  <div class="foot" class:newui={NEW_UI}>
   {#if armed}
     <div class="armed">
       <span class="grow">{note ?? `Click on the map to place the ${choice.label.toLowerCase()}`}</span>
@@ -268,6 +272,7 @@
     <button class="ws-btn block" class:primary={memory.touched} onclick={place} disabled={!memory.touched || (!!tier && !instant && playing)} title={tier && !instant && playing ? 'Stop playing to remake the world' : !memory.touched ? 'Pick a type above first' : undefined}
       ><Icon name="pin" size={16} /> Place {peek ? `a ${choice.label.toLowerCase()}` : 'on map'}</button
     >
+    {#if NEW_UI && !memory.touched}<div class="ws-muted why">Pick a kind above first, then click the map.</div>{/if}
   {/if}
   </div>
 </div>
@@ -327,6 +332,15 @@
     padding: 8px 10px;
     border-top: 1px solid var(--line-faint);
     background: var(--paper-solid);
+  }
+  .foot.newui :global(button.block:disabled) {
+    opacity: 1;
+    color: var(--ink-2);
+    border-style: dashed;
+  }
+  .why {
+    padding-top: 4px;
+    text-align: center;
   }
   .grow {
     flex: 1;
