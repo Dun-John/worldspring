@@ -70,6 +70,7 @@ mod plan;
 mod build;
 mod approach;
 mod quays;
+mod bridges;
 mod quarters;
 mod names;
 pub use layouts::*;
