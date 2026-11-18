@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import type { BenchResult } from './dev/bench';
-  import type { Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, Plateau, Plot, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
+  import type { Conflict, Created, Edits, Feature, NamedPlaces, Npc, Overlay, Plateau, Plot, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
@@ -36,8 +36,7 @@
   import type { Move } from './render/InteriorLayer';
   import InfoPanel from './ui/InfoPanel.svelte';
   import NoteCard from './ui/NoteCard.svelte';
-  import NoteList, { type NoteRow } from './ui/NoteList.svelte';
-  import { newPointId, splitPoint, splitRoom } from './ui/notes';
+  import NoteList from './ui/NoteList.svelte';
   import Gazetteer from './ui/Gazetteer.svelte';
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
@@ -58,6 +57,7 @@
   import { placeTools } from './editor/tools/places.svelte';
   import { pendingTools } from './editor/tools/pending.svelte';
   import { designTools } from './editor/tools/design.svelte';
+  import { notesTools } from './editor/tools/notes.svelte';
   import SelectPanel from './ui/SelectPanel.svelte';
   import { type BuildSettings } from './editor/build';
   import { lookOf, shore } from './editor/water';
@@ -79,7 +79,7 @@
   import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, GEN_VERSION, linkFor, newWorld, readLink, sameSketch, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, ownHash, PINNED, renumberedSince } from './world/versions';
-  import { asideCount, asideList, asideWhat, forgetAside, isAside } from './world/setaside';
+  import { asideCount, asideList, asideWhat, forgetAside } from './world/setaside';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
   import Choice, { type ChoiceButton } from './ui/shell/Choice.svelte';
   import { backup, keepLinked, linked, loadEdits, restore, restorePlan, saveEdits, saveWorld, takeRestored, type Backup, type RestorePlan } from './world/library';
@@ -2007,7 +2007,7 @@
     sketchDirty,
     drawnBuilding,
     layoutIndexOf,
-    setHidden,
+    setHidden: (id, hide) => N.setHidden(id, hide),
     editBuilding: (id) => B.editBuilding(id),
     editWorks: (id) => B.editWorks(id),
     moveSettlement: (id, x, y) => Q.moveSettlement(id, x, y),
@@ -2241,25 +2241,6 @@
     return Object.entries(plots).filter(([, p]) => p.anchors.some((a) => at(a)));
   });
 
-  function saveNpc(id: string, npc: Npc | null, tool: string) {
-    const all = { ...(edits.npcs ?? {}) };
-    const name = npc?.name ?? all[id]?.name ?? id;
-    if (npc) all[id] = npc;
-    else delete all[id];
-    // A deleted NPC leaves the plots they were in.
-    const inPlots = npc ? edits.plots : Object.fromEntries(Object.entries(edits.plots ?? {}).map(([k, p]) => [k, p.npcs.includes(id) ? { ...p, npcs: p.npcs.filter((x) => x !== id) } : p]));
-    applyEdits({ ...edits, npcs: all, plots: inPlots }, { tool, id, name }, 'user');
-  }
-
-  function savePlot(id: string, plot: Plot | null, tool: string) {
-    const all = { ...(edits.plots ?? {}) };
-    const name = plot?.title ?? all[id]?.title ?? id;
-    if (plot) all[id] = plot;
-    else delete all[id];
-    applyEdits({ ...edits, plots: all }, { tool, id, name }, 'user');
-  }
-
-  /** Hide a feature's label from both maps and search, or show it again. */
   /** The world's own islets (listed in Docks & islets). */
   let genIslets = $state<GenIslet[]>([]);
   $effect(() => {
@@ -2277,35 +2258,6 @@
     const buildings = { ...(edits.buildings ?? {}) };
     if (removed && gi?.tower) buildings[gi.tower.id] = { at: [gi.tower.x, gi.tower.y], removed: true };
     applyEdits({ ...edits, hidden: [...hidden].sort(), buildings }, { tool: 'hide_feature', id, hidden: removed }, 'user');
-  }
-
-  function setHidden(id: string, hide: boolean) {
-    // (A building drawn by hand: kept under its created id, a mark under its building id moved.)
-    const pair = drawnPair(id);
-    const key = pair?.c ?? id;
-    const set = new Set(edits.hidden ?? []);
-    if (pair) set.delete(pair.b);
-    for (const k of pair ? [key] : stretchesOf(key)) {
-      if (hide) set.add(k);
-      else set.delete(k);
-    }
-    const next = [...set].sort();
-    const now = edits.hidden ?? [];
-    if (next.length === now.length && next.every((h, i) => h === now[i])) return;
-    applyEdits({ ...edits, hidden: next }, { tool: 'hide_feature', id: key, hidden: hide }, 'user');
-  }
-
-  /** Set (or with null, clear) a place's note; `name` says which place in the undo line. */
-  function setNote(id: string, note: Note | null, name = here?.id === id ? here.name : undefined) {
-    // (A building drawn by hand: kept under its created id, a note under its building id, shown
-    // with it, dropped in the same step.)
-    const pair = drawnPair(id);
-    const key = pair?.c ?? id;
-    const all = { ...notes };
-    if (pair) delete all[pair.b];
-    if (note) all[key] = note;
-    else delete all[key];
-    applyEdits({ ...edits, notes: all }, { tool: 'annotate_feature', id: key, ...(name ? { name } : {}) }, 'user');
   }
 
   /** Show a place: a map feature is selected (and framed); a building or district is found
@@ -2378,8 +2330,8 @@
     const at = here;
     if (!at) return;
     const id = newNoteId(tab === 'npcs' ? 'n' : 'p');
-    if (tab === 'npcs') saveNpc(id, { ...blankNpc(), location: { id: at.id, ...(at.level !== undefined ? { level: at.level } : {}) } }, 'create_npc');
-    else savePlot(id, { ...blankPlot(), anchors: [at.id] }, 'create_plot');
+    if (tab === 'npcs') N.saveNpc(id, { ...blankNpc(), location: { id: at.id, ...(at.level !== undefined ? { level: at.level } : {}) } }, 'create_npc');
+    else N.savePlot(id, { ...blankPlot(), anchors: [at.id] }, 'create_plot');
     openNotebook(tab, id);
   }
 
@@ -2419,7 +2371,7 @@
     const pair = drawnPair(place.id);
     if (pair && place.id === pair.c && !pair.entry.removed && pair.entry.structure !== 'ruin') place = { ...place, id: pair.b };
     // A point note (`m:<site>:<level>:<id>`): into the site, on its level, at the point.
-    if (place.id.startsWith('m:')) return goNote(place.id);
+    if (place.id.startsWith('m:')) return N.goNote(place.id);
     // A site's level or room (`l:<site>:<level>`, `r:<site>:<level>:<room>`): into the site, on that level.
     const room = /^l:(.+):(\d+)$/.exec(place.id) ?? /^r:(.+):(\d+):\d+$/.exec(place.id);
     if (room) {
@@ -2459,7 +2411,7 @@
       if (view.interior) view.exitBuilding();
       return select({ kind: 'feature', feature: f });
     }
-    if (/^m:/.test(id)) return goNote(id);
+    if (/^m:/.test(id)) return N.goNote(id);
     if (view.interior && !/^[lr]:/.test(id) && view.interior.interior.id !== id) view.exitBuilding();
     await goTo(id);
   }
@@ -2514,7 +2466,7 @@
             if (at) location = { id: at, x, y };
           }
           if (!location) return toast('Nothing named there: pick a building, a settlement, or near a site');
-          saveNpc(id, { ...$state.snapshot(n), location }, 'place_npc');
+          N.saveNpc(id, { ...$state.snapshot(n), location }, 'place_npc');
         })();
       },
     };
@@ -2524,191 +2476,73 @@
     toast(`${shell.phone ? 'Tap' : 'Click'} on the map where ${npcs[id]?.name ?? 'they'} can be found`);
   }
 
-  // Notes on rooms and at points in rooms (inside, the DM's): the card open (`r:`/`m:` id) and
-  // where it is.
-  type NotePlace = { site: string; siteName: string; level: number; levelName: string; room: number | null; roomName: string | null };
-  /** Interiors looked up for notes' places (by site id; cleared when the world changes). */
-  let noteSites = new Map<string, Promise<Interior | null>>();
-  $effect(() => {
-    // (Or a site, building or town laid out anew: its rooms may have moved.)
-    void worldsMade;
-    void edits?.designs;
-    void edits?.buildings;
-    void edits?.towns;
-    noteSites = new Map();
+  const N = notesTools({
+    view,
+    get edits() {
+      return edits;
+    },
+    get notes() {
+      return notes;
+    },
+    get placeNotes() {
+      return placeNotes;
+    },
+    get renames() {
+      return renames;
+    },
+    get here() {
+      return here;
+    },
+    get worldsMade() {
+      return worldsMade;
+    },
+    get resolvePlace() {
+      return resolvePlace;
+    },
+    get notebookFocus() {
+      return notebookFocus;
+    },
+    get selection() {
+      return selection;
+    },
+    set selection(v) {
+      selection = v;
+    },
+    get moves() {
+      return moves;
+    },
+    set moves(v) {
+      moves = v;
+    },
+    get noteSel() {
+      return noteSel;
+    },
+    set noteSel(v) {
+      noteSel = v;
+    },
+    get notePath() {
+      return notePath;
+    },
+    set notePath(v) {
+      notePath = v;
+    },
+    get pickTool() {
+      return pickTool;
+    },
+    set pickTool(v) {
+      pickTool = v;
+    },
+    toast,
+    applyEdits,
+    syncTool,
+    drawnPair,
+    stretchesOf,
+    settlementName,
+    placeInfo,
+    nameOf,
+    goName,
+    flyToSize,
   });
-  $effect(() => {
-    // (Another place selected: the note card goes.)
-    if (selection) untrack(() => noteSel && closeNote());
-  });
-
-  /** Where a room's or point note's id is: its site, level and room, by name. */
-  async function notePlace(id: string): Promise<NotePlace | null> {
-    const r = splitRoom(id) ?? splitPoint(id);
-    if (!r) return null;
-    let it: Interior | null = view.interior?.interior.id === r.site ? view.interior.interior : null;
-    if (!it) {
-      if (!noteSites.has(r.site)) noteSites.set(r.site, view.gen.interior(r.site).catch(() => null));
-      it = await noteSites.get(r.site)!;
-    }
-    const lv = it?.levels[r.level];
-    if (!it || !lv) return null;
-    let room: number | null = 'room' in r ? r.room : null;
-    const at = notes[id]?.at;
-    if (at) {
-      const [i, j] = [Math.floor(at[0]), Math.floor(at[1])];
-      const c = i >= 0 && j >= 0 && i < it.nx && j < it.ny ? lv.cells[j * it.nx + i] : -1;
-      room = c >= 0 ? c : null;
-    }
-    const roomName = room !== null && lv.rooms[room] ? (renames[`r:${r.site}:${r.level}:${room}`] ?? lv.rooms[room].kind) : null;
-    const sewer = /^w:(\d+):/.exec(r.site);
-    const siteName = renames[r.site] ?? (sewer ? (renames[`w:${sewer[1]}`] ?? `the sewers of ${settlementName(Number(sewer[1]))}`) : ((await placeInfo(r.site))?.name ?? it.name ?? it.function));
-    return { site: r.site, siteName, level: r.level, levelName: renames[`l:${r.site}:${r.level}`] ?? lv.name, room, roomName };
-  }
-
-  /** Open a room's or point note's card (inside: the room outlined). */
-  function openNote(id: string) {
-    selection = null;
-    moves = null;
-    noteSel = id;
-    notePath = null;
-    view.markRoom(id.startsWith('r:') ? id : null);
-    if (shell.phone) shell.card = true;
-    void notePlace(id).then((p) => {
-      if (noteSel === id) notePath = p && { site: p.siteName, level: p.levelName, room: p.roomName };
-    });
-  }
-
-  function closeNote() {
-    if (noteSel?.startsWith('r:')) view.markRoom(null);
-    noteSel = null;
-    notePath = null;
-  }
-  // (Names and the spot change under an open card: its place again.)
-  $effect(() => {
-    void renames;
-    void notes;
-    const id = untrack(() => noteSel);
-    if (id) void notePlace(id).then((p) => untrack(() => noteSel === id) && (notePath = p && { site: p.siteName, level: p.levelName, room: p.roomName }));
-  });
-
-  /** A room's note or a point's set (null: a room's cleared, a point taken away). */
-  function saveNote(id: string, note: Note | null, tool = 'annotate_feature') {
-    const all = { ...notes };
-    if (note) all[id] = note;
-    else delete all[id];
-    applyEdits({ ...edits, notes: all }, { tool, id, ...(notePath?.room ? { name: notePath.room } : {}) }, 'user');
-  }
-
-  /** The point notes in a room (by where they are now). */
-  const pointsInRoom = $derived.by(() => {
-    const r = noteSel ? splitRoom(noteSel) : null;
-    if (!r) return [];
-    const it = view.interior?.interior.id === r.site ? view.interior.interior : null;
-    const lv = it?.levels[r.level];
-    return Object.entries(notes).filter(([k, n]) => {
-      const p = splitPoint(k);
-      if (!p || p.site !== r.site || p.level !== r.level || !n.at || !it || !lv) return false;
-      const [i, j] = [Math.floor(n.at[0]), Math.floor(n.at[1])];
-      return i >= 0 && j >= 0 && i < it.nx && j < it.ny && lv.cells[j * it.nx + i] === r.room;
-    });
-  });
-
-  /** Put a note down at a point inside (`move`: that point note moved there), by a click. */
-  function pickNotePoint(move?: string) {
-    const done = () => {
-      if (pickTool !== tool) return;
-      pickTool = null;
-      syncTool();
-    };
-    const tool: PointerTool = {
-      down: () => true,
-      move: () => {},
-      hover: () => {},
-      cancel: done,
-      up: (x, y) => {
-        done();
-        const layer = view.interiorAt(x, y);
-        if (!layer?.roomAt(x, y)) return toast('Pick a spot in a room');
-        const g = layer.toGrid(x, y);
-        putNote(layer.interior.id, layer.currentLevel, [Math.round(g[0] * 100) / 100, Math.round(g[1] * 100) / 100], move, layer.roomNameAt(x, y));
-      },
-    };
-    pickTool = tool;
-    if (shell.phone) shell.snap = 'peek';
-    syncTool();
-    toast(`${shell.phone ? 'Tap' : 'Click'} where in the room the note goes`);
-  }
-
-  /** A point note put down at `at` (grid units) on a site's level, or one moved there (to a new id
-   * when it changes site or level). */
-  function putNote(site: string, level: number, at: [number, number], move?: string, roomName?: string) {
-    const all = { ...notes };
-    let id: string;
-    if (move && all[move]) {
-      const p = splitPoint(move);
-      id = p && p.site === site && p.level === level ? move : `m:${site}:${level}:${p?.own ?? newPointId(site, level).split(':').pop()}`;
-      all[id] = { ...all[move], at };
-      if (id !== move) delete all[move];
-    } else {
-      id = newPointId(site, level);
-      all[id] = { text: '', at };
-    }
-    applyEdits({ ...edits, notes: all }, { tool: move ? 'move_note' : 'add_note_at', id, ...(roomName ? { name: roomName } : {}) }, 'user');
-    openNote(id);
-  }
-
-  /** Every note (places, rooms, points) for the Notebook's Notes tab, with where it is. */
-  let noteRows = $state<NoteRow[]>([]);
-  let noteRowsSeq = 0;
-  /** Rows already worked out, by id: a note's path changes with its spot or with names, not with its text. */
-  let noteRowCache = new Map<string, { at: string; path: string[] }>();
-  let noteRowKey: unknown = null;
-  async function listNotes() {
-    const seq = ++noteRowsSeq;
-    // (Names or the world changed: the paths are worked out again.)
-    const key = [renames, resolvePlace, noteSites];
-    if (!noteRowKey || (noteRowKey as unknown[]).some((k, i) => k !== key[i])) noteRowCache = new Map();
-    noteRowKey = key;
-    const rows = await Promise.all(
-      Object.entries(placeNotes)
-        .filter(([id]) => !id.startsWith('gone:') && !isAside(id))
-        .map(async ([id, n]): Promise<NoteRow> => {
-          const kind = id.startsWith('m:') ? 'point' : id.startsWith('r:') ? 'room' : 'place';
-          if (kind === 'place') return { id, kind, note: n, path: [nameOf(id)] };
-          const at = String(n.at ?? '');
-          const hit = noteRowCache.get(id);
-          if (hit && hit.at === at) return { id, kind, note: n, path: hit.path };
-          const p = await notePlace(id);
-          const path = p ? [p.siteName, p.levelName, ...(p.roomName ? [p.roomName] : [])] : [nameOf(id)];
-          // (Not found yet, say while the world is made: asked again next time.)
-          if (p) noteRowCache.set(id, { at, path });
-          return { id, kind, note: n, path };
-        }),
-    );
-    if (seq === noteRowsSeq) noteRows = rows;
-  }
-  $effect(() => {
-    if (shell.section === 'notes' && notebookFocus.tab === 'notes') {
-      void placeNotes;
-      void renames;
-      void noteSites;
-      untrack(() => void listNotes());
-    }
-  });
-
-  /** Open a note from the Notebook: a place's as any place; a room's or point's inside its site,
-   * on its level, the room outlined or the point framed, with its card. */
-  async function goNote(id: string) {
-    const r = splitRoom(id) ?? splitPoint(id);
-    if (!r) return void goName(id);
-    // (A sewer section opens as the city's sewers, on its own section.)
-    if (view.interior?.interior.id !== r.site && !(await view.enterBuilding(r.site, { level: r.level }))) return toast('That place cannot be opened now');
-    if (view.interior?.currentLevel !== r.level) view.setInteriorLevel(r.level);
-    const p = await view.gen.place(id);
-    if (p) flyToSize(p.x, p.y, 120);
-    openNote(id);
-  }
 
   /** An NPC into play as a token: where they stand inside, else the middle of the view. */
   async function dropToken(id: string) {
@@ -2966,7 +2800,7 @@
       () => (L.linkOn && (L.linkFirst || L.linkPicked) ? ((L.linkFirst = L.linkPicked = null), true) : false),
       () => (D.designer ? (openTool('select'), true) : false),
       () => (shell.phone && shell.card ? ((shell.card = false), true) : false),
-      () => (noteSel ? (closeNote(), true) : false),
+      () => (noteSel ? (N.closeNote(), true) : false),
       // (With nothing in progress, back to Select before leaving the building.)
       () => (editTool && editTool !== 'select' ? (openTool('select'), true) : false),
       () => (view.interior ? (leaveSite(), true) : false),
@@ -3017,9 +2851,9 @@
     view.onHexes = (on) => setHexes(on);
     view.setHexes(hexesOn);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
-    view.onNote = (id) => openNote(id);
+    view.onNote = (id) => N.openNote(id);
     view.onRoom = (id) => {
-      if (!playOn) openNote(id);
+      if (!playOn) N.openNote(id);
     };
     view.setRoomNotes(roomNotesOn);
     view.onOverlay = (o) => (overlay = o);
@@ -3166,7 +3000,7 @@
   {#if progress !== null}<div class="progress" style:width="{Math.round(progress * 100)}%"></div>{/if}
 
   {#if noteSheet && noteSel}
-    <Dock waiting={Q.waitBar} title={noteSel.startsWith('m:') ? 'Note' : 'Room'} icon="note" onClose={closeNote} back={shell.section ? { label: SECTIONS.find((s) => s.key === shell.section)?.label ?? 'panel', go: () => (shell.card = false) } : undefined}>
+    <Dock waiting={Q.waitBar} title={noteSel.startsWith('m:') ? 'Note' : 'Room'} icon="note" onClose={N.closeNote} back={shell.section ? { label: SECTIONS.find((s) => s.key === shell.section)?.label ?? 'panel', go: () => (shell.card = false) } : undefined}>
       {#snippet children(peek)}
         {#if noteSel}{@render noteCard(noteSel, true, peek)}{/if}
       {/snippet}
@@ -3379,7 +3213,7 @@
             names={renames}
             hiddenIds={edits.hidden ?? []}
             onRename={rename}
-            onHide={setHidden}
+            onHide={N.setHidden}
             onPatch={(p) => ((T.townPatch = p), (T.townCorner = null))}
             part={T.townPart}
           />
@@ -3474,7 +3308,7 @@
         {#if peek}
           <!-- (Folded down: the tabs alone.) -->
         {:else if notebookFocus.tab === 'notes'}
-          <NoteList rows={noteRows} onOpen={(id) => void goNote(id)} />
+          <NoteList rows={N.noteRows} onOpen={(id) => void N.goNote(id)} />
         {:else if notebookFocus.tab === 'gazetteer'}
           {#if overlay}
             <Gazetteer
@@ -3497,8 +3331,8 @@
               list={(scope) => view.gen.names(scope)}
               resolve={resolvePlace}
               onRename={rename}
-              onHide={setHidden}
-              onNote={(id, note, name) => setNote(id, note, name)}
+              onHide={N.setHidden}
+              onNote={(id, note, name) => N.setNote(id, note, name)}
               onGo={(id) => void goName(id)}
               onShow={(id) => void showPlace(id)}
               aside={asideGroups}
@@ -3527,8 +3361,8 @@
             playing={playOn}
             resolve={resolvePlace}
             levelName={(id, l) => (inside?.id === id ? (inside.levels[l]?.name ?? null) : null)}
-            onNpc={saveNpc}
-            onPlot={savePlot}
+            onNpc={N.saveNpc}
+            onPlot={N.savePlot}
             onGo={(id) => void goTo(id)}
             onPick={pickPlace}
             onToken={(id) => void dropToken(id)}
@@ -3565,15 +3399,15 @@
       {peek}
       path={notePath}
       note={notes[id]}
-      points={pointsInRoom}
-      onSave={(n) => saveNote(id, n)}
+      points={N.pointsInRoom}
+      onSave={(n) => N.saveNote(id, n)}
       onRename={id.startsWith('r:') ? (name) => rename(id, name) : undefined}
-      onAddPoint={id.startsWith('r:') ? () => pickNotePoint() : undefined}
-      onMove={id.startsWith('m:') ? () => pickNotePoint(id) : undefined}
-      onDelete={id.startsWith('m:') ? () => (saveNote(id, null, 'delete_note'), closeNote()) : undefined}
-      onOpen={openNote}
-      onGo={() => void goNote(id)}
-      onClose={closeNote}
+      onAddPoint={id.startsWith('r:') ? () => N.pickNotePoint() : undefined}
+      onMove={id.startsWith('m:') ? () => N.pickNotePoint(id) : undefined}
+      onDelete={id.startsWith('m:') ? () => (N.saveNote(id, null, 'delete_note'), N.closeNote()) : undefined}
+      onOpen={N.openNote}
+      onGo={() => void N.goNote(id)}
+      onClose={N.closeNote}
     />
   {/snippet}
   {#if selection && !shell.phone}
@@ -3604,7 +3438,7 @@
       onList={sel.kind === 'feature' ? () => openNotebook('gazetteer', sel.feature.id, true) : undefined}
       onShow={(id) => void showPlace(id)}
       onRename={rename}
-      onNote={(id, note) => setNote(id, note)}
+      onNote={(id, note) => N.setNote(id, note)}
       {npcsHere}
       {plotsHere}
       onOpen={openNotebook}
@@ -3616,7 +3450,7 @@
           : sel.kind === 'building' && B.generatedBuilding(sel.hit.id)
             ? B.generatedActions(sel.hit)
             : sel.kind === 'feature' && SETTLEMENT_KINDS.includes(sel.feature.kind)
-              ? { hidden: placeHidden.includes(sel.feature.id), onHide: (hide: boolean) => setHidden(sel.feature.id, hide) }
+              ? { hidden: placeHidden.includes(sel.feature.id), onHide: (hide: boolean) => N.setHidden(sel.feature.id, hide) }
               : {}}
       onUnsettle={sel.kind === 'feature' ? P.unsettleAction(sel.feature.id) : undefined}
       settle={sel.kind === 'feature' ? Q.settleCard(sel.feature) : null}
@@ -3803,8 +3637,8 @@
       x={moves.x}
       y={moves.y}
       onMove={(m) => {
-        if (m.kind === 'room') openNote(m.id);
-        else if (m.kind === 'note') putNote(m.site, m.level, m.grid, undefined, view.interiorAt(m.at[0], m.at[1])?.roomNameAt(m.at[0], m.at[1]));
+        if (m.kind === 'room') N.openNote(m.id);
+        else if (m.kind === 'note') N.putNote(m.site, m.level, m.grid, undefined, view.interiorAt(m.at[0], m.at[1])?.roomNameAt(m.at[0], m.at[1]));
         else void view.move(m);
         moves = null;
       }}
