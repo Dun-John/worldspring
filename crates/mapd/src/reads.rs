@@ -7,7 +7,7 @@ use worldgen::ground;
 use worldgen::world::{ObjKind, SpriteMeta};
 
 use crate::Shared;
-use crate::args::{Area, area, area_light};
+use crate::args::{Area, area, area_light, bbox, round1};
 use crate::tools::{limit_of, limit_prop, listed, schema, text};
 
 pub fn list() -> Vec<Value> {
@@ -105,10 +105,6 @@ async fn objects(app: &Shared, a: &Value) -> Result<Value, String> {
     Ok(listed(json!(objects), limit, rest))
 }
 
-fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
-    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])])
-}
-
 async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
     let area = within(app, a).await?;
     let limit = limit_of(a, 100);
@@ -124,7 +120,7 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                 let b = bbox(&p.pts);
                 let mid = worldgen::town::geom::centroid(&p.pts);
                 if hits(mid, &p.pts) {
-                    let mut it = json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts });
+                    let mut it = json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": round1(p.level as f64 - sea), "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts });
                     if let Some(f) = p.floor {
                         it["floor"] = json!(f.name());
                     }
@@ -140,7 +136,7 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                         continue;
                     }
                     let mut it = json!({
-                        "id": i.id, "what": "islet", "generated": true, "level_ft": ((i.level as f64 - sea) * 10.0).round() / 10.0, "water_ft": ((i.water as f64 - sea) * 10.0).round() / 10.0,
+                        "id": i.id, "what": "islet", "generated": true, "level_ft": round1(i.level as f64 - sea), "water_ft": round1(i.water as f64 - sea),
                         "x_ft": i.at[0].round(), "y_ft": i.at[1].round(), "radius_ft": i.r.round(), "in": if i.river { "river" } else { "sea or lake" }, "bbox": bbox(&i.pts).map(f64::round), "poly": i.pts,
                     });
                     if i.tower {

@@ -9,6 +9,7 @@ use worldgen::town::wards;
 use worldgen::world::{LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS};
 
 use crate::Shared;
+use crate::args::town_index;
 use crate::tools::{schema, text};
 
 pub fn list() -> Vec<Value> {
@@ -74,10 +75,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 }
 
 /// The layout index of the town `id` names.
-fn town_index(ex: &worldgen::pipeline::Executor, id: &str) -> Result<usize, String> {
-    agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| worldgen::town::is_settlement(&ex.t0, l)).ok_or_else(|| format!("{id} is not a settlement"))
-}
-
 async fn plan(app: &Shared, a: &Value) -> Result<Value, String> {
     let id = a["id"].as_str().ok_or("missing 'id'")?.to_string();
     let within: Option<Vec<f64>> = a["within"].as_array().map(|r| r.iter().filter_map(Value::as_f64).collect());

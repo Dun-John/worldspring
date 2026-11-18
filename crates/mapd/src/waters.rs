@@ -11,6 +11,7 @@ use worldgen::waters::{self, Water, WaterKind};
 use worldgen::world::Edits;
 
 use crate::Shared;
+use crate::args::round1;
 use crate::notebook::new_id;
 use crate::tools::{listed, schema, text};
 
@@ -54,10 +55,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "list_waters" => list_waters(app, crate::tools::limit_of(a, 100)).await.map(text),
         _ => return None,
     })
-}
-
-fn round1(v: f64) -> f64 {
-    (v * 10.0).round() / 10.0
 }
 
 /// A water's entry in replies and lists.

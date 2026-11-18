@@ -2,10 +2,10 @@
 //! changed (`edit_streets`: the change function's ops, `worldgen::town::handedit`).
 
 use serde_json::{Value, json};
-use worldgen::agent;
 use worldgen::town::{hand, handedit};
 
 use crate::Shared;
+use crate::args::town_index;
 use crate::tools::{schema, text};
 
 pub fn list() -> Vec<Value> {
@@ -40,10 +40,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "edit_streets" => edit(app, a).await.map(text),
         _ => return None,
     })
-}
-
-fn town_index(ex: &worldgen::pipeline::Executor, id: &str) -> Result<usize, String> {
-    agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| worldgen::town::is_settlement(&ex.t0, l)).ok_or_else(|| format!("{id} is not a settlement"))
 }
 
 async fn plan(app: &Shared, a: &Value) -> Result<Value, String> {

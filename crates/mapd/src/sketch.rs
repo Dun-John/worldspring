@@ -783,7 +783,7 @@ pub(crate) async fn regenerate(app: &Shared) -> Result<Value, String> {
         "regenerated": true,
         "world": hex(r.hash),
         "was": hex(old),
-        "seconds": (r.seconds * 10.0).round() / 10.0,
+        "seconds": crate::args::round1(r.seconds),
         "settlements": r.after,
         "settlements_before": r.before,
         "kept": r.kept,

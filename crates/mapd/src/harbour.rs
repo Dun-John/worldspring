@@ -9,6 +9,7 @@ use worldgen::wharf;
 use worldgen::world::{Created, CreatedChecks, CrossingMaterial, Edits, Wharf, WharfKind};
 
 use crate::Shared;
+use crate::args::{bbox, round1};
 use crate::notebook::new_id;
 use crate::tools::{limit_of, limit_prop, listed, schema, text};
 
@@ -45,14 +46,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "remove_wharves" => remove(app, a).await.map(text),
         _ => return None,
     })
-}
-
-fn round1(v: f64) -> f64 {
-    (v * 10.0).round() / 10.0
-}
-
-fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
-    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])])
 }
 
 fn num(a: &Value, k: &str) -> Result<Option<f64>, String> {

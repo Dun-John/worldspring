@@ -672,3 +672,18 @@ pub async fn point_named(app: &Shared, field: &str, v: &Value) -> Result<([f64; 
         _ => Err(format!("{field_out}: that place has no position")),
     }
 }
+
+/// A value to a tenth (feet, levels).
+pub(crate) fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// The box [x0, y0, x1, y1] round points.
+pub(crate) fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
+    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])])
+}
+
+/// The layout index of a settlement by id, else an error naming it.
+pub(crate) fn town_index(ex: &worldgen::pipeline::Executor, id: &str) -> Result<usize, String> {
+    worldgen::agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| worldgen::town::is_settlement(&ex.t0, l)).ok_or_else(|| format!("{id} is not a settlement"))
+}
