@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import type { BenchResult } from './dev/bench';
-  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, Plateau, Plot, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
+  import type { Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, Plateau, Plot, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
@@ -48,10 +48,8 @@
   import { type TownMode } from './editor/town';
   import { type StreetPick } from './editor/streets';
   import DesignPanel from './ui/DesignPanel.svelte';
-  import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { linkTools } from './editor/tools/links.svelte';
   import LinkPanel from './ui/LinkPanel.svelte';
-  import { belowGround } from './editor/site/model';
   import { buildTools } from './editor/tools/build.svelte';
   import { groundTools } from './editor/tools/ground.svelte';
   import { objectTools } from './editor/tools/objects.svelte';
@@ -59,6 +57,7 @@
   import { selectTools } from './editor/tools/select.svelte';
   import { placeTools } from './editor/tools/places.svelte';
   import { pendingTools } from './editor/tools/pending.svelte';
+  import { designTools } from './editor/tools/design.svelte';
   import SelectPanel from './ui/SelectPanel.svelte';
   import { type BuildSettings } from './editor/build';
   import { lookOf, shore } from './editor/water';
@@ -76,7 +75,7 @@
   import TokenMenu from './play/TokenMenu.svelte';
   import PicturePicker, { type PictureItem } from './play/PicturePicker.svelte';
   import { describe, tidy, type Step } from './sync/history';
-  import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
+  import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, type EditOp } from './sync/ops';
   import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, GEN_VERSION, linkFor, newWorld, readLink, sameSketch, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, ownHash, PINNED, renumberedSince } from './world/versions';
@@ -1311,7 +1310,7 @@
     remadeNotice = 0;
     // (While a world is being made: once it is.)
     if (busy) return void setTimeout(() => remadeWaiting?.w === w && takeRemade(w, gone), 500);
-    const drops = [sketchDirty() ? 'drops the sketch strokes not generated yet' : '', designer?.dirty ? 'drops this site’s unsaved design' : '', playOn ? 'stops play' : ''].filter(Boolean);
+    const drops = [sketchDirty() ? 'drops the sketch strokes not generated yet' : '', D.designer?.dirty ? 'drops this site’s unsaved design' : '', playOn ? 'stops play' : ''].filter(Boolean);
     if (drops.length) shell.ask = { kind: 'remade', proceed: () => void loadRemade(), drops: drops.join(' and ') };
     else void loadRemade();
   }
@@ -1329,7 +1328,7 @@
     if (remadeNotice) dismiss(remadeNotice);
     remadeNotice = 0;
     if (sketchOn) leaveSketch();
-    if (designer) closeDesigner();
+    if (D.designer) D.closeDesigner();
     stopPlay();
     // (The remade world, round the edits shown: they follow their places as they did in mapd,
     // whose copy is then taken.)
@@ -1434,7 +1433,7 @@
 
   /** From Objects inside a building or site: Rooms, on its Furniture (Props) tool. */
   function furnishHere() {
-    designSettings = { ...designSettings, mode: 'prop' };
+    D.designSettings = { ...D.designSettings, mode: 'prop' };
     go('edit', 'design');
   }
 
@@ -1448,7 +1447,7 @@
     const selTool = B.buildArmed && B.buildMode === 'select' ? Sel.arm() : null;
     if (!selTool && Sel.tool) Sel.disarm();
     const town = townOn && townUnderlay.adjust && townUnderlay.visible ? T.townTraceTool : T.streetPlan ? T.streetTool : T.townTool;
-    view.tool = pickTool ?? P.placeTool ?? designer ?? (L.linkOn ? L.linkTool : null) ?? selTool ?? buildTool ?? town ?? G.groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
+    view.tool = pickTool ?? P.placeTool ?? D.designer ?? (L.linkOn ? L.linkTool : null) ?? selTool ?? buildTool ?? town ?? G.groundArmed ?? S.scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -1456,13 +1455,13 @@
   function go(to: Section | null, tab?: string) {
     const t = to && to !== 'play' ? (tab ?? shell.tabs[to]) : undefined;
     if (busy && (to === 'edit' || to === 'play')) return;
-    if (to === 'edit' && t === 'design' && !designer && !canDesign && !L.canLink && !L.linkOn) return toast(playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it');
+    if (to === 'edit' && t === 'design' && !D.designer && !canDesign && !L.canLink && !L.linkOn) return toast(playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it');
     const keepSketch = to === 'world';
     const keepDesign = to === 'edit' && t === 'design';
     if (sketchOn && !keepSketch && sketchDirty()) return ask('sketch', () => go(to, tab));
-    if (designer?.dirty && !keepDesign) return ask('design', () => go(to, tab));
+    if (D.designer?.dirty && !keepDesign) return ask('design', () => go(to, tab));
     if (sketchOn && !keepSketch) leaveSketch();
-    if (designer && !keepDesign) closeDesigner();
+    if (D.designer && !keepDesign) D.closeDesigner();
     const editTab = to === 'edit' ? t : null;
     // (Moving on from Places puts its "Added X" line away.)
     if (editTab !== 'sites') P.placedName = null;
@@ -1473,7 +1472,7 @@
     if (editTab !== 'sites') P.disarmPlace();
     if (editTab !== 'design') L.disarmLinks();
     // (Where no rooms can be designed, Rooms puts ways across down.)
-    else if (!designer && !canDesign) L.linkOn = true;
+    else if (!D.designer && !canDesign) L.linkOn = true;
     pickTool = null;
     if (to && to !== shell.section) {
       shell.collapsed = false;
@@ -1486,7 +1485,7 @@
     if (editTab === 'build') B.armBuild();
     if (editTab === 'town') T.armTown();
     if (editTab === 'ground') G.armGround();
-    if (editTab === 'design' && !designer && !L.linkOn) void openDesigner();
+    if (editTab === 'design' && !D.designer && !L.linkOn) void D.openDesigner();
     if (editTab === 'design' && L.linkOn) L.armLinks();
     if (to === 'world' && t === 'sketch' && !sketchOn) enterSketch();
     if (to === 'play') startPlay();
@@ -1594,14 +1593,14 @@
       if (choice === 'drop') leaveSketch();
       else if (!(await generate(draftWorld(), { keepSketch: true, confirmed: true }))) return;
     } else {
-      if (choice === 'commit') await saveDesign();
-      closeDesigner();
+      if (choice === 'commit') await D.saveDesign();
+      D.closeDesigner();
     }
     a.proceed();
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, openTool, editTool: () => editTool, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), sel: () => Sel, links: () => L, editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => P.addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => P.createSettlement(c, x, y), deleteCreated: (id: string) => (P.createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => P.takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => designSettings, designer: () => designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, openTool, editTool: () => editTool, scatter: () => S.scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => B.setBuildMode(m), sel: () => Sel, links: () => L, editWorks: (id: string) => B.editWorks(id), editGenerated: (h: BuildingHit) => B.editGenerated(h), saveGenerated: () => B.saveGenerated(), setBuild: (o: Partial<BuildSettings>) => Object.assign(B.build, o), generatedActions: (h: BuildingHit) => B.generatedActions(h), toastsNow: () => toasts.map((t) => t.text), town: () => ({ index: T.townIndex, plan: T.townPlan, patch: T.townPatch, corner: T.townCorner, busy: T.townBusy, note: T.townNote }), townCorner: (v: number | null) => ((T.townCorner = v), (T.townPatch = null), v !== null && T.showTownCorner(v)), townMode: (m: TownMode) => (T.townMode = m), townChange: (r: TownRequest) => T.townChange(r, 'test'), streets: () => ({ plan: T.streetPlan, pick: T.streetPick, tool: T.streetTool, drawn: T.streetDrawn }), streetChange: (r: StreetRequest) => T.streetChange(r, 'test'), streetChanges: (rs: StreetRequest[]) => T.streetChanges(rs, 'test'), townTrace: () => townUnderlay, streetPick: (p: StreetPick | null) => (T.streetPick = p), townPick: (x: number, y: number) => T.townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => P.addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => P.createSettlement(c, x, y), deleteCreated: (id: string) => (P.createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => P.takeBack(), toasts: () => toasts.map((t) => t.text), sketcher: () => sketcher, state: () => ({ busy, playOn, sketchOn, designer: !!D.designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => S.placer(), design: () => D.designSettings, designer: () => D.designer, held: () => S.held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -1642,7 +1641,7 @@
 
   /** Back to the surface (the design guard first). */
   function leaveSite() {
-    if (designer?.dirty) return ask('design', leaveSite);
+    if (D.designer?.dirty) return ask('design', leaveSite);
     view.exitBuilding();
   }
 
@@ -1675,7 +1674,7 @@
     go,
     drawnBuilding,
     drawnBuildingId,
-    fitDesign,
+    fitDesign: (bid, floors) => D.fitDesign(bid, floors),
   });
 
   const Sel = selectTools({
@@ -1767,16 +1766,6 @@
     return all.some((h) => /^b:\d+:0$/.test(h) && placeKey(h) !== h) ? [...new Set(all.map(placeKey))].sort() : all;
   });
 
-  /** A building's inside designed by hand, fitted to `floors` storeys (`designs` with it), or why
-   * it is set aside. */
-  async function fitDesign(bid: string, floors: number): Promise<{ designs: Edits['designs']; aside: string }> {
-    const designed = edits.designs?.[bid];
-    if (!designed) return { designs: edits.designs, aside: '' };
-    const fit = await view.gen.design(bid, designed, { refit: floors });
-    if (!('error' in fit) && !fit.problems.some((p) => p.blocking)) return { designs: { ...edits.designs, [bid]: fit.design }, aside: '' };
-    return { designs: edits.designs, aside: 'Its inside, designed by hand, can’t follow the new storeys: set aside' };
-  }
-
 
   // Edit › Streets: the town in view laid out anew by hand; its tools, state and changes are in
   // `editor/tools/streets.svelte.ts`.
@@ -1820,63 +1809,35 @@
   });
 
 
-  // The dungeon designer: while it is open, the map's pointer changes the site we are in (a
-  // draft, saved into the edits on Save).
-  let designer = $state.raw<SiteDesigner | null>(null);
-  let designVersion = $state(0);
-  /** The design breaks a rule a site must keep: it can't be saved. */
-  const designBlocked = $derived((void designVersion, !!designer?.blocking.length));
-  let designSettings = $state<DesignSettings>(defaultDesign());
-  let underCatalog = $state.raw<UnderCatalog | null>(null);
-  async function openDesigner() {
-    const id = inside?.id;
-    if (!id || !/^[ub]:/.test(id) || designer) return;
-    if (!underCatalog) underCatalog = await view.gen.underCatalog();
-    const d = new SiteDesigner(view, id, {
-      settings: () => designSettings,
-      catalog: () => underCatalog,
-      changed: () => designVersion++,
-      hint: (t) => toast(t),
-      piece: (kind) => {
-        if (kind.startsWith('s:')) {
-          const m = edits.sprites?.[kind.slice(2)];
-          return m ? { name: m.name, blocks: m.blocks_move } : null;
-        }
-        const c = underCatalog;
-        const p = id.startsWith('b:') ? (c?.building.furniture.find((f) => f.kind === kind) ?? c?.building.props.find((f) => f.kind === kind)) : c?.props.find((f) => f.kind === kind);
-        return p ? { name: p.name, blocks: p.blocks } : null;
-      },
-      chip: (x, y, text) => S.chipAt(x, y, text),
-      bar: (at) => (S.placeBar = at),
-      held: S.setHeld,
-      ppf: () => view.cam.ppf,
-    });
-    // (Still wanted once it has loaded: the same site, the Design tab open.)
-    if (!(await d.open()) || inside?.id !== id || designer || shell.section !== 'edit' || shell.tabs.edit !== 'design') return;
-    // New rooms are, at first, the kind this site has most of its own (a building's: a
-    // storeroom); the tools and the props are the ones it has.
-    const t = underCatalog.themes.find((x) => x.key === d.draft?.theme);
-    const inBuilding = d.draft?.kind === 'building';
-    const mode = designSettings.mode;
-    const bad = inBuilding ? mode === 'corridor' || mode === 'rock' : mode === 'wall' || mode === 'merge';
-    designSettings = {
-      ...designSettings,
-      mode: bad ? 'room' : mode,
-      kind: inBuilding ? 'storeroom' : (t?.rooms.find((k) => k !== t.first && k !== t.passage) ?? 'chamber'),
-      ...(inBuilding ? { prop: 'table', pw: 2, ph: 1 } : { prop: 'chest', pw: 1, ph: 1 }),
-      back: null,
-      variant: null,
-    };
-    designer = d;
-    view.designing = id;
-    syncTool();
-    // Phones: the site sits in the part of the map above the sheet, not under it.
-    if (shell.phone) {
-      await new Promise((r) => setTimeout(r, 250));
-      const sheet = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sheet-h')) || 0;
-      if (sheet > 0) view.flyTo({ cx: view.cam.cx, cy: view.cam.cy + sheet / 2 / 2 ** view.cam.zoom, zoom: view.cam.zoom });
-    }
-  }
+  // Edit › Rooms: the site designer (open, shut, save, reset, start over); in
+  // `editor/tools/design.svelte.ts`.
+  const D = designTools({
+    view,
+    get edits() {
+      return edits;
+    },
+    get inside() {
+      return inside;
+    },
+    get selection() {
+      return selection;
+    },
+    set selection(v) {
+      selection = v;
+    },
+    build: B,
+    get objects() {
+      return S;
+    },
+    get links() {
+      return L;
+    },
+    toast,
+    applyEdits,
+    syncTool,
+    drawnBuilding,
+    flyToSize,
+  });
 
   const L = linkTools({
     view,
@@ -1893,10 +1854,10 @@
       return playOn;
     },
     get designer() {
-      return designer;
+      return D.designer;
     },
     ask: (kind, proceed) => ask(kind, proceed),
-    closeDesigner,
+    closeDesigner: () => D.closeDesigner(),
     go,
     syncTool,
     chipAt: (x, y, text) => S.chipAt(x, y, text),
@@ -1906,81 +1867,6 @@
     applyEdits,
   });
 
-  /** Shut the designer; unsaved changes are dropped (the site shown as saved). */
-  function closeDesigner() {
-    const d = designer;
-    if (!d) return;
-    d.dispose();
-    designer = null;
-    view.designing = null;
-    // (Shut while its tab is showing: Edit falls back to Places, unless on to the ways across.)
-    if (shell.tabs.edit === 'design' && !L.linkOn) shell.tabs.edit = 'sites';
-    syncTool();
-    if (d.dirty && view.interior?.interior.id === d.id) void view.enterBuilding(d.id, { level: view.interior.currentLevel });
-  }
-
-  /** The draft into the edits; a building's storeys changed in the designer change the building
-   * too (one step). */
-  async function saveDesign() {
-    const d = designer;
-    if (!d?.draft || d.blocking.length) return;
-    const draft = JSON.parse(JSON.stringify(d.draft)) as NonNullable<typeof d.draft>;
-    const floors = d.storeysChanged ? d.storeys : null;
-    const drawn = floors !== null ? drawnBuilding(d.id) : null;
-    let built: { edit: BuildingEdit | null } | { piece: PieceEdit } | null = null;
-    if (floors !== null && !drawn) {
-      const r = await view.gen.buildingEdit(d.id, { floors });
-      if (!r || 'error' in r) return toast(B.refusal(r) ?? '');
-      built = r;
-      if (designer !== d) return;
-    }
-    const e = edits;
-    const buildings = { ...(e.buildings ?? {}) };
-    if (built && 'edit' in built) {
-      if (built.edit) buildings[d.id] = built.edit;
-      else delete buildings[d.id];
-    }
-    const created = built && 'piece' in built ? B.withPiece(built.piece) : drawn && floors !== null ? (e.created ?? []).map((x) => (x.id === drawn.id ? { ...x, floors } : x)) : e.created;
-    // (Levels dug or filled in below: names and places on the others follow them.)
-    applyEdits({ ...shiftLevels(e, d.id, d.shift), buildings, created, designs: { ...(e.designs ?? {}), [d.id]: draft } }, { tool: 'set_site_design', id: d.id, name: inside?.name }, 'user');
-    d.markSaved();
-  }
-
-  /** The site as generated again: its design dropped (names and places on its levels follow
-   * them, if it has more or fewer below ground as generated). */
-  async function resetDesign() {
-    const d = designer;
-    if (!d) return;
-    const generated = await view.gen.design(d.id, undefined, { original: true });
-    if (designer !== d) return;
-    const shift = 'error' in generated ? 0 : belowGround(generated.design) - d.belowSaved;
-    const e = edits;
-    const designs = { ...(e.designs ?? {}) };
-    delete designs[d.id];
-    applyEdits({ ...shiftLevels(e, d.id, shift), designs }, { tool: 'reset_site_design', id: d.id, name: inside?.name }, 'user');
-    void d.open();
-  }
-
-  /** Every change made to this world cleared: the world as generated. One step, so Undo brings
-   * it all back (while this page is open); mapd's copy is cleared too. */
-  function startOver() {
-    if (designer) closeDesigner();
-    view.exitBuilding();
-    selection = null;
-    // (Sites made keep their places, removed: the ids after them are indices, here and in mapd.)
-    applyEdits(keepPlaces(edits, {}), { tool: 'start_over' }, 'user');
-  }
-
-  /** Show a problem's square (on its level). */
-  function showProblem(level: number, at?: [number, number]) {
-    view.setInteriorLevel(level);
-    const layer = view.interior;
-    if (at && layer) {
-      const [x, y] = layer.toWorld(at[0] + 0.5, at[1] + 0.5);
-      flyToSize(x, y, 120);
-    }
-  }
-
   // Edit › Objects: its tools, ghost, ring and chip are in `editor/tools/objects.svelte.ts`.
   const S = objectTools({
     view,
@@ -1988,10 +1874,10 @@
       return edits;
     },
     get designSettings() {
-      return designSettings;
+      return D.designSettings;
     },
     get designer() {
-      return designer;
+      return D.designer;
     },
     get scatterOn() {
       return scatterOn;
@@ -2039,7 +1925,7 @@
   });
   /** the tools that can't be used here, with why. */
   const toolsOff = $derived<Partial<Record<ToolKey, string>>>({
-    ...(!canDesign && !designer ? { rooms: playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms' } : {}),
+    ...(!canDesign && !D.designer ? { rooms: playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms' } : {}),
     ...(!townInView ? { townwall: 'Go to a town, city or metropolis to change its wall' } : {}),
     ...(!L.canLink && !L.linkOn ? { stairs: playOn ? 'Stop playing to put stairs and passages down' : 'Go down into a site, or a building’s cellar, to join it to another level or place' } : {}),
   });
@@ -2085,7 +1971,7 @@
       return busy;
     },
     get designer() {
-      return designer;
+      return D.designer;
     },
     play,
     get placeHidden() {
@@ -2163,7 +2049,7 @@
       return genSeconds;
     },
     get designer() {
-      return designer;
+      return D.designer;
     },
     get asideGroups() {
       return asideGroups;
@@ -2523,7 +2409,7 @@
 
   /** Go to a place, or to an NPC: into the building or site they are in, on their level. */
   async function goTo(id: string) {
-    if (designer?.dirty) return ask('design', () => void goTo(id));
+    if (D.designer?.dirty) return ask('design', () => void goTo(id));
     const n = npcs[id];
     let place = n ? n.location : { id };
     if (!place) return;
@@ -2567,7 +2453,7 @@
 
   /** Go to a name in the Gazetteer: a map feature is selected (and framed); the rest as `goTo`. */
   async function goName(id: string) {
-    if (designer?.dirty) return ask('design', () => void goName(id));
+    if (D.designer?.dirty) return ask('design', () => void goName(id));
     const f = overlay?.features.find((g) => g.id === id) ?? namedFeatures.find((g) => g.id === id);
     if (f) {
       if (view.interior) view.exitBuilding();
@@ -2926,23 +2812,23 @@
    * no redo), then the world's edits. */
   function undoAny() {
     S.scatterArmed?.tool.putBack();
-    if (designer) designer.undo();
+    if (D.designer) D.designer.undo();
     else if (sketchOn) sketcher.undo();
     else undo();
   }
 
   function redoAny() {
     S.scatterArmed?.tool.putBack();
-    if (designer) designer.redo();
+    if (D.designer) D.designer.redo();
     else if (!sketchOn) redo();
   }
 
   // Undo and redo as the buttons show them (following the designer's, the sketch's or the
   // world's history).
-  const canUndo = $derived((void designVersion, void sketchVersion, void undoHistory.version, designer ? designer.canUndo : sketchOn ? sketcher.canUndo : undoHistory.canUndo || !!P.added));
-  const canRedo = $derived((void designVersion, void undoHistory.version, designer ? designer.canRedo : !sketchOn && undoHistory.canRedo));
-  const undoLabel = $derived(designer || sketchOn ? null : (undoHistory.undoLabel ?? (P.added ? `Take back ${P.added.name}` : null)));
-  const redoLabel = $derived(designer || sketchOn ? null : undoHistory.redoLabel);
+  const canUndo = $derived((void D.designVersion, void sketchVersion, void undoHistory.version, D.designer ? D.designer.canUndo : sketchOn ? sketcher.canUndo : undoHistory.canUndo || !!P.added));
+  const canRedo = $derived((void D.designVersion, void undoHistory.version, D.designer ? D.designer.canRedo : !sketchOn && undoHistory.canRedo));
+  const undoLabel = $derived(D.designer || sketchOn ? null : (undoHistory.undoLabel ?? (P.added ? `Take back ${P.added.name}` : null)));
+  const redoLabel = $derived(D.designer || sketchOn ? null : undoHistory.redoLabel);
 
   /** The battlemap grid, shown or not (kept by the map across worlds). */
   let gridOn = $state(true);
@@ -2958,7 +2844,7 @@
 
   /** Out to the whole map (out of the building or site first, the design guard asking). */
   function wholeMap() {
-    if (designer?.dirty) return ask('design', wholeMap);
+    if (D.designer?.dirty) return ask('design', wholeMap);
     if (view.interior) view.exitBuilding();
     view.fitWorld();
   }
@@ -2969,7 +2855,7 @@
     editTab: () => shell.tabs.edit,
     playOn: () => playOn,
     sketching: () => sketchOn,
-    designing: () => !!designer,
+    designing: () => !!D.designer,
     linksToggle: () => {
       if (L.linkOn ? !canDesign : !L.canLink) return false;
       if (L.linkOn) L.closeLinks();
@@ -3002,9 +2888,9 @@
     redo: redoAny,
     generate: () => (sketchOn ? exitSketch(true) : void generate(draftWorld(), { keepSketch: true })),
     saveDesign: () => {
-      if (designBlocked) toast('Fix the problems marked ✕ before saving');
-      else if (!designer?.dirty) toast('Nothing new to save');
-      else saveDesign();
+      if (D.designBlocked) toast('Fix the problems marked ✕ before saving');
+      else if (!D.designer?.dirty) toast('Nothing new to save');
+      else D.saveDesign();
     },
     sketchTool: (t) => (sketchSettings.tool = t),
     scatterMode: (m) => {
@@ -3026,9 +2912,9 @@
     selectDelete: () => Sel.removeOpen(),
     designMode: (m) => {
       // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
-      const inBuilding = designer?.building ?? false;
+      const inBuilding = D.designer?.building ?? false;
       if (inBuilding ? m === 'corridor' || m === 'rock' || m === 'terrain' : m === 'wall' || m === 'merge') return;
-      designSettings = { ...designSettings, mode: m };
+      D.designSettings = { ...D.designSettings, mode: m };
     },
     townMode: (m) => {
       T.townMode = m;
@@ -3078,7 +2964,7 @@
       () => (P.placeArmed ? (P.disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
       () => (L.linkOn && (L.linkFirst || L.linkPicked) ? ((L.linkFirst = L.linkPicked = null), true) : false),
-      () => (designer ? (openTool('select'), true) : false),
+      () => (D.designer ? (openTool('select'), true) : false),
       () => (shell.phone && shell.card ? ((shell.card = false), true) : false),
       () => (noteSel ? (closeNote(), true) : false),
       // (With nothing in progress, back to Select before leaving the building.)
@@ -3110,8 +2996,8 @@
       const netName = net ? renames[`w:${net[1]}`] : undefined;
       inside = s && netName ? { ...s, name: netName } : s && /^[uwk]:/.test(s.id) && !renames[s.id] ? { ...s, name: `${settlementName(Number(s.id.split(':')[1]))} · ${s.name}` } : s;
       // Out of the site being designed: the designer shuts.
-      if (designer && s?.id !== designer.id) closeDesigner();
-      else if (designer) designer.levelShown();
+      if (D.designer && s?.id !== D.designer.id) D.closeDesigner();
+      else if (D.designer) D.designer.levelShown();
       // In or out of a building: Objects' hand is put back (it can't be put down in there) and
       // its ghost, chip and ring follow; Ground's ring too.
       if (S.scatterArmed) {
@@ -3211,7 +3097,7 @@
 <div class="map" bind:this={container} onpointerdowncapture={mapTouched} ondragover={mapDragOver} ondrop={mapDrop}></div>
 
 {#snippet askBar()}
-  {#if shell.ask}<Confirm ask={shell.ask} blocked={designBlocked} seconds={genSeconds} onKeep={() => void answer('keep')} onDrop={() => void answer('drop')} onCommit={() => void answer('commit')} onSave={() => void answer('save')} />{/if}
+  {#if shell.ask}<Confirm ask={shell.ask} blocked={D.designBlocked} seconds={genSeconds} onKeep={() => void answer('keep')} onDrop={() => void answer('drop')} onCommit={() => void answer('commit')} onSave={() => void answer('save')} />{/if}
 {/snippet}
 
 {#snippet floorPicker()}
@@ -3220,7 +3106,7 @@
       state={inside}
       onLevel={(i) => view.setInteriorLevel(i)}
       onExit={leaveSite}
-      onDesign={canDesign && !designer ? () => go('edit', 'design') : undefined}
+      onDesign={canDesign && !D.designer ? () => go('edit', 'design') : undefined}
       designed={!!edits.designs?.[inside.id]}
     />
   {/if}
@@ -3371,7 +3257,7 @@
               </div>
             {/if}
           {:else}
-            <LibraryTab {world} {busy} unexported={unexportedCount} keeps={syncKeeps} onOpen={openWorld} onDownload={() => void downloadWorld()} onCopyLink={() => void copyLink()} onBackup={backupLibrary} onRestore={restoreLibrary} onStartOver={startOver} />
+            <LibraryTab {world} {busy} unexported={unexportedCount} keeps={syncKeeps} onOpen={openWorld} onDownload={() => void downloadWorld()} onCopyLink={() => void copyLink()} onBackup={backupLibrary} onRestore={restoreLibrary} onStartOver={D.startOver} />
           {/if}
         {/if}
       {/snippet}
@@ -3544,22 +3430,22 @@
             onDrop={() => (L.linkFirst = null)}
             onRooms={canDesign ? L.closeLinks : undefined}
           />
-        {:else if designer}
+        {:else if D.designer}
           <DesignPanel
             {peek}
-              {designer}
-              version={designVersion}
-              bind:settings={designSettings}
-              catalog={underCatalog}
+              designer={D.designer}
+              version={D.designVersion}
+              bind:settings={D.designSettings}
+              catalog={D.underCatalog}
               name={inside?.name ?? 'the site'}
               {renames}
-              saved={!!edits.designs?.[designer.id]}
+              saved={!!edits.designs?.[D.designer.id]}
               sprites={edits.sprites ?? {}}
               picture={assetUrl}
               onRename={rename}
-              onSave={saveDesign}
-              onReset={resetDesign}
-              onProblem={showProblem}
+              onSave={D.saveDesign}
+              onReset={D.resetDesign}
+              onProblem={D.showProblem}
               held={S.held}
               onLinks={L.canLink ? L.openLinks : undefined}
             />
@@ -3777,7 +3663,7 @@
     </div>
   {/if}
   {#if (scatterOn || groundOn || P.placeArmed) && S.ring}<div class="ring" style="left: {S.ring.x - S.ring.r}px; top: {S.ring.y - S.ring.r}px; width: {S.ring.r * 2}px; height: {S.ring.r * 2}px" class:erase={scatterOn && S.scatter.mode === 'erase'}></div>{/if}
-  {#if (scatterOn || groundOn || designer) && S.chip}<div class="hand-chip" style="left: {S.chip.x}px; top: {S.chip.y}px">{S.chip.text}</div>{/if}
+  {#if (scatterOn || groundOn || D.designer) && S.chip}<div class="hand-chip" style="left: {S.chip.x}px; top: {S.chip.y}px">{S.chip.text}</div>{/if}
   {#if S.placeBar && S.placeBarAt}
     {@const p = S.placer()}
     {#if p}
@@ -3785,7 +3671,7 @@
         at={S.placeBarAt}
         holding={S.placeBar.holding}
         turns={S.placeBar.turns}
-        quarter={p === designer}
+        quarter={p === D.designer}
         onTurn={(d) => p.turn(d, false)}
         onAuto={() => p.turnReset()}
         onPut={() => p.confirm()}
