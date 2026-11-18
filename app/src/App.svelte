@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
+  import type { BenchResult } from './dev/bench';
   import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, ChangedFences, RemovedRoad, SettlementFacts, TownEdit, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
   import { withCut, withFence } from './editor/select';
   import SketchPanel from './editor/SketchPanel.svelte';
@@ -129,61 +129,26 @@
   function setNorthUp(on: boolean) {
     northUp = view.northUp = on;
   }
-  let places = $state(readPlaces());
-  let seaLanes = $state(readSeaLanes());
-  let hexesOn = $state(readHexes());
+  let places = $state(stored('map.places') !== '0');
+  let seaLanes = $state(stored('map.seaLanes') !== '0');
+  let hexesOn = $state(stored('map.hexes') === '1');
 
   /** Business pins on or off, as this viewer left them (on at first). */
-  function readPlaces(): boolean {
-    try {
-      return localStorage.getItem('map.places') !== '0';
-    } catch {
-      return true;
-    }
-  }
-
   function setPlaces(on: boolean) {
     places = on;
-    try {
-      localStorage.setItem('map.places', on ? '1' : '0');
-    } catch {
-      // Private mode: the choice just isn't remembered.
-    }
+    store('map.places', on ? '1' : '0');
   }
 
   /** Sea lanes on or off, as this viewer left them (on at first). */
-  function readSeaLanes(): boolean {
-    try {
-      return localStorage.getItem('map.seaLanes') !== '0';
-    } catch {
-      return true;
-    }
-  }
-
   function setSeaLanes(on: boolean) {
     seaLanes = on;
-    try {
-      localStorage.setItem('map.seaLanes', on ? '1' : '0');
-    } catch {
-      // Private mode: the choice just isn't remembered.
-    }
-  }
-  /** The hex grid on or off, as this viewer left it (off at first). */
-  function readHexes(): boolean {
-    try {
-      return localStorage.getItem('map.hexes') === '1';
-    } catch {
-      return false;
-    }
+    store('map.seaLanes', on ? '1' : '0');
   }
 
+  /** The hex grid on or off, as this viewer left it (off at first). */
   function setHexes(on: boolean) {
     hexesOn = on;
-    try {
-      localStorage.setItem('map.hexes', on ? '1' : '0');
-    } catch {
-      // Private mode: the choice just isn't remembered.
-    }
+    store('map.hexes', on ? '1' : '0');
   }
 
   /** The world's hex grid set anew (null: back to the default), an undoable change. */
@@ -1462,7 +1427,6 @@
   const buildOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'build');
   const townOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'town');
   const groundOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'ground');
-  const notebookOn = $derived(shell.section === 'notes');
   /** Sites underground can be designed, but not while playing. */
   const canDesign = $derived(!!inside && /^[ub]:/.test(inside.id) && !playOn);
   /** Objects inside: where Rooms would take the user, if anywhere. */
@@ -1608,11 +1572,6 @@
     if (hit?.kind === 'building') selection = { kind: 'building', hit };
     else if (hit?.kind === 'district') selection = { kind: 'district', hit };
     else toast('Nothing more to show on it');
-  }
-
-  /** A tab's button: open it, or shut the panel if that tab is showing. */
-  function flip(s: Exclude<Section, 'play'>, tab: string) {
-    go(shell.section === s && shell.tabs[s] === tab ? null : s, tab);
   }
 
   /** Ask before work would be dropped (or a world remade); `proceed` carries on once it is dealt
@@ -3786,6 +3745,7 @@
     benchRunning = true;
     bench = null;
     try {
+      const { runBench } = await import('./dev/bench');
       bench = await runBench(view, undefined, $state.snapshot(world) as WorldFile);
     } finally {
       benchRunning = false;
@@ -3847,26 +3807,27 @@
       const own = !!w.edits && ownLinks().includes(editsStamp(w.edits));
       if (own) w = { gen_version: w.gen_version, seed: w.seed, params: w.params, ...(w.sketch ? { sketch: w.sketch } : {}) };
       // (?bench=city: the acceptance world, whatever the address names.)
-      const city = params.get('bench') === 'city' ? await cityWorld() : null;
+      const city = params.get('bench') === 'city' ? await (await import('./dev/bench')).cityWorld() : null;
       if (city) w = city;
       else if (params.get('bench') === 'city') toast('The acceptance world is served by the dev server only');
       await generate(w, { from: w.edits ? 'link' : null });
+      const benchMod = params.has('bench') && params.get('bench') !== 'heavy' ? await import('./dev/bench') : null;
       if (params.get('bench') === 'play') {
         go('play');
         benchRunning = true;
-        bench = await runPlayBench(view, play);
+        bench = await benchMod!.runPlayBench(view, play);
         benchRunning = false;
       } else if (params.get('bench') === 'sewer') {
         benchRunning = true;
-        bench = await runSewerBench(view);
+        bench = await benchMod!.runSewerBench(view);
         benchRunning = false;
       } else if (params.get('bench') === 'dungeon') {
         benchRunning = true;
-        bench = await runDungeonBench(view);
+        bench = await benchMod!.runDungeonBench(view);
         benchRunning = false;
       } else if (params.get('bench') === 'edit') {
         benchRunning = true;
-        bench = await runEditBench(
+        bench = await benchMod!.runEditBench(
           view,
           () => edits,
           (e) => applyEdits(e, { tool: 'sync', label: 'Bench edit' }, 'user', { record: false, send: false }),
@@ -3874,7 +3835,7 @@
         benchRunning = false;
       } else if (params.get('bench') === 'city' && city) {
         benchRunning = true;
-        bench = await runCityBench(view, city);
+        bench = await benchMod!.runCityBench(view, city);
         benchRunning = false;
       } else if (params.get('bench') === 'heavy') {
         benchRunning = true;
