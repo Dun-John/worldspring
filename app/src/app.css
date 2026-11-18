@@ -188,6 +188,47 @@ body {
   color: var(--accent-ink);
 }
 
+/* A strip of a few things to open (Edit's groups): equal widths, each its icon over its word (a
+ * long word may take two lines), the one shown underlined. */
+.ws-strip {
+  display: flex;
+  gap: 2px;
+}
+.ws-strip > button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: var(--tap);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px 1px;
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1.15;
+  text-align: center;
+  color: var(--ink-2);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.ws-strip > button:hover:not(:disabled) {
+  color: var(--ink);
+  background: rgba(226, 213, 176, 0.5);
+}
+.ws-strip > button[aria-selected='true'],
+.ws-strip > button.on {
+  color: var(--ink);
+  font-weight: bold;
+  border-bottom-color: var(--accent);
+}
+.ws-strip > button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .ws-input {
   box-sizing: border-box;
   min-width: 0;

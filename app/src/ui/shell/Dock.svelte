@@ -40,9 +40,11 @@
     ask?: Snippet;
     /** Settlement changes waiting for a remake: how many, and the one button that makes them. */
     waiting?: { n: number; run: () => void; busy?: boolean; title?: string } | null;
+    /** In place of the tabs (`?ui=new`: Edit's groups and tools), told when only the strip shows. */
+    strip?: Snippet<[boolean]>;
     children: Snippet<[boolean]>;
   }
-  let { title, icon, tabs, tab, onTab, onClose, back, actions, ask, waiting = null, children }: Props = $props();
+  let { title, icon, tabs, tab, onTab, onClose, back, actions, ask, waiting = null, strip, children }: Props = $props();
 
   const peek = $derived(shell.phone ? shell.snap === 'peek' : shell.collapsed);
 
@@ -131,7 +133,9 @@
       {/if}
       <button class="ws-icon-btn" onclick={onClose} aria-label="Close {title}" title="Close"><Icon name="x" /></button>
     </header>
-    {#if tabs?.length}
+    {#if strip}
+      {@render strip(peek)}
+    {:else if tabs?.length}
       <!-- Five tabs or more: only the open one keeps its icon, so every label fits a narrow dock. -->
       <div class="tabs" class:many={tabs.length >= 5} role="tablist">
         {#each tabs as t (t.key)}

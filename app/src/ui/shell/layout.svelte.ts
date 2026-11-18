@@ -1,6 +1,11 @@
 // What the map's window has open, and the layout the screen calls for. UI state only: the
 // world's modes (playing, sketching, designing, tools armed) stay in App. Phones in portrait get
 // a bottom sheet and a tab bar; everything else (short landscape phones too) a dock on the right.
+import { EDIT_TOOLS, type GroupKey, type ToolKey } from './editTools';
+
+/** `?ui=new`: Edit grouped by thing (Roadmap 6 R8), until the user approves it. Every switch on
+ * it is `if (NEW_UI)` or a prop that defaults to the old layout, so taking it out is a grep. */
+export const NEW_UI = typeof location !== 'undefined' && new URLSearchParams(location.search).get('ui') === 'new';
 export type Section = 'world' | 'edit' | 'notes' | 'play';
 export type WorldTab = 'generate' | 'sketch' | 'library';
 export type EditTab = 'sites' | 'build' | 'town' | 'ground' | 'scatter' | 'design';
@@ -80,6 +85,12 @@ class Shell {
    * window's edges while there is none), for what floats over the map beside it. */
   sheetTop = $state(Infinity);
   dockLeft = $state(Infinity);
+  /** `?ui=new`: the Edit group whose tools the tool row shows (the open tool's, or the last one picked). */
+  group = $state<GroupKey>('settlements');
+  /** `?ui=new`: the Edit tool open (App's, worked out from the panels), else null. */
+  toolNow: () => ToolKey | null = () => null;
+  /** Tools used since their hints were last shown (the rest are read from storage). */
+  private used = $state<Partial<Record<ToolKey, boolean>>>({});
 
   constructor() {
     if (typeof window === 'undefined') return;
@@ -95,6 +106,27 @@ class Shell {
     apply();
     phone.addEventListener('change', apply);
     short.addEventListener('change', apply);
+  }
+
+  /** The tool has made a change: its one-line hint is shown no more (only as its tooltip). */
+  isUsed(t: ToolKey): boolean {
+    return this.used[t] ?? stored(`ui.used.${t}`) === '1';
+  }
+  markUsed(t: ToolKey) {
+    if (this.isUsed(t)) return;
+    store(`ui.used.${t}`, '1');
+    this.used = { ...this.used, [t]: true };
+  }
+  /** Every tool's hint shown again (the ☰ menu). */
+  hintsAgain() {
+    for (const t of EDIT_TOOLS) {
+      try {
+        localStorage.removeItem(`ui.used.${t.key}`);
+      } catch {
+        // (No storage: the hints come back for this visit.)
+      }
+    }
+    this.used = Object.fromEntries(EDIT_TOOLS.map((t) => [t.key, false]));
   }
 
   setStats(on: boolean) {
