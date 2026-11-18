@@ -101,18 +101,6 @@ export function hexAt(f: HexFrame, x: number, y: number): [number, number] {
   return [i + 1, j + 1];
 }
 
-/** The hex's six corners (world ft), clockwise on screen from the east one (flat) or the
- * north-east one (pointy). */
-export function hexCorners(f: HexFrame, col: number, row: number): [number, number][] {
-  const [cx, cy] = hexCentre(f, col, row);
-  const out: [number, number][] = [];
-  for (let k = 0; k < 6; k++) {
-    const a = (Math.PI / 3) * k - (f.flat ? 0 : Math.PI / 6);
-    out.push([cx + f.R * Math.cos(a), cy + f.R * Math.sin(a)]);
-  }
-  return out;
-}
-
 const AXIAL_DIRS: [number, number][] = [
   [1, 0],
   [1, -1],

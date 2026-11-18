@@ -8,7 +8,7 @@ import { BufferImageSource, Container, Graphics, RenderTexture, Sprite, Text, Te
 import type { MapView } from '../render/MapView';
 import { getImage } from './session';
 import { FOG_N, roleOf, settingsOf, type GridSettings, type Shape, type Token } from './state';
-import { bitAt, formatDistance, shapeLabel, shapeOutline, type Bitmap } from './vision';
+import { bitAt, shapeLabel, shapeOutline, type Bitmap } from './vision';
 import type { PlayController } from './controller';
 
 /** Local drawing units per square (tokens, shapes, rulers). */

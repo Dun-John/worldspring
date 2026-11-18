@@ -1,5 +1,4 @@
 import type { Graphics } from 'pixi.js';
-import { PLATFORMS } from '../../gen/protocol';
 import type { InteriorItem } from '../../gen/protocol';
 import { BRASS, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, lit, litEdges, oval, patch, planks, quad, ring, shade } from './common';
 import { GILT, MARBLE, candle } from './sacred';
@@ -946,7 +945,7 @@ export function musiciansCorner(g: Graphics, f: InteriorItem, light: Light, v: n
  * the middle with its ladle and cups round it, a cake with a slice cut from it, a plate of jam tarts, grapes,
  * candles. */
 export function refreshmentTable(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
-  const { along, len, rect, at } = frame(f);
+  const { len, rect, at } = frame(f);
   const cloth = [
     [0xc8a8a0, 0xecd4cc, 0xf6e8e0, 0xc8586a],
     [0xb8bcc8, 0xe0e4ec, 0xf2f4f6, 0x4f72a8],

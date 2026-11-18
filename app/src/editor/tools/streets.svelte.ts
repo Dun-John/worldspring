@@ -8,8 +8,6 @@ import { type PointerTool } from '../../render/MapView';
 import { shell } from '../../ui/shell/layout.svelte';
 import { TownTool, type TownMode } from '../town';
 import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, isDrawMode, pickIn, type StreetPick } from '../streets';
-import { type Change } from '../../sync/mapd';
-import { describe } from '../../sync/history';
 import { type Selection } from '../../ui/gazetteer';
 
 /** What the Streets tools need from the app. */

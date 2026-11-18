@@ -1475,7 +1475,6 @@ export interface SeaLane {
 export const TILE_N = 256;
 export const TILE_SAMPLES = TILE_N + 1;
 export const HALO = 4;
-export const PADDED = TILE_SAMPLES + 2 * HALO;
 export const KIND_TERRAIN = 1;
 export const KIND_BATTLEMAP = 2;
 

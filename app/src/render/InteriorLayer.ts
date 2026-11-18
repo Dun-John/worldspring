@@ -10,7 +10,7 @@ import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
 import { ballistaProp } from './fortProps';
-import { columnTones, drawFurniture, drawUnderProp, IN_RING, stoneColumn, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
+import { columnTones, drawFurniture, drawUnderProp, IN_RING, stoneColumn, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, UNDER_DRAWN, VARIED, type Fit } from './furniture';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';

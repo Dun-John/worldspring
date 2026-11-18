@@ -2,7 +2,7 @@
 // harbours, clearing, Stamp, Row and Plot), the menus' state, the worker ops they call and their
 // undo steps. App keeps `syncTool()` / `go()` and calls `armBuild` / `disarmBuild`.
 import { untrack } from 'svelte';
-import type { BuildingEdit, BuildingFuncs, PieceEdit, Created, Crossing, Edits, Plot, BlockFill, RowRoadAnswer, Tint, Water } from '../../gen/protocol';
+import type { BuildingEdit, BuildingFuncs, PieceEdit, Created, Crossing, Edits, BlockFill, RowRoadAnswer, Tint, Water } from '../../gen/protocol';
 import { TINT_MATERIAL, WHARF_WIDTH } from '../../gen/protocol';
 import { fillColour } from '../streets';
 import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type BuildShape, type Pt } from '../build';
@@ -16,7 +16,6 @@ import { WorksTool, defaultWorks, type WorksSettings } from '../works';
 import type { BuildMode, QuickInfo } from '../../ui/BuildPanel.svelte';
 import { PathTool, StampTool, defaultLasso, defaultRow, defaultStamp, type LassoSettings, type RowSettings, type StampSettings } from '../quick';
 import { newObjectId } from '../scatter';
-import { type Change } from '../../sync/mapd';
 import { hitName, sentence, type BuildingHit } from '../../ui/gazetteer';
 import { existingSite } from '../../world/world';
 

@@ -127,16 +127,6 @@ export function roomBoxes(lv: InteriorLevel, nx: number, ny: number): (Box | nul
   return out;
 }
 
-/** Point inside a convex polygon (wound clockwise on screen), to within `eps`. */
-export function insideConvex(p: Pt, poly: Pt[], eps = 1e-6): boolean {
-  for (let k = 0; k < poly.length; k++) {
-    const a = poly[k];
-    const b = poly[(k + 1) % poly.length];
-    if ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) < -eps) return false;
-  }
-  return true;
-}
-
 /** Polygon `subject` cut to the convex polygon `clip` (Sutherland–Hodgman). */
 export function clipConvex(subject: Pt[], clip: Pt[]): Pt[] {
   let out = subject;

@@ -8,7 +8,6 @@ import type { BarAt, HeldView, Placer } from '../placing';
 import { defaultScatter, ScatterTool, type ScatterSettings } from '../scatter';
 import { shrink } from '../../render/customAtlas';
 import { putAsset } from '../../world/assets';
-import { type Change } from '../../sync/mapd';
 
 /** What the Objects tools need from the app. */
 export interface ObjectsHost {

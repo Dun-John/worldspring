@@ -4,7 +4,7 @@
 // Select's card changes fences through the same calls (`change`, `addGate`).
 import type { Edits, FenceCut, FenceKind } from '../../gen/protocol';
 import { sentence } from '../../ui/gazetteer';
-import { FenceTool, defaultFence, fenceWord, type FenceMode, type Pt } from '../fence';
+import { FenceTool, defaultFence, fenceWord, type Pt } from '../fence';
 import { withFence } from '../select';
 import type { BuildHost } from './build.svelte';
 

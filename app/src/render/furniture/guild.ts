@@ -349,7 +349,6 @@ export function stableStall(g: Graphics, f: InteriorItem, light: Light, v: numbe
   let back = given;
   if (f.w !== f.h && (f.h > f.w ? back[0] !== 0 : back[1] !== 0)) back = f.h > f.w ? [0, -1] : [-1, 0];
   const { along, rect, at } = frame(f, back);
-  const { U, S } = steps(at);
   const [W, D] = back[1] !== 0 ? [f.w, f.h] : [f.h, f.w];
   const k = D / 2;
   // Straw over the floor, fading at its edge, strands in it.

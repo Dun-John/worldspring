@@ -398,37 +398,6 @@ export function rock(g: Graphics, x: number, y: number, s: number, t: readonly n
   }
 }
 
-/** A crystal shard from (x, y) out along `a`: a kite split down its spine, its half toward the light paler,
- * a glint at the tip. */
-function shard(g: Graphics, x: number, y: number, a: number, len: number, w: number, t: readonly number[], line: number, light: Light) {
-  const [c, s] = [Math.cos(a), Math.sin(a)];
-  const tip = [x + c * len, y + s * len];
-  const l = [x + c * len * 0.35 - s * w, y + s * len * 0.35 + c * w];
-  const r = [x + c * len * 0.35 + s * w, y + s * len * 0.35 - c * w];
-  const base = [x - c * w * 0.4, y - s * w * 0.4];
-  g.poly([...base, ...l, ...tip, ...r]).fill(t[0]).stroke({ width: LINE, color: line, join: 'round' });
-  const litSide = -s * light[0] + c * light[1] > 0 ? l : r;
-  g.poly([...base, ...litSide, ...tip]).fill(t[2]);
-  g.moveTo(base[0], base[1]).lineTo(tip[0], tip[1]).stroke({ width: 0.014, color: t[1] });
-  g.circle(tip[0] - c * len * 0.12, tip[1] - s * len * 0.12, w * 0.25).fill({ color: t[3], alpha: 0.9 });
-}
-
-/** A cluster of shards round a point, shaded ones first, a soft glow round it. */
-function shards(g: Graphics, cx: number, cy: number, r: number, n: number, t: readonly number[], line: number, glow: number, light: Light, rnd: () => number) {
-  for (const [k, a] of [
-    [1.25, 0.08],
-    [0.9, 0.1],
-  ]) {
-    g.circle(cx, cy, r * k).fill({ color: glow, alpha: a });
-  }
-  const ph = rnd() * Math.PI * 2;
-  const parts: [number, number, number][] = [];
-  for (let i = 0; i < n; i++) parts.push([ph + ((i + (rnd() - 0.5) * 0.6) / n) * Math.PI * 2, r * (0.6 + 0.35 * rnd()), r * (0.18 + 0.06 * rnd())]);
-  parts.sort((p, q) => -(Math.cos(p[0]) * light[0] + Math.sin(p[0]) * light[1]) + (Math.cos(q[0]) * light[0] + Math.sin(q[0]) * light[1]));
-  for (const [a, len, w] of parts) shard(g, cx + Math.cos(a) * r * 0.08, cy + Math.sin(a) * r * 0.08, a, len, w, t, line, light);
-  for (let i = 0; i < 3; i++) shard(g, cx, cy, ph + i * 2.1 + 0.5, r * 0.4, r * 0.15, t.map((c) => shade(c, 1.08)), line, light);
-}
-
 /** Daylight through a drain grate in the street overhead (`under::drain_grates`), on a sewer's floor: a soft warm
  * pool in two flat steps, brightest where the grate's square of light lands, its bars faintly across it. No glow:
  * it lies on the floor like a painted patch. `run`: the way the tunnel runs (the street's way, which the grate follows). */
