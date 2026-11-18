@@ -90,7 +90,7 @@ export interface ToolState {
   linkOn: boolean;
 }
 
-/** The tool the open panel is (Build's Clear, the old layout's, counts as Select). */
+/** The tool the open panel is. */
 export function toolOf(s: ToolState): ToolKey {
   switch (s.tab) {
     case 'sites':
