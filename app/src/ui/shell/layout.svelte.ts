@@ -71,7 +71,7 @@ class Shell {
   tabs = $state<Tabs>({ world: 'generate', edit: 'sites', notes: 'npcs' });
   /** Desktop: the dock folded down to its header and tool strip. */
   collapsed = $state(false);
-  snap = $state<Snap>('half');
+  snap = $state<Snap>(NEW_UI ? 'peek' : 'half');
   /** Phones: the sheet shows the selected place's card over the open panel. */
   card = $state(false);
   menu = $state<'main' | 'layers' | null>(null);

@@ -7,7 +7,7 @@
   import type { FenceKind, Thing } from '../gen/protocol';
   import Icon from './Icon.svelte';
   import ToolPanel from './build/ToolPanel.svelte';
-  import { NEW_UI } from './shell/layout.svelte';
+  import { NEW_UI, shell } from './shell/layout.svelte';
 
   interface Props {
     sel: SelectTools;
@@ -84,11 +84,12 @@
 {/snippet}
 
 <!-- (`?ui=new`: the card is not folded away; the strip's line says what to do.) -->
-<ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}} hint={NEW_UI ? undefined : hint} {peekHint} more={NEW_UI ? undefined : card}>
-  {#if NEW_UI && !peek}
-    {@render drag()}
-    {#if sel.area && !sel.things.length}<div class="ws-hint">{members ? 'Nothing there can be part of a town.' : 'Nothing there to choose.'}</div>{/if}
+<ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}} hint={NEW_UI ? undefined : hint} peekHint={NEW_UI ? undefined : peekHint} more={NEW_UI ? undefined : card}>
+  <!-- (`?ui=new`: the card first, what to act on; on a phone it shows with the sheet at its lowest.) -->
+  {#if NEW_UI && (!peek || shell.phone)}
     {@render card()}
+    {#if sel.area && !sel.things.length}<div class="ws-hint">{members ? 'Nothing there can be part of a town.' : 'Nothing there to choose.'}</div>{/if}
+    {#if !peek}{@render drag()}{/if}
   {/if}
 </ToolPanel>
 
@@ -101,7 +102,7 @@
             <span class="grow">{c.words}</span>
             {#if c.can < c.n}<span class="ws-muted">{c.can ? `${c.can} can be removed` : "can't be removed yet"}</span>{/if}
             <!-- (`?ui=new`: each kind's own Delete, in place of Build › Clear.) -->
-            {#if NEW_UI && c.can && sel.counts.length > 1}<button class="ws-btn quiet danger" disabled={sel.busy} onclick={() => sel.removeKind(c.kind)} title="Delete {countOf(c.kind, c.can)}" aria-label="Delete {countOf(c.kind, c.can)}"><Icon name="trash" size={16} /></button>{/if}
+            {#if NEW_UI && c.can && sel.counts.length > 1}<button class="ws-btn quiet danger kind-del" disabled={sel.busy} onclick={() => sel.removeKind(c.kind)} title="Delete {countOf(c.kind, c.can)}" aria-label="Delete {countOf(c.kind, c.can)}"><Icon name="trash" size={16} /></button>{/if}
           </div>
         {/each}
       </div>
@@ -221,6 +222,13 @@
     flex-direction: column;
     gap: 6px;
     padding: 0 8px 8px;
+  }
+  /* The per-kind Delete: the ordinary icon colour and a hit area you can see. */
+  .kind-del {
+    min-width: var(--tap);
+    color: var(--ink);
+    background: var(--btn);
+    border: 1px solid var(--line);
   }
   .kind-pick {
     width: auto;

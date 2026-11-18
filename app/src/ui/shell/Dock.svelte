@@ -117,6 +117,7 @@
   aria-label={title}
   bind:clientHeight={sheetH}
   bind:this={el}
+  style:--handle-pad={NEW_UI ? '8px 0 2px' : undefined}
   style:transform={drag && shell.phone ? `translateY(${Math.max(-120, drag.dy)}px)` : undefined}
 >
   <div class="top" role="presentation" onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={() => (drag = null)}>
@@ -124,7 +125,7 @@
     <header>
       {#if back}<button class="ws-btn quiet back" onclick={back.go} title="Back to {back.label}"><Icon name="chevron-left" size={16} />{back.label}</button>{/if}
       <Icon name={icon} />
-      <b class="title">{title}</b>
+      <b class="title" class:wrap={NEW_UI}>{title}</b>
       {#if actions}{@render actions()}{/if}
       {#if !shell.phone}
         <button class="ws-icon-btn" onclick={() => (shell.collapsed = !shell.collapsed)} aria-label={peek ? 'Unfold' : 'Fold'} title={peek ? 'Unfold the panel' : 'Fold the panel down to its tools'}>
@@ -235,6 +236,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .title.wrap {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
   }
   .tabs {
     display: flex;
@@ -348,7 +356,7 @@
     display: flex;
     justify-content: center;
     width: 100%;
-    padding: 12px 0 8px;
+    padding: var(--handle-pad, 12px 0 8px);
     border: none;
     background: none;
     cursor: grab;

@@ -1923,6 +1923,12 @@
     designer = d;
     view.designing = id;
     syncTool();
+    // `?ui=new`, phones: the site sits in the part of the map above the sheet, not under it.
+    if (NEW_UI && shell.phone) {
+      await new Promise((r) => setTimeout(r, 250));
+      const sheet = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sheet-h')) || 0;
+      if (sheet > 0) view.flyTo({ cx: view.cam.cx, cy: view.cam.cy + sheet / 2 / 2 ** view.cam.zoom, zoom: view.cam.zoom });
+    }
   }
 
   const L = linkTools({
@@ -4081,7 +4087,7 @@
     {/snippet}
     <Dock
       waiting={waitBar}
-      title={NEW_UI && editTool ? TOOL[editTool].label : 'Edit'}
+      title={NEW_UI && editTool && editTool !== 'select' ? TOOL[editTool].label : 'Edit'}
       icon="pencil"
       strip={NEW_UI ? editStrip : undefined}
       actions={NEW_UI ? selectButton : undefined}
