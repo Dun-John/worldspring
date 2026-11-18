@@ -8,7 +8,8 @@ import type { Change } from '../../sync/mapd';
 import { keepPlaces, shiftLevels } from '../../sync/ops';
 import type { Selection } from '../../ui/gazetteer';
 import { shell } from '../../ui/shell/layout.svelte';
-import { defaultDesign, SiteDesigner, type DesignSettings } from '../site/designer';
+import type { SiteDesigner } from '../site/designer';
+import { defaultDesign, type DesignSettings } from '../site/settings';
 import { belowGround } from '../site/model';
 import type { BuildTools } from './build.svelte';
 import type { ObjectsTools } from './objects.svelte';
@@ -42,10 +43,13 @@ export function designTools(host: DesignHost) {
   const designBlocked = $derived((void designVersion, !!designer?.blocking.length));
   let designSettings = $state<DesignSettings>(defaultDesign());
   let underCatalog = $state.raw<UnderCatalog | null>(null);
+  /** The designer's code, loaded the first time it opens (its own chunk). */
+  let designerCode: typeof import('../site/designer') | null = null;
   async function openDesigner() {
     const id = host.inside?.id;
     if (!id || !/^[ub]:/.test(id) || designer) return;
     if (!underCatalog) underCatalog = await host.view.gen.underCatalog();
+    const { SiteDesigner } = designerCode ?? (designerCode = await import('../site/designer'));
     const d = new SiteDesigner(host.view, id, {
       settings: () => designSettings,
       catalog: () => underCatalog,
