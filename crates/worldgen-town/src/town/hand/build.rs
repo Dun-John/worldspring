@@ -148,9 +148,9 @@ fn wharf_obstacle(w: &crate::world::Wharf, b: &[f64; 4]) -> bool {
     w.pts.len() >= 2 && box_meets(&w.pts, 0.5 * w.width + 4.0, b)
 }
 
-/// Layout `index` as its hand records lay it out, if it has a header (`base_layout`).
-pub(in crate::town) fn built(world: &World, t0: &T0, index: usize) -> Option<Rc<Layout>> {
-    let fp = fingerprint(world, t0, index)?;
+/// Layout `index` as its hand records lay it out, if it has a header (`base_layout`; `fp`: its
+/// `fingerprint`).
+pub(in crate::town) fn built(world: &World, t0: &T0, index: usize, fp: u64) -> Option<Rc<Layout>> {
     let key = index as u32;
     if let Some(l) = BUILT.with(|c| c.borrow().get(&key).filter(|e| e.0 == fp).map(|e| e.1.clone())) {
         return Some(l);

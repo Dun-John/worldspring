@@ -346,15 +346,14 @@ pub fn fingerprint(world: &World, t0: &T0, index: usize) -> Option<u64> {
     edit_of(world, t0, index).map(|e| hash_in(world, t0, index, e))
 }
 
-/// Layout `index` as its town edit lays it out, if one applies.
-pub(super) fn edited(world: &World, t0: &T0, index: usize) -> Option<Rc<Layout>> {
-    edit_of(world, t0, index).map(|e| with_edit(world, t0, index, e))
-}
-
 /// Town `index` laid out with edit `e` (whatever `Edits.towns` holds: a change tried first).
 pub fn with_edit(world: &World, t0: &T0, index: usize, e: &TownEdit) -> Rc<Layout> {
+    with_edit_fp(world, t0, index, e, hash_in(world, t0, index, e))
+}
+
+/// `with_edit`, its hash (`hash_in`) at hand.
+pub(super) fn with_edit_fp(world: &World, t0: &T0, index: usize, e: &TownEdit, fp: u64) -> Rc<Layout> {
     let key = index as u32;
-    let fp = hash_in(world, t0, index, e);
     if let Some(l) = TOWNS.with(|c| c.borrow().get(&key).filter(|x| x.0 == fp).map(|x| x.1.clone())) {
         return l;
     }

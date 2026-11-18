@@ -99,7 +99,7 @@ struct WallDeps {
 
 /// A layout with its buildings as edited (`Edits.buildings`).
 pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
-    let base = base_layout(world, t0, index);
+    let (base, town) = base_layout_fp(world, t0, index);
     // (Roads drawn by hand take the world's own buildings off their band: a settlement's, not a
     // town laid out by hand's nor a building drawn by hand.)
     let roads = if world.file.edits.paths.is_empty() || !is_settlement(t0, index) || hand::is_hand(world, index) { None } else { crate::paths::fingerprint(&world.file.edits, base.bbox, 0.0) };
@@ -127,7 +127,7 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         Some(a) => hash2(fp, a as i64, 0xadd5),
         None => fp,
     };
-    let fp = match hand::fingerprint(world, t0, index).or_else(|| wards::fingerprint(world, t0, index)) {
+    let fp = match town {
         Some(t) => crate::core::rng::hash2(fp, t as i64, 0x70e5),
         None => fp,
     };
@@ -338,11 +338,31 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
 /// A layout as laid out, before its building edits: as generated, or the town laid out anew by
 /// hand (`Edits.towns`). Building edits are made against it.
 pub fn base_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
+    base_layout_fp(world, t0, index).0
+}
+
+/// `base_layout`, with the hash of what the town is laid out from (`town_fp`), computed once for
+/// both.
+fn base_layout_fp(world: &World, t0: &T0, index: usize) -> (Rc<Layout>, Option<u64>) {
     // (A town laid out by hand: its street graph, `hand::build_hand`.)
-    if let Some(l) = hand::built(world, t0, index) {
-        return l;
+    let hand_fp = hand::fingerprint(world, t0, index);
+    if let Some(l) = hand_fp.and_then(|fp| hand::built(world, t0, index, fp)) {
+        return (l, hand_fp);
     }
-    wards::edited(world, t0, index).unwrap_or_else(|| generated_layout(world, t0, index))
+    // (A town laid out by hand has no ward edit, `wards::edit_of`: one hash or the other.)
+    match wards::edit_of(world, t0, index) {
+        Some(e) => {
+            let fp = wards::hash_in(world, t0, index, e);
+            (wards::with_edit_fp(world, t0, index, e, fp), hand_fp.or(Some(fp)))
+        }
+        None => (generated_layout(world, t0, index), hand_fp),
+    }
+}
+
+/// A hash of what town `index` is laid out from: its hand records (`hand::fingerprint`) or its
+/// town edit (`wards::fingerprint`), if any.
+fn town_fp(world: &World, t0: &T0, index: usize) -> Option<u64> {
+    hand::fingerprint(world, t0, index).or_else(|| wards::fingerprint(world, t0, index))
 }
 
 /// A layout as generated (no edits). A wall drawn by hand is the exception: its gates follow the
@@ -452,7 +472,7 @@ fn towns_fp(world: &World, t0: &T0, reached: &[u32]) -> u64 {
     let mut h = 0;
     for &i in reached {
         // (A town laid out by hand by all it is built from.)
-        if let Some(fp) = hand::fingerprint(world, t0, i as usize).or_else(|| wards::fingerprint(world, t0, i as usize)) {
+        if let Some(fp) = town_fp(world, t0, i as usize) {
             h = hash2(h ^ fp, i as i64, 0x3a11);
         }
     }
