@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::{
-    hash::fnv64,
+    hash::{FastMap, fnv64},
     rng,
     tile::{FT_PER_MILE, WorldGeom},
 };
@@ -1594,17 +1594,26 @@ impl Edits {
         let mut ops = Vec::new();
         for &(field, shape) in EDIT_FIELDS {
             let (ea, eb) = (entries(&a, field, shape), entries(&b, field, shape));
+            // Each side's entries by key, the first of a repeated key kept (as a search would find it).
+            fn by_key(e: &[(String, Value)]) -> FastMap<&str, &Value> {
+                let mut m = FastMap::default();
+                for (k, v) in e {
+                    m.entry(k.as_str()).or_insert(v);
+                }
+                m
+            }
+            let (ma, mb) = (by_key(&ea), by_key(&eb));
             // (A list's entries in list order: an entry appended can only follow the one before it.)
             let keys: Vec<&String> = match shape {
                 Shape::List => {
                     let mut k: Vec<&String> = eb.iter().map(|(k, _)| k).collect();
-                    k.extend(ea.iter().map(|(k, _)| k).filter(|k| !eb.iter().any(|(j, _)| j == *k)));
+                    k.extend(ea.iter().map(|(k, _)| k).filter(|k| !mb.contains_key(k.as_str())));
                     k
                 }
                 _ => ea.iter().chain(&eb).map(|(k, _)| k).collect::<BTreeSet<_>>().into_iter().collect(),
             };
             for key in keys {
-                let (va, vb) = (ea.iter().find(|(k, _)| k == key).map(|e| &e.1), eb.iter().find(|(k, _)| k == key).map(|e| &e.1));
+                let (va, vb) = (ma.get(key.as_str()).copied(), mb.get(key.as_str()).copied());
                 if va == vb {
                     continue;
                 }
