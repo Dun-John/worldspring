@@ -565,7 +565,22 @@ pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
         None => (*generated_layout(world, t0, index)).clone(),
     };
     l.index = 0;
-    crate::core::hash::fnv64(format!("{l:?}").as_bytes())
+    print_of(&l)
+}
+
+/// FNV-1a of a layout's Debug text, streamed through the hasher (the text is megabytes for a city).
+fn print_of(l: &Layout) -> u64 {
+    use std::fmt::Write;
+    struct H(crate::core::hash::Fnv64);
+    impl Write for H {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut h = H(crate::core::hash::Fnv64::default());
+    let _ = write!(h, "{l:?}");
+    h.0.finish()
 }
 
 /// Settlement and site layouts whose reach intersects the rectangle (world ft). Layout index
