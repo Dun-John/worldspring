@@ -1060,6 +1060,63 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     generate_in(world, t0, index, &s, edit, survey)
 }
 
+/// Local → world: every point of the layout moved by the town's centre.
+fn to_world(l: &mut Layout, center: P) {
+    let tw = |p: &mut P| *p = add(*p, center);
+    for b in &mut l.buildings {
+        b.poly.iter_mut().chain(b.parts.iter_mut().flat_map(|p| p.poly.iter_mut())).for_each(tw);
+    }
+    for (pts, _, _) in &mut l.roads {
+        pts.iter_mut().for_each(tw);
+    }
+    for st in &mut l.stairs {
+        st.pts.iter_mut().for_each(tw);
+    }
+    for poly in l.walls.iter_mut().chain(&mut l.bastions).chain(&mut l.streets).chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
+        poly.iter_mut().for_each(tw);
+    }
+    l.towers.iter_mut().chain(&mut l.gates).chain(&mut l.gate_towers).for_each(tw);
+    for poly in &mut l.monuments {
+        poly.iter_mut().for_each(tw);
+    }
+    for q in &mut l.quarters {
+        q.patches.iter_mut().flatten().chain(&mut q.label).for_each(tw);
+    }
+    for c in &mut l.castles {
+        tw(&mut c.0);
+    }
+    for t in &mut l.extra_towers {
+        tw(&mut t.0);
+    }
+    for t in &mut l.square_towers {
+        tw(&mut t.0);
+    }
+    for t in &mut l.tower_forms {
+        tw(&mut t.0);
+    }
+    for m in &mut l.mottes {
+        tw(&mut m.at);
+    }
+    for pk in &mut l.parks {
+        pk.pts.iter_mut().chain([&mut pk.ground.origin]).for_each(tw);
+    }
+    for f in &mut l.forecourts {
+        f.front.iter_mut().chain(&mut f.yard).chain(&mut f.way).for_each(tw);
+    }
+    for (_, g) in &mut l.grounds {
+        g.iter_mut().for_each(tw);
+    }
+    for m in &mut l.moats {
+        m.shift(center);
+    }
+    for c in &mut l.crofts {
+        c.pts.iter_mut().for_each(tw);
+    }
+    if let Some((d, _)) = &mut l.lined {
+        d.iter_mut().for_each(tw);
+    }
+}
+
 /// `generate_with` settlement `s` (layout `index`'s, in the culture it is laid out in).
 fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Option<&crate::world::TownEdit>, survey: Option<&mut Vec<stairs::Profile>>) -> Layout {
     let center = [s.x, s.y];
@@ -1117,60 +1174,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         palace::approach(&site, &mut l, [0.0, 0.0], s.capital, &[], None);
         palace::gardens(&site, &mut l, [0.0, 0.0]);
     }
-    // Local → world.
-    let tw = |p: &mut P| *p = add(*p, center);
-    for b in &mut l.buildings {
-        b.poly.iter_mut().chain(b.parts.iter_mut().flat_map(|p| p.poly.iter_mut())).for_each(tw);
-    }
-    for (pts, _, _) in &mut l.roads {
-        pts.iter_mut().for_each(tw);
-    }
-    for st in &mut l.stairs {
-        st.pts.iter_mut().for_each(tw);
-    }
-    for poly in l.walls.iter_mut().chain(&mut l.bastions).chain(&mut l.streets).chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
-        poly.iter_mut().for_each(tw);
-    }
-    l.towers.iter_mut().chain(&mut l.gates).chain(&mut l.gate_towers).for_each(tw);
-    for poly in &mut l.monuments {
-        poly.iter_mut().for_each(tw);
-    }
-    for q in &mut l.quarters {
-        q.patches.iter_mut().flatten().chain(&mut q.label).for_each(tw);
-    }
-    for c in &mut l.castles {
-        tw(&mut c.0);
-    }
-    for t in &mut l.extra_towers {
-        tw(&mut t.0);
-    }
-    for t in &mut l.square_towers {
-        tw(&mut t.0);
-    }
-    for t in &mut l.tower_forms {
-        tw(&mut t.0);
-    }
-    for m in &mut l.mottes {
-        tw(&mut m.at);
-    }
-    for pk in &mut l.parks {
-        pk.pts.iter_mut().chain([&mut pk.ground.origin]).for_each(tw);
-    }
-    for f in &mut l.forecourts {
-        f.front.iter_mut().chain(&mut f.yard).chain(&mut f.way).for_each(tw);
-    }
-    for (_, g) in &mut l.grounds {
-        g.iter_mut().for_each(tw);
-    }
-    for m in &mut l.moats {
-        m.shift(center);
-    }
-    for c in &mut l.crofts {
-        c.pts.iter_mut().for_each(tw);
-    }
-    if let Some((d, _)) = &mut l.lined {
-        d.iter_mut().for_each(tw);
-    }
+    to_world(&mut l, center);
     // Temples on their lots in pieces (world ft, so that a town laid out anew shapes them alike), a shrine
     // shut in a block's middle moved first to a home with a way out.
     if edit.is_none() {
