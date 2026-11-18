@@ -74,7 +74,7 @@ export const EDIT_TOOLS: EditToolDef[] = [
   { key: 'docks', group: 'roads', label: 'Docks & islets', short: 'Docks & islets', icon: 'waves', kbd: 'H', tab: 'build', mode: 'harbour', hint: 'Quays, piers, breakwaters and islets at the water’s edge.' },
   { key: 'ground', group: 'land', label: 'Ground', short: 'Ground', icon: 'raise', kbd: 'M', tab: 'ground', hint: 'Raise, lower or smooth the battlemap’s ground, or draw a plateau.' },
   { key: 'fences', group: 'land', label: 'Fences & hedges', short: 'Fences', icon: 'wall', kbd: 'F', tab: 'build', mode: 'fence', hint: 'Pick a kind, then drag or click a line; Gate and Erase work on any fence.' },
-  { key: 'trees', group: 'land', label: 'Trees & props', short: 'Trees', icon: 'tree', kbd: 'C', tab: 'scatter', hint: 'Trees, rocks and props: place one, brush many, or erase.' },
+  { key: 'trees', group: 'land', label: 'Props', short: 'Props', icon: 'tree', kbd: 'C', tab: 'scatter', hint: 'Trees, rocks and props: place one, brush many, or erase.' },
   { key: 'rooms', group: 'rooms', label: 'Rooms', short: 'Rooms', icon: 'room', kbd: 'D', tab: 'design', links: false, hint: 'Go into a building, or down into a site, to design its rooms.' },
   { key: 'stairs', group: 'rooms', label: 'Stairs & passages', short: 'Stairs', icon: 'stairs', kbd: 'J', tab: 'design', links: true, hint: 'Join a square below ground to another level or place.' },
 ];

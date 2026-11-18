@@ -13,7 +13,7 @@
 
   const OLD_ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Ground', 'Objects', 'Placing', 'Rooms', 'Play'];
   /** `?ui=new`: the tools' keys, then each tool's own under its name. */
-  const NEW_ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit tools', 'Select', 'Draw a building', 'Drawing', 'Streets', 'Ground', 'Trees & props', 'Placing', 'Rooms', 'Stairs & passages', 'Play'];
+  const NEW_ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit tools', 'Select', 'Draw a building', 'Drawing', 'Streets', 'Ground', 'Props', 'Placing', 'Rooms', 'Stairs & passages', 'Play'];
   const ORDER = NEW_UI ? NEW_ORDER : OLD_ORDER;
   const NEW_NOTES: Record<string, string> = {
     Sketch: 'While sketching',
@@ -23,8 +23,8 @@
     Drawing: 'Draw, Castle & walls, Row, Fill an area, Road, Water, Fences',
     Streets: 'Edit › Settlements › Streets',
     Ground: 'Edit › Land › Ground, on the battlemap',
-    'Trees & props': 'Edit › Land › Trees & props',
-    Placing: 'Trees & props, or Rooms’ furniture: on the piece held, pointed at or chosen',
+    'Props': 'Edit › Land › Props',
+    Placing: 'Props, or Rooms’ furniture: on the piece held, pointed at or chosen',
     Rooms: 'Edit › Rooms, inside a building or site',
     'Stairs & passages': 'Edit › Rooms › Stairs & passages',
     Play: 'While playing, with Play (or no panel) open',

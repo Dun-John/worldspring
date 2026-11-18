@@ -234,10 +234,10 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['W', 'brush', 'Brush'],
     ['E', 'erase', 'Erase'],
   ];
-  for (const [key, m, label] of modes) out.push({ keys: [key], label, group: grp('Objects', 'Trees & props'), when: edit('scatter'), run: () => k.scatterMode(m) });
+  for (const [key, m, label] of modes) out.push({ keys: [key], label, group: grp('Objects', 'Props'), when: edit('scatter'), run: () => k.scatterMode(m) });
   out.push(
-    { keys: [']'], label: 'Bigger (brush: wider)', group: grp('Objects', 'Trees & props'), repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(1) },
-    { keys: ['['], label: 'Smaller (brush: narrower)', group: grp('Objects', 'Trees & props'), repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(-1) },
+    { keys: [']'], label: 'Bigger (brush: wider)', group: grp('Objects', 'Props'), repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(1) },
+    { keys: ['['], label: 'Smaller (brush: narrower)', group: grp('Objects', 'Props'), repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(-1) },
   );
   // Placing: on what the hand shows (the piece held, the one a click would pick up, or the
   // chosen item's ghost); Delete on the piece held, else the one pointed at (also with an item
@@ -308,7 +308,7 @@ function buildModes(k: KeyContext, out: Shortcut[], when: () => boolean) {
 }
 
 /** `?ui=new`: each Edit tool's key opens it, live in Edit while no other binding has the key
- * (Streets, Ground, Trees & props and the designer keep their letters). Again on the tool open:
+ * (Streets, Ground, Props and the designer keep their letters). Again on the tool open:
  * the next kind (Road, Crossing, Docks & islets, Fences), or back (Stairs & passages to the rooms). */
 function openers(k: KeyContext, owners: Shortcut[], inEdit: () => boolean): Shortcut[] {
   const free = (key: string) => () => inEdit() && !owners.some((s) => s.keys.includes(key) && (!s.when || s.when()));
