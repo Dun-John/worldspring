@@ -71,7 +71,7 @@ battlemap zoom.
 - **Trees:** the leafy trees (deciduous, jungle, acacia, willow), bushes and thickets keep the soft overlapping
   round canopy (`canopy()`); conifers, palms and dead trees in the detailed style. Brambles sit between the tall
   grass and the trees. Some old drawings stay by choice (the ruined wall, the outdoor rubble).
-- **Structures** (`render/walls.ts`, `render/bridges.ts`): the stone ramp above, bold ink, soft shadows. Curtain
+- **Structures** (`render/walls.ts` and `render/walls/*`, `render/bridges.ts`): the stone ramp above, bold ink, soft shadows. Curtain
   walls are a flagged walk between two coping bands notched with crenels (merlons as notches in one inked band, never
   separate tabs: those read as a dashed line). Towers are flat fighting tops in a notched coping ring, with flags in
   staggered courses (no crossing lines: a spider's web), a stair hatch and its timber lid, and a banner on gate
