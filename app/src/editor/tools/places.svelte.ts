@@ -14,10 +14,8 @@ import type { PlayState } from '../../play/state';
 import { diffEdits } from '../../sync/ops';
 import { sentence, SETTLEMENT_KINDS, type Selection } from '../../ui/gazetteer';
 import { existingSite, GEN_VERSION } from '../../world/world';
+import type { Waiting } from './pending.svelte';
 
-/** A settlement change waiting for a remake: the pin it is to have, in place of stroke `index`
- * of the world's sketch (null: added), and the settlement it is for. */
-export type Waiting = { id: string; name: string; index: number | null; pin: Stroke };
 /** What the last remake did with the changes (App's `generate` leaves it in `lastFollowed`). */
 type Followed = { edits: Edits; kept: number; parked: number; removed: number };
 /** A settlement a remake takes away (its notes set aside), as App's `generate` takes it. */
