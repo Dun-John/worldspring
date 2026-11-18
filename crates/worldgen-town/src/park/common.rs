@@ -457,6 +457,113 @@ fn dress(
     }
 }
 
+/// A common's trees: clumps with shrubs, glades between, a few specimen trees, a loose belt along
+/// its edge (on the world's grid, each cell with its own rolls; a handful in all where the biome's
+/// trees are few).
+fn plant_trees(
+    p: &Park,
+    key: u64,
+    (trees, shrubs, small, few): (&[Kind], &[Kind], &[Kind], bool),
+    clear: &mut Clear,
+    out: &mut ParkLayout,
+) {
+    let poly = &p.pts;
+    let m = poly.len();
+    // Trees: clumps of four to eight on a jittered grid, glades between, shrubs at their edges, a
+    // few specimen trees in the open; a loose belt along the edge. Where the biome's trees are few,
+    // a handful in all.
+    let pick = |rng: &mut Pcg32, kinds: &[Kind]| kinds[rng.below(kinds.len() as u32) as usize];
+    let mut budget = if few { ((area(poly).abs() / 20000.0) as usize).clamp(1, 4) } else { usize::MAX };
+    let ([x0, y0], [x1, y1]) = bbox_of(poly);
+    // (On the world's grid of clump cells, each with rolls of its own: a corner moved keeps the
+    // clumps away from it.)
+    const CLUMP: f64 = 75.0;
+    let cell = |v: f64| crate::core::floor(v / CLUMP) as i64;
+    for j in cell(y0)..=cell(y1) {
+        for i in cell(x0)..=cell(x1) {
+            let rng = &mut Pcg32::new(hash3(key ^ 0xc1a3, i, j, 7), 41);
+            let at = [(i as f64 + rng.next_f64()) * CLUMP, (j as f64 + rng.next_f64()) * CLUMP];
+            if rng.next_f64() > 0.5 || depth(poly, at) < 14.0 {
+                continue;
+            }
+            let kind = pick(rng, trees);
+            for _ in 0..4 + rng.below(5) {
+                let q = add(at, [rng.range(-14.0, 14.0), rng.range(-14.0, 14.0)]);
+                let r = 0.45 * foot(kind);
+                if budget > 0 && clear.free(q, r, 0.8 * foot(kind)) {
+                    clear.disc(q, r);
+                    out.props.push((q, 0.0, kind, rng.below(8) as u8, rng.range(0.9, 1.2) as f32));
+                    budget -= 1;
+                }
+            }
+            for _ in 0..1 + rng.below(3) {
+                let kind = pick(rng, shrubs);
+                let t = rng.range(0.0, std::f64::consts::TAU);
+                let q = add(at, mul([libm::cos(t), libm::sin(t)], rng.range(15.0, 21.0)));
+                if clear.free(q, foot(kind), 3.0) {
+                    clear.disc(q, foot(kind));
+                    out.props.push((q, rng.range(0.0, std::f64::consts::TAU) as f32, kind, rng.below(4) as u8, 1.0));
+                }
+            }
+            if !small.is_empty() && rng.next_f64() < 0.5 {
+                let kind = pick(rng, small);
+                let q = add(at, [rng.range(-24.0, 24.0), rng.range(-24.0, 24.0)]);
+                if clear.free(q, foot(kind), 3.0) {
+                    clear.disc(q, foot(kind));
+                    out.props.push((q, rng.range(0.0, std::f64::consts::TAU) as f32, kind, rng.below(4) as u8, 1.0));
+                }
+            }
+        }
+    }
+    // A few specimen trees in the open, on the world's grid of 120-ft cells (one in four holds one),
+    // each with rolls of its own.
+    const SPECIMEN: f64 = 120.0;
+    let scell = |v: f64| crate::core::floor(v / SPECIMEN) as i64;
+    for j in scell(y0)..=scell(y1) {
+        for i in scell(x0)..=scell(x1) {
+            let rng = &mut Pcg32::new(hash3(key ^ 0x5be7, i, j, 11), 43);
+            let q = [(i as f64 + rng.next_f64()) * SPECIMEN, (j as f64 + rng.next_f64()) * SPECIMEN];
+            let kind = pick(rng, trees);
+            let r = foot(kind) * 1.25;
+            if rng.next_f64() < 0.25 && budget > 0 && depth(poly, q) >= r && clear.free(q, r + 6.0, 4.0) {
+                clear.disc(q, r);
+                out.props.push((q, 0.0, kind, rng.below(8) as u8, 1.3));
+                budget -= 1;
+            }
+        }
+    }
+    // A loose belt of trees 11 ft in from the edge: where it passes through each 26-ft cell of the
+    // world, at its point nearest the cell's own mark, by the cell's own rolls (a corner moved keeps
+    // the belt's trees elsewhere).
+    let belt = inset(poly, &vec![11.0; m]);
+    if belt.len() >= 3 && !few {
+        let mut pts = belt.clone();
+        pts.push(belt[0]);
+        const BELT: f64 = 26.0;
+        let mark = |c: (i64, i64)| {
+            let h = hash3(key ^ 0xbe17, c.0, c.1, 13);
+            [(c.0 as f64 + 0.15 + 0.7 * unit(h)) * BELT, (c.1 as f64 + 0.15 + 0.7 * unit(h >> 21)) * BELT]
+        };
+        let mut at: std::collections::BTreeMap<(i64, i64), P> = std::collections::BTreeMap::new();
+        for (q, _) in every(&pts, 2.0, 0.0, 0.0) {
+            let c = (crate::core::floor(q[0] / BELT) as i64, crate::core::floor(q[1] / BELT) as i64);
+            let e = at.entry(c).or_insert(q);
+            if dist(q, mark(c)) < dist(*e, mark(c)) {
+                *e = q;
+            }
+        }
+        for (&(ci, cj), &q) in &at {
+            let rng = &mut Pcg32::new(hash3(key ^ 0xbe18, ci, cj, 17), 47);
+            let kind = pick(rng, trees);
+            let r = 0.75 * foot(kind);
+            if rng.next_f64() < 0.3 && clear.free(q, r, 3.0) {
+                clear.disc(q, r);
+                out.props.push((q, 0.0, kind, rng.below(8) as u8, rng.range(0.9, 1.15) as f32));
+            }
+        }
+    }
+}
+
 pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg32) -> ParkLayout {
     let poly = &p.pts;
     let g = &p.ground;
@@ -464,7 +571,6 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
     let mut clear = Clear::new(poly);
     let o = obb(poly);
     let c = centroid(poly);
-    let m = poly.len();
     let size = crate::core::sqrt(area(poly).abs());
     let (trees, shrubs, small, few) = plants(biome);
     out.bench = [0, 1, 1, 3][rng.below(4) as usize];
@@ -664,99 +770,7 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
             }
         }
     }
-    // Trees: clumps of four to eight on a jittered grid, glades between, shrubs at their edges, a
-    // few specimen trees in the open; a loose belt along the edge. Where the biome's trees are few,
-    // a handful in all.
-    let pick = |rng: &mut Pcg32, kinds: &[Kind]| kinds[rng.below(kinds.len() as u32) as usize];
-    let mut budget = if few { ((area(poly).abs() / 20000.0) as usize).clamp(1, 4) } else { usize::MAX };
-    let ([x0, y0], [x1, y1]) = bbox_of(poly);
-    // (On the world's grid of clump cells, each with rolls of its own: a corner moved keeps the
-    // clumps away from it.)
-    const CLUMP: f64 = 75.0;
-    let cell = |v: f64| crate::core::floor(v / CLUMP) as i64;
-    for j in cell(y0)..=cell(y1) {
-        for i in cell(x0)..=cell(x1) {
-            let rng = &mut Pcg32::new(hash3(key ^ 0xc1a3, i, j, 7), 41);
-            let at = [(i as f64 + rng.next_f64()) * CLUMP, (j as f64 + rng.next_f64()) * CLUMP];
-            if rng.next_f64() > 0.5 || depth(poly, at) < 14.0 {
-                continue;
-            }
-            let kind = pick(rng, trees);
-            for _ in 0..4 + rng.below(5) {
-                let q = add(at, [rng.range(-14.0, 14.0), rng.range(-14.0, 14.0)]);
-                let r = 0.45 * foot(kind);
-                if budget > 0 && clear.free(q, r, 0.8 * foot(kind)) {
-                    clear.disc(q, r);
-                    out.props.push((q, 0.0, kind, rng.below(8) as u8, rng.range(0.9, 1.2) as f32));
-                    budget -= 1;
-                }
-            }
-            for _ in 0..1 + rng.below(3) {
-                let kind = pick(rng, shrubs);
-                let t = rng.range(0.0, std::f64::consts::TAU);
-                let q = add(at, mul([libm::cos(t), libm::sin(t)], rng.range(15.0, 21.0)));
-                if clear.free(q, foot(kind), 3.0) {
-                    clear.disc(q, foot(kind));
-                    out.props.push((q, rng.range(0.0, std::f64::consts::TAU) as f32, kind, rng.below(4) as u8, 1.0));
-                }
-            }
-            if !small.is_empty() && rng.next_f64() < 0.5 {
-                let kind = pick(rng, small);
-                let q = add(at, [rng.range(-24.0, 24.0), rng.range(-24.0, 24.0)]);
-                if clear.free(q, foot(kind), 3.0) {
-                    clear.disc(q, foot(kind));
-                    out.props.push((q, rng.range(0.0, std::f64::consts::TAU) as f32, kind, rng.below(4) as u8, 1.0));
-                }
-            }
-        }
-    }
-    // A few specimen trees in the open, on the world's grid of 120-ft cells (one in four holds one),
-    // each with rolls of its own.
-    const SPECIMEN: f64 = 120.0;
-    let scell = |v: f64| crate::core::floor(v / SPECIMEN) as i64;
-    for j in scell(y0)..=scell(y1) {
-        for i in scell(x0)..=scell(x1) {
-            let rng = &mut Pcg32::new(hash3(key ^ 0x5be7, i, j, 11), 43);
-            let q = [(i as f64 + rng.next_f64()) * SPECIMEN, (j as f64 + rng.next_f64()) * SPECIMEN];
-            let kind = pick(rng, trees);
-            let r = foot(kind) * 1.25;
-            if rng.next_f64() < 0.25 && budget > 0 && depth(poly, q) >= r && clear.free(q, r + 6.0, 4.0) {
-                clear.disc(q, r);
-                out.props.push((q, 0.0, kind, rng.below(8) as u8, 1.3));
-                budget -= 1;
-            }
-        }
-    }
-    // A loose belt of trees 11 ft in from the edge: where it passes through each 26-ft cell of the
-    // world, at its point nearest the cell's own mark, by the cell's own rolls (a corner moved keeps
-    // the belt's trees elsewhere).
-    let belt = inset(poly, &vec![11.0; m]);
-    if belt.len() >= 3 && !few {
-        let mut pts = belt.clone();
-        pts.push(belt[0]);
-        const BELT: f64 = 26.0;
-        let mark = |c: (i64, i64)| {
-            let h = hash3(key ^ 0xbe17, c.0, c.1, 13);
-            [(c.0 as f64 + 0.15 + 0.7 * unit(h)) * BELT, (c.1 as f64 + 0.15 + 0.7 * unit(h >> 21)) * BELT]
-        };
-        let mut at: std::collections::BTreeMap<(i64, i64), P> = std::collections::BTreeMap::new();
-        for (q, _) in every(&pts, 2.0, 0.0, 0.0) {
-            let c = (crate::core::floor(q[0] / BELT) as i64, crate::core::floor(q[1] / BELT) as i64);
-            let e = at.entry(c).or_insert(q);
-            if dist(q, mark(c)) < dist(*e, mark(c)) {
-                *e = q;
-            }
-        }
-        for (&(ci, cj), &q) in &at {
-            let rng = &mut Pcg32::new(hash3(key ^ 0xbe18, ci, cj, 17), 47);
-            let kind = pick(rng, trees);
-            let r = 0.75 * foot(kind);
-            if rng.next_f64() < 0.3 && clear.free(q, r, 3.0) {
-                clear.disc(q, r);
-                out.props.push((q, 0.0, kind, rng.below(8) as u8, rng.range(0.9, 1.15) as f32));
-            }
-        }
-    }
+    plant_trees(p, key, (trees, shrubs, small, few), &mut clear, &mut out);
     unseal(poly, &mut out, 0);
     out
 }
