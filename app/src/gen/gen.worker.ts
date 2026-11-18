@@ -3,6 +3,7 @@
 import { chunkTransfer, prepareChunk, type KindTactics } from './battlePrep';
 import init, { Ctx, battlemap_catalog_json, building_funcs_json, under_catalog_json } from './pkg/worldgen_wasm.js';
 import { KIND_BATTLEMAP, type FromGen, type ToGen } from './protocol';
+import type { Ask } from './protocol/ask';
 
 /** Object heights by kind (orders a chunk's objects for drawing). */
 let kinds: KindTactics[] | null = null;
@@ -13,6 +14,58 @@ let wasm: ReturnType<typeof init> | null = null;
 const load = () => (wasm ??= init());
 
 const post = (msg: FromGen, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
+
+type AskOf<K extends Ask['op']> = Extract<Ask, { op: K }>;
+/** One handler per question, each exactly its call into the WASM context (a missing op fails to compile). */
+const ASK: { [K in Ask['op']]: (a: AskOf<K>, c: Ctx) => string } = {
+  query: (a, c) => c.query_json(a.x, a.y),
+  pick: (a, c) => c.pick_json(a.x, a.y, a.radius),
+  search: (a, c) => c.search_json(a.q, a.rect ? new Float64Array(a.rect) : undefined),
+  inview: (a, c) => c.in_view_json(...a.rect),
+  interior: (a, c) => c.interior_json(a.id),
+  place: (a, c) => c.place_json(a.id),
+  names: (a, c) => c.names_json(a.scope),
+  parents: (_a, c) => c.parents_json(),
+  members: (a, c) => c.members_json(a.town, a.add, a.remove),
+  reach: (a, c) => c.reach_json(a.ids, a.within),
+  spot: (a, c) => c.creation_spot_json(a.kind, a.under, a.id, a.x, a.y),
+  bridgelots: (a, c) => c.bridge_lots_json(a.input),
+  islets: (_a, c) => c.islets_json(),
+  islet: (a, c) => c.islet_json(a.key, a.x, a.y, a.radius, a.rise),
+  wharfcheck: (a, c) => c.wharf_check_json(a.wharf, a.lighthouse),
+  building: (a, c) => c.building_spot_json(JSON.stringify(a.poly), a.func, a.id),
+  stamp: (a, c) => c.stamp_json(a.input),
+  row: (a, c) => c.row_json(a.input),
+  parcel: (a, c) => c.parcel_check_json(a.input),
+  funcs: () => building_funcs_json(),
+  bedit: (a, c) => c.building_edit_json(a.id, a.change),
+  bedits: (a, c) => JSON.stringify(a.ids.map((id) => JSON.parse(c.building_edit_json(id, a.change)))),
+  bin: (a, c) => c.buildings_in_json(JSON.stringify(a.poly)),
+  works: (a, c) => c.works_spot_json(JSON.stringify(a.site)),
+  design: (a, c) => c.design_json(a.id, a.design, a.action),
+  undercat: () => under_catalog_json(),
+  townplan: (a, c) => c.town_plan_json(a.layout),
+  townchange: (a, c) => c.town_change_json(a.layout, a.request),
+  streetplan: (a, c) => c.street_plan_json(a.layout),
+  streetchange: (a, c) => c.street_change_json(a.layout, a.request),
+  named: (_a, c) => c.named_json(),
+  under: (a, c) => c.under_search_json(a.q, a.filters),
+  made: (_a, c) => c.made_json(),
+  settlefacts: (a, c) => c.settlement_facts_json(a.id),
+  roadcut: (a, c) => c.road_cut_json(a.input),
+  removedroads: (_a, c) => c.removed_roads_json(),
+  fencechange: (a, c) => c.fence_change_json(a.input),
+  fencesnear: (a, c) => c.fences_near_json(a.x, a.y, a.r, a.limit),
+  changedfences: (_a, c) => c.changed_fences_json(),
+  bridgemarks: (_a, c) => c.bridge_marks_json(),
+  madespot: (a, c) => c.settlement_spot_json(a.kind, a.id, a.x, a.y),
+  setaside: (a, c) => c.set_aside_changed_json(a.old, a.edits),
+  setculture: (a, c) => c.set_culture_json(a.layout, a.culture, a.edits),
+  restoremade: (a, c) => c.restore_made_json(a.id, a.edits),
+  remakeprints: (a, c) => c.remake_prints_json(a.edits, new Uint32Array(a.played)),
+  follow: (a, c) => c.follow_json(a.input),
+  districts: (a, c) => c.districts_json(a.settlement),
+};
 
 self.onmessage = async (e: MessageEvent<ToGen>) => {
   const m = e.data;
@@ -50,100 +103,7 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
       if (!ctx) throw new Error('worker not initialized');
       const [a, c] = [m.ask, ctx];
       // A question that fails is answered with null, so nothing waits on it for ever.
-      const answer = (): string =>
-        a.op === 'query'
-          ? c.query_json(a.x, a.y)
-          : a.op === 'pick'
-            ? c.pick_json(a.x, a.y, a.radius)
-            : a.op === 'search'
-            ? c.search_json(a.q, a.rect ? new Float64Array(a.rect) : undefined)
-            : a.op === 'inview'
-              ? c.in_view_json(...a.rect)
-              : a.op === 'interior'
-                ? c.interior_json(a.id)
-                : a.op === 'place'
-                  ? c.place_json(a.id)
-                  : a.op === 'names'
-                    ? c.names_json(a.scope)
-                    : a.op === 'parents'
-                    ? c.parents_json()
-                    : a.op === 'members'
-                    ? c.members_json(a.town, a.add, a.remove)
-                    : a.op === 'reach'
-                    ? c.reach_json(a.ids, a.within)
-                    : a.op === 'spot'
-                      ? c.creation_spot_json(a.kind, a.under, a.id, a.x, a.y)
-                      : a.op === 'bridgelots'
-                        ? c.bridge_lots_json(a.input)
-                        : a.op === 'islets'
-                          ? c.islets_json()
-                          : a.op === 'islet'
-                          ? c.islet_json(a.key, a.x, a.y, a.radius, a.rise)
-                          : a.op === 'wharfcheck'
-                            ? c.wharf_check_json(a.wharf, a.lighthouse)
-                            : a.op === 'building'
-                        ? c.building_spot_json(JSON.stringify(a.poly), a.func, a.id)
-                        : a.op === 'stamp'
-                        ? c.stamp_json(a.input)
-                        : a.op === 'row'
-                        ? c.row_json(a.input)
-                        : a.op === 'parcel'
-                        ? c.parcel_check_json(a.input)
-                        : a.op === 'funcs'
-                          ? building_funcs_json()
-                          : a.op === 'bedit'
-                          ? c.building_edit_json(a.id, a.change)
-                          : a.op === 'bedits'
-                          ? JSON.stringify(a.ids.map((id) => JSON.parse(c.building_edit_json(id, a.change))))
-                          : a.op === 'bin'
-                          ? c.buildings_in_json(JSON.stringify(a.poly))
-                          : a.op === 'works'
-                          ? c.works_spot_json(JSON.stringify(a.site))
-                          : a.op === 'design'
-                            ? c.design_json(a.id, a.design, a.action)
-                            : a.op === 'undercat'
-                              ? under_catalog_json()
-                              : a.op === 'townplan'
-                                ? c.town_plan_json(a.layout)
-                                : a.op === 'townchange'
-                                  ? c.town_change_json(a.layout, a.request)
-                                  : a.op === 'streetplan'
-                                  ? c.street_plan_json(a.layout)
-                                  : a.op === 'streetchange'
-                                  ? c.street_change_json(a.layout, a.request)
-                                  : a.op === 'named'
-                                    ? c.named_json()
-                                    : a.op === 'under'
-                                    ? c.under_search_json(a.q, a.filters)
-                                    : a.op === 'made'
-                                    ? c.made_json()
-                                    : a.op === 'settlefacts'
-                                    ? c.settlement_facts_json(a.id)
-                                    : a.op === 'roadcut'
-                                    ? c.road_cut_json(a.input)
-                                    : a.op === 'removedroads'
-                                    ? c.removed_roads_json()
-                                    : a.op === 'fencechange'
-                                    ? c.fence_change_json(a.input)
-                                    : a.op === 'fencesnear'
-                                    ? c.fences_near_json(a.x, a.y, a.r, a.limit)
-                                    : a.op === 'changedfences'
-                                    ? c.changed_fences_json()
-                                    : a.op === 'bridgemarks'
-                                    ? c.bridge_marks_json()
-                                    : a.op === 'madespot'
-                                      ? c.settlement_spot_json(a.kind, a.id, a.x, a.y)
-                                      : a.op === 'setaside'
-                                        ? c.set_aside_changed_json(a.old, a.edits)
-                                        : a.op === 'setculture'
-                                        ? c.set_culture_json(a.layout, a.culture, a.edits)
-                                        : a.op === 'restoremade'
-                                        ? c.restore_made_json(a.id, a.edits)
-                                        : a.op === 'remakeprints'
-                                          ? c.remake_prints_json(a.edits, new Uint32Array(a.played))
-                                          : a.op === 'follow'
-                                            ? c.follow_json(a.input)
-                                            : c.districts_json(a.settlement);
+      const answer = (): string => ASK[a.op](a as never, c);
       let json = 'null';
       try {
         json = answer();
