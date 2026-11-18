@@ -199,6 +199,84 @@ fn lay_pond(
     (hub, pond)
 }
 
+/// A common's paths in from its street sides toward the hub (`wind`, out of the pond and the tier
+/// by `off_pond` and `off_mound`), a big one's walk round first.
+fn ways_in(
+    p: &Park,
+    o: &Obb,
+    c: P,
+    nseed: u64,
+    hub: P,
+    wind: impl Fn(P, P, f64, f64) -> Vec<P>,
+    off_mound: impl Fn(P, f64) -> P,
+    off_pond: impl Fn(P, f64) -> P,
+    rng: &mut Pcg32,
+) -> Vec<Vec<P>> {
+    let poly = &p.pts;
+    let m = poly.len();
+    // Ways in from the street sides only: the middle of the longest (up to four).
+    let mut sides: Vec<(f64, usize)> = (0..m).map(|e| (dist(poly[e], poly[(e + 1) % m]), e)).filter(|s| s.0 >= 40.0 && p.fronts.get(s.1).copied().unwrap_or(false)).collect();
+    sides.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let ways = (2 + rng.below(3) as usize).min(sides.len());
+    let mut entrances: Vec<P> = Vec::new();
+    for &(_, e) in sides.iter().take(ways) {
+        let at = lerp(poly[e], poly[(e + 1) % m], rng.range(0.35, 0.65));
+        if entrances.iter().all(|q| dist(*q, at) > 60.0) {
+            entrances.push(at);
+        }
+    }
+    let mut paths: Vec<Vec<P>> = Vec::new();
+    // A big one's walk round, a little in from its edge.
+    if o.short >= 220.0 {
+        let belt = inset(poly, &vec![26.0; m]);
+        if belt.len() >= 3 {
+            let mut pts: Vec<P> = Vec::new();
+            for e in 0..belt.len() {
+                let (a, b) = (belt[e], belt[(e + 1) % belt.len()]);
+                let n = (crate::core::ceil(dist(a, b) / 18.0) as usize).max(1);
+                for k in 0..n {
+                    let q = lerp(a, b, k as f64 / n as f64);
+                    let w = fbm(nseed ^ 0xbe17, q[0] / 120.0, q[1] / 120.0, 2, 2.0, 0.5) * 14.0;
+                    let toward = unit_of(sub(c, q));
+                    pts.push(off_mound(off_pond(add(q, mul(toward, w)), 9.0), 10.0));
+                }
+            }
+            pts.push(pts[0]);
+            paths.push(chaikin(&pts, 2));
+        }
+    }
+    // From each way in toward the hub, joining an earlier path where it comes within 40 ft of one
+    // (away from the hub): a Y, not a star.
+    let mut spokes: Vec<usize> = Vec::new();
+    for &e in &entrances {
+        let full = wind(e, hub, (0.35 * dist(e, hub)).min(60.0), 9.0);
+        let mut cut = None;
+        let mut run = 0.0;
+        for k in 1..full.len() {
+            run += dist(full[k - 1], full[k]);
+            if run < 30.0 || dist(full[k], hub) < 50.0 {
+                continue;
+            }
+            let near = spokes.iter().map(|&s| nearest_on(&paths[s], full[k])).filter(|x| x.1 < 40.0).min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((q, _)) = near {
+                cut = Some((k, q));
+                break;
+            }
+        }
+        let pts = match cut {
+            Some((k, q)) => {
+                let mut pts = full[..=k].to_vec();
+                pts.push(q);
+                pts
+            }
+            None => full,
+        };
+        spokes.push(paths.len());
+        paths.push(pts);
+    }
+    paths
+}
+
 pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg32) -> ParkLayout {
     let poly = &p.pts;
     let g = &p.ground;
@@ -301,66 +379,7 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
             .collect();
         chaikin(&pts, 2).iter().map(|&q| off_pond(q, margin - 2.0)).collect()
     };
-    // Ways in from the street sides only: the middle of the longest (up to four).
-    let mut sides: Vec<(f64, usize)> = (0..m).map(|e| (dist(poly[e], poly[(e + 1) % m]), e)).filter(|s| s.0 >= 40.0 && p.fronts.get(s.1).copied().unwrap_or(false)).collect();
-    sides.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-    let ways = (2 + rng.below(3) as usize).min(sides.len());
-    let mut entrances: Vec<P> = Vec::new();
-    for &(_, e) in sides.iter().take(ways) {
-        let at = lerp(poly[e], poly[(e + 1) % m], rng.range(0.35, 0.65));
-        if entrances.iter().all(|q| dist(*q, at) > 60.0) {
-            entrances.push(at);
-        }
-    }
-    let mut paths: Vec<Vec<P>> = Vec::new();
-    // A big one's walk round, a little in from its edge.
-    if o.short >= 220.0 {
-        let belt = inset(poly, &vec![26.0; m]);
-        if belt.len() >= 3 {
-            let mut pts: Vec<P> = Vec::new();
-            for e in 0..belt.len() {
-                let (a, b) = (belt[e], belt[(e + 1) % belt.len()]);
-                let n = (crate::core::ceil(dist(a, b) / 18.0) as usize).max(1);
-                for k in 0..n {
-                    let q = lerp(a, b, k as f64 / n as f64);
-                    let w = fbm(nseed ^ 0xbe17, q[0] / 120.0, q[1] / 120.0, 2, 2.0, 0.5) * 14.0;
-                    let toward = unit_of(sub(c, q));
-                    pts.push(off_mound(off_pond(add(q, mul(toward, w)), 9.0), 10.0));
-                }
-            }
-            pts.push(pts[0]);
-            paths.push(chaikin(&pts, 2));
-        }
-    }
-    // From each way in toward the hub, joining an earlier path where it comes within 40 ft of one
-    // (away from the hub): a Y, not a star.
-    let mut spokes: Vec<usize> = Vec::new();
-    for &e in &entrances {
-        let full = wind(e, hub, (0.35 * dist(e, hub)).min(60.0), 9.0);
-        let mut cut = None;
-        let mut run = 0.0;
-        for k in 1..full.len() {
-            run += dist(full[k - 1], full[k]);
-            if run < 30.0 || dist(full[k], hub) < 50.0 {
-                continue;
-            }
-            let near = spokes.iter().map(|&s| nearest_on(&paths[s], full[k])).filter(|x| x.1 < 40.0).min_by(|a, b| a.1.total_cmp(&b.1));
-            if let Some((q, _)) = near {
-                cut = Some((k, q));
-                break;
-            }
-        }
-        let pts = match cut {
-            Some((k, q)) => {
-                let mut pts = full[..=k].to_vec();
-                pts.push(q);
-                pts
-            }
-            None => full,
-        };
-        spokes.push(paths.len());
-        paths.push(pts);
-    }
+    let mut paths = ways_in(p, &o, c, nseed, hub, wind, off_mound, off_pond, rng);
     // The way up to the stand, coming to its steps (on its south side) from the south.
     if let Some(mc) = stand_at {
         let steps = add(mc, [0.0, foot(stand) + 2.5]);
