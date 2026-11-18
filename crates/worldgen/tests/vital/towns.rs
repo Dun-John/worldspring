@@ -579,7 +579,8 @@ fn hand_town_guarantee() {
 /// blank town laid out from a street plan. The grown city laid out twice the same; battlemaps across it
 /// built, none empty, each square within reach of cover (a cemetery's middle too), no building over a
 /// street (a row's neither) or in the water; the blank town built (its wall gated where its streets run
-/// out), its people counted. Native times are printed.
+/// out), its people counted; and what Roadmap 6 R3-R7 put in it holds (`acceptance_roadmap6`). Native times are
+/// printed.
 #[test]
 fn acceptance_city() {
     use worldgen::battlemap::{self, SQ};
@@ -712,10 +713,270 @@ fn acceptance_city() {
         let (want_streets, want_rows) = if li == city { (500, 20) } else { (10, 0) };
         assert!(checked >= want_streets && rows >= want_rows, "L{li}: {checked} streets, {rows} row buildings checked");
     }
+    // Roadmap 6 R3-R7.
+    let t = std::time::Instant::now();
+    let r6 = acceptance_roadmap6(&mut ex);
+    let t_r6 = t.elapsed().as_secs_f64();
     println!(
-        "acceptance city: T0 {t_t0:.1} s, L{city} laid out in {t_city:.1} s ({} buildings, {across:.2} mi across), L{blank} {} buildings, {chunks} battlemaps in {t_maps:.1} s ({squares} building squares); {:.1} s in all",
+        "acceptance city: T0 {t_t0:.1} s, L{city} laid out in {t_city:.1} s ({} buildings, {across:.2} mi across), L{blank} {} buildings, {chunks} battlemaps in {t_maps:.1} s ({squares} building squares); R3-R7 in {t_r6:.1} s ({r6}); {:.1} s in all",
         a.buildings.len(),
         lb.buildings.len(),
         start.elapsed().as_secs_f64()
     );
+}
+
+/// (R7, as `towncheck streetsin` measures it; `examples/acceptcity.rs` the same) Each main street of a walled
+/// layout: its length, its straight run from the gate (up to the first piece 3 ft or longer over 20 degrees off
+/// the gate's inward normal: across the line best fitting the wall within 50 ft of the gate, turned toward the
+/// walls' mean point) and its first 100 ft's degrees off that normal. None: no wall at the gate.
+fn straight_in(l: &worldgen::town::Layout) -> Vec<Option<(f64, f64, f64)>> {
+    use worldgen::town::geom::{add, dot, lerp, mul, seg_dist, sub};
+    type P = [f64; 2];
+    let segs: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).filter(|s| geom_dist(s.0, s.1) > 1e-6).collect();
+    let pts: Vec<P> = l.walls.iter().flatten().copied().collect();
+    let centre = mul(pts.iter().fold([0.0, 0.0], |a, &p| add(a, p)), 1.0 / pts.len().max(1) as f64);
+    l.streets
+        .iter()
+        .map(|st| {
+            let total: f64 = st.windows(2).map(|w| geom_dist(w[0], w[1])).sum();
+            let g = st[0];
+            let near: Vec<P> = segs
+                .iter()
+                .filter(|(a, b)| seg_dist(g, *a, *b) < 50.0)
+                .flat_map(|&(a, b)| {
+                    let n = (geom_dist(a, b) / 2.0).ceil().max(1.0) as usize;
+                    (0..=n).map(move |j| lerp(a, b, j as f64 / n as f64))
+                })
+                .filter(|p| geom_dist(*p, g) < 50.0)
+                .collect();
+            let m = mul(near.iter().fold([0.0, 0.0], |a, &p| add(a, p)), 1.0 / near.len().max(1) as f64);
+            let (sxx, syy, sxy) = near.iter().fold((0.0, 0.0, 0.0), |c, p| {
+                let d = sub(*p, m);
+                (c.0 + d[0] * d[0], c.1 + d[1] * d[1], c.2 + d[0] * d[1])
+            });
+            if near.len() < 2 || sxx + syy < 1e-6 || total < 1e-6 {
+                return None;
+            }
+            let th = 0.5 * libm::atan2(2.0 * sxy, sxx - syy);
+            let mut nrm = [-libm::sin(th), libm::cos(th)];
+            if dot(nrm, sub(centre, g)) < 0.0 {
+                nrm = mul(nrm, -1.0);
+            }
+            let (mut s, mut p100) = (0.0f64, st[st.len() - 1]);
+            for w in st.windows(2) {
+                let d = geom_dist(w[0], w[1]);
+                if s + d >= 100.0 {
+                    p100 = lerp(w[0], w[1], (100.0 - s) / d.max(1e-9));
+                    break;
+                }
+                s += d;
+            }
+            let off = libm::acos(dot(mul(sub(p100, g), 1.0 / geom_dist(p100, g).max(1e-9)), nrm).clamp(-1.0, 1.0)).to_degrees();
+            let mut run = 0.0;
+            for w in st.windows(2) {
+                let d = geom_dist(w[0], w[1]);
+                if d >= 3.0 && dot(mul(sub(w[1], w[0]), 1.0 / d), nrm) < libm::cos(20f64.to_radians()) {
+                    break;
+                }
+                run += d;
+            }
+            Some((total, run, off))
+        })
+        .collect()
+}
+
+/// (Roadmap 6 R9) What R3-R7 put in the acceptance world (`examples/acceptcity.rs` `roadmap6`) holds: the row's
+/// houses members of the town its street was added to, near that street, counted among its people; the outskirts
+/// pushed out a place holding them, its id and buildings kept when the world is remade; the removed stretch,
+/// lane and path and the fence edits drawn only (every town they touch laid out the same as without them; on the
+/// battlemaps the stretch, lane and path drawn as ground, the hedge gone, the eraser's gap open, the drawn
+/// picket fence and its gate there, none of which is so without the edits); the largest generated walled town's
+/// main streets straight in from their gates for 100 ft or more, within 10 degrees of square. A summary back.
+fn acceptance_roadmap6(ex: &mut Executor) -> String {
+    use worldgen::battlemap::{self as bm, Chunk, HS, Kind, SQ, SQUARE_FT, ShapeKind, URBAN_PATH, URBAN_STREET};
+    use worldgen::t0::{remap, settle::Tier};
+    use worldgen::town::{self, added, cut, fence, geom, members};
+    type P = [f64; 2];
+    let g = ex.world.geom.clone();
+    let fsize = g.tile_size_ft(g.max_level);
+    let key_at = |p: P| TileKey::surface(g.max_level, (p[0] / fsize) as u32, (p[1] / fsize) as u32);
+    let to_world = |c: &Chunk, q: [f32; 2]| {
+        let (ox, oy) = g.tile_origin_ft(&c.key);
+        [ox + q[0] as f64 * SQUARE_FT, oy + q[1] as f64 * SQUARE_FT]
+    };
+    let centre = |c: &Chunk, i: usize, j: usize| to_world(c, [i as f32 + 0.5, j as f32 + 0.5]);
+    let line_d = |p: P, pts: &[P]| pts.windows(2).map(|w| geom::seg_dist(p, w[0], w[1])).fold(f64::MAX, f64::min);
+    let len = |pts: &[P]| pts.windows(2).map(|w| geom_dist(w[0], w[1])).sum::<f64>();
+    let along = |pts: &[P], at: f64| {
+        let mut run = 0.0;
+        for w in pts.windows(2) {
+            let d = geom_dist(w[0], w[1]);
+            if run + d >= at {
+                return geom::lerp(w[0], w[1], (at - run) / d.max(1e-9));
+            }
+            run += d;
+        }
+        pts[pts.len() - 1]
+    };
+    let e = ex.world.file.edits.clone();
+    let n = ex.t0.settlements.len();
+    let first = n + ex.t0.base_pois;
+
+    // R3 + R4: the row and its street.
+    let ti = (0..n).find(|&i| added::of(&ex.world, &ex.t0, i).is_some_and(|s| !s.is_empty())).expect("no town with a street added");
+    let street = added::laid(&ex.world, &ex.t0, ti);
+    assert!(street.len() == 1 && len(&street[0].1) >= 300.0, "L{ti}: the row's street not laid ({} streets added)", street.len());
+    let row: Vec<usize> = (0..e.created.len()).filter(|&k| e.created[k].kind == "building" && e.created[k].faces.is_some()).collect();
+    assert!(row.len() >= 6, "the row has {} houses", row.len());
+    let joined: Vec<usize> = members::members_of(&ex.world, &ex.t0, ti).into_iter().map(|m| m.0).collect();
+    for &k in &row {
+        let c = &e.created[k];
+        assert!(joined.contains(&(first + k)), "the row's {} is not part of L{ti}", c.id);
+        let d = line_d(geom::centroid(&c.poly), &street[0].1);
+        assert!(d < 100.0, "the row's {} stands {d:.0} ft from its street", c.id);
+    }
+    let people = members::sizes(&ex.world, &ex.t0).iter().find(|s| s.0 == ti).map_or(0, |s| s.1);
+    assert!(people > ex.t0.settlements[ti].population, "L{ti}: the row's homes not counted among its people ({people})");
+
+    // R3: the place pushed out, kept when the world is remade with a site drawn far off (every created layout one
+    // number on).
+    let kp = e.created.iter().position(|c| c.kind == "place").expect("no place pushed out");
+    let (t2, bids) = members::all_pushed(&ex.world, &ex.t0).into_iter().find(|p| p.0 == first + kp).map(|p| (p.1, p.2)).expect("the place holds no buildings pushed out");
+    assert!(bids.len() >= 2 && town::is_settlement(&ex.t0, t2), "the place holds {} buildings of L{t2}", bids.len());
+    let at = |i: usize| [ex.t0.settlements[i].x, ex.t0.settlements[i].y];
+    let far = (0..n).max_by(|&a, &b| geom_dist(at(a), at(t2)).total_cmp(&geom_dist(at(b), at(t2)))).map(|i| [at(i)[0] + 3_000.0, at(i)[1]]).unwrap();
+    let mut f = ex.world.file.clone();
+    f.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "site", "kind": "ruin", "pts": [far] })).unwrap());
+    let (mut t1, followed) = remap::remake(&ex.world, &ex.t0, &World::new(f.clone()).unwrap(), &[]);
+    f.edits = followed.expect("the remake moved the created things").edits;
+    let rw = World::new(f).unwrap();
+    t1.apply_edits(&rw);
+    town::forget_from(n);
+    let moved = t1.settlements.len() + t1.base_pois + kp;
+    assert!(moved == first + kp + 1 && rw.file.edits.created[kp].id == e.created[kp].id && rw.file.edits.created[kp].kind == "place", "the place lost its id when the world was remade");
+    assert_eq!(members::pushed(&rw, &t1, t2), vec![(moved, bids.clone())], "the place lost its buildings when the world was remade");
+    town::forget_from(n);
+
+    // R5 + R6: drawn only.
+    let mut bare = e.clone();
+    bare.removed_roads.clear();
+    bare.fences.clear();
+    bare.fence_gaps.clear();
+    for t in bare.towns.values_mut() {
+        t.removed.clear();
+        t.fences.clear();
+    }
+    let touched: Vec<usize> = e.towns.iter().filter(|(_, t)| !t.removed.is_empty() || !t.fences.is_empty()).map(|(k, _)| k.parse().unwrap()).collect();
+    let rd = e.removed_roads.iter().find(|id| id.starts_with("rd:")).expect("no stretch removed").clone();
+    let ri = worldgen::roadids::road_ids(&ex.t0).iter().position(|id| *id == rd).expect("the removed stretch not found");
+    // (A town edit's `removed` holds local keys: a street's hash, a path's `<spot>:<j>`.)
+    let removed: Vec<(usize, String)> = e.towns.iter().flat_map(|(k, t)| t.removed.iter().map(|id| (k.parse::<usize>().unwrap(), id.clone()))).collect();
+    let (vi, lane_key) = removed.iter().find(|(li, id)| !id.contains(':') && ex.t0.settlements[*li].tier == Tier::Village).cloned().expect("no village lane removed");
+    let (pi, path_key) = removed.iter().find(|(_, id)| id.contains(':')).cloned().expect("no park path removed");
+    assert_eq!(pi, ti, "the path removed is not the row's town's");
+    let (lane_id, path_id) = (cut::street_id(vi, u32::from_str_radix(&lane_key, 16).unwrap()), format!("pp:{pi}:{path_key}"));
+    let vl = town::layout(&ex.world, &ex.t0, vi);
+    let lk = cut::street_ids(&ex.world, &ex.t0, &vl).into_iter().find(|x| x.0 == cut::STREETS && format!("{:08x}", x.2) == lane_key).expect("the lane not found").1;
+    let lane = vl.streets[lk].clone();
+    let pl = town::layout(&ex.world, &ex.t0, ti);
+    let (spot, pj) = path_key.split_once(':').map(|(s, j)| (s.to_string(), j.parse::<usize>().unwrap())).unwrap();
+    let pk = (0..pl.parks.len()).find(|&k| cut::park_spot(&pl, k) == spot).expect("the park not found");
+    let park = pl.parks[pk].clone();
+    let lay = bm::park_layout(&park, bm::land_biome(&ex.t0, geom::centroid(&park.pts)), pl.tier >= Tier::City, ex.world.stream("battlemap"));
+    let path = lay.paths[pj].clone();
+    // (The hedge gone, by its id among the village's runs.)
+    let gone = e.towns[&vi.to_string()].fences.iter().find(|(_, c)| c.gone).map(|(k, _)| k.clone()).expect("no run removed");
+    let srcs = fence::sources(&vl, &ex.t0, fence::EVERYWHERE);
+    let hedge = srcs.iter().map(|s| (s.0, fence::canonical(s.1, s.2))).find(|(tag, (a, b))| format!("{:08x}", fence::run_key(*tag, *a, *b)) == gone).map(|x| x.1).expect("the run removed not found");
+    let gap = e.fence_gaps.values().next().expect("no gap cut");
+    let gm = geom::lerp(gap.pts[0], gap.pts[gap.pts.len() - 1], 0.5);
+    let drawn = e.fences.values().next().expect("no fence drawn");
+    assert!(drawn.gates.len() == 1, "the drawn fence has {} gates", drawn.gates.len());
+    let gate = along(&drawn.pts, drawn.gates[0] as f64);
+    let stretch_at = along(&ex.t0.roads.roads[ri].pts, 0.5 * len(&ex.t0.roads.roads[ri].pts));
+    let mut keys: Vec<TileKey> = Vec::new();
+    for p in [stretch_at, along(&lane, 0.5 * len(&lane)), along(&path.0, 0.5 * len(&path.0)), geom::lerp(hedge.0, hedge.1, 0.5), gm, gate] {
+        if !keys.contains(&key_at(p)) {
+            keys.push(key_at(p));
+        }
+    }
+    let ix = |p: P| keys.iter().position(|&k| k == key_at(p)).unwrap();
+    let laid = |ex: &Executor| touched.iter().map(|&i| format!("{:?}", *town::layout(&ex.world, &ex.t0, i))).collect::<Vec<_>>();
+    town::forget_from(1);
+    let (with_layouts, with): (Vec<String>, Vec<Chunk>) = (laid(ex), keys.iter().map(|&k| ex.battlemap(k)).collect());
+    ex.world.file.edits = bare;
+    town::forget_from(1);
+    let (bare_layouts, without): (Vec<String>, Vec<Chunk>) = (laid(ex), keys.iter().map(|&k| ex.battlemap(k)).collect());
+    let pieces = ex.terrain(key_at(stretch_at)).roads.clone();
+    ex.world.file.edits = e.clone();
+    town::forget_from(1);
+    assert!(with_layouts == bare_layouts, "a removal or fence edit changed the layout of a town of {touched:?}");
+    // The stretch: no road square on it (clear of every other road).
+    {
+        let (c, b) = (&with[ix(stretch_at)], &without[ix(stretch_at)]);
+        let pts = |r: &worldgen::lod::roads::RoadPiece| r.pts.iter().map(|q| q.p).collect::<Vec<P>>();
+        let (gone, other): (Vec<_>, Vec<_>) = pieces.iter().partition(|r| r.road as usize == ri);
+        let (mut on, mut was) = (0, 0);
+        for j in 0..SQ {
+            for i in 0..SQ {
+                let p = centre(c, i, j);
+                if gone.iter().any(|r| line_d(p, &pts(r)) <= 0.5 * r.class.width_ft() - 1.0) && other.iter().all(|r| line_d(p, &pts(r)) > 0.5 * r.class.width_ft() + 10.0) {
+                    let h = (j + 1) * HS + i + 1;
+                    on += 1;
+                    was += (b.road_halo[h] != 0) as usize;
+                    assert_eq!(c.road_halo[h], 0, "{rd}: still a road at {p:?}");
+                }
+            }
+        }
+        assert!(on > 0 && was > 0, "{rd}: no road square to look at ({on}, {was})");
+    }
+    // The lane and the path.
+    for (what, line, half, urban, p) in [("the lane", &lane, 4.0, URBAN_STREET, along(&lane, 0.5 * len(&lane))), ("the path", &path.0, 0.5 * path.1, URBAN_PATH, along(&path.0, 0.5 * len(&path.0)))] {
+        let (c, b) = (&with[ix(p)], &without[ix(p)]);
+        let (mut on, mut was) = (0, 0);
+        for j in 0..SQ {
+            for i in 0..SQ {
+                let (q, k) = (centre(c, i, j), j * SQ + i);
+                let clear = if urban == URBAN_STREET {
+                    vl.roads.iter().all(|r| line_d(q, &r.0) > 0.5 * r.2 + 5.0) && vl.streets.iter().enumerate().all(|(o, s)| o == lk || line_d(q, s) > 10.0)
+                } else {
+                    geom::contains(&park.pts, q) && lay.paths.iter().enumerate().all(|(o, x)| o == pj || line_d(q, &x.0) > 0.5 * x.1 + 3.5) && lay.rounds.iter().all(|&(rc, r)| geom_dist(q, rc) > r + 3.5)
+                };
+                if line_d(q, line) < half && clear {
+                    on += 1;
+                    was += (b.urban[k] == urban) as usize;
+                    assert_ne!(c.urban[k], urban, "{what} removed is still drawn at {q:?}");
+                }
+            }
+        }
+        assert!(on > 0 && was > 0, "{what}: no square to look at ({on}, {was})");
+    }
+    // The fences.
+    let shape_near = |c: &Chunk, p: P, d: f64| c.structures.iter().any(|s| matches!(s.kind, ShapeKind::Hedge | ShapeKind::DryWall | ShapeKind::Fence) && s.pts.len() >= 2 && geom::seg_dist(p, to_world(c, s.pts[0]), to_world(c, s.pts[1])) < d);
+    let hm = geom::lerp(hedge.0, hedge.1, 0.5);
+    let others: Vec<(P, P)> = srcs.iter().map(|s| fence::canonical(s.1, s.2)).filter(|r| *r != hedge).collect();
+    assert!(shape_near(&without[ix(hm)], hm, 1.0), "the croft hedge is not drawn without its removal");
+    for t in [0.3, 0.5, 0.7] {
+        let p = geom::lerp(hedge.0, hedge.1, t);
+        assert!(!shape_near(&with[ix(hm)], p, 1.0) || others.iter().any(|&(a, b)| geom::seg_dist(p, a, b) < 5.0), "the croft hedge removed is still drawn at {p:?}");
+    }
+    assert!(shape_near(&without[ix(gm)], gm, 1.0) && !shape_near(&with[ix(gm)], gm, 2.0), "the eraser's gap did not cut the field's side");
+    let near = |c: &Chunk, kind: Kind, d: f64| c.objects.iter().filter(|o| o.kind == kind && line_d(to_world(c, [o.x, o.y]), &drawn.pts) < d).count();
+    let (c, b) = (&with[ix(gate)], &without[ix(gate)]);
+    let gates = c.objects.iter().filter(|o| o.kind == Kind::Gate && geom_dist(to_world(c, [o.x, o.y]), gate) < 3.6).count();
+    assert!(near(c, Kind::Picket, 3.6) >= 3 && gates == 1 && near(b, Kind::Picket, 3.6) + near(b, Kind::Gate, 3.6) == 0, "the drawn picket fence: {} sections, {gates} gates ({} without it)", near(c, Kind::Picket, 3.6), near(b, Kind::Picket, 3.6));
+
+    // R7: the largest generated walled town's main streets straight in.
+    let mut walled: Vec<usize> = (0..n).filter(|&i| ex.t0.settlements[i].tier >= Tier::Town && !town::hand::is_hand(&ex.world, i)).collect();
+    walled.sort_by_key(|&i| (std::cmp::Reverse(ex.t0.settlements[i].population), i));
+    let wl = walled.into_iter().map(|i| town::layout(&ex.world, &ex.t0, i)).find(|l| !l.walls.is_empty() && !l.streets.is_empty()).expect("no generated walled town");
+    let s = straight_in(&wl);
+    assert!(s.len() >= 2 && s.iter().all(|x| x.is_some_and(|(total, run, off)| total < 100.0 || (run >= 100.0 && off <= 10.0))), "L{}: main streets (ft long, ft straight, deg off square) {s:?}", wl.index);
+    format!(
+        "row of {} in L{ti} with its street, {} buildings of L{t2} pushed out, {rd} + {lane_id} + {path_id} removed, fences in L{vi}, L{} walled: {}",
+        row.len(),
+        bids.len(),
+        wl.index,
+        s.iter().flatten().map(|x| format!("{:.0} ft straight", x.1)).collect::<Vec<_>>().join(", ")
+    )
 }
