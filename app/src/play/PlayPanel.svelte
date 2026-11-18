@@ -7,7 +7,7 @@
   import { formatDistance } from './vision';
   import Icon from '../ui/Icon.svelte';
   import { WAY_ICONS, type IconName } from '../ui/icons';
-  import { remember, remembered } from '../ui/shell/layout.svelte';
+  import { NEW_UI, remember, remembered } from '../ui/shell/layout.svelte';
 
   const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
@@ -64,6 +64,8 @@
     ['fog', 'cloud', 'Fog of war brush', 'F'],
     ['hex', 'hex', 'Explore hexes (hex crawl)', 'H'],
   ];
+  /** ?ui=new: the tool row's words. */
+  const SHORT: Record<string, string> = { select: 'Select', token: 'Tokens', measure: 'Measure', shape: 'Shapes', fog: 'Fog', hex: 'Hexes' };
   const HEX_MODES: [HexMode, string, string][] = [
     ['off', 'Off', 'The players see no hexes'],
     ['grid', 'Grid', 'The players see the hex grid'],
@@ -136,11 +138,19 @@
     <span class="live"></span> Live{v.players ? ' · players’ window open' : ''} · <i>{v.place}</i> · {v.here} {v.here === 1 ? 'token' : 'tokens'}
   </div>
 
-  <div class="tools" role="toolbar" aria-label="Play tools">
-    {#each TOOLS as [t, icon, label, key] (t)}
-      <button class="ws-icon-btn" aria-pressed={v.tool === t} title="{label} ({key})" aria-label={label} onclick={() => play.setTool(t)}><Icon name={icon} /></button>
-    {/each}
-  </div>
+  {#if NEW_UI}
+    <div class="ws-strip" role="toolbar" aria-label="Play tools">
+      {#each TOOLS as [t, icon, label, key] (t)}
+        <button aria-pressed={v.tool === t} title="{label} ({key})" aria-label={label} onclick={() => play.setTool(t)}><Icon name={icon} size={16} /><span>{SHORT[t]}</span></button>
+      {/each}
+    </div>
+  {:else}
+    <div class="tools" role="toolbar" aria-label="Play tools">
+      {#each TOOLS as [t, icon, label, key] (t)}
+        <button class="ws-icon-btn" aria-pressed={v.tool === t} title="{label} ({key})" aria-label={label} onclick={() => play.setTool(t)}><Icon name={icon} /></button>
+      {/each}
+    </div>
+  {/if}
 
   {#if !peek}
     {#if v.tool === 'select'}

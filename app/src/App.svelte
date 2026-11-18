@@ -3937,7 +3937,7 @@
       tabs={[
         {
           key: 'generate',
-          label: 'Generate',
+          label: NEW_UI ? 'Settings' : 'Generate',
           icon: 'globe',
           badge: worldDraft.changed(world) && !busy ? { text: '↻', title: 'Settings changed: not generated yet' } : undefined,
           hint: 'Seed and settings. New settings make a different world; each world keeps its own changes.',
@@ -4400,6 +4400,9 @@
     battlemap={battlemapTier}
     {canUndo}
     {undoLabel}
+    {canRedo}
+    {redoLabel}
+    onRedo={redoAny}
     onGrid={setGrid}
     onPlaces={(on) => view.setPlaces(on)}
     {seaLanes}
