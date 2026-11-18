@@ -1,7 +1,8 @@
 import { Graphics } from 'pixi.js';
 import { PX } from '../scale';
 import { FT, INK, IRON, WOOD, oval, shade } from './common';
-import { UPRIGHT_FOOT, footGrass, inked, rod, upright } from './street';
+import { footGrass, inked, rod, upright } from './street';
+import { UPRIGHT_FOOT } from '../atlas';
 import { BARK, STONE, moss } from './stones';
 import { bevel } from './yard';
 import { endGrain } from './wood';

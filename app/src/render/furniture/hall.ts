@@ -1,7 +1,8 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { BRASS, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, lit, litEdges, oval, patch, planks, quad, ring, shade } from './common';
-import { GILT, MARBLE, candle } from './sacred';
+import { MARBLE, candle } from './sacred';
+import { GILT, HOUSES, VELVET } from './tables';
 import { PLUSH, STONE, WALL_GAP } from './home';
 import { screenAxes } from './under';
 
@@ -36,7 +37,6 @@ export function inkLine(g: Graphics, pts: Pt[], w: number, color: number, curve 
 /** Oak for carved seats and the timber dais: shade, face, lit. */
 export const OAK = [0x4a3220, 0x6e4c2e, 0x8e6a42];
 /** Cushions: shade, cloth, lit. Red velvet, oxblood leather, blue, green, plum. */
-export const VELVET = [0x6a1c18, 0xa83228, 0xd0604a];
 export const LEATHER = [0x4a2418, 0x74382a, 0x985238];
 export const CUSHIONS = [VELVET, [0x22345a, 0x3a5488, 0x5a78aa], [0x2a4224, 0x44663a, 0x62865a], [0x40243e, 0x663c62, 0x885a82]];
 
@@ -299,28 +299,6 @@ export function highTable(g: Graphics, f: InteriorItem, light: Light, v: number,
   g.poly(oval(sx - ca * 0.02, sy - sa * 0.02, 0.12, 0.085, fa, 14)).fill(0xb06a2e).stroke({ width: 0.014, color: INK });
   g.poly(oval(sx - ca * 0.04 + light[0] * 0.02, sy - sa * 0.04 + light[1] * 0.02, 0.06, 0.04, fa, 10)).fill({ color: 0xe0a060, alpha: 0.7 });
   for (const u of [len / 2 - 0.5, len / 2 + 0.5]) if (u > 0.3 && u < len - 0.3) candle(g, ...at(u, 0.56));
-}
-
-/** House colours (`Item::variant` of a wall banner and a standing banner, the same index on both, so a castle's
- * banners can all fly one house's): the field (shade, cloth, lit), its charge's colour and the charge. Even
- * houses' banners end in a point, odd ones in a swallowtail. */
-export const HOUSES: { name: string; field: readonly number[]; charge: number; mark: 'tower' | 'cross' | 'bend' | 'star' | 'crescent' | 'quarterly' | 'chevron' | 'saltire' }[] = [
-  { name: 'Red, a gold tower', field: [0x6e2219, 0x9e3428, 0xbc4c3a], charge: 0xe8bc4e, mark: 'tower' },
-  { name: 'Blue, a white cross', field: [0x23365e, 0x34528a, 0x4a6ca6], charge: 0xf0e8d4, mark: 'cross' },
-  { name: 'Green, a gold bend', field: [0x2e4a22, 0x46682e, 0x5e8240], charge: 0xe8bc4e, mark: 'bend' },
-  { name: 'Black, a gold star', field: [0x221e26, 0x37313c, 0x4e4654], charge: 0xe8bc4e, mark: 'star' },
-  { name: 'Purple, a white crescent', field: [0x48284a, 0x6a3e68, 0x865682], charge: 0xf0e8d4, mark: 'crescent' },
-  { name: 'White and red quarterly', field: [0xb0a68e, 0xe4d8bc, 0xf6efe0], charge: 0xa83226, mark: 'quarterly' },
-  { name: 'Gold, a black chevron', field: [0x9a7428, 0xd0a442, 0xe8c466], charge: 0x2e2830, mark: 'chevron' },
-  { name: 'Teal, a white saltire', field: [0x1e4a48, 0x2e6e6a, 0x46908a], charge: 0xf0e8d4, mark: 'saltire' },
-];
-
-/** The house a building's banners fly when none is set (`Item::variant` absent): one per building, from its id
- * (FNV-1a), so every banner put down in one castle hall matches. */
-export function houseOf(id: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193) >>> 0;
-  return h % HOUSES.length;
 }
 
 /** A heraldic banner hanging from its rod: `P(a, b)` is the point `a` across from its middle and `b` down from

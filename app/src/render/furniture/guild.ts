@@ -1,8 +1,8 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { type At, CUSHIONS, HOUSES, LEATHER, OAK, type Pt, VELVET, inkLine } from './hall';
+import { type At, CUSHIONS, LEATHER, OAK, type Pt, inkLine } from './hall';
 import { BRASS, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, oval, patch, planks, quad, shade } from './common';
-import { GILT } from './sacred';
+import { ARMS, GILT, SILVER, VELVET } from './tables';
 import { WALL_GAP } from './home';
 
 // ---------------------------------------------------------------------------------------------------------
@@ -10,8 +10,6 @@ import { WALL_GAP } from './home';
 
 /** Straw and hay: shade, mid, light, sunlit. */
 const STRAW = [0x9a7430, 0xd9b04f, 0xf0d688, 0xfff0b8];
-/** White metal (blades, silver coin, a castle argent): shade, face, lit. */
-const SILVER = [0x7a7e84, 0xb8bcc0, 0xe4e6e8];
 const COPPER = [0x6a3a1e, 0xb06a3a, 0xd8925a];
 /** Notices and ledger pages, and the writing on them. */
 const PAPERS = [0xf2e8cc, 0xf6efe0, 0xe8dcc0];
@@ -409,16 +407,6 @@ export function stableStall(g: Graphics, f: InteriorItem, light: Light, v: numbe
   const mid = W / 2;
   drawHorse(g, at, k, mid, sd, light, rnd, v, { rope: [at(mid + sd * 0.24, 0.46 * k), at(sd > 0 ? W - 0.16 : 0.16, 0.5 * k - 0.05)] });
 }
-
-/** A guild's arms or a town's (`Item::variant` of guild_arms): the field (shade, field, lit), the shield's rim, the
- * cloth of the banner it hangs on (two squares). */
-export const ARMS: { name: string; field: readonly number[]; rim: number; cloth: readonly number[] }[] = [
-  { name: "Merchants' guild: gold scales on blue", field: HOUSES[1].field, rim: GILT[1], cloth: VELVET },
-  { name: 'Craft guild: an anvil and hammer on red', field: HOUSES[0].field, rim: GILT[1], cloth: [0x1c2a4a, 0x2e4a7a, 0x4a6aa0] },
-  { name: "Adventurers' guild: crossed swords on green", field: HOUSES[2].field, rim: SILVER[1], cloth: [0x5a3a1e, 0x8a5a2e, 0xb07a44] },
-  { name: "Mages' guild: a star over a book on midnight blue", field: [0x161c3a, 0x252e5c, 0x384480], rim: GILT[1], cloth: VELVET },
-  { name: "The town's arms: a red tower on gold", field: [0x9a7428, 0xd0a442, 0xe8c466], rim: SILVER[1], cloth: [0x1c2a4a, 0x2e4a7a, 0x4a6aa0] },
-];
 
 /** A heater shield of arms hung on the wall: `P(a, b)` the point `a` across from its middle and `b` down from
  * its top, `hw` its half width, `h` its height; the field, a rim, one bold charge for arms `look`. */

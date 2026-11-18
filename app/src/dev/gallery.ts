@@ -27,7 +27,9 @@ import type { KindInfo } from '../gen/client';
 import type { Interior, InteriorItem, UnderCatalog } from '../gen/protocol';
 import type { DoorState } from '../play/state';
 import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/itemGroups';
-import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
+import { looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
+import { buildAtlas } from '../render/atlas/build';
+import { loadSprites } from '../render/spriteCode';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, topGrid } from '../render/walls';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
@@ -234,6 +236,8 @@ export async function runGallery(target: HTMLElement) {
   document.body.style.cssText = 'background:#efe6d2;overflow:auto;height:auto;position:static';
   target.style.cssText = 'position:static;height:auto';
   await init();
+  // (The interior layers below draw with it: `sprites()`.)
+  await loadSprites();
   const catalog = JSON.parse(battlemap_catalog_json()) as KindInfo[];
   // Kinds the item pickers have no group for (they show under "Other"): give them one in itemGroups.ts.
   const under = JSON.parse(under_catalog_json()) as UnderCatalog;

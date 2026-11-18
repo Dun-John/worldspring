@@ -1,7 +1,8 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { BONE, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, bone, castShadow, frame, glowPool, litEdges, oval, patch, quad, ring, shade, skullTop } from './common';
-import { BRONZE, MARBLE, candle } from './sacred';
+import { MARBLE, candle } from './sacred';
+import { BRONZE } from './tables';
 import { END_GAP, STONE, WALL_GAP } from './home';
 import { inkLine } from './hall';
 import { rock } from './under';

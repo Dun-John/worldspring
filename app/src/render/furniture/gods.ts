@@ -1,28 +1,11 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { BRONZE, GILT, candle } from './sacred';
+import { candle } from './sacred';
+import { GODS } from './tables';
 import { END_GAP, STONE, WALL_GAP } from './home';
 import { INK, IRON, LINE, type Light, OUT, board, castShadow, frame, glowPool, oval, quad, ring, shade } from './common';
 import { OAK, type Pt, inkLine } from './hall';
 import { screenAxes } from './under';
-
-/** A temple's pieces drawn for its god (`interior::GOD_LOOKS`, `town::temple::god_look`): the god's kinds
- * (`town::temple::GOD_KINDS`), each with the stone of its statue, the metal of its candle stands and fittings
- * (shade, face, lit), an accent for its emblem and carving, the cloth of its altars and the glow of its
- * candles. */
-const GODS: { name: string; stone: number[]; metal: number[]; accent: number; cloth: number[]; glow: number }[] = [
-  { name: 'The Sun and the Morning Lord', stone: [0x8a7a62, 0xd8c8a4, 0xf2e6c6], metal: GILT, accent: 0xf2c94c, cloth: [0x8a5a1a, 0xc98a2a, 0xe8b850], glow: 0xffc23a },
-  { name: 'The Dawn', stone: [0x9a7268, 0xd8ae9e, 0xf2d2c4], metal: [0x8a4e3e, 0xc88672, 0xf0bca4], accent: 0xe88aa0, cloth: [0x8a3a48, 0xc8707e, 0xe8a0aa], glow: 0xffb27a },
-  { name: 'The Moon and the Veiled Lady', stone: [0x80869a, 0xc4c8d4, 0xeceef4], metal: [0x5e646c, 0xa4aab4, 0xe0e4ea], accent: 0xdce4f4, cloth: [0x26305a, 0x3e4a7a, 0x5e6a9a], glow: 0xe4ecff },
-  { name: 'The Deep Sea', stone: [0x3e5e52, 0x5e8a74, 0x8ab8a0], metal: [0x2e5a52, 0x4e8a7a, 0x8ac0aa], accent: 0x8ad0c0, cloth: [0x1e4a4e, 0x2e6a6a, 0x4e8a86], glow: 0xb8eadc },
-  { name: 'The Storm', stone: [0x4a5260, 0x727c8c, 0x9ca6b4], metal: IRON, accent: 0xf2d45a, cloth: [0x2e4470, 0x4f72a8, 0x7a98c8], glow: 0xffe08a },
-  { name: 'The Forge', stone: [0x4a3a30, 0x6e5848, 0x947a64], metal: BRONZE, accent: 0xf28a1e, cloth: [0x5e1e18, 0x8a2e26, 0xb0483a], glow: 0xff9a3a },
-  { name: 'The Harvest and the Hearth', stone: [0x96764c, 0xc8a878, 0xe8cc9a], metal: [0x7a5a2a, 0xb08a42, 0xe0bc6a], accent: 0xe8c860, cloth: [0x4a6a2a, 0x6a8a3a, 0x8eac52], glow: 0xffc860 },
-  { name: 'The Seven and the Watcher', stone: [0x3e3a46, 0x605a6c, 0x8a8494], metal: [0x3a3644, 0x686078, 0xa49ab8], accent: 0xc8b8f0, cloth: [0x34284e, 0x4a3a6a, 0x6a5a8e], glow: 0xe0d4ff },
-];
-
-/** The god's kinds by look, for the designer's Look menu. */
-export const GOD_NAMES = GODS.map((g) => g.name);
 
 /** A god's emblem (look `v`), `r` squares across about (cx, cy), its top toward `up` (a unit step): the sun's
  * disc and rays, the dawn's half sun over the horizon, the moon's crescent, the sea's trident over a wave, the

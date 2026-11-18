@@ -4,15 +4,12 @@ import { boughs, lit, whorl } from './plants';
 import { BARK, STONE, moss, stone } from './stones';
 import { endGrain } from './wood';
 import { bevel } from './yard';
+import { UPRIGHT_FOOT } from '../atlas';
 
 /** A quad's corners as one point list, for `poly`. */
 export function quad4(a: [number, number], b: [number, number], c: [number, number], d: [number, number]): number[] {
   return [...a, ...b, ...c, ...d];
 }
-
-/** Where an upright thing drawn from a high angle stands in its frame: its foot, px below the centre, by kind
- * id (its drop shadow falls from there: `BattlemapLayer`). Things seen from straight above stand at the centre. */
-export const UPRIGHT_FOOT: Record<number, number> = { 47: 1.7 * FT, 48: 1.85 * FT, 49: 1.1 * FT, 50: 2.15 * FT, 57: 1.3 * FT, 60: 2.3 * FT, 101: 2.2 * FT };
 
 /** The high-angle view of upright things (as the headstone; the style guide's `hk` 0.5, `dk` 0.87): a ground
  * point `x` across and `d` deep (toward the viewer) and `h` up, in feet, to frame pixels, the foot at (0, `foot`). */

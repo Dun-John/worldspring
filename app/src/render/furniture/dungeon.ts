@@ -1,7 +1,8 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { DARK_WOOD, INK, IRON, LINE, type Light, OUT, WOOD, board, castShadow, frame, glowPool, oval, patch, ring } from './common';
-import { GILT, MARBLE } from './sacred';
+import { MARBLE } from './sacred';
+import { GILT } from './tables';
 import { STONE, masonry } from './home';
 import { screenAxes } from './under';
 

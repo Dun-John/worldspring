@@ -22,7 +22,8 @@ import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
-import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
+import { looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
+import { sprites } from './spriteCode';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
 import { drawBreakwaterArmour, drawCog, drawLantern } from './harbourShapes';
@@ -1148,7 +1149,7 @@ export function dropSharedAtlas() {
 }
 function sharedAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
   const key = catalog.map((k) => k.name).join('|');
-  if (!atlasCache || atlasCache.key !== key || atlasCache.renderer !== renderer) atlasCache = { key, renderer, atlas: buildAtlas(renderer, catalog) };
+  if (!atlasCache || atlasCache.key !== key || atlasCache.renderer !== renderer) atlasCache = { key, renderer, atlas: sprites().buildAtlas(renderer, catalog) };
   return atlasCache.atlas;
 }
 

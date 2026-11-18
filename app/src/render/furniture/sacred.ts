@@ -3,11 +3,10 @@ import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
 import { BRASS, DARK_WOOD, DYES, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, oval, patch, planks, quad, ring, shade } from './common';
 import { END_GAP, STONE, WALL_GAP, masonry } from './home';
+import { BRONZE, GILT } from './tables';
 
 /** Pale stone for statues, effigies and fine work: shade, face, lit. */
 export const MARBLE = [0x8e8a80, 0xc4beb0, 0xe2dccd];
-export const GILT = [0x8a6a2a, 0xc8a04a, 0xf0d488];
-export const BRONZE = [0x5a4220, 0x9a7438, 0xd0a85a];
 
 /** A candle in a holder, its flame and a little glow. */
 export function candle(g: Graphics, x: number, y: number) {

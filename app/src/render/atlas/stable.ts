@@ -1,6 +1,6 @@
 import { Graphics } from 'pixi.js';
 import { PX } from '../scale';
-import { drawHorse } from '../furniture';
+import { drawHorse } from '../furniture/guild';
 import { FT, INK, IRON, WOOD, oval, shade } from './common';
 import { footGrass } from './street';
 import { LINE, OUT } from './farm';

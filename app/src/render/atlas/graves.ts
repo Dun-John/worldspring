@@ -3,7 +3,8 @@ import { FT, INK, IRON, WOOD, blob, oval, shade } from './common';
 import { LINE, OUT } from './farm';
 import { BARK, STONE, moss, stone } from './stones';
 import { endGrain } from './wood';
-import { UPRIGHT_FOOT, footGrass, upright } from './street';
+import { footGrass, upright } from './street';
+import { UPRIGHT_FOOT } from '../atlas';
 
 /** An anvil from above on a stump before a smithy, along x, its horn to +x (to -x in v3): dark iron,
  * its four feet showing past a flat face worn bright, a hardy hole at the heel. A small wooden quench

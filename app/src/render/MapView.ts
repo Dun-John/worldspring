@@ -7,6 +7,7 @@ import { type Created, type Edits, type Feature, type GenIslet, type MadeSettlem
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
+import { loadSprites } from './spriteCode';
 import { noteMarkers } from '../ui/notes';
 import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type LinkFar, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
@@ -1156,7 +1157,8 @@ export class MapView {
       // The first time: the map's shaders compiled in the background and warmed while the
       // continent generates, after a frame shows the bar.
       if (!this.warmed) requestAnimationFrame(() => setTimeout(() => void this.warmGpu(), 0));
-      ready = await made;
+      // The sprites' drawing code fetched meanwhile (`spriteCode.ts`): there before the first layer is made.
+      [ready] = await Promise.all([made, loadSprites()]);
       adjusted = (await adjust?.(ready.overlay)) ?? null;
     } catch (e) {
       // (Said so, not left "Generating" for good.)
@@ -1962,6 +1964,7 @@ export class MapView {
   private async warmBattle(stub: Geom, catalog: KindInfo[]) {
     const warm = new BattlemapLayer(stub, this.app.renderer, catalog);
     await precompile(this.app.renderer, warm.programs);
+    await loadSprites();
     warm.warmup();
     warm.destroy();
   }

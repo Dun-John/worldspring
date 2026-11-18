@@ -10,7 +10,8 @@ import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
 import { ballistaProp } from './fortProps';
-import { columnTones, drawFurniture, drawUnderProp, IN_RING, stoneColumn, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, UNDER_DRAWN, VARIED, type Fit } from './furniture';
+import { IN_RING, houseOf, looksOf, ORIENTED, PLATFORMS, UNDER_DRAWN, VARIED, type Fit } from './furniture';
+import { sprites } from './spriteCode';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -1024,7 +1025,7 @@ export class InteriorLayer {
     if (this.underground) {
       for (const f of lv.furniture) {
         if (f.kind !== 'niche' || f.sprite || this.wallAnchor(f) || !this.rockBehind(f)) continue;
-        nicheMouth(g, f, this.light, this.propWall(f));
+        sprites().nicheMouth(g, f, this.light, this.propWall(f));
       }
     }
     // Windows: a pale slot across the exterior wall (a filled rect: fine strokes on the
@@ -1550,7 +1551,7 @@ export class InteriorLayer {
    * wall it is set against and its scatter variant. */
   /** A built site's columns' tones (`stoneColumn`), from its stone (`underLook`). */
   private columnTones(): number[] {
-    return columnTones(underLook(this.interior.function, this.interior.theme).stone);
+    return sprites().columnTones(underLook(this.interior.function, this.interior.theme).stone);
   }
 
   private itemKey(f: InteriorItem): string {
@@ -1934,16 +1935,16 @@ export class InteriorLayer {
     const c = itemColor(kind);
     const inset = 0.08;
     // A built site's columns, in its own stone.
-    if (this.underground && kind === 'pillar') return stoneColumn(g, f, this.light, this.columnTones());
+    if (this.underground && kind === 'pillar') return sprites().stoneColumn(g, f, this.light, this.columnTones());
     // Building furniture, and underground props that share its drawing.
     const shared = this.sharedKind(kind);
     if (shared) {
       const s = { ...f, kind: shared };
-      if (drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null, this.ringFit(f))) return;
+      if (sprites().drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null, this.ringFit(f))) return;
     }
     // (Indoor props in a building too.)
     const turned = this.wallAnchor(f);
-    if ((this.underground || !shared) && drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : ALONG_RUN.has(kind) ? this.runDir(f) : [0, 0], this.railLinks(f), !!turned, kind === 'niche' && !turned ? this.rockBehind(f) : 2, kind === 'grille' ? this.runOf(f) : undefined)) return;
+    if ((this.underground || !shared) && sprites().drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : ALONG_RUN.has(kind) ? this.runDir(f) : [0, 0], this.railLinks(f), !!turned, kind === 'niche' && !turned ? this.rockBehind(f) : 2, kind === 'grille' ? this.runOf(f) : undefined)) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });
@@ -2249,9 +2250,9 @@ export class InteriorLayer {
     const way = LINK_WAYS[f.variant ?? 0] ?? 'stairs';
     const [cx, cy] = [f.x + 0.5, f.y + 0.5];
     const plain = { ...f, w: 1, h: 1 };
-    if (way === 'ladder') drawUnderProp(g, { ...plain, kind: 'ladder' }, this.light, 0, [0, -1]);
-    else if (way === 'passage') drawUnderProp(g, { ...plain, kind: 'tunnel' }, this.light, 0, [0, -1]);
-    else if (way === 'trapdoor') drawFurniture(g, { ...plain, kind: 'trapdoor' }, this.light, 0);
+    if (way === 'ladder') sprites().drawUnderProp(g, { ...plain, kind: 'ladder' }, this.light, 0, [0, -1]);
+    else if (way === 'passage') sprites().drawUnderProp(g, { ...plain, kind: 'tunnel' }, this.light, 0, [0, -1]);
+    else if (way === 'trapdoor') sprites().drawFurniture(g, { ...plain, kind: 'trapdoor' }, this.light, 0);
     else if (way === 'rope') {
       // A dark shaft with a coil of rope at its lip, the rope running down into it.
       g.circle(cx, cy, 0.36).fill(0x1e1a16).stroke({ width: 0.06, color: INK });
@@ -2263,7 +2264,7 @@ export class InteriorLayer {
       g.circle(cx, cy, 0.42).fill({ color: 0x6d4fc4, alpha: 0.3 }).stroke({ width: 0.06, color: INK });
       g.circle(cx, cy, 0.31).stroke({ width: 0.08, color: 0xb9a2ff });
       g.circle(cx, cy, 0.15).fill({ color: 0xeee6ff, alpha: 0.85 });
-    } else drawUnderProp(g, { ...plain, kind: this.linkUp(f) ? 'up' : 'down' }, this.light, 0, [0, -1]);
+    } else sprites().drawUnderProp(g, { ...plain, kind: this.linkUp(f) ? 'up' : 'down' }, this.light, 0, [0, -1]);
   }
 
   /** The link of way item `f` on level `lv`. */
@@ -2291,9 +2292,9 @@ export class InteriorLayer {
     const [a, b, c, d] = [k * cos, k * sin, -k * sin, k * cos];
     g.save().setTransform(a, b, c, d, cx - (a * cx + c * cy), cy - (b * cx + d * cy));
     try {
-      if (f.kind === 'link_down' && !this.underground) drawUnderProp(g, { ...f, kind: 'down' }, this.light, this.lookOf(f), [0, -1]);
+      if (f.kind === 'link_down' && !this.underground) sprites().drawUnderProp(g, { ...f, kind: 'down' }, this.light, this.lookOf(f), [0, -1]);
       // (The way back up into a cellar as the stone stairs up, not the way out to daylight: as plain to see as the way down.)
-      else if (f.kind === 'exit' && this.underground) drawUnderProp(g, { ...f, kind: 'up' }, this.light, this.lookOf(f), [0, -1]);
+      else if (f.kind === 'exit' && this.underground) sprites().drawUnderProp(g, { ...f, kind: 'up' }, this.light, this.lookOf(f), [0, -1]);
       else this.drawItem(g, f);
       this.wayArrow(g, f);
     } finally {

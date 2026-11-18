@@ -8,20 +8,7 @@ import { bedroll, grainSacks, hangingLantern, miningTools, oreCart, oreVein, pow
 import { brazier, candelabrum, collapsedWall, dais, dryFountain, ironMaiden, ritualCircle, shackles, stocks, tatteredBanner, torchSconce, treasureHoard } from './dungeon';
 import { burialNiche, burialUrn, coldCampfire, flotsamHeap, offeringBowl, openCoffin, rubbleHeap, scatteredBones, skeletonRemains, skullPile, timberProp } from './tomb';
 import { linkDown, stoneEffigy } from './sacred';
-
-/** Underground props drawn here (InteriorLayer: ways in and out, hazards): one of four looks by position;
- * those against the rock wall take its side. */
-export const UNDER_DRAWN = new Set([
-  'exit', 'up', 'down', 'tunnel', 'ladder', 'pipe', 'well', 'pit', 'trap', 'cave_in',
-  'stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'cobweb', 'guano', 'moss', 'pool', 'nest', 'rat_nest', 'ice', 'ice_sheet',
-  'obsidian', 'basalt', 'vent', 'sulfur', 'scorched', 'glass_pool',
-  'bones', 'skeleton', 'skulls', 'coffin', 'effigy', 'niche', 'urn', 'offering',
-  'campfire', 'rubble', 'debris', 'timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'lantern', 'powder', 'bedroll', 'sacks',
-  'brazier', 'candles', 'chains', 'sconce', 'banner', 'iron_maiden', 'stocks', 'hoard', 'dais', 'fountain', 'glyph',
-  'collapsed_wall', 'drain', 'grille',
-  'throne', 'steps', 'climb_ladder', 'wall_stub', 'fallen_column', 'arcane_workbench', 'arcane_focus', 'bone_mound', 'totem', 'scaffold', 'cracked_floor',
-  'flooded_pit',
-]);
+import { UNDER_DRAWN } from './tables';
 
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
  * against a wall, and the back for those that have one (the dais); `links` the sides a rail or an ore cart joins

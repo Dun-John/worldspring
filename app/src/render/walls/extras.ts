@@ -2,7 +2,7 @@ import type { Graphics } from 'pixi.js';
 import type { Shape } from '../../gen/battlePrep';
 import { rngAt, FT, LX, LY, mix, INK } from '../bridges';
 import { PX } from '../scale';
-import { gravelPatch } from '../furniture';
+import { sprites } from '../spriteCode';
 import { BATTER, GATE, GATE_ARCHED, GATE_BENT, GATE_SQUARE, MAT_EARTH, MAT_PALISADE, OUT, PARAPET, SHAPE_D, SHAPE_OCTAGON, SHAPE_SQUARE, SQUARE, flagsOf, gateForm, lookOf, pairs, towerShape } from './base';
 import { inset, shapedOutline, squareFrame } from './towers';
 import { blockFrame } from './gates';
@@ -67,7 +67,7 @@ export function drawGravelWalk(g: Graphics, s: Shape) {
   const [la, lb] = [Math.max(e1, e3), Math.min(e1, e3)];
   const [ux, uy, vx, vy] = [(a[0] - o[0]) / la, (a[1] - o[1]) / la, (b[0] - o[0]) / lb, (b[1] - o[1]) / lb];
   const at = (u: number, t: number): [number, number] => [o[0] + (ux * u + vx * t) * PX, o[1] + (uy * u + vy * t) * PX];
-  gravelPatch(g, at, la / PX, lb / PX, PX, rngAt((q[0][0] + q[2][0]) / 2, (q[0][1] + q[2][1]) / 2), [LX, LY]);
+  sprites().gravelPatch(g, at, la / PX, lb / PX, PX, rngAt((q[0][0] + q[2][0]) / 2, (q[0][1] + q[2][1]) / 2), [LX, LY]);
 }
 
 /** The 5-ft grid over a wall's walk or a tower's top (shown with the ground's): lines on the square

@@ -2,7 +2,8 @@ import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
 import { BONE, BRASS, INK, IRON, LINE, type Light, OUT, WOOD, bone, castShadow, frame, litEdges, oval, patch, quad, ring, shade, skullTop } from './common';
-import { BRONZE, GILT, candle } from './sacred';
+import { candle } from './sacred';
+import { BRONZE, GILT } from './tables';
 import { rock, screenAxes } from './under';
 
 /** Scattered bones: long bones lying every way, a jaw, ribs, a few knuckle bits; no skull (that's the
