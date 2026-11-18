@@ -207,6 +207,16 @@ pub fn court_plan(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Opt
     Some(Court { court, pieces, forecourt, church: None, paved: false })
 }
 
+/// `court_plan` with the building's carriage arch (`arch_front`) where it is a coaching inn round a
+/// yard, both from the one plan; None where `court_plan` is (the arch then from `arch_front`).
+pub fn court_and_arch(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<(Court, Option<Vec<P>>)> {
+    if !town::palace::is_monastery(b) && town::palace::is_coaching(l, b) {
+        return yard_and_arch(world, t0, l, b).map(|(c, a)| (c, Some(a)));
+    }
+    // (Not a coaching inn: no arch.)
+    court_plan(world, t0, l, b).map(|c| (c, None))
+}
+
 /// A monastery's cloister garth as the battlemap and the map draw it (`Court`: open to the sky, its
 /// corners each by the footprint's corner in the same place; its gravel walks and its cloister well as
 /// its ground floor has them, `hub::Plan::garth_pieces`); None for a monastery not round a cloister.
@@ -240,6 +250,11 @@ fn garth_plan(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<
 /// place; a water trough, barrels and a cart as `hub::Plan::yard_pieces` puts them); None for an inn
 /// not round a yard.
 fn yard_plan(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<Court> {
+    yard_and_arch(world, t0, l, b).map(|(c, _)| c)
+}
+
+/// `yard_plan` with its carriage arch's mouth as `arch_front` gives it, from the same plan.
+fn yard_and_arch(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<(Court, Vec<P>)> {
     if !hub_kind(t0, l, b).is_some_and(|k| k.is_inn()) {
         return None;
     }
@@ -263,7 +278,8 @@ fn yard_plan(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<C
     };
     let (a0, a1) = (a0 as isize, a1 as isize - 1);
     pieces.push(("arch", [at(a0, -1.5, -0.5), at(a1, -1.5, 0.5), at(a1, -0.05, 0.5), at(a0, -0.05, -0.5)], None));
-    Some(Court { court, pieces, forecourt: None, church: None, paved: true })
+    let arch = vec![at(a0, -0.5, -0.5), at(a1, -0.5, 0.5), at(a1, 0.5, 0.5), at(a0, 0.5, -0.5)];
+    Some((Court { court, pieces, forecourt: None, church: None, paved: true }, arch))
 }
 
 /// The plan a building laid out by zones is laid out on (`hub::plan`): its frame, its zones (a

@@ -920,8 +920,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         // The capital's palace's court and forecourt (`interior::court_plan`), where the chunk meets
         // them: the forecourt paved, nothing added on it, its walls and the gate's piers raised with
-        // the town's walls below.
-        let mut courts: Vec<(u32, crate::interior::Court)> = Vec::new();
+        // the town's walls below. (A coaching inn's carriage arch with its yard, from the one plan:
+        // `interior::court_and_arch`.)
+        let mut courts: Vec<(u32, crate::interior::Court, Option<Vec<[f64; 2]>>)> = Vec::new();
         let mut fore_walls: Vec<([f64; 2], [f64; 2])> = Vec::new();
         let mut fore_piers: Vec<([f64; 2], [f64; 2])> = Vec::new();
         let mut fore_gates: Vec<[[f64; 2]; 3]> = Vec::new();
@@ -935,7 +936,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if !overlaps((bb.0 - 40.0, bb.1 - 40.0, bb.2 + 40.0, bb.3 + 40.0)) {
                 continue;
             }
-            let Some(c) = crate::interior::court_plan(world, t0, &l, b) else { continue };
+            let Some((c, arch)) = crate::interior::court_and_arch(world, t0, &l, b) else { continue };
             if let Some(fc) = &c.forecourt {
                 stamp(&fc.yard, URBAN_PLAZA, &mut urb_h);
                 let (fi0, fj0, fi1, fj1) = range(bbox(&fc.yard));
@@ -952,7 +953,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 fore_piers.extend(fc.piers.iter().map(|&p| (p, fc.along)));
                 fore_gates.push(fc.gate);
             }
-            courts.push((b.id, c));
+            courts.push((b.id, c, arch));
         }
         for b in &l.buildings {
             let bb = bbox(&b.poly);
@@ -986,7 +987,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // (The capital's palace's court open to the sky: not the building's. A lawn with gravel
             // walks, its fountain and its benches, as its ground floor has them:
             // `interior::court_plan`.)
-            let court = courts.iter().position(|c| c.0 == b.id).map(|k| courts.swap_remove(k).1);
+            let (court, mut arch) = match courts.iter().position(|c| c.0 == b.id) {
+                Some(k) => {
+                    let (_, c, a) = courts.swap_remove(k);
+                    (Some(c), Some(a))
+                }
+                None => (None, None),
+            };
             if let Some(c) = &court {
                 // (A coaching inn's yard cobbled as the street.)
                 stamp(&c.court, if c.paved { URBAN_PLAZA } else { URBAN_PARK }, &mut urb_h);
@@ -1057,7 +1064,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             }
                             // (A city's town hall on its arcade: its piers along the front.)
                             // (A coaching inn's carriage arch likewise: its piers either side of it.)
-                            if let Some(front) = crate::interior::arcade_front(world, t0, &l, b).or_else(|| crate::interior::arch_front(world, t0, &l, b)) {
+                            // (Its arch found with its court, else `arch_front`.)
+                            if let Some(front) = crate::interior::arcade_front(world, t0, &l, b).or_else(|| arch.take().unwrap_or_else(|| crate::interior::arch_front(world, t0, &l, b))) {
                                 parts.push((ARCADE_PART, front.iter().map(local).collect()));
                             }
 
