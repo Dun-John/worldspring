@@ -1787,11 +1787,17 @@ export class MapView {
       // runs every frame and a long joined string is a lot of garbage.
       let h1 = 0x811c9dc5;
       let h2 = 0x9e3779b9;
+      // (Kind, level, x, y in turn, written out: no array a tile.)
       for (const w of want) {
-        for (const v of [w.kind === 'battlemap' ? 1 : 0, w.level, w.x, w.y]) {
-          h1 = Math.imul(h1 ^ v, 0x01000193);
-          h2 = Math.imul(h2 ^ v, 0x85ebca6b) ^ (h2 >>> 13);
-        }
+        const k = w.kind === 'battlemap' ? 1 : 0;
+        h1 = Math.imul(h1 ^ k, 0x01000193);
+        h2 = Math.imul(h2 ^ k, 0x85ebca6b) ^ (h2 >>> 13);
+        h1 = Math.imul(h1 ^ w.level, 0x01000193);
+        h2 = Math.imul(h2 ^ w.level, 0x85ebca6b) ^ (h2 >>> 13);
+        h1 = Math.imul(h1 ^ w.x, 0x01000193);
+        h2 = Math.imul(h2 ^ w.x, 0x85ebca6b) ^ (h2 >>> 13);
+        h1 = Math.imul(h1 ^ w.y, 0x01000193);
+        h2 = Math.imul(h2 ^ w.y, 0x85ebca6b) ^ (h2 >>> 13);
       }
       const wantKey = `${h1 >>> 0}.${h2 >>> 0}.${want.length}`;
       if (wantKey !== this.lastWantKey) {
