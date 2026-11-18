@@ -1,21 +1,20 @@
 // Edit › Build: the eleven modes' tools (buildings, castles and walls, crossings, water, roads,
 // harbours, clearing, Stamp, Row and Plot), the menus' state, the worker ops they call and their
 // undo steps. App keeps `syncTool()` / `go()` and calls `armBuild` / `disarmBuild`.
-import { untrack } from 'svelte';
-import type { BuildingEdit, BuildingFuncs, PieceEdit, Created, Crossing, Edits, BlockFill, RowRoadAnswer, Tint, Water } from '../../gen/protocol';
+import type { BuildingEdit, BuildingFuncs, PieceEdit, Created, Edits, Tint } from '../../gen/protocol';
 import { TINT_MATERIAL, WHARF_WIDTH } from '../../gen/protocol';
-import { fillColour } from '../streets';
 import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type BuildShape, type Pt } from '../build';
-import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from '../crossing';
-import { HarbourTool, defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from '../harbour';
-import { MAX_WATERS, WaterTool, centre, defaultWater, depthOf, flows, isDug, isLine, legacy, lookOf, ofSea, shore, streamLevels, streamSamples, waterProblem, widthOf, type WaterSettings } from '../water';
-import { MAX_PATHS, PathDrawTool, defaultPath, kindWidth, pathProblem, type PathSettings } from '../paths';
+import { CrossingTool } from '../crossing';
+import { HarbourTool } from '../harbour';
+import { WaterTool } from '../water';
+import { PathDrawTool, kindWidth } from '../paths';
 import { FENCE_KINDS } from '../fence';
 import { fenceTools } from './fences.svelte';
-import { WorksTool, defaultWorks, type WorksSettings } from '../works';
-import type { BuildMode, QuickInfo } from '../../ui/BuildPanel.svelte';
-import { PathTool, StampTool, defaultLasso, defaultRow, defaultStamp, type LassoSettings, type RowSettings, type StampSettings } from '../quick';
-import { newObjectId } from '../scatter';
+import { waterways } from './waterways.svelte';
+import { quickTools } from './quick.svelte';
+import { WorksTool } from '../works';
+import type { BuildMode } from '../../ui/BuildPanel.svelte';
+import { PathTool, StampTool } from '../quick';
 import { hitName, sentence, type BuildingHit } from '../../ui/gazetteer';
 import { existingSite } from '../../world/world';
 
@@ -55,24 +54,10 @@ export function buildTools(app: BuildHost) {
   /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
    * own buildings. */
   let buildMode = $state<BuildMode>('building');
-  let works = $state<WorksSettings>(defaultWorks());
-  /** The castle or wall drawn by hand being changed (its created id). */
-  let worksEditing = $state<string | null>(null);
-  /** The world's own buildings standing where a castle or wall would go: take them away with it? */
-  let inWayAsk = $state<{ what: string; count: number; choose: (go: boolean) => void } | null>(null);
-  let cross = $state<CrossSettings>(defaultCross());
-  /** The crossing put down by hand being changed (its id). */
-  let crossEditing = $state<string | null>(null);
-  /** Build › Water: the kind new outlines get, and the water picked (its id), else drawing new ones. */
-  let water = $state<WaterSettings>(defaultWater());
-  let waterPicked = $state<string | null>(null);
-  /** Build › Road: the type, width and name new roads get, and the road picked (its id), else drawing new ones. */
-  let road = $state<PathSettings>(defaultPath());
-  let roadPicked = $state<string | null>(null);
-  let harbour = $state<HarbourSettings>(defaultHarbour());
-  /** The quay, pier or breakwater picked (its id). */
-  let harbourPicked = $state<string | null>(null);
 
+  // Crossing, Water, Road and Docks & islets; Stamp, Row, Plot and the works: their own controllers.
+  const w = waterways(app);
+  const q = quickTools(app, { mode: () => buildMode, armed: () => buildArmed, build: () => build, setMode: setBuildMode });
   function armBuild() {
     if (buildArmed) return;
     if (!buildFuncs) void app.view.gen.buildingFuncs().then((f) => (buildFuncs = f));
@@ -82,804 +67,86 @@ export function buildTools(app: BuildHost) {
       hint: (t) => app.toast(t),
     });
     const crossTool = new CrossingTool({
-      settings: () => cross,
+      settings: () => w.cross,
       edits: () => app.edits,
-      picked: () => crossEditing,
-      placed: crossPlaced,
-      pick: pickCrossing,
+      picked: () => w.crossEditing,
+      placed: w.crossPlaced,
+      pick: w.pickCrossing,
       hint: (t) => app.toast(t),
     });
     const waterTool = new WaterTool({
       edits: () => app.edits,
-      picked: () => waterPicked,
-      brush: () => water.brush,
-      dug: () => water.dug,
-      width: () => water.width,
-      placed: waterPlaced,
-      pick: (id) => (waterPicked = id),
+      picked: () => w.waterPicked,
+      brush: () => w.water.brush,
+      dug: () => w.water.dug,
+      width: () => w.water.width,
+      placed: w.waterPlaced,
+      pick: (id) => (w.waterPicked = id),
       hint: (t) => app.toast(t),
     });
     const harbourTool = new HarbourTool({
-      settings: () => harbour,
+      settings: () => w.harbour,
       edits: () => app.edits,
-      picked: () => harbourPicked,
-      islet: (at) => void harbourIslet(at),
-      wharf: (a, b) => void harbourWharf(a, b),
-      pick: (id) => (harbourPicked = id),
+      picked: () => w.harbourPicked,
+      islet: (at) => void w.harbourIslet(at),
+      wharf: (a, b) => void w.harbourWharf(a, b),
+      pick: (id) => (w.harbourPicked = id),
       hint: (t) => app.toast(t),
     });
     const worksTool = new WorksTool({
       mode: () => (buildMode === 'castle' ? 'castle' : 'wall'),
-      settings: () => works,
-      editing: () => worksSite(worksEditing),
-      castle: (poly, gate) => void placeWorks({ kind: 'castle', poly, ...(gate != null ? { gate } : {}) }),
-      wall: (pts, gates, closed) => void placeWorks({ kind: 'wall', pts, ...(gates.length ? { gates } : {}), ...(closed ? { closed } : {}) }),
+      settings: () => q.works,
+      editing: () => q.worksSite(q.worksEditing),
+      castle: (poly, gate) => void q.placeWorks({ kind: 'castle', poly, ...(gate != null ? { gate } : {}) }),
+      wall: (pts, gates, closed) => void q.placeWorks({ kind: 'wall', pts, ...(gates.length ? { gates } : {}), ...(closed ? { closed } : {}) }),
       gates: (change) => {
-        const c = worksSite(worksEditing);
+        const c = q.worksSite(q.worksEditing);
         if (!c) return;
-        void placeWorks('sides' in change ? { kind: 'castle', poly: c.poly, gate: change.sides[0], gates: change.sides.length > 1 ? change.sides.slice(1) : undefined } : { kind: 'wall', pts: change.pts, gates: change.gates.length ? change.gates : undefined }, true);
+        void q.placeWorks('sides' in change ? { kind: 'castle', poly: c.poly, gate: change.sides[0], gates: change.sides.length > 1 ? change.sides.slice(1) : undefined } : { kind: 'wall', pts: change.pts, gates: change.gates.length ? change.gates : undefined }, true);
       },
       hint: (t) => app.toast(t),
     });
-    const stampTool = new StampTool({ at: (x, y, place) => void stampAt(x, y, place), hint: (t) => app.toast(t) });
-    const pathTool = new PathTool({ mode: () => (buildMode === 'lasso' ? 'lasso' : 'row'), changed: (path, done) => void pathChanged(path, done), hint: (t) => app.toast(t) });
+    const stampTool = new StampTool({ at: (x, y, place) => void q.stampAt(x, y, place), hint: (t) => app.toast(t) });
+    const pathTool = new PathTool({ mode: () => (buildMode === 'lasso' ? 'lasso' : 'row'), changed: (path, done) => void q.pathChanged(path, done), hint: (t) => app.toast(t) });
     const roadTool = new PathDrawTool({
       edits: () => app.edits,
-      picked: () => roadPicked,
-      width: () => (roadPicked ? (app.edits.paths?.[roadPicked]?.width ?? kindWidth(app.edits.paths?.[roadPicked]?.type ?? road.kind)) : road.width),
-      placed: roadPlaced,
-      pick: (id) => (roadPicked = id),
+      picked: () => w.roadPicked,
+      width: () => (w.roadPicked ? (app.edits.paths?.[w.roadPicked]?.width ?? kindWidth(app.edits.paths?.[w.roadPicked]?.type ?? w.road.kind)) : w.road.width),
+      placed: w.roadPlaced,
+      pick: (id) => (w.roadPicked = id),
       hint: (t) => app.toast(t),
     });
     buildArmed = { tool, cross: crossTool, water: waterTool, harbour: harbourTool, works: worksTool, stamp: stampTool, path: pathTool, road: roadTool };
   }
 
-  // Quick placement: Stamp, Row and Plot (Lasso). A ghost follows the generator's answer (the same
-  // `placing` code the agent tools use); each placing is one change (one undo step).
-  let stampSet = $state<StampSettings>(defaultStamp());
-  let rowSet = $state<RowSettings>(defaultRow());
-  let lassoSet = $state<LassoSettings>(defaultLasso());
-  /** the plot drawn by hand being changed from Select (its created id): its fill, ward,
-   * lots, layout and name rewritten in place as they are set, one step to undo each. */
-  let plotEditing = $state<string | null>(null);
-  let plotTimer: ReturnType<typeof setTimeout> | null = null;
-  let quick = $state<QuickInfo>({ can: false, text: '' });
-  /** The newest preview asked for (an older answer is dropped). */
-  let quickToken = 0;
-  /** Where the stamp's ghost was last asked for. */
-  let stampLast: Pt | null = null;
-  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
-
-  function stampAsk(x: number, y: number) {
-    return { x, y, func: build.func, size: stampSet.size, clear: stampSet.clear, ...(stampSet.facing != null ? { facing: stampSet.facing } : {}), id: `c:${(app.edits.created ?? []).length}` };
-  }
-
-  /** The ghost's question in flight, and the newest place asked meanwhile (one at a time, the latest wins). */
-  let stampBusy = false;
-  let stampNext: Pt | null = null;
-  /** A click's building is being put down: no preview is asked meanwhile. */
-  let stampPlacing = false;
-  /** The pointer is at (x, y) in Stamp: the ghost there, or (a click) the building put down. */
-  async function stampAt(x: number, y: number, place: boolean) {
-    if (place) {
-      // A click always puts down at the click: no queued preview runs after it (it would take the answer's token).
-      stampNext = null;
-      stampPlacing = true;
-      try {
-        return await stampRun(x, y, true);
-      } finally {
-        stampPlacing = false;
-      }
-    }
-    if (stampPlacing) return;
-    stampLast = [x, y];
-    if (stampBusy) {
-      stampNext = [x, y];
-      return;
-    }
-    stampBusy = true;
-    try {
-      let at: Pt | null = [x, y];
-      while (at) {
-        stampNext = null;
-        await stampRun(at[0], at[1], false);
-        at = stampPlacing ? null : (stampNext as Pt | null);
-      }
-    } finally {
-      stampBusy = false;
-    }
-  }
-
-  async function stampRun(x: number, y: number, place: boolean) {
-    const tool = buildArmed?.stamp;
-    if (!tool || buildMode !== 'stamp') return;
-    stampLast = [x, y];
-    const token = ++quickToken;
-    const r = await app.view.gen.stamp(stampAsk(x, y));
-    if (token !== quickToken || buildMode !== 'stamp') return;
-    if (!r) return void (quick = { can: false, text: 'The map could not answer: try again', bad: true });
-    if ('error' in r) {
-      tool.ghost = null;
-      tool.gone = [];
-      quick = { can: false, text: sentence(r.error), bad: true };
-      return place ? app.toast(quick.text) : undefined;
-    }
-    tool.ghost = { poly: r.poly, facing: r.facing, ok: true };
-    tool.gone = r.removed.map((b) => b.at);
-    quick = { can: true, text: `${r.name}${r.removed.length ? `: ${plural(r.removed.length, 'building')} taken away` : ''}${r.moved_ft > 5 ? `, ${Math.round(r.moved_ft)} ft from the click` : ''}`, removed: r.removed.length };
-    if (place) void stampPlace([x, y]);
-  }
-
-  /** Put down the ghost's building (with the generated ones under it, if asked): one change; Stamp stays on. */
-  async function stampPlace(at: Pt | null = stampLast) {
-    const tool = buildArmed?.stamp;
-    if (!at || !tool) return;
-    const r = await app.view.gen.stamp(stampAsk(at[0], at[1]));
-    if (!r || 'error' in r) return app.toast(r ? sentence(r.error) : 'The map could not answer: try again');
-    const id = `c:${(app.edits.created ?? []).length}`;
-    const opts = buildOptions(build);
-    const old = existingSite(app.edits, { id, kind: 'building', x: 0, y: 0, name: '', poly: r.poly }, [0, 0]);
-    if (old) return app.toast(`${old.name} is already here`);
-    // (With generated buildings to take away the stamp's own answer holds the spot: the plain check would refuse them.)
-    const spot = r.removed.length ? { x: r.x, y: r.y, name: r.name } : await app.view.gen.buildingSpot(r.poly, opts.func, id);
-    if (!spot) return app.toast('The map could not answer: try again');
-    if ('error' in spot) return app.toast(sentence(spot.short ?? spot.error));
-    const c: Created = { id, kind: 'building', x: spot.x, y: spot.y, name: build.name.trim() || spot.name, poly: r.poly, ...opts };
-    const buildings = { ...(app.edits.buildings ?? {}) };
-    for (const b of r.removed) buildings[b.id] = { at: b.at, removed: true };
-    app.applyEdits({ ...app.edits, created: [...(app.edits.created ?? []), c], ...(r.removed.length ? { buildings } : {}) }, { tool: 'place_stamp', id, name: c.name }, 'user');
-    build.name = '';
-    tool.ghost = null;
-    tool.gone = [];
-    quick = { can: false, text: '' };
-  }
-
-  /** The row's road, if asked for (the width only past what the kind alone gives). */
-  const roadAsk = () => (rowSet.road.on ? { road: { kind: rowSet.road.kind, width: rowSet.road.width } } : {});
-
-  /** The row or outline being drawn changed (`done`: finished). */
-  async function pathChanged(path: Pt[], done: boolean) {
-    const tool = buildArmed?.path;
-    if (!tool) return;
-    const token = ++quickToken;
-    if (buildMode === 'row') {
-      if (path.length < 2) {
-        tool.lots = [];
-        tool.refused = [];
-        tool.roadLine = null;
-        quick = { can: false, text: '' };
-        return;
-      }
-      const q = { line: path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: (app.edits.created ?? []).length, ...roadAsk() };
-      const r = await app.view.gen.row(q);
-      if (token !== quickToken || buildMode !== 'row') return;
-      if (!r || 'error' in r) {
-        tool.lots = [];
-        tool.refused = [];
-        tool.roadLine = null;
-        quick = { can: false, text: r ? sentence(r.error) : 'The map could not answer: try again', bad: true };
-        return;
-      }
-      tool.lots = r.lots.map((l) => l.poly);
-      tool.refused = r.refused.map((f) => [f.x, f.y]);
-      tool.roadLine = r.road?.line ?? null;
-      tool.roadWidth = rowSet.road.width;
-      const fresh = r.lots.filter((l) => !l.existing).length;
-      const newRoad = !!r.road && !r.road.kept;
-      const parts = [`${plural(fresh, 'building')} in ${Math.round(r.length_ft)} ft`];
-      if (r.refused_count) parts.push(`${r.refused_count} would not fit (${r.refused[0].why})`);
-      const gone = r.removed.length + (r.road && !r.road.kept ? r.road.removed.length : 0);
-      if (gone) parts.push(`${plural(gone, 'building')} taken away`);
-      if (r.road) parts.push(r.road.kept ? 'the road is here already' : r.road.as === 'street' ? 'with a street' : 'with a road');
-      quick = { can: done && (fresh > 0 || newRoad), text: fresh || newRoad ? parts.join('; ') : 'All of these are here already', removed: gone };
-      if (!done && fresh) quick.text += ' · press Enter to finish';
-      return;
-    }
-    // Plot: only a finished outline is checked.
-    tool.over = null;
-    tool.bad = false;
-    if (!done) return void (quick = { can: false, text: '' });
-    const r = await app.view.gen.parcelCheck(path);
-    if (token !== quickToken || buildMode !== 'lasso') return;
-    if (!r) return void (quick = { can: false, text: 'The map could not answer: try again', bad: true });
-    if ('error' in r) {
-      tool.bad = true;
-      tool.over = r.over ?? null;
-      return void (quick = { can: false, text: sentence(r.error), bad: true });
-    }
-    quick = { can: true, text: 'Ready: this outline can be a plot' };
-  }
-
-  /** The row's settings changed: lay it again over the same path. */
-  $effect(() => {
-    void JSON.stringify(rowSet);
-    void app.edits.created?.length;
-    const tool = buildArmed?.path;
-    if (buildMode === 'row' && tool && tool.path.length >= 2) untrack(() => void pathChanged(tool.path, tool.finished));
-  });
-  /** The stamp's settings changed: the ghost again where it was. */
-  $effect(() => {
-    void stampSet.size;
-    void stampSet.clear;
-    void stampSet.facing;
-    void build.func;
-    if (buildMode === 'stamp' && stampLast) untrack(() => void stampAt(stampLast![0], stampLast![1], false));
-  });
-
-  /** Plots drawn by hand outlined while Build is open, each in its fill's colour. */
-  $effect(() => {
-    const plots = app.buildOn ? (app.edits.created ?? []).filter((c) => c.kind === 'plot' && !c.removed && (c.poly?.length ?? 0) >= 3) : [];
-    app.view.setPlotOutlines(plots.map((c) => ({ poly: c.poly!, color: fillColour((c.fill ?? { kind: 'generated', ward: 'common' }) as BlockFill) })));
-  });
-
-  /** `next` with a row's road written: a drawn road, a hand town's street records, or a generated town's edit. */
-  function withRoad(next: Edits, road: RowRoadAnswer): Edits {
-    const out: Edits = { ...next };
-    if (road.path) out.paths = { ...(next.paths ?? {}), [newObjectId('rw')]: road.path };
-    for (const field of ['streets', 'wharves', 'towns'] as const) {
-      const recs = road[field];
-      if (!recs || !Object.keys(recs).length) continue;
-      const m = { ...((next[field] ?? {}) as Record<string, unknown>) };
-      for (const [k, v] of Object.entries(recs)) {
-        if (v === null) delete m[k];
-        else m[k] = v;
-      }
-      (out as Record<string, unknown>)[field] = m;
-    }
-    if (road.towns && road.town != null) {
-      const k = String(road.town);
-      if (road.towns[k]) {
-        const [x0, y0, x1, y1] = road.line.reduce((b, p) => [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])], [Infinity, Infinity, -Infinity, -Infinity]);
-        const w = rowSet.road.width + 160;
-        app.view.hintTown(k, road.towns[k], [[x0 - w, y0 - w, x1 + w, y1 + w]]);
-      }
-    }
-    return out;
-  }
-
-  /** The row or plot being drawn, put down: one change. */
-  async function quickPlace() {
-    if (buildMode === 'stamp') return void stampPlace();
-    const tool = buildArmed?.path;
-    if (!tool || !tool.finished) return;
-    const n = (app.edits.created ?? []).length;
-    if (buildMode === 'row') {
-      const q = { line: tool.path, side: rowSet.side, ward: rowSet.ward, kinds: [...rowSet.kinds], ...(rowSet.depth ? { depth: rowSet.depth } : {}), gaps: rowSet.gaps, clear: rowSet.clear, seed: rowSet.seed, first_id: n, ...roadAsk() };
-      const r = await app.view.gen.row(q);
-      if (!r || 'error' in r) return app.toast(r ? sentence(r.error) : 'The map could not answer: try again');
-      const made: Created[] = [];
-      for (const l of r.lots) {
-        if (l.existing) continue;
-        made.push({ id: `c:${n + made.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, func: l.func, floors: l.floors, ...(l.faces ? { faces: l.faces } : {}) });
-      }
-      const road = r.road && !r.road.kept ? r.road : null;
-      if (!made.length && !road) return app.toast('All of these are here already');
-      const buildings = { ...(app.edits.buildings ?? {}) };
-      for (const b of r.removed) buildings[b.id] = { at: b.at, removed: true };
-      let next: Edits = { ...app.edits, created: [...(app.edits.created ?? []), ...made], ...(r.removed.length ? { buildings } : {}) };
-      if (road) next = withRoad(next, road);
-      app.applyEdits(next, { tool: 'create_building_row', count: made.length, ...(road ? { road: road.as } : {}) }, 'user');
-      // (The history toast says what went down, with Undo; only what did not fit is added.)
-      if (r.refused_count) app.toast(`${r.refused_count} would not fit`);
-    } else {
-      // (A new plot drawn: the one being changed is let go first.)
-      if (plotEditing) plotDone();
-      const poly = tool.path;
-      const r = await app.view.gen.parcelCheck(poly);
-      if (!r || 'error' in r) return app.toast(r ? sentence(r.error) : 'The map could not answer: try again');
-      const fill = plotFill();
-      const c: Created = { id: `c:${n}`, kind: 'plot', x: r.x, y: r.y, name: lassoSet.name.trim(), poly, fill };
-      if (existingSite(app.edits, c, [c.x, c.y])) return app.toast('There is a plot here already');
-      // (The world's own buildings under it give way to its fill, in the same change.)
-      const removed = r.removed ?? [];
-      const buildings = { ...(app.edits.buildings ?? {}) };
-      for (const b of removed) buildings[b.id] = { at: b.at, removed: true };
-      app.applyEdits({ ...app.edits, created: [...(app.edits.created ?? []), c], ...(removed.length ? { buildings } : {}) }, { tool: 'create_parcel', id: c.id, name: c.name }, 'user');
-      app.toast(`Plot made${removed.length ? `; ${plural(removed.length, 'building')} taken away for it` : ''}`);
-    }
-    tool.reset();
-    quick = { can: false, text: '' };
-  }
-
-  /** A plot drawn by hand, by its created id. */
-  function plotSite(id: string | null): Created | null {
-    const c = id ? app.edits.created?.find((x) => x.id === id) : null;
-    return c && !c.removed && c.kind === 'plot' ? c : null;
-  }
-
-  /** The plot's fill as Fill an area's settings say it. */
-  function plotFill(): Record<string, unknown> {
-    return lassoSet.fill === 'generated'
-      ? { kind: 'generated', ward: lassoSet.ward, ...(lassoSet.lots ? { lots: lassoSet.lots } : {}), ...(lassoSet.reroll ? { reroll: lassoSet.reroll } : {}) }
-      : lassoSet.fill === 'hand'
-        ? { kind: 'hand' }
-        : { kind: 'open', open: lassoSet.open };
-  }
-
-  /** Open Fill an area on a plot drawn by hand, its settings loaded (Select's Change). */
-  function editPlot(id: string) {
-    const c = plotSite(id);
-    if (!c) return;
-    setBuildMode('lasso');
-    const f = (c.fill ?? { kind: 'generated', ward: 'common' }) as { kind: string; ward?: string; lots?: string; reroll?: number; open?: string };
-    const d = defaultLasso();
-    lassoSet = { fill: f.kind === 'hand' ? 'hand' : f.kind === 'open' ? 'open' : 'generated', ward: f.ward ?? d.ward, lots: f.lots ?? '', reroll: f.reroll ?? 0, open: f.open ?? d.open, name: c.name ?? '' };
-    plotEditing = c.id;
-  }
-
-  /** The plot being changed given the menu's settings now: one step to undo (nothing if the same). */
-  function savePlot() {
-    if (plotTimer) clearTimeout(plotTimer);
-    plotTimer = null;
-    const c = plotSite(plotEditing);
-    if (!c) return;
-    const fill = plotFill();
-    const name = lassoSet.name.trim();
-    if (JSON.stringify(fill) === JSON.stringify(c.fill ?? null) && name === (c.name ?? '')) return;
-    const created = (app.edits.created ?? []).map((x) => (x.id === c.id ? { ...x, fill, name } : x));
-    app.applyEdits({ ...app.edits, created }, { tool: 'update_parcel', id: c.id, name }, 'user');
-  }
-
-  // (A change to the plot's settings is written once they stop changing for a moment: typing its
-  // name is one step, not one per letter.)
-  $effect(() => {
-    const v = JSON.stringify(lassoSet);
-    if (!plotEditing) return;
-    void v;
-    untrack(() => {
-      if (plotTimer) clearTimeout(plotTimer);
-      plotTimer = setTimeout(savePlot, 500);
-    });
-  });
-
-  /** The plot being changed taken away (one step to undo). */
-  function removePlot() {
-    const c = plotSite(plotEditing);
-    if (plotTimer) clearTimeout(plotTimer);
-    plotTimer = null;
-    plotEditing = null;
-    if (!c) return;
-    const created = (app.edits.created ?? []).map((x) => (x.id === c.id ? { ...x, removed: true } : x));
-    app.applyEdits({ ...app.edits, created }, { tool: 'delete_feature', id: c.id }, 'user');
-  }
-
-  /** Done with the plot being changed: what is set is written now. */
-  function plotDone() {
-    if (plotTimer) savePlot();
-    plotEditing = null;
-  }
-
-  function quickDrop() {
-    buildArmed?.path.reset();
-    quick = { can: false, text: '' };
-  }
-
-  /** A castle or wall drawn by hand, by its created id. */
-  function worksSite(id: string | null): Created | null {
-    const c = id ? app.edits.created?.find((x) => x.id === id) : null;
-    return c && !c.removed && (c.kind === 'castle' || c.kind === 'wall') ? c : null;
-  }
-
-  /** A castle's or wall's options from the menu (its outline, line and gates aside). */
-  function worksOptions(kind: string): Partial<Created> {
-    if (kind === 'wall') return works.closed ? { closed: true } : {};
-    const o: Partial<Created> = {};
-    if (!works.keep) o.keep = false;
-    if (!works.yardBuildings) o.yard_buildings = false;
-    if (works.ruin) o.structure = 'ruin';
-    if (works.keep && works.keepShape !== 'auto') o.keep_shape = works.keepShape;
-    if (works.moat !== 'auto') o.moat = works.moat;
-    return o;
-  }
-
-  /** A castle or wall drawn, or the one being changed drawn again or given new options or gates
-   * (`keepOpts`: with its options as they were): checked by the generator; the world's own
-   * buildings in its way go with it, in the same change, if the user says so. */
-  async function placeWorks(shape: Partial<Created> & { kind: 'castle' | 'wall' }, keepOpts = false) {
-    const tool = buildArmed?.works;
-    const done = () => {
-      if (tool) tool.pending = null;
-    };
-    const editing = worksSite(worksEditing);
-    if (editing && editing.kind !== shape.kind) return void (done(), app.toast(`Draw a ${editing.kind} to change it`));
-    const id = editing?.id ?? `c:${(app.edits.created ?? []).length}`;
-    const opts: Partial<Created> =
-      keepOpts && editing
-        ? { keep: editing.keep, keep_shape: editing.keep_shape, keep_poly: editing.keep_poly, yard_buildings: editing.yard_buildings, moat: editing.moat, structure: editing.structure, closed: editing.closed }
-        : worksOptions(shape.kind);
-    const draft = { id, x: 0, y: 0, name: '', ...opts, ...shape } as Created;
-    for (const k of Object.keys(draft) as (keyof Created)[]) if (draft[k] === undefined) delete draft[k];
-    if (!editing && existingSite(app.edits, draft, [0, 0])) {
-      done();
-      return app.toast('That is already here');
-    }
-    const spot = await app.view.gen.worksSpot(draft);
-    if (!spot) return void (done(), app.toast('The map could not answer: try again'));
-    if ('error' in spot) return void (done(), app.toast(spot.error.charAt(0).toUpperCase() + spot.error.slice(1)));
-    const what = shape.kind;
-    if (spot.in_way.length) {
-      const yes = await new Promise<boolean>((choose) => (inWayAsk = { what, count: spot.in_way.length, choose }));
-      inWayAsk = null;
-      if (!yes) return void done();
-    }
-    done();
-    const name = works.name.trim() || editing?.name || spot.name;
-    // (A castle's pieces changed by hand stay through a redraw or new options.)
-    // (A wall's ends put onto the walls they meet: a T-join.)
-    const c: Created = { ...draft, x: spot.x, y: spot.y, name, ...(editing?.pieces ? { pieces: editing.pieces } : {}), ...(spot.pts ? { pts: spot.pts } : {}) };
-    const all = { ...(app.edits.buildings ?? {}) };
-    for (const b of spot.in_way) all[b.id] = { at: b.at, removed: true };
-    const buildings = spot.in_way.length ? all : app.edits.buildings;
-    if (editing) {
-      const created = (app.edits.created ?? []).map((x) => (x.id === c.id ? c : x));
-      app.applyEdits({ ...app.edits, created, buildings }, { tool: 'update_feature', id: c.id, name }, 'user');
-    } else {
-      // (Numbered as it is added: another site may have come in meanwhile.)
-      c.id = `c:${(app.edits.created ?? []).length}`;
-      app.applyEdits({ ...app.edits, created: [...(app.edits.created ?? []), c], buildings }, { tool: 'create_feature', id: c.id, kind: what, name }, 'user');
-    }
-    works.name = '';
-  }
-
-  /** The castle or wall being changed gets the menu's options (its outline, line and gates stay). */
-  function saveWorks() {
-    const c = worksSite(worksEditing);
-    if (!c) return;
-    const { keep: _k, keep_shape: _ks, keep_poly: kp, yard_buildings: _y, moat: _m, structure: _s, closed: _c, ...rest } = c;
-    // (A drawn keep keeps its outline while it stays drawn.)
-    const drawn = works.keep && works.keepShape === 'drawn' && kp?.length ? { keep_poly: kp } : {};
-    void placeWorks({ ...rest, ...drawn, ...worksOptions(c.kind), kind: c.kind as 'castle' | 'wall' });
-  }
-
-  /** Open the build menu on a castle or wall drawn by hand. */
-  function editWorks(id: string) {
-    const c = worksSite(id);
-    if (!c) return;
-    app.go('edit', 'build');
-    setBuildMode(c.kind as 'castle' | 'wall');
-    worksEditing = c.id;
-    works = {
-      castleShape: (c.poly?.length ?? 0) === 4 ? 'rect' : 'poly',
-      keep: c.keep !== false,
-      keepShape: c.keep_shape ?? (c.keep_poly?.length ? 'drawn' : 'auto'),
-      moat: c.moat ?? 'auto',
-      yardBuildings: c.yard_buildings !== false,
-      ruin: c.structure === 'ruin',
-      closed: !!c.closed,
-      name: '',
-    };
-  }
   function disarmBuild() {
     buildArmed = null;
-    worksEditing = null;
+    q.worksEditing = null;
     buildEditing = null;
     genEditing = null;
-    crossEditing = null;
-    harbourPicked = null;
+    w.crossEditing = null;
+    w.harbourPicked = null;
   }
 
   function setBuildMode(m: BuildMode) {
-    if (plotEditing) plotDone();
+    q.closePlot();
     buildMode = m;
-    worksEditing = null;
-    buildArmed?.works.reset();
     buildEditing = null;
     genEditing = null;
-    crossEditing = null;
-    harbourPicked = null;
-    waterPicked = null;
-    roadPicked = null;
+    w.crossEditing = null;
+    w.harbourPicked = null;
+    w.waterPicked = null;
+    w.roadPicked = null;
     buildArmed?.cross.reset();
     buildArmed?.water.reset();
     buildArmed?.road.reset();
     fences.tool.reset();
     buildArmed?.harbour.reset();
-    buildArmed?.path.reset();
-    if (buildArmed) (buildArmed.stamp.ghost = null), (buildArmed.stamp.gone = []);
-    stampLast = null;
-    quickToken++;
-    quick = { can: false, text: '' };
+    q.leave();
     app.syncTool();
   }
 
   /** The shops standing on a crossing now (their created ids). */
-  const shopsOn = (id: string): Created[] => (app.edits.created ?? []).filter((c) => c.on === id && !c.removed && c.kind === 'building');
-
-  /** `edits.created` with the shops on crossing `id` taken away (they stay in the list, removed). */
-  const withoutShops = (id: string): Created[] => (app.edits.created ?? []).map((c) => (c.on === id && !c.removed && c.kind === 'building' ? { ...c, removed: true } : c));
-
-  /** `created` with shops laid along bridge `c` (`id`) as the menu's depth says; or why not. */
-  async function withShops(id: string, c: Crossing, created: Created[]): Promise<Created[] | string> {
-    const r = await app.view.gen.bridgeLots(c, { depth: cross.shopDepth, frontage: SHOP_FRONT_FT, lane: cross.shopLane, vary: cross.shopVary, id });
-    if (!r) return 'The map could not answer: try again';
-    if ('error' in r) return r.error.replace(/^shops: /, '').replace(/^./, (x) => x.toUpperCase());
-    const out = [...created];
-    for (const lot of r.lots) {
-      const x = lot.poly.reduce((s, p) => s + p[0], 0) / lot.poly.length;
-      const y = lot.poly.reduce((s, p) => s + p[1], 0) / lot.poly.length;
-      out.push({ id: `c:${out.length}`, kind: 'building', x, y, name: '', poly: lot.poly, floors: lot.floors, func: lot.func, on: id });
-    }
-    return out;
-  }
-
-  /** Both banks clicked: a new crossing there, or the one being changed moved there; a bridge
-   * with its shops (laid out again if it had them) as one change. */
-  async function crossPlaced(a: Pt, b: Pt) {
-    const c: Crossing = crossingOf(cross, a, b);
-    const withShopsOn = cross.shops && c.kind === 'bridge';
-    if (withShopsOn) c.width = Math.max(c.width, shopsWidth(cross.shopDepth, cross.shopLane));
-    const problem = crossingProblem(c);
-    if (problem) return app.toast(problem);
-    const editing = crossEditing && app.edits.crossings?.[crossEditing] ? crossEditing : null;
-    const id = editing ?? newObjectId('v');
-    const next: Edits = { ...app.edits, crossings: { ...(app.edits.crossings ?? {}), [id]: c } };
-    const had = editing ? shopsOn(editing).length > 0 : false;
-    if (withShopsOn || had) {
-      let created: Created[] | string = app.edits.created ?? [];
-      if (editing && had && withShopsOn) {
-        const r = await app.view.gen.followBridge(id, c, app.edits.crossings?.[id], created);
-        created = !r ? 'The map could not answer: try again' : 'error' in r ? r.error : r.created;
-      } else {
-        if (had) created = withoutShops(id);
-        if (withShopsOn) created = await withShops(id, c, created);
-      }
-      if (typeof created === 'string') return app.toast(created);
-      next.created = created;
-    }
-    app.applyEdits(next, { tool: 'place_crossing', id, kind: c.kind, changed: !!editing }, 'user');
-  }
-
-  /** A crossing put down earlier was clicked: the menu shows it, to change or take away. */
-  function pickCrossing(id: string) {
-    const c = app.edits.crossings?.[id];
-    if (!c) return;
-    crossEditing = id;
-    const shops = shopsOn(id);
-    // (Their depth as they stand: the first one's short side across the deck.)
-    const sides = shops.map((s) => {
-      const q = s.poly ?? [];
-      return q.length >= 4 ? [Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]), Math.hypot(q[2][0] - q[1][0], q[2][1] - q[1][1])] : [0, 0];
-    });
-    const depths = sides.map((d) => Math.min(d[0], d[1]));
-    const depth = depths.length ? Math.max(...depths) : cross.shopDepth;
-    const vary = depths.length > 0 && (Math.max(...depths) - Math.min(...depths) > 0.5 || sides.some((d) => Math.abs(Math.max(d[0], d[1]) - Math.max(sides[0][0], sides[0][1])) > 0.5));
-    cross = { kind: c.kind, width: c.width, material: c.material ?? 'timber', shops: shops.length > 0, shopDepth: Math.max(10, Math.min(40, Math.round(depth))), shopLane: cross.shopLane, shopVary: depths.length ? vary : cross.shopVary };
-  }
-
-  /** The crossing being changed gets the menu's kind, width and material (its ends stay); its
-   * shops follow it, or go (the toggle off) or come (on). */
-  async function saveCrossing() {
-    const id = crossEditing;
-    const c = id ? app.edits.crossings?.[id] : null;
-    if (!c || !id) return;
-    const next: Crossing = crossingOf(cross, c.a, c.b);
-    const withShopsOn = cross.shops && next.kind === 'bridge';
-    if (withShopsOn) next.width = Math.max(next.width, shopsWidth(cross.shopDepth, cross.shopLane));
-    const problem = crossingProblem(next);
-    if (problem) return app.toast(problem);
-    const out: Edits = { ...app.edits, crossings: { ...(app.edits.crossings ?? {}), [id]: next } };
-    const had = shopsOn(id).length > 0;
-    if (withShopsOn || had) {
-      let created: Created[] | string = app.edits.created ?? [];
-      if (had && withShopsOn) {
-        const r = await app.view.gen.followBridge(id, next, c, created);
-        created = !r ? 'The map could not answer: try again' : 'error' in r ? r.error : r.created;
-      } else {
-        if (had) created = withoutShops(id);
-        if (withShopsOn) created = await withShops(id, next, created);
-      }
-      if (typeof created === 'string') return app.toast(created);
-      out.created = created;
-    }
-    app.applyEdits(out, { tool: 'place_crossing', id, kind: next.kind, changed: true }, 'user');
-  }
-
-  /** The level an outline takes (as `mapd`'s `create_water`): the water's where it reaches the sea
-   * or a lake (the highest), else the sea's for a legacy inlet or basin, else 1 ft under the lowest
-   * ground on its shore, as the loaded tiles have them. Water with no kind reaches the sea within
-   * 4 ft of its shore (read out there too) and then stands at its level exactly, else half a foot
-   * over it at least (so it looks the sea's only where it joins it). */
-  function waterLevel(w: Water): number {
-    const sea = app.view.geom?.sea_level_ft ?? 0;
-    const modern = !legacy(w);
-    // Along its shore as shaped (`Water::shore`), at most 96 points of it.
-    const sh = shore(w);
-    const every = Math.max(1, Math.ceil(sh.length / 96));
-    const pts = sh.filter((_, i) => i % every === 0);
-    const n = pts.length;
-    const per = Math.max(1, Math.floor(96 / n));
-    let a2 = 0;
-    for (let i = 0; i < n; i++) a2 += pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1];
-    const out = modern ? (a2 > 0 ? -4 : 4) : 0;
-    let [wet, low] = [-Infinity, Infinity];
-    for (let i = 0; i < n; i++) {
-      const [a, b] = [pts[i], pts[(i + 1) % n]];
-      const l = Math.max(1e-9, Math.hypot(b[0] - a[0], b[1] - a[1]));
-      const [ox, oy] = [((b[1] - a[1]) / l) * out, (-(b[0] - a[0]) / l) * out];
-      for (let s = 0; s < per; s++) {
-        const t = s / per;
-        const [x, y] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-        const at = app.view.surfaceAt(x, y);
-        if (at) {
-          if (at[1] > at[0]) wet = Math.max(wet, at[1]);
-          low = Math.min(low, at[0]);
-        }
-        const o = out ? app.view.surfaceAt(x + ox, y + oy) : null;
-        if (o && o[1] > o[0]) wet = Math.max(wet, o[1]);
-      }
-    }
-    if (wet > -Infinity) return modern && wet <= sea + 1 ? sea : Math.round(wet * 10) / 10;
-    if (ofSea(w) || low === Infinity) return sea;
-    return Math.round(Math.max(modern ? sea + 0.5 : sea, low - 1) * 10) / 10;
-  }
-
-  /** A stream's levels along its line (`waters::stream_levels`), as the loaded tiles have the ground. */
-  function streamLevelsOf(w: Water): number[] {
-    const sea = app.view.geom?.sea_level_ft ?? 0;
-    const at = streamSamples(centre(w)).map(([x, y]): [number, number | null] => {
-      const a = app.view.surfaceAt(x, y);
-      return a ? [a[0], a[1] > a[0] ? a[1] : null] : [sea + 1, null];
-    });
-    return streamLevels(at, sea);
-  }
-
-  /** Water as the tool draws it (no kind: its look follows it): a polygon, or a brushed line of
-   * the width set (`closed`: a ring); its level kept from `prev` while its points and whether it
-   * flows stay. */
-  function waterOf(pts: Pt[], o: { line: boolean; closed: boolean; width?: number; depth: number; dug: boolean }, prev?: Water): Water {
-    const base: Water = { pts, level: 0, depth: o.depth, dug: o.dug, ...(o.line ? { line: true, width: o.width, ...(o.closed ? { closed: true } : {}) } : {}) };
-    if (flows(base)) {
-      base.levels = prev?.levels?.length && flows(prev) && prev.pts === pts ? prev.levels : streamLevelsOf(base);
-      base.level = Math.max(...base.levels);
-    } else base.level = prev && !flows(prev) && prev.pts === pts ? prev.level : waterLevel(base);
-    return base;
-  }
-
-  /** Water drawn in Build › Water: of the shape, width, depth and shore set. */
-  function waterPlaced(pts: Pt[], closed = false) {
-    const w = waterOf(pts, { line: water.brush, closed: water.brush && closed, width: water.brush ? water.width : undefined, depth: water.depth, dug: water.dug });
-    const bad = waterProblem(w);
-    if (bad) return app.toast(bad);
-    if (Object.keys(app.edits.waters ?? {}).length >= MAX_WATERS) return app.toast(`A world holds at most ${MAX_WATERS} waters`);
-    const id = newObjectId('e');
-    waterPicked = id;
-    app.applyEdits({ ...app.edits, waters: { ...(app.edits.waters ?? {}), [id]: w } }, { tool: 'create_water', id, kind: lookOf(w, app.view.geom?.sea_level_ft ?? 0).kind }, 'user');
-  }
-
-  /** A line ended in Build › Road: a road of the menu's type, width and name along it. */
-  function roadPlaced(pts: Pt[]) {
-    const r = { pts, type: road.kind, ...(road.width !== kindWidth(road.kind) ? { width: road.width } : {}), ...(road.name.trim() ? { name: road.name.trim() } : {}) };
-    const bad = pathProblem(r);
-    if (bad) return app.toast(bad);
-    if (Object.keys(app.edits.paths ?? {}).length >= MAX_PATHS) return app.toast(`A world holds at most ${MAX_PATHS} roads drawn by hand`);
-    const id = newObjectId('rw');
-    roadPicked = id;
-    app.applyEdits({ ...app.edits, paths: { ...(app.edits.paths ?? {}), [id]: r } }, { tool: 'place_path', id, kind: r.type }, 'user');
-  }
-
-  /** The road picked: another type (its width the type's unless it had its own), width or name. */
-  function changeRoad(change: { kind?: PathSettings['kind']; width?: number; name?: string }) {
-    const id = roadPicked;
-    const r = id ? app.edits.paths?.[id] : null;
-    if (!id || !r) return;
-    const next = { ...r };
-    if (change.kind && change.kind !== r.type) {
-      next.type = change.kind;
-      if (r.width === undefined || r.width === kindWidth(change.kind)) delete next.width;
-    }
-    if (change.width !== undefined) {
-      if (change.width === kindWidth(next.type)) delete next.width;
-      else next.width = change.width;
-    }
-    if (change.name !== undefined) {
-      if (change.name.trim()) next.name = change.name.trim();
-      else delete next.name;
-    }
-    if (JSON.stringify(next) === JSON.stringify(r)) return;
-    app.applyEdits({ ...app.edits, paths: { ...(app.edits.paths ?? {}), [id]: next } }, { tool: 'place_path', id, kind: next.type, changed: true }, 'user');
-  }
-
-  function removeRoad() {
-    const id = roadPicked;
-    if (!id || !app.edits.paths?.[id]) return;
-    const { [id]: _gone, ...rest } = app.edits.paths ?? {};
-    const notes = app.edits.notes && id in app.edits.notes ? Object.fromEntries(Object.entries(app.edits.notes).filter(([k]) => k !== id)) : app.edits.notes;
-    roadPicked = null;
-    app.applyEdits({ ...app.edits, paths: rest, notes }, { tool: 'remove_paths', ids: [id] }, 'user');
-  }
-
-  /** The water picked: another width, depth or shore (water made with a kind loses it, keeping
-   * its depth and shore), or name. */
-  function changeWater(change: { name?: string; width?: number; depth?: number; dug?: boolean }) {
-    const id = waterPicked;
-    const w = id ? app.edits.waters?.[id] : null;
-    if (!id || !w) return;
-    let next = app.edits;
-    const width = change.width !== undefined && isLine(w) && change.width !== widthOf(w) ? change.width : undefined;
-    const depth = change.depth !== undefined && change.depth !== depthOf(w) ? change.depth : undefined;
-    const dug = change.dug !== undefined && change.dug !== isDug(w) ? change.dug : undefined;
-    if (width !== undefined || depth !== undefined || dug !== undefined) {
-      const nw = waterOf(w.pts, { line: isLine(w), closed: !!w.closed && !flows(w), width: isLine(w) ? (width ?? widthOf(w)) : undefined, depth: depth ?? depthOf(w), dug: dug ?? isDug(w) }, w);
-      const bad = waterProblem(nw);
-      if (bad) return app.toast(bad);
-      next = { ...next, waters: { ...(next.waters ?? {}), [id]: nw } };
-    }
-    if (change.name !== undefined && change.name.trim() !== (app.edits.renames?.[id] ?? '')) {
-      const { [id]: _was, ...kept } = app.edits.renames ?? {};
-      next = { ...next, renames: change.name.trim() ? { ...kept, [id]: change.name.trim() } : kept };
-    }
-    if (next !== app.edits) app.applyEdits(next, { tool: 'update_water', id }, 'user');
-  }
-
-  /** The picked water for the panel: its look, name, width (a line's), depth and shore. */
-  function waterInfo(w: Water, name: string) {
-    return { look: lookOf(w, app.view?.geom?.sea_level_ft ?? 0).kind, name, width: isLine(w) ? widthOf(w) : null, depth: depthOf(w), dug: isDug(w) };
-  }
-
-  function removeWater() {
-    const id = waterPicked;
-    if (!id || !app.edits.waters?.[id]) return;
-    const { [id]: _gone, ...rest } = app.edits.waters ?? {};
-    const drop = <T,>(m: Record<string, T> | undefined) => {
-      if (!m || !(id in m)) return m;
-      const { [id]: _x, ...r } = m;
-      return r;
-    };
-    waterPicked = null;
-    app.applyEdits({ ...app.edits, waters: rest, renames: drop(app.edits.renames), notes: drop(app.edits.notes), hidden: app.edits.hidden?.filter((h) => h !== id) }, { tool: 'delete_water', ids: [id] }, 'user');
-  }
-
-  function removeCrossing() {
-    const id = crossEditing;
-    const c = id ? app.edits.crossings?.[id] : null;
-    if (!id || !c) return;
-    const { [id]: _gone, ...rest } = app.edits.crossings ?? {};
-    crossEditing = null;
-    // (Its shops go with it.)
-    app.applyEdits({ ...app.edits, crossings: rest, ...(shopsOn(id).length ? { created: withoutShops(id) } : {}) }, { tool: 'remove_crossings', ids: [id], kind: c.kind }, 'user');
-  }
-
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-  /** An islet clicked: raised there (the generator says where one can stand). */
-  async function harbourIslet(at: Pt) {
-    const key = newObjectId('h');
-    const r = await app.view.gen.islet(key, at[0], at[1], harbour.radius, harbour.rise);
-    if (!r) return app.toast('The map could not answer: try again');
-    if ('error' in r) return app.toast(cap(r.error));
-    app.applyEdits({ ...app.edits, plateaus: { ...(app.edits.plateaus ?? {}), [key]: r.plateau } }, { tool: 'raise_islet', id: key, changed: false }, 'user');
-  }
-
-  /** A quay, pier or breakwater dragged: checked (its root on the bank, a lighthouse's place), then
-   * put down with its lighthouse as one change. */
-  async function harbourWharf(a: Pt, b: Pt) {
-    const w = wharfOf(harbour, a, b);
-    const problem = wharfProblem(w);
-    if (problem) return app.toast(problem);
-    const lighthouse = w.kind === 'breakwater' && harbour.lighthouse;
-    const r = await app.view.gen.wharfCheck(w, lighthouse);
-    if (!r) return app.toast('The map could not answer: try again');
-    if ('error' in r) return app.toast(cap(r.error));
-    const id = newObjectId('q');
-    const next: Edits = { ...app.edits, wharves: { ...(app.edits.wharves ?? {}), [id]: w } };
-    if (r.lighthouse) {
-      const l = r.lighthouse;
-      const created = app.edits.created ?? [];
-      next.created = [...created, { id: `c:${created.length}`, kind: 'building', x: l.x, y: l.y, name: l.name, poly: l.poly, floors: 3, func: 'lighthouse', on: id }];
-    }
-    app.applyEdits(next, { tool: 'place_wharf', id, kind: w.kind, changed: false, lighthouse: !!r.lighthouse }, 'user');
-  }
-
-  /** The wharf picked is taken away, its lighthouse with it. */
-  function removeWharf() {
-    const id = harbourPicked;
-    const w = id ? app.edits.wharves?.[id] : null;
-    if (!id || !w) return;
-    const { [id]: _gone, ...rest } = app.edits.wharves ?? {};
-    harbourPicked = null;
-    app.applyEdits({ ...app.edits, wharves: rest, ...(shopsOn(id).length ? { created: withoutShops(id) } : {}) }, { tool: 'remove_wharves', ids: [id], kind: w.kind }, 'user');
-  }
-
   /** One of the world's own buildings (not drawn by hand) behind a building id. */
   function generatedBuilding(id: string): boolean {
     const m = /^b:(\d+):(\d+)$/.exec(id);
@@ -1147,23 +414,23 @@ export function buildTools(app: BuildHost) {
   function keyCross() {
     if (buildMode !== 'crossing') return setBuildMode('crossing');
     const order = ['bridge', 'ford', 'ferry'] as const;
-    const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
-    cross = { ...cross, kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
+    const kind = order[(order.indexOf(w.cross.kind) + 1) % order.length];
+    w.cross = { ...w.cross, kind, width: w.crossEditing ? w.cross.width : kind === 'ford' ? 10 : 12 };
   }
   /** H again on Docks & islets, the next kind (islet, quay, pier, breakwater). */
   function keyHarbour() {
     if (buildMode !== 'harbour') return setBuildMode('harbour');
-    if (harbourPicked) return;
+    if (w.harbourPicked) return;
     const order = ['islet', 'quay', 'pier', 'breakwater'] as const;
-    const kind = order[(order.indexOf(harbour.kind) + 1) % order.length];
-    harbour = { ...harbour, kind, width: kind === 'islet' ? harbour.width : WHARF_WIDTH[kind][2] };
+    const kind = order[(order.indexOf(w.harbour.kind) + 1) % order.length];
+    w.harbour = { ...w.harbour, kind, width: kind === 'islet' ? w.harbour.width : WHARF_WIDTH[kind][2] };
   }
   function keyRoad() {
     if (buildMode !== 'road') return setBuildMode('road');
-    if (roadPicked) return;
+    if (w.roadPicked) return;
     const order = ['footpath', 'track', 'gravel', 'paved', 'cobbled'] as const;
-    const kind = order[(order.indexOf(road.kind) + 1) % order.length];
-    road = { ...road, kind, width: kindWidth(kind) };
+    const kind = order[(order.indexOf(w.road.kind) + 1) % order.length];
+    w.road = { ...w.road, kind, width: kindWidth(kind) };
   }
   /** F: Build › Fence (again: the next kind). */
   function keyFence() {
@@ -1174,13 +441,13 @@ export function buildTools(app: BuildHost) {
     fences.fence = { ...fences.fence, kind: order[(order.indexOf(fences.fence.kind) + 1) % order.length] };
   }
   function keyShape(k: BuildShape) {
-    if (buildMode === 'castle' && k !== 'tower') return void (works.castleShape = k);
+    if (buildMode === 'castle' && k !== 'tower') return void (q.works.castleShape = k);
     if (buildMode !== 'building') setBuildMode('building');
     // A round tower is a wizard's tower unless it was something else already.
     build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
   }
   /** Enter: the line or outline drawn ends (Stamp: the ghost is put down). */
-  const finish = () => (buildMode === 'fence' ? void fences.tool.finish() : buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void quickPlace() : buildMode === 'water' ? buildArmed?.water.finish() : buildArmed?.tool.finish());
+  const finish = () => (buildMode === 'fence' ? void fences.tool.finish() : buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void q.quickPlace() : buildMode === 'water' ? buildArmed?.water.finish() : buildArmed?.tool.finish());
   /** Backspace: a corner taken back. */
   const back = () => (buildMode === 'fence' ? void fences.tool.back() : buildMode === 'road' ? void buildArmed?.road.back() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back());
   /** Escape, in turn: a line being drawn dropped, then what is picked put down. */
@@ -1188,17 +455,17 @@ export function buildTools(app: BuildHost) {
     () => !!buildArmed?.tool.reset(),
     () => !!buildArmed?.path.reset(),
     () => !!buildArmed?.works.reset(),
-    () => (worksEditing ? ((worksEditing = null), true) : false),
+    () => (q.worksEditing ? ((q.worksEditing = null), true) : false),
     () => !!buildArmed?.cross.reset(),
-    () => (crossEditing ? ((crossEditing = null), true) : false),
+    () => (w.crossEditing ? ((w.crossEditing = null), true) : false),
     () => !!buildArmed?.water.reset(),
-    () => (waterPicked ? ((waterPicked = null), true) : false),
+    () => (w.waterPicked ? ((w.waterPicked = null), true) : false),
     () => !!buildArmed?.road.reset(),
     () => !!fences.tool.reset(),
-    () => (roadPicked ? ((roadPicked = null), true) : false),
+    () => (w.roadPicked ? ((w.roadPicked = null), true) : false),
   ];
   /** The menu's Done: nothing changed any more. */
-  const done = () => (plotEditing && plotDone(), (buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null), (waterPicked = null), (roadPicked = null));
+  const done = () => (q.plotEditing && q.plotDone(), (buildEditing = null), (genEditing = null), (w.crossEditing = null), (q.worksEditing = null), (w.waterPicked = null), (w.roadPicked = null));
 
   return {
     tool,
@@ -1223,57 +490,57 @@ export function buildTools(app: BuildHost) {
     get buildArmed() { return buildArmed; },
     get buildMode() { return buildMode; },
     set buildMode(v) { buildMode = v; },
-    get works() { return works; },
-    set works(v) { works = v; },
-    get worksEditing() { return worksEditing; },
-    set worksEditing(v) { worksEditing = v; },
-    get inWayAsk() { return inWayAsk; },
-    set inWayAsk(v) { inWayAsk = v; },
-    get cross() { return cross; },
-    set cross(v) { cross = v; },
-    get crossEditing() { return crossEditing; },
-    set crossEditing(v) { crossEditing = v; },
-    get water() { return water; },
-    set water(v) { water = v; },
-    get waterPicked() { return waterPicked; },
-    set waterPicked(v) { waterPicked = v; },
-    get road() { return road; },
-    set road(v) { road = v; },
-    get roadPicked() { return roadPicked; },
-    set roadPicked(v) { roadPicked = v; },
-    get harbour() { return harbour; },
-    set harbour(v) { harbour = v; },
-    get harbourPicked() { return harbourPicked; },
-    set harbourPicked(v) { harbourPicked = v; },
+    get works() { return q.works; },
+    set works(v) { q.works = v; },
+    get worksEditing() { return q.worksEditing; },
+    set worksEditing(v) { q.worksEditing = v; },
+    get inWayAsk() { return q.inWayAsk; },
+    set inWayAsk(v) { q.inWayAsk = v; },
+    get cross() { return w.cross; },
+    set cross(v) { w.cross = v; },
+    get crossEditing() { return w.crossEditing; },
+    set crossEditing(v) { w.crossEditing = v; },
+    get water() { return w.water; },
+    set water(v) { w.water = v; },
+    get waterPicked() { return w.waterPicked; },
+    set waterPicked(v) { w.waterPicked = v; },
+    get road() { return w.road; },
+    set road(v) { w.road = v; },
+    get roadPicked() { return w.roadPicked; },
+    set roadPicked(v) { w.roadPicked = v; },
+    get harbour() { return w.harbour; },
+    set harbour(v) { w.harbour = v; },
+    get harbourPicked() { return w.harbourPicked; },
+    set harbourPicked(v) { w.harbourPicked = v; },
     armBuild,
-    get stampSet() { return stampSet; },
-    set stampSet(v) { stampSet = v; },
-    get rowSet() { return rowSet; },
-    set rowSet(v) { rowSet = v; },
-    get plotEditing() { return plotEditing; },
-    get plotName() { return plotSite(plotEditing)?.name || (plotEditing ? 'the plot' : null); },
-    editPlot,
-    removePlot,
-    get lassoSet() { return lassoSet; },
-    set lassoSet(v) { lassoSet = v; },
-    get quick() { return quick; },
-    set quick(v) { quick = v; },
-    quickPlace,
-    quickDrop,
-    worksSite,
-    saveWorks,
-    editWorks,
+    get stampSet() { return q.stampSet; },
+    set stampSet(v) { q.stampSet = v; },
+    get rowSet() { return q.rowSet; },
+    set rowSet(v) { q.rowSet = v; },
+    get plotEditing() { return q.plotEditing; },
+    get plotName() { return q.plotSite(q.plotEditing)?.name || (q.plotEditing ? 'the plot' : null); },
+    editPlot: q.editPlot,
+    removePlot: q.removePlot,
+    get lassoSet() { return q.lassoSet; },
+    set lassoSet(v) { q.lassoSet = v; },
+    get quick() { return q.quick; },
+    set quick(v) { q.quick = v; },
+    quickPlace: q.quickPlace,
+    quickDrop: q.quickDrop,
+    worksSite: q.worksSite,
+    saveWorks: q.saveWorks,
+    editWorks: q.editWorks,
     disarmBuild,
     setBuildMode,
-    saveCrossing,
-    changeRoad,
-    removeRoad,
-    changeWater,
-    waterInfo,
-    removeWater,
-    removeCrossing,
-    pickCrossing,
-    removeWharf,
+    saveCrossing: w.saveCrossing,
+    changeRoad: w.changeRoad,
+    removeRoad: w.removeRoad,
+    changeWater: w.changeWater,
+    waterInfo: w.waterInfo,
+    removeWater: w.removeWater,
+    removeCrossing: w.removeCrossing,
+    pickCrossing: w.pickCrossing,
+    removeWharf: w.removeWharf,
     generatedBuilding,
     withPiece,
     refusal,
