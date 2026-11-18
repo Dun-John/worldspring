@@ -139,12 +139,15 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     let rivers = pack_lines(ox, oy, size, river_lines);
     // Roads, and the streets towns draw as roads (approaches to gates, main streets, streets
     // over bridges) from site levels in.
+    // (The layouts over the tile and what of each is removed by hand, once: `pack_sites` reads them
+    // too.)
+    let near: Vec<std::rc::Rc<crate::town::Layout>> = if key.level >= SITE_MIN_LEVEL { crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) } else { Vec::new() };
+    let cuts: Vec<Option<crate::town::cut::Cut>> = near.iter().map(|l| crate::town::cut::Cut::of(world, t0, l)).collect();
     let town_roads: Vec<Vec<[f64; 4]>> = if key.level >= SITE_MIN_LEVEL {
-        crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size])
-            .iter()
-            .flat_map(|l| {
+        near.iter()
+            .zip(&cuts)
+            .flat_map(|(l, cut)| {
                 // (Roadmap 6 R5: its streets and lanes removed by hand left out.)
-                let cut = crate::town::cut::Cut::of(world, t0, l);
                 let roads = l.roads.iter().enumerate().filter(|(k, _)| !cut.as_ref().is_some_and(|c| c.road(*k))).map(|(_, (pts, class, w))| pts.iter().map(|p| [p[0], p[1], *w, *class as f64]).collect::<Vec<_>>());
                 let lanes = crate::town::village::plan_lanes(l).into_iter().enumerate().filter(|(k, _)| !cut.as_ref().is_some_and(|c| c.street(*k))).map(|(_, v)| v);
                 roads.chain(lanes).collect::<Vec<_>>()
@@ -203,7 +206,7 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     out.extend_from_slice(&biome);
     out.extend_from_slice(&rivers);
     out.extend_from_slice(&roads);
-    out.extend_from_slice(&pack_sites(world, t0, key, tile));
+    out.extend_from_slice(&pack_sites(world, t0, key, tile, &near, &cuts));
     out
 }
 
@@ -321,7 +324,8 @@ const FERRY_MIN_LEVEL: u8 = 10;
 pub const SITE_MIN_LEVEL: u8 = 9;
 pub const BUILDING_MIN_LEVEL: u8 = 11;
 
-fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u8> {
+/// `near`: the layouts over the tile (from `SITE_MIN_LEVEL`), `cuts` what of each is removed by hand.
+fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[std::rc::Rc<crate::town::Layout>], cuts: &[Option<crate::town::cut::Cut>]) -> Vec<u8> {
     let (ox, oy) = world.geom.tile_origin_ft(key);
     let size = world.geom.tile_size_ft(key.level);
     let mut starts: Vec<u32> = vec![0];
@@ -371,7 +375,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
         // draws the full bridge).
         if key.level >= BUILDING_MIN_LEVEL {
             // (R5 M20: none under a metropolis's lined bridge, which carries the road on.)
-            let lined: Vec<Vec<[f64; 2]>> = crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]).iter().filter_map(|l| l.lined.as_ref().map(|d| d.0.clone())).collect();
+            let lined: Vec<Vec<[f64; 2]>> = near.iter().filter_map(|l| l.lined.as_ref().map(|d| d.0.clone())).collect();
             for d in road_bridges(world, t0, key, tile) {
                 if !lined.iter().any(|deck| crate::town::geom::contains(deck, crate::town::geom::centroid(&d))) {
                     push(&d, 6);
@@ -394,9 +398,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 }
             }
         }
-        for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
-            // (Roadmap 6 R5: its decks and park paths removed by hand drawn nowhere.)
-            let cut = crate::town::cut::Cut::of(world, t0, &l);
+        for (l, cut) in near.iter().zip(cuts) {
+            // (Roadmap 6 R5: its decks and park paths removed by hand drawn nowhere: `cut`.)
             // (Roadmap 6 R6: the marks of corrals, pens and the churchyard's wall removed by hand
             // left out.)
             let fence_gone = crate::town::fence::FenceCut::of(world, t0, &l).map(|c| c.plan_gone(&l, t0)).unwrap_or_default();

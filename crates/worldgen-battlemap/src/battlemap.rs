@@ -301,7 +301,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut bailey_ways: Vec<([f64; 2], [f64; 2])> = Vec::new();
     // v63 countryside: the layouts here, for `town::rural` below.
     let mut rural_ls: Vec<std::rc::Rc<crate::town::Layout>> = Vec::new();
-    for l in crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]) {
+    // (The layouts round the chunk and its halo, once: the mottes, moats and walls below read them.)
+    let near = crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]);
+    for l in &near {
         rural_ls.push(l.clone());
         for m in &l.mottes {
             let (a, b) = (crate::town::geom::add(m.at, crate::town::geom::mul(m.way, m.top_r - 8.0)), crate::town::geom::add(m.at, crate::town::geom::mul(m.way, m.foot_r + 6.0)));
@@ -331,7 +333,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     // Castles' moats, dug before anything stands on the ground, and their drawbridges (v63 castles).
-    let moats: Vec<crate::town::moat::Moat> = crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]).iter().flat_map(|l| l.moats.clone()).collect();
+    let moats: Vec<crate::town::moat::Moat> = near.iter().flat_map(|l| l.moats.clone()).collect();
     let dug = moat::dig(&moats, ox - SQUARE_FT, oy - SQUARE_FT, &mut hh, &mut hw, &mut road_h, &mut lift);
     for m in &moats {
         for b in &m.bridges {
@@ -372,7 +374,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // and gates' leaves, for `town::rural` below; the eraser's gaps.)
     let mut hand_fences = crate::town::rural::Battle::default();
     let fence_gaps: Vec<crate::model::fences::FenceGap> = world.file.edits.fence_gaps.values().cloned().collect();
-    for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
+    for (li, l) in near.into_iter().enumerate() {
         // (Roadmap 6 R5: its streets, lanes, decks and park paths removed by hand, drawn nowhere.)
         let cut = crate::town::cut::Cut::of(world, t0, &l);
         // (Roadmap 6 R6: its fences and hedges changed by hand.)
