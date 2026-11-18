@@ -15,7 +15,7 @@ import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
 import { FREEHAND_FT } from './units';
-import { contains } from './geom';
+import { contains, roundHalf, simplifyOpen } from './geom';
 export { contains };
 
 export type Pt = [number, number];
@@ -444,34 +444,6 @@ function fillet(pts: Pt[]): Pt[] {
 
 /** Freehand outlines are sampled this far apart (ft) at least. */
 
-/** An open line with points dropped while it stays within `tol` ft of them, the tolerance raised
- * until at most `max` (Douglas-Peucker). */
-function simplifyOpen(pts: Pt[], max: number): Pt[] {
-  if (pts.length <= 2) return pts;
-  for (let tol = 1.5; ; tol *= 1.5) {
-    const keep = pts.map((_, i) => i === 0 || i === pts.length - 1);
-    const run = (a: number, b: number) => {
-      const [p, q] = [pts[a], pts[b]];
-      const [dx, dy] = [q[0] - p[0], q[1] - p[1]];
-      const l2 = dx * dx + dy * dy;
-      let [best, at] = [-1, -1];
-      for (let i = a + 1; i < b; i++) {
-        const r = pts[i];
-        const t = l2 > 0 ? Math.max(0, Math.min(1, ((r[0] - p[0]) * dx + (r[1] - p[1]) * dy) / l2)) : 0;
-        const d = Math.hypot(r[0] - p[0] - dx * t, r[1] - p[1] - dy * t);
-        if (d > best) [best, at] = [d, i];
-      }
-      if (at < 0 || best <= tol) return;
-      keep[at] = true;
-      run(a, at);
-      run(at, b);
-    };
-    run(0, pts.length - 1);
-    const out = pts.filter((_, i) => keep[i]);
-    if (out.length <= max) return out;
-  }
-}
-
 /** A closed outline with points dropped while it stays within `tol` ft of them (Douglas-Peucker,
  * from its first point and the one farthest from it), the tolerance raised until at most `max`. */
 export function simplify(pts: Pt[], max: number): Pt[] {
@@ -520,7 +492,6 @@ export interface WaterHost {
   hint(text: string): void;
 }
 
-const round = (p: Pt): Pt => [Math.round(p[0] * 2) / 2, Math.round(p[1] * 2) / 2];
 
 export class WaterTool implements PointerTool {
   private pts: Pt[] = [];
@@ -550,7 +521,7 @@ export class WaterTool implements PointerTool {
   up(x: number, y: number) {
     this.press = null;
     if (this.stroke) return this.endStroke(x, y);
-    const p = round([x, y]);
+    const p = roundHalf([x, y]);
     const line = this.host.brush();
     if (!this.pts.length) {
       const hit = this.at(p);
@@ -582,7 +553,7 @@ export class WaterTool implements PointerTool {
     if (line) {
       // (A line drawn freehand is done when let go: a ring when let go near its start.)
       const pts: Pt[] = [];
-      for (const p of simplifyOpen(s, MAX_WATER_PTS).map(round)) {
+      for (const p of simplifyOpen(s, MAX_WATER_PTS).map(roundHalf)) {
         const q = pts[pts.length - 1];
         if (!q || Math.hypot(p[0] - q[0], p[1] - q[1]) >= 1) pts.push(p);
       }
@@ -593,7 +564,7 @@ export class WaterTool implements PointerTool {
       return;
     }
     const pts: Pt[] = [];
-    for (const p of simplify(s, closes ? MAX_WATER_PTS : MAX_WATER_PTS - 1).map(round)) {
+    for (const p of simplify(s, closes ? MAX_WATER_PTS : MAX_WATER_PTS - 1).map(roundHalf)) {
       const q = pts[pts.length - 1];
       if (!q || Math.hypot(p[0] - q[0], p[1] - q[1]) >= 1) pts.push(p);
     }

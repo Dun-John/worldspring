@@ -17,7 +17,7 @@ import type { Graphics } from 'pixi.js';
 import type { SquareKind, TownPlan, TownWard } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
-import { dist, inside, lerp } from './geom';
+import { add, dist, inside, lerp, mul, sub } from './geom';
 import { GRAB_PX } from './units';
 
 export type TownMode = 'select' | 'street' | 'area' | 'wall' | 'displace' | 'liquify' | 'bloat' | 'pinch' | 'relax' | 'equalize';
@@ -72,9 +72,6 @@ export interface TownHost {
   hint(text: string): void;
 }
 
-const sub = (a: Pt, b: Pt): Pt => [a[0] - b[0], a[1] - b[1]];
-const add = (a: Pt, b: Pt): Pt => [a[0] + b[0], a[1] + b[1]];
-const mul = (a: Pt, k: number): Pt => [a[0] * k, a[1] * k];
 
 type Drag =
   | { kind: 'corner'; v: number; start: Pt; live: boolean }

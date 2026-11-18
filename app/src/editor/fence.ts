@@ -10,7 +10,7 @@ import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
 import { FREEHAND_FT } from './units';
-import { simplifyOpen } from './paths';
+import { roundHalf, simplifyOpen } from './geom';
 
 export type Pt = [number, number];
 
@@ -71,7 +71,6 @@ export interface FenceHost {
 }
 
 const MAX_POINTS = 400;
-const round = (p: Pt): Pt => [Math.round(p[0] * 2) / 2, Math.round(p[1] * 2) / 2];
 
 export class FenceTool implements PointerTool {
   private pts: Pt[] = [];
@@ -106,9 +105,9 @@ export class FenceTool implements PointerTool {
     if (this.stroke) {
       const s = endAt(this.stroke, [x, y]);
       this.stroke = null;
-      if (mode === 'erase') return this.host.gap(simplifyOpen(s, MAX_POINTS).map(round));
+      if (mode === 'erase') return this.host.gap(simplifyOpen(s, MAX_POINTS).map(roundHalf));
       const pts: Pt[] = [];
-      for (const p of simplifyOpen(s, MAX_POINTS).map(round)) {
+      for (const p of simplifyOpen(s, MAX_POINTS).map(roundHalf)) {
         const q = pts[pts.length - 1];
         if (!q || Math.hypot(p[0] - q[0], p[1] - q[1]) >= 1) pts.push(p);
       }
@@ -117,7 +116,7 @@ export class FenceTool implements PointerTool {
       this.finish();
       return;
     }
-    const p = round([x, y]);
+    const p = roundHalf([x, y]);
     if (mode === 'gate') return this.host.gate(p);
     if (mode === 'erase') return this.host.gap([p]);
     if (!this.pts.length) {

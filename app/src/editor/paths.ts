@@ -10,7 +10,7 @@ import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
 import { FREEHAND_FT } from './units';
-import { segDist } from './geom';
+import { roundHalf, simplifyOpen, segDist } from './geom';
 
 export type Pt = [number, number];
 
@@ -97,28 +97,6 @@ export function curve(pts: Pt[]): Pt[] {
   return out;
 }
 
-/** An open line's points thinned (Douglas-Peucker, both ends kept) to at most `max`. */
-export function simplifyOpen(pts: Pt[], max: number): Pt[] {
-  if (pts.length <= 2) return pts;
-  for (let tol = 1.5; ; tol *= 1.5) {
-    const keep = pts.map((_, i) => i === 0 || i === pts.length - 1);
-    const run = (a: number, b: number) => {
-      let [best, at] = [-1, -1];
-      for (let i = a + 1; i < b; i++) {
-        const d = segDist(pts[i], pts[a], pts[b]);
-        if (d > best) [best, at] = [d, i];
-      }
-      if (at < 0 || best <= tol) return;
-      keep[at] = true;
-      run(a, at);
-      run(at, b);
-    };
-    run(0, pts.length - 1);
-    const out = pts.filter((_, i) => keep[i]);
-    if (out.length <= max) return out;
-  }
-}
-
 /** The road drawn by hand nearest `p` within its half width and `slack` ft, if any. */
 export function pathAt(edits: Edits, p: Pt, slack: number): string | null {
   let best: [string, number] | null = null;
@@ -146,7 +124,6 @@ export interface PathHost {
   hint(text: string): void;
 }
 
-const round = (p: Pt): Pt => [Math.round(p[0] * 2) / 2, Math.round(p[1] * 2) / 2];
 
 export class PathDrawTool implements PointerTool {
   private pts: Pt[] = [];
@@ -175,7 +152,7 @@ export class PathDrawTool implements PointerTool {
   up(x: number, y: number) {
     this.press = null;
     if (this.stroke) return this.endStroke(x, y);
-    const p = round([x, y]);
+    const p = roundHalf([x, y]);
     if (!this.pts.length) {
       const hit = pathAt(this.host.edits(), p, 4 * this.fpp);
       if (hit && hit !== this.host.picked()) return this.host.pick(hit);
@@ -194,7 +171,7 @@ export class PathDrawTool implements PointerTool {
     this.stroke = null;
     endAt(s, [x, y]);
     const pts: Pt[] = [];
-    for (const p of simplifyOpen(s, MAX_PATH_PTS).map(round)) {
+    for (const p of simplifyOpen(s, MAX_PATH_PTS).map(roundHalf)) {
       const q = pts[pts.length - 1];
       if (!q || Math.hypot(p[0] - q[0], p[1] - q[1]) >= 1) pts.push(p);
     }

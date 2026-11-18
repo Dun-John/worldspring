@@ -27,3 +27,31 @@ export function contains(pts: Pt[], x: number, y: number): boolean {
 export const inside = (p: Pt, poly: Pt[]): boolean => contains(poly, p[0], p[1]);
 export const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 export const lerp = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+
+/** An open line's points thinned (Douglas-Peucker, both ends kept) to at most `max`. */
+export function simplifyOpen(pts: Pt[], max: number): Pt[] {
+  if (pts.length <= 2) return pts;
+  for (let tol = 1.5; ; tol *= 1.5) {
+    const keep = pts.map((_, i) => i === 0 || i === pts.length - 1);
+    const run = (a: number, b: number) => {
+      let [best, at] = [-1, -1];
+      for (let i = a + 1; i < b; i++) {
+        const d = segDist(pts[i], pts[a], pts[b]);
+        if (d > best) [best, at] = [d, i];
+      }
+      if (at < 0 || best <= tol) return;
+      keep[at] = true;
+      run(a, at);
+      run(at, b);
+    };
+    run(0, pts.length - 1);
+    const out = pts.filter((_, i) => keep[i]);
+    if (out.length <= max) return out;
+  }
+}
+
+export const sub = (a: Pt, b: Pt): Pt => [a[0] - b[0], a[1] - b[1]];
+export const add = (a: Pt, b: Pt): Pt => [a[0] + b[0], a[1] + b[1]];
+export const mul = (a: Pt, k: number): Pt => [a[0] * k, a[1] * k];
+/** A point rounded to the nearest half foot. */
+export const roundHalf = (p: Pt): Pt => [Math.round(p[0] * 2) / 2, Math.round(p[1] * 2) / 2];

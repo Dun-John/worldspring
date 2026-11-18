@@ -16,7 +16,7 @@ import type { BlockFill, OpenKind, StreetClass, StreetPlan, StreetRequest, TownW
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { WARD_COLOURS, type TownMode } from './town';
-import { dist, inside, lerp } from './geom';
+import { add, dist, inside, lerp, mul, sub } from './geom';
 import { GRAB_PX } from './units';
 
 type Pt = [number, number];
@@ -104,9 +104,6 @@ type Drag =
   | { kind: 'brush'; mode: TownMode; start: Pt; last: Pt; base: Map<number, Pt>; weight: Map<number, number> }
   | { kind: 'equalize'; blocks: Set<number> };
 
-const sub = (a: Pt, b: Pt): Pt => [a[0] - b[0], a[1] - b[1]];
-const add = (a: Pt, b: Pt): Pt => [a[0] + b[0], a[1] + b[1]];
-const mul = (a: Pt, k: number): Pt => [a[0] * k, a[1] * k];
 const round = (p: Pt): Pt => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10];
 
 export class StreetTool implements PointerTool {
