@@ -1394,6 +1394,14 @@ impl Created {
     }
 }
 
+/// The keyed (`Shape::Map`) edit fields, handed to `$m` (which makes a match arm, or a term, of
+/// each): `set_fields`, `patch_fields`, `apply` and `is_empty` take theirs from here.
+macro_rules! keyed_fields {
+    ($m:ident) => {
+        $m!(renames notes npcs plots objects cleared sprites designs crossings buildings towns ground plateaus waters wharves cultures hexes streets links paths members fences fence_gaps)
+    };
+}
+
 impl Edits {
     /// `next` replacing these edits whole, keeping listed entries' places (`created`: later ids
     /// are indices): the entries `next` lacks stay, marked removed, as the ops that make it leave
@@ -1492,35 +1500,18 @@ impl Edits {
         let mut part: Edits = serde_json::from_value(v).map_err(|e| e.to_string())?;
         let mut old = None;
         for k in &keys {
-            match k.as_str() {
-                "renames" => self.renames = std::mem::take(&mut part.renames),
-                "notes" => self.notes = std::mem::take(&mut part.notes),
-                "hidden" => self.hidden = std::mem::take(&mut part.hidden),
-                "created" => old = Some(std::mem::replace(&mut self.created, std::mem::take(&mut part.created))),
-                "npcs" => self.npcs = std::mem::take(&mut part.npcs),
-                "plots" => self.plots = std::mem::take(&mut part.plots),
-                "objects" => self.objects = std::mem::take(&mut part.objects),
-                "cleared" => self.cleared = std::mem::take(&mut part.cleared),
-                "sprites" => self.sprites = std::mem::take(&mut part.sprites),
-                "designs" => self.designs = std::mem::take(&mut part.designs),
-                "crossings" => self.crossings = std::mem::take(&mut part.crossings),
-                "buildings" => self.buildings = std::mem::take(&mut part.buildings),
-                "towns" => self.towns = std::mem::take(&mut part.towns),
-                "ground" => self.ground = std::mem::take(&mut part.ground),
-                "plateaus" => self.plateaus = std::mem::take(&mut part.plateaus),
-                "waters" => self.waters = std::mem::take(&mut part.waters),
-                "wharves" => self.wharves = std::mem::take(&mut part.wharves),
-                "cultures" => self.cultures = std::mem::take(&mut part.cultures),
-                "hexes" => self.hexes = std::mem::take(&mut part.hexes),
-                "streets" => self.streets = std::mem::take(&mut part.streets),
-                "links" => self.links = std::mem::take(&mut part.links),
-                "paths" => self.paths = std::mem::take(&mut part.paths),
-                "members" => self.members = std::mem::take(&mut part.members),
-                "removed_roads" => self.removed_roads = std::mem::take(&mut part.removed_roads),
-                "fences" => self.fences = std::mem::take(&mut part.fences),
-                "fence_gaps" => self.fence_gaps = std::mem::take(&mut part.fence_gaps),
-                _ => return Err(format!("no such edits field: {k}")),
+            macro_rules! arms {
+                ($($f:ident)*) => {
+                    match k.as_str() {
+                        $(stringify!($f) => self.$f = std::mem::take(&mut part.$f),)*
+                        "hidden" => self.hidden = std::mem::take(&mut part.hidden),
+                        "created" => old = Some(std::mem::replace(&mut self.created, std::mem::take(&mut part.created))),
+                        "removed_roads" => self.removed_roads = std::mem::take(&mut part.removed_roads),
+                        _ => return Err(format!("no such edits field: {k}")),
+                    }
+                };
             }
+            keyed_fields!(arms);
         }
         Ok(old)
     }
@@ -1539,43 +1530,26 @@ impl Edits {
         }
         let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
         for (field, p) in v.as_object().ok_or("edits patch: a JSON object")? {
-            match field.as_str() {
-                "renames" => patch(&mut self.renames, p)?,
-                "notes" => patch(&mut self.notes, p)?,
-                "npcs" => patch(&mut self.npcs, p)?,
-                "plots" => patch(&mut self.plots, p)?,
-                "objects" => patch(&mut self.objects, p)?,
-                "cleared" => patch(&mut self.cleared, p)?,
-                "sprites" => patch(&mut self.sprites, p)?,
-                "designs" => patch(&mut self.designs, p)?,
-                "crossings" => patch(&mut self.crossings, p)?,
-                "buildings" => patch(&mut self.buildings, p)?,
-                "towns" => patch(&mut self.towns, p)?,
-                "ground" => patch(&mut self.ground, p)?,
-                "plateaus" => patch(&mut self.plateaus, p)?,
-                "waters" => patch(&mut self.waters, p)?,
-                "wharves" => patch(&mut self.wharves, p)?,
-                "cultures" => patch(&mut self.cultures, p)?,
-                "hexes" => patch(&mut self.hexes, p)?,
-                "streets" => patch(&mut self.streets, p)?,
-                "links" => patch(&mut self.links, p)?,
-                "paths" => patch(&mut self.paths, p)?,
-                "members" => patch(&mut self.members, p)?,
-                "fences" => patch(&mut self.fences, p)?,
-                "fence_gaps" => patch(&mut self.fence_gaps, p)?,
-                _ => return Err(format!("{field}: not a keyed edits field")),
+            macro_rules! arms {
+                ($($f:ident)*) => {
+                    match field.as_str() {
+                        $(stringify!($f) => patch(&mut self.$f, p)?,)*
+                        _ => return Err(format!("{field}: not a keyed edits field")),
+                    }
+                };
             }
+            keyed_fields!(arms);
         }
         Ok(())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
-            && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
-            && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty() && self.waters.is_empty()
-            && self.wharves.is_empty() && self.cultures.is_empty() && self.hexes.is_empty()
-            && self.streets.is_empty() && self.links.is_empty() && self.paths.is_empty()
-            && self.members.is_empty() && self.removed_roads.is_empty() && self.fences.is_empty() && self.fence_gaps.is_empty()
+        macro_rules! all_empty {
+            ($($f:ident)*) => {
+                $(self.$f.is_empty() &&)* self.hidden.is_empty() && self.created.is_empty() && self.removed_roads.is_empty()
+            };
+        }
+        keyed_fields!(all_empty)
     }
 
     /// The ops that turn these edits into `to`.
@@ -1636,32 +1610,15 @@ impl Edits {
             }
             Ok(before)
         }
-        let fast = match field {
-            "renames" => Some(one(&mut self.renames, op, field, &key)),
-            "notes" => Some(one(&mut self.notes, op, field, &key)),
-            "npcs" => Some(one(&mut self.npcs, op, field, &key)),
-            "plots" => Some(one(&mut self.plots, op, field, &key)),
-            "objects" => Some(one(&mut self.objects, op, field, &key)),
-            "cleared" => Some(one(&mut self.cleared, op, field, &key)),
-            "sprites" => Some(one(&mut self.sprites, op, field, &key)),
-            "designs" => Some(one(&mut self.designs, op, field, &key)),
-            "crossings" => Some(one(&mut self.crossings, op, field, &key)),
-            "buildings" => Some(one(&mut self.buildings, op, field, &key)),
-            "towns" => Some(one(&mut self.towns, op, field, &key)),
-            "ground" => Some(one(&mut self.ground, op, field, &key)),
-            "plateaus" => Some(one(&mut self.plateaus, op, field, &key)),
-            "waters" => Some(one(&mut self.waters, op, field, &key)),
-            "wharves" => Some(one(&mut self.wharves, op, field, &key)),
-            "cultures" => Some(one(&mut self.cultures, op, field, &key)),
-            "hexes" => Some(one(&mut self.hexes, op, field, &key)),
-            "streets" => Some(one(&mut self.streets, op, field, &key)),
-            "links" => Some(one(&mut self.links, op, field, &key)),
-            "paths" => Some(one(&mut self.paths, op, field, &key)),
-            "members" => Some(one(&mut self.members, op, field, &key)),
-            "fences" => Some(one(&mut self.fences, op, field, &key)),
-            "fence_gaps" => Some(one(&mut self.fence_gaps, op, field, &key)),
-            _ => None,
-        };
+        macro_rules! arms {
+            ($($f:ident)*) => {
+                match field {
+                    $(stringify!($f) => Some(one(&mut self.$f, op, field, &key)),)*
+                    _ => None,
+                }
+            };
+        }
+        let fast = keyed_fields!(arms);
         if let Some(before) = fast {
             let field = field.to_string();
             return Ok(match before? {
