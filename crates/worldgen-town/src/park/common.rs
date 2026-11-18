@@ -4,6 +4,9 @@
 
 use super::*;
 
+/// How wide (ft) a common's paths are.
+const PATH_W: f64 = 7.0;
+
 /// A stream's way down to the pond, as the ground has it: the water's level along `pts` (from the
 /// spring to the mouth), a foot below the ground and never rising toward the pond, smoothed; none
 /// where the ground doesn't fall to the pond (it would climb out of its bed or cut a trench).
@@ -277,6 +280,103 @@ fn ways_in(
     paths
 }
 
+/// A common's stream (`out.stream`) down to its pond now and then, its spring's stones, and a
+/// footbridge wherever a path crosses it (the paths squared to it there): the paths, and the
+/// stream's line.
+fn lay_stream(
+    p: &Park,
+    pond: Option<(P, f64, f64)>,
+    hub: P,
+    rim: impl Fn(f64) -> f64,
+    nseed: u64,
+    off_mound: impl Fn(P, f64) -> P,
+    mut paths: Vec<Vec<P>>,
+    clear: &mut Clear,
+    out: &mut ParkLayout,
+    rng: &mut Pcg32,
+) -> (Vec<Vec<P>>, Vec<P>) {
+    let poly = &p.pts;
+    let g = &p.ground;
+    // A stream down to the pond now and then, from a spring at least 30 ft in from the edge, the
+    // way (of seven, away from the hub) whose ground falls most; its head cut back until its spring
+    // stands 3 ft or more off the paths and a path crossing it does so 12 ft or more below its head.
+    let path_gap = |q: P| paths.iter().map(|pts| nearest_on(pts, q).1).fold(f64::MAX, f64::min) - 0.5 * PATH_W;
+    if let Some((pc, level, band)) = pond
+        && rng.next_f64() < 0.6
+    {
+        let away = sub(pc, hub);
+        let a0 = libm::atan2(away[1], away[0]);
+        let mut best: Option<(f64, Vec<(P, f32)>)> = None;
+        for k in 0..7 {
+            let t = a0 + (k as f64 - 3.0) * 0.32;
+            let d = [libm::cos(t), libm::sin(t)];
+            let mouth = add(pc, mul(d, rim(t) - 4.0));
+            let mut head = mouth;
+            while depth(poly, add(head, mul(d, 5.0))) >= 30.0 && dist(head, mouth) < 260.0 {
+                head = add(head, mul(d, 5.0));
+            }
+            if dist(head, mouth) < 50.0 || g.wet_near(head, 30.0) {
+                continue;
+            }
+            let n = (crate::core::ceil(dist(head, mouth) / 14.0) as usize).max(2);
+            let nrm = perp(d);
+            let raw: Vec<P> = (0..=n)
+                .map(|j| {
+                    let f = j as f64 / n as f64;
+                    let base = lerp(head, mouth, f);
+                    off_mound(add(base, mul(nrm, 10.0 * libm::sin(std::f64::consts::PI * f) * fbm(nseed ^ 0x51, base[0] / 70.0, base[1] / 70.0, 2, 2.0, 0.5))), 12.0)
+                })
+                .collect();
+            let mut pts = chaikin(&raw, 2);
+            // (And until it rises at the highest ground along it: nothing upstream of its spring climbs
+            // above it.)
+            while pts.len() > 2 {
+                let spring = sub(pts[0], mul(unit_of(sub(pts[1], pts[0])), 0.5 * STREAM_FT + 4.0));
+                let top = pts[1..].iter().map(|&q| g.at(q)).fold(f64::MIN, f64::max);
+                if path_gap(pts[0]) >= 12.0 && path_gap(spring) >= 6.0 + 3.0 && top <= g.at(pts[0]) + 0.2 {
+                    break;
+                }
+                pts.remove(0);
+            }
+            if length(&pts) < 40.0 {
+                continue;
+            }
+            let Some(w) = stream_levels(&pts, g, level, band, &out.pond.as_ref().map_or(Vec::new(), |pd| pd.pts.clone()), mouth) else { continue };
+            let fall = w[0] as f64 - level;
+            if best.as_ref().is_none_or(|b| fall > b.0) {
+                best = Some((fall, pts.into_iter().zip(w).collect()));
+            }
+        }
+        if let Some((_, s)) = best {
+            out.stream = s;
+            // Its spring: stones round where it rises, reeds by them.
+            // (Just behind its head, on the dry.)
+            let (head, next) = (out.stream[0].0, out.stream[1].0);
+            let spring = sub(head, mul(unit_of(sub(next, head)), 0.5 * STREAM_FT + 4.0));
+            out.props.push((spring, 0.0, Kind::RockPile, rng.below(4) as u8, 1.1));
+            clear.disc(spring, 6.0);
+        }
+    }
+    // Where a path crosses the stream it goes straight across on a footbridge, square to the water.
+    let stream: Vec<P> = out.stream.iter().map(|s| s.0).collect();
+    if stream.len() >= 2 {
+        let mut bridges: Vec<(P, P)> = Vec::new();
+        for pts in &mut paths {
+            let (squared, found) = square_crossings(pts, &stream, &bridges);
+            *pts = squared;
+            for (q, n) in found {
+                out.props.push((q, along(n), Kind::Footbridge, [0, 0, 2, 3][rng.below(4) as usize], 1.05));
+                clear.disc(q, 3.0);
+                bridges.push((q, n));
+            }
+        }
+        for s in stream.windows(2) {
+            clear.seg(s[0], s[1], 0.5 * STREAM_FT + 2.0);
+        }
+    }
+    (paths, stream)
+}
+
 pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg32) -> ParkLayout {
     let poly = &p.pts;
     let g = &p.ground;
@@ -289,7 +389,6 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
     let (trees, shrubs, small, few) = plants(biome);
     out.bench = [0, 1, 1, 3][rng.below(4) as usize];
     let lamp = [0, 1, 2][rng.below(3) as usize];
-    const PATH_W: f64 = 7.0;
     // The ground inside it (dry points of its grid at least 20 ft in): low, high, and how steep.
     let inside: Vec<(P, f64)> = (0..g.ny)
         .flat_map(|j| (0..g.nx).map(move |i| (i, j)))
@@ -428,83 +527,7 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
             }
         }
     }
-    // A stream down to the pond now and then, from a spring at least 30 ft in from the edge, the
-    // way (of seven, away from the hub) whose ground falls most; its head cut back until its spring
-    // stands 3 ft or more off the paths and a path crossing it does so 12 ft or more below its head.
-    let path_gap = |q: P| paths.iter().map(|pts| nearest_on(pts, q).1).fold(f64::MAX, f64::min) - 0.5 * PATH_W;
-    if let Some((pc, level, band)) = pond
-        && rng.next_f64() < 0.6
-    {
-        let away = sub(pc, hub);
-        let a0 = libm::atan2(away[1], away[0]);
-        let mut best: Option<(f64, Vec<(P, f32)>)> = None;
-        for k in 0..7 {
-            let t = a0 + (k as f64 - 3.0) * 0.32;
-            let d = [libm::cos(t), libm::sin(t)];
-            let mouth = add(pc, mul(d, rim(t) - 4.0));
-            let mut head = mouth;
-            while depth(poly, add(head, mul(d, 5.0))) >= 30.0 && dist(head, mouth) < 260.0 {
-                head = add(head, mul(d, 5.0));
-            }
-            if dist(head, mouth) < 50.0 || g.wet_near(head, 30.0) {
-                continue;
-            }
-            let n = (crate::core::ceil(dist(head, mouth) / 14.0) as usize).max(2);
-            let nrm = perp(d);
-            let raw: Vec<P> = (0..=n)
-                .map(|j| {
-                    let f = j as f64 / n as f64;
-                    let base = lerp(head, mouth, f);
-                    off_mound(add(base, mul(nrm, 10.0 * libm::sin(std::f64::consts::PI * f) * fbm(nseed ^ 0x51, base[0] / 70.0, base[1] / 70.0, 2, 2.0, 0.5))), 12.0)
-                })
-                .collect();
-            let mut pts = chaikin(&raw, 2);
-            // (And until it rises at the highest ground along it: nothing upstream of its spring climbs
-            // above it.)
-            while pts.len() > 2 {
-                let spring = sub(pts[0], mul(unit_of(sub(pts[1], pts[0])), 0.5 * STREAM_FT + 4.0));
-                let top = pts[1..].iter().map(|&q| g.at(q)).fold(f64::MIN, f64::max);
-                if path_gap(pts[0]) >= 12.0 && path_gap(spring) >= 6.0 + 3.0 && top <= g.at(pts[0]) + 0.2 {
-                    break;
-                }
-                pts.remove(0);
-            }
-            if length(&pts) < 40.0 {
-                continue;
-            }
-            let Some(w) = stream_levels(&pts, g, level, band, &out.pond.as_ref().map_or(Vec::new(), |pd| pd.pts.clone()), mouth) else { continue };
-            let fall = w[0] as f64 - level;
-            if best.as_ref().is_none_or(|b| fall > b.0) {
-                best = Some((fall, pts.into_iter().zip(w).collect()));
-            }
-        }
-        if let Some((_, s)) = best {
-            out.stream = s;
-            // Its spring: stones round where it rises, reeds by them.
-            // (Just behind its head, on the dry.)
-            let (head, next) = (out.stream[0].0, out.stream[1].0);
-            let spring = sub(head, mul(unit_of(sub(next, head)), 0.5 * STREAM_FT + 4.0));
-            out.props.push((spring, 0.0, Kind::RockPile, rng.below(4) as u8, 1.1));
-            clear.disc(spring, 6.0);
-        }
-    }
-    // Where a path crosses the stream it goes straight across on a footbridge, square to the water.
-    let stream: Vec<P> = out.stream.iter().map(|s| s.0).collect();
-    if stream.len() >= 2 {
-        let mut bridges: Vec<(P, P)> = Vec::new();
-        for pts in &mut paths {
-            let (squared, found) = square_crossings(pts, &stream, &bridges);
-            *pts = squared;
-            for (q, n) in found {
-                out.props.push((q, along(n), Kind::Footbridge, [0, 0, 2, 3][rng.below(4) as usize], 1.05));
-                clear.disc(q, 3.0);
-                bridges.push((q, n));
-            }
-        }
-        for s in stream.windows(2) {
-            clear.seg(s[0], s[1], 0.5 * STREAM_FT + 2.0);
-        }
-    }
+    let (paths, stream) = lay_stream(p, pond, hub, rim, nseed, off_mound, paths, &mut clear, &mut out, rng);
     for pts in &paths {
         clear.path(pts, PATH_W);
     }
