@@ -850,245 +850,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
             let origin = town.origin;
             let mut after = before.clone();
             let mut asked: BTreeSet<u32> = BTreeSet::new();
-            let pt = |p: &[f64; 2]| q(*p);
-            match req {
-                HandRequest::AddStreet { points, width, set_l, set_r, class } => {
-                    let (set, w) = usual(&before);
-                    let (sl, sr) = (set_l.unwrap_or(set), set_r.unwrap_or(set));
-                    let proto = Street { a: 0, b: 0, bends: Vec::new(), width: width.unwrap_or(if set_l.is_some() || set_r.is_some() { sl + sr } else { w }), set_l: sl, set_r: sr, class: class.unwrap_or_default(), bridge: false };
-                    if proto.width < 0.0 || proto.set_l < 0.0 || proto.set_r < 0.0 {
-                        return Err("width and setbacks are 0 ft or more".into());
-                    }
-                    let pts: Vec<P> = points.iter().map(pt).collect();
-                    let made = add_street(&mut after, &pts, &proto)?;
-                    report["streets_added"] = json!(made);
-                }
-                HandRequest::DeleteStreet { street } => {
-                    let st = after.streets.remove(street).ok_or_else(|| format!("street e{street}: no such street"))?;
-                    let rows: Vec<u32> = after.rows.iter().filter(|(_, r)| r.street == *street).map(|(k, _)| *k).collect();
-                    for r in &rows {
-                        after.rows.remove(r);
-                    }
-                    for j in [st.a, st.b] {
-                        if !after.streets.values().any(|s| s.a == j || s.b == j) {
-                            after.junctions.remove(&j);
-                        }
-                    }
-                    if !rows.is_empty() {
-                        report["rows_removed"] = json!(rows);
-                    }
-                }
-                HandRequest::SetStreet { street, width, set_l, set_r, class, bridge } => {
-                    let st = after.streets.get_mut(street).ok_or_else(|| format!("street e{street}: no such street"))?;
-                    if [width, set_l, set_r].iter().any(|v| v.is_some_and(|v| !(0.0..=200.0).contains(&v))) {
-                        return Err("width and setbacks are 0 to 200 ft".into());
-                    }
-                    st.width = width.unwrap_or(st.width);
-                    st.set_l = set_l.unwrap_or(st.set_l);
-                    st.set_r = set_r.unwrap_or(st.set_r);
-                    st.class = class.unwrap_or(st.class);
-                    st.bridge = bridge.unwrap_or(st.bridge);
-                }
-                HandRequest::MoveJunctions { moves } => {
-                    let mut to: Vec<(u32, P)> = Vec::new();
-                    for m in moves {
-                        let j = after.junctions.get(&m.junction).ok_or_else(|| format!("junction n{}: no such junction", m.junction))?;
-                        let p = match (m.to, m.by) {
-                            (Some(t), None) => q(t),
-                            (None, Some(b)) => q(add(j.p, b)),
-                            _ => return Err(format!("junction n{}: give to or by", m.junction)),
-                        };
-                        to.push((m.junction, p));
-                    }
-                    let base = graph_problems(&before, origin, &li);
-                    let mut all = after.clone();
-                    for (j, p) in &to {
-                        all.junctions.get_mut(j).expect("checked").p = *p;
-                    }
-                    if broken(&base, &graph_problems(&all, origin, &li)).is_none() {
-                        after = all;
-                    } else {
-                        // Each that keeps the streets apart, in the order asked.
-                        let mut stayed = Vec::new();
-                        for (j, p) in &to {
-                            let mut one = after.clone();
-                            one.junctions.get_mut(j).expect("checked").p = *p;
-                            match broken(&base, &graph_problems(&one, origin, &li)) {
-                                None => after = one,
-                                Some(why) => stayed.push(json!({ "junction": j, "why": why })),
-                            }
-                        }
-                        if stayed.len() == to.len() && to.len() == 1 {
-                            return Err(format!("junction n{} can't go there: {}", to[0].0, stayed[0]["why"].as_str().unwrap_or("")));
-                        }
-                        report["stayed"] = json!(stayed);
-                    }
-                }
-                HandRequest::SetSquare { junction, square } => {
-                    let j = after.junctions.get_mut(junction).ok_or_else(|| format!("junction n{junction}: no such junction"))?;
-                    j.square = match square.as_str() {
-                        "none" => None,
-                        k if hand::plaza_kind(k).is_some() => Some(k.to_string()),
-                        k => return Err(format!("no square of kind {k}")),
-                    };
-                    // (The blocks round it give it room.)
-                    let lp = sub(j.p, origin);
-                    for f in face_infos(&before, origin, &li) {
-                        if f.ring.iter().any(|p| dist(*p, lp) < 0.5) {
-                            asked.extend(f.block);
-                        }
-                    }
-                }
-                HandRequest::SetBlock { block, fill, district, seed, reroll } => {
-                    let b = after.blocks.get_mut(block).ok_or_else(|| format!("block k{block}: no such block"))?;
-                    if let Some(f) = fill {
-                        if let BlockFill::Generated { ward, lots, height, .. } = f {
-                            if hand::ward_of(ward).is_none() {
-                                return Err(format!("no ward {ward}"));
-                            }
-                            if lots.as_deref().is_some_and(|l| !crate::world::LOT_SIZES.contains(&l)) {
-                                return Err(format!("lots: one of {}", crate::world::LOT_SIZES.join(", ")));
-                            }
-                            if height.as_deref().is_some_and(|h| !hand::HEIGHTS.contains(&h)) {
-                                return Err(format!("height: one of {}", hand::HEIGHTS.join(", ")));
-                            }
-                        }
-                        if let BlockFill::Castle { gates, keep_shape, moat, .. } = f {
-                            if gates.len() > 8 {
-                                return Err("gates: 8 at most".into());
-                            }
-                            if keep_shape.as_deref().is_some_and(|k| !matches!(k, "square" | "round")) {
-                                return Err("keep_shape: square or round (left out: rolled)".into());
-                            }
-                            if moat.as_deref().is_some_and(|m| !matches!(m, "none" | "dry" | "wet")) {
-                                return Err("moat: none, dry or wet (left out: rolled)".into());
-                            }
-                        }
-                        b.fill = f.clone();
-                        asked.insert(*block);
-                    }
-                    if let Some(s) = seed {
-                        u64::from_str_radix(s, 16).map_err(|_| "seed: hex digits".to_string())?;
-                        b.seed = s.clone();
-                        asked.insert(*block);
-                    }
-                    if *reroll {
-                        match &mut b.fill {
-                            BlockFill::Generated { reroll, .. } => *reroll += 1,
-                            _ => return Err(format!("block k{block}: only lots are rolled again")),
-                        }
-                        asked.insert(*block);
-                    }
-                    if let Some(d) = district {
-                        b.district = (!d.is_empty()).then(|| d.clone());
-                    }
-                }
-                HandRequest::AddRow { street, side, depth, ward, lots, gaps, seed } => {
-                    if !after.streets.contains_key(street) {
-                        return Err(format!("street e{street}: no such street"));
-                    }
-                    if side != "l" && side != "r" {
-                        return Err("side: l or r".into());
-                    }
-                    if hand::ward_of(ward).is_none() {
-                        return Err(format!("no ward {ward}"));
-                    }
-                    if !(10.0..=200.0).contains(depth) {
-                        return Err("depth: 10 to 200 ft".into());
-                    }
-                    let id = next_id(&after.rows);
-                    if id >= hand::MAX_ROWS {
-                        return Err(format!("no more than {} rows", hand::MAX_ROWS));
-                    }
-                    let seed = seed.clone().unwrap_or_else(|| hand::hex(hash3(u64::from_str_radix(&town.seed, 16).unwrap_or(0), id as i64, 0x7a0, 1)));
-                    after.rows.insert(id, Row { street: *street, side: side.clone(), depth: *depth, ward: ward.clone(), lots: lots.clone(), gaps: gaps.unwrap_or(0.08), seed });
-                    report["row"] = json!(id);
-                }
-                HandRequest::RemoveRow { row } => {
-                    after.rows.remove(row).ok_or_else(|| format!("row r{row}: no such row"))?;
-                }
-                HandRequest::AddArea { poly, open } => {
-                    if poly.len() < 3 {
-                        return Err("an area needs three corners at least".into());
-                    }
-                    let poly: Vec<P> = poly.iter().map(pt).collect();
-                    let id = next_id(&after.areas);
-                    asked.extend(blocks_under(&before, origin, &li, &poly));
-                    after.areas.insert(id, Area { poly, open: *open });
-                    report["area"] = json!(id);
-                }
-                HandRequest::RemoveArea { area } => {
-                    let a = after.areas.remove(area).ok_or_else(|| format!("area a{area}: no such area"))?;
-                    asked.extend(blocks_under(&before, origin, &li, &a.poly));
-                }
-                HandRequest::AddWall { pts, closed, spacing, towers, gates, name } => {
-                    if pts.len() < 2 {
-                        return Err("a wall needs two points at least".into());
-                    }
-                    let id = next_id(&after.walls);
-                    let spacing = spacing.unwrap_or_else(|| before.walls.values().next().map_or(90.0, |w| w.spacing));
-                    after.walls.insert(id, WallLine { pts: pts.iter().map(pt).collect(), closed: *closed, spacing, towers: towers.clone(), gates: gates.iter().map(pt).collect(), name: name.clone(), look: None });
-                    report["wall"] = json!(id);
-                }
-                HandRequest::RemoveWall { wall } => {
-                    after.walls.remove(wall).ok_or_else(|| format!("wall m{wall}: no such wall"))?;
-                }
-                HandRequest::SetArea { area, open } => {
-                    let a = after.areas.get_mut(area).ok_or_else(|| format!("area a{area}: no such area"))?;
-                    a.open = *open;
-                    let poly = a.poly.clone();
-                    asked.extend(blocks_under(&before, origin, &li, &poly));
-                }
-                HandRequest::SetWall { wall, gates, name, spacing } => {
-                    let w = after.walls.get_mut(wall).ok_or_else(|| format!("wall m{wall}: no such wall"))?;
-                    if let Some(gs) = gates {
-                        if gs.len() > 16 {
-                            return Err("no more than 16 gates on a wall".into());
-                        }
-                        let n = w.pts.len();
-                        let mut out: Vec<P> = Vec::new();
-                        for g in gs {
-                            let g = pt(g);
-                            let mut best: Option<(f64, P)> = None;
-                            for k in 0..(if w.closed { n } else { n - 1 }) {
-                                let (a, b) = (w.pts[k], w.pts[(k + 1) % n]);
-                                let ab = sub(b, a);
-                                let t = (dot(sub(g, a), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
-                                let c = add(a, mul(ab, t));
-                                let d = dist(g, c);
-                                if best.is_none_or(|b| d < b.0) {
-                                    best = Some((d, c));
-                                }
-                            }
-                            match best {
-                                Some((d, c)) if d <= 30.0 => {
-                                    let c = q(c);
-                                    if !out.iter().any(|o| dist(*o, c) < 1.0) {
-                                        out.push(c);
-                                    }
-                                }
-                                _ => return Err("a gate has to be on the wall line (within 30 ft of it)".into()),
-                            }
-                        }
-                        w.gates = out;
-                    }
-                    if let Some(nm) = name {
-                        let nm = nm.trim();
-                        if nm.chars().count() > 80 {
-                            return Err("name: 80 letters at most".into());
-                        }
-                        w.name = if nm.is_empty() { None } else { Some(nm.to_string()) };
-                    }
-                    if let Some(sp) = spacing {
-                        if !(40.0..=1000.0).contains(sp) {
-                            return Err("towers apart: 40 to 1000 ft".into());
-                        }
-                        w.spacing = *sp;
-                        w.towers.clear();
-                    }
-                }
-                HandRequest::LayOutByHand | HandRequest::BackToGenerated => unreachable!("handled above"),
-            }
+            edit_records(req, &before, &mut after, &mut asked, &mut report, &town, origin, &li)?;
             if let Some(why) = broken(&graph_problems(&before, origin, &li), &graph_problems(&after, origin, &li)) {
                 return Err(format!("that would break the streets: {why}"));
             }
@@ -1150,6 +912,252 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &HandRequest) -> Result
         report["size"] = json!(ch.streets.iter().map(|(k, v)| k.len() + 4 + v.as_ref().map_or(0, |v| v.to_string().len())).sum::<usize>());
     }
     Ok((ch, report))
+}
+
+/// The records of a town laid out by hand changed as `req` asks (`after` starts as `before`); the blocks
+/// to lay out anew go in `asked`, what it did in `report`.
+#[allow(clippy::too_many_arguments)]
+fn edit_records(req: &HandRequest, before: &HandRecords, after: &mut HandRecords, asked: &mut BTreeSet<u32>, report: &mut Value, town: &hand::HandTown, origin: P, li: &str) -> Result<(), String> {
+    let pt = |p: &[f64; 2]| q(*p);
+match req {
+    HandRequest::AddStreet { points, width, set_l, set_r, class } => {
+        let (set, w) = usual(before);
+        let (sl, sr) = (set_l.unwrap_or(set), set_r.unwrap_or(set));
+        let proto = Street { a: 0, b: 0, bends: Vec::new(), width: width.unwrap_or(if set_l.is_some() || set_r.is_some() { sl + sr } else { w }), set_l: sl, set_r: sr, class: class.unwrap_or_default(), bridge: false };
+        if proto.width < 0.0 || proto.set_l < 0.0 || proto.set_r < 0.0 {
+            return Err("width and setbacks are 0 ft or more".into());
+        }
+        let pts: Vec<P> = points.iter().map(pt).collect();
+        let made = add_street(after, &pts, &proto)?;
+        report["streets_added"] = json!(made);
+    }
+    HandRequest::DeleteStreet { street } => {
+        let st = after.streets.remove(street).ok_or_else(|| format!("street e{street}: no such street"))?;
+        let rows: Vec<u32> = after.rows.iter().filter(|(_, r)| r.street == *street).map(|(k, _)| *k).collect();
+        for r in &rows {
+            after.rows.remove(r);
+        }
+        for j in [st.a, st.b] {
+            if !after.streets.values().any(|s| s.a == j || s.b == j) {
+                after.junctions.remove(&j);
+            }
+        }
+        if !rows.is_empty() {
+            report["rows_removed"] = json!(rows);
+        }
+    }
+    HandRequest::SetStreet { street, width, set_l, set_r, class, bridge } => {
+        let st = after.streets.get_mut(street).ok_or_else(|| format!("street e{street}: no such street"))?;
+        if [width, set_l, set_r].iter().any(|v| v.is_some_and(|v| !(0.0..=200.0).contains(&v))) {
+            return Err("width and setbacks are 0 to 200 ft".into());
+        }
+        st.width = width.unwrap_or(st.width);
+        st.set_l = set_l.unwrap_or(st.set_l);
+        st.set_r = set_r.unwrap_or(st.set_r);
+        st.class = class.unwrap_or(st.class);
+        st.bridge = bridge.unwrap_or(st.bridge);
+    }
+    HandRequest::MoveJunctions { moves } => {
+        let mut to: Vec<(u32, P)> = Vec::new();
+        for m in moves {
+            let j = after.junctions.get(&m.junction).ok_or_else(|| format!("junction n{}: no such junction", m.junction))?;
+            let p = match (m.to, m.by) {
+                (Some(t), None) => q(t),
+                (None, Some(b)) => q(add(j.p, b)),
+                _ => return Err(format!("junction n{}: give to or by", m.junction)),
+            };
+            to.push((m.junction, p));
+        }
+        let base = graph_problems(before, origin, li);
+        let mut all = after.clone();
+        for (j, p) in &to {
+            all.junctions.get_mut(j).expect("checked").p = *p;
+        }
+        if broken(&base, &graph_problems(&all, origin, li)).is_none() {
+            *after = all;
+        } else {
+            // Each that keeps the streets apart, in the order asked.
+            let mut stayed = Vec::new();
+            for (j, p) in &to {
+                let mut one = after.clone();
+                one.junctions.get_mut(j).expect("checked").p = *p;
+                match broken(&base, &graph_problems(&one, origin, li)) {
+                    None => *after = one,
+                    Some(why) => stayed.push(json!({ "junction": j, "why": why })),
+                }
+            }
+            if stayed.len() == to.len() && to.len() == 1 {
+                return Err(format!("junction n{} can't go there: {}", to[0].0, stayed[0]["why"].as_str().unwrap_or("")));
+            }
+            report["stayed"] = json!(stayed);
+        }
+    }
+    HandRequest::SetSquare { junction, square } => {
+        let j = after.junctions.get_mut(junction).ok_or_else(|| format!("junction n{junction}: no such junction"))?;
+        j.square = match square.as_str() {
+            "none" => None,
+            k if hand::plaza_kind(k).is_some() => Some(k.to_string()),
+            k => return Err(format!("no square of kind {k}")),
+        };
+        // (The blocks round it give it room.)
+        let lp = sub(j.p, origin);
+        for f in face_infos(before, origin, li) {
+            if f.ring.iter().any(|p| dist(*p, lp) < 0.5) {
+                asked.extend(f.block);
+            }
+        }
+    }
+    HandRequest::SetBlock { block, fill, district, seed, reroll } => {
+        let b = after.blocks.get_mut(block).ok_or_else(|| format!("block k{block}: no such block"))?;
+        if let Some(f) = fill {
+            if let BlockFill::Generated { ward, lots, height, .. } = f {
+                if hand::ward_of(ward).is_none() {
+                    return Err(format!("no ward {ward}"));
+                }
+                if lots.as_deref().is_some_and(|l| !crate::world::LOT_SIZES.contains(&l)) {
+                    return Err(format!("lots: one of {}", crate::world::LOT_SIZES.join(", ")));
+                }
+                if height.as_deref().is_some_and(|h| !hand::HEIGHTS.contains(&h)) {
+                    return Err(format!("height: one of {}", hand::HEIGHTS.join(", ")));
+                }
+            }
+            if let BlockFill::Castle { gates, keep_shape, moat, .. } = f {
+                if gates.len() > 8 {
+                    return Err("gates: 8 at most".into());
+                }
+                if keep_shape.as_deref().is_some_and(|k| !matches!(k, "square" | "round")) {
+                    return Err("keep_shape: square or round (left out: rolled)".into());
+                }
+                if moat.as_deref().is_some_and(|m| !matches!(m, "none" | "dry" | "wet")) {
+                    return Err("moat: none, dry or wet (left out: rolled)".into());
+                }
+            }
+            b.fill = f.clone();
+            asked.insert(*block);
+        }
+        if let Some(s) = seed {
+            u64::from_str_radix(s, 16).map_err(|_| "seed: hex digits".to_string())?;
+            b.seed = s.clone();
+            asked.insert(*block);
+        }
+        if *reroll {
+            match &mut b.fill {
+                BlockFill::Generated { reroll, .. } => *reroll += 1,
+                _ => return Err(format!("block k{block}: only lots are rolled again")),
+            }
+            asked.insert(*block);
+        }
+        if let Some(d) = district {
+            b.district = (!d.is_empty()).then(|| d.clone());
+        }
+    }
+    HandRequest::AddRow { street, side, depth, ward, lots, gaps, seed } => {
+        if !after.streets.contains_key(street) {
+            return Err(format!("street e{street}: no such street"));
+        }
+        if side != "l" && side != "r" {
+            return Err("side: l or r".into());
+        }
+        if hand::ward_of(ward).is_none() {
+            return Err(format!("no ward {ward}"));
+        }
+        if !(10.0..=200.0).contains(depth) {
+            return Err("depth: 10 to 200 ft".into());
+        }
+        let id = next_id(&after.rows);
+        if id >= hand::MAX_ROWS {
+            return Err(format!("no more than {} rows", hand::MAX_ROWS));
+        }
+        let seed = seed.clone().unwrap_or_else(|| hand::hex(hash3(u64::from_str_radix(&town.seed, 16).unwrap_or(0), id as i64, 0x7a0, 1)));
+        after.rows.insert(id, Row { street: *street, side: side.clone(), depth: *depth, ward: ward.clone(), lots: lots.clone(), gaps: gaps.unwrap_or(0.08), seed });
+        report["row"] = json!(id);
+    }
+    HandRequest::RemoveRow { row } => {
+        after.rows.remove(row).ok_or_else(|| format!("row r{row}: no such row"))?;
+    }
+    HandRequest::AddArea { poly, open } => {
+        if poly.len() < 3 {
+            return Err("an area needs three corners at least".into());
+        }
+        let poly: Vec<P> = poly.iter().map(pt).collect();
+        let id = next_id(&after.areas);
+        asked.extend(blocks_under(before, origin, li, &poly));
+        after.areas.insert(id, Area { poly, open: *open });
+        report["area"] = json!(id);
+    }
+    HandRequest::RemoveArea { area } => {
+        let a = after.areas.remove(area).ok_or_else(|| format!("area a{area}: no such area"))?;
+        asked.extend(blocks_under(before, origin, li, &a.poly));
+    }
+    HandRequest::AddWall { pts, closed, spacing, towers, gates, name } => {
+        if pts.len() < 2 {
+            return Err("a wall needs two points at least".into());
+        }
+        let id = next_id(&after.walls);
+        let spacing = spacing.unwrap_or_else(|| before.walls.values().next().map_or(90.0, |w| w.spacing));
+        after.walls.insert(id, WallLine { pts: pts.iter().map(pt).collect(), closed: *closed, spacing, towers: towers.clone(), gates: gates.iter().map(pt).collect(), name: name.clone(), look: None });
+        report["wall"] = json!(id);
+    }
+    HandRequest::RemoveWall { wall } => {
+        after.walls.remove(wall).ok_or_else(|| format!("wall m{wall}: no such wall"))?;
+    }
+    HandRequest::SetArea { area, open } => {
+        let a = after.areas.get_mut(area).ok_or_else(|| format!("area a{area}: no such area"))?;
+        a.open = *open;
+        let poly = a.poly.clone();
+        asked.extend(blocks_under(before, origin, li, &poly));
+    }
+    HandRequest::SetWall { wall, gates, name, spacing } => {
+        let w = after.walls.get_mut(wall).ok_or_else(|| format!("wall m{wall}: no such wall"))?;
+        if let Some(gs) = gates {
+            if gs.len() > 16 {
+                return Err("no more than 16 gates on a wall".into());
+            }
+            let n = w.pts.len();
+            let mut out: Vec<P> = Vec::new();
+            for g in gs {
+                let g = pt(g);
+                let mut best: Option<(f64, P)> = None;
+                for k in 0..(if w.closed { n } else { n - 1 }) {
+                    let (a, b) = (w.pts[k], w.pts[(k + 1) % n]);
+                    let ab = sub(b, a);
+                    let t = (dot(sub(g, a), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
+                    let c = add(a, mul(ab, t));
+                    let d = dist(g, c);
+                    if best.is_none_or(|b| d < b.0) {
+                        best = Some((d, c));
+                    }
+                }
+                match best {
+                    Some((d, c)) if d <= 30.0 => {
+                        let c = q(c);
+                        if !out.iter().any(|o| dist(*o, c) < 1.0) {
+                            out.push(c);
+                        }
+                    }
+                    _ => return Err("a gate has to be on the wall line (within 30 ft of it)".into()),
+                }
+            }
+            w.gates = out;
+        }
+        if let Some(nm) = name {
+            let nm = nm.trim();
+            if nm.chars().count() > 80 {
+                return Err("name: 80 letters at most".into());
+            }
+            w.name = if nm.is_empty() { None } else { Some(nm.to_string()) };
+        }
+        if let Some(sp) = spacing {
+            if !(40.0..=1000.0).contains(sp) {
+                return Err("towers apart: 40 to 1000 ft".into());
+            }
+            w.spacing = *sp;
+            w.towers.clear();
+        }
+    }
+    HandRequest::LayOutByHand | HandRequest::BackToGenerated => unreachable!("handled above"),
+}
+    Ok(())
 }
 
 fn op_name(r: &HandRequest) -> &'static str {
