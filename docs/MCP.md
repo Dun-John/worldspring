@@ -1,6 +1,6 @@
 # Worldspring MCP: full reference
 
-`mapd` exposes the open world to agents (any MCP client) through 59 tools. With them an agent can:
+`mapd` exposes the open world to agents (any MCP client) through 98 tools. With them an agent can:
 - read and search the world: features, buildings, districts, underground sites, routes, battlemaps;
 - look at the map as you see it, or move your view;
 - edit the world: rename anything (down to a dungeon's levels and rooms), write notes, hide features, and create

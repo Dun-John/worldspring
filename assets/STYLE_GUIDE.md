@@ -1,8 +1,8 @@
 # Sprite style guide
 
 Rules for battlemap art: the objects scattered on outdoor maps (`battlemap::CATALOG`, drawn by `DRAW` in
-`app/src/render/atlas.ts`), building furniture (`drawFurniture`) and underground props (`drawUnderProp`, both in
-`app/src/render/furniture.ts`). All of it is drawn in code, so it looks like one set.
+`app/src/render/atlas.ts`, the drawings under `render/atlas/`), building furniture (`drawFurniture`) and underground
+props (`drawUnderProp`, both exported by `app/src/render/furniture.ts`, the drawings under `render/furniture/`). All of it is drawn in code, so it looks like one set.
 
 The target is the **cozy** look of hand-drawn VTT terrain (Nimblehold-like): a sunny afternoon,
 warm and inviting even in a ruin, drawn with simple broad strokes and generous colour. The world can be dangerous; the
