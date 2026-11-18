@@ -1736,8 +1736,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             Surface::Sand
         } else {
             match surface_for(biome[k], slope[k]) {
-                // Tundra: patches of snow among the grass, where the map draws them.
-                Surface::Grass if biome[k] == Biome::Tundra && tundra_snowy(world, ox, oy, k) => Surface::Snow,
+                // Tundra: patches of snow among its grass.
+                Surface::TundraGrass if tundra_snowy(world, ox, oy, k) => Surface::Snow,
                 s => s,
             }
         };

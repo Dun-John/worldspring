@@ -160,8 +160,7 @@ const SURFACES = [
   'field (crops)',
   'stairs',
   'gravel path',
-  // v63 countryside
-  'pasture',
+  'tundra grass',
 ];
 /** Cobbles' tints by culture (`ground.frag` `uStone`, times the cobble grey; `Layout::culture`):
  * north cool blue-grey granite, west warm grey-buff, south warm honey limestone, dry pale ochre

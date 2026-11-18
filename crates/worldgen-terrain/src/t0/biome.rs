@@ -152,21 +152,22 @@ pub fn local_slope(w: usize, h: usize, height: &[f64], i: usize, j: usize, cell_
     crate::core::sqrt(gx * gx + gy * gy)
 }
 
-/// Where snow lies on tundra: big soft patches of snow and of grass, a pure function of world
-/// position (ft) and the world's seed. Battlemaps lay `Surface::Snow` where it passes
-/// `TUNDRA_SNOW_AT`; the map shows none (its tundra is one painted grass texture). Value noise on a
-/// turned lattice, its coordinates warped twice so outlines wind; three octaves (1,500, 620 and
-/// 240 ft). Returns 0..1, about half of it over the threshold.
+/// Where snow lies on tundra: soft patches of snow and of grass, a pure function of world position
+/// (ft) and the world's seed, sized so a battlemap's view (a few hundred feet) holds several of
+/// each. Battlemaps lay `Surface::Snow` where it passes `TUNDRA_SNOW_AT`; the map shows none (its
+/// tundra is one painted grass texture). Value noise on a turned lattice, its coordinates warped
+/// twice so outlines wind; three octaves (115, 48 and 18 ft). Returns 0..1, about half of it over
+/// the threshold.
 pub fn tundra_snow(seed: u32, x: f64, y: f64) -> f64 {
     let (mut rx, mut ry) = (0.8 * x - 0.6 * y, 0.6 * x + 0.8 * y);
     let s = |k: u32| snow_hash(seed.wrapping_add(k.wrapping_mul(0x632b_e5ab)));
-    let (wx, wy) = (snow_noise(rx / 2600.0, ry / 2600.0, s(1)), snow_noise(rx / 2600.0, ry / 2600.0, s(2)));
-    rx += 700.0 * (wx - 0.5);
-    ry += 700.0 * (wy - 0.5);
-    let (wx, wy) = (snow_noise(rx / 520.0, ry / 520.0, s(3)), snow_noise(rx / 520.0, ry / 520.0, s(4)));
-    rx += 160.0 * (wx - 0.5);
-    ry += 160.0 * (wy - 0.5);
-    0.55 * snow_noise(rx / 1500.0, ry / 1500.0, s(5)) + 0.3 * snow_noise(rx / 620.0, ry / 620.0, s(6)) + 0.15 * snow_noise(rx / 240.0, ry / 240.0, s(7))
+    let (wx, wy) = (snow_noise(rx / 200.0, ry / 200.0, s(1)), snow_noise(rx / 200.0, ry / 200.0, s(2)));
+    rx += 55.0 * (wx - 0.5);
+    ry += 55.0 * (wy - 0.5);
+    let (wx, wy) = (snow_noise(rx / 40.0, ry / 40.0, s(3)), snow_noise(rx / 40.0, ry / 40.0, s(4)));
+    rx += 12.0 * (wx - 0.5);
+    ry += 12.0 * (wy - 0.5);
+    0.55 * snow_noise(rx / 115.0, ry / 115.0, s(5)) + 0.3 * snow_noise(rx / 48.0, ry / 48.0, s(6)) + 0.15 * snow_noise(rx / 18.0, ry / 18.0, s(7))
 }
 
 /// `tundra_snow` at or over this: snow.

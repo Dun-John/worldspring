@@ -158,7 +158,7 @@ light; rugs and cloth may use the dyes above, slightly deeper.
 ### Against the ground
 
 Sprites are seen on the ground shader (`app/src/render/shaders/ground.frag`): grass `#668a40`, forest
-floor `#4f5930`, dry grass `#a39a5c`, sand `#d9c28c`, dirt `#856b4a`, mud `#544a36`, rock `#7f7d75`,
+floor `#4f5930`, dry grass `#a39a5c`, tundra grass `#87875e`, sand `#d9c28c`, dirt `#856b4a`, mud `#544a36`, rock `#7f7d75`,
 cobble `#948c80`, snow `#e8edf5`. An object must separate from the ground it usually stands on by value
 (lighter or darker), not by hue alone: trees and bushes are darker than grass at the edge and brighter at
 the sunlit top; stones are lighter than dirt and mud.

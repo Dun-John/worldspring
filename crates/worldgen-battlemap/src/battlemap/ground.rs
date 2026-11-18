@@ -99,7 +99,7 @@ pub(super) fn surface_for(b: Biome, slope: f64) -> Surface {
         Biome::Steppe | Biome::Savanna => Surface::DryGrass,
         Biome::HotDesert => Surface::Sand,
         Biome::ColdDesert => Surface::Dirt,
-        Biome::Tundra => if slope > 0.4 { Surface::Rock } else { Surface::Grass },
+        Biome::Tundra => if slope > 0.4 { Surface::Rock } else { Surface::TundraGrass },
         Biome::Alpine => if slope > 0.5 { Surface::Rock } else { Surface::Snow },
         Biome::Ice => Surface::Snow,
         Biome::Swamp => Surface::Mud,

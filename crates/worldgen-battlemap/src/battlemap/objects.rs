@@ -48,7 +48,7 @@ pub(super) fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_
                     continue;
                 }
                 // Tundra: no bushes on its snow patches, no drifts on its grass.
-                if b == Biome::Tundra && matches!((c.surface[k], kind), (Surface::Snow, Kind::Bush) | (Surface::Grass, Kind::Snowdrift)) {
+                if b == Biome::Tundra && matches!((c.surface[k], kind), (Surface::Snow, Kind::Bush) | (Surface::TundraGrass, Kind::Snowdrift)) {
                     continue;
                 }
                 if c.urban[k] != 0 {
@@ -412,7 +412,7 @@ pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: 
         0 if green(c, k) => green_cover(biome[k], false, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         // (Tundra's grass patches: no drifts, those keep to its snow.)
-        0 if biome[k] == Biome::Tundra && c.surface[k] == Surface::Grass => [Kind::Boulder, Kind::Bush, Kind::RockPile][rng.below(3) as usize],
+        0 if biome[k] == Biome::Tundra && c.surface[k] == Surface::TundraGrass => [Kind::Boulder, Kind::Bush, Kind::RockPile][rng.below(3) as usize],
         0 => fallback_cover(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], false, rng),
     };

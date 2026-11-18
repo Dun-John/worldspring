@@ -64,6 +64,8 @@ pub enum Surface {
     Stairs,
     /// A park's gravel paths.
     Gravel,
+    /// Tundra's sedge and moss: a duller, greyer grass (snow lies in patches among it).
+    TundraGrass,
 }
 
 impl Surface {
