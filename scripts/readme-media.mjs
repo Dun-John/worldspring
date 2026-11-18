@@ -1,7 +1,7 @@
 // Dev tool: the README's pictures (docs/media/), from the running dev server: one zoom from the
 // whole continent down to an inn's battlemap and inside it (zoom.gif, needs ffmpeg), and stills of
 // the continent, a city, a street battlemap, the inn's interior and underground sites (a dungeon,
-// a cave, a mine, a lava tube or a crypt: the biggest of each, close on the middle of its floor).
+// a cave, a mine, a lava tube or a crypt: the biggest of each, no ice caves, close on the middle of its floor).
 // Usage: node scripts/readme-media.mjs [url]   (default http://localhost:5173/?seed=1)
 // Each frame is taken once the map has drawn everything in view, so the GIF is smooth however
 // slow the generation is.
@@ -126,11 +126,18 @@ try {
     const off = 1 - ease(t);
     await evaluate(`window.__map.cam.set({ cx: ${target.x + (x0 - target.x) * s * off}, cy: ${target.y + (y0 - target.y) * s * off}, zoom: ${z} })`);
     await settle();
+    if (i === 0) {
+      // The still without the overland hexes; the zoom with them (they fade out going down).
+      await shot(join(out, 'continent.png'));
+      await evaluate('window.__map.setHexes(true)');
+      await settle();
+    }
     await frame();
-    if (i === 0) await shot(join(out, 'continent.png'));
     if (i === 0) for (let h = 0; h < 15; h++) await frame();
     process.stdout.write(`\rframe ${i}/${N}`);
   }
+  await evaluate('window.__map.setHexes(false)');
+  await settle();
   await shot(join(out, 'battlemap.png'));
   for (let h = 0; h < 18; h++) await frame();
   // Inside: the inn's ground floor, over the map.
@@ -156,6 +163,8 @@ try {
     for (let k = 0; k < sites.length; k++) {
       const id = 'u:' + (towns + k) + ':0';
       const it = await m.gen.interior(id);
+      // (No ice or frosted caves: the picture shows a cave's usual rock.)
+      if (it && it.function === 'cave' && (it.theme === 'ice' || it.look >= 3)) continue;
       if (it && (!best[it.function] || it.nx * it.ny > best[it.function].n)) best[it.function] = { id, n: it.nx * it.ny };
     }
     return Object.fromEntries(Object.entries(best).map(([k, v]) => [k, v.id]));

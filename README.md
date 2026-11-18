@@ -44,23 +44,31 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 
 | Section | What it's for |
 |---|---|
-| **World** (1) | **Generate** a world from a seed, size and climate. **Sketch** the continent you want and the generator follows. **Library** saves, opens, backs up and shares your worlds. |
+| **World** (1) | **Settings** makes a world from a seed, size and climate. **Sketch** the continent you want and the generator follows. **Library** saves, opens, backs up and shares your worlds. |
 | **Edit** (2) | Change the world and make it yours. See below. |
 | **Notes** (3) | Your campaign's **NPCs** and **plots**, pinned to the map, and the **Gazetteer**: every name in the world to rename (each settlement with the places that stand in it), places to hide from the map, and the notes only you see. |
 | **Play** (4) | Run a session: tokens, fog of war, line of sight, lights, doors and secret doors, and a second **players' window** for a TV or another screen that shows only what the players have seen. Each world's session is kept in this browser, and comes along when the world is remade (a settlement added or taken back, the sketch redrawn). |
 
 ### What you can edit
 
-Open **Edit**: it starts on **Select** (A), which shows what anything on the map is; click, or drag a box or a lasso. Pick what to change (Settlements, Buildings, Roads & water, Land, Rooms), then a tool in that group, or press the tool's letter. Every change can be undone.
+Open **Edit**: it starts on **Select** (A). Click anything on the map to see what it is, or drag a box (Shift: a
+lasso) for many; its card deletes or changes what you picked: buildings, roads, streets, lanes, paths and fences,
+generated or yours, one by one or all in the box. Pick what to change (Settlements, Buildings, Roads & water, Land,
+Rooms), then a tool in that group, or press the tool's letter. Each tool keeps its finer options under **More
+options**. Every change can be undone, and the Gazetteer lists the roads and fences you took away, to bring back.
 
 | Group › tool | What you can do |
 |---|---|
 | **Settlements › Places** (S) | Add a village, town, city or metropolis (the world is remade round it; Take back, Undo or Remove on its card takes it away again, and what was made on it is kept in Notes), or your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
-| **Buildings** | **Draw a building** (B: rectangles, polygons, round towers), **One building** (Q), a **Row of houses** (E) along a street, **Fill an area** (L), **Castle & walls** (K, W: raise castles and walls anywhere). **Roads & water** puts roads (V), bridges, fords and ferries (X) across a river, bank to bank, water (I) and **Docks & islets** (H). |
-| **Settlements › Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Push, Smudge, Grow, Shrink, Soften, Even out). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
+| **Settlements › Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Push, Smudge, Grow, Shrink, Soften, Even out). Give a ward another use, change its lots, merge or reroll them, or clear a ward and build your own. Or **Lay out by hand**: the town's streets become yours to draw, join, widen or delete, each block filled with houses, lots of your choosing or left open, and a street lined with houses. |
+| **Settlements › Town wall** (Shift+U) | Put the walls up or down, and click a corner on the wall for a gate or a tower. |
+| **Settlements › Join or leave** (Shift+J) | What you build within 300 ft of a town joins it (its people, style and shops); pick what should be part of a town, or taken out of one. Outskirts taken out become a place of their own. |
+| **Buildings** | **Draw a building** (B: rectangles, polygons, round towers), set down **One building** (Q) facing the nearest street, line a street with a **Row of houses** (E, and lay a road along it if you like), **Fill an area** (L) with buildings, lots or open ground, or raise a **Castle & walls** (K, W) anywhere. |
+| **Roads & water** | Draw **Roads** (V), put a bridge, ford or ferry across a river bank to bank (**Crossing**, X), paint or outline **Water** (I: lakes, ponds, moats, inlets), and build **Docks & islets** (H): quays, piers and breakwaters. |
 | **Land › Ground** (M) | Shape a battlemap's ground: raise, lower, smooth or put it back with a brush, or draw a plateau, a cliff or a pit (a castle on a cliff) and change its level later. Buildings, streets and walls stand on it; a city street climbing steeply turns to steps. |
+| **Land › Fences & hedges** (F) | Draw hedgerows, clipped hedges, stone walls, rails, wattle, pickets, iron railings, stockades and high walls; put gates in them; erase a stretch of any fence, the generated ones too. |
 | **Land › Props** (C) | Place objects on a battlemap one at a time (turned, picked up and moved again), brush them on, or erase them. Upload your own pictures to use as objects. Objects go outdoors (the ghost turns red where a roof would hide one); furniture, props and traps inside a building or down a site go in Rooms. |
-| **Rooms** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, and furniture and props placed as on the battlemap (turned, picked up and moved again). |
+| **Rooms** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, and furniture and props placed as on the battlemap (turned, picked up and moved again). **Stairs & passages** (J) joins a square below ground to another level or another place. |
 
 **Sketch** (World › Sketch) works at the scale of the continent, and generating from it remakes the world to fit:
 draw coastlines, land and sea, ranges, massifs, rivers, lakes, biomes, volcanoes, **towns and cities**, planned sites
