@@ -110,6 +110,14 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
     out
 }
 
+/// Feature `id`'s name as generated (not renamed) and its spot, as `features` has them, without
+/// building the list: the overlay's first, then a created site not removed. (`features` changes
+/// only their kind, extent and detail, by `town_sizes`, and their name, by the renames.)
+fn feature_spot<'a>(world: &'a World, t0: &'a T0, id: &str) -> Option<(&'a str, P)> {
+    let overlay = t0.extra.as_ref().and_then(|e| e.overlay.features.iter().find(|f| f.id == id)).map(|f| (f.name.as_str(), [f.x, f.y]));
+    overlay.or_else(|| world.file.edits.created.iter().find(|c| !c.removed && c.id == id).map(|c| (c.name.as_str(), [c.x, c.y])))
+}
+
 /// The towns laid out by hand, sized by the people their homes house (`hand::size`) at once, as
 /// their labels, icons and lists show them: (feature id, size class, label extent ft, people).
 /// T0 (its roads, its trade) keeps the settlement as it was until the world is next remade.
@@ -251,8 +259,9 @@ fn extent_of(world: &World, t0: &T0, id: &str) -> Option<Value> {
             town::layout(world, t0, *li).quarters.get(*qi).map(|q| poly_extent(&q.patches.iter().map(Vec::as_slice).collect::<Vec<_>>()))
         }
         _ => {
-            let i = features(world, t0).iter().position(|f| f.id == id)?;
-            shapes(world, t0).get(i).map(|s| feature_extent(world, &features(world, t0)[i], s))
+            let fs = features(world, t0);
+            let i = fs.iter().position(|f| f.id == id)?;
+            shapes(world, t0).get(i).map(|s| feature_extent(world, &fs[i], s))
         }
     }
 }

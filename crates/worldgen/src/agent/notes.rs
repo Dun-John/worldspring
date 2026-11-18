@@ -67,11 +67,11 @@ pub fn feature_of_layout(world: &World, t0: &T0, li: usize) -> Option<String> {
     if li >= n + t0.base_pois {
         return world.file.edits.created.get(li - n - t0.base_pois).map(|c| c.id.clone());
     }
-    let fs = place_ids(t0);
-    if li < n {
-        fs.into_iter().filter(|g| SETTLEMENT_KINDS.contains(&g.1)).nth(li).map(|f| f.0)
-    } else {
-        fs.into_iter().filter(|g| SITE_KINDS.contains(&g.1)).nth(li - n).map(|f| f.0)
+    // (`place_ids` order, without collecting it.)
+    let (kinds, k): (&[&str], usize) = if li < n { (&SETTLEMENT_KINDS, li) } else { (&SITE_KINDS, li - n) };
+    match &t0.extra {
+        Some(e) => e.overlay.features.iter().filter(|f| kinds.contains(&f.kind)).nth(k).map(|f| f.id.clone()),
+        None => PLACES.with(|p| p.borrow().iter().filter(|g| kinds.contains(&g.1)).nth(k).map(|g| g.0.clone())),
     }
 }
 
@@ -79,7 +79,7 @@ pub fn name_of(world: &World, t0: &T0, id: &str) -> Option<String> {
     if let Some(n) = world.file.edits.renames.get(id) {
         return Some(n.clone());
     }
-    features(world, t0).into_iter().find(|f| f.id == id).map(|f| f.name).or_else(|| place_name(t0, id))
+    feature_spot(world, t0, id).map(|f| f.0.to_string()).or_else(|| place_name(t0, id))
 }
 
 /// A settlement's or site's generated name from `set_place_names`, when T0 has no overlay.
@@ -202,7 +202,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
         ("w", [li, sx, sy]) if town::is_settlement(t0, *li) => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
         ("sq" | "gt", _) => town::places::find(world, t0, id).map(|x| x.1.at),
-        _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
+        _ => feature_spot(world, t0, id).map(|f| f.1),
     }
 }
 
