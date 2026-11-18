@@ -20,6 +20,14 @@ export interface SelectApp {
   go(to: import('../../ui/shell/layout.svelte').Section | null, tab?: string): void;
   /** The settlements and places a thing can join (by layout index; `place`: a place made by pushing buildings out). */
   townChoices(): TownChoice[];
+  /** `?ui=new` (the old layout leaves them out): open an Edit tool; Change opened one (its Done goes
+   * back to Select); `t`'s town opened in Streets with `t` chosen, or in Town wall; whether `t` is a
+   * town whose streets can be edited; `t`'s info card. */
+  openTool?(key: import('../../ui/shell/editTools').ToolKey): boolean;
+  changedFrom?(): void;
+  openTown?(t: Thing, tool: 'streets' | 'townwall'): void;
+  hasStreets?(t: Thing): boolean;
+  info?(t: Thing): void;
 }
 
 /** What `gen.reach` says of a thing: the towns within `OFFER_FT` of it (layout, gap ft) and why a generated building may not leave its town. */
@@ -86,7 +94,7 @@ export function selectTools(host: SelectApp) {
       ftPerPx,
       clicked: (p) => void click(p),
       drawn: (poly) => void drag(poly),
-      shown: () => (area ? things.slice(0, 300) : things[open] ? [things[open]] : []).map((t) => t.bbox),
+      shown: () => (area ? shown.slice(0, 300) : shown[open] ? [shown[open]] : []).map((t) => t.bbox),
       area: () => area,
       lasso: () => lasso,
     });
@@ -133,12 +141,12 @@ export function selectTools(host: SelectApp) {
     if (!armed) return;
     if (at) {
       const { p, r } = at;
-      const key = things[open] ? keyOf(things[open]) : null;
+      const key = shown[open] ? keyOf(shown[open]) : null;
       const s = ++seq;
       void host.view.gen.pick(p[0], p[1], r).then((found) => {
         if (s !== seq) return;
         things = underFirst(unique(found), p, r);
-        open = Math.max(0, things.findIndex((t) => keyOf(t) === key));
+        open = Math.max(0, shown.findIndex((t) => keyOf(t) === key));
         loadReach(things);
       });
     } else if (area) {
@@ -241,7 +249,7 @@ export function selectTools(host: SelectApp) {
       const gone = new Set<string>([...kept.map((t) => t.id as string), ...(cut && cutOk ? [...cut.done, ...cut.also] : [])]);
       const refusedAll = [...(cut?.refused ?? []), ...(fcut?.refused ?? [])];
       things = things.filter((t) => !t.id || !gone.has(t.id));
-      open = Math.min(open, Math.max(0, things.length - 1));
+      open = Math.min(open, Math.max(0, shown.length - 1));
       notice = refusedAll.length ? `Not taken away (${refusedAll.length}): ${refusedAll.map((r) => r.why).filter((w, i, a) => a.indexOf(w) === i).join('; ')}` : '';
       if (notice) host.toast(notice);
     } finally {
@@ -249,8 +257,32 @@ export function selectTools(host: SelectApp) {
     }
   }
 
-  /** The tool that made `t` opened, with it chosen where that tool can choose one. */
+  /** The tool that made `t` opened, with it chosen where that tool can choose one (`?ui=new`: its
+   * Done comes back here). */
   async function change(t: Thing) {
+    if (host.openTool) {
+      const id = t.id;
+      switch (t.kind) {
+        case 'plot':
+          if (id) host.build.editPlot(id);
+          return void host.changedFrom?.();
+        case 'district':
+        case 'street':
+          return void host.openTown?.(t, 'streets');
+        case 'settlement':
+        case 'site':
+          if (!host.openTool('places')) return;
+          if (id) host.showFeature(id);
+          return;
+      }
+      const p = change0(t);
+      host.changedFrom?.();
+      return p;
+    }
+    return change0(t);
+  }
+
+  async function change0(t: Thing) {
     const B = host.build;
     const id = t.id;
     switch (t.kind) {
@@ -316,11 +348,14 @@ export function selectTools(host: SelectApp) {
     if (out?.done.length) things = things.filter((x) => x.id !== t.id);
   }) : undefined);
 
+  /** `?ui=new`: Join or leave a town lists only what can be part of one. */
+  const shown = $derived(purpose === 'members' ? things.filter((t) => memberable(t)) : things);
+
   /** What an area holds, counted by kind (in pick's order). */
   const counts = $derived.by(() => {
     if (!area) return [];
     const by = new Map<Thing['kind'], { n: number; can: number }>();
-    for (const t of things) {
+    for (const t of shown) {
       const c = by.get(t.kind) ?? { n: 0, can: 0 };
       c.n++;
       if (t.removable && t.id) c.can++;
@@ -448,7 +483,7 @@ export function selectTools(host: SelectApp) {
       armed = null;
     },
     get things() {
-      return things;
+      return shown;
     },
     get open() {
       return open;
@@ -476,7 +511,7 @@ export function selectTools(host: SelectApp) {
     remove,
     /** The thing open in a click's card taken away (false: none, or it can't be). */
     removeOpen(): boolean {
-      const t = !area && armed ? things[open] : undefined;
+      const t = !area && armed ? shown[open] : undefined;
       if (!t?.removable || !t.id) return false;
       void remove([t]);
       return true;
@@ -486,6 +521,12 @@ export function selectTools(host: SelectApp) {
     fenced,
     kindable,
     setKind,
+    /** The area's things of one kind taken away (those that can be), as one step (Select's per-kind Delete). */
+    removeKind: (kind: Thing['kind']) => void remove(shown.filter((t) => t.kind === kind)),
+    /** `?ui=new`: the card's extra links (none in the old layout). */
+    get links() {
+      return { info: host.info, openTown: host.openTown, hasStreets: host.hasStreets };
+    },
     townName: (t: Thing) => (t.town && t.town !== t.id ? host.nameOf(t.town) : null),
   };
 }

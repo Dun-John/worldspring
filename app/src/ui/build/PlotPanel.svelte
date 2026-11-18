@@ -15,21 +15,27 @@
     near: boolean;
     peek?: boolean;
     onZoomIn: () => void;
+    /** `?ui=new`: the plot being changed (its name), opened by Select's Change; its settings are written as they are set. */
+    editing?: string | null;
+    onRemove?: () => void;
+    onDone?: () => void;
   }
 
-  let { lasso = $bindable(), quick, onPlace, onDrop, near, peek = false, onZoomIn }: Props = $props();
+  let { lasso = $bindable(), quick, onPlace, onDrop, near, peek = false, onZoomIn, editing = null, onRemove, onDone }: Props = $props();
 
   const OPEN_KINDS = ['plaza', 'lawn', 'park', 'garden', 'market', 'cemetery', 'farmland'];
 </script>
 
-<ToolPanel title="Plot" {near} {peek} {onZoomIn} startOver {onDrop} {quick} place="Make the plot" {onPlace}>
+{#snippet changing()}Changing <b>{editing}</b>{/snippet}
+
+<ToolPanel title="Plot" {near} {peek} {onZoomIn} changing={editing ? changing : undefined} {onRemove} {onDone} startOver {onDrop} {quick} place="Make the plot" {onPlace}>
   <div class="ws-seg" role="radiogroup" aria-label="Fill">
     <button class:on={lasso.fill === 'generated'} aria-pressed={lasso.fill === 'generated'} onclick={() => (lasso.fill = 'generated')}>Buildings</button>
     <button class:on={lasso.fill === 'hand'} aria-pressed={lasso.fill === 'hand'} onclick={() => (lasso.fill = 'hand')}>Empty</button>
     <button class:on={lasso.fill === 'open'} aria-pressed={lasso.fill === 'open'} onclick={() => (lasso.fill = 'open')}>Open ground</button>
   </div>
   {#snippet hint()}
-    <div class="ws-hint">Draw round a plot, or click each corner (the first again to finish).
+    <div class="ws-hint">{editing ? 'Its fill, ward, lots and name change as you set them; for another outline, delete it and draw again. ' : ''}Draw round a plot, or click each corner (the first again to finish).
       {lasso.fill === 'generated' ? 'The generator fills it with lots of the ward.' : lasso.fill === 'hand' ? 'It is left empty for buildings drawn by hand.' : 'It stays open ground.'}
       A plot cannot overlap another.</div>
   {/snippet}

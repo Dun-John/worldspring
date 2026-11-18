@@ -3,7 +3,7 @@
 // undo steps. App keeps `syncTool()` / `go()` and calls `armBuild` / `disarmBuild`.
 import { untrack } from 'svelte';
 import type { BuildingEdit, BuildingFuncs, PieceEdit, Created, Crossing, Edits, Plot, BlockFill, RowRoadAnswer, Tint, Water } from '../../gen/protocol';
-import { TINT_MATERIAL } from '../../gen/protocol';
+import { TINT_MATERIAL, WHARF_WIDTH } from '../../gen/protocol';
 import { fillColour } from '../streets';
 import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type BuildShape, type Pt } from '../build';
 import { CrossingTool, SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from '../crossing';
@@ -147,6 +147,10 @@ export function buildTools(app: BuildHost) {
   let stampSet = $state<StampSettings>(defaultStamp());
   let rowSet = $state<RowSettings>(defaultRow());
   let lassoSet = $state<LassoSettings>(defaultLasso());
+  /** `?ui=new`: the plot drawn by hand being changed from Select (its created id): its fill, ward,
+   * lots, layout and name rewritten in place as they are set, one step to undo each. */
+  let plotEditing = $state<string | null>(null);
+  let plotTimer: ReturnType<typeof setTimeout> | null = null;
   let quick = $state<QuickInfo>({ can: false, text: '' });
   /** The newest preview asked for (an older answer is dropped). */
   let quickToken = 0;
@@ -366,15 +370,12 @@ export function buildTools(app: BuildHost) {
       // (The history toast says what went down, with Undo; only what did not fit is added.)
       if (r.refused_count) app.toast(`${r.refused_count} would not fit`);
     } else {
+      // (A new plot drawn: the one being changed is let go first.)
+      if (plotEditing) plotDone();
       const poly = tool.path;
       const r = await app.view.gen.parcelCheck(poly);
       if (!r || 'error' in r) return app.toast(r ? sentence(r.error) : 'The map could not answer: try again');
-      const fill: Record<string, unknown> =
-        lassoSet.fill === 'generated'
-          ? { kind: 'generated', ward: lassoSet.ward, ...(lassoSet.lots ? { lots: lassoSet.lots } : {}), ...(lassoSet.reroll ? { reroll: lassoSet.reroll } : {}) }
-          : lassoSet.fill === 'hand'
-            ? { kind: 'hand' }
-            : { kind: 'open', open: lassoSet.open };
+      const fill = plotFill();
       const c: Created = { id: `c:${n}`, kind: 'plot', x: r.x, y: r.y, name: lassoSet.name.trim(), poly, fill };
       if (existingSite(app.edits, c, [c.x, c.y])) return app.toast('There is a plot here already');
       // (The world's own buildings under it give way to its fill, in the same change.)
@@ -386,6 +387,74 @@ export function buildTools(app: BuildHost) {
     }
     tool.reset();
     quick = { can: false, text: '' };
+  }
+
+  /** A plot drawn by hand, by its created id. */
+  function plotSite(id: string | null): Created | null {
+    const c = id ? app.edits.created?.find((x) => x.id === id) : null;
+    return c && !c.removed && c.kind === 'plot' ? c : null;
+  }
+
+  /** The plot's fill as Fill an area's settings say it. */
+  function plotFill(): Record<string, unknown> {
+    return lassoSet.fill === 'generated'
+      ? { kind: 'generated', ward: lassoSet.ward, ...(lassoSet.lots ? { lots: lassoSet.lots } : {}), ...(lassoSet.reroll ? { reroll: lassoSet.reroll } : {}) }
+      : lassoSet.fill === 'hand'
+        ? { kind: 'hand' }
+        : { kind: 'open', open: lassoSet.open };
+  }
+
+  /** Open Fill an area on a plot drawn by hand, its settings loaded (Select's Change). */
+  function editPlot(id: string) {
+    const c = plotSite(id);
+    if (!c) return;
+    setBuildMode('lasso');
+    const f = (c.fill ?? { kind: 'generated', ward: 'common' }) as { kind: string; ward?: string; lots?: string; reroll?: number; open?: string };
+    const d = defaultLasso();
+    lassoSet = { fill: f.kind === 'hand' ? 'hand' : f.kind === 'open' ? 'open' : 'generated', ward: f.ward ?? d.ward, lots: f.lots ?? '', reroll: f.reroll ?? 0, open: f.open ?? d.open, name: c.name ?? '' };
+    plotEditing = c.id;
+  }
+
+  /** The plot being changed given the menu's settings now: one step to undo (nothing if the same). */
+  function savePlot() {
+    if (plotTimer) clearTimeout(plotTimer);
+    plotTimer = null;
+    const c = plotSite(plotEditing);
+    if (!c) return;
+    const fill = plotFill();
+    const name = lassoSet.name.trim();
+    if (JSON.stringify(fill) === JSON.stringify(c.fill ?? null) && name === (c.name ?? '')) return;
+    const created = (app.edits.created ?? []).map((x) => (x.id === c.id ? { ...x, fill, name } : x));
+    app.applyEdits({ ...app.edits, created }, { tool: 'update_parcel', id: c.id, name }, 'user');
+  }
+
+  // (A change to the plot's settings is written once they stop changing for a moment: typing its
+  // name is one step, not one per letter.)
+  $effect(() => {
+    const v = JSON.stringify(lassoSet);
+    if (!plotEditing) return;
+    void v;
+    untrack(() => {
+      if (plotTimer) clearTimeout(plotTimer);
+      plotTimer = setTimeout(savePlot, 500);
+    });
+  });
+
+  /** The plot being changed taken away (one step to undo). */
+  function removePlot() {
+    const c = plotSite(plotEditing);
+    if (plotTimer) clearTimeout(plotTimer);
+    plotTimer = null;
+    plotEditing = null;
+    if (!c) return;
+    const created = (app.edits.created ?? []).map((x) => (x.id === c.id ? { ...x, removed: true } : x));
+    app.applyEdits({ ...app.edits, created }, { tool: 'delete_feature', id: c.id }, 'user');
+  }
+
+  /** Done with the plot being changed: what is set is written now. */
+  function plotDone() {
+    if (plotTimer) savePlot();
+    plotEditing = null;
   }
 
   function quickDrop() {
@@ -498,6 +567,7 @@ export function buildTools(app: BuildHost) {
   }
 
   function setBuildMode(m: BuildMode) {
+    if (plotEditing) plotDone();
     buildMode = m;
     worksEditing = null;
     buildArmed?.works.reset();
@@ -1101,6 +1171,14 @@ export function buildTools(app: BuildHost) {
     const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
     cross = { ...cross, kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
   }
+  /** `?ui=new`: H again on Docks & islets, the next kind (islet, quay, pier, breakwater). */
+  function keyHarbour() {
+    if (buildMode !== 'harbour') return setBuildMode('harbour');
+    if (harbourPicked) return;
+    const order = ['islet', 'quay', 'pier', 'breakwater'] as const;
+    const kind = order[(order.indexOf(harbour.kind) + 1) % order.length];
+    harbour = { ...harbour, kind, width: kind === 'islet' ? harbour.width : WHARF_WIDTH[kind][2] };
+  }
   function keyRoad() {
     if (buildMode !== 'road') return setBuildMode('road');
     if (roadPicked) return;
@@ -1141,12 +1219,13 @@ export function buildTools(app: BuildHost) {
     () => (roadPicked ? ((roadPicked = null), true) : false),
   ];
   /** The menu's Done: nothing changed any more. */
-  const done = () => ((buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null), (waterPicked = null), (roadPicked = null));
+  const done = () => (plotEditing && plotDone(), (buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null), (waterPicked = null), (roadPicked = null));
 
   return {
     tool,
     keyCross,
     keyRoad,
+    keyHarbour,
     keyFence,
     fences,
     keyShape,
@@ -1192,6 +1271,10 @@ export function buildTools(app: BuildHost) {
     set stampSet(v) { stampSet = v; },
     get rowSet() { return rowSet; },
     set rowSet(v) { rowSet = v; },
+    get plotEditing() { return plotEditing; },
+    get plotName() { return plotSite(plotEditing)?.name || (plotEditing ? 'the plot' : null); },
+    editPlot,
+    removePlot,
     get lassoSet() { return lassoSet; },
     set lassoSet(v) { lassoSet = v; },
     get quick() { return quick; },

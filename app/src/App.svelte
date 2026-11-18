@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { cityWorld, runBench, runCityBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, ChangedFences, RemovedRoad, SettlementFacts, TownEdit, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Water } from './gen/protocol';
+  import type { BuildingEdit, PieceEdit, UnderCatalog, Conflict, Created, Edits, Feature, Interior, NamedPlaces, Npc, Overlay, PinKind, Plateau, Plot, ChangedFences, RemovedRoad, SettlementFacts, TownEdit, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
   import { withCut, withFence } from './editor/select';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
@@ -675,12 +675,14 @@
   }
   /** A store or a link still to be written. */
   const savePending = () => saveTimer !== null || linkTimer !== null;
-  /** What the address keeps of the page's query when it is rewritten: a bench run, and which
+  /** What the address keeps of the page's query when it is rewritten: a bench run, the new UI, and which
    * mapd to reach (`?mapd=0` none: a reload must not reach the default one). */
   const keptSearch = (() => {
     const q = new URLSearchParams();
     if (params.has('bench')) q.set('bench', params.get('bench') || '1');
     if (params.has('mapd')) q.set('mapd', params.get('mapd') ?? '');
+    // (`?ui=new`, the regrouped Edit, lasts across a reload.)
+    if (NEW_UI) q.set('ui', 'new');
     const t = q.toString();
     return t ? `?${t}` : '';
   })();
@@ -1548,6 +1550,7 @@
   function openTool(key: ToolKey): boolean {
     const t = TOOL[key];
     if (busy) return false;
+    backToSelect = false;
     if (toolsOff[key]) return (toast(toolsOff[key]!), false);
     const there = shell.section === 'edit' && shell.tabs.edit === t.tab;
     if (t.links !== undefined && there) {
@@ -1571,6 +1574,42 @@
     if (t.mode && B.buildMode !== t.mode && !(key === 'works' && B.buildMode === 'wall')) B.setBuildMode(t.mode);
     syncTool();
     return true;
+  }
+
+  /** `?ui=new`: the tool open came from Select's Change, so its Done goes back to Select. */
+  let backToSelect = false;
+  /** A Build tool's Done (or a plot's Remove): back to Select if Change opened it. */
+  function doneBack() {
+    if (!backToSelect) return;
+    backToSelect = false;
+    openTool('select');
+  }
+
+  /** `?ui=new`: Select's card on a town, district or street: the town chosen and opened in Streets
+   * (with the district or street chosen there once its plan is read) or in Town wall. */
+  function openTown(t: Thing, tool: 'streets' | 'townwall') {
+    const id = t.kind === 'settlement' ? t.id : t.town;
+    const f = id ? overlay?.features.find((g) => g.id === id) : undefined;
+    if (!f) return void toast('Its town is not on the map');
+    const m = t.id ? /^(?:d|ts|tr):(\d+):/.exec(t.id) : null;
+    const li = m ? Number(m[1]) : layoutIndexOf(f.id);
+    void choose({ kind: 'feature', feature: f }, false);
+    if (!openTool(tool)) return;
+    if (t.kind !== 'settlement') {
+      const [x0, y0, x1, y1] = t.bbox;
+      T.focusOn(li, [(x0 + x1) / 2, (y0 + y1) / 2], t.kind === 'district' ? (t.id ?? undefined) : undefined);
+    }
+  }
+
+  /** `?ui=new`: Select's Info: the card a click outside Edit gives for `t`. */
+  async function thingInfo(t: Thing) {
+    const f = t.id ? overlay?.features.find((g) => g.id === t.id) : undefined;
+    if (f) return void choose({ kind: 'feature', feature: f }, false);
+    const [x0, y0, x1, y1] = t.bbox;
+    const hit = await view.gen.query((x0 + x1) / 2, (y0 + y1) / 2);
+    if (hit?.kind === 'building') selection = { kind: 'building', hit };
+    else if (hit?.kind === 'district') selection = { kind: 'district', hit };
+    else toast('Nothing more to show on it');
   }
 
   /** A tab's button: open it, or shut the panel if that tab is showing. */
@@ -1703,6 +1742,18 @@
     toast,
     applyEdits,
     go,
+    ...(NEW_UI
+      ? {
+          openTool: (k: ToolKey) => openTool(k),
+          changedFrom: () => (backToSelect = true),
+          openTown: (t: Thing, tool: 'streets' | 'townwall') => openTown(t, tool),
+          hasStreets: (t: Thing) => {
+            const f = t.kind === 'settlement' && t.id ? overlay?.features.find((g) => g.id === t.id) : undefined;
+            return !!f && !!T.streetsCard(f)?.ok;
+          },
+          info: (t: Thing) => void thingInfo(t),
+        }
+      : {}),
     townChoices: () =>
       (overlay?.features ?? [])
         .filter((f) => SETTLEMENT_KINDS.includes(f.kind))
@@ -2026,9 +2077,17 @@
     const g = editTool && TOOL[editTool].group;
     if (g) shell.group = g;
   });
+  /** `?ui=new`: a town (not a village) at the middle of the map, or chosen, for Town wall. */
+  const townInView = $derived.by(() => {
+    if (!NEW_UI || shell.section !== 'edit') return true;
+    if (selection?.kind === 'feature' && view.hasTown(layoutIndexOf(selection.feature.id))) return true;
+    const c = hud?.center;
+    return !!c && view.townAt(c.x, c.y) >= 0;
+  });
   /** `?ui=new`: the tools that can't be used here, with why. */
   const toolsOff = $derived<Partial<Record<ToolKey, string>>>({
     ...(!canDesign && !designer ? { rooms: playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms' } : {}),
+    ...(!townInView ? { townwall: 'Go to a town, city or metropolis to change its wall' } : {}),
     ...(!L.canLink && !L.linkOn ? { stairs: playOn ? 'Stop playing to put stairs and passages down' : 'Go down into a site, or a building’s cellar, to join it to another level or place' } : {}),
   });
 
@@ -3012,8 +3071,10 @@
   let genIslets = $state<GenIslet[]>([]);
   $effect(() => {
     void (edits.hidden?.length, edits.buildings);
-    if (groundOn) void view.gen.islets().then((l) => (genIslets = l));
+    if (groundOn || (NEW_UI && buildOn && B.buildMode === 'harbour')) void view.gen.islets().then((l) => (genIslets = l));
   });
+  /** The islets as the list shows them (`ui/IsletList.svelte`: Ground, or `?ui=new` Docks & islets). */
+  const isletRows = $derived(genIslets.map((i) => ({ id: i.id, x: i.x, y: i.y, r: i.r, river: i.river, removed: (edits.hidden ?? []).includes(i.id), tower: !!i.tower })));
   /** An islet of the world's taken away (its watchtower with it) or brought back: a hidden mark. */
   function setIslet(id: string, removed: boolean) {
     const gi = genIslets.find((i) => i.id === id);
@@ -3646,7 +3707,7 @@
     },
     placing: S.placer,
     buildCross: () => B.keyCross(),
-    buildHarbour: () => B.setBuildMode('harbour'),
+    buildHarbour: () => (NEW_UI ? B.keyHarbour() : B.setBuildMode('harbour')),
     buildRoad: () => B.keyRoad(),
     buildFence: () => B.keyFence(),
     buildWorks: (m) => B.setBuildMode(m),
@@ -4082,7 +4143,12 @@
             {near}
             {peek}
             onSave={B.saveBuilding}
-            onDone={B.done}
+            onDone={() => (B.done(), doneBack())}
+            plotEditing={B.plotEditing ? B.plotName : null}
+            onPlotRemove={() => (B.removePlot(), doneBack())}
+            islets={NEW_UI ? isletRows : []}
+            onIslet={setIslet}
+            onGoIslet={(x, y) => view.flyTo({ cx: x, cy: y, zoom: clampZoom(Math.max(view.cam.zoom, 3)) })}
             onMode={B.setBuildMode}
             onCrossSave={B.saveCrossing}
             onCrossRemove={B.removeCrossing}
@@ -4100,7 +4166,7 @@
             harbourPicked={B.harbourPicked}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 0.5)) })}
           >
-            {#snippet select()}<SelectPanel sel={Sel} {peek} />{/snippet}
+            {#snippet select()}<SelectPanel sel={Sel} {peek} purpose={Sel.purpose} />{/snippet}
           </BuildPanel>
         {:else if townOn}
           <TownPanel
@@ -4141,6 +4207,7 @@
             onRename={rename}
             onHide={setHidden}
             onPatch={(p) => ((T.townPatch = p), (T.townCorner = null))}
+            part={NEW_UI ? T.townPart : null}
           />
         {:else if groundOn}
           <GroundPanel
@@ -4153,7 +4220,7 @@
             onPlateau={(id, p) => G.groundArmed?.change(id, p)}
             onRemove={() => G.groundArmed?.remove()}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 2)) })}
-            islets={genIslets.map((i) => ({ id: i.id, x: i.x, y: i.y, r: i.r, river: i.river, removed: (edits.hidden ?? []).includes(i.id), tower: !!i.tower }))}
+            islets={isletRows}
             onIslet={setIslet}
             onGoIslet={(x, y) => view.flyTo({ cx: x, cy: y, zoom: clampZoom(Math.max(view.cam.zoom, 3)) })}
           />

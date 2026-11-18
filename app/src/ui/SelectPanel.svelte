@@ -2,18 +2,24 @@
   // Edit › Build › Select: what a click found (the top one open: its kind, name and town, Delete
   // and Change), or what a box or lasso holds, counted by kind, with "Delete all that can be".
   import type { SelectTools } from '../editor/tools/select.svelte';
-  import { KIND_WORDS, foldedWords } from '../editor/select';
+  import { KIND_WORDS, countOf, foldedWords } from '../editor/select';
   import { FENCE_KINDS } from '../editor/fence';
   import type { FenceKind, Thing } from '../gen/protocol';
   import Icon from './Icon.svelte';
   import ToolPanel from './build/ToolPanel.svelte';
+  import { NEW_UI } from './shell/layout.svelte';
 
   interface Props {
     sel: SelectTools;
     peek?: boolean;
+    /** `?ui=new`: plain Select, or Join or leave a town (only what can be part of one, Join and
+     * Leave first). */
+    purpose?: 'all' | 'members';
   }
 
-  let { sel, peek = false }: Props = $props();
+  let { sel, peek = false, purpose = 'all' }: Props = $props();
+  const members = $derived(purpose === 'members');
+  const links = $derived(sel.links);
 
   const word = (t: Thing) => {
     const w = KIND_WORDS[t.kind][0];
@@ -49,39 +55,57 @@
   {#if sel.notice}<div class="ws-muted" role="status">{sel.notice}</div>{/if}
 {/snippet}
 
-<ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}}>
-  {#snippet hint()}
-    {#if !sel.things.length}
-      <div class="ws-hint">
-        {sel.area ? 'Nothing there to choose.' : 'Click something on the map to see what it is. Drag a box, or a lasso (Shift-drag), to choose all inside it.'}
-      </div>
-    {/if}
-    <div class="ws-seg" role="radiogroup" aria-label="Drag draws">
-      <button class:on={!sel.lasso} role="radio" aria-checked={!sel.lasso} onclick={() => (sel.lasso = false)}>Box</button>
-      <button class:on={sel.lasso} role="radio" aria-checked={sel.lasso} onclick={() => (sel.lasso = true)}>Lasso</button>
+{#snippet drag()}
+  <div class="ws-seg" role="radiogroup" aria-label="Drag draws">
+    <button class:on={!sel.lasso} role="radio" aria-checked={!sel.lasso} onclick={() => (sel.lasso = false)}>Box</button>
+    <button class:on={sel.lasso} role="radio" aria-checked={sel.lasso} onclick={() => (sel.lasso = true)}>Lasso</button>
+  </div>
+{/snippet}
+{#snippet hint()}
+  {#if !sel.things.length}
+    <div class="ws-hint">
+      {sel.area ? 'Nothing there to choose.' : 'Click something on the map to see what it is. Drag a box, or a lasso (Shift-drag), to choose all inside it.'}
     </div>
-  {/snippet}
-  {#snippet peekHint()}
-    {#if sel.things.length}<div class="ws-hint">{sel.area ? `${sel.things.length} chosen` : word(sel.things[sel.open] ?? sel.things[0])}</div>{/if}
-  {/snippet}
-  {#snippet more()}
+  {/if}
+  {@render drag()}
+{/snippet}
+{#snippet peekHint()}
+  {#if sel.things.length}<div class="ws-hint">{sel.area ? `${sel.things.length} chosen` : word(sel.things[sel.open] ?? sel.things[0])}</div>{/if}
+{/snippet}
+{#snippet joinLeave()}
+  {#if joinable.length || leavable.length}
+    <div class="actions">
+      {#if joinable.length}<button class="ws-btn" disabled={sel.busy} onclick={() => sel.join(joinable)}>Join town ({joinable.length})</button>{/if}
+      <button class="ws-btn" disabled={sel.busy || !leavable.length} onclick={() => sel.leave(leavable)}>Leave town{leavable.length ? ` (${leavable.length})` : ''}</button>
+    </div>
+    {@render picker()}
+    <div class="ws-muted">{num(partOfTown.length, 'thing here can', 'things here can')} be part of a town.</div>
+  {/if}
+{/snippet}
+
+<!-- (`?ui=new`: the card is not folded away; the strip's line says what to do.) -->
+<ToolPanel title="Select" near={true} {peek} onZoomIn={() => {}} hint={NEW_UI ? undefined : hint} {peekHint} more={NEW_UI ? undefined : card}>
+  {#if NEW_UI && !peek}
+    {@render drag()}
+    {#if sel.area && !sel.things.length}<div class="ws-hint">{members ? 'Nothing there can be part of a town.' : 'Nothing there to choose.'}</div>{/if}
+    {@render card()}
+  {/if}
+</ToolPanel>
+
+{#snippet card()}
     {#if sel.area && sel.things.length}
+      {#if members}{@render joinLeave()}{/if}
       <div class="sel-list" aria-label="What is inside">
         {#each sel.counts as c (c.kind)}
           <div class="row">
             <span class="grow">{c.words}</span>
             {#if c.can < c.n}<span class="ws-muted">{c.can ? `${c.can} can be removed` : "can't be removed yet"}</span>{/if}
+            <!-- (`?ui=new`: each kind's own Delete, in place of Build › Clear.) -->
+            {#if NEW_UI && c.can && sel.counts.length > 1}<button class="ws-btn quiet danger" disabled={sel.busy} onclick={() => sel.removeKind(c.kind)} title="Delete {countOf(c.kind, c.can)}" aria-label="Delete {countOf(c.kind, c.can)}"><Icon name="trash" size={16} /></button>{/if}
           </div>
         {/each}
       </div>
-      {#if joinable.length || leavable.length}
-        <div class="actions">
-          {#if joinable.length}<button class="ws-btn" disabled={sel.busy} onclick={() => sel.join(joinable)}>Join town ({joinable.length})</button>{/if}
-          <button class="ws-btn" disabled={sel.busy || !leavable.length} onclick={() => sel.leave(leavable)}>Leave town{leavable.length ? ` (${leavable.length})` : ''}</button>
-        </div>
-        {@render picker()}
-        <div class="ws-muted">{num(partOfTown.length, 'thing here can', 'things here can')} be part of a town.</div>
-      {/if}
+      {#if !members}{@render joinLeave()}{/if}
       <div class="actions">
         <button class="ws-btn danger" disabled={!all.length || sel.busy} onclick={() => void sel.remove(all)}><Icon name="trash" size={16} /> Delete all that can be{all.length ? ` (${all.length})` : ''}</button>
         <button class="ws-btn" onclick={() => sel.clear()}>Clear</button>
@@ -116,7 +140,14 @@
                     <span class="ws-muted">can't be removed yet</span>
                   {/if}
                   {#if sel.changeable(t)}<button class="ws-btn" onclick={() => void sel.change(t)}><Icon name="pencil" size={16} /> Change</button>{/if}
+                  {#if links.info}<button class="ws-btn quiet" onclick={() => links.info?.(t)} title="Its card, as a click outside Edit shows it"><Icon name="info" size={16} /> Info</button>{/if}
                 </div>
+                {#if links.openTown && links.hasStreets?.(t)}
+                  <div class="actions">
+                    <button class="ws-btn" onclick={() => links.openTown?.(t, 'streets')} title="Re-plan its streets, wards and lots"><Icon name="wards" size={16} /> Streets</button>
+                    <button class="ws-btn" onclick={() => links.openTown?.(t, 'townwall')} title="Its walls, gates and towers"><Icon name="tower" size={16} /> Town wall</button>
+                  </div>
+                {/if}
                 {#if sel.fenced(t)}
                   <div class="actions">
                     <button class="ws-btn" disabled={sel.busy} onclick={() => void sel.change(t)} title="Opens the Gate tool: click on the fence to put a 5 ft gate in it"><Icon name="plus" size={16} /> Gate tool</button>
@@ -137,8 +168,7 @@
         {/if}
       </div>
     {/if}
-  {/snippet}
-</ToolPanel>
+{/snippet}
 
 <style>
   .sel-list {

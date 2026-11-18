@@ -95,6 +95,13 @@
     onHarbourRemove: () => void;
     /** Fly in close enough to draw. */
     onZoomIn: () => void;
+    /** `?ui=new`: the plot being changed (its name), from Select's Change. */
+    plotEditing?: string | null;
+    onPlotRemove?: () => void;
+    /** `?ui=new`: the world's own islets, listed in Docks & islets. */
+    islets?: import('./IsletList.svelte').Islet[];
+    onIslet?: (id: string, removed: boolean) => void;
+    onGoIslet?: (x: number, y: number) => void;
   }
 
   let {
@@ -136,6 +143,11 @@
     onCrossRemove,
     onHarbourRemove,
     onZoomIn,
+    plotEditing = null,
+    onPlotRemove,
+    islets = [],
+    onIslet,
+    onGoIslet,
   }: Props = $props();
 
   const MODES: { key: BuildMode; label: string; icon: IconName; title: string }[] = [
@@ -167,13 +179,13 @@
   {#if mode === 'select'}
     {@render select?.()}
   {:else if mode === 'castle' || mode === 'wall'}
-    <WorksPanel {mode} bind:works {worksEditing} {handTown} {onWorksSave} {onDone} {near} {peek} {onZoomIn} />
+    <WorksPanel {mode} bind:works {worksEditing} {handTown} {onWorksSave} {onDone} {near} {peek} {onZoomIn} onMode={NEW_UI ? onMode : undefined} />
   {:else if mode === 'clear'}
     <ClearPanel bind:clearShape {near} {peek} {onZoomIn} />
   {:else if mode === 'row'}
     <RowPanel bind:row bind:stamp {funcs} {quick} {onPlace} {onDrop} {near} {peek} {onZoomIn} />
   {:else if mode === 'lasso'}
-    <PlotPanel bind:lasso {quick} {onPlace} {onDrop} {near} {peek} {onZoomIn} />
+    <PlotPanel bind:lasso {quick} {onPlace} {onDrop} {near} {peek} {onZoomIn} editing={plotEditing} onRemove={onPlotRemove} {onDone} />
   {:else if mode === 'crossing'}
     <CrossingPanel bind:cross {crossEditing} {onCrossSave} {onCrossRemove} {onDone} {near} {peek} {onZoomIn} />
   {:else if mode === 'water'}
@@ -183,7 +195,7 @@
   {:else if mode === 'fence'}
     <FencePanel bind:fence {near} {peek} {onZoomIn} />
   {:else if mode === 'harbour'}
-    <HarbourPanel bind:harbour {harbourPicked} {onHarbourRemove} {onDone} {near} {peek} {onZoomIn} />
+    <HarbourPanel bind:harbour {harbourPicked} {onHarbourRemove} {onDone} {near} {peek} {onZoomIn} {islets} {onIslet} {onGoIslet} />
   {:else if mode === 'stamp'}
     <StampPanel bind:stamp bind:settings {funcs} {editing} {quick} {onPlace} {onSave} {near} {peek} {onZoomIn} />
   {:else}
