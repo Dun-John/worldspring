@@ -569,6 +569,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         whole.set(None);
                         continue;
                     }
+                    // (A building whose middle is in another tile draws nothing here (every branch below
+                    // pushes only in the tile holding its middle), unless it can draw lines, owned by
+                    // their own middles: a palace's forecourt walls and piers, a keep's corner towers.)
+                    if !owns(crate::town::geom::centroid(&b.poly)) && !crate::town::palace::is_palace(b) && !crate::interior::battlements(b).is_some_and(|t| t > 0.0 && b.poly.len() == 4) {
+                        continue;
+                    }
                     let kind = match b.structure {
                         crate::town::Structure::Roofed => 0,
                         crate::town::Structure::Ruin => 4,
