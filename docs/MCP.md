@@ -177,7 +177,7 @@ hiding or annotating them is refused); `world_overview` lists their building cha
 redrawn past it) has its changes set aside too. A settlement pinned in the sketch comes first in its tier and
 moves the later ones along a number; they keep their changes. It counts as one of its tier: one the world would
 have had is gone (one near it, within its tier's spacing, else the last), with its roads, and the pin keeps its
-tier's spacing round it. One added in the app's Edit › Places (a pin marked `added`) stands beside the world's
+tier's spacing round it. One added in the app's Edit › Settlements › Places (a pin marked `added`) stands beside the world's
 own instead: after them in its tier, pushing none of its tier out; smaller places within 10 miles of it move
 away, and none is placed within 3 miles of another settlement. A city or metropolis brings king's roads either
 way, which draw other towns and villages to new places: those come out different. A settlement taken back or
@@ -1113,7 +1113,7 @@ the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbo
 | `lives_by` | string | pins | `port`, `river`, `mining`, `fortress`, `market`, `farming`, `fishing`, `lumber`, `herding`, `oasis`. Default: from its land. |
 | `capital` | boolean | pins | The realm's capital. |
 | `wards` | `[string]` | pins | Its districts' names, the central one first (up to 24). |
-| `added` | boolean | pins | Beside the world's own settlements (default true, as Edit › Places adds them); false: in place of one of its tier. |
+| `added` | boolean | pins | Beside the world's own settlements (default true, as Edit › Settlements › Places adds them); false: in place of one of its tier. |
 | `replaces` | string | pins | In place of the world's own settlement at its spot (within 3 mi), changed: the tier the generator placed it at (`get_sketch`'s `replaces`; a city that grew only to a town is placed as a city). Nothing else moves. `update_settlement` makes these pins. |
 | `on_water` | boolean | pins | `false`: a port, fishing village or river town stays where the pin stands (on heights above its river, say) instead of being moved onto its shore or beside its river as the world's own are. Left out: moved. |
 
@@ -1315,7 +1315,7 @@ Returns `{items, found}`: each has `id`, `kind`, `place` (path of names), `room`
 
 Battlemaps are generated with their trees, rocks, props and hazards. On top of that, objects can be **put down**
 by hand (`o:<id>` entries) and generated ones **taken away** (clears, `x:<id>` entries), by the user (the app's
-**Edit › Objects** tab) or by agents. Pictures can be **uploaded** as new kinds of object, with their own tactical
+**Edit › Land › Props** tool) or by agents. Pictures can be **uploaded** as new kinds of object, with their own tactical
 rules (`s:<asset>` kinds). Objects block, cover and hinder in play mode by their kind's rules, and
 `get_battlemap` lists them. Like the other edits, they are saved, logged, shown live, and leave the world hash
 alone; only the battlemap chunk holding each object (by its centre) is made again.
@@ -2345,7 +2345,7 @@ follow the world as other edits do).
 
 ## Shaping the ground
 
-A battlemap's ground can be shaped by hand, as the Ground tab shapes it: brushed up or down, smoothed, put back,
+A battlemap's ground can be shaped by hand, as Edit › Land › Ground shapes it: brushed up or down, smoothed, put back,
 or levelled as plateaus and pits. Two edits fields hold it:
 
 - **`ground`**: brushed blocks, by `g:XXXXX:YYYYY` (block indices, zero-padded, x first; block `(bx, by)` holds
@@ -2486,7 +2486,7 @@ top (knolls, hollows) and levels road beds under roads.
 
 ## Water drawn by hand
 
-Water drawn by hand, as Build › Water draws it: a polygon, or a band brushed along a line, with a depth and a
+Water drawn by hand, as Edit › Roads & water › Water draws it: a polygon, or a band brushed along a line, with a depth and a
 shore that is natural or dug. Its look follows the water (there is no kind to pick). The edits field **`waters`**
 holds it, by `e:<id>`: `pts` (a polygon's points, 3 to 128, rounded to 0.5 ft, not crossing itself, spanning at
 most 5 miles; or a line's, 2 or more, with `line: true`, `width` and `closed`), `depth` (ft), `dug` and `level`
@@ -2559,7 +2559,7 @@ Every water drawn by hand, as `create_water` returns it (`{items, found}`, `limi
 
 ## Roads drawn by hand
 
-Roads drawn on the ground, as Build › Road draws them: a footpath, track, gravel road, paved road or cobbled street
+Roads drawn on the ground, as Edit › Roads & water › Road draws them: a footpath, track, gravel road, paved road or cobbled street
 along a line of points. The edits field **`paths`** holds them, by `rw:<id>`: `pts` (2 to 256 points, rounded to
 0.5 ft, no two in a row the same, spanning at most 5 miles), `type` (`footpath`, `track`, `gravel`, `paved`,
 `cobbled`), `width` (ft, 3 to 40; absent: the type's own, footpath 4, track 10, gravel 14, paved 18, cobbled 20) and

@@ -51,15 +51,15 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 
 ### What you can edit
 
-Open **Edit** and pick a tab (or press its letter). Every change can be undone.
+Open **Edit**: it starts on **Select** (A), which shows what anything on the map is; click, or drag a box or a lasso. Pick what to change (Settlements, Buildings, Roads & water, Land, Rooms), then a tool in that group, or press the tool's letter. Every change can be undone.
 
-| Tab | What you can do |
+| Group › tool | What you can do |
 |---|---|
-| **Places** (S) | Add a village, town, city or metropolis (the world is remade round it; Take back, Undo or Remove on its card takes it away again, and what was made on it is kept in Notes), or your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
-| **Build** (B) | Draw buildings (rectangles, polygons, round towers). Raise castles (K) and walls (W) anywhere. Put bridges, fords and ferries (X) across a river, bank to bank. |
-| **Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Displace, Liquify, Bloat, Pinch, Relax, Equalize). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
-| **Ground** (M) | Shape a battlemap's ground: raise, lower, smooth or put it back with a brush, or draw a plateau, a cliff or a pit (a castle on a cliff) and change its level later. Buildings, streets and walls stand on it; a city street climbing steeply turns to steps. |
-| **Objects** (C) | Place objects on a battlemap one at a time (turned, picked up and moved again), brush them on, or erase them. Upload your own pictures to use as objects. Objects go outdoors (the ghost turns red where a roof would hide one); furniture, props and traps inside a building or down a site go in Rooms. |
+| **Settlements › Places** (S) | Add a village, town, city or metropolis (the world is remade round it; Take back, Undo or Remove on its card takes it away again, and what was made on it is kept in Notes), or your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
+| **Buildings** | **Draw a building** (B: rectangles, polygons, round towers), **One building** (Q), a **Row of houses** (E) along a street, **Fill an area** (L), **Castle & walls** (K, W: raise castles and walls anywhere). **Roads & water** puts roads (V), bridges, fords and ferries (X) across a river, bank to bank, water (I) and **Docks & islets** (H). |
+| **Settlements › Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Push, Smudge, Grow, Shrink, Soften, Even out). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
+| **Land › Ground** (M) | Shape a battlemap's ground: raise, lower, smooth or put it back with a brush, or draw a plateau, a cliff or a pit (a castle on a cliff) and change its level later. Buildings, streets and walls stand on it; a city street climbing steeply turns to steps. |
+| **Land › Props** (C) | Place objects on a battlemap one at a time (turned, picked up and moved again), brush them on, or erase them. Upload your own pictures to use as objects. Objects go outdoors (the ghost turns red where a roof would hide one); furniture, props and traps inside a building or down a site go in Rooms. |
 | **Rooms** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, and furniture and props placed as on the battlemap (turned, picked up and moved again). |
 
 **Sketch** (World › Sketch) works at the scale of the continent, and generating from it remakes the world to fit:
