@@ -377,6 +377,86 @@ fn lay_stream(
     (paths, stream)
 }
 
+/// A common's hub (a fountain or a statue in a gravel round, benches round it), the reeds along
+/// its pond's far side, benches along its paths (a city's lamps between) and beds round the hub.
+fn dress(
+    hub: P,
+    city: bool,
+    lamp: u8,
+    key: u64,
+    pond_c: Option<P>,
+    rp: f64,
+    rim: impl Fn(f64) -> f64,
+    clear: &mut Clear,
+    out: &mut ParkLayout,
+    rng: &mut Pcg32,
+) {
+    // The hub: a fountain or a statue in a gravel round, benches round it.
+    let rh = 13.0;
+    out.rounds.push((hub, rh));
+    if rng.next_f64() < 0.55 {
+        out.props.push((hub, 0.0, Kind::Fountain, [0, 1, 3][rng.below(3) as usize], 1.1));
+    } else {
+        out.props.push((hub, 0.0, Kind::GardenStatue, [1, 3, 0][rng.below(3) as usize], 1.0));
+    }
+    clear.disc(hub, rh - 1.0);
+    let mut round_benches = 0;
+    for k in 0..6 {
+        let t = std::f64::consts::TAU * (k as f64 + rng.next_f64() * 0.3) / 6.0;
+        let d = [libm::cos(t), libm::sin(t)];
+        let b = add(hub, mul(d, rh + 3.5));
+        if round_benches < 4 && clear.path_gap(b) > foot(Kind::Bench) + 1.0 && clear.free(b, foot(Kind::Bench), 2.0) {
+            clear.disc(b, foot(Kind::Bench));
+            out.props.push((b, facing(mul(d, -1.0)), Kind::Bench, out.bench, 1.0));
+            round_benches += 1;
+        }
+    }
+    // Reeds along the pond's far side, in the shallows.
+    if let Some(pc) = pond_c {
+        let away = sub(pc, hub);
+        let t0 = libm::atan2(away[1], away[0]) + rng.range(-0.8, 0.8);
+        let span = rng.range(1.6, 2.6);
+        let n = (span * rp / 6.0) as usize;
+        for k in 0..=n {
+            let t = t0 + (k as f64 / n.max(1) as f64 - 0.5) * span;
+            let q = add(pc, mul([libm::cos(t), libm::sin(t)], rim(t) - 2.5 - 2.0 * jit(key, [t, 0.0], 5)));
+            out.props.push((q, rng.range(0.0, std::f64::consts::TAU) as f32, Kind::Reeds, rng.below(4) as u8, rng.range(0.8, 1.2) as f32));
+        }
+    }
+    // Benches along the paths, by turns either side, facing them; a city's lamps between.
+    for (pi, (pts, w)) in out.paths.clone().iter().enumerate() {
+        for (k, (q, d)) in every(pts, rng.range(40.0, 55.0), 22.0, 14.0).into_iter().enumerate() {
+            if dist(q, hub) < rh + 14.0 {
+                continue;
+            }
+            let side = perp(d);
+            let s = if (k + pi) % 2 == 0 { 1.0 } else { -1.0 };
+            let b = add(q, mul(side, s * (0.5 * w + foot(Kind::Bench) + 1.3)));
+            if clear.free(b, foot(Kind::Bench), 3.0) {
+                clear.disc(b, foot(Kind::Bench));
+                out.props.push((b, facing(mul(side, -s)), Kind::Bench, out.bench, 1.0));
+            }
+            if city && k % 2 == 1 {
+                let l = add(q, mul(side, -s * (0.5 * w + foot(Kind::LampPost) + 1.3)));
+                if clear.free(l, foot(Kind::LampPost), 3.0) {
+                    clear.disc(l, foot(Kind::LampPost));
+                    out.props.push((l, 0.0, Kind::LampPost, lamp, 1.0));
+                }
+            }
+        }
+    }
+    // A few beds round the hub's round.
+    for k in 0..2 + rng.below(3) as usize {
+        let t = std::f64::consts::TAU * (k as f64 + 0.5) / 4.0 + rng.range(-0.3, 0.3);
+        let d = [libm::cos(t), libm::sin(t)];
+        let f = add(hub, mul(d, rh + 9.0));
+        if clear.free(f, 0.8 * foot(Kind::Flowerbed), 3.0) {
+            clear.disc(f, 0.8 * foot(Kind::Flowerbed));
+            out.props.push((f, along(perp(d)), Kind::Flowerbed, [0, 1, 2][rng.below(3) as usize], 1.0));
+        }
+    }
+}
+
 pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg32) -> ParkLayout {
     let poly = &p.pts;
     let g = &p.ground;
@@ -551,70 +631,7 @@ pub(super) fn common(p: &Park, biome: Biome, city: bool, key: u64, rng: &mut Pcg
             }
         }
     }
-    // The hub: a fountain or a statue in a gravel round, benches round it.
-    let rh = 13.0;
-    out.rounds.push((hub, rh));
-    if rng.next_f64() < 0.55 {
-        out.props.push((hub, 0.0, Kind::Fountain, [0, 1, 3][rng.below(3) as usize], 1.1));
-    } else {
-        out.props.push((hub, 0.0, Kind::GardenStatue, [1, 3, 0][rng.below(3) as usize], 1.0));
-    }
-    clear.disc(hub, rh - 1.0);
-    let mut round_benches = 0;
-    for k in 0..6 {
-        let t = std::f64::consts::TAU * (k as f64 + rng.next_f64() * 0.3) / 6.0;
-        let d = [libm::cos(t), libm::sin(t)];
-        let b = add(hub, mul(d, rh + 3.5));
-        if round_benches < 4 && clear.path_gap(b) > foot(Kind::Bench) + 1.0 && clear.free(b, foot(Kind::Bench), 2.0) {
-            clear.disc(b, foot(Kind::Bench));
-            out.props.push((b, facing(mul(d, -1.0)), Kind::Bench, out.bench, 1.0));
-            round_benches += 1;
-        }
-    }
-    // Reeds along the pond's far side, in the shallows.
-    if let Some(pc) = pond_c {
-        let away = sub(pc, hub);
-        let t0 = libm::atan2(away[1], away[0]) + rng.range(-0.8, 0.8);
-        let span = rng.range(1.6, 2.6);
-        let n = (span * rp / 6.0) as usize;
-        for k in 0..=n {
-            let t = t0 + (k as f64 / n.max(1) as f64 - 0.5) * span;
-            let q = add(pc, mul([libm::cos(t), libm::sin(t)], rim(t) - 2.5 - 2.0 * jit(key, [t, 0.0], 5)));
-            out.props.push((q, rng.range(0.0, std::f64::consts::TAU) as f32, Kind::Reeds, rng.below(4) as u8, rng.range(0.8, 1.2) as f32));
-        }
-    }
-    // Benches along the paths, by turns either side, facing them; a city's lamps between.
-    for (pi, (pts, w)) in out.paths.clone().iter().enumerate() {
-        for (k, (q, d)) in every(pts, rng.range(40.0, 55.0), 22.0, 14.0).into_iter().enumerate() {
-            if dist(q, hub) < rh + 14.0 {
-                continue;
-            }
-            let side = perp(d);
-            let s = if (k + pi) % 2 == 0 { 1.0 } else { -1.0 };
-            let b = add(q, mul(side, s * (0.5 * w + foot(Kind::Bench) + 1.3)));
-            if clear.free(b, foot(Kind::Bench), 3.0) {
-                clear.disc(b, foot(Kind::Bench));
-                out.props.push((b, facing(mul(side, -s)), Kind::Bench, out.bench, 1.0));
-            }
-            if city && k % 2 == 1 {
-                let l = add(q, mul(side, -s * (0.5 * w + foot(Kind::LampPost) + 1.3)));
-                if clear.free(l, foot(Kind::LampPost), 3.0) {
-                    clear.disc(l, foot(Kind::LampPost));
-                    out.props.push((l, 0.0, Kind::LampPost, lamp, 1.0));
-                }
-            }
-        }
-    }
-    // A few beds round the hub's round.
-    for k in 0..2 + rng.below(3) as usize {
-        let t = std::f64::consts::TAU * (k as f64 + 0.5) / 4.0 + rng.range(-0.3, 0.3);
-        let d = [libm::cos(t), libm::sin(t)];
-        let f = add(hub, mul(d, rh + 9.0));
-        if clear.free(f, 0.8 * foot(Kind::Flowerbed), 3.0) {
-            clear.disc(f, 0.8 * foot(Kind::Flowerbed));
-            out.props.push((f, along(perp(d)), Kind::Flowerbed, [0, 1, 2][rng.below(3) as usize], 1.0));
-        }
-    }
+    dress(hub, city, lamp, key, pond_c, rp, rim, &mut clear, &mut out, rng);
     // Broad low swells, two or more by its size (none on a slope: it has its own), clear of the pond's
     // banks, the stream, the stand and the hub: the common rolls rather than lies flat.
     if !steep {
