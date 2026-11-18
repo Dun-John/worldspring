@@ -344,7 +344,7 @@ pub fn shaped_fp(edits: &crate::world::Edits, rect: [f64; 4]) -> u64 {
     }
     for (key, p) in &edits.plateaus {
         let e = p.edge as f64 + b;
-        let pb = p.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, q| [r[0].min(q[0]), r[1].min(q[1]), r[2].max(q[0]), r[3].max(q[1])]);
+        let pb = bbox(&p.pts);
         if pb[2] + e >= rect[0] && pb[0] - e <= rect[2] && pb[3] + e >= rect[1] && pb[1] - e <= rect[3] {
             h = hash2(h, fnv64(key.as_bytes()) as i64, fnv64(serde_json::to_string(p).unwrap_or_default().as_bytes()) as i64);
         }

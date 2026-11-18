@@ -216,7 +216,7 @@ pub fn rasters(houses: &[House], sq: f64) -> Vec<Raster> {
     for h in houses {
         let Some(block) = h.block() else { continue };
         let legs = h.passage();
-        let bb = block.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        let bb = bbox(&block);
         let (i0, j0) = (crate::core::floor((bb[0] - 2.0) / sq) as i64, crate::core::floor((bb[1] - 2.0) / sq) as i64);
         let (i1, j1) = (crate::core::floor((bb[2] + 2.0) / sq) as i64, crate::core::floor((bb[3] + 2.0) / sq) as i64);
         let (nx, ny) = ((i1 - i0 + 1) as usize, (j1 - j0 + 1) as usize);

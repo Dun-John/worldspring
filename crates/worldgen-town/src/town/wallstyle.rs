@@ -418,7 +418,7 @@ fn depth(poly: &[P], p: P) -> f64 {
 /// of a wall behind it, `walled`) furthest toward `inward` (a unit vector). Squares are on the global lattice
 /// (`floor(x / sq)`), so every chunk finds the same.
 pub fn raster(poly: &[P], inward: P, sq: f64, open: &dyn Fn(P) -> bool, free: &dyn Fn(P) -> bool, walled: &dyn Fn(P) -> bool) -> Raster {
-    let bb = poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let bb = bbox(poly);
     // (Room past the ring for a door through the wall behind it, below.)
     let (i0, j0) = (crate::core::floor((bb[0] - 2.0) / sq) as i64 - 3, crate::core::floor((bb[1] - 2.0) / sq) as i64 - 3);
     let (i1, j1) = (crate::core::floor((bb[2] + 2.0) / sq) as i64 + 3, crate::core::floor((bb[3] + 2.0) / sq) as i64 + 3);

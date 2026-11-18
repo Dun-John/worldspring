@@ -15,7 +15,7 @@
 use crate::core::rng::{hash3, unit};
 use crate::t0::T0;
 use crate::t0::settle::Tier;
-use crate::core::geom::{add, dist, mul, seg_dist};
+use crate::core::geom::{add, bbox, dist, mul, seg_dist};
 
 type P = [f64; 2];
 
@@ -102,7 +102,7 @@ fn generate(t0: &T0) -> Vec<Islet> {
             let rise = RISE_FT.0 + (RISE_FT.1 - RISE_FT.0) * roll(40 + k);
             let level = (crate::core::round((water + rise) * 10.0) * 0.1) as f32;
             let tower = r >= TOWER_MIN_R_FT && roll(60 + k) < 0.5;
-            let bbox = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            let bbox = bbox(&pts);
             let id = format!("i:{:08x}", hash3(s.seed ^ SALT ^ 0x1d, crate::core::round(at[0]) as i64, crate::core::round(at[1]) as i64, k) & 0xffff_ffff);
             out.push(Islet { id, pts, level, water: water as f32, at, r, tower, settlement: index as u32, river, bbox });
         };

@@ -542,7 +542,7 @@ struct Shape {
 
 impl Shape {
     fn new(pts: Vec<P>, closed: bool) -> Shape {
-        let bbox = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        let bbox = bbox(&pts);
         Shape { closed: closed && pts.len() > 2, pts, bbox }
     }
 

@@ -1,6 +1,7 @@
 //! Network cleanup: shortcuts, triangles, twin links, lenses, parallel roads, fillets.
 
 use super::*;
+use crate::core::geom::bbox;
 
 pub(super) fn unit2(v: [f64; 2]) -> [f64; 2] {
     let l = crate::core::sqrt(v[0] * v[0] + v[1] * v[1]).max(1e-9);
@@ -220,7 +221,7 @@ pub(super) fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64
     };
     // Per road, its end keys and bounds (kept up to date as roads are cut).
     let key_of = |r: &RoadPath| (end_key(r.pts[0], towns), end_key(*r.pts.last().unwrap(), towns));
-    let box_of = |r: &RoadPath| r.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let box_of = |r: &RoadPath| bbox(&r.pts);
     let mut keys: Vec<((i64, i64), (i64, i64))> = roads.iter().map(key_of).collect();
     let mut boxes: Vec<[f64; 4]> = roads.iter().map(box_of).collect();
     for _ in 0..50 {

@@ -9,7 +9,7 @@
 use crate::core::rng::{hash3, unit};
 use crate::town::Layout;
 use crate::town::fields::FieldUse;
-use crate::town::geom::{add, centroid, contains, dist, lerp, mul, outline_dist, seg_dist, sub};
+use crate::town::geom::{add, bbox, centroid, contains, dist, lerp, mul, outline_dist, seg_dist, sub};
 use crate::town::village::PlotKind;
 
 type P = [f64; 2];
@@ -37,7 +37,7 @@ fn unit_v(v: P) -> P {
 pub(super) fn stacks(l: &Layout, rect: [f64; 4], out: &mut Vec<(P, f32, f32)>) {
     let near = [rect[0] - 300.0, rect[1] - 300.0, rect[2] + 300.0, rect[3] + 300.0];
     let hits = |poly: &[P]| {
-        let b = poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        let b = bbox(poly);
         b[0] <= near[2] && near[0] <= b[2] && b[1] <= near[3] && near[1] <= b[3]
     };
     let inside = |p: P| p[0] >= rect[0] && p[0] < rect[2] && p[1] >= rect[1] && p[1] < rect[3];
@@ -126,7 +126,7 @@ pub(super) fn stacks(l: &Layout, rect: [f64; 4], out: &mut Vec<(P, f32, f32)>) {
         }
         // The outline's nearest point to a lane or a road (every 4 ft along it), else to a farmstead.
         let n = f.len();
-        let fb = f.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        let fb = bbox(f);
         let by = |a: P, b: P, m: f64| a[0].min(b[0]) - m <= fb[2] && fb[0] <= a[0].max(b[0]) + m && a[1].min(b[1]) - m <= fb[3] && fb[1] <= a[1].max(b[1]) + m;
         let mine: Vec<(P, P, f64)> = ways.iter().copied().filter(|&(a, b, half)| by(a, b, half + GATE_WAY_FT)).collect();
         let homes: Vec<&Vec<P>> = l.crofts.iter().map(|p| &p.pts).chain(l.buildings.iter().map(|b| &b.poly)).filter(|p| p.iter().any(|q| by(*q, *q, FARMSTEAD_FT))).collect();

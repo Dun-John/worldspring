@@ -436,7 +436,7 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         .filter(|&i| usable(i))
         .map(|i| {
             let pts = mesh.face_pts(i);
-            let bb = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            let bb = bbox(&pts);
             (bb, pts)
         })
         .collect();

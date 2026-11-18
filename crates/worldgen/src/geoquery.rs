@@ -90,7 +90,7 @@ impl Region {
         match self {
             Region::Box(b) => *b,
             Region::Circle(c, r) => [c[0] - r, c[1] - r, c[0] + r, c[1] + r],
-            Region::Poly(q) => q.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]),
+            Region::Poly(q) => geom::bbox(q),
         }
     }
 
@@ -804,7 +804,7 @@ fn plateau_spots(ex: &Executor, p: P, max_ft: f64, step: f64, per: usize) -> Vec
     let mut out = Vec::new();
     for pl in ex.world.file.edits.plateaus.values() {
         let n = pl.pts.len();
-        let b = pl.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
+        let b = geom::bbox(&pl.pts);
         if n < 3 || b[0] > p[0] + max_ft || b[2] < p[0] - max_ft || b[1] > p[1] + max_ft || b[3] < p[1] - max_ft {
             continue;
         }

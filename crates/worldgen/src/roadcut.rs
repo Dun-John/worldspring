@@ -101,7 +101,7 @@ fn boxes(pts: &[P], pad: f64, out: &mut Vec<[f64; 4]>) {
     let runs = (n - 1).clamp(1, MAX_BOXES);
     for j in 0..runs {
         let (a, b) = ((n - 1) * j / runs, ((n - 1) * (j + 1) / runs).max((n - 1) * j / runs));
-        let b0 = pts[a..=b].iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+        let b0 = geom::bbox(&pts[a..=b]);
         out.push([crate::core::floor(b0[0] - pad), crate::core::floor(b0[1] - pad), crate::core::ceil(b0[2] + pad), crate::core::ceil(b0[3] + pad)]);
     }
 }

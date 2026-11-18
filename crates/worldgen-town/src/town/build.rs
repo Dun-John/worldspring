@@ -489,7 +489,7 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
                 }
             }
             if !wall_dense.is_empty() {
-                let bb = c.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+                let bb = bbox(&c.pts);
                 for p in wall_dense.iter().filter(|p| p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && contains(&c.pts, **p)) {
                     // (By distance to each side, not across its line: a patch moved by hand may be concave.)
                     let (e, depth) = (0..m).map(|e| (e, seg_dist(*p, c.pts[e], c.pts[(e + 1) % m]))).min_by(|x, y| x.1.total_cmp(&y.1)).unwrap_or((0, 0.0));

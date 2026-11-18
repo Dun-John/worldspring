@@ -289,7 +289,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     let mut joined: Option<Vec<P>> = None;
     let mut ends: Vec<P> = Vec::new();
     if !castle && !c.closed {
-        let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let b = bbox(pts);
         let r = WALL_JOIN + 1.0;
         let near = town::layouts_near(world, t0, [b[0] - r, b[1] - r, b[2] + r, b[3] + r]);
         let walls: Vec<&Vec<P>> = near.iter().filter(|l| Some(l.index as usize) != skip).flat_map(|l| l.walls.iter()).collect();

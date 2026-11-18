@@ -175,7 +175,6 @@ pub fn plan_mark_gone(gone: &[P], poly: &[P], code: u32) -> bool {
 /// (tag, a, b, its kind). For pick and the agent's lists.
 pub fn sources(l: &Layout, t0: &T0, near: [f64; 4]) -> Vec<(u8, P, P, FenceKind)> {
     let hits = |b: [f64; 4]| b[0] <= near[2] && b[2] >= near[0] && b[1] <= near[3] && b[3] >= near[1];
-    let bbox = |pts: &[P]| pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
     let mut out: Vec<(u8, P, P, FenceKind)> = Vec::new();
     let mut seen: FastSet<u32> = FastSet::default();
     let mut add = |tag: u8, a: P, b: P, kind: FenceKind, out: &mut Vec<(u8, P, P, FenceKind)>| {
@@ -503,7 +502,7 @@ fn drawn_one(f: &Fence, rect: [f64; 4], near: [f64; 4], wet: &dyn Fn(P) -> bool,
     if f.closed && pts.len() >= 3 {
         pts.push(pts[0]);
     }
-    let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+    let b = bbox(&pts);
     if b[0] > near[2] || b[2] < near[0] || b[1] > near[3] || b[3] < near[1] {
         return;
     }

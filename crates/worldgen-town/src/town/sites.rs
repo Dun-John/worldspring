@@ -497,7 +497,7 @@ struct Open<'a> {
 impl<'a> Open<'a> {
     /// Round `pts` (world ft).
     fn new(world: &'a World, t0: &'a T0, center: P, pts: &[P]) -> Open<'a> {
-        let r = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        let r = bbox(pts);
         Open { t0, center, shore: super::Shore::new(world, t0, r), rivers: Default::default() }
     }
     /// Standing water or a river channel at `q` (local).
@@ -688,7 +688,7 @@ fn shaped_level(ground: &Open, block: &[P], width: f64) -> Option<bool> {
             out.push(h);
         }
     };
-    let b = block.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+    let b = bbox(block);
     let (i0, j0) = (crate::core::ceil(b[0] / 10.0) as i64, crate::core::ceil(b[1] / 10.0) as i64);
     let (i1, j1) = (crate::core::floor(b[2] / 10.0) as i64, crate::core::floor(b[3] / 10.0) as i64);
     for j in j0..=j1 {

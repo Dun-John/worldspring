@@ -557,7 +557,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     let drawn = drawn_over(world, t0, l.index as usize);
     if !drawn.is_empty() {
         let edited: Vec<u32> = super::building_edits(world, l.index).map(|(id, _)| id).collect();
-        let bb = |poly: &[P]| poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let bb = |poly: &[P]| bbox(poly);
         let boxes: Vec<[f64; 4]> = drawn.iter().map(|d| bb(d)).collect();
         l.buildings.retain(|b| {
             let o = bb(&b.poly);
@@ -876,7 +876,6 @@ pub(super) fn inherit_entrances(generated: &Layout, l: &mut Layout) {
 /// made again.
 pub fn changed_rects(a: &Layout, b: &Layout) -> Vec<[f64; 4]> {
     let mut rects: Vec<[f64; 4]> = Vec::new();
-    let bbox = |pts: &[P]| pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
     fn ids(l: &Layout) -> FastMap<u32, &Building> {
         l.buildings.iter().map(|b| (b.id, b)).collect()
     }
