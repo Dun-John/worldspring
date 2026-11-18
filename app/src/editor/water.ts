@@ -14,6 +14,8 @@ import type { Edits, Water, WaterKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
+import { contains } from './geom';
+export { contains };
 
 export type Pt = [number, number];
 
@@ -437,16 +439,6 @@ function fillet(pts: Pt[]): Pt[] {
     }
   }
   return out;
-}
-
-export function contains(pts: Pt[], x: number, y: number): boolean {
-  let inside = false;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const [xi, yi] = pts[i];
-    const [xj, yj] = pts[j];
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
 }
 
 /** Freehand outlines are sampled this far apart (ft) at least. */

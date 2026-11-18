@@ -13,6 +13,7 @@ import type { Graphics } from 'pixi.js';
 import type { PointerTool } from '../render/MapView';
 import { added, BLOCK, blockKey, encode, MAX_ADD, MAX_BLOCKS, MAX_EDGE_FT, MAX_PLATEAU_PTS, MAX_PLATEAU_SPAN_FT, MAX_STROKE_BLOCKS, values } from './groundCodec';
 import { newObjectId } from './scatter';
+import { contains, segDistXY as segDist } from './geom';
 
 export type GroundMode = 'raise' | 'lower' | 'smooth' | 'restore' | 'plateau' | 'select';
 export type Brush = 'raise' | 'lower' | 'smooth' | 'restore';
@@ -71,22 +72,6 @@ const smoothstep = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 };
-
-function segDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const [dx, dy] = [bx - ax, by - ay];
-  const l = dx * dx + dy * dy;
-  const t = l > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l)) : 0;
-  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
-}
-
-function contains(pts: [number, number][], x: number, y: number): boolean {
-  let inside = false;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const [[xi, yi], [xj, yj]] = [pts[i], pts[j]];
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}
 
 function outlineDist(pts: [number, number][], x: number, y: number): number {
   let d = Infinity;

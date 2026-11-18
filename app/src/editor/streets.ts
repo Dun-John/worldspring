@@ -16,6 +16,7 @@ import type { BlockFill, OpenKind, StreetClass, StreetPlan, StreetRequest, TownW
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { WARD_COLOURS, type TownMode } from './town';
+import { dist, inside, lerp } from './geom';
 
 type Pt = [number, number];
 
@@ -106,8 +107,6 @@ type Drag =
 const sub = (a: Pt, b: Pt): Pt => [a[0] - b[0], a[1] - b[1]];
 const add = (a: Pt, b: Pt): Pt => [a[0] + b[0], a[1] + b[1]];
 const mul = (a: Pt, k: number): Pt => [a[0] * k, a[1] * k];
-const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-const lerp = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 const round = (p: Pt): Pt => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10];
 
 export class StreetTool implements PointerTool {
@@ -834,16 +833,6 @@ function cross(a: Pt, b: Pt, c: Pt, d: Pt): Pt | null {
   const t = (ca[0] * s[1] - ca[1] * s[0]) / den;
   const u = (ca[0] * r[1] - ca[1] * r[0]) / den;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? add(a, mul(r, t)) : null;
-}
-
-/** Whether `p` is inside polygon `poly` (even-odd). */
-function inside(p: Pt, poly: Pt[]): boolean {
-  let c = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [a, b] = [poly[i], poly[j]];
-    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) c = !c;
-  }
-  return c;
 }
 
 /** A polygon's area, signed (positive: its points go round clockwise on screen, y down). */

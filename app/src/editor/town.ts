@@ -17,6 +17,7 @@ import type { Graphics } from 'pixi.js';
 import type { SquareKind, TownPlan, TownWard } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
+import { dist, inside, lerp } from './geom';
 
 export type TownMode = 'select' | 'street' | 'area' | 'wall' | 'displace' | 'liquify' | 'bloat' | 'pinch' | 'relax' | 'equalize';
 type Pt = [number, number];
@@ -74,8 +75,6 @@ export interface TownHost {
 const sub = (a: Pt, b: Pt): Pt => [a[0] - b[0], a[1] - b[1]];
 const add = (a: Pt, b: Pt): Pt => [a[0] + b[0], a[1] + b[1]];
 const mul = (a: Pt, k: number): Pt => [a[0] * k, a[1] * k];
-const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-const lerp = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 
 type Drag =
   | { kind: 'corner'; v: number; start: Pt; live: boolean }
@@ -523,12 +522,3 @@ export class TownTool implements PointerTool {
   }
 }
 
-/** Whether `p` is inside polygon `poly` (even-odd). */
-function inside(p: Pt, poly: Pt[]): boolean {
-  let c = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [a, b] = [poly[i], poly[j]];
-    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) c = !c;
-  }
-  return c;
-}

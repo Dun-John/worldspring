@@ -6,6 +6,7 @@ import type { Graphics } from 'pixi.js';
 import { CROSSING_LENGTH, CROSSING_WIDTH, FERRY_MIN_FT, NARROW_CROSSING_MAX, type Crossing, type CrossingKind, type CrossingMaterial, type Edits } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
+import { segDist } from './geom';
 
 export type Pt = [number, number];
 
@@ -58,13 +59,6 @@ export function crossingProblem(c: Crossing): string | null {
   const max = c.kind === 'bridge' ? CROSSING_WIDTH[1] : NARROW_CROSSING_MAX;
   if (!(c.width >= CROSSING_WIDTH[0] && c.width <= max)) return `Width: ${CROSSING_WIDTH[0]} to ${max} ft for a ${c.kind}`;
   return null;
-}
-
-/** Distance (ft) from p to the segment a–b. */
-function segDist(p: Pt, a: Pt, b: Pt): number {
-  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
-  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
-  return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
 }
 
 /** What the tool needs from the app. */

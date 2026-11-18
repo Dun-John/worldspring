@@ -9,6 +9,7 @@ import type { DrawnPath, Edits, PathKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 import { dragTo, endAt } from './line';
+import { segDist } from './geom';
 
 export type Pt = [number, number];
 
@@ -115,13 +116,6 @@ export function simplifyOpen(pts: Pt[], max: number): Pt[] {
     const out = pts.filter((_, i) => keep[i]);
     if (out.length <= max) return out;
   }
-}
-
-function segDist(p: Pt, a: Pt, b: Pt): number {
-  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
-  const l2 = dx * dx + dy * dy;
-  const t = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
-  return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
 }
 
 /** The road drawn by hand nearest `p` within its half width and `slack` ft, if any. */

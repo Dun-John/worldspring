@@ -7,6 +7,7 @@ import type { Graphics } from 'pixi.js';
 import { WHARF_WIDTH, type Edits, type Wharf, type WharfKind } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
+import { segDist } from './geom';
 
 export type Pt = [number, number];
 export type HarbourKind = 'islet' | WharfKind;
@@ -66,12 +67,6 @@ export interface HarbourHost {
   /** A wharf put down earlier was clicked. */
   pick(id: string): void;
   hint(text: string): void;
-}
-
-function segDist(p: Pt, a: Pt, b: Pt): number {
-  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
-  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
-  return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
 }
 
 export class HarbourTool implements PointerTool {
