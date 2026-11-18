@@ -17,6 +17,8 @@
   import { SQUARE_COLOURS, WARD_COLOURS, type TownMode } from '../editor/town';
   import { HAND_BRUSH_FT, isDrawMode, type StreetPick } from '../editor/streets';
   import Icon from './Icon.svelte';
+  import MoreFold from './shell/MoreFold.svelte';
+  import { NEW_UI } from './shell/layout.svelte';
   import type { IconName } from './icons';
 
   interface Props {
@@ -72,18 +74,23 @@
     onStreetFinish?: (closed?: boolean) => void;
     onStreetBack?: () => void;
     onStreetPick?: (p: StreetPick | null) => void;
+    /** `?ui=new`: which tool the panel is, Streets (no walls) or Town wall (the walls and their
+     * corners only); unset, all of it (the old layout). */
+    part?: 'streets' | 'walls' | null;
   }
 
-  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn, picking = false, onChangeTown, names = {}, hiddenIds = [], onRename, onHide, onPatch, streets = null, streetPick = null, streetDrawn = 0, streetClass = $bindable('street'), streetOpen = $bindable('lawn'), wallSpacing = $bindable(null), wallName = $bindable(''), onLayOut, onBack, onStreet, onStreets, onStreetFinish, onStreetBack, onStreetPick }: Props = $props();
+  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn, picking = false, onChangeTown, names = {}, hiddenIds = [], onRename, onHide, onPatch, streets = null, streetPick = null, streetDrawn = 0, streetClass = $bindable('street'), streetOpen = $bindable('lawn'), wallSpacing = $bindable(null), wallName = $bindable(''), onLayOut, onBack, onStreet, onStreets, onStreetFinish, onStreetBack, onStreetPick, part = null }: Props = $props();
+  const walls_ = $derived(part !== 'streets');
+  const streets_ = $derived(part !== 'walls');
 
-  const MODES: { key: TownMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
+  const MODES: { key: TownMode; label: string; was?: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
-    { key: 'displace', label: 'Displace', icon: 'move', kbd: 'Q', hint: 'Drag: the corners in the ring go with you, those in its middle all the way.' },
-    { key: 'liquify', label: 'Liquify', icon: 'liquify', kbd: 'L', hint: 'Drag: the corners under the ring are smudged along.' },
-    { key: 'bloat', label: 'Bloat', icon: 'bloat', kbd: 'O', hint: 'Press and drag: the patches round where you pressed swell, the further you drag the more.' },
-    { key: 'pinch', label: 'Pinch', icon: 'pinch', kbd: 'I', hint: 'Press and drag: the patches round where you pressed shrink, the further you drag the more.' },
-    { key: 'relax', label: 'Relax', icon: 'relax', kbd: 'R', hint: 'Scrub over the town: each corner eases toward the middle of its neighbours.' },
-    { key: 'equalize', label: 'Equalize', icon: 'polygon', kbd: 'E', hint: 'Click or drag over patches: each is made more regular.' },
+    { key: 'displace', label: NEW_UI ? 'Push' : 'Displace', was: 'Displace', icon: 'move', kbd: 'Q', hint: 'Drag: the corners in the ring go with you, those in its middle all the way.' },
+    { key: 'liquify', label: NEW_UI ? 'Smudge' : 'Liquify', was: 'Liquify', icon: 'liquify', kbd: 'L', hint: 'Drag: the corners under the ring are smudged along.' },
+    { key: 'bloat', label: NEW_UI ? 'Grow' : 'Bloat', was: 'Bloat', icon: 'bloat', kbd: 'O', hint: 'Press and drag: the patches round where you pressed swell, the further you drag the more.' },
+    { key: 'pinch', label: NEW_UI ? 'Shrink' : 'Pinch', was: 'Pinch', icon: 'pinch', kbd: 'I', hint: 'Press and drag: the patches round where you pressed shrink, the further you drag the more.' },
+    { key: 'relax', label: NEW_UI ? 'Soften' : 'Relax', was: 'Relax', icon: 'relax', kbd: 'R', hint: 'Scrub over the town: each corner eases toward the middle of its neighbours.' },
+    { key: 'equalize', label: NEW_UI ? 'Even out' : 'Equalize', was: 'Equalize', icon: 'polygon', kbd: 'E', hint: 'Click or drag over patches: each is made more regular.' },
   ];
 
   const WARD_LABEL: Record<TownWard, string> = {
@@ -186,7 +193,11 @@
     if (renaming !== null) onRename?.(renaming, renameTo.trim().slice(0, 80));
     renaming = null;
   }
-  const hint = $derived((hand ? HAND_HINT[mode] : undefined) ?? MODES.find((m) => m.key === mode)?.hint ?? '');
+  const hint = $derived(
+    part === 'walls' && !hand && mode === 'select'
+      ? 'Click a ringed corner on the wall to add or take away a gate or a tower there.'
+      : ((hand ? HAND_HINT[mode] : undefined) ?? MODES.find((m) => m.key === mode)?.hint ?? ''),
+  );
   const brush = $derived(mode !== 'select' && mode !== 'equalize' && !isDrawMode(mode));
   const generatedWard = $derived(selected ? (selected.ward_generated ?? selected.ward) : 'empty');
   const set = (req: TownRequest['patches'], what: string) => selected && onChange({ patches: req }, what);
@@ -233,13 +244,15 @@
       {#if hand}
         <button class:on={!!drawing} aria-pressed={!!drawing} aria-haspopup="menu" aria-expanded={drawOpen} onclick={() => ((reshapeOpen = false), (drawOpen = !drawOpen))} title="Draw a street, paint an area, or draw the town's wall"><Icon name={drawing?.icon ?? 'road'} size={16} />{drawing?.label ?? 'Draw'} ▾</button>
       {/if}
+      {#if streets_}
       <button class:on={!!reshaping} aria-pressed={!!reshaping} aria-haspopup="menu" aria-expanded={reshapeOpen} onclick={() => ((drawOpen = false), (reshapeOpen = !reshapeOpen))} title={hand ? "Brushes that move the town's junctions" : "Brushes that reshape the town's patches"}>
         <Icon name={reshaping?.icon ?? 'liquify'} size={16} />{reshaping?.label ?? 'Reshape'} ▾
       </button>
+      {/if}
     </div>
     {#if drawOpen && hand}
       <div class="menu ws-panel" role="menu" aria-label="Draw">
-        {#each DRAWS as m (m.key)}
+        {#each DRAWS.filter((d) => (part === 'walls' ? d.key === 'wall' : part === 'streets' ? d.key !== 'wall' : true)) as m (m.key)}
           <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((drawOpen = false), onMode(m.key))}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
         {/each}
       </div>
@@ -247,7 +260,7 @@
     {#if reshapeOpen}
       <div class="menu ws-panel" role="menu" aria-label="Reshape">
         {#each reshape as m (m.key)}
-          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((reshapeOpen = false), onMode(m.key))}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
+          <button class="ws-btn quiet" class:on={mode === m.key} role="menuitem" onclick={() => ((reshapeOpen = false), onMode(m.key))} title={NEW_UI && m.was ? `Was ${m.was}` : undefined}><Icon name={m.icon} size={16} /><span class="grow">{m.label}</span><kbd>{m.kbd}</kbd></button>
         {/each}
       </div>
     {/if}
@@ -298,6 +311,7 @@
         <input type="range" min="0.25" max="4" step="0.05" bind:value={size} />
       </label>
     {/if}
+    {#if streets_}
     <section class="card" aria-label="Streets">
       <div class="title"><span class="grow"><b>Laid out by hand</b><span class="ws-muted"> · {plural(streets.streets.length, 'street')}, {plural(streets.junctions.length, 'junction')}, {plural(streets.blocks.length, 'block')}</span></span></div>
       {#if streets.problems.length}
@@ -312,11 +326,19 @@
         <span class="ws-muted">No problems: every street meets the others and every block has its streets round it.</span>
       {/if}
     </section>
+    {/if}
     <StreetCards {streets} pick={streetPick} {busy} {names} onStreet={(r, w) => onStreet?.(r, w)} onStreets={(rs, w) => onStreets?.(rs, w)} onPick={(p) => onStreetPick?.(p)} />
+    {#snippet handMore()}
     <TownTrace />
     <div class="more">
       <button class="ws-btn quiet" disabled={busy} onclick={onBack} title="Its streets as generated again"><Icon name="reset" size={16} /> Back to generated</button>
     </div>
+    {/snippet}
+    {#if !part}
+      {@render handMore()}
+    {:else if part === 'streets'}
+      <MoreFold tool="streets">{@render handMore()}</MoreFold>
+    {/if}
   {/if}
   {#if !peek && plan}
     {#if brush || mode === 'equalize' || !selected}
@@ -328,6 +350,7 @@
         <input type="range" min="0.25" max="4" step="0.05" bind:value={size} />
       </label>
     {/if}
+    {#if walls_}
     <section class="card" aria-label="Walls">
       <label class="switch">
         <span class="grow"><b>Walls</b><span class="ws-muted"> · {plan.walls.generated ? 'it was built with walls' : 'it was built without'}</span></span>
@@ -338,6 +361,8 @@
         <div class="ws-hint">Choose, then click a ringed corner on the wall to add or take away a gate or a tower.</div>
       {/if}
     </section>
+    {/if}
+    {#snippet districts()}
     {#if plan.districts?.length}
       <section class="card" aria-label="Districts">
         <div class="title"><span class="grow"><b>Districts</b></span></div>
@@ -367,7 +392,9 @@
         {/if}
       </section>
     {/if}
-    {#if selected}
+    {/snippet}
+    {#if !NEW_UI}{@render districts()}{/if}
+    {#if selected && streets_}
       <section class="card" aria-label="Patch">
         <div class="title">
           <span class="dot" style:background={hex(WARD_COLOURS[selected.ward])}></span>
@@ -442,13 +469,15 @@
         {/if}
       </section>
     {/if}
-    {#if corner}
+    {#if corner && (streets_ || onWall)}
       <section class="card" aria-label="Corner">
         <div class="title">
           <span class="dot" style:background={corner.square ? hex(SQUARE_COLOURS[corner.square]) : 'transparent'}></span>
           <span class="grow"><b>{corner.square ? SQUARE_LABEL[corner.square] : corner.junction ? 'Where streets meet' : 'A corner'}</b></span>
         </div>
-        {#if corner.junction || corner.square}
+        {#if !streets_}
+          <!-- (Town wall: only the wall's gate and towers.) -->
+        {:else if corner.junction || corner.square}
           <label class="ws-field">
             Square
             <select class="ws-input" value={corner.square ?? 'none'} disabled={busy} onchange={(e) => onChange({ squares: [{ corner: corner.corner, kind: (e.currentTarget as HTMLSelectElement).value as SquareKind | 'none' }] }, 'square')}>
@@ -465,7 +494,7 @@
         {:else if !onWall}
           <div class="ws-hint">No square opens here: {corner.square_refused ?? 'it needs three streets or more meeting between built-up patches, inside the walls and off the water'}.</div>
         {/if}
-        {#if onWall}
+        {#if onWall && walls_}
           <div class="ws-hint"><b>Wall here</b>{corner.gate_by_hand ? ' · a gate put in by hand' : corner.gate_removed ? ' · its gate taken out' : corner.gate ? ' · a gate' : ''}</div>
           <div class="row">
             {#if corner.gate}
@@ -499,14 +528,22 @@
         {/if}
       </section>
     {/if}
+    {#if part}
+      {#if plan.set_aside.length}
+        <div class="aside">Set aside since the world changed: {plan.set_aside.join('; ')}.</div>
+      {/if}
+    {/if}
+    {#snippet planMore()}
     <section class="card" aria-label="Lay out by hand">
       <div class="row">
         <span class="grow"><b>Streets by hand</b><span class="ws-muted"> · draw, split, join and move its streets one by one; its blocks follow them</span></span>
         <button class="ws-btn" disabled={busy} onclick={onLayOut} title="Its streets as they are now, to change by hand"><Icon name="road" size={16} /> Lay out by hand</button>
       </div>
     </section>
-    {#if plan.set_aside.length}
-      <div class="aside">Set aside since the world changed: {plan.set_aside.join('; ')}.</div>
+    {#if !part}
+      {#if plan.set_aside.length}
+        <div class="aside">Set aside since the world changed: {plan.set_aside.join('; ')}.</div>
+      {/if}
     {/if}
     {#if plan.edited}
       <div class="more">
@@ -524,6 +561,15 @@
       </div>
     {/if}
     <TownTrace />
+    {/snippet}
+    {#if !part}
+      {@render planMore()}
+    {:else if part === 'streets'}
+      <MoreFold tool="streets">
+        {@render districts()}
+        {@render planMore()}
+      </MoreFold>
+    {/if}
   {/if}
 </div>
 

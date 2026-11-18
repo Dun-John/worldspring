@@ -5,7 +5,7 @@ import { untrack } from 'svelte';
 import type { Edits, Feature, StreetPlan, StreetRequest, BlockFill, P2, TownPlan, TownReport, TownRequest, OpenKind } from '../../gen/protocol';
 import { townUnderlay } from '../trace/underlay.svelte';
 import { type PointerTool } from '../../render/MapView';
-import { shell } from '../../ui/shell/layout.svelte';
+import { NEW_UI, shell } from '../../ui/shell/layout.svelte';
 import { TownTool, type TownMode } from '../town';
 import { DOTS_PPF, HAND_BRUSH_FT, StreetTool, isDrawMode, pickIn, type StreetPick } from '../streets';
 import { type Change } from '../../sync/mapd';
@@ -40,6 +40,9 @@ export function streetTools(host: StreetsHost) {
   let townMode = $state<TownMode>('select');
   /** `?ui=new`: which tool Streets' panel is, its streets or the town wall (the panel's part, 8b-1b). */
   let townPart = $state<'streets' | 'walls'>('streets');
+  /** `?ui=new`: what Select's Change asked to have chosen once the town's plan is read (a district
+   * by its id, else the patch or the hand street at a point). */
+  let townFocus: { layout: number; district?: string; at: [number, number] } | null = null;
   /** The brush's size, in patch widths. */
   let townSize = $state(1);
   /** The town in view (its layout index), its plan, the patch picked. */
@@ -109,6 +112,42 @@ export function streetTools(host: StreetsHost) {
     return f ? (host.renames[f.id] ?? f.name) : null;
   });
   const townNear = $derived(streetPlan ? (host.hud?.ftPerPx ?? 99) <= 1 / DOTS_PPF : !!townPlan && townPlan.max_move_ft / (host.hud?.ftPerPx ?? 99) >= 40);
+
+  // `?ui=new`: Town wall is the walls only (a hand town's opens on drawing its wall); Streets has no wall drawing.
+  $effect(() => {
+    const part = townPart;
+    const hand = !!streetPlan;
+    if (!NEW_UI) return;
+    untrack(() => {
+      const want: TownMode | null = part === 'walls' ? (hand ? 'wall' : 'select') : townMode === 'wall' ? 'select' : null;
+      if (want && townMode !== want) {
+        townMode = want;
+        townTool?.reset();
+        streetTool?.reset();
+      }
+    });
+  });
+
+  /** The focus asked for, chosen if the plan read is its town's (then it is done with). */
+  function applyFocus() {
+    const f = townFocus;
+    if (!f || f.layout !== townIndex) return;
+    if (streetPlan) {
+      streetPick = streetTool?.pickAt(f.at[0], f.at[1]) ?? null;
+    } else if (townPlan) {
+      const d = f.district ? townPlan.districts?.find((x) => x.id === f.district) : undefined;
+      const p = d?.patches[0] ?? townTool?.patchAt(f.at[0], f.at[1]) ?? null;
+      townCorner = null;
+      townPatch = p;
+    } else return;
+    townFocus = null;
+  }
+
+  /** Select's Change on a district or street: chosen when its town's plan is read (now, if it is). */
+  function focusOn(layout: number, at: [number, number], district?: string) {
+    townFocus = { layout, at, district };
+    applyFocus();
+  }
 
   function armTown() {
     if (townTool) return;
@@ -241,6 +280,7 @@ export function streetTools(host: StreetsHost) {
     }
     townTool?.setPlan(townPlan);
     setStreetPlan(null);
+    applyFocus();
   }
 
   /** A hand town's street graph read (in place of the ward editor's plan). */
@@ -257,6 +297,7 @@ export function streetTools(host: StreetsHost) {
     const p = streetPick;
     if (p && !pickIn(r, p)) streetPick = null;
     setStreetPlan(r);
+    applyFocus();
   }
 
   function setStreetPlan(p: StreetPlan | null) {
@@ -472,6 +513,7 @@ export function streetTools(host: StreetsHost) {
     set townTool(v) { townTool = v; },
     get townMode() { return townMode; },
     set townMode(v) { townMode = v; },
+    focusOn,
     get townPart() { return townPart; },
     set townPart(v) { townPart = v; },
     get townSize() { return townSize; },

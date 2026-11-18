@@ -199,12 +199,14 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['R', 'relax', grp('Relax', 'Soften (Relax)')],
     ['E', 'equalize', grp('Equalize', 'Even out (Equalize)')],
   ];
-  for (const [key, m, label] of town) out.push({ keys: [key], label, group: 'Streets', when: edit('town'), run: () => k.townMode(m) });
+  // (`?ui=new`: Town wall has no brushes, nor a hand town's streets and areas; Streets no wall drawing.)
+  const walls = () => k.editTool() === 'townwall';
+  for (const [key, m, label] of town) out.push({ keys: [key], label, group: 'Streets', when: m === 'select' ? edit('town') : () => edit('town')() && !walls(), run: () => k.townMode(m) });
   const hand = () => edit('town')() && k.townHand();
   out.push(
-    { keys: ['N'], label: 'Draw a street (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('street') },
-    { keys: ['A'], label: 'Paint an area open or paved (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('area') },
-    { keys: ['W'], label: 'Draw the town wall (laid out by hand)', group: 'Streets', when: hand, run: () => k.townMode('wall') },
+    { keys: ['N'], label: 'Draw a street (laid out by hand)', group: 'Streets', when: () => hand() && !walls(), run: () => k.townMode('street') },
+    { keys: ['A'], label: 'Paint an area open or paved (laid out by hand)', group: 'Streets', when: () => hand() && !walls(), run: () => k.townMode('area') },
+    { keys: ['W'], label: 'Draw the town wall (laid out by hand)', group: 'Streets', when: () => hand() && k.editTool() !== 'streets', run: () => k.townMode('wall') },
     { keys: ['Enter'], label: 'End the street, area or wall being drawn', group: 'Streets', when: hand, run: () => k.townStreetFinish() },
     { keys: ['Backspace'], label: 'Take a point back, else take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetBack() || k.townStreetDelete() },
     { keys: ['Delete'], label: 'Take the street, area or wall chosen away', group: 'Streets', when: hand, run: () => k.townStreetDelete() },
@@ -307,7 +309,7 @@ function buildModes(k: KeyContext, out: Shortcut[], when: () => boolean) {
 
 /** `?ui=new`: each Edit tool's key opens it, live in Edit while no other binding has the key
  * (Streets, Ground, Trees & props and the designer keep their letters). Again on the tool open:
- * the next kind (Road, Crossing, Fences), or back (Stairs & passages to the rooms). */
+ * the next kind (Road, Crossing, Docks & islets, Fences), or back (Stairs & passages to the rooms). */
 function openers(k: KeyContext, owners: Shortcut[], inEdit: () => boolean): Shortcut[] {
   const free = (key: string) => () => inEdit() && !owners.some((s) => s.keys.includes(key) && (!s.when || s.when()));
   const open = (t: ToolKey, again?: () => void) => () => {
@@ -327,7 +329,7 @@ function openers(k: KeyContext, owners: Shortcut[], inEdit: () => boolean): Shor
     ['V', 'road', () => k.buildRoad(), 'Road (again: footpath, track, gravel, paved, cobbled)'],
     ['X', 'crossing', () => k.buildCross(), 'Crossing (again: bridge, ford, ferry)'],
     ['I', 'water', undefined],
-    ['H', 'docks', undefined],
+    ['H', 'docks', () => k.buildHarbour(), 'Docks & islets (again: islet, quay, pier, breakwater)'],
     ['M', 'ground', undefined],
     ['F', 'fences', () => k.buildFence(), 'Fences & hedges (draw, gate, erase; again: the next kind)'],
     ['C', 'trees', undefined],
