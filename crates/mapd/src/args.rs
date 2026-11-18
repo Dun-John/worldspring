@@ -687,3 +687,8 @@ pub(crate) fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
 pub(crate) fn town_index(ex: &worldgen::pipeline::Executor, id: &str) -> Result<usize, String> {
     worldgen::agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| worldgen::town::is_settlement(&ex.t0, l)).ok_or_else(|| format!("{id} is not a settlement"))
 }
+
+/// The error for a write whose result cannot be found again (`verb`: what was done, "saved", "built"…).
+pub fn read_back(verb: &'static str) -> impl FnOnce() -> String {
+    move || format!("{verb}, but it could not be read back")
+}

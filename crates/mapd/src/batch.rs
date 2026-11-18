@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use worldgen::world::Edits;
 
 use crate::Shared;
+use crate::worker::NO_WORLD;
 use crate::tools::{schema, text};
 
 /// Steps one batch may hold.
@@ -89,7 +90,7 @@ async fn run(app: &Shared, a: &Value) -> Result<Value, String> {
     {
         return Err(crate::tools::other_world(app.current(), want));
     }
-    let start = app.with_edits(Edits::clone).ok_or("no world is open: open the map app first")?;
+    let start = app.with_edits(Edits::clone).ok_or(NO_WORLD)?;
     let done = STAGED
         .scope(RefCell::new(Some(Staged { edits: start, changes: Vec::new() })), async {
             let mut results = Vec::with_capacity(steps.len());

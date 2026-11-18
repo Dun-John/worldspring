@@ -57,7 +57,7 @@ use worldgen::world::{EditOp, Edits};
 use worldgen::{World, WorldFile};
 
 use crate::store::Store;
-use crate::worker::GenHandle;
+use crate::worker::{GenHandle, NO_WORLD};
 
 pub struct AppState {
     pub worker: GenHandle,
@@ -93,6 +93,11 @@ pub type Shared = Arc<AppState>;
 /// A world hash as agents and apps see it.
 pub fn hex(hash: u64) -> String {
     format!("{hash:016x}")
+}
+
+/// What a write says when it stands but the world could not be saved (`why`: the save's error).
+pub fn unsaved_warning(why: &dyn std::fmt::Display) -> String {
+    format!("made, but not yet saved to disk ({why}): mapd keeps it and saves it again every few seconds; don't repeat this call")
 }
 
 impl AppState {
@@ -160,7 +165,7 @@ impl AppState {
     pub async fn edit_now(&self, author: &str, from: u64, f: impl FnOnce(&mut Edits) -> Result<Value, String>) -> Result<Value, String> {
         let (hash, edits, ops, change, text) = {
             let mut w = self.world.lock().unwrap();
-            let Some((hash, file)) = w.as_mut() else { return Err("no world is open: open the map app first".into()) };
+            let Some((hash, file)) = w.as_mut() else { return Err(NO_WORLD.into()) };
             // (The world may have changed while the call waited for the gate.)
             if let Some(want) = tools::wanted()
                 && want != *hash
@@ -197,7 +202,7 @@ impl AppState {
                 let mut change = change;
                 if change.is_object() {
                     change["saved"] = json!(false);
-                    change["warning"] = json!(format!("made, but not yet saved to disk ({e}): mapd keeps it and saves it again every few seconds; don't repeat this call"));
+                    change["warning"] = json!(unsaved_warning(&e));
                 }
                 Ok(change)
             }

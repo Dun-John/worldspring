@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use worldgen::world::HexGrid;
 
 use crate::Shared;
+use crate::worker::NO_WORLD;
 use crate::tools::{schema, text};
 
 const FT_PER_MI: f64 = 5280.0;
@@ -70,7 +71,7 @@ fn checked(g: Option<&HexGrid>) -> HexGrid {
 }
 
 fn get(app: &Shared) -> Result<Value, String> {
-    let e = app.with_edits(|e| e.hexes.get(KEY).cloned()).ok_or("no world is open: open the map app first")?;
+    let e = app.with_edits(|e| e.hexes.get(KEY).cloned()).ok_or(NO_WORLD)?;
     Ok(json!({ "grid": grid_json(&checked(e.as_ref())), "set": e.is_some() }))
 }
 
@@ -197,7 +198,7 @@ fn parse_hex(s: &str) -> Result<(i64, i64), String> {
 }
 
 async fn at(app: &Shared, a: &Value) -> Result<Value, String> {
-    let g = checked(app.with_edits(|e| e.hexes.get(KEY).cloned()).ok_or("no world is open: open the map app first")?.as_ref());
+    let g = checked(app.with_edits(|e| e.hexes.get(KEY).cloned()).ok_or(NO_WORLD)?.as_ref());
     let [w, h] = crate::args::map_size(app).await?;
     let f = frame(&g);
     let (col, row) = match (&a["at"], &a["hex"]) {

@@ -177,7 +177,7 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
         return crate::tools::found(app, id.to_string()).await;
     }
     let id = change["id"].as_str().unwrap_or_default().to_string();
-    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await?;
+    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(crate::args::read_back("created"))).await?;
     for k in ["blank", "lane"] {
         if !change[k].is_null() {
             v[k] = change[k].clone();
@@ -269,7 +269,7 @@ async fn restore(app: &Shared, id: String, k: usize) -> Result<Value, String> {
     };
     let r = if crate::batch::active() { app.edit("agent", 0, change).await? } else { app.edit_now("agent", 0, change).await? };
     drop(_hold);
-    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(|| "restored, but it could not be read back".to_string())).await?;
+    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(crate::args::read_back("restored"))).await?;
     v["tool"] = json!("restore_feature");
     v["brought_back"] = r["brought_back"].clone();
     v["note"] = json!("what was set aside when it was deleted (names, notes, buildings, NPCs' places, plot points) is brought back where it still fits (brought_back counts them); what was set aside before, by a move or a change of what lays it out, stays set aside");
@@ -429,7 +429,7 @@ async fn update_culture(app: &Shared, id: String, to: u8) -> Result<Value, Strin
         })
         .await?;
     let rid = id.clone();
-    let now = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &rid).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
+    let now = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &rid).ok_or_else(crate::args::read_back("changed"))).await?;
     let mut out = json!({ "id": id, "layout": li, "culture": change["to"], "from": change["from"], "pending": false, "feature": now });
     if change["unchanged"] == json!(true) {
         out["unchanged"] = json!(true);
@@ -489,7 +489,7 @@ async fn update_made(app: &Shared, id: String, k: usize, ask: Asked) -> Result<V
         .await?;
     let set_aside = change["set_aside"].clone();
     let rid = id.clone();
-    let mut v = app.worker.with(move |ex| read_back(ex, &rid).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
+    let mut v = app.worker.with(move |ex| read_back(ex, &rid).ok_or_else(crate::args::read_back("changed"))).await?;
     if change["unchanged"] == json!(true) {
         v["unchanged"] = json!(true);
     } else {

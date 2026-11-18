@@ -264,8 +264,7 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
     let me = id.clone();
     let (sea, level, joins, levels) = app
         .worker
-        .run(move |g| {
-            let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;
+        .with_mut(move |ex| {
             let (mw, mh) = (ex.world.geom.map_w_ft, ex.world.geom.map_h_ft);
             if pts.iter().any(|p| !(0.0..mw).contains(&p[0]) || !(0.0..mh).contains(&p[1])) {
                 return Err("the outline is off the map".to_string());

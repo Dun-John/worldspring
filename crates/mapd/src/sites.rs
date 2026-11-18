@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::world::Created;
 
+use crate::args::read_back;
 use crate::Shared;
 use crate::tools::{schema, text};
 
@@ -229,7 +230,7 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
         .with(move |ex| {
             want.iter()
                 .map(|(id, bid)| {
-                    let mut v = agent::get(&ex.world, &ex.t0, id).ok_or_else(|| "restored, but it could not be read back".to_string())?;
+                    let mut v = agent::get(&ex.world, &ex.t0, id).ok_or_else(read_back("restored"))?;
                     if let Some(b) = bid {
                         v["building"] = json!(b);
                     }

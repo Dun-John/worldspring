@@ -9,6 +9,7 @@ use worldgen::town::geom;
 use worldgen::world::{Created, CreatedChecks, LOT_SIZES, TOWN_WARDS};
 
 use crate::Shared;
+use crate::worker::NO_WORLD;
 use crate::tools::{found, schema, text};
 
 const BUILDING_KEYS: [&str; 8] = ["name", "floors", "roof", "tint", "material", "shape", "shade", "structure"];
@@ -332,7 +333,7 @@ async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, St
     let mut c = match &id {
         Some(id) => app
             .with_edits(|e| e.created.iter().find(|c| &c.id == id && !c.removed && c.kind == "plot").cloned())
-            .ok_or("no world is open: open the map app first")?
+            .ok_or(NO_WORLD)?
             .ok_or_else(|| format!("{id} is not a parcel (a plot made by create_parcel)"))?,
         None => {
             if poly.is_none() {

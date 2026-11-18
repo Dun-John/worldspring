@@ -137,20 +137,18 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
     // The ground under the brush as generated; smoothing eases toward the ground as drawn.
     let smooth = mode == Brush::Smooth;
     let (under2, path2) = (under.clone(), path.clone());
-    let (squares, drawn) = app
+    let (squares, drawn, sea) = app
         .worker
-        .run(move |g| {
-            let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;
+        .with_mut(move |ex| {
             let (mw, mh) = (ex.world.geom.map_w_ft, ex.world.geom.map_h_ft);
             if path.iter().any(|p| !(0.0..mw).contains(&p[0]) || !(0.0..mh).contains(&p[1])) {
                 return Err("the brush is off the map".to_string());
             }
             let squares = Squares::round(ex, b, 1);
             let drawn = if smooth { drawn_ground(ex, &under2) } else { BTreeMap::new() };
-            Ok::<_, String>((squares, drawn))
+            Ok::<_, String>((squares, drawn, ex.world.params().sea_level_ft as f32))
         })
         .await?;
-    let sea = app.worker.with(|ex| Ok(ex.world.params().sea_level_ft as f32)).await?;
     let reply = app
         .edit("agent", 0, move |e| {
             let under: Vec<usize> = under.iter().filter_map(|&(gx, gy)| squares.at(gx, gy)).collect();
@@ -301,8 +299,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
     // The ground at the middle as generated (shaped below, without this plateau).
     let (squares, sea) = app
         .worker
-        .run(move |g| {
-            let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;
+        .with_mut(move |ex| {
             let (mw, mh) = (ex.world.geom.map_w_ft, ex.world.geom.map_h_ft);
             if pts.iter().any(|p| !(0.0..mw).contains(&p[0]) || !(0.0..mh).contains(&p[1])) {
                 return Err("the outline is off the map".to_string());
@@ -474,8 +471,7 @@ async fn heights(app: &Shared, a: &Value) -> Result<Value, String> {
     let c = crate::args::place(app, a).await?;
     let r = num(a, "radius_ft", 25.0)?;
     app.worker
-        .run(move |g| {
-            let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;
+        .with_mut(move |ex| {
             if !(0.0..ex.world.geom.map_w_ft).contains(&c[0]) || !(0.0..ex.world.geom.map_h_ft).contains(&c[1]) {
                 return Err("the place is off the map".to_string());
             }

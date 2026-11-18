@@ -15,6 +15,7 @@ use worldgen::world::{NAME_MAX, PIN_KINDS, PIN_TIERS, ROAD_KINDS, Sketch, Sketch
 use worldgen::{World, WorldFile};
 
 use crate::tools::{schema, text};
+use crate::worker::NO_WORLD;
 use crate::{Shared, hex};
 
 const MI: f64 = 5280.0;
@@ -131,7 +132,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 
 /// The open world (hash, file), and the sketch as its pending changes leave it (or as it is).
 fn state(app: &Shared) -> Result<(u64, WorldFile, Pending, bool), String> {
-    let (hash, file) = app.world.lock().unwrap().clone().ok_or("no world is open: open the map app first")?;
+    let (hash, file) = app.world.lock().unwrap().clone().ok_or(NO_WORLD)?;
     if let Some(want) = crate::tools::wanted()
         && want != hash
     {

@@ -221,7 +221,7 @@ fn unsaved_note(app: &Shared, name: &str, r: Result<Vec<Value>, String>, changed
         && v.get("saved").is_none()
     {
         v["saved"] = json!(false);
-        v["warning"] = json!(format!("made, but not yet saved to disk ({}): mapd keeps it and saves it again every few seconds; don't repeat this call", app.save_error.lock().unwrap()));
+        v["warning"] = json!(crate::unsaved_warning(&*app.save_error.lock().unwrap()));
         *t = text(v).remove(0);
     }
     Ok(out)
@@ -417,7 +417,7 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     let mut v = app
         .worker
         .with(move |ex| {
-            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())?;
+            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(crate::args::read_back("created"))?;
             same_name_note(&mut v, agent::same_named(&ex.world, &ex.t0, &name, &id), &name);
             Ok(v)
         })
@@ -697,7 +697,7 @@ async fn create_in_building(app: &Shared, a: Value, kind: String) -> Result<Valu
         .worker
         .with(move |ex| {
             let (w, t0) = (&ex.world, &ex.t0);
-            let mut v = agent::get(w, t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())?;
+            let mut v = agent::get(w, t0, &id).ok_or_else(crate::args::read_back("created"))?;
             if let Some(el) = agent::layout_of(w, t0, &id)
                 && let Some(l) = agent::way_down_level(w, t0, &host, el)
             {

@@ -6,7 +6,9 @@ use worldgen::agent;
 use worldgen::town::roof;
 use worldgen::world::{BUILDING_HOMES, Created, CreatedChecks, MAX_FLOORS, ROOFS, STRUCTURES, TINTS};
 
+use crate::args::read_back;
 use crate::Shared;
+use crate::worker::NO_WORLD;
 use crate::tools::{found, schema, text};
 
 const SQUARE_FT: f64 = 5.0;
@@ -232,7 +234,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
         Ok(json!({ "tool": "update_building", "id": id3, "entrances_moved": followed }))
     })
     .await?;
-    let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
+    let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(read_back("changed"))).await?;
     v["tool"] = json!("update_building");
     if done["entrances_moved"].as_array().is_some_and(|m| !m.is_empty()) {
         v["entrances_moved"] = done["entrances_moved"].clone();
@@ -363,7 +365,7 @@ async fn restore_buildings(app: &Shared, ids: Vec<String>, single: bool, at: Vec
     let ids2 = ids.clone();
     let mut got = app
         .worker
-        .with(move |ex| ids2.iter().map(|id| agent::get(&ex.world, &ex.t0, id).ok_or_else(|| "restored, but it could not be read back".to_string())).collect::<Result<Vec<_>, String>>())
+        .with(move |ex| ids2.iter().map(|id| agent::get(&ex.world, &ex.t0, id).ok_or_else(read_back("restored"))).collect::<Result<Vec<_>, String>>())
         .await?;
     if ids.len() == 1 {
         let mut v = got.remove(0);
@@ -438,7 +440,7 @@ pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result
     let mut c = match &id {
         Some(id) => app
             .with_edits(|e| e.created.iter().find(|c| &c.id == id && !c.removed && c.kind == "building").cloned())
-            .ok_or("no world is open: open the map app first")?
+            .ok_or(NO_WORLD)?
             .ok_or_else(|| format!("{id} is not a building drawn by hand"))?,
         None => {
             let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
@@ -623,7 +625,7 @@ pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result
     let id = if creating { change["id"].as_str().unwrap_or_default().to_string() } else { cid };
     app.worker
         .with(move |ex| {
-            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "built, but it could not be read back".to_string())?;
+            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(read_back("built"))?;
             if let Some(li) = agent::layout_of(&ex.world, &ex.t0, &id) {
                 v["building"] = json!(format!("b:{li}:0"));
             }

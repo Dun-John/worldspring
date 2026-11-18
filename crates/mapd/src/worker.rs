@@ -11,6 +11,10 @@ use worldgen::t0::remap::{self, Gone};
 use worldgen::world::{EditOp, Edits};
 use worldgen::{World, WorldFile, town};
 
+/// The refusals when no world is open: for a tool that reads the edits, and for one that needs the app (to run the worker).
+pub const NO_WORLD: &str = "no world is open: open the map app first";
+pub const NO_APP: &str = "no world is open: open the map app (it connects to mapd and shares its world)";
+
 pub struct Gen {
     pub ex: Option<Executor>,
     /// Next layout to lay out ahead of time.
@@ -59,7 +63,7 @@ impl Gen {
     /// one here only once it is whole; `swap` runs then, on this thread, so that no job sees one
     /// world here and the other in `swap`'s state.
     pub fn remake(&mut self, file: WorldFile, removed: &[usize], swap: impl FnOnce(u64, &WorldFile)) -> Result<Remade, String> {
-        let Some(old) = &self.ex else { return Err("no world is open: open the map app first".into()) };
+        let Some(old) = &self.ex else { return Err(NO_WORLD.into()) };
         let started = std::time::Instant::now();
         let mut new = World::new(file)?;
         let gone: Vec<Gone> = removed
@@ -218,7 +222,7 @@ impl GenHandle {
     pub async fn with<R: Send + 'static>(&self, f: impl FnOnce(&Executor) -> Result<R, String> + Send + 'static) -> Result<R, String> {
         self.run(move |g| match &g.ex {
             Some(ex) => f(ex),
-            None => Err("no world is open: open the map app (it connects to mapd and shares its world)".into()),
+            None => Err(NO_APP.into()),
         })
         .await
     }
@@ -227,7 +231,7 @@ impl GenHandle {
     pub async fn with_mut<R: Send + 'static>(&self, f: impl FnOnce(&mut Executor) -> Result<R, String> + Send + 'static) -> Result<R, String> {
         self.run(move |g| match g.ex.as_mut() {
             Some(ex) => f(ex),
-            None => Err("no world is open: open the map app (it connects to mapd and shares its world)".into()),
+            None => Err(NO_APP.into()),
         })
         .await
     }

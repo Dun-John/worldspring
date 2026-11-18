@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::world::{Npc, NpcPlace, PLOT_STATUSES, Plot, STANCES};
 
+use crate::args::read_back;
 use crate::Shared;
 use crate::tools::{arg_str, known, listed, schema, text};
 
@@ -359,7 +360,7 @@ async fn write_npc(app: &Shared, tool: &str, a: &Value) -> Result<Value, String>
     .await?;
     let existing = change["existing"].as_str().map(str::to_string);
     let id = existing.clone().unwrap_or(id);
-    let mut v = app.worker.with(move |ex| agent::npc_json(&ex.world, &ex.t0, &id, false).ok_or_else(|| "saved, but it could not be read back".to_string())).await?;
+    let mut v = app.worker.with(move |ex| agent::npc_json(&ex.world, &ex.t0, &id, false).ok_or_else(read_back("saved"))).await?;
     if existing.is_some() {
         v["existing"] = json!(true);
         v["note"] = json!("an NPC with this name and place was already here: its id is returned and nothing was added (give another name or place for a second one)");
@@ -395,7 +396,7 @@ async fn write_plot(app: &Shared, tool: &str, a: &Value) -> Result<Value, String
     .await?;
     let existing = change["existing"].as_str().map(str::to_string);
     let id = existing.clone().unwrap_or(id);
-    let mut v = app.worker.with(move |ex| agent::plot_json(&ex.world, &ex.t0, &id, false).ok_or_else(|| "saved, but it could not be read back".to_string())).await?;
+    let mut v = app.worker.with(move |ex| agent::plot_json(&ex.world, &ex.t0, &id, false).ok_or_else(read_back("saved"))).await?;
     if existing.is_some() {
         v["existing"] = json!(true);
         v["note"] = json!("a plot point with this title was already here: its id is returned and nothing was added (give another title for a second one)");
@@ -511,8 +512,8 @@ pub(crate) async fn write_point(app: &Shared, tool: &str, a: &Value) -> Result<V
     let mut v = app
         .worker
         .with(move |ex| {
-            let n = ex.world.file.edits.notes.get(&id2).ok_or("saved, but it could not be read back")?;
-            agent::note_row(&ex.world, &ex.t0, &id2, n).ok_or_else(|| "saved, but it could not be read back".to_string())
+            let n = ex.world.file.edits.notes.get(&id2).ok_or_else(read_back("saved"))?;
+            agent::note_row(&ex.world, &ex.t0, &id2, n).ok_or_else(read_back("saved"))
         })
         .await?;
     v["site"] = json!(site);

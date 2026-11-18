@@ -9,6 +9,7 @@ use worldgen::wharf;
 use worldgen::world::{Created, CreatedChecks, CrossingMaterial, Edits, Wharf, WharfKind};
 
 use crate::Shared;
+use crate::worker::NO_WORLD;
 use crate::args::{bbox, round1};
 use crate::notebook::new_id;
 use crate::tools::{limit_of, limit_prop, listed, schema, text};
@@ -187,7 +188,7 @@ fn wharf_json(e: &Edits, id: &str, w: &Wharf, sea: f64, level: Option<f32>) -> V
 async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     let id = a["id"].as_str().map(str::to_string);
     let old = match &id {
-        Some(i) => Some(app.with_edits(|e| e.wharves.get(i).cloned()).ok_or("no world is open: open the map app first")?.ok_or_else(|| format!("no wharf {i}"))?),
+        Some(i) => Some(app.with_edits(|e| e.wharves.get(i).cloned()).ok_or(NO_WORLD)?.ok_or_else(|| format!("no wharf {i}"))?),
         None => None,
     };
     let kind = match (a["kind"].as_str(), &old) {
@@ -249,8 +250,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     let (w2, check_root) = (w.clone(), repeat.is_none());
     let (info, level, sea) = app
         .worker
-        .run(move |g| {
-            let ex = g.ex.as_mut().ok_or("no world is open: open the map app (it connects to mapd and shares its world)")?;
+        .with_mut(move |ex| {
             if check_root && let Some(p) = wharf::root_problem(ex, &w2) {
                 return Err(p);
             }

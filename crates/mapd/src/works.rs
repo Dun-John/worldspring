@@ -6,7 +6,9 @@ use worldgen::agent;
 use worldgen::town::pieces;
 use worldgen::world::{BuildingEdit, CASTLE_MAX_FT, CASTLE_MAX_GATES, CASTLE_MIN_FT, CastlePiece, Created, CreatedChecks, KEEP_SHAPES, MOATS, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
 
+use crate::args::read_back;
 use crate::Shared;
+use crate::worker::NO_WORLD;
 use crate::tools::{found, schema, text};
 
 const SQUARE_FT: f64 = 5.0;
@@ -92,7 +94,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
     let mut c = match &id {
         Some(id) => app
             .with_edits(|e| e.created.iter().find(|c| &c.id == id && !c.removed && (c.kind == "castle" || c.kind == "wall")).cloned())
-            .ok_or("no world is open: open the map app first")?
+            .ok_or(NO_WORLD)?
             .ok_or_else(|| format!("{id} is not a castle or wall made by hand"))?,
         None => {
             let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
@@ -268,7 +270,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
     let mut v = app
         .worker
         .with(move |ex| {
-            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "made, but it could not be read back".to_string())?;
+            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(read_back("made"))?;
             if let Some(li) = agent::layout_of(&ex.world, &ex.t0, &id) {
                 let l = worldgen::town::layout(&ex.world, &ex.t0, li);
                 v["towers"] = json!(l.towers.len());
@@ -357,7 +359,7 @@ async fn piece_reply(app: &Shared, id: String, tool: &'static str, castle: (Stri
     let c2 = castle.0.clone();
     let (mut v, aside) = app
         .worker
-        .with(move |ex| agent::get(&ex.world, &ex.t0, &id2).map(|v| (v, aside_of(ex, &c2))).ok_or_else(|| "changed, but it could not be read back".to_string()))
+        .with(move |ex| agent::get(&ex.world, &ex.t0, &id2).map(|v| (v, aside_of(ex, &c2))).ok_or_else(read_back("changed")))
         .await?;
     if !aside.is_empty() {
         v["pieces_set_aside"] = json!(aside);
