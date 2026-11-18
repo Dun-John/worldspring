@@ -3,7 +3,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT, halfToFloat, linkSites } from '../gen/protocol';
+import { type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, halfToFloat, linkSites } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
@@ -18,16 +18,14 @@ import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
 import { HEX_DEFAULTS, hexGrid, NO_HEXES, type Hex, type HexSeen } from './hex';
 import { MadeTracks } from './MadeTracks';
 import { DrawnRoads } from './DrawnRoads';
-import { curve as pathCurve, pathWidth } from '../editor/paths';
 import { underlay, type Underlay } from '../editor/trace/underlay.svelte';
 import { TraceSprite } from './TraceSprite';
 import { tracer } from '../editor/trace/tracer.svelte';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
-import { BLOCK, parseKey } from '../editor/groundCodec';
 import { lookOf, shore } from '../editor/water';
-import { fenceBox, fenceId } from '../editor/fence';
+import { editDirty, isMade, siteReach } from './editDirty';
 import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
 
 export interface InteriorState {
@@ -86,17 +84,6 @@ const STAGE_WEIGHT: [string, number][] = [
 const SITE_MIN_LEVEL = 9;
 /** Sea lanes fade out between these many levels before the site plans (`SITE_MIN_LEVEL`). */
 const LANE_FADE: [number, number] = [1.3, 0.4];
-/** How far a created site's layout reaches (`town::sites::SITE_REACH_FT`), with a margin. */
-const SITE_REACH_FT = 260 + 100;
-
-/** How far (ft) from its point a created site's layout reaches, with a margin (as
- * `worldgen::world::Created::reach`: a castle's, wall's or plot's farthest corner and its towers). */
-export function siteReach(c: Created): number {
-  const pts = c.kind === 'castle' || c.kind === 'plot' ? c.poly : c.kind === 'wall' ? c.pts : null;
-  if (!pts?.length) return SITE_REACH_FT;
-  return Math.max(...pts.map((p) => Math.hypot(p[0] - c.x, p[1] - c.y))) + WORKS_MARGIN_FT + 100;
-}
-
 /** A wall's length (ft). */
 export function wallLength(pts: [number, number][], closed: boolean): number {
   let s = 0;
@@ -149,13 +136,6 @@ function createdFeature(c: Created, population?: number): Feature {
 
 /** Label extents (mi) of the villages and towns added by hand, as the world's own have them. */
 const MADE_EXTENT_MI: Record<string, number> = { village: 5, town: 12 };
-/** Created kinds that are settlements added by hand (`world::CREATED_SETTLEMENTS`). */
-const isMade = (c: Created) => c.kind === 'village' || c.kind === 'town';
-
-/** What a created site's layout depends on (not its name, but a drawn building's: it is the
- * building's own). */
-const siteKey = (c: Created) => JSON.stringify({ ...c, name: c.kind === 'building' || c.kind === 'castle' ? c.name : null });
-
 /** Screenshots for agents (`render_view`): pixels. */
 const CAPTURE_W = 1536;
 const CAPTURE_H = 1024;
@@ -1324,39 +1304,22 @@ export class MapView {
     this.edits = next;
     // (The hex grid is drawn here, never generated from.)
     if (prev.hexes !== next.hexes) this.setHexGrid(hexGrid(next), this.hexesOn);
-    /** The ids in a keyed field that may have changed. */
-    const keys = (field: string, a: object, b: object): Iterable<string> => changed?.[field] ?? (changed ? [] : new Set([...Object.keys(a), ...Object.keys(b)]));
-    const before = prev.created ?? [];
+    // (What the edits alone say they redraw: `editDirty`; the towns' reach and hints are ours.)
+    const d = editDirty(prev, next, changed);
     const after = next.created ?? [];
-    const rects: Rect[] = [];
+    const rects: Rect[] = [...d.createdRects];
     let pieceHere = false;
-    let madeChanged = false;
-    for (let k = 0; k < Math.max(before.length, after.length); k++) {
-      const a = before[k];
-      const b = after[k];
-      if (a && b && siteKey(a) === siteKey(b)) continue;
-      // A hand castle's pieces changed: their business pins asked for again, an open one shown anew.
-      const first = this.overlay?.first_created;
-      if (first !== undefined && (a?.kind === 'castle' || b?.kind === 'castle') && JSON.stringify(a?.pieces ?? null) !== JSON.stringify(b?.pieces ?? null)) {
-        const pre = `b:${first + k}:`;
-        this.labels?.forgetPlaces(pre);
-        this.placesRect = null;
-        this.placesEpoch++;
-        if (this.interior?.interior.id.startsWith(pre)) pieceHere = true;
-      }
-      for (const c of [a, b]) {
-        if (!c) continue;
-        // (A village or town added by hand: what it redraws comes from the generator, its pad and
-        // track as it has them, once it has the edits: `refreshMade`.)
-        if (isMade(c)) {
-          madeChanged = true;
-          continue;
-        }
-        const r = siteReach(c);
-        rects.push([c.x - r, c.y - r, c.x + r, c.y + r]);
-      }
+    let madeChanged = d.made;
+    // A hand castle's pieces changed: their business pins asked for again, an open one shown anew.
+    const first = this.overlay?.first_created;
+    if (first !== undefined) for (const k of d.castles) {
+      const pre = `b:${first + k}:`;
+      this.labels?.forgetPlaces(pre);
+      this.placesRect = null;
+      this.placesEpoch++;
+      if (this.interior?.interior.id.startsWith(pre)) pieceHere = true;
     }
-    const createdChanged = JSON.stringify(before) !== JSON.stringify(after);
+    const createdChanged = d.createdChanged;
     if (createdChanged) this.createdWays(after);
     if (createdChanged && this.baseOverlay) {
       const created = after.filter((c) => !c.removed).map((c) => createdFeature(c, this.made.find((m) => m.id === c.id)?.population));
@@ -1366,16 +1329,9 @@ export class MapView {
     // Changed names, and created sites' (their labels are new).
     const pr = prev.renames ?? {};
     const nr = next.renames ?? {};
-    // (Only names drawn inside, levels, rooms and sites, redraw the building or site we are in.)
-    let renamed = false;
-    // (Roads someone named, renamed or hidden: their labels asked for again once these are sent.)
-    let roadNames = prev.hidden !== next.hidden && [...(prev.hidden ?? []), ...(next.hidden ?? [])].some((h) => h.startsWith('rd:'));
-    // (Fields that are the same object are unchanged: edits are never changed in place.)
-    if (pr !== nr || createdChanged) for (const id of createdChanged ? new Set([...Object.keys(pr), ...Object.keys(nr)]) : keys('renames', pr, nr)) {
-      if (pr[id] !== nr[id] && /^[lrbtuwk]:/.test(id)) renamed = true;
-      if (pr[id] !== nr[id] || (createdChanged && id.startsWith('c:'))) this.labels?.rename(id, nr[id] ?? null);
-      if (pr[id] !== nr[id] && id.startsWith('rd:')) roadNames = true;
-    }
+    const renamed = d.renamedInside;
+    const roadNames = d.roadNames;
+    for (const [id, name] of d.relabel) this.labels?.rename(id, name);
     this.renames = nr;
     InteriorLayer.names = nr;
     // Plateaus someone named: their names at their middles.
@@ -1420,128 +1376,18 @@ export class MapView {
       void this.enterBuilding(here, { level: this.interior!.currentLevel });
     }
     if (this.battle) this.battle.sprites = next.sprites ?? {};
-    // Objects put down or taken away: only the battlemaps holding them are made again.
-    const battleRects: Rect[] = [];
-    const added: NonNullable<Edits['objects']>[string][] = [];
-    const po = prev.objects ?? {};
-    const no = next.objects ?? {};
-    if (po !== no) for (const id of keys('objects', po, no)) {
-      const [a, b] = [po[id], no[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      for (const o of [a, b]) if (o) battleRects.push([o.x - 1, o.y - 1, o.x + 1, o.y + 1]);
-      if (b && !this.previewed.delete(`${b.x},${b.y}`)) added.push(b);
-    }
-    const pc = prev.cleared ?? {};
-    const nc = next.cleared ?? {};
-    const reach = (c: Clear) => (c.r ?? 1.25) + 1;
-    if (pc !== nc) for (const id of keys('cleared', pc, nc)) {
-      const [a, b] = [pc[id], nc[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      for (const c of [a, b]) if (c) battleRects.push([c.x - reach(c), c.y - reach(c), c.x + reach(c), c.y + reach(c)]);
-    }
-    // A sprite's rules changed: every chunk using it.
-    const ps = prev.sprites ?? {};
-    const ns = next.sprites ?? {};
-    if (ps !== ns) for (const asset of new Set([...Object.keys(ps), ...Object.keys(ns)])) {
-      if (JSON.stringify(ps[asset]) === JSON.stringify(ns[asset])) continue;
-      for (const o of Object.values(no)) if (o.kind === `s:${asset}`) battleRects.push([o.x - 1, o.y - 1, o.x + 1, o.y + 1]);
-    }
-    // Crossings put down by hand: the battlemaps and site tiles along them (decks are drawn on
-    // both; a ferry's jetties reach past its ends).
-    const pv = prev.crossings ?? {};
-    const nv = next.crossings ?? {};
-    if (pv !== nv) for (const id of keys('crossings', pv, nv)) {
-      const [a, b] = [pv[id], nv[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      for (const c of [a, b]) {
-        if (!c) continue;
-        const r = c.width / 2 + 40;
-        const box: Rect = [Math.min(c.a[0], c.b[0]) - r, Math.min(c.a[1], c.b[1]) - r, Math.max(c.a[0], c.b[0]) + r, Math.max(c.a[1], c.b[1]) + r];
-        rects.push(box);
-      }
-    }
-    // Roads drawn by hand: the battlemaps and site tiles along them (their band, its bridges'
-    // decks, and the world's own buildings it takes away: 160 ft takes in the largest).
-    const pp = prev.paths ?? {};
-    const np = next.paths ?? {};
-    if (pp !== np) for (const id of keys('paths', pp, np)) {
-      const [a, b] = [pp[id], np[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      for (const r of [a, b]) {
-        if (!r) continue;
-        const line = pathCurve(r.pts);
-        const e = pathWidth(r) / 2 + 160;
-        rects.push([Math.min(...line.map((q) => q[0])) - e, Math.min(...line.map((q) => q[1])) - e, Math.max(...line.map((q) => q[0])) + e, Math.max(...line.map((q) => q[1])) + e]);
-      }
-    }
-    // Quays, piers and breakwaters built by hand: the battlemaps and site tiles along them (a quay
-    // fills in water behind it, a breakwater is a raised strip: a margin of their width and 60 ft).
-    const qv = prev.wharves ?? {};
-    const qn = next.wharves ?? {};
-    if (qv !== qn) for (const id of keys('wharves', qv, qn)) {
-      const [a, b] = [qv[id], qn[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      for (const w of [a, b]) {
-        if (!w) continue;
-        const r = (w.width ?? 20) + 60;
-        rects.push([Math.min(...w.pts.map((q) => q[0])) - r, Math.min(...w.pts.map((q) => q[1])) - r, Math.max(...w.pts.map((q) => q[0])) + r, Math.max(...w.pts.map((q) => q[1])) + r]);
-      }
-    }
+    // Objects put down or taken away, cleared, sprites' rules: only the battlemaps holding them are made again.
+    const battleRects: Rect[] = [...d.battleRects];
+    const added = d.put.filter((b) => !this.previewed.delete(`${b.x},${b.y}`));
+    // Crossings, roads and wharves built by hand: the battlemaps and site tiles along them.
+    rects.push(...d.worksRects);
     let reenter = pieceHere && this.interior?.interior.id !== this.designing;
-    // Ground shaped by hand: the battlemaps over it, and every building that may stand on it
-    // (a building rides on the ground under its corners: 160 ft takes in the largest).
-    const ground: Rect[] = [];
-    const pg = prev.ground ?? {};
-    const ng = next.ground ?? {};
-    const box: Rect = [Infinity, Infinity, -Infinity, -Infinity];
-    const grow = (r: Rect) => {
-      box[0] = Math.min(box[0], r[0]);
-      box[1] = Math.min(box[1], r[1]);
-      box[2] = Math.max(box[2], r[2]);
-      box[3] = Math.max(box[3], r[3]);
-    };
-    if (pg !== ng) for (const key of keys('ground', pg, ng)) {
-      if (pg[key] === ng[key]) continue;
-      const b = parseKey(key);
-      if (b) grow([b[0] * BLOCK * 5 - 5, b[1] * BLOCK * 5 - 5, (b[0] + 1) * BLOCK * 5 + 5, (b[1] + 1) * BLOCK * 5 + 5]);
-    }
-    // (A stroke's blocks are one box, so the rects edited grow by one a stroke.)
-    if (box[0] <= box[2]) ground.push([...box]);
-    const ph = prev.plateaus ?? {};
-    const nh = next.plateaus ?? {};
-    if (ph !== nh) for (const id of keys('plateaus', ph, nh)) {
-      const [a, b] = [ph[id], nh[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      for (const p of [a, b]) {
-        if (!p) continue;
-        const e = Math.max(p.edge ?? 0, 5) + 5;
-        ground.push([Math.min(...p.pts.map((q) => q[0])) - e, Math.min(...p.pts.map((q) => q[1])) - e, Math.max(...p.pts.map((q) => q[0])) + e, Math.max(...p.pts.map((q) => q[1])) + e]);
-      }
-    }
-    // Water drawn by hand: its outline and its bank (`waters::BANK_FT`) round it, as it was and is
-    // (an outline over another cuts the other's shore there too).
-    const pw = prev.waters ?? {};
-    const nw = next.waters ?? {};
-    if (pw !== nw) for (const id of keys('waters', pw, nw)) {
-      const [a, b] = [pw[id], nw[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      for (const w of [a, b]) {
-        if (!w) continue;
-        const e = 20;
-        const sh = shore(w);
-        ground.push([Math.min(...sh.map((q) => q[0])) - e, Math.min(...sh.map((q) => q[1])) - e, Math.max(...sh.map((q) => q[0])) + e, Math.max(...sh.map((q) => q[1])) + e]);
-      }
-    }
-    // The world's own islets taken away or brought back (`Edits.hidden`, `i:` ids): round each
-    // one, its edge (`ground::ISLET_EDGE_FT`) and a margin. Where they are is asked for once;
-    // before that they are redrawn when it comes (`redrawIslets`).
-    if (prev.hidden !== next.hidden) {
-      const ph = new Set((prev.hidden ?? []).filter((h) => h.startsWith('i:')));
-      const nh = new Set((next.hidden ?? []).filter((h) => h.startsWith('i:')));
-      const flipped = [...ph, ...nh].filter((h) => ph.has(h) !== nh.has(h));
-      if (flipped.length && this.islets) ground.push(...this.isletRects(flipped));
-      else if (flipped.length) void this.redrawIslets(flipped);
-    }
+    // Ground shaped by hand (with the world's own islets taken away or brought back: round each
+    // one, its edge, `ground::ISLET_EDGE_FT`, and a margin. Where they are is asked for once;
+    // before that they are redrawn when it comes, `redrawIslets`).
+    const ground: Rect[] = d.ground;
+    if (d.islets.length && this.islets) ground.push(...this.isletRects(d.islets));
+    else if (d.islets.length) void this.redrawIslets(d.islets);
     const REACH = 160;
     for (const r of ground) battleRects.push([r[0] - REACH, r[1] - REACH, r[2] + REACH, r[3] + REACH]);
     // The tiles that draw it (the three finest levels), one of their samples round it: a sample
@@ -1555,37 +1401,18 @@ export class MapView {
       const [x, y] = inside.origin;
       if (ground.some((r) => x >= r[0] - REACH && x <= r[2] + REACH && y >= r[1] - REACH && y <= r[3] + REACH)) reenter = true;
     }
-    // The world's own buildings changed or taken away: round their middle as generated (a
-    // castle keep reaches ~150 ft) and any new footprint.
-    const pb = prev.buildings ?? {};
+    // The world's own buildings changed or taken away.
+    rects.push(...d.buildingRects);
+    const replaced = d.replaced;
+    // Inside one: shown as it is now (unless it is being designed: the designer shows it).
     const nb = next.buildings ?? {};
-    const replaced: string[] = [];
-    if (pb !== nb) for (const id of keys('buildings', pb, nb)) {
-      const [a, b] = [pb[id], nb[id]];
-      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
-      replaced.push(id);
-      for (const e of [a, b]) {
-        if (!e) continue;
-        const pts: [number, number][] = [[e.at[0] - 150, e.at[1] - 150], [e.at[0] + 150, e.at[1] + 150], ...(e.poly ?? [])];
-        rects.push([Math.min(...pts.map((p) => p[0])) - 5, Math.min(...pts.map((p) => p[1])) - 5, Math.max(...pts.map((p) => p[0])) + 5, Math.max(...pts.map((p) => p[1])) + 5]);
-      }
-      // Inside it: shown as it is now (unless it is being designed: the designer shows it).
-      if (id === here && b && !b.removed && id !== this.designing) reenter = true;
-    }
+    if (here && replaced.includes(here) && nb[here] && !nb[here].removed && here !== this.designing) reenter = true;
     // Towns laid out anew by hand: all they reach (fields and sprawl, 2.3 radii), and their
     // district labels and business pins asked for again.
     const pt = prev.towns ?? {};
     const nt = next.towns ?? {};
-    const fenceIds: string[] = [];
-    if (pt !== nt) for (const key of keys('towns', pt, nt)) {
-      if (JSON.stringify(pt[key]) === JSON.stringify(nt[key])) continue;
-      // Only its fences and hedges changed: the generator says what they redraw (`redrawFences`).
-      if (JSON.stringify({ ...pt[key], fences: 0, at: 0 }) === JSON.stringify({ ...nt[key], fences: 0, at: 0 }) && (pt[key]?.fences || nt[key]?.fences)) {
-        for (const k of new Set([...Object.keys(pt[key]?.fences ?? {}), ...Object.keys(nt[key]?.fences ?? {})])) {
-          if (JSON.stringify(pt[key]?.fences?.[k]) !== JSON.stringify(nt[key]?.fences?.[k])) fenceIds.push(fenceId(Number(key), k));
-        }
-        continue;
-      }
+    const fenceIds = d.fenceIds;
+    for (const key of d.replanned) {
       const t = this.towns.find((t) => t.index === Number(key));
       if (!t) {
         // A village (no district labels): only its streets can change; redraw what they reach.
@@ -1617,29 +1444,9 @@ export class MapView {
     }
     // Towns' members changed by hand: what joined or left looks as its town's now (or no longer does), so
     // the town's reach and each thing's own area are made again, with the town's labels and business pins.
-    const pm = prev.members ?? {};
-    const nm = next.members ?? {};
-    if (pm !== nm) {
-      const towns = new Set<number>();
-      const ids = new Set<string>();
-      for (const key of keys('members', pm, nm)) {
-        if (JSON.stringify(pm[key]) === JSON.stringify(nm[key])) continue;
-        towns.add(Number(key));
-        for (const m of [pm[key], nm[key]]) for (const id of [...(m?.add ?? []), ...(m?.remove ?? [])]) ids.add(id);
-      }
-      const made = [...(prev.created ?? []), ...(next.created ?? [])];
-      for (const id of ids) {
-        const c = made.find((x) => x.id === id);
-        if (c) {
-          const pts: [number, number][] = [[c.x - 150, c.y - 150], [c.x + 150, c.y + 150], ...(c.poly ?? []), ...(c.pts ?? [])];
-          rects.push([Math.min(...pts.map((p) => p[0])) - 5, Math.min(...pts.map((p) => p[1])) - 5, Math.max(...pts.map((p) => p[0])) + 5, Math.max(...pts.map((p) => p[1])) + 5]);
-        } else {
-          // (A generated building: the town it was laid out in.)
-          const li = /^b:(\d+):/.exec(id)?.[1];
-          if (li !== undefined) towns.add(Number(li));
-        }
-      }
-      for (const li of towns) {
+    if (d.members) {
+      rects.push(...d.members.rects);
+      for (const li of d.members.towns) {
         const t = this.towns.find((t) => t.index === li);
         if (!t) continue;
         const r = 2.3 * t.r + 200;
@@ -1651,33 +1458,24 @@ export class MapView {
       this.placesRect = null;
       this.placesEpoch++;
     }
-    // Towns laid out by hand as streets (`Edits.streets`, keys `<li>` and `<li>/…`; `lanes/…` lie
-    // outside any town): what their change said it redraws, else all they reach.
-    const hs = (prev.streets ?? {}) as Record<string, unknown>;
+    // Towns laid out by hand as streets: what their change said it redraws, else all they reach.
     const hn = (next.streets ?? {}) as Record<string, unknown>;
-    if (hs !== hn) {
-      const hand = new Set<string>();
-      for (const key of keys('streets', hs, hn)) if (hs[key] !== hn[key]) hand.add(key.split('/')[0]);
-      for (const li of hand) {
-        const t = this.towns.find((t) => String(t.index) === li);
-        if (!t) continue;
-        const hint = this.streetHints.get(li);
-        this.streetHints.delete(li);
-        const r = 2.3 * t.r + 200;
-        if (hint && hint.records.every(([k, v]) => JSON.stringify(hn[k] ?? null) === v)) rects.push(...hint.rects);
-        else rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
-        this.districtsAsked.delete(t.index);
-        this.labels?.forgetTown(t.index);
-        this.placesRect = null;
-        this.placesEpoch++;
-      }
+    if (d.streets) for (const li of d.streets) {
+      const t = this.towns.find((t) => String(t.index) === li);
+      if (!t) continue;
+      const hint = this.streetHints.get(li);
+      this.streetHints.delete(li);
+      const r = 2.3 * t.r + 200;
+      if (hint && hint.records.every(([k, v]) => JSON.stringify(hn[k] ?? null) === v)) rects.push(...hint.rects);
+      else rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
+      this.districtsAsked.delete(t.index);
+      this.labels?.forgetTown(t.index);
+      this.placesRect = null;
+      this.placesEpoch++;
     }
     // The world's own settlements laid out in another culture (`Edits.cultures`): all they reach,
     // as a town re-planned; their district labels, business pins and an open building anew.
-    const pk = prev.cultures ?? {};
-    const nk = next.cultures ?? {};
-    if (pk !== nk) for (const key of keys('cultures', pk, nk)) {
-      if (pk[key] === nk[key]) continue;
+    for (const key of d.cultures) {
       const li = Number(key);
       const f = this.baseOverlay?.features.filter((g) => ['metropolis', 'city', 'town', 'village'].includes(g.kind))[li];
       if (!f) continue;
@@ -1698,23 +1496,11 @@ export class MapView {
     }
     // Roads, streets and paths taken off the map or brought back: drawn again where they ran, at every
     // zoom (asked of the generator, once it has the edits: `redrawRoads`); names and made links follow.
-    const cutIds: string[] = [];
-    if (prev.removed_roads !== next.removed_roads) {
-      const was = new Set(prev.removed_roads ?? []);
-      const now = new Set(next.removed_roads ?? []);
-      for (const id of [...was, ...now]) if (was.has(id) !== now.has(id)) cutIds.push(id);
-      if (cutIds.some((id) => id.startsWith('mt:'))) madeChanged = true;
-      if (cutIds.length) queueMicrotask(() => this.askRoads());
-    }
+    const cutIds = d.cutIds;
+    if (cutIds.some((id) => id.startsWith('mt:'))) madeChanged = true;
+    if (cutIds.length) queueMicrotask(() => this.askRoads());
     // Fences and hedges drawn by hand or gaps cut: round their lines now; a generated run's changes (`fenceIds`) as the generator says.
-    if (prev.fences !== next.fences || prev.fence_gaps !== next.fence_gaps) {
-      for (const [was, now] of [[prev.fences, next.fences], [prev.fence_gaps, next.fence_gaps]] as const) {
-        for (const id of new Set([...Object.keys(was ?? {}), ...Object.keys(now ?? {})])) {
-          if (JSON.stringify(was?.[id]) === JSON.stringify(now?.[id])) continue;
-          for (const f of [was?.[id], now?.[id]]) if (f) battleRects.push(fenceBox(f.pts, 'r' in f && f.r ? f.r : 0));
-        }
-      }
-    }
+    battleRects.push(...d.fenceRects);
     // (Asked once the generators have the edits: after they are sent.)
     if (!send) {
       this.refreshBridgeMarks(cutIds);
