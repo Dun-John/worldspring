@@ -661,7 +661,7 @@ app as one notice. If a step fails, nothing is changed, and the error names the 
 
 ### `rename_feature`
 Renames anything with a name: a feature, building, district, tower, underground site, a site's level (`l:`) or
-room (`r:`), a road stretch (`rd:`, ids from `list_roads` or `route`), a crossing put down by hand (`v:`), a city's whole sewers (`w:<layout>`) or a plateau (`h:`; its name shows in `list_plateaus`). Use
+room (`r:`), a road stretch (`rd:`, ids from `list_roads` or `route`), a crossing put down by hand (`v:`), a city's whole sewers (`w:<layout>`) or one 480-ft section of them (`w:<layout>:<sx>:<sy>`), or a plateau (`h:`; its name shows in `list_plateaus`). Use
 `list_names` for the ids. The app shows the new names everywhere, including the level list and
 the room labels inside. A building drawn by hand is one place, whether it is named by its `c:` id or its
 building id (`b:<layout>:0`): one name, one note (kept under `c:`) and one hidden mark.
@@ -682,7 +682,8 @@ building id (`b:<layout>:0`): one name, one note (kept under `c:`) and one hidde
 ### `annotate_feature`
 Sets a feature's notes: lore, adventure hooks, secrets for the DM. The app shows them in the info panel. A
 building drawn by hand keeps its note under its `c:` id, whichever id is given (the reply's `id`); a note left
-under its building id is joined onto it.
+under its building id is joined onto it. A city's sewers take notes too, as a whole (`w:<layout>`) or by
+section (`w:<layout>:<sx>:<sy>`); `hide_feature` refuses them.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1838,13 +1839,16 @@ way) that names the far end, so both maps have it; furniture on the square gives
 (default), `ladder`, `passage`, `trapdoor`, `rope`, `portal`. An end is a level and a square: levels are counted from
 the bottom (`l:<site>:<level>`, as level and room ids are), squares as `get_site_design`'s plan numbers them (`x`
 across, `y` down, from 0). Places a link names change only by its ends; `get_feature` of a site or level lists its
-`links`, `describe_location` those with an end below the point. A level filled in (`set_site_design`) takes the
-links on it away; a remade world moves the ends with their places.
+`links`, `describe_location` those with an end below the point. A site designed by hand (`set_site_design`) keeps
+its links: they are put on its levels after the design is built, so a designed site can have as many extra ways out
+(to another site, a cellar or the sewers) as it has links; an end whose square a new design fills with rock stops
+showing (`list_links` `check` says so) until it is moved. A remade world moves the ends with their places. In play
+mode a token on a link's square steps across to the far end's square (the sewers: on the city's one sewer level).
 
 ### `create_link`
 | Parameter | Type | | |
 |---|---|---|---|
-| `a`, `b` | `{at, x, y}` | required | Each end. `at`: a level (`l:<site>:<level>`), a room (`r:<site>:<level>:<room>`; with no `x`/`y`, its free square nearest its middle), or a site: `u:`/`k:` (its top level), `w:` (a sewer section's walkway), `b:` (its cellar); a site with no `x`/`y` takes the free square nearest the middle of that level. `x`, `y`: the square. |
+| `a`, `b` | `{at, x, y}` | required | Each end. `at`: a level (`l:<site>:<level>`), a room (`r:<site>:<level>:<room>`; with no `x`/`y`, its free square nearest its middle), or a site: `u:`/`k:` (its top level), `w:` (a sewer section's walkway), `b:` (its cellar); a site with no `x`/`y` takes the free square nearest the middle of that level. A city's whole sewers (`w:<layout>`, no `x`/`y`, one end only) take the free walkway square nearest the other end (within 3 sections, 1440 ft), so a site can be joined to its city's sewers without knowing the section. `x`, `y`: the square. |
 | `way` | string | optional | How it goes: `stairs` (default), `ladder`, `passage`, `trapdoor`, `rope`, `portal`. |
 | `name` | string | optional | Its own name, shown with the far end's. |
 

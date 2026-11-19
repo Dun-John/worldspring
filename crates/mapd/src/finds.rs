@@ -405,6 +405,9 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
         "hide_feature" => {
             let id = arg_str(&a, "id")?;
             let hide = a["hidden"].as_bool().unwrap_or(true);
+            if id.starts_with("w:") {
+                return Err(format!("{id}: a city's sewers can't be hidden (their grates go with the streets)"));
+            }
             known(app, &id).await?;
             let pair = drawn_pair(app, &id).await?;
             app.edit("agent", 0, move |e| {

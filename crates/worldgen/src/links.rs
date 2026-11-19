@@ -7,7 +7,7 @@
 
 use serde_json::{Value, json};
 
-use crate::interior::{Far, Interior, Item, Level, Link as Way, generated_id};
+use crate::interior::{Far, Interior, Item, Level, Link as Way, SQUARE_FT, generated_id};
 use crate::t0::T0;
 use crate::world::{Edits, World};
 pub use crate::model::links::{End, Link, WAYS};
@@ -188,4 +188,71 @@ pub fn generate_id(world: &World, t0: &T0, id: &str) -> Option<Interior> {
 
 pub fn interior_json(world: &World, t0: &T0, id: &str) -> String {
     serde_json::to_string(&generate_id(world, t0, id)).expect("serializable")
+}
+
+/// Whether `id` names a city's sewers: the network (`w:<layout>`, a city's) or one of its
+/// sections (`w:<layout>:<sx>:<sy>`, one under a paved street). None: not a `w:` id.
+pub fn sewers_known(world: &World, t0: &T0, id: &str) -> Option<bool> {
+    let n: Vec<&str> = id.strip_prefix("w:")?.split(':').collect();
+    Some(match n.as_slice() {
+        [l] => l.parse::<usize>().is_ok_and(|l| sewered(world, t0, l)),
+        [_, _, _] => generated_id(world, t0, id).is_some(),
+        _ => false,
+    })
+}
+
+/// Whether layout `l` is a city with sewers (`under::drain_grates`: cities only).
+fn sewered(world: &World, t0: &T0, l: usize) -> bool {
+    crate::town::is_settlement(t0, l) && {
+        let lay = crate::town::layout(world, t0, l);
+        !lay.site && lay.tier >= crate::t0::settle::Tier::City
+    }
+}
+
+/// The middle of an end's square (world ft), from its place's grid.
+pub fn end_point(world: &World, t0: &T0, e: &End) -> Option<[f64; 2]> {
+    let (site, _) = site_of(&e.level)?;
+    let it = generated_id(world, t0, site)?;
+    let (u, v) = ((e.x as f64 + 0.5) * SQUARE_FT, (e.y as f64 + 0.5) * SQUARE_FT);
+    Some([it.origin[0] + u * it.axis[0] + v * it.across[0], it.origin[1] + u * it.axis[1] + v * it.across[1]])
+}
+
+/// The free walkway square of layout `l`'s sewers nearest world point `p` (sections round the
+/// one under it, out to 3 sections away; the lowest section, then square, among equals). None:
+/// no sewer walkway that near.
+pub fn nearest_sewer_end(world: &World, t0: &T0, l: usize, p: [f64; 2]) -> Option<End> {
+    if !sewered(world, t0, l) {
+        return None;
+    }
+    let s = crate::under::SEWER_SECTION_FT;
+    let (cx, cy) = (crate::core::floor(p[0] / s) as i64, crate::core::floor(p[1] / s) as i64);
+    let mut best: Option<(f64, End)> = None;
+    for r in 0..=3i64 {
+        // (Ring r is at least r - 1 sections from p: stop once a nearer square was found.)
+        let gap = (r - 1).max(0) as f64 * s;
+        if best.as_ref().is_some_and(|b| b.0 <= gap * gap) {
+            break;
+        }
+        for sy in cy - r..=cy + r {
+            for sx in cx - r..=cx + r {
+                if (sx - cx).abs().max((sy - cy).abs()) != r {
+                    continue;
+                }
+                let site = format!("w:{l}:{sx}:{sy}");
+                // (With the links already put down: their squares are taken.)
+                let Some(it) = generate_id(world, t0, &site) else { continue };
+                let li = it.entry_level;
+                for k in 0..it.nx * it.ny {
+                    let (x, y) = ((k % it.nx) as u16, (k / it.nx) as u16);
+                    let q = [it.origin[0] + (x as f64 + 0.5) * SQUARE_FT, it.origin[1] + (y as f64 + 0.5) * SQUARE_FT];
+                    let d = (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]);
+                    if best.as_ref().is_some_and(|b| b.0 <= d) || spot_problem(&it, &site, li, x, y).is_some() {
+                        continue;
+                    }
+                    best = Some((d, End { level: level_id(&site, li), x, y }));
+                }
+            }
+        }
+    }
+    best.map(|b| b.1)
 }

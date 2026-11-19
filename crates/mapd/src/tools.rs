@@ -314,7 +314,14 @@ pub(crate) fn deleted_or(world: &worldgen::world::World, t0: &worldgen::t0::T0, 
 /// An id the world knows (so edits never pile up on typos).
 pub(crate) async fn known(app: &Shared, id: &str) -> Result<(), String> {
     let id2 = id.to_string();
-    app.worker.with(move |ex| agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| crate::args::no_such(&ex.world, &ex.t0, &id2))).await
+    app.worker
+        .with(move |ex| match worldgen::links::sewers_known(&ex.world, &ex.t0, &id2) {
+            // (A city's sewers or a section of them: no place of their own on the map.)
+            Some(true) => Ok(()),
+            Some(false) => Err(format!("no sewers {id2} (w:<layout> a city's, w:<layout>:<sx>:<sy> a 480-ft section under a paved street)")),
+            None => agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| crate::args::no_such(&ex.world, &ex.t0, &id2)),
+        })
+        .await
 }
 
 /// A building drawn by hand behind an id (`agent::drawn_pair`: its place in `created`, created

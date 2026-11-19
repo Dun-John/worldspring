@@ -10,7 +10,7 @@ use crate::tools::{listed, schema, text};
 
 fn end_schema(description: &str) -> Value {
     json!({ "type": "object", "description": description, "properties": {
-        "at": { "type": "string", "description": "A level (l:<site>:<level>, from the bottom), a room (r:<site>:<level>:<room>), or a site: u:/k: (top level), w:<layout>:<sx>:<sy> (sewer section), b: (cellar)" },
+        "at": { "type": "string", "description": "A level (l:<site>:<level>, from the bottom), a room (r:<site>:<level>:<room>), or a site: u:/k: (top level), w:<layout>:<sx>:<sy> (sewer section), w:<layout> (a city's sewers: the walkway nearest the other end), b: (cellar)" },
         "x": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "Square as get_site_design's plan numbers them (a room or site alone: its free square nearest its middle)" },
         "y": { "type": "integer", "minimum": 0, "maximum": 4095 },
     }, "required": ["at"] })
@@ -98,13 +98,42 @@ fn resolve(world: &worldgen::world::World, t0: &worldgen::t0::T0, field: &str, v
     Ok(End { level: links::level_id(&site, li), x, y })
 }
 
+/// The layout of an end given as a whole sewer network (`at: w:<layout>`), if it is one.
+fn network(v: &Value) -> Option<usize> {
+    v["at"].as_str()?.strip_prefix("w:")?.parse().ok()
+}
+
+/// End `field`, a city's sewers (`w:<layout>`): the free walkway square nearest the other end.
+fn nearest(world: &worldgen::world::World, t0: &worldgen::t0::T0, field: &str, l: usize, v: &Value, other: &End) -> Result<End, String> {
+    if !v["x"].is_null() || !v["y"].is_null() {
+        return Err(format!("{field}: a square is in a sewer section (w:{l}:<sx>:<sy>), not the whole network w:{l}"));
+    }
+    if links::sewers_known(world, t0, &format!("w:{l}")) != Some(true) {
+        return Err(format!("{field}.at: w:{l} is not a city's sewers"));
+    }
+    let p = links::end_point(world, t0, other).ok_or_else(|| format!("{field}: the other end's place is not there"))?;
+    links::nearest_sewer_end(world, t0, l, p).ok_or_else(|| format!("{field}: no free sewer walkway of w:{l} within 3 sections (1440 ft) of the other end ({:.0}, {:.0} ft)", p[0], p[1]))
+}
+
 async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
     let (ea, eb) = (a["a"].clone(), a["b"].clone());
     let (a_end, b_end) = app
         .worker
         .with(move |ex| {
-            let a = resolve(&ex.world, &ex.t0, "a", &ea)?;
-            let b = resolve(&ex.world, &ex.t0, "b", &eb)?;
+            let (w, t0) = (&ex.world, &ex.t0);
+            let (a, b) = match (network(&ea), network(&eb)) {
+                (Some(_), Some(_)) => return Err("a, b: only one end can be a whole sewer network (w:<layout>); give the other as a place or a section".to_string()),
+                (Some(l), None) => {
+                    let b = resolve(w, t0, "b", &eb)?;
+                    (nearest(w, t0, "a", l, &ea, &b)?, b)
+                }
+                (None, Some(l)) => {
+                    let a = resolve(w, t0, "a", &ea)?;
+                    let b = nearest(w, t0, "b", l, &eb, &a)?;
+                    (a, b)
+                }
+                (None, None) => (resolve(w, t0, "a", &ea)?, resolve(w, t0, "b", &eb)?),
+            };
             if a == b {
                 return Err("a and b are the same square".to_string());
             }
