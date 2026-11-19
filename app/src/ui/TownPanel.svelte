@@ -202,6 +202,8 @@
   const set = (req: TownRequest['patches'], what: string) => selected && onChange({ patches: req }, what);
   let naming = $state(false);
   let newName = $state('');
+  // (A patch outside the walls joins a district once it is built on: open country made a slum or common ward, 184.)
+  const districtable = $derived(!!selected && (selected.in_town || !!selected.district || (selected.ward !== 'farm' && selected.ward !== 'empty')));
   const districtList = $derived((plan?.districts ?? []).filter((d) => d.patches.length > 0 || d.id === selected?.district?.id));
   function pickDistrict(e: Event) {
     const el = e.currentTarget as HTMLSelectElement;
@@ -380,7 +382,7 @@
         {/each}
         </div>
         <div class="row">
-          <button class="ws-btn" disabled={busy || !selected?.in_town} title={selected?.in_town ? 'A district of its own, taking the picked patch' : 'Pick a patch first'} onclick={() => (naming = true)}><Icon name="plus" size={16} /> New district</button>
+          <button class="ws-btn" disabled={busy || !districtable} title={districtable ? 'A district of its own, taking the picked patch' : selected ? 'Open country is in no district: give it a ward built on first' : 'Pick a patch first'} onclick={() => (naming = true)}><Icon name="plus" size={16} /> New district</button>
         </div>
         {#if naming && selected}
           <div class="row">
@@ -406,7 +408,7 @@
             {/each}
           </select>
         </label>
-        {#if selected.in_town && plan.districts?.length}
+        {#if districtable && plan.districts?.length}
           <div class="ws-field">
             <label for="town-district">District</label>
             <select id="town-district" class="ws-input" value={selected.district?.id ?? ''} disabled={busy} onchange={pickDistrict}>
