@@ -1099,12 +1099,18 @@ export class MapView {
   private readonly waterLayer = new Waters();
   private waterKey = '';
 
-  /** The labels hidden: a building drawn by hand hidden by its created id hides its business
-   * pin (its building id) too. */
+  /** The labels hidden: a building drawn by hand is one place under two ids (its created id and
+   * its building id), so hidden under either, both its map label and its business pin go. */
   private hiddenLabels(e: Edits): Set<string> {
     const set = new Set(e.hidden ?? []);
     const first = this.overlay?.first_created;
-    if (first !== undefined) (e.created ?? []).forEach((c, k) => c.kind === 'building' && set.has(c.id) && set.add(`b:${first + k}:0`));
+    if (first === undefined) return set;
+    (e.created ?? []).forEach((c, k) => {
+      if (c.kind !== 'building') return;
+      const b = `b:${first + k}:0`;
+      if (set.has(c.id)) set.add(b);
+      else if (set.has(b)) set.add(c.id);
+    });
     return set;
   }
 
