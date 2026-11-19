@@ -1136,7 +1136,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         };
         // (Roadmap 7, 183: planned from the roads its ward edit kept, the roads come in since
         // join its gates, the edit's own among them.)
-        let plan = if frozen_fp(world, t0, index) != 0 { Rc::new(rejoined(&plan, &site, &road_ends, edit.map(|e| &e.wall))) } else { plan };
+        let plan = if frozen_fp(world, t0, index) != 0 { Rc::new(rejoined(&plan, &site, &road_ends, edit.map(|e| &e.wall), frozen_ends(world, t0, index).map_or(0, |f| f.0.len()))) } else { plan };
         let mut ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
         // (R5 towns, M18: the ground of a gate taken out keeps off the wall as it was generated.)
         if !ch.wall.remove.is_empty() {

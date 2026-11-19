@@ -220,7 +220,7 @@ fn plateau_of(world: &World, t0: &T0, id: &str) -> Option<(&'static str, f64, P)
         let what = if p.kind == crate::ground::PlateauKind::Islet { "islet" } else { "plateau" };
         return Some((what, p.level as f64, town::geom::centroid(&p.pts)));
     }
-    if !id.starts_with("i:") || world.file.edits.hidden.contains(id) {
+    if !id.starts_with("i:") {
         return None;
     }
     crate::t0::islets::islets(t0).iter().find(|i| i.id == id).map(|i| ("islet", i.level as f64, i.at))

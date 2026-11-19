@@ -50,9 +50,9 @@ pub(super) fn plan_for(world: &World, t0: &T0, index: usize, site: &Site, s: &Se
 
 /// (183) `plan` with the roads of `now` joined to its gates (`rejoin`), those put in by `wall` (the
 /// edit it is built with) among them.
-pub(super) fn rejoined(plan: &TownPlan, site: &Site, now: &[(P, u8)], wall: Option<&crate::world::WallEdit>) -> TownPlan {
+pub(super) fn rejoined(plan: &TownPlan, site: &Site, now: &[(P, u8)], wall: Option<&crate::world::WallEdit>, frozen_roads: usize) -> TownPlan {
     let mut p = plan.clone();
-    rejoin(&mut p, site, now, wall.unwrap_or(&crate::world::WallEdit::default()));
+    rejoin(&mut p, site, now, wall.unwrap_or(&crate::world::WallEdit::default()), frozen_roads);
     p
 }
 
@@ -62,17 +62,23 @@ const MATCH_FT: f64 = 250.0;
 /// The roads of `now` that came in since `plan` was planned meet its nearest gate (the plan's
 /// not taken out, or one put in by hand in `wall`: its way in, then, no way out of its own); the
 /// ends that moved under `MATCH_FT` start there. Those gone stay as planned.
-fn rejoin(plan: &mut TownPlan, site: &Site, now: &[(P, u8)], wall: &crate::world::WallEdit) {
+fn rejoin(plan: &mut TownPlan, site: &Site, now: &[(P, u8)], wall: &crate::world::WallEdit, frozen_roads: usize) {
     let mut used = vec![false; now.len()];
-    for k in 0..plan.ends.len() {
-        let e = plan.ends[k].0;
-        let near = (0..now.len()).filter(|&j| !used[j]).min_by(|&a, &b| dist(now[a].0, e).total_cmp(&dist(now[b].0, e))).filter(|&j| dist(now[j].0, e) <= MATCH_FT);
-        if let Some(j) = near {
-            used[j] = true;
-            if dist(now[j].0, e) > 0.0 {
-                plan.ends[k].0 = now[j].0;
-                plan.heading_of[k] = site.road_heading(now[j].0);
-            }
+    // (The two ends made up for a town frozen with no road are no roads: no road joins them.)
+    let made_up = if frozen_roads == 0 { plan.ends.len() } else { 0 };
+    // The nearest pairs first, over all of them (ties by index, so the order of the roads is no matter).
+    let mut pairs: Vec<(f64, usize, usize)> = (made_up..plan.ends.len()).flat_map(|k| (0..now.len()).map(move |j| (k, j))).map(|(k, j)| (dist(now[j].0, plan.ends[k].0), k, j)).filter(|p| p.0 <= MATCH_FT).collect();
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut done = vec![false; plan.ends.len()];
+    for (d, k, j) in pairs {
+        if used[j] || done[k] {
+            continue;
+        }
+        used[j] = true;
+        done[k] = true;
+        if d > 0.0 {
+            plan.ends[k].0 = now[j].0;
+            plan.heading_of[k] = site.road_heading(now[j].0);
         }
     }
     for (_, &(e, class)) in now.iter().enumerate().filter(|(j, _)| !used[*j]) {
