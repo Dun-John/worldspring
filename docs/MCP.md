@@ -1591,7 +1591,9 @@ a `reason` (the first blocker that stays, worded as `create_building`'s refusal)
   `would_remove` with `clear`. A suggestion, not a move: nothing is changed. It is `null` when there is none (or the
   footprint is in the sea), with a `note`.
 - `would_remove` (with `clear`, beside `ok: true`): `[{id, name, function}]`, the world's own buildings
-  `create_building clear` would take away. With `clear` over more than 300 buildings the check is refused.
+  `create_building clear` would take away. With `clear` over more than 300 buildings the check is refused. A town laid
+  out by hand (in Streets) is not listed: it lays its lots out anew round the new building, so its buildings in the way
+  give way without a removal (and with new ids round it).
 
 ```json
 { "name": "check_building_spot", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 50, "depth_ft": 30 }, "func": "inn" } }

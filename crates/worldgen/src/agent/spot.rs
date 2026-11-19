@@ -395,12 +395,18 @@ impl Removal {
 }
 
 /// The removals the buildings in `found` that `clear` takes away come to (each with where its edit is: the building as generated).
+/// A town laid out by hand needs none: it lays its blocks out anew round a building or plot drawn by hand (`hand::build`), its
+/// lots then numbered anew, so a removal by id would take away the neighbour that comes to carry the id (a lawn where it stood)
+/// and leave the building meant under its new id.
 pub fn removals(world: &World, t0: &T0, found: &[Blocker]) -> Vec<Removal> {
     let mut bases: FastMap<usize, std::rc::Rc<town::Layout>> = FastMap::default();
     let mut out = Vec::new();
     for b in found.iter().filter(|b| b.removable) {
         let Some(id) = b.id.clone() else { continue };
         let Some((li, bi)) = generated_building(t0, &id) else { continue };
+        if town::hand::is_hand(world, li) {
+            continue;
+        }
         let base = bases.entry(li).or_insert_with(|| town::base_layout(world, t0, li));
         if let Some(g) = base.building(bi as usize) {
             out.push(Removal { id, name: b.name.clone().unwrap_or_default(), function: b.function.clone().unwrap_or_default(), at: geom::centroid(&g.poly) });
