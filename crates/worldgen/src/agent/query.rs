@@ -109,6 +109,17 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
                 }
             }
         }
+        // Plateaus and islets that were named (`rename_feature`; they have no name of their own).
+        if (!ql.is_empty() || matches!(kind, Some("plateau" | "islet"))) && out.len() < limit && kind.is_none_or(|k| k == "plateau" || k == "islet") {
+            for (id, name) in edits.renames.iter().filter(|(id, n)| (id.starts_with("h:") || id.starts_with("i:")) && n.to_lowercase().contains(&ql) && (include_hidden || !hidden.contains(*id))) {
+                if let Some((what, level, at)) = plateau_of(world, t0, id).filter(|p| kind.is_none_or(|k| k == p.0))
+                    && out.len() < limit
+                {
+                    let sea = world.params().sea_level_ft;
+                    out.push(json!({ "id": id, "kind": what, "name": name, "level_ft": crate::core::round((level - sea) * 10.0) / 10.0, "x_ft": at[0].round(), "y_ft": at[1].round() }));
+                }
+            }
+        }
         // Road stretches renamed and crossings named (only those given a name).
         if (!ql.is_empty() || matches!(kind, Some("road" | "crossing"))) && out.len() < limit {
             out.extend(crate::roadids::search_hits(world, t0, &ql, kind, include_hidden, limit - out.len()));
@@ -200,6 +211,19 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
         out.sort_by(|a, b| key(a).total_cmp(&key(b)));
     }
     json!({ "results": out })
+}
+
+/// A plateau or islet drawn by hand (`h:`) or one of the world's own islets (`i:`, not taken away): "plateau" or "islet" and its
+/// level (ft, absolute), with its middle.
+fn plateau_of(world: &World, t0: &T0, id: &str) -> Option<(&'static str, f64, P)> {
+    if let Some(p) = world.file.edits.plateaus.get(id) {
+        let what = if p.kind == crate::ground::PlateauKind::Islet { "islet" } else { "plateau" };
+        return Some((what, p.level as f64, town::geom::centroid(&p.pts)));
+    }
+    if !id.starts_with("i:") || world.file.edits.hidden.contains(id) {
+        return None;
+    }
+    crate::t0::islets::islets(t0).iter().find(|i| i.id == id).map(|i| ("islet", i.level as f64, i.at))
 }
 
 /// A renamed wall or gate tower (`t:<layout>:<k>`) as a search hit.
@@ -321,6 +345,14 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["kind"] = json!(f.kind);
         v["name"] = json!(f.name);
         v["detail"] = json!(f.detail);
+    }
+    // A plateau or islet (`h:` by hand, `i:` the world's own): what it is, its name (`rename_feature`) and its top.
+    if let Some((what, level, _)) = plateau_of(world, t0, id) {
+        let sea = world.params().sea_level_ft;
+        v["kind"] = json!(what);
+        v["name"] = json!(world.file.edits.renames.get(id));
+        v["level_ft"] = json!(crate::core::round((level - sea) * 10.0) / 10.0);
+        v["elevation_ft"] = json!(crate::core::round(level - sea));
     }
     let head = id.split(':').next().unwrap_or("");
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
