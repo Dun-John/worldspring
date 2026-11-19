@@ -500,6 +500,11 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     let kept = || world.file.edits.towns.get(&key(index)).filter(|e| (!e.districts.is_empty() || !e.streets.is_empty() || !e.removed.is_empty() || !e.fences.is_empty()) && dist(e.at, center) <= TownEdit::SAME_AT_FT);
     let mut e = edit_of(world, t0, index).or_else(kept).cloned().unwrap_or_default();
     let e0 = e.clone();
+    // (Roadmap 7, 183: the roads it is planned from stay with the edit, so a road drawn later
+    // joins its gates and leaves the edit standing.)
+    if e.roads.is_none() {
+        e.roads = Some(super::super::ends_to_keep(t0, index, &plan));
+    }
     // Keep only what still applies (a stale part would be set aside anyway).
     let (ch, _) = changes(&plan, &e, center);
     let mut moves: BTreeMap<usize, P> = ch.moves.iter().copied().collect();

@@ -2179,8 +2179,14 @@ farms outside the walls) cut into lots. The ward editor changes that layout with
   which takes the business's id and name (a home's own id goes, as a building taken away does); `functions_lost`
   lists the ones that found none. Renames, notes, NPCs and building changes on buildings that keep their ids stay
   with them.
-- Villages have no wards (they grow along their roads). Draw roads before editing towns: a road drawn into a town
-  lays it out anew (from the sketch) and sets its ward edits aside.
+- Villages have no wards (they grow along their roads). A town's first edit keeps the roads it was laid out from
+  (`roads` in its edit): while the edit stands the town is planned from them, so a road drawn into it later (a sketch
+  road, then `regenerate`) leaves its patches, wards, gates and edits as they were. The new road comes in by the
+  nearest gate it can reach round the town (never through it); where none can be reached it stops at the outskirts:
+  put a gate in where it comes in (`walls.gates_add`), and the road comes in by that gate (no way out of its own,
+  `way_out_ft` 0). A road that moved a little (250 ft or less at the town's edge) keeps its gate. `reset: "all"`
+  drops the edit, and the town is laid out anew from the roads as they are. Edits made before these were kept lay
+  the town out anew as before.
 
 ### `get_town_plan`
 A town's plan: `patches` (`patch`, `at`, `corners`, `ward`, `ward_generated` when set by hand, `in_town`,
@@ -2248,7 +2254,7 @@ and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `
 | `moves` | `[{corner, to \| by \| as_generated}]` | | `to: [x_ft, y_ft]`, or `by: [dx_ft, dy_ft]` from where it stands now; `as_generated` puts it back |
 | `equalize` | `[patch]` | | Pull each patch toward a regular polygon (its corners move) |
 | `relax` | `{at, radius_ft, amount}` | | Each corner within `radius_ft` of `at` toward the middle of its neighbours, by `amount` (0–1, default 0.5) at the centre, less toward the edge |
-| `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, district, as_generated}]` | | `district`: a district's id (`d:<layout>:<n>`: any patch to any district, apart or not), a name (the district of that name now, any case, else a new district so named: new ones follow the generated ones, so every district keeps its id; one emptied keeps its id with no patches or label) or `"auto"`; a district whose patches change takes its kind from its wards by area (the centre stays the centre) and its label at its largest piece; `rename_feature` renames one; `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
+| `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, district, as_generated}]` | | `district`: a district's id (`d:<layout>:<n>`: any patch to any district, apart or not; a patch outside the walls once it has a ward built on, such as open country made `slum` or `common`, which also joins its neighbour's district by itself), a name (the district of that name now, any case, else a new district so named: new ones follow the generated ones, so every district keeps its id; one emptied keeps its id with no patches or label) or `"auto"`; a district whose patches change takes its kind from its wards by area (the centre stays the centre) and its label at its largest piece; `rename_feature` renames one; `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
 | `squares` | `[{corner, kind}]` | | `kind`: crossroads, well, fountain, green, `"none"` (no square there) or `"auto"` (as generated); a square opens only at a `junction` |
 | `walls` | `true` \| `false` \| `"auto"` \| `{built, gates_add, gates_remove, towers_add, towers_remove}` | | Walls up, down, or as generated; or by corner: `built` as the plain value, `gates_add`/`gates_remove`: `[corner]`, `towers_add`: `[[corner, next corner, f]]` (`f` 0.05–0.95, default 0.5) or `[corner]` (a tower taken down there, back up), `towers_remove`: `[corner \| "t:<layout>:<n>"]` |
 | `members` | `{add, remove}` (lists of ids) | | What belongs to the town, by hand (see below): `c:<n>` drawn things (`add` joins, `remove` leaves), `b:<layout>:<id>` generated outskirt buildings (`remove` pushes them out into a new place, `add` takes them back). May be given alone |

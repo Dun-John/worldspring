@@ -87,6 +87,12 @@ pub struct TownEdit {
     /// layout never sees them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fences: BTreeMap<String, crate::model::fences::FenceChange>,
+    /// (Roadmap 7, 183) Where the roads came in when the ward editor first changed the town
+    /// (local ft from its middle, class, heading x and y: 0, 0 none). It is planned from these
+    /// while the edit stands, so a road drawn later joins its gates instead of laying it out anew.
+    /// None: planned from the roads as they are (an edit made before these were kept).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roads: Option<Vec<[f64; 5]>>,
 }
 
 /// (Roadmap 6 R4) A street added to a generated town (`TownEdit::streets`): its centreline

@@ -407,7 +407,10 @@ pub(super) fn settle(site: &Site, plan: &TownPlan, mesh: &Mesh, ward: &[Option<W
         if gates.contains(&v) {
             continue;
         }
-        let why = gate_why(plan, mesh, ward, &gates, v).map_or_else(|| way_out(site, plan, mesh, v), Err);
+        // (Roadmap 7, 183: a road come in since the ward edit that comes in by it has its way in, and
+        // needs no way out of its own: `plan::rejoin`.)
+        let road_in = plan.gate_of.contains(&Some(v));
+        let why = gate_why(plan, mesh, ward, &gates, v).map_or_else(|| if road_in { Ok(Vec::new()) } else { way_out(site, plan, mesh, v) }, Err);
         match why {
             Ok(pts) => {
                 gates.push(v);
@@ -417,8 +420,10 @@ pub(super) fn settle(site: &Site, plan: &TownPlan, mesh: &Mesh, ward: &[Option<W
                     let n = chain.len();
                     hw.halves.push((v as u32, gate_half(mesh.pos[chain[(k + n - 1) % n]], mesh.pos[v], mesh.pos[chain[(k + 1) % n]])));
                 }
-                hw.ways.push((v as u32, pts.windows(2).map(|s| dist(s[0], s[1])).sum()));
-                ways.push((v, pts));
+                hw.ways.push((v as u32, if pts.is_empty() { 0.0 } else { pts.windows(2).map(|s| dist(s[0], s[1])).sum() }));
+                if !pts.is_empty() {
+                    ways.push((v, pts));
+                }
             }
             Err(why) => hw.refused.push((v as u32, why)),
         }

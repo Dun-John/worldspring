@@ -1131,9 +1131,12 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         village(&site, s, r, &road_ends, &mut rng, &mut l);
     } else {
         let plan = match edit {
-            Some(_) => wards::plan(world, index, s.culture, || plan_town(&site, s, r, &road_ends, &mut rng)),
-            None => Rc::new(plan_town(&site, s, r, &road_ends, &mut rng)),
+            Some(_) => wards::plan(world, t0, index, s.culture, || plan_for(world, t0, index, &site, s, r, &road_ends, &mut rng)),
+            None => Rc::new(plan_for(world, t0, index, &site, s, r, &road_ends, &mut rng)),
         };
+        // (Roadmap 7, 183: planned from the roads its ward edit kept, the roads come in since
+        // join its gates, the edit's own among them.)
+        let plan = if frozen_fp(world, t0, index) != 0 { Rc::new(rejoined(&plan, &site, &road_ends, edit.map(|e| &e.wall))) } else { plan };
         let mut ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
         // (R5 towns, M18: the ground of a gate taken out keeps off the wall as it was generated.)
         if !ch.wall.remove.is_empty() {
@@ -1272,6 +1275,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
 /// walls, streets and blocks follow the corners they run along, while what was decided (wards,
 /// district groups, names, the towers along each wall run) stays as planned on the unmoved mesh,
 /// so a moved corner changes only the patches round it.
+#[derive(Clone)]
 struct TownPlan {
     /// Patch spacing (ft): how far a corner may be moved from where it was planned.
     spacing: f64,

@@ -95,6 +95,8 @@ export interface TownEdit {
   removed?: string[];
   /** The town's generated fences and hedges changed by hand, by their local key (`fencecut`). */
   fences?: Record<string, FenceChange>;
+  /** Where the roads came in when the ward editor first changed it (local ft, class, heading x, y): it is planned from these. */
+  roads?: [number, number, number, number, number][];
 }
 
 /** A fence's or hedge's kind, as the world file writes it (`FenceKind`). */

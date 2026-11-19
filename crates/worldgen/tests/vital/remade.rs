@@ -203,6 +203,61 @@ fn a_remade_world_keeps_changes_on_their_places() {
     assert!(kept > first / 2, "only {kept} of {first} places kept their changes");
 }
 
+/// (Roadmap 7, 183) A road drawn into a town changed in the ward editor leaves it as it was:
+/// the remake keeps the edit on it (its patches, wards and gates as before, nothing set aside),
+/// and the town is planned from the roads its edit kept.
+#[test]
+fn a_road_into_an_edited_town_keeps_its_edit() {
+    use worldgen::t0::{T0, remap, settle::Tier};
+    use worldgen::town::wards;
+    let mut file: WorldFile = serde_json::from_str(&world_json(2)).unwrap();
+    let w0 = World::new(file.clone()).unwrap();
+    let t0 = T0::generate(&w0);
+    let n = t0.settlements.len();
+    let ci = (0..n).filter(|&i| t0.settlements[i].tier >= Tier::City).max_by_key(|&i| t0.settlements[i].population).expect("a city");
+    let plan = wards::plan_json(&w0, &t0, ci).unwrap();
+    let patch = plan["patches"].as_array().unwrap().iter().find(|p| p["in_town"] == true && p["ward"] == "common").expect("a common ward")["patch"].clone();
+    let req = serde_json::from_str(&format!(r#"{{"patches":[{{"patch":{patch},"ward":"craft"}}]}}"#)).unwrap();
+    let (edit, _) = wards::change(&w0, &t0, ci, &req).expect("the change");
+    let edit = edit.expect("an edit");
+    assert!(edit.roads.is_some(), "the edit kept no roads");
+    file.edits.towns.insert(wards::key(ci), edit);
+    let old = World::new(file.clone()).unwrap();
+    let gates = |p: &serde_json::Value| p["corners"].as_array().unwrap().iter().filter(|c| !c["gate"].is_null()).map(|c| c["corner"].clone()).collect::<Vec<_>>();
+    let before = wards::plan_json(&old, &t0, ci).unwrap();
+    // A road from 5 mi off, from the side farthest from every gate.
+    let s = &t0.settlements[ci];
+    let ats: Vec<[f64; 2]> = before["corners"].as_array().unwrap().iter().filter(|c| !c["gate"].is_null()).map(|c| [c["at"][0].as_f64().unwrap() - s.x, c["at"][1].as_f64().unwrap() - s.y]).collect();
+    let dir = (0..36)
+        .map(|k| {
+            let a = k as f64 * std::f64::consts::TAU / 36.0;
+            [a.cos(), a.sin()]
+        })
+        .max_by(|a, b| {
+            let near = |d: &[f64; 2]| ats.iter().map(|g| (g[0] * d[0] + g[1] * d[1]) / g[0].hypot(g[1])).fold(-1.0, f64::max);
+            near(b).total_cmp(&near(a))
+        })
+        .unwrap();
+    let far = 5.0 * 5280.0;
+    let mut b = file.clone();
+    b.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "road", "kind": "road", "pts": [[s.x + far * dir[0], s.y + far * dir[1]], [s.x + 0.5 * far * dir[0], s.y + 0.5 * far * dir[1]], [s.x + 300.0 * dir[0], s.y + 300.0 * dir[1]]] })).unwrap());
+    let new = World::new(b).unwrap();
+    let (t1, followed) = remap::remake(&old, &t0, &new, &[]);
+    assert!(t1.roads.roads.len() != t0.roads.roads.len() || t1.roads.roads.iter().zip(&t0.roads.roads).any(|(a, b)| a.pts != b.pts), "the road changed no network road");
+    let edits = followed.map_or_else(|| old.file.edits.clone(), |f| f.edits);
+    let li = (0..t1.settlements.len()).find(|&i| (t1.settlements[i].x - s.x).abs() < 1.0 && (t1.settlements[i].y - s.y).abs() < 1.0).expect("the city stands");
+    assert!(edits.towns.contains_key(&wards::key(li)), "the town's edit was set aside");
+    let mut f2 = new.file.clone();
+    f2.edits = edits;
+    let w2 = World::new(f2).unwrap();
+    let after = wards::plan_json(&w2, &t1, li).unwrap();
+    assert_eq!(after["set_aside"], serde_json::json!([]), "parts of the edit were set aside");
+    let ward = after["patches"].as_array().unwrap().iter().find(|p| p["patch"] == patch).unwrap()["ward"].clone();
+    assert_eq!(ward, "craft", "the patch lost its ward");
+    assert_eq!(gates(&after), gates(&before), "the town's gates moved");
+    assert_eq!(after["districts"], before["districts"], "the districts changed");
+}
+
 /// A settlement a sketch pin makes takes the changes of a place only at its own spot (M11, M10):
 /// a pin put on a town to change it (`Stroke::replaces`: a fishing village now) takes the town's
 /// place, its layout number and its rename and notes, and moves no other settlement; a new pin far

@@ -203,14 +203,16 @@ pub(super) fn moved_mesh(plan: &TownPlan, moves: &[(usize, P)]) -> Mesh {
 // it builds the town again without planning it again.
 
 thread_local! {
-    static PLANS: RefCell<(u64, FastMap<u32, (u8, Rc<TownPlan>)>)> = RefCell::new((0, FastMap::default()));
+    static PLANS: RefCell<(u64, FastMap<u32, (u64, Rc<TownPlan>)>)> = RefCell::new((0, FastMap::default()));
     static TOWNS: RefCell<FastMap<u32, (u64, Rc<Layout>)>> = RefCell::new(FastMap::default());
 }
 
 /// A town's plan, made once per world and culture (`make`; `culture`: the one it is laid out
 /// in, R5 121) and kept.
-pub(super) fn plan(world: &World, index: usize, culture: u8, make: impl FnOnce() -> TownPlan) -> Rc<TownPlan> {
+pub(super) fn plan(world: &World, t0: &T0, index: usize, culture: u8, make: impl FnOnce() -> TownPlan) -> Rc<TownPlan> {
     let key = index as u32;
+    // (183: and the roads its ward edit keeps, `plan::frozen_fp`.)
+    let culture = (culture as u64) ^ super::plan::frozen_fp(world, t0, index);
     if let Some(p) = PLANS.with(|c| {
         let c = c.borrow();
         if c.0 == world.hash { c.1.get(&key).filter(|p| p.0 == culture).map(|p| p.1.clone()) } else { None }
@@ -307,6 +309,13 @@ pub(super) fn hash_edit(world: &World, e: &TownEdit) -> u64 {
     }
     // (R5 towns, M18b: only when set.)
     super::wallgates::hash(&mut h, &e.wall);
+    // (183: the roads it keeps, when it does.)
+    if let Some(roads) = &e.roads {
+        h.write(&[0xfa]);
+        for x in roads.iter().flatten() {
+            h.write(&x.to_le_bytes());
+        }
+    }
     h.finish()
 }
 

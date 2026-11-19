@@ -86,6 +86,9 @@ thread_local! {
     static WALLS: RefCell<FastMap<u32, WallDeps>> = RefCell::new(FastMap::default());
     /// The islets a created site's layout read (`raised_fp`) when it was built, by layout index.
     static RAISED: RefCell<FastMap<u32, u64>> = RefCell::new(FastMap::default());
+    /// (183) The roads a town's ward edit kept (`plan::frozen_fp`) when its layout was built, by
+    /// layout index (none: 0).
+    static FROZEN: RefCell<FastMap<u32, u64>> = RefCell::new(FastMap::default());
 }
 
 /// What a cached wall layout was built from: the towns it reached, the fingerprint of their
@@ -376,6 +379,7 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     }) && wall_kept(world, t0, index)
         && raised_kept(world, t0, index)
         && culture_kept(world, t0, index, &l)
+        && FROZEN.with(|f| f.borrow().get(&key).copied().unwrap_or(0)) == frozen_fp(world, t0, index)
     {
         return l;
     }
@@ -392,12 +396,17 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
             c.1.clear();
             WALLS.with(|w| w.borrow_mut().clear());
             RAISED.with(|r| r.borrow_mut().clear());
+            FROZEN.with(|f| f.borrow_mut().clear());
         }
         c.1.insert(key, l.clone());
     });
     WALLS.with(|w| match deps {
         Some(d) => drop(w.borrow_mut().insert(key, d)),
         None => drop(w.borrow_mut().remove(&key)),
+    });
+    FROZEN.with(|f| match frozen_fp(world, t0, index) {
+        0 => drop(f.borrow_mut().remove(&key)),
+        fp => drop(f.borrow_mut().insert(key, fp)),
     });
     let raised = raised_fp(world, t0, index);
     RAISED.with(|r| match raised {
@@ -515,6 +524,7 @@ pub fn forget_from(index: usize) {
     CACHE.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
     WALLS.with(|w| w.borrow_mut().retain(|&k, _| (k as usize) < index));
     RAISED.with(|r| r.borrow_mut().retain(|&k, _| (k as usize) < index));
+    FROZEN.with(|f| f.borrow_mut().retain(|&k, _| (k as usize) < index));
     EDITED.with(|c| c.borrow_mut().retain(|&k, _| (k as usize) < index));
     wards::forget_from(index);
 }
@@ -557,6 +567,11 @@ pub fn forget_created(old: &[crate::world::Created], new: &[crate::world::Create
 pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
     if index >= layout_count(t0) {
         return 0;
+    }
+    // (Roadmap 7, 183: a town whose ward edit keeps its roads is the same town while its plan is,
+    // whatever roads have come in since.)
+    if let Some(p) = frozen_print(world, t0, index) {
+        return p;
     }
     // (In the culture it was generated in: a culture changed by hand follows its place to the
     // remade world's number, as its other edits do, so it is no part of what the place is.)

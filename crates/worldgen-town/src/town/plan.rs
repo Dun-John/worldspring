@@ -31,10 +31,135 @@ pub(crate) fn ends_of(t0: &T0, index: usize) -> Vec<(P, u8)> {
 /// A town's plan (kept by `wards::plan`), without building it; `None` for a village or a site.
 pub(super) fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownPlan>> {
     let s = culture::settlement(world, t0, index).filter(|s| s.tier >= Tier::Town)?;
-    Some(wards::plan(world, index, s.culture, || {
+    Some(wards::plan(world, t0, index, s.culture, || {
         let (site, road_ends, mut rng) = prepare(world, t0, index);
-        plan_town(&site, &s, urban_radius(s.tier, s.population), &road_ends, &mut rng)
+        plan_for(world, t0, index, &site, &s, urban_radius(s.tier, s.population), &road_ends, &mut rng)
     }))
+}
+
+/// (Roadmap 7, 183) `plan_town` from the road ends town `index`'s ward edit was made on
+/// (`frozen_ends`), else from where the roads come in now (`now`, local ft). The roads come in
+/// since then are joined to it as it is built (`rejoined`).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plan_for(world: &World, t0: &T0, index: usize, site: &Site, s: &Settlement, r: f64, now: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
+    match frozen_ends(world, t0, index) {
+        Some((was, heading)) => plan_town(site, s, r, &was, Some(&heading), rng),
+        None => plan_town(site, s, r, now, None, rng),
+    }
+}
+
+/// (183) `plan` with the roads of `now` joined to its gates (`rejoin`), those put in by `wall` (the
+/// edit it is built with) among them.
+pub(super) fn rejoined(plan: &TownPlan, site: &Site, now: &[(P, u8)], wall: Option<&crate::world::WallEdit>) -> TownPlan {
+    let mut p = plan.clone();
+    rejoin(&mut p, site, now, wall.unwrap_or(&crate::world::WallEdit::default()));
+    p
+}
+
+/// How far a road's end may have moved and still be the same road (ft).
+const MATCH_FT: f64 = 250.0;
+
+/// The roads of `now` that came in since `plan` was planned meet its nearest gate (the plan's
+/// not taken out, or one put in by hand in `wall`: its way in, then, no way out of its own); the
+/// ends that moved under `MATCH_FT` start there. Those gone stay as planned.
+fn rejoin(plan: &mut TownPlan, site: &Site, now: &[(P, u8)], wall: &crate::world::WallEdit) {
+    let mut used = vec![false; now.len()];
+    for k in 0..plan.ends.len() {
+        let e = plan.ends[k].0;
+        let near = (0..now.len()).filter(|&j| !used[j]).min_by(|&a, &b| dist(now[a].0, e).total_cmp(&dist(now[b].0, e))).filter(|&j| dist(now[j].0, e) <= MATCH_FT);
+        if let Some(j) = near {
+            used[j] = true;
+            if dist(now[j].0, e) > 0.0 {
+                plan.ends[k].0 = now[j].0;
+                plan.heading_of[k] = site.road_heading(now[j].0);
+            }
+        }
+    }
+    for (_, &(e, class)) in now.iter().enumerate().filter(|(j, _)| !used[*j]) {
+        let heading = site.road_heading(e);
+        // (The gate its approach reaches round the town, never through it: the shortest; none, it
+        // stops where it ends, for a gate put in by hand to take it, `wallgates::way_out`.)
+        let on_wall = |v: usize| plan.wall_runs.iter().any(|(chain, _, _)| chain.contains(&v));
+        let taken_out = |v: usize| wall.gates_remove.iter().any(|c| c.v as usize == v);
+        let hand = wall.gates_add.iter().map(|c| c.v as usize).filter(|&v| v < plan.mesh.pos.len() && on_wall(v));
+        let gates: Vec<usize> = plan.gates.iter().copied().chain(hand).filter(|&v| !taken_out(v)).collect();
+        let gate = gates
+            .iter()
+            .filter_map(|&g| {
+                let curve = approach_curve(e, plan.mesh.pos[g], heading);
+                let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
+                let n = (total / 15.0).ceil().max(1.0) as usize;
+                let through = (0..=n).map(|j| point_along(&curve, total * j as f64 / n as f64).0).any(|p| {
+                    dist(p, plan.mesh.pos[g]) >= 40.0 && !site.wet(p) && plan.town_faces.iter().any(|(bb, poly)| p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && contains(poly, p))
+                });
+                (!through).then_some((total, g))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+            .map(|(_, g)| g);
+        plan.ends.push((e, class));
+        plan.heading_of.push(heading);
+        plan.gate_of.push(gate);
+    }
+}
+
+/// (183) The ward edit of town `index` that keeps the roads it was planned from: one standing on
+/// the town where it is (the ward editor's, not a town laid out by hand).
+fn frozen_edit<'a>(world: &'a World, t0: &T0, index: usize) -> Option<&'a crate::world::TownEdit> {
+    if world.file.edits.towns.is_empty() {
+        return None;
+    }
+    let e = world.file.edits.towns.get(&wards::key(index)).filter(|e| e.roads.is_some())?;
+    let s = settlement(t0, index).filter(|s| s.tier >= Tier::Town)?;
+    (dist(e.at, [s.x, s.y]) <= crate::world::TownEdit::SAME_AT_FT && !hand::is_hand(world, index)).then_some(e)
+}
+
+/// (183) The road ends (local ft, class) town `index` is planned from while its ward edit stands,
+/// and the way each came in (`Site::road_heading` then).
+pub(super) fn frozen_ends(world: &World, t0: &T0, index: usize) -> Option<(Vec<(P, u8)>, Vec<Option<P>>)> {
+    let e = frozen_edit(world, t0, index)?;
+    let roads = e.roads.as_deref().unwrap_or_default();
+    Some((roads.iter().map(|r| ([r[0], r[1]], r[2] as u8)).collect(), roads.iter().map(|r| (r[3] != 0.0 || r[4] != 0.0).then_some([r[3], r[4]])).collect()))
+}
+
+/// (183) A hash of `frozen_ends` (0: none), for the caches of plans and layouts.
+pub(super) fn frozen_fp(world: &World, t0: &T0, index: usize) -> u64 {
+    let Some(e) = frozen_edit(world, t0, index) else { return 0 };
+    let mut f = crate::core::hash::Fnv64::default();
+    for r in e.roads.as_deref().unwrap_or_default() {
+        for x in r {
+            f.write(&x.to_le_bytes());
+        }
+    }
+    for x in e.at {
+        f.write(&x.to_le_bytes());
+    }
+    f.finish() | 1
+}
+
+/// (183) The roads to keep in a new ward edit of town `index`, planned as `plan` (from the roads
+/// as they come in: none kept yet): local ft, class, heading (none: 0, 0).
+pub(super) fn ends_to_keep(t0: &T0, index: usize, plan: &TownPlan) -> Vec<[f64; 5]> {
+    // (No road comes in: the two ends `plan_town` made up are no roads.)
+    if ends_of(t0, index).is_empty() {
+        return Vec::new();
+    }
+    plan.ends.iter().zip(&plan.heading_of).map(|((p, c), h)| [p[0], p[1], *c as f64, h.map_or(0.0, |h| h[0]), h.map_or(0.0, |h| h[1])]).collect()
+}
+
+/// (183) What a remake must find alike in a town whose ward edit keeps its roads, for the edits
+/// made on it to follow it: its plan (patches, wards, gates, main streets, districts), not the
+/// roads round it. None for any other layout.
+pub(super) fn frozen_print(world: &World, t0: &T0, index: usize) -> Option<u64> {
+    frozen_edit(world, t0, index)?;
+    let plan = town_plan(world, t0, index)?;
+    let mut f = crate::core::hash::Fnv64::default();
+    for p in &plan.mesh.pos {
+        f.write(&p[0].to_le_bytes());
+        f.write(&p[1].to_le_bytes());
+    }
+    let text = format!("{:?}|{:?}|{:?}|{:?}|{}|{:?}", plan.mesh.faces, plan.ward, plan.gates, plan.paths, plan.walled, plan.quarters.iter().map(|(q, m)| (&q.name, m)).collect::<Vec<_>>());
+    f.write(text.as_bytes());
+    Some(f.finish() | 1)
 }
 
 /// Buildings with no way in: every point just outside their walls lies inside another
@@ -185,7 +310,7 @@ fn water_beyond(site: &Site, a: P, b: P, inside: P) -> bool {
     wet.windows(2).any(|w| w[0] && w[1])
 }
 
-pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
+pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], headings: Option<&[Option<P>]>, rng: &mut Pcg32) -> TownPlan {
     let seeds::Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells } = seeds::plant(site, s, r, rng);
     // Per-patch random streams (`seeds::plant`).
     let roll = |i: usize, stage: i64| seeds::roll(pseed, i, stage);
@@ -280,7 +405,11 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
     // edge, from which a main street runs) its approach reaches most cheaply: short, little
     // over water, and not through the town. `gate_of[i]` is the gate for road end i (roads
     // that find none share the nearest).
-    let heading_of: Vec<Option<P>> = ends.iter().map(|(e, _)| site.road_heading(*e)).collect();
+    // (183: as they came in when the ward edit was made, kept with it.)
+    let heading_of: Vec<Option<P>> = match headings.filter(|h| h.len() == ends.len()) {
+        Some(h) => h.to_vec(),
+        None => ends.iter().map(|(e, _)| site.road_heading(*e)).collect(),
+    };
     let town_faces: Vec<([f64; 4], Vec<P>)> = (0..n_inner)
         .filter(|&i| usable(i))
         .map(|i| {
