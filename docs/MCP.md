@@ -1554,7 +1554,7 @@ within 300 ft of its edge or of one of its members), the road is one of the town
 street (`ts:<layout>:<id>`, listed by `list_streets` with that id; its ends joined to the nearest street within 100 ft unless a
 wall is in the way; the town's own buildings on its band give way; it takes the town's street look, the kind setting its width
 only); in a town laid out by hand, streets of its plan (joined at their ends, split where they cross others). Elsewhere it is a
-road drawn by hand (`rw:`, as `place_path` makes). Refused with an `rd:` along, and for a town street over water, through the town
+road drawn by hand (`rw:`, as `place_path` makes). Over water either gets a bridge (a town street a timber deck a little wider than it). Refused with an `rd:` along, and for a town street through the town
 wall (open a gate first) or past 64 added streets in one town. The reply's `road` is `{as: road|street, id, town?, line_pts,
 removed?}` (`id`: the `rw:` or `ts:` id, or a hand town's new street numbers; `removed`: the town's buildings taken off; `line` with
 `preview`). Laying the town out by hand (`edit_streets` `lay_out_by_hand`) turns added streets into streets of its plan.
@@ -2593,9 +2593,8 @@ How it applies:
 - The road runs on a smooth curve through its points (a centripetal Catmull-Rom spline), a band of its width along
   it. The battlemap draws the band as road squares: a footpath or track packed earth (a footpath at least a square
   wide), gravel as gravel, a paved road or cobbled street as cobbles; it is walked like a road.
-- Where its line runs over water (a river, a lake, the sea, water drawn by hand), a footpath or track crosses on a
-  ford (the bed at wading depth under stepping stones), the others on a bridge (gravel on timber, paved and
-  cobbled on stone), from a few feet before the water to as far past it; a crossing longer than 300 ft is built in
+- Where its line runs over water (a river, a lake, the sea, water drawn by hand), it crosses on a
+  bridge (timber; paved and cobbled on stone), from a few feet before the water to as far past it; a crossing longer than 300 ft is built in
   pieces end to end.
 - Trees, rocks and bushes keep off the band; the world's own buildings in villages, towns and cities that the band
   meets are taken away (not those of a town laid out by hand, nor buildings drawn by hand). The world's road

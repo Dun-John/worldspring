@@ -182,6 +182,12 @@ pub fn apply(world: &World, t0: &T0, l: &mut Layout) {
         for p in &pts {
             l.bbox = [l.bbox[0].min(p[0] - h), l.bbox[1].min(p[1] - h), l.bbox[2].max(p[0] + h), l.bbox[3].max(p[1] + h)];
         }
+        // (Where it runs over water: a timber bridge deck a little wider than the street, bank to bank.)
+        for c in crate::paths::street_bridges(world, t0, &pts, w) {
+            let d = sub(c.b, c.a);
+            let u = mul(d, 1.0 / len(d).max(1e-9));
+            l.bridges.push(rect(lerp(c.a, c.b, 0.5), u, c.length(), w + 4.0));
+        }
         l.roads.push((pts, CLASS, w));
     }
 }

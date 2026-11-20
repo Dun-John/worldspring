@@ -430,7 +430,7 @@ fn plain_why(e: &str) -> String {
 /// (R4) The road along a row whose lots are laid: in the town the lots would be part of
 /// (`members::would_own`) a street of it (a hand town's street graph, joined at its ends and
 /// split where it crosses; a generated town's added street), else a road drawn by hand (`raw`:
-/// the points asked). Refused: a town street over water or through the town wall, a town with
+/// the points asked). Refused: a town street through the town wall, a town with
 /// `added::MAX_ADDED` streets added, a street the hand town's graph refuses.
 fn row_road(world: &World, t0: &T0, r: RowRoadAsk, raw: &[P], line: &[P], lots: &[RowLot], first_id: usize) -> Result<RowRoad, String> {
     use town::{added, handedit};
@@ -476,10 +476,6 @@ fn row_road(world: &World, t0: &T0, r: RowRoadAsk, raw: &[P], line: &[P], lots: 
             if added::crosses_wall(&l, &joined) {
                 return Err("road: the street would run through the town wall: open a gate there first (Streets › gates)".into());
             }
-            let probe = Path { pts: added::thin(&crate::paths::rounded(&joined), 0.5), kind: r.kind, width: r.width, name: None };
-            if probe.problem().is_none() && !crate::paths::crossings(world, t0, &probe).is_empty() {
-                return Err("road: a street along a row can't cross water: put a crossing down first".into());
-            }
             let near = band(&joined);
             let removed = l.buildings.iter().filter(|b| crate::paths::meets(&near, &b.poly)).map(|b| format!("b:{li}:{}", b.id)).collect();
             e.streets.insert(id, st);
@@ -491,9 +487,6 @@ fn row_road(world: &World, t0: &T0, r: RowRoadAsk, raw: &[P], line: &[P], lots: 
             let p = Path { pts, kind: r.kind, width: r.width, name: None };
             if let Some(why) = p.problem() {
                 return Err(format!("road: {why}"));
-            }
-            if !crate::paths::crossings(world, t0, &p).is_empty() {
-                return Err("road: a road along a row can't cross water: put a crossing down first".into());
             }
             if let Some((id, _)) = world.file.edits.paths.iter().find(|(_, o)| o.pts == p.pts && o.kind == p.kind && o.width == p.width) {
                 return Ok(RowRoad { town: owner, line: p.line().to_vec(), edit: RowRoadEdit::Kept(id.clone()), removed: Vec::new() });

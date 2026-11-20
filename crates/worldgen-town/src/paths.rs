@@ -291,7 +291,17 @@ pub fn crossings(world: &World, t0: &T0, p: &Path) -> Arc<[Crossing]> {
 }
 
 fn find_crossings(world: &World, t0: &T0, p: &Path) -> Vec<Crossing> {
-    let line = p.line();
+    let material = if matches!(p.kind, PathKind::Paved | PathKind::Cobbled) { CrossingMaterial::Stone } else { CrossingMaterial::Timber };
+    wet_crossings(world, t0, &p.line(), p.width_ft(), material)
+}
+
+/// The bridges (timber) a street's `line` (world ft, as laid, not shaped) needs where it runs over
+/// water, `width` ft wide: as a road drawn by hand gets them. A pure function of the world.
+pub fn street_bridges(world: &World, t0: &T0, line: &[P], width: f64) -> Vec<Crossing> {
+    wet_crossings(world, t0, line, width, CrossingMaterial::Timber)
+}
+
+fn wet_crossings(world: &World, t0: &T0, line: &[P], width: f64, material: CrossingMaterial) -> Vec<Crossing> {
     // (Arc length at each of the line's points.)
     let mut at_s = Vec::with_capacity(line.len());
     let mut s = 0.0;
@@ -337,9 +347,8 @@ fn find_crossings(world: &World, t0: &T0, p: &Path) -> Vec<Crossing> {
             _ => runs.push((s, s)),
         }
     }
-    let half_w = 0.5 * p.width_ft();
-    let kind = if p.kind.bridged() { CrossingKind::Bridge } else { CrossingKind::Ford };
-    let material = if matches!(p.kind, PathKind::Paved | PathKind::Cobbled) { CrossingMaterial::Stone } else { CrossingMaterial::Timber };
+    let half_w = 0.5 * width;
+    let kind = CrossingKind::Bridge;
     let mut out = Vec::new();
     for (s0, s1) in runs {
         let (a, b) = ((s0 - BANK_REACH_FT).max(0.0), (s1 + BANK_REACH_FT).min(total));
@@ -349,7 +358,7 @@ fn find_crossings(world: &World, t0: &T0, p: &Path) -> Vec<Crossing> {
         let pieces = ceil((b - a) / MAX_SPAN_FT).max(1.0) as usize;
         for i in 0..pieces {
             let (u, v) = (a + (b - a) * i as f64 / pieces as f64, a + (b - a) * (i + 1) as f64 / pieces as f64);
-            out.push(Crossing { kind, a: point(u), b: point(v), width: p.width_ft(), material });
+            out.push(Crossing { kind, a: point(u), b: point(v), width, material });
         }
     }
     out

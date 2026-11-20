@@ -20,8 +20,8 @@ export const MAX_PATHS = 256;
 export const PATH_WIDTH = { min: 3, max: 40 };
 
 export const PATH_KINDS: { key: PathKind; label: string; name: string; width: number; look: string }[] = [
-  { key: 'footpath', label: 'Footpath', name: 'footpath', width: 4, look: 'A narrow worn path; fords water.' },
-  { key: 'track', label: 'Track', name: 'track', width: 10, look: 'A packed-earth cart track; fords water.' },
+  { key: 'footpath', label: 'Footpath', name: 'footpath', width: 4, look: 'A narrow worn path; a plank bridge over water.' },
+  { key: 'track', label: 'Track', name: 'track', width: 10, look: 'A packed-earth cart track; a plank bridge over water.' },
   { key: 'gravel', label: 'Gravel', name: 'gravel road', width: 14, look: 'A gravel road; crosses water on a timber bridge.' },
   { key: 'paved', label: 'Paved', name: 'paved road', width: 18, look: 'A paved road; crosses water on a stone bridge.' },
   { key: 'cobbled', label: 'Cobbled', name: 'cobbled street', width: 20, look: 'A cobbled street; crosses water on a stone bridge.' },

@@ -36,10 +36,6 @@ impl PathKind {
         [4.0, 10.0, 14.0, 18.0, 20.0][self as usize]
     }
 
-    /// Whether it crosses water on a bridge (else a ford).
-    pub fn bridged(self) -> bool {
-        matches!(self, PathKind::Gravel | PathKind::Paved | PathKind::Cobbled)
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
