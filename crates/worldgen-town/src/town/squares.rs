@@ -306,6 +306,8 @@ pub(super) fn close(site: &Site, block: &[P], streets: &[(P, f64)], t: f64, firs
             .max_by(|a, b| area(a).abs().total_cmp(&area(b).abs()));
         // (A lot deeper than the ring is cut back to it, its street front kept: no less than a
         // small house, and no sliver.)
+        // ((P4) Squared off where the cut leaves a wedge to the eye.)
+        let best = best.map(|kept| if super::fill::eye_corner(&kept) < 70.0 { super::fill::square_off(&kept, None).unwrap_or(kept) } else { kept });
         match best.filter(|kept| area(kept).abs() >= 150.0_f64.max(0.2 * whole) && obb(kept).short >= 16.0 && !wedge(kept)) {
             Some(kept) => {
                 l.buildings[k].poly = kept;
@@ -317,10 +319,15 @@ pub(super) fn close(site: &Site, block: &[P], streets: &[(P, f64)], t: f64, firs
             }
         }
     }
-    // (No wedge faces the close, cut back or not.)
+    // (No wedge faces the close, cut back or not: squared off where it can be.)
     let mut k = first;
     while k < l.buildings.len() {
-        if wedge(&l.buildings[k].poly) {
+        if super::fill::eye_corner(&l.buildings[k].poly) < 70.0 && l.buildings[k].parts.is_empty() {
+            if let Some(r) = super::fill::square_off(&l.buildings[k].poly, None).filter(|r| area(r).abs() >= 150.0) {
+                l.buildings[k].poly = r;
+            }
+        }
+        if wedge(&l.buildings[k].poly) || super::fill::eye_corner(&l.buildings[k].poly) < 70.0 {
             l.buildings.remove(k);
         } else {
             k += 1;
@@ -539,6 +546,8 @@ impl Cut {
                     continue;
                 }
                 let kept = if hi <= line { Vec::new() } else { clean(&clip_plain(poly, mul(n, -1.0), -line)) };
+                // ((P4) Squared off where the cut leaves a wedge to the eye.)
+                let kept = if kept.len() >= 3 && super::fill::eye_corner(&kept) < 70.0 { super::fill::square_off(&kept, None).unwrap_or(kept) } else { kept };
                 if kept.len() >= 3 && area(&kept).abs() >= (0.5 * area(poly).abs()).max(150.0) && obb(&kept).short >= 12.0 && !wedge(&kept) {
                     bs[k].poly = kept;
                     bs[k].parts.clear();

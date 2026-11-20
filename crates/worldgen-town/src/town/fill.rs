@@ -312,16 +312,31 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             // Irregular street fronts: some buildings stand back from the street line.
             let indent = rng.next_f64() * (crate::core::sqrt(la) / 3.0).min(16.0);
             // (Blunted again: a corner cut off at the street may come back once set back. Not
-            // where that leaves a wedge or a sliver, a shallow lot along its street, or no front.)
+            // where that leaves a wedge or a sliver, a shallow lot along its street (under 14 ft
+            // deep), or no front.)
             let set = if indent > 6.5 { clean(&blunt(&clean(&clip_plain(&lot, n, c - indent)), 60.0, 10.0)) } else { Vec::new() };
-            let poly = if set.len() >= 3 && (if spans { Front { n, c: c - indent, a: sub(fa, mul(n, indent)), b: sub(fb, mul(n, indent)) }.fronted_by(&set) } else { on_line_lot(&set, n, c - indent) }) && shapeliness(&set) >= shapeliness(&lot).min(1.0) { set } else { lot };
+            // (`d`: how far the footprint stands back.)
+            let fronted = |p: &[P], d: f64| if spans { Front { n, c: c - d, a: sub(fa, mul(n, d)), b: sub(fb, mul(n, d)) }.fronted_by(p) } else { on_line_lot(p, n, c - d) };
+            let (poly, d) = if set.len() >= 3 && fronted(&set, indent) && shapeliness(&set) >= shapeliness(&lot).min(1.0) && obb(&set).short >= 14.0 { (set, indent) } else { (lot, 0.0) };
+            // (P4) A footprint that still reads as a wedge (`eye_corner`: a trapezoid's narrow end, a
+            // chord across a sharp corner): squared off on its front inside its lot, or the lot left
+            // as yard.
+            let poly = if eye_corner(&poly) < 70.0 {
+                match square_off(&poly, Some((n, c - d))).filter(|r| fronted(r, d)) {
+                    Some(r) => r,
+                    None => continue,
+                }
+            } else {
+                poly
+            };
             if poly.len() < 3 || area(&poly).abs() < 150.0 {
                 continue;
             }
             let pads = if site.buildable(&poly) {
                 vec![poly]
             } else if dp.stepped && site.stepped(&poly) {
-                step_pads(site, &poly)
+                // ((P4) A half that reads as a wedge squared off, or left as yard.)
+                step_pads(site, &poly).into_iter().filter_map(|h| if eye_corner(&h) < 70.0 { square_off(&h, poly_on(&h, n, c - d).then_some((n, c - d))).filter(|r| area(r).abs() >= 150.0 && site.buildable(r)) } else { Some(h) }).collect()
             } else {
                 continue;
             };
@@ -375,6 +390,128 @@ pub(super) fn shapeliness(lot: &[P]) -> f64 {
     let aspect = if o.long > 1e-6 { o.short / (0.25 * o.long) } else { 0.0 };
     let fill = if o.long * o.short > 1e-6 { area(lot).abs() / (0.62 * o.long * o.short) } else { 0.0 };
     corner.min(aspect).min(fill).min(1.0)
+}
+
+/// (P4) A footprint's sharpest corner as the eye reads it (deg): each convex corner, and across
+/// each short edge (under 14 ft, a `blunt` chord, and under half of both edges beside it) between
+/// two convex corners the corner the two edges beside it would meet at ahead (a trapezoid's narrow
+/// end, a corner cut by a chord; not where they run (nearly) parallel: a strip, a width's matter).
+/// Vertices under 1 ft apart count as one.
+pub(super) fn eye_corner(poly: &[P]) -> f64 {
+    let mut p: Vec<P> = Vec::with_capacity(poly.len());
+    for q in poly {
+        if p.last().is_none_or(|l| dist(*l, *q) >= 1.0) {
+            p.push(*q);
+        }
+    }
+    while p.len() > 3 && dist(p[0], p[p.len() - 1]) < 1.0 {
+        p.pop();
+    }
+    let m = p.len();
+    if m < 3 {
+        return 0.0;
+    }
+    let ccw = area(&p) > 0.0;
+    let ang = |k: usize| -> Option<f64> {
+        let (a, b, c) = (p[(k + m - 1) % m], p[k], p[(k + 1) % m]);
+        if (cross(sub(b, a), sub(c, b)) > 0.0) != ccw {
+            return None;
+        }
+        let (u, v) = (sub(a, b), sub(c, b));
+        Some(libm::acos((dot(u, v) / (len(u) * len(v)).max(1e-9)).clamp(-1.0, 1.0)).to_degrees())
+    };
+    let mut sharp = 180.0f64;
+    for k in 0..m {
+        let Some(a0) = ang(k) else { continue };
+        sharp = sharp.min(a0);
+        let e = dist(p[k], p[(k + 1) % m]);
+        let (before, after) = (dist(p[(k + m - 1) % m], p[k]), dist(p[(k + 1) % m], p[(k + 2) % m]));
+        if e < 14.0 && e < 0.5 * before.min(after) {
+            if let Some(a1) = ang((k + 1) % m).filter(|a1| a0 + a1 > 185.0) {
+                sharp = sharp.min(a0 + a1 - 180.0);
+            }
+        }
+    }
+    sharp
+}
+
+/// (P4) The largest rectangle inside a convex footprint standing on one of its edges (12 ft or
+/// more each way, no more than three times as long as wide): on its street front where `front`
+/// (the street line: normal, offset) is given, else on whichever edge does best. None where no
+/// rectangle keeps 40% of the footprint (a sliver: left as yard).
+pub(super) fn square_off(poly: &[P], front: Option<(P, f64)>) -> Option<Vec<P>> {
+    let m = poly.len();
+    let pa = area(poly).abs();
+    if m < 3 || pa < 1.0 {
+        return None;
+    }
+    let c = centroid(poly);
+    let mut best: Option<(f64, Vec<P>)> = None;
+    for i in 0..m {
+        let (a, b) = (poly[i], poly[(i + 1) % m]);
+        let el = dist(a, b);
+        if el < 12.0 {
+            continue;
+        }
+        let u = mul(sub(b, a), 1.0 / el);
+        let mut w = [-u[1], u[0]];
+        if dot(sub(c, a), w) < 0.0 {
+            w = mul(w, -1.0);
+        }
+        let on_front = front.is_some_and(|(n, c)| dot(u, n).abs() < 0.05 && (dot(a, n) - c).abs() < 0.5);
+        if front.is_some() && !on_front {
+            continue;
+        }
+        let vmax = poly.iter().map(|p| dot(sub(*p, a), w)).fold(0.0, f64::max);
+        // The footprint's extent along `u` at height `v` off the edge.
+        let chord = |v: f64| -> (f64, f64) {
+            let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+            for k in 0..m {
+                let (p, q) = (poly[k], poly[(k + 1) % m]);
+                let (vp, vq) = (dot(sub(p, a), w), dot(sub(q, a), w));
+                if (vp - v) * (vq - v) > 0.0 || (vp - vq).abs() < 1e-9 && (vp - v).abs() > 1e-9 {
+                    continue;
+                }
+                let t = if (vq - vp).abs() < 1e-9 { 0.0 } else { (v - vp) / (vq - vp) };
+                let (up, uq) = (dot(sub(p, a), u), dot(sub(q, a), u));
+                let x = up + t * (uq - up);
+                lo = lo.min(x);
+                hi = hi.max(x);
+                if (vq - vp).abs() < 1e-9 {
+                    lo = lo.min(uq);
+                    hi = hi.max(uq);
+                }
+            }
+            (lo, hi)
+        };
+        let base = chord(0.05);
+        for s in 0..=24 {
+            let d = 12.1 + (vmax - 12.1) * s as f64 / 24.0;
+            if d < 12.1 {
+                break;
+            }
+            let top = chord(d - 0.05);
+            let (lo, hi) = (base.0.max(top.0), base.1.min(top.1));
+            if hi - lo < 12.0 {
+                continue;
+            }
+            // (No sliver either: its short side a third of its long one or more, kept in the middle.)
+            let dd = (d - 0.05).min(3.0 * (hi - lo));
+            let mid = 0.5 * (lo + hi);
+            let half = 0.5 * (hi - lo).min(3.0 * dd);
+            let (lo, hi) = (mid - half, mid + half);
+            let ra = (hi - lo) * dd;
+            let score = ra;
+            if best.as_ref().is_none_or(|bb| score > bb.0) {
+                let mut r = vec![add(a, mul(u, lo)), add(a, mul(u, hi)), add(add(a, mul(u, hi)), mul(w, dd)), add(add(a, mul(u, lo)), mul(w, dd))];
+                if (area(&r) > 0.0) != (area(poly) > 0.0) {
+                    r.reverse();
+                }
+                best = Some((score, r));
+            }
+        }
+    }
+    best.filter(|bb| area(&bb.1).abs() >= 0.4 * pa).map(|bb| bb.1)
 }
 
 /// A polygon's corners: its vertices, each edge under 4 ft taken as part of the corner it leads to.
@@ -498,6 +635,11 @@ pub(super) fn blunt(poly: &[P], min_deg: f64, depth: f64) -> Vec<P> {
 
 /// Half the width of an alley cut through a block (ft).
 pub(super) const ALLEY_HALF_FT: f64 = 8.0;
+
+/// Some edge of `poly` lies on the line (normal `n`, offset `c`) within 0.5 ft.
+fn poly_on(poly: &[P], n: P, c: f64) -> bool {
+    (0..poly.len()).any(|i| on_line(poly[i], poly[(i + 1) % poly.len()], n, c))
+}
 
 /// A lot edge of useful length lies on the line (normal `n`, offset `c`).
 fn on_line_lot(lot: &[P], n: P, c: f64) -> bool {

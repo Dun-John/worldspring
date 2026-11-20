@@ -18,7 +18,7 @@ use super::catalog::Ward;
 use super::clip::{self, Shape};
 use super::geom::*;
 use super::{Building, District, Ground, Layout, Structure};
-use super::fill::{blunt, shapeliness};
+use super::fill::{blunt, eye_corner, shapeliness, square_off};
 use crate::World;
 use crate::core::hash::FastMap;
 use crate::core::rng::Pcg32;
@@ -302,8 +302,17 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
             let la = area(&lot).abs();
             let back = indent * (crate::core::sqrt(la) / 3.0).min(16.0);
             let set = if back > 6.5 { clean(&blunt(&clean(&clip_plain(&lot, sn, sc - back)), 60.0, 10.0)) } else { Vec::new() };
-            // (Not where it would leave a wedge or a sliver, or no front.)
-            let poly = if set.len() >= 3 && fronts(&set, sn, sc - back) && shapeliness(&set) >= shapeliness(&lot).min(1.0) { set } else { lot.clone() };
+            // (Not where it would leave a wedge or a sliver (under 14 ft deep), or no front.)
+            let (poly, fc) = if set.len() >= 3 && fronts(&set, sn, sc - back) && shapeliness(&set) >= shapeliness(&lot).min(1.0) && obb(&set).short >= 14.0 { (set, sc - back) } else { (lot.clone(), sc) };
+            // ((P4) Squared off on its front where it still reads as a wedge, as `build_block`'s are.)
+            let poly = if eye_corner(&poly) < 70.0 {
+                match square_off(&poly, Some((sn, fc))) {
+                    Some(r) => r,
+                    None => continue,
+                }
+            } else {
+                poly
+            };
             if poly.len() < 3 || area(&poly).abs() < 150.0 || !site.buildable(&poly) {
                 continue;
             }
