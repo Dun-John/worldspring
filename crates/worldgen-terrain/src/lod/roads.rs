@@ -291,6 +291,10 @@ pub fn river_crossings(roads: &[RoadPiece], rivers: &[crate::lod::rivers::Piece]
     out
 }
 
+/// The most a battlemap road chord turns (radians), and the most parts one step splits into.
+const MAX_CHORD_TURN: f64 = 0.06;
+const MAX_CHORD_SPLIT: usize = 16;
+
 /// Road polylines near a rectangle, resampled at about `spacing` (never coarser than the
 /// stored points), consecutive segments of one road joined into one piece.
 pub fn pieces(net: &RoadNet, rect: [f64; 4], pad: f64, spacing: f64) -> Vec<RoadPiece> {
@@ -312,28 +316,207 @@ pub fn pieces(net: &RoadNet, rect: [f64; 4], pad: f64, spacing: f64) -> Vec<Road
         let step = if spacing > CARVE_MAX_SPACING_FT { 0.5 * spacing } else { spacing.max(KINK_WAVELENGTH_FT / 12.0).min(net.cell_ft / 6.0) };
         let (k0, k1) = (k0 as usize, k1 as usize);
         let (s0, s1) = (r.s[k0], r.s[k1 + 1]);
-        let mut pts: Vec<RoadPoint> = vec![r.eval(k0, 0.0, spacing, net.cell_ft)];
+        let total = r.s[r.pts.len() - 1];
+        // The curve at distance `d` along the road (its segment found from `k` on, either way;
+        // past the run too, so what a step looks at is the same whichever tile asks).
+        let last = r.pts.len() - 2;
         let mut k = k0;
-        let mut m = crate::core::floor(s0 / step) as i64 + 1;
+        let mut at = |d: f64| {
+            let d = d.clamp(0.0, total);
+            while k < last && r.s[k + 1] <= d {
+                k += 1;
+            }
+            while k > 0 && r.s[k] > d {
+                k -= 1;
+            }
+            let t = (d - r.s[k]) / (r.s[k + 1] - r.s[k]).max(1e-9);
+            r.eval(k, t.clamp(0.0, 1.0), spacing, net.cell_ft)
+        };
+        if spacing > CARVE_MAX_SPACING_FT {
+            let mut pts: Vec<RoadPoint> = vec![r.eval(k0, 0.0, spacing, net.cell_ft)];
+            let mut m = crate::core::floor(s0 / step) as i64 + 1;
+            while (m as f64 * step) < s1 {
+                pts.push(at(m as f64 * step));
+                m += 1;
+            }
+            pts.push(r.eval(k1, 1.0, spacing, net.cell_ft));
+            if pts.len() >= 2 {
+                out.push(RoadPiece { class: r.class, pts, road: ri });
+            }
+            continue;
+        }
+        // (Roadmap 7 P5) Where beds are carved (battlemaps), the road is the smooth curve the map
+        // draws: a centripetal Catmull-Rom through the curve's samples at the step's multiples
+        // (and its ends), so the control points' short jitter, which the map's samples step over,
+        // stays out too. A step that bends is split so no chord turns more than `MAX_CHORD_TURN`;
+        // how many parts depends only on the step's own samples, so every tile splits it alike.
+        let jb = crate::core::floor(s0 / step) as i64 - 1;
+        let samples: Vec<RoadPoint> = (jb..=crate::core::floor(s1 / step) as i64 + 3).map(|j| at((j as f64 * step).min(total))).collect();
+        let base = |j: i64| samples[(j - jb) as usize];
+        // Point on the step from sample `m` at fraction `t` (of the step, or of what is left of the road).
+        let smooth = |m: i64, t: f64| -> RoadPoint {
+            let (b0, b1, b2, b3) = (base(m - 1), base(m), base(m + 1), base(m + 2));
+            let chord = |a: RoadPoint, b: RoadPoint| crate::core::sqrt(dist(a.p, b.p));
+            let (d0, d1, d2) = (chord(b0, b1), chord(b1, b2).max(1e-9), chord(b2, b3));
+            let tangent = |a: f64, b: f64, c: f64, da: f64, db: f64| {
+                if da < 1e-6 || db < 1e-6 { 0.5 * (c - a) } else { d1 * ((b - a) / da - (c - a) / (da + db) + (c - b) / db) }
+            };
+            let m1 = [tangent(b0.p[0], b1.p[0], b2.p[0], d0, d1), tangent(b0.p[1], b1.p[1], b2.p[1], d0, d1)];
+            let m2 = [tangent(b1.p[0], b2.p[0], b3.p[0], d1, d2), tangent(b1.p[1], b2.p[1], b3.p[1], d1, d2)];
+            let (t2, t3) = (t * t, t * t * t);
+            let (h00, h10, h01, h11) = (2.0 * t3 - 3.0 * t2 + 1.0, t3 - 2.0 * t2 + t, 3.0 * t2 - 2.0 * t3, t3 - t2);
+            RoadPoint {
+                p: [h00 * b1.p[0] + h10 * m1[0] + h01 * b2.p[0] + h11 * m2[0], h00 * b1.p[1] + h10 * m1[1] + h01 * b2.p[1] + h11 * m2[1]],
+                z: b1.z + (b2.z - b1.z) * t,
+            }
+        };
+        // The step holding distance `d` and the fraction of it.
+        let place = |d: f64| {
+            let m = crate::core::floor(d / step) as i64;
+            let (a, b) = (m as f64 * step, ((m + 1) as f64 * step).min(total));
+            (m, ((d - a) / (b - a).max(1e-9)).clamp(0.0, 1.0))
+        };
+        let split = |m: i64| -> usize {
+            let (a, mid, b) = (base(m), smooth(m, 0.5), base(m + 1));
+            let (u, v) = ([mid.p[0] - a.p[0], mid.p[1] - a.p[1]], [b.p[0] - mid.p[0], b.p[1] - mid.p[1]]);
+            let turn = libm::atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]).abs();
+            // The half chords turn about half the step's whole turn.
+            (crate::core::ceil(2.0 * turn / MAX_CHORD_TURN) as usize).clamp(1, MAX_CHORD_SPLIT)
+        };
+        let (m0, f0) = place(s0);
+        let mut pts: Vec<RoadPoint> = vec![smooth(m0, f0)];
+        let mut m = m0;
         loop {
             let d = m as f64 * step;
             if d >= s1 {
                 break;
             }
-            while k < k1 && r.s[k + 1] <= d {
-                k += 1;
+            let n = split(m);
+            for i in 0..n {
+                let e = d + (((m + 1) as f64 * step).min(total) - d) * i as f64 / n as f64;
+                if e > s0 && e < s1 {
+                    pts.push(smooth(m, i as f64 / n as f64));
+                }
             }
-            let t = (d - r.s[k]) / (r.s[k + 1] - r.s[k]).max(1e-9);
-            pts.push(r.eval(k, t.clamp(0.0, 1.0), spacing, net.cell_ft));
             m += 1;
         }
-        pts.push(r.eval(k1, 1.0, spacing, net.cell_ft));
+        let (m1, f1) = place(s1);
+        pts.push(if s1 >= total { base(m1 + 1) } else { smooth(m1, f1) });
         if pts.len() >= 2 {
             out.push(RoadPiece { class: r.class, pts, road: ri });
         }
     }
     out
 }
+
+/// How far either way of a bridge's middle (ft) its square run (deck, landings, the road's
+/// way on) and the ease back to the curve beyond may reach: `square_bridges` moves no point
+/// farther than this from a crossing, and looks at the road no farther than this either way.
+/// (A king's road bridges any river: 250 ft wide at the shallowest crossing angle and more.)
+pub const BRIDGE_SQUARE_REACH_FT: f64 = 600.0;
+
+/// (Roadmap 7 P5) Each bridge carries its road straight: over the channel, the deck's landings
+/// and a road's width on, the road runs on the chord of its own curve across that run (through
+/// the crossing's middle), then curves back onto its line on a cubic that leaves the run on
+/// its heading and meets the line on the line's (no corner either end). The deck is laid along
+/// the squared road (`RiverCrossing::u`), so road and deck meet square and centred. Points move
+/// by their distance along the road from the crossing (the surface level stays their own). A
+/// pure function of the pieces and the river pieces (sampled the same in every tile), as long
+/// as each piece runs `BRIDGE_SQUARE_REACH_FT` past every crossing that moves its points.
+pub fn square_bridges(pieces: &mut [RoadPiece], rivers: &[crate::lod::rivers::Piece]) {
+    for piece in pieces.iter_mut() {
+        let crossings: Vec<RiverCrossing> = river_crossings(std::slice::from_ref(piece), rivers).into_iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Bridge).collect();
+        let deck = piece.class.width_ft() + 4.0;
+        let mut done: Vec<[f64; 2]> = Vec::new();
+        for c in &crossings {
+            let cos = crate::core::sqrt((1.0 - c.sin * c.sin).max(0.0));
+            let ease0 = (4.0 * c.class.width_ft()).clamp(80.0, 150.0);
+            let core = (c.half_span() + (0.5 * deck * cos + 4.0) / c.sin + 8.0 + c.class.width_ft()).min(BRIDGE_SQUARE_REACH_FT - ease0);
+            // Braided channels: the first crossing's run carries the road over the others.
+            if done.iter().any(|&p| dist(p, c.at) < BRIDGE_SQUARE_REACH_FT) {
+                continue;
+            }
+            done.push(c.at);
+            // Distance along the piece at each point, and the line as it is (point and level at a
+            // distance along it, clamped to the piece; unit heading).
+            let n = piece.pts.len();
+            let mut along = vec![0.0; n];
+            for k in 1..n {
+                along[k] = along[k - 1] + dist(piece.pts[k - 1].p, piece.pts[k].p);
+            }
+            let line = piece.pts.clone();
+            let total = along[n - 1];
+            let at = |d: f64| -> RoadPoint {
+                let d = d.clamp(0.0, total);
+                let k = along.partition_point(|&s| s <= d).clamp(1, n - 1);
+                let t = ((d - along[k - 1]) / (along[k] - along[k - 1]).max(1e-9)).clamp(0.0, 1.0);
+                let (a, b) = (line[k - 1], line[k]);
+                RoadPoint { p: [a.p[0] + (b.p[0] - a.p[0]) * t, a.p[1] + (b.p[1] - a.p[1]) * t], z: a.z + (b.z - a.z) * t }
+            };
+            let unit = |v: [f64; 2]| {
+                let l = crate::core::sqrt(v[0] * v[0] + v[1] * v[1]).max(1e-9);
+                [v[0] / l, v[1] / l]
+            };
+            // Where along the piece the crossing is.
+            let Some(sc) = line.windows(2).zip(&along).find_map(|(w, &s0)| (dist(w[0].p, w[1].p) > 1e-9 && seg_dist(c.at, w[0].p, w[1].p) < 1e-6).then(|| s0 + dist(w[0].p, c.at))) else {
+                continue;
+            };
+            // The run: the chord of the line across it, moved to pass through the crossing.
+            let (r0, r1) = (at(sc - core).p, at(sc + core).p);
+            let u = if dist(r0, r1) > 1.0 { unit([r1[0] - r0[0], r1[1] - r0[1]]) } else { c.u };
+            let heading = |d: f64| {
+                let (q0, q1) = (at(d - 4.0).p, at(d + 4.0).p);
+                unit([q1[0] - q0[0], q1[1] - q0[1]])
+            };
+            // Each side's ease back: long enough to turn from the run's heading to the line's
+            // (about 200 ft a radian, judged where the shortest ease would meet the line).
+            let ease_on = |sg: f64| {
+                let h = heading(sc + sg * (core + ease0));
+                let turn = libm::acos((h[0] * u[0] + h[1] * u[1]).clamp(-1.0, 1.0));
+                (200.0 * turn).clamp(ease0, BRIDGE_SQUARE_REACH_FT - core)
+            };
+            let eases = [ease_on(-1.0), ease_on(1.0)];
+            let moved = |d: f64| -> RoadPoint {
+                let z = at(sc + d).z;
+                if d.abs() <= core {
+                    return RoadPoint { p: [c.at[0] + u[0] * d, c.at[1] + u[1] * d], z };
+                }
+                // Hermite from the run's end (heading out along it) to the line `ease` on.
+                let sg = d.signum();
+                let ease = eases[(sg > 0.0) as usize];
+                let p0 = [c.at[0] + u[0] * sg * core, c.at[1] + u[1] * sg * core];
+                let m0 = [u[0] * sg * ease, u[1] * sg * ease];
+                let e = sc + sg * (core + ease);
+                let (p1, h) = (at(e).p, heading(e));
+                let m1 = [h[0] * sg * ease, h[1] * sg * ease];
+                let t = (d.abs() - core) / ease;
+                let (t2, t3) = (t * t, t * t * t);
+                let (h00, h10, h01, h11) = (2.0 * t3 - 3.0 * t2 + 1.0, t3 - 2.0 * t2 + t, 3.0 * t2 - 2.0 * t3, t3 - t2);
+                RoadPoint { p: [h00 * p0[0] + h10 * m0[0] + h01 * p1[0] + h11 * m1[0], h00 * p0[1] + h10 * m0[1] + h01 * p1[1] + h11 * m1[1]], z }
+            };
+            // The squared stretch resampled every `SQUARE_STEP_FT` from the crossing (the same
+            // samples in every tile), the piece's own ends kept where they fall inside it.
+            let (lo, hi) = ((sc - core - eases[0]).max(0.0), (sc + core + eases[1]).min(total));
+            let mut pts: Vec<RoadPoint> = line.iter().zip(&along).filter(|&(_, &s)| s < lo).map(|(p, _)| *p).collect();
+            if lo <= 0.0 {
+                pts.push(moved(-sc));
+            }
+            let mut j = crate::core::floor((lo - sc) / SQUARE_STEP_FT) as i64 + 1;
+            while sc + j as f64 * SQUARE_STEP_FT < hi {
+                pts.push(moved(j as f64 * SQUARE_STEP_FT));
+                j += 1;
+            }
+            if hi >= total {
+                pts.push(moved(total - sc));
+            }
+            pts.extend(line.iter().zip(&along).filter(|&(_, &s)| s > hi).map(|(p, _)| *p));
+            piece.pts = pts;
+        }
+    }
+}
+
+/// Sample spacing (ft) along a road squared to its bridge.
+const SQUARE_STEP_FT: f64 = 8.0;
 
 /// Cut and fill a flat road bed with side slopes into a padded height grid.
 ///
@@ -351,6 +534,11 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usiz
     // being cut to their average. Beds that overlap each other average (a junction).
     let mut bed_sum = vec![0f64; n];
     let mut bed_n = vec![0u16; n];
+    // (Roadmap 7 P5) Within one piece a sample's bed is its nearest segment's (a bend's short
+    // chords all lie within a road's half width of it: their clamped ends would smear the climb).
+    let mut near_d = vec![f64::INFINITY; n];
+    let mut near_z = vec![0f64; n];
+    let mut touched: Vec<usize> = Vec::new();
     for piece in pieces {
         let half = 0.5 * piece.class.width_ft();
         // Side slopes reach until they would meet any plausible terrain offset.
@@ -382,8 +570,12 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usiz
                     lo[k] = lo[k].max((z - band) as f32);
                     hi[k] = hi[k].min((z + band) as f32);
                     if d <= half {
-                        bed_sum[k] += z;
-                        bed_n[k] += 1;
+                        if near_d[k] == f64::INFINITY {
+                            touched.push(k);
+                        }
+                        if d < near_d[k] {
+                            (near_d[k], near_z[k]) = (d, z);
+                        }
                     }
                     if d <= half + 0.5 * spacing {
                         let c = piece.class as u8 + 1;
@@ -391,6 +583,11 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usiz
                     }
                 }
             }
+        }
+        for k in touched.drain(..) {
+            bed_sum[k] += near_z[k];
+            bed_n[k] += 1;
+            near_d[k] = f64::INFINITY;
         }
     }
     for k in 0..n {

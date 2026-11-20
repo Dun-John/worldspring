@@ -63,7 +63,15 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
     let (ox, oy) = g.tile_origin_ft(key);
     let size = g.tile_size_ft(key.level);
     let refined = key.level >= g.first_refine_level;
-    let road_pieces = roads::pieces(&t0.roads, [ox, oy, ox + size, oy + size], (HALO as f64 + CORRIDOR_OUT_SAMPLES) * s + 200.0, s.max(20.0));
+    let road_pad = (HALO as f64 + CORRIDOR_OUT_SAMPLES) * s + 200.0;
+    let carves_roads = refined && s <= roads::CARVE_MAX_SPACING_FT;
+    // (Roadmap 7 P5) Where beds are carved, the roads from twice as far as a bridge squares them
+    // (`roads::square_bridges`: its run and the line it looks at), on the rivers out once that far.
+    let mut road_pieces = roads::pieces(&t0.roads, [ox, oy, ox + size, oy + size], road_pad + if carves_roads { 2.0 * roads::BRIDGE_SQUARE_REACH_FT } else { 0.0 }, s.max(20.0));
+    if carves_roads && !road_pieces.is_empty() {
+        let far = rivers::pieces(&t0.rivers, [ox, oy, ox + size, oy + size], &|_| road_pad + roads::BRIDGE_SQUARE_REACH_FT, s, t0.cell_ft);
+        roads::square_bridges(&mut road_pieces, &far);
+    }
     // Road corridors: refinement detail fades out near roads at every level, so the ground
     // stays close to the road's profile and the bed only cuts and fills where the grade
     // demands it (instead of a dike or a trench as deep as the detail beside it).
@@ -98,7 +106,7 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
     // Road beds after the rivers: a road keeps its bed (an embankment to the bank where it
     // crosses a valley) and leaves the water to the river, which its bridge spans.
     let mut road_mask = Vec::new();
-    if refined && s <= roads::CARVE_MAX_SPACING_FT {
+    if carves_roads {
         road_mask = roads::carve(&road_pieces, &mut padded, &river_water, PADDED, origin, s);
         // Fords: the bed under the road comes up to a wading depth.
         for c in roads::river_crossings(&road_pieces, &pieces).iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Ford) {
