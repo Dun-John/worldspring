@@ -462,3 +462,65 @@ function foldLine(f: number[], g: number[], s: Slope, q: Slope): number[] | null
   if (t1 - t0 < 1e-3) return null;
   return [px + ux * t0, py + uy * t0, px + ux * t1, py + uy * t1];
 }
+
+/** (Roadmap 7, 163) The outline of the union of convex `parts` (each overlapping the next where they
+ * meet: an L's, a U's or a court's ranges), as segments [ax, ay, bx, by]: each part's edges cut where
+ * the others' cross them, kept where one side is under a part and the other open, so no line runs
+ * across the roof where ranges join (nor across a court's gateway range). */
+export function unionEdges(parts: number[][]): number[][] {
+  const inside = (p: number[], x: number, y: number) => {
+    const m = p.length / 2;
+    const s = signedArea(p) > 0 ? 1 : -1;
+    for (let i = 0; i < m; i++) {
+      const [ax, ay, bx, by] = [p[i * 2], p[i * 2 + 1], p[((i + 1) % m) * 2], p[((i + 1) % m) * 2 + 1]];
+      if (s * ((bx - ax) * (y - ay) - (by - ay) * (x - ax)) <= 0) return false;
+    }
+    return true;
+  };
+  const covered = (x: number, y: number) => parts.some((p) => inside(p, x, y));
+  const out: number[][] = [];
+  for (const p of parts) {
+    const m = p.length / 2;
+    for (let i = 0; i < m; i++) {
+      const [ax, ay, bx, by] = [p[i * 2], p[i * 2 + 1], p[((i + 1) % m) * 2], p[((i + 1) % m) * 2 + 1]];
+      const [ex, ey] = [bx - ax, by - ay];
+      const l = Math.hypot(ex, ey);
+      if (l < 1e-6) continue;
+      // (Where the other parts' edges cross this one.)
+      const ts = [0, 1];
+      for (const q of parts) {
+        if (q === p) continue;
+        const k = q.length / 2;
+        for (let j = 0; j < k; j++) {
+          const [cx, cy, dx, dy] = [q[j * 2], q[j * 2 + 1], q[((j + 1) % k) * 2], q[((j + 1) % k) * 2 + 1]];
+          const [fx, fy] = [dx - cx, dy - cy];
+          const den = ex * fy - ey * fx;
+          if (Math.abs(den) < 1e-9) continue;
+          const t = ((cx - ax) * fy - (cy - ay) * fx) / den;
+          const s = ((cx - ax) * ey - (cy - ay) * ex) / den;
+          if (t > 1e-6 && t < 1 - 1e-6 && s > -1e-6 && s < 1 + 1e-6) ts.push(t);
+        }
+      }
+      ts.sort((a, b) => a - b);
+      const eps = Math.min(0.05 * l, 0.5);
+      const [nx, ny] = [-ey / l, ex / l];
+      let run: number[] | null = null;
+      for (let k = 0; k + 1 < ts.length; k++) {
+        if (ts[k + 1] - ts[k] < 1e-6) continue;
+        const t = (ts[k] + ts[k + 1]) / 2;
+        const [mx, my] = [ax + ex * t, ay + ey * t];
+        const edge = covered(mx + nx * eps, my + ny * eps) !== covered(mx - nx * eps, my - ny * eps);
+        if (edge && run) [run[2], run[3]] = [ax + ex * ts[k + 1], ay + ey * ts[k + 1]];
+        else if (edge) run = [ax + ex * ts[k], ay + ey * ts[k], ax + ex * ts[k + 1], ay + ey * ts[k + 1]];
+        else if (run) {
+          out.push(run);
+          run = null;
+        }
+      }
+      if (run) out.push(run);
+    }
+  }
+  // (Two parts sharing a stretch of eave: drawn once.)
+  const same = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1]) + Math.hypot(a[2] - b[2], a[3] - b[3]) < 1e-3 || Math.hypot(a[0] - b[2], a[1] - b[3]) + Math.hypot(a[2] - b[0], a[3] - b[1]) < 1e-3;
+  return out.filter((s, i) => !out.slice(0, i).some((o) => same(o, s)));
+}

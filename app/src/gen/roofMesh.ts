@@ -2,7 +2,7 @@
 // tessellated into one vertex-coloured mesh.
 import earcut from 'earcut';
 import { FELT, roofRgb, ROOF_MATERIAL_RGB, YURT_FELT } from './protocol';
-import { domeSpots, frame, isConvex, rangesRoof, ridgeEnds, roofParts, roundOutline as roundEaves, signedArea, straighten } from './roofGeom';
+import { domeSpots, frame, isConvex, rangesRoof, ridgeEnds, roofParts, roundOutline as roundEaves, signedArea, straighten, unionEdges } from './roofGeom';
 import type { ColorMesh, Roof } from './battlePrep';
 import { PX } from '../render/scale';
 import { INK, FT } from '../render/pen';
@@ -158,8 +158,10 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
     // A palace round its court: a hipped (or flat) range along each side, the court open to the sky.
     const ranges = courtRanges(roof);
     if (ranges) {
-      for (const part of ranges) (flat ? flatRoof : hipRoof)(g, part, tint);
-      if (!flat) for (const part of ranges) g.outline(part, INK_LINE, ROOF_INK);
+      // (Pitched: a range along each side, each as deep as the court leaves it, under one roof with
+      // valleys at the court's corners, not four mitred hips whose ridges miss where sides differ.)
+      if (flat) for (const part of ranges) flatRoof(g, part, tint);
+      else rangesMesh(g, sideRanges(roof.pts, roof.parts.find((p) => p.kind === COURT)!.pts), tint, false);
       g.outline(roof.pts, INK_OUT, ROOF_INK);
       g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, INK_OUT, ROOF_INK);
       const church = roof.parts.find((p) => p.kind === CHURCH);
@@ -237,7 +239,8 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
     if (wings.length > 1 && !roof.cone && (roof.shape === HIP || roof.shape === GABLE)) {
       rangesMesh(g, wings, tint, roof.shape === GABLE);
       if (roof.smoke) smoke(g, wings[0], 0.28);
-      g.outline(roof.pts, INK_OUT, ROOF_INK);
+      // (Inked round the ranges, not the footprint: a court's gateway range runs on over its arch.)
+      for (const [ax, ay, bx, by] of unionEdges(wings)) g.line(ax, ay, bx, by, INK_OUT, ROOF_INK, 1, INK_OUT / 2);
       continue;
     }
     const round = roof.cone ? null : roundOutline(roof);
@@ -580,6 +583,23 @@ function courtRanges(roof: Roof): number[][] | null {
   return [0, 1, 2, 3].map((i) => {
     const j = (i + 1) % 4;
     return [o[i * 2], o[i * 2 + 1], o[j * 2], o[j * 2 + 1], c[j * 2], c[j * 2 + 1], c[i * 2], c[i * 2 + 1]];
+  });
+}
+
+/** A court's ranges as rectangles (`rangesRoof`'s arms): along each side of outline `o`, in to the
+ * court's side `c` across from it (its mean depth), overlapping the next at the corners. */
+function sideRanges(o: number[], c: number[]): number[][] {
+  const m = o.length / 2;
+  return [...Array(m).keys()].map((i) => {
+    const j = (i + 1) % m;
+    const [ax, ay, bx, by] = [o[i * 2], o[i * 2 + 1], o[j * 2], o[j * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay) || 1;
+    let [nx, ny] = [-(by - ay) / l, (bx - ax) / l];
+    const into = (x: number, y: number) => (x - ax) * nx + (y - ay) * ny;
+    const depth0 = (into(c[i * 2], c[i * 2 + 1]) + into(c[j * 2], c[j * 2 + 1])) / 2;
+    if (depth0 < 0) [nx, ny] = [-nx, -ny];
+    const depth = Math.abs(depth0);
+    return [ax, ay, bx, by, bx + nx * depth, by + ny * depth, ax + nx * depth, ay + ny * depth];
   });
 }
 
