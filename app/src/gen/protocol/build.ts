@@ -75,6 +75,11 @@ export interface DesignProblem {
  * Without a culture asked, only `from`. */
 export type CultureChange = { from: string; to?: string; unchanged?: boolean; set_aside?: number; set_aside_by?: Record<string, number>; edits?: Edits };
 
+/** How planned a town's streets are (`set_planning_json`): 0-1 as it is now, its class, the rolled
+ * value, whether set by hand; or a change's edits (`unchanged`, `set_aside`) like `CultureChange`. */
+export type PlanningNow = { value: number; class: string; rolled: number; set: boolean };
+export type PlanningChange = { from: number; to?: number; class?: string; unchanged?: boolean; set_aside?: number; set_aside_by?: Record<string, number>; edits?: Edits };
+
 export type DesignReply = { design: SiteDesign; interior: Interior; problems: DesignProblem[]; set_aside?: boolean } | { error: string };
 
 /** What the designer offers (`worldgen::under::design::catalog_json`). */

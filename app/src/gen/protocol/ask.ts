@@ -96,6 +96,7 @@ export type Ask =
    * it set aside (`town::culture::change`; nothing changed in the worker); without `culture`, the
    * culture it is laid out in now. */
   | { op: 'setculture'; layout: number; culture?: number; edits: string }
+  | { op: 'setplanning'; layout: number; planning?: number; auto: boolean; edits: string }
   /** Edits with deleted village or town `id` restored, if its spot is free, and what was set aside
    * when it was deleted brought back where it fits (`t0::made::restore`). */
   | { op: 'restoremade'; id: string; edits: string }

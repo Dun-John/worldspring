@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
+import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, PlanningNow, PlanningChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -329,6 +329,13 @@ export class GenClient {
    * culture already. Without `culture`: `{from}`, the culture it is laid out in now. */
   setCulture(layout: number, culture: number | undefined, edits: Edits): Promise<CultureChange | { error: string } | null> {
     return this.ask({ op: 'setculture', layout, culture, edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
+  }
+
+  /** How planned the streets of the world's own town or city `layout` are now (`PlanningNow`), or
+   * with `planning` (0-1) or `auto` (as rolled) the `edits` that plan it so, with what that sets
+   * aside, to apply as one change (`unchanged` when it is so already). */
+  setPlanning(layout: number, planning: number | undefined, auto: boolean, edits: Edits): Promise<PlanningNow | PlanningChange | { error: string } | null> {
+    return this.ask({ op: 'setplanning', layout, planning, auto, edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
   }
 
   /** `edits` with the deleted village or town `id` restored where it was (if its spot is still

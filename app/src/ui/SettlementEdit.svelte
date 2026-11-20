@@ -1,10 +1,10 @@
 <script lang="ts" module>
-  import type { Edits } from '../gen/protocol';
+  import type { Edits, PlanningNow } from '../gen/protocol';
   import type { Change } from '../sync/mapd';
 
   /** One change asked on a settlement's card: its culture (0 north … 4 steppe), and for a village
    * or town added by hand its tier, its economy or its name. */
-  export type SettleAsk = { culture?: number; tier?: 'village' | 'town'; lives_by?: string; name?: string };
+  export type SettleAsk = { culture?: number; planning?: number | 'auto'; tier?: 'village' | 'town'; lives_by?: string; name?: string };
   /** A change worked out but not made: the edits it makes and what it sets aside (by field), or
    * why it can't be made, or that it changes nothing. */
   export type SettlePlan = { edits: Edits; change: Change; set_aside: number; by: Record<string, number>; count: number } | { error: string } | { unchanged: true };
@@ -39,6 +39,8 @@
     capital: boolean;
     /** Its culture now (null: not known yet). */
     culture: number | null;
+    /** How planned its streets are (a town or city of the world's own; null: not one, or not known yet). */
+    planning?: PlanningNow | null;
     /** The name it was given (added by hand). */
     name: string;
     plan: (ask: SettleAsk) => Promise<SettlePlan>;
@@ -56,13 +58,15 @@
     /** Remake the world with every change waiting. */
     onRemake?: () => void;
   }
-  let { made, tier, livesBy, capital, culture, name, plan, apply, onMove, own = null, wait, onCancel, onSketch, onRemake }: Props = $props();
+  let { made, tier, livesBy, capital, culture, planning = null, name, plan, apply, onMove, own = null, wait, onCancel, onSketch, onRemake }: Props = $props();
 
   /** A change worked out that sets something aside, waiting for Apply (raw: its edits are the
    * world's, plain data to clone and save). */
   let pending = $state.raw<{ what: string; p: Extract<SettlePlan, { edits: Edits }> } | null>(null);
   let note = $state<string | null>(null);
   let busy = $state(false);
+  /** The Streets slider while it is dragged (changed on release). */
+  let dragging = $state<number | null>(null);
 
   /** Inland livings (a village or town added by hand stands away from the shore). */
   const INLAND = PIN_KINDS.filter(([k]) => k && k !== 'port' && k !== 'fishing') as [string, string][];
@@ -139,6 +143,33 @@
       {#each CULTURES as c, i (c)}<option value={i}>{c}</option>{/each}
     </select>
   </label>
+  {#if planning}
+    {@const v = Math.round(planning.value * 100)}
+    <div class="row">
+      <span class="key" title="How regular its streets are: grown with the town, or planned out in blocks">Streets</span>
+      <input
+        type="range"
+        min="0"
+        max="100"
+        step="5"
+        aria-label="Streets, grown to planned"
+        value={dragging ?? v}
+        disabled={busy}
+        oninput={(e) => (dragging = Number(e.currentTarget.value))}
+        onchange={(e) => {
+          const to = Number(e.currentTarget.value);
+          dragging = null;
+          e.currentTarget.value = String(v);
+          if (to !== v) void change({ planning: to }, `Streets planned ${to < 30 ? 'as grown' : to < 70 ? 'in part' : 'throughout'} (${to}).`);
+        }}
+      />
+      <span class="val">{dragging ?? v}</span>
+    </div>
+    <div class="row muted">
+      <span class="grow">Grown ↔ planned: {planning.set ? 'set by you' : 'rolled'}{planning.set ? ` (rolled ${Math.round(planning.rolled * 100)})` : ''}</span>
+      <button class="ws-btn quiet" disabled={!planning.set || busy} title="Go back to the rolled value" onclick={() => void change({ planning: 'auto' }, 'Streets planned as rolled.')}>Auto</button>
+    </div>
+  {/if}
   {#if made}
     <div class="row">
       <span class="key">Tier</span>
@@ -277,6 +308,11 @@
   .row input {
     flex: 1;
     min-width: 0;
+  }
+  .val {
+    flex: 0 0 28px;
+    text-align: right;
+    color: var(--ink-2);
   }
   .grow {
     flex: 1;
