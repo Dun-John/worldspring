@@ -704,6 +704,43 @@ impl Ctx {
         })
     }
 
+    /// (189) `edits` (JSON) with town layout `layout` (one of the world's own, not a village)
+    /// given street pattern `pattern` (`grid`, `rings`, `radial`, `linear`; `auto`: picked from
+    /// its land and culture, its `Edits.patterns` entry taken out) and the edits keyed to its
+    /// layout set aside (`town::pattern::change_own`): `{edits, from, to, unchanged, set_aside,
+    /// set_aside_by}`, or `{error}`. Changes nothing here. Neither given: `{pattern, set, auto}`,
+    /// as it is laid out now.
+    pub fn set_patterns_json(&self, layout: u32, pattern: Option<String>, auto: bool, edits: &str) -> String {
+        self.with_t0("null", |t0| {
+            use worldgen::town::pattern;
+            let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+                Ok(v) => v,
+                Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+            };
+            let li = layout as usize;
+            if !t0.settlements.get(li).is_some_and(|s| s.tier >= worldgen::t0::settle::Tier::Town) {
+                return serde_json::json!({ "error": format!("layout {li}: not one of the world's own towns or cities") }).to_string();
+            }
+            if edits.streets.contains_key(&li.to_string()) {
+                return serde_json::json!({ "error": format!("layout {li}: laid out by hand, its streets are drawn") }).to_string();
+            }
+            let to = match (&pattern, auto) {
+                (_, true) => None,
+                (Some(p), false) => match pattern::Pattern::parse(p) {
+                    Some(p) => Some(p),
+                    None => return serde_json::json!({ "error": format!("pattern: one of {} or auto, got {p}", pattern::NAMES.join(", ")) }).to_string(),
+                },
+                (None, false) => {
+                    let l = worldgen::town::layout(&self.world, t0, li);
+                    return pattern::to_json(&edits, t0, li, l.pattern).to_string();
+                }
+            };
+            let mut v = pattern::change_own(&mut edits, li, to).to_json();
+            v["edits"] = serde_json::to_value(&edits).unwrap_or_default();
+            v.to_string()
+        })
+    }
+
     /// `edits` (JSON) with settlement layout `layout` laid out in culture `culture` (0-4;
     /// `town::culture::change`: the world's own through `Edits.cultures`, one added by hand its
     /// `Created.culture`) and the edits keyed to its layout set aside: `{edits, from, to,

@@ -529,7 +529,7 @@ fn planning_kept(world: &World, t0: &T0, index: usize, l: &Layout) -> bool {
         return true;
     }
     let Some(s) = culture::settlement(world, t0, index) else { return true };
-    crate::core::round(planning::of(world, t0, index, &s) * 100.0) as u8 == l.planning
+    crate::core::round(planning::of(world, t0, index, &s) * 100.0) as u8 == l.planning && super::pattern::mark(world, t0, index) as u8 == l.pattern_mark
 }
 
 /// Forget cached layouts from `index` on (`forget_from(0)`: all of them).

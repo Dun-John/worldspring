@@ -1063,6 +1063,10 @@ pub(crate) fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
                 text.replace_range(a..a + b + 1, "");
             }
         }
+        // (Nor the street pattern, recorded since 189: a town on the grid is laid out as before.)
+        if let Some(a) = text.find(", pattern: 0, pattern_mark: 0") {
+            text.replace_range(a..a + ", pattern: 0, pattern_mark: 0".len(), "");
+        }
         // (Nor the castle's and the market's patches, recorded later.)
         if let Some(a) = text.find(", castle_patch: ")
             && let Some(b) = text[a..].find(", bbox: ")

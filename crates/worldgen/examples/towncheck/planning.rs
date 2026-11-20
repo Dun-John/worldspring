@@ -112,7 +112,7 @@ pub(crate) fn planning(ctx: &mut Ctx, label: &str, r: &mut Report) {
 /// (161) With `TC_SVG=<dir>` and `TC_SVG_TOWNS=<label>:L<li>,...` (e.g. `seed 3:L1`): the town's
 /// patches, blocks, streets, buildings, quays and rivers drawn to `<dir>/<label>-L<li>.svg`, for a look
 /// at its plan; a block centred on a river channel in red, and 500 ft round the first in `-zoom.svg`.
-fn svg_dump(label: &str, li: usize, l: &Layout, map: [f64; 2], t0: &T0) {
+pub(crate) fn svg_dump(label: &str, li: usize, l: &Layout, map: [f64; 2], t0: &T0) {
     let (Ok(dir), Ok(towns)) = (std::env::var("TC_SVG"), std::env::var("TC_SVG_TOWNS")) else { return };
     if !towns.split(',').any(|t| t.trim() == format!("{label}:L{li}")) {
         return;

@@ -167,11 +167,12 @@ mod walls;
 mod cemeteries;
 mod handwalls;
 mod steppe;
+mod patterns;
 mod planning;
 mod wedges;
 
 fn main() {
-    const MODES: [&str; 35] = ["wings", "wedges", "planning", "streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
+    const MODES: [&str; 36] = ["wings", "wedges", "planning", "patterns", "streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -188,7 +189,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"] || modes == ["planning"] || modes == ["wedges"] || modes == ["wings"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"] || modes == ["planning"] || modes == ["patterns"] || modes == ["wedges"] || modes == ["wings"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -206,6 +207,15 @@ fn main() {
             let mut file = world.file.clone();
             for li in (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town) {
                 file.edits.planning.insert(li.to_string(), v);
+            }
+            world = World::new(file).unwrap();
+        }
+        // (Dev: `TC_PATTERN=<grid|rings|radial|linear>` gives every town that street pattern.)
+        if let Some(p) = std::env::var("TC_PATTERN").ok().filter(|p| town::pattern::Pattern::parse(p).is_some()) {
+            let t0 = T0::generate(&world);
+            let mut file = world.file.clone();
+            for li in (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town) {
+                file.edits.patterns.insert(li.to_string(), p.clone());
             }
             world = World::new(file).unwrap();
         }
@@ -237,6 +247,7 @@ fn main() {
                 "wallgates" => wallgates(&mut ctx, &mut r),
                 "streetsin" => streets_in(&mut ctx, &label, &mut r),
                 "planning" => planning::planning(&mut ctx, &label, &mut r),
+                "patterns" => patterns::patterns(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
                 "wedges" => wedges::wedges(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
                 "wings" => wedges::wings(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
                 "castlepieces" => castle_pieces(&mut ctx, &mut r),

@@ -333,9 +333,12 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
         let mut dp = District::roll(w, salt(hash2(plan.base_seed, key as i64, 0xd15)));
         // (161) A planned block: its alleys cut square, its lots near one size.
         if plan.lattice.get(i) == Some(&true) {
-            dp.grid_chaos *= 1.0 - 0.8 * plan.planning;
-            dp.size_chaos *= 1.0 - 0.7 * plan.planning;
-            dp.frame = Some([libm::cos(plan.axis), libm::sin(plan.axis)]);
+            // (189: a pattern set on a grown town is followed as loosely as a planned quarter's.)
+            let p = if plan.pattern.polar() { plan.planning.max(super::planning::MIXED) } else { plan.planning };
+            dp.grid_chaos *= 1.0 - 0.8 * p;
+            dp.size_chaos *= 1.0 - 0.7 * p;
+            let a = plan.frames.get(i).copied().unwrap_or(plan.axis);
+            dp.frame = Some([libm::cos(a), libm::sin(a)]);
         }
         match ch.lots.get(&i) {
             Some(f) => dp.min_sq = District::base(w) * f,

@@ -444,6 +444,11 @@ pub struct Edits {
     /// and villages ignore it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub planning: BTreeMap<String, u8>,
+    /// (Roadmap 7, 189) The world's own towns and cities given a street pattern (`<layout>` →
+    /// `grid`, `rings`, `radial` or `linear`; absent: auto, picked from its land and culture,
+    /// `town::pattern`). Its planned part follows it, as strictly as its planning says.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub patterns: BTreeMap<String, String>,
     /// Overland hex grids (one key, `overland`): drawn over the map for a hex crawl, never
     /// generated from (the app draws them; play sessions keep which hexes are revealed).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

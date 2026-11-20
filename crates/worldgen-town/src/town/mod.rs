@@ -49,6 +49,7 @@ pub mod rural;
 // R5 towns
 pub mod cemetery;
 pub mod culture;
+pub mod pattern;
 pub mod planning;
 pub mod members;
 pub mod added;
@@ -362,6 +363,10 @@ pub struct Layout {
     pub culture: u8,
     /// (161) How planned a town's streets were laid out (0-100, `planning`; 0 for anything else).
     pub planning: u8,
+    /// (189) The street pattern its planned part was laid out on (`pattern::Pattern::code`), and
+    /// the mark of the one set by hand it was laid out with (`pattern::mark`, 0: auto).
+    pub pattern: u8,
+    pub pattern_mark: u8,
     pub roof_seed: u64,
     pub roof_age: u8,
     /// Castles' moats (v63 castles: `moat`).
@@ -707,6 +712,8 @@ impl Layout {
             wings: Vec::new(),
             culture: 0,
             planning: 0,
+            pattern: 0,
+            pattern_mark: 0,
             roof_seed: 0,
             roof_age: 0,
             moats: Vec::new(),
@@ -1157,6 +1164,8 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         }
         spacing = plan.spacing;
         l.planning = crate::core::round(plan.planning * 100.0) as u8;
+        l.pattern = plan.pattern.code();
+        l.pattern_mark = pattern::mark(world, t0, index) as u8;
         let hand = build_town(&site, s, r, &plan, &ch, &mut l, survey);
         // (Read by a conversion to a hand town alone: `hand::convert`.)
         hand::cap_plan(index, &plan);
@@ -1357,6 +1366,11 @@ struct TownPlan {
     lattice: Vec<bool>,
     /// (161) The planned lattice's heading (radians): its blocks' alleys and lots run with it.
     axis: f64,
+    /// (189) The street pattern the planned part is laid out on, and each face's heading
+    /// (radians) its lots run with on it (the lattice's `axis` on the grid; along the ring, or
+    /// out from the middle, on rings and radial).
+    pattern: pattern::Pattern,
+    frames: Vec<f64>,
 }
 
 /// Why a patch can't be laid out as a park (generated or set by hand).
