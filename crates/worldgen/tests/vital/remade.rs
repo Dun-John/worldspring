@@ -530,10 +530,14 @@ fn harbour_ground() {
     let (ok, n) = walk(&mut ex, from, reach, &|p| fill.iter().all(|pl| !geom::contains(pl, p) && geom::poly_gap(pl, &[p]) > 15.0));
     assert!(ok, "L{si}: the lighthouse b:{si}:{} isn't reached from the bank ({n} squares walked)", lh.id);
     // Islets: a river islet's chunk agrees with its neighbours; every tower's door opens onto its top.
-    // (In the first of seeds 1-8 with a tower on an islet.)
-    let towered = |ex: &Executor| worldgen::t0::islets::islets(&ex.t0).iter().any(|i| i.tower);
+    // (In the first of seeds 1-8 with a tower on an islet and a river islet.)
+    let towered = |ex: &Executor| {
+        let isl = worldgen::t0::islets::islets(&ex.t0);
+        isl.iter().any(|i| i.tower) && isl.iter().any(|i| i.river)
+    };
+    let mut seed = 1;
     if !towered(&ex) {
-        ex = (2..=8).map(|seed| Executor::new(World::new(serde_json::from_str(&world_json(seed)).unwrap()).unwrap())).find(|ex| towered(ex)).expect("a world with an islet tower");
+        (seed, ex) = (2..=8).map(|seed| (seed, Executor::new(World::new(serde_json::from_str(&world_json(seed)).unwrap()).unwrap()))).find(|(_, ex)| towered(ex)).expect("a world with an islet tower and a river islet");
     }
     let islets: Vec<_> = worldgen::t0::islets::islets(&ex.t0).to_vec();
     let river = islets.iter().find(|i| i.river).expect("a river islet");
@@ -544,7 +548,7 @@ fn harbour_ground() {
         let Some(t) = l.buildings.iter().find(|b| town::is_watchtower(b) && geom::contains(&isl.pts, geom::mean(&b.poly))) else { continue };
         let from = door(&ex, isl.settlement as usize, t.id);
         let (_, n) = walk(&mut ex, from, 400.0, &|_| false);
-        assert!(n >= 4, "the islet tower b:{}:{} opens onto {n} dry squares", isl.settlement, t.id);
+        assert!(n >= 4, "seed {seed}: the islet tower b:{}:{} opens onto {n} dry squares", isl.settlement, t.id);
         towers += 1;
     }
     assert!(towers >= 1, "no islet tower checked");
