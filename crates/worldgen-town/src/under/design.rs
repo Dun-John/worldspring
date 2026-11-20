@@ -492,17 +492,23 @@ impl SiteDesignOps for SiteDesign {
     /// with nothing changed, when the change breaks one more than the design already did (each
     /// kind of problem counted, whatever its numbers: a stretch already cut off may change size).
     fn set_shape_checked(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, shape: u8) -> Result<(), String> {
-        let blocking = |d: &SiteDesign| -> Result<Vec<(String, String)>, String> {
-            Ok(d.problems(world, t0, id)?.1.into_iter().filter(|p| p.blocking).map(|p| (p.text.chars().filter(|c| !c.is_ascii_digit()).collect(), p.text)).collect())
+        let blocking = |d: &SiteDesign| -> Result<(Vec<(String, String)>, Vec<f32>), String> {
+            let (it, problems) = d.problems(world, t0, id)?;
+            Ok((problems.into_iter().filter(|p| p.blocking).map(|p| (p.text.chars().filter(|c| !c.is_ascii_digit()).collect(), p.text)).collect(), wall_off(&it)))
         };
-        let had = blocking(self)?;
+        let (had, off) = blocking(self)?;
         let mut next = self.clone();
         next.set_shape(level, room, shape)?;
-        let now = blocking(&next)?;
+        let (now, off_now) = blocking(&next)?;
         let count = |v: &[(String, String)], k: &str| v.iter().filter(|p| p.0 == k).count();
+        let kind = &self.levels[level].rooms[room].kind;
         if let Some(p) = now.iter().find(|p| count(&now, &p.0) > count(&had, &p.0)) {
-            let kind = &self.levels[level].rooms[room].kind;
             return Err(format!("the {kind} can't take that shape: {}", p.1));
+        }
+        // (189: a building's outer wall drawn off the grid kept within a square of its ground
+        // floor; the squares a shape gives up in a corner with no room beside can leave it off.)
+        if off_now.iter().zip(off.iter().chain(std::iter::repeat(&0.0))).any(|(&n, &o)| n > 1.0 && n > o + 1e-3) {
+            return Err(format!("the {kind} can't take that shape: it leaves the outer wall standing off the floor"));
         }
         *self = next;
         Ok(())
@@ -937,4 +943,25 @@ impl SiteDesignWays for SiteDesign {
             }
         }
     }
+}
+
+/// (189) How far each corner of a building's outer wall drawn off the grid (`Interior::outlines`)
+/// stands from its ground floor's nearest square, in squares (empty: on the grid).
+fn wall_off(it: &Interior) -> Vec<f32> {
+    let (nx, ny) = (it.nx, it.ny);
+    let Some(g) = it.levels.get(it.entry_level) else { return Vec::new() };
+    it.outlines
+        .iter()
+        .flatten()
+        .map(|v| {
+            (0..nx * ny)
+                .filter(|&k| g.cells[k] >= 0)
+                .map(|k| {
+                    let (i, j) = ((k % nx) as f32, (k / nx) as f32);
+                    let (dx, dy) = ((i - v[0]).max(v[0] - i - 1.0).max(0.0), (j - v[1]).max(v[1] - j - 1.0).max(0.0));
+                    (dx * dx + dy * dy).sqrt()
+                })
+                .fold(f32::MAX, f32::min)
+        })
+        .collect()
 }
