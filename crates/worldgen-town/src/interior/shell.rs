@@ -233,6 +233,23 @@ impl<'a> Shell<'a> {
         vec![self.outline.iter().map(|p| [p[0] as f32, p[1] as f32]).collect()]
     }
 
+    /// (Roadmap 7, 164) A U's or a court's yard (`town::wings`): the squares of its ranges' box
+    /// outside its footprint (row-major, nx × ny) and the box's corners (grid units, as
+    /// `Interior::yard`); None for any other building.
+    pub fn yard(&self, b: &town::Building) -> Option<(Vec<bool>, Vec<[f32; 2]>)> {
+        let arms = town::wings::ranges(b).filter(|a| a.len() >= 3)?;
+        let at = |p: P, d: P| geom::dot(sub(p, self.origin), d) / SQUARE_FT;
+        let span = |d: P| arms.iter().flatten().map(|p| at(*p, d)).fold((f64::MAX, f64::MIN), |(a, c), x| (a.min(x), c.max(x)));
+        let ((x0, x1), (y0, y1)) = (span(self.u), span(self.v));
+        let yard: Vec<bool> = (0..self.nx * self.ny)
+            .map(|k| {
+                let (x, y) = ((k % self.nx) as f64 + 0.5, (k / self.nx) as f64 + 0.5);
+                !self.inside[k] && x > x0 && x < x1 && y > y0 && y < y1
+            })
+            .collect();
+        yard.contains(&true).then(|| (yard, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].iter().map(|p| [p[0] as f32, p[1] as f32]).collect()))
+    }
+
     /// World position (ft) of a grid point.
     pub fn world_at(&self, x: f64, y: f64) -> P {
         add(self.origin, add(mul(self.u, x * SQUARE_FT), mul(self.v, y * SQUARE_FT)))

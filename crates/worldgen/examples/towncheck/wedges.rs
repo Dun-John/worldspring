@@ -95,6 +95,15 @@ pub(crate) fn wings(world: &World, t0: &T0, label: &str, r: &mut Report) {
                         yard += 1;
                     }
                 }
+                // (164) Its squares as its footprint (the battlemap's and the roof's outline) has them, on every
+                // floor above ground; and its yard box (`Interior::yard`) on a U's and a court's.
+                let off = it.levels.iter().filter(|lv| lv.z >= 0).map(|lv| (0..it.nx * it.ny).filter(|&k| (lv.cells[k] >= 0) != worldgen::town::geom::contains(&b.poly, world_at([(k % it.nx) as f32 + 0.5, (k / it.nx) as f32 + 0.5]))).count()).max().unwrap_or(0);
+                if off > 0 {
+                    r.add(&format!("{form}s whose squares miss their footprint"), off as f64, format!("{label} L{li} b{} {kind}", b.id));
+                }
+                if form != "L" && it.yard.len() != 4 {
+                    r.add(&format!("{form}s with no yard box"), 1.0, format!("{label} L{li} b{} {kind}", b.id));
+                }
                 r.tally(&format!("{form}: doors out"), out);
                 r.tally(&format!("{form}: doors onto the yard"), yard);
                 if yard == 0 {

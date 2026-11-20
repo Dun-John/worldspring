@@ -11,7 +11,7 @@ struct R {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: [usize; 4], front: usize, ground: bool, arch: Arch, towers: Option<&[(Vec<usize>, Vec<usize>)]>, ext_free: &dyn Fn(isize, isize) -> bool, rng: &mut Pcg32) -> Level {
+pub(super) fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: [usize; 4], front: usize, ground: bool, arch: Arch, towers: Option<&[(Vec<usize>, Vec<usize>)]>, yard: Option<&[bool]>, ext_free: &dyn Fn(isize, isize) -> bool, rng: &mut Pcg32) -> Level {
     // A large keep's dungeon floor: guardrooms, a prison block, stores and the stair down to
     // the deep dungeons, on corridors (a small keep keeps its cell block).
     let keep_dungeon;
@@ -505,6 +505,29 @@ pub(super) fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelPr
             }
         }
         if carved {
+            cells = merge_fragments(cells, nx, ny);
+        }
+    }
+    // (Roadmap 7, 164) An inn round its yard (`yard`: a U's or a court's, `town::wings`), above its
+    // ground floor: a gallery along the yard side of its ranges, railed onto the yard (`doors`: a yard
+    // gallery's side onto open ground), every room off it; not on the outer wall's squares.
+    if let Some(yard) = yard.filter(|_| !ground) {
+        let g = rooms.len() as i16;
+        let on_st = |i: usize, j: usize| i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
+        let near = |i: usize, j: usize| (-1..=1isize).any(|dj| (-1..=1isize).any(|di| {
+            let (a, b) = (i as isize + di, j as isize + dj);
+            a >= 0 && b >= 0 && (a as usize) < nx && (b as usize) < ny && yard[b as usize * nx + a as usize]
+        }));
+        let mut any = false;
+        for k in 0..nx * ny {
+            let (i, j) = (k % nx, k / nx);
+            if cells[k] >= 0 && i > 0 && j > 0 && i + 1 < nx && j + 1 < ny && !on_st(i, j) && near(i, j) {
+                cells[k] = g;
+                any = true;
+            }
+        }
+        if any {
+            rooms.push(Room { kind: "yard gallery", squares: 0, raise_ft: 0.0, center: [0.0; 2], shape: 0 });
             cells = merge_fragments(cells, nx, ny);
         }
     }

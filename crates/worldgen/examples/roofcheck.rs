@@ -16,6 +16,9 @@ fn main() {
     if std::env::args().any(|a| a == "sample") {
         return sample();
     }
+    if std::env::args().any(|a| a == "taverns") {
+        return taverns();
+    }
     let mut mat = [[0u32; MATERIALS.len()]; 5];
     let mut shp = [[0u32; SHAPES.len()]; 5];
     let (mut n, mut bat, mut smoke, mut wear, mut towns) = ([0u32; 5], [0u32; 5], [0u32; 5], [0u64; 5], [0u32; 5]);
@@ -94,5 +97,73 @@ fn sample() {
         if done.iter().all(|&d| d) {
             break;
         }
+    }
+}
+
+/// (Roadmap 7, 164) Taverns, inns and alehouses per culture over the same towns: their roof shapes and
+/// materials and their forms (a coaching inn round its yard, an L / U / court, a felt hall, a plain one),
+/// and any not hipped or gabled listed (`-- taverns`).
+fn taverns() {
+    let mut shp = [[0u32; SHAPES.len()]; 5];
+    let mut mat = [[0u32; MATERIALS.len()]; 5];
+    let mut form = [[0u32; 6]; 5];
+    let mut odd: Vec<String> = Vec::new();
+    let mut first: [Option<String>; 5] = Default::default();
+    for seed in 1..=8 {
+        let ex = Executor::new(World::new(WorldFile { seed, ..Default::default() }).unwrap());
+        let (world, t0) = (&ex.world, &ex.t0);
+        let mut by_pop: Vec<usize> = (0..t0.settlements.len()).collect();
+        by_pop.sort_by_key(|&i| (std::cmp::Reverse(t0.settlements[i].population), i));
+        let mut taken = [0u32; 5];
+        for &si in &by_pop {
+            let c = (t0.settlements[si].culture % 5) as usize;
+            if taken[c] == 4 {
+                continue;
+            }
+            taken[c] += 1;
+            let l = town::layout(world, t0, si);
+            for b in l.buildings.iter().filter(|b| b.structure == Structure::Roofed) {
+                let Some(key) = b.func.map(|f| town::catalog::CATALOG[f as usize].key) else { continue };
+                if !matches!(key, "inn" | "tavern" | "alehouse") {
+                    continue;
+                }
+                let k = roof::look(&l, b);
+                shp[c][k.shape as usize] += 1;
+                mat[c][k.material as usize] += 1;
+                let f = if town::palace::is_coaching(&l, b) {
+                    0
+                } else if let Some(r) = town::wings::ranges(b) {
+                    r.len().min(4) - 1
+                } else if roof::hall_ring(&l, b).is_some() {
+                    4
+                } else {
+                    5
+                };
+                form[c][f] += 1;
+                if first[c].is_none() && f != 4 && key == "inn" {
+                    let m = town::geom::centroid(&b.poly);
+                    first[c] = Some(format!("s{seed} L{si} b{} {} {} fx {:.6} fy {:.6}", b.id, SHAPES[k.shape as usize], MATERIALS[k.material as usize], m[0] / world.geom.map_w_ft, m[1] / world.geom.map_h_ft));
+                }
+                if !matches!(k.shape, roof::Shape::Hip | roof::Shape::Gable) && f != 4 && odd.len() < 12 {
+                    let o = town::geom::obb(&b.poly);
+                    odd.push(format!("s{seed} L{si} b{} {key} {} {} {}x{:.0}x{:.0}", b.id, SHAPES[k.shape as usize], MATERIALS[k.material as usize], b.poly.len(), o.long, o.short));
+                }
+            }
+        }
+    }
+    for c in 0..5 {
+        let n: u32 = shp[c].iter().sum();
+        let shps: Vec<String> = (0..SHAPES.len()).filter(|&s| shp[c][s] > 0).map(|s| format!("{} {}", SHAPES[s], shp[c][s])).collect();
+        let mats: Vec<String> = (0..MATERIALS.len()).filter(|&m| mat[c][m] > 0).map(|m| format!("{} {}", MATERIALS[m], mat[c][m])).collect();
+        let f = form[c];
+        println!("{:<7} {:>3}  shape: {}", CULTURES[c], n, shps.join(", "));
+        println!("             material: {}", mats.join(", "));
+        println!("             coaching {} L {} U {} court {} felt hall {} plain {}", f[0], f[1], f[2], f[3], f[4], f[5]);
+    }
+    for (c, f) in first.iter().enumerate() {
+        println!("  first inn, {}: {}", CULTURES[c], f.as_deref().unwrap_or("-"));
+    }
+    for o in &odd {
+        println!("  {o}");
     }
 }

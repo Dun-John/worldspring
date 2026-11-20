@@ -226,6 +226,10 @@ export class InteriorLayer {
   private pickedSpot: [number, number] | null = null;
   private pickedRi = -1;
   private readonly dim = new Sprite(Texture.WHITE);
+  /** The dim with a U's or a court's yard left open (`Interior.yard`), redrawn each frame; and whether
+   * the map is dimmed at all. */
+  private readonly yardDim = new Graphics();
+  private dimmed = false;
   private readonly plan = new Container();
   /** What is in the hand (`setGhost`), over the plan (which every draw rebuilds). */
   private readonly ghostLayer = new Container();
@@ -274,10 +278,10 @@ export class InteriorLayer {
     this.dim.tint = 0x14100c;
     // Underground the surface is a ghost, showing round the site where its rock fades out.
     this.dim.alpha = this.underground ? UNDER_DIM : 0.55;
-    this.dim.visible = !peek && !ghost && !tile;
+    this.dimmed = this.dim.visible = !peek && !ghost && !tile;
     this.labels.visible = !peek && !ghost;
     this.marks.visible = !peek && !ghost && !style.player;
-    this.container.addChild(this.dim, this.plan, this.pickedRoom, this.ghostLayer, this.labels, this.pickedName, this.marks);
+    this.container.addChild(this.dim, this.yardDim, this.plan, this.pickedRoom, this.ghostLayer, this.labels, this.pickedName, this.marks);
     this.level = Math.max(0, Math.min(interior.levels.length - 1, start ?? interior.entry_level));
     // Light from the NW of the screen, in grid axes, rounded to 45 degrees so items lit alike share
     // one look in the item atlas.
@@ -497,6 +501,16 @@ export class InteriorLayer {
     const span = Math.hypot(cam.width, cam.height);
     this.dim.position.set((cam.width - span) / 2, (cam.height - span) / 2);
     this.dim.width = this.dim.height = span;
+    // (Roadmap 7, 164: a yard the building stands round left undimmed, the ground as outside.)
+    const yard = this.interior.yard;
+    const open = this.dimmed && yard?.length === 4 && !this.underground && (this.interior.levels[this.level]?.z ?? -1) >= 0;
+    this.dim.visible = this.dimmed && !open;
+    this.yardDim.visible = open;
+    if (open) {
+      this.yardDim.clear();
+      this.yardDim.rect(this.dim.position.x, this.dim.position.y, span, span).fill({ color: this.dim.tint, alpha: this.dim.alpha });
+      this.yardDim.poly(yard.flatMap(([x, y]) => cam.worldToScreen(...this.toWorld(x, y)))).cut();
+    }
     for (const l of this.labelSpots) {
       l.text.rotation = -cam.turn;
       const w = this.toWorld(l.x, l.y);

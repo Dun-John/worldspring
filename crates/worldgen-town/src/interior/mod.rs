@@ -88,6 +88,11 @@ pub struct Interior {
     /// inside it (`Shell::outlines`). Empty for the rest.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub outlines: Vec<Vec<[f32; 2]>>,
+    /// (Roadmap 7, 164) A U's or a court's yard (`town::wings`): its ranges' box (four corners, grid
+    /// units); the ground in it outside the footprint is the yard, shown as open ground (as on the
+    /// battlemap) on and above its ground floor. Empty for the rest.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub yard: Vec<[f32; 2]>,
 }
 
 fn no_stone(v: &u8) -> bool {
@@ -617,5 +622,6 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         stairs,
         sprites: Vec::new(),
         outlines: Vec::new(),
+        yard: Vec::new(),
     })
 }

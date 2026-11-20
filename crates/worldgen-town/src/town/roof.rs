@@ -267,6 +267,19 @@ pub fn look(l: &Layout, b: &Building) -> Look {
             }
         }
     };
+    // (Roadmap 7, 164) An inn, a tavern or an alehouse pitched in its culture's style, never flat nor
+    // domed: in the south its terracotta, in the dry lands low terracotta hips (a rich one's glazed).
+    let (material, shape) = match (key, material, shape) {
+        ("inn" | "tavern" | "alehouse", m, Flat | Dome) => {
+            let m = match m {
+                FlatClay | Whitewash if culture == 3 && rich == 2 && h(15) < 0.3 => GlazedTile,
+                FlatClay | Whitewash => ClayTile,
+                m => m,
+            };
+            (m, if culture == 3 { pick(h(16), &[(Hip, 8), (Gable, 2)]) } else { pick(h(16), &[(Hip, 7), (Gable, 3)]) })
+        }
+        _ => (material, shape),
+    };
     // R5 towns: a cemetery's tomb in quiet stone, lead or weathered pale tile; in the dry lands its
     // dome whitewashed, ochre plaster or weathered stone (no glaze).
     let tomb = key == "tomb";

@@ -666,5 +666,6 @@ fn site(
         stairs: [0; 4],
         sprites: Vec::new(),
         outlines: Vec::new(),
+        yard: Vec::new(),
     })
 }

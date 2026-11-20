@@ -298,6 +298,7 @@ pub fn build(world: &World, d: &SiteDesign, t0: &T0, l: &Layout, settlement: usi
         stairs,
         sprites: sprites.table(),
         outlines: sh.outlines(),
+        yard: sh.yard(b).map(|y| y.1).unwrap_or_default(),
     };
     (it, want)
 }

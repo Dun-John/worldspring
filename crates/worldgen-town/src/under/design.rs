@@ -365,6 +365,7 @@ impl SiteDesignOps for SiteDesign {
             stairs: [0; 4],
             sprites: sprites.table(),
             outlines: Vec::new(),
+            yard: Vec::new(),
         }
     }
 

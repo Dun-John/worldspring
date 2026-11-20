@@ -19,6 +19,8 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     let (nx, ny, origin, u, v) = (sh.nx, sh.ny, sh.origin, sh.u, sh.v);
     let world_at = |x: f64, y: f64| sh.world_at(x, y);
     let inside = &sh.inside;
+    // (Roadmap 7, 164: an inn round its yard galleried onto it above its ground floor, `layout_level`.)
+    let galleried = sh.yard(b).filter(|_| town::palace::is_inn(b));
     let ext_free = |i: isize, j: isize| sh.ext_free(i, j);
     let is_in = |i: isize, j: isize| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny && inside[j as usize * nx + i as usize];
     // Open exterior squares along each side (0 top, 1 right, 2 bottom, 3 left).
@@ -178,7 +180,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     // (An inn laid out by zones has its stairs in its taproom already: `hub::inn`.)
     if is_pub(arch) && plan.is_none() {
         let prog = program(arch, 0, floors == 1, key);
-        let lvl = layout_level(&inside, nx, ny, &prog, [0, 0, 0, 0], front, true, arch, rings.as_deref(), &ext_free, &mut rng);
+        let lvl = layout_level(&inside, nx, ny, &prog, [0, 0, 0, 0], front, true, arch, rings.as_deref(), None, &ext_free, &mut rng);
         // (Clear of the outer wall as drawn if they can be; in the taproom whatever.)
         // (Then on squares the wall cuts if it leaves them clear enough (or none is), else, in a
         // taproom of 12 squares or more, a square beside a door clear of it, else on the cut squares;
@@ -197,7 +199,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
             ground_pre = Some(lvl);
         } else {
             let all = LevelProgram { rooms: prog.rooms[..1].to_vec(), filler: None, ..prog };
-            let lvl = layout_level(&inside, nx, ny, &all, [0, 0, 0, 0], front, true, arch, rings.as_deref(), &ext_free, &mut rng);
+            let lvl = layout_level(&inside, nx, ny, &all, [0, 0, 0, 0], front, true, arch, rings.as_deref(), None, &ext_free, &mut rng);
             let st = pub_stairs(&lvl, nx, ny, &sh.whole, true, false)
                 .or_else(|| pub_stairs(&lvl, nx, ny, &sh.whole, false, false))
                 .or_else(|| pub_stairs(&lvl, nx, ny, inside, true, false))
@@ -269,7 +271,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
             _ => {
                 // (A monastery's crypt under its church only: `hub::Plan::crypt`.)
                 let crypt = if z < 0 { plan.as_ref().and_then(|p| p.crypt()) } else { None };
-                (layout_level(crypt.as_deref().unwrap_or(inside), nx, ny, &prog, stairs, front, z == 0, arch, rings.as_deref(), &ext_free, &mut rng), None)
+                (layout_level(crypt.as_deref().unwrap_or(inside), nx, ny, &prog, stairs, front, z == 0, arch, rings.as_deref(), galleried.as_ref().map(|y| y.0.as_slice()), &ext_free, &mut rng), None)
             }
         };
         // The roof is one storey above the top floor, the tower tops one above that.
@@ -479,6 +481,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         stairs,
         sprites: Vec::new(),
         outlines: sh.outlines(),
+        yard: sh.yard(b).map(|y| y.1).unwrap_or_default(),
     }
 }
 

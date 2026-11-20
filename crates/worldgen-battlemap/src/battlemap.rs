@@ -995,6 +995,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
             courts.push((b.id, c, arch));
         }
+        // (Roadmap 7, 164) An inn round its yard (a U or a court, `town::wings`): the yard cobbled as a
+        // coaching inn's, as its interior shows it (`Interior::yard`).
+        for b in l.buildings.iter().filter(|b| crate::town::palace::is_inn(b)) {
+            let Some(arms) = crate::town::wings::ranges(b).filter(|a| a.len() >= 3) else { continue };
+            let u = crate::town::geom::obb(&b.poly).axis;
+            let v = [-u[1], u[0]];
+            let span = |d: [f64; 2]| arms.iter().flatten().map(|p| crate::town::geom::dot(*p, d)).fold((f64::MAX, f64::MIN), |(a, c), x| (a.min(x), c.max(x)));
+            let ((s0, s1), (t0_, t1)) = (span(u), span(v));
+            let at = |a: f64, c: f64| [u[0] * a + v[0] * c, u[1] * a + v[1] * c];
+            stamp(&[at(s0, t0_), at(s1, t0_), at(s1, t1), at(s0, t1)], URBAN_PLAZA, &mut urb_h);
+        }
         for b in &l.buildings {
             let bb = bbox(&b.poly);
             if !overlaps(bb) {

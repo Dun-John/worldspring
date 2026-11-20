@@ -32,6 +32,9 @@ export interface Interior {
    * the footprint), convex parts whose union is the footprint (grid units, clockwise on screen),
    * within half a square of its squares. */
   outlines?: [number, number][][];
+  /** (Roadmap 7, 164) A U's or a court's yard: its ranges' box (four corners, grid units); the ground in
+   * it outside the footprint is open yard, shown undimmed (as on the battlemap) on and above the ground floor. */
+  yard?: [number, number][];
 }
 
 export interface InteriorLevel {
