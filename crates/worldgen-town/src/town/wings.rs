@@ -88,13 +88,17 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
             if same && b.parts.is_empty() && b.structure == Structure::Roofed {
                 let made = lot(g, b.id).unwrap_or(&b.poly).to_vec();
                 if g.grounds.iter().filter(|q| q.0 == b.id).count() > 1 {
+                    // (Not over a building with edits of its own: the inn is shaped anew instead.)
+                    if l.buildings.iter().any(|h| h.id != b.id && edited.contains(&h.id) && contains(&made, super::geom::centroid(&h.poly))) {
+                        continue;
+                    }
                     yards.push((b.id, made.clone()));
                 }
                 kept.push((b.id, was.poly.clone(), made.clone(), block_of(l, &made), was.poly.len() > 6));
             }
         }
         for (id, rect) in yards {
-            let taken = |h: &Building| h.id != id && g.building(h.id as usize).is_none() && contains(&rect, super::geom::centroid(&h.poly));
+            let taken = |h: &Building| h.id != id && g.building(h.id as usize).is_none() && !edited.contains(&h.id) && contains(&rect, super::geom::centroid(&h.poly));
             let homes: Vec<Building> = l.buildings.iter().filter(|h| taken(h)).cloned().collect();
             l.buildings.retain(|h| !taken(h));
             if let Some(b) = l.buildings.iter_mut().find(|b| b.id == id) {
