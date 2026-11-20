@@ -685,6 +685,10 @@ impl Ctx {
             let Some(s) = t0.settlements.get(li).filter(|s| s.tier >= worldgen::t0::settle::Tier::Town) else {
                 return serde_json::json!({ "error": format!("layout {li}: not one of the world's own towns or cities") }).to_string();
             };
+            // A town laid out by hand (`hand::is_hand`, as mapd checks) ignores planning: no control.
+            if edits.streets.contains_key(&li.to_string()) {
+                return serde_json::json!({ "error": format!("layout {li}: laid out by hand, its streets are drawn") }).to_string();
+            }
             let culture = worldgen::town::culture::override_in(&edits, t0, li).unwrap_or(s.culture);
             let rolled = worldgen::town::planning::rolled(&worldgen::t0::settle::Settlement { culture, ..s.clone() });
             if planning.is_none() && !auto {

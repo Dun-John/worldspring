@@ -44,8 +44,12 @@ pub fn of(world: &World, t0: &T0, index: usize, s: &Settlement) -> f64 {
 }
 
 /// A mark of the planning set for layout `index` (0: none), mixed into the caches' hashes.
+/// The stored integer itself, so every set value (0-100) marks apart and `planning_kept` agrees.
 pub fn mark(world: &World, t0: &T0, index: usize) -> u64 {
-    override_in(&world.file.edits, t0, index).map_or(0, |p| (p * 100.0) as u64 + 1)
+    if index >= t0.settlements.len() {
+        return 0;
+    }
+    world.file.edits.planning.get(&index.to_string()).map_or(0, |&v| v.min(100) as u64 + 1)
 }
 
 /// The class a planning value is in: "grown", "mixed" (a planned quarter beside a grown core) or
