@@ -133,14 +133,14 @@ pub(crate) fn wedges(world: &World, t0: &T0, label: &str, r: &mut Report) {
             let (ang, asp) = wedge_of(&b.poly);
             let nv = verts(&b.poly);
             // (An L's, a U's or a court's width is its narrowest range's.)
-            let w = town::wings::ranges(b).map_or_else(|| min_width(&b.poly), |arms| arms.iter().map(|a| min_width(a)).fold(f64::MAX, f64::min));
+            let w = town::wings::ranges(&l, b).map_or_else(|| min_width(&b.poly), |arms| arms.iter().map(|a| min_width(a)).fold(f64::MAX, f64::min));
             let eye = eye_corner(&b.poly);
             n += 1;
             let c0 = centroid(&b.poly);
             let at = format!("{label} L{li} b{} at {:.0},{:.0}", b.id, c0[0], c0[1]);
             if let Some((c, rr)) = near {
                 if dist(c0, c) < rr {
-                    say!("    {at} ({:+.0},{:+.0}) v{nv} corner {ang:.0} eye {eye:.0} aspect {asp:.2} width {w:.1} area {:.0} func {:?} name {:?} wings {}", c0[0] - c[0], c0[1] - c[1], area(&b.poly).abs(), b.func, b.name, town::wings::ranges(b).is_some());
+                    say!("    {at} ({:+.0},{:+.0}) v{nv} corner {ang:.0} eye {eye:.0} aspect {asp:.2} width {w:.1} area {:.0} func {:?} name {:?} wings {}", c0[0] - c[0], c0[1] - c[1], area(&b.poly).abs(), b.func, b.name, town::wings::ranges(&l, b).is_some());
                     if std::env::var("POLY").is_ok() {
                         say!("      {:?}", b.poly.iter().map(|p| ((p[0] - c0[0]) as i32, (p[1] - c0[1]) as i32)).collect::<Vec<_>>());
                     }
@@ -165,7 +165,7 @@ pub(crate) fn wedges(world: &World, t0: &T0, label: &str, r: &mut Report) {
                 }
             }
             if w < 12.0 {
-                let winged = if town::wings::ranges(b).is_some() { "winged " } else { "" };
+                let winged = if town::wings::ranges(&l, b).is_some() { "winged " } else { "" };
                 r.add(&format!("width < 12 ft ({winged}{t})"), 12.0 - w, format!("{at}: {w:.1} ft"));
                 if std::env::var("POLY").is_ok() {
                     say!("    THIN {at} w {w:.1} v{nv} area {:.0} func {:?} ward {:?} floors {} {:?}", area(&b.poly).abs(), b.func, b.ward, b.floors, b.poly.iter().map(|p| ((p[0] - c0[0]) as i32, (p[1] - c0[1]) as i32)).collect::<Vec<_>>());
