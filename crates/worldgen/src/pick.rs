@@ -480,8 +480,14 @@ pub fn pick(world: &World, t0: &T0, at: P, radius_ft: f64) -> Vec<Thing> {
     }
     for (id, q) in &edits.wharves {
         let half = 0.5 * q.width;
-        if near_box(&q.pts, at, r + half) {
-            put(line_d(&q.pts, false, at) - half, "harbour", Some(id.clone()), renamed(id), mid(&q.pts).and_then(town_at), true, bbox(&q.pts, half));
+        // (A shore quay's band lies on the dry side of its face: picked about its middle line.)
+        let middle: std::borrow::Cow<[[f64; 2]]> = if q.shore {
+            std::borrow::Cow::Owned(q.pts.iter().zip(crate::wharf::shore_normals(&q.pts)).map(|(&p, n)| [p[0] + n[0] * half, p[1] + n[1] * half]).collect())
+        } else {
+            std::borrow::Cow::Borrowed(&q.pts)
+        };
+        if near_box(&middle, at, r + half) {
+            put(line_d(&middle, false, at) - half, "harbour", Some(id.clone()), renamed(id), mid(&middle).and_then(town_at), true, bbox(&middle, half));
         }
     }
     out.sort_by(|a, b| {

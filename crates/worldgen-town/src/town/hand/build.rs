@@ -145,7 +145,7 @@ fn drawn_obstacle(c: &crate::world::Created, b: &[f64; 4]) -> bool {
 
 /// A wharf a hand town within `b` builds round (as `drawn_obstacle`).
 fn wharf_obstacle(w: &crate::world::Wharf, b: &[f64; 4]) -> bool {
-    w.pts.len() >= 2 && box_meets(&w.pts, 0.5 * w.width + 4.0, b)
+    w.pts.len() >= 2 && box_meets(&w.pts, if w.shore { w.width } else { 0.5 * w.width } + 4.0, b)
 }
 
 /// Layout `index` as its hand records lay it out, if it has a header (`base_layout`; `fp`: its

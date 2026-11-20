@@ -357,7 +357,9 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[
         for i in crate::t0::islets::near_in(t0, &world.file.edits, [ox, oy, ox + size, oy + size]) {
             push(&i.pts, 44);
         }
-        for (_, w) in crate::wharf::near(world, [ox, oy, ox + size, oy + size]) {
+        // (R7 173: a shore quay's piers as piers of their own; a timber one planked over.)
+        let near_wharves: Vec<std::borrow::Cow<crate::world::Wharf>> = crate::wharf::near(world, [ox, oy, ox + size, oy + size]).flat_map(|(_, w)| std::iter::once(std::borrow::Cow::Borrowed(w)).chain(crate::wharf::shore_piers(w, t0).into_iter().map(std::borrow::Cow::Owned))).collect();
+        for w in near_wharves.iter().map(|w| w.as_ref()) {
             if w.kind == crate::world::WharfKind::Pier {
                 if key.level >= BUILDING_MIN_LEVEL {
                     let stone = (w.material == crate::world::CrossingMaterial::Stone) as u32;
@@ -366,8 +368,9 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[
                     }
                 }
             } else {
+                let planked = w.shore && w.material == crate::world::CrossingMaterial::Timber && key.level >= BUILDING_MIN_LEVEL;
                 for strip in crate::wharf::strips(w, t0) {
-                    push(&strip, 45);
+                    push(&strip, if planked { 6 } else { 45 });
                 }
             }
         }

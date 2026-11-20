@@ -432,6 +432,16 @@ impl Ctx {
         })
     }
 
+    /// R7 173: a stroke brushed along the shore (`[[x, y], ...]` JSON) snapped to the water's edge
+    /// (`wharf::shore_line`): `{pts}` (a shore quay's) or `{error}`.
+    pub fn shore_line_json(&self, stroke: &str) -> String {
+        let Ok(s) = serde_json::from_str::<Vec<[f64; 2]>>(stroke) else { return r#"{"error":"bad stroke"}"#.into() };
+        self.with_t0("null", |t0| match worldgen::wharf::shore_line(t0, &s) {
+            Ok(pts) => serde_json::json!({ "pts": pts }).to_string(),
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        })
+    }
+
     /// Whether a wharf (`Wharf` JSON) can be put down: `{}` with, for a breakwater asked to have one (`lighthouse`), its
     /// lighthouse as `{poly, x, y, name}`; or `{error}` (`Wharf::problem`, `wharf::root_problem`, `building_spot`).
     pub fn wharf_check_json(&mut self, wharf: &str, lighthouse: bool) -> String {

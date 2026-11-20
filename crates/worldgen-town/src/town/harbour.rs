@@ -467,6 +467,8 @@ fn breakwater(site: &Site, s: &Settlement, l: &Layout, all: &[(P, P)]) -> Result
                     pts: line.clone(),
                     width: MOLE_WIDTH_FT,
                     material: crate::world::CrossingMaterial::Stone,
+                    shore: false,
+                    piers: 0.0,
                 },
                 site.t0,
             );

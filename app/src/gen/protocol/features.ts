@@ -74,6 +74,11 @@ export interface Wharf {
   pts: [number, number][];
   width?: number;
   material?: CrossingMaterial;
+  /** R7 173: a quay brushed along the shore (`wharf::shore_line`): `pts` its face along the
+   * water's edge, up to 512 points ~5 ft apart, the dry side on the left; `material` timber or stone. */
+  shore?: boolean;
+  /** A shore quay's piers, this many ft apart (30 to 400; absent: none). */
+  piers?: number;
 }
 
 /** A town's layout changed by hand (`worldgen::world::TownEdit`): `at` is the town's centre (the

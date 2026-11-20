@@ -75,7 +75,9 @@ pub(super) fn build(
     hand_shore_things(&world.file.edits, seed, sea, [hx0, hy0, hx0 + span, hy0 + span], dock);
     // R5 M20: quays and breakwaters built by hand: their made ground paved (a quay's with cargo
     // along it); a pier's deck over the water at one flat level, as a hand bridge's.
-    for (_, w) in crate::wharf::near(world, [hx0, hy0, hx0 + span, hy0 + span]) {
+    // (R7 173: a shore quay's piers as piers of their own.)
+    let near: Vec<std::borrow::Cow<crate::world::Wharf>> = crate::wharf::near(world, [hx0, hy0, hx0 + span, hy0 + span]).flat_map(|(_, w)| std::iter::once(std::borrow::Cow::Borrowed(w)).chain(crate::wharf::shore_piers(w, t0).into_iter().map(std::borrow::Cow::Owned))).collect();
+    for w in near.iter().map(|w| w.as_ref()) {
         use crate::world::WharfKind;
         if w.kind == WharfKind::Pier {
             let top = crate::wharf::level(w, t0);
@@ -106,7 +108,17 @@ pub(super) fn build(
             }
             continue;
         }
-        if w.kind == WharfKind::Quay {
+        if w.kind == WharfKind::Quay && w.shore {
+            // (A shore quay's pieces: cargo and works along each one's face; a timber one planked over.)
+            let piers: Vec<Vec<[f64; 2]>> = crate::wharf::shore_piers(w, t0).iter().flat_map(crate::wharf::decks).collect();
+            for (piece, m) in crate::wharf::shore_pieces(w).iter().filter(|p| overlaps(bbox(&p.0))) {
+                quay_cargo(piece, seed, stalls);
+                quay_works(piece, &piece[..*m], seed, &piers, true, dock);
+                if w.material == crate::world::CrossingMaterial::Timber && owns(crate::town::geom::centroid(piece)) {
+                    shapes.push(VectorShape { kind: ShapeKind::Deck, size: 0.0, pts: piece.iter().map(&local).collect() });
+                }
+            }
+        } else if w.kind == WharfKind::Quay {
             for strip in crate::wharf::strips(w, t0).iter().filter(|p| p.len() == 4 && overlaps(bbox(p))) {
                 quay_cargo(strip, seed, stalls);
                 quay_works(strip, &strip[..2], seed, &[], true, dock);

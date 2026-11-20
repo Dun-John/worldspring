@@ -179,6 +179,11 @@ export class GenClient {
     return this.ask({ op: 'islet', key, x, y, radius, rise }).then((j) => JSON.parse(j));
   }
 
+  /** A stroke brushed along the shore snapped to the water's edge: a shore quay's points, or why not. */
+  shoreLine(stroke: [number, number][]): Promise<{ pts: [number, number][] } | { error: string } | null> {
+    return this.ask({ op: 'shoreline', stroke: JSON.stringify(stroke) }).then((j) => JSON.parse(j));
+  }
+
   /** Whether a wharf can be put down (a breakwater's lighthouse too, when asked): why not, or its lighthouse. */
   wharfCheck(wharf: Wharf, lighthouse: boolean): Promise<{ error: string } | { lighthouse?: { poly: [number, number][]; x: number; y: number; name: string } } | null> {
     return this.ask({ op: 'wharfcheck', wharf: JSON.stringify(wharf), lighthouse }).then((j) => JSON.parse(j));

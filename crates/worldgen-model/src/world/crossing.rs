@@ -87,6 +87,11 @@ impl Crossing {
 /// dry side, and the water inside that strip is filled in (made ground behind a stone face). A
 /// pier and a breakwater run from `pts[0]` on the bank out over the water: a pier a deck
 /// (`material`), a breakwater a raised strip of rubble, always stone (`crate::wharf`).
+///
+/// R7 173: a quay brushed along the shore (`shore`) has its face traced along the water's edge
+/// (`wharf::shore_line`, up to `MAX_SHORE_PTS` points ~5 ft apart), the dry side on the left of
+/// its line (`[-u.y, u.x]`), paving `width` ft from it in a smooth band; `material` timber or stone;
+/// `piers` ft apart (0: none) a pier sticks straight out from its face into the water.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Wharf {
     pub kind: WharfKind,
@@ -95,6 +100,14 @@ pub struct Wharf {
     pub width: f64,
     #[serde(default, skip_serializing_if = "CrossingMaterial::is_timber")]
     pub material: CrossingMaterial,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shore: bool,
+    #[serde(default, skip_serializing_if = "no_piers")]
+    pub piers: f64,
+}
+
+fn no_piers(v: &f64) -> bool {
+    *v == 0.0
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,6 +152,18 @@ impl WharfKind {
 
 impl Wharf {
     pub const MAX_PTS: usize = 16;
+    /// A shore quay's points at most, each side at least `MIN_SHORE_SIDE_FT`; its piers
+    /// `PIERS_FT` apart (or none), each `SHORE_PIER_FT` long and `SHORE_PIER_WIDTH_FT` wide.
+    pub const MAX_SHORE_PTS: usize = 512;
+    pub const MIN_SHORE_SIDE_FT: f64 = 1.0;
+    pub const PIERS_FT: std::ops::RangeInclusive<f64> = 30.0..=400.0;
+    pub const SHORE_PIER_FT: f64 = 40.0;
+    pub const SHORE_PIER_WIDTH_FT: f64 = 10.0;
+
+    /// A wharf of `kind` along `pts`, `width` ft wide, of timber, not a shore quay.
+    pub fn new(kind: WharfKind, pts: Vec<[f64; 2]>, width: f64, material: CrossingMaterial) -> Wharf {
+        Wharf { kind, pts, width, material, shore: false, piers: 0.0 }
+    }
     /// Each side at least this long (ft), and the whole line at most `MAX_LENGTH_FT`.
     pub const MIN_SIDE_FT: f64 = 10.0;
     pub const MAX_LENGTH_FT: f64 = 2000.0;
@@ -152,8 +177,16 @@ impl Wharf {
     /// too short, too long in all, too narrow or wide for its kind.
     pub fn problem(&self, map_w_ft: f64, map_h_ft: f64) -> Option<String> {
         let n = self.pts.len();
-        if !(2..=Self::MAX_PTS).contains(&n) {
-            return Some(format!("a {} has 2 to {} points, not {n}", self.kind.name(), Self::MAX_PTS));
+        let shore = self.shore && self.kind == WharfKind::Quay;
+        if self.shore && !shore {
+            return Some(format!("a {} does not follow the shore (only a quay does)", self.kind.name()));
+        }
+        let (max_pts, min_side) = if shore { (Self::MAX_SHORE_PTS, Self::MIN_SHORE_SIDE_FT) } else { (Self::MAX_PTS, Self::MIN_SIDE_FT) };
+        if !(2..=max_pts).contains(&n) {
+            return Some(format!("a {} has 2 to {} points, not {n}", self.kind.name(), max_pts));
+        }
+        if self.piers != 0.0 && !(shore && Self::PIERS_FT.contains(&self.piers)) {
+            return Some(format!("piers: 0 (none) or {:.0} to {:.0} ft apart, on a quay along the shore", Self::PIERS_FT.start(), Self::PIERS_FT.end()));
         }
         let on = |p: &[f64; 2]| p[0].is_finite() && p[1].is_finite() && (0.0..map_w_ft).contains(&p[0]) && (0.0..map_h_ft).contains(&p[1]);
         if !self.pts.iter().all(on) {
@@ -161,8 +194,8 @@ impl Wharf {
         }
         for (k, s) in self.pts.windows(2).enumerate() {
             let d = crate::core::sqrt((s[1][0] - s[0][0]) * (s[1][0] - s[0][0]) + (s[1][1] - s[0][1]) * (s[1][1] - s[0][1]));
-            if d < Self::MIN_SIDE_FT {
-                return Some(format!("side {} is {d:.0} ft: each side at least {:.0} ft", k + 1, Self::MIN_SIDE_FT));
+            if d < min_side {
+                return Some(format!("side {} is {d:.0} ft: each side at least {:.0} ft", k + 1, min_side));
             }
         }
         let len = self.length();

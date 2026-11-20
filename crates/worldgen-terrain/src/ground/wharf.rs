@@ -15,7 +15,9 @@ pub const MADE_ABOVE_FT: (f32, f32) = (3.0, 10.0);
 pub fn water(w: &Wharf, t0: &T0, margin: f64) -> f32 {
     let cache = crate::lod::rivers::CrossingCache::default();
     let mut top = crate::t0::hydro::DRY;
-    for s in w.pts.windows(2) {
+    // (A shore quay's line every ~40 ft: its points are ~5 ft apart.)
+    let pts: Vec<P> = if w.shore { w.pts.iter().copied().step_by(8).chain(w.pts.last().copied()).collect() } else { w.pts.clone() };
+    for s in pts.windows(2) {
         let n = (geom::dist(s[0], s[1]) / 10.0).ceil().max(1.0) as usize;
         for k in 0..=n {
             let p = geom::lerp(s[0], s[1], k as f64 / n as f64);
@@ -81,6 +83,7 @@ pub fn strips(w: &Wharf, t0: &T0) -> Vec<Vec<P>> {
     let mut out = Vec::new();
     match w.kind {
         WharfKind::Pier => {}
+        WharfKind::Quay if w.shore => out.extend(shore_pieces(w).into_iter().map(|p| p.0)),
         WharfKind::Quay => {
             let sides: Vec<P> = w.pts.windows(2).map(|s| dry_side(t0, s[0], s[1], w.width)).collect();
             for (s, n) in w.pts.windows(2).zip(&sides) {
@@ -110,8 +113,95 @@ pub fn decks(w: &Wharf) -> Vec<Vec<P>> {
     out
 }
 
-/// The bounds (world ft: x0, y0, x1, y1) a wharf's ground and decks keep within.
+/// The bounds (world ft: x0, y0, x1, y1) a wharf's ground and decks keep within (a shore quay's
+/// piers too).
 pub fn bounds(w: &Wharf) -> [f64; 4] {
-    let r = w.width + 1.0;
+    let r = if w.shore && w.piers > 0.0 { w.width.max(Wharf::SHORE_PIER_FT) } else { w.width } + 1.0;
     w.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0] - r), b[1].min(p[1] - r), b[2].max(p[0] + r), b[3].max(p[1] + r)])
+}
+
+// R7 173: quays brushed along the shore (`Wharf::shore`).
+
+/// A shore quay's normals at its points, toward the dry side: the left of its line's tangent
+/// there (across the points either side).
+pub fn shore_normals(pts: &[P]) -> Vec<P> {
+    let n = pts.len();
+    (0..n)
+        .map(|k| {
+            let u = unit(geom::sub(pts[(k + 1).min(n - 1)], pts[k.saturating_sub(1)]));
+            [-u[1], u[0]]
+        })
+        .collect()
+}
+
+/// A shore quay's back line: `width` ft in from each point of its face along its normal, closing
+/// onto the face at each end in a quarter ellipse over about its width (a round end on the beach,
+/// never a straight cut).
+pub fn shore_back(w: &Wharf) -> Vec<P> {
+    let (pts, normal) = (&w.pts, shore_normals(&w.pts));
+    let n = pts.len();
+    let mut along = vec![0.0; n];
+    for k in 1..n {
+        along[k] = along[k - 1] + geom::dist(pts[k - 1], pts[k]);
+    }
+    let run = along[n - 1];
+    let reach = w.width.max(10.0).min(0.3 * run).max(1e-6);
+    (0..n)
+        .map(|k| {
+            let d = along[k].min(run - along[k]);
+            let u = (1.0 - d / reach).max(0.0);
+            let e = crate::core::sqrt(1.0 - u * u).max(0.04);
+            geom::add(pts[k], geom::mul(normal[k], w.width * e))
+        })
+        .collect()
+}
+
+/// A shore quay's length (ft) in each of its pieces (`shore_pieces`).
+pub const SHORE_PIECE_FT: f64 = 40.0;
+
+/// A shore quay's made ground in pieces of about `SHORE_PIECE_FT` along it: each its face's
+/// points `k0..=k1` then its back's `k1..=k0` (a polygon), with how many of them are the face's.
+pub fn shore_pieces(w: &Wharf) -> Vec<(Vec<P>, usize)> {
+    let n = w.pts.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let back = shore_back(w);
+    let np = (crate::core::round(w.length() / SHORE_PIECE_FT) as usize).clamp(1, n - 1);
+    (0..np)
+        .map(|j| {
+            let (a, b) = (j * (n - 1) / np, (j + 1) * (n - 1) / np);
+            let mut poly: Vec<P> = w.pts[a..=b].to_vec();
+            poly.extend(back[a..=b].iter().rev());
+            (poly, b - a + 1)
+        })
+        .collect()
+}
+
+/// A shore quay's piers (`Wharf::piers` ft apart, none within half that of its ends): each
+/// `SHORE_PIER_FT` straight out from its face into the water, from 2 ft back on the quay, of its
+/// material; only where T0 has water under its middle and tip.
+pub fn shore_piers(w: &Wharf, t0: &T0) -> Vec<Wharf> {
+    if !w.shore || w.kind != WharfKind::Quay || w.piers <= 0.0 || w.pts.len() < 2 {
+        return Vec::new();
+    }
+    let normal = shore_normals(&w.pts);
+    let len = w.length();
+    let mut out = Vec::new();
+    let (mut at, mut run, mut k) = (0.5 * w.piers, 0.0, 0);
+    while at <= len - 0.5 * w.piers + 1e-6 {
+        while k + 2 < w.pts.len() && run + geom::dist(w.pts[k], w.pts[k + 1]) < at {
+            run += geom::dist(w.pts[k], w.pts[k + 1]);
+            k += 1;
+        }
+        let d = geom::dist(w.pts[k], w.pts[k + 1]).max(1e-9);
+        let t = ((at - run) / d).clamp(0.0, 1.0);
+        let (p, nn) = (geom::lerp(w.pts[k], w.pts[k + 1], t), unit(geom::lerp(normal[k], normal[k + 1], t)));
+        let (root, tip) = (geom::add(p, geom::mul(nn, 2.0)), geom::sub(p, geom::mul(nn, Wharf::SHORE_PIER_FT)));
+        if wetness(t0, tip) > 0.0 && wetness(t0, geom::lerp(p, tip, 0.5)) > 0.0 {
+            out.push(Wharf::new(WharfKind::Pier, vec![root, tip], Wharf::SHORE_PIER_WIDTH_FT, w.material));
+        }
+        at += w.piers;
+    }
+    out
 }

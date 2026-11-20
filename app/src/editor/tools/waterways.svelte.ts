@@ -3,7 +3,7 @@
 import type { Created, Crossing, Edits, Water } from '../../gen/protocol';
 import type { Pt } from '../build';
 import { SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from '../crossing';
-import { defaultHarbour, wharfOf, wharfProblem, type HarbourSettings } from '../harbour';
+import { defaultHarbour, shoreQuayOf, wharfOf, wharfProblem, type HarbourSettings } from '../harbour';
 import { MAX_WATERS, centre, defaultWater, depthOf, flows, isDug, isLine, legacy, lookOf, ofSea, shore, streamLevels, streamSamples, waterProblem, widthOf, type WaterSettings } from '../water';
 import { MAX_PATHS, defaultPath, kindWidth, pathProblem, type PathSettings } from '../paths';
 import { newObjectId } from '../scatter';
@@ -311,6 +311,20 @@ export function waterways(app: BuildHost) {
     app.applyEdits(next, { tool: 'place_wharf', id, kind: w.kind, changed: false, lighthouse: !!r.lighthouse }, 'user');
   }
 
+  /** R7 173: a quay brushed along the shore: the stroke snapped to the water's edge by the
+   * generator (`wharf::shore_line`), checked, then put down as one change. */
+  async function harbourShore(stroke: Pt[]) {
+    const s = await app.view.gen.shoreLine(stroke);
+    if (!s) return app.toast('The map could not answer: try again');
+    if ('error' in s) return app.toast(cap(s.error));
+    const w = shoreQuayOf(harbour, s.pts);
+    const r = await app.view.gen.wharfCheck(w, false);
+    if (!r) return app.toast('The map could not answer: try again');
+    if ('error' in r) return app.toast(cap(r.error));
+    const id = newObjectId('q');
+    app.applyEdits({ ...app.edits, wharves: { ...(app.edits.wharves ?? {}), [id]: w } }, { tool: 'place_wharf', id, kind: 'quay', changed: false, shore: true }, 'user');
+  }
+
   /** The wharf picked is taken away, its lighthouse with it. */
   function removeWharf() {
     const id = harbourPicked;
@@ -336,6 +350,7 @@ export function waterways(app: BuildHost) {
     removeCrossing,
     harbourIslet,
     harbourWharf,
+    harbourShore,
     removeWharf,
     get cross() { return cross; },
     set cross(v) { cross = v; },

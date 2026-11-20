@@ -409,8 +409,8 @@ pub(in super::super) fn ground_edits(base: &World) {
     assert!(agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).is_err(), "a building in the water before the islet");
     let others: Vec<usize> = shores.iter().copied().filter(|&k2| k2 != islet_k2).collect();
     let (b_at, q_at) = (at(others[0]), at(others[1]));
-    let breakwater = Wharf { kind: WharfKind::Breakwater, pts: vec![[b_at[0] - 10.0, b_at[1]], [b_at[0] + 60.0, b_at[1]]], width: 15.0, material: Default::default() };
-    let quay = Wharf { kind: WharfKind::Quay, pts: vec![[q_at[0] + 2.5, q_at[1] - 30.0], [q_at[0] + 2.5, q_at[1] + 30.0]], width: 15.0, material: Default::default() };
+    let breakwater = Wharf { kind: WharfKind::Breakwater, pts: vec![[b_at[0] - 10.0, b_at[1]], [b_at[0] + 60.0, b_at[1]]], width: 15.0, material: Default::default(), shore: false, piers: 0.0 };
+    let quay = Wharf { kind: WharfKind::Quay, pts: vec![[q_at[0] + 2.5, q_at[1] - 30.0], [q_at[0] + 2.5, q_at[1] + 30.0]], width: 15.0, material: Default::default(), shore: false, piers: 0.0 };
     for w in [&breakwater, &quay] {
         assert!(w.problem(g.map_w_ft, g.map_h_ft).is_none(), "a {}: {:?}", w.kind.name(), w.problem(g.map_w_ft, g.map_h_ft));
     }

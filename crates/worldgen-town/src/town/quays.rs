@@ -367,6 +367,8 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
             pts: vec![site.world(mi.2), site.world(mi.1)],
             width: f[mi.0] + FRONT_BACK_FT,
             material: crate::world::CrossingMaterial::Stone,
+            shore: false,
+            piers: 0.0,
         },
         site.t0,
     );

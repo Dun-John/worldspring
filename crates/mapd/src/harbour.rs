@@ -22,12 +22,14 @@ pub fn list() -> Vec<Value> {
             "radius_ft": { "type": "number", "minimum": 10, "maximum": 200, "default": 30 },
             "rise_ft": { "type": "number", "minimum": 1, "maximum": 30, "default": 5, "description": "Its top over the water" },
         }), &[]) }),
-        json!({ "name": "place_wharf", "title": "Put a quay, pier or breakwater down", "description": "A quay (paving along a shore), pier (a deck) or breakwater (a stone mole; lighthouse: true builds one at its tip) along path (a pier's or breakwater's first point on the bank). With id (q:...), changes it. Returns id, water and bank.", "inputSchema": schema(json!({
+        json!({ "name": "place_wharf", "title": "Put a quay, pier or breakwater down", "description": "A quay (paving along a shore), pier (a deck) or breakwater (a stone mole; lighthouse: true builds one at its tip) along path (a pier's or breakwater's first point on the bank). A quay with shore: true follows the water's edge near path (a line drawn along the shore), with optional piers every pier_spacing_ft. With id (q:...), changes it. Returns id, water and bank.", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A wharf to change" },
             "kind": { "type": "string", "enum": ["quay", "pier", "breakwater"] },
-            "path": { "type": "array", "minItems": 2, "maxItems": 16, "items": crate::args::point_schema("A point") },
+            "path": { "type": "array", "minItems": 2, "maxItems": 512, "items": crate::args::point_schema("A point") },
             "width_ft": { "type": "number", "minimum": 6, "maximum": 60, "description": "By kind: MCP.md" },
             "material": { "type": "string", "enum": ["timber", "stone"] },
+            "shore": { "type": "boolean", "description": "A quay only: snap path to the water's edge within 60 ft of it and follow it smoothly" },
+            "pier_spacing_ft": { "type": "number", "minimum": 0, "maximum": 400, "description": "A shore quay's piers, this far apart (0: none; else 30 to 400)" },
             "lighthouse": { "type": "boolean" },
         }), &[]) }),
         json!({ "name": "list_wharves", "title": "Quays, piers and breakwaters", "description": "The wharves put down by hand, with the buildings on them.", "inputSchema": schema(json!({
@@ -172,7 +174,11 @@ fn near_path(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
 /// A wharf's own description: what the app and `list_wharves` show.
 fn wharf_json(e: &Edits, id: &str, w: &Wharf, sea: f64, level: Option<f32>) -> Value {
     let mut v = json!({ "id": id, "kind": w.kind.name(), "path": w.pts, "width_ft": w.width, "length_ft": w.length().round() });
-    if w.kind != WharfKind::Quay {
+    if w.shore {
+        v["shore"] = json!(true);
+        v["pier_spacing_ft"] = json!(w.piers);
+    }
+    if w.kind != WharfKind::Quay || w.shore {
         v["material"] = json!(if w.material == CrossingMaterial::Stone || w.kind == WharfKind::Breakwater { "stone" } else { "timber" });
     }
     if let Some(l) = level {
@@ -221,10 +227,40 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     if lighthouse == Some(true) && kind != WharfKind::Breakwater {
         return Err(format!("lighthouse: only a breakwater has one (this is a {})", kind.name()));
     }
-    let w = match &old {
-        Some(o) => Wharf { kind, pts: path.clone().unwrap_or_else(|| o.pts.clone()), width: width.unwrap_or(o.width), material: material.unwrap_or(o.material) },
-        None => Wharf { kind, pts: path.clone().ok_or("path: needed for a new wharf (2 to 16 points)")?, width: width.unwrap_or_else(|| kind.default_width()), material: material.unwrap_or(CrossingMaterial::Timber) },
+    // (R7 173: a quay along the shore: its path snapped to the water's edge.)
+    let shore = a["shore"].as_bool().unwrap_or(old.as_ref().is_some_and(|o| o.shore));
+    if shore && kind != WharfKind::Quay {
+        return Err(format!("shore: only a quay follows the shore (this is a {})", kind.name()));
+    }
+    let piers = num(a, "pier_spacing_ft")?;
+    if piers.is_some_and(|p| p != 0.0) && !shore {
+        return Err("pier_spacing_ft: only a quay with shore: true has piers".into());
+    }
+    let path = match path {
+        Some(p) if shore => Some(app.worker.with(move |ex| Ok(wharf::shore_line(&ex.t0, &p))).await?.map_err(|e| format!("path: {e}"))?),
+        p => p,
     };
+    let w = match &old {
+        Some(o) => Wharf {
+            kind,
+            pts: path.clone().unwrap_or_else(|| o.pts.clone()),
+            width: width.unwrap_or(o.width),
+            material: material.unwrap_or(o.material),
+            shore,
+            piers: piers.unwrap_or(if shore { o.piers } else { 0.0 }),
+        },
+        None => Wharf {
+            kind,
+            pts: path.clone().ok_or("path: needed for a new wharf (2 to 16 points; a shore quay's line along the shore up to 512)")?,
+            width: width.unwrap_or_else(|| kind.default_width()),
+            material: material.unwrap_or(CrossingMaterial::Timber),
+            shore,
+            piers: piers.unwrap_or(0.0),
+        },
+    };
+    if shore && old.as_ref().is_some_and(|o| !o.shore) && path.is_none() {
+        return Err("shore: give path (a line along the shore) to turn a quay into one along the shore".into());
+    }
     let w = Wharf { material: if kind == WharfKind::Breakwater { CrossingMaterial::Stone } else { w.material }, ..w };
     let [mw, mh] = app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await?;
     if let Some(p) = w.problem(mw, mh) {

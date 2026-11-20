@@ -58,6 +58,8 @@ export type Ask =
   | { op: 'islet'; key: string; x: number; y: number; radius: number; rise: number }
   /** Whether a wharf can be put down, with its lighthouse (`wharf::root_problem`). */
   | { op: 'wharfcheck'; wharf: string; lighthouse: boolean }
+  /** A brushed stroke snapped to the water's edge: a shore quay's points (`wharf::shore_line`). */
+  | { op: 'shoreline'; stroke: string }
   /** An underground site as a design (the one given, else its own), changed by `action`, with
    * what it builds and its problems (`under::design::design_json`). */
   | { op: 'design'; id: string; design?: string; action?: string }

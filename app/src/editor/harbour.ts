@@ -1,5 +1,6 @@
 // Build › Harbour: rock islets (a click), and quays, piers and breakwaters (a drag: a pier or
-// breakwater from the bank out over the water, a quay along the shore). The map shows what
+// breakwater from the bank out over the water; R7 173: a quay brushed along the shore, which the
+// generator snaps to the water's edge, `wharf::shore_line`). The map shows what
 // the drag will be (as wide as it will be); the generator has the last word on release
 // (`Wharf::problem`, `wharf::root_problem`, through the app's `wharfcheck` op). A click on one put
 // down earlier (when nothing is being drawn) picks it, to take it away. Right-drag pans meanwhile.
@@ -23,11 +24,42 @@ export interface HarbourSettings {
   width: number;
   /** A breakwater's lighthouse at its tip. */
   lighthouse: boolean;
-  /** A pier's material. */
+  /** A pier's or quay's material. */
   material: 'timber' | 'stone';
+  /** A quay's piers, this many ft apart (0: none). */
+  piers: number;
 }
 
-export const defaultHarbour = (): HarbourSettings => ({ kind: 'pier', radius: 30, rise: 5, width: WHARF_WIDTH.pier[2], lighthouse: false, material: 'timber' });
+export const defaultHarbour = (): HarbourSettings => ({ kind: 'pier', radius: 30, rise: 5, width: WHARF_WIDTH.pier[2], lighthouse: false, material: 'timber', piers: 0 });
+
+/** The quay brush's width range (ft) and its piers' spacing (`Wharf::PIERS_FT`). */
+export const SHORE_WIDTH: [number, number] = [15, 30];
+export const PIER_SPACING: [number, number] = [30, 400];
+
+/** A shore quay from a brushed stroke snapped to the shore (`pts`) and the strip's choices. */
+export function shoreQuayOf(s: HarbourSettings, pts: Pt[]): Wharf {
+  return { kind: 'quay', pts, width: s.width, shore: true, ...(s.material === 'stone' ? { material: 'stone' as const } : {}), ...(s.piers > 0 ? { piers: s.piers } : {}) };
+}
+
+/** A shore quay's back line (mirrors `wharf::shore_back`): `width` ft to the left of its face,
+ * closing onto the face at its ends. */
+export function shoreBack(w: Wharf): Pt[] {
+  const p = w.pts;
+  const n = p.length;
+  const width = w.width ?? 20;
+  const along = [0];
+  for (let k = 1; k < n; k++) along.push(along[k - 1] + Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]));
+  const run = along[n - 1];
+  const reach = Math.max(1e-6, Math.min(Math.max(width, 10), 0.3 * run));
+  return p.map((q, k) => {
+    const a = p[Math.max(0, k - 1)];
+    const b = p[Math.min(n - 1, k + 1)];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const u = Math.max(0, 1 - Math.min(along[k], run - along[k]) / reach);
+    const e = Math.max(0.04, Math.sqrt(1 - u * u)) * width;
+    return [q[0] - ((b[1] - a[1]) / l) * e, q[1] + ((b[0] - a[0]) / l) * e];
+  });
+}
 
 /** The islet radius and rise ranges (`raise_islet`). */
 export const ISLET_RADIUS: [number, number] = [10, 200];
@@ -64,6 +96,8 @@ export interface HarbourHost {
   islet(at: Pt): void;
   /** A wharf dragged (both ends, world ft). */
   wharf(a: Pt, b: Pt): void;
+  /** A quay brushed along the shore (the stroke, world ft). */
+  shore(stroke: Pt[]): void;
   /** A wharf put down earlier was clicked. */
   pick(id: string): void;
   hint(text: string): void;
@@ -71,6 +105,7 @@ export interface HarbourHost {
 
 export class HarbourTool implements PointerTool {
   private from: Pt | null = null;
+  private stroke: Pt[] | null = null;
   private cursor: Pt | null = null;
   readonly hoverFollows = true;
 
@@ -85,11 +120,14 @@ export class HarbourTool implements PointerTool {
     this.cursor = this.snap(x, y);
     if (this.host.settings().kind !== 'islet' && !this.at(this.cursor)) this.from = this.cursor;
     else this.from = null;
+    this.stroke = this.from && this.host.settings().kind === 'quay' ? [this.from] : null;
     return true;
   }
 
   move(x: number, y: number) {
     this.cursor = this.snap(x, y);
+    const last = this.stroke?.[this.stroke.length - 1];
+    if (this.stroke && last && Math.hypot(this.cursor[0] - last[0], this.cursor[1] - last[1]) >= 3) this.stroke.push(this.cursor);
   }
 
   hover(x: number, y: number) {
@@ -100,8 +138,18 @@ export class HarbourTool implements PointerTool {
     const p = this.snap(x, y);
     const s = this.host.settings();
     const a = this.from;
+    const stroke = this.stroke;
     this.from = null;
+    this.stroke = null;
     if (s.kind === 'islet') return this.host.islet(p);
+    if (stroke) {
+      const last = stroke[stroke.length - 1];
+      if (Math.hypot(p[0] - last[0], p[1] - last[1]) >= 1) stroke.push(p);
+      let len = 0;
+      for (let i = 1; i < stroke.length; i++) len += Math.hypot(stroke[i][0] - stroke[i - 1][0], stroke[i][1] - stroke[i - 1][1]);
+      if (len < 20) return this.host.hint('Brush along the shore: the quay follows the water\'s edge');
+      return this.host.shore(stroke);
+    }
     if (!a) {
       const hit = this.at(p);
       if (hit) return this.host.pick(hit);
@@ -116,7 +164,9 @@ export class HarbourTool implements PointerTool {
     let best: [string, number] | null = null;
     for (const [id, w] of Object.entries(this.host.edits().wharves ?? {})) {
       let d = Infinity;
-      for (let i = 0; i + 1 < w.pts.length; i++) d = Math.min(d, segDist(p, w.pts[i], w.pts[i + 1]));
+      // (A shore quay's band lies on the dry side of its face: its middle line.)
+      const line = w.shore ? shoreBack({ ...w, width: (w.width ?? 20) / 2 }) : w.pts;
+      for (let i = 0; i + 1 < line.length; i++) d = Math.min(d, segDist(p, line[i], line[i + 1]));
       d -= (w.width ?? 20) / 2;
       if (d < 4 && (!best || d < best[1])) best = [id, d];
     }
@@ -127,11 +177,13 @@ export class HarbourTool implements PointerTool {
   reset(): boolean {
     const had = !!this.from;
     this.from = null;
+    this.stroke = null;
     return had;
   }
 
   cancel() {
     this.from = null;
+    this.stroke = null;
   }
 
   draw(g: Graphics, cam: Camera) {
@@ -140,6 +192,11 @@ export class HarbourTool implements PointerTool {
     const picked = this.host.picked();
     for (const [id, w] of Object.entries(this.host.edits().wharves ?? {})) {
       const on = id === picked;
+      if (w.shore) {
+        g.poly([...w.pts, ...shoreBack(w).reverse()].flatMap((q) => scr(q)));
+        g.fill({ color: ink, alpha: on ? 0.25 : 0.06 }).stroke({ width: on ? 2 : 1, color: ink, alpha: on ? 1 : 0.6 });
+        continue;
+      }
       for (let i = 0; i + 1 < w.pts.length; i++) {
         outline(g, w.pts[i], w.pts[i + 1], w.width ?? 20, scr);
         g.fill({ color: ink, alpha: on ? 0.25 : 0.06 }).stroke({ width: on ? 2 : 1, color: ink, alpha: on ? 1 : 0.6 });
@@ -158,6 +215,11 @@ export class HarbourTool implements PointerTool {
     if (!this.from) {
       const [sx, sy] = scr(this.cursor);
       g.circle(sx, sy, 3).fill({ color: ink });
+      return;
+    }
+    if (this.stroke) {
+      // (The brush: where it was dragged; the quay snaps to the water's edge on release.)
+      g.poly(this.stroke.flatMap((q) => scr(q)), false).stroke({ width: 3, color: ink, alpha: 0.8 });
       return;
     }
     const [a, b] = [this.from, this.cursor];
