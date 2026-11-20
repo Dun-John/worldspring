@@ -355,23 +355,40 @@ pub(in super::super) fn ground_edits(base: &World) {
     use worldgen::world::{Wharf, WharfKind};
     let wet = |c: &Chunk, k2: usize| c.water_level[k2] > c.height[k2];
     assert!(!serde_json::to_string(&ground::plateau_for(&pit, 10.0, 0.0).unwrap()).unwrap().contains("kind"), "a plateau's file changed");
-    // Shores: the first dry square of a row with 80 ft of open water east of it, rows 100 ft apart.
-    let (key, shores) = settlements
-        .iter()
-        .map(|s| TileKey::surface(lvl, (s.x / size) as u32, (s.y / size) as u32))
-        .find_map(|k| {
-            let c = ex.battlemap(k);
-            let mut rows: Vec<usize> = Vec::new();
-            for j in 10..SQ - 10 {
-                if rows.last().is_some_and(|&r| j < r / SQ + 20) {
-                    continue;
-                }
-                if let Some(k2) = (10..SQ - 30).map(|i| j * SQ + i).find(|&k2| !wet(&c, k2) && c.building[k2] == 0 && (1..=16).all(|d| wet(&c, k2 + d))) {
-                    rows.push(k2);
-                }
-            }
-            (rows.len() >= 3).then_some((k, rows))
+    // Shores: the first dry square of a row with 80 ft of open standing water east of it, rows 100 ft apart.
+    // (Best a chunk with a row whose inlet below meets a city's quay front, for the front's check there.)
+    let meets_at = |s: [f64; 2]| {
+        city_fronts.iter().any(|f| {
+            let b = worldgen::ground::bbox(f);
+            b[0] - 10.0 <= s[0] + 30.0 && b[2] + 10.0 >= s[0] - 50.0 && b[1] - 10.0 <= s[1] + 15.0 && b[3] + 10.0 >= s[1] - 15.0
         })
+    };
+    let mut shore_rows = |k: TileKey, front: bool| {
+        let c = ex.battlemap(k);
+        let mut rows: Vec<usize> = Vec::new();
+        for j in 10..SQ - 10 {
+            if rows.last().is_some_and(|&r| j < r / SQ + 20) {
+                continue;
+            }
+            // (Standing water in T0, a sea's or lake's: not a river's.)
+            let open = |k2: usize| wet(&c, k2) && { let p = centre(&k, k2 % SQ, k2 / SQ); ex.t0.sample_water(p[0], p[1]) > worldgen::t0::hydro::DRY };
+            if let Some(k2) = (10..SQ - 30).map(|i| j * SQ + i).find(|&k2| !wet(&c, k2) && c.building[k2] == 0 && (1..=16).all(|d| open(k2 + d))) {
+                rows.push(k2);
+            }
+        }
+        (rows.len() >= 3 && (!front || rows.iter().any(|&k2| meets_at(centre(&k, k2 % SQ, k2 / SQ))))).then_some((k, rows))
+    };
+    let chunks: Vec<TileKey> = settlements.iter().map(|s| TileKey::surface(lvl, (s.x / size) as u32, (s.y / size) as u32)).collect();
+    // (The chunks the fronts stand in, then the settlements'.)
+    let front_chunks: Vec<TileKey> = city_fronts.iter().map(|f| {
+        let b = worldgen::ground::bbox(f);
+        TileKey::surface(lvl, (0.5 * (b[0] + b[2]) / size) as u32, (0.5 * (b[1] + b[3]) / size) as u32)
+    }).collect();
+    let (key, shores) = front_chunks
+        .iter()
+        .chain(chunks.iter())
+        .find_map(|&k| shore_rows(k, true))
+        .or_else(|| chunks.iter().find_map(|&k| shore_rows(k, false)))
         .expect("a shore with three rows of open water");
     let plain_c = pack(&mut ex, key);
     let plain_padded = ex.terrain(key).padded.clone();
@@ -598,7 +615,10 @@ pub(in super::super) fn ground_edits(base: &World) {
             for q in 0..SQ * SQ {
                 let p = at(q);
                 let (raised, off) = ((plain_c.1.height[q] - f.level).abs() < 0.01 && !wet(&plain_c.1, q), worldgen::town::geom::poly_gap(&inlet.pts, &[p]) > 6.0);
-                if !worldgen::town::geom::contains(&f.pts, p) || worldgen::town::geom::poly_gap(&f.pts, &[p]) < 3.0 || !raised || !off || c.building[q] != 0 || c.urban[q] == battlemap::URBAN_DECK {
+                if !worldgen::town::geom::contains(&f.pts, p) || worldgen::town::geom::poly_gap(&f.pts, &[p]) < 3.0 || !raised || !off || c.building[q] != 0 || c.urban[q] == battlemap::URBAN_DECK
+                    // (By a kept front it joins: that one's own paving.)
+                    || kept.iter().any(|k| worldgen::town::geom::poly_gap(&k.pts, &[p]) < 6.0)
+                {
                     continue;
                 }
                 assert!(c.height[q] < f.level - 0.01, "the inlet: square {q} on the front it meets still made ground ({} at level {})", c.height[q], f.level);
