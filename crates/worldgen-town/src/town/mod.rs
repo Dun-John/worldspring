@@ -348,7 +348,8 @@ pub struct Layout {
     pub forecourts: Vec<palace::Forecourt>,
     /// The ground a temple's or a monastery's lots held (world ft), by its id: a temple's lot it stands
     /// on in pieces (`temple::shape_all`), a monastery's own lot and those it took in (`palace::merge`).
-    /// What of it the building leaves open is its own: no other building's door opens onto it.
+    /// What of it the building leaves open is its own: no other building's door opens onto it. An inn
+    /// that took others in has two: the lot they make first (`wings::lot`), its own last (`wings::own_lot`).
     pub grounds: Vec<(u32, Vec<P>)>,
     /// (Roadmap 7, 163) The buildings shaped as an L, a U or a court (`wings::shape_all`), their ids in
     /// order (their lots in `grounds`); only these are roofed and laid out by their ranges (`wings::ranges`).

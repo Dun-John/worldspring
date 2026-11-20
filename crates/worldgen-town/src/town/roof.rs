@@ -157,7 +157,7 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     let rich = wealth(b);
     let city = l.tier as u8 >= 2;
     // (Roadmap 7, 163: an L's, a U's or a court's its lot's, as when it was shaped, `wings::shaped`.)
-    let lot = if super::wings::is_shaped(l, b) { l.grounds.iter().find(|g| g.0 == b.id).map(|g| &g.1[..]) } else { None };
+    let lot = if super::wings::is_shaped(l, b) { super::wings::lot(l, b.id) } else { None };
     let o = super::geom::obb(lot.unwrap_or(&b.poly));
     let area = super::geom::area(lot.unwrap_or(&b.poly)).abs();
     let compact = o.long <= 1.35 * o.short.max(1.0);

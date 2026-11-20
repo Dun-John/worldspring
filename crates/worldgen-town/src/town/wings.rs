@@ -7,7 +7,7 @@
 //! (`Layout::grounds`). The footprint is rectilinear: its ranges (`arms`) are what the battlemap roofs
 //! (`app/src/gen/roofMesh.ts` `rangesRoof`), each hipped or gabled, valleys where they meet.
 
-use super::geom::{P, add, area, clean, contains, cross, dot, len, mul, obb, seg_dist, sub};
+use super::geom::{P, add, area, clean, contains, cross, dot, len, mul, obb, seg_dist, segs_cross_mul, sub};
 use super::{Building, Layout, Structure, Ward, catalog, roof};
 use crate::core::rng::{hash3, unit};
 
@@ -74,25 +74,34 @@ fn kind_of(b: &Building) -> Option<(bool, bool)> {
 pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) {
     let edited: Vec<u32> = edit.map(|(w, _)| super::building_edits(w, l.index).map(|(id, _)| id).collect()).unwrap_or_default();
     let boxes: Vec<[f64; 4]> = l.blocks.iter().map(|q| super::geom::bbox(q)).collect();
-    // Inns round a yard first: each with the lot it takes in, the home on it gone.
-    let yards = inn_yards(l, &boxes, &edited);
+    let block_of = |l: &Layout, p: &[P]| block_in(l, &boxes, p);
+    // One on the lot it was shaped on as generated keeps its shape: (its id, footprint, lot, block, a U
+    // or a court).
+    let mut kept: Vec<(u32, Vec<P>, Vec<P>, Option<usize>, bool)> = Vec::new();
+    if let Some((_, g)) = edit {
+        for b in &l.buildings {
+            let Some(was) = g.building(b.id as usize).filter(|w| g.wings.binary_search(&w.id).is_ok()) else { continue };
+            let same = lot(g, b.id).is_some_and(|q| q.len() == b.poly.len() && q.iter().zip(&b.poly).all(|(a, c)| len(sub(*a, *c)) < 0.01));
+            if same && b.parts.is_empty() && b.structure == Structure::Roofed {
+                kept.push((b.id, was.poly.clone(), b.poly.clone(), block_of(l, &b.poly), was.poly.len() > 6));
+            }
+        }
+    }
+    // Inns round a yard first (clear of those kept): each with the lot it takes in, the homes on it gone.
+    let yards = inn_yards(l, &boxes, &edited, &kept);
     let inns: Vec<u32> = yards.iter().map(|&(k, _, _)| l.buildings[k].id).collect();
     let gone: Vec<u32> = yards.iter().flat_map(|(_, j, _)| j.iter().map(|&j| l.buildings[j].id)).collect();
-    let mut was: Vec<(u32, Vec<P>)> = Vec::new();
-    for (k, _, rect) in yards {
-        was.push((l.buildings[k].id, std::mem::replace(&mut l.buildings[k].poly, rect)));
+    let mut was: Vec<(u32, Vec<P>, Vec<Building>)> = Vec::new();
+    for (k, j, rect) in yards {
+        let homes = j.iter().map(|&j| l.buildings[j].clone()).collect();
+        was.push((l.buildings[k].id, std::mem::replace(&mut l.buildings[k].poly, rect), homes));
     }
     l.buildings.retain(|b| !gone.contains(&b.id));
-    let block_of = |p: &[P]| block_in(l, &boxes, p);
     // (Each taken: its index, footprint, lot, block, a U or a court.)
     let mut done: Vec<(usize, Vec<P>, Vec<P>, Option<usize>, bool)> = Vec::new();
-    if let Some((_, g)) = edit {
-        for (k, b) in l.buildings.iter().enumerate() {
-            let Some(was) = g.building(b.id as usize).filter(|w| g.wings.binary_search(&w.id).is_ok()) else { continue };
-            let same = g.grounds.iter().find(|q| q.0 == b.id).is_some_and(|q| q.1.len() == b.poly.len() && q.1.iter().zip(&b.poly).all(|(a, c)| len(sub(*a, *c)) < 0.01));
-            if same && b.parts.is_empty() && b.structure == Structure::Roofed {
-                done.push((k, was.poly.clone(), b.poly.clone(), block_of(&b.poly), was.poly.len() > 6));
-            }
+    for (id, f, p, block, big) in kept {
+        if let Some(k) = l.buildings.iter().position(|b| b.id == id) {
+            done.push((k, f, p, block, big));
         }
     }
     let first: Vec<usize> = (0..l.buildings.len()).filter(|&k| inns.contains(&l.buildings[k].id)).collect();
@@ -103,7 +112,7 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
         }
         let Some((p, form)) = shape_of(l, b, inns.contains(&b.id)) else { continue };
         let big = form != Form::L;
-        let block = block_of(&b.poly);
+        let block = block_of(l, &b.poly);
         let mine = done.iter().filter(|d| block.is_some() && d.3 == block);
         if mine.clone().count() >= PER_BLOCK || (big && mine.clone().any(|d| d.4)) || done.iter().any(|d| poly_gap(&d.2, &b.poly) < NEAR_FT) {
             continue;
@@ -118,10 +127,18 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
         l.wings.push(id);
     }
     // (An inn's own lot before it took others in, after its ground: what a town laid out anew knows it
-    // by, `wards::inherit`.)
-    for (id, lot) in was {
+    // by, `own_lot`. One not shaped after all stands on its own lot again, the homes back on theirs.)
+    for (id, own, homes) in was {
         if l.wings.contains(&id) {
-            l.grounds.push((id, lot));
+            l.grounds.push((id, own));
+        } else {
+            if let Some(b) = l.buildings.iter_mut().find(|b| b.id == id) {
+                b.poly = own;
+            }
+            for h in homes {
+                let at = l.buildings.partition_point(|b| b.id < h.id);
+                l.buildings.insert(at, h);
+            }
         }
     }
     l.wings.sort_unstable();
@@ -161,7 +178,9 @@ fn rect_in(poly: &[P], u: P) -> Option<[f64; 4]> {
 /// be, and as much open ground of the block behind as it takes (to `INN_DEEP_FT`), where that makes one
 /// lot wide and deep enough for a U or a court (`shape_of`'s `yard`); none near another (`NEAR_FT`) nor
 /// two in a block. Each: the inn's index, the homes', the lot they make (wound as the inn's).
-fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<usize>, Vec<P>)> {
+/// `kept`: those keeping their shape in a town laid out anew (`shape_all`), which none comes near nor
+/// takes in.
+fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32], kept: &[(u32, Vec<P>, Vec<P>, Option<usize>, bool)]) -> Vec<(usize, Vec<usize>, Vec<P>)> {
     let mut out: Vec<(usize, Vec<usize>, Vec<P>, Option<usize>)> = Vec::new();
     if l.tier < crate::t0::settle::Tier::Town {
         return Vec::new();
@@ -172,7 +191,7 @@ fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<
     for k in 0..l.buildings.len() {
         let b = &l.buildings[k];
         let inn = b.func.is_some_and(|f| matches!(catalog::CATALOG[f as usize].key, "inn" | "tavern"));
-        if !inn || !plain(b) || unit(hash3(l.roof_seed, b.id as i64, 0x494e_4e59, 0)) >= INN_SHARE || out.iter().any(|o| o.1.contains(&k)) {
+        if !inn || unit(hash3(l.roof_seed, b.id as i64, 0x494e_4e59, 0)) >= INN_SHARE || !plain(b) || out.iter().any(|o| o.1.contains(&k)) {
             continue;
         }
         let block = block_in(l, boxes, &b.poly);
@@ -209,7 +228,7 @@ fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<
         // (A plain home of its ward, not yet taken in by another inn.)
         let home = |j: usize| {
             let n = &l.buildings[j];
-            j != k && !out.iter().any(|o| o.0 == j || o.1.contains(&j)) && n.func.is_none() && n.ward == b.ward && catalog::RESIDENTIAL[n.residential as usize] != "noble estate" && plain(n)
+            j != k && n.func.is_none() && n.ward == b.ward && catalog::RESIDENTIAL[n.residential as usize] != "noble estate" && !kept.iter().any(|q| q.0 == n.id) && plain(n) && !out.iter().any(|o| o.0 == j || o.1.contains(&j))
         };
         let (mut cur, mut taken) = (r, Vec::new());
         let mut found: Option<Vec<P>> = None;
@@ -217,7 +236,7 @@ fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<
             // The home beside it on its front.
             let next = (0..l.buildings.len()).find_map(|j| {
                 let n = &l.buildings[j];
-                if taken.contains(&j) || !home(j) {
+                if taken.contains(&j) || n.func.is_some() || n.ward != b.ward || bbs[j][0] > bbs[k][2] + SEAM_FT + 1.0 || bbs[j][2] < bbs[k][0] - SEAM_FT - 1.0 || bbs[j][1] > bbs[k][3] + SEAM_FT + 1.0 || bbs[j][3] < bbs[k][1] - SEAM_FT - 1.0 || !home(j) {
                     return None;
                 }
                 let q = rect_in(&n.poly, u)?;
@@ -269,7 +288,7 @@ fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<
                     }
                     behind = hits;
                 }
-                if out.iter().any(|o| poly_gap(&o.2, &p) < NEAR_FT) {
+                if out.iter().any(|o| poly_gap(&o.2, &p) < NEAR_FT) || kept.iter().any(|q| poly_gap(&q.2, &p) < NEAR_FT) {
                     break;
                 }
                 // (Over no other building: 1 ft in from its sides.)
@@ -290,7 +309,13 @@ fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<
                 break;
             }
         }
-        if let Some(p) = found {
+        // (A block holds `PER_BLOCK` shaped at most, one of them a U or a court.)
+        let mine = |p: &[P]| {
+            let at = block_in(l, boxes, p);
+            let q: Vec<_> = kept.iter().filter(|q| at.is_some() && q.3 == at).collect();
+            q.len() >= PER_BLOCK || q.iter().any(|q| q.4)
+        };
+        if let Some(p) = found.filter(|p| !mine(p)) {
             out.push((k, taken, p, block));
         }
     }
@@ -299,7 +324,8 @@ fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<
 
 /// The least distance between two footprints (ft; 0 where they touch or overlap).
 fn poly_gap(a: &[P], b: &[P]) -> f64 {
-    if a.iter().any(|p| contains(b, *p)) || b.iter().any(|p| contains(a, *p)) {
+    let crossing = || (0..a.len()).any(|i| (0..b.len()).any(|j| segs_cross_mul(a[i], a[(i + 1) % a.len()], b[j], b[(j + 1) % b.len()])));
+    if a.iter().any(|p| contains(b, *p)) || b.iter().any(|p| contains(a, *p)) || crossing() {
         return 0.0;
     }
     let d = |a: &[P], b: &[P]| a.iter().flat_map(|p| (0..b.len()).map(move |k| seg_dist(*p, b[k], b[(k + 1) % b.len()]))).fold(f64::MAX, f64::min);
@@ -446,6 +472,18 @@ pub fn ranges(l: &Layout, b: &Building) -> Option<Vec<[P; 4]>> {
         }
     }
     Some(r)
+}
+
+/// The lot shaped building `id` stands on (`Layout::grounds`, its first entry): for an inn that took
+/// others in (`inn_yards`), the lot they make.
+pub fn lot(l: &Layout, id: u32) -> Option<&[P]> {
+    l.grounds.iter().find(|g| g.0 == id).map(|g| &g.1[..])
+}
+
+/// The lot shaped building `id` stood on as laid out (its last entry in `Layout::grounds`): for an
+/// inn that took others in, its own before it did; what a town laid out anew knows it by.
+pub fn own_lot(l: &Layout, id: u32) -> Option<&[P]> {
+    l.grounds.iter().rfind(|g| g.0 == id).map(|g| &g.1[..])
 }
 
 /// Whether `shape_all` shaped building `b` (its lot then in `Layout::grounds`).

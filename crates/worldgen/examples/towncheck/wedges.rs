@@ -253,7 +253,7 @@ pub(crate) fn wings(world: &World, t0: &T0, label: &str, r: &mut Report) {
         }
         // (Fix B) Shaped ones within 30 ft of each other (their lots: footprints within 30 ft), and blocks with more than one U or court.
         let shaped: Vec<&town::Building> = l.buildings.iter().filter(|b| town::wings::ranges(&l, b).is_some()).collect();
-        let lot = |b: &town::Building| l.grounds.iter().find(|g| g.0 == b.id).map_or(b.poly.clone(), |g| g.1.clone());
+        let lot = |b: &town::Building| town::wings::lot(&l, b.id).map_or(b.poly.clone(), |g| g.to_vec());
         let gap = |a: &[P], b: &[P]| a.iter().flat_map(|p| (0..b.len()).map(move |k| worldgen::town::geom::seg_dist(*p, b[k], b[(k + 1) % b.len()]))).fold(f64::MAX, f64::min);
         for i in 0..shaped.len() {
             for j in i + 1..shaped.len() {

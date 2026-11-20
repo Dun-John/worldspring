@@ -161,7 +161,12 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
       // (Pitched: a range along each side, each as deep as the court leaves it, under one roof with
       // valleys at the court's corners, not four mitred hips whose ridges miss where sides differ.)
       if (flat) for (const part of ranges) flatRoof(g, part, tint);
-      else rangesMesh(g, sideRanges(roof.pts, roof.parts.find((p) => p.kind === COURT)!.pts), tint, false);
+      else {
+        // (A side with next to no depth, a court reaching the eaves, has no range of its own.)
+        const sides = sideRanges(roof.pts, roof.parts.find((p) => p.kind === COURT)!.pts).filter((r) => r.length > 0);
+        if (sides.length) rangesMesh(g, sides, tint, false);
+        else for (const part of ranges) flatRoof(g, part, tint);
+      }
       g.outline(roof.pts, INK_OUT, ROOF_INK);
       g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, INK_OUT, ROOF_INK);
       const church = roof.parts.find((p) => p.kind === CHURCH);
@@ -587,7 +592,8 @@ function courtRanges(roof: Roof): number[][] | null {
 }
 
 /** A court's ranges as rectangles (`rangesRoof`'s arms): along each side of outline `o`, in to the
- * court's side `c` across from it (its mean depth), overlapping the next at the corners. */
+ * court's side `c` across from it (its mean depth), overlapping the next at the corners; empty where
+ * that depth is next to none. Both four-cornered, corner by corner (`courtRanges`). */
 function sideRanges(o: number[], c: number[]): number[][] {
   const m = o.length / 2;
   return [...Array(m).keys()].map((i) => {
@@ -599,6 +605,7 @@ function sideRanges(o: number[], c: number[]): number[][] {
     const depth0 = (into(c[i * 2], c[i * 2 + 1]) + into(c[j * 2], c[j * 2 + 1])) / 2;
     if (depth0 < 0) [nx, ny] = [-nx, -ny];
     const depth = Math.abs(depth0);
+    if (depth < 0.05 * PX) return [];
     return [ax, ay, bx, by, bx + nx * depth, by + ny * depth, ax + nx * depth, ay + ny * depth];
   });
 }

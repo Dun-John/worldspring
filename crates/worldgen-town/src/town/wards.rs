@@ -394,7 +394,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     // (Roadmap 7, 163: an L's, a U's or a court's, the lot it was shaped on, kept as its ground, `wings`;
     // an inn's that took others in, its own lot, the last kept.)
     let lot = |b: &'_ Building| -> Vec<P> {
-        let ground = || super::wings::ranges(generated, b).and_then(|_| generated.grounds.iter().rfind(|g| g.0 == b.id).map(|g| g.1.clone()));
+        let ground = || super::wings::ranges(generated, b).and_then(|_| super::wings::own_lot(generated, b.id).map(|g| g.to_vec()));
         super::belfry::of(b).map_or_else(|| ground().unwrap_or_else(|| b.poly.clone()), |_| b.parts[0].poly.clone())
     };
     for (k, b) in generated.buildings.iter().enumerate() {
