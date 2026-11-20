@@ -2,7 +2,7 @@
 //! `cargo run --release -p worldgen --example chunkseam -- <seed> <fx> <fy>`
 //! `... -- <seed> at <x ft> <y ft> [r]`: every shared edge of the (2r+1)² chunks round the spot,
 //! each side's halo against the neighbour's own squares (height, road cover, road marks).
-//! `ROW=y [COL=tx]`: also one row of that chunk (square:surface:height:road mark).
+//! `RUG=r`: the world's ruggedness. `ROW=y [COL=tx]`: also one row of that chunk (square:surface:height:road mark).
 
 use worldgen::battlemap::SQ;
 use worldgen::core::tile::TileKey;
@@ -18,7 +18,7 @@ fn main() {
     }
     let fx: f64 = a.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.3666);
     let fy: f64 = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(0.8357);
-    let world = World::new(WorldFile { seed, ..Default::default() }).unwrap();
+    let world = World::new(file(seed)).unwrap();
     let g = world.geom.clone();
     let mut ex = Executor::new(world);
     let size = g.tile_size_ft(g.max_level);
@@ -49,7 +49,7 @@ fn main() {
 /// The halo ring of each chunk against its neighbours' own squares round (x, y) ft.
 fn around(seed: u32, x: f64, y: f64, r: i64) {
     use worldgen::battlemap::HS;
-    let world = World::new(WorldFile { seed, ..Default::default() }).unwrap();
+    let world = World::new(file(seed)).unwrap();
     let g = world.geom.clone();
     let mut ex = Executor::new(world);
     let size = g.tile_size_ft(g.max_level);
@@ -110,4 +110,12 @@ fn around(seed: u32, x: f64, y: f64, r: i64) {
     }
     println!("(map {:.0} x {:.0} ft, chunk {size:.0} ft)", g.map_w_ft, g.map_h_ft);
     println!("{n} shared squares: height halo vs own max {dh:.3} ft ({at}); road cover max diff {dc}; road marks differing {dm}; own squares in the halo grid vs height max {dhin:.3}");
+}
+
+fn file(seed: u32) -> WorldFile {
+    let mut f = WorldFile { seed, ..Default::default() };
+    if let Some(r) = std::env::var("RUG").ok().and_then(|v| v.parse().ok()) {
+        f.params.ruggedness = r;
+    }
+    f
 }

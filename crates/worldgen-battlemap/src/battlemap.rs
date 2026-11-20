@@ -68,6 +68,8 @@ mod objects;
 mod shore;
 mod plaza;
 mod cover;
+// Roadmap 7 (170): cliff faces and their scree.
+mod cliff;
 pub use ground::*;
 pub use crossings::*;
 use objects::*;
@@ -2463,6 +2465,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     compute_edges(&mut chunk);
     crate::town::rural::mark(&rural, ox, oy, &mut chunk.edges);
     soft_relief::flag(&mut chunk.edges, &soft, &crag_h, &crag_m);
+    cliff::mark(&mut chunk, &tile.padded, &sidx);
     for k in 0..n {
         let h = (k / SQ + 1) * HS + k % SQ + 1;
         // (A wet moat's water and its banks, as a park's pond's, v63 castles.)

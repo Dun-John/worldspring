@@ -37,7 +37,8 @@ pub struct Chunk {
     pub tier: Vec<i16>,
     pub surface: Vec<Surface>,
     /// Bits: 1 cliff to the east, 2 cliff to the south, 4 slope edge east, 8 slope edge south,
-    /// 16 difficult terrain, 32 a park's pond or stream or the ground by it.
+    /// 16 difficult terrain, 32 a park's pond or stream or the ground by it, 64 a cliff's scree
+    /// (`battlemap::cliff`; its faces are difficult terrain).
     /// 128 small closed relief, drawn soft (`soft_relief`).
     pub edges: Vec<u8>,
     pub objects: Vec<Object>,

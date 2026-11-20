@@ -25,10 +25,10 @@ fn main() {
             let (world_w, world_h) = (world.geom.map_w_ft, world.geom.map_h_ft);
             let t0 = T0::generate(&world);
             let s = stats(&world, &t0);
-            let (seams, fine, town_slope) = seams(world, s.probe, &s.edge_towns);
+            let (seams, fine, town_slope, cl) = seams(world, s.probe, &s.edge_towns);
             println!(
-                "rug {rug:.1} seed {seed}: plateaus {} mesas {} escarpments {} canyons {} terraced {:.1}% | slope max {:.2} p99 {:.3} | climbs {} | towns by a riser {}/{} (steepest within their pads {town_slope:.2}) | seam mismatches {seams} | fine slope at a riser {fine:.2} (at {:.3},{:.3} of the map)",
-                s.plateaus, s.mesas, s.scarps, s.canyons, 100.0 * s.terraced, s.max_slope, s.p99, s.climbs, s.edge_towns.len(), s.towns, s.probe.0 / world_w, s.probe.1 / world_h
+                "rug {rug:.1} seed {seed}: plateaus {} mesas {} escarpments {} canyons {} terraced {:.1}% | slope max {:.2} p99 {:.3} | climbs {} | towns by a riser {}/{} (steepest within their pads {town_slope:.2}) | seam mismatches {seams} | battlemap 3x3 at the riser: faces {} scree {} steeper than 2 {} | fine slope at a riser {fine:.2} (at {:.3},{:.3} of the map)",
+                s.plateaus, s.mesas, s.scarps, s.canyons, 100.0 * s.terraced, s.max_slope, s.p99, s.climbs, s.edge_towns.len(), s.towns, cl[0], cl[1], cl[2], s.probe.0 / world_w, s.probe.1 / world_h
             );
             for (t, v) in tot.iter_mut().zip([s.plateaus, s.mesas, s.scarps, s.canyons, s.climbs, seams]) {
                 *t += v;
@@ -195,7 +195,7 @@ fn stats(world: &World, t0: &T0) -> Stats {
 
 /// Halo mismatches between a tile and its right / lower neighbours at a few levels round `at`,
 /// and the steepest ground in the tile there at the finest level stepped (~20 ft samples).
-fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64, f64) {
+fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64, f64, [usize; 3]) {
     let g = world.geom.clone();
     let mut ex = Executor::new(world);
     let (h, n) = (HALO as i64, TILE_N as i64);
@@ -220,10 +220,15 @@ fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64
     let size = g.tile_size_ft(fine);
     let t = ex.terrain(TileKey::surface(fine, (at.0 / size) as u32, (at.1 / size) as u32)).padded.clone();
     let mut steep = 0f64;
+    let mut riser = at;
+    let (fx, fy) = ((at.0 / size) as i64 as f64 * size, (at.1 / size) as i64 as f64 * size);
     for j in 0..n {
         for i in 0..n {
             let (sx, sy) = ((t[padded_index(i + 1, j)] - t[padded_index(i, j)]) as f64 / s, (t[padded_index(i, j + 1)] - t[padded_index(i, j)]) as f64 / s);
-            steep = steep.max((sx * sx + sy * sy).sqrt());
+            let v = (sx * sx + sy * sy).sqrt();
+            if v > steep {
+                (steep, riser) = (v, (fx + (i as f64 + 0.5) * s, fy + (j as f64 + 0.5) * s));
+            }
         }
     }
     // Round up to six towns by a riser: the steepest ground within their pads at that level.
@@ -242,5 +247,26 @@ fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64
             }
         }
     }
-    (bad, steep, town_slope)
+    // Battlemap cliffs (item 170) in the 3 x 3 chunks round the riser: face squares (hard going, not
+    // scree), scree squares (`edges` bit 64), and squares steeper than 2 by their heights.
+    let mut cl = [0usize; 3];
+    let bsize = g.tile_size_ft(g.max_level);
+    let (bx, by) = ((riser.0 / bsize) as i64, (riser.1 / bsize) as i64);
+    println!("  riser at {:.0},{:.0} ft", riser.0, riser.1);
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let c = ex.battlemap(TileKey::surface(g.max_level, (bx + dx).max(0) as u32, (by + dy).max(0) as u32));
+            let sq = worldgen::battlemap::SQ;
+            for k in 0..sq * sq {
+                cl[0] += (c.edges[k] & 64 == 0 && c.edges[k] & 16 != 0 && c.surface[k] == worldgen::battlemap::Surface::Rock) as usize;
+                cl[1] += (c.edges[k] & 64 != 0) as usize;
+                let (i, j) = (k % sq, k / sq);
+                if i + 1 < sq && j + 1 < sq {
+                    let (gx, gy) = ((c.height[k + 1] - c.height[k]) / 5.0, (c.height[k + sq] - c.height[k]) / 5.0);
+                    cl[2] += (gx * gx + gy * gy > 4.0) as usize;
+                }
+            }
+        }
+    }
+    (bad, steep, town_slope, cl)
 }

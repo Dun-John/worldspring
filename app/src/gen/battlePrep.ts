@@ -304,8 +304,9 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     // (Bit 64: a plaza or market square, `URBAN_PLAZA`, whose cobbles the ground lays in fans;
     // bit 128: by the paving's edge, see `pavingEdges`; bit 8: small closed relief drawn soft, the
     // edges' bit 128 (`battlemap::soft_relief`), in place of their slope-edge-south bit, which
-    // nothing reads from here.)
-    data[k * 4 + 1] = (edges[k] & 0x77) | (edges[k] & 128 ? 8 : 0) | (raised && raised[k * 2 + 1] === 3 ? 64 : 0) | paveEdge[k];
+    // nothing reads from here; bit 4: a cliff's scree, the edges' bit 64 (`battlemap::cliff`), in place
+    // of their slope-edge-east bit.)
+    data[k * 4 + 1] = (edges[k] & 0x33) | (edges[k] & 64 ? 4 : 0) | (edges[k] & 128 ? 8 : 0) | (raised && raised[k * 2 + 1] === 3 ? 64 : 0) | paveEdge[k];
     data[k * 4 + 2] = tier[k] & 255;
     // Building id (1..255, wrapping) for per-building roof colour and wall edges; on a field's square
     // (never a building's) its furrows (v63 countryside, `town::fields::square_byte`).
