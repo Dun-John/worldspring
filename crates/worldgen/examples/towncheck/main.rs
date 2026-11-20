@@ -171,7 +171,7 @@ mod planning;
 mod wedges;
 
 fn main() {
-    const MODES: [&str; 34] = ["wedges", "planning", "streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
+    const MODES: [&str; 35] = ["wings", "wedges", "planning", "streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -188,7 +188,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"] || modes == ["planning"] || modes == ["wedges"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"] || modes == ["planning"] || modes == ["wedges"] || modes == ["wings"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -238,6 +238,7 @@ fn main() {
                 "streetsin" => streets_in(&mut ctx, &label, &mut r),
                 "planning" => planning::planning(&mut ctx, &label, &mut r),
                 "wedges" => wedges::wedges(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
+                "wings" => wedges::wings(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
                 "castlepieces" => castle_pieces(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),

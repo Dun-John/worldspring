@@ -2,7 +2,7 @@
 // tessellated into one vertex-coloured mesh.
 import earcut from 'earcut';
 import { FELT, roofRgb, ROOF_MATERIAL_RGB, YURT_FELT } from './protocol';
-import { domeSpots, frame, isConvex, ridgeEnds, roofParts, roundOutline as roundEaves, signedArea, straighten } from './roofGeom';
+import { domeSpots, frame, isConvex, rangesRoof, ridgeEnds, roofParts, roundOutline as roundEaves, signedArea, straighten } from './roofGeom';
 import type { ColorMesh, Roof } from './battlePrep';
 import { PX } from '../render/scale';
 import { INK, FT } from '../render/pen';
@@ -231,6 +231,15 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
       g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
+    // (Roadmap 7, 163: an L, a U or a court, `town::wings`: each range hipped or gabled, the roof the
+    // highest of them, valleys where they meet.)
+    const wings = roof.parts.filter((p) => p.kind === RANGE).map((p) => p.pts);
+    if (wings.length > 1 && !roof.cone && (roof.shape === HIP || roof.shape === GABLE)) {
+      rangesMesh(g, wings, tint, roof.shape === GABLE);
+      if (roof.smoke) smoke(g, wings[0], 0.28);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
+      continue;
+    }
     const round = roof.cone ? null : roundOutline(roof);
     if (round) {
       // (Felt whatever the material, unless tinted by hand.)
@@ -263,6 +272,7 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
 }
 
 /** Roof shapes (`town::roof::Shape`). */
+const HIP = 0;
 const GABLE = 1;
 const CONE = 2;
 const DOME = 3;
@@ -277,6 +287,8 @@ const ROUND = 5;
 const COURT = 5;
 const CROSS_WING = 6;
 const MAIN_RANGE = 7;
+/** A range of an L, a U or a court (`battlemap::RANGE_PART`). */
+const RANGE = 11;
 /** A temple's pieces (`town::temple`): its body (nave and choir), its transept, its apse
  * (`battlemap::APSE_PART`). */
 const BODY = 0;
@@ -683,6 +695,27 @@ function crossGable(g: MeshBuilder, pts: number[], range: number[], wing: number
     }
   }
   for (const part of roofParts(pts)) (gable ? gableRoof : hipRoof)(g, part.pts, tint);
+}
+
+/** (Roadmap 7, 163) The ranges of an L, a U or a court under one roof (`rangesRoof`): each face shaded
+ * by how its eave faces the light, its courses along the eave (in line across ranges sharing an eave
+ * line), ridges and hips in the material, valleys inked. */
+function rangesMesh(g: MeshBuilder, arms: number[][], tint: number, gable: boolean) {
+  const { faces, lines, top } = rangesRoof(arms, gable);
+  for (const f of faces) {
+    const [px, py, qx, qy] = f.eave;
+    const uvd: number[] = [];
+    for (let i = 0; i < f.pts.length; i += 2) {
+      const [x, y] = [f.pts[i], f.pts[i + 1]];
+      uvd.push(g.seed + (x * f.s.ex + y * f.s.ey) / FT, ((x - f.s.ax) * f.s.nx + (y - f.s.ay) * f.s.ny) / FT, 1);
+    }
+    g.face(f.pts, uvd, faceShade(px, py, qx, qy, f.ccw, tint));
+  }
+  for (const { seg, valley } of lines) {
+    const [ax, ay, bx, by] = seg;
+    if (valley) g.line(ax, ay, bx, by, INK_LINE, ROOF_INK, 1);
+    else ridgeLine(g, ax, ay, bx, by, tint, Math.abs(top(ax, ay) - top(bx, by)) > 0.05 * FT);
+  }
 }
 
 /** A hip roof on a convex footprint: a face up from each eave to the ridge (shaded by how it faces the

@@ -1108,6 +1108,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             if let Some(front) = crate::interior::arcade_front(world, t0, &l, b).or_else(|| arch.take().unwrap_or_else(|| crate::interior::arch_front(world, t0, &l, b))) {
                                 parts.push((ARCADE_PART, front.iter().map(local).collect()));
                             }
+                            // (An L, a U or a court: its ranges, `town::wings`.)
+                            for q in crate::town::wings::ranges(b).into_iter().flatten() {
+                                parts.push((RANGE_PART, q.iter().map(local).collect()));
+                            }
 
                             poly_parts.push(parts);
                             id = refs.len().min(u16::MAX as usize) as u16;

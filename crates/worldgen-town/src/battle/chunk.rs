@@ -227,6 +227,9 @@ pub const CHURCH_PART: u8 = 9;
 /// arch's mouth (`interior::arch_front`): its corners along the front from the first square to the
 /// last, then a square in.
 pub const ARCADE_PART: u8 = 10;
+/// (Roadmap 7, 163) A range of an L, a U or a court (`town::wings::arms`): each hipped or gabled, the
+/// ranges overlapping where they meet, valleys there.
+pub const RANGE_PART: u8 = 11;
 
 /// Binary payload for the renderer (little-endian):
 ///   0 magic "BATL" | 4 level | 8 x | 12 y | 16 n_objects | 20 atmosphere | 24 sea f32 | 28 stone u32

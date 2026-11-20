@@ -60,3 +60,51 @@ pub(crate) fn wedges(world: &World, t0: &T0, label: &str, r: &mut Report) {
         say!("    {label} L{li} {t}: {n} buildings, {sharp} corner < 60, {thin} aspect < 0.25");
     }
 }
+
+/// (Roadmap 7, 163) L, U and courtyard buildings (`town::wings`) in every town laid out by the
+/// generator: counts by kind and form, and the eligible ones (a kind that may, on a lot that fits,
+/// before the roll) left rectangles; each shaped one's place for QA (`-v`).
+pub(crate) fn wings(world: &World, t0: &T0, label: &str, r: &mut Report) {
+    for li in (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= Tier::Village && town::hand::size(world, li).is_none()) {
+        let l = town::layout(world, t0, li);
+        for b in &l.buildings {
+            let Some(arms) = town::wings::ranges(b) else { continue };
+            let kind = b.func.map_or(town::catalog::RESIDENTIAL[b.residential as usize], |f| town::catalog::CATALOG[f as usize].key);
+            let form = match (arms.len(), b.poly.len()) {
+                (2, _) => "L",
+                (3, _) => "U",
+                (_, 12) => "court",
+                _ => "other",
+            };
+            r.tally(&format!("{form} {kind}"), 1);
+            // Its ground floor's doors out, and those onto its yard (the ground inside its ranges' box).
+            if let Some(it) = worldgen::interior::generate_id(world, t0, &format!("b:{li}:{}", b.id)) {
+                let lv = &it.levels[it.entry_level];
+                let world_at = |p: [f32; 2]| add(it.origin, add(mul(it.axis, p[0] as f64 * 5.0), mul(it.across, p[1] as f64 * 5.0)));
+                let (u, v) = (it.axis, it.across);
+                let box_of = |d: P| (arms.iter().flatten().map(|p| dot(*p, d)).fold(f64::MAX, f64::min), arms.iter().flatten().map(|p| dot(*p, d)).fold(f64::MIN, f64::max));
+                let ((s0, s1), (t0_, t1)) = (box_of(u), box_of(v));
+                let (mut out, mut yard) = (0, 0);
+                for d in lv.doors.iter().filter(|d| d.rooms.contains(&-1)) {
+                    out += 1;
+                    let (a, e) = (world_at(d.a), world_at(d.b));
+                    let m = mul(add(a, e), 0.5);
+                    let n = { let t = sub(e, a); let l = len(t).max(1e-9); [-t[1] / l, t[0] / l] };
+                    let o = [add(m, mul(n, 2.0)), sub(m, mul(n, 2.0))].into_iter().find(|p| !worldgen::town::geom::contains(&b.poly, *p));
+                    if o.is_some_and(|p| { let (a, c) = (dot(p, u), dot(p, v)); a > s0 && a < s1 && c > t0_ && c < t1 }) {
+                        yard += 1;
+                    }
+                }
+                r.tally(&format!("{form}: doors out"), out);
+                r.tally(&format!("{form}: doors onto the yard"), yard);
+                if yard == 0 {
+                    r.add(&format!("{form}s with no door onto their yard"), 1.0, format!("{label} L{li} b{} {kind}", b.id));
+                }
+            }
+            r.tally(&format!("{form} (all)"), 1);
+            let c = centroid(&b.poly);
+            say!("    {label} L{li} b{} {form} {kind} at {:.0},{:.0} fx {:.6} fy {:.6}", b.id, c[0], c[1], c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
+        }
+        r.tally("buildings", l.buildings.len());
+    }
+}

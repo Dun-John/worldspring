@@ -279,6 +279,10 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
             _ => z,
         };
         lvl.z = zf;
+        // (Roadmap 7, 163: an L, a U or a court, `town::wings`, opens onto its yard.)
+        if z == 0 && hubbed.is_none() && town::wings::ranges(b).is_some() {
+            super::doors::yard_door(&mut lvl, nx, ny, stairs, &ext_free);
+        }
         lvl.has_stairs &= !yurt && !tomb;
         lvl.name = if z == TOWER_TOP { "Tower tops".to_string() } else { prog.name.to_string() };
         lvl.elevation_ft = b.pad_ft + STOREY_FT * zf as f32;

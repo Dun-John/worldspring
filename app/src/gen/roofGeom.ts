@@ -265,3 +265,200 @@ export function domeSpots(pts: number[], ft: number): [number, number, number][]
 export function roundOutline(pts: number[]): number[] {
   return pts;
 }
+
+/** (Roadmap 7, 163) A plane of a range's roof: its eave through (ax, ay) along (ex, ey), (nx, ny) its
+ * inward normal; its height over a point is the point's distance in from the eave (`d`). */
+interface Slope {
+  ax: number;
+  ay: number;
+  ex: number;
+  ey: number;
+  nx: number;
+  ny: number;
+}
+const d = (s: Slope, x: number, y: number) => (x - s.ax) * s.nx + (y - s.ay) * s.ny;
+/** A range's slopes (hipped: one per side; gabled: its two long sides') and its sides' (its outline). */
+function slopesOf(pts: number[], gable: boolean): { sides: Slope[]; roof: Slope[] } {
+  const m = pts.length / 2;
+  const ccw = signedArea(pts) > 0;
+  const sides: Slope[] = [];
+  for (let i = 0; i < m; i++) {
+    const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay) || 1;
+    const [ex, ey] = [(bx - ax) / l, (by - ay) / l];
+    sides.push({ ax, ay, ex, ey, nx: ccw ? -ey : ey, ny: ccw ? ex : -ex });
+  }
+  if (!gable) return { sides, roof: sides };
+  const [ux, uy] = longestDir(pts);
+  return { sides, roof: sides.filter((s) => Math.abs(s.ex * ux + s.ey * uy) > 0.7) };
+}
+/** A range's roof height over a point (its slopes' least; -Infinity off it). */
+function heightOf(r: { sides: Slope[]; roof: Slope[] }, x: number, y: number): number {
+  if (r.sides.some((s) => d(s, x, y) < -1e-6)) return -Infinity;
+  return Math.min(...r.roof.map((s) => d(s, x, y)));
+}
+/** Keep the part of a convex polygon where d(a) - d(b) - c <= 0 (`b` null: -d(a) - c <= 0). */
+function clipBy(pts: number[], a: Slope, b: Slope | null, c: number): number[] {
+  const [nx, ny] = b ? [a.nx - b.nx, a.ny - b.ny] : [-a.nx, -a.ny];
+  const k = b ? a.ax * a.nx + a.ay * a.ny - (b.ax * b.nx + b.ay * b.ny) : -(a.ax * a.nx + a.ay * a.ny);
+  if (Math.abs(nx) + Math.abs(ny) < 1e-9) return k + c >= 0 ? pts : [];
+  return keep(pts, nx, ny, k + c);
+}
+const SLIVER = 1e-3;
+/** The parts of convex `pts` not inside range `r` where it stands higher than slope `s` (each convex). */
+function notUnder(pts: number[], r: { sides: Slope[]; roof: Slope[] }, s: Slope): number[][] {
+  // (The region under it: inside its sides and each of its slopes above s. Cut away one condition at a
+  // time: what lies outside it is kept, what lies inside goes on to the next.)
+  const out: number[][] = [];
+  const conds: [(p: number[]) => number[], (p: number[]) => number[]][] = [
+    ...r.sides.map((q): [(p: number[]) => number[], (p: number[]) => number[]] => [(p) => keep(p, q.nx, q.ny, q.ax * q.nx + q.ay * q.ny), (p) => clipBy(p, q, null, 0)]),
+    ...r.roof.map((w): [(p: number[]) => number[], (p: number[]) => number[]] => [(p) => clipBy(p, w, s, SLIVER), (p) => clipBy(p, s, w, -SLIVER)]),
+  ];
+  let rest = pts;
+  for (const [outside, inside] of conds) {
+    const o = outside(rest);
+    if (o.length >= 6 && Math.abs(signedArea(o)) > 1e-4) out.push(o);
+    rest = inside(rest);
+    if (rest.length < 6 || Math.abs(signedArea(rest)) <= 1e-4) return out;
+  }
+  return out;
+}
+
+/** (Roadmap 7, 163) The roof over the ranges of an L, a U or a court (`town::wings::arms`, each convex and
+ * overlapping the next where they meet): each range hipped (`gable`: gabled along its length), the roof
+ * the highest of them over every point, so their slopes meet in valleys at inner corners and hips at outer
+ * ones. Its faces (each convex, on one slope of one range: `eave` that slope's eave, `ccw` its range's
+ * winding) and its lines (ridges, hips and valleys where the roof's slope changes; `valley` when it dips). */
+export function rangesRoof(arms: number[][], gable: boolean) {
+  const rs = arms.map((p) => slopesOf(p, gable));
+  // (Gabled: a range joining a longer one runs on into it only to its ridge, so the longer one's gable
+  // ends stand and the join has a valley each side.)
+  const dom = arms.slice();
+  if (gable) {
+    const len = arms.map((p) => frame(p).hi - frame(p).lo);
+    arms.forEach((p, i) => {
+      const fi = frame(p);
+      arms.forEach((q, j) => {
+        if (j === i || len[j] < len[i] || (len[j] === len[i] && j > i)) return;
+        const fj = frame(q);
+        const [ex, ey] = [fj.ux, fj.uy];
+        let [nx, ny] = [-ey, ex];
+        if ((fi.cx - fj.rx) * nx + (fi.cy - fj.ry) * ny < 0) [nx, ny] = [-nx, -ny];
+        // (Only where the two overlap.)
+        let o = p;
+        for (const sd of rs[j].sides) o = clipBy(o, sd, null, 0);
+        if (o.length < 6 || Math.abs(signedArea(o)) < 1e-3) return;
+        const side: Slope = { ax: fj.rx, ay: fj.ry, ex, ey, nx, ny };
+        rs[i].sides.push(side);
+        dom[i] = clipBy(dom[i], side, null, 0);
+      });
+    });
+  }
+  const top = (x: number, y: number) => Math.max(...rs.map((r) => heightOf(r, x, y)));
+  // (The slope on top at a point, for telling a fold from a flat.)
+  const topSlope = (x: number, y: number): Slope | null => {
+    let [best, h] = [null as Slope | null, -Infinity];
+    for (const r of rs) {
+      if (heightOf(r, x, y) === -Infinity) continue;
+      for (const s of r.roof) {
+        const v = d(s, x, y);
+        if (v <= Math.min(...r.roof.map((q) => d(q, x, y))) + 1e-6 && v > h + 1e-6) [best, h] = [s, v];
+      }
+    }
+    return best;
+  };
+  const same = (a: Slope | null, b: Slope | null) => !!a && !!b && Math.abs(a.nx - b.nx) < 1e-4 && Math.abs(a.ny - b.ny) < 1e-4 && Math.abs(d(a, b.ax, b.ay)) < 1e-3;
+  const faces: { pts: number[]; s: Slope; eave: number[]; ccw: boolean }[] = [];
+  const segs: { seg: number[]; s: Slope }[] = [];
+  rs.forEach((r, i) => {
+    const ccw = signedArea(arms[i]) > 0;
+    for (const s of r.roof) {
+      // The range's own face on slope s: inside it, s the lowest of its slopes.
+      let f = dom[i];
+      for (const q of r.roof) if (q !== s) f = clipBy(f, s, q, 0);
+      if (f.length < 6) continue;
+      let pieces = [f];
+      rs.forEach((o, j) => {
+        if (j !== i) pieces = pieces.flatMap((p) => notUnder(p, o, s));
+      });
+      const k = r.sides.indexOf(s);
+      const m = arms[i].length / 2;
+      const eave = [arms[i][k * 2], arms[i][k * 2 + 1], arms[i][((k + 1) % m) * 2], arms[i][((k + 1) % m) * 2 + 1]];
+      for (const p of pieces) faces.push({ pts: p, s, eave, ccw });
+      // Its folds with its range's later slopes and every later range's, as candidates.
+      rs.forEach((o, oi) => {
+        if (oi < i) return;
+        for (const q of o.roof) {
+          if (oi === i && o.roof.indexOf(q) <= o.roof.indexOf(s)) continue;
+          let g = dom[oi];
+          for (const w of o.roof) if (w !== q) g = clipBy(g, q, w, 0);
+          const seg = g.length >= 6 ? foldLine(f, g, s, q) : null;
+          if (seg) segs.push({ seg, s });
+        }
+      });
+    }
+  });
+  // Each fold where it is on top and the roof's slope changes across it, cut where it is not.
+  const lines: { seg: number[]; valley: boolean }[] = [];
+  const eps = 0.02 * Math.max(1, ...arms.map((p) => frame(p).halfW));
+  for (const { seg, s } of segs) {
+    const [x0, y0, x1, y1] = seg;
+    const l = Math.hypot(x1 - x0, y1 - y0);
+    if (l < 1e-3) continue;
+    const [nx, ny] = [-(y1 - y0) / l, (x1 - x0) / l];
+    const n = Math.max(2, Math.ceil(l / eps / 4));
+    let run: number[] | null = null;
+    let runValley = false;
+    const flush = () => {
+      const r = run;
+      if (r && !lines.some((o) => Math.hypot(o.seg[0] - r[0], o.seg[1] - r[1]) + Math.hypot(o.seg[2] - r[2], o.seg[3] - r[3]) < 1e-3 || Math.hypot(o.seg[0] - r[2], o.seg[1] - r[3]) + Math.hypot(o.seg[2] - r[0], o.seg[3] - r[1]) < 1e-3)) lines.push({ seg: r, valley: runValley });
+      run = null;
+    };
+    for (let k = 0; k < n; k++) {
+      const [t0, t1] = [k / n, (k + 1) / n];
+      const [mx, my] = [x0 + (x1 - x0) * (t0 + t1) * 0.5, y0 + (y1 - y0) * (t0 + t1) * 0.5];
+      const h = top(mx, my);
+      const [ha, hb] = [top(mx + nx * eps, my + ny * eps), top(mx - nx * eps, my - ny * eps)];
+      const own = Math.abs(d(s, mx, my) - h) < 1e-3 * eps + 1e-6;
+      const fold = own && !same(topSlope(mx + nx * eps, my + ny * eps), topSlope(mx - nx * eps, my - ny * eps));
+      const valley = (ha + hb) / 2 > h + 1e-6 * eps;
+      if (fold && run && runValley === valley) {
+        run[2] = x0 + (x1 - x0) * t1;
+        run[3] = y0 + (y1 - y0) * t1;
+      } else {
+        flush();
+        if (fold) [run, runValley] = [[x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0, x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1], valley];
+      }
+    }
+    flush();
+  }
+  return { faces, lines, top };
+}
+/** Where slopes s (over convex f) and q (over convex g) meet, inside both (a segment), or null. */
+function foldLine(f: number[], g: number[], s: Slope, q: Slope): number[] | null {
+  // (The line d(s) = d(q): through a point on it, along the direction both are level in.)
+  const [ax, ay] = [s.nx - q.nx, s.ny - q.ny];
+  const l2 = ax * ax + ay * ay;
+  if (l2 < 1e-9) return null;
+  const c = s.ax * s.nx + s.ay * s.ny - (q.ax * q.nx + q.ay * q.ny);
+  const [px, py] = [(ax * c) / l2, (ay * c) / l2];
+  const [ux, uy] = [-ay / Math.sqrt(l2), ax / Math.sqrt(l2)];
+  let [t0, t1] = [-1e7, 1e7];
+  for (const poly of [f, g]) {
+    const m = poly.length / 2;
+    const ccw = signedArea(poly) > 0;
+    for (let i = 0; i < m; i++) {
+      const [bx, by, cx, cy] = [poly[i * 2], poly[i * 2 + 1], poly[((i + 1) % m) * 2], poly[((i + 1) % m) * 2 + 1]];
+      // (Inside: to the left of b→c when anticlockwise.)
+      const [inx, iny] = ccw ? [-(cy - by), cx - bx] : [cy - by, -(cx - bx)];
+      const c0 = (px - bx) * inx + (py - by) * iny;
+      const c1 = ux * inx + uy * iny;
+      if (Math.abs(c1) < 1e-12) {
+        if (c0 < -1e-6) return null;
+      } else if (c1 > 0) t0 = Math.max(t0, -c0 / c1);
+      else t1 = Math.min(t1, -c0 / c1);
+    }
+  }
+  if (t1 - t0 < 1e-3) return null;
+  return [px + ux * t0, py + uy * t0, px + ux * t1, py + uy * t1];
+}

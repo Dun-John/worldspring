@@ -371,3 +371,52 @@ pub(super) fn required(kind: &str, item: &str) -> bool {
 pub(super) fn is_pub(arch: Arch) -> bool {
     matches!(arch, Arch::Tavern | Arch::Inn | Arch::Brewery)
 }
+
+/// (Roadmap 7, 163) A door onto the yard of an L, a U or a court (`town::wings`): its outside squares
+/// inside the grid are its yard (and a court's gateway). Unless a door already opens there, from the
+/// ground floor's room beside the most of it (a way about the floor first), off the stairs, in the
+/// middle of its run; walls and windows again.
+pub(super) fn yard_door(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ext_free: &dyn Fn(isize, isize) -> bool) {
+    let at = |i: isize, j: isize| if i < 0 || j < 0 || i >= nx as isize || j >= ny as isize { -2 } else { lvl.cells[j as usize * nx + i as usize] };
+    let on_stairs = |i: usize, j: usize| i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
+    let steps = [(0isize, -1isize), (1, 0), (0, 1), (-1, 0)];
+    let yard = |a: [f32; 2], b: [f32; 2]| {
+        // (The two squares beside a door's edge; one of them inside the grid but not the building.)
+        let (i, j) = (a[0].min(b[0]) as isize, a[1].min(b[1]) as isize);
+        let pair = if a[0] == b[0] { [(i - 1, j), (i, j)] } else { [(i, j - 1), (i, j)] };
+        pair.iter().any(|&(x, y)| at(x, y) == -1)
+    };
+    if lvl.doors.iter().any(|d| d.rooms.contains(&-1) && yard(d.a, d.b)) {
+        return;
+    }
+    let mut cands: Vec<(usize, usize, usize, i16)> = Vec::new();
+    for j in 0..ny {
+        for i in 0..nx {
+            let c = lvl.cells[j * nx + i];
+            if c < 0 || on_stairs(i, j) {
+                continue;
+            }
+            for (side, (di, dj)) in steps.into_iter().enumerate() {
+                let (a, b) = (i as isize + di, j as isize + dj);
+                if at(a, b) == -1 && ext_free(a, b) {
+                    cands.push((side, i, j, c));
+                }
+            }
+        }
+    }
+    let rank = |r: i16| (super::is_circulation(lvl.rooms[r as usize].kind), cands.iter().filter(|c| c.3 == r).count(), lvl.rooms[r as usize].squares);
+    let Some(best) = cands.iter().map(|c| c.3).max_by(|&x, &y| rank(x).cmp(&rank(y)).then(y.cmp(&x))) else { return };
+    let side = (0..4).max_by_key(|&s| (cands.iter().filter(|c| c.3 == best && c.0 == s).count(), std::cmp::Reverse(s))).unwrap_or(0);
+    let mine: Vec<&(usize, usize, usize, i16)> = cands.iter().filter(|c| c.3 == best && c.0 == side).collect();
+    let &(side, i, j, r) = mine[mine.len() / 2];
+    let (p, q) = match side {
+        0 => ([i as f32, j as f32], [(i + 1) as f32, j as f32]),
+        1 => ([(i + 1) as f32, j as f32], [(i + 1) as f32, (j + 1) as f32]),
+        2 => ([i as f32, (j + 1) as f32], [(i + 1) as f32, (j + 1) as f32]),
+        _ => ([i as f32, j as f32], [i as f32, (j + 1) as f32]),
+    };
+    lvl.doors.push(Door { a: p, b: q, kind: "back", rooms: [r, -1], lock: 0 });
+    lvl.walls = wall_runs(&lvl.cells, &lvl.rooms, nx, ny, &lvl.doors);
+    lvl.windows.clear();
+    windows(lvl, nx, ny, true);
+}

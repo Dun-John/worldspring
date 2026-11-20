@@ -30,6 +30,7 @@ pub mod roof;
 pub mod squares;
 pub mod stairs;
 pub mod temple;
+pub mod wings;
 pub mod wards;
 pub mod hand;
 pub mod handedit;
@@ -1192,6 +1193,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         temple::reach_streets(&mut l, None);
         temple::shape_all(&mut l, None);
         belfry::raise_all(&mut l, None);
+        wings::shape_all(&mut l);
     }
     if let Some(e) = edit {
         let generated = generated_layout(world, t0, index);
@@ -1203,6 +1205,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         temple::reach_streets(&mut l, Some(&generated));
         temple::shape_all(&mut l, Some(&generated));
         belfry::raise_all(&mut l, Some(&generated));
+        wings::shape_all(&mut l);
     }
     round_off(&mut l, Some(&site));
     fields::crofts_off_sand(&site, &mut l);
