@@ -291,6 +291,7 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             Some(u) => rows(part, u, dp.min_sq, rng, &mut lots),
             None => bisect(part, dp.min_sq, lot_variance, 0.0, None, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0),
         }
+        merge_wedges(&mut lots, 5.0 * dp.min_sq);
         for lot in lots {
             let lot = clean(&blunt(&clean(&lot), 60.0, 10.0));
             // No triangles, slivers or scraps: those corners stay open ground.
@@ -303,14 +304,17 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
                 continue;
             }
             // Frontage: a street or alley one of the lot's edges lies on (along its stretch, in a piece).
-            let Some(&Front { n, c, .. }) = fronts.iter().find(|f| if spans { f.fronted_by(&lot) } else { on_line_lot(&lot, f.n, f.c) }) else { continue };
+            let Some(&Front { n, c, a: fa, b: fb }) = fronts.iter().find(|f| if spans { f.fronted_by(&lot) } else { on_line_lot(&lot, f.n, f.c) }) else { continue };
             // (A terraced garden on a steep block: a house here and there.)
             if ward == Ward::Park && rng.next_f64() > 0.15 {
                 continue;
             }
             // Irregular street fronts: some buildings stand back from the street line.
             let indent = rng.next_f64() * (crate::core::sqrt(la) / 3.0).min(16.0);
-            let poly = if indent > 6.5 { clean(&clip_plain(&lot, n, c - indent)) } else { lot };
+            // (Blunted again: a corner cut off at the street may come back once set back. Not
+            // where that leaves a wedge or a sliver, a shallow lot along its street, or no front.)
+            let set = if indent > 6.5 { clean(&blunt(&clean(&clip_plain(&lot, n, c - indent)), 60.0, 10.0)) } else { Vec::new() };
+            let poly = if set.len() >= 3 && (if spans { Front { n, c: c - indent, a: sub(fa, mul(n, indent)), b: sub(fb, mul(n, indent)) }.fronted_by(&set) } else { on_line_lot(&set, n, c - indent) }) && shapeliness(&set) >= shapeliness(&lot).min(1.0) { set } else { lot };
             if poly.len() < 3 || area(&poly).abs() < 150.0 {
                 continue;
             }
@@ -349,17 +353,125 @@ fn step_pads<G: Ground>(site: &G, poly: &[P]) -> Vec<Vec<P>> {
     [clip_plain(poly, n, k), clip_plain(poly, mul(n, -1.0), -k)].into_iter().map(|h| clean(&h)).filter(|h| h.len() >= 3 && area(h).abs() >= 150.0 && site.buildable(h)).collect()
 }
 
+/// How far a lot is from a wedge or a sliver, 0-1 (1: fine): the least of its sharpest corner
+/// over 60 deg (edges under 4 ft taken as part of their corner), its fitted box's short side over
+/// a quarter of its long one, and its area over 0.62 of that box's.
+pub(super) fn shapeliness(lot: &[P]) -> f64 {
+    let pts = corners(lot);
+    let m = pts.len();
+    if m < 3 {
+        return 0.0;
+    }
+    let mut cos_max = -1.0f64;
+    for i in 0..m {
+        let (a, b) = (sub(pts[(i + m - 1) % m], pts[i]), sub(pts[(i + 1) % m], pts[i]));
+        let (la, lb) = (len(a), len(b));
+        if la > 1e-6 && lb > 1e-6 {
+            cos_max = cos_max.max(dot(a, b) / (la * lb));
+        }
+    }
+    let corner = libm::acos(cos_max.clamp(-1.0, 1.0)).to_degrees() / 60.0;
+    let o = obb(lot);
+    let aspect = if o.long > 1e-6 { o.short / (0.25 * o.long) } else { 0.0 };
+    let fill = if o.long * o.short > 1e-6 { area(lot).abs() / (0.62 * o.long * o.short) } else { 0.0 };
+    corner.min(aspect).min(fill).min(1.0)
+}
+
+/// A polygon's corners: its vertices, each edge under 4 ft taken as part of the corner it leads to.
+fn corners(poly: &[P]) -> Vec<P> {
+    let mut pts: Vec<P> = Vec::with_capacity(poly.len());
+    for &p in poly {
+        if pts.last().is_none_or(|q| dist(*q, p) >= 4.0) {
+            pts.push(p);
+        }
+    }
+    while pts.len() > 3 && dist(pts[0], pts[pts.len() - 1]) < 4.0 {
+        pts.pop();
+    }
+    pts
+}
+
+/// (Roadmap 7, 162) Wedge and sliver lots (`shapeliness` under 1) merged into a neighbour, the
+/// one they share the longest edge with whose union is convex, no bigger than `cap` sq ft, and
+/// shaped better than the wedge was; a wedge at the block's own sharp corner (no merge helps) is
+/// left to `blunt`. Worst first, until none is left to merge.
+fn merge_wedges(lots: &mut Vec<Vec<P>>, cap: f64) {
+    let mut score: Vec<f64> = lots.iter().map(|l| shapeliness(l)).collect();
+    let mut stuck = vec![false; lots.len()];
+    loop {
+        let Some(i) = (0..lots.len()).filter(|&i| score[i] < 1.0 && !stuck[i]).min_by(|&a, &b| score[a].total_cmp(&score[b]).then(a.cmp(&b))) else { break };
+        let ai = area(&lots[i]).abs();
+        let mut cands: Vec<(f64, usize)> = (0..lots.len()).filter(|&j| j != i).map(|j| (shared(&lots[i], &lots[j]), j)).filter(|c| c.0 > 1.0).collect();
+        cands.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+        let mut done = false;
+        for (_, j) in cands {
+            let aj = area(&lots[j]).abs();
+            if ai + aj > cap {
+                continue;
+            }
+            let mut h = hull(lots[i].iter().chain(lots[j].iter()).copied().collect());
+            if h.len() < 3 || area(&h).abs() > ai + aj + 0.5 {
+                continue;
+            }
+            let sh = shapeliness(&h);
+            if sh <= score[i] + 0.05 {
+                continue;
+            }
+            if (area(&h) > 0.0) != (area(&lots[j]) > 0.0) {
+                h.reverse();
+            }
+            lots[j] = clean(&h);
+            score[j] = sh;
+            stuck[j] = false;
+            lots.remove(i);
+            score.remove(i);
+            stuck.remove(i);
+            done = true;
+            break;
+        }
+        if !done {
+            stuck[i] = true;
+        }
+    }
+}
+
+/// The length two lots' edges run together (collinear within half a foot, either way round).
+fn shared(a: &[P], b: &[P]) -> f64 {
+    let mut total = 0.0;
+    for i in 0..a.len() {
+        let (p, q) = (a[i], a[(i + 1) % a.len()]);
+        let l = dist(p, q);
+        if l < 1e-6 {
+            continue;
+        }
+        let u = mul(sub(q, p), 1.0 / l);
+        let nrm = [-u[1], u[0]];
+        for k in 0..b.len() {
+            let (r, s) = (b[k], b[(k + 1) % b.len()]);
+            if dot(sub(r, p), nrm).abs() > 0.5 || dot(sub(s, p), nrm).abs() > 0.5 {
+                continue;
+            }
+            let (t0, t1) = (dot(sub(r, p), u), dot(sub(s, p), u));
+            total += (t0.max(t1).min(l) - t0.min(t1).max(0.0)).max(0.0);
+        }
+    }
+    total
+}
+
 /// Cut off corners sharper than `min_deg` with a chord square to the corner's bisector,
-/// `depth` ft in from the tip (keeps the polygon convex; houses don't come to a point).
-fn blunt(poly: &[P], min_deg: f64, depth: f64) -> Vec<P> {
-    let m = poly.len();
+/// `depth` ft in from the tip, deeper at a sharper corner so the chord is 12 ft or more (keeps the
+/// polygon convex; houses don't come to a point).
+pub(super) fn blunt(poly: &[P], min_deg: f64, depth: f64) -> Vec<P> {
+    // (Corners as `corners` has them: a corner already cut a foot across is still a point.)
+    let pts = corners(poly);
+    let m = pts.len();
     if m < 3 {
         return poly.to_vec();
     }
     let cos_min = libm::cos(min_deg.to_radians());
     let mut out = poly.to_vec();
     for i in 0..m {
-        let (p, a, b) = (poly[i], poly[(i + m - 1) % m], poly[(i + 1) % m]);
+        let (p, a, b) = (pts[i], pts[(i + m - 1) % m], pts[(i + 1) % m]);
         let (u, v) = (sub(a, p), sub(b, p));
         let (lu, lv) = (len(u), len(v));
         if lu < 1e-9 || lv < 1e-9 {
@@ -373,7 +485,10 @@ fn blunt(poly: &[P], min_deg: f64, depth: f64) -> Vec<P> {
         let bis = add(u, v);
         let bl = len(bis).max(1e-9);
         let n = mul(bis, -1.0 / bl);
-        out = clip_plain(&out, n, dot(p, n) - depth);
+        // (The chord at depth d is 2 d tan(half the corner) long.)
+        let half = 0.5 * libm::acos(dot(u, v).clamp(-1.0, 1.0));
+        let d = depth.max(6.0 / libm::tan(half).max(0.05));
+        out = clip_plain(&out, n, dot(p, n) - d);
         if out.len() < 3 {
             return out;
         }

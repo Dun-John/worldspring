@@ -18,6 +18,7 @@ use super::catalog::Ward;
 use super::clip::{self, Shape};
 use super::geom::*;
 use super::{Building, District, Ground, Layout, Structure};
+use super::fill::{blunt, shapeliness};
 use crate::World;
 use crate::core::hash::FastMap;
 use crate::core::rng::Pcg32;
@@ -278,6 +279,12 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
                 continue;
             }
             let Some(lot) = spare(lot, avoid, &cand, dp, sn, sc) else { continue };
+            // (162) No corner sharper than 60 deg (a run's end on the bisector at a bend, what is
+            // left round the shapes avoided): cut off as `build_block`'s lots' are.
+            let lot = clean(&blunt(&lot, 60.0, 10.0));
+            if !good(&lot, dp, sn, sc) {
+                continue;
+            }
             // (A street doubling back or coming round again: its rows don't overlap.)
             let bb = bbox(&lot);
             close_kept.clear();
@@ -294,7 +301,9 @@ fn lay<G: Ground>(site: &G, side: &Side, dp: &District, rng: &mut Pcg32, avoid: 
             // Some buildings stand back from the street, as in `build_block`.
             let la = area(&lot).abs();
             let back = indent * (crate::core::sqrt(la) / 3.0).min(16.0);
-            let poly = if back > 6.5 { clean(&clip_plain(&lot, sn, sc - back)) } else { lot.clone() };
+            let set = if back > 6.5 { clean(&blunt(&clean(&clip_plain(&lot, sn, sc - back)), 60.0, 10.0)) } else { Vec::new() };
+            // (Not where it would leave a wedge or a sliver, or no front.)
+            let poly = if set.len() >= 3 && fronts(&set, sn, sc - back) && shapeliness(&set) >= shapeliness(&lot).min(1.0) { set } else { lot.clone() };
             if poly.len() < 3 || area(&poly).abs() < 150.0 || !site.buildable(&poly) {
                 continue;
             }

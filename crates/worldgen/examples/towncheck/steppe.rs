@@ -564,6 +564,14 @@ pub(crate) fn rows(base: &World, t0: &T0, label: &str, r: &mut Report) {
         }
         let (ward, seed) = (wards[ci % wards.len()], ci as u64 + 7);
         let out = qa_rows(base, t0, ci, ward, seed, &rows, &avoid);
+        // (162) Row buildings that are wedges or slivers (`wedges`' measure).
+        for (_, b) in out.iter().flat_map(|o| o.lots.iter()) {
+            let (ang, asp) = crate::wedges::wedge_of(b);
+            r.tally("row buildings", 1);
+            if ang < 60.0 || asp < 0.25 {
+                r.add("row buildings with a corner < 60 or aspect < 0.25", 60.0 - ang, format!("{label} town {ci} at {:.0},{:.0}: {ang:.0} deg, {asp:.2}", centroid(b)[0], centroid(b)[1]));
+            }
+        }
         if done < 2 {
             let again = qa_rows(base, t0, ci, ward, seed, &rows, &avoid);
             if out.iter().zip(&again).any(|(a, b)| a.lots != b.lots || a.alleys != b.alleys) {
