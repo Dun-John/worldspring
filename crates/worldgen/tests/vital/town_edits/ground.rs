@@ -557,7 +557,16 @@ pub(in super::super) fn ground_edits(base: &World) {
     };
     // (Else any row's shore: the rows 100 ft apart may all meet piers or lots.)
     let any_row = (10..SQ - 10).filter_map(|j| (40..SQ - 30).map(|i| j * SQ + i).find(|&q| !wet(&plain_c.1, q) && (1..=16).all(|d| wet(&plain_c.1, q + d))));
-    let k2 = others.iter().skip(2).chain(others.iter()).copied().chain(any_row).find(|&k2| clear(k2)).expect("a shore clear of buildings for the inlet");
+    // (Best one whose inlet meets a city's quay front, for the front's check below.)
+    let meets = |k2: usize| {
+        let s = at(k2);
+        city_fronts.iter().any(|f| {
+            let b = worldgen::ground::bbox(f);
+            b[0] - 10.0 <= s[0] + 30.0 && b[2] + 10.0 >= s[0] - 50.0 && b[1] - 10.0 <= s[1] + 15.0 && b[3] + 10.0 >= s[1] - 15.0
+        })
+    };
+    let rows = || others.iter().skip(2).chain(others.iter()).copied().chain(any_row.clone());
+    let k2 = rows().find(|&k2| clear(k2) && meets(k2)).or_else(|| rows().find(|&k2| clear(k2))).expect("a shore clear of buildings for the inlet");
     let shore = at(k2);
     let sea = plain_c.1.water_level[k2 + 8];
     let inlet = Water::outline(vec![[shore[0] - 50.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] + 15.0], [shore[0] - 50.0, shore[1] + 15.0]], WaterKind::Inlet, sea);

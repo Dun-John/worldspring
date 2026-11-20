@@ -1572,15 +1572,21 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // ground's drawing follows the water's edge, not the squares), and the dry squares by its
     // shore take its level (kept under their ground) instead of the land's no-water one, so the
     // surface between squares meets the ground along the shore, not in torn steps at the squares.
+    // (`by_hand_water`: those squares, for the guarantee: no knoll in a cell the water reaches.)
+    let mut by_hand_water = Vec::new();
     if let Some(sh) = shaper.as_ref().filter(|s| s.has_waters()) {
+        by_hand_water = vec![false; HS * HS];
         for h in 0..HS * HS {
             let p = center(h % HS, h / HS);
             if hw[h] > hh[h] {
-                park_wet[h] |= sh.outline_level(p[0], p[1]).is_some();
+                let own = sh.outline_level(p[0], p[1]).is_some();
+                park_wet[h] |= own;
+                by_hand_water[h] = own;
                 continue;
             }
             if let Some((_, d, l)) = sh.water_edge(p[0], p[1], 2.0 * SQUARE_FT, sea) {
                 park_wet[h] = true;
+                by_hand_water[h] = true;
                 if d <= 1.5 * SQUARE_FT {
                     hw[h] = hw[h].max((l as f32).min(hh[h] - 0.3));
                 }
@@ -2262,8 +2268,19 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         marks
     };
     // Where the ground is shaped, the guarantee's draws are keyed by cell (a mound in one corner
-    // moves nothing elsewhere) and plateaus get no knolls (`shaped`: empty when nothing is).
-    let shaped: Vec<bool> = if shaper.is_some() { (0..n).map(|k| plat_w[(k / SQ + 1) * HS + k % SQ + 1] >= 0.5).collect() } else { Vec::new() };
+    // moves nothing elsewhere) and plateaus get no knolls (`shaped`: empty when nothing is). Nor
+    // does a cell that water drawn by hand reaches: its dry squares are not the ground's as
+    // generated, so its draw would set the knoll elsewhere, out on the ground round the water.
+    let shaped: Vec<bool> = if shaper.is_some() {
+        (0..n)
+            .map(|k| {
+                let h = (k / SQ + 1) * HS + k % SQ + 1;
+                plat_w[h] >= 0.5 || by_hand_water.get(h).is_some_and(|&w| w)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let before = if shaped.is_empty() { Vec::new() } else { chunk.height.clone() };
     // (Roadmap 6 R6: the eraser's gaps through hedges' and fences' pieces, before the guarantee
     // counts its cover.)
