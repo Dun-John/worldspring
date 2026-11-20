@@ -135,7 +135,7 @@ export const VARIED = new Set([
   'altar', 'statue', 'pillar', 'sarcophagus', 'bell', 'throne', 'stage',
   'vat', 'cauldron', 'alchemy_bench', 'weapon_rack', 'rack', 'cage', 'winch', 'telescope', 'barricade',
   'trapdoor', 'spiral_stair', 'link_down',
-  'millstones', 'spur_wheel', 'hoist_trapdoor', 'sack_hoist',
+  'millstones', 'spur_wheel', 'hoist_trapdoor', 'sack_hoist', 'lighthouse_lamp',
   'throne_dais', 'carpet_runner', 'chair_of_office', 'high_table', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
   'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'low_dais', 'garden_path',
   'god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'side_altar',

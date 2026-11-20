@@ -107,6 +107,7 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("millstones", "millstones", 1, true, 3.5),
     ("spur_wheel", "great spur wheel", 1, true, 4.0),
     ("hoist_trapdoor", "sack hoist trapdoor", 0, false, 0.0),
+    ("lighthouse_lamp", "lighthouse lamp", 2, true, 5.0),
     ("sack_hoist", "sack hoist", 1, true, 4.0),
 ];
 
@@ -305,8 +306,13 @@ pub(super) fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)
         "library" | "reading room" => &[("bookcase", Wall(2, 1), 2, 6), ("table", Center(2, 1), 1, 16)],
         "laboratory" => &[("alchemy_bench", Wall(2, 1), 2, 0), ("cauldron", Center(1, 1), 1, 0), ("shelf", Wall(2, 1), 1, 0)],
         "observatory" => &[("telescope", Center(2, 2), 1, 0), ("desk", Wall(2, 1), 1, 0), ("bookcase", Wall(1, 1), 1, 0)],
-        // R5 M20: a lighthouse's lamp (its great oil basin), the oil beside it.
-        "lamp room" => &[("cauldron", Center(1, 1), 1, 0), ("barrel", Wall(1, 1), 1, 0)],
+        // A lighthouse's (Roadmap 7 P8): its lamp put down by `builder` (the lamp room); the keeper's
+        // watch room below it; wicks and spare glass on the store floors; the oil in casks.
+        "lamp room" | "lamp gallery" => &[],
+        "watch room" => &[("desk", Wall(2, 1), 1, 0), ("chair", Wall(1, 1), 1, 0), ("barrel", Wall(1, 1), 1, 0)],
+        "wick store" => &[("shelf", Wall(2, 1), 1, 0), ("crate", Wall(1, 1), 1, 0), ("barrel", Wall(1, 1), 1, 0)],
+        "oil store" => &[("barrel", Wall(1, 1), 3, 0), ("rack", Wall(2, 1), 1, 0)],
+        "keeper's room" => &[("cot", Wall(1, 2), 1, 0), ("hearth", Wall(2, 1), 1, 0), ("table", Center(1, 1), 1, 0), ("chest", Wall(1, 1), 1, 0)],
         "entry hall" | "foyer" => &[("rug", Center(2, 2), 1, 0), ("statue", Wall(1, 1), 1, 0)],
         "nave" => &[("pew", Center(3, 1), 2, 6), ("pillar", Wall(1, 1), 2, 0)],
         "sanctuary" | "chapel" => &[("altar", Wall(2, 1), 1, 0), ("statue", Wall(1, 1), 1, 0), ("pew", Center(2, 1), 0, 10)],
@@ -432,6 +438,8 @@ pub const ROOM_KINDS: &[&str] = &[
     "inn yard", "yard gallery", "yurt", "meal floor", "stone floor", "bin floor", "dust floor",
     // R5 towns
     "tomb chamber", "felt hall", "felt sanctuary", "felt common room",
+    // Roadmap 7 P8: a lighthouse's, its oil store's
+    "lamp room", "lamp gallery", "watch room", "wick store", "oil store", "keeper's room",
 ];
 
 /// A kind of room in a building, by name.

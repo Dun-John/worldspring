@@ -204,6 +204,10 @@ pub const CATALOG: &[Func] = &[
     // are a town hall's and a shrine's (`interior::func_key`).
     f("hall", "Hall", CIVIC, Metropolis, None, [0, 0, 0, 0], &[Noble, Plaza], Institution, false, true, "Hall"),
     f("chapel", "Chapel", FAITH, Metropolis, None, [0, 0, 0, 0], &[Temple, Noble], Institution, false, false, "Chapel"),
+    // Roadmap 7 P8 (178): a lighthouse's keeper's cottage and its oil store, on its breakwater against
+    // the tower (`harbour`), set only by the layout: never on a lot.
+    f("keepers_cottage", "Keeper's cottage", CIVIC, Metropolis, None, [0, 0, 0, 0], &[Docks], Institution, true, false, "Cottage"),
+    f("oil_store", "Oil store", CIVIC, Metropolis, None, [0, 0, 0, 0], &[Docks], Institution, true, false, "Oil store"),
 ];
 
 /// Residential building kinds by ward (index into `RESIDENTIAL`).
@@ -224,7 +228,7 @@ pub fn residential_for(ward: Ward, big: bool) -> usize {
 
 /// Copies of `func` this settlement is guaranteed.
 pub fn required_count(func: &Func, tier: Tier, on_water: bool) -> usize {
-    if matches!(func.key, "windmill" | "tomb" | "watchtower" | "lighthouse" | "hall" | "chapel") {
+    if matches!(func.key, "windmill" | "tomb" | "watchtower" | "lighthouse" | "keepers_cottage" | "oil_store" | "hall" | "chapel") {
         return 0;
     }
     if func.water && !on_water {

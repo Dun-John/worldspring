@@ -313,6 +313,38 @@ export function spurWheel(g: Graphics, f: InteriorItem, light: Light, rnd: () =>
   g.circle(nx, ny, 0.05).fill(IRON[1]).stroke({ width: 0.016, color: INK });
 }
 
+/** A lighthouse's lamp from above: its warm glow, the iron table it stands on, a ring of silvered
+ * reflector dishes turned outward round the burners, the brass oil fount in the middle, its flame. */
+export function lighthouseLamp(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
+  const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
+  const r = Math.min(f.w, f.h) / 2 - 0.06;
+  for (let k = 0; k < 5; k++) g.circle(cx, cy, r * (1.25 - k * 0.12)).fill({ color: 0xffd27a, alpha: 0.09 });
+  // The table: an iron ring on three legs.
+  for (let k = 0; k < 3; k++) {
+    const a = (k / 3) * Math.PI * 2 + 0.5;
+    g.moveTo(cx, cy).lineTo(cx + Math.cos(a) * r * 0.96, cy + Math.sin(a) * r * 0.96);
+  }
+  g.stroke({ width: 0.04, color: IRON[0] });
+  g.circle(cx, cy, r * 0.8).stroke({ width: 0.035, color: IRON[1] });
+  // The reflectors: dishes on the ring, their bowls lit inside, their backs to the middle.
+  const n = 6;
+  const ph = rnd() * 0.3;
+  for (let k = 0; k < n; k++) {
+    const a = ph + (k / n) * Math.PI * 2;
+    const [dx, dy] = [Math.cos(a), Math.sin(a)];
+    const [px, py] = [cx + dx * r * 0.62, cy + dy * r * 0.62];
+    const d = r * 0.24;
+    g.poly(oval(px, py, d, d * 0.62, a + Math.PI / 2, 12)).fill(0x9aa4aa).stroke({ width: LINE, color: INK });
+    g.poly(oval(px + dx * d * 0.12, py + dy * d * 0.12, d * 0.74, d * 0.42, a + Math.PI / 2, 12)).fill(0xe6ecee);
+    g.circle(px + dx * d * 0.1 + light[0] * d * 0.15, py + dy * d * 0.1 + light[1] * d * 0.15, d * 0.18).fill(0xfff4c8);
+  }
+  // The fount and its flame.
+  g.circle(cx, cy, r * 0.3).fill(BRASS).stroke({ width: LINE, color: INK });
+  g.circle(cx + light[0] * r * 0.06, cy + light[1] * r * 0.06, r * 0.2).fill(shade(BRASS, 1.2));
+  g.circle(cx, cy, r * 0.12).fill(0xffc23a);
+  g.circle(cx, cy, r * 0.06).fill(0xfff4c8);
+}
+
 /** Cauldron: a round black iron pot on three short legs, the embers of a fire glowing round its foot, a
  * bubbling brew inside. */
 export function cauldron(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {

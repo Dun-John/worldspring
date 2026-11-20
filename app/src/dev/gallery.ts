@@ -52,7 +52,7 @@ const FURNITURE: [string, number, number][] = [
   ['cauldron', 1, 1], ['workbench', 2, 1], ['alchemy_bench', 2, 1], ['weapon_rack', 1, 1], ['weapon_rack', 2, 1], ['rack', 1, 2], ['cage', 2, 2], ['cage', 1, 1],
   ['altar', 2, 1], ['statue', 1, 1], ['pillar', 1, 1], ['sarcophagus', 1, 2], ['bell', 2, 2], ['throne', 1, 1], ['rug', 2, 3], ['rug', 2, 2], ['rug', 2, 1],
   ['bath', 1, 2], ['bath', 2, 2], ['bucket', 1, 1], ['water_jar', 1, 1], ['planter', 1, 1], ['planter', 2, 1], ['washing_line', 3, 1], ['roof_dome', 4, 4], ['trapdoor', 1, 1], ['winch', 1, 1], ['millstones', 2, 2], ['spur_wheel', 2, 2], ['telescope', 2, 2], ['barricade', 2, 1],
-  ['stage', 3, 2], ['spiral_stair', 1, 1], ['link_down', 1, 1],
+  ['stage', 3, 2], ['spiral_stair', 1, 1], ['link_down', 1, 1], ['lighthouse_lamp', 1, 1], ['lighthouse_lamp', 2, 2],
   ['throne_dais', 4, 2], ['throne_dais', 3, 2], ['low_dais', 3, 2], ['chair_of_office', 1, 1], ['high_table', 4, 1], ['carpet_runner', 1, 5], ['carpet_runner', 2, 4],
   ['tapestry', 3, 1], ['tapestry', 2, 1], ['wall_banner', 1, 1], ['standing_banner', 1, 1], ['font', 1, 1], ['cloister_well', 2, 2],
   ['dance_floor', 5, 5], ['dance_floor', 4, 3], ['harpsichord', 1, 2], ['musicians_corner', 2, 2], ['refreshment_table', 3, 1], ['refreshment_table', 2, 1],
@@ -63,7 +63,11 @@ const FURNITURE: [string, number, number][] = [
 ];
 
 /** Named sets for `&items=`: the guild and civic batch. */
-const SETS: Record<string, string[]> = { civic: ['strongbox', 'counting_desk', 'job_board', 'stable_stall', 'guild_arms', 'council_table'] };
+const SETS: Record<string, string[]> = {
+  civic: ['strongbox', 'counting_desk', 'job_board', 'stable_stall', 'guild_arms', 'council_table'],
+  // (Roadmap 7 P8: the lighthouse's tower top and its lamp room's lamp and stair.)
+  lighthouse: ['lighthouse', 'lighthouse_lamp', 'spiral_stair'],
+};
 
 /** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
 const UNDER: [string, number, number][] = [
@@ -468,6 +472,11 @@ export async function runGallery(target: HTMLElement) {
     head('Timber piers, a road bridge, a fenced deck and a shore quay (battlemap)');
     y = piers(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
   }
+  // The lighthouse: its tower top from above, then its levels (`&items=lighthouse`).
+  if (!only && pick?.includes('lighthouse')) {
+    head('Lighthouse: the tower top from above (lit, dark; 18 and 20 ft towers), then its levels as generated: stair foot, watch room, lamp room with its gallery');
+    y = lighthouse(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 64);
+  }
 
   // The fences and walls, with a gate in each run (`&items=fences` alone).
   if (!only && pick?.includes('fences')) {
@@ -624,6 +633,79 @@ const HARBOUR_KINDS: KindInfo[] = (
 const WATER = 0x5e8a8e;
 const QUAY = 0xb4ab96;
 
+/** `&items=lighthouse`: the tower's top as the battlemap draws it over its roof (`drawLantern`) on its
+ * breakwater's head, lit and dark, at `sq` px a square; then a 4-by-4 tower's levels laid out as `interior`
+ * lays a lighthouse's (`frames::lamp_top`): its spiral stair by the middle on each, the lamp room on the
+ * middle squares of the roof with the gallery round it. */
+function lighthouse(root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  let y = y0;
+  const g = new Graphics();
+  root.addChild(g);
+  const label = (s: string, x: number, yy: number) => {
+    if (nolabels) return;
+    const t = new Text({ text: s, style: LABEL });
+    t.position.set(x, yy);
+    root.addChild(t);
+  };
+  const cell = 8 * sq;
+  let x = 16;
+  for (const [r, lit] of [[9, true], [10, false], [10, true]] as const) {
+    if (x + cell > width - 16) break;
+    g.rect(x, y, cell, cell).fill(WATER);
+    g.circle(x + cell / 2, y + cell / 2, (18 / 5) * sq).fill(QUAY).stroke({ width: 2, color: 0x1d1a14 });
+    drawLantern(g, x + cell / 2, y + cell / 2, r, sq, lit);
+    label(`${2 * r}-ft tower, ${lit ? 'lit' : 'dark'}`, x, y + cell + 2);
+    x += cell + 16;
+  }
+  y += cell + 34;
+  // Its levels: three 4-by-4 floors side by side (a round tower's squares, the corners out but on the roof).
+  const n = 4;
+  const gap = 2;
+  const nx = 3 * n + 4 * gap - 2;
+  const cells = new Array<number>(nx * (n + 2)).fill(-1);
+  const rooms: Interior['levels'][number]['rooms'] = [];
+  const furniture: InteriorItem[] = [];
+  const item = (kind: string, x: number, y: number, w = 1, h = 1) => furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3 });
+  const floors: [string, (i: number, j: number) => number][] = [
+    ['stair foot', (i, j) => ((i === 0 || i === n - 1) && (j === 0 || j === n - 1) ? -1 : 0)],
+    ['watch room', (i, j) => ((i === 0 || i === n - 1) && (j === 0 || j === n - 1) ? -1 : 0)],
+    ['lamp room', (i, j) => (i >= 1 && i <= 2 && j >= 1 && j <= 2 ? 0 : 1)],
+  ];
+  floors.forEach(([kind, room], f) => {
+    const x0 = gap - 1 + f * (n + gap);
+    const base = rooms.length;
+    const kinds = kind === 'lamp room' ? ['lamp room', 'lamp gallery'] : [kind];
+    for (const k of kinds) rooms.push({ kind: ' ', squares: 0, raise_ft: 0, center: [x0 + n / 2, 1 + n / 2], ...(k.endsWith('gallery') ? {} : { shape: 1 }) });
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const r = room(i, j);
+      if (r >= 0) {
+        cells[(1 + j) * nx + x0 + i] = base + r;
+        rooms[base + r].squares++;
+      }
+    }
+    item('spiral_stair', x0 + 1, 1 + 1);
+    if (kind === 'lamp room') item('lighthouse_lamp', x0 + 2, 1 + 2);
+    else if (kind === 'watch room') {
+      item('desk', x0 + 1, 1 + 3, 2, 1);
+      item('barrel', x0 + 3, 1 + 2);
+    } else {
+      item('crate', x0 + 2, 1 + 3);
+      item('barrel', x0 + 3, 1 + 1);
+    }
+  });
+  const level = { z: 0, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
+  const it: Interior = { id: 'b:lighthouse', settlement: 0, building: 0, name: null, function: 'lighthouse', origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny: n + 2, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] };
+  const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+  const holder = new Container();
+  holder.addChild(layer.container);
+  holder.scale.set(sq);
+  holder.position.set(16, y);
+  layer.container.children[0].visible = false;
+  root.addChild(holder);
+  floors.forEach(([kind], f) => label(kind === 'lamp room' ? 'roof: lamp room, gallery round it' : kind, 16 + (gap - 1 + f * (n + gap)) * sq, y + (n + 1) * sq + 4));
+  return y + (n + 2) * sq + 40;
+}
+
 /** `&items=harbour`: each harbour kind's four looks on water (boats, buoys) or quay paving (the rest), on the
  * 5-ft grid, at `sq` px a square; then the vector pieces close up; then a small harbour at a third of that. */
 function harbour(app: Application, catalog: KindInfo[], root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
@@ -687,10 +769,9 @@ function harbour(app: Application, catalog: KindInfo[], root: Container, y0: num
   panel(lx, 6 * sq, 6 * sq, WATER);
   for (const [i, lit] of [[0, true], [1, false]] as const) {
     const [cx, cy] = [lx + 1.5 * sq + i * 3 * sq, y + 3 * sq];
-    g.circle(cx, cy, 1.5 * sq).fill(0x9a9182).stroke({ width: 2 * k, color: 0x1d1a14 });
-    drawLantern(g, cx, cy, 6, sq, lit);
+    drawLantern(g, cx, cy, 7, sq, lit);
   }
-  label('lantern on a 15-ft tower top, lit and dark', lx, y + 6 * sq + 2);
+  label('a 14-ft tower\'s top, lit and dark', lx, y + 6 * sq + 2);
   y += 6 * sq + 30;
   const cw = Math.min(width - 32, 32 * sq);
   panel(16, cw, 7 * sq, WATER);
@@ -710,8 +791,7 @@ function harbour(app: Application, catalog: KindInfo[], root: Container, y0: num
   const P = (a: number, b: number): [number, number] => [16 + a * s3, y + b * s3];
   drawBreakwaterArmour(h, [P(2, 22), P(4, 14), P(9, 7), P(17, 4)], s3, 9, 2);
   const [tx, ty] = P(17, 4);
-  h.circle(tx, ty, 1.5 * s3).fill(0x9a9182).stroke({ width: 2 * k, color: 0x1d1a14 });
-  drawLantern(h, tx, ty, 6, s3);
+  drawLantern(h, tx, ty, 9.5, s3);
   const [cx, cy] = P(36, 19.2);
   drawCog(h, cx, cy, 0, 72, s3, 0);
   const put = (id: number, v: number, a: number, b: number, rot = 0) => {

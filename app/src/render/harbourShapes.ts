@@ -8,9 +8,10 @@
 //     A moored cog centred at (x, y), its bow toward `dir` (radians, 0 = +x): hull, deck planks, castles fore
 //     and aft, a hatch, the mast with its top, the sail furled on the yard. `lengthFt` 60-80; `look` 0 tarred
 //     hull, 1 a red-ochre wale and a striped sail.
-//   drawLantern(g, x, y, radiusFt = 6, sq = PX, lit = true)
-//     A lighthouse's lamp gallery seen from above at (x, y): railing, glazed lantern round a copper cap, and
-//     (lit) the only glow on the battlemap, since it is alight.
+//   drawLantern(g, x, y, radiusFt = 9.5, sq = PX, lit = true)
+//     A lighthouse's top seen from above at (x, y), its tower `radiusFt` at the foot: the tapering tower's
+//     courses, the gallery corbelled out round the top with its rail, the glazed lantern under a copper cap,
+//     and (lit) the only glow on the battlemap, since it is alight.
 //
 // `sq` is px a 5-ft square (the battlemap's shapes are at `PX`); every size and line width scales with it.
 // Each draws into `g` and leaves its transform as it was.
@@ -236,51 +237,82 @@ export function drawCog(g: Graphics, x: number, y: number, dir: number, lengthFt
   });
 }
 
-/** A lighthouse's lantern from above (see the top of the file). */
-export function drawLantern(g: Graphics, x: number, y: number, radiusFt = 6, sq = PX, lit = true) {
+/** A lighthouse's top from above, its tower `radiusFt` at the foot (see the top of the file). */
+export function drawLantern(g: Graphics, x: number, y: number, radiusFt = 9.5, sq = PX, lit = true) {
   framed(g, x, y, 0, sq, (w) => {
-    const R = radiusFt * FT;
-    const stone = [0x8c8474, 0xb4ab98, 0xd0c8b4];
+    const T = radiusFt * FT;
+    // The taper: the tower's top well in from its foot, the gallery corbelled out past the top, the
+    // lantern's glazing inside the gallery's rail, its cap over the glass.
+    const top = T * 0.6;
+    const R = T * 0.72;
+    const G = T * 0.42;
+    const stone = [0x7c7568, 0xa29a88, 0xc6bea9, 0xe4ddcb];
     // The glow: the one allowed, since it's alight. Soft discs, warm.
-    if (lit) for (let i = 0; i < 9; i++) g.circle(0, 0, R * (2.3 - i * 0.14)).fill({ color: 0xffd27a, alpha: 0.055 });
-    // The gallery's floor, flagged, warm where the lamp lights it; its shadow side to the south-east.
-    g.circle(0, 0, R).fill(stone[0]).stroke({ width: w(OUT), color: INK });
-    g.circle(-1.5, -1.5, R * 0.93).fill(stone[1]);
+    if (lit) for (let i = 0; i < 9; i++) g.circle(0, 0, T * (1.75 - i * 0.1)).fill({ color: 0xffd27a, alpha: 0.05 });
+    // The tower's battered wall from above, foot to top: lit on the north-west, shaded to the
+    // south-east, its courses ringing it ever smaller as it rises.
+    g.circle(0, 0, T).fill(stone[0]).stroke({ width: w(OUT), color: INK });
+    g.circle(-T * 0.05, -T * 0.05, T * 0.94).fill(stone[2]);
+    g.circle(T * 0.025, T * 0.025, T * 0.9).fill(stone[1]);
+    const rnd = rng((Math.imul(Math.round(radiusFt * 10), 2654435761) ^ 0x11e7) >>> 0);
+    for (let k = 1; k <= 4; k++) {
+      const r = T - (k / 5) * (T - top);
+      g.circle(0, 0, r).stroke({ width: w(1.2), color: stone[0], alpha: 0.55 });
+      // (The joints between its blocks, staggered course by course.)
+      const n = 18 - k * 2;
+      const r0 = T - ((k - 1) / 5) * (T - top);
+      for (let i = 0; i < n; i++) {
+        const a = ((i + (k % 2) * 0.5 + rnd() * 0.2) / n) * Math.PI * 2;
+        g.moveTo(Math.cos(a) * r, Math.sin(a) * r).lineTo(Math.cos(a) * r0 * 0.99, Math.sin(a) * r0 * 0.99);
+      }
+      g.stroke({ width: w(1), color: stone[0], alpha: 0.45 });
+    }
+    // The gallery: its shadow on the tower, its flagged deck, the rail round its edge.
+    g.circle(T * 0.07, T * 0.07, R).fill({ color: 0x000000, alpha: 0.22 });
+    g.circle(0, 0, R).fill(stone[1]).stroke({ width: w(OUT), color: INK });
+    g.circle(-1.2, -1.2, R * 0.92).fill(stone[3]);
     for (let i = 0; i < 12; i++) {
       const a = (i / 12) * Math.PI * 2 + 0.13;
-      g.moveTo(Math.cos(a) * R * 0.64, Math.sin(a) * R * 0.64).lineTo(Math.cos(a) * R * 0.9, Math.sin(a) * R * 0.9);
+      g.moveTo(Math.cos(a) * G * 1.05, Math.sin(a) * G * 1.05).lineTo(Math.cos(a) * R * 0.9, Math.sin(a) * R * 0.9);
     }
-    g.stroke({ width: w(1.3), color: stone[0], alpha: 0.8 });
-    if (lit) for (let i = 0; i < 4; i++) g.circle(0, 0, R * (0.92 - i * 0.07)).fill({ color: 0xffd27a, alpha: 0.12 });
-    // The railing round its edge: posts on a ring.
-    g.circle(0, 0, R * 0.9).stroke({ width: w(2.4), color: IRON[1] });
-    for (let i = 0; i < 16; i++) {
-      const a = (i / 16) * Math.PI * 2;
-      g.circle(Math.cos(a) * R * 0.9, Math.sin(a) * R * 0.9, 2.2).fill(IRON[0]);
+    g.stroke({ width: w(1.2), color: stone[1], alpha: 0.9 });
+    if (lit) for (let i = 0; i < 4; i++) g.circle(0, 0, R * (0.9 - i * 0.07)).fill({ color: 0xffd27a, alpha: 0.1 });
+    g.circle(0, 0, R * 0.92).stroke({ width: w(2.4), color: IRON[0] });
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2;
+      g.circle(Math.cos(a) * R * 0.92, Math.sin(a) * R * 0.92, w(2.3)).fill(IRON[1]).stroke({ width: w(0.8), color: INK });
     }
-    // The lantern: glass round the lamp, iron glazing bars, its shadow to the south-east.
-    const G = R * 0.6;
-    g.circle(0.4 * FT, 0.4 * FT, G).fill({ color: 0x000000, alpha: lit ? 0.12 : 0.25 });
-    g.circle(0, 0, G).fill(lit ? 0xffe08a : 0x6a7a80).stroke({ width: w(OUT), color: INK });
-    if (lit) g.circle(0, 0, G * 0.9).fill(0xfff0c0);
+    // The lantern: eight panes of glass round the lamp, its shadow to the south-east, iron glazing
+    // bars at the corners, a glint on the north-west panes.
+    const oct = (r: number, dx = 0, dy = 0) => Array.from({ length: 8 }, (_, i) => [dx + Math.cos(((i + 0.5) / 8) * Math.PI * 2) * r, dy + Math.sin(((i + 0.5) / 8) * Math.PI * 2) * r]).flat();
+    g.poly(oct(G, 0.45 * FT, 0.45 * FT)).fill({ color: 0x000000, alpha: lit ? 0.14 : 0.25 });
+    g.poly(oct(G)).fill(lit ? 0xffd77a : 0x5d6e76).stroke({ width: w(OUT), color: INK, join: 'round' });
+    g.poly(oct(G * 0.86)).fill(lit ? 0xfff0c0 : 0x7d8e94);
+    for (const i of [4, 5]) {
+      const [a, b] = [((i + 0.5) / 8) * Math.PI * 2, ((i + 1.5) / 8) * Math.PI * 2];
+      g.moveTo(Math.cos(a) * G * 0.93, Math.sin(a) * G * 0.93).lineTo(Math.cos(b) * G * 0.93, Math.sin(b) * G * 0.93);
+    }
+    g.stroke({ width: w(2), color: 0xffffff, alpha: 0.75 });
     for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
-      g.moveTo(Math.cos(a) * G * 0.68, Math.sin(a) * G * 0.68).lineTo(Math.cos(a) * G, Math.sin(a) * G);
+      const a = ((i + 0.5) / 8) * Math.PI * 2;
+      g.moveTo(Math.cos(a) * G * 0.66, Math.sin(a) * G * 0.66).lineTo(Math.cos(a) * G, Math.sin(a) * G);
     }
-    g.stroke({ width: w(2.6), color: IRON[0] });
-    // The cap: a copper cone, ribbed, lit on the north-west, a ball on top.
-    const C = G * 0.7;
+    g.stroke({ width: w(2.4), color: IRON[0] });
+    // The cap: a copper dome in eight ribbed gores, verdigris, lit on the north-west, the vent's
+    // ball on top.
+    const C = G * 0.58;
     const copper = [0x4f6a60, 0x6f8a7e, 0x93ab9c];
-    g.circle(0, 0, C).fill(copper[0]).stroke({ width: w(LINE), color: INK });
-    g.poly([0, 0, ...Array.from({ length: 9 }, (_, i) => [Math.cos(Math.PI * (0.75 + i * 0.0625)) * C * 0.96, Math.sin(Math.PI * (0.75 + i * 0.0625)) * C * 0.96]).flat()]).fill(copper[2]);
-    g.poly([0, 0, ...Array.from({ length: 9 }, (_, i) => [Math.cos(Math.PI * (0.25 + i * 0.0625)) * C * 0.96, Math.sin(Math.PI * (0.25 + i * 0.0625)) * C * 0.96]).flat()]).fill(shade(copper[0], 0.9));
-    g.poly([0, 0, ...Array.from({ length: 9 }, (_, i) => [Math.cos(Math.PI * (1.25 + i * 0.0625)) * C * 0.96, Math.sin(Math.PI * (1.25 + i * 0.0625)) * C * 0.96]).flat()]).fill(copper[1]);
+    g.poly(oct(C / Math.cos(Math.PI / 8))).fill(copper[0]).stroke({ width: w(LINE), color: INK, join: 'round' });
+    const gore = (a0: number, color: number) => g.poly([0, 0, ...Array.from({ length: 9 }, (_, i) => [Math.cos(Math.PI * (a0 + i * 0.0625)) * C * 0.96, Math.sin(Math.PI * (a0 + i * 0.0625)) * C * 0.96]).flat()]).fill(color);
+    gore(0.75, copper[2]);
+    gore(0.25, shade(copper[0], 0.9));
+    gore(1.25, copper[1]);
     for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      g.moveTo(Math.cos(a) * C * 0.2, Math.sin(a) * C * 0.2).lineTo(Math.cos(a) * C * 0.96, Math.sin(a) * C * 0.96);
+      const a = ((i + 0.5) / 8) * Math.PI * 2;
+      g.moveTo(Math.cos(a) * C * 0.2, Math.sin(a) * C * 0.2).lineTo(Math.cos(a) * C, Math.sin(a) * C);
     }
     g.stroke({ width: w(1.3), color: shade(copper[0], 0.75) });
-    g.circle(0, 0, C * 0.2).fill(0xb89a50).stroke({ width: w(LINE), color: INK });
-    g.circle(-C * 0.06, -C * 0.06, C * 0.08).fill(0xe8d48e);
+    g.circle(0, 0, C * 0.22).fill(0xb89a50).stroke({ width: w(LINE), color: INK });
+    g.circle(-C * 0.07, -C * 0.07, C * 0.09).fill(0xe8d48e);
   });
 }

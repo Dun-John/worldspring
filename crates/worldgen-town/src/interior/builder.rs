@@ -68,6 +68,25 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     } else {
         front
     };
+    // (Roadmap 7 P8: a lighthouse's door not onto its keeper's cottage or oil store (`harbour::
+    // annexes`): else the side clear of them nearest it.)
+    let front = if key == Some("lighthouse") {
+        let annex: Vec<&Vec<P>> = l.buildings.iter().filter(|o| town::harbour::is_annex(o) && geom::poly_gap(&o.poly, &b.poly) < 2.0).map(|o| &o.poly).collect();
+        let along = |k: usize, t: f64| {
+            let d = [[0.0, -0.5], [0.5, 0.0], [0.0, 0.5], [-0.5, 0.0]][k];
+            world_at(sides[k][0] + d[0] + t * d[1].abs() * 2.0, sides[k][1] + d[1] + t * d[0].abs() * 2.0)
+        };
+        let out = |k: usize| along(k, 0.0);
+        // (Its door's outside square anywhere along the middle of that side, a battlemap square off them.)
+        let clear = |k: usize| annex.iter().all(|a| [-1.0, 0.0, 1.0].iter().all(|&t| geom::poly_gap(a, &[along(k, t)]) >= 3.6));
+        if clear(front) {
+            front
+        } else {
+            (0..4).filter(|&k| clear(k) && (!any_open || open[k] > 0)).min_by(|&x, &y| geom::dist(out(x), out(front)).total_cmp(&geom::dist(out(y), out(front)))).unwrap_or(front)
+        }
+    } else {
+        front
+    };
     // R5 M20: a building on a deck over the water opens on the deck's lane: the side nearest its
     // centre line.
     let front = match b.deck {
@@ -151,8 +170,12 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     let whole = off_towers(sh.whole.clone());
     // (A tower mill's stair up its wall, a straight one: the stones and the gearing in the middle.)
     let arch_st = if mill { Arch::Warehouse } else { arch };
+    // (Roadmap 7 P8: a lighthouse's spiral stair by its middle, from its foot to its lamp room,
+    // the lamp beside it there: `lighthouse_squares`.)
+    let lamp = if arch == Arch::Tower && key == Some("lighthouse") && plan.is_none() { lighthouse_squares(&whole, nx, ny, front) } else { None };
     let mut stairs = match &plan {
         Some(p) => p.stairs,
+        None if lamp.is_some() => lamp.as_ref().map_or([0, 0, 1, 1], |(sp, _, _)| [sp % nx, sp / nx, 1, 1]),
         None if mill => mill_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
         None if key == Some("shrine") => shrine_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
         None => place_stairs(&whole, nx, ny, front, arch_st),
@@ -267,6 +290,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         let (mut lvl, hubbed) = match (&ground_pre, z, hubbed) {
             (_, _, Some((lvl, name, roof, items, _))) => (lvl, Some((name, roof, items))),
             (Some(g), 0, None) => (g.clone(), None),
+            (_, ROOF, None) if lamp.is_some() => (lamp_top(nx, ny, lamp.as_ref().map_or(&[][..], |l| &l.2[..]), stairs, &mut rng), None),
             (_, TOWER_TOP, None) => (tower_tops(&inside, nx, ny, t, towers.as_deref().unwrap_or_default(), stairs, &mut rng), None),
             _ => {
                 // (A monastery's crypt under its church only: `hub::Plan::crypt`.)
@@ -311,6 +335,16 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
                 if lvl.cells[j * nx + i] >= 0 {
                     push_item(&mut lvl.furniture, "spiral_stair", i, j);
                 }
+            }
+        }
+        // A lighthouse's spiral stair on every floor, its lamp in the lamp room on the roof.
+        if let Some((sp, lp, _)) = &lamp {
+            lvl.has_stairs = false;
+            if lvl.cells[*sp] >= 0 {
+                push_item(&mut lvl.furniture, "spiral_stair", sp % nx, sp / nx);
+            }
+            if z == ROOF && lvl.cells[*lp] >= 0 {
+                push_item(&mut lvl.furniture, "lighthouse_lamp", lp % nx, lp / nx);
             }
         }
         // A town hall's belfry: its spiral stair from the top floor's landing up.

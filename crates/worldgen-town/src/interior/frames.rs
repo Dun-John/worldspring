@@ -509,6 +509,52 @@ pub(super) fn tower_tops(inside: &[bool], nx: usize, ny: usize, t: usize, towers
     lvl
 }
 
+/// A lighthouse's middle (Roadmap 7 P8): the squares of `inside` round the grid's middle (its lamp
+/// room on the roof, at least two), its spiral stair's the one of them farthest from the door
+/// (`front`, as `mill_stairs`), the lamp's the one farthest from the stair.
+pub(super) fn lighthouse_squares(inside: &[bool], nx: usize, ny: usize, front: usize) -> Option<(usize, usize, Vec<usize>)> {
+    let mid = [0.5 * nx as f64, 0.5 * ny as f64];
+    let at = |k: usize| [(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5];
+    let mut by: Vec<usize> = (0..nx * ny).filter(|&k| inside[k]).collect();
+    by.sort_by(|&a, &b| geom::dist(at(a), mid).total_cmp(&geom::dist(at(b), mid)).then(a.cmp(&b)));
+    let mut inner: Vec<usize> = by.iter().copied().filter(|&k| geom::dist(at(k), mid) <= 1.0).collect();
+    if inner.len() < 2 {
+        inner = by.iter().copied().take(2).collect();
+    }
+    if inner.len() < 2 {
+        return None;
+    }
+    let door = match front {
+        0 => [mid[0], 0.0],
+        1 => [nx as f64, mid[1]],
+        2 => [mid[0], ny as f64],
+        _ => [0.0, mid[1]],
+    };
+    let far = |from: P, not: Option<usize>| inner.iter().copied().filter(|&k| Some(k) != not).max_by(|&a, &b| geom::dist(at(a), from).total_cmp(&geom::dist(at(b), from)).then(b.cmp(&a)));
+    let sp = far(door, None)?;
+    let lamp = far(at(sp), Some(sp))?;
+    inner.sort_unstable();
+    Some((sp, lamp, inner))
+}
+
+/// A lighthouse's roof (Roadmap 7 P8): its lamp room on the `inner` squares under the glazed
+/// lantern, the gallery round it outside the glass (on every square of the grid: it stands out
+/// past the tower's wall), a door between them; reached by its spiral stair (`st`).
+pub(super) fn lamp_top(nx: usize, ny: usize, inner: &[usize], st: [usize; 4], rng: &mut Pcg32) -> Level {
+    let mut cells = vec![1i16; nx * ny];
+    for &k in inner {
+        cells[k] = 0;
+    }
+    let mut rooms = vec![
+        Room { kind: "lamp room", squares: 0, raise_ft: 0.0, center: [0.0; 2], shape: 0 },
+        Room { kind: "lamp gallery", squares: 0, raise_ft: 0.0, center: [0.0; 2], shape: 0 },
+    ];
+    finish_rooms(&mut rooms, &cells, nx);
+    let mut lvl = connect(cells, rooms, nx, ny, st, 0, false, None, &|_, _| true, rng);
+    lvl.has_stairs = false;
+    lvl
+}
+
 /// A convex polygon pushed outward by `d` ft (about its centroid).
 pub(super) fn grow(poly: &[P], d: f64) -> Vec<P> {
     let c = geom::centroid(poly);

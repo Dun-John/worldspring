@@ -6,7 +6,7 @@ import { type Fit, floorCushion, paintedChest, yurtHearth, yurtPallet } from './
 import { candleStand, carvedScreen, godStatue, screenGate, sideAltar } from './gods';
 import { carpetRunner, chairOfOffice, cloisterWell, danceFloor, font, harpsichord, highTable, lowDais, musiciansCorner, refreshmentTable, standingBanner, tapestry, throneDais, wallBanner } from './hall';
 import { type Light } from './common';
-import { alchemyBench, altar, barricade, bell, cage, cauldron, linkDown, millstones, pillar, sarcophagus, spiralStair, spurWheel, stage, statue, telescope, throne, tortureRack, trapdoor, vat, weaponRack, winch } from './sacred';
+import { alchemyBench, altar, barricade, bell, cage, cauldron, lighthouseLamp, linkDown, millstones, pillar, sarcophagus, spiralStair, spurWheel, stage, statue, telescope, throne, tortureRack, trapdoor, vat, weaponRack, winch } from './sacred';
 import { anvil, bar, barrel, bath, bed, bench, bookcase, boothSeat, boothTable, bucket, chair, chest, cot, couch, counter, crates, desk, display, forge, hearth, keg, oven, pew, planter, roofDome, roundTable, rug, shelf, sideboard, table, wardrobe, washingLine, waterJar, workbench } from './home';
 import { gravelWalk } from './under';
 import { VARIED } from './tables';
@@ -94,6 +94,9 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       break;
     case 'millstones':
       millstones(g, f, light, rnd);
+      break;
+    case 'lighthouse_lamp':
+      lighthouseLamp(g, f, light, rnd);
       break;
     case 'spur_wheel':
       spurWheel(g, f, light, rnd);

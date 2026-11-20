@@ -1185,7 +1185,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for b in l.buildings.iter().filter(|b| crate::town::harbour::is_lighthouse(b)) {
             let c = crate::town::geom::mean(&b.poly);
             if owns(c) {
-                shapes.push(VectorShape { kind: ShapeKind::Lantern, size: (6.0 / SQUARE_FT) as f32, pts: vec![local(&c)] });
+                // (Roadmap 7 P8: the size its tower's radius at the foot, the top drawn tapering in from it.)
+                let r = b.poly.iter().map(|p| crate::town::geom::dist(*p, c)).sum::<f64>() / b.poly.len().max(1) as f64;
+                shapes.push(VectorShape { kind: ShapeKind::Lantern, size: (r / SQUARE_FT) as f32, pts: vec![local(&c)] });
             }
         }
         for m in &l.moored {

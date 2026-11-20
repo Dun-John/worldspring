@@ -39,6 +39,9 @@ pub(super) fn arch_of(b: &town::Building) -> Arch {
         Some("watchtower") => Arch::Tower,
         // R5 M20: a breakwater's lighthouse: the keeper below, the stair up to the lamp room.
         Some("lighthouse") => Arch::Tower,
+        // (Roadmap 7 P8: its keeper's cottage a home of one storey, its oil store a shed.)
+        Some("keepers_cottage") => Arch::House,
+        Some("oil_store") => Arch::Shop,
         Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
         Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs" | "tomb") => Arch::Temple,
         Some("prison") => Arch::Prison,
@@ -87,6 +90,7 @@ pub(super) fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelP
     let trade = matches!(key, Some("carpenter" | "mason" | "cooper" | "cartwright"));
     use Arch::*;
     match (arch, z) {
+        (Tower, z) if z == ROOF && key == Some("lighthouse") => p("Lamp room", &[("lamp room", 1.0)], None, false),
         (_, z) if z == ROOF => p("Battlements", &[("battlements", 1.0)], None, false),
         (_, -1) => match arch {
             Temple => p("Crypt", &[("crypt", 3.0), ("ossuary", 1.0)], Some("crypt"), false),
@@ -113,10 +117,14 @@ pub(super) fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelP
         (Tower, 0) if key == Some("watchtower") => p("Guardroom", &[("guardroom", 1.0)], None, false),
         (Tower, _) if key == Some("watchtower") && top => p("Lookout", &[("guardroom", 1.0)], None, false),
         (Tower, _) if key == Some("watchtower") => p("Store", &[("storeroom", 1.0)], None, false),
-        // R5 M20: a lighthouse: the keeper's room, stores of oil and wicks, the lamp at the top.
-        (Tower, 0) if key == Some("lighthouse") => p("Keeper's room", &[("bedchamber", 1.0)], None, false),
-        (Tower, _) if key == Some("lighthouse") && top => p("Lamp room", &[("lamp room", 1.0)], None, false),
-        (Tower, _) if key == Some("lighthouse") => p("Oil store", &[("storeroom", 1.0)], None, false),
+        // A lighthouse (Roadmap 7 P8): its spiral stair up from the stair foot through the store
+        // floors to the watch room, the lamp room on the roof under the lantern with its gallery
+        // round it (`frames::lamp_top`; above). Its keeper lives in his cottage beside it.
+        (Tower, 0) if key == Some("lighthouse") => p("Stair foot", &[("storeroom", 1.0)], None, false),
+        (Tower, _) if key == Some("lighthouse") && top => p("Watch room", &[("watch room", 1.0)], None, false),
+        (Tower, _) if key == Some("lighthouse") => p("Store", &[("wick store", 1.0)], None, false),
+        (House, 0) if key == Some("keepers_cottage") => p("Keeper's cottage", &[("keeper's room", 1.0)], None, false),
+        (_, 0) if key == Some("oil_store") => p("Oil store", &[("oil store", 1.0)], None, false),
         (Tower, 0) => p("Entry", &[("entry hall", 1.0)], None, false),
         (Tower, _) => {
             let rooms = ["library", "laboratory", "study", "bedchamber"];

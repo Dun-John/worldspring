@@ -323,7 +323,7 @@ pub(super) fn harbour(site: &Site, s: &Settlement, index: usize, l: &mut Layout,
     if let Some(g) = generated {
         l.port = g.port;
         l.moles = g.moles.clone();
-        for h in g.buildings.iter().filter(|b| is_lighthouse(b)) {
+        for h in g.buildings.iter().filter(|b| is_lighthouse(b) || is_annex(b)) {
             let at = l.buildings.partition_point(|b| b.id < h.id);
             let hb = bbox(&h.poly);
             if l.buildings.get(at).is_none_or(|b| b.id != h.id) && l.buildings.iter().all(|b| !boxes_meet(grow(bbox(&b.poly), 1.5), hb) || poly_gap(&b.poly, &h.poly) > 0.5) {
@@ -584,7 +584,7 @@ fn lighthouses(index: usize, l: &mut Layout) {
             poly.reverse();
         }
         let floors = 3 + (unit(h ^ 3) < 0.5) as u8;
-        l.buildings.push(Building {
+        let made = |poly: Vec<P>, func: usize, floors: u8, id: u32| Building {
             poly,
             ward: Ward::Docks,
             func: Some(func as u16),
@@ -602,9 +602,69 @@ fn lighthouses(index: usize, l: &mut Layout) {
             parts: Vec::new(),
             keep: None,
             deck: None,
-        });
+        };
+        l.buildings.push(made(poly, func, floors, id));
         id += 1;
+        // Roadmap 7 P8 (178): its keeper's cottage against the tower, the oil store beyond it, on one
+        // side of the breakwater (the other side left for the way out to the tower's door).
+        if let (Some(cottage), Some(store)) = (catalog::index_of("keepers_cottage"), catalog::index_of("oil_store"))
+            && let Some([c, o]) = annexes(&m, rad, unit(h ^ 5) < 0.5)
+        {
+            l.buildings.push(made(c, cottage, 1, id));
+            l.buildings.push(made(o, store, 1, id + 1));
+            id += 2;
+        }
     }
+}
+
+/// A lighthouse's keeper's cottage and oil store (world ft, counter-clockwise) on breakwater `m`,
+/// its tower of radius `rad` on the head: rectangles along the mole, landward of the tower, on the
+/// side `left` picks, the cottage 14 ft long touching the tower's wall, the store 7 ft square
+/// against the cottage's far end; None where they wouldn't stand on the mole's top.
+pub fn annexes(m: &Mole, rad: f64, left: bool) -> Option<[Vec<P>; 2]> {
+    let n = m.pts.len();
+    if n < 2 {
+        return None;
+    }
+    let tip = m.pts[n - 1];
+    let d = sub(m.pts[n - 2], tip);
+    let len = dist(m.pts[n - 2], tip);
+    if len < 1e-6 {
+        return None;
+    }
+    let back = mul(d, 1.0 / len);
+    let side = if left { [-back[1], back[0]] } else { [back[1], -back[0]] };
+    let half = 0.5 * m.width;
+    let at = |a: f64, s: f64| add(tip, add(mul(back, a), mul(side, s)));
+    let quad = |a0: f64, a1: f64, s0: f64, s1: f64| {
+        let mut q = vec![at(a0, s0), at(a1, s0), at(a1, s1), at(a0, s1)];
+        if area(&q) < 0.0 {
+            q.reverse();
+        }
+        q
+    };
+    // (Its inner side 3 ft off the mole's middle, clear of the square before the tower's door; its
+    // near end where its inner corner meets the tower's wall.)
+    let (s0, s1) = (3.0, half - 0.5);
+    let a0 = libm::sqrt(((rad + 0.25) * (rad + 0.25) - s0 * s0).max(0.0));
+    let cottage = quad(a0, a0 + 14.0, s0, s1);
+    let store = quad(a0 + 14.0, a0 + 21.0, s1 - 7.0, s1);
+    // (Every corner, half a foot in toward its middle, on the mole's made ground.)
+    let polys = m.polys();
+    let on = |q: &[P]| {
+        let c = mul(q.iter().fold([0.0, 0.0], |a, p| add(a, *p)), 0.25);
+        q.iter().all(|p| {
+            let k = dist(*p, c);
+            let p = if k > 0.5 { add(*p, mul(sub(c, *p), 0.5 / k)) } else { *p };
+            polys.iter().any(|g| contains(g, p))
+        })
+    };
+    (s1 - s0 >= 7.0 && on(&cottage) && on(&store)).then_some([cottage, store])
+}
+
+/// Whether `b` is a lighthouse's keeper's cottage or oil store (`annexes`).
+pub fn is_annex(b: &Building) -> bool {
+    b.func.is_some_and(|f| matches!(CATALOG[f as usize].key, "keepers_cottage" | "oil_store"))
 }
 
 /// Boats along the piers: in a big port one at every second pier (a rowboat or a fishing boat),
