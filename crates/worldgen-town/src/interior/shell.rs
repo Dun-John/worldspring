@@ -34,6 +34,10 @@ pub struct Shell<'a> {
     neighbours: Vec<&'a Vec<P>>,
     /// A keep's footprint (world ft): the squares in it no room has are its walls, not open ground.
     own: Vec<P>,
+    /// A round building's footprint (world ft), else empty: the grid is turned to the footprint but
+    /// the battlemap's squares are not, and a square of those whose middle is in the footprint is
+    /// the building's, so a door's outside square must not fall in one (`open_ground`).
+    raster: Vec<P>,
     /// A temple's, a shrine's or a monastery's: the battlemap's squares round it (`town::temple::REACH_PAD`
     /// beyond it each way) whose open ground reaches a street (`town::temple::street_reach`), else the box's
     /// edge (`reach_of`); None for another building, or one no open square beside it reaches either from.
@@ -81,7 +85,7 @@ impl<'a> Shell<'a> {
         let neighbours = neighbours_of(l, b);
         // (A yurt's ring is its footprint as built: its lattice stands on it, inside no wider.)
         let outline = outline_of(&b.poly, &inside, nx, origin, u, v, arch_of(b) == Arch::House && round_ish(b));
-        let mut sh = Shell { nx, ny, origin, u, v, inside, outline, whole: Vec::new(), outline_parts: Vec::new(), towers: Vec::new(), tower_doors: Vec::new(), owner: Vec::new(), neighbours, own: Vec::new(), reach: None, coaching: town::palace::is_coaching(l, b), shaped: town::wings::ranges(l, b).is_some() };
+        let mut sh = Shell { nx, ny, origin, u, v, inside, outline, whole: Vec::new(), outline_parts: Vec::new(), towers: Vec::new(), tower_doors: Vec::new(), owner: Vec::new(), neighbours, own: Vec::new(), raster: if matches!(arch_of(b), Arch::Tower | Arch::House) && round_ish(b) { b.poly.clone() } else { Vec::new() }, reach: None, coaching: town::palace::is_coaching(l, b), shaped: town::wings::ranges(l, b).is_some() };
         sh.whole = sh.whole_by(WALL_HALF);
         sh.reach = sh.reach_of(l, b);
         sh
@@ -196,7 +200,7 @@ impl<'a> Shell<'a> {
                 part_outline(&parts[pi], &own, &reach, nx)
             })
             .collect();
-        let mut sh = Shell { nx, ny, origin, u, v, inside, outline: Vec::new(), whole: Vec::new(), outline_parts, towers, tower_doors, owner, neighbours: neighbours_of(l, b), own: b.poly.clone(), reach: None, coaching: false, shaped: false };
+        let mut sh = Shell { nx, ny, origin, u, v, inside, outline: Vec::new(), whole: Vec::new(), outline_parts, towers, tower_doors, owner, neighbours: neighbours_of(l, b), own: b.poly.clone(), raster: Vec::new(), reach: None, coaching: false, shaped: false };
         sh.whole = sh.whole_by(WALL_HALF);
         sh.reach = sh.reach_of(l, b);
         sh
@@ -272,7 +276,12 @@ impl<'a> Shell<'a> {
     /// ground, whether or not it reaches a street.
     pub fn open_ground(&self, i: isize, j: isize) -> bool {
         let p = self.world_at(i as f64 + 0.5, j as f64 + 0.5);
-        !self.neighbours.iter().any(|poly| geom::contains(poly, p)) && (self.own.is_empty() || !geom::contains(&self.own, p))
+        // (The battlemap square, on its lattice of `SQUARE_FT`, that holds `p`.)
+        let on_raster = !self.raster.is_empty() && {
+            let m = |x: f64| (crate::core::floor(x / SQUARE_FT) + 0.5) * SQUARE_FT;
+            geom::contains(&self.raster, [m(p[0]), m(p[1])])
+        };
+        !on_raster && !self.neighbours.iter().any(|poly| geom::contains(poly, p)) && (self.own.is_empty() || !geom::contains(&self.own, p))
     }
 
     /// `reach` for building `b` of layout `l`: a temple's, a shrine's or a monastery's, where an open
