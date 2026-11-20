@@ -2,7 +2,7 @@
 // them all), a settlement card's change worked out and made, a village or town added by hand
 // moved, and what the Gazetteer brings back (deleted settlements, removed roads, changed fences).
 // App keeps the markup reading these and the `waiting` check when another world opens.
-import type { ChangedFences, Created, Edits, Feature, Overlay, PinKind, PlanningNow, RemovedRoad, SettlementFacts, Stroke, TownEdit, WorldFile } from '../../gen/protocol';
+import type { ChangedFences, Created, Edits, Feature, Overlay, PatternNow, PinKind, PlanningNow, RemovedRoad, SettlementFacts, Stroke, TownEdit, WorldFile } from '../../gen/protocol';
 import type { MapView } from '../../render/MapView';
 import type { Ask, Remake, Section } from '../../ui/shell/layout.svelte';
 import type { UndoHistory } from '../../ui/shell/history.svelte';
@@ -261,6 +261,17 @@ export function pendingTools(host: PendingHost) {
       const n = r.set_aside ?? 0;
       return { edits: r.edits, change: { tool: 'update_settlement', id, name, planning: to === undefined ? 'as rolled' : `${to}`, set_aside: n }, set_aside: n, by: r.set_aside_by ?? {}, count };
     }
+    if (ask.pattern !== undefined) {
+      const li = host.layoutIndexOf(id);
+      if (li < 0) return { error: 'It is not on the map now' };
+      const auto = ask.pattern === 'auto';
+      const r = await host.view.gen.setPatterns(li, auto ? undefined : ask.pattern, auto, now);
+      if (!r) return unanswered;
+      if ('error' in r) return { error: sentence(r.error) };
+      if (!('edits' in r) || r.unchanged || !r.edits) return { unchanged: true };
+      const n = r.set_aside ?? 0;
+      return { edits: r.edits, change: { tool: 'update_settlement', id, name, pattern: auto ? 'as chosen' : ask.pattern, set_aside: n }, set_aside: n, by: r.set_aside_by ?? {}, count };
+    }
     const old = now.created ?? [];
     const k = old.findIndex((c) => c.id === id && !c.removed);
     if (k < 0) return { error: 'It was deleted meanwhile' };
@@ -444,6 +455,20 @@ export function pendingTools(host: PendingHost) {
     });
   });
 
+  /** The selected town's street pattern now (null: a village, or one added by hand). */
+  let cardPattern = $state<{ id: string; p: PatternNow } | null>(null);
+  $effect(() => {
+    const sel = host.selection;
+    void host.edits;
+    if (sel?.kind !== 'feature' || !SETTLEMENT_KINDS.includes(sel.feature.kind)) return;
+    const id = sel.feature.id;
+    const li = host.layoutIndexOf(id);
+    if (li < 0 || id.startsWith('c:')) return;
+    void host.view.gen.setPatterns(li, undefined, false, $state.snapshot(host.edits) as Edits).then((r) => {
+      if (host.selection?.kind === 'feature' && host.selection.feature.id === id) cardPattern = r && 'pattern' in r && 'set' in r ? { id, p: r } : null;
+    });
+  });
+
   /** The selected settlement's Settlement block (culture for all; tier, living, name and Move
    * for a village or town added by hand). */
   function settleCard(f: Feature) {
@@ -458,6 +483,7 @@ export function pendingTools(host: PendingHost) {
       capital: !!f.detail?.endsWith(', capital'),
       culture: cardCulture?.id === f.id ? cardCulture.culture : null,
       planning: cardPlanning?.id === f.id && !f.id.startsWith('c:') ? cardPlanning.p : null,
+      pattern: cardPattern?.id === f.id && !f.id.startsWith('c:') ? cardPattern.p : null,
       name: c?.name ?? f.name,
       plan: (a: SettleAsk) => planSettlement(f.id, a),
       apply: applySettlement,

@@ -62,6 +62,7 @@ const ASK: { [K in Ask['op']]: (a: AskOf<K>, c: Ctx) => string } = {
   setaside: (a, c) => c.set_aside_changed_json(a.old, a.edits),
   setculture: (a, c) => c.set_culture_json(a.layout, a.culture, a.edits),
   setplanning: (a, c) => c.set_planning_json(a.layout, a.planning, a.auto, a.edits),
+  setpatterns: (a, c) => c.set_patterns_json(a.layout, a.pattern, a.auto, a.edits),
   restoremade: (a, c) => c.restore_made_json(a.id, a.edits),
   remakeprints: (a, c) => c.remake_prints_json(a.edits, new Uint32Array(a.played)),
   follow: (a, c) => c.follow_json(a.input),

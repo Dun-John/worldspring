@@ -2246,6 +2246,14 @@ Rivers and shores still shape the blocks along them, and the main streets still 
 made inside the town are set aside as a culture change sets them aside. The reply: `planning` (`from`, `to`,
 `class`, `unchanged`, `set_aside`, `set_aside_by`). Villages and towns laid out by hand (`edit_streets`) have none.
 
+`pattern` sets the street pattern of the planned part: `grid`, `rings` (concentric rings), `radial` (streets
+radiating from the centre) or `linear` (one long street with cross streets; laid out as a grid for now);
+`"auto"` (the default) picks one from its land and culture (a hill top or a northern city rings, a southern city
+radial, most towns a grid). Patterns show only in a town's planned part: a grown town given one is laid out
+as planned 0.3 round a grown core. It is given alone or with `planning`, with the same effect: the town is laid out
+anew and the changes made inside it are set aside. The reply carries `pattern` (`from`, `to`, `unchanged`,
+`set_aside`, `set_aside_by`) beside `planning`. Villages and towns laid out by hand have none.
+
 Gates and towers go in and out of the town's own wall by its corners (`get_town_plan`: corners with `wall: true`;
 `gate_by_hand`, `gate_removed`, and `walls.by_hand` for what was set). A gate put in takes the town's gatehouse
 (its culture's form: square tower, twin drums, arched, bent, log), the id `gt:<layout>:<corner>` and a name like
@@ -2274,6 +2282,7 @@ and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `
 | `members` | `{add, remove}` (lists of ids) | | What belongs to the town, by hand (see below): `c:<n>` drawn things (`add` joins, `remove` leaves), `b:<layout>:<id>` generated outskirt buildings (`remove` pushes them out into a new place, `add` takes them back). May be given alone |
 | `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` \| `"walls"` | | Back to as generated (`walls`: up or down and every gate and tower set by hand) |
 | `planning` | number 0-1 or `"auto"` | | How planned its streets are, given alone (with `id`, `dry_run`): see below |
+| `pattern` | `"auto"` \| `"grid"` \| `"rings"` \| `"radial"` \| `"linear"` | | The street pattern of its planned part, alone or with `planning` (see above) |
 | `dry_run` | boolean | `false` | Report without changing anything |
 
 ```json

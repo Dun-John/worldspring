@@ -1,10 +1,10 @@
 <script lang="ts" module>
-  import type { Edits, PlanningNow } from '../gen/protocol';
+  import { STREET_PATTERNS, type Edits, type PatternNow, type PlanningNow } from '../gen/protocol';
   import type { Change } from '../sync/mapd';
 
   /** One change asked on a settlement's card: its culture (0 north … 4 steppe), and for a village
    * or town added by hand its tier, its economy or its name. */
-  export type SettleAsk = { culture?: number; planning?: number | 'auto'; tier?: 'village' | 'town'; lives_by?: string; name?: string };
+  export type SettleAsk = { culture?: number; planning?: number | 'auto'; pattern?: string; tier?: 'village' | 'town'; lives_by?: string; name?: string };
   /** A change worked out but not made: the edits it makes and what it sets aside (by field), or
    * why it can't be made, or that it changes nothing. */
   export type SettlePlan = { edits: Edits; change: Change; set_aside: number; by: Record<string, number>; count: number } | { error: string } | { unchanged: true };
@@ -41,6 +41,8 @@
     culture: number | null;
     /** How planned its streets are (a town or city of the world's own; null: not one, or not known yet). */
     planning?: PlanningNow | null;
+    /** Its street pattern (null: as for `planning`). */
+    pattern?: PatternNow | null;
     /** The name it was given (added by hand). */
     name: string;
     plan: (ask: SettleAsk) => Promise<SettlePlan>;
@@ -58,7 +60,7 @@
     /** Remake the world with every change waiting. */
     onRemake?: () => void;
   }
-  let { made, tier, livesBy, capital, culture, planning = null, name, plan, apply, onMove, own = null, wait, onCancel, onSketch, onRemake }: Props = $props();
+  let { made, tier, livesBy, capital, culture, planning = null, pattern = null, name, plan, apply, onMove, own = null, wait, onCancel, onSketch, onRemake }: Props = $props();
 
   /** A change worked out that sets something aside, waiting for Apply (raw: its edits are the
    * world's, plain data to clone and save). */
@@ -169,6 +171,25 @@
       <span class="grow">Grown ↔ planned: {planning.set ? 'set by you' : 'rolled'}{planning.set ? ` (rolled ${Math.round(planning.rolled * 100)})` : ''}</span>
       <button class="ws-btn quiet" disabled={!planning.set || busy} title="Go back to the rolled value" onclick={() => void change({ planning: 'auto' }, 'Streets planned as rolled.')}>Auto</button>
     </div>
+    {#if pattern}
+      <label class="row">
+        <span class="key" title="The layout of its planned streets (a town with no planned part shows little of it)">Pattern</span>
+        <select
+          class="ws-input"
+          aria-label="Street pattern"
+          value={pattern.set ?? 'auto'}
+          disabled={busy}
+          onchange={(e) => {
+            const to = e.currentTarget.value;
+            e.currentTarget.value = pattern.set ?? 'auto';
+            void change({ pattern: to }, to === 'auto' ? 'Street pattern chosen as generated.' : `Streets laid out as ${to}.`);
+          }}
+        >
+          <option value="auto">{pattern.auto ? `Auto (${pattern.pattern})` : 'Auto'}</option>
+          {#each STREET_PATTERNS as p (p)}<option value={p}>{cap(p)}</option>{/each}
+        </select>
+      </label>
+    {/if}
   {/if}
   {#if made}
     <div class="row">
