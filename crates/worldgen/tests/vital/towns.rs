@@ -575,8 +575,8 @@ fn hand_town_guarantee() {
 }
 
 /// The acceptance city (Roadmap 6 P11; `tests/fixtures/acceptcity.json`, written by `examples/acceptcity.rs`
-/// through the change functions): seed 3's metropolis laid out by hand and grown to ~3.5 mi across, and a
-/// blank town laid out from a street plan. The grown city laid out twice the same; battlemaps across it
+/// through the change functions): seed 3's greatest place with room to grow and a coast past it, laid out by
+/// hand and grown to ~3.5 mi across, and a blank town laid out from a street plan. The grown city laid out twice the same; battlemaps across it
 /// built, none empty, each square within reach of cover (a cemetery's middle too), no building over a
 /// street (a row's neither) or in the water; the blank town built (its wall gated where its streets run
 /// out), its people counted; and what Roadmap 6 R3-R7 put in it holds (`acceptance_roadmap6`). Native times are
@@ -587,9 +587,6 @@ fn acceptance_city() {
     use worldgen::town::{self, hand};
     let mut file: WorldFile = serde_json::from_str(include_str!("../fixtures/acceptcity.json")).unwrap();
     file.gen_version = worldgen::world::GEN_VERSION;
-    // (The towns edited in it as they were laid out when it was made: grown, before planning.)
-    let edited: Vec<String> = file.edits.towns.keys().cloned().collect();
-    file.edits.planning.extend(edited.into_iter().map(|k| (k, 0)));
     let start = std::time::Instant::now();
     let mut ex = Executor::new(World::new(file).unwrap());
     let t_t0 = start.elapsed().as_secs_f64();

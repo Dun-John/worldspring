@@ -4,7 +4,7 @@
 //! `cargo run --release -p worldgen --example acceptcity [out.json]` (default
 //! `crates/worldgen/tests/fixtures/acceptcity.json`, the vital test's fixture). Deterministic: run twice, the same bytes.
 //!
-//! What it holds: seed 3's metropolis laid out by hand and grown inland to ~3.5 mi across (streets out from its edge, ring
+//! What it holds: seed 3's greatest place with room to grow and a coast past it laid out by hand and grown inland to ~3.5 mi across (streets out from its edge, ring
 //! streets, blocks of every fill, districts, rows, painted areas, a wall with gates, squares); a blank town laid out from a
 //! street plan in the manner of a walled market town of before 1900 (authored here by hand, not digitised from any real
 //! map); a stamp, a building row and a parcel along a generated city's road; a harbour basin joining the sea; a plateau
@@ -129,8 +129,16 @@ fn main() {
     let world = World::new(WorldFile { seed: SEED, ..Default::default() }).unwrap();
     let t0 = T0::generate(&world);
     let mut b = Build { world, t0, refused: Vec::new(), ops: 0 };
-    let li = (0..b.t0.settlements.len()).filter(|&i| b.t0.settlements[i].tier == Tier::Metropolis).max_by_key(|&i| (b.t0.settlements[i].population, std::cmp::Reverse(i))).expect("a metropolis");
-    eprintln!("seed {SEED}: metropolis L{li}, T0 {:.1} s", start.elapsed().as_secs_f64());
+    // (The place grown: of the towns and greater, the highest tier, then the most people, whose dry land reaches
+    // `GROWN_R` along half the rays or more, with a coast past that for the harbour basin.)
+    let mut big: Vec<usize> = (0..b.t0.settlements.len()).filter(|&i| b.t0.settlements[i].tier >= Tier::Town).collect();
+    big.sort_by_key(|&i| (std::cmp::Reverse(b.t0.settlements[i].tier), std::cmp::Reverse(b.t0.settlements[i].population), i));
+    let grows = |b: &Build, i: usize| {
+        let o = [b.t0.settlements[i].x, b.t0.settlements[i].y];
+        (0..RAYS).filter(|&k| dry_reach(b, o, k as f64 * std::f64::consts::TAU / RAYS as f64) >= GROWN_R).count() * 2 >= RAYS
+    };
+    let li = big.into_iter().find(|&i| grows(&b, i) && coast_past(&b, i).is_some()).expect("a place to grow with a coast past it");
+    eprintln!("seed {SEED}: grown place L{li} ({:?}), T0 {:.1} s", b.t0.settlements[li].tier, start.elapsed().as_secs_f64());
 
     let first_new = grow_city(&mut b, li);
     castles(&mut b, li, first_new);
@@ -174,7 +182,7 @@ fn main() {
     }
 }
 
-/// The metropolis laid out by hand, then grown: streets out from its edge every 7.5 degrees where the land
+/// The port laid out by hand, then grown: streets out from its edge every 7.5 degrees where the land
 /// reaches, ring streets between them, the new blocks given every fill, districts, rows both sides of a
 /// long street, painted areas, squares, a wall round the grown part with gates where streets cross it.
 fn grow_city(b: &mut Build, li: usize) -> u64 {
@@ -201,22 +209,7 @@ fn grow_city(b: &mut Build, li: usize) -> u64 {
     // How far dry land runs out along each ray (a river up to 450 ft across is bridged).
     let dry: Vec<f64> = (0..RAYS)
         .map(|k| {
-            let a = k as f64 * step;
-            let (mut last, mut wet) = (0.0, 0.0);
-            let mut r = 1_000.0;
-            while r <= GROWN_R + 600.0 {
-                if b.land(polar(o, r, a)) {
-                    last = r;
-                    wet = 0.0;
-                } else {
-                    wet += 150.0;
-                    if wet > 450.0 {
-                        break;
-                    }
-                }
-                r += 150.0;
-            }
-            last
+            dry_reach(b, o, k as f64 * step)
         })
         .collect();
     let ring0 = r0 + 450.0;
@@ -626,27 +619,50 @@ fn quick_placement(b: &mut Build, city: usize) -> usize {
     lc
 }
 
-/// A harbour basin joining the sea beyond the grown city's wall, and a plateau stack (a terrace on a
-/// terrace) on dry land beside it.
-fn water_and_ground(b: &mut Build, li: usize) {
+/// How far dry land runs out from `o` along angle `a`, up to `GROWN_R` and a little (a river up to 450 ft across
+/// is bridged).
+fn dry_reach(b: &Build, o: P, a: f64) -> f64 {
+    let (mut last, mut wet) = (0.0, 0.0);
+    let mut r = 1_000.0;
+    while r <= GROWN_R + 600.0 {
+        if b.land(polar(o, r, a)) {
+            last = r;
+            wet = 0.0;
+        } else {
+            wet += 150.0;
+            if wet > 450.0 {
+                break;
+            }
+        }
+        r += 150.0;
+    }
+    last
+}
+
+/// The coast past a city grown to `GROWN_R`: the first land-to-sea step along a ray out from it (and the ray's angle).
+fn coast_past(b: &Build, li: usize) -> Option<(P, f64)> {
     use std::f64::consts::TAU;
     let s = &b.t0.settlements[li];
     let o = [s.x, s.y];
-    let sea = b.world.params().sea_level_ft;
-    // The coast: the first land-to-sea step along a ray past the city.
-    let mut coast = None;
-    'find: for k in 0..RAYS {
+    for k in 0..RAYS {
         let a = k as f64 * TAU / RAYS as f64;
         let mut r = GROWN_R + 1_200.0;
         while r < GROWN_R + 6_000.0 {
             if b.land(polar(o, r, a)) && !b.land(polar(o, r + 100.0, a)) {
-                coast = Some((polar(o, r + 50.0, a), a));
-                break 'find;
+                return Some((polar(o, r + 50.0, a), a));
             }
             r += 100.0;
         }
     }
-    let (c, a) = coast.expect("a coast past the city");
+    None
+}
+
+/// A harbour basin joining the sea beyond the grown city's wall, and a plateau stack (a terrace on a
+/// terrace) on dry land beside it.
+fn water_and_ground(b: &mut Build, li: usize) {
+    use std::f64::consts::TAU;
+    let sea = b.world.params().sea_level_ft;
+    let (c, a) = coast_past(b, li).expect("a coast past the city");
     let (u, v) = ([libm::cos(a), libm::sin(a)], [-libm::sin(a), libm::cos(a)]);
     let corner = |x: f64, y: f64| worldgen::waters::rounded(&[[c[0] + u[0] * x + v[0] * y, c[1] + u[1] * x + v[1] * y]])[0];
     let basin = worldgen::waters::Water::outline(vec![corner(-260.0, -180.0), corner(260.0, -200.0), corner(260.0, 200.0), corner(-260.0, 180.0), corner(-330.0, 0.0)], worldgen::waters::WaterKind::Basin, sea as f32);
