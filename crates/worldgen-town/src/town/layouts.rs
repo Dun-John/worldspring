@@ -282,6 +282,8 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
         if e.poly.len() >= 3 && edit_stands(b, e) {
             // (Its lots' ground as generated no longer its own.)
             l.grounds.retain(|g| g.0 != id);
+            // (Nor an L's, a U's or a court's shape: drawn anew, its outline is the hand's, `wings::ranges`.)
+            l.wings.retain(|&w| w != id);
             // (Moved or turned, a keep keeps its pieces with it; drawn otherwise, it has none.)
             match rigid(&b.poly, &e.poly) {
                 Some(f) => b.parts.iter_mut().flat_map(|p| p.poly.iter_mut()).for_each(|q| *q = f(*q)),

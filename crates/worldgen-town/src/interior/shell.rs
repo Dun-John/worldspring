@@ -40,6 +40,8 @@ pub struct Shell<'a> {
     reach: Option<town::temple::Reach>,
     /// A coaching inn's (`town::palace::is_coaching`: its lots merged round a yard).
     pub coaching: bool,
+    /// (Roadmap 7, 163) An L, a U or a court `town::wings` shaped (`town::wings::ranges`).
+    pub shaped: bool,
 }
 
 
@@ -79,7 +81,7 @@ impl<'a> Shell<'a> {
         let neighbours = neighbours_of(l, b);
         // (A yurt's ring is its footprint as built: its lattice stands on it, inside no wider.)
         let outline = outline_of(&b.poly, &inside, nx, origin, u, v, arch_of(b) == Arch::House && round_ish(b));
-        let mut sh = Shell { nx, ny, origin, u, v, inside, outline, whole: Vec::new(), outline_parts: Vec::new(), towers: Vec::new(), tower_doors: Vec::new(), owner: Vec::new(), neighbours, own: Vec::new(), reach: None, coaching: town::palace::is_coaching(l, b) };
+        let mut sh = Shell { nx, ny, origin, u, v, inside, outline, whole: Vec::new(), outline_parts: Vec::new(), towers: Vec::new(), tower_doors: Vec::new(), owner: Vec::new(), neighbours, own: Vec::new(), reach: None, coaching: town::palace::is_coaching(l, b), shaped: town::wings::ranges(l, b).is_some() };
         sh.whole = sh.whole_by(WALL_HALF);
         sh.reach = sh.reach_of(l, b);
         sh
@@ -194,7 +196,7 @@ impl<'a> Shell<'a> {
                 part_outline(&parts[pi], &own, &reach, nx)
             })
             .collect();
-        let mut sh = Shell { nx, ny, origin, u, v, inside, outline: Vec::new(), whole: Vec::new(), outline_parts, towers, tower_doors, owner, neighbours: neighbours_of(l, b), own: b.poly.clone(), reach: None, coaching: false };
+        let mut sh = Shell { nx, ny, origin, u, v, inside, outline: Vec::new(), whole: Vec::new(), outline_parts, towers, tower_doors, owner, neighbours: neighbours_of(l, b), own: b.poly.clone(), reach: None, coaching: false, shaped: false };
         sh.whole = sh.whole_by(WALL_HALF);
         sh.reach = sh.reach_of(l, b);
         sh
@@ -237,7 +239,10 @@ impl<'a> Shell<'a> {
     /// outside its footprint (row-major, nx × ny) and the box's corners (grid units, as
     /// `Interior::yard`); None for any other building.
     pub fn yard(&self, b: &town::Building) -> Option<(Vec<bool>, Vec<[f32; 2]>)> {
-        let arms = town::wings::ranges(b).filter(|a| a.len() >= 3)?;
+        if !self.shaped {
+            return None;
+        }
+        let arms = town::wings::arms(&b.poly).filter(|a| a.len() >= 3)?;
         let at = |p: P, d: P| geom::dot(sub(p, self.origin), d) / SQUARE_FT;
         let span = |d: P| arms.iter().flatten().map(|p| at(*p, d)).fold((f64::MAX, f64::MIN), |(a, c), x| (a.min(x), c.max(x)));
         let ((x0, x1), (y0, y1)) = (span(self.u), span(self.v));

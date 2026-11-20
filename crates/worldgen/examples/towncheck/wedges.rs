@@ -188,7 +188,7 @@ pub(crate) fn wings(world: &World, t0: &T0, label: &str, r: &mut Report) {
     for li in (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= Tier::Village && town::hand::size(world, li).is_none()) {
         let l = town::layout(world, t0, li);
         for b in &l.buildings {
-            let Some(arms) = town::wings::ranges(b) else { continue };
+            let Some(arms) = town::wings::ranges(&l, b) else { continue };
             let kind = b.func.map_or(town::catalog::RESIDENTIAL[b.residential as usize], |f| town::catalog::CATALOG[f as usize].key);
             let form = match (arms.len(), b.poly.len()) {
                 (2, _) => "L",
@@ -197,6 +197,12 @@ pub(crate) fn wings(world: &World, t0: &T0, label: &str, r: &mut Report) {
                 _ => "other",
             };
             r.tally(&format!("{form} {kind}"), 1);
+            // (Fix B) Its narrowest range (ft): under 25 flagged.
+            let narrow = arms.iter().map(|q| len(sub(q[1], q[0])).min(len(sub(q[3], q[0])))).fold(f64::MAX, f64::min);
+            r.tally(&format!("{form}: narrowest range ft {}", (narrow / 5.0).round() * 5.0), 1);
+            if narrow < 23.0 {
+                r.add(&format!("{form}s with a range under 23 ft"), narrow, format!("{label} L{li} b{} {kind}", b.id));
+            }
             // Its ground floor's doors out, and those onto its yard (the ground inside its ranges' box).
             if let Some(it) = worldgen::interior::generate_id(world, t0, &format!("b:{li}:{}", b.id)) {
                 let lv = &it.levels[it.entry_level];
@@ -235,5 +241,24 @@ pub(crate) fn wings(world: &World, t0: &T0, label: &str, r: &mut Report) {
             say!("    {label} L{li} b{} {form} {kind} at {:.0},{:.0} fx {:.6} fy {:.6}", b.id, c[0], c[1], c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
         }
         r.tally("buildings", l.buildings.len());
+        // (Fix B) Shaped ones within 30 ft of each other (their lots: footprints within 30 ft), and blocks with more than one U or court.
+        let shaped: Vec<&town::Building> = l.buildings.iter().filter(|b| town::wings::ranges(&l, b).is_some()).collect();
+        let lot = |b: &town::Building| l.grounds.iter().find(|g| g.0 == b.id).map_or(b.poly.clone(), |g| g.1.clone());
+        let gap = |a: &[P], b: &[P]| a.iter().flat_map(|p| (0..b.len()).map(move |k| worldgen::town::geom::seg_dist(*p, b[k], b[(k + 1) % b.len()]))).fold(f64::MAX, f64::min);
+        for i in 0..shaped.len() {
+            for j in i + 1..shaped.len() {
+                let (a, c) = (lot(shaped[i]), lot(shaped[j]));
+                let d = gap(&a, &c).min(gap(&c, &a));
+                if d < 29.0 {
+                    r.add("shaped pairs within 30 ft", d, format!("{label} L{li} b{} b{}", shaped[i].id, shaped[j].id));
+                }
+            }
+        }
+        for blk in &l.blocks {
+            let big = shaped.iter().filter(|b| b.poly.len() > 6 && worldgen::town::geom::contains(blk, centroid(&lot(b)))).count();
+            if big > 1 {
+                r.add("blocks with 2+ U/courts", big as f64, format!("{label} L{li}"));
+            }
+        }
     }
 }

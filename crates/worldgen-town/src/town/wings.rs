@@ -16,8 +16,17 @@ pub const SHARE: f64 = 0.25;
 /// A side whose middle lies this near a street's edge (ft) faces it.
 const STREET_FT: f64 = 14.0;
 const SQ: f64 = 5.0;
-/// The yard's least side (squares).
-const YARD_SQ: i32 = 2;
+/// A range's least and most width (squares): 25 ft at least, a room off a passage deep, so that its
+/// end is a gable or a hip as big as the main range's (a share of the lot's least side between).
+const ARM_SQ: i32 = 5;
+const ARM_MAX_SQ: i32 = 7;
+/// The yard's least side behind an L (squares), and a U's or a court's.
+const L_YARD_SQ: i32 = 3;
+const YARD_SQ: i32 = 4;
+/// No two shaped buildings' lots nearer than this (ft): not side by side on a street, nor one lot apart.
+const NEAR_FT: f64 = 30.0;
+/// At most this many in one block, and of them one U or court.
+const PER_BLOCK: usize = 2;
 /// A court's gateway (squares wide).
 const GATE_SQ: i32 = 2;
 
@@ -48,15 +57,58 @@ fn kind_of(b: &Building) -> Option<(bool, bool)> {
     })
 }
 
-/// Shapes every building that takes wings (after the temples: `temple::shape_all`).
-pub(super) fn shape_all(l: &mut Layout) {
-    let done: Vec<(usize, Vec<P>)> = l.buildings.iter().enumerate().filter_map(|(k, b)| shaped(l, b).map(|(p, _)| (k, p))).collect();
-    for (k, p) in done {
+/// Shapes every building that takes wings (after the temples: `temple::shape_all`), in id order, none
+/// near another (`NEAR_FT`, `PER_BLOCK`), so that they stand out. In a town laid out anew (`edit`: the
+/// world and the layout as generated), one on the lot it was shaped on as generated keeps its shape; no
+/// building with edits of its own (`b:<layout>:<id>`) is shaped anew.
+pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) {
+    let edited: Vec<u32> = edit.map(|(w, _)| super::building_edits(w, l.index).map(|(id, _)| id).collect()).unwrap_or_default();
+    let boxes: Vec<[f64; 4]> = l.blocks.iter().map(|q| super::geom::bbox(q)).collect();
+    let block_of = |p: &[P]| {
+        let c = super::geom::centroid(p);
+        (0..l.blocks.len()).find(|&k| boxes[k][0] <= c[0] && c[0] <= boxes[k][2] && boxes[k][1] <= c[1] && c[1] <= boxes[k][3] && contains(&l.blocks[k], c))
+    };
+    // (Each taken: its index, footprint, lot, block, a U or a court.)
+    let mut done: Vec<(usize, Vec<P>, Vec<P>, Option<usize>, bool)> = Vec::new();
+    if let Some((_, g)) = edit {
+        for (k, b) in l.buildings.iter().enumerate() {
+            let Some(was) = g.building(b.id as usize).filter(|w| g.wings.binary_search(&w.id).is_ok()) else { continue };
+            let same = g.grounds.iter().find(|q| q.0 == b.id).is_some_and(|q| q.1.len() == b.poly.len() && q.1.iter().zip(&b.poly).all(|(a, c)| len(sub(*a, *c)) < 0.01));
+            if same && b.parts.is_empty() && b.structure == Structure::Roofed {
+                done.push((k, was.poly.clone(), b.poly.clone(), block_of(&b.poly), was.poly.len() > 6));
+            }
+        }
+    }
+    for (k, b) in l.buildings.iter().enumerate() {
+        if edited.contains(&b.id) || done.iter().any(|d| d.0 == k) {
+            continue;
+        }
+        let Some((p, form)) = shaped(l, b) else { continue };
+        let big = form != Form::L;
+        let block = block_of(&b.poly);
+        let mine = done.iter().filter(|d| block.is_some() && d.3 == block);
+        if mine.clone().count() >= PER_BLOCK || (big && mine.clone().any(|d| d.4)) || done.iter().any(|d| poly_gap(&d.2, &b.poly) < NEAR_FT) {
+            continue;
+        }
+        done.push((k, p, b.poly.clone(), block, big));
+    }
+    for (k, p, _, _, _) in done {
         let b = &mut l.buildings[k];
         let lot = std::mem::replace(&mut b.poly, p);
         let id = b.id;
         l.grounds.push((id, lot));
+        l.wings.push(id);
     }
+    l.wings.sort_unstable();
+}
+
+/// The least distance between two footprints (ft; 0 where they touch or overlap).
+fn poly_gap(a: &[P], b: &[P]) -> f64 {
+    if a.iter().any(|p| contains(b, *p)) || b.iter().any(|p| contains(a, *p)) {
+        return 0.0;
+    }
+    let d = |a: &[P], b: &[P]| a.iter().flat_map(|p| (0..b.len()).map(move |k| seg_dist(*p, b[k], b[(k + 1) % b.len()]))).fold(f64::MAX, f64::min);
+    d(a, b).min(d(b, a))
 }
 
 /// The footprint building `b` takes and its form, if it takes wings (`shape_all`).
@@ -65,7 +117,7 @@ pub fn shaped(l: &Layout, b: &Building) -> Option<(Vec<P>, Form)> {
         return None;
     }
     let (front_open, court) = kind_of(b)?;
-    if super::palace::merges(l, b) || !matches!(roof::look(l, b).shape, roof::Shape::Hip | roof::Shape::Gable | roof::Shape::Flat) {
+    if unit(hash3(l.roof_seed, b.id as i64, 0x5749_4e47, 0)) >= SHARE {
         return None;
     }
     let poly = clean(&b.poly);
@@ -111,6 +163,11 @@ pub fn shaped(l: &Layout, b: &Building) -> Option<(Vec<P>, Form)> {
     if d[front] > STREET_FT {
         return None;
     }
+    // (Its roof one the battlemap draws over ranges, `roofMesh.ts`: pitched, or flat behind a parapet;
+    // `roof::look` takes a shaped building's lot's area, so it stays as it is here.)
+    if super::palace::merges(l, b) || !matches!(roof::look(l, b).shape, roof::Shape::Hip | roof::Shape::Gable | roof::Shape::Flat) {
+        return None;
+    }
     // (The sides at x = 0 and x = X: the next side round and the one before.)
     let (left, right) = (d[(front + 3) % 4] <= STREET_FT, d[(front + 1) % 4] <= STREET_FT);
     let (xl, yl) = (frames[front].3, frames[front].4);
@@ -119,11 +176,11 @@ pub fn shaped(l: &Layout, b: &Building) -> Option<(Vec<P>, Form)> {
     let (ox, oy) = (0.5 * (xl - nx as f64 * SQ), 0.5 * (yl - ny as f64 * SQ));
     let gx = |k: i32| ox + k as f64 * SQ;
     let gy = |k: i32| oy + k as f64 * SQ;
-    let w = (crate::core::round(0.3 * xl.min(yl) / SQ) as i32).clamp(3, 5);
-    let fits_l = (left || right) && nx - w >= YARD_SQ && ny - w >= YARD_SQ && nx * ny >= 60;
-    let fits_u = nx - 2 * w >= YARD_SQ + 1 && ny - w >= YARD_SQ + 1 && nx * ny >= 90;
-    let fits_c = court && nx - 2 * w >= YARD_SQ + 1 && ny - 2 * w >= YARD_SQ + 1 && nx - 2 * w >= GATE_SQ + 2;
-    if !(fits_l || fits_u || fits_c) || unit(hash3(l.roof_seed, b.id as i64, 0x5749_4e47, 0)) >= SHARE {
+    let w = (crate::core::round(0.3 * xl.min(yl) / SQ) as i32).clamp(ARM_SQ, ARM_MAX_SQ);
+    let fits_l = (left || right) && nx - w >= L_YARD_SQ && ny - w >= L_YARD_SQ && nx * ny >= 80;
+    let fits_u = nx - 2 * w >= YARD_SQ && ny - w >= YARD_SQ && nx * ny >= 140;
+    let fits_c = court && nx - 2 * w >= YARD_SQ.max(GATE_SQ + 2) && ny - 2 * w >= YARD_SQ;
+    if !(fits_l || fits_u || fits_c) {
         return None;
     }
     let pick = unit(hash3(l.roof_seed, b.id as i64, 0x5749_4e47, 1));
@@ -155,13 +212,44 @@ pub fn shaped(l: &Layout, b: &Building) -> Option<(Vec<P>, Form)> {
     Some((out, form))
 }
 
-/// A building's ranges (`arms`) if it is an L, a U or a court: not a keep's or a temple's pieces, nor a
-/// castle's.
-pub fn ranges(b: &Building) -> Option<Vec<[P; 4]>> {
-    if !b.parts.is_empty() || b.keep.is_some() || b.ward == Ward::Castle {
+/// A building's ranges (`arms`) if it is an L, a U or a court `shape_all` made (`Layout::wings`): not one
+/// drawn by hand, nor a keep's or a temple's pieces, nor a castle's.
+pub fn ranges(l: &Layout, b: &Building) -> Option<Vec<[P; 4]>> {
+    if !is_shaped(l, b) || !b.parts.is_empty() || b.keep.is_some() || b.ward == Ward::Castle {
         return None;
     }
-    arms(&b.poly)
+    let mut r = arms(&b.poly)?;
+    // (A court's front range one roof over its gateway, a carriage arch: not two stubs either side of it.)
+    if b.poly.len() == 12 {
+        let u = obb(&b.poly).axis;
+        let v = [-u[1], u[0]];
+        let span = |q: &[P; 4], d: P| q.iter().map(|p| dot(*p, d)).fold((f64::MAX, f64::MIN), |(a, c), x| (a.min(x), c.max(x)));
+        let ccw = area(&b.poly) > 0.0;
+        'pairs: for i in 0..r.len() {
+            for j in i + 1..r.len() {
+                for (d, e) in [(u, v), (v, u)] {
+                    let ((a0, a1), (c0, c1)) = (span(&r[i], d), span(&r[j], d));
+                    let ((t0, t1), (e0, e1)) = (span(&r[i], e), span(&r[j], e));
+                    let gap = a0.max(c0) - a1.min(c1);
+                    if (t0 - e0).abs() < 0.01 && (t1 - e1).abs() < 0.01 && gap > 0.0 && gap < GATE_SQ as f64 * SQ + 1.5 {
+                        let (s0, s1) = (a0.min(c0), a1.max(c1));
+                        let at = |x: f64, y: f64| add(mul(d, x), mul(e, y));
+                        let q = [at(s0, t0), at(s1, t0), at(s1, t1), at(s0, t1)];
+                        r[i] = if (area(&q) > 0.0) == ccw { q } else { [q[3], q[2], q[1], q[0]] };
+                        r.remove(j);
+                        break 'pairs;
+                    }
+                }
+            }
+        }
+    }
+    Some(r)
+}
+
+/// Whether `shape_all` shaped building `b` (its lot then in `Layout::grounds`).
+#[inline]
+pub fn is_shaped(l: &Layout, b: &Building) -> bool {
+    b.poly.len() > 4 && l.wings.binary_search(&b.id).is_ok()
 }
 
 /// A rectilinear footprint's ranges (world ft, each four corners wound as the footprint is): the

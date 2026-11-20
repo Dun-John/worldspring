@@ -99,6 +99,10 @@ pub fn cross_wing_of(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> 
     if b.structure != Structure::Roofed || !b.parts.is_empty() || b.func.is_some() || b.keep.is_some() || town::catalog::RESIDENTIAL[b.residential as usize] != "noble estate" || geom::area(&b.poly).abs() < 120.0 * SQUARE_FT * SQUARE_FT {
         return None;
     }
+    // (Nor an L, a U or a court, `town::wings`: roofed by its ranges.)
+    if town::wings::ranges(l, b).is_some() {
+        return None;
+    }
     let sh = Shell::of(l, b);
     let plan = zone_plan(world, t0, l, l.index as usize, b, &sh, 0)?;
     let (f, dz) = plan.cross_wing()?;

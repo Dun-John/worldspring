@@ -192,7 +192,7 @@ pub fn keep_kind(b: &town::Building) -> Option<Kind> {
 /// (`inn::kind`); `sh`: its grid.
 pub fn kind_of(b: &town::Building, key: Option<&str>, sh: &Shell, capital: bool, city: bool) -> Option<Kind> {
     // (Roadmap 7, 163: an L, a U or a court, `town::wings`, laid out as other buildings are.)
-    if town::wings::ranges(b).is_some() {
+    if sh.shaped {
         return None;
     }
     if matches!(key, Some("town_hall" | "merchant_guild" | "craft_guild" | "adventurers_guild" | "mages_guild")) {

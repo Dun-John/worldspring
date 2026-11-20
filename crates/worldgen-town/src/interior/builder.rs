@@ -282,7 +282,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         };
         lvl.z = zf;
         // (Roadmap 7, 163: an L, a U or a court, `town::wings`, opens onto its yard.)
-        if z == 0 && hubbed.is_none() && town::wings::ranges(b).is_some() {
+        if z == 0 && hubbed.is_none() && town::wings::ranges(l, b).is_some() {
             super::doors::yard_door(&mut lvl, nx, ny, stairs, &ext_free);
         }
         lvl.has_stairs &= !yurt && !tomb;

@@ -350,6 +350,9 @@ pub struct Layout {
     /// on in pieces (`temple::shape_all`), a monastery's own lot and those it took in (`palace::merge`).
     /// What of it the building leaves open is its own: no other building's door opens onto it.
     pub grounds: Vec<(u32, Vec<P>)>,
+    /// (Roadmap 7, 163) The buildings shaped as an L, a U or a court (`wings::shape_all`), their ids in
+    /// order (their lots in `grounds`); only these are roofed and laid out by their ranges (`wings::ranges`).
+    pub wings: Vec<u32>,
     /// R5 towns (115): a steppe town's yurts, by building id: the lot each stands on, its trodden
     /// ground, a pen beside some (`yurts::finish`; their horses, carts and haystacks in `props`).
     pub yurts: Vec<yurts::Yurt>,
@@ -700,6 +703,7 @@ impl Layout {
             forecourts: Vec::new(),
             yurts: Vec::new(),
             grounds: Vec::new(),
+            wings: Vec::new(),
             culture: 0,
             planning: 0,
             roof_seed: 0,
@@ -1193,7 +1197,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         temple::reach_streets(&mut l, None);
         temple::shape_all(&mut l, None);
         belfry::raise_all(&mut l, None);
-        wings::shape_all(&mut l);
+        wings::shape_all(&mut l, None);
     }
     if let Some(e) = edit {
         let generated = generated_layout(world, t0, index);
@@ -1205,7 +1209,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         temple::reach_streets(&mut l, Some(&generated));
         temple::shape_all(&mut l, Some(&generated));
         belfry::raise_all(&mut l, Some(&generated));
-        wings::shape_all(&mut l);
+        wings::shape_all(&mut l, Some((world, &generated)));
     }
     round_off(&mut l, Some(&site));
     fields::crofts_off_sand(&site, &mut l);

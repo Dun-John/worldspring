@@ -156,8 +156,10 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     let role = role(b);
     let rich = wealth(b);
     let city = l.tier as u8 >= 2;
-    let o = super::geom::obb(&b.poly);
-    let area = super::geom::area(&b.poly).abs();
+    // (Roadmap 7, 163: an L's, a U's or a court's its lot's, as when it was shaped, `wings::shaped`.)
+    let lot = if super::wings::is_shaped(l, b) { l.grounds.iter().find(|g| g.0 == b.id).map(|g| &g.1[..]) } else { None };
+    let o = super::geom::obb(lot.unwrap_or(&b.poly));
+    let area = super::geom::area(lot.unwrap_or(&b.poly)).abs();
     let compact = o.long <= 1.35 * o.short.max(1.0);
     let small = area < 1000.0 && b.floors <= 1;
     // (A village's manor is a big house, not a grand one: `town::village`.)

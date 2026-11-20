@@ -132,7 +132,7 @@ fn taverns() {
                 mat[c][k.material as usize] += 1;
                 let f = if town::palace::is_coaching(&l, b) {
                     0
-                } else if let Some(r) = town::wings::ranges(b) {
+                } else if let Some(r) = town::wings::ranges(&l, b) {
                     r.len().min(4) - 1
                 } else if roof::hall_ring(&l, b).is_some() {
                     4

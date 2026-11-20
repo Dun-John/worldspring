@@ -998,7 +998,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // (Roadmap 7, 164) An inn round its yard (a U or a court, `town::wings`): the yard cobbled as a
         // coaching inn's, as its interior shows it (`Interior::yard`).
         for b in l.buildings.iter().filter(|b| crate::town::palace::is_inn(b)) {
-            let Some(arms) = crate::town::wings::ranges(b).filter(|a| a.len() >= 3) else { continue };
+            let Some(arms) = crate::town::wings::ranges(&l, b).filter(|a| a.len() >= 3) else { continue };
             let u = crate::town::geom::obb(&b.poly).axis;
             let v = [-u[1], u[0]];
             let span = |d: [f64; 2]| arms.iter().flatten().map(|p| crate::town::geom::dot(*p, d)).fold((f64::MAX, f64::MIN), |(a, c), x| (a.min(x), c.max(x)));
@@ -1120,7 +1120,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                                 parts.push((ARCADE_PART, front.iter().map(local).collect()));
                             }
                             // (An L, a U or a court: its ranges, `town::wings`.)
-                            for q in crate::town::wings::ranges(b).into_iter().flatten() {
+                            for q in crate::town::wings::ranges(&l, b).into_iter().flatten() {
                                 parts.push((RANGE_PART, q.iter().map(local).collect()));
                             }
 
