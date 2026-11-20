@@ -32,8 +32,31 @@ pub(super) fn along_wall(walls: &[(P, P)], gates: &[P], wet: &dyn Fn(P) -> bool,
 /// The corners of `ring` (anticlockwise) sharper than `SPIKE_DEG` cut back where the ring is
 /// `SPIKE_WIDE` across (to the next corner where that is near it), so long as what is left is a
 /// simple ring holding most of it.
-pub(super) fn cut_spikes(ring: &[P]) -> Vec<P> {
+pub(super) fn cut_spikes(ring: &[P], along: &dyn Fn(P, P) -> bool) -> Vec<P> {
     let mut pts = ring.to_vec();
+    // (A spike tipped by a side under `SPIKE_TIP` ft, both its corners turning in: that side made
+    // one corner first, so the spike is seen; the corner on a side along the town wall (`along`)
+    // kept, else the side's middle; none where both sides beside it run along the wall.)
+    const SPIKE_TIP: f64 = 15.0;
+    for _ in 0..ring.len() {
+        let m = pts.len();
+        if m <= 3 {
+            break;
+        }
+        let turns = |k: usize| cross(sub(pts[k], pts[(k + m - 1) % m]), sub(pts[(k + 1) % m], pts[k])) > 0.0;
+        let Some(k) = (0..m).find(|&k| dist(pts[k], pts[(k + 1) % m]) < SPIKE_TIP && turns(k) && turns((k + 1) % m)) else { break };
+        let (wa, wc) = (along(pts[(k + m - 1) % m], pts[k]), along(pts[(k + 1) % m], pts[(k + 2) % m]));
+        if wa && wc {
+            break;
+        }
+        let mut next = pts.clone();
+        next[k] = if wa { pts[k] } else if wc { pts[(k + 1) % m] } else { lerp(pts[k], pts[(k + 1) % m], 0.5) };
+        next.remove((k + 1) % m);
+        if !simple(&next) {
+            break;
+        }
+        pts = next;
+    }
     let mut tried: Vec<P> = Vec::new();
     for _ in 0..ring.len() {
         let m = pts.len();

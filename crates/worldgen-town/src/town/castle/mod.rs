@@ -388,7 +388,7 @@ pub(super) fn castle<G: Ground>(
         // Its sharp corners cut back (a town's castle: one drawn by hand keeps to its outline).
         // (Its corners slid along the town wall within the bound, and not up to a town gate.)
         let room = |p: P| inset_depth(&outer, p) >= -1.0 && town_gates.iter().all(|g| dist(*g, p) >= 60.0);
-        let ring = if set.follow { meet_wall(&cut_spikes(&ring), &along, &room) } else { ring };
+        let ring = if set.follow { meet_wall(&cut_spikes(&ring, &along), &along, &room) } else { ring };
         // A road running through it (one the castle's ground lies across: an approach bent through
         // it, a main street) cuts the bound off it, its larger side kept, and the ring is laid
         // again.

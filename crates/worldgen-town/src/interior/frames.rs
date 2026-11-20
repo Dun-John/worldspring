@@ -333,8 +333,10 @@ pub(super) fn pub_stairs(lvl: &Level, nx: usize, ny: usize, whole: &[bool], agai
 
 /// The towers' rooms (`cells` ids from `first`) more than one room from a way about the floor (a
 /// passage, a hall, a landing): each given to the room beside it nearest one (v63 castles: a keep's
-/// corner tower off a chamber that is itself a room from the ways).
-fn tower_rooms_near_ways(cells: &mut [i16], rooms: &[Room], nx: usize, ny: usize, first: usize) {
+/// corner tower off a chamber that is itself a room from the ways). A keep's own towers (the
+/// first `kept` of them) keep their rooms whole: the room beside one, nearest a way, is given to
+/// the room beside it nearest one instead, where it has such a room that is no tower's.
+fn tower_rooms_near_ways(cells: &mut [i16], rooms: &[Room], nx: usize, ny: usize, first: usize, kept: usize) {
     let n = rooms.len();
     if first >= n || !rooms.iter().any(|r| is_way_through(r.kind)) {
         return;
@@ -368,7 +370,18 @@ fn tower_rooms_near_ways(cells: &mut [i16], rooms: &[Room], nx: usize, ny: usize
                 }
             }
         }
-        let merge = (first..n).filter(|&r| hops[r] != usize::MAX && hops[r] >= 3).find_map(|r| adj[r].iter().copied().filter(|&o| !is_way_through(rooms[o].kind)).min_by_key(|&o| (hops[o], o)).map(|o| (r, o)));
+        let nearest = |r: usize| adj[r].iter().copied().filter(|&o| !is_way_through(rooms[o].kind)).min_by_key(|&o| (hops[o], o));
+        let merge = (first..n).filter(|&r| hops[r] != usize::MAX && hops[r] >= 3).find_map(|r| {
+            let o = nearest(r)?;
+            if r < first + kept && o < first {
+                // (The room between: to its own neighbour nearer a way, no tower's.)
+                let by = adj[o].iter().copied().filter(|&p| p < first && hops[p] < hops[o] && !is_way_through(rooms[p].kind)).min_by_key(|&p| (hops[p], p));
+                if let Some(p) = by {
+                    return Some((o, p));
+                }
+            }
+            Some((r, o))
+        });
         let Some((r, to)) = merge else { return };
         for c in cells.iter_mut() {
             if *c == r as i16 {
@@ -412,7 +425,7 @@ pub(super) fn hub_level(laid: hub::Laid, sh: &Shell, nx: usize, ny: usize, st: [
     }
     // (A tower's room more than a room from a way about the floor, where the rooms beside it
     // stand: made part of the room beside it nearest one, as no door could bring it nearer.)
-    tower_rooms_near_ways(&mut cells, &rooms, nx, ny, first_tower);
+    tower_rooms_near_ways(&mut cells, &rooms, nx, ny, first_tower, towers.len());
     let cells = merge_fragments(cells, nx, ny);
     let (cells, mut rooms, map) = compact_map(cells, rooms);
     finish_rooms(&mut rooms, &cells, nx);
