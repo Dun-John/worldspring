@@ -18,6 +18,8 @@
 // `&items=cemetery` (alone; `&panels=`, `&sq=`) shows the cemetery props and a cemetery per culture group.
 // `&items=harbour` (alone; `&sq=`, default 48) shows the harbour batch: boats, bollards, cranes, net racks and buoys on
 // water or a quay, then the vector pieces (breakwater armour, a cog, a lighthouse's lantern) close up and in a harbour.
+// `&items=breakwaters` and `&items=piers` (alone; `&sq=`, default 48) show the breakwater armour and the timber
+// piers, bridges and quays (`dev/galleryTimber.ts`).
 // `&items=fences` (alone; `&sq=`, default 48) shows the fence and wall pieces in runs with a gate, and today's hedge,
 // wattle and dry-stone wall beside them.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
@@ -35,6 +37,7 @@ import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
+import { breakwaters, piers } from './galleryTimber';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
 
@@ -452,6 +455,16 @@ export async function runGallery(target: HTMLElement) {
   if (!only && pick?.includes('harbour')) {
     head('Harbour: boats and buoys afloat, quay props on paving, then breakwater armour, a cog and a lantern (battlemap)');
     y = harbour(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
+  }
+
+  // Breakwater armour and timber piers, bridges and quays (`&items=breakwaters`, `&items=piers`).
+  if (!only && pick?.includes('breakwaters')) {
+    head('Breakwaters: big rounded stones, one foam line on the water side (battlemap)');
+    y = breakwaters(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
+  }
+  if (!only && pick?.includes('piers')) {
+    head('Timber piers, a road bridge, a fenced deck and a shore quay (battlemap)');
+    y = piers(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
   }
 
   // The fences and walls, with a gate in each run (`&items=fences` alone).

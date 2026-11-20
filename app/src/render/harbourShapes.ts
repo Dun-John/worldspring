@@ -2,7 +2,8 @@
 // few broad shapes, three close matte tones lit from the north-west (the upper left), bold ink.
 //
 //   drawBreakwaterArmour(g, pts, sq = PX, widthFt = 9, seed = 0)
-//     Big pale rubble stones heaped along the polyline `pts` (px), a band about `widthFt` across.
+//     A few big rounded pale stones along the polyline `pts` (px), a band about `widthFt` across, one
+//     line of foam on the water side (the left-hand normal (-uy, ux) of the line's run).
 //   drawCog(g, x, y, dir, lengthFt = 70, sq = PX, look = 0)
 //     A moored cog centred at (x, y), its bow toward `dir` (radians, 0 = +x): hull, deck planks, castles fore
 //     and aft, a hatch, the mast with its top, the sail furled on the yard. `lengthFt` 60-80; `look` 0 tarred
@@ -34,66 +35,80 @@ function framed(g: Graphics, x: number, y: number, dir: number, sq: number, body
   g.restore();
 }
 
-/** One big rubble stone from above (atlas px): a dark rim on the shaded side, the body, a lit top facet
- * toward the north-west, a sunlit spot; `w` scales the line widths. */
-function rubble(g: Graphics, x: number, y: number, s: number, rnd: () => number, w: (px: number) => number) {
-  const n = 7 + Math.floor(rnd() * 3);
+/** One big rounded stone from above (atlas px): a smooth lopsided round, the shaded tone with the lit
+ * tone over its north-west, a soft ink outline; `w` scales the line widths. */
+function boulder(g: Graphics, x: number, y: number, s: number, rnd: () => number, w: (px: number) => number) {
+  const n = 16;
   const pts: number[] = [];
-  const ph = rnd() * Math.PI * 2;
+  const [p2, p3, turn] = [rnd() * 6.3, rnd() * 6.3, rnd() * Math.PI];
+  const squash = 0.8 + 0.12 * rnd();
   for (let i = 0; i < n; i++) {
-    const a = ph + (i / n) * Math.PI * 2;
-    const r = s * (0.78 + 0.3 * rnd());
-    pts.push(Math.cos(a) * r, Math.sin(a) * r * 0.86);
+    const a = (i / n) * Math.PI * 2;
+    const r = s * (1 + 0.09 * Math.sin(2 * a + p2) + 0.05 * Math.sin(3 * a + p3));
+    const [px, py] = [Math.cos(a) * r, Math.sin(a) * r * squash];
+    pts.push(px * Math.cos(turn) - py * Math.sin(turn), px * Math.sin(turn) + py * Math.cos(turn));
   }
   const at = (k: number, dx: number, dy: number) => pts.map((p, i) => p * k + (i % 2 ? y + dy : x + dx));
-  g.poly(at(1, 0, 0)).fill(RUBBLE[0]).stroke({ width: w(OUT), color: INK, join: 'round' });
-  g.poly(at(0.84, -s * 0.07, -s * 0.07)).fill(RUBBLE[1]);
-  g.poly(at(0.5, -s * 0.2, -s * 0.2)).fill(RUBBLE[2]);
-  g.poly(oval(x - s * 0.34, y - s * 0.34, s * 0.16, s * 0.1, -0.7, 10)).fill(RUBBLE[3]);
+  g.poly(at(1, 0, 0)).fill(RUBBLE[0]);
+  g.poly(at(0.8, -s * 0.12, -s * 0.12)).fill(RUBBLE[2]);
+  g.poly(at(1, 0, 0)).stroke({ width: w(OUT), color: INK, alpha: 0.8, join: 'round' });
 }
 
-/** Breakwater armour along `pts` (px): big pale stones, two staggered rows across the line, their wet feet
- * darkened, a soft line of foam beyond the outer row. */
+/** `pts` moved `d` px along their left-hand normal (-uy, ux), the normals averaged at the bends. */
+function offsetLine(pts: [number, number][], d: number): [number, number][] {
+  return pts.map((p, i) => {
+    const [a, b] = [pts[Math.max(0, i - 1)], pts[Math.min(pts.length - 1, i + 1)]];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    return [p[0] - ((b[1] - a[1]) / l) * d, p[1] + ((b[0] - a[0]) / l) * d];
+  });
+}
+
+/** Breakwater armour along `pts` (px), the water on their left-hand normal (-uy, ux): a few big
+ * rounded stones in two staggered rows, the outer ones bigger, seated in a soft wet shade, and one
+ * line of foam along the water side. */
 export function drawBreakwaterArmour(g: Graphics, pts: [number, number][], sq = PX, widthFt = 9, seed = 0) {
   if (pts.length < 2) return;
   const k = sq / PX;
   const rnd = rng((seed ^ Math.imul(Math.round(pts[0][0]), 73856093) ^ Math.imul(Math.round(pts[0][1]), 19349663)) >>> 0);
-  // Stones along the line, every ~1.8 ft, alternately either side of it, packed so they touch.
   const half = (widthFt / 2) * FT * k;
-  const stones: [number, number, number][] = [];
-  let carry = 0;
-  let side = 1;
+  // The line's pieces: [start, end, index, length] along it.
+  const along: [number, number, number, number][] = [];
+  let run = 0;
   for (let i = 1; i < pts.length; i++) {
-    const [ax, ay] = pts[i - 1];
-    const [bx, by] = pts[i];
-    const len = Math.hypot(bx - ax, by - ay);
+    const len = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
     if (len < 1e-6) continue;
-    const [ux, uy] = [(bx - ax) / len, (by - ay) / len];
-    const step = 1.8 * FT * k;
-    let t = carry;
-    for (; t < len; t += step) {
-      const off = side * half * (0.45 + 0.15 * rnd());
-      side = -side;
-      const along = (rnd() - 0.5) * 0.5 * FT * k;
-      stones.push([ax + ux * (t + along) - uy * off, ay + uy * (t + along) + ux * off, (2.0 + 0.7 * rnd()) * FT]);
-    }
-    carry = t - len;
+    along.push([run, run + len, i - 1, len]);
+    run += len;
   }
-  const [ex, ey] = pts[pts.length - 1];
-  stones.push([ex, ey, 2.6 * FT]);
+  if (run < 1e-6) return;
+  const pointAt = (t: number, off: number): [number, number] => {
+    const seg = along.find((s) => t <= s[1]) ?? along[along.length - 1];
+    const [ax, ay] = pts[seg[2]];
+    const [bx, by] = pts[seg[2] + 1];
+    const [ux, uy] = [(bx - ax) / seg[3], (by - ay) / seg[3]];
+    const u = t - seg[0];
+    return [ax + ux * u - uy * off, ay + uy * u + ux * off];
+  };
+  // An outer row (the water side) every ~5.2 ft, an inner row of smaller stones between them.
+  const nOut = Math.max(1, Math.round(run / (5.2 * FT * k)));
+  const jig = () => (rnd() - 0.5) * 0.4 * FT * k;
+  const inner: [number, number, number][] = [];
+  const outer: [number, number, number][] = [];
+  for (let j = 0; j <= nOut; j++) {
+    const t = Math.min(run, Math.max(0, (run * j) / nOut + jig()));
+    outer.push([...pointAt(t, half * (0.22 + 0.1 * rnd())), (2.7 + 0.6 * rnd()) * FT]);
+  }
+  for (let j = 0; j < nOut; j++) inner.push([...pointAt((run * (j + 0.5)) / nOut + jig(), -half * (0.3 + 0.1 * rnd())), (2.1 + 0.4 * rnd()) * FT]);
   framed(g, 0, 0, 0, sq, (w) => {
-    // The stones' wet feet and a soft fringe of foam along the whole band: soft, no ink.
-    const line = (width: number, color: number, alpha: number, d = 0) => {
-      g.moveTo(pts[0][0] / k + d, pts[0][1] / k + d);
-      for (const [x, y] of pts.slice(1)) g.lineTo(x / k + d, y / k + d);
-      g.stroke({ width: w(width), color, alpha, cap: 'round', join: 'round' });
+    const line = (p: [number, number][], width: number, color: number, alpha: number, cap: 'round' | 'butt') => {
+      g.moveTo(p[0][0] / k, p[0][1] / k);
+      for (const [x, y] of p.slice(1)) g.lineTo(x / k, y / k);
+      g.stroke({ width: w(width), color, alpha, cap, join: 'round' });
     };
-    line((widthFt + 5) * FT, 0xe8f0ea, 0.1);
-    line((widthFt + 3) * FT, 0xe8f0ea, 0.12);
-    line((widthFt + 1.5) * FT, 0x2a3e40, 0.22, 0.4 * FT);
-    // The inner row first so the outer stones sit over it.
-    const order = stones.map((s, i) => [s, i % 2] as const).sort((a, b) => a[1] - b[1]);
-    for (const [[x, y, s]] of order) rubble(g, x / k, y / k, s, rnd, w);
+    // The wet shade the stones sit in on the water side, then the one line of foam along the outer row.
+    line(offsetLine(pts, half * 0.55), widthFt * 0.6 * FT, 0x2a3e40, 0.2, 'butt');
+    line(offsetLine(pts, half + 0.35 * FT * k), 0.7 * FT, 0xf2f6f0, 0.6, 'round');
+    for (const [x, y, s] of [...inner, ...outer]) boulder(g, x / k, y / k, s, rnd, w);
   });
 }
 

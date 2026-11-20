@@ -277,7 +277,10 @@ pub(super) fn armour(line: &[[f64; 2]], edges: &[Vec<[f64; 2]>], hh: &[f32], hw:
                 continue;
             }
             let m = 1 + crate::core::ceil((s1 - s0) / 6.0) as usize;
-            let pts: Vec<[f32; 2]> = (0..=m).map(|j| local(&at(s0 + (s1 - s0) * j as f64 / m as f64))).collect();
+            // (Run so the water lies on the left-hand normal (-uy, ux), where the foam is drawn.)
+            let d = sub(at(s1), at(s0));
+            let flip = d[0] * out[1] - d[1] * out[0] < 0.0;
+            let pts: Vec<[f32; 2]> = (0..=m).map(|j| if flip { m - j } else { j }).map(|j| local(&at(s0 + (s1 - s0) * j as f64 / m as f64))).collect();
             shapes.push(VectorShape { kind: ShapeKind::Breakwater, size: (9.0 / SQUARE_FT) as f32, pts });
         }
     }

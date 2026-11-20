@@ -21,6 +21,10 @@ const PLANKS: [number, number][] = [
   [0x93693e, 0xbc9262],
   [0x80664a, 0xa88d6a],
 ];
+/** The underside between the planks: mid-brown, the props' wood in shade. */
+const UNDERSIDE = 0x6a4a2e;
+/** The planks' bold ink. */
+const PLANK_INK = 3;
 /** Stone: dark, mid, light, sunlit. */
 export const STONE = [0x6e675c, 0x9a9182, 0xc4baa6, 0xe4dccb];
 /** Old stone, weathered a shade darker and warmer: dark, mid, light, sunlit. */
@@ -94,7 +98,7 @@ function quayFrame(s: Shape) {
 }
 
 /** A timber shore quay's deck: planks laid from the face back to the shore, mid-brown with a lit
- * edge, one grain stroke and the odd knot each, inked, over the dark between them, as the piers'. */
+ * edge, the odd grain stroke or knot, inked boldly over the underside, as the piers'. */
 function quayDeck(g: Graphics, s: Shape) {
   const { m, face, back } = quayFrame(s);
   if (m < 2) return;
@@ -121,9 +125,9 @@ function quayDeck(g: Graphics, s: Shape) {
     return Math.hypot(b[0] - f[0], b[1] - f[1]);
   };
   const rnd = rngAt(face[0][0] + face[m - 1][0], face[0][1] + face[m - 1][1]);
-  g.poly([...face.flat(), ...[...back].reverse().flat()]).fill(0x2e1f16);
+  g.poly([...face.flat(), ...[...back].reverse().flat()]).fill(UNDERSIDE);
   for (let a = 0; a < run - FT * 0.3; ) {
-    const a1 = Math.min(run, a + FT * (2.3 + rnd() * 0.9));
+    const a1 = Math.min(run, a + FT * (2.2 + rnd() * 0.2));
     const [base, lit] = PLANKS[Math.floor(rnd() * PLANKS.length)];
     const out = -FT * (0.1 + rnd() * 0.4);
     const w0 = wid(a), w1 = wid(a1);
@@ -135,20 +139,21 @@ function quayDeck(g: Graphics, s: Shape) {
     g.poly(plank(0, 1, 0)).fill(lit);
     g.poly(plank(0.32, 1, 0)).fill(base);
     g.poly(plank(0.86, 1, 0)).fill(WOOD[0]);
-    const ga = 0.3 + rnd() * 0.3;
-    const gd0 = Math.max(w0, w1) * (0.15 + rnd() * 0.3);
-    const gd1 = gd0 + Math.max(w0, w1) * (0.2 + rnd() * 0.3);
-    const [gx0, gy0] = at(a + (a1 - a) * ga, gd0);
-    const [gx1, gy1] = at(a + (a1 - a) * (ga + (rnd() - 0.5) * 0.25), (gd0 + gd1) / 2);
-    const [gx2, gy2] = at(a + (a1 - a) * ga, gd1);
-    g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.16, color: WOOD[0], cap: 'round' });
-    if (rnd() < 0.25) {
-      const [kx, ky] = at(a + (a1 - a) * (0.35 + rnd() * 0.3), Math.max(w0, w1) * (0.2 + rnd() * 0.6));
-      g.ellipse(kx, ky, FT * 0.3, FT * 0.3).fill(WOOD[0]);
-      g.ellipse(kx, ky, FT * 0.13, FT * 0.13).fill(0x3a2616);
+    if (rnd() < 0.55) {
+      const ga = 0.3 + rnd() * 0.3;
+      const gd0 = Math.max(w0, w1) * (0.15 + rnd() * 0.3);
+      const gd1 = gd0 + Math.max(w0, w1) * (0.2 + rnd() * 0.3);
+      const [gx0, gy0] = at(a + (a1 - a) * ga, gd0);
+      const [gx1, gy1] = at(a + (a1 - a) * (ga + (rnd() - 0.5) * 0.25), (gd0 + gd1) / 2);
+      const [gx2, gy2] = at(a + (a1 - a) * ga, gd1);
+      g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.18, color: WOOD[0], cap: 'round' });
     }
-    g.poly(plank(0, 1, 0)).stroke({ width: 2.2, color: INK, join: 'round' });
-    a = a1 + FT * 0.22;
+    if (rnd() < 0.12) {
+      const [kx, ky] = at(a + (a1 - a) * (0.4 + rnd() * 0.2), Math.max(w0, w1) * (0.2 + rnd() * 0.6));
+      g.ellipse(kx, ky, FT * 0.3, FT * 0.3).fill(WOOD[0]);
+    }
+    g.poly(plank(0, 1, 0)).stroke({ width: PLANK_INK, color: INK, join: 'round' });
+    a = a1 + FT * 0.24;
   }
 }
 
@@ -251,93 +256,65 @@ export function drawFerry(g: Graphics, s: Shape) {
 }
 
 /**
- * Worn timber in the props' manner (the fallen log, crates): a few broad planks across the span,
- * each a little skewed and ragged at the ends, two flat tones with a dark far edge, one bold grain
- * stroke and the odd knot or moss; now and then a plank broken short or missing (the stringers
- * show through). A post-and-rail fence of logs along both sides, or log pilings for a pier.
+ * Worn timber in the props' manner (the fallen log, crates): broad planks across the span, two to
+ * a 5-ft square, each a little skewed, two flat tones (the lit edge, the body) with a dark far
+ * edge, the odd bold grain stroke or knot, inked boldly over a mid-brown underside. A post-and-rail
+ * fence of logs along both sides, or log pilings for a pier.
  */
 function timber(g: Graphics, f: Frame, rnd: () => number, fence: boolean) {
   const at = (a: number, b: number) => atF(f, a, b);
   const quad = (a0: number, a1: number, b0: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
   const { len, wid } = f;
-  // Shadow on the water, the dark under the deck and the stringers the planks lie on.
+  // Shadow on the water, the underside and the stringers the planks lie on.
   const sh = FT * 2;
   g.poly(quad(0, len, -FT * 0.3, wid + FT * 0.3).map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.28 });
-  g.poly(quad(FT * 0.2, len - FT * 0.2, 0, wid)).fill(0x2e1f16);
+  g.poly(quad(FT * 0.2, len - FT * 0.2, 0, wid)).fill(UNDERSIDE).stroke({ width: PLANK_INK, color: INK, join: 'round' });
   const nStr = wid > FT * 18 ? 4 : 3;
   for (let k = 0; k < nStr; k++) {
     const b = wid * (0.12 + (0.76 * k) / (nStr - 1));
     g.poly(quad(FT * 0.2, len - FT * 0.2, b - FT * 0.5, b + FT * 0.5)).fill(WOOD[1]);
-    g.poly(quad(FT * 0.2, len - FT * 0.2, b - FT * 0.5, b - FT * 0.15)).fill(WOOD[2]);
   }
   const litA1 = facing(f, 1, 0) > 0;
-  const planks: [number, number][] = [];
-  for (let a = FT * 0.15; a < len - FT * 1.2; ) {
-    const a1 = Math.min(len - FT * 0.15, a + FT * (2.3 + rnd() * 0.9));
-    planks.push([a, a1]);
-    a = a1 + FT * 0.22;
-  }
-  let gone = -9;
-  for (let k = 0; k < planks.length; k++) {
-    const [a0, a1] = planks[k];
+  // Planks two to a square, laid from the first end; the last one takes up what is left.
+  const n = Math.max(1, Math.round((len - FT * 0.3) / (FT * 2.5)));
+  const pw = (len - FT * 0.3) / n;
+  for (let k = 0; k < n; k++) {
+    const a0 = FT * 0.15 + pw * k + FT * 0.12;
+    const a1 = FT * 0.15 + pw * (k + 1) - FT * 0.12;
     const w = a1 - a0;
-    // A missing plank now and then, never at the ends or near another.
-    if (rnd() < 0.04 && k > 1 && k < planks.length - 2 && k - gone > 6) {
-      gone = k;
-      continue;
-    }
     const [base, lit] = PLANKS[Math.floor(rnd() * PLANKS.length)];
-    let b0 = -FT * (0.1 + rnd() * 0.5);
-    let b1 = wid + FT * (0.1 + rnd() * 0.5);
-    // A plank broken short at one end: a splintered edge.
-    const broken = rnd() < 0.06 ? (rnd() < 0.5 ? 1 : -1) : 0;
-    if (broken === 1) b1 = wid * (0.6 + rnd() * 0.15);
-    if (broken === -1) b0 = wid * (0.25 + rnd() * 0.15);
-    const [s0, s1] = [(rnd() - 0.5) * FT * 0.4, (rnd() - 0.5) * FT * 0.4];
-    const [e0, e1] = [(rnd() - 0.5) * FT * 0.35, (rnd() - 0.5) * FT * 0.35];
+    const b0 = FT * (0.05 + rnd() * 0.25);
+    const b1 = wid - FT * (0.05 + rnd() * 0.25);
+    const [s0, s1] = [(rnd() - 0.5) * FT * 0.25, (rnd() - 0.5) * FT * 0.25];
     // A point `t` of the way across the plank (0 the a0 edge) at its b0 or b1 end, `d` in from it.
-    const end0 = (t: number, d = 0) => at(a0 + s0 + w * t, b0 + e0 * t + d);
-    const end1 = (t: number, d = 0) => at(a0 + s1 + w * t, b1 + e1 * t - d);
-    const band = (t0: number, t1: number, d: number) => [...end0(t0, d), ...end0(t1, d), ...end1(t1, d), ...end1(t0, d)];
-    const bow = (rnd() - 0.5) * FT * 0.25;
-    const outline = [...end0(0), ...at(a0 + (s0 + s1) / 2 + bow, (b0 + b1) / 2), ...end1(0)];
-    if (broken === 1) outline.push(...at(a0 + s1 + w * 0.35, b1 - FT * 0.9), ...at(a0 + s1 + w * 0.62, b1 + FT * 0.15));
-    outline.push(...end1(1), ...at(a1 + (s0 + s1) / 2 + bow, (b0 + b1) / 2), ...end0(1));
-    if (broken === -1) outline.push(...at(a0 + s0 + w * 0.62, b0 - FT * 0.15), ...at(a0 + s0 + w * 0.35, b0 + FT * 0.9));
+    const end0 = (t: number) => at(a0 + s0 + w * t, b0);
+    const end1 = (t: number) => at(a0 + s1 + w * t, b1);
+    const band = (t0: number, t1: number) => [...end0(t0), ...end0(t1), ...end1(t1), ...end1(t0)];
+    const outline = band(0, 1);
     // Two flat tones: the lit side of the plank, then the rest, then a dark edge on the far side.
     g.poly(outline).fill(lit);
-    const d = broken ? FT * 0.9 : 0;
     if (litA1) {
-      g.poly(band(0, 0.68, d)).fill(base);
-      g.poly(band(0, 0.14, d)).fill(WOOD[0]);
+      g.poly(band(0, 0.7)).fill(base);
+      g.poly(band(0, 0.16)).fill(WOOD[0]);
     } else {
-      g.poly(band(0.32, 1, d)).fill(base);
-      g.poly(band(0.86, 1, d)).fill(WOOD[0]);
+      g.poly(band(0.3, 1)).fill(base);
+      g.poly(band(0.84, 1)).fill(WOOD[0]);
     }
-    // One bold grain stroke, bending a little, and the odd knot.
-    const ga = 0.3 + rnd() * 0.3;
-    const gb = 0.15 + rnd() * 0.3;
-    const gl = 0.3 + rnd() * 0.3;
-    const [gx0, gy0] = at(a0 + w * ga, b0 + (b1 - b0) * gb);
-    const [gx1, gy1] = at(a0 + w * (ga + (rnd() - 0.5) * 0.25), b0 + (b1 - b0) * (gb + gl * 0.5));
-    const [gx2, gy2] = at(a0 + w * ga, b0 + (b1 - b0) * (gb + gl));
-    g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.16, color: WOOD[0], cap: 'round' });
-    if (rnd() < 0.25) {
-      const [kx, ky] = at(a0 + w * (0.35 + rnd() * 0.3), b0 + (b1 - b0) * (0.2 + rnd() * 0.6));
+    // One bold grain stroke on some planks, and the odd knot.
+    if (rnd() < 0.55) {
+      const ga = 0.35 + rnd() * 0.3;
+      const gb = 0.1 + rnd() * 0.4;
+      const gl = 0.25 + rnd() * 0.25;
+      const [gx0, gy0] = at(a0 + w * ga, b0 + (b1 - b0) * gb);
+      const [gx1, gy1] = at(a0 + w * (ga + (rnd() - 0.5) * 0.3), b0 + (b1 - b0) * (gb + gl * 0.5));
+      const [gx2, gy2] = at(a0 + w * ga, b0 + (b1 - b0) * (gb + gl));
+      g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.18, color: WOOD[0], cap: 'round' });
+    }
+    if (rnd() < 0.12) {
+      const [kx, ky] = at(a0 + w * (0.4 + rnd() * 0.2), b0 + (b1 - b0) * (0.2 + rnd() * 0.6));
       g.ellipse(kx, ky, FT * 0.3, FT * 0.3).fill(WOOD[0]);
-      g.ellipse(kx, ky, FT * 0.13, FT * 0.13).fill(0x3a2616);
     }
-    g.poly(outline).stroke({ width: 2.2, color: INK, join: 'round' });
-    // Moss on a damp plank end: a couple of inked blobs.
-    if (rnd() < 0.08) {
-      const t = rnd() < 0.5 ? 0.12 : 0.88;
-      for (let m = 0; m < 2; m++) {
-        const [mx, my] = at(a0 + w * (0.3 + 0.4 * m + (rnd() - 0.5) * 0.2), b0 + (b1 - b0) * (t + (rnd() - 0.5) * 0.06));
-        const r = FT * (0.5 + rnd() * 0.25);
-        g.ellipse(mx, my, r, r * 0.8).fill(0x6f9a3e).stroke({ width: 1.5, color: INK });
-        g.ellipse(mx - r * 0.25, my - r * 0.25, r * 0.4, r * 0.3).fill(0xa8c45a);
-      }
-    }
+    g.poly(outline).stroke({ width: PLANK_INK, color: INK, join: 'round' });
   }
   if (fence) railings(g, f, rnd);
   else pilings(g, f, rnd);
