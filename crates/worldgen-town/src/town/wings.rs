@@ -23,6 +23,16 @@ const ARM_MAX_SQ: i32 = 7;
 /// The yard's least side behind an L (squares), and a U's or a court's.
 const L_YARD_SQ: i32 = 3;
 const YARD_SQ: i32 = 4;
+/// (Fix C) The share of inns and taverns with a home beside them that take its lot in (`inn_yards`);
+/// two lots side by side on a street: their fronts on a line within `FRONT_FT` (a house set back),
+/// the seam between them at most `SEAM_FT` wide (ft).
+const INN_SHARE: f64 = 1.0;
+const FRONT_FT: f64 = 10.0;
+const SEAM_FT: f64 = 3.0;
+/// The deepest an inn's lot reaches back into its block's open ground (ft).
+const INN_DEEP_FT: f64 = 70.0;
+/// The most homes an inn takes in.
+const INN_MOST: usize = 4;
 /// No two shaped buildings' lots nearer than this (ft): not side by side on a street, nor one lot apart.
 const NEAR_FT: f64 = 30.0;
 /// At most this many in one block, and of them one U or court.
@@ -49,7 +59,7 @@ fn kind_of(b: &Building) -> Option<(bool, bool)> {
         };
     };
     Some(match catalog::CATALOG[f as usize].key {
-        "inn" | "warehouse" | "caravanserai" | "customs_house" | "brewery" | "stables" => (false, true),
+        "inn" | "tavern" | "warehouse" | "caravanserai" | "customs_house" | "brewery" | "stables" => (false, true),
         "merchant_guild" | "craft_guild" => (true, true),
         "adventurers_guild" | "mages_guild" | "bank" | "courthouse" | "library" | "bards_college" | "auction_house" | "orphanage" => (true, false),
         "bathhouse" | "distillery" | "winery" => (false, false),
@@ -64,10 +74,16 @@ fn kind_of(b: &Building) -> Option<(bool, bool)> {
 pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) {
     let edited: Vec<u32> = edit.map(|(w, _)| super::building_edits(w, l.index).map(|(id, _)| id).collect()).unwrap_or_default();
     let boxes: Vec<[f64; 4]> = l.blocks.iter().map(|q| super::geom::bbox(q)).collect();
-    let block_of = |p: &[P]| {
-        let c = super::geom::centroid(p);
-        (0..l.blocks.len()).find(|&k| boxes[k][0] <= c[0] && c[0] <= boxes[k][2] && boxes[k][1] <= c[1] && c[1] <= boxes[k][3] && contains(&l.blocks[k], c))
-    };
+    // Inns round a yard first: each with the lot it takes in, the home on it gone.
+    let yards = inn_yards(l, &boxes, &edited);
+    let inns: Vec<u32> = yards.iter().map(|&(k, _, _)| l.buildings[k].id).collect();
+    let gone: Vec<u32> = yards.iter().flat_map(|(_, j, _)| j.iter().map(|&j| l.buildings[j].id)).collect();
+    let mut was: Vec<(u32, Vec<P>)> = Vec::new();
+    for (k, _, rect) in yards {
+        was.push((l.buildings[k].id, std::mem::replace(&mut l.buildings[k].poly, rect)));
+    }
+    l.buildings.retain(|b| !gone.contains(&b.id));
+    let block_of = |p: &[P]| block_in(l, &boxes, p);
     // (Each taken: its index, footprint, lot, block, a U or a court.)
     let mut done: Vec<(usize, Vec<P>, Vec<P>, Option<usize>, bool)> = Vec::new();
     if let Some((_, g)) = edit {
@@ -79,11 +95,13 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
             }
         }
     }
-    for (k, b) in l.buildings.iter().enumerate() {
+    let first: Vec<usize> = (0..l.buildings.len()).filter(|&k| inns.contains(&l.buildings[k].id)).collect();
+    for k in first.iter().copied().chain((0..l.buildings.len()).filter(|k| !first.contains(k))) {
+        let b = &l.buildings[k];
         if edited.contains(&b.id) || done.iter().any(|d| d.0 == k) {
             continue;
         }
-        let Some((p, form)) = shaped(l, b) else { continue };
+        let Some((p, form)) = shape_of(l, b, inns.contains(&b.id)) else { continue };
         let big = form != Form::L;
         let block = block_of(&b.poly);
         let mine = done.iter().filter(|d| block.is_some() && d.3 == block);
@@ -99,7 +117,184 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
         l.grounds.push((id, lot));
         l.wings.push(id);
     }
+    // (An inn's own lot before it took others in, after its ground: what a town laid out anew knows it
+    // by, `wards::inherit`.)
+    for (id, lot) in was {
+        if l.wings.contains(&id) {
+            l.grounds.push((id, lot));
+        }
+    }
     l.wings.sort_unstable();
+}
+
+/// The block (`Layout::blocks`; `boxes` their bounding boxes) a footprint's centroid lies in.
+fn block_in(l: &Layout, boxes: &[[f64; 4]], p: &[P]) -> Option<usize> {
+    let c = super::geom::centroid(p);
+    (0..l.blocks.len()).find(|&k| boxes[k][0] <= c[0] && c[0] <= boxes[k][2] && boxes[k][1] <= c[1] && c[1] <= boxes[k][3] && contains(&l.blocks[k], c))
+}
+
+/// The rectangle inside a four-cornered footprint square to axis `u` (within about 11 degrees), as its
+/// spans along `u` and across it: [s0, s1, t0, t1].
+fn rect_in(poly: &[P], u: P) -> Option<[f64; 4]> {
+    let poly = clean(poly);
+    if poly.len() != 4 {
+        return None;
+    }
+    let v = [-u[1], u[0]];
+    for k in 0..4 {
+        let e = sub(poly[(k + 1) % 4], poly[k]);
+        let n = len(e);
+        if n < 1e-6 || (dot(e, u).abs() / n).min(dot(e, v).abs() / n) > 0.2 {
+            return None;
+        }
+    }
+    let mut s: Vec<f64> = poly.iter().map(|p| dot(*p, u)).collect();
+    let mut t: Vec<f64> = poly.iter().map(|p| dot(*p, v)).collect();
+    s.sort_by(f64::total_cmp);
+    t.sort_by(f64::total_cmp);
+    Some([s[1], s[2], t[1], t[2]])
+}
+
+/// (Fix C) Coaching inns of the street: in a town or bigger, the inns and taverns (`INN_SHARE` of them,
+/// rolled from the roof seed and the id; the ground lets about one in four do it) with a plain home beside them on their street
+/// front (its front on theirs, the same block, not edited) take its lot in, and the next one's if need
+/// be, and as much open ground of the block behind as it takes (to `INN_DEEP_FT`), where that makes one
+/// lot wide and deep enough for a U or a court (`shape_of`'s `yard`); none near another (`NEAR_FT`) nor
+/// two in a block. Each: the inn's index, the homes', the lot they make (wound as the inn's).
+fn inn_yards(l: &Layout, boxes: &[[f64; 4]], edited: &[u32]) -> Vec<(usize, Vec<usize>, Vec<P>)> {
+    let mut out: Vec<(usize, Vec<usize>, Vec<P>, Option<usize>)> = Vec::new();
+    if l.tier < crate::t0::settle::Tier::Town {
+        return Vec::new();
+    }
+    let plain = |b: &Building| b.structure == Structure::Roofed && b.parts.is_empty() && b.keep.is_none() && b.deck.is_none() && b.ward != Ward::Castle && b.roof.is_none() && b.shape.is_none() && !edited.contains(&b.id) && !l.grounds.iter().any(|g| g.0 == b.id);
+    let street = |p: P| l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |q| seg_dist(p, q[0], q[1]) - 0.5 * w)).fold(f64::MAX, f64::min);
+    let bbs: Vec<[f64; 4]> = l.buildings.iter().map(|b| super::geom::bbox(&b.poly)).collect();
+    for k in 0..l.buildings.len() {
+        let b = &l.buildings[k];
+        let inn = b.func.is_some_and(|f| matches!(catalog::CATALOG[f as usize].key, "inn" | "tavern"));
+        if !inn || !plain(b) || unit(hash3(l.roof_seed, b.id as i64, 0x494e_4e59, 0)) >= INN_SHARE || out.iter().any(|o| o.1.contains(&k)) {
+            continue;
+        }
+        let block = block_in(l, boxes, &b.poly);
+        let Some(bk) = block else { continue };
+        if out.iter().any(|o| o.3 == block) {
+            continue;
+        }
+        let u = obb(&b.poly).axis;
+        let v = [-u[1], u[0]];
+        let at = |a: f64, c: f64| add(mul(u, a), mul(v, c));
+        let Some(r) = rect_in(&b.poly, u) else { continue };
+        let [s0, s1, t0, t1] = r;
+        // Its front: the side nearest a street; (the spans' index along it, the front's across, which
+        // way is in).
+        let mids = [at(0.5 * (s0 + s1), t0), at(s1, 0.5 * (t0 + t1)), at(0.5 * (s0 + s1), t1), at(s0, 0.5 * (t0 + t1))];
+        let d: Vec<f64> = mids.iter().map(|&p| street(p)).collect();
+        let f = (0..4).min_by(|&a, &c| d[a].total_cmp(&d[c])).unwrap_or(0);
+        if d[f] > STREET_FT {
+            continue;
+        }
+        let (al, ac, ab, sign) = match f {
+            0 => (0, 2, 3, 1.0),
+            1 => (2, 1, 0, -1.0),
+            2 => (0, 3, 2, -1.0),
+            _ => (2, 0, 1, 1.0),
+        };
+        let poly_of = |q: &[f64; 4]| {
+            let mut p = vec![at(q[0], q[2]), at(q[1], q[2]), at(q[1], q[3]), at(q[0], q[3])];
+            if (area(&p) < 0.0) != (area(&b.poly) < 0.0) {
+                p.reverse();
+            }
+            p
+        };
+        // (A plain home of its ward, not yet taken in by another inn.)
+        let home = |j: usize| {
+            let n = &l.buildings[j];
+            j != k && !out.iter().any(|o| o.0 == j || o.1.contains(&j)) && n.func.is_none() && n.ward == b.ward && catalog::RESIDENTIAL[n.residential as usize] != "noble estate" && plain(n)
+        };
+        let (mut cur, mut taken) = (r, Vec::new());
+        let mut found: Option<Vec<P>> = None;
+        for _ in 0..2 {
+            // The home beside it on its front.
+            let next = (0..l.buildings.len()).find_map(|j| {
+                let n = &l.buildings[j];
+                if taken.contains(&j) || !home(j) {
+                    return None;
+                }
+                let q = rect_in(&n.poly, u)?;
+                let gap = cur[al].max(q[al]) - cur[al + 1].min(q[al + 1]);
+                if (cur[ac] - q[ac]).abs() > FRONT_FT || !(-0.5..=SEAM_FT).contains(&gap) || block_in(l, boxes, &n.poly) != block {
+                    return None;
+                }
+                // (Its front the nearer of the two to the street where that stays off it, else the
+                // other; its back the shallower's.)
+                let mut m = cur;
+                m[al] = cur[al].min(q[al]);
+                m[al + 1] = cur[al + 1].max(q[al + 1]);
+                m[ab] = if sign > 0.0 { cur[ab].min(q[ab]) } else { cur[ab].max(q[ab]) };
+                m[ac] = if sign > 0.0 { cur[ac].min(q[ac]) } else { cur[ac].max(q[ac]) };
+                if poly_of(&m).iter().any(|c| street(*c) < 0.5) {
+                    m[ac] = if sign > 0.0 { cur[ac].max(q[ac]) } else { cur[ac].min(q[ac]) };
+                }
+                Some((j, m))
+            });
+            let Some((j, m)) = next else { break };
+            taken.push(j);
+            cur = m;
+            // As deep as it is, or reaching back into open ground (in its block, clear of every other
+            // building and ground) to the least depth a U or a court takes.
+            let deep = (cur[ab] - cur[ac]).abs();
+            let mut behind: Vec<usize> = Vec::new();
+            for want in std::iter::once(deep).chain((9..=INN_DEEP_FT as i32 / 5).map(|k| k as f64 * 5.0).filter(|&w| w > deep + 0.5)) {
+                let mut e = cur;
+                e[ab] = cur[ac] + sign * want;
+                let p = poly_of(&e);
+                if want > deep {
+                    let mut back = cur;
+                    back[ac] = cur[ab];
+                    back[ab] = e[ab];
+                    // (Clear of the homes beside it touching it at a corner: 1 ft in either side.)
+                    back[al] += 1.0;
+                    back[al + 1] -= 1.0;
+                    let strip = poly_of(&back);
+                    let sb = super::geom::bbox(&strip);
+                    // (The homes behind it in the way taken in too, `INN_MOST` in all; anything else stops it.)
+                    let hits: Vec<usize> = (0..l.buildings.len()).filter(|&i| i != k && !taken.contains(&i) && bbs[i][0] < sb[2] + 1.0 && bbs[i][2] > sb[0] - 1.0 && bbs[i][1] < sb[3] + 1.0 && bbs[i][3] > sb[1] - 1.0 && poly_gap(&l.buildings[i].poly, &strip) < 0.5).collect();
+                    let blocked = !p.iter().all(|c| contains(&l.blocks[bk], *c))
+                        || strip.iter().any(|c| street(*c) < 1.0)
+                        || taken.len() + hits.len() > INN_MOST
+                        || hits.iter().any(|&i| !home(i))
+                        || l.grounds.iter().any(|g| poly_gap(&g.1, &strip) < 0.5);
+                    if blocked {
+                        break;
+                    }
+                    behind = hits;
+                }
+                if out.iter().any(|o| poly_gap(&o.2, &p) < NEAR_FT) {
+                    break;
+                }
+                // (Over no other building: 1 ft in from its sides.)
+                let pb = super::geom::bbox(&p);
+                let inset = poly_of(&[e[0] + 1.0, e[1] - 1.0, e[2] + 1.0, e[3] - 1.0]);
+                if (0..l.buildings.len()).any(|i| i != k && !taken.contains(&i) && !behind.contains(&i) && bbs[i][0] < pb[2] && bbs[i][2] > pb[0] && bbs[i][1] < pb[3] && bbs[i][3] > pb[1] && poly_gap(&l.buildings[i].poly, &inset) <= 0.0) {
+                    break;
+                }
+                let mut wide = b.clone();
+                wide.poly = p.clone();
+                if shape_of(l, &wide, true).is_some() {
+                    taken.append(&mut behind);
+                    found = Some(p);
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        if let Some(p) = found {
+            out.push((k, taken, p, block));
+        }
+    }
+    out.into_iter().map(|(k, j, r, _)| (k, j, r)).collect()
 }
 
 /// The least distance between two footprints (ft; 0 where they touch or overlap).
@@ -113,11 +308,17 @@ fn poly_gap(a: &[P], b: &[P]) -> f64 {
 
 /// The footprint building `b` takes and its form, if it takes wings (`shape_all`).
 pub fn shaped(l: &Layout, b: &Building) -> Option<(Vec<P>, Form)> {
+    shape_of(l, b, false)
+}
+
+/// `shaped`, or for an inn that took in a lot to stand round a yard (`inn_yards`: `yard`) its U or
+/// court, unrolled.
+fn shape_of(l: &Layout, b: &Building, yard: bool) -> Option<(Vec<P>, Form)> {
     if b.structure != Structure::Roofed || !b.parts.is_empty() || b.keep.is_some() || b.deck.is_some() || b.ward == Ward::Castle || b.roof.is_some() || b.shape.is_some() {
         return None;
     }
     let (front_open, court) = kind_of(b)?;
-    if unit(hash3(l.roof_seed, b.id as i64, 0x5749_4e47, 0)) >= SHARE {
+    if !yard && unit(hash3(l.roof_seed, b.id as i64, 0x5749_4e47, 0)) >= SHARE {
         return None;
     }
     let poly = clean(&b.poly);
@@ -180,10 +381,11 @@ pub fn shaped(l: &Layout, b: &Building) -> Option<(Vec<P>, Form)> {
     let fits_l = (left || right) && nx - w >= L_YARD_SQ && ny - w >= L_YARD_SQ && nx * ny >= 80;
     let fits_u = nx - 2 * w >= YARD_SQ && ny - w >= YARD_SQ && nx * ny >= 140;
     let fits_c = court && nx - 2 * w >= YARD_SQ.max(GATE_SQ + 2) && ny - 2 * w >= YARD_SQ;
-    if !(fits_l || fits_u || fits_c) {
+    if !(fits_l || fits_u || fits_c) || yard && !(fits_u || fits_c) {
         return None;
     }
     let pick = unit(hash3(l.roof_seed, b.id as i64, 0x5749_4e47, 1));
+    let fits_l = fits_l && !yard;
     let form = match (fits_l, fits_u, fits_c) {
         (_, _, true) if pick < 0.4 || !fits_u && !fits_l => Form::Court,
         (true, true, _) => if pick < 0.7 { Form::L } else { Form::U(front_open) },

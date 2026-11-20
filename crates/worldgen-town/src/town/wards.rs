@@ -391,9 +391,10 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     let cell = |p: P| (crate::core::floor(p[0] / CELL) as i64, crate::core::floor(p[1] / CELL) as i64);
     let mut grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
     // (A town hall's lot as generated: under its belfry, its body (`belfry`).)
-    // (Roadmap 7, 163: an L's, a U's or a court's, the lot it was shaped on, kept as its ground, `wings`.)
+    // (Roadmap 7, 163: an L's, a U's or a court's, the lot it was shaped on, kept as its ground, `wings`;
+    // an inn's that took others in, its own lot, the last kept.)
     let lot = |b: &'_ Building| -> Vec<P> {
-        let ground = || super::wings::ranges(generated, b).and_then(|_| generated.grounds.iter().find(|g| g.0 == b.id).map(|g| g.1.clone()));
+        let ground = || super::wings::ranges(generated, b).and_then(|_| generated.grounds.iter().rfind(|g| g.0 == b.id).map(|g| g.1.clone()));
         super::belfry::of(b).map_or_else(|| ground().unwrap_or_else(|| b.poly.clone()), |_| b.parts[0].poly.clone())
     };
     for (k, b) in generated.buildings.iter().enumerate() {

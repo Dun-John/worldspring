@@ -241,6 +241,16 @@ pub(crate) fn wings(world: &World, t0: &T0, label: &str, r: &mut Report) {
             say!("    {label} L{li} b{} {form} {kind} at {:.0},{:.0} fx {:.6} fy {:.6}", b.id, c[0], c[1], c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
         }
         r.tally("buildings", l.buildings.len());
+        // (Fix C) Inns and taverns of towns and up: all, and those round a yard (a U or a court).
+        if t0.settlements[li].tier >= Tier::Town {
+            for b in l.buildings.iter().filter(|b| b.func.is_some_and(|f| matches!(town::catalog::CATALOG[f as usize].key, "inn" | "tavern"))) {
+                let key = town::catalog::CATALOG[b.func.unwrap() as usize].key;
+                r.tally(&format!("{key}s (towns+)"), 1);
+                if town::wings::ranges(&l, b).is_some_and(|a| a.len() > 2) {
+                    r.tally(&format!("{key}s round a yard (towns+)"), 1);
+                }
+            }
+        }
         // (Fix B) Shaped ones within 30 ft of each other (their lots: footprints within 30 ft), and blocks with more than one U or court.
         let shaped: Vec<&town::Building> = l.buildings.iter().filter(|b| town::wings::ranges(&l, b).is_some()).collect();
         let lot = |b: &town::Building| l.grounds.iter().find(|g| g.0 == b.id).map_or(b.poly.clone(), |g| g.1.clone());
