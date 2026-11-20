@@ -45,6 +45,20 @@ pub fn list() -> Vec<Value> {
             "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0 },
             "floor": { "type": "string", "enum": ["auto", "rock", "ground"], "description": "What its top or floor draws as (kept when changing one; default auto)" },
         }), &[]) }),
+        json!({ "name": "set_hill", "title": "Raise or change a hill", "description": "A hill on the battlemap's ground: it rises from the ground at its footprint's edge to peak_ft over the ground, with natural slopes and a little shape noise of its own. profile: round (smooth slopes), ridge (a crest along a line: from and to, half-width width_ft), knoll (steeper, with rocky outcrops) or mountain (concave slopes and bands of crag; the outcrops draw as cliff faces with scree). Footprint: at with radius_ft (or rx_ft along angle_deg and ry_ft across), or around (a building, tower or site: centred on it, the crown wider than it). crown_ft flattens its top (a castle's yard). With hills and the brush together the ground moves at most 300 ft, easing into that limit. With id, changes it (fields left out stay). Returns its id (h:...); delete_plateau takes it away.", "inputSchema": schema(json!({
+            "id": { "type": "string", "description": "A hill to change (h:...)" },
+            "profile": { "type": "string", "enum": ["round", "ridge", "knoll", "mountain"], "default": "round" },
+            "at": at,
+            "radius_ft": { "type": "number", "minimum": ground::HILL_RADIUS_FT.start(), "maximum": ground::HILL_RADIUS_FT.end(), "description": "The footprint's radius (round)" },
+            "rx_ft": { "type": "number", "minimum": ground::HILL_RADIUS_FT.start(), "maximum": ground::HILL_RADIUS_FT.end(), "description": "Half-axis along angle_deg" },
+            "ry_ft": { "type": "number", "minimum": ground::HILL_RADIUS_FT.start(), "maximum": ground::HILL_RADIUS_FT.end(), "description": "Half-axis across (default rx_ft)" },
+            "angle_deg": { "type": "number", "default": 0, "description": "rx_ft's direction, clockwise from east" },
+            "from": at, "to": at,
+            "width_ft": { "type": "number", "minimum": ground::HILL_RADIUS_FT.start(), "maximum": ground::HILL_RADIUS_FT.end(), "default": 80, "description": "A ridge's half-width (with from and to)" },
+            "around": { "type": "string", "description": "A building, tower or site to raise a round hill under" },
+            "peak_ft": { "type": "number", "minimum": 1, "maximum": ground::MAX_HILL_FT, "default": 60, "description": "Its peak over the ground" },
+            "crown_ft": { "type": "number", "minimum": 0, "maximum": 512, "default": 0, "description": "A flat crown's radius (at most 0.8 of the narrower half-axis)" },
+        }), &[]) }),
         json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus, pits or the world\'s own generated islets (i:..., see list_plateaus; its watchtower goes too: removed_towers) away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
         json!({ "name": "restore_islets", "title": "Bring generated islets back", "description": "Bring the world's own islets (i:...) back after delete_plateau took them away. A watchtower removed with one stays removed (restore_building).", "inputSchema": schema(crate::args::ids_props("islet id (i:...)"), &[]) }),
         json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square within radius_ft (at most 200) of a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
@@ -56,6 +70,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     Some(match name {
         "shape_ground" => shape(app, a).await.map(text),
         "set_plateau" => set_plateau(app, a).await.map(text),
+        "set_hill" => set_hill(app, a).await.map(text),
         "delete_plateau" => delete(app, a).await.map(text),
         "restore_islets" => restore_islets(app, a).await.map(text),
         "ground_heights" => heights(app, a).await.map(text),
@@ -270,6 +285,9 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         Some(id) => Some(app.with_edits(|e| e.plateaus.get(id).cloned()).flatten().ok_or_else(|| format!("no plateau {id}"))?),
         None => None,
     };
+    if old.as_ref().is_some_and(|p| p.hill.is_some()) {
+        return Err("that is a hill: set_hill changes it".into());
+    }
     let edge = match (&a["edge_ft"], &old) {
         (Value::Null, Some(p)) => p.edge as f64,
         (Value::Null, None) => 0.0,
@@ -347,7 +365,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         let p = match (&outline, &old) {
             (Some(o), _) => ground::plateau_for(o, level, edge)?,
             (None, Some(p)) => {
-                let p = Plateau { pts: p.pts.clone(), level: ((level * 10.0).round() * 0.1) as f32, edge: edge as f32, kind: p.kind, floor: p.floor };
+                let p = Plateau { pts: p.pts.clone(), level: ((level * 10.0).round() * 0.1) as f32, edge: edge as f32, kind: p.kind, floor: p.floor, hill: p.hill.clone() };
                 if let Some(err) = p.problem() {
                     return Err(err);
                 }
@@ -385,6 +403,84 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
             "level_ft": round1(p.level - sea as f32), "ground_ft": round1(here as f32 - sea as f32), "edge_ft": p.edge,
             "points": p.pts.len(), "area_sq_ft": geom::area(&p.pts).abs().round(), "bbox": [b[0], b[1], b[2], b[3]],
             "floor": p.floor.map_or("auto", ground::Floor::name),
+        });
+        e.plateaus.insert(id, p);
+        Ok(reply)
+    })
+    .await
+}
+
+/// `set_hill`: a hill (`ground::hill_for`) made or changed.
+async fn set_hill(app: &Shared, a: &Value) -> Result<Value, String> {
+    let id = a["id"].as_str().map(str::to_string);
+    let old = match &id {
+        Some(id) => {
+            let p = app.with_edits(|e| e.plateaus.get(id).cloned()).flatten().ok_or_else(|| format!("no hill {id}"))?;
+            Some(p.hill.clone().map(|h| (h, p.level as f64)).ok_or_else(|| format!("{id} is a plateau, not a hill: set_plateau changes it"))?)
+        }
+        None => None,
+    };
+    let profile = match &a["profile"] {
+        Value::Null => old.as_ref().map_or(ground::HillProfile::Round, |o| o.0.profile),
+        Value::String(s) => ground::HillProfile::parse(s).ok_or("profile: round, ridge, knoll or mountain")?,
+        _ => return Err("profile: round, ridge, knoll or mountain".into()),
+    };
+    let mut peak = opt_num(a, "peak_ft")?;
+    let mut crown = opt_num(a, "crown_ft")?;
+    let (mut at, mut rx, mut ry, mut angle) = (None, opt_num(a, "rx_ft")?.or(opt_num(a, "radius_ft")?), opt_num(a, "ry_ft")?.or(opt_num(a, "radius_ft")?), opt_num(a, "angle_deg")?);
+    if !a["from"].is_null() || !a["to"].is_null() {
+        let (f, t) = (crate::args::point(app, "from", &a["from"]).await?, crate::args::point(app, "to", &a["to"]).await?);
+        let w = num(a, "width_ft", 80.0)?;
+        at = Some([(f[0] + t[0]) * 0.5, (f[1] + t[1]) * 0.5]);
+        (rx, ry) = (Some((t[0] - f[0]).hypot(t[1] - f[1]) * 0.5 + w), Some(w));
+        angle = Some((t[1] - f[1]).atan2(t[0] - f[0]).to_degrees());
+    } else if !a["at"].is_null() {
+        at = Some(crate::args::point(app, "at", &a["at"]).await?);
+    } else if let Some(around) = a["around"].as_str() {
+        let around = around.to_string();
+        let key = id.clone().unwrap_or_else(|| "h:around".into());
+        let p = app.worker.with(move |ex| footprint(ex, &around).and_then(|f| ground::castle_hill(&key, &f))).await?;
+        let h = p.hill.as_ref().expect("a hill");
+        at = Some(h.at);
+        (rx, ry) = (rx.or(Some(h.rx)), ry.or(Some(h.ry)));
+        peak = peak.or(Some(p.level as f64));
+        crown = crown.or(Some(h.crown as f64));
+    }
+    let at = match (at, &old) {
+        (Some(p), _) => p,
+        (None, Some(o)) => o.0.at,
+        (None, None) => return Err("give at (with radius_ft, or rx_ft and ry_ft), from and to (a ridge), or around".into()),
+    };
+    let rx = rx.or(old.as_ref().map(|o| o.0.rx)).ok_or("radius_ft (or rx_ft): how far the hill reaches")?;
+    let ry = ry.or(old.as_ref().map(|o| if a["rx_ft"].is_null() && a["radius_ft"].is_null() { o.0.ry } else { rx })).unwrap_or(rx);
+    let angle = angle.or(old.as_ref().map(|o| o.0.angle as f64)).unwrap_or(0.0);
+    let peak = peak.or(old.as_ref().map(|o| o.1)).unwrap_or(60.0);
+    let crown = crown.or(old.as_ref().map(|o| o.0.crown as f64)).unwrap_or(0.0);
+    let (mw, mh) = app.worker.with(|ex| Ok::<_, String>((ex.world.geom.map_w_ft, ex.world.geom.map_h_ft))).await?;
+    if !(0.0..mw).contains(&at[0]) || !(0.0..mh).contains(&at[1]) {
+        return Err("the hill's middle is off the map".into());
+    }
+    app.edit("agent", 0, move |e| {
+        let changed = id.is_some();
+        if let Some(id) = &id
+            && !e.plateaus.get(id).is_some_and(|p| p.hill.is_some())
+        {
+            return Err(format!("{id} was taken away meanwhile"));
+        }
+        if !changed && e.plateaus.len() >= ground::MAX_PLATEAUS {
+            return Err(format!("a world holds at most {} plateaus and hills", ground::MAX_PLATEAUS));
+        }
+        let id = id.unwrap_or_else(|| new_id("h"));
+        let mut p = ground::hill_for(&id, profile, at, rx, ry, angle, peak, crown)?;
+        // (Its noise stays its own when changed.)
+        if let (Some(h), Some(o)) = (p.hill.as_mut(), e.plateaus.get(&id).and_then(|q| q.hill.as_ref())) {
+            h.seed = o.seed;
+        }
+        let h = p.hill.clone().expect("a hill");
+        let reply = json!({
+            "tool": "set_hill", "id": id, "changed": changed, "profile": h.profile, "peak_ft": p.level,
+            "x_ft": h.at[0], "y_ft": h.at[1], "rx_ft": h.rx, "ry_ft": h.ry, "angle_deg": h.angle, "crown_ft": h.crown,
+            "bbox": ground::footprint_bounds(&h).map(f64::round),
         });
         e.plateaus.insert(id, p);
         Ok(reply)

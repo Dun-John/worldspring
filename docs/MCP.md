@@ -8,7 +8,7 @@
 - keep the DM's notebook: NPCs and plot points;
 - put objects on battlemaps (and take generated ones away), with uploaded sprites;
 - draw buildings and towers, with what they are, their storeys and roofs;
-- shape a battlemap's ground: mounds, hollows, plateaus, cliffs and pits;
+- shape a battlemap's ground: mounds, hollows, plateaus, hills, cliffs and pits;
 - set the overland hex grid and look up the hex of a place;
 - put bridges, fords and ferries across rivers (crossings), and lay a town out anew (town plans: its patches, wards
   and lots) or design a dungeon's rooms and a building's interior by hand (designs);
@@ -855,7 +855,10 @@ Both must stand on dry land, off river channels, and not cross another wall (the
 wall c:4 at (x, y)` or `the town wall of city:…`), but an open wall may end on one: an end within 15 ft of another
 wall's line or a castle's curtain (short of it or past it) is put on that line, a T-join with no gap (the result's
 `pts` gives the line as laid, `joined` says so); a castle also stays off squares, roads and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
-refusal, or taken away with it (one change) when `remove_in_way: true`. Corners snap to the 5-ft grid (`snap: false`
+refusal, or taken away with it (one change) when `remove_in_way: true`. A castle with `raise_hill: true` stands on a
+round hill of its own, added in the same change (`hill: {id, added}` in the result; none is added when a hill already
+stands under its middle): 60 to 120 ft high, its flat crown a little wider than the castle, its slopes about three
+times as long as it is high. It is an entry like any hill (`set_hill`, `delete_plateau`). Corners snap to the 5-ft grid (`snap: false`
 not). Their wall and gate towers have interiors (`t:<layout>:<k>`), and a building drawn on the wall is refused. The
 result also gives `towers`, `gates`, `buildings` and the castle's `keep` (its building id); a wall's also `corners`,
 `length_ft`, `closed`, `gate_list` (each gate as built: `corner` when on one, and `x_ft`, `y_ft`) and
@@ -2386,7 +2389,7 @@ follow the world as other edits do).
 ## Shaping the ground
 
 A battlemap's ground can be shaped by hand, as Edit › Land › Ground shapes it: brushed up or down, smoothed, put back,
-or levelled as plateaus and pits. Two edits fields hold it:
+levelled as plateaus and pits, or raised as hills. Two edits fields hold it:
 
 - **`ground`**: brushed blocks, by `g:XXXXX:YYYYY` (block indices, zero-padded, x first; block `(bx, by)` holds
   squares `16·bx … 16·bx + 15` east and `16·by …` south). Each is one string: 256 height changes in tenths of a
@@ -2395,14 +2398,22 @@ or levelled as plateaus and pits. Two edits fields hold it:
   writing them.
 - **`plateaus`**: by `h:<id>`: `pts` (the outline, 3 to 48 points, rounded to 0.5 ft, not crossing itself,
   spanning at most 1,280 ft), `level` (ft on the world's datum: above the sea plus the sea's level), `edge` (0 to
-  60 ft; absent: 0, a sheer cliff at the outline).
+  60 ft; absent: 0, a sheer cliff at the outline). A hill is an entry with `kind: "hill"` and a `hill` form
+  `{profile, at: [x, y], rx, ry, angle?, crown?, seed}` (profile `round`, `ridge`, `knoll` or `mountain`; half-axes
+  10 to 640 ft, `rx` along `angle` degrees clockwise from east; `crown` a flat top's radius); its `level` is its
+  peak in ft over the ground (1 to 300) and `pts` its footprint's outline. Use `set_hill` rather than writing them.
 
 How it applies:
 
 - Plateaus first, largest first (a terrace or pit inside a plateau goes on top of it): inside the outline the
   ground is at the level; outside it eases back to the ground over `edge` ft (a sheer one over a square). Then the
-  brushed change, at most 150 ft either way (plateaus and pits have no limit: they stand at their level). Ground that was dry never sinks below
+  brushed change and the hills together, taken as they are up to 220 ft and easing smoothly toward 300 ft either
+  way beyond (plateaus and pits have no limit: they stand at their level). Ground that was dry never sinks below
   the water beside it; raising ground under water makes dry land.
+- A hill rises from the ground at its footprint's edge to its peak, with a little shape noise of its own (keyed by
+  its `seed`): `round` smooth all round, `ridge` a crest along `rx`, `knoll` steeper with rocky outcrops, `mountain`
+  concave slopes and bands of crag. Its slopes steeper than about 50 degrees are cliff faces on the battlemap,
+  hard going, with scree below.
 - Everything on the ground follows it: buildings stand on it (on a plateau, at its level; a building over a sheer
   edge takes the mean, so draw round it), with their interiors and cellars; streets, roads, walls, towers and camp
   yards. Plateaus are flat: no generated knolls on them. Steep shaped ground draws as rock, with its cliffs.
@@ -2470,7 +2481,7 @@ below the ground, the land round it otherwise.
 | `around` | string | | Or a building, tower or site to raise it round |
 | `margin_ft` | number | 10 | Round the footprint, 0–200 |
 | `level_ft` | number | | Its level above the sea, within 20,000 ft |
-| `rise_ft` | number | 10 | Or its level above the ground at the middle (below zero: a pit); for a brush stroke, within 150 ft; with `id`, only when given |
+| `rise_ft` | number | 10 | Or its level above the ground at the middle (below zero: a pit); for a brush stroke, within 300 ft; with `id`, only when given |
 | `edge_ft` | number | 0 | The slope round it, 0 (sheer) to 60 |
 | `floor` | string | `auto` | `auto`, `rock` or `ground`: what its top (a pit's floor) draws as; with `id`, kept unless given |
 
@@ -2478,9 +2489,34 @@ below the ground, the land round it otherwise.
 { "name": "set_plateau", "arguments": { "around": "c:3", "margin_ft": 15, "rise_ft": 25, "edge_ft": 0 } }
 ```
 
+A hill (`set_hill` changes it; `set_plateau` refuses one).
+
+### `set_hill`
+Raise a hill, or change one by `id` (fields left out stay; its noise stays its own). Returns `{tool, id, changed,
+profile, peak_ft, x_ft, y_ft, rx_ft, ry_ft, angle_deg, crown_ft, bbox}`. `delete_plateau` takes it away; `list_plateaus`
+lists it (`what: "hill"`, with its form).
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `id` | string | | A hill to change (`h:…`) |
+| `profile` | string | `round` | `round`, `ridge`, `knoll` or `mountain` |
+| `at` | place | | Its middle, with `radius_ft` (or `rx_ft` and `ry_ft`) |
+| `radius_ft` | number | | The footprint's radius, 10–640 |
+| `rx_ft`, `ry_ft` | number | | Or half-axes along and across `angle_deg` (`ry_ft` defaults to `rx_ft`) |
+| `angle_deg` | number | 0 | `rx_ft`'s direction, clockwise from east |
+| `from`, `to` | place | | Or a ridge's crest, end to end, with `width_ft` its half-width (default 80) |
+| `around` | string | | Or a building, tower or site: a round hill centred on it, its crown wider than it |
+| `peak_ft` | number | 60 | Its peak over the ground, 1–300 |
+| `crown_ft` | number | 0 | A flat top's radius, at most 0.8 of the narrower half-axis |
+
+```json
+{ "name": "set_hill", "arguments": { "profile": "ridge", "from": [412000, 380000], "to": [412600, 380200], "width_ft": 90, "peak_ft": 120 } }
+```
+
 ### `list_plateaus`
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
-`{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, floor? (rock or ground, if set), x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
+`{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, floor? (rock or ground, if set), x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline),
+hills `{id: "h:...", what: "hill", profile, peak_ft, x_ft, y_ft, rx_ft, ry_ft, angle_deg, crown_ft, bbox, poly}` (`peak_ft` over the ground), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
 block's north-west corner), and (unless `generated: false`) the world's own islets in rivers and off coasts
 `{id: "i:<8 hex>", what: "islet", generated: true, level_ft, water_ft, x_ft, y_ft, radius_ft, in: "river" or "sea or lake", tower? (a watchtower stands on it), removed? (taken away), bbox, poly}`.

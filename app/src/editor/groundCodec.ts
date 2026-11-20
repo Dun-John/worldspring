@@ -11,8 +11,8 @@ const CELLS = BLOCK * BLOCK;
 export const MAX_BLOCKS = 1500;
 /** Blocks one stroke may touch. */
 export const MAX_STROKE_BLOCKS = 48;
-/** A value's limit (tenths of a foot: 150 ft). */
-export const MAX_ADD = 1500;
+/** A value's limit (tenths of a foot: 300 ft). */
+export const MAX_ADD = 3000;
 export const MAX_PLATEAU_PTS = 48;
 export const MAX_PLATEAU_SPAN_FT = 1280;
 export const MAX_EDGE_FT = 60;

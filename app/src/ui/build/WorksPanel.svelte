@@ -95,6 +95,10 @@
         <span class="ws-grow">In ruins<span class="ws-muted"> · broken walls, roofless</span></span>
         <input type="checkbox" class="ws-switch" bind:checked={works.ruin} />
       </label>
+      <label class="switch" title="A hill of its own: choose it in Edit › Ground to change it or take it away">
+        <span class="ws-grow">Raise a hill under it<span class="ws-muted"> · round, 60–120 ft, its top flat</span></span>
+        <input type="checkbox" class="ws-switch" bind:checked={works.hill} />
+      </label>
     {:else}
       <label class="switch">
         <span class="ws-grow">Closed ring<span class="ws-muted"> · the last corner joins the first</span></span>

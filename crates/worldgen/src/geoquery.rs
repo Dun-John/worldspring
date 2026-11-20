@@ -793,7 +793,7 @@ fn drops(pa: &Patch, p: P) -> (Option<(f64, f32, usize, usize)>, Option<(f32, us
 /// at most `per` for each plateau, nearest first, with the plateau's level.
 fn plateau_spots(ex: &Executor, p: P, max_ft: f64, step: f64, per: usize) -> Vec<(f64, P, f32)> {
     let mut out = Vec::new();
-    for pl in ex.world.file.edits.plateaus.values() {
+    for pl in ex.world.file.edits.plateaus.values().filter(|pl| pl.hill.is_none()) {
         let n = pl.pts.len();
         let b = geom::bbox(&pl.pts);
         if n < 3 || b[0] > p[0] + max_ft || b[2] < p[0] - max_ft || b[1] > p[1] + max_ft || b[3] < p[1] - max_ft {
@@ -841,7 +841,7 @@ fn cliff(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
     let (c, sea) = (cell(&ex.t0), ex.world.params().sea_level_ft as f32);
     // Spots to measure: hand-made plateaus' outlines nearest the point, then the steepest samples in T0 cells steep enough.
     let mut spots: Vec<P> = Vec::new();
-    for pl in ex.world.file.edits.plateaus.values() {
+    for pl in ex.world.file.edits.plateaus.values().filter(|pl| pl.hill.is_none()) {
         let n = pl.pts.len();
         if let Some(q) = (0..n).map(|i| closest_on_seg(p, pl.pts[i], pl.pts[(i + 1) % n])).min_by(|a, b| geom::dist(*a, p).total_cmp(&geom::dist(*b, p)))
             && geom::dist(q, p) <= max_ft

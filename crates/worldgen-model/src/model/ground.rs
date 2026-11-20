@@ -18,10 +18,29 @@ pub const MAX_PLATEAUS: usize = 256;
 pub const MAX_PLATEAU_PTS: usize = 48;
 pub const MAX_PLATEAU_SPAN_FT: f64 = 1280.0;
 pub const MAX_EDGE_FT: f32 = 60.0;
-/// The brushed change stays within this of the ground (plateaus, pits and water beds have no limit).
-pub const MAX_SHIFT_FT: f64 = 150.0;
-/// A block's values are tenths of a foot, at most this far either way (150 ft).
-pub const MAX_ADD: i32 = 1500;
+/// The brushed change and hills together stay within this of the ground, easing into it
+/// (`soft_shift`; plateaus, pits and water beds have no limit).
+pub const MAX_SHIFT_FT: f64 = 300.0;
+/// Up to this much (ft) of the change is taken as it is; beyond, it eases toward `MAX_SHIFT_FT`.
+pub const SHIFT_KNEE_FT: f64 = 220.0;
+/// A block's values are tenths of a foot, at most this far either way (300 ft).
+pub const MAX_ADD: i32 = 3000;
+/// A hill's peak (ft over the ground) and its footprint's half-axes (ft).
+pub const MAX_HILL_FT: f32 = 300.0;
+pub const HILL_RADIUS_FT: std::ops::RangeInclusive<f64> = 10.0..=640.0;
+
+/// The change `d` (ft) as the ground takes it: as it is up to `SHIFT_KNEE_FT`, then easing
+/// smoothly (no kink, no clip) toward `MAX_SHIFT_FT` either way.
+#[inline]
+pub fn soft_shift(d: f64) -> f64 {
+    let a = crate::core::fabs(d);
+    if a <= SHIFT_KNEE_FT {
+        return d;
+    }
+    let room = MAX_SHIFT_FT - SHIFT_KNEE_FT;
+    let v = SHIFT_KNEE_FT + room * libm::tanh((a - SHIFT_KNEE_FT) / room);
+    if d < 0.0 { -v } else { v }
+}
 pub const SQUARE_FT: f64 = 5.0;
 
 /// 16 × 16 squares of brushed change, tenths of a foot, row-major. On the wire one string:
@@ -81,6 +100,59 @@ pub struct Plateau {
     /// floor `CHASM_FT` or more below the ground there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub floor: Option<Floor>,
+    /// A hill's form (kind `Hill`: then `level` is its peak, ft over the ground, and `pts` its
+    /// footprint's outline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hill: Option<Hill>,
+}
+
+/// A hill raised by hand (`PlateauKind::Hill`, Roadmap 7 item 172): it rises from the ground at
+/// its footprint's edge to its peak (`Plateau::level` over the ground) with the profile's slopes,
+/// added to the ground like the brush (`ground::hill`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Hill {
+    pub profile: HillProfile,
+    /// The footprint's middle (world ft).
+    pub at: [f64; 2],
+    /// Half-axes (ft): `rx` along `angle`, `ry` across it. A ridge's crest runs along `rx`, with
+    /// `ry` its half-width.
+    pub rx: f64,
+    pub ry: f64,
+    /// Degrees, of the `rx` axis from east toward south (+y).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub angle: f32,
+    /// A flat crown's radius (ft; a ridge's, across its crest), at the peak.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub crown: f32,
+    /// Its shape noise's seed.
+    #[serde(default)]
+    pub seed: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HillProfile {
+    /// Smooth slopes all round.
+    #[default]
+    Round,
+    /// A long crest (along `rx`).
+    Ridge,
+    /// Steeper, with rocky outcrops.
+    Knoll,
+    /// Concave slopes to a peak, with bands of crag.
+    Mountain,
+}
+
+impl HillProfile {
+    pub fn parse(s: &str) -> Option<HillProfile> {
+        match s {
+            "round" | "hill" => Some(HillProfile::Round),
+            "ridge" => Some(HillProfile::Ridge),
+            "knoll" | "rocky_knoll" => Some(HillProfile::Knoll),
+            "mountain" | "small_mountain" => Some(HillProfile::Mountain),
+            _ => None,
+        }
+    }
 }
 
 /// A plateau's top or a pit's floor (`Plateau::floor`).
@@ -125,6 +197,8 @@ pub enum PlateauKind {
     /// Rock standing out of the water: its top is bare rock, and buildings, castles and towers
     /// may stand on it (`town::Shore` knows it as dry land).
     Islet,
+    /// A hill (`Plateau::hill`): not flat; it adds to the ground.
+    Hill,
 }
 
 impl PlateauKind {
@@ -184,6 +258,20 @@ impl Plateau {
         }
         if crosses_itself(&self.pts) {
             return Some("the outline crosses itself".into());
+        }
+        if (self.kind == PlateauKind::Hill) != self.hill.is_some() {
+            return Some("a hill has its form, and only a hill".into());
+        }
+        if let Some(h) = &self.hill {
+            if !(1.0..=MAX_HILL_FT).contains(&self.level) {
+                return Some(format!("a hill's peak is 1 to {MAX_HILL_FT} ft over the ground"));
+            }
+            if !HILL_RADIUS_FT.contains(&h.rx) || !HILL_RADIUS_FT.contains(&h.ry) || !h.at[0].is_finite() || !h.at[1].is_finite() || !h.angle.is_finite() {
+                return Some(format!("a hill's half-axes are {} to {} ft", HILL_RADIUS_FT.start(), HILL_RADIUS_FT.end()));
+            }
+            if !(0.0..=0.8 * h.rx.min(h.ry) as f32).contains(&h.crown) {
+                return Some("a hill's crown is at most 0.8 of its narrower half-axis".into());
+            }
         }
         None
     }

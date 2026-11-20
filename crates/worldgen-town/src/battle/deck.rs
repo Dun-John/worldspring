@@ -60,7 +60,7 @@ pub fn hand_deck_short(c: &crate::world::Crossing, world: &World, t0: &T0) -> f3
 fn plateau_edge(end: [f64; 2], other: [f64; 2], level: f32, world: &World) -> Option<f64> {
     let d = [other[0] - end[0], other[1] - end[1]];
     let mut best: Option<f64> = None;
-    for p in world.file.edits.plateaus.values().filter(|p| p.level >= level - 1.0 && p.level <= level + 1.0 && crate::town::geom::contains(&p.pts, end)) {
+    for p in world.file.edits.plateaus.values().filter(|p| p.hill.is_none() && p.level >= level - 1.0 && p.level <= level + 1.0 && crate::town::geom::contains(&p.pts, end)) {
         for (i, &q0) in p.pts.iter().enumerate() {
             let q1 = p.pts[(i + 1) % p.pts.len()];
             let e = [q1[0] - q0[0], q1[1] - q0[1]];

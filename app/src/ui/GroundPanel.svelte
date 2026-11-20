@@ -2,8 +2,9 @@
   // Edit › Ground: the battlemap's ground raised, lowered, smoothed or put back by a brush, and
   // plateaus or pits drawn as loops (a castle on a cliff). A plateau chosen can be given another
   // level or edge, or taken away. Each stroke or change is one step to undo.
-  import type { Plateau } from '../gen/protocol';
+  import type { HillProfile, Plateau } from '../gen/protocol';
   import type { GroundMode, GroundSettings } from '../editor/ground';
+  import { changedHill, MAX_HILL_FT } from '../editor/hill';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
   import { foldOpen, setFold, shell } from './shell/layout.svelte';
@@ -32,10 +33,23 @@
     { key: 'smooth', label: 'Smooth', icon: 'relax', kbd: 'E', hint: 'Brush over bumps and steps to ease them toward the ground round them.' },
     { key: 'restore', label: 'Put back', icon: 'reset', kbd: 'R', hint: 'Brush to take brushed changes back toward the ground as generated (plateaus stay).' },
     { key: 'plateau', label: 'Plateau', icon: 'plateau', kbd: 'L', hint: 'Drag a loop round the ground: inside it becomes flat at the level shown. Start on a plateau to extend it.' },
-    { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a plateau or pit to change its level or edge, or take it away.' },
+    { key: 'hill', label: 'Hill', icon: 'mountain', kbd: 'H', hint: 'Drag out from a hill’s middle to its foot (a ridge: along its crest). It rises from the ground with natural slopes to the height below.' },
+    { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a plateau, pit or hill to change it, or take it away.' },
+  ];
+  const PROFILES: { key: HillProfile; label: string; title: string }[] = [
+    { key: 'round', label: 'Round', title: 'A round hill: smooth slopes all round' },
+    { key: 'ridge', label: 'Ridge', title: 'A ridge: a long crest along the drag' },
+    { key: 'knoll', label: 'Knoll', title: 'A rocky knoll: steep, with outcrops (cliff faces and scree)' },
+    { key: 'mountain', label: 'Mountain', title: 'A small mountain: concave slopes to a peak, bands of crag' },
   ];
   const hint = $derived(MODES.find((m) => m.key === settings.mode)?.hint ?? '');
-  const brush = $derived(settings.mode !== 'plateau' && settings.mode !== 'select');
+  const brush = $derived(settings.mode !== 'plateau' && settings.mode !== 'hill' && settings.mode !== 'select');
+  const hill = $derived(selected?.plateau.kind === 'hill' ? selected.plateau : null);
+  function changeHill(change: { profile?: HillProfile; peak?: number }) {
+    if (!selected || !hill) return;
+    const p = changedHill(hill, change);
+    if (typeof p !== 'string') onPlateau(selected.id, p);
+  }
   const ft = (v: number) => `${Math.round(v).toLocaleString('en')} ft`;
   const signed = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(Math.round(v))} ft`;
   const edgeLabel = (e: number) => (e ? `${e} ft slope` : 'Sheer');
@@ -118,8 +132,54 @@
           </label>
         </div>
       </details>
+    {:else if settings.mode === 'hill'}
+      <div class="ws-seg" role="radiogroup" aria-label="Profile">
+        {#each PROFILES as h (h.key)}
+          <button class:on={settings.hillProfile === h.key} aria-pressed={settings.hillProfile === h.key} onclick={() => (settings.hillProfile = h.key)} title={h.title}>{h.label}</button>
+        {/each}
+      </div>
+      <label class="ws-slider">
+        <span>Height</span><output>{settings.hillPeak} ft</output>
+        <input type="range" min="10" max={MAX_HILL_FT} step="5" bind:value={settings.hillPeak} />
+      </label>
+      <details class="ws-group" open={foldOpen('ground')} ontoggle={(e) => setFold('ground', e.currentTarget.open)}>
+        <summary>More options</summary>
+        <div class="ws-group-body">
+          {#if settings.hillProfile === 'ridge'}
+            <label class="ws-slider">
+              <span>Half-width</span><output>{settings.ridgeWidth} ft</output>
+              <input type="range" min="20" max="300" step="10" bind:value={settings.ridgeWidth} />
+            </label>
+          {:else}
+            <label class="ws-slider">
+              <span>Width across the drag</span><output>{Math.round(settings.hillAspect * 100)}%</output>
+              <input type="range" min="0.3" max="1" step="0.05" bind:value={settings.hillAspect} />
+            </label>
+          {/if}
+        </div>
+      </details>
     {/if}
-    {#if selected}
+    {#if selected && hill}
+      <section class="card" aria-label="Hill">
+        <div class="title">
+          <Icon name="mountain" size={16} />
+          <span class="ws-grow"><b>Hill</b><span class="ws-muted">&nbsp;· {size(hill)}</span></span>
+        </div>
+        <label class="ws-field">
+          Profile
+          <select class="ws-input" value={hill.hill?.profile ?? 'round'} onchange={(e) => changeHill({ profile: e.currentTarget.value as HillProfile })}>
+            {#each PROFILES as h (h.key)}<option value={h.key}>{h.title}</option>{/each}
+          </select>
+        </label>
+        <label class="ws-slider">
+          <span>Height</span><output>{Math.round(hill.level)} ft</output>
+          <input type="range" min="10" max={MAX_HILL_FT} step="5" value={hill.level} onchange={(e) => changeHill({ peak: Number(e.currentTarget.value) })} />
+        </label>
+        <div class="row">
+          <button class="ws-btn" onclick={onRemove} title="Take it away (Delete)"><Icon name="trash" size={16} /> Take away</button>
+        </div>
+      </section>
+    {:else if selected}
       <section class="card" aria-label="Plateau">
         <div class="title">
           <Icon name="plateau" size={16} />
@@ -194,7 +254,7 @@
   .lvl {
     width: 6em;
   }
-  /* Six tools side by side: each its icon over its word. */
+  /* Seven tools side by side: each its icon over its word. */
   .modes > button {
     flex-direction: column;
     gap: 0;

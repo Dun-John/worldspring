@@ -197,6 +197,23 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let moles = crate::town::harbour::raised_near(world, t0, shape_rect);
     let shaper = crate::ground::Shaper::with_extra(&world.file.edits, t0, &moles, shape_rect, SQUARE_FT);
     let (mut plat_w, mut moved) = if shaper.is_some() { (vec![0f32; HS * HS], vec![false; HS * HS]) } else { (Vec::new(), Vec::new()) };
+    // (Item 172: a hill raised by hand is natural ground, so its steep bands are cliff faces: the
+    // tile's samples raised by the hills for `cliff::marks`, each by its global lattice index.)
+    let cliff_pad: std::borrow::Cow<[f32]> = match shaper.as_ref().filter(|s| s.has_hills()) {
+        Some(s) => {
+            let half = SQUARE_FT * 0.5;
+            let (gx0, gy0) = (crate::core::round(ox / half) as i64 - HALO as i64, crate::core::round(oy / half) as i64 - HALO as i64);
+            let mut p = tile.padded.clone();
+            for r in 0..PADDED {
+                for c in 0..PADDED {
+                    let (x, y) = ((gx0 + c as i64) as f64 * half, (gy0 + r as i64) as f64 * half);
+                    p[r * PADDED + c] += crate::ground::soft_shift(s.hill_at(x, y)) as f32;
+                }
+            }
+            std::borrow::Cow::Owned(p)
+        }
+        None => std::borrow::Cow::Borrowed(tile.padded.as_slice()),
+    };
     // R5 M20: what the shaping makes of each halo square (an islet's rock, a quay's made ground;
     // empty when nothing here is either).
     let mut look_h = vec![crate::ground::Look::Ground; if shaper.as_ref().is_some_and(|s| s.has_looks()) { HS * HS } else { 0 }];
@@ -2221,7 +2238,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     };
     // Nothing generated stands on a cliff face (item 170): what did moves off it, and the guarantee
     // keeps off it (filling any gap the move left).
-    let faces = cliff::marks(&chunk, &tile.padded, &sidx);
+    let faces = cliff::marks(&chunk, &cliff_pad, &sidx);
     cliff::clear_faces(&mut chunk, &faces);
     let keep_off: Vec<bool> = (0..n)
         .map(|k| {
@@ -2468,7 +2485,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Nothing generated grows or stands on a dry ditch's floor (its sides and floor kept clear to read).
     chunk.objects.retain(|o| !dug.ditch[((o.y.max(0.0) as usize).min(SQ - 1) + 1) * HS + (o.x.max(0.0) as usize).min(SQ - 1) + 1]);
     // Cliff faces and scree (item 170) as the ground ended (`edges` below).
-    let cliffs = cliff::marks(&chunk, &tile.padded, &sidx);
+    let cliffs = cliff::marks(&chunk, &cliff_pad, &sidx);
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
     crate::town::rural::mark(&rural, ox, oy, &mut chunk.edges);

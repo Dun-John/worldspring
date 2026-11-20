@@ -11,6 +11,8 @@ import { PathTool, StampTool, defaultLasso, defaultRow, defaultStamp, type Lasso
 import { newObjectId } from '../scatter';
 import { sentence } from '../../ui/gazetteer';
 import { existingSite } from '../../world/world';
+import { castleHill } from '../hill';
+import { contains } from '../geom';
 import type { BuildHost } from './build.svelte';
 
 /** What the quick-placement tools read from Build. */
@@ -404,13 +406,24 @@ export function quickTools(app: BuildHost, host: QuickHost) {
     const all = { ...(app.edits.buildings ?? {}) };
     for (const b of spot.in_way) all[b.id] = { at: b.at, removed: true };
     const buildings = spot.in_way.length ? all : app.edits.buildings;
+    // (A hill raised under a castle: its own entry, chosen and taken away in Edit › Ground.)
+    let plateaus = app.edits.plateaus;
+    if (what === 'castle' && works.hill && c.poly?.length) {
+      const under = Object.values(plateaus ?? {}).some((p) => p.kind === 'hill' && contains(p.pts, c.x, c.y));
+      if (!under) {
+        const hid = newObjectId('h');
+        const h = castleHill(hid, c.poly as [number, number][]);
+        if (typeof h === 'string') app.toast(h);
+        else plateaus = { ...(plateaus ?? {}), [hid]: h };
+      }
+    }
     if (editing) {
       const created = (app.edits.created ?? []).map((x) => (x.id === c.id ? c : x));
-      app.applyEdits({ ...app.edits, created, buildings }, { tool: 'update_feature', id: c.id, name }, 'user');
+      app.applyEdits({ ...app.edits, created, buildings, ...(plateaus ? { plateaus } : {}) }, { tool: 'update_feature', id: c.id, name }, 'user');
     } else {
       // (Numbered as it is added: another site may have come in meanwhile.)
       c.id = `c:${(app.edits.created ?? []).length}`;
-      app.applyEdits({ ...app.edits, created: [...(app.edits.created ?? []), c], buildings }, { tool: 'create_feature', id: c.id, kind: what, name }, 'user');
+      app.applyEdits({ ...app.edits, created: [...(app.edits.created ?? []), c], buildings, ...(plateaus ? { plateaus } : {}) }, { tool: 'create_feature', id: c.id, kind: what, name }, 'user');
     }
     works.name = '';
   }
@@ -441,6 +454,8 @@ export function quickTools(app: BuildHost, host: QuickHost) {
       ruin: c.structure === 'ruin',
       closed: !!c.closed,
       name: '',
+      // (On while a hill stands under it; turned on, Save raises one.)
+      hill: Object.values(app.edits.plateaus ?? {}).some((p) => p.kind === 'hill' && contains(p.pts, c.x, c.y)),
     };
   }
 

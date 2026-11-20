@@ -36,6 +36,7 @@ pub fn props() -> Value {
         "closed": { "type": "boolean", "default": false, "description": "A wall's last corner joins its first (a ring)" },
         "snap": { "type": "boolean", "default": true, "description": "Snap to the 5-ft grid" },
         "remove_in_way": { "type": "boolean", "default": false, "description": "Take away the world's buildings in its way (else refused)" },
+        "raise_hill": { "type": "boolean", "default": false, "description": "A castle on a hill: adds a round hill (as set_hill; h:...) centred on it, 60 to 120 ft high with a flat crown wider than the castle, unless a hill already stands under its middle. delete_plateau takes the hill away." },
     })
 }
 
@@ -241,9 +242,28 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         reply["removed"] = json!(removed);
     }
 
+    // A hill raised under a castle (its own entry: undone or taken away like any hill).
+    let hill = if castle && a["raise_hill"].as_bool().unwrap_or(false) {
+        let key = crate::notebook::new_id("h");
+        Some((worldgen::ground::castle_hill(&key, &c.poly)?, key))
+    } else {
+        None
+    };
     let cid = c.id.clone();
     let change = app
         .edit("agent", 0, move |e| {
+            if let Some((p, key)) = hill {
+                let mid = [c.x, c.y];
+                let under = e.plateaus.iter().find(|(_, q)| q.hill.is_some() && worldgen::town::geom::contains(&q.pts, mid)).map(|(k, _)| k.clone());
+                match under {
+                    Some(k) => reply["hill"] = json!({ "id": k, "added": false }),
+                    None if e.plateaus.len() >= worldgen::ground::MAX_PLATEAUS => return Err(format!("a world holds at most {} plateaus and hills", worldgen::ground::MAX_PLATEAUS)),
+                    None => {
+                        reply["hill"] = json!({ "id": key, "added": true, "peak_ft": p.level, "radius_ft": p.hill.as_ref().map(|h| h.rx), "crown_ft": p.hill.as_ref().map(|h| h.crown) });
+                        e.plateaus.insert(key, p);
+                    }
+                }
+            }
             if creating {
                 if let Some(o) = e.existing_site(&c, at) {
                     return Ok(json!({ "existing": o.id }));

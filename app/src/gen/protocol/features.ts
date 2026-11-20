@@ -23,8 +23,25 @@ export interface Plateau {
   pts: [number, number][];
   level: number;
   edge?: number;
-  kind?: 'plateau' | 'islet';
+  kind?: 'plateau' | 'islet' | 'hill';
   floor?: 'rock' | 'ground';
+  /** A hill's form (`kind: 'hill'`: then `level` is its peak, ft over the ground). */
+  hill?: Hill;
+}
+
+export type HillProfile = 'round' | 'ridge' | 'knoll' | 'mountain';
+
+/** A hill raised by hand (`worldgen::ground::Hill`): its footprint's middle (world ft), half-axes
+ * (`rx` along `angle` degrees from east toward south; a ridge's crest runs along it), a flat
+ * crown's radius and its noise's seed. */
+export interface Hill {
+  profile: HillProfile;
+  at: [number, number];
+  rx: number;
+  ry: number;
+  angle?: number;
+  crown?: number;
+  seed: number;
 }
 
 export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat' | 'stream';

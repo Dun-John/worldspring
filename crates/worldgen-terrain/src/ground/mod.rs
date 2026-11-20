@@ -22,7 +22,10 @@ use crate::core::geom;
 
 pub use crate::model::ground::*;
 
+pub mod hill;
 pub mod wharf;
+
+pub use hill::{castle_hill, footprint_bounds, hill_for};
 
 // ---- evaluation ----
 
@@ -87,6 +90,8 @@ pub struct Shaper<'a> {
     /// Water drawn by hand meeting the rectangle (`waters`), and the bank's least width.
     waters: Vec<crate::waters::Near>,
     band: f64,
+    /// Hills meeting the rectangle (`hill`).
+    hills: Vec<hill::Near>,
 }
 
 impl<'a> Shaper<'a> {
@@ -141,8 +146,18 @@ impl<'a> Shaper<'a> {
             }
         }
         let mut plats: Vec<(std::borrow::Cow<str>, Kept)> = Vec::new();
+        let mut hills = Vec::new();
         for (k, p) in &edits.plateaus {
             if !usable(p) {
+                continue;
+            }
+            if p.kind == PlateauKind::Hill {
+                if let Some(h) = hill::Near::of(p)
+                    && near(h.b, spacing)
+                {
+                    grow(h.b);
+                    hills.push(h);
+                }
                 continue;
             }
             let b = bbox(&p.pts);
@@ -201,17 +216,27 @@ impl<'a> Shaper<'a> {
         if let Some(b) = crate::waters::bounds(&waters) {
             grow(b);
         }
-        if !any && plats.is_empty() && waters.is_empty() {
+        if !any && plats.is_empty() && waters.is_empty() && hills.is_empty() {
             return None;
         }
         let (order, steps) = stack(edits, &plats);
-        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.1).collect(), order, steps, reach, waters, band: spacing })
+        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.1).collect(), order, steps, reach, waters, band: spacing, hills })
     }
 
     /// Where the shaping it holds can change the ground (world ft: x0, y0, x1, y1); outside it
     /// every point is the ground as given.
     pub fn reach(&self) -> [f64; 4] {
         self.reach
+    }
+
+    /// The hills' height at a point (ft over the ground, before `soft_shift`).
+    pub fn hill_at(&self, x: f64, y: f64) -> f64 {
+        self.hills.iter().map(|h| h.height(x, y)).sum()
+    }
+
+    /// Whether any hill meets what it covers.
+    pub fn has_hills(&self) -> bool {
+        !self.hills.is_empty()
     }
 
     /// The brushed change of global square (gx, gy), ft.
@@ -306,7 +331,7 @@ impl<'a> Shaper<'a> {
                 };
             }
         }
-        h += d.clamp(-MAX_SHIFT_FT, MAX_SHIFT_FT);
+        h += soft_shift(if self.hills.is_empty() { d } else { d + self.hill_at(x, y) });
         // Ground that was dry stays above the water by it (raising wet ground makes land).
         if g >= hw {
             h = h.max(g0.min(hw as f64 + 0.5));
@@ -394,7 +419,7 @@ fn usable(p: &Plateau) -> bool {
 /// deeper one neither.
 fn stack(edits: &crate::world::Edits, plats: &[(std::borrow::Cow<str>, Kept)]) -> (Vec<u16>, Vec<Step>) {
     let hand: Vec<(&str, &[[f64; 2]], [f64; 4])> =
-        edits.plateaus.iter().filter(|(_, p)| usable(p)).map(|(k, p)| (k.as_str(), p.pts.as_slice(), bbox(&p.pts))).filter(|(_, _, b)| b[2] - b[0] <= MAX_PLATEAU_SPAN_FT && b[3] - b[1] <= MAX_PLATEAU_SPAN_FT).collect();
+        edits.plateaus.iter().filter(|(_, p)| usable(p) && p.kind != PlateauKind::Hill).map(|(k, p)| (k.as_str(), p.pts.as_slice(), bbox(&p.pts))).filter(|(_, _, b)| b[2] - b[0] <= MAX_PLATEAU_SPAN_FT && b[3] - b[1] <= MAX_PLATEAU_SPAN_FT).collect();
     let depth = |k: &str, p: &Kept| -> usize {
         hand.iter()
             .filter(|(hk, pts, b)| *hk != k && b[0] <= p.b[0] && b[1] <= p.b[1] && b[2] >= p.b[2] && b[3] >= p.b[3] && p.pts.iter().all(|q| geom::contains(pts, *q)))
@@ -593,6 +618,7 @@ pub fn plateau_for(outline: &[[f64; 2]], level: f64, edge: f64) -> Result<Platea
         edge: edge.clamp(0.0, MAX_EDGE_FT as f64) as f32,
         kind: PlateauKind::Plateau,
         floor: None,
+        hill: None,
     };
     match p.problem() {
         Some(e) => Err(e),
@@ -644,7 +670,7 @@ pub fn islet_for_fine(key: &str, at: [f64; 2], radius_ft: f64, rise_ft: f64, t0:
         return Err(format!("at: the water there is {depth:.0} ft deep: at most {ISLET_MAX_DEPTH_FT:.0}"));
     }
     let pts = islet_ring(stream(0x15_1e7, key), at, radius_ft);
-    let p = Plateau { pts, level: (crate::core::round((water as f64 + rise_ft) * 10.0) * 0.1) as f32, edge: ISLET_EDGE_FT, kind: PlateauKind::Islet, floor: None };
+    let p = Plateau { pts, level: (crate::core::round((water as f64 + rise_ft) * 10.0) * 0.1) as f32, edge: ISLET_EDGE_FT, kind: PlateauKind::Islet, floor: None, hill: None };
     match p.problem() {
         Some(e) => Err(e),
         None => Ok(p),

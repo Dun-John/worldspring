@@ -204,6 +204,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['E', 'smooth', 'Smooth'],
     ['R', 'restore', 'Put back (Restore)'],
     ['L', 'plateau', 'Plateau (drag a loop)'],
+    ['H', 'hill', 'Hill (drag out its footprint)'],
     ['V', 'select', 'Choose a plateau'],
   ];
   for (const [key, m, label] of ground) out.push({ keys: [key], label, group: 'Ground', when: edit('ground'), run: () => k.groundMode(m) });

@@ -29,9 +29,12 @@ export interface WorksSettings {
   closed: boolean;
   /** '' named for the place. */
   name: string;
+  /** A castle: raise a round hill under it (a hill of its own in `Edits.plateaus`, unless one
+   * stands under its middle already). */
+  hill: boolean;
 }
 
-export const defaultWorks = (): WorksSettings => ({ castleShape: 'rect', keep: true, keepShape: 'auto', moat: 'auto', yardBuildings: true, ruin: false, closed: false, name: '' });
+export const defaultWorks = (): WorksSettings => ({ castleShape: 'rect', keep: true, keepShape: 'auto', moat: 'auto', yardBuildings: true, ruin: false, closed: false, name: '', hill: false });
 
 /** A castle's gates, its sides (`gate` first, then `gates`, as `Created::castle_gates`). */
 export function castleGates(c: Created): number[] {

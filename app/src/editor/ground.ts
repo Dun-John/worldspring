@@ -7,7 +7,8 @@
 // A brush square takes the strongest touch of its stroke, so scrubbing back and forth doesn't
 // pile up; the values written are what `worldgen::ground::stamp_brush` would write for the same
 // touches. A loop's level is the plateau's it starts on, else the ground there plus the offset.
-import type { Edits, Plateau } from '../gen/protocol';
+import type { Edits, HillProfile, Plateau } from '../gen/protocol';
+import { hillFor, hillOutline, softShift } from './hill';
 import type { Camera } from '../render/camera';
 import { SQUARE_FT } from '../render/scale';
 import type { Graphics } from 'pixi.js';
@@ -16,7 +17,7 @@ import { added, BLOCK, blockKey, encode, MAX_ADD, MAX_BLOCKS, MAX_EDGE_FT, MAX_P
 import { newObjectId } from './scatter';
 import { contains, segDistXY as segDist } from './geom';
 
-export type GroundMode = 'raise' | 'lower' | 'smooth' | 'restore' | 'plateau' | 'select';
+export type GroundMode = 'raise' | 'lower' | 'smooth' | 'restore' | 'plateau' | 'hill' | 'select';
 export type Brush = 'raise' | 'lower' | 'smooth' | 'restore';
 
 export interface GroundSettings {
@@ -33,9 +34,24 @@ export interface GroundSettings {
   offset: number;
   /** Plateau: its edge (ft; 0 a sheer cliff). */
   edge: number;
+  /** Hill: its profile, its peak over the ground (ft), its footprint's width across the drag
+   * (0.3 to 1 of its length; a ridge: its half-width, ft). */
+  hillProfile: HillProfile;
+  hillPeak: number;
+  hillAspect: number;
+  ridgeWidth: number;
 }
 
-export const defaultGround = (): GroundSettings => ({ mode: 'raise', radius: 15, height: 5, hardness: 0.5, strength: 0.5, offset: 10, edge: 0 });
+export const defaultGround = (): GroundSettings => ({ mode: 'raise', radius: 15, height: 5, hardness: 0.5, strength: 0.5, offset: 10, edge: 0, hillProfile: 'round', hillPeak: 60, hillAspect: 1, ridgeWidth: 80 });
+
+/** A hill's footprint from a drag from `a` to `b` (world ft): from its middle out to its rim
+ * (a ridge: along its crest), as `hillFor` takes it. */
+export function hillDrag(s: GroundSettings, a: [number, number], b: [number, number]): { at: [number, number]; rx: number; ry: number; angle: number } {
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+  if (s.hillProfile === 'ridge') return { at: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], rx: len / 2 + s.ridgeWidth, ry: s.ridgeWidth, angle };
+  return { at: a, rx: len, ry: len * Math.max(0.3, Math.min(1, s.hillAspect)), angle };
+}
 
 export const MAX_PLATEAUS = 256;
 
@@ -180,6 +196,8 @@ export class GroundTool implements PointerTool {
   private last: [number, number] | null = null;
   /** A loop being drawn, and the level it will have. */
   private loop: { pts: [number, number][]; level: number; on: string | null } | null = null;
+  /** A hill being dragged out: from its middle (a ridge: one end) to the pointer. */
+  private drag: { a: [number, number]; b: [number, number] } | null = null;
   private at: [number, number] | null = null;
   /** Select: the plateau under the pointer. */
   private under: string | null = null;
@@ -192,7 +210,7 @@ export class GroundTool implements PointerTool {
 
   private brush(): Brush | null {
     const m = this.host.settings().mode;
-    return m === 'plateau' || m === 'select' ? null : m;
+    return m === 'plateau' || m === 'hill' || m === 'select' ? null : m;
   }
 
   /** The plateau at a point: the smallest holding it, else one whose outline is within `near` ft. */
@@ -213,7 +231,8 @@ export class GroundTool implements PointerTool {
   private levelAt(x: number, y: number): { level: number; on: string | null } | null {
     const on = this.plateauAt(x, y);
     const p = on ? this.host.edits().plateaus?.[on] : null;
-    if (p) return { level: p.level, on };
+    // (A hill's level is its peak over the ground: a loop on it starts from the ground.)
+    if (p && p.kind !== 'hill') return { level: p.level, on };
     const g = this.host.ground(Math.floor(x / SQUARE_FT), Math.floor(y / SQUARE_FT));
     return g ? { level: g[0] + this.host.settings().offset, on: null } : null;
   }
@@ -237,15 +256,25 @@ export class GroundTool implements PointerTool {
     }
     this.host.ring(at[0], at[1], this.brush() ? s.radius : null);
     if (s.mode === 'plateau') this.levelChip(at[0], at[1]);
+    else if (s.mode === 'hill') this.hillChip(at[0], at[1]);
     else if (s.mode === 'select') this.selectChip(at[0], at[1]);
     else this.host.chip(0, 0, null);
+  }
+
+  private hillChip(x: number, y: number) {
+    const s = this.host.settings();
+    const r = 12 / this.host.ppf();
+    if (!this.drag) return this.host.chip(x + r, y + r, `${s.hillPeak} ft high · drag ${s.hillProfile === 'ridge' ? 'along its crest' : 'out from its middle'}`);
+    const f = hillDrag(s, this.drag.a, this.drag.b);
+    this.host.chip(x + r, y + r, `${s.hillPeak} ft high · ${Math.round(2 * f.rx)} × ${Math.round(2 * f.ry)} ft`);
   }
 
   private selectChip(x: number, y: number) {
     this.under = this.plateauAt(x, y, 6 / this.host.ppf());
     const p = this.under ? this.host.edits().plateaus?.[this.under] : null;
     const r = 12 / this.host.ppf();
-    this.host.chip(x + r, y + r, p ? `Level ${above(p.level, this.host.sea())}${this.under === this.host.selected() ? '' : ' · click to choose'}` : null);
+    const what = p?.kind === 'hill' ? `Hill ${Math.round(p.level)} ft high` : p ? `Level ${above(p.level, this.host.sea())}` : '';
+    this.host.chip(x + r, y + r, p ? `${what}${this.under === this.host.selected() ? '' : ' · click to choose'}` : null);
   }
 
   down(x: number, y: number, e: PointerEvent): boolean {
@@ -254,6 +283,15 @@ export class GroundTool implements PointerTool {
     this.at = [x, y];
     // (Choose picks by a tap: a drag pans the map.)
     if (s.mode === 'select') return false;
+    if (s.mode === 'hill') {
+      if (Object.keys(this.host.edits().plateaus ?? {}).length >= MAX_PLATEAUS) {
+        this.host.hint(`This world has as many plateaus and hills as it can hold (${MAX_PLATEAUS})`);
+        return true;
+      }
+      this.drag = { a: [x, y], b: [x, y] };
+      this.hillChip(x, y);
+      return true;
+    }
     if (s.mode === 'plateau') {
       const l = this.levelAt(x, y);
       if (!l) {
@@ -277,6 +315,7 @@ export class GroundTool implements PointerTool {
   }
 
   move(x: number, y: number, e: PointerEvent) {
+    if (this.drag) this.drag.b = [x, y];
     this.hover(x, y);
     if (this.loop) {
       const q = this.loop.pts[this.loop.pts.length - 1];
@@ -313,6 +352,17 @@ export class GroundTool implements PointerTool {
       this.refresh();
     }
     const s = this.host.settings();
+    if (this.drag) {
+      const { a } = this.drag;
+      this.drag = null;
+      const f = hillDrag(s, a, [x, y]);
+      const id = newObjectId('h');
+      const p = hillFor(id, s.hillProfile, f.at, f.rx, f.ry, f.angle, s.hillPeak);
+      if (typeof p === 'string') return this.host.hint(p);
+      this.host.commit({}, { [id]: p }, { tool: 'set_hill' });
+      this.host.select(id);
+      return;
+    }
     if (this.loop) {
       const loop = this.loop;
       this.loop = null;
@@ -346,6 +396,7 @@ export class GroundTool implements PointerTool {
   cancel() {
     this.touch = null;
     this.loop = null;
+    this.drag = null;
     this.last = null;
     if (this.previewing) {
       this.previewing = false;
@@ -355,7 +406,7 @@ export class GroundTool implements PointerTool {
 
   /** Escape: a stroke or loop under way is dropped, then the chosen plateau let go. */
   escape(): boolean {
-    if (this.touch || this.loop) {
+    if (this.touch || this.loop || this.drag) {
       this.cancel();
       return true;
     }
@@ -371,6 +422,7 @@ export class GroundTool implements PointerTool {
   dispose() {
     this.touch = null;
     this.loop = null;
+    this.drag = null;
     this.at = null;
     this.host.ring(0, 0, null);
     this.host.chip(0, 0, null);
@@ -422,7 +474,7 @@ export class GroundTool implements PointerTool {
       const d = added(e.ground, gx, gy);
       const next = this.value(brush, s, gx, gy, f, d, touch);
       if (next === null) return null;
-      const out = h + (next - d);
+      const out = h + (softShift(next) - softShift(d));
       // Ground that is dry stays above the water by it.
       return h >= water ? Math.max(out, Math.min(h, water + 0.5)) : out;
     });
@@ -548,6 +600,16 @@ export class GroundTool implements PointerTool {
       const lit = !on && id === this.under && this.host.settings().mode === 'select';
       line(pts, true, on ? 4 : 3, 0x1c1917, on ? 0.55 : 0.35);
       line(pts, true, on ? 2 : 1.2, on || lit ? 0xfde047 : 0xf5efe0, on ? 0.95 : lit ? 0.9 : 0.6);
+    }
+    if (this.drag) {
+      const s = this.host.settings();
+      const f = hillDrag(s, this.drag.a, this.drag.b);
+      if (f.rx >= 5) {
+        const pts = hillOutline(s.hillProfile, f.at, f.rx, f.ry, f.angle);
+        line(pts, true, 3.5, 0x1c1917, 0.45);
+        line(pts, true, 1.6, 0xfde047, 0.95);
+        line([this.drag.a, this.drag.b], false, 1, 0xfde047, 0.6);
+      }
     }
     if (this.loop && this.loop.pts.length > 1) {
       const pts = this.at ? [...this.loop.pts, this.at] : this.loop.pts;

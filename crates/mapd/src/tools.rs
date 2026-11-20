@@ -127,7 +127,7 @@ const DESTRUCTIVE: &[&str] = &[
 /// `focus_view` and the creates that return what is already there.
 const IDEMPOTENT: &[&str] = &[
     "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_building_row", "create_parcel", "update_parcel", "create_npc",
-    "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "restore_islets", "update_water", "place_path", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
+    "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "set_hill", "restore_islets", "update_water", "place_path", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
 ];
 
 /// A tool's hints by name, one table for every tool (so a tool in any module gets them): reads say `readOnlyHint` and

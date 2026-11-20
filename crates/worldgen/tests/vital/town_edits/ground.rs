@@ -3,7 +3,8 @@
 use super::*;
 
 /// Ground shaped by hand (`Edits.ground`, `Edits.plateaus`) at the largest settlement: a sheer
-/// plateau across a chunk corner and a mound brushed across a chunk edge. The four chunks agree at
+/// plateau across a chunk corner, a mound brushed across a chunk edge and a rocky hill (item 172)
+/// across the northern chunks' edge. The four chunks agree at
 /// their seams bit for bit; the plateau's top is flat at its level on the drawn ground (leaving
 /// out roads, buildings, plaza features, walls and towers); lowering a dry shore (by brush and by
 /// a pit) leaves every dry square dry; terrain samples never see the edits; the edits survive a
@@ -64,6 +65,8 @@ pub(in super::super) fn ground_edits(base: &World) {
     let plateau = ground::plateau_for(&outline, level as f64, 0.0).expect("the plateau");
     let mut e = pinned.clone();
     e.plateaus.insert("h:test".into(), plateau);
+    let (hill_at, peak) = ([corner[0], corner[1] - 260.0], 80.0);
+    e.plateaus.insert("h:hill".into(), ground::hill_for("h:hill", ground::HillProfile::Knoll, hill_at, 150.0, 120.0, 30.0, peak, 0.0).expect("the hill"));
     // The mound: on the edge between the southern two, where both sides have open dry ground.
     let open = |c: &Chunk, k: &TileKey, at: [f64; 2]| -> Vec<usize> {
         (0..SQ * SQ).filter(|&k2| geom_dist(centre(k, k2 % SQ, k2 / SQ), at) < 20.0 && c.building[k2] == 0 && c.water_level[k2] <= c.height[k2]).collect()
@@ -115,6 +118,12 @@ pub(in super::super) fn ground_edits(base: &World) {
     ring(&shaped[2].1, &shaped[3].1, true);
     ring(&shaped[0].1, &shaped[2].1, false);
     ring(&shaped[1].1, &shaped[3].1, false);
+    // The hill stands, on both sides of the edge.
+    for q in [0, 1] {
+        let near: Vec<usize> = (0..SQ * SQ).filter(|&k2| geom_dist(centre(&keys[q], k2 % SQ, k2 / SQ), hill_at) < 30.0).collect();
+        let rise = near.iter().map(|&k2| shaped[q].1.height[k2] - plain[q].1.height[k2]).sum::<f32>() / near.len().max(1) as f32;
+        assert!(!near.is_empty() && rise >= 0.6 * peak as f32, "no hill in chunk {:?} ({} squares, {rise} ft up)", keys[q], near.len());
+    }
     // The mound stands, on both sides of the edge.
     for q in [2, 3] {
         let (a, b) = (&plain[q].1, &shaped[q].1);

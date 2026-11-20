@@ -120,7 +120,10 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                 let b = bbox(&p.pts);
                 let mid = worldgen::town::geom::centroid(&p.pts);
                 if hits(mid, &p.pts) {
-                    let mut it = json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": round1(p.level as f64 - sea), "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts });
+                    let mut it = match &p.hill {
+                        Some(h) => json!({ "id": id, "what": "hill", "profile": h.profile, "peak_ft": p.level, "x_ft": h.at[0], "y_ft": h.at[1], "rx_ft": h.rx, "ry_ft": h.ry, "angle_deg": h.angle, "crown_ft": h.crown, "bbox": b.map(f64::round), "poly": p.pts }),
+                        None => json!({ "id": id, "what": if p.kind == ground::PlateauKind::Islet { "islet" } else { "plateau" }, "level_ft": round1(p.level as f64 - sea), "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts }),
+                    };
                     if let Some(f) = p.floor {
                         it["floor"] = json!(f.name());
                     }
