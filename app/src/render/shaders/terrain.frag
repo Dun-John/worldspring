@@ -42,6 +42,12 @@ const vec3 INK = vec3(0.20, 0.18, 0.16);
 const vec3 CONTOUR_INK = vec3(0.42, 0.33, 0.24);
 const vec3 SAND = vec3(0.90, 0.85, 0.68);
 const float SAMPLES = 257.0;
+// Cliff faces, as the battlemap's (`ground.frag`): the grade they start at and three matte tones
+// by the way the face looks (lit from the upper left).
+const float CLIFF_T = 1.2;
+const vec3 ROCK_LIT = vec3(0.58, 0.53, 0.45);
+const vec3 ROCK_MID = vec3(0.49, 0.45, 0.39);
+const vec3 ROCK_SHADE = vec3(0.39, 0.36, 0.32);
 const float COAST_ENCODE_FT = 250000.0;
 
 const vec3 PALETTE[19] = vec3[19](
@@ -245,6 +251,8 @@ void main() {
     float coastFt = coastEnc * coastEnc * COAST_ENCODE_FT;
 
     float slope = length(g);
+    // How the grade changes per pixel (taken here, in uniform flow): the cliffs' top and foot.
+    vec2 dslope = vec2(dFdx(slope), dFdy(slope));
     // Pattern coordinates (cells) of both octaves, and their screen gradients (taken here, outside
     // any branch, for the tundra texture's reads under one).
     vec2 p0 = uPat0.xy + vLocal * uPat0.z;
@@ -269,17 +277,36 @@ void main() {
         if (beachy && above < 6.0 && slope < 0.08) col = mix(col, SAND, 1.0 - smoothstep(3.0, 6.0, above));
     }
 
-    // Cliff faces (Roadmap 7 item 170: risers of a few squares at the finest levels): matte rock,
-    // which the hillshade below lights or shades by the way the face looks.
-    float cliff = wet ? 0.0 : smoothstep(1.0, 1.6, slope);
-    col = mix(col, vec3(0.53, 0.49, 0.42), cliff * 0.85);
-
     // Hillshade, normalized so flat ground is 1.0; light from the north-west.
     vec3 n = normalize(vec3(-g * uExag, 1.0));
     vec3 L = normalize(vec3(-1.0, -1.0, 1.3));
     float lambert = dot(n, L) / L.z;
     float shade = wet ? mix(1.0, lambert, 0.1) : lambert;
     col *= clamp(mix(1.0, shade, 0.85), 0.3, 1.3);
+
+    // Cliff faces (Roadmap 7 item 170: risers of a few squares at the finest levels), drawn flat
+    // as the battlemap's: one matte rock tone by the way the face looks, an inked top where the
+    // grade crosses CLIFF_T going over the rim (convex) and a shadow just past the foot (concave),
+    // found from the grade's change per pixel (no extra height taps).
+    float cliff = wet ? 0.0 : smoothstep(0.9, 1.3, slope);
+    if (!wet) {
+        vec2 up = g / max(slope, 1e-6);
+        float facing = dot(-up, vec2(-0.7071));
+        vec3 rock = mix(mix(ROCK_MID, ROCK_LIT, smoothstep(0.14, 0.26, facing)), ROCK_SHADE, smoothstep(0.14, 0.26, -facing));
+        col = mix(col, rock, cliff * 0.92);
+        float dsl = length(dslope);
+        if (dsl > 1e-3) {
+            float gap = abs(slope - CLIFF_T) / dsl;
+            float ds = dot(dslope, up) / dsl;
+            // (Screen y runs down the map as the samples' y does.)
+            float sharp = smoothstep(0.08, 0.3, dsl);
+            if (ds < 0.0) {
+                col = mix(col, INK, (1.0 - smoothstep(1.4, 2.6, gap)) * 0.9 * smoothstep(0.3, 0.7, -ds) * sharp);
+            } else if (slope < CLIFF_T) {
+                col *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 4.0, gap)) * smoothstep(0.3, 0.7, ds) * sharp;
+            }
+        }
+    }
 
     // Map symbols, blended across two octaves; ecotones dither between the two biomes.
     if (!wet && uPatAlpha > 0.0) {
@@ -322,7 +349,7 @@ void main() {
             vec2 dir = normalize(g + 1e-9);
             float across = dot(p0 * 2.2, vec2(-dir.y, dir.x));
             float line = 1.0 - smoothstep(0.0, aa0 * 2.2, abs(fract(across) - 0.5) - 0.34);
-            col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - 0.6 * cliff));
+            col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - cliff));
         }
     }
 
@@ -339,7 +366,7 @@ void main() {
         float line = 1.0 - smoothstep(w * fw, (w + 1.0) * fw, d);
         float room = 1.0 - smoothstep(0.12, 0.3, fw);
         float sloped = smoothstep(5e-5, 2e-4, slope);
-        col = mix(col, CONTOUR_INK, line * room * sloped * mix(0.22, 0.45, isIndex));
+        col = mix(col, CONTOUR_INK, line * room * sloped * mix(0.22, 0.45, isIndex) * (1.0 - 0.8 * cliff));
     }
 
     // Coast ripples: evenly spaced ink lines offshore (sea only).

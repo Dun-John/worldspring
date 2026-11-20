@@ -396,7 +396,7 @@ impl Windows {
 /// by its own cell (global), and squares marked (on a plateau) get no knoll or built feature.
 /// `park`: the parks' squares (1 a common's, 2 a formal garden's; empty: none).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool], park: &[u8], bailey: &[u8]) {
+pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool], lodge: &[bool], park: &[u8], bailey: &[u8]) {
     let mut chunk_rng = Pcg32::new(hash3(seed, gsx, gsy, 0xe4f), 9);
     let keyed = !shaped.is_empty();
     let cell_rng = |phase: i64, x: i64, y: i64| Pcg32::new(hash3(seed, x, y, 0xe4f ^ (phase << 16)), 9);
@@ -575,13 +575,15 @@ pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: 
                     &mut chunk_rng
                 };
                 // On a road, put the cover on the nearest verge instead.
-                let (k, edge) = if !placeable(c, k) || keep_off[k] {
+                let (k, edge, lodged) = if !placeable(c, k) || keep_off[k] {
                     match nearest_verge(c, k, keep_off) {
-                        Some(v) => (v, false),
+                        Some(v) => (v, false, false),
                         // (In a park's gravel round, its nearest edge: a statue in a formal garden, a
                         // bench on a common, off the path's middle.)
                         None => match gravel_edge(c, k, park) {
-                            Some(v) => (v, true),
+                            Some(v) => (v, true, false),
+                            // (Mid-face on a broad cliff face, a boulder lodged there: `cliff`.)
+                            None if lodge.get(k).is_some_and(|&l| l) && placeable(c, k) => (k, false, true),
                             None => {
                                 given_up.push(k);
                                 continue;
@@ -589,9 +591,11 @@ pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: 
                         },
                     }
                 } else {
-                    (k, false)
+                    (k, false, false)
                 };
-                let kind = if edge { if in_park(k) & 3 == 2 { Kind::GardenStatue } else { Kind::Bench } } else { cover_kind(c, k, rng) };
+                let kind = if lodged {
+                    Kind::Boulder
+                } else if edge { if in_park(k) & 3 == 2 { Kind::GardenStatue } else { Kind::Bench } } else { cover_kind(c, k, rng) };
                 let before = c.objects.len();
                 if !push_at(c, kind, k, rng) {
                     given_up.push(k);

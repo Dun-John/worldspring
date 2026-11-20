@@ -4,6 +4,9 @@
 //! cells with both sides much higher); slope stats (max, 99th percentile on land); river cells
 //! that climb (must be 0); and tile seams (halo mismatches at a few levels over a canyon or the
 //! steepest lowland cell, must be 0).
+//! Battlemap cliffs in the 3 x 3 chunks round the first of the steepest risers that has faces
+//! (its fx / fy printed for QA): faces, scree, mean width, things on faces (must be 0; boulders
+//! the guarantee lodged mid-face apart). `FACEDBG=1` lists them, `LEVELDBG=1` the grade per level.
 //! `cargo run --release -p worldgen --example landformcheck -- [seeds]`   (`RUG=0.5,1,2`)
 
 use worldgen::core::tile::{HALO, TILE_N, TileKey};
@@ -25,10 +28,10 @@ fn main() {
             let (world_w, world_h) = (world.geom.map_w_ft, world.geom.map_h_ft);
             let t0 = T0::generate(&world);
             let s = stats(&world, &t0);
-            let (seams, fine, town_slope, cl) = seams(world, s.probe, &s.edge_towns);
+            let (seams, fine, town_slope, cl, at) = seams(world, s.probe, &s.risers, &s.edge_towns);
             println!(
-                "rug {rug:.1} seed {seed}: plateaus {} mesas {} escarpments {} canyons {} terraced {:.1}% | slope max {:.2} p99 {:.3} | climbs {} shore below lake {} | towns by a riser {}/{} (steepest within their pads {town_slope:.2}) | seam mismatches {seams} | battlemap 3x3 at the riser: faces {} scree {} steeper than 2 {} mean face width {:.1} sq, things on faces {} | fine slope at a riser {fine:.2} (at {:.3},{:.3} of the map)",
-                s.plateaus, s.mesas, s.scarps, s.canyons, 100.0 * s.terraced, s.max_slope, s.p99, s.climbs, s.shore, s.edge_towns.len(), s.towns, cl[0], cl[1], cl[2], cl[3] as f64 / cl[0].max(1) as f64, cl[4], s.probe.0 / world_w, s.probe.1 / world_h
+                "rug {rug:.1} seed {seed}: plateaus {} mesas {} escarpments {} canyons {} terraced {:.1}% | slope max {:.2} p99 {:.3} | climbs {} shore below lake {} | towns by a riser {}/{} (steepest within their pads {town_slope:.2}) | seam mismatches {seams} | battlemap 3x3 at the riser: faces {} scree {} steeper than 2 {} mean face width {:.1} sq, things on faces {} (boulders lodged {}) | fine slope at a riser {fine:.2} (battlemap probe fx {:.6} fy {:.6} of the map)",
+                s.plateaus, s.mesas, s.scarps, s.canyons, 100.0 * s.terraced, s.max_slope, s.p99, s.climbs, s.shore, s.edge_towns.len(), s.towns, cl[0], cl[1], cl[2], cl[3] as f64 / cl[0].max(1) as f64, cl[4], cl[5], at.0 / world_w, at.1 / world_h
             );
             for (t, v) in tot.iter_mut().zip([s.plateaus, s.mesas, s.scarps, s.canyons, s.climbs, seams]) {
                 *t += v;
@@ -49,6 +52,8 @@ struct Stats {
     /// Dry land beside a lake lower than its surface.
     shore: usize,
     probe: (f64, f64),
+    /// The steepest terraced cells, apart: where the battlemap probe looks for cliff faces.
+    risers: Vec<(f64, f64)>,
     terraced: f64,
     edge_towns: Vec<(f64, f64, f64)>,
     towns: usize,
@@ -192,6 +197,18 @@ fn stats(world: &World, t0: &T0) -> Stats {
     // The steepest terraced cell (a riser), where refined levels step the ground into cliffs.
     let riser = (0..w * h).filter(|&k| land[k] && !t0.landform.data.is_empty()).max_by(|&a, &b| (t0.landform.data[a] as f64 * slope[a]).total_cmp(&(t0.landform.data[b] as f64 * slope[b])));
     let k = riser.or(probe).unwrap_or(w * h / 2);
+    let mut order: Vec<usize> = (0..w * h).filter(|&k| land[k] && !t0.landform.data.is_empty() && t0.landform.data[k] > 0.0).collect();
+    order.sort_by(|&a, &b| (t0.landform.data[b] as f64 * slope[b]).total_cmp(&(t0.landform.data[a] as f64 * slope[a])));
+    let mut risers: Vec<usize> = Vec::new();
+    for c in order {
+        if risers.len() >= 12 {
+            break;
+        }
+        if risers.iter().all(|&r| ((r % w) as i64 - (c % w) as i64).abs().max(((r / w) as i64 - (c / w) as i64).abs()) >= 12) {
+            risers.push(c);
+        }
+    }
+    let risers = risers.iter().map(|&k| ((k % w) as f64 * t0.cell_ft, (k / w) as f64 * t0.cell_ft)).collect();
     // Settlements whose cell or a neighbour is a stepped riser (weight > 0.3, slope > 1 in 25).
     let riser_at = |k: usize| !t0.landform.data.is_empty() && t0.landform.data[k] > 0.3 && slope[k] > 0.04;
     let edge_towns: Vec<(f64, f64, f64)> = t0
@@ -204,12 +221,12 @@ fn stats(world: &World, t0: &T0) -> Stats {
         .map(|st| (st.x, st.y, worldgen::t0::radii::pad_extent(worldgen::t0::radii::reach(st))))
         .collect();
     let terraced = if t0.landform.data.is_empty() { 0.0 } else { (0..w * h).filter(|&k| land[k] && t0.landform.data[k] > 0.5).count() as f64 / land.iter().filter(|&&l| l).count() as f64 };
-    Stats { edge_towns, towns: t0.settlements.len(), terraced, plateaus, mesas, scarps, canyons, max_slope, p99, climbs, shore, probe: ((k % w) as f64 * t0.cell_ft, (k / w) as f64 * t0.cell_ft) }
+    Stats { risers, edge_towns, towns: t0.settlements.len(), terraced, plateaus, mesas, scarps, canyons, max_slope, p99, climbs, shore, probe: ((k % w) as f64 * t0.cell_ft, (k / w) as f64 * t0.cell_ft) }
 }
 
 /// Halo mismatches between a tile and its right / lower neighbours at a few levels round `at`,
 /// and the steepest ground in the tile there at the finest level stepped (~20 ft samples).
-fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64, f64, [usize; 5]) {
+fn seams(world: World, at: (f64, f64), risers: &[(f64, f64)], towns: &[(f64, f64, f64)]) -> (usize, f64, f64, [usize; 6], (f64, f64)) {
     let g = world.geom.clone();
     let mut ex = Executor::new(world);
     let (h, n) = (HALO as i64, TILE_N as i64);
@@ -232,19 +249,23 @@ fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64
     }
     let s = g.spacing_ft(fine);
     let size = g.tile_size_ft(fine);
-    let t = ex.terrain(TileKey::surface(fine, (at.0 / size) as u32, (at.1 / size) as u32)).padded.clone();
-    let mut steep = 0f64;
-    let mut riser = at;
-    let (fx, fy) = ((at.0 / size) as i64 as f64 * size, (at.1 / size) as i64 as f64 * size);
-    for j in 0..n {
-        for i in 0..n {
-            let (sx, sy) = ((t[padded_index(i + 1, j)] - t[padded_index(i, j)]) as f64 / s, (t[padded_index(i, j + 1)] - t[padded_index(i, j)]) as f64 / s);
-            let v = (sx * sx + sy * sy).sqrt();
-            if v > steep {
-                (steep, riser) = (v, (fx + (i as f64 + 0.5) * s, fy + (j as f64 + 0.5) * s));
+    // The steepest ground at that level in the tile round a point.
+    let steepest = |ex: &mut Executor, at: (f64, f64)| {
+        let t = ex.terrain(TileKey::surface(fine, (at.0 / size) as u32, (at.1 / size) as u32)).padded.clone();
+        let mut steep = 0f64;
+        let mut riser = at;
+        let (fx, fy) = ((at.0 / size) as i64 as f64 * size, (at.1 / size) as i64 as f64 * size);
+        for j in 0..n {
+            for i in 0..n {
+                let (sx, sy) = ((t[padded_index(i + 1, j)] - t[padded_index(i, j)]) as f64 / s, (t[padded_index(i, j + 1)] - t[padded_index(i, j)]) as f64 / s);
+                let v = (sx * sx + sy * sy).sqrt();
+                if v > steep {
+                    (steep, riser) = (v, (fx + (i as f64 + 0.5) * s, fy + (j as f64 + 0.5) * s));
+                }
             }
         }
-    }
+        (steep, riser)
+    };
     // Round up to six towns by a riser: the steepest ground within their pads at that level.
     let mut town_slope = 0f64;
     for &(x, y, e) in towns.iter().take(6) {
@@ -264,16 +285,47 @@ fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64
     // Battlemap cliffs (item 170) in the 3 x 3 chunks round the riser: face squares (hard going, not
     // scree), scree squares (`edges` bit 64), and squares steeper than 2 by their heights.
     // (Also the faces' mean width: per face square the shorter of its row and column runs.)
-    let mut cl = [0usize; 5];
+    // (The probe: the first of the steepest risers whose 3 x 3 chunks have faces.)
+    let (mut steep, mut riser, mut cl) = (0.0, at, [0usize; 6]);
+    for &p in std::iter::once(&at).chain(risers) {
+        let (st, r) = steepest(&mut ex, p);
+        let c = cliffs(&mut ex, &g, r);
+        if steep == 0.0 || c[0] > 0 {
+            (steep, riser, cl) = (st, r, c);
+        }
+        if c[0] > 0 {
+            break;
+        }
+    }
+    if std::env::var("LEVELDBG").is_ok() {
+        for level in g.first_refine_level..=g.max_level {
+            let (sp, size) = (g.spacing_ft(level), g.tile_size_ft(level));
+            let t = ex.terrain(TileKey::surface(level, (riser.0 / size) as u32, (riser.1 / size) as u32)).padded.clone();
+            let (i, j) = (((riser.0 % size) / sp) as i64, ((riser.1 % size) / sp) as i64);
+            let mut m = 0f64;
+            for dj in -3..=3 {
+                for di in -3..=3 {
+                    let (a, b) = ((i + di).clamp(0, n - 1), (j + dj).clamp(0, n - 1));
+                    let gx = (t[padded_index(a + 1, b)] - t[padded_index(a - 1, b)]) as f64 / (2.0 * sp);
+                    let gy = (t[padded_index(a, b + 1)] - t[padded_index(a, b - 1)]) as f64 / (2.0 * sp);
+                    m = m.max((gx * gx + gy * gy).sqrt());
+                }
+            }
+            println!("  level {level} spacing {sp} ft: steepest central grade near the probe {m:.2}");
+        }
+    }
+    (bad, steep, town_slope, cl, riser)
+}
+
+fn cliffs(ex: &mut Executor, g: &worldgen::core::tile::WorldGeom, riser: (f64, f64)) -> [usize; 6] {
+    let mut cl = [0usize; 6];
     let bsize = g.tile_size_ft(g.max_level);
     let (bx, by) = ((riser.0 / bsize) as i64, (riser.1 / bsize) as i64);
-    println!("  riser at {:.0},{:.0} ft", riser.0, riser.1);
     for dy in -1..=1 {
         for dx in -1..=1 {
             let c = ex.battlemap(TileKey::surface(g.max_level, (bx + dx).max(0) as u32, (by + dy).max(0) as u32));
             let sq = worldgen::battlemap::SQ;
             for k in 0..sq * sq {
-                cl[0] += (c.edges[k] & 64 == 0 && c.edges[k] & 16 != 0 && c.surface[k] == worldgen::battlemap::Surface::Rock) as usize;
                 cl[1] += (c.edges[k] & 64 != 0) as usize;
                 let (i, j) = (k % sq, k / sq);
                 if i + 1 < sq && j + 1 < sq {
@@ -300,14 +352,25 @@ fn seams(world: World, at: (f64, f64), towns: &[(f64, f64, f64)]) -> (usize, f64
                 n
             };
             // (Things standing on a face, which should be none: `cliff::clear_faces`.)
-            cl[4] += c.objects.iter().filter(|o| face((o.x.max(0.0) as usize).min(sq - 1), (o.y.max(0.0) as usize).min(sq - 1))).count();
+            for o in c.objects.iter().filter(|o| face((o.x.max(0.0) as usize).min(sq - 1), (o.y.max(0.0) as usize).min(sq - 1))) {
+                // (Boulders the guarantee lodged mid-face for cover are counted apart.)
+                if o.kind == worldgen::battlemap::Kind::Boulder {
+                    cl[5] += 1;
+                } else {
+                    cl[4] += 1;
+                }
+                if std::env::var("FACEDBG").is_ok() {
+                    println!("    on a face: {:?} at {:.1},{:.1} chunk {},{}", o.kind, o.x, o.y, bx + dx, by + dy);
+                }
+            }
             for k in 0..sq * sq {
                 let (i, j) = (k % sq, k / sq);
                 if face(i, j) {
+                    cl[0] += 1;
                     cl[3] += (run(i, j, 1, 0) + run(i, j, -1, 0) - 1).min(run(i, j, 0, 1) + run(i, j, 0, -1) - 1);
                 }
             }
         }
     }
-    (bad, steep, town_slope, cl)
+    cl
 }

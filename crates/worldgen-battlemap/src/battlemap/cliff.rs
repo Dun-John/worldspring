@@ -18,9 +18,14 @@ const SCREE_RISE: f32 = 6.0;
 const FACE_REACH: i64 = 8;
 /// The grade the chunk's own heights must still have on a face (made ground is flatter).
 const OWN_SLOPE: f64 = 0.6;
+/// `marks`' bit for a square drawn as a face that is not one (masked off `edges`).
+pub(super) const DRAWN: u8 = 128;
 
 /// The chunk's cliff faces and scree per square (`edges` bits 16, and 16 | 64) from the tile's
 /// samples (`sidx`: a square's centre sample, squares -2..=SQ + 1). Only open, dry, unbuilt ground.
+/// Also `DRAWN` (not an `edges` bit): open ground the drawing paints as a face, steep by the chunk's
+/// own heights, on natural slopes too steep to have been made, though its samples' finer grade
+/// is below a face's (a riser's shoulder): kept clear like a face, not hard going.
 pub(super) fn marks(c: &Chunk, padded: &[f32], sidx: &dyn Fn(i64, i64) -> usize) -> Vec<u8> {
     let mut out = vec![0u8; SQ * SQ];
     let m = SQ as i64 + 2 * SCREE_SQ;
@@ -28,20 +33,24 @@ pub(super) fn marks(c: &Chunk, padded: &[f32], sidx: &dyn Fn(i64, i64) -> usize)
     let mut face = vec![false; (m * m) as usize];
     let mut h = vec![0f32; (m * m) as usize];
     let mut made_sq = vec![false; (m * m) as usize];
+    let mut drawn = vec![false; (m * m) as usize];
     for j in -SCREE_SQ..SQ as i64 + SCREE_SQ {
         for i in -SCREE_SQ..SQ as i64 + SCREE_SQ {
             let s = sidx(i, j);
             let (gx, gy) = ((padded[s + 1] - padded[s - 1]) as f64 / 5.0, (padded[s + PADDED] - padded[s - PADDED]) as f64 / 5.0);
             // (Ground the chunk made itself, a quay, a castle's mound, a building's pad, is no face
             // and gets no scree: the chunk's own heights, its halo included, must be steep too.)
+            let mut own = 0.0;
             let made = (0..SQ as i64).contains(&i) && (0..SQ as i64).contains(&j) && {
                 let hh = |di: i64, dj: i64| {
                     let (a, b) = (i + di, j + dj);
                     (if (0..SQ as i64).contains(&a) && (0..SQ as i64).contains(&b) { c.height[b as usize * SQ + a as usize] } else { c.halo_height[(b + 1) as usize * HS + (a + 1) as usize] }) as f64
                 };
                 let (cx, cy) = ((hh(1, 0) - hh(-1, 0)) / (2.0 * SQUARE_FT), (hh(0, 1) - hh(0, -1)) / (2.0 * SQUARE_FT));
-                cx * cx + cy * cy < OWN_SLOPE * OWN_SLOPE
+                own = cx * cx + cy * cy;
+                own < OWN_SLOPE * OWN_SLOPE
             };
+            drawn[at(i, j)] = own >= CLIFF_SLOPE * CLIFF_SLOPE && gx * gx + gy * gy >= OWN_SLOPE * OWN_SLOPE;
             face[at(i, j)] = !made && gx * gx + gy * gy >= CLIFF_SLOPE * CLIFF_SLOPE;
             made_sq[at(i, j)] = made && gx * gx + gy * gy >= CLIFF_SLOPE * CLIFF_SLOPE;
             h[at(i, j)] = padded[s];
@@ -62,18 +71,25 @@ pub(super) fn marks(c: &Chunk, padded: &[f32], sidx: &dyn Fn(i64, i64) -> usize)
             let scree = (-SCREE_SQ..=SCREE_SQ).any(|dy| (-SCREE_SQ..=SCREE_SQ).any(|dx| face[at(i + dx, j + dy)] && h[at(i + dx, j + dy)] >= h[own] + SCREE_RISE));
             if scree {
                 out[k] = 16 | 64;
+            } else if drawn[own] {
+                out[k] = DRAWN;
             }
         }
     }
     out
 }
 
-/// Nothing generated stands on a face: each object there moves to the nearest square off it (open,
-/// dry ground, its foot or its top), keeping its cover; with none within reach, cover becomes a
-/// boulder and the rest goes. (Run before the guarantee, which keeps off faces and fills any gap
-/// this leaves.)
+/// Whether a square of `marks` is kept clear: a face, or drawn as one.
+pub(super) fn keep_clear(m: u8) -> bool {
+    m == 16 || m == DRAWN
+}
+
+/// Nothing generated stands on a face (or what is drawn as one): each object there moves to the nearest square off it (open,
+/// dry ground, its foot or its top), keeping its cover; with none within reach it goes. (Run
+/// before the guarantee, which keeps off faces and fills any gap this leaves, mid-face on a broad
+/// one with a boulder lodged there, its `lodge` squares.)
 pub(super) fn clear_faces(c: &mut Chunk, marks: &[u8]) {
-    let face = |k: usize| marks[k] == 16;
+    let face = |k: usize| keep_clear(marks[k]);
     let mut gone = vec![false; c.objects.len()];
     for n in 0..c.objects.len() {
         let o = c.objects[n];
@@ -95,8 +111,6 @@ pub(super) fn clear_faces(c: &mut Chunk, marks: &[u8]) {
         });
         match spot {
             Some(m) => c.objects[n] = m,
-            // (Mid-face on a broad one: cover becomes a boulder lodged there, the rest goes.)
-            None if info(o.kind as u16).cover >= 1 => c.objects[n] = Object { kind: Kind::Boulder, variant: 0, scale: o.scale.min(1.0), ..o },
             None => gone[n] = true,
         }
     }

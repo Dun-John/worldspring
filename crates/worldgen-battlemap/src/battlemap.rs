@@ -2228,7 +2228,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
             let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR);
             let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
-            faces[k] == 16
+            cliff::keep_clear(faces[k])
                 || (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy)))
                 || in_gate(p, 2.5)
                 || features.iter().any(|f| crate::town::geom::dist(p, f.0) < f.1 + 4.0)
@@ -2325,7 +2325,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
-    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &park, &bailey);
+    let lodge: Vec<bool> = faces.iter().map(|&m| cliff::keep_clear(m)).collect();
+    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &lodge, &park, &bailey);
     // R5 towns (114): a steppe town's stone daises (its squares', a horse park's, the guarantee's
     // there) are banks of earth trodden by hooves (`PlazaFeature::Mound`).
     if steppe_any && steppe_all {
@@ -2473,7 +2474,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     crate::town::rural::mark(&rural, ox, oy, &mut chunk.edges);
     soft_relief::flag(&mut chunk.edges, &soft, &crag_h, &crag_m);
     for (e, &m) in chunk.edges.iter_mut().zip(&cliffs) {
-        *e |= m;
+        *e |= m & !cliff::DRAWN;
     }
     for k in 0..n {
         let h = (k / SQ + 1) * HS + k % SQ + 1;
