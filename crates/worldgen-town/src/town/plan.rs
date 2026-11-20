@@ -308,6 +308,13 @@ pub(super) fn voronoi(sites: &[P], boundary: &[P]) -> Vec<Labeled> {
 const CASTLE_MIN_AREA: f64 = 20_000.0;
 const CASTLE_MIN_SHORT: f64 = 120.0;
 const WALL_BIAS_FT: f64 = -0.4;
+/// (171) A citadel's spur: the ring round a patch its foot is sampled on (ft beyond its farthest
+/// corner, rays), how far over that foot a patch stands to be one (ft), and how much its height
+/// over the foot counts beside its height.
+const SPUR_OUT_FT: f64 = 120.0;
+const SPUR_RAYS: usize = 12;
+const SPUR_MIN_FT: f64 = 5.0;
+const SPUR_WEIGHT: f64 = 3.0;
 
 /// Water (the sea, a lake or a river's channel) on a patch side from `a` to `b` or beyond it, away
 /// from `inside` (its patch's middle): at two neighbouring points of those every 15 ft out to 120 ft
@@ -642,14 +649,45 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         };
         let wall_side = |i: usize| wall_sides(i, false) && !wall_sides(i, true);
         let inside = |i: usize| !mesh.faces[i].iter().any(|v| ring.contains(v));
-        let score = |i: usize| {
+        let ground = |i: usize| {
             let f = &mesh.faces[i];
-            let ground = (site.height(sites[i]) + f.iter().map(|&v| site.height(mesh.pos[v])).sum::<f64>()) / (f.len() + 1) as f64;
-            ground + if inside(i) { 0.0 } else { WALL_BIAS_FT }
+            (site.height(sites[i]) + f.iter().map(|&v| site.height(mesh.pos[v])).sum::<f64>()) / (f.len() + 1) as f64
         };
-        (0..n_inner)
-            .filter(|&i| usable(i) && (wall_side(i) || inside(i)) && !plaza_face.is_some_and(|pz| next_to(i, pz)) && !mesh.faces[i].iter().any(|v| gates.contains(v)) && roomy(i))
-            .max_by(|&a, &b| score(a).total_cmp(&score(b)).then(b.cmp(&a)))
+        let candidates: Vec<usize> =
+            (0..n_inner).filter(|&i| usable(i) && (wall_side(i) || inside(i)) && !plaza_face.is_some_and(|pz| next_to(i, pz)) && !mesh.faces[i].iter().any(|v| gates.contains(v)) && roomy(i)).collect();
+        // (171: a spur, knoll or hill top: how far the patch stands over its foot, a ring
+        // `SPUR_OUT_FT` beyond its corners (beyond the wall too; two in three of it dry). Where one
+        // above the town stands `SPUR_MIN_FT` or more over it, its height over its foot counts
+        // `SPUR_WEIGHT` times beside its height: a knoll is taken over a little higher slope, not
+        // over the top of a hillside town. On a slope or on the flat, as before: the highest patch.)
+        let spur = |i: usize| {
+            let (c, f) = (sites[i], &mesh.faces[i]);
+            let r = f.iter().map(|&v| dist(mesh.pos[v], c)).fold(0.0, f64::max) + SPUR_OUT_FT;
+            // (Its foot on dry ground: a patch by the sea or a river is no spur for the water's
+            // bed below it, a headland's or a bluff's taken from the land round it.)
+            let ring: Vec<f64> = (0..SPUR_RAYS)
+                .map(|k| {
+                    let a = k as f64 * std::f64::consts::TAU / SPUR_RAYS as f64;
+                    add(c, [r * libm::cos(a), r * libm::sin(a)])
+                })
+                .filter(|&p| !site.wet(p))
+                .map(|p| site.height(p))
+                .collect();
+            if ring.len() * 3 < SPUR_RAYS * 2 {
+                return 0.0;
+            }
+            ground(i) - ring.iter().sum::<f64>() / ring.len() as f64
+        };
+        // (Above the town: on ground no lower than its patches' mean.)
+        let inner: Vec<usize> = (0..n_inner).filter(|&i| usable(i)).collect();
+        let town_mean = inner.iter().map(|&i| ground(i)).sum::<f64>() / inner.len().max(1) as f64;
+        let spurs: Vec<f64> = candidates.iter().map(|&i| if ground(i) >= town_mean { spur(i) } else { 0.0 }).collect();
+        let score = |k: usize| {
+            let i = candidates[k];
+            let raised = if spurs[k] >= SPUR_MIN_FT { SPUR_WEIGHT * spurs[k] } else { 0.0 };
+            raised + ground(i) + if inside(i) { 0.0 } else { WALL_BIAS_FT }
+        };
+        (0..candidates.len()).max_by(|&a, &b| score(a).total_cmp(&score(b)).then(candidates[b].cmp(&candidates[a]))).map(|k| candidates[k])
     } else {
         None
     };
