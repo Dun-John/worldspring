@@ -97,6 +97,8 @@ export interface TownEdit {
   fences?: Record<string, FenceChange>;
   /** Where the roads came in when the ward editor first changed it (local ft, class, heading x, y): it is planned from these. */
   roads?: [number, number, number, number, number][];
+  /** The street pattern it was laid out on then (kept with `roads`, so an auto town keeps it while the edit stands). */
+  pattern?: string;
 }
 
 /** A fence's or hedge's kind, as the world file writes it (`FenceKind`). */

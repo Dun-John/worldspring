@@ -505,6 +505,8 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     // joins its gates and leaves the edit standing.)
     if e.roads.is_none() {
         e.roads = Some(super::super::ends_to_keep(t0, index, &plan));
+        // (189: and the pattern it is laid out on, so it can't flip under the edit.)
+        e.pattern = Some(plan.pattern.name().to_string());
     }
     // Keep only what still applies (a stale part would be set aside anyway).
     let (ch, _) = changes(&plan, &e, center);

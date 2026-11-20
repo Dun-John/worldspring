@@ -317,6 +317,11 @@ pub(super) fn hash_edit(world: &World, e: &TownEdit) -> u64 {
             h.write(&x.to_le_bytes());
         }
     }
+    // (189: the pattern it keeps, when it does.)
+    if let Some(p) = &e.pattern {
+        h.write(&[0xf8]);
+        h.write(p.as_bytes());
+    }
     h.finish()
 }
 

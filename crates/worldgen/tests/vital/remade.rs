@@ -205,7 +205,7 @@ fn a_remade_world_keeps_changes_on_their_places() {
 
 /// (Roadmap 7, 183) A road drawn into a town changed in the ward editor leaves it as it was:
 /// the remake keeps the edit on it (its patches, wards and gates as before, nothing set aside),
-/// and the town is planned from the roads its edit kept.
+/// and the town is planned from the roads and the street pattern its edit kept.
 #[test]
 fn a_road_into_an_edited_town_keeps_its_edit() {
     use worldgen::t0::{T0, remap, settle::Tier};
@@ -256,6 +256,15 @@ fn a_road_into_an_edited_town_keeps_its_edit() {
     assert_eq!(ward, "craft", "the patch lost its ward");
     assert_eq!(gates(&after), gates(&before), "the town's gates moved");
     assert_eq!(after["districts"], before["districts"], "the districts changed");
+    // (189) And on the street pattern its edit kept, whatever the land would pick now: an auto
+    // town edited keeps its pattern.
+    let kept = w2.file.edits.towns[&wards::key(li)].pattern.clone().expect("the edit kept no pattern");
+    assert_eq!(worldgen::town::pattern::Pattern::from_code(worldgen::town::layout(&w2, &t1, li).pattern).name(), kept, "not laid out on the pattern its edit kept");
+    let other = if kept == "radial" { "linear" } else { "radial" };
+    let mut f3 = w2.file.clone();
+    f3.edits.towns.get_mut(&wards::key(li)).unwrap().pattern = Some(other.to_string());
+    let w3 = World::new(f3).unwrap();
+    assert_eq!(worldgen::town::pattern::Pattern::from_code(worldgen::town::layout(&w3, &t1, li).pattern).name(), other, "the pattern an edit keeps doesn't hold");
 }
 
 /// A settlement a sketch pin makes takes the changes of a place only at its own spot (M11, M10):

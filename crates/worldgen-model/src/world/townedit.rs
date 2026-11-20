@@ -93,6 +93,11 @@ pub struct TownEdit {
     /// None: planned from the roads as they are (an edit made before these were kept).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roads: Option<Vec<[f64; 5]>>,
+    /// (Roadmap 7, 189) The street pattern it was laid out on then (`town::pattern::NAMES`), kept
+    /// with `roads`: while the edit stands a town left on auto keeps it, so a ground or water
+    /// change near it can't lay its streets out anew under the edit. None: picked as it stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
 }
 
 /// (Roadmap 6 R4) A street added to a generated town (`TownEdit::streets`): its centreline

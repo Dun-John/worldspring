@@ -43,9 +43,11 @@ pub(super) fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownP
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_for(world: &World, t0: &T0, index: usize, site: &Site, s: &Settlement, r: f64, now: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
     let planning = super::planning::of(world, t0, index, s);
-    // (189) Its street pattern: as set, else as its land and culture pick.
+    // (189) Its street pattern: as set, else as its ward edit was made on, else as its land and
+    // culture pick.
     let set = super::pattern::override_in(&world.file.edits, t0, index);
-    let pattern = set.unwrap_or_else(|| super::pattern::auto(site, s, r, planning));
+    let frozen = || frozen_edit(world, t0, index).and_then(|e| e.pattern.as_deref()).and_then(super::pattern::Pattern::parse);
+    let pattern = set.or_else(frozen).unwrap_or_else(|| super::pattern::auto(site, s, r, planning));
     // (A pattern set by hand is followed at least fairly strictly, more as the slider rises.)
     let laid = if set.is_some() { planning.max(super::pattern::HAND_FLOOR) } else if pattern != super::pattern::Pattern::Grid { planning.max(super::planning::MIXED) } else { planning };
     match frozen_ends(world, t0, index) {
@@ -145,6 +147,7 @@ pub(super) fn frozen_fp(world: &World, t0: &T0, index: usize) -> u64 {
     for x in e.at {
         f.write(&x.to_le_bytes());
     }
+    f.write(e.pattern.as_deref().unwrap_or("").as_bytes());
     f.finish() | 1
 }
 
