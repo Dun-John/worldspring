@@ -27,8 +27,8 @@ fn main() {
             let s = stats(&world, &t0);
             let (seams, fine, town_slope, cl) = seams(world, s.probe, &s.edge_towns);
             println!(
-                "rug {rug:.1} seed {seed}: plateaus {} mesas {} escarpments {} canyons {} terraced {:.1}% | slope max {:.2} p99 {:.3} | climbs {} | towns by a riser {}/{} (steepest within their pads {town_slope:.2}) | seam mismatches {seams} | battlemap 3x3 at the riser: faces {} scree {} steeper than 2 {} mean face width {:.1} sq, things on faces {} | fine slope at a riser {fine:.2} (at {:.3},{:.3} of the map)",
-                s.plateaus, s.mesas, s.scarps, s.canyons, 100.0 * s.terraced, s.max_slope, s.p99, s.climbs, s.edge_towns.len(), s.towns, cl[0], cl[1], cl[2], cl[3] as f64 / cl[0].max(1) as f64, cl[4], s.probe.0 / world_w, s.probe.1 / world_h
+                "rug {rug:.1} seed {seed}: plateaus {} mesas {} escarpments {} canyons {} terraced {:.1}% | slope max {:.2} p99 {:.3} | climbs {} shore below lake {} | towns by a riser {}/{} (steepest within their pads {town_slope:.2}) | seam mismatches {seams} | battlemap 3x3 at the riser: faces {} scree {} steeper than 2 {} mean face width {:.1} sq, things on faces {} | fine slope at a riser {fine:.2} (at {:.3},{:.3} of the map)",
+                s.plateaus, s.mesas, s.scarps, s.canyons, 100.0 * s.terraced, s.max_slope, s.p99, s.climbs, s.shore, s.edge_towns.len(), s.towns, cl[0], cl[1], cl[2], cl[3] as f64 / cl[0].max(1) as f64, cl[4], s.probe.0 / world_w, s.probe.1 / world_h
             );
             for (t, v) in tot.iter_mut().zip([s.plateaus, s.mesas, s.scarps, s.canyons, s.climbs, seams]) {
                 *t += v;
@@ -46,6 +46,8 @@ struct Stats {
     max_slope: f64,
     p99: f64,
     climbs: usize,
+    /// Dry land beside a lake lower than its surface.
+    shore: usize,
     probe: (f64, f64),
     terraced: f64,
     edge_towns: Vec<(f64, f64, f64)>,
@@ -152,6 +154,18 @@ fn stats(world: &World, t0: &T0) -> Stats {
     }
     // Canyons: river cells with both sides (2 cells across the flow) 400 ft above and gentle
     // ground on the rims (3 cells across), in runs of 6.
+    let mut shore = 0;
+    for k in 0..w * h {
+        if !land[k] {
+            continue;
+        }
+        let (i, j) = ((k % w) as i64, (k / w) as i64);
+        let wl = [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().filter_map(|&(di, dj)| {
+            let (x, y) = (i + di, j + dj);
+            (x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && hy.lake_of[y as usize * w + x as usize] != hydro::NO_LAKE).then(|| hy.water[y as usize * w + x as usize])
+        });
+        shore += wl.fold(false, |b, l| b || t0.height.data[k] < l - 1.0) as usize;
+    }
     let (mut canyons, mut climbs) = (0, 0);
     for r in &hy.rivers {
         let mut run = 0;
@@ -190,7 +204,7 @@ fn stats(world: &World, t0: &T0) -> Stats {
         .map(|st| (st.x, st.y, worldgen::t0::radii::pad_extent(worldgen::t0::radii::reach(st))))
         .collect();
     let terraced = if t0.landform.data.is_empty() { 0.0 } else { (0..w * h).filter(|&k| land[k] && t0.landform.data[k] > 0.5).count() as f64 / land.iter().filter(|&&l| l).count() as f64 };
-    Stats { edge_towns, towns: t0.settlements.len(), terraced, plateaus, mesas, scarps, canyons, max_slope, p99, climbs, probe: ((k % w) as f64 * t0.cell_ft, (k / w) as f64 * t0.cell_ft) }
+    Stats { edge_towns, towns: t0.settlements.len(), terraced, plateaus, mesas, scarps, canyons, max_slope, p99, climbs, shore, probe: ((k % w) as f64 * t0.cell_ft, (k / w) as f64 * t0.cell_ft) }
 }
 
 /// Halo mismatches between a tile and its right / lower neighbours at a few levels round `at`,

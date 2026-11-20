@@ -93,13 +93,14 @@ pub fn shape(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], l
     // Escarpments: long steps along the contours, the uphill side raised and falling back
     // gently behind its edge (a cuesta). Their edges are stepped with the terraces below.
     // (One chance per lattice cell 120 mi across, at a hashed spot in it: a scarp depends only on
-    // the ground round its own spot, so drawing elsewhere on the map never moves it.)
+    // its lattice cell, the seed and the ground round its spot, so drawing elsewhere on the map
+    // or changing its size never moves it.)
     let lattice = 120.0 * MI;
     let scarps = world.stream("t0.landform.scarps");
     let chance = (0.55 * a).min(0.8);
     let mut sinuous = Fbm::new(world.stream("t0.landform.scarp_warp"), 3, 2.0, 0.5);
     let (lw, lh) = ((w as f64 * cell / lattice).ceil() as i64, (h as f64 * cell / lattice).ceil() as i64);
-    for (e, (gi, gj)) in (0..lh).flat_map(|gj| (0..lw).map(move |gi| (gi, gj))).enumerate() {
+    for (gi, gj) in (0..lh).flat_map(|gj| (0..lw).map(move |gi| (gi, gj))) {
         let mut rng = Pcg32::new(rng::hash2(scarps, gi, gj), 1);
         if rng.next_f64() >= chance {
             continue;
@@ -126,7 +127,7 @@ pub fn shape(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], l
             let t = rng.range(0.0, std::f64::consts::TAU);
             (libm::cos(t), libm::sin(t))
         };
-        let len = (rng.range(40.0, 120.0) * MI * (0.7 + 0.3 * a)).min(0.45 * (w as f64 * cell));
+        let len = rng.range(40.0, 120.0) * MI * (0.7 + 0.3 * a);
         let rise = (250.0 + 450.0 * a) * rng.range(0.6, 1.2);
         let edge = (0.6 * cell).max(1_500.0);
         let back = 0.3 * len;
@@ -134,7 +135,8 @@ pub fn shape(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], l
         let reach = 0.5 * len + back + 0.15 * len;
         let (i0, i1) = (((cx - reach) / cell).floor().max(0.0) as usize, (((cx + reach) / cell).ceil() as usize).min(w - 1));
         let (j0, j1) = (((cy - reach) / cell).floor().max(0.0) as usize, (((cy + reach) / cell).ceil() as usize).min(h - 1));
-        let off = e as f64 * 37.0;
+        // (Its own stretch of the wiggle noise, from its lattice cell.)
+        let off = (rng::hash2(scarps ^ 0x5ca7_0ff5, gi, gj) % 100_000) as f64 * 0.0137;
         for j in j0..=j1 {
             for i in i0..=i1 {
                 let kk = j * w + i;
@@ -232,7 +234,9 @@ pub fn incise(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], 
     for &r in &order {
         let river = &hy.rivers[r];
         let Some(&end) = river.cells.last() else { continue };
-        let end_h = height[end as usize];
+        // (Its mouth's water surface, not a lake's bed.)
+        let end = end as usize;
+        let end_h = if hy.lake_of[end] != hydro::NO_LAKE { hy.water[end] as f64 } else { height[end] }.max(sea);
         for (idx, &c) in river.cells.iter().enumerate() {
             let c = c as usize;
             if idx + 1 == river.cells.len() || !free(c) {
@@ -279,28 +283,89 @@ pub fn incise(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], 
             }
         }
     }
-    height.copy_from_slice(&out);
-    // Strictly downhill again: down each river (mains first, so a tributary's mouth is final),
-    // until nothing moves.
-    for _ in 0..6 {
-        let mut moved = false;
-        for &r in &order {
-            let cells = &hy.rivers[r].cells;
-            for pair in cells.windows(2) {
-                let (u, d) = (pair[0] as usize, pair[1] as usize);
-                if !land[d] || hy.lake_of[d] != hydro::NO_LAKE || height[d] <= sea {
-                    continue;
-                }
-                if height[d] >= height[u] - 0.05 {
-                    height[d] = height[u] - 0.1;
-                    moved = true;
-                }
+    // No wall or floor beside a lake drops below its surface (else the lake would spill into the
+    // canyon); ground already lower there (a lake's outlet) is left as it was.
+    for k in 0..w * h {
+        if out[k] >= orig[k] || !land[k] || hy.lake_of[k] != hydro::NO_LAKE {
+            continue;
+        }
+        let (ci, cj) = ((k % w) as i64, (k / w) as i64);
+        let mut shore = f64::NEG_INFINITY;
+        for (di, dj) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            let (i, j) = (ci + di, cj + dj);
+            if i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && hy.lake_of[j as usize * w + i as usize] != hydro::NO_LAKE {
+                shore = shore.max(hy.water[j as usize * w + i as usize] as f64 + 2.0);
             }
         }
-        if !moved {
-            break;
+        out[k] = out[k].max(shore.min(orig[k]));
+    }
+    height.copy_from_slice(&out);
+    downhill(w * h, height, &orig, land, hy, sea);
+}
+
+/// Every river step strictly downhill again after the cut (lake and sea cells excepted): the
+/// rivers' cells in flow order (each after every cell flowing into it) lower the cells below
+/// them, so one pass settles all: a cell is final before any step out of it is looked at.
+fn downhill(n: usize, height: &mut [f64], orig: &[f64], land: &[bool], hy: &Hydro, sea: f64) {
+    // Flow edges u -> d of every river (shared cells join them into one graph).
+    let mut next: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut indeg = vec![0u32; n];
+    let mut on = vec![false; n];
+    for r in &hy.rivers {
+        for pair in r.cells.windows(2) {
+            let (u, d) = (pair[0] as usize, pair[1]);
+            on[u] = true;
+            on[d as usize] = true;
+            if u != d as usize && !next[u].contains(&d) {
+                next[u].push(d);
+                indeg[d as usize] += 1;
+            }
         }
     }
+    // Kahn's order (ascending cell index among the ready ones: deterministic).
+    let mut ready: std::collections::BinaryHeap<std::cmp::Reverse<u32>> = (0..n as u32).filter(|&k| on[k as usize] && indeg[k as usize] == 0).map(std::cmp::Reverse).collect();
+    let mut seen = 0usize;
+    let fix = |u: usize, height: &mut [f64]| {
+        // (Hydrology left its rivers downhill: only steps out of a lowered cell need a look, and
+        // the least drop f32 heights hold apart, so a flat run below a lowered cell, at a lake's
+        // level say, sinks by next to nothing.)
+        let hu = height[u];
+        let gap = 0.001f64.max(crate::core::fabs(hu) * 5e-7);
+        if hu >= orig[u] || hy.lake_of[u] != hydro::NO_LAKE {
+            return;
+        }
+        for &d in &next[u] {
+            let d = d as usize;
+            if land[d] && hy.lake_of[d] == hydro::NO_LAKE && height[d] > sea && height[d] > hu - gap {
+                height[d] = hu - gap;
+            }
+        }
+    };
+    let mut done = vec![false; n];
+    while let Some(std::cmp::Reverse(u)) = ready.pop() {
+        let u = u as usize;
+        done[u] = true;
+        seen += 1;
+        fix(u, height);
+        for &d in &next[u] {
+            indeg[d as usize] -= 1;
+            if indeg[d as usize] == 0 {
+                ready.push(std::cmp::Reverse(d));
+            }
+        }
+    }
+    // (River nets are trees; a cycle would be a hydrology bug. Settle what's left in index order.)
+    if seen < on.iter().filter(|&&o| o).count() {
+        for u in 0..n {
+            if on[u] && !done[u] {
+                fix(u, height);
+            }
+        }
+    }
+    debug_assert!((0..n).all(|u| height[u] >= orig[u] || hy.lake_of[u] != hydro::NO_LAKE || next[u].iter().all(|&d| {
+        let d = d as usize;
+        !land[d] || hy.lake_of[d] != hydro::NO_LAKE || height[d] <= sea || height[d] < height[u]
+    })));
 }
 
 /// Terrace weights fade to 0 within about two miles (and at least two cells) of a river or lake.
