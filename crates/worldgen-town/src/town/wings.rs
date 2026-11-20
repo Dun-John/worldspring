@@ -76,14 +76,29 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
     let boxes: Vec<[f64; 4]> = l.blocks.iter().map(|q| super::geom::bbox(q)).collect();
     let block_of = |l: &Layout, p: &[P]| block_in(l, &boxes, p);
     // One on the lot it was shaped on as generated keeps its shape: (its id, footprint, lot, block, a U
-    // or a court).
+    // or a court). An inn that took others in round a yard as generated (`inn_yards`) keeps it when its
+    // own lot is as generated: the lot it made again, the homes on it gone again.
     let mut kept: Vec<(u32, Vec<P>, Vec<P>, Option<usize>, bool)> = Vec::new();
+    let mut was: Vec<(u32, Vec<P>, Vec<Building>)> = Vec::new();
     if let Some((_, g)) = edit {
+        let mut yards: Vec<(u32, Vec<P>)> = Vec::new();
         for b in &l.buildings {
             let Some(was) = g.building(b.id as usize).filter(|w| g.wings.binary_search(&w.id).is_ok()) else { continue };
-            let same = lot(g, b.id).is_some_and(|q| q.len() == b.poly.len() && q.iter().zip(&b.poly).all(|(a, c)| len(sub(*a, *c)) < 0.01));
+            let same = own_lot(g, b.id).is_some_and(|q| q.len() == b.poly.len() && q.iter().zip(&b.poly).all(|(a, c)| len(sub(*a, *c)) < 0.01));
             if same && b.parts.is_empty() && b.structure == Structure::Roofed {
-                kept.push((b.id, was.poly.clone(), b.poly.clone(), block_of(l, &b.poly), was.poly.len() > 6));
+                let made = lot(g, b.id).unwrap_or(&b.poly).to_vec();
+                if g.grounds.iter().filter(|q| q.0 == b.id).count() > 1 {
+                    yards.push((b.id, made.clone()));
+                }
+                kept.push((b.id, was.poly.clone(), made.clone(), block_of(l, &made), was.poly.len() > 6));
+            }
+        }
+        for (id, rect) in yards {
+            let taken = |h: &Building| h.id != id && g.building(h.id as usize).is_none() && contains(&rect, super::geom::centroid(&h.poly));
+            let homes: Vec<Building> = l.buildings.iter().filter(|h| taken(h)).cloned().collect();
+            l.buildings.retain(|h| !taken(h));
+            if let Some(b) = l.buildings.iter_mut().find(|b| b.id == id) {
+                was.push((id, std::mem::replace(&mut b.poly, rect), homes));
             }
         }
     }
@@ -91,7 +106,6 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
     let yards = inn_yards(l, &boxes, &edited, &kept);
     let inns: Vec<u32> = yards.iter().map(|&(k, _, _)| l.buildings[k].id).collect();
     let gone: Vec<u32> = yards.iter().flat_map(|(_, j, _)| j.iter().map(|&j| l.buildings[j].id)).collect();
-    let mut was: Vec<(u32, Vec<P>, Vec<Building>)> = Vec::new();
     for (k, j, rect) in yards {
         let homes = j.iter().map(|&j| l.buildings[j].clone()).collect();
         was.push((l.buildings[k].id, std::mem::replace(&mut l.buildings[k].poly, rect), homes));
