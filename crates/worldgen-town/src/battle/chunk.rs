@@ -50,6 +50,11 @@ pub struct Chunk {
     /// Road class + 1 on the `HS`² grid (0 = none), bit 0x80 = bridge deck; the renderer
     /// filters it into smooth road edges.
     pub road_halo: Vec<u8>,
+    /// How much of each `HS`² square's middle the road covers, 0-255 from the roads' own lines
+    /// (`battlemap::road_cover`): a ramp across the edge, so the renderer's filtered coverage
+    /// draws the edge where the road runs, not along the squares. 255/0 where no line explains
+    /// the square (roads drawn by hand, crossings' approaches); 0 on a bridge's deck.
+    pub road_cover: Vec<u8>,
     /// Building on each square: index + 1 into `buildings` (0 = none).
     pub building: Vec<u16>,
     /// (settlement index, building index) of each building touching the chunk.
@@ -239,6 +244,7 @@ pub const RANGE_PART: u8 = 11;
 ///   objects: (kind u16, variant u8, turned u8 (1: put down by hand and drawn at rot,
 ///   `Placed::turned`; 0 otherwise), x f32, y f32, rot f32, scale f32) × n
 ///   road halo u8[HS²]: road class + 1 (0 = none), 0x80 = bridge deck
+///   road cover u8[HS²]: the road's coverage of each square's middle, 0-255 (`Chunk::road_cover`)
 ///   building u16[SQ²]: index + 1 of the building on each square (0 = none)
 ///   buildings: count u32, then per building: n u8, floors u8, roof u8 (style: 0 hip,
 ///   1 battlements, 2 cone; | (tint + 1) << 2, 0 = picked),
@@ -285,6 +291,7 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         }
     }
     out.extend(c.road_halo.iter().map(|&r| if r & 0x80 != 0 { 0 } else { r }));
+    out.extend_from_slice(&c.road_cover);
     for b in &c.building {
         out.extend_from_slice(&b.to_le_bytes());
     }

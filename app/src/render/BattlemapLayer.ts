@@ -353,15 +353,15 @@ export class BattlemapLayer {
     this.atlas ??= sharedAtlas(this.renderer, this.catalog);
     const n = SQ * SQ;
     const nh = HS * HS;
-    // ..., one object, road halo, buildings (one, for the roof shader).
-    const buf = new ArrayBuffer(32 + nh * 8 + n * 4 + 20 + nh + n * 2 + 4 + 7 + 3 * 8);
+    // ..., one object, road halo and cover, buildings (one, for the roof shader).
+    const buf = new ArrayBuffer(32 + nh * 8 + n * 4 + 20 + 2 * nh + n * 2 + 4 + 7 + 3 * 8);
     const dv = new DataView(buf);
     dv.setUint32(16, 1, true); // one object
     dv.setUint32(20, 1, true); // mist, to compile the atmosphere shader
     const o = 32 + nh * 8 + n * 4;
     dv.setUint16(o, 1, true);
     dv.setFloat32(o + 16, 1, true);
-    const r = o + 20 + nh + n * 2;
+    const r = o + 20 + 2 * nh + n * 2;
     dv.setUint32(r, 1, true);
     // (Its header: corners, floors, roof, tower, material, shape, weathering; a triangle after it.)
     dv.setUint8(r + 4, 3);

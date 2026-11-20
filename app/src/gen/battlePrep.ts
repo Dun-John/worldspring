@@ -181,10 +181,12 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     if (heights[k] > max) max = heights[k];
   }
   const base = (min + max) / 2;
-  // Road halo → filtered channels: b = road coverage, a = kind × coverage (0 earth,
-  // 0.5 cobbles, 1 bridge deck), so kind = a / b is the mean over nearby road squares.
+  // Road halo → filtered channels: b = road coverage (`Chunk::road_cover`: ramped across the
+  // roads' edges, so the filtered 0.5 contour follows the road's line), a = kind × coverage
+  // (0 earth, 0.5 cobbles, 1 bridge deck), so kind = a / b is the mean over nearby road squares.
   const roadH = new Uint8Array(buf, objOffset + nObj * 20, nh);
-  const building = new Uint16Array(buf.slice(objOffset + nObj * 20 + nh, objOffset + nObj * 20 + nh + n * 2));
+  const roadCover = new Uint8Array(buf, objOffset + nObj * 20 + nh, nh);
+  const building = new Uint16Array(buf.slice(objOffset + nObj * 20 + 2 * nh, objOffset + nObj * 20 + 2 * nh + n * 2));
   const roofs: Roof[] = [];
   const shapes: Shape[] = [];
   const sprites: ChunkSprite[] = [];
@@ -192,7 +194,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   // v63 countryside: field squares' furrows (`battlemap::Chunk::field`), if the chunk has fields.
   let field: Uint8Array | null = null;
   {
-    let o = objOffset + nObj * 20 + nh + n * 2;
+    let o = objOffset + nObj * 20 + 2 * nh + n * 2;
     const count = dv.getUint32(o, true);
     o += 4;
     for (let b = 0; b < count; b++) {
@@ -279,8 +281,20 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     hdata[k * 4] = toHalf(heights[k] - base);
     hdata[k * 4 + 1] = toHalf(Math.max(water[k], base - 60000) - base);
     const r = roadH[k];
-    hdata[k * 4 + 2] = r ? 0x3c00 : 0; // 1.0 / 0.0
-    hdata[k * 4 + 3] = r & 0x80 ? 0x3c00 : (r & 0x7f) === 1 ? 0x3800 : 0; // 1.0 / 0.5 / 0.0
+    const cover = roadCover[k] / 255;
+    // (A square beside the road takes the kind of the road beside it.)
+    const kindOf = (r: number) => (r & 0x80 ? 1 : (r & 0x7f) === 1 ? 0.5 : 0);
+    let kind = kindOf(r);
+    if (!r && cover > 0) {
+      const hs = HS;
+      const [x, y] = [k % hs, Math.floor(k / hs)];
+      for (let d = 0; d < 8 && kind === 0; d++) {
+        const [nx, ny] = [x + [1, -1, 0, 0, 1, 1, -1, -1][d], y + [0, 0, 1, -1, 1, -1, 1, -1][d]];
+        if (nx >= 0 && ny >= 0 && nx < hs && ny < hs && roadH[ny * hs + nx]) kind = kindOf(roadH[ny * hs + nx]);
+      }
+    }
+    hdata[k * 4 + 2] = toHalf(cover);
+    hdata[k * 4 + 3] = toHalf(kind * cover);
   }
   const data = new Uint8Array(n * 4);
   const shown = groundUnder(surface, raised);

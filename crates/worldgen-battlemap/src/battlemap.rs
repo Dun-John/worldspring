@@ -1741,6 +1741,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         water_level,
         halo_height: hh,
         halo_water: hw,
+        road_cover: road_cover(&road_h, tile_roads.iter().chain(&made_roads), [ox - SQUARE_FT, oy - SQUARE_FT]),
         road_halo: road_h,
         building: (0..n).map(|k| bld_h[(k / SQ + 1) * HS + k % SQ + 1]).collect(),
         buildings: refs,
@@ -2614,4 +2615,48 @@ struct ParkMeta {
     segs: Vec<([f64; 2], [f64; 2])>,
     rounds: Vec<([f64; 2], f64)>,
     axis: Option<f32>,
+}
+
+/// Road coverage per `HS`² square (`Chunk::road_cover`) from the road lines near the chunk
+/// (`origin`: the halo's corner, ft): from the signed distance of the square's middle to the
+/// nearest road's edge, half coverage on the edge, ramped over two squares (so bilinear filtering
+/// puts the 0.5 contour where the edge runs), held on the marks' side of a half: a road square at
+/// least half, a square beside one under half. Squares no line comes near keep the marks (255 on
+/// a road, 0 off it); a bridge's deck is 0.
+fn road_cover<'a>(road_h: &[u8], roads: impl Iterator<Item = &'a crate::lod::roads::RoadPiece>, origin: [f64; 2]) -> Vec<u8> {
+    const RAMP: f64 = 2.0 * SQUARE_FT;
+    // Per square: the largest (half width - distance) of any road near it (ft), MIN where none.
+    let mut sd = vec![f64::MIN; HS * HS];
+    for r in roads {
+        let half = 0.5 * r.class.width_ft();
+        let reach = half + RAMP;
+        for w in r.pts.windows(2) {
+            let (a, b) = (w[0].p, w[1].p);
+            let lo = |v: f64, o: f64| (crate::core::floor((v - reach - o) / SQUARE_FT - 0.5) as i64).max(0);
+            let hi = |v: f64, o: f64| (crate::core::ceil((v + reach - o) / SQUARE_FT - 0.5) as i64).min(HS as i64 - 1);
+            let (i0, i1) = (lo(a[0].min(b[0]), origin[0]), hi(a[0].max(b[0]), origin[0]));
+            let (j0, j1) = (lo(a[1].min(b[1]), origin[1]), hi(a[1].max(b[1]), origin[1]));
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    let c = [origin[0] + (i as f64 + 0.5) * SQUARE_FT, origin[1] + (j as f64 + 0.5) * SQUARE_FT];
+                    let h = j as usize * HS + i as usize;
+                    sd[h] = sd[h].max(half - crate::town::geom::seg_dist(c, a, b));
+                }
+            }
+        }
+    }
+    (0..HS * HS)
+        .map(|h| {
+            let on = road_h[h] != 0;
+            if road_h[h] & 0x80 != 0 {
+                return 0;
+            }
+            if sd[h] < -RAMP {
+                return if on { 255 } else { 0 };
+            }
+            let v = (0.5 + sd[h] / RAMP).clamp(0.0, 1.0);
+            let v = if on { v.max(0.52) } else { v.min(0.48) };
+            crate::core::round(v * 255.0) as u8
+        })
+        .collect()
 }
