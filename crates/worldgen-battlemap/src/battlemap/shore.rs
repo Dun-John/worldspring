@@ -39,30 +39,44 @@ pub(super) fn quay_cargo(poly: &[[f64; 2]], seed: u64, out: &mut Vec<([f64; 2], 
 }
 
 /// R5 M20: a quay's bollards every 20-30 ft along its water edge (side 0-1, as the town's quays
-/// and those built by hand are laid), 2 ft in; and on a city's quay, a crane at a quarter of the
-/// way along each 50 ft or more of it, clear of the piers' roots, its jib out over the water.
-pub(super) fn quay_works(poly: &[[f64; 2]], seed: u64, piers: &[Vec<[f64; 2]>], cranes: bool, out: &mut Vec<([f64; 2], f32, Kind, u8, bool)>) {
-    use crate::town::geom::{add, dist, lerp, mul, sub};
-    if poly.len() < 4 {
+/// and those built by hand are laid; P2 160: a city's quay front's face, `edge`, a line along the
+/// shore), 2 ft in; and on a city's quay, a crane at a quarter of the way along each 50 ft or more
+/// of it, clear of the piers' roots, its jib out over the water.
+pub(super) fn quay_works(poly: &[[f64; 2]], edge: &[[f64; 2]], seed: u64, piers: &[Vec<[f64; 2]>], cranes: bool, out: &mut Vec<([f64; 2], f32, Kind, u8, bool)>) {
+    use crate::town::geom::{add, contains, dist, lerp, mul, sub};
+    if poly.len() < 4 || edge.len() < 2 {
         return;
     }
-    let (a, b) = (poly[0], poly[1]);
-    let el = dist(a, b);
+    let el: f64 = edge.windows(2).map(|w| dist(w[0], w[1])).sum();
     if el < 10.0 {
         return;
     }
-    let u = mul(sub(b, a), 1.0 / el);
-    // (Inward: toward the far side of the strip.)
-    let mut v = [-u[1], u[0]];
-    if crate::town::geom::dot(v, sub(lerp(poly[2], poly[3], 0.5), a)) < 0.0 {
-        v = mul(v, -1.0);
-    }
+    // (The point `t` ft along the edge and the way in there: toward the quay's far side.)
+    let at = |t: f64| -> ([f64; 2], [f64; 2]) {
+        let mut t = t;
+        for (i, w) in edge.windows(2).enumerate() {
+            let d = dist(w[0], w[1]);
+            if t <= d || i + 2 == edge.len() {
+                let u = mul(sub(w[1], w[0]), 1.0 / d.max(1e-9));
+                let p = lerp(w[0], w[1], (t / d.max(1e-9)).min(1.0));
+                let mut v = [-u[1], u[0]];
+                if !contains(poly, add(p, mul(v, 1.0))) {
+                    v = mul(v, -1.0);
+                }
+                return (p, v);
+            }
+            t -= d;
+        }
+        (edge[0], [0.0, 0.0])
+    };
+    let (a, b) = (edge[0], edge[edge.len() - 1]);
     let roots: Vec<[f64; 2]> = piers.iter().filter_map(|p| crate::town::harbour::pier_ends(p)).map(|e| e.0).collect();
     let h = hash3(seed ^ 0xb011, crate::core::round(a[0]) as i64, crate::core::round(a[1]) as i64, crate::core::round(b[1]) as i64);
     let mut t = 6.0 + 8.0 * unit(h);
     let mut k = 0i64;
     while t < el - 4.0 {
-        let p = add(add(a, mul(u, t)), mul(v, 2.0));
+        let (q, v) = at(t);
+        let p = add(q, mul(v, 2.0));
         if roots.iter().all(|r| dist(*r, p) > 7.0) {
             out.push((p, 0.0, Kind::Bollard, (hash2(h, k, 1) >> 20) as u8 & 3, false));
         }
@@ -70,8 +84,9 @@ pub(super) fn quay_works(poly: &[[f64; 2]], seed: u64, piers: &[Vec<[f64; 2]>], 
         t += 20.0 + 10.0 * unit(hash2(h, k, 2));
     }
     if cranes && el >= 50.0 {
-        let at = if unit(h ^ 9) < 0.5 { 0.25 } else { 0.75 };
-        let p = add(add(a, mul(u, at * el)), mul(v, 3.0));
+        let f = if unit(h ^ 9) < 0.5 { 0.25 } else { 0.75 };
+        let (q, v) = at(f * el);
+        let p = add(q, mul(v, 3.0));
         if roots.iter().all(|r| dist(*r, p) > 18.0) {
             out.push((p, libm::atan2(-v[1], -v[0]) as f32, Kind::DockCrane, (h >> 24) as u8 & 3, false));
         }

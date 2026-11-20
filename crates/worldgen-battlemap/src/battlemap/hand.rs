@@ -99,7 +99,7 @@ pub(super) fn build(
         if w.kind == WharfKind::Quay {
             for strip in crate::wharf::strips(w, t0).iter().filter(|p| p.len() == 4 && overlaps(bbox(p))) {
                 quay_cargo(strip, seed, stalls);
-                quay_works(strip, seed, &[], true, dock);
+                quay_works(strip, &strip[..2], seed, &[], true, dock);
             }
         } else {
             // (A breakwater's armour where the water meets it, its far end rounded.)

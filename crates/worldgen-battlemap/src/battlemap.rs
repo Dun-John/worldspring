@@ -564,7 +564,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if pl.kind == K::Quay {
                 if overlaps(bbox(p)) {
                     quay_cargo(p, seed, &mut stalls);
-                    quay_works(p, seed, &l.piers, l.tier >= crate::t0::settle::Tier::City, &mut dock);
+                    // (A city's quay front: its face along the shore; any other quay: its side 0-1.)
+                    let front = matches!(p_cow, std::borrow::Cow::Borrowed(_)).then(|| l.quays.iter().find(|q| q.pts == pl.pts)).flatten();
+                    let edge = front.map_or(&p[..2], |q| q.face());
+                    quay_works(p, edge, seed, &l.piers, l.tier >= crate::t0::settle::Tier::City, &mut dock);
                 }
                 continue;
             }
@@ -1143,7 +1146,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         // P2 160: a timber quay front planked over (a stone one is the quay's paving).
         for q in crate::town::harbour::quays_kept(world, &l).filter(|q| q.timber && owns(crate::town::geom::centroid(&q.pts))) {
-            shapes.push(VectorShape { kind: ShapeKind::Deck, size: 0.0, pts: q.pts.iter().map(local).collect() });
+            shapes.push(VectorShape { kind: ShapeKind::Deck, size: 0.0, pts: q.band().iter().map(local).collect() });
         }
         for b in l.buildings.iter().filter(|b| crate::town::harbour::is_lighthouse(b)) {
             let c = crate::town::geom::mean(&b.poly);

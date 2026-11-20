@@ -234,18 +234,22 @@ pub(in super::super) fn ground_edits(base: &World) {
     assert!((after.1 - before.1 - rise).abs() < 1e-3, "building {id}'s ground floor rose {} ft, its roof {rise} ft", after.1 - before.1);
     ex.world.file.edits = Edits::default();
 
-    // Lowering never floods: a dry square on a shore, dug by brush and by a pit.
+    // Lowering never floods: a dry square on a shore, dug by brush and by a pit. (A natural shore:
+    // not by a city's quay front, made ground over the water that digging lays open again.)
     let settlements = ex.t0.settlements.clone();
+    let city_fronts: Vec<Vec<[f64; 2]>> = (0..settlements.len())
+        .filter(|&i| settlements[i].tier >= worldgen::t0::settle::Tier::City)
+        .flat_map(|i| worldgen::town::layout(&ex.world, &ex.t0, i).quays.iter().map(|q| q.pts.clone()).collect::<Vec<_>>())
+        .collect();
     let (key, k2) = settlements
         .iter()
         .map(|s| TileKey::surface(lvl, (s.x / size) as u32, (s.y / size) as u32))
         .find_map(|k| {
             let c = ex.battlemap(k);
             let wet = |k2: usize| c.water_level[k2] > c.height[k2];
-            (20..SQ - 20)
-                .flat_map(|j| (20..SQ - 20).map(move |i| j * SQ + i))
-                .find(|&k2| !wet(k2) && c.building[k2] == 0 && wet(k2 + 1) && wet(k2 + 2))
-                .map(|k2| (k, k2))
+            let shore: Vec<usize> = (20..SQ - 20).flat_map(|j| (20..SQ - 20).map(move |i| j * SQ + i)).filter(|&k2| !wet(k2) && c.building[k2] == 0 && wet(k2 + 1) && wet(k2 + 2)).collect();
+            let natural = |&k2: &usize| city_fronts.iter().all(|f| worldgen::town::geom::poly_gap(f, &[centre(&k, k2 % SQ, k2 / SQ)]) >= 60.0);
+            shore.iter().copied().find(natural).or(shore.first().copied()).map(|k2| (k, k2))
         })
         .expect("a shore");
     let c = ex.battlemap(key);
@@ -532,8 +536,18 @@ pub(in super::super) fn ground_edits(base: &World) {
         west.sort_by_key(|&o| (o as i64 - 40).abs());
         west.into_iter().map(|o| j * SQ + i0 - o).find(|&q| open(q))
     };
-    let clear = |k2: usize| (k2 % SQ >= 11) && (k2 - 10..=k2).all(|q| plain_c.1.building[q] == 0 && !matches!(plain_c.1.urban[q], worldgen::battlemap::URBAN_DECK | worldgen::battlemap::URBAN_WALL | worldgen::battlemap::URBAN_TOWER));
-    let k2 = others.iter().skip(2).chain(others.iter()).copied().find(|&k2| clear(k2)).expect("a shore clear of buildings for the inlet");
+    // (A city's timber quay front gives way to the inlet, `harbour::quays_kept`: its deck may be there.)
+    let on_front = |q: usize| city_fronts.iter().any(|f| worldgen::town::geom::contains(f, at(q)) || worldgen::town::geom::poly_gap(f, &[at(q)]) < 4.0);
+    let clear = |k2: usize| {
+        (k2 % SQ >= 11)
+            && (k2 - 10..=k2).all(|q| {
+                let u = plain_c.1.urban[q];
+                plain_c.1.building[q] == 0 && !matches!(u, worldgen::battlemap::URBAN_WALL | worldgen::battlemap::URBAN_TOWER) && (u != worldgen::battlemap::URBAN_DECK || on_front(q))
+            })
+    };
+    // (Else any row's shore: the rows 100 ft apart may all meet piers or lots.)
+    let any_row = (10..SQ - 10).filter_map(|j| (40..SQ - 30).map(|i| j * SQ + i).find(|&q| !wet(&plain_c.1, q) && (1..=16).all(|d| wet(&plain_c.1, q + d))));
+    let k2 = others.iter().skip(2).chain(others.iter()).copied().chain(any_row).find(|&k2| clear(k2)).expect("a shore clear of buildings for the inlet");
     let shore = at(k2);
     let sea = plain_c.1.water_level[k2 + 8];
     let inlet = Water::outline(vec![[shore[0] - 50.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] + 15.0], [shore[0] - 50.0, shore[1] + 15.0]], WaterKind::Inlet, sea);

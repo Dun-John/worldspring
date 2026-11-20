@@ -530,6 +530,14 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         "coastal cities",
         "coastal cities without a quay front",
         "quay front ft",
+        "quay face samples",
+        "quay face to water ft (sum)",
+        "quay face to water 0-2 ft",
+        "quay face to water 3-5 ft",
+        "quay face to water 6-10 ft",
+        "quay face to water 11-30 ft",
+        "quay face samples over 10 ft from the water",
+        "quay face samples with no water within 30 ft",
         "bollards",
         "net racks",
     ]);
@@ -556,7 +564,51 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
             }
         }
         for qf in &l.quays {
-            r.tally("quay front ft", town::geom::dist(qf.pts[0], qf.pts[1]) as usize);
+            let face = qf.face();
+            r.tally("quay front ft", face.windows(2).map(|w| town::geom::dist(w[0], w[1])).sum::<f64>() as usize);
+            // (How the face follows the shore: from each point every ~5 ft along it, out square to
+            // it, the first wet square on the battlemap within 30 ft.)
+            let sq_wet = |ctx: &mut Ctx, p: [f64; 2]| -> bool {
+                let k = |v: f64| (v / size).floor().max(0.0) as u32;
+                let c = ctx.chunk(k(p[0]), k(p[1]));
+                let (i, j) = (((p[0] - k(p[0]) as f64 * size) / SQUARE_FT) as usize, ((p[1] - k(p[1]) as f64 * size) / SQUARE_FT) as usize);
+                let q = j.min(SQ - 1) * SQ + i.min(SQ - 1);
+                c.water_level[q] >= c.height[q]
+            };
+            // (Not the last 3 steps at an end, where it eases onto the beach and a slip runs down.)
+            let nw = face.len().saturating_sub(1);
+            for (wi, w) in face.windows(2).enumerate() {
+                let d = town::geom::dist(w[0], w[1]);
+                if d < 0.5 || wi < 3 || wi + 3 >= nw {
+                    continue;
+                }
+                let u = [(w[1][0] - w[0][0]) / d, (w[1][1] - w[0][1]) / d];
+                let mid = town::geom::lerp(w[0], w[1], 0.5);
+                let mut v = [-u[1], u[0]];
+                if contains(&qf.pts, [mid[0] + v[0], mid[1] + v[1]]) {
+                    v = [u[1], -u[0]];
+                }
+                // (A pier or breakwater going out from it is no gap.)
+                let on_works = |t: f64| {
+                    let q = [mid[0] + v[0] * t, mid[1] + v[1] * t];
+                    l.piers.iter().any(|pp| town::geom::poly_gap(pp, &[q]) < 3.0) || l.moles.iter().any(|m| town::geom::poly_gap(&m.pts, &[q]) < 3.0)
+                };
+                if (0..=6).any(|j| on_works(5.0 * j as f64)) {
+                    continue;
+                }
+                let off = (0..=30).map(|t| t as f64).find(|&t| sq_wet(ctx, [mid[0] + v[0] * t, mid[1] + v[1] * t]));
+                r.tally("quay face samples", 1);
+                match off {
+                    Some(t) => {
+                        r.tally("quay face to water ft (sum)", t as usize);
+                        r.tally(if t <= 2.0 { "quay face to water 0-2 ft" } else if t <= 5.0 { "quay face to water 3-5 ft" } else if t <= 10.0 { "quay face to water 6-10 ft" } else { "quay face to water 11-30 ft" }, 1);
+                        if t > 10.0 {
+                            r.add("quay face samples over 10 ft from the water", 1.0, format!("L{si} {:.0} ft at {}", t, at(mid)));
+                        }
+                    }
+                    None => r.add("quay face samples with no water within 30 ft", 1.0, format!("L{si} at {}", at(mid))),
+                }
+            }
             r.tally("quay fronts", 1);
             r.tally("timber quay fronts", qf.timber as usize);
             let bb = town::geom::bbox(&qf.pts);

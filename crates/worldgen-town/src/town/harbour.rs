@@ -167,10 +167,11 @@ impl Mole {
     }
 }
 
-/// P2 160: a city's quay front along a shore side of its docks (`quays::lay`): made ground from
-/// the lots' fronts out past the water's edge, its top level (`level`, as a hand quay's), its
-/// face `pts[0]`-`pts[1]` on the water, `pts[2]`-`pts[3]` behind against the lots. Stone (a
-/// paved top) or timber (planked over).
+/// P2 160: a city's quay front along its built shore (`quays::fronts`): made ground from the
+/// lots' fronts out past the water's edge, its top level (`level`, as a hand quay's). Its outline
+/// is its face along the water (the first half of `pts`, tracing the shore) and then its back
+/// against the lots (the second half, back the other way, a point behind each of the face's).
+/// Stone (a paved top) or timber (planked over).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Quay {
     pub pts: Vec<P>,
@@ -207,16 +208,52 @@ pub fn plaza_pts<'a>(world: &World, l: &Layout, pl: &'a Plaza) -> std::borrow::C
     std::borrow::Cow::Borrowed(&pl.pts)
 }
 
+/// How deep a quay front's quay proper is behind its face (ft, `Quay::band`).
+pub const QUAY_BAND_FT: f64 = 16.0;
+
 impl Quay {
-    /// The 14 ft strip along the lots its front was carried out from (`quays::lay`).
-    pub fn strip(&self) -> Vec<P> {
-        let p = &self.pts;
-        let to = |back: P, face: P| add(back, mul(sub(face, back), 14.0 / dist(back, face).max(14.0)));
-        vec![to(p[3], p[0]), to(p[2], p[1]), p[2], p[3]]
+    /// Its face along the water, in order along the shore.
+    pub fn face(&self) -> &[P] {
+        &self.pts[..self.pts.len() / 2]
     }
-    /// Its made ground as the ground shaper takes it.
-    pub fn raised(&self) -> crate::ground::Raised {
-        crate::ground::Raised { pts: self.pts.clone(), level: self.level, band: 0.0, look: crate::ground::Look::Made }
+    /// The 14 ft strip along the lots its front was carried out from (`quays::fronts`).
+    pub fn strip(&self) -> Vec<P> {
+        let (p, h) = (&self.pts, self.pts.len() / 2);
+        let to = |back: P, face: P| add(back, mul(sub(face, back), 14.0 / dist(back, face).max(14.0)));
+        let mut out: Vec<P> = (0..h).map(|i| to(p[2 * h - 1 - i], p[i])).collect();
+        out.extend_from_slice(&p[h..]);
+        out
+    }
+    /// The quay proper along its face, `QUAY_BAND_FT` deep (or as deep as it is): the stone or
+    /// timber the map draws, a timber front's deck; behind it the lots' paving (its quay plaza).
+    pub fn band(&self) -> Vec<P> {
+        let (p, h) = (&self.pts, self.pts.len() / 2);
+        let to = |face: P, back: P| add(face, mul(sub(back, face), QUAY_BAND_FT / dist(back, face).max(QUAY_BAND_FT)));
+        let mut out: Vec<P> = p[..h].to_vec();
+        out.extend((0..h).rev().map(|i| to(p[i], p[2 * h - 1 - i])));
+        out
+    }
+    /// Its made ground as the ground shaper takes it; at an end `open` (no front joins on there),
+    /// a slip easing down onto the beach and into the water over 10 ft.
+    pub fn raised(&self, open: [bool; 2]) -> Vec<crate::ground::Raised> {
+        let made = |pts: Vec<P>, band: f32| crate::ground::Raised { pts, level: self.level, band, look: crate::ground::Look::Made };
+        let (p, h) = (&self.pts, self.pts.len() / 2);
+        let mut out = vec![made(p.clone(), 0.0)];
+        if h >= 2 {
+            if open[0] {
+                out.push(made(vec![p[0], p[1], p[2 * h - 2], p[2 * h - 1]], 10.0));
+            }
+            if open[1] {
+                out.push(made(vec![p[h - 2], p[h - 1], p[h], p[h + 1]], 10.0));
+            }
+        }
+        out
+    }
+    /// Whether its ends meet another front (`others`): a stone stretch running on as timber.
+    pub fn joined(&self, others: &[&Quay]) -> [bool; 2] {
+        let (p, h) = (&self.pts, self.pts.len() / 2);
+        let meets = |a: P, b: P| others.iter().any(|o| !std::ptr::eq(*o, self) && o.pts.contains(&a) && o.pts.contains(&b));
+        [meets(p[0], p[2 * h - 1]), meets(p[h - 1], p[h])]
     }
 }
 
@@ -771,10 +808,12 @@ pub fn raised_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<crate::ground:
                 out.extend(m.raised());
             }
         }
-        for q in quays_kept(world, &l) {
+        let kept: Vec<&Quay> = quays_kept(world, &l).collect();
+        for q in &kept {
             let b = bbox(&q.pts);
-            if b[2] + 10.0 >= rect[0] && b[0] - 10.0 <= rect[2] && b[3] + 10.0 >= rect[1] && b[1] - 10.0 <= rect[3] {
-                out.push(q.raised());
+            if b[2] + 20.0 >= rect[0] && b[0] - 20.0 <= rect[2] && b[3] + 20.0 >= rect[1] && b[1] - 20.0 <= rect[3] {
+                let j = q.joined(&kept);
+                out.extend(q.raised([!j[0], !j[1]]));
             }
         }
     }

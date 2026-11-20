@@ -879,7 +879,7 @@ pub fn build_hand(world: &World, t0: &T0, index: usize) -> Option<HandBuilt> {
         l.plaza_patch = w.main;
         l.piers = w.piers.iter().map(|p| unpk(p)).filter(|p| p.len() == 4).collect();
         l.moles = w.moles.iter().map(|m| super::super::harbour::Mole { pts: unpk(&m.2), width: m.0, level: m.1 }).filter(|m| m.pts.len() >= 2).collect();
-        l.quays = w.quays.iter().map(|q| super::super::harbour::Quay { pts: unpk(&q.2), level: q.0, timber: q.1 }).filter(|q| q.pts.len() == 4).collect();
+        l.quays = w.quays.iter().map(|q| super::super::harbour::Quay { pts: unpk(&q.2), level: q.0, timber: q.1 }).filter(|q| q.pts.len() >= 4 && q.pts.len() % 2 == 0).collect();
         l.moored = unpack(&w.moored)
             .unwrap_or_default()
             .chunks_exact(5)
