@@ -9,6 +9,8 @@
 //!   buildings; the outer gate's distance to the nearest street or way; the outer bailey's width
 //!   and the inner curtain's distance to the outer gate; castles with no keep; mottes with
 //!   objects on them (from the battlemap); and a few more (spikes, keep tops left open, ids twice).
+//!   (171) Each castle's ground: its height over its town's and over its foot, castles on a spur
+//!   or in water (`TC_CASTLE_GROUND=1` prints each; `TC_RUGGED=<0-3>` sets the world's ruggedness).
 //!   Every town's quays with no water beyond them, walled towns' rings with no wall on dry ground,
 //!   buildings over a river's channel and built blocks centred on one.
 //! - `reach`: each castle's battlemap round it, flooded as play mode blocks movement (buildings,
@@ -217,6 +219,12 @@ fn main() {
             for li in (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town) {
                 file.edits.patterns.insert(li.to_string(), p.clone());
             }
+            world = World::new(file).unwrap();
+        }
+        // (Dev: `TC_RUGGED=<0-3>` sets the world's ruggedness, to tell what rough ground does.)
+        if let Some(v) = std::env::var("TC_RUGGED").ok().and_then(|v| v.parse::<f64>().ok()) {
+            let mut file = world.file.clone();
+            file.params.ruggedness = v;
             world = World::new(file).unwrap();
         }
         let mut ctx = Ctx { ex: Executor::new(world), chunks: HashMap::new() };

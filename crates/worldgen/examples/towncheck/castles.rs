@@ -393,7 +393,7 @@ pub(crate) fn streets_in_summary(all: &Report) {
     });
 }
 
-pub(crate) const CASTLE_SPOTS: [&str; 15] = [
+pub(crate) const CASTLE_SPOTS: [&str; 19] = [
     "town castles (planned or set)",
     "castle patches cut, a noble block left",
     "cuts skipped: patch too small",
@@ -409,6 +409,10 @@ pub(crate) const CASTLE_SPOTS: [&str; 15] = [
     "bailey squares",
     "bailey squares paved (street or cobbles)",
     "baileys over 5% paved",
+    "castles on raised ground (8 ft over the town, standing 6 ft over its foot)",
+    "castles with water at their middle",
+    "castles on a spur (6 ft over its foot)",
+    "castles on a spur as planned (5 ft over its foot)",
 ];
 
 /// A town's castle patch: not the market square's, with a bailey; inside the town or on its wall;
@@ -457,6 +461,53 @@ pub(crate) fn castle_spot(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) 
         if !has(key) {
             r.add(&format!("town castles with no {key}"), area(ring).abs(), format!("{tag}: bailey of {:.0} sq ft at {}", area(ring).abs(), at(mid)));
         }
+    }
+    // (171: the castle's ground against its town's: its bailey's mean height over the mean of its
+    // town's buildings (on the ground it was planned on, with its river valleys, both), and over
+    // its foot, the dry ground 120 ft out from its curtain's corners (on the battlemap with its moat
+    // and motte; on the ground planned).)
+    let t0 = &ctx.ex.t0;
+    let lattice = ctx.ex.world.geom.spacing_ft(ctx.ex.world.geom.first_refine_level.saturating_sub(1));
+    let b = l.buildings.iter().fold(bbox(ring), |a, b| bbox(&b.poly).iter().enumerate().fold(a, |mut a, (k, v)| {
+        a[k] = if k < 2 { a[k].min(*v) } else { a[k].max(*v) };
+        a
+    }));
+    let rect = [b[0] - 800.0, b[1] - 800.0, b[2] + 800.0, b[3] + 800.0];
+    let planned = worldgen::lod::plan_ground::PlanGround::new(t0, rect, rect, lattice, worldgen::lod::plan_ground::VALLEY_CELL);
+    let h0 = |p: P| planned.ground(p[0], p[1], false) + planned.depth(p[0], p[1]);
+    let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+    let town: Vec<f64> = l.buildings.iter().filter(|b| b.ward != Ward::Castle).map(|b| h0(centroid(&b.poly))).collect();
+    let raise = town.is_empty().then_some(0.0).unwrap_or_else(|| (ring.iter().map(|p| h0(*p)).sum::<f64>() + h0(mid)) / (ring.len() + 1) as f64 - town.iter().sum::<f64>() / town.len().max(1) as f64);
+    let foot0 = ring.iter().map(|p| h0(add(*p, mul(sub(*p, mid), 120.0 / len(sub(*p, mid)).max(1.0))))).sum::<f64>() / ring.len() as f64;
+    let over0 = (ring.iter().map(|p| h0(*p)).sum::<f64>() + h0(mid)) / (ring.len() + 1) as f64 - foot0;
+    let mut ground = |p: P| {
+        let (kx, ky) = ((p[0] / size).floor().max(0.0) as u32, (p[1] / size).floor().max(0.0) as u32);
+        let c = ctx.chunk(kx, ky);
+        let (i, j) = ((((p[0] - kx as f64 * size) / SQUARE_FT) as usize).min(SQ - 1), (((p[1] - ky as f64 * size) / SQUARE_FT) as usize).min(SQ - 1));
+        let q = j * SQ + i;
+        (c.height[q] as f64, c.water_level[q] > c.height[q])
+    };
+    let bailey = (ring.iter().map(|p| ground(*p).0).sum::<f64>() + ground(mid).0) / (ring.len() + 1) as f64;
+    let out: Vec<f64> = ring.iter().map(|p| ground(add(*p, mul(sub(*p, mid), 120.0 / len(sub(*p, mid)).max(1.0))))).filter(|g| !g.1).map(|g| g.0).collect();
+    let fall = bailey - out.iter().sum::<f64>() / out.len().max(1) as f64;
+    if std::env::var("TC_CASTLE_GROUND").is_ok() {
+        eprintln!("CASTLE171 {tag} at {}: {raise:.1} over the town, {fall:.1} over its foot, as planned {over0:.1}", at(mid));
+    }
+    r.value("castle height over the town's mean (ft)", raise, format!("{tag} at {}", at(mid)));
+    r.value("castle height over its foot, 120 ft out from its curtain (ft)", fall, format!("{tag} at {}", at(mid)));
+    if raise >= 8.0 && fall >= 6.0 {
+        r.add("castles on raised ground (8 ft over the town, standing 6 ft over its foot)", raise, format!("{tag} at {}", at(mid)));
+    }
+    if fall >= 6.0 {
+        r.add("castles on a spur (6 ft over its foot)", fall, format!("{tag} at {}", at(mid)));
+    }
+    // (The ground as planned, before the castle's own moat and motte: 5 ft over its foot.)
+    r.value("castle height over its foot as planned (ft)", over0, format!("{tag} at {}", at(mid)));
+    if over0 >= 5.0 {
+        r.add("castles on a spur as planned (5 ft over its foot)", over0, format!("{tag} at {}", at(mid)));
+    }
+    if (0..=8).map(|k| [mid[0] + 20.0 * (k % 3) as f64 - 20.0, mid[1] + 20.0 * (k / 3) as f64 - 20.0]).any(|q| ground(q).1) {
+        r.add("castles with water at their middle", 1.0, format!("{tag} at {}", at(mid)));
     }
     let w = ctx.window(bbox(ring));
     if !w.objects.iter().any(|(p, name)| name == "well" && contains(ring, *p)) {
