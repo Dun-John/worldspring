@@ -192,6 +192,62 @@ pub(crate) fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen:
         within(MI),
         within(3.0 * MI)
     );
+    // Bridge approaches: the road's curve sampled every 50 ft over 1,500 ft either side of each
+    // bridge, the sharpest turn between 300-ft chords (past the first 100 ft from the deck).
+    {
+        let (mut over45, mut over60, mut worst, mut worst_at, mut sum, mut m) = (0usize, 0usize, 0.0f64, [0.0, 0.0], 0.0, 0usize);
+        let mut listed: Vec<(f64, P)> = Vec::new();
+        // (`CHORD=ft`, 300 by default.)
+        let chord = std::env::var("CHORD").ok().and_then(|v| v.parse().ok()).unwrap_or(300.0f64);
+        for c in crossings.iter().filter(|c| c.2 == CrossingKind::Bridge) {
+            let best = t0.roads.roads.iter().filter_map(|rc| (0..rc.pts.len()).map(|k| (dist(rc.pts[k], c.0), k)).min_by(|a, b| a.0.total_cmp(&b.0)).map(|b| (b, rc))).min_by(|a, b| a.0 .0.total_cmp(&b.0 .0));
+            let Some(((d0, k0), rc)) = best else { continue };
+            if d0 > 3000.0 {
+                continue;
+            }
+            let at = |d: f64| {
+                let d = d.clamp(0.0, *rc.s.last().unwrap());
+                let mut k = 0;
+                while k + 2 < rc.pts.len() && rc.s[k + 1] <= d {
+                    k += 1;
+                }
+                let t = ((d - rc.s[k]) / (rc.s[k + 1] - rc.s[k]).max(1e-9)).clamp(0.0, 1.0);
+                rc.eval(k, t, 500.0, t0.cell_ft).p
+            };
+            // (The deck: the point along the road nearest the crossing.)
+            let s0 = (-60..=60).map(|j| rc.s[k0] + 50.0 * j as f64).min_by(|a, b| dist(at(*a), c.0).total_cmp(&dist(at(*b), c.0))).unwrap();
+            let mut w = 0.0f64;
+            let mut w_at = c.0;
+            for j in -30i32..=30 {
+                if j.abs() < 2 {
+                    continue;
+                }
+                let d = s0 + 50.0 * j as f64;
+                if d - chord < 0.0 || d + chord > *rc.s.last().unwrap() {
+                    continue;
+                }
+                let (a, p, b) = (at(d - chord), at(d), at(d + chord));
+                let deg = angle(sub(p, a), sub(b, p));
+                if deg > w {
+                    (w, w_at) = (deg, p);
+                }
+            }
+            m += 1;
+            sum += w;
+            over45 += (w > 45.0) as usize;
+            over60 += (w > 60.0) as usize;
+            if w > worst {
+                (worst, worst_at) = (w, w_at);
+            }
+            listed.push((w, w_at));
+        }
+        say!("  bridge approaches ({m}, 1,500 ft either side, {chord:.0}-ft chords): sharpest turn mean {:.0}°, max {worst:.0}° at ({:.0}, {:.0}); over 45° {over45}, over 60° {over60}", sum / m.max(1) as f64, worst_at[0], worst_at[1]);
+        let top = std::env::var("APPROACH").ok().and_then(|v| v.parse().ok()).unwrap_or(0usize);
+        listed.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for (w, p) in listed.iter().take(top) {
+            say!("      approach turns {w:.0}° at ({:.0}, {:.0})", p[0], p[1]);
+        }
+    }
     // (`SHALLOW=n`: the first n crossings under 30°.)
     let shallow = std::env::var("SHALLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     for c in crossings.iter().filter(|c| c.1 < 0.5).take(shallow) {
@@ -281,6 +337,31 @@ pub(crate) fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen:
     let near_cross = near.len();
     let njunc = junction.iter().filter(|j| **j).count();
     say!("  junctions outside settlements: {njunc} (3 arms {}, 4 arms {}, 5+ {})", arms_n[0], arms_n[1], arms_n[2]);
+    // Road ends on another road's middle (a T not at its points' ends): within 300 ft of its
+    // line, over 1 ft from it (left off it), and not within 1 ft of one of its ends.
+    {
+        let (mut tees, mut off, mut worst) = (0usize, 0usize, 0.0f64);
+        for (i, a) in t0.roads.roads.iter().enumerate() {
+            for e in [a.pts[0], a.pts[a.pts.len() - 1]] {
+                for (j, b) in t0.roads.roads.iter().enumerate() {
+                    if i == j || dist(e, b.pts[0]) <= 1.0 || dist(e, b.pts[b.pts.len() - 1]) <= 1.0 {
+                        continue;
+                    }
+                    let d = b.pts.windows(2).map(|w| seg_dist(e, w[0], w[1])).fold(f64::MAX, f64::min);
+                    if d < 300.0 {
+                        tees += 1;
+                        off += (d > 1.0) as usize;
+                        worst = worst.max(d);
+                        if std::env::var("TEES").is_ok() {
+                            let st = t0.settlements.iter().map(|st| dist([st.x, st.y], e)).fold(f64::MAX, f64::min);
+                            say!("      road {i} ({:?}) ends at ({:.0}, {:.0}), {d:.0} ft from road {j}'s middle ({:?}); settlement {st:.0} ft", a.class, e[0], e[1], b.class);
+                        }
+                    }
+                }
+            }
+        }
+        say!("  road ends within 300 ft of another road's middle: {tees}, off its line (> 1 ft) {off}, farthest {worst:.0} ft");
+    }
     say!(
         "    shape: T/cross {} (3 arms {}, 4 arms {}), Y {} (3 arms {}), other {} (3 arms {}); between junctions: < 0.5 mi {stub_half} ({stub_doubled} on shared stretches), < 2 mi {stub_two}; two roads through one place {x_cross}; within 0.5 mi of a river crossing {near_cross}",
         shape_n[0],

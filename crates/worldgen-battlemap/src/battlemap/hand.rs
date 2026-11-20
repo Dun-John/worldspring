@@ -193,7 +193,8 @@ pub(super) fn build(
     let mut path_stairs = Vec::new();
     let mut path_runs = Vec::new();
     if !path_near.is_empty() {
-        let beds = crate::paths::beds(world, t0, [hx0, hy0, hx0 + span, hy0 + span], BED_EASE_MAX_FT);
+        // (Pruned as far out as `bed_at` reaches: the band at least `PATH_MIN_HALF_FT`.)
+        let beds = crate::paths::beds(world, t0, [hx0, hy0, hx0 + span, hy0 + span], BED_EASE_MAX_FT + PATH_MIN_HALF_FT);
         let g_on = crate::town::stairs::StairParams::DEFAULT.g_on;
         for h in 0..HS * HS {
             if hw[h] > hh[h] || road_h[h] != 0 || urb_h[h] != 0 || bld_h[h] != 0 {

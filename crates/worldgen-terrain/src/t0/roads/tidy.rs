@@ -35,7 +35,8 @@ pub fn tidy(r: &mut RoadPath) {
 /// its graded bed takes the rest, item 168) and to 0.35
 /// round hairpins (switchbacks keep their legs apart), and fades out over the first and last
 /// stretch (a junction's or a gate's way in stays; a short road sweeps its middle third) and at
-/// river crossings (still square over the water). Tried at full and half reach; left as it is
+/// river crossings (still square over the water; the ways onto them bend over two reaches,
+/// `square_approaches`). Tried at full and half reach; left as it is
 /// where a point would go wet or the road would cross rivers (`rivers`: where, with the belt's
 /// half width there) a different number of times. Drawn roads keep their line. (The profile is
 /// fitted again afterwards.)
@@ -92,7 +93,8 @@ pub fn sweep_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool, 
     // a quarter of the belt and 100 ft, eased over half a reach, so it still crosses square
     // (wider protection keeps most of the bends a crossing makes; narrower skews the bridges).
     let wet = rivers(&r.pts);
-    let by_river = |p: [f64; 2]| wet.iter().map(|&(c, hw)| smooth01((dist(p, c) - 0.25 * hw - 100.0) / (0.5 * reach))).fold(1.0, f64::min);
+    let core = |hw: f64| 0.25 * hw + 100.0;
+    let by_river = |p: [f64; 2]| wet.iter().map(|&(c, hw)| smooth01((dist(p, c) - core(hw)) / (0.5 * reach))).fold(1.0, f64::min);
     // The way in at either end: past the second point, and a reach (half of it as shaped).
     let (e0, e1) = (s[2].max(reach), (total - s[n - 3]).max(reach));
     for scale in [1.0, 0.5] {
@@ -117,11 +119,80 @@ pub fn sweep_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool, 
                 [p[0] + fade * (sx / sw - p[0]), p[1] + fade * (sy / sw - p[1])]
             })
             .collect();
+        // (The ways onto the crossings bend over two reaches from the belt's edge: inside it the
+        // road keeps to the sweep, crossing the channel as squarely as before, off its banks.)
+        let moved = square_approaches(&r.pts, &s, moved, &wet, &|hw| core(hw).max(hw), reach, dry);
         if moved.iter().all(|p| dry(p[0], p[1])) && rivers(&moved).len() == wet.len() {
             r.pts = moved;
             return;
         }
     }
+}
+
+/// The ways onto river crossings after a sweep (ft): from `core(hw)` from the crossing (`hw`
+/// the belt's half width there), on the swept line's heading there, to two reaches along the
+/// road (or its last two points or the next crossing's `core`, if over half a reach away), the
+/// swept line becomes a cubic leaving on that heading and joining the swept road on its own, so
+/// the bend a crossing needs (the road turning to cross square) spreads out instead of piling
+/// up just off the crossing. Each approach is left swept where its cubic would go wet.
+/// Points on the original line `pts` (distances `s` along it); `moved` the swept points.
+fn square_approaches(pts: &[[f64; 2]], s: &[f64], mut moved: Vec<[f64; 2]>, wet: &[([f64; 2], f64)], core: &dyn Fn(f64) -> f64, reach: f64, dry: &dyn Fn(f64, f64) -> bool) -> Vec<[f64; 2]> {
+    let n = pts.len();
+    let kept = |k: usize| wet.iter().any(|&(c, hw)| dist(pts[k], c) <= core(hw));
+    for &(c, hw) in wet {
+        let kc = (0..n).min_by(|&a, &b| dist(pts[a], c).total_cmp(&dist(pts[b], c))).unwrap_or(0);
+        if dist(pts[kc], c) > core(hw) {
+            continue;
+        }
+        // The kept stretch's ends either side, and its heading.
+        let fwd = (kc..n).find(|&k| dist(pts[k], c) > core(hw));
+        let back = (0..=kc).rev().find(|&k| dist(pts[k], c) > core(hw));
+        let (Some(kf), Some(kb)) = (fwd, back) else { continue };
+        for (k0, dir) in [(kf, 1i64), (kb, -1i64)] {
+            // (Leaving on the kept line's heading at its end: over the last 100 ft of it, or all of it.)
+            let mut j = k0 as i64;
+            while j - dir != kc as i64 && (s[(j - dir) as usize] - s[k0]).abs() < 100.0 {
+                j -= dir;
+            }
+            let j = (j - dir) as usize;
+            let h = unit2([moved[k0][0] - moved[j][0], moved[k0][1] - moved[j][1]]);
+            // Two reaches along, or (if over half a reach away) up to the last two points or
+            // the next crossing's kept stretch (a road between two bridges bends between them).
+            let mut k1 = k0 as i64;
+            let mut ok = false;
+            while k1 + dir >= 2 && k1 + dir <= n as i64 - 3 && !kept((k1 + dir) as usize) {
+                k1 += dir;
+                if (s[k1 as usize] - s[k0]).abs() >= 2.0 * reach {
+                    ok = true;
+                    break;
+                }
+            }
+            let k1 = k1 as usize;
+            if !ok && (s[k1] - s[k0]).abs() < 0.5 * reach {
+                continue;
+            }
+            let (p0, p1) = (moved[k0], moved[k1]);
+            let len = dist(p0, p1);
+            let (a, b) = ((k1 as i64 - dir) as usize, (k1 as i64 + dir) as usize);
+            let h1 = unit2([moved[b][0] - moved[a][0], moved[b][1] - moved[a][1]]);
+            let (t0, t1) = ([h[0] * len, h[1] * len], [h1[0] * len, h1[1] * len]);
+            let span = (s[k1] - s[k0]).abs();
+            let (lo, hi) = (k0.min(k1), k0.max(k1));
+            let curve: Vec<[f64; 2]> = (lo + 1..hi)
+                .map(|k| {
+                    let t = (s[k] - s[k0]).abs() / span;
+                    let (t2, t3) = (t * t, t * t * t);
+                    let (a0, b0, a1, b1) = (2.0 * t3 - 3.0 * t2 + 1.0, t3 - 2.0 * t2 + t, -2.0 * t3 + 3.0 * t2, t3 - t2);
+                    [a0 * p0[0] + b0 * t0[0] + a1 * p1[0] + b1 * t1[0], a0 * p0[1] + b0 * t0[1] + a1 * p1[1] + b1 * t1[1]]
+                })
+                .collect();
+            // (Left as swept where the cubic would go wet.)
+            if curve.iter().all(|p| dry(p[0], p[1])) {
+                moved[lo + 1..hi].copy_from_slice(&curve);
+            }
+        }
+    }
+    moved
 }
 
 /// How far along the road (ft) `sweep_turns` averages for a road of `class`: a king's road
