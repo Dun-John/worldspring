@@ -136,36 +136,64 @@ impl Near {
         self.peak * f.max(0.0)
     }
 
-    /// A ridge at (`a`, `b`) in its half-axes: a crest running along it that swings to its steeper
-    /// side and bends, rising to a high point off its middle with saddles either side, its ends
-    /// tapered and rounded, a few broken outcrops down the steep side.
+    /// A ridge at (`a`, `b`) in its half-axes: a rounded crest that wanders across it and leans to
+    /// its steeper side, rising and falling along it (a summit, a lower one, saddles between) and
+    /// easing down at its ends; a width that changes along it, with a shoulder or two running out
+    /// to the side; a ragged outline; outcrops only on the steep side of its high parts.
     fn ridge(&self, a: f64, b: f64, u: f64, v: f64, k: f64, wob: f64) -> f64 {
-        // Inside both a tapered superellipse and the footprint's capsule.
-        let taper = 1.0 - 0.2 * a * a;
-        let bb = b / taper;
-        let a4 = a * a * a * a;
-        let du = (crate::core::fabs(u) - (self.rx - self.ry).max(0.0)).max(0.0);
-        let cap = (du * du + v * v) / (self.ry * self.ry);
-        let rs2 = (a4 + bb * bb).max(cap) * wob * wob;
-        if rs2 >= 1.0 {
+        // How far across it may reach here (in half-widths): the footprint's capsule.
+        let du = (crate::core::fabs(u) - (self.rx - self.ry).max(0.0)).max(0.0) / self.ry;
+        if du >= 1.0 || crate::core::fabs(b) >= 1.0 {
             return 0.0;
         }
-        // (How far it swings varies along it, so its steep side is crag in places, a slope between.)
-        let lean = 0.12 + 0.22 * (0.5 + 0.5 * gradient2(self.seed ^ 0x2f, a * 2.6, 0.29));
-        let shift = (self.side * lean + 0.1 * gradient2(self.seed ^ 0x2e, a * 1.4, 0.61)) * (1.0 - rs2);
-        let bc = bb - shift;
-        let r = crate::core::sqrt(a4 + bc * bc).min(1.0);
-        let t = ((r - self.crown) / (1.0 - self.crown)).clamp(0.0, 1.0);
-        // (Eased at the crest and the foot, straight between: a gentler steepest grade than a
-        // smoothstep's, so only where it swings hard does its steep side reach a cliff's.)
-        const C: f64 = 0.2;
-        let dome = 1.0 - if t < C { t * t / (2.0 * C * (1.0 - C)) } else if t > 1.0 - C { 1.0 - (1.0 - t) * (1.0 - t) / (2.0 * C * (1.0 - C)) } else { (t - 0.5 * C) / (1.0 - C) };
-        let crest = 1.0 - 0.28 * smoothstep(0.0, 1.2, crate::core::fabs(a - self.high)) - 0.16 * (0.5 + 0.5 * gradient2(self.seed ^ 0x2d, a * 3.2, 0.37)) + 0.08;
+        let lim = crate::core::sqrt(1.0 - du * du);
         let seed = self.seed;
-        let steep = smoothstep(0.02, 0.3, self.side * bc);
-        let mask = |i: f64| steep * smoothstep(-0.1, 0.22, gradient2(seed ^ 0x0e, a * 4.5 + i * 3.7, 0.8 + i * 1.3));
-        let mut f = self.outcrops(dome * crest, 2.0, 0.17, u, v, k, mask);
-        f += 0.06 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, 3, 2.0, 0.5) * 4.0 * t * (1.0 - t);
+        let n = |s: u64, x: f64, y: f64| gradient2(seed ^ s, x, y);
+        let bump = |c: f64, w: f64| 1.0 - smoothstep(0.0, w, crate::core::fabs(a - c));
+        // Shoulders: one or two spots along it where a side runs out further, a spur off the crest.
+        let pick = |i: i64| crate::core::rng::unit(crate::core::rng::hash2(seed, i, 0x5b));
+        let spur_at = [-0.55 + 0.5 * pick(1), 0.05 + 0.5 * pick(2)];
+        let spur_side = [if pick(3) < 0.5 { -1.0 } else { 1.0 }, if pick(4) < 0.5 { -1.0 } else { 1.0 }];
+        let spur = [bump(spur_at[0], 0.24), bump(spur_at[1], 0.16) * (0.4 + 0.6 * pick(5))];
+        // Its two edges (half-widths out from its axis), each ragged on its own.
+        let width = 0.8 + 0.14 * n(0x2b, a * 2.1, 0.9) + 0.04 * n(0x2a, a * 6.1, 2.3);
+        let edge = |s: f64, salt: u64| {
+            let out = (0..2).map(|i| if spur_side[i] == s { 0.5 * spur[i] } else { 0.0 }).sum::<f64>();
+            (width + out + 0.1 * n(salt, a * 4.7, 3.1) + 0.03 * n(salt ^ 0x9, a * 11.0, 0.4)).min(lim).max(0.0)
+        };
+        let (ep, en) = (edge(1.0, 0x27), edge(-1.0, 0x28));
+        if b >= ep || b <= -en {
+            return 0.0;
+        }
+        // The crest: leaning to the steep side (more where it is high), wandering across it.
+        let high2 = if self.high > 0.0 { self.high - 0.75 } else { self.high + 0.75 };
+        let lift = 0.4 + 0.52 * bump(self.high, 0.5) + 0.34 * bump(high2, 0.32) + 0.08 * n(0x2d, a * 3.2, 0.37);
+        let ends = 1.0 - smoothstep(0.45, 1.0, crate::core::fabs(a));
+        let lift = lift.clamp(0.0, 1.0) * ends;
+        let lean = self.side * (0.06 + 0.2 * smoothstep(0.5, 1.0, lift / ends.max(1e-9)));
+        let wander = 0.28 * n(0x2e, a * 1.3, 0.61) + 0.08 * n(0x2f, a * 3.4, 1.7);
+        let gap = 0.3 * (ep + en);
+        let bc = (lean + wander).clamp(-en + gap, ep - gap);
+        // Across: from the crest out to the edge on that side, the ragged outline drawn inward.
+        let run = if b > bc { ep - bc } else { bc + en };
+        let near_spur = (0..2).map(|i| if spur_side[i] * (b - bc) > 0.0 { spur[i] } else { 0.0 }).fold(0.0, f64::max);
+        let rag = 1.0 + 0.16 * (0.5 + 0.5 * n(0x26, u * 1.6 * k, v * 1.6 * k)) + (wob - 1.0);
+        let t = (crate::core::fabs(b - bc) / run.max(1e-9) * rag).min(1.0);
+        if t >= 1.0 {
+            return 0.0;
+        }
+        // (A crown, if it has one, flat along the crest.)
+        let t = ((t - self.crown) / (1.0 - self.crown)).max(0.0);
+        // (Rounded at the crest, spread at the foot, straight between; a shoulder holds up a spur.)
+        const C1: f64 = 0.22;
+        const C2: f64 = 0.26;
+        let m = 1.0 / (1.0 - 0.5 * C1 - 0.5 * C2);
+        let fall = if t < C1 { m * t * t / (2.0 * C1) } else if t > 1.0 - C2 { 1.0 - m * (1.0 - t) * (1.0 - t) / (2.0 * C2) } else { m * (t - 0.5 * C1) };
+        let dome = (1.0 - fall) * (1.0 + 0.35 * near_spur * t * (1.0 - t));
+        let steep = smoothstep(0.02, 0.15, self.side * (b - bc) / run.max(1e-9));
+        let mask = |i: f64| steep * smoothstep(0.6, 0.85, lift) * smoothstep(0.0, 0.3, n(0x0e, a * 4.5 + i * 3.7, 0.8 + i * 1.3));
+        let mut f = self.outcrops(dome * lift, 2.0, 0.17, u, v, k, mask);
+        f += 0.06 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, 3, 2.0, 0.5) * 4.0 * t * (1.0 - t) * ends;
         self.peak * f.max(0.0)
     }
 
