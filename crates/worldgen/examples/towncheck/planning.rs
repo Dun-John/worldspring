@@ -85,6 +85,7 @@ pub(crate) fn planning(ctx: &mut Ctx, label: &str, r: &mut Report) {
             100.0 * m[1].2,
             100.0 * m[2].2
         );
+        svg_dump(label, li, &town::layout(world, t0, li), [world.geom.map_w_ft, world.geom.map_h_ft]);
         r.tally(&format!("towns {class}"), 1);
         for (k, what) in ["grown", "as rolled", "planned"].iter().enumerate() {
             r.value(&format!("on axes % {what}"), 100.0 * m[k].0, format!("L{li}"));
@@ -106,4 +107,49 @@ pub(crate) fn planning(ctx: &mut Ctx, label: &str, r: &mut Report) {
         say!("    streetsin, every town {what}:");
         rs.print();
     }
+}
+
+/// (161) With `TC_SVG=<dir>` and `TC_SVG_TOWNS=<label>:L<li>,...` (e.g. `seed 3:L1`): the town's
+/// patches, blocks, streets and buildings drawn to `<dir>/<label>-L<li>.svg`, for a look at its plan.
+fn svg_dump(label: &str, li: usize, l: &Layout, map: [f64; 2]) {
+    let (Ok(dir), Ok(towns)) = (std::env::var("TC_SVG"), std::env::var("TC_SVG_TOWNS")) else { return };
+    if !towns.split(',').any(|t| t.trim() == format!("{label}:L{li}")) {
+        return;
+    }
+    let pts: Vec<P> = l.districts.iter().flatten().copied().collect();
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for q in &pts {
+        for k in 0..2 {
+            lo[k] = lo[k].min(q[k]);
+            hi[k] = hi[k].max(q[k]);
+        }
+    }
+    let w = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1.0);
+    let path = |p: &[P], close: bool| {
+        let mut d = String::new();
+        for (k, q) in p.iter().enumerate() {
+            d += &format!("{}{:.0} {:.0} ", if k == 0 { "M" } else { "L" }, q[0] - lo[0], q[1] - lo[1]);
+        }
+        if close {
+            d += "Z";
+        }
+        d
+    };
+    let mut svg = format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {w:.0} {w:.0}' width='960' height='960'><rect width='100%' height='100%' fill='#cfe0b8'/>");
+    for b in &l.blocks {
+        svg += &format!("<path d='{}' fill='#e8dcc0'/>", path(b, true));
+    }
+    for r in l.roads.iter().filter(|r| r.1 >= 3) {
+        svg += &format!("<path d='{}' fill='none' stroke='#9a8f80' stroke-width='{:.0}'/>", path(&r.0, false), r.2);
+    }
+    for b in &l.buildings {
+        svg += &format!("<path d='{}' fill='#a0604a'/>", path(&b.poly, true));
+    }
+    for d in &l.districts {
+        svg += &format!("<path d='{}' fill='none' stroke='#2040c0' stroke-width='{:.1}'/>", path(d, true), w / 500.0);
+    }
+    svg += "</svg>";
+    let file = format!("{dir}/{}-L{li}.svg", label.replace(' ', ""));
+    say!("    svg {file}: centre fx {:.6} fy {:.6}", l.center[0] / map[0], l.center[1] / map[1]);
+    std::fs::write(&file, svg).unwrap();
 }

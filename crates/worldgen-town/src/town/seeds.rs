@@ -81,19 +81,69 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
             seeds.push((polar(d, a), true, false));
         }
     }
+    // (161) The shore's points, wanted by the lattice before the shore's seed pairs (below).
+    let shore = shore_points(site, 0.5 * spacing, r_out * 1.1);
+    // (Each lattice seed's mirror across the water, if it has one: their seeds' index pairs.)
+    let mut partner: Vec<(usize, usize)> = Vec::new();
     if line.is_some() {
         let jit = (0.12 * (1.0 - planning) / (1.0 - super::planning::MIXED)).max(0.01) * spacing;
         let k = (r_edge / gx.min(gy)) as i64 + 1;
+        let g = gx.min(gy);
+        // The lattice holds up to the water: a block by a river or the shore is clipped to the
+        // bank by a mirror seed across it (the edge between them on the water's line), never
+        // dropped for an odd patch. By a river, the town's middle's side keeps its lattice and
+        // the far bank's band is its mirror; by the shore, a mirror stands in the water.
+        let band = 0.75 * spacing;
+        let mut pts: Vec<(P, Option<P>)> = Vec::new();
         for ix in -k..=k {
             for iy in -k..=k {
                 let mut sr = Pcg32::new(hash2(pseed, ix, iy ^ 0x1a77), 67);
                 let (ja, j) = (sr.range(0.0, std::f64::consts::TAU), sr.range(0.0, jit));
                 let p = add(add(mul(gu, ix as f64 * gx), mul(gv, iy as f64 * gy)), [j * libm::cos(ja), j * libm::sin(ja)]);
-                let d = len(p);
-                if d >= r_edge || grown(p) || site.near_river(p, 0.6 * spacing) || seeds.iter().any(|(q, fixed, _)| *fixed && dist(*q, p) < 0.5 * gx.min(gy)) {
+                if len(p) >= r_edge || grown(p) || seeds.iter().any(|(q, fixed, _)| *fixed && dist(*q, p) < 0.5 * g) {
                     continue;
                 }
-                seeds.push((p, false, true));
+                if site.near_river(p, band) {
+                    let Some(&(a, b, hw)) = site.river.iter().min_by(|x, y| seg_dist(p, x.0, x.1).total_cmp(&seg_dist(p, y.0, y.1))) else { continue };
+                    let t = sub(b, a);
+                    let tl = len(t);
+                    if tl < 1e-9 {
+                        continue;
+                    }
+                    let n = [-t[1] / tl, t[0] / tl];
+                    let (sp, so) = (dot(sub(p, a), n), dot(mul(a, -1.0), n));
+                    let m = sub(p, mul(n, 2.0 * sp));
+                    if sp.abs() < hw + 0.2 * spacing {
+                        // (A seed on the channel: its block split by the river, a half on each bank.)
+                        let c = sub(p, mul(n, sp));
+                        let d = hw + 0.15 * g;
+                        pts.push((add(c, mul(n, d)), Some(sub(c, mul(n, d)))));
+                    } else if (sp > 0.0) == (so > 0.0) {
+                        pts.push((p, Some(m)));
+                    } else {
+                        // (The far bank's: kept unless a mirror stands there.)
+                        pts.push((p, None));
+                    }
+                    continue;
+                }
+                if site.wet(p) {
+                    continue;
+                }
+                let near_shore = shore.iter().filter(|(q, _)| dist(*q, p) < band).min_by(|x, y| dist(x.0, p).total_cmp(&dist(y.0, p)));
+                let m = near_shore.map(|&(q, n)| sub(p, mul(n, 2.0 * dot(sub(p, q), n)))).filter(|&m| site.wet(m));
+                pts.push((p, m));
+            }
+        }
+        // (A lattice seed hard by another's mirror gives way to it.)
+        let mirrors: Vec<P> = pts.iter().filter_map(|x| x.1).collect();
+        for (p, m) in pts {
+            if mirrors.iter().any(|q| dist(*q, p) < 0.55 * g) {
+                continue;
+            }
+            seeds.push((p, false, true));
+            if let Some(m) = m {
+                partner.push((seeds.len() - 1, seeds.len()));
+                seeds.push((m, false, true));
             }
         }
     }
@@ -127,6 +177,10 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     for (c, t, hw) in river_samples(site, 0.9 * spacing, r_out * 1.1) {
         let n = [-t[1], t[0]];
         let off = hw + 0.45 * spacing;
+        // (Not where the lattice meets the river: its mirrors put the edge on the channel.)
+        if seeds.iter().any(|(p, _, lat)| *lat && dist(*p, c) < hw + 0.8 * spacing) {
+            continue;
+        }
         for q in [add(c, mul(n, off)), sub(c, mul(n, off))] {
             if !seeds.iter().any(|(p, fixed, _)| *fixed && dist(*p, q) < 0.4 * spacing) {
                 seeds.push((q, true, false));
@@ -135,17 +189,51 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     }
     // Coast and lake shore: like the river, mirrored seed pairs across the shoreline put a
     // patch edge on it, so blocks line the water with a quay instead of straddling it.
-    let shore = shore_points(site, 0.5 * spacing, r_out * 1.1);
     let mut shore_used: Vec<P> = Vec::new();
     for &(q, n) in &shore {
-        if shore_used.iter().any(|u| dist(*u, q) < 0.85 * spacing) || site.near_river(q, 0.6 * spacing) {
+        if shore_used.iter().any(|u| dist(*u, q) < 0.85 * spacing) || site.near_river(q, 0.6 * spacing) || seeds.iter().any(|(p, _, lat)| *lat && dist(*p, q) < 0.85 * spacing) {
             continue;
         }
         shore_used.push(q);
         seeds.push((sub(q, mul(n, 0.45 * spacing)), true, false));
         seeds.push((add(q, mul(n, 0.45 * spacing)), true, false));
     }
-    seeds.retain(|(p, fixed, _)| *fixed || shore_used.iter().all(|u| dist(*u, *p) > 0.55 * spacing));
+    // (Lattice seeds kept, and their partners' indices with them.)
+    let mut keep: Vec<bool> = seeds.iter().map(|(p, fixed, lat)| *fixed || *lat || shore_used.iter().all(|u| dist(*u, *p) > 0.55 * spacing)).collect();
+    // (A lattice block left a sliver or a small triangle beside the water or the square gives its
+    // ground to its neighbours: its seed, and its mirror, dropped.)
+    if line.is_some() {
+        let pos: Vec<P> = seeds.iter().map(|x| x.0).collect();
+        let first = voronoi(&pos, &circle([0.0, 0.0], r_out * 1.3, 48));
+        let block = gx * gy;
+        for i in 0..seeds.len() {
+            let c = &first[i].pts;
+            if !seeds[i].2 || c.len() < 3 || len(seeds[i].0) >= r_edge || site.wet(seeds[i].0) {
+                continue;
+            }
+            let a = area(c).abs();
+            let corners = (0..c.len()).filter(|&k| {
+                let (p, q, r) = (c[(k + c.len() - 1) % c.len()], c[k], c[(k + 1) % c.len()]);
+                let (d1, d2) = (sub(q, p), sub(r, q));
+                len(d1) > 0.15 * gx.min(gy) && len(d2) > 0.15 * gx.min(gy) && libm::atan2(cross(d1, d2), dot(d1, d2)).abs() > 15f64.to_radians()
+            }).count();
+            if a < 0.3 * block || (corners <= 3 && a < 0.6 * block) {
+                keep[i] = false;
+                for &(x, y) in &partner {
+                    if x == i {
+                        keep[y] = false;
+                    } else if y == i {
+                        keep[x] = false;
+                    }
+                }
+            }
+        }
+    }
+    let mut k = 0;
+    seeds.retain(|_| {
+        k += 1;
+        keep[k - 1]
+    });
     // Inner (city) seeds first.
     let (inner_seeds, outer_seeds): (Vec<_>, Vec<_>) = seeds.into_iter().partition(|(p, _, _)| len(*p) < r_edge);
     let n_inner = inner_seeds.len();
@@ -153,7 +241,9 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     let total = seeds.len();
     let mut sites: Vec<P> = seeds.iter().map(|x| x.0).collect();
     let fixed_seed: Vec<bool> = seeds.iter().map(|x| x.1 || x.2).collect();
-    let lattice: Vec<bool> = seeds.iter().map(|x| x.2).collect();
+    // (Planned throughout: the blocks by the water and the plaza's ring are cut as the lattice's.)
+    let all = line.is_some_and(|t| t < 0.0);
+    let lattice: Vec<bool> = seeds.iter().map(|x| x.2 || (all && x.1)).collect();
     let boundary = circle([0.0, 0.0], r_out * 1.3, 48);
     let mut cells = voronoi(&sites, &boundary);
     for _ in 0..2 {

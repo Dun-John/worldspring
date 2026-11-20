@@ -109,6 +109,9 @@ pub(super) struct District {
     /// (R6 P8) A docks ward on a sloping shore (grade over 0.09): a lot too steep for one pad
     /// (`Ground::stepped`) stands on two (`step_pads`).
     pub(super) stepped: bool,
+    /// (161) A planned block's lattice heading (unit vector): its alleys cut square to it, its
+    /// lots laid back to back in rows along it (`rows`), none left without a street.
+    pub(super) frame: Option<P>,
 }
 
 impl District {
@@ -138,6 +141,7 @@ impl District {
             size_chaos: 0.4 + 0.6 * r.next_f64(),
             block_size: 4.0 + 10.0 * r.next_f64(),
             stepped: false,
+            frame: None,
         };
         if w == Ward::Slum {
             d.grid_chaos *= 0.5;
@@ -245,7 +249,7 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
     let alley_area = dp.min_sq * dp.block_size;
     if area(block).abs() > alley_area * libm::pow(2.0, dp.size_chaos * (2.0 * rng.next_f64() - 1.0)) {
         let mut chords: Vec<(P, P)> = Vec::new();
-        bisect(block, alley_area, (16.0 * dp.grid_chaos).max(2.0), ALLEY_HALF_FT, rng, &mut parts, fronts, &mut chords, 0);
+        bisect(block, alley_area, (16.0 * dp.grid_chaos).max(2.0), ALLEY_HALF_FT, dp.frame, rng, &mut parts, fronts, &mut chords, 0);
         // Alleys in towns are paved like their fronts (the sprawl outside keeps dirt lanes).
         if thin.is_none() && l.tier >= Tier::Town {
             for (a, b) in chords {
@@ -283,7 +287,10 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             continue;
         }
         let mut lots: Vec<Vec<P>> = Vec::new();
-        bisect(part, dp.min_sq, lot_variance, 0.0, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0);
+        match dp.frame {
+            Some(u) => rows(part, u, dp.min_sq, rng, &mut lots),
+            None => bisect(part, dp.min_sq, lot_variance, 0.0, None, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0),
+        }
         for lot in lots {
             let lot = clean(&blunt(&clean(&lot), 60.0, 10.0));
             // No triangles, slivers or scraps: those corners stay open ground.
@@ -398,16 +405,78 @@ fn on_line(a: P, b: P, n: P, c: f64) -> bool {
 /// in frames rotated by 36°. `gap` > 0 leaves a lane of width 2·gap along each cut, whose
 /// sides are recorded in `cuts` as fronts, as far as the lane runs.
 #[allow(clippy::too_many_arguments)]
-fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, cuts: &mut Vec<Front>, chords: &mut Vec<(P, P)>, depth: u32) {
+/// (161) A planned block's lots (`District::frame`, `u` its lattice heading): one row of lots, or
+/// two back to back (a yard between them where the block is deeper than two lots), along its
+/// longer way on the lattice, every lot reaching a street or alley on the block's side.
+fn rows(part: &[P], u: P, min_sq: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>) {
+    let v = [-u[1], u[0]];
+    let ((ulo, uhi), (vlo, vhi)) = (extent(part, u), extent(part, v));
+    let (a, b, (blo, bhi)) = if uhi - ulo >= vhi - vlo { (u, v, (vlo, vhi)) } else { (v, u, (ulo, uhi)) };
+    let deep = bhi - blo;
+    let dt = crate::core::sqrt(1.5 * min_sq).clamp(22.0, 70.0);
+    // (Lots about twice as deep as wide at most: a house fills its lot.)
+    let strips: Vec<(Vec<P>, f64)> = if deep <= 1.3 * dt {
+        vec![(part.to_vec(), deep)]
+    } else {
+        let d = (0.5 * deep).min(1.15 * dt);
+        vec![(clean(&clip_plain(part, b, blo + d)), d), (clean(&clip_plain(part, mul(b, -1.0), -(bhi - d))), d)]
+    };
+    for (strip, d) in strips {
+        if strip.len() < 3 {
+            continue;
+        }
+        let (alo, ahi) = extent(&strip, a);
+        let w = (min_sq / d.max(1.0)).max(14.0);
+        let mut x = alo;
+        while ahi - x > 1.0 {
+            let mut step = w * (0.85 + 0.3 * rng.next_f64());
+            if ahi - (x + step) < 0.6 * w {
+                step = ahi - x;
+            }
+            let lot = clean(&clip_plain(&clip_plain(&strip, a, x + step), mul(a, -1.0), -x));
+            if lot.len() >= 3 {
+                out.push(lot);
+            }
+            x += step;
+        }
+    }
+}
+
+/// A piece's split into parts of about `min_area` (`variance` how far they may differ), cut by
+/// lines across it (`gap` either side of each kept open as an alley, its sides `cuts` and its centre
+/// line `chords`). (161) With `frame` (a planned block's lattice heading) the cuts run square to it.
+#[allow(clippy::too_many_arguments)]
+fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, frame_to: Option<P>, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, cuts: &mut Vec<Front>, chords: &mut Vec<(P, P)>, depth: u32) {
     let a = area(poly).abs();
     let avg4 = (rng.next_f64() + rng.next_f64() + rng.next_f64() + rng.next_f64()) / 4.0;
     if depth > 18 || a < min_area * libm::pow(variance, (avg4 * 2.0 - 1.0).abs()) {
         out.push(poly.to_vec());
         return;
     }
-    let frame = obb(poly).axis;
     let c = centroid(poly);
     let m = poly.len();
+    if let Some(u) = frame_to {
+        // (Across the longer way first, then the other.)
+        let v = [-u[1], u[0]];
+        let ((ulo, uhi), (vlo, vhi)) = (extent(poly, u), extent(poly, v));
+        let order = if uhi - ulo >= vhi - vlo { [u, v] } else { [v, u] };
+        for attempt in 0..6 {
+            let nrm = order[attempt % 2];
+            let (lo, hi) = extent(poly, nrm);
+            if hi - lo < 1e-6 {
+                continue;
+            }
+            let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
+            let cf = (dot(c, nrm) - lo) / (hi - lo);
+            let cc = lo + (hi - lo) * (0.5 * (cf + 0.5) + 0.2 * (avg3 - 0.5));
+            if split_at(poly, nrm, add(c, mul(nrm, cc - dot(c, nrm))), min_area, variance, gap, frame_to, rng, out, cuts, chords, depth) {
+                return;
+            }
+        }
+        out.push(poly.to_vec());
+        return;
+    }
+    let frame = obb(poly).axis;
     for attempt in 0..10 {
         let ang = attempt as f64 * std::f64::consts::PI / 5.0;
         let (ca, sa) = (libm::cos(ang), libm::sin(ang));
@@ -439,46 +508,55 @@ fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, o
             }
         }
         let Some((_, x, nrm)) = best else { continue };
-        let cc = dot(x, nrm);
-        let p1 = clean(&clip_plain(poly, nrm, cc - gap));
-        let p2 = clean(&clip_plain(poly, mul(nrm, -1.0), -(cc + gap)));
-        if p1.len() < 3 || p2.len() < 3 {
-            continue;
+        if split_at(poly, nrm, x, min_area, variance, gap, None, rng, out, cuts, chords, depth) {
+            return;
         }
-        let (a1, a2) = (area(&p1).abs(), area(&p2).abs());
-        if a1.max(a2) > 2.0 * variance * a1.min(a2).max(1e-9) {
-            continue;
-        }
-        if gap > 0.0 {
-            // The alley's centre line across this piece; its sides, as far as it runs, are fronts.
-            let dir = [-nrm[1], nrm[0]];
-            let m = poly.len();
-            let hits: Vec<P> = (0..m)
-                .filter_map(|k| {
-                    let (a, b) = (poly[k], poly[(k + 1) % m]);
-                    let (da, db) = (dot(a, nrm) - cc, dot(b, nrm) - cc);
-                    (da * db < 0.0).then(|| lerp(a, b, da / (da - db)))
-                })
-                .collect();
-            let lo = hits.iter().min_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
-            let hi = hits.iter().max_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
-            let (a, b) = match (lo, hi) {
-                (Some(&a), Some(&b)) => {
-                    chords.push((a, b));
-                    (a, b)
-                }
-                _ => (x, x),
-            };
-            let side = |s: f64| (add(a, mul(nrm, s)), add(b, mul(nrm, s)));
-            let ((a1, b1), (a2, b2)) = (side(-gap), side(gap));
-            cuts.push(Front { n: nrm, c: cc - gap, a: a1, b: b1 });
-            cuts.push(Front { n: mul(nrm, -1.0), c: -(cc + gap), a: a2, b: b2 });
-        }
-        bisect(&p1, min_area, variance, gap, rng, out, cuts, chords, depth + 1);
-        bisect(&p2, min_area, variance, gap, rng, out, cuts, chords, depth + 1);
-        return;
     }
     out.push(poly.to_vec());
+}
+
+/// `bisect`'s cut of `poly` along the line through `x` square to `nrm`, if it leaves two parts near
+/// enough in size; then each part's own.
+#[allow(clippy::too_many_arguments)]
+fn split_at(poly: &[P], nrm: P, x: P, min_area: f64, variance: f64, gap: f64, frame_to: Option<P>, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, cuts: &mut Vec<Front>, chords: &mut Vec<(P, P)>, depth: u32) -> bool {
+    let cc = dot(x, nrm);
+    let p1 = clean(&clip_plain(poly, nrm, cc - gap));
+    let p2 = clean(&clip_plain(poly, mul(nrm, -1.0), -(cc + gap)));
+    if p1.len() < 3 || p2.len() < 3 {
+        return false;
+    }
+    let (a1, a2) = (area(&p1).abs(), area(&p2).abs());
+    if a1.max(a2) > 2.0 * variance * a1.min(a2).max(1e-9) {
+        return false;
+    }
+    if gap > 0.0 {
+        // The alley's centre line across this piece; its sides, as far as it runs, are fronts.
+        let dir = [-nrm[1], nrm[0]];
+        let m = poly.len();
+        let hits: Vec<P> = (0..m)
+            .filter_map(|k| {
+                let (a, b) = (poly[k], poly[(k + 1) % m]);
+                let (da, db) = (dot(a, nrm) - cc, dot(b, nrm) - cc);
+                (da * db < 0.0).then(|| lerp(a, b, da / (da - db)))
+            })
+            .collect();
+        let lo = hits.iter().min_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
+        let hi = hits.iter().max_by(|a, b| dot(**a, dir).total_cmp(&dot(**b, dir)));
+        let (a, b) = match (lo, hi) {
+            (Some(&a), Some(&b)) => {
+                chords.push((a, b));
+                (a, b)
+            }
+            _ => (x, x),
+        };
+        let side = |s: f64| (add(a, mul(nrm, s)), add(b, mul(nrm, s)));
+        let ((a1, b1), (a2, b2)) = (side(-gap), side(gap));
+        cuts.push(Front { n: nrm, c: cc - gap, a: a1, b: b1 });
+        cuts.push(Front { n: mul(nrm, -1.0), c: -(cc + gap), a: a2, b: b2 });
+    }
+    bisect(&p1, min_area, variance, gap, frame_to, rng, out, cuts, chords, depth + 1);
+    bisect(&p2, min_area, variance, gap, frame_to, rng, out, cuts, chords, depth + 1);
+    true
 }
 
 /// Farmland (after watabou's fields): the patch is split into plots, square to the long

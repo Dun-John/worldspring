@@ -1347,6 +1347,8 @@ struct TownPlan {
     /// planned lattice (its blocks cut regularly).
     planning: f64,
     lattice: Vec<bool>,
+    /// (161) The planned lattice's heading (radians): its blocks' alleys and lots run with it.
+    axis: f64,
 }
 
 /// Why a patch can't be laid out as a park (generated or set by hand).

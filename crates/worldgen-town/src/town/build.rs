@@ -335,6 +335,7 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
         if plan.lattice.get(i) == Some(&true) {
             dp.grid_chaos *= 1.0 - 0.8 * plan.planning;
             dp.size_chaos *= 1.0 - 0.7 * plan.planning;
+            dp.frame = Some([libm::cos(plan.axis), libm::sin(plan.axis)]);
         }
         match ch.lots.get(&i) {
             Some(f) => dp.min_sq = District::base(w) * f,

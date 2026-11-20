@@ -366,8 +366,14 @@ fn paired_links(world: &World, t0: &worldgen::t0::T0) {
     // A free floor square of a level (one with furniture that may move on it, if there is one).
     let spot = |id: &str, li: usize, avoid: &[(u16, u16)]| -> End {
         let it = built(world, id);
-        let ok = |x: u16, y: u16| !avoid.contains(&(x, y)) && links::spot_problem(&it, id, li, x, y).is_none();
         let lv = &it.levels[li];
+        // (Not a corner shut in by crates and barrels: a free floor square beside it.)
+        let blocks = worldgen::under::blocked_squares(&lv.furniture, it.nx, it.ny);
+        let open = |x: u16, y: u16| {
+            let (i, j) = (x as usize, y as usize);
+            [(i > 0).then(|| (i - 1, j)), (i + 1 < it.nx).then(|| (i + 1, j)), (j > 0).then(|| (i, j - 1)), (j + 1 < it.ny).then(|| (i, j + 1))].into_iter().flatten().any(|(a, b)| lv.cells[b * it.nx + a] >= 0 && !blocks[b * it.nx + a])
+        };
+        let ok = |x: u16, y: u16| !avoid.contains(&(x, y)) && open(x, y) && links::spot_problem(&it, id, li, x, y).is_none();
         let under = lv.furniture.iter().filter(|f| !f.blocks_move && f.w == 1 && f.h == 1).map(|f| (f.x, f.y)).find(|&(x, y)| ok(x, y));
         let any = (0..it.nx * it.ny).map(|k| ((k % it.nx) as u16, (k / it.nx) as u16)).find(|&(x, y)| ok(x, y));
         let (x, y) = under.or(any).unwrap_or_else(|| panic!("{id} level {li}: no square for a link"));

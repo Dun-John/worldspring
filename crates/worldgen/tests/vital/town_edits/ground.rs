@@ -12,7 +12,17 @@ pub(in super::super) fn ground_edits(base: &World) {
     use worldgen::battlemap::{self, Chunk, HS, SQ, SQUARE_FT};
     use worldgen::ground::{self, Brush, Stroke};
     use worldgen::world::{EditOp, Edits};
-    let mut ex = Executor::new(World::new(base.file.clone()).unwrap());
+    // (The towns laid out grown, as when these checks were written: a planned grid moves the
+    // shores, fronts and squares they look at. Below, `pinned` stands for no edits.)
+    let pinned = {
+        let t0 = worldgen::t0::T0::generate(base);
+        let mut e = Edits::default();
+        e.planning = (0..t0.settlements.len()).map(|i| (i.to_string(), 0)).collect();
+        e
+    };
+    let mut file = base.file.clone();
+    file.edits = pinned.clone();
+    let mut ex = Executor::new(World::new(file).unwrap());
     let g = ex.world.geom.clone();
     let lvl = g.max_level;
     let size = g.tile_size_ft(lvl);
@@ -52,7 +62,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     let level = (top + 10.0).round();
     let outline = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
     let plateau = ground::plateau_for(&outline, level as f64, 0.0).expect("the plateau");
-    let mut e = Edits::default();
+    let mut e = pinned.clone();
     e.plateaus.insert("h:test".into(), plateau);
     // The mound: on the edge between the southern two, where both sides have open dry ground.
     let open = |c: &Chunk, k: &TileKey, at: [f64; 2]| -> Vec<usize> {
@@ -183,7 +193,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     }
     assert!(seams >= 4, "too few tile seams checked ({seams})");
     // Cleared: as generated, byte for byte.
-    ex.world.file.edits = Edits::default();
+    ex.world.file.edits = pinned.clone();
     for (q, k) in keys.iter().enumerate() {
         assert!(pack(&mut ex, *k).0 == plain[q].0, "chunk {k:?} differs once the shaping is cleared");
     }
@@ -224,7 +234,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     let ground_floor = |ex: &Executor| worldgen::interior::generate_id(&ex.world, &ex.t0, &id).expect("the building's interior").levels.iter().find(|v| v.z == 0).unwrap().elevation_ft;
     let before = (sides.map(|k| roof(&mut ex, k)), ground_floor(&ex));
     let outline = [[seam + 10.0, y0 - 20.0], [x1 + 20.0, y0 - 20.0], [x1 + 20.0, y1 + 20.0], [seam + 10.0, y1 + 20.0]];
-    let mut e = Edits::default();
+    let mut e = pinned.clone();
     e.plateaus.insert("h:side".into(), ground::plateau_for(&outline, b.pad_ft as f64 + 12.0, 0.0).unwrap());
     ex.world.file.edits = e;
     let after = (sides.map(|k| roof(&mut ex, k)), ground_floor(&ex));
@@ -232,7 +242,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     assert_eq!(after.0[0].to_bits(), after.0[1].to_bits(), "building {id} across a chunk edge stands at {} and {} on ground shaped on one side", after.0[0], after.0[1]);
     assert!(rise >= 2.0, "building {id} rose only {rise} ft with a plateau 12 ft up under its far corners");
     assert!((after.1 - before.1 - rise).abs() < 1e-3, "building {id}'s ground floor rose {} ft, its roof {rise} ft", after.1 - before.1);
-    ex.world.file.edits = Edits::default();
+    ex.world.file.edits = pinned.clone();
 
     // Lowering never floods: a dry square on a shore, dug by brush and by a pit. (A natural shore:
     // not by a city's quay front, made ground over the water that digging lays open again.)
@@ -254,7 +264,7 @@ pub(in super::super) fn ground_edits(base: &World) {
         .expect("a shore");
     let c = ex.battlemap(key);
     let p = centre(&key, k2 % SQ, k2 / SQ);
-    let mut e = Edits::default();
+    let mut e = pinned.clone();
     ground::stamp_brush(&mut e.ground, &Stroke { mode: Brush::Lower, path: &[p], radius_ft: 30.0, height_ft: 20.0, hardness: 0.8, strength: 1.0 }, &|_, _| 0.0).unwrap();
     let pit = [[-25.0, -25.0], [25.0, -25.0], [25.0, 25.0], [-25.0, 25.0]].map(|d| [p[0] - 30.0 + d[0], p[1] + d[1]]);
     e.plateaus.insert("h:pit".into(), ground::plateau_for(&pit, c.height[k2] as f64 - 30.0, 10.0).unwrap());
@@ -279,7 +289,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     let c = ex.battlemap(key);
     let m = centre(&key, mid % SQ, mid / SQ);
     let hole = [[-25.0, -25.0], [25.0, -25.0], [25.0, 25.0], [-25.0, 25.0]].map(|d| [m[0] + d[0], m[1] + d[1]]);
-    let mut e = Edits::default();
+    let mut e = pinned.clone();
     e.plateaus.insert("h:chasm".into(), ground::plateau_for(&hole, c.height[mid] as f64 - 30.0, 10.0).unwrap());
     ex.world.file.edits = e;
     let dug = ex.battlemap(key);
@@ -291,7 +301,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     ex.world.file.edits.plateaus.get_mut("h:chasm").unwrap().floor = Some(ground::Floor::Ground);
     let lawn = ex.battlemap(key);
     assert!(rock(&lawn) <= rock(&c), "a pit with floor: ground draws rock on {} squares (the ground there {})", rock(&lawn), rock(&c));
-    ex.world.file.edits = Edits::default();
+    ex.world.file.edits = pinned.clone();
 
     // P6: plateaus stack whatever their sizes and ids. A base, a terrace 15 ft above it in two
     // pieces of one level, and a lower piece inside the terrace (smallest, first by id): the
@@ -301,7 +311,7 @@ pub(in super::super) fn ground_edits(base: &World) {
         let at = |x0: f64, y0: f64, x1: f64, y1: f64| [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
         let lv = level as f64;
         let stack = |ids: [&str; 4]| {
-            let mut e = Edits::default();
+            let mut e = pinned.clone();
             e.plateaus.insert(ids[0].into(), ground::plateau_for(&at(-60.0, -60.0, 60.0, 60.0), lv, 0.0).unwrap());
             e.plateaus.insert(ids[1].into(), ground::plateau_for(&at(-30.0, -30.0, 0.0, 30.0), lv + 15.0, 10.0).unwrap());
             e.plateaus.insert(ids[2].into(), ground::plateau_for(&at(0.0, -30.0, 30.0, 30.0), lv + 15.0, 10.0).unwrap());
@@ -387,7 +397,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     for w in [&breakwater, &quay] {
         assert!(w.problem(g.map_w_ft, g.map_h_ft).is_none(), "a {}: {:?}", w.kind.name(), w.problem(g.map_w_ft, g.map_h_ft));
     }
-    let mut e = Edits::default();
+    let mut e = pinned.clone();
     e.plateaus.insert("h:isle".into(), islet.clone());
     e.wharves.insert("q:bw".into(), breakwater.clone());
     e.wharves.insert("q:quay".into(), quay.clone());
@@ -456,7 +466,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     // The finest tile under the islet draws it, its samples for its children as generated.
     let tk = fine(islet_at);
     let shaped_tile = ex.terrain_packed(tk);
-    ex.world.file.edits = Edits::default();
+    ex.world.file.edits = pinned.clone();
     let plain_tile = ex.terrain_packed(tk);
     let samples = 48..48 + PADDED * PADDED * 4;
     assert!(shaped_tile != plain_tile, "tile {tk:?} doesn't show the islet");
@@ -479,7 +489,7 @@ pub(in super::super) fn ground_edits(base: &World) {
         panic!("a wall on a plateau over the water refused: {e}");
     }
     agent::building_spot(&ex.world, &ex.t0, &foot(islet_at), None, "c:99", None).expect("a building on a plateau over the water");
-    ex.world.file.edits = Edits::default();
+    ex.world.file.edits = pinned.clone();
     // No limit on the shift: a plateau 250 ft over the ground, a pit 300 ft under it and a plateau
     // over sea deeper than 150 ft each stand flat at their own level.
     {
@@ -487,7 +497,7 @@ pub(in super::super) fn ground_edits(base: &World) {
         let area = [corner[0] - 80.0, corner[1] - 80.0, corner[0] + 80.0, corner[1] + 80.0];
         let box_at = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
         for (name, gr, rise, pit) in [("plateau", 100.0f32, 250.0, false), ("pit", 1000.0, -300.0, true)] {
-            let mut e = Edits::default();
+            let mut e = pinned.clone();
             let pl = ground::plateau_for(&box_at, gr as f64 + rise, 0.0).unwrap();
             e.plateaus.insert("h:far".into(), pl);
             let sh = ground::Shaper::build(&e, None, area, SQUARE_FT).unwrap();
@@ -517,7 +527,7 @@ pub(in super::super) fn ground_edits(base: &World) {
         assert!(agent::building_spot(&ex.world, &ex.t0, &foot(p), None, "c:99", None).is_err(), "a building in deep water");
         ex.world.file.edits.plateaus.insert("h:deep".into(), ground::plateau_for(&deck, ex.t0.sample_water(p[0], p[1]) as f64 + 12.0, 0.0).unwrap());
         agent::building_spot(&ex.world, &ex.t0, &foot(p), None, "c:99", None).expect("a building on a plateau over deep water");
-        ex.world.file.edits = Edits::default();
+        ex.world.file.edits = pinned.clone();
     }
 
     // P6: water outlines. An inlet from 50 ft inland out into the sea at the sea's level: wet on
@@ -557,10 +567,6 @@ pub(in super::super) fn ground_edits(base: &World) {
     let (j, i0) = (k2 / SQ, k2 % SQ);
     for i in i0 - 8..=i0 + 16 {
         let q = j * SQ + i;
-        // (A town square it cuts into stays, on a deck where over the water: it clears none.)
-        if plain_c.1.urban[q] == worldgen::battlemap::URBAN_PLAZA {
-            continue;
-        }
         assert!(wet(&c, q) && (c.water_level[q] - sea).abs() < 0.01, "the inlet: square {} from the shore is not the sea's water ({} over {})", i as i64 - i0 as i64, c.water_level[q], c.height[q]);
     }
     // (A city's quay front the inlet meets gives way to it, `harbour::quays_kept`: the ground by
@@ -583,8 +589,7 @@ pub(in super::super) fn ground_edits(base: &World) {
             for q in 0..SQ * SQ {
                 let p = at(q);
                 let (raised, off) = ((plain_c.1.height[q] - f.level).abs() < 0.01 && !wet(&plain_c.1, q), worldgen::town::geom::poly_gap(&inlet.pts, &[p]) > 6.0);
-                if !worldgen::town::geom::contains(&f.pts, p) || worldgen::town::geom::poly_gap(&f.pts, &[p]) < 3.0 || !raised || !off || c.building[q] != 0 || c.urban[q] == battlemap::URBAN_DECK || c.urban[q] == battlemap::URBAN_PLAZA {
-                    // (A town square on it stays, as above.)
+                if !worldgen::town::geom::contains(&f.pts, p) || worldgen::town::geom::poly_gap(&f.pts, &[p]) < 3.0 || !raised || !off || c.building[q] != 0 || c.urban[q] == battlemap::URBAN_DECK {
                     continue;
                 }
                 assert!(c.height[q] < f.level - 0.01, "the inlet: square {q} on the front it meets still made ground ({} at level {})", c.height[q], f.level);
@@ -599,7 +604,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     let shaped_tile = ex.terrain_packed(tk);
     let json = serde_json::to_string(&ex.world.file.edits).unwrap();
     assert!(serde_json::from_str::<Edits>(&json).unwrap() == ex.world.file.edits, "water outlines through JSON");
-    ex.world.file.edits = Edits::default();
+    ex.world.file.edits = pinned.clone();
     let plain_tile = ex.terrain_packed(tk);
     let samples = 48..48 + PADDED * PADDED * 4;
     assert!(shaped_tile != plain_tile && shaped_tile[samples.clone()] == plain_tile[samples], "tile {tk:?}: the inlet drawn, its samples as generated");
@@ -617,6 +622,6 @@ pub(in super::super) fn ground_edits(base: &World) {
     }
     let s = worldgen::town::Shore::new(&ex.world, &ex.t0, [dp[0] - 100.0, dp[1] - 100.0, dp[0] + 100.0, dp[1] + 100.0]);
     assert!(s.wet(dp) && !s.wet([dp[0], dp[1] + 40.0]), "the ponds' shore");
-    ex.world.file.edits = Edits::default();
+    ex.world.file.edits = pinned.clone();
     assert!(pack(&mut ex, key).0 == plain_c.0 && inlet_pack != plain_c.0, "the shore's chunk with and without the water outlines");
 }

@@ -1094,6 +1094,7 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         park_refused,
         planning,
         lattice,
+        axis,
     };
     // Its other open spaces, on the plan as it stands.
     (plan.squares, plan.closes) = squares::plan(&plan, site, s.tier);
