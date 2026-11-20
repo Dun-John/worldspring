@@ -115,6 +115,9 @@ pub(super) struct District {
     /// (189) A Linear town's planned block: its lots (`rows`) long narrow burgage plots the depth
     /// of the block, the house at the street end of each, a yard behind.
     pub(super) burgage: bool,
+    /// (189) A Linear town's: a point on its high street (it runs along `frame`), the plots'
+    /// fronts on it where they have one there.
+    pub(super) high: Option<P>,
 }
 
 impl District {
@@ -146,6 +149,7 @@ impl District {
             stepped: false,
             frame: None,
             burgage: false,
+            high: None,
         };
         if w == Ward::Slum {
             d.grid_chaos *= 0.5;
@@ -308,7 +312,16 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
                 continue;
             }
             // Frontage: a street or alley one of the lot's edges lies on (along its stretch, in a piece).
-            let Some(&Front { n, c, a: fa, b: fb }) = fronts.iter().find(|f| if spans { f.fronted_by(&lot) } else { on_line_lot(&lot, f.n, f.c) }) else { continue };
+            let fronting = |f: &&Front| if spans { f.fronted_by(&lot) } else { on_line_lot(&lot, f.n, f.c) };
+            // (189: a burgage plot fronts the high street where it reaches it, not its back lane.)
+            let high = match (dp.burgage, dp.high, dp.frame) {
+                (true, Some(h), Some(u)) => fronts.iter().filter(fronting).min_by(|x, y| {
+                    let off = |f: &Front| cross(u, sub(lerp(f.a, f.b, 0.5), h)).abs();
+                    off(x).total_cmp(&off(y))
+                }),
+                _ => None,
+            };
+            let Some(&Front { n, c, a: fa, b: fb }) = high.or_else(|| fronts.iter().find(fronting)) else { continue };
             // (189: a burgage plot's house at its street end, up to about twice its width deep.)
             // (A plot whose long side is on the street, at a block's end: the house at the end of
             // it nearer the street's stretch.)
@@ -321,7 +334,12 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
                     if m > 0.5 * (lo + hi) { clip_plain(&lot, mul(o.axis, -1.0), -(hi - deep)) } else { clip_plain(&lot, o.axis, lo + deep) }
                 };
                 let h = clean(&h);
-                if h.len() >= 4 { h } else { lot }
+                // (Never the whole long plot, or a sliver of it, for a house: then a yard only.)
+                let ho = if h.len() >= 4 { Some(obb(&h)) } else { None };
+                match ho {
+                    Some(ho) if ho.short >= 0.28 * ho.long => h,
+                    _ => continue,
+                }
             } else {
                 lot
             };

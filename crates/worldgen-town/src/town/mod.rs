@@ -539,6 +539,8 @@ pub struct ParkGround {
 
 /// `ParkGround`'s spacing (ft).
 pub const PARK_GROUND_FT: f64 = 20.0;
+/// (189) A Linear town's high street's width (ft; other main streets 18): a street market's.
+pub const HIGH_STREET_FT: f64 = 28.0;
 
 impl ParkGround {
     /// The planned ground at `p` (world ft), bilinear, clamped to the grid.
@@ -1363,6 +1365,14 @@ struct TownPlan {
     /// (161) How planned its streets are (0-1, `planning`), and each face's: seeded on the
     /// planned lattice (its blocks cut regularly).
     planning: f64,
+    /// (189) How planned it is laid out: `planning`, at least a planned quarter's on a pattern,
+    /// and at least `pattern::HAND_FLOOR` on one set by hand.
+    laid: f64,
+    /// (189) The middle its rings run round (`seeds::Seeds::hub`); a Linear town's: a point on its
+    /// high street.
+    hub: P,
+    /// (189) Each main street's (`paths`): a Linear town's high street, wider (`HIGH_STREET_FT`).
+    wide: Vec<bool>,
     lattice: Vec<bool>,
     /// (161) The planned lattice's heading (radians): its blocks' alleys and lots run with it.
     axis: f64,
@@ -1396,6 +1406,10 @@ impl TownPlan {
 
     fn main_edge(&self, a: usize, b: usize) -> bool {
         self.main_edges.contains(&(a.min(b), a.max(b)))
+    }
+    /// (189) Whether the edge between corners `a` and `b` is on a Linear town's high street.
+    fn high_edge(&self, a: usize, b: usize) -> bool {
+        self.paths.iter().zip(&self.wide).filter(|x| *x.1).any(|(p, _)| p.windows(2).any(|w| (w[0], w[1]) == (a, b) || (w[0], w[1]) == (b, a)))
     }
 
     fn roll(&self, i: usize, stage: i64) -> f64 {

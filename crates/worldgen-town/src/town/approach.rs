@@ -23,7 +23,9 @@ pub(super) fn lay(
     // (R5 towns, M18: the stretches of road and street a gate taken out cut off, kept clear as
     // they were with the gate, and their half widths and 3 ft, as `keep_clear` keeps roads.)
     let mut freed: Vec<(P, P, f64)> = Vec::new();
-    for path in &plan.paths {
+    for (pi, path) in plan.paths.iter().enumerate() {
+        // (189: a Linear town's high street wider, a street market's.)
+        let width = if plan.wide.get(pi) == Some(&true) { super::HIGH_STREET_FT } else { 18.0 };
         l.streets.push(path.iter().map(|&v| mesh.pos[v]).collect());
         let mut drawn: Vec<P> = Vec::new();
         for (k, &v) in path.iter().enumerate() {
@@ -32,19 +34,19 @@ pub(super) fn lay(
             {
                 drawn.push(river_crossing(site, mesh.pos[path[k - 1]], mesh.pos[v]));
             } else if k > 0 {
-                pieces.edge(path[k - 1], v, mesh.pos[path[k - 1]], mesh.pos[v], 18.0, true, l.roads.len());
+                pieces.edge(path[k - 1], v, mesh.pos[path[k - 1]], mesh.pos[v], width, true, l.roads.len());
             }
             drawn.push(mesh.pos[v]);
         }
         pieces.main_street(l.roads.len());
         let drawn = if walled {
             let (kept, cut) = wallgates::closed_street(&ch.wall, path, drawn);
-            freed.extend(cut.iter().flat_map(|c| c.windows(2).map(|s| (s[0], s[1], 0.5 * 18.0 + 3.0))));
+            freed.extend(cut.iter().flat_map(|c| c.windows(2).map(|s| (s[0], s[1], 0.5 * width + 3.0))));
             kept
         } else {
             drawn
         };
-        l.roads.push((drawn, 4, 18.0));
+        l.roads.push((drawn, 4, width));
     }
     // (A road to a gate taken out ends where it can join another: the streets and network roads.)
     let others: Vec<(P, P, f64)> = if walled && !ch.wall.remove.is_empty() {

@@ -205,7 +205,9 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
                 // (A planned wall taken down leaves its strip as a street round the town.)
                 // (Nor round the water the town encloses.)
                 let wall = (walled || plan.walled) && i < n_inner && (!plan.inner(nb) || (wet[nb as usize] && !plan.enclosed[nb as usize]));
-                back[e] = (if main { 12.0 } else { 7.0 }) + if wall { 18.0 } else { 0.0 };
+                // (189: a Linear town's high street wider: its blocks step back further.)
+                let main_back = if main && plan.high_edge(va, vb) { 0.5 * super::HIGH_STREET_FT + 3.0 } else { 12.0 };
+                back[e] = (if main { main_back } else { 7.0 }) + if wall { 18.0 } else { 0.0 };
                 // A castle's side on the town wall: that wall is the castle's there (`castle`; with
                 // the wall taken down, a curtain of its own on that side).
                 if w == Ward::Castle && wall && castle_wall_edge(i, e) {
@@ -333,14 +335,16 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
         let mut dp = District::roll(w, salt(hash2(plan.base_seed, key as i64, 0xd15)));
         // (161) A planned block: its alleys cut square, its lots near one size.
         if plan.lattice.get(i) == Some(&true) {
-            // (189: a pattern set on a grown town is followed as loosely as a planned quarter's.)
-            let p = if plan.pattern != super::pattern::Pattern::Grid { plan.planning.max(super::planning::MIXED) } else { plan.planning };
+            // (189: a pattern on a grown town is followed as loosely as a planned quarter's; one
+            // set by hand at least fairly strictly: `TownPlan::laid`.)
+            let p = plan.laid;
             dp.grid_chaos *= 1.0 - 0.8 * p;
             dp.size_chaos *= 1.0 - 0.7 * p;
             let a = plan.frames.get(i).copied().unwrap_or(plan.axis);
             dp.frame = Some([libm::cos(a), libm::sin(a)]);
             // (189: on Linear, long narrow burgage plots, a house at the street end of each.)
             dp.burgage = plan.pattern == super::pattern::Pattern::Linear;
+            dp.high = dp.burgage.then_some(plan.hub);
         }
         match ch.lots.get(&i) {
             Some(f) => dp.min_sq = District::base(w) * f,

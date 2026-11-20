@@ -24,6 +24,26 @@ fn round_and_out(l: &Layout, c: P, r: f64) -> (f64, f64) {
     if total > 0.0 { (ring / total, spoke / total) } else { (0.0, 0.0) }
 }
 
+/// (189) How much of a straight high street town `l` (urban radius `r`) has: the most main-street
+/// length on one line (within 10 deg of one of 36 headings, within 60 ft across), over its width
+/// (2 `r`).
+fn straight(l: &Layout, r: f64) -> f64 {
+    let segs: Vec<(P, P)> = l.roads.iter().filter(|x| x.1 == 4).flat_map(|x| x.0.windows(2).map(|w| (sub(w[0], l.center), sub(w[1], l.center))).collect::<Vec<_>>()).collect();
+    let mut best = 0.0f64;
+    for k in 0..36 {
+        let a = k as f64 * std::f64::consts::PI / 36.0;
+        let u = [libm::cos(a), libm::sin(a)];
+        let along: Vec<&(P, P)> = segs.iter().filter(|(p, q)| dist(*p, *q) > 1.0 && (dot(sub(*q, *p), u) / dist(*p, *q)).abs() > libm::cos(10f64.to_radians())).collect();
+        // (Lines: each aligned piece's offset across; the best 60 ft band's length.)
+        for (p, q) in &along {
+            let off = cross(u, lerp(*p, *q, 0.5));
+            let t: f64 = along.iter().filter(|(a, b)| (cross(u, lerp(*a, *b, 0.5)) - off).abs() < 60.0).map(|(a, b)| dist(*a, *b)).sum();
+            best = best.max(t);
+        }
+    }
+    best / (2.0 * r)
+}
+
 /// (189) Per town and city (as generated, not by hand): the street pattern it is laid out on
 /// (`Layout::pattern`; every town's set with `TC_PATTERN`), how its streets run round its middle
 /// (`round_and_out`), and its buildings' wedges (`wedges::wedge_of`, `eye_corner`) and overlaps,
@@ -60,7 +80,10 @@ pub(crate) fn patterns(world: &World, t0: &T0, label: &str, r: &mut Report) {
                 }
             }
         }
-        say!("    {label} L{li} {} {p} (planning {}): round {:.0}%, out {:.0}%; {n} buildings, {sharp} corner < 60, {eye} eye < 70, {over} overlapping; fx {:.4} fy {:.4}", s.tier.name(), l.planning, 100.0 * ring, 100.0 * spoke, l.center[0] / world.geom.map_w_ft, l.center[1] / world.geom.map_h_ft);
+        let hs = straight(&l, ur);
+        let wide: f64 = l.roads.iter().filter(|x| x.1 == 4 && x.2 > 20.0).map(|x| x.0.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>()).sum();
+        r.value(&format!("high street % ({p})"), 100.0 * hs, format!("{label} L{li}"));
+        say!("    {label} L{li} {} {p} (planning {}): round {:.0}%, out {:.0}%, high street {:.0}% ({wide:.0} ft wide); {n} buildings, {sharp} corner < 60, {eye} eye < 70, {over} overlapping; fx {:.4} fy {:.4}", s.tier.name(), l.planning, 100.0 * ring, 100.0 * spoke, 100.0 * hs, l.center[0] / world.geom.map_w_ft, l.center[1] / world.geom.map_h_ft);
         r.tally(&format!("towns {p}"), 1);
         r.value(&format!("round % ({p})"), 100.0 * ring, format!("{label} L{li}"));
         r.value(&format!("out % ({p})"), 100.0 * spoke, format!("{label} L{li}"));

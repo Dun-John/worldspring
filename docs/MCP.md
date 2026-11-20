@@ -2251,8 +2251,9 @@ radiating from the centre; round a bay, arcs round the harbour with streets down
 long high street along the valley, ridge, hillside or river, back lanes behind its long narrow plots, short cross
 lanes); `"auto"` (the default) picks one from its land and culture (a hill top or a northern city rings, a bay
 town harbour arcs, a valley or hillside town or some river towns linear, a southern city radial, most towns a
-grid). Patterns show only in a town's planned part: a grown town given one is laid out
-as planned 0.3 round a grown core. It is given alone or with `planning`, with the same effect: the town is laid out
+grid; harbour arcs only where the shore curves round the harbour, not on a straight coast). Patterns show
+only in a town's planned part: a pattern given by hand is followed at least as strictly as planning 0.6 (a
+small grown core), more if `planning` is higher. It is given alone or with `planning`, with the same effect: the town is laid out
 anew and the changes made inside it are set aside. The reply carries `pattern` (`from`, `to`, `unchanged`,
 `set_aside`, `set_aside_by`) beside `planning`. Villages and towns laid out by hand have none.
 

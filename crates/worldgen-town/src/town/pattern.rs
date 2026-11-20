@@ -50,6 +50,10 @@ impl Pattern {
     }
 }
 
+/// How planned a town whose pattern is set by hand is laid out at the least (`town::planning`):
+/// the pattern shows, beyond a small grown core.
+pub const HAND_FLOOR: f64 = 0.6;
+
 /// The pattern `edits` set for one of the world's own settlements, if any.
 pub fn override_in(edits: &Edits, t0: &T0, index: usize) -> Option<Pattern> {
     if edits.patterns.is_empty() || index >= t0.settlements.len() {
@@ -137,7 +141,8 @@ pub(super) fn long_axis(site: &Site, r: f64) -> Option<(f64, bool)> {
 }
 
 /// (189) The harbour a bay town's rings arc round, if it stands on one: standing water on a
-/// fifth to three fifths of the way round it at 0.8 r, all in one stretch. The middle of the
+/// fifth to three fifths of the way round it at 0.8 r, all in one stretch, and land round the
+/// harbour most of the way. The middle of the
 /// shore there (where the water begins, from the town's middle out towards it), a little out
 /// on the water.
 pub(super) fn harbour(site: &Site, r: f64) -> Option<P> {
@@ -164,7 +169,11 @@ pub(super) fn harbour(site: &Site, r: f64) -> Option<P> {
     while t < 0.8 * r && !site.wet_standing(mul(u, t)) {
         t += 10.0;
     }
-    Some(mul(u, t + 0.1 * r))
+    let hub = mul(u, t + 0.1 * r);
+    // (A bay, not a straight shore or a headland: from the harbour, land round most of the way
+    // (10 of 16 directions or more, at 0.6 r, where a straight shore has 7 to 9), the shore curving round it on both sides.)
+    let dry = dirs.iter().filter(|&&d| !site.wet_standing(add(hub, mul(d, 0.6 * r)))).count();
+    (dry >= 10).then_some(hub)
 }
 
 /// What `get_town_plan` and `get_feature` say of town layout `index`'s pattern: the one it is

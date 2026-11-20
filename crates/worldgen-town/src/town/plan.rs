@@ -44,10 +44,13 @@ pub(super) fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownP
 pub(super) fn plan_for(world: &World, t0: &T0, index: usize, site: &Site, s: &Settlement, r: f64, now: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
     let planning = super::planning::of(world, t0, index, s);
     // (189) Its street pattern: as set, else as its land and culture pick.
-    let pattern = super::pattern::override_in(&world.file.edits, t0, index).unwrap_or_else(|| super::pattern::auto(site, s, r, planning));
+    let set = super::pattern::override_in(&world.file.edits, t0, index);
+    let pattern = set.unwrap_or_else(|| super::pattern::auto(site, s, r, planning));
+    // (A pattern set by hand is followed at least fairly strictly, more as the slider rises.)
+    let laid = if set.is_some() { planning.max(super::pattern::HAND_FLOOR) } else if pattern != super::pattern::Pattern::Grid { planning.max(super::planning::MIXED) } else { planning };
     match frozen_ends(world, t0, index) {
-        Some((was, heading)) => plan_town(site, s, r, &was, Some(&heading), planning, pattern, rng),
-        None => plan_town(site, s, r, now, None, planning, pattern, rng),
+        Some((was, heading)) => plan_town(site, s, r, &was, Some(&heading), planning, laid, pattern, rng),
+        None => plan_town(site, s, r, now, None, planning, laid, pattern, rng),
     }
 }
 
@@ -321,7 +324,7 @@ fn water_beyond(site: &Site, a: P, b: P, inside: P) -> bool {
 
 /// (161: `planning`, 0-1, how planned its streets are: `town::planning`.)
 #[allow(clippy::too_many_arguments)]
-pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], headings: Option<&[Option<P>]>, planning: f64, pattern: super::pattern::Pattern, rng: &mut Pcg32) -> TownPlan {
+pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], headings: Option<&[Option<P>]>, planning: f64, laid: f64, pattern: super::pattern::Pattern, rng: &mut Pcg32) -> TownPlan {
     // (161) A planned town's lattice runs with its chief road's way in (the first of the most
     // important class), else with a rolled heading.
     let axis = match road_ends.iter().filter(|(e, _)| len(*e) > 1.0).min_by_key(|(_, c)| *c) {
@@ -333,9 +336,10 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         super::pattern::Pattern::Linear => super::pattern::long_axis(site, r).map_or(axis, |a| a.0),
         _ => axis,
     };
-    // (189: a pattern set on a grown town is laid out as a planned quarter beyond its core.)
-    let laid = if pattern != super::pattern::Pattern::Grid { planning.max(super::planning::MIXED) } else { planning };
+    // (189: `laid`: a pattern on a grown town is laid out as a planned quarter beyond its core.)
     let seeds::Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice, frames, hub } = seeds::plant(site, s, r, laid, axis, pattern, rng);
+    // (A Linear town's rows' depth, `seeds::plant`'s: the high street's line within a third of it.)
+    let high_gy = (0.5 * spacing).clamp(100.0, 150.0);
     // Per-patch random streams (`seeds::plant`).
     let roll = |i: usize, stage: i64| seeds::roll(pseed, i, stage);
 
@@ -691,8 +695,8 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
             };
             // (189: on Linear, along the high street at 0.6 times the cost: the main streets take it.)
             let high = pattern == super::pattern::Pattern::Linear && lattice[i] && {
-                let (m, d, u) = (lerp(pa, pb, 0.5), sub(pb, pa), [libm::cos(axis), libm::sin(axis)]);
-                cross(u, m).abs() < 30.0 && dot(u, d).abs() > 0.9 * len(d)
+                let (m, d, u) = (sub(lerp(pa, pb, 0.5), hub), sub(pb, pa), [libm::cos(axis), libm::sin(axis)]);
+                cross(u, m).abs() < 0.35 * high_gy && dot(u, d).abs() > 0.9 * len(d)
             };
             let w = dist(pa, pb) * (1.0 + 40.0 * grade * grade) * if castle_side { 2.0 } else { 1.0 } * if round { 1.6 } else if high { 0.6 } else { 1.0 };
             adj.entry((a as i64, 0)).or_default().push(((b as i64, 0), w));
@@ -759,6 +763,54 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
             }
         }
     }
+    // (189) Linear: the high street a main street from end to end, each half from the market
+    // square out to the last corner on its line in the town (on the wall, or by it: laid from the
+    // square, so the wall's gates and spokes never take it for one of theirs).
+    let high_from = paths.len();
+    if pattern == super::pattern::Pattern::Linear
+        && let Some(pz) = plaza
+    {
+        let targets: std::collections::BTreeSet<(i64, i64)> = mesh.faces[pz].iter().map(|&v| (v as i64, 0)).collect();
+        let u = [libm::cos(axis), libm::sin(axis)];
+        let on_line: Vec<usize> = (0..mesh.pos.len())
+            .filter(|&v| {
+                let m = sub(mesh.pos[v], hub);
+                cross(u, m).abs() < 0.35 * high_gy && !vf[v].is_empty() && vf[v].iter().all(|&f| usable(f) || !inner(f as i32)) && vf[v].iter().any(|&f| lattice[f] && usable(f))
+            })
+            .collect();
+        let at = |v: usize| dot(u, sub(mesh.pos[v], hub));
+        let ends = [on_line.iter().copied().min_by(|&a, &b| at(a).total_cmp(&at(b)).then(a.cmp(&b))), on_line.iter().copied().max_by(|&a, &b| at(a).total_cmp(&at(b)).then(b.cmp(&a)))];
+        for e in ends.into_iter().flatten() {
+            if targets.contains(&(e as i64, 0)) {
+                continue;
+            }
+            if let Some(path) = shortest(&adj, (e as i64, 0), &targets) {
+                paths.push(path.iter().rev().map(|k| k.0 as usize).collect());
+            }
+        }
+    }
+    // (The main streets that are the high street: those laid along it, and a gate's run mostly
+    // along its line.)
+    let wide: Vec<bool> = paths
+        .iter()
+        .enumerate()
+        .map(|(pi, p)| {
+            if pattern != super::pattern::Pattern::Linear {
+                return false;
+            }
+            let u = [libm::cos(axis), libm::sin(axis)];
+            let (mut on, mut all) = (0.0, 0.0);
+            for w in p.windows(2) {
+                let (pa, pb) = (mesh.pos[w[0]], mesh.pos[w[1]]);
+                let (m, d) = (sub(lerp(pa, pb, 0.5), hub), sub(pb, pa));
+                all += len(d);
+                if cross(u, m).abs() < 0.35 * high_gy && dot(u, d).abs() > 0.9 * len(d) {
+                    on += len(d);
+                }
+            }
+            pi >= high_from || (all > 0.0 && on >= 0.5 * all)
+        })
+        .collect();
     // Curve the main streets: the patches along them bend with them.
     let mut keep_v: Vec<usize> = plaza.map(|pz| mesh.faces[pz].clone()).unwrap_or_default();
     if let Some(cf) = castle_face {
@@ -1113,6 +1165,9 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         palace,
         park_refused,
         planning,
+        laid,
+        hub,
+        wide,
         lattice,
         axis,
         pattern,

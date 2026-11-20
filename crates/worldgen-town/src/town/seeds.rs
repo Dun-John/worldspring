@@ -66,6 +66,14 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     let plaza_s = spacing * 0.866 * (0.55 + 0.25 * roll(0, 2));
     let plaza_l = plaza_s * (1.0 + 0.5 * roll(0, 3));
     let rhombus = !site.near_river([0.0, 0.0], plaza_l);
+    let linear = pattern == super::pattern::Pattern::Linear && super::planning::core_line(planning).is_some();
+    let (lu, ld) = ((1.1 * spacing).clamp(220.0, 380.0), (0.5 * spacing).clamp(100.0, 150.0));
+    // (Linear: no grown core on the high street, which runs right through the town; along a river
+    // it runs beside it, on the town's middle's bank, a frontage row's depth off the bank, never
+    // down the channel: `beside`. The market square on it, `c0` its point nearest the middle.)
+    let beside = if linear { beside_river(site, r, axis, ld) } else { None };
+    let c0 = beside.map_or([0.0, 0.0], |b| b.0);
+    let rhombus = if linear { !site.near_river(c0, plaza_l) } else { rhombus };
     // (161) The grown core: the side of a line across the town (`planning::core_line`), the
     // planned quarter beyond it, which way out rolled (along or across the lattice); and the
     // lattice: square blocks, or (half the towns) blocks drawn out along the axis, avenues
@@ -80,22 +88,22 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     // each side, the rest grown.
     let hub = if ringed && pattern == super::pattern::Pattern::Rings { super::pattern::harbour(site, r) } else { None };
     let o = hub.unwrap_or([0.0, 0.0]);
-    let linear = pattern == super::pattern::Pattern::Linear && line.is_some();
-    let (lu, ld) = ((1.4 * spacing).clamp(240.0, 420.0), (0.5 * spacing).clamp(100.0, 150.0));
     let core_r = match line {
         Some(t) if t >= 0.0 => r_edge * (0.5 - 0.25 * (planning - super::planning::MIXED) / (super::planning::PLANNED - super::planning::MIXED)),
         _ => 0.0,
     };
+    // (Radial: a narrower core, the spokes fanning out from near the market square.)
+    let core_r = if pattern == super::pattern::Pattern::Radial { 0.6 * core_r } else { core_r };
     let gv0 = [-libm::sin(axis), libm::cos(axis)];
-    // (Linear: half as wide a core, the high street running through most of the town.)
-    let core_l = 0.5 * core_r;
-    let grown = |p: P| if ringed { len(sub(p, o)) < core_r } else if linear { len(p) < core_l || dot(p, gv0).abs() > 2.0 * ld } else { line.is_none_or(|t| dot(p, out) < t * r_edge) };
+    let grown = |p: P| if ringed { len(sub(p, o)) < core_r } else if linear { dot(sub(p, c0), gv0).abs() > 2.0 * ld } else { line.is_none_or(|t| dot(p, out) < t * r_edge) };
     let aspect = if roll(0, 7) < 0.5 { 1.0 + 0.15 * roll(0, 8) } else { 1.4 + 0.6 * roll(0, 8) };
     let (gx, gy) = if linear { (lu, ld) } else { (spacing * crate::core::sqrt(aspect), spacing / crate::core::sqrt(aspect)) };
     let (gu, gv) = ([libm::cos(axis), libm::sin(axis)], [-libm::sin(axis), libm::cos(axis)]);
     // (Planned throughout: the market square is the lattice's middle block.)
+    // (Linear: the square's ring seeds off the high street, a quarter turn about, so it runs in at
+    // one corner of the square and out at the other between their blocks, never through one.)
     let (pa, plaza_s, plaza_l) = if linear {
-        (axis + std::f64::consts::FRAC_PI_2, plaza_s, plaza_l)
+        (axis + std::f64::consts::FRAC_PI_4, plaza_s, plaza_s)
     } else if !ringed && line.is_some_and(|t| t < 0.0) {
         (axis, gx, gy)
     } else {
@@ -108,7 +116,8 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
         let dr = (0.6 * spacing).clamp(110.0, 170.0);
         (dr, 2.2 * dr)
     } else {
-        let w = (0.7 * spacing).clamp(110.0, 200.0);
+        // (No wider than two rows of lots back to back, so no block is left green inside.)
+        let w = (0.5 * spacing).clamp(100.0, 150.0);
         ((1.6 * spacing).max(3.0 * w), w)
     };
     // (Where the first ring's blocks start: the grown core's edge, else just past the market
@@ -121,9 +130,9 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     let mut seeds: Vec<(P, bool, bool)> = Vec::new();
     if rhombus {
         let h = std::f64::consts::FRAC_PI_2;
-        seeds.push(([0.0, 0.0], true, false));
+        seeds.push((c0, true, false));
         for (d, a) in [(plaza_s, pa), (plaza_l, pa + h), (plaza_s, pa + 2.0 * h), (plaza_l, pa + 3.0 * h)] {
-            seeds.push((polar(d, a), true, false));
+            seeds.push((add(c0, polar(d, a)), true, false));
         }
     }
     // (161) The shore's points, wanted by the lattice before the shore's seed pairs (below).
@@ -132,6 +141,8 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     let mut partner: Vec<(usize, usize)> = Vec::new();
     if line.is_some() {
         let jit = (0.12 * (1.0 - planning) / (1.0 - super::planning::MIXED)).max(0.01) * spacing;
+        // (Linear: a third of that, the high street and its rows straight.)
+        let jit = if linear { (jit / 3.0).max(0.01 * spacing) } else { jit };
         let k = (r_edge / gx.min(gy)) as i64 + 1;
         // The lattice holds up to the water: a block by a river or the shore is clipped to the
         // bank by a mirror seed across it (the edge between them on the water's line), never
@@ -148,7 +159,13 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
                 for iy in -ky..ky + if linear { 0 } else { 1 } {
                     let mut sr = Pcg32::new(hash2(pseed, ix, iy ^ 0x1a77), 67);
                     let (ja, j) = (sr.range(0.0, std::f64::consts::TAU), sr.range(0.0, jit));
-                    cands.push(add(add(mul(gu, ix as f64 * gx), mul(gv, (iy as f64 + half) * gy)), [j * libm::cos(ja), j * libm::sin(ja)]));
+                    // (Linear: the market square where a cross lane meets the high street.)
+                    let p = add(add(add(c0, mul(gu, (ix as f64 + half) * gx)), mul(gv, (iy as f64 + half) * gy)), [j * libm::cos(ja), j * libm::sin(ja)]);
+                    // (Beside a river: nothing of the band on the river's side of its frontage row.)
+                    if beside.is_some_and(|(_, n, bank)| dot(sub(p, c0), n) > bank - 0.25 * gy) {
+                        continue;
+                    }
+                    cands.push(p);
                 }
             }
         }
@@ -203,7 +220,7 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
         }
     }
     for i in 0..n_spiral + n_outer {
-        if rhombus && i < 5 {
+        if rhombus && i < 5 && !linear {
             continue;
         }
         let mut sr = Pcg32::new(hash2(pseed, i as i64, 0x5eed), 61);
@@ -219,6 +236,10 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
         let p = [rad * libm::cos(a) + j * libm::cos(ja), rad * libm::sin(a) + j * libm::sin(ja)];
         // (161: the planned quarter's seeds are the lattice's.)
         if i < n_spiral && !grown(p) {
+            continue;
+        }
+        // (Linear: none on its market square, wherever on the high street it is.)
+        if linear && rhombus && dist(p, c0) < plaza_l + 0.3 * spacing {
             continue;
         }
         // Near a river, seeds come in mirrored pairs across the channel instead (below).
@@ -301,6 +322,8 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     // (189: on rings, a block's lots run along its ring (Rings) or out from the middle (Radial).)
     let turn = if pattern == super::pattern::Pattern::Rings { std::f64::consts::FRAC_PI_2 } else { 0.0 };
     let frames: Vec<f64> = seeds.iter().map(|x| if ringed { libm::atan2(x.0[1] - o[1], x.0[0] - o[0]) + turn } else { axis }).collect();
+    // (Linear: a point on its high street, `hub`.)
+    let o = if linear { c0 } else { o };
     let boundary = circle([0.0, 0.0], r_out * 1.3, 48);
     let mut cells = voronoi(&sites, &boundary);
     for _ in 0..2 {
@@ -318,6 +341,8 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     // on (a function of where it is).
     if ringed && pattern == super::pattern::Pattern::Rings {
         let strict = 0.5 + 0.5 * ((planning - super::planning::MIXED) / (1.0 - super::planning::MIXED)).clamp(0.0, 1.0);
+        // (Round a harbour, the arcs drawn on firmly, so they read along the bay.)
+        let strict = if hub.is_some() { strict.max(0.85) } else { strict };
         // (Round a harbour: not by the shore either, whose quays trace it, nor near the town's
         // edge, which no ring follows there.)
         let by_shore = |p: P| hub.is_some() && (len(p) > r_edge - 0.5 * dr || shore.iter().any(|(q, _)| dist(*q, p) < 0.4 * dr));
@@ -338,6 +363,32 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
         }
     }
     Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice, frames, hub: o }
+}
+
+/// (189) Where a Linear town's high street runs, along `axis`, if the river it stands by runs
+/// that way too (its nearest piece within 0.9 `r`, within 25 deg of it): beside it on the bank the
+/// town's middle is on, the river's half width and a frontage row (`gy`) off its line, or where
+/// it is if farther. The high street's point nearest the middle, the way across to the river
+/// (unit), and the river's bank's distance that way from that point.
+fn beside_river(site: &Site, r: f64, axis: f64, gy: f64) -> Option<(P, P, f64)> {
+    let (a, b, hw) = site.river.iter().copied().filter(|&(a, b, _)| seg_dist([0.0, 0.0], a, b) < 0.9 * r && dist(a, b) > 1.0).min_by(|x, y| {
+        seg_dist([0.0, 0.0], x.0, x.1).total_cmp(&seg_dist([0.0, 0.0], y.0, y.1))
+    })?;
+    let t = mul(sub(b, a), 1.0 / dist(a, b));
+    let u = [libm::cos(axis), libm::sin(axis)];
+    if dot(t, u).abs() < libm::cos(25f64.to_radians()) {
+        return None;
+    }
+    // (`n` across from the middle towards the river; `sd` the middle's distance from its line.)
+    let mut n = [-u[1], u[0]];
+    let sd = dot(sub(a, [0.0, 0.0]), n);
+    if sd < 0.0 {
+        n = mul(n, -1.0);
+    }
+    let sd = sd.abs();
+    let want = hw + 1.05 * gy;
+    let c0 = if sd < want { mul(n, sd - want) } else { [0.0, 0.0] };
+    Some((c0, n, sd.max(want) - hw))
 }
 
 /// (189) The planned part's seeds on rings round the middle, from `start` out to `r_edge`: rings
