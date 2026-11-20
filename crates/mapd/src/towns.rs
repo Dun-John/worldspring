@@ -61,6 +61,7 @@ pub fn list() -> Vec<Value> {
                 "reset": { "type": "string", "enum": ["all", "corners", "patches", "squares", "walls"] },
                 "members": { "type": "object", "properties": { "add": ids.clone(), "remove": ids }, "description": "By hand: c:<n> drawn things (add joins, remove leaves); b:<layout>:<id> outskirt buildings (remove pushes out into a new place, add takes back)" },
                 "planning": { "oneOf": [{ "type": "number", "minimum": 0, "maximum": 1 }, { "type": "string", "enum": ["auto"] }], "description": "How planned its streets are, given alone: 0-0.3 grown, 0.3-0.7 a planned quarter beside a grown core, 0.7-1 planned throughout (a regular grid); \"auto\" as rolled. Lays the town out anew: the changes made inside it are set aside" },
+                "pattern": { "type": "string", "enum": ["auto", "grid", "rings", "radial", "linear"], "description": "The street pattern of its planned part (see planning): a regular grid, concentric rings, streets radiating from the centre, or one long street with cross streets; \"auto\" as chosen from its seed and site. Alone or with planning; lays the town out anew like planning does, setting aside the changes made inside it. Not for villages, nor towns laid out by hand" },
                 "dry_run": { "type": "boolean", "default": false },
             }), &["id"]),
         }),
@@ -75,16 +76,39 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     })
 }
 
-/// (161) `edit_town` with `planning` (given alone): through `Edits.planning` (`town::planning`),
-/// the town laid out anew and the edits in it set aside.
-async fn planning(app: &Shared, a: &Value, id: String, p: &Value, dry: bool) -> Result<Value, String> {
-    if a.as_object().is_some_and(|m| m.keys().any(|k| !["id", "dry_run", "world", "planning"].contains(&k.as_str()))) {
-        return Err("planning: give it alone (with id and dry_run): it lays the town out anew, setting aside the changes made inside it".into());
+/// (161, 189) `edit_town` with `planning` and/or `pattern` (given alone, or together): through
+/// `Edits.planning` (`town::planning`) and `Edits.patterns` (`town::pattern_set`), the town laid
+/// out anew and the edits in it set aside.
+async fn planning(app: &Shared, a: &Value, id: String, p: Option<&Value>, pat: Option<&Value>, dry: bool) -> Result<Value, String> {
+    if a.as_object().is_some_and(|m| m.keys().any(|k| !["id", "dry_run", "world", "planning", "pattern"].contains(&k.as_str()))) {
+        return Err("planning, pattern: give them alone (with id and dry_run): they lay the town out anew, setting aside the changes made inside it".into());
     }
-    let to: Option<u8> = match p {
-        Value::String(s) if s == "auto" => None,
-        Value::Number(n) => Some(n.as_f64().filter(|v| (0.0..=1.0).contains(v)).map(|v| (v * 100.0).round() as u8).ok_or_else(|| format!("planning: 0 to 1, got {n}"))?),
-        _ => return Err(format!("planning: a number 0 to 1 or \"auto\", got {p}")),
+    let to: Option<Option<u8>> = match p {
+        None => None,
+        Some(Value::String(s)) if s == "auto" => Some(None),
+        Some(Value::Number(n)) => Some(Some(n.as_f64().filter(|v| (0.0..=1.0).contains(v)).map(|v| (v * 100.0).round() as u8).ok_or_else(|| format!("planning: 0 to 1, got {n}"))?)),
+        Some(p) => return Err(format!("planning: a number 0 to 1 or \"auto\", got {p}")),
+    };
+    let pattern: Option<Option<String>> = match pat {
+        None => None,
+        Some(Value::String(s)) if s == "auto" => Some(None),
+        Some(Value::String(s)) if worldgen::town::pattern_set::NAMES.contains(&s.as_str()) => Some(Some(s.clone())),
+        Some(p) => return Err(format!("pattern: one of auto, {}; got {p}", worldgen::town::pattern_set::NAMES.join(", "))),
+    };
+    // Applies what was asked to `e`: `(planning change, pattern change)` as JSON.
+    let apply = move |e: &mut worldgen::world::Edits, li: usize, rolled: f64| -> (Value, Value) {
+        let pl = to.map_or(Value::Null, |t| worldgen::town::planning::change_own(e, li, rolled, t).to_json());
+        let pa = pattern.as_ref().map_or(Value::Null, |t| worldgen::town::pattern_set::change_own(e, li, t.as_deref()).to_json());
+        (pl, pa)
+    };
+    let same = |pl: &Value, pa: &Value| [pl, pa].iter().filter(|v| !v.is_null()).all(|v| v["unchanged"] == json!(true));
+    let put = |v: &mut Value, pl: Value, pa: Value| {
+        if !pl.is_null() {
+            v["planning"] = pl;
+        }
+        if !pa.is_null() {
+            v["pattern"] = pa;
+        }
     };
     let town = id.clone();
     let (li, rolled) = app
@@ -92,7 +116,7 @@ async fn planning(app: &Shared, a: &Value, id: String, p: &Value, dry: bool) -> 
         .with(move |ex| {
             let li = town_index(ex, &town)?;
             if li >= ex.t0.settlements.len() || ex.t0.settlements[li].tier < worldgen::t0::settle::Tier::Town || worldgen::town::hand::is_hand(&ex.world, li) {
-                return Err(format!("{town}: planning is for the world's own towns and cities laid out as generated (not a village, nor one added or laid out by hand)"));
+                return Err(format!("{town}: planning and pattern are for the world's own towns and cities laid out as generated (not a village, nor one added or laid out by hand)"));
             }
             let s = worldgen::town::culture::settlement(&ex.world, &ex.t0, li).ok_or("not a settlement")?;
             Ok((li, worldgen::town::planning::rolled(&s)))
@@ -100,17 +124,22 @@ async fn planning(app: &Shared, a: &Value, id: String, p: &Value, dry: bool) -> 
         .await?;
     if dry {
         let mut e = app.worker.with(|ex| Ok(ex.world.file.edits.clone())).await?;
-        let mut v = worldgen::town::planning::change_own(&mut e, li, rolled, to).to_json();
+        let (pl, pa) = apply(&mut e, li, rolled);
+        let mut v = json!({});
+        put(&mut v, pl, pa);
         v["tool"] = json!("edit_town");
         v["id"] = json!(id);
         v["layout"] = json!(li);
         v["dry_run"] = json!(true);
         return Ok(v);
     }
-    let change = app.edit("agent", 0, move |e| Ok(worldgen::town::planning::change_own(e, li, rolled, to).to_json())).await?;
-    let mut out = json!({ "tool": "edit_town", "id": id, "layout": li, "planning": change });
-    out["note"] = json!(if change["unchanged"] == json!(true) {
-        "It was planned so already: nothing changed"
+    let both = app.edit("agent", 0, move |e| { let (a, b) = apply(e, li, rolled); Ok(json!([a, b])) }).await?;
+    let (pl, pa) = (both[0].clone(), both[1].clone());
+    let unchanged = same(&pl, &pa);
+    let mut out = json!({ "tool": "edit_town", "id": id, "layout": li });
+    put(&mut out, pl, pa);
+    out["note"] = json!(if unchanged {
+        "It was laid out so already: nothing changed"
     } else {
         "Laid out anew at once: its streets and buildings follow the planning; roads and neighbours stay; its name, notes, NPCs and plot points stay on it; the changes made inside it are set aside (set_aside_by counts them by field)"
     });
@@ -137,8 +166,9 @@ async fn plan(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     let id = a["id"].as_str().ok_or("missing 'id'")?.to_string();
     let dry = a["dry_run"].as_bool().unwrap_or(false);
-    if let Some(p) = a.get("planning").filter(|p| !p.is_null()) {
-        return planning(app, a, id, p, dry).await;
+    let (p, pat) = (a.get("planning").filter(|p| !p.is_null()), a.get("pattern").filter(|p| !p.is_null()));
+    if p.is_some() || pat.is_some() {
+        return planning(app, a, id, p, pat, dry).await;
     }
     let members = a.get("members").filter(|m| !m.is_null()).cloned();
     if members.as_ref().is_some_and(|m| !m.is_object()) {

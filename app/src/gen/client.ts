@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, PlanningNow, PlanningChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
+import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, PlanningNow, PlanningChange, PatternNow, PatternChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -329,6 +329,12 @@ export class GenClient {
    * culture already. Without `culture`: `{from}`, the culture it is laid out in now. */
   setCulture(layout: number, culture: number | undefined, edits: Edits): Promise<CultureChange | { error: string } | null> {
     return this.ask({ op: 'setculture', layout, culture, edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
+  }
+
+  /** The street pattern of the world's own town or city `layout` now (`PatternNow`), or with `pattern`
+   * (one of `STREET_PATTERNS`) or `auto` the `edits` that give it so (`PatternChange`). */
+  setPatterns(layout: number, pattern: string | undefined, auto: boolean, edits: Edits): Promise<PatternNow | PatternChange | { error: string } | null> {
+    return this.ask({ op: 'setpatterns', layout, pattern, auto, edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
   }
 
   /** How planned the streets of the world's own town or city `layout` are now (`PlanningNow`), or

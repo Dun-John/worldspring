@@ -80,6 +80,12 @@ export type CultureChange = { from: string; to?: string; unchanged?: boolean; se
 export type PlanningNow = { value: number; class: string; rolled: number; set: boolean };
 export type PlanningChange = { from: number; to?: number; class?: string; unchanged?: boolean; set_aside?: number; set_aside_by?: Record<string, number>; edits?: Edits };
 
+/** A town's street pattern (`set_patterns_json`): `auto` or one of `STREET_PATTERNS`, as it is now and whether set by hand;
+ * or a change's edits like `PlanningChange` (`from`, `to`: the pattern's name). */
+export const STREET_PATTERNS = ['grid', 'rings', 'radial', 'linear'] as const;
+export type PatternNow = { pattern: string; set: boolean };
+export type PatternChange = { from: string; to: string; unchanged?: boolean; set_aside?: number; set_aside_by?: Record<string, number>; edits?: Edits };
+
 export type DesignReply = { design: SiteDesign; interior: Interior; problems: DesignProblem[]; set_aside?: boolean } | { error: string };
 
 /** What the designer offers (`worldgen::under::design::catalog_json`). */

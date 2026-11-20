@@ -314,6 +314,10 @@ export function editDirty(prev: Edits, next: Edits, changed?: Record<string, str
   const plp = prev.planning ?? {};
   const nlp = next.planning ?? {};
   if (plp !== nlp) for (const key of keys('planning', plp, nlp)) if (plp[key] !== nlp[key] && !cultures.includes(key)) cultures.push(key);
+  // (189: and with another street pattern, `Edits.patterns`.)
+  const ptp = prev.patterns ?? {};
+  const ntp = next.patterns ?? {};
+  if (ptp !== ntp) for (const key of keys('patterns', ptp, ntp)) if (ptp[key] !== ntp[key] && !cultures.includes(key)) cultures.push(key);
   // Roads, streets and paths taken off the map or brought back.
   const cutIds: string[] = [];
   if (prev.removed_roads !== next.removed_roads) {

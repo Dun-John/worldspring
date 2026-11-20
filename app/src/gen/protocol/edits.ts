@@ -193,6 +193,8 @@ export interface Edits {
    * planned its streets are (0-29 grown, 30-69 a planned quarter beside a grown core, 70-100 planned
    * throughout; `worldgen::town::planning`). Villages and towns laid out by hand ignore it. */
   planning?: Record<string, number>;
+  /** (189) The street pattern of a town's planned part, set by hand (`<layout>` → `grid`, `rings`, `radial`, `linear`; absent: chosen from its seed and site). */
+  patterns?: Record<string, string>;
   /** `g:XXXXX:YYYYY` → 16 × 16 squares of ground brushed by hand (`worldgen::ground::GroundBlock`:
    * tenths of a foot, row-major, as base64url zigzag-delta varints, a 0 delta followed by a byte
    * counting further zeros). Block indices zero-padded, x first. */

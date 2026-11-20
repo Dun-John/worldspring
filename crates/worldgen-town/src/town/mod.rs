@@ -49,6 +49,7 @@ pub mod rural;
 // R5 towns
 pub mod cemetery;
 pub mod culture;
+pub mod pattern_set;
 pub mod planning;
 pub mod members;
 pub mod added;
