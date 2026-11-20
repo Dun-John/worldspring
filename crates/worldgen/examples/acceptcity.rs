@@ -853,6 +853,10 @@ fn roadmap6(b: &mut Build, avoid: &[usize]) {
                 ids.push(id);
             }
         }
+        // (At least two, as the vital test asks: else the next town.)
+        if ids.len() < 2 {
+            continue;
+        }
         b.ops += 1;
         match members::change(&b.world, &b.t0, t2, &[], &ids) {
             Ok(c) if c.refused.is_empty() && c.created.len() == 1 => {

@@ -67,25 +67,29 @@ pub fn area(poly: &[P]) -> f64 {
     (0..n).map(|i| cross(poly[i], poly[(i + 1) % n])).sum::<f64>() * 0.5
 }
 
+/// The area centroid. (Taken about the first corner, so a small polygon far from the origin keeps
+/// its feet: products of large coordinates would lose them.)
 pub fn centroid(poly: &[P]) -> P {
     let n = poly.len();
-    let a = area(poly);
-    if a.abs() < 1e-9 {
-        let s = poly.iter().fold([0.0, 0.0], |acc, p| add(acc, *p));
-        return mul(s, 1.0 / n.max(1) as f64);
+    if n == 0 {
+        return [0.0, 0.0];
     }
-    let mut c = [0.0, 0.0];
+    let o = poly[0];
+    let (mut a, mut c) = (0.0, [0.0, 0.0]);
     for i in 0..n {
-        let (p, q) = (poly[i], poly[(i + 1) % n]);
+        let (p, q) = (sub(poly[i], o), sub(poly[(i + 1) % n], o));
         let f = cross(p, q);
+        a += f;
         c[0] += (p[0] + q[0]) * f;
         c[1] += (p[1] + q[1]) * f;
     }
-    mul(c, 1.0 / (6.0 * a))
+    if (a * 0.5).abs() < 1e-9 {
+        return mean(poly);
+    }
+    add(o, mul(c, 1.0 / (3.0 * a)))
 }
 
-/// The mean of a polygon's corners: a box's middle, exact far from the origin (where `centroid`'s
-/// products lose feet on a small one).
+/// The mean of a polygon's corners: a box's middle.
 #[inline]
 pub fn mean(poly: &[P]) -> P {
     let s = poly.iter().fold([0.0, 0.0], |acc, p| add(acc, *p));

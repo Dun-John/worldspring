@@ -229,6 +229,9 @@ pub struct Ground {
     pub(crate) on_river: Vec<bool>,
     /// Only sea and lake mouths make a harbour (a confluence is a river town).
     harbour: Vec<bool>,
+    /// How sheltered a harbour a sea coast cell has, 0-1: of the ways out, how few stay on open
+    /// sea 1, 2 and 3 mi out (a cove or a bay's head); what draws a city to a bay (`CITY_BAY`).
+    bay: Vec<f32>,
     /// Per cell, the strength (0-255) of each site reason `Reason::Harbour..=Fishing` (index = the reason).
     pub(crate) site: Vec<[u8; 10]>,
     /// Farmland within a day's reach, 0-1.
@@ -270,6 +273,10 @@ const MARKET_MI: (f64, f64) = (45.0, 100.0);
 const MARKET_REASON: f64 = 0.7;
 /// How much of its water a tier weighs: `wet.0 + wet.1 * water` (cities `0.35 + water`).
 const TOWN_WET: (f64, f64) = (0.5, 0.6);
+/// What a sea coast is worth to a city or metropolis, as `a + b * bay` (an open coast `a`, a bay
+/// `a + b`): the big ports sit in bays, estuaries and sheltered harbours. (A bay worth much more
+/// than 1 draws many more cities to the coast; this keeps about as many as before.)
+const CITY_BAY: (f64, f64) = (0.35, 0.75);
 const VILLAGE_WET: (f64, f64) = (0.55, 0.55);
 /// Inland pulls for towns and villages: a spring (`1 + s * spring`), farmland (`f.0 + f.1 * food`)
 /// and, for towns, market spacing (`1 + m * gap`).
@@ -323,6 +330,7 @@ fn ground(inp: &Inputs) -> Ground {
     let mut mouth = vec![0.0f64; n];
     // Only sea and lake mouths make a harbour (a confluence is a river town).
     let mut harbour = vec![false; n];
+    let mut bay = vec![0.0f32; n];
     let mut site = vec![[0u8; 10]; n];
     let mut sources: Vec<(Reason, u32, u32, f32)> = Vec::new();
     // Raises one reason's strength round a cell (within 1 cell: the river's bank).
@@ -498,6 +506,14 @@ fn ground(inp: &Inputs) -> Ground {
         }
     }
     let ore_seed = inp.world.stream("t0.settle.ore");
+    // The ways out from a coast cell for `bay` (16 of them), and a mile in cells.
+    let ways: Vec<[f64; 2]> = (0..16)
+        .map(|a| {
+            let t = std::f64::consts::TAU * a as f64 / 16.0;
+            [libm::cos(t), libm::sin(t)]
+        })
+        .collect();
+    let mile = 5_280.0 / cell;
     let mut bulk = vec![0.0f32; n];
     let mut industry = vec![0.0f32; n];
     for k in 0..n {
@@ -546,6 +562,19 @@ fn ground(inp: &Inputs) -> Ground {
             }
             let shelter = 1.0 - smoothstep(0.22, 0.36, sea_n as f64 / all.max(1) as f64);
             site[k][Reason::Harbour as usize] = (0.8 * shelter * 255.0) as u8;
+            // A big port's shelter (`bay`): of the ways out, how few stay on open sea 1, 2 and 3 mi
+            // out; off the map is open sea. A straight coast has them over half its sweep, a bay
+            // only through its mouth.
+            let open = ways
+                .iter()
+                .filter(|u| {
+                    [1.0, 2.0, 3.0].iter().all(|&m| {
+                        let (x, y) = (crate::core::round(cx + u[0] * m * mile) as i64, crate::core::round(cy + u[1] * m * mile) as i64);
+                        x < 0 || y < 0 || x >= w as i64 || y >= h as i64 || !inp.land[y as usize * w + x as usize]
+                    })
+                })
+                .count();
+            bay[k] = (1.0 - smoothstep(0.06, 0.25, open as f64 / 16.0)) as f32;
         }
         if ocean_n > 0 || lake_n > 0 {
             site[k][Reason::Fishing as usize] = (0.5 * 255.0) as u8;
@@ -623,7 +652,7 @@ fn ground(inp: &Inputs) -> Ground {
         industry[k] = m(&[Reason::Ore, Reason::Timber, Reason::Fishing]);
     }
     let islands = super::islands::label(w, h, cell, inp.land, &inp.hydro.lake_of, inp.biome);
-    Ground { score, base, water: water_at, spring, coastal, lakeside, on_river, harbour, site, food, bulk, industry, sources, islands }
+    Ground { score, base, water: water_at, spring, coastal, lakeside, on_river, harbour, bay, site, food, bulk, industry, sources, islands }
 }
 
 /// What a place lives by: its reason's kind where the place allows, else a cascade on its ground
@@ -728,7 +757,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
 
     let ore_seed = world.stream("t0.settle.ore");
     let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
-    let Ground { score, base, water, spring, coastal, lakeside, on_river, harbour, site, food, bulk, .. } = inp.ground.get_or_init(|| ground(inp));
+    let Ground { score, base, water, spring, coastal, lakeside, on_river, harbour, bay, site, food, bulk, .. } = inp.ground.get_or_init(|| ground(inp));
 
     // How many of each tier, from land area (square miles) and density. At density 0 none are
     // chosen, but the sketch's pins still stand: what is placed by hand wins over the dial.
@@ -826,6 +855,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         let site_score = |k: usize| -> f64 {
             let (b, wv) = (base[k] as f64, water[k] as f64);
             match tier {
+                Tier::Metropolis | Tier::City if coastal[k] => score[k] * (CITY_BAY.0 + CITY_BAY.1 * bay[k] as f64),
                 Tier::Metropolis | Tier::City => score[k],
                 Tier::Town => b * (TOWN_WET.0 + TOWN_WET.1 * wv) * (1.0 + SPRING_GAIN * spring[k] as f64) * (FOOD_GAIN.0 + FOOD_GAIN.1 * food[k] as f64) * (1.0 + MARKET_GAIN * gap(k)),
                 Tier::Village => b * (VILLAGE_WET.0 + VILLAGE_WET.1 * wv) * (1.0 + SPRING_GAIN * spring[k] as f64) * (FOOD_GAIN.0 + FOOD_GAIN.1 * food[k] as f64),

@@ -966,10 +966,11 @@ fn acceptance_roadmap6(ex: &mut Executor) -> String {
     let gates = c.objects.iter().filter(|o| o.kind == Kind::Gate && geom_dist(to_world(c, [o.x, o.y]), gate) < 3.6).count();
     assert!(near(c, Kind::Picket, 3.6) >= 3 && gates == 1 && near(b, Kind::Picket, 3.6) + near(b, Kind::Gate, 3.6) == 0, "the drawn picket fence: {} sections, {gates} gates ({} without it)", near(c, Kind::Picket, 3.6), near(b, Kind::Picket, 3.6));
 
-    // R7: the largest generated walled town's main streets straight in.
+    // R7: the largest generated walled town's main streets straight in (of those with two or more: a port
+    // on a bay may have one way in by land).
     let mut walled: Vec<usize> = (0..n).filter(|&i| ex.t0.settlements[i].tier >= Tier::Town && !town::hand::is_hand(&ex.world, i)).collect();
     walled.sort_by_key(|&i| (std::cmp::Reverse(ex.t0.settlements[i].population), i));
-    let wl = walled.into_iter().map(|i| town::layout(&ex.world, &ex.t0, i)).find(|l| !l.walls.is_empty() && !l.streets.is_empty()).expect("no generated walled town");
+    let wl = walled.into_iter().map(|i| town::layout(&ex.world, &ex.t0, i)).find(|l| !l.walls.is_empty() && l.streets.len() >= 2).expect("no generated walled town");
     let s = straight_in(&wl);
     assert!(s.len() >= 2 && s.iter().all(|x| x.is_some_and(|(total, run, off)| total < 100.0 || (run >= 100.0 && off <= 10.0))), "L{}: main streets (ft long, ft straight, deg off square) {s:?}", wl.index);
     format!(

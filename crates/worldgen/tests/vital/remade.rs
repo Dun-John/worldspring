@@ -392,11 +392,11 @@ fn harbour_ground() {
             }
         }
     };
-    // Walked from `from` (world ft) over dry open squares, steps of at most 2.5 ft, within 400 ft:
-    // whether a square `goal` holds is reached, and how many squares are.
-    let walk = |ex: &mut Executor, from: [f64; 2], goal: &dyn Fn([f64; 2]) -> bool| -> (bool, usize) {
-        let k0 = key_at([from[0] - 400.0, from[1] - 400.0]);
-        let k1 = key_at([from[0] + 400.0, from[1] + 400.0]);
+    // Walked from `from` (world ft) over dry open squares, steps of at most 2.5 ft, within `reach`
+    // ft: whether a square `goal` holds is reached, and how many squares are.
+    let walk = |ex: &mut Executor, from: [f64; 2], reach: f64, goal: &dyn Fn([f64; 2]) -> bool| -> (bool, usize) {
+        let k0 = key_at([from[0] - reach, from[1] - reach]);
+        let k1 = key_at([from[0] + reach, from[1] + reach]);
         let (cw, ch) = ((k1.x - k0.x + 1) as usize, (k1.y - k0.y + 1) as usize);
         let (nx, ny) = (cw * SQ, ch * SQ);
         let (ox, oy) = (k0.x as f64 * size, k0.y as f64 * size);
@@ -432,7 +432,7 @@ fn harbour_ground() {
                     continue;
                 }
                 let b = nj as usize * nx + ni as usize;
-                if !seen[b] && !h[b].is_nan() && (h[b] - h[a]).abs() <= 2.5 && geom_dist(at(b), from) < 400.0 {
+                if !seen[b] && !h[b].is_nan() && (h[b] - h[a]).abs() <= 2.5 && geom_dist(at(b), from) < reach {
                     seen[b] = true;
                     queue.push_back(b);
                 }
@@ -516,7 +516,9 @@ fn harbour_ground() {
     let mut fill = polys.clone();
     fill.extend(mole.ramp().into_iter().map(|r| r.0));
     let from = door(&ex, si, lh.id);
-    let (ok, n) = walk(&mut ex, from, &|p| fill.iter().all(|pl| !geom::contains(pl, p) && geom::poly_gap(pl, &[p]) > 15.0));
+    // (Within the breakwater's length of the door, and a little more.)
+    let reach = 100.0 + mole.pts.windows(2).map(|w| geom_dist(w[0], w[1])).sum::<f64>().max(300.0);
+    let (ok, n) = walk(&mut ex, from, reach, &|p| fill.iter().all(|pl| !geom::contains(pl, p) && geom::poly_gap(pl, &[p]) > 15.0));
     assert!(ok, "L{si}: the lighthouse b:{si}:{} isn't reached from the bank ({n} squares walked)", lh.id);
     // Islets: a river islet's chunk agrees with its neighbours; every tower's door opens onto its top.
     let islets: Vec<_> = worldgen::t0::islets::islets(&ex.t0).to_vec();
@@ -527,7 +529,7 @@ fn harbour_ground() {
         let l = town::layout(&ex.world, &ex.t0, isl.settlement as usize);
         let Some(t) = l.buildings.iter().find(|b| town::is_watchtower(b) && geom::contains(&isl.pts, geom::mean(&b.poly))) else { continue };
         let from = door(&ex, isl.settlement as usize, t.id);
-        let (_, n) = walk(&mut ex, from, &|_| false);
+        let (_, n) = walk(&mut ex, from, 400.0, &|_| false);
         assert!(n >= 4, "the islet tower b:{}:{} opens onto {n} dry squares", isl.settlement, t.id);
         towers += 1;
     }

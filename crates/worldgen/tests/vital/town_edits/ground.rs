@@ -521,7 +521,19 @@ pub(in super::super) fn ground_edits(base: &World) {
     // round it as it was, refused to a building, the tile's samples as generated; two overlapping
     // ponds on dry land are one water with no bank between them; cleared, as generated.
     use worldgen::waters::{Water, WaterKind};
-    let k2 = others[2.min(others.len() - 1)];
+    // (No building, deck (a quay, a pier) or wall on the 50 ft inland the inlet cuts: it clears
+    // none of them.)
+    // (And for the ponds below: open dry ground west of a shore, on its row.)
+    // (Flat: the ponds stand 2 ft over it.)
+    let open = |k2: usize| (k2 - 6..=k2 + 6).all(|q| !wet(&plain_c.1, q) && plain_c.1.building[q] == 0 && (plain_c.1.height[q] - plain_c.1.height[k2]).abs() < 1.5);
+    let west_of = |k2: usize| {
+        let (j, i0) = (k2 / SQ, k2 % SQ);
+        let mut west: Vec<usize> = (14..i0.saturating_sub(10)).collect();
+        west.sort_by_key(|&o| (o as i64 - 40).abs());
+        west.into_iter().map(|o| j * SQ + i0 - o).find(|&q| open(q))
+    };
+    let clear = |k2: usize| (k2 % SQ >= 11) && (k2 - 10..=k2).all(|q| plain_c.1.building[q] == 0 && !matches!(plain_c.1.urban[q], worldgen::battlemap::URBAN_DECK | worldgen::battlemap::URBAN_WALL | worldgen::battlemap::URBAN_TOWER));
+    let k2 = others.iter().skip(2).chain(others.iter()).copied().find(|&k2| clear(k2)).expect("a shore clear of buildings for the inlet");
     let shore = at(k2);
     let sea = plain_c.1.water_level[k2 + 8];
     let inlet = Water::outline(vec![[shore[0] - 50.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] - 15.0], [shore[0] + 30.0, shore[1] + 15.0], [shore[0] - 50.0, shore[1] + 15.0]], WaterKind::Inlet, sea);
@@ -547,17 +559,14 @@ pub(in super::super) fn ground_edits(base: &World) {
     assert!(shaped_tile != plain_tile && shaped_tile[samples.clone()] == plain_tile[samples], "tile {tk:?}: the inlet drawn, its samples as generated");
     // Two ponds overlapping on dry ground west of the shore, 2 ft above it (open ground along
     // the row looked at: no building there, as the town round the shore is laid out).
-    let open = |k2: usize| (k2 - 6..=k2 + 6).all(|q| !wet(&plain_c.1, q) && plain_c.1.building[q] == 0);
-    let mut west: Vec<usize> = (14..i0 - 10).collect();
-    west.sort_by_key(|&o| (o as i64 - 40).abs());
-    let dry = west.into_iter().map(|o| j * SQ + i0 - o).find(|&k2| open(k2)).expect("open dry ground west of the shore");
+    let dry = others.iter().find_map(|&k2| west_of(k2)).expect("open dry ground west of a shore");
     let (dp, top) = (at(dry), plain_c.1.height[dry]);
     let pond = |dx: f64| Water::outline(vec![[dp[0] + dx - 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] - 20.0], [dp[0] + dx + 20.0, dp[1] + 20.0], [dp[0] + dx - 20.0, dp[1] + 20.0]], WaterKind::Pond, top + 2.0);
     ex.world.file.edits.waters.insert("e:a".into(), pond(-15.0));
     ex.world.file.edits.waters.insert("e:b".into(), pond(15.0));
     let c = pack(&mut ex, key).1;
     for i in dry % SQ - 5..=dry % SQ + 5 {
-        let q = j * SQ + i;
+        let q = dry / SQ * SQ + i;
         assert!(wet(&c, q) && (c.water_level[q] - top - 2.0).abs() < 0.01, "overlapping ponds: square {q} at {} under {}", c.height[q], c.water_level[q]);
     }
     let s = worldgen::town::Shore::new(&ex.world, &ex.t0, [dp[0] - 100.0, dp[1] - 100.0, dp[0] + 100.0, dp[1] + 100.0]);
