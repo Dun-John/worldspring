@@ -551,6 +551,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[
                     push(&p, 45);
                 }
             }
+            // P2 160: a city's quay fronts, made ground (45), a timber one planked over (6).
+            for q in crate::town::harbour::quays_kept(world, l) {
+                push(&q.pts, if q.timber && key.level >= BUILDING_MIN_LEVEL { 6 } else { 45 });
+            }
             for m in &l.monuments {
                 push(m, 7);
             }

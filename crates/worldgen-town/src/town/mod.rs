@@ -371,6 +371,8 @@ pub struct Layout {
     /// and whether it is a big port: `None` not one, `Some("")` with a breakwater, else why not.
     pub moles: Vec<harbour::Mole>,
     pub moored: Vec<harbour::Moored>,
+    /// P2 160: a city's quay fronts along its docks' shore (`quays`), made ground.
+    pub quays: Vec<harbour::Quay>,
     pub port: Option<&'static str>,
 }
 
@@ -703,6 +705,7 @@ impl Layout {
             lined: None,
             moles: Vec::new(),
             moored: Vec::new(),
+            quays: Vec::new(),
             port: None,
         }
     }
@@ -1072,7 +1075,7 @@ fn to_world(l: &mut Layout, center: P) {
     for st in &mut l.stairs {
         st.pts.iter_mut().for_each(tw);
     }
-    for poly in l.walls.iter_mut().chain(&mut l.bastions).chain(&mut l.streets).chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
+    for poly in l.walls.iter_mut().chain(&mut l.bastions).chain(&mut l.streets).chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers).chain(l.quays.iter_mut().map(|q| &mut q.pts)) {
         poly.iter_mut().for_each(tw);
     }
     l.towers.iter_mut().chain(&mut l.gates).chain(&mut l.gate_towers).for_each(tw);

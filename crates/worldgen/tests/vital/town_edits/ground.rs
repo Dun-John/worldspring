@@ -545,7 +545,13 @@ pub(in super::super) fn ground_edits(base: &World) {
         let q = j * SQ + i;
         assert!(wet(&c, q) && (c.water_level[q] - sea).abs() < 0.01, "the inlet: square {} from the shore is not the sea's water ({} over {})", i as i64 - i0 as i64, c.water_level[q], c.height[q]);
     }
-    for q in [(j - 6) * SQ + i0 - 4, (j + 6) * SQ + i0 - 4, j * SQ + i0 - 14] {
+    // (A city's quay front the inlet meets gives way to it, `harbour::quays_kept`: the ground by
+    // one is the shore's again.)
+    let fronts: Vec<Vec<[f64; 2]>> = (0..settlements.len()).flat_map(|i| worldgen::town::layout(&ex.world, &ex.t0, i).quays.iter().map(|q| q.pts.clone()).collect::<Vec<_>>()).collect();
+    let by_front = |q: usize| fronts.iter().any(|f| worldgen::town::geom::poly_gap(f, &[at(q)]) < 40.0);
+    let outside: Vec<usize> = [(j - 6) * SQ + i0 - 4, (j + 6) * SQ + i0 - 4, j * SQ + i0 - 14, j * SQ + i0 - 24, j * SQ + i0 - 34].into_iter().filter(|&q| !by_front(q)).collect();
+    assert!(!outside.is_empty(), "the inlet: no ground outside it to look at");
+    for q in outside {
         assert!(c.height[q] == plain_c.1.height[q] && c.water_level[q] == plain_c.1.water_level[q], "the inlet changed the ground outside it at square {q}");
     }
     assert!(agent::building_spot(&ex.world, &ex.t0, &foot([shore[0] - 25.0, shore[1]]), None, "c:99", None).is_err(), "a building in the inlet");

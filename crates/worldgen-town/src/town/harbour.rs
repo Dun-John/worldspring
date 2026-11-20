@@ -167,6 +167,37 @@ impl Mole {
     }
 }
 
+/// P2 160: a city's quay front along a shore side of its docks (`quays::lay`): made ground from
+/// the lots' fronts out past the water's edge, its top level (`level`, as a hand quay's), its
+/// face `pts[0]`-`pts[1]` on the water, `pts[2]`-`pts[3]` behind against the lots. Stone (a
+/// paved top) or timber (planked over).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quay {
+    pub pts: Vec<P>,
+    pub level: f32,
+    pub timber: bool,
+}
+
+/// Layout `l`'s quay fronts that stand: those no quay, pier or breakwater, nor water outline put
+/// down by hand meets (within 10 ft); the hand works take their place. (Read where they are
+/// shaped and drawn, not in the layout: a generated layout knows no edits.)
+pub fn quays_kept<'a>(world: &'a World, l: &'a Layout) -> impl Iterator<Item = &'a Quay> + 'a {
+    let edits = &world.file.edits;
+    l.quays.iter().filter(move |q| {
+        let b = bbox(&q.pts);
+        let r = [b[0] - 10.0, b[1] - 10.0, b[2] + 10.0, b[3] + 10.0];
+        edits.wharves.values().map(crate::wharf::bounds).all(|w| w[2] < r[0] || w[0] > r[2] || w[3] < r[1] || w[1] > r[3])
+            && (edits.waters.is_empty() || crate::waters::near(edits, r).is_empty())
+    })
+}
+
+impl Quay {
+    /// Its made ground as the ground shaper takes it.
+    pub fn raised(&self) -> crate::ground::Raised {
+        crate::ground::Raised { pts: self.pts.clone(), level: self.level, band: 0.0, look: crate::ground::Look::Made }
+    }
+}
+
 /// What floats in a harbour (`Layout::moored`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Afloat {
@@ -701,7 +732,7 @@ pub(crate) const KINDS: [(crate::battle::Kind, crate::battle::KindInfo); 6] = {
     ]
 };
 
-/// The breakwaters' made ground meeting `rect` (world ft), as the battlemap and the finest terrain
+/// The breakwaters' and quay fronts' made ground meeting `rect` (world ft), as the battlemap and the finest terrain
 /// tiles shape it (`ground::Shaper::with_extra`): only cities' and metropolises' layouts are
 /// asked, in settlement order.
 pub fn raised_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<crate::ground::Raised> {
@@ -716,6 +747,12 @@ pub fn raised_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<crate::ground:
             let b = m.bbox();
             if b[2] + 10.0 >= rect[0] && b[0] - 10.0 <= rect[2] && b[3] + 10.0 >= rect[1] && b[1] - 10.0 <= rect[3] {
                 out.extend(m.raised());
+            }
+        }
+        for q in quays_kept(world, &l) {
+            let b = bbox(&q.pts);
+            if b[2] + 10.0 >= rect[0] && b[0] - 10.0 <= rect[2] && b[3] + 10.0 >= rect[1] && b[1] - 10.0 <= rect[3] {
+                out.push(q.raised());
             }
         }
     }

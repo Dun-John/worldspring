@@ -295,6 +295,7 @@ pub(super) fn works_from(l: &Layout, of: String, corner: &BTreeMap<usize, P>) ->
         main: l.plaza_patch,
         piers: l.piers.iter().map(|p| pk(p)).collect(),
         moles: l.moles.iter().map(|m| (m.width, m.level, pk(&m.pts))).collect(),
+        quays: l.quays.iter().map(|q| (q.level, q.timber, pk(&q.pts))).collect(),
         moored: flat(&mut l.moored.iter().flat_map(|m| [m.at[0], m.at[1], m.rot as f64, AFLOAT.iter().position(|k| *k == m.kind).unwrap_or(0) as f64, m.length as f64])),
         port: l.port.map(str::to_string),
     }

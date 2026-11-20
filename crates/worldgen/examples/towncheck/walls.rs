@@ -523,6 +523,10 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         "boats on a dry or deck square",
         "boats left off the battlemap",
         "quay cranes",
+        "quay fronts",
+        "timber quay fronts",
+        "quay front squares wet",
+        "quay front squares unpaved",
         "bollards",
         "net racks",
     ]);
@@ -540,6 +544,34 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
     };
     for si in 0..ctx.ex.t0.settlements.len() {
         let l = town::layout(&ctx.ex.world, &ctx.ex.t0, si);
+        // P2 160: a city's quay fronts, dry and paved on the battlemap.
+        for qf in &l.quays {
+            r.tally("quay fronts", 1);
+            r.tally("timber quay fronts", qf.timber as usize);
+            let bb = town::geom::bbox(&qf.pts);
+            let (mut wet, mut unpaved, mut n) = (0, 0, 0);
+            for (cx, cy, c) in &chunks_round(ctx, [bb[0] - 10.0, bb[1] - 10.0, bb[2] + 10.0, bb[3] + 10.0]) {
+                for q in 0..SQ * SQ {
+                    let p = [cx + ((q % SQ) as f64 + 0.5) * SQUARE_FT, cy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    if !contains(&qf.pts, p) || town::geom::poly_gap(&qf.pts, &[p]) < 2.5 || c.building[q] != 0 || c.height[q] > qf.level + 0.5 {
+                        continue;
+                    }
+                    n += 1;
+                    if c.water_level[q] >= c.height[q] {
+                        wet += 1;
+                    } else if !matches!(c.urban[q], worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET | worldgen::battlemap::URBAN_DECK) {
+                        unpaved += 1;
+                    }
+                }
+            }
+            let qtag = format!("L{si} {:?} quay front at {} level {:.1}", l.tier, at(qf.pts[0]), qf.level);
+            if wet > 0 {
+                r.add("quay front squares wet", wet as f64, format!("{qtag}: {wet} of {n}"));
+            }
+            if unpaved > 0 {
+                r.add("quay front squares unpaved", unpaved as f64, format!("{qtag}: {unpaved} of {n}"));
+            }
+        }
         if l.piers.is_empty() {
             continue;
         }

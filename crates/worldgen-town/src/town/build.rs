@@ -123,7 +123,7 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
     let freed = approach::lay(site, s, r, plan, ch, &mesh, walled, &wall_laid.0, gate_ways, &mut pieces, l);
 
     // Quays and landings along the shore, and the docks' piers (`quays`).
-    quays::lay(site, plan, n_inner, &cells, ward, &usable, &edge_v, l);
+    quays::lay(site, s, plan, n_inner, &cells, ward, &usable, &edge_v, l);
 
     // A side of a castle's patch along which the town wall is the castle's own (`castle`): the wall
     // laid along the whole of it, no main street running between it and the castle and no town gate

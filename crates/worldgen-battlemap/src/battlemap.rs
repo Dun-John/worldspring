@@ -1139,6 +1139,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for m in &l.moles {
             armour(&m.pts, &m.edges(crate::town::harbour::MOLE_HEAD_FT), &hh, &hw, hx0, hy0, &owns, &local, &mut shapes);
         }
+        // P2 160: a timber quay front planked over (a stone one is the quay's paving).
+        for q in crate::town::harbour::quays_kept(world, &l).filter(|q| q.timber && owns(crate::town::geom::centroid(&q.pts))) {
+            shapes.push(VectorShape { kind: ShapeKind::Deck, size: 0.0, pts: q.pts.iter().map(local).collect() });
+        }
         for b in l.buildings.iter().filter(|b| crate::town::harbour::is_lighthouse(b)) {
             let c = crate::town::geom::mean(&b.poly);
             if owns(c) {

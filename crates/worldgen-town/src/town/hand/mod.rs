@@ -310,7 +310,7 @@ pub struct Works {
     /// The main square's block (`Layout::plaza_patch`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main: Option<u32>,
-    /// The harbour as generated: piers (outlines), breakwaters (width, level, line), boats moored
+    /// The harbour as generated: piers (outlines), breakwaters (width, level, line), quay fronts, boats moored
     /// (x, y, bow, kind, length) and why a big port has no breakwater (`Layout::port`; "" it has
     /// one). Kept as they are, whatever the streets do.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -319,6 +319,9 @@ pub struct Works {
     pub moles: Vec<(f64, f32, String)>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub moored: String,
+    /// P2 160: quay fronts (level, timber, outline).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quays: Vec<(f32, bool, String)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<String>,
 }
