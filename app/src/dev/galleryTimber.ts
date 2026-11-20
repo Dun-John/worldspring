@@ -64,29 +64,30 @@ function flow(width: number, y0: number, sq: number) {
 function mole(g: Graphics, c: P[], wf: number, seed: number) {
   const px = c.map(([a, b]): P => [a * FT, b * FT]);
   const half = (wf / 2) * FT;
-  const side = (s: number): P[] => {
-    const out: P[] = [];
-    for (let k = 0; k + 1 < px.length; k++) {
-      const [a, b] = [px[k], px[k + 1]];
-      const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const [vx, vy] = [(-(b[1] - a[1]) / l) * s * half, ((b[0] - a[0]) / l) * s * half];
-      out.push([a[0] + vx, a[1] + vy], [b[0] + vx, b[1] + vy]);
-    }
-    return out;
-  };
+  // Each side offset with mitred bends, so it runs on unbroken into the head's rim.
+  const side = (s: number): P[] =>
+    px.map((p, i) => {
+      const [a, b] = [px[Math.max(0, i - 1)], px[Math.min(px.length - 1, i + 1)]];
+      const n = (q: P, r: P): P => {
+        const l = Math.hypot(r[0] - q[0], r[1] - q[1]);
+        return [-(r[1] - q[1]) / l, (r[0] - q[0]) / l];
+      };
+      const [n0, n1] = [n(a === p ? p : a, a === p ? b : p), n(b === p ? a : p, b === p ? p : b)];
+      const [mx, my] = [n0[0] + n1[0], n0[1] + n1[1]];
+      const d = (s * half) / Math.max(0.5, (mx * n0[0] + my * n0[1]) || 1);
+      return [p[0] + mx * d, p[1] + my * d];
+    });
   const [tip, last] = [px[px.length - 1], px[px.length - 2]];
   const a0 = Math.atan2(tip[1] - last[1], tip[0] - last[0]);
-  const head = half * 1.25;
   const rim: P[] = [];
-  for (let k = 0; k <= 16; k++) {
+  for (let k = 1; k < 16; k++) {
     const a = a0 + Math.PI / 2 - (Math.PI * k) / 16;
-    rim.push([tip[0] + head * Math.cos(a), tip[1] + head * Math.sin(a)]);
+    rim.push([tip[0] + half * Math.cos(a), tip[1] + half * Math.sin(a)]);
   }
   const [l, r] = [side(1), side(-1)];
-  g.poly([...l.flat(), ...rim.flat(), ...[...r].reverse().flat()]).fill(QUAY);
-  drawBreakwaterArmour(g, l, PX, 9, seed);
-  drawBreakwaterArmour(g, rim, PX, 9, seed + 1);
-  drawBreakwaterArmour(g, [...r].reverse(), PX, 9, seed + 2);
+  const edge = [...l, ...rim, ...[...r].reverse()];
+  g.poly(edge.flat()).fill(QUAY);
+  drawBreakwaterArmour(g, edge, PX, 9, seed);
 }
 
 /** `&items=breakwaters`: armour round a mole and its head, then along bent lines on water (9 and 12 ft). */

@@ -36,9 +36,35 @@ function framed(g: Graphics, x: number, y: number, dir: number, sq: number, body
   g.restore();
 }
 
+/** `poly` (flat x, y) cut to the side of the line through (ax, ay) where (nx, ny) points; each kept
+ * vertex flagged when the edge that leaves it lies along the cut. */
+function cutPoly(poly: number[], ax: number, ay: number, nx: number, ny: number): [number[], boolean[]] {
+  const out: number[] = [];
+  const along: boolean[] = [];
+  const n = poly.length / 2;
+  const side = (i: number) => (poly[i * 2] - ax) * nx + (poly[i * 2 + 1] - ay) * ny;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [di, dj] = [side(i), side(j)];
+    if (di >= 0) {
+      out.push(poly[i * 2], poly[i * 2 + 1]);
+      along.push(false);
+    }
+    if (di >= 0 !== dj >= 0) {
+      const t = di / (di - dj);
+      out.push(poly[i * 2] + (poly[j * 2] - poly[i * 2]) * t, poly[i * 2 + 1] + (poly[j * 2 + 1] - poly[i * 2 + 1]) * t);
+      // (Entering the cut: the edge from here runs along it to where the outline comes back out.)
+      along.push(di >= 0);
+    }
+  }
+  return [out, along];
+}
+
 /** One big rounded stone from above (atlas px): a smooth lopsided round, the shaded tone with the lit
- * tone over its north-west, a soft ink outline; `w` scales the line widths. */
-function boulder(g: Graphics, x: number, y: number, s: number, rnd: () => number, w: (px: number) => number) {
+ * tone over its north-west, a soft ink outline; `w` scales the line widths. With `cut` [ax, ay, nx, ny]
+ * only its part on the (nx, ny) side of that line shows (the rest lies under the made ground), its
+ * outline left open along the cut. */
+function boulder(g: Graphics, x: number, y: number, s: number, rnd: () => number, w: (px: number) => number, cut?: number[]) {
   const n = 16;
   const pts: number[] = [];
   const [p2, p3, turn] = [rnd() * 6.3, rnd() * 6.3, rnd() * Math.PI];
@@ -50,9 +76,26 @@ function boulder(g: Graphics, x: number, y: number, s: number, rnd: () => number
     pts.push(px * Math.cos(turn) - py * Math.sin(turn), px * Math.sin(turn) + py * Math.cos(turn));
   }
   const at = (k: number, dx: number, dy: number) => pts.map((p, i) => p * k + (i % 2 ? y + dy : x + dx));
-  g.poly(at(1, 0, 0)).fill(RUBBLE[0]);
-  g.poly(at(0.8, -s * 0.12, -s * 0.12)).fill(RUBBLE[2]);
-  g.poly(at(1, 0, 0)).stroke({ width: w(OUT), color: INK, alpha: 0.8, join: 'round' });
+  const clip = (poly: number[]): [number[], boolean[]] => (cut ? cutPoly(poly, cut[0], cut[1], cut[2], cut[3]) : [poly, poly.filter((_, i) => i % 2 === 0).map(() => false)]);
+  const [body, along] = clip(at(1, 0, 0));
+  if (body.length < 6) return;
+  g.poly(body).fill(RUBBLE[0]);
+  const [lit] = clip(at(0.8, -s * 0.12, -s * 0.12));
+  if (lit.length >= 6) g.poly(lit).fill(RUBBLE[2]);
+  const m = body.length / 2;
+  if (!along.includes(true)) {
+    g.poly(body).stroke({ width: w(OUT), color: INK, alpha: 0.8, join: 'round' });
+    return;
+  }
+  // The open outline: from the vertex where it comes out of the cut round to where it goes back in.
+  const start = (along.indexOf(true) + 1) % m;
+  g.moveTo(body[start * 2], body[start * 2 + 1]);
+  for (let q = 1; q < m; q++) {
+    const i = (start + q) % m;
+    g.lineTo(body[i * 2], body[i * 2 + 1]);
+    if (along[i]) break;
+  }
+  g.stroke({ width: w(OUT), color: INK, alpha: 0.8, join: 'round', cap: 'round' });
 }
 
 /** `pts` moved `d` px along their left-hand normal (-uy, ux), the normals averaged at the bends. */
@@ -90,26 +133,38 @@ export function drawBreakwaterArmour(g: Graphics, pts: [number, number][], sq = 
     const u = t - seg[0];
     return [ax + ux * u - uy * off, ay + uy * u + ux * off];
   };
-  // An outer row (the water side) every ~5.2 ft, an inner row of smaller stones between them.
+  // The line's own piece at t, as the cut [ax, ay, nx, ny] (atlas px) the made ground makes there.
+  const cutAt = (t: number): number[] => {
+    const seg = along.find((s) => t <= s[1]) ?? along[along.length - 1];
+    const [ax, ay] = pts[seg[2]];
+    const [bx, by] = pts[seg[2] + 1];
+    const [ux, uy] = [(bx - ax) / seg[3], (by - ay) / seg[3]];
+    return [ax / k, ay / k, -uy, ux];
+  };
+  // An outer row every ~5.2 ft, bedded at the made ground's edge so its outer half shows on the water;
+  // a row of smaller stones between them, further under, only their outer rims showing in the gaps.
   const nOut = Math.max(1, Math.round(run / (5.2 * FT * k)));
   const jig = () => (rnd() - 0.5) * 0.4 * FT * k;
-  const inner: [number, number, number][] = [];
-  const outer: [number, number, number][] = [];
+  const stones: [number, number, number, number[]][] = [];
+  for (let j = 0; j < nOut; j++) {
+    const t = (run * (j + 0.5)) / nOut + jig();
+    stones.push([...pointAt(t, half * (0.02 + 0.08 * rnd())), (2.1 + 0.4 * rnd()) * FT, cutAt(t)]);
+  }
   for (let j = 0; j <= nOut; j++) {
     const t = Math.min(run, Math.max(0, (run * j) / nOut + jig()));
-    outer.push([...pointAt(t, half * (0.22 + 0.1 * rnd())), (2.7 + 0.6 * rnd()) * FT]);
+    stones.push([...pointAt(t, half * (0.2 + 0.1 * rnd())), (2.7 + 0.6 * rnd()) * FT, cutAt(t)]);
   }
-  for (let j = 0; j < nOut; j++) inner.push([...pointAt((run * (j + 0.5)) / nOut + jig(), -half * (0.3 + 0.1 * rnd())), (2.1 + 0.4 * rnd()) * FT]);
   framed(g, 0, 0, 0, sq, (w) => {
     const line = (p: [number, number][], width: number, color: number, alpha: number, cap: 'round' | 'butt') => {
       g.moveTo(p[0][0] / k, p[0][1] / k);
       for (const [x, y] of p.slice(1)) g.lineTo(x / k, y / k);
       g.stroke({ width: w(width), color, alpha, cap, join: 'round' });
     };
-    // The wet shade the stones sit in on the water side, then the one line of foam along the outer row.
-    line(offsetLine(pts, half * 0.55), widthFt * 0.6 * FT, 0x2a3e40, 0.2, 'butt');
-    line(offsetLine(pts, half + 0.35 * FT * k), 0.7 * FT, 0xf2f6f0, 0.6, 'round');
-    for (const [x, y, s] of [...inner, ...outer]) boulder(g, x / k, y / k, s, rnd, w);
+    // The wet shade the stones sit in on the water side (clear of the made ground), then the one line
+    // of foam along the outer row.
+    line(offsetLine(pts, half * 0.75), widthFt * 0.55 * FT, 0x2a3e40, 0.2, 'butt');
+    line(offsetLine(pts, half * 0.88), 0.7 * FT, 0xf2f6f0, 0.6, 'round');
+    for (const [x, y, s, c] of stones) boulder(g, x / k, y / k, s, rnd, w, c);
   });
 }
 

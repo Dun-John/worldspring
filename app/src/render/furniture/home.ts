@@ -482,21 +482,44 @@ export function keg(g: Graphics, f: InteriorItem, u: number, light: Light, rnd: 
   g.moveTo(...at(u + 0.5, e1)).lineTo(...at(u + 0.5, e1 + 0.07)).stroke({ width: 0.022, color: BRASS, cap: 'round' });
 }
 
-/** Crate: a frame of boards round three planks, nails in the corners, a cross brace on some. */
+/** Crate: a frame of boards round three planks, nails in the corners, a cross brace on some; bold dark
+ * ink round the box, the frame, the plank seams and the brace. */
 function crate(g: Graphics, x0: number, y0: number, sz: number, light: Light, rnd: () => number, braced: boolean) {
   const face = board(g, [x0, y0, x0 + sz, y0 + sz], [0x6e4e2e, 0x9a7448, 0xae8858], light, rnd, true, 0.04, 0);
-  planks(g, face, true, 3, 0x5e4028, rnd);
-  const e = sz * 0.12;
+  const e = sz * 0.13;
   const [fx0, fy0, fx1, fy1] = face;
+  const ink = 0.034;
   g.rect(fx0, fy0, fx1 - fx0, fy1 - fy0).stroke({ width: e, color: 0x7e5c38, alignment: 1 });
-  if (braced) g.moveTo(fx0 + e, fy1 - e).lineTo(fx1 - e, fy0 + e).stroke({ width: e * 0.8, color: 0x7e5c38 });
+  // The frame's inner edge and the plank seams, inked.
+  const [ix0, iy0, ix1, iy1] = [fx0 + e, fy0 + e, fx1 - e, fy1 - e];
+  for (let k = 1; k < 3; k++) {
+    const t = iy0 + ((iy1 - iy0) * k) / 3;
+    g.moveTo(ix0, t).lineTo(ix1, t);
+  }
+  g.stroke({ width: ink * 0.8, color: INK });
+  g.rect(ix0, iy0, ix1 - ix0, iy1 - iy0).stroke({ width: ink * 0.8, color: INK });
+  for (const [ax, ay, bx, by] of [
+    [x0, y0, ix0, iy0],
+    [x0 + sz, y0, ix1, iy0],
+    [x0 + sz, y0 + sz, ix1, iy1],
+    [x0, y0 + sz, ix0, iy1],
+  ]) {
+    g.moveTo(ax, ay).lineTo(bx, by);
+  }
+  g.stroke({ width: ink * 0.6, color: INK, cap: 'round' });
+  if (braced) {
+    g.moveTo(ix0, iy1).lineTo(ix1, iy0).stroke({ width: e * 0.8 + ink * 1.4, color: INK });
+    g.moveTo(ix0, iy1).lineTo(ix1, iy0).stroke({ width: e * 0.8, color: 0x8a6640 });
+    g.moveTo(ix0, iy1).lineTo(ix1, iy0).stroke({ width: e * 0.3, color: 0xae8858, alpha: 0.7 });
+  }
+  g.rect(x0, y0, sz, sz).stroke({ width: ink * 1.3, color: INK, join: 'round' });
   for (const [nx, ny] of [
     [fx0 + e / 2, fy0 + e / 2],
     [fx1 - e / 2, fy0 + e / 2],
     [fx1 - e / 2, fy1 - e / 2],
     [fx0 + e / 2, fy1 - e / 2],
   ]) {
-    g.circle(nx, ny, 0.012).fill(0x2a2a28);
+    g.circle(nx, ny, 0.018).fill(INK);
   }
 }
 

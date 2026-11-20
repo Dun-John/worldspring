@@ -10,7 +10,7 @@
 // alone, at `&sq=` px a square, default 64); town walls by culture group (`&items=townwalls` alone, default 16, `&ruins=1`
 // every panel ruined); the countryside's hedgerows, dry-stone walls, fences and windmill sails
 // (`&items=countryside`, or with `&kinds=62` or `63`, at `&sq=`, default 32); and a temple's pieces in each god's look (`&items=temple` alone,
-// default 56). `&items=civic` shows the guild and civic pieces and the stable stall. `&items=terrain` (alone, at
+// default 56). `&items=civic` shows the guild and civic pieces and the stable stall; `&items=crates` the crates. `&items=terrain` (alone, at
 // `&sq=` px a square, default 34) shows underground terrain as the floor shader paints it: a room each of shallow
 // water, deep water, a chasm and a rubble slope, a pool crossed by a rope bridge and stepping stones, and a chasm
 // bridged, in a dungeon's flagstones and again in a cave. `&items=dungeon4` (alone, default 48) shows the dungeon set as the DM
@@ -67,6 +67,8 @@ const SETS: Record<string, string[]> = {
   civic: ['strongbox', 'counting_desk', 'job_board', 'stable_stall', 'guild_arms', 'council_table'],
   // (Roadmap 7 P8: the lighthouse's tower top and its lamp room's lamp and stair.)
   lighthouse: ['lighthouse', 'lighthouse_lamp', 'spiral_stair'],
+  // (Roadmap 7 P8: the yard's crates and the furniture crate, redrawn with bolder ink.)
+  crates: ['crates', 'crate'],
 };
 
 /** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
@@ -297,18 +299,21 @@ export async function runGallery(target: HTMLElement) {
     }
     return;
   }
-  if (!pick) {
+  // (`&items=` naming battlemap kinds, as the `crates` set does, shows those kinds' frames too.)
+  const pickKinds = pick?.length ? catalog.filter((info) => pick.includes(info.name)).map((info) => info.id) : [];
+  if (!pick || pickKinds.length) {
     head(`Battlemap objects (atlas, ${catalog.length} kinds × ${VARIANTS} variants; market stalls 16, four to a row)`);
     const atlas = buildAtlas(app.renderer, catalog);
     const scale = sq / PX;
     // On the ground, every frame at full size (as on the battlemap), with the ground round it.
-    const widest = Math.max(...catalog.filter((info) => !only || only.includes(info.id)).map((info) => atlas.frames[info.id][0].width));
+    const shown = only ?? (pickKinds.length ? pickKinds : undefined);
+    const widest = Math.max(...catalog.filter((info) => !shown || shown.includes(info.id)).map((info) => atlas.frames[info.id][0].width));
     const cell = Math.max(104, Math.ceil((sq / 48) * 104), ground === null ? 0 : Math.ceil(widest * scale + 64 * scale));
     const cellW = 4 * cell + 24;
     const per = Math.max(1, Math.floor((width - 32) / cellW));
     let rowH = 0;
     catalog
-      .filter((info) => !only || only.includes(info.id))
+      .filter((info) => !shown || shown.includes(info.id))
       .forEach((info, k) => {
         if (k % per === 0 && k) {
           y += rowH + 30;

@@ -37,26 +37,54 @@ export function barrel(g: Graphics, x: number, y: number, r: number, rnd: () => 
 }
 
 /** Crate from above: a frame of boards round three planks, nails in the corners, a cross brace on some,
- * lit on the NW. */
+ * lit on the NW; bold dark ink round the box, the frame, every plank seam and the brace. */
 export function crate(g: Graphics, x: number, y: number, s: number, rot: number, braced: boolean) {
   const c = Math.cos(rot);
   const si = Math.sin(rot);
   const pt = (u: number, v: number) => [x + u * c - v * si, y + u * si + v * c];
   const quad = (u0: number, v0: number, u1: number, v1: number) => [...pt(u0, v0), ...pt(u1, v0), ...pt(u1, v1), ...pt(u0, v1)];
   const wood = [0x6e4e2e, 0x9a7448, 0xc09a68];
-  g.poly(quad(-s, -s, s, s)).fill(wood[0]).stroke({ width: 2.2, color: INK, join: 'round' });
-  const f = s * 0.18;
-  for (let i = 0; i < 3; i++) {
-    const v0 = -s + f + ((2 * s - 2 * f) * i) / 3;
-    g.poly(quad(-s + f, v0 + 0.8, s - f, v0 + (2 * s - 2 * f) / 3 - 0.8)).fill(i === 0 ? shade(wood[1], 1.08) : wood[1]);
-  }
+  const ink = Math.max(1.6, Math.min(3.4, s * 0.09));
+  const f = s * 0.2;
+  // The box and its frame boards (lit along the north and west).
+  g.poly(quad(-s, -s, s, s)).fill(wood[0]);
   g.poly(quad(-s, -s, s, -s + f)).fill(wood[2]);
   g.poly(quad(-s, -s, -s + f, s)).fill(shade(wood[2], 0.95));
-  if (braced) {
-    const [a, b] = [pt(-s + f, s - f), pt(s - f, -s + f)];
-    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: f * 0.9, color: wood[0] });
-    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: f * 0.5, color: wood[2], alpha: 0.6 });
+  // Three planks inside the frame, the first lit, each with a grain stroke.
+  const [i0, i1] = [-s + f, s - f];
+  const step = (i1 - i0) / 3;
+  for (let i = 0; i < 3; i++) {
+    const v0 = i0 + step * i;
+    g.poly(quad(i0, v0, i1, v0 + step)).fill(i === 0 ? shade(wood[1], 1.08) : wood[1]);
+    const [a, b] = [pt(i0 + (i1 - i0) * (0.15 + 0.2 * i), v0 + step * 0.55), pt(i0 + (i1 - i0) * (0.55 + 0.15 * i), v0 + step * 0.5)];
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
   }
+  g.stroke({ width: ink * 0.45, color: shade(wood[0], 0.7), alpha: 0.8, cap: 'round' });
+  // The plank seams and the frame's inner edge, inked.
+  for (let i = 1; i < 3; i++) {
+    const [a, b] = [pt(i0, i0 + step * i), pt(i1, i0 + step * i)];
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
+  }
+  g.stroke({ width: ink * 0.6, color: INK, cap: 'butt' });
+  g.poly(quad(i0, i0, i1, i1)).stroke({ width: ink * 0.6, color: INK, join: 'miter' });
+  // The frame's mitred corners.
+  for (const [u, v] of [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ]) {
+    const [a, b] = [pt(u * s, v * s), pt(u * (s - f), v * (s - f))];
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
+  }
+  g.stroke({ width: ink * 0.5, color: INK, cap: 'round' });
+  if (braced) {
+    const [a, b] = [pt(i0, i1), pt(i1, i0)];
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: f * 0.9 + ink * 1.2, color: INK, cap: 'butt' });
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: f * 0.9, color: wood[1], cap: 'butt' });
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: f * 0.35, color: wood[2], alpha: 0.7, cap: 'butt' });
+  }
+  g.poly(quad(-s, -s, s, s)).stroke({ width: ink, color: INK, join: 'round' });
   for (const [u, v] of [
     [-1, -1],
     [1, -1],
@@ -64,7 +92,7 @@ export function crate(g: Graphics, x: number, y: number, s: number, rot: number,
     [-1, 1],
   ]) {
     const [nx, ny] = pt(u * (s - f / 2), v * (s - f / 2));
-    g.circle(nx, ny, 1.1).fill(0x2a2a28);
+    g.circle(nx, ny, Math.max(1.2, ink * 0.55)).fill(INK);
   }
 }
 

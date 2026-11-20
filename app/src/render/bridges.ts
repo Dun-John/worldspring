@@ -21,8 +21,8 @@ const PLANKS: [number, number][] = [
   [0x93693e, 0xbc9262],
   [0x80664a, 0xa88d6a],
 ];
-/** The underside between the planks: mid-brown, the props' wood in shade. */
-const UNDERSIDE = 0x6a4a2e;
+/** The underside between the planks: a lighter warm mid-brown, greyer than the planks so it reads as the side. */
+const UNDERSIDE = 0x8e6e4c;
 /** The planks' bold ink. */
 const PLANK_INK = 3;
 /** Stone: dark, mid, light, sunlit. */
