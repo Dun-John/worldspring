@@ -212,7 +212,8 @@ thread_local! {
 pub(super) fn plan(world: &World, t0: &T0, index: usize, culture: u8, make: impl FnOnce() -> TownPlan) -> Rc<TownPlan> {
     let key = index as u32;
     // (183: and the roads its ward edit keeps, `plan::frozen_fp`.)
-    let culture = (culture as u64) ^ super::plan::frozen_fp(world, t0, index);
+    // (161: and the planning set for it.)
+    let culture = (culture as u64) ^ super::plan::frozen_fp(world, t0, index) ^ (super::planning::mark(world, t0, index) << 8);
     if let Some(p) = PLANS.with(|c| {
         let c = c.borrow();
         if c.0 == world.hash { c.1.get(&key).filter(|p| p.0 == culture).map(|p| p.1.clone()) } else { None }
@@ -325,6 +326,10 @@ pub(super) fn hash_in(world: &World, t0: &T0, index: usize, e: &TownEdit) -> u64
     let h = match super::culture::mark(world, t0, index) {
         0 => hash_edit(world, e),
         c => crate::core::rng::hash2(hash_edit(world, e), c, 0xc017),
+    };
+    let h = match super::planning::mark(world, t0, index) {
+        0 => h,
+        p => crate::core::rng::hash2(h, p as i64, 0x91a7),
     };
     let drawn = drawn_over(world, t0, index);
     if drawn.is_empty() {

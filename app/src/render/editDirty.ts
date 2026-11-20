@@ -310,6 +310,10 @@ export function editDirty(prev: Edits, next: Edits, changed?: Record<string, str
   const nk = next.cultures ?? {};
   const cultures: string[] = [];
   if (pk !== nk) for (const key of keys('cultures', pk, nk)) if (pk[key] !== nk[key]) cultures.push(key);
+  // (161: and planned otherwise, `Edits.planning`: re-laid the same way.)
+  const plp = prev.planning ?? {};
+  const nlp = next.planning ?? {};
+  if (plp !== nlp) for (const key of keys('planning', plp, nlp)) if (plp[key] !== nlp[key] && !cultures.includes(key)) cultures.push(key);
   // Roads, streets and paths taken off the map or brought back.
   const cutIds: string[] = [];
   if (prev.removed_roads !== next.removed_roads) {

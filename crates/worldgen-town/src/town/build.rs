@@ -331,6 +331,11 @@ pub(super) fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, c
         let roll = ch.reroll.get(&i).copied().unwrap_or(0);
         let salt = |h: u64| if roll == 0 { h } else { hash3(h, roll as i64, 0x7e70, 1) };
         let mut dp = District::roll(w, salt(hash2(plan.base_seed, key as i64, 0xd15)));
+        // (161) A planned block: its alleys cut square, its lots near one size.
+        if plan.lattice.get(i) == Some(&true) {
+            dp.grid_chaos *= 1.0 - 0.8 * plan.planning;
+            dp.size_chaos *= 1.0 - 0.7 * plan.planning;
+        }
         match ch.lots.get(&i) {
             Some(f) => dp.min_sq = District::base(w) * f,
             None if close => dp.min_sq *= District::base(Ward::Common) / District::base(Ward::Temple),

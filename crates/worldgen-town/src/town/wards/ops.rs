@@ -379,6 +379,7 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         "layout": index,
         "center": round1(center),
         "max_move_ft": crate::core::round(plan.spacing),
+        "planning": super::super::planning::to_json(world, t0, index),
         "walls": walls_json,
         "edited": e.is_some(),
         "patches": patches,

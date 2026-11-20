@@ -438,6 +438,12 @@ pub struct Edits {
     /// village or town added by hand keeps its own in `Created::culture`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cultures: BTreeMap<String, u8>,
+    /// (Roadmap 7, 161) The world's own towns and cities planned otherwise than rolled
+    /// (`<layout>` → 0-100: how planned its streets are, `town::planning`: 0-29 grown, 30-69 a
+    /// planned quarter beside a grown core, 70-100 planned throughout). Towns laid out by hand
+    /// and villages ignore it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub planning: BTreeMap<String, u8>,
     /// Overland hex grids (one key, `overland`): drawn over the map for a hex crawl, never
     /// generated from (the app draws them; play sessions keep which hexes are revealed).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

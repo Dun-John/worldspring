@@ -24,11 +24,16 @@ pub(super) struct Seeds {
     pub(super) total: usize,
     pub(super) sites: Vec<P>,
     pub(super) cells: Vec<Labeled>,
+    /// (161) Each seed's: on the planned lattice.
+    pub(super) lattice: Vec<bool>,
 }
 
 /// Seeds the patches of settlement `s` (urban radius `r`); draws the per-patch stream's seed
-/// from `rng` (its first two draws).
-pub(super) fn plant(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32) -> Seeds {
+/// from `rng` (its first two draws). (161) A town planned (`planning`, 0-1: `town::planning`)
+/// has the part of it beyond its grown core (all of it, planned throughout) seeded on a lattice
+/// turned to `axis` (radians: its main road's way in), so its patches, and the streets between
+/// them, are regular blocks; the lattice's seeds are never relaxed.
+pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f64, rng: &mut Pcg32) -> Seeds {
     let pop = s.population as f64;
     let n_spiral = match s.tier {
         Tier::Town => (pop / 220.0).clamp(9.0, 26.0),
@@ -54,12 +59,42 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32) -> See
     let plaza_s = spacing * 0.866 * (0.55 + 0.25 * roll(0, 2));
     let plaza_l = plaza_s * (1.0 + 0.5 * roll(0, 3));
     let rhombus = !site.near_river([0.0, 0.0], plaza_l);
-    let mut seeds: Vec<(P, bool)> = Vec::new();
+    // (161) The grown core: the side of a line across the town (`planning::core_line`), the
+    // planned quarter beyond it, which way out rolled (along or across the lattice); and the
+    // lattice: square blocks, or (half the towns) blocks drawn out along the axis, avenues
+    // between them.
+    let line = super::planning::core_line(planning);
+    let out = axis + std::f64::consts::FRAC_PI_2 * (roll(0, 9) * 4.0).floor();
+    let out = [libm::cos(out), libm::sin(out)];
+    let grown = |p: P| line.is_none_or(|t| dot(p, out) < t * r_edge);
+    let aspect = if roll(0, 7) < 0.5 { 1.0 + 0.15 * roll(0, 8) } else { 1.4 + 0.6 * roll(0, 8) };
+    let (gx, gy) = (spacing * crate::core::sqrt(aspect), spacing / crate::core::sqrt(aspect));
+    let (gu, gv) = ([libm::cos(axis), libm::sin(axis)], [-libm::sin(axis), libm::cos(axis)]);
+    // (Planned throughout: the market square is the lattice's middle block.)
+    let (pa, plaza_s, plaza_l) = if line.is_some_and(|t| t < 0.0) { (axis, gx, gy) } else { (pa, plaza_s, plaza_l) };
+    // (Seed, fixed, on the lattice.)
+    let mut seeds: Vec<(P, bool, bool)> = Vec::new();
     if rhombus {
         let h = std::f64::consts::FRAC_PI_2;
-        seeds.push(([0.0, 0.0], true));
+        seeds.push(([0.0, 0.0], true, false));
         for (d, a) in [(plaza_s, pa), (plaza_l, pa + h), (plaza_s, pa + 2.0 * h), (plaza_l, pa + 3.0 * h)] {
-            seeds.push((polar(d, a), true));
+            seeds.push((polar(d, a), true, false));
+        }
+    }
+    if line.is_some() {
+        let jit = (0.12 * (1.0 - planning) / (1.0 - super::planning::MIXED)).max(0.01) * spacing;
+        let k = (r_edge / gx.min(gy)) as i64 + 1;
+        for ix in -k..=k {
+            for iy in -k..=k {
+                let mut sr = Pcg32::new(hash2(pseed, ix, iy ^ 0x1a77), 67);
+                let (ja, j) = (sr.range(0.0, std::f64::consts::TAU), sr.range(0.0, jit));
+                let p = add(add(mul(gu, ix as f64 * gx), mul(gv, iy as f64 * gy)), [j * libm::cos(ja), j * libm::sin(ja)]);
+                let d = len(p);
+                if d >= r_edge || grown(p) || site.near_river(p, 0.6 * spacing) || seeds.iter().any(|(q, fixed, _)| *fixed && dist(*q, p) < 0.5 * gx.min(gy)) {
+                    continue;
+                }
+                seeds.push((p, false, true));
+            }
         }
     }
     for i in 0..n_spiral + n_outer {
@@ -77,11 +112,15 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32) -> See
         let j = sr.range(0.0, 0.3 * local);
         let ja = sr.range(0.0, std::f64::consts::TAU);
         let p = [rad * libm::cos(a) + j * libm::cos(ja), rad * libm::sin(a) + j * libm::sin(ja)];
+        // (161: the planned quarter's seeds are the lattice's.)
+        if i < n_spiral && !grown(p) {
+            continue;
+        }
         // Near a river, seeds come in mirrored pairs across the channel instead (below).
         if site.near_river(p, 0.6 * spacing) {
             continue;
         }
-        seeds.push((p, false));
+        seeds.push((p, false, false));
     }
     // River: pairs of seeds mirrored across the centreline put a patch edge on the channel,
     // so blocks end at quays along it instead of losing buildings to the water one by one.
@@ -89,8 +128,8 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32) -> See
         let n = [-t[1], t[0]];
         let off = hw + 0.45 * spacing;
         for q in [add(c, mul(n, off)), sub(c, mul(n, off))] {
-            if !seeds.iter().any(|(p, fixed)| *fixed && dist(*p, q) < 0.4 * spacing) {
-                seeds.push((q, true));
+            if !seeds.iter().any(|(p, fixed, _)| *fixed && dist(*p, q) < 0.4 * spacing) {
+                seeds.push((q, true, false));
             }
         }
     }
@@ -103,17 +142,18 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32) -> See
             continue;
         }
         shore_used.push(q);
-        seeds.push((sub(q, mul(n, 0.45 * spacing)), true));
-        seeds.push((add(q, mul(n, 0.45 * spacing)), true));
+        seeds.push((sub(q, mul(n, 0.45 * spacing)), true, false));
+        seeds.push((add(q, mul(n, 0.45 * spacing)), true, false));
     }
-    seeds.retain(|(p, fixed)| *fixed || shore_used.iter().all(|u| dist(*u, *p) > 0.55 * spacing));
+    seeds.retain(|(p, fixed, _)| *fixed || shore_used.iter().all(|u| dist(*u, *p) > 0.55 * spacing));
     // Inner (city) seeds first.
-    let (inner_seeds, outer_seeds): (Vec<_>, Vec<_>) = seeds.into_iter().partition(|(p, _)| len(*p) < r_edge);
+    let (inner_seeds, outer_seeds): (Vec<_>, Vec<_>) = seeds.into_iter().partition(|(p, _, _)| len(*p) < r_edge);
     let n_inner = inner_seeds.len();
-    let seeds: Vec<(P, bool)> = inner_seeds.into_iter().chain(outer_seeds).collect();
+    let seeds: Vec<(P, bool, bool)> = inner_seeds.into_iter().chain(outer_seeds).collect();
     let total = seeds.len();
     let mut sites: Vec<P> = seeds.iter().map(|x| x.0).collect();
-    let fixed_seed: Vec<bool> = seeds.iter().map(|x| x.1).collect();
+    let fixed_seed: Vec<bool> = seeds.iter().map(|x| x.1 || x.2).collect();
+    let lattice: Vec<bool> = seeds.iter().map(|x| x.2).collect();
     let boundary = circle([0.0, 0.0], r_out * 1.3, 48);
     let mut cells = voronoi(&sites, &boundary);
     for _ in 0..2 {
@@ -129,5 +169,5 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32) -> See
             *c = Labeled { pts: Vec::new(), labels: Vec::new() };
         }
     }
-    Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells }
+    Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice }
 }

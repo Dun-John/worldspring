@@ -42,9 +42,10 @@ pub(super) fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownP
 /// since then are joined to it as it is built (`rejoined`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_for(world: &World, t0: &T0, index: usize, site: &Site, s: &Settlement, r: f64, now: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
+    let planning = super::planning::of(world, t0, index, s);
     match frozen_ends(world, t0, index) {
-        Some((was, heading)) => plan_town(site, s, r, &was, Some(&heading), rng),
-        None => plan_town(site, s, r, now, None, rng),
+        Some((was, heading)) => plan_town(site, s, r, &was, Some(&heading), planning, rng),
+        None => plan_town(site, s, r, now, None, planning, rng),
     }
 }
 
@@ -316,8 +317,16 @@ fn water_beyond(site: &Site, a: P, b: P, inside: P) -> bool {
     wet.windows(2).any(|w| w[0] && w[1])
 }
 
-pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], headings: Option<&[Option<P>]>, rng: &mut Pcg32) -> TownPlan {
-    let seeds::Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells } = seeds::plant(site, s, r, rng);
+/// (161: `planning`, 0-1, how planned its streets are: `town::planning`.)
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], headings: Option<&[Option<P>]>, planning: f64, rng: &mut Pcg32) -> TownPlan {
+    // (161) A planned town's lattice runs with its chief road's way in (the first of the most
+    // important class), else with a rolled heading.
+    let axis = match road_ends.iter().filter(|(e, _)| len(*e) > 1.0).min_by_key(|(_, c)| *c) {
+        Some((e, _)) => libm::atan2(e[1], e[0]),
+        None => unit(hash2(s.seed, 0xa715, 161)) * std::f64::consts::PI,
+    };
+    let seeds::Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice } = seeds::plant(site, s, r, planning, axis, rng);
     // Per-patch random streams (`seeds::plant`).
     let roll = |i: usize, stage: i64| seeds::roll(pseed, i, stage);
 
@@ -580,9 +589,11 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
             mesh.try_move(&vf, g, mid);
         }
     }
-    // Round the wall: three smoothing passes (gates, water and river corners stay put).
+    // Round the wall: three smoothing passes (gates, water and river corners stay put; 161: one
+    // pass round a town with a planned quarter, its blocks kept near square).
+    let wall_passes = if planning >= super::planning::MIXED { 1 } else { 3 };
     for (chain, closed) in &chains {
-        mesh.smooth_chain(&vf, chain, *closed, &|v| gates.contains(&v) || pinned[v], 3);
+        mesh.smooth_chain(&vf, chain, *closed, &|v| gates.contains(&v) || pinned[v], wall_passes);
     }
     // Citadel: the highest city patch with room for a castle, inside the town (a full curtain of
     // its own) or on its wall (sharing the city wall; `WALL_BIAS_FT`), not by the market square nor
@@ -800,8 +811,10 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         }
         spoke_end.push(v);
     }
+    // (161: never among a planned quarter's blocks: its streets run straight.)
+    let on_grid = |v: usize| !vf[v].is_empty() && vf[v].iter().all(|&f| lattice[f]);
     for path in &paths {
-        mesh.smooth_chain(&vf, path, false, &|v| gates.contains(&v) || pinned[v] || ring.contains(&v) || keep_v.contains(&v) || spoke_end.contains(&v), 2);
+        mesh.smooth_chain(&vf, path, false, &|v| gates.contains(&v) || pinned[v] || ring.contains(&v) || keep_v.contains(&v) || spoke_end.contains(&v) || on_grid(v), 2);
     }
 
     // Bridges carry streets: every crossing link a main street uses gets a bridge along it;
@@ -1079,6 +1092,8 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         steep,
         palace,
         park_refused,
+        planning,
+        lattice,
     };
     // Its other open spaces, on the plan as it stands.
     (plan.squares, plan.closes) = squares::plan(&plan, site, s.tier);

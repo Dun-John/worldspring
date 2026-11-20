@@ -60,6 +60,7 @@ pub fn list() -> Vec<Value> {
                 "walls": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }, walls], "description": "true, false or \"auto\" (as generated), or {built, gates_add, gates_remove (corners), towers_add ([corner, next corner, f 0.05-0.95] or a corner), towers_remove (corner or t:<layout>:<n>)}" },
                 "reset": { "type": "string", "enum": ["all", "corners", "patches", "squares", "walls"] },
                 "members": { "type": "object", "properties": { "add": ids.clone(), "remove": ids }, "description": "By hand: c:<n> drawn things (add joins, remove leaves); b:<layout>:<id> outskirt buildings (remove pushes out into a new place, add takes back)" },
+                "planning": { "oneOf": [{ "type": "number", "minimum": 0, "maximum": 1 }, { "type": "string", "enum": ["auto"] }], "description": "How planned its streets are, given alone: 0-0.3 grown, 0.3-0.7 a planned quarter beside a grown core, 0.7-1 planned throughout (a regular grid); \"auto\" as rolled. Lays the town out anew: the changes made inside it are set aside" },
                 "dry_run": { "type": "boolean", "default": false },
             }), &["id"]),
         }),
@@ -72,6 +73,48 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "edit_town" => edit(app, a).await.map(text),
         _ => return None,
     })
+}
+
+/// (161) `edit_town` with `planning` (given alone): through `Edits.planning` (`town::planning`),
+/// the town laid out anew and the edits in it set aside.
+async fn planning(app: &Shared, a: &Value, id: String, p: &Value, dry: bool) -> Result<Value, String> {
+    if a.as_object().is_some_and(|m| m.keys().any(|k| !["id", "dry_run", "world", "planning"].contains(&k.as_str()))) {
+        return Err("planning: give it alone (with id and dry_run): it lays the town out anew, setting aside the changes made inside it".into());
+    }
+    let to: Option<u8> = match p {
+        Value::String(s) if s == "auto" => None,
+        Value::Number(n) => Some(n.as_f64().filter(|v| (0.0..=1.0).contains(v)).map(|v| (v * 100.0).round() as u8).ok_or_else(|| format!("planning: 0 to 1, got {n}"))?),
+        _ => return Err(format!("planning: a number 0 to 1 or \"auto\", got {p}")),
+    };
+    let town = id.clone();
+    let (li, rolled) = app
+        .worker
+        .with(move |ex| {
+            let li = town_index(ex, &town)?;
+            if li >= ex.t0.settlements.len() || ex.t0.settlements[li].tier < worldgen::t0::settle::Tier::Town || worldgen::town::hand::is_hand(&ex.world, li) {
+                return Err(format!("{town}: planning is for the world's own towns and cities laid out as generated (not a village, nor one added or laid out by hand)"));
+            }
+            let s = worldgen::town::culture::settlement(&ex.world, &ex.t0, li).ok_or("not a settlement")?;
+            Ok((li, worldgen::town::planning::rolled(&s)))
+        })
+        .await?;
+    if dry {
+        let mut e = app.worker.with(|ex| Ok(ex.world.file.edits.clone())).await?;
+        let mut v = worldgen::town::planning::change_own(&mut e, li, rolled, to).to_json();
+        v["tool"] = json!("edit_town");
+        v["id"] = json!(id);
+        v["layout"] = json!(li);
+        v["dry_run"] = json!(true);
+        return Ok(v);
+    }
+    let change = app.edit("agent", 0, move |e| Ok(worldgen::town::planning::change_own(e, li, rolled, to).to_json())).await?;
+    let mut out = json!({ "tool": "edit_town", "id": id, "layout": li, "planning": change });
+    out["note"] = json!(if change["unchanged"] == json!(true) {
+        "It was planned so already: nothing changed"
+    } else {
+        "Laid out anew at once: its streets and buildings follow the planning; roads and neighbours stay; its name, notes, NPCs and plot points stay on it; the changes made inside it are set aside (set_aside_by counts them by field)"
+    });
+    Ok(out)
 }
 
 /// The layout index of the town `id` names.
@@ -94,6 +137,9 @@ async fn plan(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     let id = a["id"].as_str().ok_or("missing 'id'")?.to_string();
     let dry = a["dry_run"].as_bool().unwrap_or(false);
+    if let Some(p) = a.get("planning").filter(|p| !p.is_null()) {
+        return planning(app, a, id, p, dry).await;
+    }
     let members = a.get("members").filter(|m| !m.is_null()).cloned();
     if members.as_ref().is_some_and(|m| !m.is_object()) {
         return Err("members: an object {add?, remove?}".into());

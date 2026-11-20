@@ -2203,7 +2203,8 @@ patch built on as a common ward's, too small once its streets were cut), `corner
 meet but none can (a close's corner), `square` and `square_ft` (how far out from the corner its chords are cut,
 on average) for the one there, `square_generated` when set by hand: a kind or `none`), `districts` (`id`, `name`,
 `kind`, `patches`; `by_hand` for one made by hand, `changed` when its patches or their wards were changed by hand),
-`max_move_ft`, `walls` (`built`, `generated`), `edited`, `set_aside`, `places`: its squares, parks and gates (`id`,
+`max_move_ft`, `planning` (how planned its streets are: `value` 0-1, `class` `grown`, `mixed` or `planned`,
+`rolled`, `set` when set with `edit_town`), `walls` (`built`, `generated`), `edited`, `set_aside`, `places`: its squares, parks and gates (`id`,
 `kind`: `square`, `park` or `gate`; `sort`: a square's `market`, `civic`, `fountain`, `well`, `crossroads` or `green`,
 a park's `formal`, `common`, `cemetery` or `horses`; `name`, `generated`, `x_ft`, `y_ft`, `size_ft`, `patch`, `district` with
 its id, `main` for the square the main streets lead to). Their ids are kept by what they stand on (a patch, a corner,
@@ -2236,6 +2237,15 @@ longer leave three streets goes with the change that took them. `added` and `tak
 and footprint (a patch laid out again keeps reusing its new buildings' ids). A square set or taken away changes only
 the lots at its corner: they are trimmed back to it, or come back whole.
 
+Each town and city rolls how planned its streets are (`planning`, 0-1; `get_town_plan` and `get_feature` report
+it): most are grown (under 0.3: winding streets, irregular blocks), some have a planned quarter beside their grown
+core (0.3-0.7: a side of the town laid out as a grid, larger the higher the value) and a few are planned throughout
+(0.7-1: a regular grid of streets, square blocks or long ones between avenues, the market square its middle block).
+Rivers and shores still shape the blocks along them, and the main streets still come straight in from the gates.
+`planning` sets it (`"auto"`: back to as rolled); it lays the town out anew, so it is given alone, and the changes
+made inside the town are set aside as a culture change sets them aside. The reply: `planning` (`from`, `to`,
+`class`, `unchanged`, `set_aside`, `set_aside_by`). Villages and towns laid out by hand (`edit_streets`) have none.
+
 Gates and towers go in and out of the town's own wall by its corners (`get_town_plan`: corners with `wall: true`;
 `gate_by_hand`, `gate_removed`, and `walls.by_hand` for what was set). A gate put in takes the town's gatehouse
 (its culture's form: square tower, twin drums, arched, bent, log), the id `gt:<layout>:<corner>` and a name like
@@ -2263,6 +2273,7 @@ and put up again keep them. The reply's `wall`: `gates_added` (`corner`, `id`, `
 | `walls` | `true` \| `false` \| `"auto"` \| `{built, gates_add, gates_remove, towers_add, towers_remove}` | | Walls up, down, or as generated; or by corner: `built` as the plain value, `gates_add`/`gates_remove`: `[corner]`, `towers_add`: `[[corner, next corner, f]]` (`f` 0.05–0.95, default 0.5) or `[corner]` (a tower taken down there, back up), `towers_remove`: `[corner \| "t:<layout>:<n>"]` |
 | `members` | `{add, remove}` (lists of ids) | | What belongs to the town, by hand (see below): `c:<n>` drawn things (`add` joins, `remove` leaves), `b:<layout>:<id>` generated outskirt buildings (`remove` pushes them out into a new place, `add` takes them back). May be given alone |
 | `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` \| `"walls"` | | Back to as generated (`walls`: up or down and every gate and tower set by hand) |
+| `planning` | number 0-1 or `"auto"` | | How planned its streets are, given alone (with `id`, `dry_run`): see below |
 | `dry_run` | boolean | `false` | Report without changing anything |
 
 ```json

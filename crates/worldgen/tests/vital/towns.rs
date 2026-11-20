@@ -587,6 +587,9 @@ fn acceptance_city() {
     use worldgen::town::{self, hand};
     let mut file: WorldFile = serde_json::from_str(include_str!("../fixtures/acceptcity.json")).unwrap();
     file.gen_version = worldgen::world::GEN_VERSION;
+    // (The towns edited in it as they were laid out when it was made: grown, before planning.)
+    let edited: Vec<String> = file.edits.towns.keys().cloned().collect();
+    file.edits.planning.extend(edited.into_iter().map(|k| (k, 0)));
     let start = std::time::Instant::now();
     let mut ex = Executor::new(World::new(file).unwrap());
     let t_t0 = start.elapsed().as_secs_f64();

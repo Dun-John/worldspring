@@ -583,8 +583,10 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     let stairs: Vec<Value> = flights.iter().take(40).map(|(rise, at, length)| json!({ "x_ft": at[0].round(), "y_ft": at[1].round(), "length_ft": length.round(), "rise_ft": (*rise as f64 * 10.0).round() / 10.0 })).collect();
     let _ = t0;
     // (A town laid out by hand: the size class its people make, as its feature's kind.)
-    let tier = town::hand::size(world, l.index as usize).map_or(l.tier, |x| x.1);
-    json!({
+    let hand = town::hand::size(world, l.index as usize);
+    let tier = hand.map_or(l.tier, |x| x.1);
+    let planning = if hand.is_none() && l.tier >= crate::t0::settle::Tier::Town { town::planning::to_json(world, t0, l.index as usize) } else { None };
+    let mut v = json!({
         "tier": tier.name(),
         "culture": town::culture::NAMES[l.culture as usize % 5],
         "buildings": l.buildings.len(),
@@ -594,7 +596,12 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
         "underground": entrances,
         "sewer_grates": sewers,
         "stairs": stairs,
-    })
+    });
+    // (161: how planned its streets are, a town laid out by hand's not.)
+    if let Some(p) = planning {
+        v["planning"] = p;
+    }
+    v
 }
 
 /// A building's or site's name: renamed, its own, or what it is.

@@ -189,6 +189,10 @@ export interface Edits {
   /** `<layout>` → one of the world's own settlements laid out in another culture (0 north, 1 west,
    * 2 south, 3 dry, 4 steppe; `worldgen::town::culture`). One added by hand keeps it in `Created.culture`. */
   cultures?: Record<string, number>;
+  /** `<layout>` → one of the world's own towns or cities planned otherwise than rolled: 0-100, how
+   * planned its streets are (0-29 grown, 30-69 a planned quarter beside a grown core, 70-100 planned
+   * throughout; `worldgen::town::planning`). Villages and towns laid out by hand ignore it. */
+  planning?: Record<string, number>;
   /** `g:XXXXX:YYYYY` → 16 × 16 squares of ground brushed by hand (`worldgen::ground::GroundBlock`:
    * tenths of a foot, row-major, as base64url zigzag-delta varints, a 0 delta followed by a byte
    * counting further zeros). Block indices zero-padded, x first. */

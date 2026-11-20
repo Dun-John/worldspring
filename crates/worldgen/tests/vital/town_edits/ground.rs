@@ -543,6 +543,10 @@ pub(in super::super) fn ground_edits(base: &World) {
     let (j, i0) = (k2 / SQ, k2 % SQ);
     for i in i0 - 8..=i0 + 16 {
         let q = j * SQ + i;
+        // (A town square it cuts into stays, on a deck where over the water: it clears none.)
+        if plain_c.1.urban[q] == worldgen::battlemap::URBAN_PLAZA {
+            continue;
+        }
         assert!(wet(&c, q) && (c.water_level[q] - sea).abs() < 0.01, "the inlet: square {} from the shore is not the sea's water ({} over {})", i as i64 - i0 as i64, c.water_level[q], c.height[q]);
     }
     // (A city's quay front the inlet meets gives way to it, `harbour::quays_kept`: the ground by
@@ -565,7 +569,8 @@ pub(in super::super) fn ground_edits(base: &World) {
             for q in 0..SQ * SQ {
                 let p = at(q);
                 let (raised, off) = ((plain_c.1.height[q] - f.level).abs() < 0.01 && !wet(&plain_c.1, q), worldgen::town::geom::poly_gap(&inlet.pts, &[p]) > 6.0);
-                if !worldgen::town::geom::contains(&f.pts, p) || worldgen::town::geom::poly_gap(&f.pts, &[p]) < 3.0 || !raised || !off || c.building[q] != 0 || c.urban[q] == battlemap::URBAN_DECK {
+                if !worldgen::town::geom::contains(&f.pts, p) || worldgen::town::geom::poly_gap(&f.pts, &[p]) < 3.0 || !raised || !off || c.building[q] != 0 || c.urban[q] == battlemap::URBAN_DECK || c.urban[q] == battlemap::URBAN_PLAZA {
+                    // (A town square on it stays, as above.)
                     continue;
                 }
                 assert!(c.height[q] < f.level - 0.01, "the inlet: square {q} on the front it meets still made ground ({} at level {})", c.height[q], f.level);

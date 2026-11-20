@@ -4,7 +4,7 @@ use super::*;
 /// each): `set_fields`, `patch_fields`, `apply` and `is_empty` take theirs from here.
 macro_rules! keyed_fields {
     ($m:ident) => {
-        $m!(renames notes npcs plots objects cleared sprites designs crossings buildings towns ground plateaus waters wharves cultures hexes streets links paths members fences fence_gaps)
+        $m!(renames notes npcs plots objects cleared sprites designs crossings buildings towns ground plateaus waters wharves cultures planning hexes streets links paths members fences fence_gaps)
     };
 }
 
@@ -329,6 +329,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("waters", Shape::Map),
     ("wharves", Shape::Map),
     ("cultures", Shape::Map),
+    ("planning", Shape::Map),
     ("hexes", Shape::Map),
     ("streets", Shape::Map),
     ("links", Shape::Map),

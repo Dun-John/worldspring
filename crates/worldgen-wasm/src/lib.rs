@@ -670,6 +670,36 @@ impl Ctx {
         })
     }
 
+    /// (161) `edits` (JSON) with town layout `layout` (one of the world's own, not a village) planned
+    /// with `planning` (0-1; `auto`: as rolled, its `Edits.planning` entry taken out) and the edits
+    /// keyed to its layout set aside (`town::planning::change_own`): `{edits, from, to, class,
+    /// unchanged, set_aside, set_aside_by: {field: n}}`, or `{error}`. Changes nothing here: the
+    /// app applies `edits` as one change. Neither given: `{value, class, rolled, set}`, as it is now.
+    pub fn set_planning_json(&self, layout: u32, planning: Option<f64>, auto: bool, edits: &str) -> String {
+        self.with_t0("null", |t0| {
+            let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+                Ok(v) => v,
+                Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+            };
+            let li = layout as usize;
+            let Some(s) = t0.settlements.get(li).filter(|s| s.tier >= worldgen::t0::settle::Tier::Town) else {
+                return serde_json::json!({ "error": format!("layout {li}: not one of the world's own towns or cities") }).to_string();
+            };
+            let culture = worldgen::town::culture::override_in(&edits, t0, li).unwrap_or(s.culture);
+            let rolled = worldgen::town::planning::rolled(&worldgen::t0::settle::Settlement { culture, ..s.clone() });
+            if planning.is_none() && !auto {
+                let set = worldgen::town::planning::override_in(&edits, t0, li);
+                let p = set.unwrap_or(rolled);
+                let r2 = |x: f64| (x * 100.0).round() / 100.0;
+                return serde_json::json!({ "value": r2(p), "class": worldgen::town::planning::class(p), "rolled": r2(rolled), "set": set.is_some() }).to_string();
+            }
+            let to = if auto { None } else { planning.map(|p| (p.clamp(0.0, 1.0) * 100.0).round() as u8) };
+            let mut v = worldgen::town::planning::change_own(&mut edits, li, rolled, to).to_json();
+            v["edits"] = serde_json::to_value(&edits).unwrap_or_default();
+            v.to_string()
+        })
+    }
+
     /// `edits` (JSON) with settlement layout `layout` laid out in culture `culture` (0-4;
     /// `town::culture::change`: the world's own through `Edits.cultures`, one added by hand its
     /// `Created.culture`) and the edits keyed to its layout set aside: `{edits, from, to,

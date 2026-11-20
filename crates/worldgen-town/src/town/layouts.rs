@@ -379,6 +379,7 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     }) && wall_kept(world, t0, index)
         && raised_kept(world, t0, index)
         && culture_kept(world, t0, index, &l)
+        && planning_kept(world, t0, index, &l)
         && FROZEN.with(|f| f.borrow().get(&key).copied().unwrap_or(0)) == frozen_fp(world, t0, index)
     {
         return l;
@@ -517,6 +518,16 @@ fn wall_kept(world: &World, t0: &T0, index: usize) -> bool {
 /// out in now (`Edits.cultures`, R5 121: changed, or changed back).
 fn culture_kept(world: &World, t0: &T0, index: usize, l: &Layout) -> bool {
     index >= t0.settlements.len() || culture::of(world, t0, index) == Some(l.culture)
+}
+
+/// (161) Whether a cached town layout `l` was planned with the planning it is planned with now
+/// (`Edits.planning`: set, or set back).
+fn planning_kept(world: &World, t0: &T0, index: usize, l: &Layout) -> bool {
+    if index >= t0.settlements.len() || l.tier < Tier::Town {
+        return true;
+    }
+    let Some(s) = culture::settlement(world, t0, index) else { return true };
+    crate::core::round(planning::of(world, t0, index, &s) * 100.0) as u8 == l.planning
 }
 
 /// Forget cached layouts from `index` on (`forget_from(0)`: all of them).

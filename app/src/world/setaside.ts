@@ -6,7 +6,7 @@ import type { Edits } from '../gen/protocol';
 import { PARKED_LAYOUT } from '../sync/ops';
 import { removedKind, setAside } from '../ui/gazetteer';
 
-export type AsideField = 'renames' | 'notes' | 'hidden' | 'designs' | 'buildings' | 'towns' | 'cultures' | 'npcs' | 'plots';
+export type AsideField = 'renames' | 'notes' | 'hidden' | 'designs' | 'buildings' | 'towns' | 'cultures' | 'planning' | 'npcs' | 'plots';
 
 /** One thing kept: its field and key (an NPC's or plot's own id), and the place id it names. */
 export interface AsideEntry {
@@ -51,6 +51,7 @@ export function asideList(e: Edits): AsideGroup[] {
   for (const k of Object.keys(e.buildings ?? {})) if (isAside(k)) add('buildings', k, k);
   for (const k of Object.keys(e.towns ?? {})) if (Number(k) >= PARKED_LAYOUT) add('towns', k, `t:${k}`);
   for (const k of Object.keys(e.cultures ?? {})) if (Number(k) >= PARKED_LAYOUT) add('cultures', k, `t:${k}`);
+  for (const k of Object.keys(e.planning ?? {})) if (Number(k) >= PARKED_LAYOUT) add('planning', k, `t:${k}`);
   for (const [k, n] of Object.entries(e.npcs ?? {})) if (n.location && isAside(n.location.id)) add('npcs', k, n.location.id);
   for (const [k, p] of Object.entries(e.plots ?? {})) for (const a of p.anchors ?? []) if (isAside(a)) add('plots', k, a);
   return [...groups.values()];
@@ -95,6 +96,8 @@ export function asideWhat(x: AsideEntry, e: Edits): string {
       return 'Streets re-planned';
     case 'cultures':
       return 'Laid out in another culture';
+    case 'planning':
+      return 'Streets planned otherwise';
     case 'npcs':
       return `NPC here: ${e.npcs![x.key].name || 'unnamed'}`;
     case 'plots':
@@ -118,6 +121,7 @@ export function forgetAside(e: Edits, entries: AsideEntry[]): Edits {
   out.buildings = drop(e.buildings, keys('buildings'));
   out.towns = drop(e.towns, keys('towns'));
   out.cultures = drop(e.cultures, keys('cultures'));
+  out.planning = drop(e.planning, keys('planning'));
   const hidden = new Set(keys('hidden'));
   if (hidden.size) out.hidden = (e.hidden ?? []).filter((h) => !hidden.has(h));
   const npcs = new Set(keys('npcs'));

@@ -62,6 +62,7 @@ pub const LAYOUT_ID_FIELDS: &[(&str, IdsIn)] = &[
     ("buildings", IdsIn::Keys),
     ("towns", IdsIn::Towns),
     ("cultures", IdsIn::Towns),
+    ("planning", IdsIn::Towns),
     ("streets", IdsIn::TownPrefixed),
     ("npcs", IdsIn::Npcs),
     ("plots", IdsIn::Plots),
@@ -226,6 +227,7 @@ fn each_id(edits: &Edits, mut f: impl FnMut(&str)) {
             "buildings" => edits.buildings.keys().for_each(|k| f(k)),
             "towns" => edits.towns.keys().for_each(|k| f(&format!("t:{k}"))),
             "cultures" => edits.cultures.keys().for_each(|k| f(&format!("t:{k}"))),
+            "planning" => edits.planning.keys().for_each(|k| f(&format!("t:{k}"))),
             "streets" => edits.streets.keys().filter_map(|k| town_head(k)).for_each(|(li, _)| f(&format!("t:{li}"))),
             "npcs" => edits.npcs.values().filter_map(|n| n.location.as_ref()).for_each(|l| f(&l.id)),
             "plots" => edits.plots.values().flat_map(|p| &p.anchors).for_each(|k| f(k)),
@@ -262,6 +264,7 @@ fn renamed(edits: &Edits, mut rename: impl FnMut(&str, bool) -> String) -> (Edit
     out.buildings = rekey(&edits.buildings, false, &mut to);
     out.towns = rekey(&edits.towns, true, &mut to);
     out.cultures = rekey(&edits.cultures, true, &mut to);
+    out.planning = rekey(&edits.planning, true, &mut to);
     out.members = edits.members.iter().map(|(k, m)| (to(k, true), crate::world::Members { add: m.add.iter().map(|id| to(id, false)).collect(), remove: m.remove.iter().map(|id| to(id, false)).collect() })).collect();
     // (A hand town's records: the layout number before the `/` renamed, the rest kept.)
     out.streets = edits.streets.iter().map(|(k, v)| (town_head(k).map_or_else(|| k.clone(), |(li, rest)| format!("{}{rest}", to(li, true))), v.clone())).collect();

@@ -167,9 +167,10 @@ mod walls;
 mod cemeteries;
 mod handwalls;
 mod steppe;
+mod planning;
 
 fn main() {
-    const MODES: [&str; 32] = ["streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
+    const MODES: [&str; 33] = ["planning", "streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -186,7 +187,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"] || modes == ["planning"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -224,6 +225,7 @@ fn main() {
                 "handwalls" => handwalls(&mut ctx, &mut r),
                 "wallgates" => wallgates(&mut ctx, &mut r),
                 "streetsin" => streets_in(&mut ctx, &label, &mut r),
+                "planning" => planning::planning(&mut ctx, &label, &mut r),
                 "castlepieces" => castle_pieces(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
