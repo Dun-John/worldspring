@@ -470,13 +470,16 @@ fn breakwater(site: &Site, s: &Settlement, l: &Layout, all: &[(P, P)]) -> Result
                 },
                 site.t0,
             );
-            let mole = Mole {
+            let mut mole = Mole {
                 pts: line,
                 width: MOLE_WIDTH_FT,
                 level,
             };
             let mut polys = mole.polys();
             polys.extend(mole.ramp().into_iter().map(|r| r.0));
+            // (Out from a quay front: its top at the quay's, the higher of the two, so the made ground
+            // meets as one level; both are in the same band over the water.)
+            mole.level = l.quays.iter().filter(|q| polys.iter().any(|m| poly_gap(m, &q.pts) < 10.0)).map(|q| q.level).fold(mole.level, f32::max);
             let gap = |o: &[P]| polys.iter().map(|m| poly_gap(m, o)).fold(f64::MAX, f64::min);
             let bb = mole.bbox();
             let w = if !l.piers.iter().all(|p| gap(p) >= 15.0) {

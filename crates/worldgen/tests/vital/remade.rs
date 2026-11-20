@@ -530,6 +530,11 @@ fn harbour_ground() {
     let (ok, n) = walk(&mut ex, from, reach, &|p| fill.iter().all(|pl| !geom::contains(pl, p) && geom::poly_gap(pl, &[p]) > 15.0));
     assert!(ok, "L{si}: the lighthouse b:{si}:{} isn't reached from the bank ({n} squares walked)", lh.id);
     // Islets: a river islet's chunk agrees with its neighbours; every tower's door opens onto its top.
+    // (In the first of seeds 1-8 with a tower on an islet.)
+    let towered = |ex: &Executor| worldgen::t0::islets::islets(&ex.t0).iter().any(|i| i.tower);
+    if !towered(&ex) {
+        ex = (2..=8).map(|seed| Executor::new(World::new(serde_json::from_str(&world_json(seed)).unwrap()).unwrap())).find(|ex| towered(ex)).expect("a world with an islet tower");
+    }
     let islets: Vec<_> = worldgen::t0::islets::islets(&ex.t0).to_vec();
     let river = islets.iter().find(|i| i.river).expect("a river islet");
     seams(&mut ex, key_at(river.at), "a river islet's chunk");

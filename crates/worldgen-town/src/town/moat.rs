@@ -423,6 +423,11 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
     for q in &moat.ring {
         moat.bbox = [moat.bbox[0].min(q[0] - r), moat.bbox[1].min(q[1] - r), moat.bbox[2].max(q[0] + r), moat.bbox[3].max(q[1] + r)];
     }
+    // (A wet moat its bound pinches too narrow to hold deep water down its middle: a dry ditch.)
+    if wet && plan.wet.is_none() && deep_share(&moat) < DEEP_SHARE {
+        moat.wet = false;
+        moat.level = lo as f32;
+    }
     // The drawbridge: from the gate out to a foot past the far bank (or the first foot off the moat
     // past its middle).
     for k in 0..moat.bridges.len() {
@@ -444,6 +449,30 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
     (moat.pieces, moat.inks) = plan_pieces(&moat, 0.0);
     moat.banks = moat.bank_lines();
     l.moats.push(moat);
+}
+
+/// How far in from either rim (ft) a wet moat's water is deeper than 4 ft (the battlemap's water
+/// deepens 1.2 ft a foot in from its rim), and the least share of its squares (off the drawbridge)
+/// a wet moat has that deep; narrower, it is dug dry.
+const DEEP_IN: f64 = 3.4;
+const DEEP_SHARE: f64 = 0.4;
+
+/// The share of moat `m`'s ground (off its drawbridges, every 2.5 ft) over `DEEP_IN` ft from both rims.
+fn deep_share(m: &Moat) -> f64 {
+    let (mut all, mut deep) = (0usize, 0usize);
+    let (nx, ny) = (crate::core::ceil((m.bbox[2] - m.bbox[0]) / 2.5) as usize, crate::core::ceil((m.bbox[3] - m.bbox[1]) / 2.5) as usize);
+    for j in 0..ny {
+        for i in 0..nx {
+            let p = [m.bbox[0] + (i as f64 + 0.5) * 2.5, m.bbox[1] + (j as f64 + 0.5) * 2.5];
+            let Some(s) = m.spot(p).filter(|s| s.inside()) else { continue };
+            if m.bridged(p) {
+                continue;
+            }
+            all += 1;
+            deep += (s.inner.min(s.outer) > DEEP_IN) as usize;
+        }
+    }
+    if all == 0 { 1.0 } else { deep as f64 / all as f64 }
 }
 
 /// The soft minimum of `a` and `b` (`k` its reach, ft): a crease between them rounded.
