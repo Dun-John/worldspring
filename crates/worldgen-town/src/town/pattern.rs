@@ -3,9 +3,11 @@
 //! the core, radial lanes between them), Radial (main streets fanning out from the market square,
 //! little cross-linking) or Linear (one long high street with back lanes). Set by hand in
 //! `Edits.patterns` (`<layout>` → name), else picked (`auto`) from the town's land and culture.
-//! Linear is laid out as the grid for now.
+//! Linear runs its high street along the town's long axis (`long_axis`); Rings round a bay are
+//! harbour arcs (`harbour`).
 
 use super::{Site, Tier};
+use super::geom::{P, add, dist, len, mul, seg_dist};
 use crate::World;
 use crate::core::rng::{hash2, unit};
 use crate::t0::T0;
@@ -84,6 +86,21 @@ pub(super) fn auto(site: &Site, s: &Settlement, r: f64, planning: f64) -> Patter
     if hill && u < 0.75 {
         return Pattern::Rings;
     }
+    // (A valley floor, a ridge line or a hillside: mostly a high street along it; a river bank:
+    // some a high street along the river; a bay: some harbour arcs round it.)
+    let w = unit(hash2(s.seed, 0x7a79, 189));
+    // (Market towns, not the great cities: a city only along a narrow valley or ridge.)
+    if let Some((_, land)) = long_axis(site, r).filter(|_| s.tier <= Tier::City) {
+        if land && w < 0.6 {
+            return Pattern::Linear;
+        }
+        if !land && s.tier <= Tier::Town && w < 0.35 {
+            return Pattern::Linear;
+        }
+    }
+    if harbour(site, r).is_some() && w < 0.4 {
+        return Pattern::Rings;
+    }
     let v = unit(hash2(s.seed, 0x7a78, 189));
     match s.culture % 5 {
         0 | 1 if s.tier >= Tier::City && v < 0.3 => Pattern::Rings,
@@ -91,6 +108,63 @@ pub(super) fn auto(site: &Site, s: &Settlement, r: f64, planning: f64) -> Patter
         4 if v < 0.3 => Pattern::Rings,
         _ => Pattern::Grid,
     }
+}
+
+/// (189) The long axis of the ground settlement `site` (urban radius `r`) stands on, if it has
+/// one: along a valley floor, a ridge line or a hillside's contour (the ground 24 ft or more
+/// higher or lower across it, both ways at 0.7 r added, and along it under half that: `true`),
+/// else along the river it stands by (within 0.9 r: `false`). Radians, half turn.
+pub(super) fn long_axis(site: &Site, r: f64) -> Option<(f64, bool)> {
+    let h0 = site.height([0.0, 0.0]);
+    let d = 0.7 * r;
+    let rise = |a: f64| [d, -d].map(|t| site.height([t * libm::cos(a), t * libm::sin(a)]) - h0);
+    let mut best: Option<(f64, f64)> = None;
+    for k in 0..8 {
+        let a = k as f64 * std::f64::consts::PI / 8.0;
+        let (al, ac) = (rise(a), rise(a + std::f64::consts::FRAC_PI_2));
+        let (along, across) = (al[0].abs() + al[1].abs(), ac[0].abs() + ac[1].abs());
+        if across >= 24.0 && along <= 0.5 * across && best.is_none_or(|b| across - along > b.1) {
+            best = Some((a, across - along));
+        }
+    }
+    if let Some((a, _)) = best {
+        return Some((a, true));
+    }
+    let (a, b, _) = site.river.iter().copied().filter(|&(a, b, _)| seg_dist([0.0, 0.0], a, b) < 0.9 * r && dist(a, b) > 1.0).min_by(|x, y| {
+        seg_dist([0.0, 0.0], x.0, x.1).total_cmp(&seg_dist([0.0, 0.0], y.0, y.1))
+    })?;
+    Some((libm::atan2(b[1] - a[1], b[0] - a[0]), false))
+}
+
+/// (189) The harbour a bay town's rings arc round, if it stands on one: standing water on a
+/// fifth to three fifths of the way round it at 0.8 r, all in one stretch. The middle of the
+/// shore there (where the water begins, from the town's middle out towards it), a little out
+/// on the water.
+pub(super) fn harbour(site: &Site, r: f64) -> Option<P> {
+    const N: usize = 16;
+    let dirs: Vec<P> = (0..N).map(|k| {
+        let a = k as f64 * std::f64::consts::TAU / N as f64;
+        [libm::cos(a), libm::sin(a)]
+    }).collect();
+    let wet: Vec<bool> = dirs.iter().map(|&u| site.wet_standing(mul(u, 0.8 * r))).collect();
+    let n = wet.iter().filter(|&&w| w).count();
+    let runs = (0..N).filter(|&k| wet[k] && !wet[(k + N - 1) % N]).count();
+    if !(N / 5..=3 * N / 5).contains(&n) || runs != 1 || site.wet_standing([0.0, 0.0]) {
+        return None;
+    }
+    let mut u = [0.0, 0.0];
+    for k in (0..N).filter(|&k| wet[k]) {
+        u = add(u, dirs[k]);
+    }
+    if len(u) < 1e-6 {
+        return None;
+    }
+    let u = mul(u, 1.0 / len(u));
+    let mut t = 0.0;
+    while t < 0.8 * r && !site.wet_standing(mul(u, t)) {
+        t += 10.0;
+    }
+    Some(mul(u, t + 0.1 * r))
 }
 
 /// What `get_town_plan` and `get_feature` say of town layout `index`'s pattern: the one it is

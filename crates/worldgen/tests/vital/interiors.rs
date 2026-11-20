@@ -91,7 +91,7 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     let buckets = building_buckets(&l);
     let ok = |d: &design::SiteDesign, id: &str| d.problems(world, t0, id).unwrap().1.iter().all(|p| !p.blocking);
     let mut done = None;
-    for b in l.buildings.iter().filter(|b| b.structure == Structure::Roofed && b.floors >= 2 && b.poly.len() == 4) {
+    for b in l.buildings.iter().filter(|b| b.structure == Structure::Roofed && b.floors >= 2 && b.poly.len() == 4 && b.func.is_none()) {
         let id = format!("b:{si}:{}", b.id);
         let (mut d, aside) = bd::design_of(world, t0, &id, false).unwrap();
         assert!(!aside, "{id}: set aside with no design saved");
@@ -111,6 +111,10 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
             if cells[k] == big && k / nx >= cut {
                 cells[k] = study;
             }
+        }
+        // (A study big enough for the pieces put down in it below, drawn round.)
+        if cells.iter().filter(|&&c| c == study).count() < 9 {
+            continue;
         }
         d.levels[g].rooms.push(DesignRoom { kind: "study".into(), ..Default::default() });
         d.levels[g].cells = design::encode(&cells);

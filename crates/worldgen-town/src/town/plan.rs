@@ -43,10 +43,8 @@ pub(super) fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownP
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_for(world: &World, t0: &T0, index: usize, site: &Site, s: &Settlement, r: f64, now: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
     let planning = super::planning::of(world, t0, index, s);
-    // (189) Its street pattern: as set, else as its land and culture pick (Linear: on the grid
-    // for now).
+    // (189) Its street pattern: as set, else as its land and culture pick.
     let pattern = super::pattern::override_in(&world.file.edits, t0, index).unwrap_or_else(|| super::pattern::auto(site, s, r, planning));
-    let pattern = if pattern == super::pattern::Pattern::Linear { super::pattern::Pattern::Grid } else { pattern };
     match frozen_ends(world, t0, index) {
         Some((was, heading)) => plan_town(site, s, r, &was, Some(&heading), planning, pattern, rng),
         None => plan_town(site, s, r, now, None, planning, pattern, rng),
@@ -330,9 +328,14 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
         Some((e, _)) => libm::atan2(e[1], e[0]),
         None => unit(hash2(s.seed, 0xa715, 161)) * std::f64::consts::PI,
     };
+    // (189: a Linear town's high street runs along its valley, ridge or river, else the road.)
+    let axis = match pattern {
+        super::pattern::Pattern::Linear => super::pattern::long_axis(site, r).map_or(axis, |a| a.0),
+        _ => axis,
+    };
     // (189: a pattern set on a grown town is laid out as a planned quarter beyond its core.)
-    let laid = if pattern.polar() { planning.max(super::planning::MIXED) } else { planning };
-    let seeds::Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice, frames } = seeds::plant(site, s, r, laid, axis, pattern, rng);
+    let laid = if pattern != super::pattern::Pattern::Grid { planning.max(super::planning::MIXED) } else { planning };
+    let seeds::Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice, frames, hub } = seeds::plant(site, s, r, laid, axis, pattern, rng);
     // Per-patch random streams (`seeds::plant`).
     let roll = |i: usize, stage: i64| seeds::roll(pseed, i, stage);
 
@@ -683,10 +686,15 @@ pub(super) fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8
             // (189: on rings, round a ring at 1.6 times the cost: the main streets keep to the
             // spokes, and a corner moved never sends them round another way far off.)
             let round = pattern.polar() && lattice[i] && {
-                let (m, d) = (lerp(pa, pb, 0.5), sub(pb, pa));
+                let (m, d) = (sub(lerp(pa, pb, 0.5), hub), sub(pb, pa));
                 dot(m, d).abs() < 0.5 * len(m) * len(d)
             };
-            let w = dist(pa, pb) * (1.0 + 40.0 * grade * grade) * if castle_side { 2.0 } else { 1.0 } * if round { 1.6 } else { 1.0 };
+            // (189: on Linear, along the high street at 0.6 times the cost: the main streets take it.)
+            let high = pattern == super::pattern::Pattern::Linear && lattice[i] && {
+                let (m, d, u) = (lerp(pa, pb, 0.5), sub(pb, pa), [libm::cos(axis), libm::sin(axis)]);
+                cross(u, m).abs() < 30.0 && dot(u, d).abs() > 0.9 * len(d)
+            };
+            let w = dist(pa, pb) * (1.0 + 40.0 * grade * grade) * if castle_side { 2.0 } else { 1.0 } * if round { 1.6 } else if high { 0.6 } else { 1.0 };
             adj.entry((a as i64, 0)).or_default().push(((b as i64, 0), w));
             adj.entry((b as i64, 0)).or_default().push(((a as i64, 0), w));
         }

@@ -478,6 +478,9 @@ pub struct Refill {
     /// (161) Lots: a planned block's lattice heading (`District::frame`), as unit vector bits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fr: Option<[u64; 2]>,
+    /// (189) Lots: burgage plots (`District::burgage`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bu: bool,
     pub g: String,
 }
 
@@ -565,7 +568,7 @@ impl Refill {
         match fill {
             Fill::Farm { class, rng } => {
                 g.extend(words(rng));
-                Some(Refill { k: 1, w: 0, close: false, class: *class, nb, nl, nt: None, st: false, fr: None, g: pack(&g) })
+                Some(Refill { k: 1, w: 0, close: false, class: *class, nb, nl, nt: None, st: false, fr: None, bu: false, g: pack(&g) })
             }
             Fill::Lots { ward, dp, rng, thin, close } => {
                 g.extend(words(rng));
@@ -574,18 +577,18 @@ impl Refill {
                     g.push(*reach);
                     g.extend(pts.iter().flat_map(|p| *p));
                 }
-                Some(Refill { k: 0, w: index_of(&WARDS, ward), close: *close, class: 0, nb, nl, nt: thin.as_ref().map(|t| t.0.len() as u32), st: dp.stepped, fr: dp.frame.map(|u| [u[0].to_bits(), u[1].to_bits()]), g: pack(&g) })
+                Some(Refill { k: 0, w: index_of(&WARDS, ward), close: *close, class: 0, nb, nl, nt: thin.as_ref().map(|t| t.0.len() as u32), st: dp.stepped, fr: dp.frame.map(|u| [u[0].to_bits(), u[1].to_bits()]), bu: dp.burgage, g: pack(&g) })
             }
             Fill::Square(kind) => {
                 let mut g: Vec<f64> = block.iter().flat_map(|p| *p).collect();
                 g.extend((40..44).map(roll));
-                Some(Refill { k: 2, w: index_of(&PLAZAS, kind), close: false, class: 0, nb, nl: 0, nt: None, st: false, fr: None, g: pack(&g) })
+                Some(Refill { k: 2, w: index_of(&PLAZAS, kind), close: false, class: 0, nb, nl: 0, nt: None, st: false, fr: None, bu: false, g: pack(&g) })
             }
             Fill::Park { kind, ways, key, .. } => {
                 let mut g: Vec<f64> = block.iter().flat_map(|p| *p).collect();
                 g.extend(ways.iter().flat_map(|(n, c)| [n[0], n[1], *c]));
                 g.push(f64::from_bits(*key));
-                Some(Refill { k: 3, w: index_of(&PARKS, kind), close: false, class: 0, nb, nl: ways.len() as u32, nt: None, st: false, fr: None, g: pack(&g) })
+                Some(Refill { k: 3, w: index_of(&PARKS, kind), close: false, class: 0, nb, nl: ways.len() as u32, nt: None, st: false, fr: None, bu: false, g: pack(&g) })
             }
         }
     }
@@ -636,7 +639,7 @@ impl Refill {
             }
             0 => {
                 let d = &g[at + 2..at + 7];
-                let dp = District { min_sq: d[0], grid_chaos: d[1], size_chaos: d[2], block_size: d[3], stepped: self.st, frame: self.fr.map(|u| [f64::from_bits(u[0]), f64::from_bits(u[1])]) };
+                let dp = District { min_sq: d[0], grid_chaos: d[1], size_chaos: d[2], block_size: d[3], stepped: self.st, frame: self.fr.map(|u| [f64::from_bits(u[0]), f64::from_bits(u[1])]), burgage: self.bu };
                 let thin = self.nt.map(|_| (pts_of(&g[at + 8..]), g[at + 7]));
                 (Fill::Lots { ward: nth(&WARDS, self.w, "ward")?, dp, rng: rng(), thin, close: self.close }, d[4])
             }

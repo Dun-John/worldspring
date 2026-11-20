@@ -2247,9 +2247,11 @@ made inside the town are set aside as a culture change sets them aside. The repl
 `class`, `unchanged`, `set_aside`, `set_aside_by`). Villages and towns laid out by hand (`edit_streets`) have none.
 
 `pattern` sets the street pattern of the planned part: `grid`, `rings` (concentric rings), `radial` (streets
-radiating from the centre) or `linear` (one long street with cross streets; laid out as a grid for now);
-`"auto"` (the default) picks one from its land and culture (a hill top or a northern city rings, a southern city
-radial, most towns a grid). Patterns show only in a town's planned part: a grown town given one is laid out
+radiating from the centre; round a bay, arcs round the harbour with streets down to the quays) or `linear` (one
+long high street along the valley, ridge, hillside or river, back lanes behind its long narrow plots, short cross
+lanes); `"auto"` (the default) picks one from its land and culture (a hill top or a northern city rings, a bay
+town harbour arcs, a valley or hillside town or some river towns linear, a southern city radial, most towns a
+grid). Patterns show only in a town's planned part: a grown town given one is laid out
 as planned 0.3 round a grown core. It is given alone or with `planning`, with the same effect: the town is laid out
 anew and the changes made inside it are set aside. The reply carries `pattern` (`from`, `to`, `unchanged`,
 `set_aside`, `set_aside_by`) beside `planning`. Villages and towns laid out by hand have none.

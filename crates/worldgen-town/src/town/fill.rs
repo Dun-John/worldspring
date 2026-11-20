@@ -112,6 +112,9 @@ pub(super) struct District {
     /// (161) A planned block's lattice heading (unit vector): its alleys cut square to it, its
     /// lots laid back to back in rows along it (`rows`), none left without a street.
     pub(super) frame: Option<P>,
+    /// (189) A Linear town's planned block: its lots (`rows`) long narrow burgage plots the depth
+    /// of the block, the house at the street end of each, a yard behind.
+    pub(super) burgage: bool,
 }
 
 impl District {
@@ -142,6 +145,7 @@ impl District {
             block_size: 4.0 + 10.0 * r.next_f64(),
             stepped: false,
             frame: None,
+            burgage: false,
         };
         if w == Ward::Slum {
             d.grid_chaos *= 0.5;
@@ -288,7 +292,7 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
         }
         let mut lots: Vec<Vec<P>> = Vec::new();
         match dp.frame {
-            Some(u) => rows(part, u, dp.min_sq, rng, &mut lots),
+            Some(u) => rows(part, u, dp.min_sq, dp.burgage, rng, &mut lots),
             None => bisect(part, dp.min_sq, lot_variance, 0.0, None, rng, &mut lots, &mut Vec::new(), &mut Vec::new(), 0),
         }
         merge_wedges(&mut lots, 5.0 * dp.min_sq);
@@ -305,6 +309,22 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             }
             // Frontage: a street or alley one of the lot's edges lies on (along its stretch, in a piece).
             let Some(&Front { n, c, a: fa, b: fb }) = fronts.iter().find(|f| if spans { f.fronted_by(&lot) } else { on_line_lot(&lot, f.n, f.c) }) else { continue };
+            // (189: a burgage plot's house at its street end, up to about twice its width deep.)
+            // (A plot whose long side is on the street, at a block's end: the house at the end of
+            // it nearer the street's stretch.)
+            let lot = if dp.burgage && o.long > 2.4 * o.short {
+                let deep = (1.9 * o.short).clamp(36.0, 60.0);
+                let h = if dot(n, o.axis).abs() > 0.7 {
+                    clip_plain(&lot, mul(n, -1.0), -(c - deep))
+                } else {
+                    let ((lo, hi), m) = (extent(&lot, o.axis), dot(lerp(fa, fb, 0.5), o.axis));
+                    if m > 0.5 * (lo + hi) { clip_plain(&lot, mul(o.axis, -1.0), -(hi - deep)) } else { clip_plain(&lot, o.axis, lo + deep) }
+                };
+                let h = clean(&h);
+                if h.len() >= 4 { h } else { lot }
+            } else {
+                lot
+            };
             // (A terraced garden on a steep block: a house here and there.)
             if ward == Ward::Park && rng.next_f64() > 0.15 {
                 continue;
@@ -665,13 +685,15 @@ fn on_line(a: P, b: P, n: P, c: f64) -> bool {
 /// (161) A planned block's lots (`District::frame`, `u` its lattice heading): one row of lots, or
 /// two back to back (a yard between them where the block is deeper than two lots), along its
 /// longer way on the lattice, every lot reaching a street or alley on the block's side.
-fn rows(part: &[P], u: P, min_sq: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>) {
+fn rows(part: &[P], u: P, min_sq: f64, burgage: bool, rng: &mut Pcg32, out: &mut Vec<Vec<P>>) {
     let v = [-u[1], u[0]];
     let ((ulo, uhi), (vlo, vhi)) = (extent(part, u), extent(part, v));
     let (a, b, (blo, bhi)) = if uhi - ulo >= vhi - vlo { (u, v, (vlo, vhi)) } else { (v, u, (ulo, uhi)) };
     let deep = bhi - blo;
     let dt = crate::core::sqrt(1.5 * min_sq).clamp(22.0, 70.0);
     // (Lots about twice as deep as wide at most: a house fills its lot.)
+    // (189: burgage plots: one row the block's depth, up to 170 ft, the plots 18-30 ft wide.)
+    let dt = if burgage { 130.0 } else { dt };
     let strips: Vec<(Vec<P>, f64)> = if deep <= 1.3 * dt {
         vec![(part.to_vec(), deep)]
     } else {
@@ -683,7 +705,7 @@ fn rows(part: &[P], u: P, min_sq: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>) {
             continue;
         }
         let (alo, ahi) = extent(&strip, a);
-        let w = (min_sq / d.max(1.0)).max(14.0);
+        let w = if burgage { (0.7 * crate::core::sqrt(min_sq)).clamp(18.0, 30.0) } else { (min_sq / d.max(1.0)).max(14.0) };
         let mut x = alo;
         while ahi - x > 1.0 {
             let mut step = w * (0.85 + 0.3 * rng.next_f64());

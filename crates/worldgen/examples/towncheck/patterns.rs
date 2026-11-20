@@ -60,7 +60,7 @@ pub(crate) fn patterns(world: &World, t0: &T0, label: &str, r: &mut Report) {
                 }
             }
         }
-        say!("    {label} L{li} {} {p} (planning {}): round {:.0}%, out {:.0}%; {n} buildings, {sharp} corner < 60, {eye} eye < 70, {over} overlapping", s.tier.name(), l.planning, 100.0 * ring, 100.0 * spoke);
+        say!("    {label} L{li} {} {p} (planning {}): round {:.0}%, out {:.0}%; {n} buildings, {sharp} corner < 60, {eye} eye < 70, {over} overlapping; fx {:.4} fy {:.4}", s.tier.name(), l.planning, 100.0 * ring, 100.0 * spoke, l.center[0] / world.geom.map_w_ft, l.center[1] / world.geom.map_h_ft);
         r.tally(&format!("towns {p}"), 1);
         r.value(&format!("round % ({p})"), 100.0 * ring, format!("{label} L{li}"));
         r.value(&format!("out % ({p})"), 100.0 * spoke, format!("{label} L{li}"));

@@ -28,6 +28,8 @@ pub(super) struct Seeds {
     pub(super) lattice: Vec<bool>,
     /// (189) Each seed's heading (radians) its lots run with on the planned part (`TownPlan::frames`).
     pub(super) frames: Vec<f64>,
+    /// (189) The middle the rings run round (the harbour's, round a bay; else the town's).
+    pub(super) hub: P,
 }
 
 /// Seeds the patches of settlement `s` (urban radius `r`); draws the per-patch stream's seed
@@ -73,16 +75,32 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     let out = [libm::cos(out), libm::sin(out)];
     // (189: on rings, the grown core is round, a little wider the less planned the town.)
     let ringed = pattern.polar() && line.is_some();
+    // (189) Rings round a bay: arcs round its harbour (`pattern::harbour`), the core by it. Linear:
+    // the lattice a band of blocks along the high street (`axis`), a frontage row and a back row
+    // each side, the rest grown.
+    let hub = if ringed && pattern == super::pattern::Pattern::Rings { super::pattern::harbour(site, r) } else { None };
+    let o = hub.unwrap_or([0.0, 0.0]);
+    let linear = pattern == super::pattern::Pattern::Linear && line.is_some();
+    let (lu, ld) = ((1.4 * spacing).clamp(240.0, 420.0), (0.5 * spacing).clamp(100.0, 150.0));
     let core_r = match line {
         Some(t) if t >= 0.0 => r_edge * (0.5 - 0.25 * (planning - super::planning::MIXED) / (super::planning::PLANNED - super::planning::MIXED)),
         _ => 0.0,
     };
-    let grown = |p: P| if ringed { len(p) < core_r } else { line.is_none_or(|t| dot(p, out) < t * r_edge) };
+    let gv0 = [-libm::sin(axis), libm::cos(axis)];
+    // (Linear: half as wide a core, the high street running through most of the town.)
+    let core_l = 0.5 * core_r;
+    let grown = |p: P| if ringed { len(sub(p, o)) < core_r } else if linear { len(p) < core_l || dot(p, gv0).abs() > 2.0 * ld } else { line.is_none_or(|t| dot(p, out) < t * r_edge) };
     let aspect = if roll(0, 7) < 0.5 { 1.0 + 0.15 * roll(0, 8) } else { 1.4 + 0.6 * roll(0, 8) };
-    let (gx, gy) = (spacing * crate::core::sqrt(aspect), spacing / crate::core::sqrt(aspect));
+    let (gx, gy) = if linear { (lu, ld) } else { (spacing * crate::core::sqrt(aspect), spacing / crate::core::sqrt(aspect)) };
     let (gu, gv) = ([libm::cos(axis), libm::sin(axis)], [-libm::sin(axis), libm::cos(axis)]);
     // (Planned throughout: the market square is the lattice's middle block.)
-    let (pa, plaza_s, plaza_l) = if !ringed && line.is_some_and(|t| t < 0.0) { (axis, gx, gy) } else { (pa, plaza_s, plaza_l) };
+    let (pa, plaza_s, plaza_l) = if linear {
+        (axis + std::f64::consts::FRAC_PI_2, plaza_s, plaza_l)
+    } else if !ringed && line.is_some_and(|t| t < 0.0) {
+        (axis, gx, gy)
+    } else {
+        (pa, plaza_s, plaza_l)
+    };
     // (189) The rings' depth and the blocks' length along them (ft): Rings long blocks between
     // close rings, two lots deep (a ring street's houses back to back with the next's), Radial
     // long blocks out from the middle between many spokes.
@@ -122,13 +140,15 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
         let band = 0.75 * spacing;
         let mut cands: Vec<P> = Vec::new();
         if ringed {
-            cands = ring_seeds(pseed, start, r_edge, dr, w, axis, jit, pattern == super::pattern::Pattern::Rings);
+            cands = ring_seeds(pseed, start, r_edge + len(o), dr, w, axis, jit, pattern == super::pattern::Pattern::Rings).into_iter().map(|p| add(p, o)).collect();
         } else {
+            // (Linear: the rows half a block off the high street, so it runs between them.)
+            let (ky, half) = if linear { (2, 0.5) } else { (k, 0.0) };
             for ix in -k..=k {
-                for iy in -k..=k {
+                for iy in -ky..ky + if linear { 0 } else { 1 } {
                     let mut sr = Pcg32::new(hash2(pseed, ix, iy ^ 0x1a77), 67);
                     let (ja, j) = (sr.range(0.0, std::f64::consts::TAU), sr.range(0.0, jit));
-                    cands.push(add(add(mul(gu, ix as f64 * gx), mul(gv, iy as f64 * gy)), [j * libm::cos(ja), j * libm::sin(ja)]));
+                    cands.push(add(add(mul(gu, ix as f64 * gx), mul(gv, (iy as f64 + half) * gy)), [j * libm::cos(ja), j * libm::sin(ja)]));
                 }
             }
         }
@@ -280,7 +300,7 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     let lattice: Vec<bool> = seeds.iter().map(|x| x.2 || (all && x.1)).collect();
     // (189: on rings, a block's lots run along its ring (Rings) or out from the middle (Radial).)
     let turn = if pattern == super::pattern::Pattern::Rings { std::f64::consts::FRAC_PI_2 } else { 0.0 };
-    let frames: Vec<f64> = seeds.iter().map(|x| if ringed { libm::atan2(x.0[1], x.0[0]) + turn } else { axis }).collect();
+    let frames: Vec<f64> = seeds.iter().map(|x| if ringed { libm::atan2(x.0[1] - o[1], x.0[0] - o[0]) + turn } else { axis }).collect();
     let boundary = circle([0.0, 0.0], r_out * 1.3, 48);
     let mut cells = voronoi(&sites, &boundary);
     for _ in 0..2 {
@@ -298,13 +318,16 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
     // on (a function of where it is).
     if ringed && pattern == super::pattern::Pattern::Rings {
         let strict = 0.5 + 0.5 * ((planning - super::planning::MIXED) / (1.0 - super::planning::MIXED)).clamp(0.0, 1.0);
+        // (Round a harbour: not by the shore either, whose quays trace it, nor near the town's
+        // edge, which no ring follows there.)
+        let by_shore = |p: P| hub.is_some() && (len(p) > r_edge - 0.5 * dr || shore.iter().any(|(q, _)| dist(*q, p) < 0.4 * dr));
         for c in cells.iter_mut() {
             for p in c.pts.iter_mut() {
-                let l = len(*p);
+                let l = len(sub(*p, o));
                 let k = crate::core::round((l - start) / dr);
                 let rk = start + k * dr;
-                if k >= 0.0 && rk < r_edge - 1.0 && (l - rk).abs() < 0.3 * dr && l > 1e-9 && !site.near_river(*p, 0.35 * dr) && !site.wet(*p) {
-                    *p = mul(*p, (l + strict * (rk - l)) / l);
+                if k >= 0.0 && (rk < r_edge - 1.0 || hub.is_some()) && (l - rk).abs() < 0.3 * dr && l > 1e-9 && !site.near_river(*p, 0.35 * dr) && !site.wet(*p) && !by_shore(*p) {
+                    *p = add(o, mul(sub(*p, o), (l + strict * (rk - l)) / l));
                 }
             }
         }
@@ -314,7 +337,7 @@ pub(super) fn plant(site: &Site, s: &Settlement, r: f64, planning: f64, axis: f6
             *c = Labeled { pts: Vec::new(), labels: Vec::new() };
         }
     }
-    Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice, frames }
+    Seeds { pseed, spacing, r_out, rhombus, n_inner, total, sites, cells, lattice, frames, hub: o }
 }
 
 /// (189) The planned part's seeds on rings round the middle, from `start` out to `r_edge`: rings
