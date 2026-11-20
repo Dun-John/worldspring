@@ -811,13 +811,14 @@ export class BattlemapLayer {
 
     const noiseOff = new Float32Array([((cx * SQ) % 512 + 512) % 512, ((cy * SQ) % 512 + 512) % 512]);
     // Flights of steps crossing the chunk (shape 8): per axis (bottom, top) and (half width,
-    // start up the flight, tread, 0) in squares, for the ground's treads.
+    // start up the flight, tread, timber) in squares, for the ground's treads.
     const stairs = new Float32Array(STAIR_AXES * 8);
     let nStairs = 0;
     for (const s of c.shapes) {
       if (s.kind !== 8 || nStairs === STAIR_AXES) continue;
       const p = s.pts.map((v) => v / PX);
-      stairs.set([p[0], p[1], p[2], p[3], (0.5 * s.size) / PX, p[4], p[5], 0], nStairs++ * 8);
+      // (Timber steps on a flight 8 ft wide or less: a footpath's; dressed stone on a street's.)
+      stairs.set([p[0], p[1], p[2], p[3], (0.5 * s.size) / PX, p[4], p[5], s.size / PX <= 1.6 ? 1 : 0], nStairs++ * 8);
     }
     const uniforms = new UniformGroup({
       uBase: { value: base, type: 'f32' },
@@ -849,6 +850,9 @@ export class BattlemapLayer {
     // Fully static particles: the chunk moves as a whole, so nothing is re-uploaded per frame
     // (Pixi's default re-uploads every position, every frame).
     const fixed = { vertex: false, position: false, rotation: false, uvs: false, color: false };
+    // (The low layer: ground marks, then the short props' shadows, then the short props.)
+    const flat = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
+    const lowShadows = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
     const low = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
     const shadows = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
     const tall = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
@@ -870,25 +874,22 @@ export class BattlemapLayer {
       if (this.player && dmOnlyHazard(hazard?.effect)) continue;
       const isTall = inf.height_ft >= 5;
       const rotation = custom ? o.rot : drawnRotation(inf as KindInfo, turned, o.rot);
-      if (inf.height_ft >= 1.5 && !hazard && (custom || !OWN_SHADOW.has((inf as KindInfo).name))) {
-        const [size, strength] = (!custom && SPARSE.get((inf as KindInfo).name)) || [1, 1];
-        const r = inf.radius * PX * o.scale * size;
-        // Upright things drawn from a high angle cast it from their foot; long ones a long shadow along
-        // them (still falling SE, whatever their turn), a bridge's further off (it stands over the water).
-        const foot = custom ? 0 : (UPRIGHT_FOOT[o.kind] ?? 0) * o.scale;
-        const long = !custom && LONG_SHADOW.get((inf as KindInfo).name);
-        const off = Math.min(1.3, 0.15 + inf.height_ft / 45) * PX * 0.7 * (long ? long[2] : 1);
-        shadows.addParticle(
+      const standing = custom ? inf.height_ft > 0 : !hazard && isStanding(inf as KindInfo);
+      const sh = standing ? dropShadowOf(inf, custom ? 0 : o.kind, !custom, o.scale, rotation) : null;
+      if (sh) {
+        // (A short prop's shadow lies under it and the props beside it, over the ground marks; a tall
+        // one's falls over the short props and walls about it.)
+        (isTall ? shadows : lowShadows).addParticle(
           new Particle({
             texture: atlas.shadow,
-            x: o.x * PX + off,
-            y: o.y * PX + foot + off,
+            x: o.x * PX + sh.dx,
+            y: o.y * PX + sh.dy,
             anchorX: 0.5,
             anchorY: 0.5,
-            scaleX: long ? (long[0] * PX * o.scale) / 128 : (r * 2.1) / 128,
-            scaleY: long ? (long[1] * PX * o.scale) / 128 : (r * 2.1) / 128,
-            rotation: long ? rotation : 0,
-            alpha: (isTall ? 0.6 : 0.35) * strength,
+            scaleX: sh.sx,
+            scaleY: sh.sy,
+            rotation: sh.rot,
+            alpha: sh.alpha,
           }),
         );
       }
@@ -902,13 +903,13 @@ export class BattlemapLayer {
         pc.addParticle(new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: k, scaleY: k, rotation: o.rot }));
         continue;
       }
-      (isTall ? tall : low).addParticle(
+      (isTall ? tall : standing ? low : flat).addParticle(
         new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: o.scale, scaleY: o.scale, rotation }),
       );
     }
 
     yield;
-    for (const layer of [low, shadows, tall]) {
+    for (const layer of [flat, lowShadows, low, shadows, tall]) {
       this.prewarm(layer);
       yield;
     }
@@ -1007,9 +1008,9 @@ export class BattlemapLayer {
       this.prewarm(part);
       yield;
     }
-    const parts = [ground, low, shadows, tall].map((o, i) => {
+    const parts = [[ground], [flat, lowShadows, low], [shadows], [tall]].map((os, i) => {
       const holder = new Container();
-      holder.addChild(o);
+      holder.addChild(...os);
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
       if (i === 0) holder.addChild(bastionG, daisG, pathGridG);
       if (i === 2) {
@@ -1234,6 +1235,41 @@ export const LONG_SHADOW = new Map([
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
 export const OWN_SHADOW = new Set(['market cross', 'water wheel', 'kurgan', 'rowboat', 'fishing boat', 'dock crane', 'net rack']);
+/** Things lying flat on the ground (marks, beds of low plants, water): no drop shadow, however tall the
+ * catalog says they stand. */
+export const GROUND_MARK = new Set(['pond', 'wildflowers', 'mushroom ring', 'old bones', 'bedroll', 'flowerbed']);
+
+/** Whether a catalog kind stands up off the ground and so casts a drop shadow (not hazards, ground marks or
+ * things that draw their own). */
+export function isStanding(inf: KindInfo): boolean {
+  return !inf.hazard && inf.height_ft > 0 && !GROUND_MARK.has(inf.name) && !OWN_SHADOW.has(inf.name);
+}
+
+/** A standing thing's drop shadow (`atlas.shadow`, 128 px across), in atlas px about its centre at `scale`:
+ * offset to the SE and sized by its height (a stone 1 ft high casts a small faint one hard by it, a 5-ft
+ * crate stack a full one), drawn out along long things, from the foot of upright ones. `builtin`: a
+ * catalog kind (its own rules by name and id), else an uploaded sprite. */
+export function dropShadowOf(inf: { name?: string; radius: number; height_ft: number }, kind: number, builtin: boolean, scale: number, rotation: number) {
+  const h = inf.height_ft;
+  const name = builtin ? (inf.name ?? '') : '';
+  const [size, strength] = SPARSE.get(name) ?? [1, 1];
+  const long = LONG_SHADOW.get(name);
+  // (Short things: a tighter, darker blob set further out, so it shows past the prop and not only
+  // under it, growing as they rise; from 5 ft, the tall things' shadow.)
+  const short = h < 5;
+  const grow = short ? 0.85 + 0.0375 * h : 1;
+  const r = inf.radius * PX * scale * size * grow;
+  const foot = builtin ? (UPRIGHT_FOOT[kind] ?? 0) * scale : 0;
+  const off = Math.min(1.3, 0.15 + h / 45) * PX * 0.7 * (long ? long[2] : 1) * (short ? 1.8 : 1);
+  return {
+    dx: off,
+    dy: foot + off,
+    sx: long ? (long[0] * PX * scale) / 128 : (r * 2.1) / 128,
+    sy: long ? (long[1] * PX * scale) / 128 : (r * 2.1) / 128,
+    rot: long ? rotation : 0,
+    alpha: (short ? Math.min(0.6, 0.4 + 0.05 * h) : 0.6) * strength,
+  };
+}
 
 /** R5 M20 shapes (`battlemap::ShapeKind`): a breakwater's armour, a moored cog, a lighthouse's lantern. */
 const BREAKWATER = 32;

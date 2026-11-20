@@ -22,7 +22,7 @@
 // piers, bridges and quays (`dev/galleryTimber.ts`).
 // `&items=fences` (alone; `&sq=`, default 48) shows the fence and wall pieces in runs with a gate, and today's hedge,
 // wattle and dry-stone wall beside them.
-import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
+import { Application, Container, Geometry, GlProgram, Graphics, Mesh, Shader, Sprite, Text, UniformGroup, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
@@ -32,7 +32,7 @@ import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/item
 import { looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { buildAtlas } from '../render/atlas/build';
 import { loadSprites } from '../render/spriteCode';
-import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
+import { drawnTurned, dropShadowOf, isStanding, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, topGrid } from '../render/walls';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
@@ -40,6 +40,8 @@ import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourSha
 import { breakwaters, piers } from './galleryTimber';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
+import groundFragment from '../render/shaders/ground.frag?raw';
+import terrainVertex from '../render/shaders/terrain.vert?raw';
 
 /** Building furniture (`interior::item_info`), with a typical size in squares. */
 const FURNITURE: [string, number, number][] = [
@@ -316,7 +318,7 @@ export async function runGallery(target: HTMLElement) {
           const [cx, cy] = [x0 + cell / 2 + (v % VARIANTS) * cell, y + cell / 2 + Math.floor(v / VARIANTS) * cell];
           if (ground !== null) {
             root.addChild(new Graphics().rect(cx - cell / 2 + 2, cy - cell / 2 + 2, cell - 4, cell - 4).fill(ground));
-            if (info.height_ft >= 1.5 && !info.hazard && !OWN_SHADOW.has(info.name)) root.addChild(dropShadow(atlas, info, cx, cy, fit));
+            if (isStanding(info)) root.addChild(dropShadow(atlas, info, cx, cy, fit));
           }
           s.scale.set(fit);
           s.anchor.set(0.5);
@@ -471,6 +473,18 @@ export async function runGallery(target: HTMLElement) {
   if (!only && pick?.includes('fences')) {
     head('Fences: picket, iron railing, stockade, low stone wall (dry-stone), high wall (garden wall), each with a gate; hedge, wattle (battlemap)');
     y = fences(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
+  }
+
+  // Drop shadows on the small props, before and after (`&items=shadows` alone).
+  if (!only && pick?.includes('shadows')) {
+    head('Shadows: small props on grass, before (v65) | after (every standing prop, sized by its height); ground marks get none (battlemap)');
+    y = shadowsPanel(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
+  }
+
+  // Steps on a street and a footpath, as the ground shader draws them (`&items=stairs` alone).
+  if (!only && pick?.includes('stairs')) {
+    head('Stairs: a street flight in dressed stone, a footpath flight in timber, close and further out (ground shader treads)');
+    y = stairsPanel(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
   }
 
   // The countryside's bounds and sails (`&items=countryside`, or with the fruit tree or water wheel kinds).
@@ -975,7 +989,7 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
     const atlas = buildAtlas(app.renderer, kinds);
     const put = (id: number, v: number, x: number, y: number, rot = 0) => {
       const inf = kinds.find((k) => k.id === id)!;
-      if (inf.height_ft >= 1.5) props.addChild(dropShadow(atlas, inf, x * PX, y * PX, 1));
+      if (isStanding(inf)) props.addChild(dropShadow(atlas, inf, x * PX, y * PX, 1));
       const sp = new Sprite(atlas.frames[id][v % looks(id)]);
       sp.anchor.set(0.5);
       sp.position.set(x * PX, y * PX);
@@ -1046,7 +1060,7 @@ function cemeteries(app: Application, catalog: KindInfo[], root: Container, y0: 
     const put = (id: number, v: number, x: number, y: number, rot = 0, s = 1) => {
       const inf = info.get(id)!;
       const [cx, cy] = [x * PX, y * PX];
-      if (inf.height_ft >= 1.5 && !OWN_SHADOW.has(inf.name)) {
+      if (isStanding(inf)) {
         const sh = dropShadow(atlas, inf, cx, cy, s);
         sh.rotation = rot;
         props.addChild(sh);
@@ -1168,6 +1182,18 @@ function cemeteries(app: Application, catalog: KindInfo[], root: Container, y0: 
 /** An object's drop shadow as the battlemap casts it (`BattlemapLayer`): a soft blob to the SE (from the foot of
  * an upright thing), smaller and fainter for sparse plants, at `fit` screen px per atlas px. */
 function dropShadow(atlas: ReturnType<typeof buildAtlas>, info: KindInfo, cx: number, cy: number, fit: number): Sprite {
+  const d = dropShadowOf(info, info.id, true, 1, 0);
+  const sh = new Sprite(atlas.shadow);
+  sh.anchor.set(0.5);
+  sh.scale.set(d.sx * fit, d.sy * fit);
+  sh.alpha = d.alpha;
+  sh.position.set(cx + d.dx * fit, cy + d.dy * fit);
+  return sh;
+}
+
+/** The drop shadow as it was before every standing prop had one (v65: from 1.5 ft, over the short props). */
+function oldDropShadow(atlas: ReturnType<typeof buildAtlas>, info: KindInfo, cx: number, cy: number, fit: number): Sprite | null {
+  if (info.height_ft < 1.5 || info.hazard || OWN_SHADOW.has(info.name)) return null;
   const [size, strength] = SPARSE.get(info.name) ?? [1, 1];
   const long = LONG_SHADOW.get(info.name);
   const off = Math.min(1.3, 0.15 + info.height_ft / 45) * PX * 0.7 * (long ? long[2] : 1);
@@ -1178,6 +1204,143 @@ function dropShadow(atlas: ReturnType<typeof buildAtlas>, info: KindInfo, cx: nu
   sh.alpha = (info.height_ft >= 5 ? 0.6 : 0.35) * strength;
   sh.position.set(cx + off * fit, cy + ((UPRIGHT_FOOT[info.id] ?? 0) + off) * fit);
   return sh;
+}
+
+/** `&items=stairs`: flights of steps drawn by the battlemap's own `treads` (cut from `ground.frag` with
+ * what it needs, over a plain slope: paving beside the street's flight, grass beside the footpath's), a
+ * street flight 3 squares wide and a footpath's 1 square wide, at `sq` px a square and at a third of it. */
+function stairsPanel(root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  const cut = (from: string, to: string) => {
+    const a = groundFragment.indexOf(from);
+    const b = groundFragment.indexOf(to, a);
+    if (a < 0 || b < 0) throw new Error(`ground.frag: no ${from}`);
+    return groundFragment.slice(a, b + to.length);
+  };
+  const fragment = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vUV;',
+    'out vec4 finalColor;',
+    'uniform float uPxPerSq;',
+    'uniform vec4 uStairs[128];',
+    'uniform float uStairN;',
+    'uniform vec2 uSize;',
+    'uniform vec4 uRect;',
+    'uniform vec3 uBeside;',
+    cut('const vec3 INK', ';'),
+    cut('const vec3 SURF[22]', ');'),
+    cut('float hash21(vec2 p) {', '\n}'),
+    cut('// Roadmap 7 (177) steps', '\n}'),
+    'void main() {',
+    '    vec2 q = vUV * uSize;',
+    '    bool on = q.x > uRect.x && q.x < uRect.z && q.y > uRect.y && q.y < uRect.w;',
+    // (The slope's hillshade: a little darker downhill.)
+    '    vec3 col = (on ? SURF[19] : uBeside) * (0.92 + 0.08 * (1.0 - q.y / uSize.y));',
+    '    if (on) col = treads(col, q, 0.0);',
+    '    vec2 f = fract(q);',
+    '    vec2 g = min(f, 1.0 - f) * uPxPerSq;',
+    '    col = mix(col, vec3(0.0), (1.0 - smoothstep(0.4, 1.2, min(g.x, g.y))) * 0.14);',
+    '    finalColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+  const program = GlProgram.from({ vertex: terrainVertex, fragment, name: 'gallery-stairs' });
+  const quad = new Geometry({
+    attributes: {
+      aPosition: { buffer: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), format: 'float32x2' },
+      aUV: { buffer: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), format: 'float32x2' },
+    },
+    indexBuffer: new Uint32Array([0, 1, 2, 0, 2, 3]),
+  });
+  // (Each: panel size in squares, the flight's half width, beside colour (`ground.frag` SURF), timber.)
+  const flights: [string, number, number, number[], number][] = [
+    ['street flight, 15 ft wide (stone)', 6, 1.5, [0.66, 0.62, 0.55], 0],
+    ['footpath flight, 5 ft wide (timber)', 4, 0.5, [0.4, 0.54, 0.25], 1],
+  ];
+  let x = 16;
+  let y = y0;
+  let rowH = 0;
+  for (const k of [sq, Math.max(12, Math.round(sq / 3))]) {
+    for (const [name, wSq, half, beside, wood] of flights) {
+      const hSq = 7;
+      const [w, h] = [wSq * k, hSq * k];
+      if (x + w > width - 16) {
+        x = 16;
+        y += rowH + 26;
+        rowH = 0;
+      }
+      // Up the flight is up the panel: from its foot a square above the bottom to a square below the top.
+      const cx = wSq / 2;
+      const stairs = new Float32Array(128 * 4);
+      stairs.set([cx, hSq - 1, cx, 1, half, 0, 0.5, wood]);
+      const uniforms = new UniformGroup({
+        uPxPerSq: { value: k, type: 'f32' },
+        uStairs: { value: stairs, type: 'vec4<f32>', size: 128 },
+        uStairN: { value: 1, type: 'f32' },
+        uSize: { value: new Float32Array([wSq, hSq]), type: 'vec2<f32>' },
+        uRect: { value: new Float32Array([cx - half, 1, cx + half, hSq - 1]), type: 'vec4<f32>' },
+        uBeside: { value: new Float32Array(beside), type: 'vec3<f32>' },
+      });
+      const mesh = new Mesh({ geometry: quad, shader: new Shader({ glProgram: program, resources: { stairs: uniforms } }) });
+      mesh.scale.set(w, h);
+      mesh.position.set(x, y);
+      root.addChild(mesh);
+      if (!nolabels) {
+        const t = new Text({ text: `${name}, ${k} px a square`, style: LABEL });
+        t.position.set(x, y + h + 2);
+        root.addChild(t);
+      }
+      x += Math.max(w, nolabels ? 0 : 300) + 24;
+      rowH = Math.max(rowH, h + 18);
+    }
+  }
+  return y + rowH + 40;
+}
+
+/** `&items=shadows`: the small props on grass, each before (the v65 rule: none under 1.5 ft, and the
+ * shadow laid over a short prop, as the low layer was under the shadows) and after (every standing
+ * thing, under it, sized by its height); then the ground marks, which get none. At `sq` px a square. */
+function shadowsPanel(app: Application, catalog: KindInfo[], root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  const names = [
+    'rocks', 'stump', 'rock pile', 'fallen log', 'bush', 'barrels', 'crates', 'firewood stack', 'water trough', 'bench', 'well', 'headstone',
+    'tomb slab', 'stocks', 'beehive', 'anvil', 'shot stones', 'cairn', 'hitching rail', 'wattle fence', 'snowdrift', 'cart', 'boulder',
+  ];
+  const marks = ['wildflowers', 'mushroom ring', 'old bones', 'bedroll', 'flowerbed'];
+  const kinds = [...names, ...marks].map((n) => catalog.find((c) => c.name === n)).filter((k): k is KindInfo => !!k);
+  const atlas = buildAtlas(app.renderer, kinds);
+  const k = sq / PX;
+  const cell = Math.ceil(2.4 * sq);
+  const per = Math.max(1, Math.floor((width - 32) / (2 * cell + 24)));
+  let y = y0;
+  let i = 0;
+  for (const info of kinds) {
+    const col = i % per;
+    if (col === 0 && i > 0) y += cell + 22;
+    i++;
+    const x = 16 + col * (2 * cell + 24);
+    const g = new Graphics().rect(x, y, 2 * cell, cell).fill(GRASS);
+    for (let gx = x + sq; gx < x + 2 * cell - 1; gx += sq) g.moveTo(gx, y).lineTo(gx, y + cell);
+    for (let gy = y + sq; gy < y + cell - 1; gy += sq) g.moveTo(x, gy).lineTo(x + 2 * cell, gy);
+    g.stroke({ width: 1, color: 0x000000, alpha: 0.12 });
+    root.addChild(g);
+    for (const after of [false, true]) {
+      const [cx, cy] = [x + cell / 2 + (after ? cell : 0), y + cell / 2];
+      const sprite = new Sprite(atlas.frames[info.id][0]);
+      sprite.anchor.set(0.5);
+      sprite.scale.set(k);
+      sprite.position.set(cx, cy);
+      const sh = after ? (isStanding(info) ? dropShadow(atlas, info, cx, cy, k) : null) : oldDropShadow(atlas, info, cx, cy, k);
+      // (Before: the shadow over the short prop; after: under it.)
+      if (sh && !after && info.height_ft < 5) root.addChild(sprite, sh);
+      else if (sh) root.addChild(sh, sprite);
+      else root.addChild(sprite);
+    }
+    if (!nolabels) {
+      const t = new Text({ text: `${info.name} (${info.height_ft} ft): before | after`, style: LABEL });
+      t.position.set(x, y + cell + 2);
+      root.addChild(t);
+    }
+  }
+  return y + cell + 40;
 }
 
 /** Trees and plants (by id), and topiary (drawn upright): never turned by hand. */

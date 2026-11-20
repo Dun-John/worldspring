@@ -313,9 +313,17 @@ vec3 surfaceColor(int s, vec2 w, bool fan, float fade) {
 uniform vec4 uStairs[128];
 uniform float uStairN;
 
-// A flight of steps: treads square across the nearest flight's axis (a bold nosing line on each,
-// lit at its front edge and shaded towards the riser above), each tread laid in a row of stone
-// blocks. Fades out where the treads crowd on screen and where the ground is a cliff.
+// Roadmap 7 (177) steps, in the sprites' cartoon style: each tread a flat top tone with a lit nosing
+// at its front (downhill) edge under a bold ink line, the riser above it a flat shaded band, in the
+// props' palettes: dressed stone (`atlas` STONE) laid in a few broad blocks on a street's flight,
+// timber (`atlas` WOOD) boards on a narrow footpath's (axis `w` 1). The ground's light and shade
+// carry over. Fades out where the treads crowd on screen and where the ground is a cliff.
+const vec3 STEP_STONE_TOP = vec3(0.64, 0.60, 0.54);
+const vec3 STEP_STONE_LIT = vec3(0.80, 0.76, 0.68);
+const vec3 STEP_STONE_RISE = vec3(0.45, 0.42, 0.38);
+const vec3 STEP_WOOD_TOP = vec3(0.60, 0.46, 0.30);
+const vec3 STEP_WOOD_LIT = vec3(0.74, 0.60, 0.40);
+const vec3 STEP_WOOD_RISE = vec3(0.37, 0.26, 0.15);
 vec3 treads(vec3 col, vec2 q, float steep) {
     float best = 1e9;
     vec4 axis = vec4(0.0);
@@ -342,22 +350,47 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     vec2 pa = q - axis.xy;
     float x = (more.y + dot(pa, u)) / more.z;
     float fr = fract(x);
+    float step_ = floor(x);
     // Squares per tread on screen: fade the treads out below a few pixels.
     float px = more.z * uPxPerSq;
     float show = smoothstep(2.5, 5.0, px) * (1.0 - steep);
-    // Blocks across the tread, offset tread by tread.
-    float across = (pa.x * u.y - pa.y * u.x) / 0.55 + hash21(vec2(floor(x), 7.0)) * 3.0;
-    float joint = min(fract(across), 1.0 - fract(across)) * 0.55 * uPxPerSq;
-    col *= 0.92 + 0.14 * hash21(vec2(floor(x), floor(across)));
-    col = mix(col, col * 0.78, (1.0 - smoothstep(0.3, 1.0, joint)) * 0.5 * show);
-    // Lit at the front (downhill) edge, in the shadow of the riser above at the back.
-    col = mix(col, col * 1.15, (1.0 - smoothstep(0.0, 0.25, fr)) * 0.7 * show);
-    col = mix(col, col * 0.6, smoothstep(0.55, 1.0, fr) * 0.8 * show);
-    // A bold nosing: about a twentieth of the tread each side, 1-3 px.
+    float aa = 1.0 / max(px, 1.0);
+    bool wood = more.w > 0.5;
+    // The ground's light and shade under the flat tones (its hillshade, the edge's blend).
+    float lum = dot(col, vec3(0.333));
+    float shade = clamp(lum / dot(SURF[19], vec3(0.333)), 0.65, 1.25);
+    vec3 top = wood ? STEP_WOOD_TOP : STEP_STONE_TOP;
+    vec3 lit = wood ? STEP_WOOD_LIT : STEP_STONE_LIT;
+    vec3 rise = wood ? STEP_WOOD_RISE : STEP_STONE_RISE;
+    // Across the flight: stone in broad blocks (about a square and a half, offset tread by tread),
+    // timber as one board per tread, its grain a faint line along it.
+    float across = (pa.x * u.y - pa.y * u.x);
+    float bw = wood ? 1e3 : 1.6;
+    float ab = across / bw + hash21(vec2(step_, 7.0));
+    top *= 0.95 + 0.1 * hash21(vec2(step_, floor(ab)));
+    // Front to back: nosing (lit), tread top, riser (shaded), with crisp edges.
+    float nose = 1.0 - smoothstep(0.16 - aa, 0.16 + aa, fr);
+    float riser = smoothstep(0.7 - aa, 0.7 + aa, fr);
+    vec3 c = mix(mix(top, lit, nose), rise, riser) * shade;
+    // A thin dark line where the tread meets the riser, and the block joints over the top only.
+    float back = 1.0 - smoothstep(0.0, 1.2, abs(fr - 0.7) * px);
+    c = mix(c, INK, back * 0.45);
+    if (!wood) {
+        float jd = min(fract(ab), 1.0 - fract(ab)) * bw * uPxPerSq;
+        float joint = (1.0 - smoothstep(0.6, 1.4, jd)) * (1.0 - riser);
+        c = mix(c, INK, joint * 0.6);
+    } else {
+        float grain = 1.0 - smoothstep(0.3, 1.0, abs(fr - 0.42) * px);
+        c = mix(c, rise, grain * 0.35);
+    }
+    // The bold ink line at each tread's front edge: about a twentieth of the tread, 1-3 px.
     float d = min(fr, 1.0 - fr) * px;
-    float hw = clamp(0.05 * px, 0.9, 3.0);
-    float nosing = 1.0 - smoothstep(hw - 0.5, hw + 0.5, d);
-    return mix(col, INK, nosing * 0.85 * show);
+    float hw = clamp(0.06 * px, 1.0, 3.0);
+    float ink = 1.0 - smoothstep(hw - 0.5, hw + 0.5, d);
+    c = mix(c, INK, ink * 0.9);
+    // (Soft at the flight's sides, where the street's own paving takes over.)
+    float edge = 1.0 - smoothstep(0.35, 0.6, best);
+    return mix(col, c, show * edge);
 }
 
 // Roadmap 7 (170) cliffs, in the sprites' cartoon style: three close matte rock tones by which way
