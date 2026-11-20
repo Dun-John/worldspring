@@ -519,7 +519,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let steppe_from = features.len();
         for pl in &l.plazas {
             use crate::town::PlazaKind as K;
-            let p = &pl.pts;
+            // (P2 160: a quay plaza over a front that gave way to hand work is its strip again.)
+            let p_cow = crate::town::harbour::plaza_pts(world, &l, pl);
+            let p = &*p_cow;
             // A town's green and a temple's close are lawns; a village's green keeps the ground
             // round it as it is.
             let lawn = pl.kind.is_lawn() && l.tier >= crate::t0::settle::Tier::Town;

@@ -527,6 +527,9 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         "timber quay fronts",
         "quay front squares wet",
         "quay front squares unpaved",
+        "coastal cities",
+        "coastal cities without a quay front",
+        "quay front ft",
         "bollards",
         "net racks",
     ]);
@@ -545,7 +548,15 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
     for si in 0..ctx.ex.t0.settlements.len() {
         let l = town::layout(&ctx.ex.world, &ctx.ex.t0, si);
         // P2 160: a city's quay fronts, dry and paved on the battlemap.
+        let st = &ctx.ex.t0.settlements[si];
+        if l.tier >= worldgen::t0::settle::Tier::City && st.coastal {
+            r.tally("coastal cities", 1);
+            if l.quays.is_empty() {
+                r.add("coastal cities without a quay front", 1.0, format!("L{si} {:?} at ({:.0}, {:.0}) river {}", l.tier, st.x, st.y, st.river));
+            }
+        }
         for qf in &l.quays {
+            r.tally("quay front ft", town::geom::dist(qf.pts[0], qf.pts[1]) as usize);
             r.tally("quay fronts", 1);
             r.tally("timber quay fronts", qf.timber as usize);
             let bb = town::geom::bbox(&qf.pts);

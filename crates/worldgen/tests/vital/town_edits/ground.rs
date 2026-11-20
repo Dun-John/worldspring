@@ -554,6 +554,27 @@ pub(in super::super) fn ground_edits(base: &World) {
     for q in outside {
         assert!(c.height[q] == plain_c.1.height[q] && c.water_level[q] == plain_c.1.water_level[q], "the inlet changed the ground outside it at square {q}");
     }
+    // (And on the front itself, off the inlet: a square its made ground raised is the shore's
+    // plain ground again, and only its strip along the lots is paved.)
+    let mut on_front = 0;
+    for i in 0..settlements.len() {
+        let l = worldgen::town::layout(&ex.world, &ex.t0, i);
+        let kept: Vec<&worldgen::town::harbour::Quay> = worldgen::town::harbour::quays_kept(&ex.world, &l).collect();
+        for f in l.quays.iter().filter(|f| !kept.contains(f)) {
+            let strip = f.strip();
+            for q in 0..SQ * SQ {
+                let p = at(q);
+                let (raised, off) = ((plain_c.1.height[q] - f.level).abs() < 0.01 && !wet(&plain_c.1, q), worldgen::town::geom::poly_gap(&inlet.pts, &[p]) > 6.0);
+                if !worldgen::town::geom::contains(&f.pts, p) || worldgen::town::geom::poly_gap(&f.pts, &[p]) < 3.0 || !raised || !off || c.building[q] != 0 || c.urban[q] == battlemap::URBAN_DECK {
+                    continue;
+                }
+                assert!(c.height[q] < f.level - 0.01, "the inlet: square {q} on the front it meets still made ground ({} at level {})", c.height[q], f.level);
+                assert!(worldgen::town::geom::contains(&strip, p) || worldgen::town::geom::poly_gap(&strip, &[p]) < 3.0 || c.urban[q] != battlemap::URBAN_PLAZA, "the inlet: square {q} off the front's strip still paved");
+                on_front += 1;
+            }
+        }
+    }
+    assert!(on_front > 0, "the inlet: no square of a front it meets to look at");
     assert!(agent::building_spot(&ex.world, &ex.t0, &foot([shore[0] - 25.0, shore[1]]), None, "c:99", None).is_err(), "a building in the inlet");
     let tk = fine(shore);
     let shaped_tile = ex.terrain_packed(tk);

@@ -432,7 +432,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[
             for p in l.plazas.iter().filter(|p| l.tier != crate::t0::settle::Tier::Village && !p.kind.is_lawn() && p.kind != crate::town::PlazaKind::Bailey) {
                 // (R5 item 123: a steppe town's squares are trodden dirt, as its yurts' ground.)
                 let code = if crate::town::yurts::dirt_squares(&l) { 8 } else { 1 };
-                for tri in ears(&p.pts) {
+                for tri in ears(&crate::town::harbour::plaza_pts(world, l, p)) {
                     push(&tri, code);
                 }
             }

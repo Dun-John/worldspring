@@ -182,16 +182,38 @@ pub struct Quay {
 /// down by hand meets (within 10 ft); the hand works take their place. (Read where they are
 /// shaped and drawn, not in the layout: a generated layout knows no edits.)
 pub fn quays_kept<'a>(world: &'a World, l: &'a Layout) -> impl Iterator<Item = &'a Quay> + 'a {
+    l.quays.iter().filter(move |q| stands(world, q))
+}
+
+/// Whether quay front `q` stands (`quays_kept`).
+fn stands(world: &World, q: &Quay) -> bool {
     let edits = &world.file.edits;
-    l.quays.iter().filter(move |q| {
-        let b = bbox(&q.pts);
-        let r = [b[0] - 10.0, b[1] - 10.0, b[2] + 10.0, b[3] + 10.0];
-        edits.wharves.values().map(crate::wharf::bounds).all(|w| w[2] < r[0] || w[0] > r[2] || w[3] < r[1] || w[1] > r[3])
-            && (edits.waters.is_empty() || crate::waters::near(edits, r).is_empty())
-    })
+    let b = bbox(&q.pts);
+    let r = [b[0] - 10.0, b[1] - 10.0, b[2] + 10.0, b[3] + 10.0];
+    edits.wharves.values().map(crate::wharf::bounds).all(|w| w[2] < r[0] || w[0] > r[2] || w[3] < r[1] || w[1] > r[3])
+        && (edits.waters.is_empty() || crate::waters::near(edits, r).is_empty())
+}
+
+/// Plaza `pl`'s outline where it is stamped: a quay plaza carried out over a front that gave way
+/// (`quays_kept`) is only its strip along the lots again (the hand work takes the water's side).
+pub fn plaza_pts<'a>(world: &World, l: &Layout, pl: &'a Plaza) -> std::borrow::Cow<'a, [P]> {
+    if pl.kind == PlazaKind::Quay && !l.quays.is_empty() {
+        if let Some(q) = l.quays.iter().find(|q| q.pts == pl.pts) {
+            if !stands(world, q) {
+                return std::borrow::Cow::Owned(q.strip());
+            }
+        }
+    }
+    std::borrow::Cow::Borrowed(&pl.pts)
 }
 
 impl Quay {
+    /// The 14 ft strip along the lots its front was carried out from (`quays::lay`).
+    pub fn strip(&self) -> Vec<P> {
+        let p = &self.pts;
+        let to = |back: P, face: P| add(back, mul(sub(face, back), 14.0 / dist(back, face).max(14.0)));
+        vec![to(p[3], p[0]), to(p[2], p[1]), p[2], p[3]]
+    }
     /// Its made ground as the ground shaper takes it.
     pub fn raised(&self) -> crate::ground::Raised {
         crate::ground::Raised { pts: self.pts.clone(), level: self.level, band: 0.0, look: crate::ground::Look::Made }
