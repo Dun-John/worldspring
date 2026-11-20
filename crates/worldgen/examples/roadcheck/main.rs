@@ -117,6 +117,8 @@ fn main() {
         let mut through = Tally::default();
         let mut over = Tally::default();
         let mut turns = Tally::default();
+        let mut offroad = Tally::default();
+        let mut checked = 0usize;
         let mut bridge_x = Tally::default();
         let mut gate_counts: Vec<(worldgen::t0::settle::Tier, usize)> = Vec::new();
         let mut pier_x = Tally::default();
@@ -216,6 +218,22 @@ fn main() {
                 if on > 0 {
                     over.add(on as f64, pts[0], format!("{name}: class {class} approach runs over {} ft of buildings, from ({:.0}, {:.0})", on * 10, pts[0][0], pts[0][1]));
                 }
+                // Its outer end on the network road's curve (within 3 ft).
+                if i < t0.settlements.len() {
+                    let a = pts[0];
+                    let mut d = f64::MAX;
+                    for (ri, k) in t0.roads.segments_near([a[0] - 200.0, a[1] - 200.0, a[0] + 200.0, a[1] + 200.0], 0.0) {
+                        let rc = &t0.roads.roads[ri as usize];
+                        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 2.0).ceil().max(1.0) as usize;
+                        for j in 0..=n {
+                            d = d.min(dist(a, rc.eval(k as usize, j as f64 / n as f64, 5.0, t0.cell_ft).p));
+                        }
+                    }
+                    checked += (d < 1e9) as usize;
+                    if d > 3.0 && d < 1e9 {
+                        offroad.add(d, a, format!("{name}: class {class} approach starts {d:.0} ft off the network road at ({:.0}, {:.0})", a[0], a[1]));
+                    }
+                }
                 if pts.len() >= 3 {
                     let (deg, at) = sharpest(pts, 30.0);
                     if deg > 60.0 {
@@ -267,6 +285,55 @@ fn main() {
                     let from_end = (i as f64 * 10.0).min((pts.len() - 1 - i) as f64 * 10.0);
                     kinks.add(deg, pts[i], format!("road {ri} ({:?}) turns {deg:.0}° at ({:.0}, {:.0}), {from_end:.0} ft from its end{near}", rc.class, pts[i][0], pts[i][1]));
                 }
+            }
+        }
+        // Map lines: each road's curve sampled every 1,000 ft (as a mid-zoom map draws it), the
+        // turn at each sample: the sharpest, and how many turn over 45° (one per 2,000 ft).
+        {
+            let (mut worst, mut over45, mut worst_at) = (0.0f64, 0usize, [0.0, 0.0]);
+            // (Of those: on switchback legs (no wander), within 1,500 ft of a road's end.)
+            let (mut on_legs, mut at_ends) = (0usize, 0usize);
+            let top = std::env::var("TOP").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+            let mut listed: Vec<(f64, String)> = Vec::new();
+            for rc in &t0.roads.roads {
+                let total = *rc.s.last().unwrap();
+                let n = (total / 1000.0).ceil().max(1.0) as usize;
+                let (mut k, mut q, mut ks) = (0usize, Vec::with_capacity(n + 1), Vec::with_capacity(n + 1));
+                for j in 0..=n {
+                    let d = total * j as f64 / n as f64;
+                    while k + 2 < rc.pts.len() && rc.s[k + 1] <= d {
+                        k += 1;
+                    }
+                    let t = ((d - rc.s[k]) / (rc.s[k + 1] - rc.s[k]).max(1e-9)).clamp(0.0, 1.0);
+                    q.push(rc.eval(k, t, 500.0, t0.cell_ft).p);
+                    ks.push((k, d));
+                }
+                let mut last: Option<P> = None;
+                for i in 1..q.len().saturating_sub(1) {
+                    let deg = angle(sub(q[i], q[i - 1]), sub(q[i + 1], q[i]));
+                    if deg > worst {
+                        (worst, worst_at) = (deg, q[i]);
+                    }
+                    if deg > 45.0 && last.is_none_or(|p| dist(p, q[i]) > 2000.0) {
+                        over45 += 1;
+                        last = Some(q[i]);
+                        let (k, d) = ks[i];
+                        let leg = rc.wander[k] == 0.0 && rc.wander[k + 1] == 0.0;
+                        let end = d.min(total - d) < 1500.0;
+                        on_legs += leg as usize;
+                        at_ends += (end && !leg) as usize;
+                        if top > 0 {
+                            let (a, b) = ((0..k).rev().find(|&j| rc.s[k] - rc.s[j] >= 500.0).unwrap_or(0), (k..rc.pts.len()).find(|&j| rc.s[j] - rc.s[k] >= 500.0).unwrap_or(rc.pts.len() - 1));
+                            let grade = (rc.z[b] - rc.z[a]).abs() as f64 / (rc.s[b] - rc.s[a]).max(1.0) / rc.class.max_grade();
+                            listed.push((deg, format!("      {deg:.0}° {:?} at ({:.0}, {:.0}) pt {k} {:.0} ft from an end of {total:.0}, grade {grade:.2} of max{}{}", rc.class, q[i][0], q[i][1], d.min(total - d), if leg { " leg" } else { "" }, if end { " end" } else { "" })));
+                        }
+                    }
+                }
+            }
+            say!("  map lines (every 1,000 ft): sharpest turn {worst:.0}° at ({:.0}, {:.0}), turns > 45°: {over45} (switchback legs {on_legs}, near an end {at_ends})", worst_at[0], worst_at[1]);
+            listed.sort_by(|a, b| b.0.total_cmp(&a.0));
+            for (_, l) in listed.iter().take(top) {
+                say!("{l}");
             }
         }
         // Bends: the heading 750 ft before a point and 750 ft after differing by over 60° (at the
@@ -492,10 +559,11 @@ fn main() {
             (&mut over, "approaches over buildings", "approaches_over_buildings"),
             (&mut turns, "approaches turning > 60° within 30 ft", "approach_turns"),
             (&mut kinks, "network road turns > 75° within 40 ft", "network_road_turns"),
+            (&mut offroad, "approaches starting off the network road (> 3 ft)", "approaches_off_road"),
         ] {
             tally.print(label, key, &mut counts, &mut worst);
         }
-        say!("  ({n_layouts} layouts in {layout_s:.1} s)");
+        say!("  ({n_layouts} layouts in {layout_s:.1} s; {checked} approaches checked against the network road)");
         report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn, "stairs": steps, "network": net, "economy": econ }));
     }
     for (name, v) in ["cave", "mine", "lava tube", "ruin", "tower"].iter().zip(poi_mi.iter_mut()) {

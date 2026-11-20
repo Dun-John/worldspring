@@ -1,4 +1,4 @@
-//! Final per-road passes: tidy, eased turns, keeping dry, cutting spikes.
+//! Final per-road passes: tidy, swept turns, eased turns, keeping dry, cutting spikes.
 
 use super::*;
 
@@ -25,6 +25,108 @@ pub fn tidy(r: &mut RoadPath) {
             k += 1;
         }
     }
+}
+
+/// Sweeps a road's turns round (ft) at map scale: each point moves toward the average of the
+/// road within `sweep_radius` of it along the way (a biweight over distance along the road), so
+/// a turn bends over hundreds of feet instead of at a point, and the map line, the battlemaps
+/// and the town approaches (all drawn from these points) follow one curve. The reach shrinks
+/// where the road climbs near its class's grade (it keeps to the contours it was routed on) and
+/// round hairpins (switchbacks keep their legs apart), and fades out over the first and last
+/// stretch (a junction's or a gate's way in stays; a short road sweeps its middle third) and at
+/// river crossings (still square over the water). Tried at full and half reach; left as it is
+/// where a point would go wet or the road would cross rivers (`rivers`: where, with the belt's
+/// half width there) a different number of times. Drawn roads keep their line. (The profile is
+/// fitted again afterwards.)
+pub fn sweep_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool, rivers: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>) {
+    let n = r.pts.len();
+    if r.stroke.is_some() || n < 5 {
+        return;
+    }
+    let mut s = vec![0.0; n];
+    for k in 1..n {
+        s[k] = s[k - 1] + dist(r.pts[k - 1], r.pts[k]);
+    }
+    let total = s[n - 1];
+    // (A short road sweeps less: its middle third.)
+    let reach = sweep_radius(r.class, cell).min(total / 6.0);
+    if reach < 100.0 {
+        return;
+    }
+    // Each point's share of the road (half the segments either side).
+    let ds: Vec<f64> = (0..n).map(|k| 0.5 * (s[(k + 1).min(n - 1)] - s[k.saturating_sub(1)])).collect();
+    // The point `d` ft along from `k` (dir ±1), clamped to the road.
+    let at = |k: usize, d: f64| {
+        let mut j = k;
+        if d >= 0.0 {
+            while j + 1 < n && s[j] - s[k] < d {
+                j += 1;
+            }
+        } else {
+            while j > 0 && s[k] - s[j] < -d {
+                j -= 1;
+            }
+        }
+        j
+    };
+    let gmax = r.class.max_grade();
+    // Per point: the share of `reach` it takes.
+    let local: Vec<f64> = (0..n)
+        .map(|k| {
+            let (a, b) = (at(k, -300.0), at(k, 300.0));
+            let grade = if s[b] - s[a] > 1.0 { (r.z[b] - r.z[a]).abs() as f64 / (s[b] - s[a]) } else { 0.0 };
+            let mut f = (1.3 - grade / gmax).clamp(0.35, 1.0);
+            // (A hairpin: turning over 120° between the headings half a reach either side.)
+            let (a, b) = (at(k, -0.5 * reach), at(k, 0.5 * reach));
+            if a < k && b > k {
+                let (u, v) = (unit2([r.pts[k][0] - r.pts[a][0], r.pts[k][1] - r.pts[a][1]]), unit2([r.pts[b][0] - r.pts[k][0], r.pts[b][1] - r.pts[k][1]]));
+                if dot2(u, v) < -0.5 {
+                    f = f.min(0.35);
+                }
+            }
+            f
+        })
+        .collect();
+    // Where it crosses rivers (each with the belt's half width there): it keeps its line within
+    // a quarter of the belt and 100 ft, eased over half a reach, so it still crosses square
+    // (wider protection keeps most of the bends a crossing makes; narrower skews the bridges).
+    let wet = rivers(&r.pts);
+    let by_river = |p: [f64; 2]| wet.iter().map(|&(c, hw)| smooth01((dist(p, c) - 0.25 * hw - 100.0) / (0.5 * reach))).fold(1.0, f64::min);
+    // The way in at either end: past the second point, and a reach (half of it as shaped).
+    let (e0, e1) = (s[2].max(reach), (total - s[n - 3]).max(reach));
+    for scale in [1.0, 0.5] {
+        let moved: Vec<[f64; 2]> = (0..n)
+            .map(|k| {
+                let fade = smooth01((s[k] - 0.5 * e0) / (0.5 * e0)) * smooth01((total - s[k] - 0.5 * e1) / (0.5 * e1)) * by_river(r.pts[k]);
+                let rr = scale * reach * local[k];
+                if fade <= 0.0 || rr < 1.0 {
+                    return r.pts[k];
+                }
+                let (mut sx, mut sy, mut sw) = (0.0, 0.0, 0.0);
+                for j in at(k, -rr)..=at(k, rr) {
+                    let u = (s[j] - s[k]) / rr;
+                    let w = (1.0 - u * u).max(0.0);
+                    let w = w * w * ds[j];
+                    (sx, sy, sw) = (sx + w * r.pts[j][0], sy + w * r.pts[j][1], sw + w);
+                }
+                if sw <= 0.0 {
+                    return r.pts[k];
+                }
+                let p = r.pts[k];
+                [p[0] + fade * (sx / sw - p[0]), p[1] + fade * (sy / sw - p[1])]
+            })
+            .collect();
+        if moved.iter().all(|p| dry(p[0], p[1])) && rivers(&moved).len() == wet.len() {
+            r.pts = moved;
+            return;
+        }
+    }
+}
+
+/// How far along the road (ft) `sweep_turns` averages for a road of `class`: a king's road
+/// sweeps widest, a track bends tightest.
+pub fn sweep_radius(class: RoadClass, cell: f64) -> f64 {
+    [0.32, 0.26, 0.18][class as usize] * cell
 }
 
 /// Eases turns still too sharp for a cart (ft): where the road's heading over 40 ft before a

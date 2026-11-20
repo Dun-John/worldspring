@@ -510,6 +510,7 @@ impl T0 {
             let z = roads::round_corners(&r.pts, &r.z, 0.06 * cell, 0.05 * cell).1;
             (r.pts, r.wander) = roads::round_corners(&r.pts, &r.wander, 0.06 * cell, 0.05 * cell);
             r.z = z;
+            roads::sweep_turns(r, cell, &|x, y| !wet(x, y), &|line| crate::lod::roads::belt_crossings(line, &rivers, cell, &belts));
             roads::ease_turns(r, cell, &|x, y| !wet(x, y));
             // (A track still running into a lake between the cells it was routed on keeps to the
             // shore, its turns eased again.)
