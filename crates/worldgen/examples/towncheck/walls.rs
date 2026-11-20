@@ -610,6 +610,9 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
             r.tally("quay fronts", 1);
+            if std::env::var("QUAY_ENDS").is_ok() {
+                say!("    quay end L{si} {} / {}", at(qf.pts[0]), at(qf.pts[qf.pts.len() / 2 - 1]));
+            }
             r.tally("timber quay fronts", qf.timber as usize);
             let bb = town::geom::bbox(&qf.pts);
             let (mut wet, mut unpaved, mut n) = (0, 0, 0);

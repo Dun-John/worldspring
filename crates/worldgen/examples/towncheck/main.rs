@@ -198,7 +198,17 @@ fn main() {
     let start = Instant::now();
     for arg in &worlds {
         let t = Instant::now();
-        let mut ctx = Ctx { ex: Executor::new(common::world(arg)), chunks: HashMap::new() };
+        let mut world = common::world(arg);
+        // (Dev: `TC_PLANNING=<0-100>` sets every town's planning, to tell what planned streets do.)
+        if let Some(v) = std::env::var("TC_PLANNING").ok().and_then(|v| v.parse::<u8>().ok()) {
+            let t0 = T0::generate(&world);
+            let mut file = world.file.clone();
+            for li in (0..t0.settlements.len()).filter(|&li| t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town) {
+                file.edits.planning.insert(li.to_string(), v);
+            }
+            world = World::new(file).unwrap();
+        }
+        let mut ctx = Ctx { ex: Executor::new(world), chunks: HashMap::new() };
         let label = common::label(arg);
         say!("{label}: {} settlements, T0 {:.1} s", ctx.ex.t0.settlements.len(), t.elapsed().as_secs_f64());
         for &mode in &modes {

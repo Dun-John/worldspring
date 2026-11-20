@@ -85,7 +85,7 @@ pub(crate) fn planning(ctx: &mut Ctx, label: &str, r: &mut Report) {
             100.0 * m[1].2,
             100.0 * m[2].2
         );
-        svg_dump(label, li, &town::layout(world, t0, li), [world.geom.map_w_ft, world.geom.map_h_ft]);
+        svg_dump(label, li, &town::layout(world, t0, li), [world.geom.map_w_ft, world.geom.map_h_ft], t0);
         r.tally(&format!("towns {class}"), 1);
         for (k, what) in ["grown", "as rolled", "planned"].iter().enumerate() {
             r.value(&format!("on axes % {what}"), 100.0 * m[k].0, format!("L{li}"));
@@ -110,8 +110,9 @@ pub(crate) fn planning(ctx: &mut Ctx, label: &str, r: &mut Report) {
 }
 
 /// (161) With `TC_SVG=<dir>` and `TC_SVG_TOWNS=<label>:L<li>,...` (e.g. `seed 3:L1`): the town's
-/// patches, blocks, streets and buildings drawn to `<dir>/<label>-L<li>.svg`, for a look at its plan.
-fn svg_dump(label: &str, li: usize, l: &Layout, map: [f64; 2]) {
+/// patches, blocks, streets, buildings, quays and rivers drawn to `<dir>/<label>-L<li>.svg`, for a look
+/// at its plan; a block centred on a river channel in red, and 500 ft round the first in `-zoom.svg`.
+fn svg_dump(label: &str, li: usize, l: &Layout, map: [f64; 2], t0: &T0) {
     let (Ok(dir), Ok(towns)) = (std::env::var("TC_SVG"), std::env::var("TC_SVG_TOWNS")) else { return };
     if !towns.split(',').any(|t| t.trim() == format!("{label}:L{li}")) {
         return;
@@ -145,11 +146,36 @@ fn svg_dump(label: &str, li: usize, l: &Layout, map: [f64; 2]) {
     for b in &l.buildings {
         svg += &format!("<path d='{}' fill='#a0604a'/>", path(&b.poly, true));
     }
+    // (The rivers' channels, and blocks whose middle is in one in red.)
+    let reach = 2.0 * l.radius + 1000.0;
+    let mut river: Vec<(P, P, f64)> = Vec::new();
+    let mut zoom: Option<P> = None;
+    for (ri, k) in t0.rivers.segments_near(l.center[0] - reach, l.center[1] - reach, l.center[0] + reach, l.center[1] + reach, 0.0) {
+        let rc = &t0.rivers.rivers[ri as usize];
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 20.0).ceil().clamp(2.0, 1200.0) as usize;
+        let pts: Vec<(P, f64)> = (0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft)).map(|c| (c.p, c.w)).collect();
+        river.extend(pts.windows(2).map(|s| (s[0].0, s[1].0, 0.5 * s[0].1.max(s[1].1))));
+    }
+    for &(a, b, hw) in &river {
+        svg += &format!("<path d='{}' fill='none' stroke='#5080d0' stroke-opacity='0.5' stroke-linecap='round' stroke-width='{:.0}'/>", path(&[a, b], false), 2.0 * hw);
+    }
+    for b in l.blocks.iter().filter(|b| b.len() >= 3 && river.iter().any(|&(a, c, hw)| seg_dist(centroid(b), a, c) < hw)) {
+        svg += &format!("<path d='{}' fill='#ff0000' fill-opacity='0.6'/>", path(b, true));
+        say!("    channel block centre {:?}", centroid(b));
+        zoom.get_or_insert(sub(centroid(b), lo));
+    }
+    for q in &l.quays {
+        svg += &format!("<path d='{}' fill='#806040' fill-opacity='0.7'/>", path(&q.pts, true));
+    }
     for d in &l.districts {
         svg += &format!("<path d='{}' fill='none' stroke='#2040c0' stroke-width='{:.1}'/>", path(d, true), w / 500.0);
     }
     svg += "</svg>";
     let file = format!("{dir}/{}-L{li}.svg", label.replace(' ', ""));
     say!("    svg {file}: centre fx {:.6} fy {:.6}", l.center[0] / map[0], l.center[1] / map[1]);
+    if let Some(z) = zoom {
+        let zs = svg.replacen(&format!("viewBox='0 0 {w:.0} {w:.0}'"), &format!("viewBox='{:.0} {:.0} 500 500'", z[0] - 250.0, z[1] - 250.0), 1).replacen("width='960' height='960'", "width='640' height='640'", 1);
+        std::fs::write(file.replace(".svg", "-zoom.svg"), zs).unwrap();
+    }
     std::fs::write(&file, svg).unwrap();
 }
