@@ -91,7 +91,22 @@ impl RoadCurve {
             off += resolve * KINK_AMP_FT * gradient2(self.seed ^ 0x5a, s / KINK_WAVELENGTH_FT, 0.71);
             off *= wt;
         }
-        let z = self.z[k] as f64 + (self.z[k + 1] - self.z[k]) as f64 * t;
+        // (Roadmap 7 item 168) The surface climbs evenly along the curve, not along its parameter
+        // (whose pace changes through a segment): the profile's grade holds at every sample, not
+        // only from point to point. Arc length by three-point Gauss on the base curve's speed.
+        let speed = |t: f64| {
+            let (t2, g) = (t * t, |a: f64, b: f64, c: f64, d: f64| a * p1[0] + b * m1[0] + c * p2[0] + d * m2[0]);
+            let (a, b, c, d) = (6.0 * t2 - 6.0 * t, 3.0 * t2 - 4.0 * t + 1.0, 6.0 * t - 6.0 * t2, 3.0 * t2 - 2.0 * t);
+            let (gx, gy) = (g(a, b, c, d), a * p1[1] + b * m1[1] + c * p2[1] + d * m2[1]);
+            crate::core::sqrt(gx * gx + gy * gy)
+        };
+        let arc = |t: f64| {
+            const X: f64 = 0.774_596_669_241_483_4;
+            0.5 * t * (5.0 / 9.0 * speed(0.5 * t * (1.0 - X)) + 8.0 / 9.0 * speed(0.5 * t) + 5.0 / 9.0 * speed(0.5 * t * (1.0 + X)))
+        };
+        let whole = arc(1.0);
+        let frac = if whole > 1e-9 && t > 0.0 && t < 1.0 { (arc(t) / whole).clamp(0.0, 1.0) } else { t };
+        let z = self.z[k] as f64 + (self.z[k + 1] - self.z[k]) as f64 * frac;
         RoadPoint { p: [base[0] + nrm[0] * off, base[1] + nrm[1] * off], z }
     }
 }

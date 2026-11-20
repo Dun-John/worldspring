@@ -1198,7 +1198,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // The hand-built part (`hand::build`): what stands along water drawn by hand, quays, piers and
     // breakwaters built by hand, crossings put down by hand, roads drawn by hand, decks over
     // water, and the road crossings drawn as vectors.
-    let hand::Built { quay_h, path_near, path_h } = hand::build(
+    let hand::Built { quay_h, path_near, path_h, path_stairs, path_runs } = hand::build(
         &hand::Ctx { world, t0, seed, sea, hx0, hy0, span, shaper: &shaper, crossings: &crossings, crossing_shapes: &crossing_shapes, islet_decks: &islet_decks, lined_decks: &lined_decks, look_h: &look_h, bld_h: &bld_h, hw: &hw },
         hand::Halo { hh: &mut hh, lift: &mut lift, road_h: &mut road_h, urb_h: &mut urb_h, shapes: &mut shapes, dock: &mut dock, stalls: &mut stalls },
         center,
@@ -1213,6 +1213,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Steps on slopes made by hand, by street segment and way up: (segment start, its direction,
     // street width, the squares' places along it).
     let mut hand_runs: std::collections::BTreeMap<((u32, u32, u32), bool), ([f64; 2], [f64; 2], f64, Vec<f64>)> = std::collections::BTreeMap::new();
+    // (Footpaths drawn by hand: their steps, `hand::build`.)
+    for &(key, up, a, u, width, t) in &path_runs {
+        hand_runs.entry((key, up)).or_insert((a, u, width, Vec::new())).3.push(t);
+    }
     for j in 0..SQ {
         for i in 0..SQ {
             let k = j * SQ + i;
@@ -1885,6 +1889,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // (A gravel road drawn by hand.)
         if path_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&(crate::paths::PathKind::Gravel as u8 + 1)) && road[k] & 0x80 == 0 {
             chunk.surface[k] = Surface::Gravel;
+        }
+        // (A footpath's steps drawn by hand.)
+        if path_stairs.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&true) && road[k] & 0x80 == 0 && chunk.water_level[k] <= chunk.height[k] {
+            chunk.surface[k] = Surface::Stairs;
         }
         if chunk.building[k] != 0 {
             chunk.surface[k] = Surface::Roof;

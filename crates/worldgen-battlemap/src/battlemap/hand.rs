@@ -45,7 +45,17 @@ pub(super) struct Built {
     pub quay_h: Vec<bool>,
     pub path_near: Vec<crate::paths::Near>,
     pub path_h: Vec<u8>,
+    /// Halo squares of a footpath's steps drawn by hand (empty if none), and each one's run:
+    /// (key, way up along the stretch, its start, unit direction, the steps' width, the square's
+    /// place along it), as `generate`'s `hand_runs` takes them.
+    pub path_stairs: Vec<bool>,
+    pub path_runs: Vec<PathRun>,
 }
+
+pub(super) type PathRun = ((u32, u32, u32), bool, [f64; 2], [f64; 2], f64, f64);
+
+/// How far a hand road's banks reach past its band at most (ft).
+const BED_EASE_MAX_FT: f64 = 20.0;
 
 /// The hand-built part of `generate`, in its order, with `generate`'s closures over the chunk's
 /// frame (`center`, `range`, `overlaps`, `owns`, `local`).
@@ -176,6 +186,36 @@ pub(super) fn build(
     // Roads drawn by hand: their band's squares on dry ground (a bridge's deck keeps its planks, a
     // ford's water stays) are road squares of their kind's look, at least a square wide so a narrow
     // path reads as one; a gravel road's squares are gravel (`path_h`, the road's kind + 1).
+    // (Roadmap 7 item 168) Their beds graded on open ground: the band at the bed's surface
+    // (`paths::beds`), its banks easing back to the ground at about one in two; not under a
+    // network road, a town's ground, a building or water. A footpath's band climbing at a stair's
+    // grade gets steps (`path_stairs`, and their runs for the treads).
+    let mut path_stairs = Vec::new();
+    let mut path_runs = Vec::new();
+    if !path_near.is_empty() {
+        let beds = crate::paths::beds(world, t0, [hx0, hy0, hx0 + span, hy0 + span], BED_EASE_MAX_FT);
+        let g_on = crate::town::stairs::StairParams::DEFAULT.g_on;
+        for h in 0..HS * HS {
+            if hw[h] > hh[h] || road_h[h] != 0 || urb_h[h] != 0 || bld_h[h] != 0 {
+                continue;
+            }
+            let p = center(h % HS, h / HS);
+            let Some(on) = crate::paths::bed_at(&beds, p, |b| b.half.max(PATH_MIN_HALF_FT) + BED_EASE_MAX_FT) else { continue };
+            let band = on.half.max(PATH_MIN_HALF_FT);
+            let dz = on.z - hh[h] as f64;
+            let ease = (2.0 * dz.abs()).clamp(SQUARE_FT, BED_EASE_MAX_FT);
+            let w = 1.0 - crate::core::noise::smoothstep(band, band + ease, on.d);
+            hh[h] += (dz * w) as f32;
+            if on.kind == crate::paths::PathKind::Footpath && on.d <= band && on.grade.abs() >= g_on {
+                if path_stairs.is_empty() {
+                    path_stairs = vec![false; HS * HS];
+                }
+                path_stairs[h] = true;
+                let t = (p[0] - on.a[0]) * on.u[0] + (p[1] - on.a[1]) * on.u[1];
+                path_runs.push(((u32::MAX, on.bed, on.seg), on.grade > 0.0, on.a, on.u, 2.0 * band, t));
+            }
+        }
+    }
     let mut path_h = vec![0u8; if path_near.is_empty() { 0 } else { HS * HS }];
     for h in (0..path_h.len()).filter(|_| !path_near.is_empty()) {
         let Some((kind, _)) = crate::paths::at(&path_near, center(h % HS, h / HS), 0.0, PATH_MIN_HALF_FT) else { continue };
@@ -338,5 +378,5 @@ pub(super) fn build(
             shapes.push(VectorShape { kind: c.kind, size: (c.size / SQUARE_FT) as f32, pts });
         }
     }
-    Built { quay_h, path_near, path_h }
+    Built { quay_h, path_near, path_h, path_stairs, path_runs }
 }

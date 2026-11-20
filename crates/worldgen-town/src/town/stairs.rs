@@ -1,4 +1,4 @@
-//! Flights of steps on steep paved streets (cities and up). Every street is judged once per
+//! Flights of steps on steep streets (towns and up). Every street is judged once per
 //! layout from the ground it is planned on (`Site::height`): stations every 5 ft, the grade by a
 //! central difference over 10 ft, steps where it climbs past `g_on` until it falls below `g_off`.
 //! A mesh edge is judged once for all its pieces (both side strips and the main street), so a
@@ -29,8 +29,8 @@ impl StairParams {
 
 /// The least grade the survey looks at further (its gentlest `g_off`).
 pub const SURVEY_FROM: f64 = 0.09;
-/// The smallest settlement with stepped streets.
-pub const STAIR_TIER: Tier = Tier::City;
+/// The smallest settlement with stepped streets (towns too since Roadmap 7 item 168).
+pub const STAIR_TIER: Tier = Tier::Town;
 const STATION: f64 = 5.0;
 /// The shortest landing at a flight's end (ft), and the room left past the streets that meet it:
 /// the steps come down to the street crossing them.

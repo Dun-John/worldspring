@@ -172,6 +172,109 @@ pub fn near(edits: &Edits, rect: [f64; 4], pad: f64) -> Vec<Near> {
     out
 }
 
+/// (Roadmap 7 item 168) A road drawn by hand, graded: its line's stretches near an area with the
+/// bed's surface (ft) at each end. The bed follows the smooth ground (`T0::ground_at`, the terrain
+/// without refinement detail) within its kind's grade (`max_grade`) as a network road's profile
+/// does (`fit_profile`), but never more than `BED_MAX_DEV_FT` from that ground (a line drawn up a
+/// slope too steep for it climbs it: a footpath there gets steps); a pure function of the record
+/// and the world, so every chunk grades it alike.
+pub struct Bed {
+    pub kind: PathKind,
+    pub half: f64,
+    pub segs: Vec<(P, P, f32, f32)>,
+}
+
+/// How far a hand road's bed strays from the smooth ground at most (ft): a cutting or bank.
+pub const BED_MAX_DEV_FT: f64 = 6.0;
+
+/// The steepest a hand road's bed climbs where the ground lets it (a footpath: as steep as the
+/// ground, its steps take the rest).
+pub fn max_grade(kind: PathKind) -> f64 {
+    [1.0, 0.15, 0.12, 0.10, 0.10][kind as usize]
+}
+
+/// The graded roads drawn by hand whose band comes within `pad` ft of `rect`, in id order (as `near`).
+pub fn beds(world: &World, t0: &T0, rect: [f64; 4], pad: f64) -> Vec<Bed> {
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+    let mut out = Vec::new();
+    for p in world.file.edits.paths.values() {
+        let b = crate::ground::bbox(&p.pts);
+        let half = 0.5 * p.width_ft();
+        let m = half + pad + 0.25 * (b[2] - b[0]).max(b[3] - b[1]).min(400.0);
+        if b[0] - m > rect[2] || b[2] + m < rect[0] || b[1] - m > rect[3] || b[3] + m < rect[1] || p.problem().is_some() {
+            continue;
+        }
+        let r = half + pad;
+        let line = p.line();
+        let hit = |a: P, c: P| a[0].min(c[0]) - r <= rect[2] && a[0].max(c[0]) + r >= rect[0] && a[1].min(c[1]) - r <= rect[3] && a[1].max(c[1]) + r >= rect[1];
+        if !line.windows(2).any(|s| hit(s[0], s[1])) {
+            continue;
+        }
+        let z = bed_profile(t0, &line, p.kind, lattice);
+        let segs: Vec<(P, P, f32, f32)> = (1..line.len()).filter(|&i| hit(line[i - 1], line[i])).map(|i| (line[i - 1], line[i], z[i - 1], z[i])).collect();
+        out.push(Bed { kind: p.kind, half, segs });
+    }
+    out
+}
+
+/// The bed's surface at each point of a hand road's `line`.
+fn bed_profile(t0: &T0, line: &[P], kind: PathKind, lattice: f64) -> Vec<f32> {
+    let ground: Vec<f64> = line.iter().map(|p| t0.ground_at(p[0], p[1], lattice)).collect();
+    let fit = crate::t0::roads::fit_profile(line, &ground, max_grade(kind));
+    let mut z: Vec<f64> = fit.iter().zip(&ground).map(|(&f, &g)| (f as f64).clamp(g - BED_MAX_DEV_FT, g + BED_MAX_DEV_FT)).collect();
+    // Eased where the clamp bites (a few passes of a three-point mean; the ends stay put).
+    for _ in 0..4 {
+        let prev = z.clone();
+        for i in 1..z.len().saturating_sub(1) {
+            z[i] = 0.25 * prev[i - 1] + 0.5 * prev[i] + 0.25 * prev[i + 1];
+        }
+    }
+    z.into_iter().map(|v| v as f32).collect()
+}
+
+/// Where a point lies by a graded bed (`bed_at`).
+#[derive(Clone, Copy, Debug)]
+pub struct OnBed {
+    /// Distance (ft) from the line, the bed's surface there (ft), the stretch's start and unit
+    /// direction, its grade (rise per ft along it), and the bed's and stretch's indices.
+    pub d: f64,
+    pub z: f64,
+    pub a: P,
+    pub u: P,
+    pub grade: f64,
+    pub kind: PathKind,
+    pub half: f64,
+    pub bed: u32,
+    pub seg: u32,
+}
+
+/// The graded bed nearest `p` within `reach(bed)` ft of its line.
+pub fn bed_at(beds: &[Bed], p: P, reach: impl Fn(&Bed) -> f64) -> Option<OnBed> {
+    let mut best: Option<OnBed> = None;
+    for (bi, b) in beds.iter().enumerate() {
+        let r = reach(b);
+        for (si, &(a, c, za, zc)) in b.segs.iter().enumerate() {
+            if p[0] < a[0].min(c[0]) - r || p[0] > a[0].max(c[0]) + r || p[1] < a[1].min(c[1]) - r || p[1] > a[1].max(c[1]) + r {
+                continue;
+            }
+            let (dx, dy) = (c[0] - a[0], c[1] - a[1]);
+            let len2 = dx * dx + dy * dy;
+            if len2 < 1e-9 {
+                continue;
+            }
+            let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0);
+            let (ex, ey) = (a[0] + dx * t - p[0], a[1] + dy * t - p[1]);
+            let d = sqrt(ex * ex + ey * ey);
+            if d <= r && best.is_none_or(|q| d < q.d) {
+                let len = sqrt(len2);
+                let z = za as f64 + (zc - za) as f64 * t;
+                best = Some(OnBed { d, z, a, u: [dx / len, dy / len], grade: (zc - za) as f64 / len, kind: b.kind, half: b.half, bed: bi as u32, seg: si as u32 });
+            }
+        }
+    }
+    best
+}
+
 /// The road whose band (grown by `grow` ft, and at least `min_half` ft each side of its line) holds `p`: the
 /// nearest line's; its kind and how far (ft) `p` is from its line.
 pub fn at(near: &[Near], p: P, grow: f64, min_half: f64) -> Option<(PathKind, f64)> {

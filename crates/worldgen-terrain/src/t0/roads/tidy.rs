@@ -30,8 +30,9 @@ pub fn tidy(r: &mut RoadPath) {
 /// Sweeps a road's turns round (ft) at map scale: each point moves toward the average of the
 /// road within `sweep_radius` of it along the way (a biweight over distance along the road), so
 /// a turn bends over hundreds of feet instead of at a point, and the map line, the battlemaps
-/// and the town approaches (all drawn from these points) follow one curve. The reach shrinks
-/// where the road climbs near its class's grade (it keeps to the contours it was routed on) and
+/// and the town approaches (all drawn from these points) follow one curve. The reach shrinks to
+/// 0.6 where the road climbs near its class's grade (it keeps to the contours it was routed on;
+/// its graded bed takes the rest, item 168) and to 0.35
 /// round hairpins (switchbacks keep their legs apart), and fades out over the first and last
 /// stretch (a junction's or a gate's way in stays; a short road sweeps its middle third) and at
 /// river crossings (still square over the water). Tried at full and half reach; left as it is
@@ -75,7 +76,7 @@ pub fn sweep_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool, 
         .map(|k| {
             let (a, b) = (at(k, -300.0), at(k, 300.0));
             let grade = if s[b] - s[a] > 1.0 { (r.z[b] - r.z[a]).abs() as f64 / (s[b] - s[a]) } else { 0.0 };
-            let mut f = (1.3 - grade / gmax).clamp(0.35, 1.0);
+            let mut f = (1.6 - grade / gmax).clamp(0.6, 1.0);
             // (A hairpin: turning over 120° between the headings half a reach either side.)
             let (a, b) = (at(k, -0.5 * reach), at(k, 0.5 * reach));
             if a < k && b > k {
