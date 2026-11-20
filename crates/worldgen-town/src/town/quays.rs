@@ -348,6 +348,7 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
     if kept.len() < 4 {
         return;
     }
+    round_ends(&mut kept);
     // (The stretch of each side it takes.)
     let mut last_side = usize::MAX;
     for &(i, ..) in &kept {
@@ -388,5 +389,37 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
         pts.extend(kept[a..=b].iter().rev().map(|q| q.2));
         l.quays.push(super::harbour::Quay { pts: pts.clone(), level, timber });
         l.plazas.push(Plaza { pts, kind: PlazaKind::Quay, spot: places::Spot::None });
+    }
+}
+
+/// A front's ends rounded off along the shore (`run_front`): over about its width from each end
+/// its back closes on the face in a quarter ellipse, so the quay and its paving come to a round
+/// end on the beach instead of a straight cut. (A pair a quarter of the way along each end's first
+/// step rounds the very end.)
+fn round_ends(kept: &mut Vec<(usize, P, P)>) {
+    let quarter = |a: (usize, P, P), b: (usize, P, P)| (a.0, lerp(a.1, b.1, 0.25), lerp(a.2, b.2, 0.25));
+    let (first, last) = (quarter(kept[0], kept[1]), quarter(kept[kept.len() - 1], kept[kept.len() - 2]));
+    kept.insert(1, first);
+    let n = kept.len();
+    kept.insert(n - 1, last);
+    let n = kept.len();
+    let run: f64 = kept.windows(2).map(|w| dist(w[0].1, w[1].1)).sum();
+    for end in 0..2 {
+        let at = |j: usize| if end == 0 { j } else { n - 1 - j };
+        let wide = dist(kept[at(0)].1, kept[at(0)].2).max(dist(kept[at(2)].1, kept[at(2)].2));
+        let reach = wide.max(10.0).min(0.3 * run);
+        let mut d = 0.0;
+        for j in 0..n / 2 {
+            if j > 0 {
+                d += dist(kept[at(j - 1)].1, kept[at(j)].1);
+            }
+            if d >= reach {
+                break;
+            }
+            let u = 1.0 - d / reach;
+            let e = crate::core::sqrt(1.0 - u * u).max(0.04);
+            let (i, face, back) = kept[at(j)];
+            kept[at(j)] = (i, face, add(face, mul(sub(back, face), e)));
+        }
     }
 }

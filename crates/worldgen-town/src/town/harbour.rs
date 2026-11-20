@@ -240,11 +240,25 @@ impl Quay {
         let (p, h) = (&self.pts, self.pts.len() / 2);
         let mut out = vec![made(p.clone(), 0.0)];
         if h >= 2 {
+            // (Over its rounded end (`quays::round_ends`): the pairs while it widens.)
+            let wide = |i: usize| dist(p[i], p[2 * h - 1 - i]);
+            let mut k = 1;
+            while k + 1 < h / 2 + 1 && wide(k + 1) > wide(k) + 0.05 {
+                k += 1;
+            }
             if open[0] {
-                out.push(made(vec![p[0], p[1], p[2 * h - 2], p[2 * h - 1]], 10.0));
+                let mut pts: Vec<P> = p[..=k].to_vec();
+                pts.extend_from_slice(&p[2 * h - 1 - k..]);
+                out.push(made(pts, 10.0));
+            }
+            let mut k = 1;
+            while k + 1 < h / 2 + 1 && wide(h - 2 - k) > wide(h - 1 - k) + 0.05 {
+                k += 1;
             }
             if open[1] {
-                out.push(made(vec![p[h - 2], p[h - 1], p[h], p[h + 1]], 10.0));
+                let mut pts: Vec<P> = p[h - 1 - k..=h + k].to_vec();
+                pts.dedup();
+                out.push(made(pts, 10.0));
             }
         }
         out
