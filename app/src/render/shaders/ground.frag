@@ -375,21 +375,35 @@ vec3 cliffFace(vec3 col, vec2 w, float h, vec2 up, float slope, float face, floa
     float lit = smoothstep(0.2 - 0.06, 0.2 + 0.06, facing);
     float shd = smoothstep(0.2 - 0.06, 0.2 + 0.06, -facing);
     vec3 rock = mix(mix(ROCK_MID, ROCK_LIT, lit), ROCK_SHADE, shd);
-    // A few big ledges, every 70-110 ft of height, their lines wobbling along the face; about one in
-    // three left out. Each band between them one of three close value steps (strata).
+    // A few big ledges as shelves: a pale tread (its top, a third to half a square wide, wavering),
+    // an ink lip at its edge and a shaded band under it, at least a square and a half apart across
+    // the face (their height interval doubles with the grade, so the steeper ledges are a subset of
+    // the gentler ones'), about one in three left out, each broken off here and there along the
+    // cliff; cracks down the fall line between them. Each band one of three close value steps.
     float ledges = smoothstep(1.0, 1.4, slope);
     if (ledges > 0.0) {
-        float tl = (h - uSea + 36.0 * vnoise(w * 0.035)) / 90.0;
+        float iv = 60.0 * exp2(max(0.0, ceil(log2(slope * 5.0 * 1.4 / 60.0))));
+        float tl = (h - uSea + 0.3 * iv * (vnoise(w * 0.035) + vnoise(w * 0.21) - 1.0)) / iv;
         float band = floor(tl);
         float fr = fract(tl);
-        float run = max(slope * 5.0 / 90.0, 1e-3);
+        float run = max(slope * 5.0 / iv, 1e-3);
         float above = fr / run, below = (1.0 - fr) / run;
-        float on = ledges * step(0.33, hash21(vec2(band, 7.0)));
-        float lw = max(0.025, 0.9 * aa);
-        rock *= 1.0 + ledges * 0.045 * (floor(hash21(vec2(band, 3.0)) * 2.999) - 1.0);
-        rock = mix(rock, rock * 1.13, (1.0 - smoothstep(0.45, 0.45 + aa, above)) * on);
-        rock = mix(rock, rock * 0.8, (1.0 - smoothstep(0.9, 0.9 + aa, below)) * on);
-        rock = mix(rock, INK, (1.0 - smoothstep(lw, lw + aa, min(above, below))) * on * 0.8);
+        // The nearest ledge (its lip at height `lip` * iv), keyed by its own height, so every
+        // interval agrees on the ledges they share. Above the lip its tread, below it its shade.
+        float lip = above < below ? band : band + 1.0;
+        float key = floor(lip * iv / 60.0 + 0.5);
+        float on = ledges * step(0.33, hash21(vec2(key, 7.0))) * smoothstep(0.3, 0.42, vnoise(w * 0.09 + key * 1.7));
+        float lw = max(0.035, 1.1 * aa);
+        float tread = 0.3 + 0.2 * vnoise(w * 0.4 + key);
+        rock *= 1.0 + ledges * 0.05 * (floor(hash21(vec2(band, 3.0)) * 2.999) - 1.0);
+        rock = mix(rock, ROCK_LIT * 1.12, (1.0 - smoothstep(tread, tread + aa, above)) * on * step(above, below));
+        rock = mix(rock, rock * 0.78, (1.0 - smoothstep(0.55, 0.55 + aa, below)) * on * step(below, above));
+        rock = mix(rock, INK, (1.0 - smoothstep(lw, lw + aa, min(above, below))) * on * 0.85);
+        // Cracks down the fall line, a stroke every square or so across the face, broken up.
+        float across = dot(w, vec2(-up.y, up.x)) * 1.1 + 0.6 * vnoise(w * 0.45);
+        float crack = 1.0 - smoothstep(lw * 1.1, lw * 1.1 + aa * 1.1, abs(fract(across) - 0.5) * 0.9);
+        float runs = smoothstep(0.45, 0.6, vnoise(vec2(floor(across) * 3.1, dot(w, up) * 0.7)));
+        rock = mix(rock, rock * 0.62, crack * runs * ledges * (1.0 - on * step(min(above, below), 0.6)));
     }
     return mix(col, rock, face * 0.92);
 }
@@ -640,6 +654,9 @@ void main() {
     // Elevation from the smooth height field. Slope in ft per ft; gradient points uphill.
     vec2 grad = vec2(hx, hy) / 5.0;
     float slope = length(grad);
+    // How the grade changes per square (screen derivatives taken here, in uniform flow).
+    mat2 sqPerPx = mat2(dFdx(q), dFdy(q));
+    vec2 dslope = inverse(transpose(sqPerPx)) * vec2(dFdx(slope), dFdy(slope));
     // Above a grade of 1.5 the 5-ft lines would crowd into a smear of ink (a 40-ft step in one
     // square is 8 of them): only every n-th is drawn, n doubling with the grade, so a cliff reads
     // as rock with a bold line or two.
@@ -657,24 +674,22 @@ void main() {
         vec2 up = grad / max(slope, 1e-4);
         bool shaped = surf == 19 || fanned || onRoad || softRelief;
         if (face > 0.0) col = cliffFace(col, w, h, up, slope, shaped ? 0.0 : face, aa);
-        // The face's top and foot: the line where the grade crosses CLIFF_T, found from the grade just
-        // above and below (convex: the top, inked; concave: the foot, shaded below it).
+        // The face's top and foot: the line where the grade crosses CLIFF_T, from how fast the grade
+        // changes there (convex: the top, inked; concave: the foot, its lower face and a square below
+        // it shaded). No extra height taps: the grade's own change per square (`dslope`).
         float foot = 0.0;
-        if (slope > 0.06 && !shaped) {
-            // (Over a square and a half each way, so the detail noise doesn't break the line up.)
-            float hu = heightsAt(q + up * 1.5).x, hd = heightsAt(q - up * 1.5).x;
-            float su = (hu - h) / 7.5, sd = (h - hd) / 7.5, sc = (hu - hd) / 15.0;
-            float ds = (su - sd) / 1.5;
-            float gap = abs(sc - CLIFF_T) / max(abs(ds), 1e-3);
-            if (ds < -0.08 && sd > CLIFF_T) {
-                float lw = max(0.045, 1.1 * aa);
+        float ds = dot(dslope, up), dsl = length(dslope);
+        if (dsl > 0.5 && !shaped) {
+            float gap = abs(slope - CLIFF_T) / dsl;
+            if (ds < 0.0) {
+                float lw = max(0.05, 1.2 * aa);
                 // (Faint where the top rounds over gently, so it never blots.)
-                col = mix(col, INK, (1.0 - smoothstep(lw, lw + aa * 1.3, gap)) * 0.85 * smoothstep(0.08, 0.3, -ds));
-                if (sc < CLIFF_T) col = mix(col, col * 1.08, 1.0 - smoothstep(0.35, 0.35 + aa, gap));
-            } else if (ds > 0.08 && sc < CLIFF_T && su > CLIFF_T) {
-                foot = (1.0 - smoothstep(0.0, 2.2, gap)) * smoothstep(0.06, 0.2, slope);
+                col = mix(col, INK, (1.0 - smoothstep(lw, lw + aa * 1.3, gap)) * 0.9 * smoothstep(0.5, 2.0, -ds));
+                if (slope < CLIFF_T) col = mix(col, col * 1.08, 1.0 - smoothstep(0.3, 0.3 + aa, gap));
+            } else {
+                foot = (1.0 - smoothstep(0.0, 1.2, gap)) * smoothstep(0.5, 2.0, ds);
                 float away = clamp(0.5 - 0.5 * dot(-up, vec2(-0.7071)), 0.0, 1.0);
-                col *= 1.0 - foot * mix(0.18, 0.34, away);
+                col *= 1.0 - foot * mix(0.2, 0.36, away);
             }
         }
         if ((int(d.g + 0.5) & 4) != 0 && !shaped) col = scree(col, w, max(foot, 0.25), aa);

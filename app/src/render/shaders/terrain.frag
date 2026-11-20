@@ -269,6 +269,11 @@ void main() {
         if (beachy && above < 6.0 && slope < 0.08) col = mix(col, SAND, 1.0 - smoothstep(3.0, 6.0, above));
     }
 
+    // Cliff faces (Roadmap 7 item 170: risers of a few squares at the finest levels): matte rock,
+    // which the hillshade below lights or shades by the way the face looks.
+    float cliff = wet ? 0.0 : smoothstep(1.0, 1.6, slope);
+    col = mix(col, vec3(0.53, 0.49, 0.42), cliff * 0.85);
+
     // Hillshade, normalized so flat ground is 1.0; light from the north-west.
     vec3 n = normalize(vec3(-g * uExag, 1.0));
     vec3 L = normalize(vec3(-1.0, -1.0, 1.3));
@@ -317,7 +322,7 @@ void main() {
             vec2 dir = normalize(g + 1e-9);
             float across = dot(p0 * 2.2, vec2(-dir.y, dir.x));
             float line = 1.0 - smoothstep(0.0, aa0 * 2.2, abs(fract(across) - 0.5) - 0.34);
-            col = mix(col, INK, line * steep * 0.28 * uPatAlpha);
+            col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - 0.6 * cliff));
         }
     }
 

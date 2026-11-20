@@ -2219,12 +2219,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             })
             .collect()
     };
+    // Nothing generated stands on a cliff face (item 170): what did moves off it, and the guarantee
+    // keeps off it (filling any gap the move left).
+    let faces = cliff::marks(&chunk, &tile.padded, &sidx);
+    cliff::clear_faces(&mut chunk, &faces);
     let keep_off: Vec<bool> = (0..n)
         .map(|k| {
             let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
             let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR);
             let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
-            (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy)))
+            faces[k] == 16
+                || (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy)))
                 || in_gate(p, 2.5)
                 || features.iter().any(|f| crate::town::geom::dist(p, f.0) < f.1 + 4.0)
                 || churchyard.get(k).is_some_and(|&y| y)
@@ -2461,11 +2466,15 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     // Nothing generated grows or stands on a dry ditch's floor (its sides and floor kept clear to read).
     chunk.objects.retain(|o| !dug.ditch[((o.y.max(0.0) as usize).min(SQ - 1) + 1) * HS + (o.x.max(0.0) as usize).min(SQ - 1) + 1]);
+    // Cliff faces and scree (item 170) as the ground ended (`edges` below).
+    let cliffs = cliff::marks(&chunk, &tile.padded, &sidx);
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
     crate::town::rural::mark(&rural, ox, oy, &mut chunk.edges);
     soft_relief::flag(&mut chunk.edges, &soft, &crag_h, &crag_m);
-    cliff::mark(&mut chunk, &tile.padded, &sidx);
+    for (e, &m) in chunk.edges.iter_mut().zip(&cliffs) {
+        *e |= m;
+    }
     for k in 0..n {
         let h = (k / SQ + 1) * HS + k % SQ + 1;
         // (A wet moat's water and its banks, as a park's pond's, v63 castles.)

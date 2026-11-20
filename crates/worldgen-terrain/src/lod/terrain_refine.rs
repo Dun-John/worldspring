@@ -41,6 +41,10 @@ const GULLY_CELL: f64 = 8.0;
 const CARVE_REACH_SAMPLES: f64 = 8.0;
 /// Ground left unstepped round a settlement's pad (ft): no cliff at a town's edge.
 const CLIFF_CLEAR_FT: f64 = 2_000.0;
+/// Refined levels step terraced ground again down to this sample spacing (ft): the risers
+/// halve with the samples level by level, so on battlemaps a cliff face is a few squares wide
+/// (the 5- and 2.5-ft levels below only interpolate it).
+pub const SHARPEN_MIN_FT: f64 = 5.0;
 /// Water over a ford's bed (ft): wading depth.
 pub const FORD_DEPTH_FT: f32 = 0.8;
 /// Levels with coarser sample spacing than this skip carving.
@@ -255,7 +259,7 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
 
     // Landforms: where the T0 ground is terraced, each level steps it again, so risers narrow
     // as the samples do (`t0::landform`); road corridors are left to the road's profile.
-    let sharpen = !t0.landform.data.is_empty() && s >= crate::t0::landform::SHARPEN_MIN_FT;
+    let sharpen = !t0.landform.data.is_empty() && s >= SHARPEN_MIN_FT;
     let mut terrace = crate::t0::landform::Terrace::new(world);
     // Settlements keep clear of cliffs: no stepping within their pads and a margin round them
     // (the T0 ramp stays there), so no town stands on or under a cliff edge.
