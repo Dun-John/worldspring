@@ -78,8 +78,9 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
       case 'restore_feature':
         return `restored ${String(change.name ?? nameOf(id))}`;
       case 'update_settlement': {
-        // (What it was changed in: its culture, tier, living or name; and what that set aside.)
-        const what = [change.culture && `${String(change.culture)} culture`, change.kind && `a ${String(change.kind)}`, change.lives_by && `living by ${String(change.lives_by).replace(/_/g, ' ')}`, change.planning && `streets ${String(change.planning)}`, change.renamed && `named “${String(change.renamed)}”`].filter(Boolean).join(', ');
+        // (What it was changed in: its culture, tier, living, planning, street pattern or name; and what
+        // that set aside.)
+        const what = [change.culture && `${String(change.culture)} culture`, change.kind && `a ${String(change.kind)}`, change.lives_by && `living by ${String(change.lives_by).replace(/_/g, ' ')}`, change.planning && `streets ${String(change.planning)}`, change.pattern && `streets laid out ${change.pattern === 'as chosen' ? 'as its land picks' : `as ${String(change.pattern)}`}`, change.renamed && `named “${String(change.renamed)}”`].filter(Boolean).join(', ');
         const aside = Number(change.set_aside ?? 0);
         return `${String(change.name ?? nameOf(id))}: ${what || 'changed'}${aside ? ` (${aside} ${aside === 1 ? 'change' : 'changes'} inside set aside)` : ''}`;
       }

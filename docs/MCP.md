@@ -2246,8 +2246,8 @@ Rivers and shores still shape the blocks along them, and the main streets still 
 made inside the town are set aside as a culture change sets them aside. The reply: `planning` (`from`, `to`,
 `class`, `unchanged`, `set_aside`, `set_aside_by`). Villages and towns laid out by hand (`edit_streets`) have none.
 
-`pattern` sets the street pattern of the planned part: `grid`, `rings` (concentric rings), `radial` (streets
-radiating from the centre; round a bay, arcs round the harbour with streets down to the quays) or `linear` (one
+`pattern` sets the street pattern of the planned part: `grid`, `rings` (concentric rings; round a bay, arcs
+round the harbour with streets down to the quays), `radial` (streets radiating from the centre) or `linear` (one
 long high street along the valley, ridge, hillside or river, back lanes behind its long narrow plots, short cross
 lanes); `"auto"` (the default) picks one from its land and culture (a hill top or a northern city rings, a bay
 town harbour arcs, a valley or hillside town or some river towns linear, a southern city radial, most towns a
@@ -2255,7 +2255,10 @@ grid; harbour arcs only where the shore curves round the harbour, not on a strai
 only in a town's planned part: a pattern given by hand is followed at least as strictly as planning 0.6 (a
 small grown core), more if `planning` is higher. It is given alone or with `planning`, with the same effect: the town is laid out
 anew and the changes made inside it are set aside. The reply carries `pattern` (`from`, `to`, `unchanged`,
-`set_aside`, `set_aside_by`) beside `planning`. Villages and towns laid out by hand have none.
+`set_aside`, `set_aside_by`) beside `planning`, each only when given; a `dry_run` reply is the same (with
+`dry_run: true`, nothing saved). Once the ward editor (or `edit_town`'s other fields) has changed a town on
+`"auto"`, it keeps the pattern it was laid out on while that edit stands, so a change to the land round it
+doesn't lay its streets out anew. Villages and towns laid out by hand have none.
 
 Gates and towers go in and out of the town's own wall by its corners (`get_town_plan`: corners with `wall: true`;
 `gate_by_hand`, `gate_removed`, and `walls.by_hand` for what was set). A gate put in takes the town's gatehouse
