@@ -7,7 +7,7 @@
 //! footpath side by side, 600 ft): the bed's grade over 20-ft windows on dry road squares (the
 //! track's against its kind's limit), the steepest step between neighbouring band squares, and
 //! the footpath's squares of steps.
-//! `cargo run --release -p worldgen --example gradecheck -- [seeds, default 1..8]`   (`SITES=n` per seed, default 10)
+//! `cargo run --release -p worldgen --example gradecheck -- [seeds, default 1..8]`   (`SITES=n` per seed, default 10; `RUG=r` ruggedness)
 mod common;
 
 use worldgen::battlemap::SQ;
@@ -25,7 +25,12 @@ fn main() {
     }
     let mut all = (0usize, 0usize, 0usize, 0f64, 0f64);
     for seed in seeds {
-        let mut ex = Executor::new(common::world(&seed));
+        // (`RUG=<r>`: the world's ruggedness instead of the default.)
+        let mut file = common::world_file(&seed);
+        if let Some(r) = std::env::var("RUG").ok().and_then(|v| v.parse().ok()) {
+            file.params.ruggedness = r;
+        }
+        let mut ex = Executor::new(worldgen::World::new(file).unwrap());
         let g = ex.world.geom.clone();
         let size = g.tile_size_ft(g.max_level);
         // Steep stretches: chords at a grade near the class limit, spread over the map.

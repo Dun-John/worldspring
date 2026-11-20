@@ -204,7 +204,11 @@ pub fn incise(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], 
     let mut prov = Fbm::new(world.stream("t0.landform.canyons"), 2, 2.0, 0.5);
     let threshold = 0.15 - 0.35 * a.min(1.0);
     let deep = 300.0 + 800.0 * a;
-    let half = (1.4 * MI * (0.6 + 0.4 * a)).max(1.6 * cell);
+    // (Out to two cells at least, and flat out to the cells beside the river: a floor the grid
+    // holds, wide enough for the river's meanders and a road along it, not a notch between cells
+    // whose sides the river's curve would climb.)
+    let half = (1.4 * MI * (0.6 + 0.4 * a)).max(2.0 * cell);
+    let flat = (cell / half).clamp(0.3, 0.8);
     let reach = crate::core::ceil(half / cell) as i64;
     let free = |k: usize| land[k] && hy.lake_of[k] == hydro::NO_LAKE && !keep[k];
     // Mains before the tributaries that join them.
@@ -268,7 +272,7 @@ pub fn incise(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], 
                 if t >= 1.0 {
                     continue;
                 }
-                let wall = floor + (orig[k] - floor) * smoothstep(0.3, 1.0, t);
+                let wall = floor + (orig[k] - floor) * smoothstep(flat, 1.0, t);
                 if wall < out[k] {
                     out[k] = wall;
                 }
