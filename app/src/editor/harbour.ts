@@ -50,13 +50,13 @@ export function shoreBack(w: Wharf): Pt[] {
   const along = [0];
   for (let k = 1; k < n; k++) along.push(along[k - 1] + Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]));
   const run = along[n - 1];
-  const reach = Math.max(1e-6, Math.min(Math.max(width, 10), 0.3 * run));
+  const reach = Math.max(1e-6, Math.min(2.5 * Math.max(width, 10), 0.35 * run));
   return p.map((q, k) => {
     const a = p[Math.max(0, k - 1)];
     const b = p[Math.min(n - 1, k + 1)];
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-    const u = Math.max(0, 1 - Math.min(along[k], run - along[k]) / reach);
-    const e = Math.max(0.04, Math.sqrt(1 - u * u)) * width;
+    const s = Math.min(1, Math.min(along[k], run - along[k]) / reach);
+    const e = Math.max(0.04, Math.sqrt(s * s * (3 - 2 * s))) * width;
     return [q[0] - ((b[1] - a[1]) / l) * e, q[1] + ((b[0] - a[0]) / l) * e];
   });
 }

@@ -135,8 +135,8 @@ pub fn shore_normals(pts: &[P]) -> Vec<P> {
 }
 
 /// A shore quay's back line: `width` ft in from each point of its face along its normal, closing
-/// onto the face at each end in a quarter ellipse over about its width (a round end on the beach,
-/// never a straight cut).
+/// onto the face at each end over about two and a half widths, so each end tapers smoothly into
+/// the shore (never a straight cut).
 pub fn shore_back(w: &Wharf) -> Vec<P> {
     let (pts, normal) = (&w.pts, shore_normals(&w.pts));
     let n = pts.len();
@@ -145,12 +145,11 @@ pub fn shore_back(w: &Wharf) -> Vec<P> {
         along[k] = along[k - 1] + geom::dist(pts[k - 1], pts[k]);
     }
     let run = along[n - 1];
-    let reach = w.width.max(10.0).min(0.3 * run).max(1e-6);
+    let reach = (2.5 * w.width.max(10.0)).min(0.35 * run).max(1e-6);
     (0..n)
         .map(|k| {
             let d = along[k].min(run - along[k]);
-            let u = (1.0 - d / reach).max(0.0);
-            let e = crate::core::sqrt(1.0 - u * u).max(0.04);
+            let e = crate::core::sqrt(crate::core::noise::smoothstep(0.0, 1.0, d / reach)).max(0.04);
             geom::add(pts[k], geom::mul(normal[k], w.width * e))
         })
         .collect()

@@ -20,6 +20,13 @@ pub(super) struct Near {
     cos: f64,
     sin: f64,
     seed: u64,
+    /// Where the peak stands off the middle (in half-axes, 0.1 to 0.18: the middle stays high).
+    off: [f64; 2],
+    /// Two directions the slopes run out furthest in (spurs), unit vectors in half-axes.
+    spurs: [[f64; 2]; 2],
+    /// A ridge's steeper side (+1 or -1 across it) and where along it its crest is highest.
+    side: f64,
+    high: f64,
     pub(super) b: [f64; 4],
 }
 
@@ -42,6 +49,12 @@ impl Near {
         }
         let a = h.angle as f64 * (std::f64::consts::PI / 180.0);
         let narrow = if h.profile == HillProfile::Ridge { h.ry } else { h.rx.min(h.ry) };
+        let seed = crate::core::rng::hash2(0x4811_1ce5 ^ h.seed as u64, h.seed as i64, 0x172);
+        let pick = |k: i64| crate::core::rng::unit(crate::core::rng::hash2(seed, k, 0x3a));
+        let turn = |t: f64| [libm::cos(t * 2.0 * std::f64::consts::PI), libm::sin(t * 2.0 * std::f64::consts::PI)];
+        let (d0, d1) = (pick(1), pick(2));
+        let lean = turn(pick(3));
+        let reach = 0.1 + 0.08 * pick(4);
         Some(Near {
             profile: h.profile,
             at: h.at,
@@ -51,7 +64,12 @@ impl Near {
             peak: (p.level as f64).clamp(-(MAX_HILL_FT as f64), MAX_HILL_FT as f64),
             cos: libm::cos(a),
             sin: libm::sin(a),
-            seed: crate::core::rng::hash2(0x4811_1ce5 ^ h.seed as u64, h.seed as i64, 0x172),
+            seed,
+            // A crowned hill (a castle's) keeps its crown in the middle.
+            off: if h.crown > 0.0 { [0.0, 0.0] } else { [lean[0] * reach, lean[1] * reach] },
+            spurs: [turn(d0), turn(d0 + 0.3 + 0.4 * d1)],
+            side: if pick(5) < 0.5 { -1.0 } else { 1.0 },
+            high: 0.5 * (pick(6) * 2.0 - 1.0),
             b: footprint_bounds(h),
         })
     }
@@ -66,47 +84,103 @@ impl Near {
         let narrow = if self.profile == HillProfile::Ridge { self.ry } else { self.rx.min(self.ry) };
         // Noise lengths from the hill's own size: a few wobbles round it.
         let k = 1.0 / (0.55 * narrow).max(12.0);
-        let r0 = match self.profile {
-            HillProfile::Ridge => {
-                let du = (crate::core::fabs(u) - (self.rx - self.ry).max(0.0)).max(0.0);
-                crate::core::sqrt(du * du + v * v) / self.ry
-            }
-            _ => crate::core::sqrt((u / self.rx) * (u / self.rx) + (v / self.ry) * (v / self.ry)),
-        };
-        // The footprint's edge wobbles inward only (never past the outline).
-        let r = r0 * (1.0 + 0.09 * (0.5 + 0.5 * gradient2(self.seed, u * k, v * k)));
-        if r >= 1.0 {
+        let (a, b) = (u / self.rx, v / self.ry);
+        let wob = 1.0 + 0.06 * (0.5 + 0.5 * gradient2(self.seed, u * k, v * k));
+        if self.profile == HillProfile::Ridge {
+            return self.ridge(a, b, u, v, k, wob);
+        }
+        let r0 = crate::core::sqrt(a * a + b * b);
+        if r0 * wob >= 1.0 {
             return 0.0;
         }
+        // An irregular outline: full out along the two spurs, drawn in and wobbled between them
+        // (inward only, so never past the footprint).
+        let (da, db) = if r0 > 1e-9 { (a / r0, b / r0) } else { (1.0, 0.0) };
+        let lobe = |d: [f64; 2]| {
+            let c = (da * d[0] + db * d[1]).max(0.0);
+            let c2 = c * c;
+            c2 * c2 * c2
+        };
+        let spur = lobe(self.spurs[0]).max(lobe(self.spurs[1]));
+        let m = if self.crown > 0.0 {
+            1.0 - 0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x31, da * 1.6, db * 1.6))
+        } else {
+            0.92 + 0.08 * spur - 0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x31, da * 1.6 + 2.3, db * 1.6)) - 0.03 * (0.5 + 0.5 * gradient2(self.seed ^ 0x32, da * 3.1 + 7.3, db * 3.1))
+        };
+        let (sa, sb) = (a * wob / m.clamp(0.6, 1.0), b * wob / m.clamp(0.6, 1.0));
+        let rs2 = sa * sa + sb * sb;
+        if rs2 >= 1.0 {
+            return 0.0;
+        }
+        // The peak stands off the middle; the outline stays where it is.
+        let pull = 1.0 - rs2;
+        let (pa, pb) = (sa - self.off[0] * pull, sb - self.off[1] * pull);
+        let r = crate::core::sqrt(pa * pa + pb * pb).min(1.0);
+        let (ea, eb) = if r > 1e-9 { (pa / r, pb / r) } else { (1.0, 0.0) };
         let t = ((r - self.crown) / (1.0 - self.crown)).clamp(0.0, 1.0);
         let dome = 1.0 - smoothstep(0.0, 1.0, t);
+        // Outcrops on one or two arcs of the slope, broken along their length.
+        let seed = self.seed;
+        let arc = smoothstep(-0.05, 0.3, gradient2(seed ^ 0x0d, ea * 1.2 + 3.1, eb * 1.2 - 1.7));
+        let mask = |i: f64| arc * smoothstep(-0.12, 0.18, gradient2(seed ^ 0x0e, ea * 3.6 + i * 5.3, eb * 3.6 - i * 2.9));
         let mut f = match self.profile {
-            HillProfile::Round | HillProfile::Ridge => dome,
-            HillProfile::Knoll => self.outcrops(dome, 3.0, 0.2, u, v, k),
+            HillProfile::Knoll => self.outcrops(dome, 3.0, 0.2, u, v, k, mask),
             HillProfile::Mountain => {
                 let concave = (1.0 - t) * (1.0 - t);
-                self.outcrops(0.6 * concave + 0.4 * dome, 4.0, 0.14, u, v, k)
+                self.outcrops(0.6 * concave + 0.4 * dome, 4.0, 0.14, u, v, k, mask)
             }
+            _ => dome,
         };
-        // Low swells on the slopes (none at the crown or the foot).
-        f += 0.07 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, 3, 2.0, 0.5) * 4.0 * t * (1.0 - t);
-        if self.profile == HillProfile::Ridge {
-            // The crest rises and dips along its length.
-            f *= 1.0 - 0.12 * (0.5 + 0.5 * gradient2(self.seed ^ 0x2d, u * 1.5 / self.rx, 0.37));
+        // Low swells on the slopes (none at the crown or the foot), and the spurs standing out of them.
+        f += (0.07 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, 3, 2.0, 0.5) + if self.crown > 0.0 { 0.0 } else { 0.12 * spur }) * 4.0 * t * (1.0 - t);
+        self.peak * f.max(0.0)
+    }
+
+    /// A ridge at (`a`, `b`) in its half-axes: a crest running along it that swings to its steeper
+    /// side and bends, rising to a high point off its middle with saddles either side, its ends
+    /// tapered and rounded, a few broken outcrops down the steep side.
+    fn ridge(&self, a: f64, b: f64, u: f64, v: f64, k: f64, wob: f64) -> f64 {
+        // Inside both a tapered superellipse and the footprint's capsule.
+        let taper = 1.0 - 0.2 * a * a;
+        let bb = b / taper;
+        let a4 = a * a * a * a;
+        let du = (crate::core::fabs(u) - (self.rx - self.ry).max(0.0)).max(0.0);
+        let cap = (du * du + v * v) / (self.ry * self.ry);
+        let rs2 = (a4 + bb * bb).max(cap) * wob * wob;
+        if rs2 >= 1.0 {
+            return 0.0;
         }
+        // (How far it swings varies along it, so its steep side is crag in places, a slope between.)
+        let lean = 0.12 + 0.22 * (0.5 + 0.5 * gradient2(self.seed ^ 0x2f, a * 2.6, 0.29));
+        let shift = (self.side * lean + 0.1 * gradient2(self.seed ^ 0x2e, a * 1.4, 0.61)) * (1.0 - rs2);
+        let bc = bb - shift;
+        let r = crate::core::sqrt(a4 + bc * bc).min(1.0);
+        let t = ((r - self.crown) / (1.0 - self.crown)).clamp(0.0, 1.0);
+        // (Eased at the crest and the foot, straight between: a gentler steepest grade than a
+        // smoothstep's, so only where it swings hard does its steep side reach a cliff's.)
+        const C: f64 = 0.2;
+        let dome = 1.0 - if t < C { t * t / (2.0 * C * (1.0 - C)) } else if t > 1.0 - C { 1.0 - (1.0 - t) * (1.0 - t) / (2.0 * C * (1.0 - C)) } else { (t - 0.5 * C) / (1.0 - C) };
+        let crest = 1.0 - 0.28 * smoothstep(0.0, 1.2, crate::core::fabs(a - self.high)) - 0.16 * (0.5 + 0.5 * gradient2(self.seed ^ 0x2d, a * 3.2, 0.37)) + 0.08;
+        let seed = self.seed;
+        let steep = smoothstep(0.02, 0.3, self.side * bc);
+        let mask = |i: f64| steep * smoothstep(-0.1, 0.22, gradient2(seed ^ 0x0e, a * 4.5 + i * 3.7, 0.8 + i * 1.3));
+        let mut f = self.outcrops(dome * crest, 2.0, 0.17, u, v, k, mask);
+        f += 0.06 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, 3, 2.0, 0.5) * 4.0 * t * (1.0 - t);
         self.peak * f.max(0.0)
     }
 
     /// `base` (1 at the crown, 0 at the foot) gathered into `bands` benches with steep risers
-    /// between (each riser `w` of a band wide), the bands warped by noise so they break into crags
-    /// rather than rings; eased off at the foot and the crown.
-    fn outcrops(&self, base: f64, bands: f64, w: f64, u: f64, v: f64, k: f64) -> f64 {
+    /// between (each riser `w` of a band wide), the bands warped by noise; `mask(band)` (0..1)
+    /// keeps the risers only where it is up, so outcrops stand on parts of the slope, not in rings.
+    /// Eased off at the foot and the crown.
+    #[allow(clippy::too_many_arguments)]
+    fn outcrops(&self, base: f64, bands: f64, w: f64, u: f64, v: f64, k: f64, mask: impl Fn(f64) -> f64) -> f64 {
         let warp = 0.45 * gradient2(self.seed ^ 0x0c, u * 1.7 * k, v * 1.7 * k);
         let g = base * bands + warp;
         let i = crate::core::floor(g);
         let stepped = (i + smoothstep(0.5 - w, 0.5 + w, g - i) - warp) / bands;
         let keep = smoothstep(0.0, 0.18, base) * (1.0 - smoothstep(0.65, 0.9, base));
-        base + (stepped - base) * keep
+        base + (stepped - base) * keep * mask(i)
     }
 }
 

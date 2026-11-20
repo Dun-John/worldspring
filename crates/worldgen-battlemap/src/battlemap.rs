@@ -1665,12 +1665,18 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // copses, windmills' sails and water wheels (`town::rural`).
     let mut rural = crate::town::rural::Battle::default();
     {
+        let hilly = matches!(cliff_pad, std::borrow::Cow::Owned(_));
         let blocked = |p: [f64; 2]| {
             let (i, j) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
             if i < -1 || j < -1 || i > SQ as i64 || j > SQ as i64 {
                 return false;
             }
-            hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0)))
+            hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0))) || (hilly && {
+                // (Item 172: nor over a hill's cliff face; the run breaks there.)
+                let s = sidx(i, j);
+                let (gx, gy) = ((cliff_pad[s + 1] - cliff_pad[s - 1]) as f64 / 5.0, (cliff_pad[s + PADDED] - cliff_pad[s - PADDED]) as f64 / 5.0);
+                gx * gx + gy * gy >= cliff::CLIFF_SLOPE * cliff::CLIFF_SLOPE
+            })
         };
         let rect = [ox, oy, ox + chunk_ft, oy + chunk_ft];
         for l in &rural_ls {

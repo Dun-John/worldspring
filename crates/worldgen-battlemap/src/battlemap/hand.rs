@@ -115,7 +115,7 @@ pub(super) fn build(
                 quay_cargo(piece, seed, stalls);
                 quay_works(piece, &piece[..*m], seed, &piers, true, dock);
                 if w.material == crate::world::CrossingMaterial::Timber && owns(crate::town::geom::centroid(piece)) {
-                    shapes.push(VectorShape { kind: ShapeKind::Deck, size: 0.0, pts: piece.iter().map(&local).collect() });
+                    shapes.push(VectorShape { kind: ShapeKind::Deck, size: 4.0, pts: piece.iter().map(&local).collect() });
                 }
             }
         } else if w.kind == WharfKind::Quay {

@@ -73,9 +73,83 @@ export function drawDeck(g: Graphics, s: Shape) {
   const wid = Math.hypot(x3 - x0, y3 - y0) || 1;
   const f: Frame = { ox: x0, oy: y0, ux: (x1 - x0) / len, uy: (y1 - y0) / len, vx: (x3 - x0) / wid, vy: (y3 - y0) / wid, len, wid };
   const style = Math.round(s.size / PX);
+  if (style === 4) return quayDeck(g, s);
   if (style === 2) stoneBridge(g, f, rngAt(x0 + x1, y0 + y1));
   else if (style === 3) oldStoneBridge(g, f, rngAt(x0 + x1, y0 + y1));
   else timber(g, f, rngAt(x0 + x1, y0 + y1), style === 1);
+}
+
+/** A timber shore quay's piece (`Deck` style 4): its face's points, then its back's the other way
+ * (as many), each piece about 40 ft along the shore. */
+function quayFrame(s: Shape) {
+  const m = Math.floor(s.pts.length / 4);
+  const face: [number, number][] = [];
+  const back: [number, number][] = [];
+  for (let k = 0; k < m; k++) {
+    face.push([s.pts[k * 2], s.pts[k * 2 + 1]]);
+    const j = 2 * m - 1 - k;
+    back.push([s.pts[j * 2], s.pts[j * 2 + 1]]);
+  }
+  return { m, face, back };
+}
+
+/** A timber shore quay's deck: planks laid from the face back to the shore, mid-brown with a lit
+ * edge, one grain stroke and the odd knot each, inked, over the dark between them, as the piers'. */
+function quayDeck(g: Graphics, s: Shape) {
+  const { m, face, back } = quayFrame(s);
+  if (m < 2) return;
+  const along = [0];
+  for (let k = 1; k < m; k++) along.push(along[k - 1] + Math.hypot(face[k][0] - face[k - 1][0], face[k][1] - face[k - 1][1]));
+  const run = along[m - 1];
+  if (run < FT) return;
+  // The face's and the back's point `a` along the face (px).
+  const ends = (a: number): [[number, number], [number, number]] => {
+    let k = 0;
+    while (k < m - 2 && along[k + 1] < a) k++;
+    const t = Math.min(1, Math.max(0, (a - along[k]) / (along[k + 1] - along[k] || 1)));
+    const lerp = (p: [number, number][]): [number, number] => [p[k][0] + (p[k + 1][0] - p[k][0]) * t, p[k][1] + (p[k + 1][1] - p[k][1]) * t];
+    return [lerp(face), lerp(back)];
+  };
+  // A point `d` px from the face toward the back (`d` < 0 out over the water).
+  const at = (a: number, d: number): [number, number] => {
+    const [f, b] = ends(a);
+    const w = Math.hypot(b[0] - f[0], b[1] - f[1]) || 1;
+    return [f[0] + ((b[0] - f[0]) / w) * d, f[1] + ((b[1] - f[1]) / w) * d];
+  };
+  const wid = (a: number) => {
+    const [f, b] = ends(a);
+    return Math.hypot(b[0] - f[0], b[1] - f[1]);
+  };
+  const rnd = rngAt(face[0][0] + face[m - 1][0], face[0][1] + face[m - 1][1]);
+  g.poly([...face.flat(), ...[...back].reverse().flat()]).fill(0x2e1f16);
+  for (let a = 0; a < run - FT * 0.3; ) {
+    const a1 = Math.min(run, a + FT * (2.3 + rnd() * 0.9));
+    const [base, lit] = PLANKS[Math.floor(rnd() * PLANKS.length)];
+    const out = -FT * (0.1 + rnd() * 0.4);
+    const w0 = wid(a), w1 = wid(a1);
+    if (Math.max(w0, w1) < FT * 0.4) {
+      a = a1 + FT * 0.22;
+      continue;
+    }
+    const plank = (t0: number, t1: number, inset: number) => [...at(a + (a1 - a) * t0, out + inset), ...at(a + (a1 - a) * t1, out + inset), ...at(a + (a1 - a) * t1, w1 - inset * 0.3), ...at(a + (a1 - a) * t0, w0 - inset * 0.3)];
+    g.poly(plank(0, 1, 0)).fill(lit);
+    g.poly(plank(0.32, 1, 0)).fill(base);
+    g.poly(plank(0.86, 1, 0)).fill(WOOD[0]);
+    const ga = 0.3 + rnd() * 0.3;
+    const gd0 = Math.max(w0, w1) * (0.15 + rnd() * 0.3);
+    const gd1 = gd0 + Math.max(w0, w1) * (0.2 + rnd() * 0.3);
+    const [gx0, gy0] = at(a + (a1 - a) * ga, gd0);
+    const [gx1, gy1] = at(a + (a1 - a) * (ga + (rnd() - 0.5) * 0.25), (gd0 + gd1) / 2);
+    const [gx2, gy2] = at(a + (a1 - a) * ga, gd1);
+    g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.16, color: WOOD[0], cap: 'round' });
+    if (rnd() < 0.25) {
+      const [kx, ky] = at(a + (a1 - a) * (0.35 + rnd() * 0.3), Math.max(w0, w1) * (0.2 + rnd() * 0.6));
+      g.ellipse(kx, ky, FT * 0.3, FT * 0.3).fill(WOOD[0]);
+      g.ellipse(kx, ky, FT * 0.13, FT * 0.13).fill(0x3a2616);
+    }
+    g.poly(plank(0, 1, 0)).stroke({ width: 2.2, color: INK, join: 'round' });
+    a = a1 + FT * 0.22;
+  }
 }
 
 /** A road bridge (`ShapeKind::RoadBridge`): its centre line, `size` wide, then `[material, 0]`
@@ -632,6 +706,11 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
  * deck, one screen pixel wide like the ground's.
  */
 export function deckGrid(g: Graphics, s: Shape) {
+  if (s.kind === 2 && Math.round(s.size / PX) === 4) {
+    const { m, face, back } = quayFrame(s);
+    for (let k = 0; k + 1 < m; k++) deckGrid(g, { ...s, size: 0, pts: [...face[k], ...face[k + 1], ...back[k + 1], ...back[k]] });
+    return;
+  }
   let q: number[];
   if (s.kind === 2 && s.pts.length >= 8) q = s.pts.slice(0, 8);
   else if (s.kind === 3 || s.kind === 18) {
