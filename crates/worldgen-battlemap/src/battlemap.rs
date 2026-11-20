@@ -285,6 +285,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Round raised features on town squares: (centre, radius ft, kind, steps angle).
     let mut features: Vec<([f64; 2], f64, PlazaFeature, f64)> = Vec::new();
     let mut in_town = vec![false; HS * HS];
+    // R7 159: whose ground a district's square is (an index into `town_land`, from 1: the land's
+    // biome round the town's middle, the same in every chunk).
+    let mut town_ix = vec![0u8; HS * HS];
+    let mut town_land: Vec<Biome> = Vec::new();
     let mut ruins: Vec<Vec<[f64; 2]>> = Vec::new();
     let mut statues: Vec<[f64; 2]> = Vec::new();
     // Props a layout sets out itself (a camp's tents and fire).
@@ -431,6 +435,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         };
         // Only streets are paved (stamped from the town's road lines below); yards and
         // gardens between buildings keep their natural ground, but no mounds or ditches.
+        let mut land_ix = 0u8;
         for d in &l.districts {
             let b = bbox(d);
             if !overlaps(b) {
@@ -444,6 +449,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 for i in i0..=i1 as usize {
                     if crate::town::geom::contains(d, center(i, j)) {
                         in_town[j * HS + i] = true;
+                        if land_ix == 0 {
+                            town_land.push(land_biome(t0, l.center));
+                            land_ix = town_land.len().min(255) as u8;
+                        }
+                        town_ix[j * HS + i] = land_ix;
                     }
                 }
             }
@@ -1726,18 +1736,35 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let village = tier_here == Some(crate::t0::settle::Tier::Village);
     // (P145: the walls and castles a moat drawn by hand may run by, found when one does.)
     let mut moat_stone: Option<Vec<([f64; 2], [f64; 2])>> = None;
+    // R7 159: a town's built ground (its wards and buildings) is the town's, not a beach, but for
+    // the squares at the water's edge (any of the eight round it wet); where the sea's or a lake's
+    // biome reaches in, the ground of the land round the town (packed earth under a building off
+    // its wards). (A hot desert's sand stays: inland it is the town's too.)
+    let town_ground = |k: usize| {
+        let h = (k / SQ + 1) * HS + k % SQ + 1;
+        (in_town[h] || bld_h[h] != 0)
+            && [h - HS - 1, h - HS, h - HS + 1, h - 1, h + 1, h + HS - 1, h + HS, h + HS + 1].iter().all(|&q| chunk.halo_water[q] <= chunk.halo_height[q])
+    };
     for k in 0..n {
         let depth = chunk.water_level[k] - chunk.height[k];
+        let town = depth <= 0.0 && town_ground(k);
         chunk.surface[k] = if depth > 4.0 {
             Surface::Deep
         } else if depth > 0.0 {
             Surface::Shallow
-        } else if beach(depth as f64, chunk.water_level[k] as f64, sea, slope[k]) {
+        } else if !town && beach(depth as f64, chunk.water_level[k] as f64, sea, slope[k]) {
             Surface::Sand
         } else {
             match surface_for(biome[k], slope[k]) {
                 // Tundra: patches of snow among its grass.
                 Surface::TundraGrass if tundra_snowy(world, ox, oy, k) => Surface::Snow,
+                Surface::Sand if town && matches!(biome[k], Biome::Ocean | Biome::Lake) => match town_ix[(k / SQ + 1) * HS + k % SQ + 1] {
+                    0 => Surface::Dirt,
+                    ix => match surface_for(town_land[ix as usize - 1], slope[k]) {
+                        Surface::TundraGrass if tundra_snowy(world, ox, oy, k) => Surface::Snow,
+                        s => s,
+                    },
+                },
                 s => s,
             }
         };
