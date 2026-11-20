@@ -14,6 +14,7 @@ pub mod flood;
 pub mod hydro;
 pub mod islands;
 pub mod islets;
+pub mod landform;
 pub mod layout_index;
 pub mod made;
 pub mod names;
@@ -59,6 +60,9 @@ pub struct T0 {
     /// primary | secondary << 8 | blend << 16 (see `biome::classify`).
     pub biome: Grid<u32>,
     pub cell_ft: f64,
+    /// Terrace weights per cell (`landform`: refined levels step the ground again where it is
+    /// above 0); empty when the map has none.
+    pub landform: Grid<f32>,
     /// River curves (shared by every zoom level) with a spatial index.
     pub rivers: RiverNet,
     /// Road polylines (grade-profiled) with a spatial index.
@@ -129,6 +133,8 @@ struct Shaped {
     sites: Vec<sketch::Site>,
     /// The drawn rivers' courses (stroke, cells).
     courses: Vec<(usize, Vec<usize>)>,
+    /// Terrace weights per cell (`T0::landform`).
+    landform: Vec<f32>,
 }
 
 pub struct T0Extra {
@@ -315,9 +321,29 @@ impl T0 {
 
         progress("climate", 0.0);
         let clim = climate::build(world, w, h, cell, &height, &land);
+        // Landforms from ruggedness: plateaus and escarpments before the rivers find their way,
+        // canyons cut along them after. Drawn lakes, rivers and volcanoes are left alone.
+        let drawn_water: Vec<bool> = (0..n).map(|k| lakes.of[k] != sketch::NONE || courses.channel.get(k).copied().unwrap_or(false)).collect();
+        // (And the country round them, which their water would leave if it were stepped.)
+        let mut keep = drawn_water.clone();
+        if drawn_water.iter().any(|&d| d) {
+            let d = climate::distance_to(w, h, &drawn_water);
+            let reach = 4.0f64.max(3.0 * 5280.0 / cell);
+            keep = d.iter().map(|&v| v <= reach).collect();
+        }
+        for v in &volcanoes {
+            let r = (1.3 * v.radius_ft / cell).ceil() as i64;
+            for j in (v.cy as i64 - r).max(0)..=(v.cy as i64 + r).min(h as i64 - 1) {
+                for i in (v.cx as i64 - r).max(0)..=(v.cx as i64 + r).min(w as i64 - 1) {
+                    keep[j as usize * w + i as usize] = true;
+                }
+            }
+        }
+        let mut landform = landform::shape(world, w, h, cell, &mut height, &land, &clim, &keep);
         progress("rivers", 0.0);
         let drawn: Vec<(u32, bool, bool)> = lakes.list.iter().map(|l| (l.stroke as u32, l.salt, l.outflow)).collect();
         let hydro = hydro::build(w, h, cell, &mut height, &land, &clim, sea, p.river_density, &feed, hydro::Drawn { of: &lakes.of, lakes: &drawn, courses: &courses.channel });
+        landform::incise(world, w, h, cell, &mut height, &land, &clim, &hydro, &keep, &mut landform);
 
         progress("biomes", 0.0);
         let vents = volcanoes
@@ -330,14 +356,14 @@ impl T0 {
         let pins = sketch::pins(world, raster, &land, &mut conflicts);
         let sites = sketch::sites(world, raster, &land, &hydro.lake_of, &mut conflicts);
         let courses = courses.strokes.iter().copied().zip(courses.cells).collect();
-        Shaped { height, land, clim, hydro, biome, volcanoes, conflicts, pins, sites, courses }
+        Shaped { height, land, clim, hydro, biome, volcanoes, conflicts, pins, sites, courses, landform }
     }
 
     pub fn generate_with_progress(world: &World, progress: &mut dyn FnMut(&str, f64)) -> T0 {
         let g = &world.geom;
         let (w, h, cell) = (g.t0_w, g.t0_h, g.t0_cell_ft);
         let n = w * h;
-        let Shaped { height, land, clim, hydro, biome, volcanoes, mut conflicts, pins, sites, courses } = Self::shape(world, w, h, cell, progress);
+        let Shaped { height, land, clim, hydro, biome, volcanoes, mut conflicts, pins, sites, courses, mut landform } = Self::shape(world, w, h, cell, progress);
         let dist_land = climate::distance_to(w, h, &land);
         let coast: Vec<f32> = (0..n).map(|k| if land[k] { 0.0 } else { (dist_land[k] * cell) as f32 }).collect();
 
@@ -591,6 +617,12 @@ impl T0 {
             rivers,
             road_net,
         );
+        if landform.iter().any(|&m| m > 0.0) {
+            // (Roads keep to the T0 ramps where they climb a step: no cliff within a mile or two.)
+            let lines: Vec<&[[f64; 2]]> = t0.roads.roads.iter().map(|r| r.pts.as_slice()).collect();
+            landform::clear_lines(w, h, cell, &lines, &mut landform);
+            t0.landform = Grid::from_vec(w, h, landform);
+        }
         // Its ground nodes are base's (the same height and water grids).
         if let Some(c) = base.ground_cache.get() {
             let _ = t0.ground_cache.set(c.clone());
@@ -659,7 +691,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), lanes: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), road_index: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, landform: Grid::from_vec(0, 0, Vec::new()), rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), lanes: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), road_index: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -681,6 +713,17 @@ impl T0 {
         self.sea_lanes = sea_lanes;
         self.ferries = ferries;
         self
+    }
+
+    fn with_landform(mut self, landform: Grid<f32>) -> T0 {
+        self.landform = landform;
+        self
+    }
+
+    /// The terrace weight at (x, y) ft (bilinear; 0 where the map has none).
+    #[inline]
+    pub fn landform_at(&self, x_ft: f64, y_ft: f64) -> f64 {
+        if self.landform.data.is_empty() { 0.0 } else { bilinear(&self.landform, x_ft / self.cell_ft, y_ft / self.cell_ft) }
     }
 
     fn with_settlements(mut self, settlements: Vec<settle::Settlement>, pois: Vec<settle::Poi>) -> T0 {
@@ -1218,6 +1261,11 @@ impl T0 {
             out.push(s.planned as u8);
             out.extend_from_slice(&s.planned_pop.to_le_bytes());
         }
+        // Terrace weights (optional, after the plans): cell count (0: none), then f32 per cell.
+        out.extend_from_slice(&(self.landform.data.len() as u32).to_le_bytes());
+        for v in &self.landform.data {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
         out
     }
 
@@ -1350,6 +1398,12 @@ impl T0 {
                 s.planned_pop = u32::from_le_bytes(take(4)?.try_into().unwrap());
             }
         }
+        let mut landform = Grid::from_vec(0, 0, Vec::new());
+        if let Ok(b) = take(4)
+            && u32::from_le_bytes(b.try_into().unwrap()) as usize == n
+        {
+            landform = Grid::from_vec(w, h, take(n * 4)?.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect());
+        }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
         Ok(Self::from_grids(
@@ -1363,7 +1417,8 @@ impl T0 {
             RoadNet::new(road_curves, map_w, map_h, cell_ft),
         )
         .with_settlements(settlements, pois)
-        .with_sea_lanes(sea_lanes, sea_ferries))
+        .with_sea_lanes(sea_lanes, sea_ferries)
+        .with_landform(landform))
     }
 }
 

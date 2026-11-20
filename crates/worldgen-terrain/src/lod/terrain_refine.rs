@@ -39,6 +39,8 @@ const GULLY_CELL: f64 = 8.0;
 /// Rivers re-carve a band this many samples wide at each level (coarser levels carved the
 /// broad valley already; finer levels sharpen the channel).
 const CARVE_REACH_SAMPLES: f64 = 8.0;
+/// Ground left unstepped round a settlement's pad (ft): no cliff at a town's edge.
+const CLIFF_CLEAR_FT: f64 = 2_000.0;
 /// Water over a ford's bed (ft): wading depth.
 pub const FORD_DEPTH_FT: f32 = 0.8;
 /// Levels with coarser sample spacing than this skip carving.
@@ -251,6 +253,21 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     });
     let cols = plan.as_ref().map(|p| p.columns(&(-h..=n + h).map(|ci| (gx0 + ci) as f64 * s).collect::<Vec<_>>()));
 
+    // Landforms: where the T0 ground is terraced, each level steps it again, so risers narrow
+    // as the samples do (`t0::landform`); road corridors are left to the road's profile.
+    let sharpen = !t0.landform.data.is_empty() && s >= crate::t0::landform::SHARPEN_MIN_FT;
+    let mut terrace = crate::t0::landform::Terrace::new(world);
+    // Settlements keep clear of cliffs: no stepping within their pads and a margin round them
+    // (the T0 ramp stays there), so no town stands on or under a cliff edge.
+    let clear: Vec<(f64, f64, f64)> = if sharpen {
+        t0.settlements
+            .iter()
+            .map(|st| (st.x, st.y, crate::t0::radii::pad_extent(crate::t0::radii::reach(st)) + CLIFF_CLEAR_FT))
+            .filter(|&(x, y, e)| x + e >= tx0 && x - e <= tx1 && y + e >= ty0 && y - e <= ty1)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut out = vec![0f32; PADDED * PADDED];
     // (Along a row the samples ask about the same noise cell several times running.)
     let (mut detail_noise, mut along_noise) = (Gradient::new(seed), Gradient::new(gseed ^ 0x77));
@@ -268,11 +285,26 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             _ => Vec::new(),
         };
         for ci in -h..=n + h {
-            let base = if odd {
+            let mut base = if odd {
                 HALF[0] * row(pv - 1, ci) + HALF[1] * row(pv, ci) + HALF[2] * row(pv + 1, ci) + HALF[3] * row(pv + 2, ci)
             } else {
                 row(pv, ci)
             } as f64;
+            let mut flat = 1.0;
+            if sharpen {
+                let x = (gx0 + ci) as f64 * s;
+                let mut m = t0.landform_at(x, y) * corridor.map_or(1.0, |c| c[padded_index(ci, cj)] as f64);
+                for &(px, py, e) in &clear {
+                    if m > 0.01 && (x - px).abs() < e && (y - py).abs() < e {
+                        let d = crate::core::sqrt((x - px) * (x - px) + (y - py) * (y - py));
+                        m *= smoothstep(e - CLIFF_CLEAR_FT, e, d);
+                    }
+                }
+                if m > 0.01 {
+                    base += m * (terrace.at(x, y, base, crate::t0::landform::SHARPEN_RISER) - base);
+                    flat = 1.0 - 0.5 * m;
+                }
+            }
 
             // Parent-cell slope drives roughness (steep ground gets rougher detail).
             let pu = (2 * off_x + ci).div_euclid(2);
@@ -287,7 +319,7 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
                 rough *= 0.25;
             }
             let nx = (gx0 + ci) as f64 / DETAIL_WAVELENGTH;
-            let mut detail = amp * rough * detail_noise.at(nx, ny);
+            let mut detail = amp * rough * flat * detail_noise.at(nx, ny);
 
             // Gullies: ridges and furrows running down the fall line on steep ground, blended
             // over local cells so the direction stays stable at any world coordinate.
