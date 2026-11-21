@@ -393,14 +393,14 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     return mix(col, c, show * edge);
 }
 
-// Roadmap 7 (170) cliffs, in the sprites' cartoon style: three close matte rock tones by which way
-// the face looks (lit from the upper left), a few big ledges across it (a pale shelf, an ink lip, a
-// shaded band under it), an ink line along its top, a soft shadow at its foot and loose stones on
-// its scree (data bit 4: `battlemap::cliff`, where it is hard going).
+// Roadmap 7 (170) cliffs, in the sprites' cartoon style: a dark matte rock face in three tones by
+// which way it looks (lit from the upper left), a few big bands down it (a pale ledge, an ink lip,
+// a shaded band under it), bold cracks, a lit rim under an ink line along its top, a shadow at its
+// foot and big loose stones on its scree (data bit 4: `battlemap::cliff`, where it is hard going).
 const float CLIFF_T = 1.2;
-const vec3 ROCK_LIT = vec3(0.58, 0.53, 0.45);
-const vec3 ROCK_MID = vec3(0.49, 0.45, 0.39);
-const vec3 ROCK_SHADE = vec3(0.39, 0.36, 0.32);
+const vec3 ROCK_LIT = vec3(0.60, 0.55, 0.47);
+const vec3 ROCK_MID = vec3(0.45, 0.41, 0.36);
+const vec3 ROCK_SHADE = vec3(0.33, 0.30, 0.27);
 
 // The face: tones and ledges. up the uphill unit vector, face 0..1 how much is rock.
 vec3 cliffFace(vec3 col, vec2 w, float h, vec2 up, float slope, float face, float aa) {
@@ -408,67 +408,75 @@ vec3 cliffFace(vec3 col, vec2 w, float h, vec2 up, float slope, float face, floa
     float lit = smoothstep(0.2 - 0.06, 0.2 + 0.06, facing);
     float shd = smoothstep(0.2 - 0.06, 0.2 + 0.06, -facing);
     vec3 rock = mix(mix(ROCK_MID, ROCK_LIT, lit), ROCK_SHADE, shd);
-    // A few big ledges as shelves: a pale tread (its top, a third to half a square wide, wavering),
-    // an ink lip at its edge and a shaded band under it, at least a square and a half apart across
-    // the face (their height interval doubles with the grade, so the steeper ledges are a subset of
-    // the gentler ones'), about one in three left out, each broken off here and there along the
-    // cliff; cracks down the fall line between them. Each band one of three close value steps.
+    // Big bands down the face, three to five squares across (their height interval doubles with
+    // the grade, so a steeper face's ledges are a subset of a gentler one's): each topped by a pale
+    // ledge (a third to half a square wide, wavering) with an ink lip, the face under the lip in its
+    // shade, each band one of three close value steps; about one ledge in four left out, each broken
+    // off here and there along the cliff. Bold cracks down the fall line, a few squares apart.
     float ledges = smoothstep(1.0, 1.4, slope);
     if (ledges > 0.0) {
-        float iv = 60.0 * exp2(max(0.0, ceil(log2(slope * 5.0 * 1.4 / 60.0))));
-        float tl = (h - uSea + 0.3 * iv * (vnoise(w * 0.035) + vnoise(w * 0.21) - 1.0)) / iv;
+        float iv = 20.0 * exp2(max(0.0, ceil(log2(slope * 5.0 * 4.0 / 20.0))));
+        float tl = (h - uSea + iv * (0.3 * vnoise(w * 0.05) + 0.1 * vnoise(w * 0.19) - 0.2)) / iv;
         float band = floor(tl);
         float fr = fract(tl);
+        // Squares across one band, and the distances (squares) to its foot and top.
         float run = max(slope * 5.0 / iv, 1e-3);
         float above = fr / run, below = (1.0 - fr) / run;
-        // The nearest ledge (its lip at height `lip` * iv), keyed by its own height, so every
-        // interval agrees on the ledges they share. Above the lip its tread, below it its shade.
-        float lip = above < below ? band : band + 1.0;
-        float key = floor(lip * iv / 60.0 + 0.5);
-        float on = ledges * step(0.33, hash21(vec2(key, 7.0))) * smoothstep(0.3, 0.42, vnoise(w * 0.09 + key * 1.7));
-        float lw = max(0.035, 1.1 * aa);
-        float tread = 0.3 + 0.2 * vnoise(w * 0.4 + key);
-        rock *= 1.0 + ledges * 0.05 * (floor(hash21(vec2(band, 3.0)) * 2.999) - 1.0);
-        rock = mix(rock, ROCK_LIT * 1.12, (1.0 - smoothstep(tread, tread + aa, above)) * on * step(above, below));
-        rock = mix(rock, rock * 0.78, (1.0 - smoothstep(0.55, 0.55 + aa, below)) * on * step(below, above));
-        rock = mix(rock, INK, (1.0 - smoothstep(lw, lw + aa, min(above, below))) * on * 0.85);
-        // Cracks down the fall line, a stroke every square or so across the face, broken up.
-        float across = dot(w, vec2(-up.y, up.x)) * 1.1 + 0.6 * vnoise(w * 0.45);
-        float crack = 1.0 - smoothstep(lw * 1.1, lw * 1.1 + aa * 1.1, abs(fract(across) - 0.5) * 0.9);
-        float runs = smoothstep(0.45, 0.6, vnoise(vec2(floor(across) * 3.1, dot(w, up) * 0.7)));
-        rock = mix(rock, rock * 0.62, crack * runs * ledges * (1.0 - on * step(min(above, below), 0.6)));
+        // Its foot is the lip of the ledge below (`band`), its top the lip of the one above, keyed by
+        // height so every interval agrees on the ledges they share.
+        float keyLo = floor(band * iv / 20.0 + 0.5), keyHi = floor((band + 1.0) * iv / 20.0 + 0.5);
+        float onLo = step(0.33, hash21(vec2(keyLo, 7.0))) * smoothstep(0.38, 0.48, vnoise(w * 0.14 + keyLo * 1.7));
+        float onHi = step(0.33, hash21(vec2(keyHi, 7.0))) * smoothstep(0.38, 0.48, vnoise(w * 0.14 + keyHi * 1.7));
+        float lw = max(0.05, 1.4 * aa);
+        float tread = 0.26 + 0.14 * vnoise(w * 0.3 + keyLo);
+        rock *= 1.0 + ledges * 0.07 * (floor(hash21(vec2(band, 3.0)) * 2.999) - 1.0);
+        // (Face under the upper lip in shade, darkest right under it.)
+        rock = mix(rock, rock * 0.72, (1.0 - smoothstep(0.15, 0.75, below)) * onHi * ledges);
+        // Cracks: a stroke every two to three squares across the face, in runs, darkest at the top.
+        float across = dot(w, vec2(-up.y, up.x)) * 0.4 + 0.35 * vnoise(w * 0.3);
+        float cw = max(0.06, 0.9 * aa);
+        float crack = 1.0 - smoothstep(cw, cw + aa, abs(fract(across) - 0.5) * 2.5);
+        float runs = smoothstep(0.42, 0.55, vnoise(vec2(floor(across) * 3.1, dot(w, up) * 0.4)));
+        rock = mix(rock, rock * 0.58, crack * runs * ledges * (1.0 - onLo * step(above, tread + lw)));
+        rock = mix(rock, ROCK_LIT * 1.06, (1.0 - smoothstep(tread, tread + aa, above)) * onLo * ledges);
+        rock = mix(rock, INK, (1.0 - smoothstep(lw, lw + aa, above)) * onLo * ledges * 0.85);
     }
-    return mix(col, rock, face * 0.92);
+    return mix(col, rock, face);
 }
 
 // Scree: loose stones on its scree squares, a big one in about half the squares and small ones in
 // their quarters (each inside its own square, so chunks need no neighbour), thinner away from the
-// foot (fade 1 at it); NW crescent lit, SE shaded, inked.
-float screeStone(vec2 w, float cell, float rmin, float rmax, float density, float aa, out vec3 st) {
+// foot (fade 1 at it); NW crescent lit, SE shaded, inked, a soft shadow to the SE.
+float screeStone(vec2 w, float cell, float rmin, float rmax, float density, float aa, out vec3 st, out float sh) {
+    sh = 0.0;
     vec2 c = floor(w / cell);
     float hs = hash21(mod(c + cell * 101.0, 896.0));
     if (hs > density) return 0.0;
-    vec2 ctr = (c + 0.5 + (vec2(hash21(mod(c + 31.0, 896.0)), hash21(mod(c + 57.0, 896.0))) - 0.5) * 0.25) * cell;
+    vec2 ctr = (c + 0.5 + (vec2(hash21(mod(c + 31.0, 896.0)), hash21(mod(c + 57.0, 896.0))) - 0.5) * 0.12) * cell;
     float r = mix(rmin, rmax, fract(hs * 17.3));
     vec2 v = (w - ctr) / r;
-    float dist = length(v) * (1.0 + 0.1 * sin(atan(v.y, v.x) * 3.0 + hs * 40.0));
     float px = aa / r;
+    sh = 1.0 - smoothstep(0.75, 1.0, length(v - vec2(0.22)));
+    float dist = length(v) * (1.0 + 0.1 * sin(atan(v.y, v.x) * 3.0 + hs * 40.0));
     float inside = 1.0 - smoothstep(1.0 - px, 1.0, dist);
     if (inside <= 0.0) return 0.0;
-    st = mix(ROCK_MID, ROCK_LIT, step(0.5, fract(hs * 5.1)) * 0.6);
+    st = mix(ROCK_MID, ROCK_LIT, step(0.5, fract(hs * 5.1)) * 0.6 + 0.3);
     float side = dot(v, vec2(-0.7071));
-    st = mix(st, ROCK_LIT * 1.05, smoothstep(0.35 - px, 0.35 + px, side) * 0.7);
-    st = mix(st, ROCK_SHADE, smoothstep(0.3 - px, 0.3 + px, -side));
-    float lw = max(0.025, 0.8 * aa) / r;
+    st = mix(st, ROCK_LIT * 1.1, smoothstep(0.3 - px, 0.3 + px, side) * 0.8);
+    st = mix(st, ROCK_SHADE, smoothstep(0.25 - px, 0.25 + px, -side));
+    float lw = max(0.03, 0.9 * aa) / r;
     st = mix(st, INK, smoothstep(1.0 - lw - px, 1.0 - lw, dist));
     return inside;
 }
 
 vec3 scree(vec3 col, vec2 w, float fade, float aa) {
     vec3 st;
-    float a = screeStone(w, 1.0, 0.2, 0.33, 0.2 + 0.4 * fade, aa, st);
+    float sh;
+    float a = screeStone(w, 1.0, 0.3, 0.4, 0.45 + 0.4 * fade, aa, st, sh);
+    col *= 1.0 - 0.3 * sh;
     if (a > 0.0) return mix(col, st, a);
-    a = screeStone(w, 0.5, 0.08, 0.15, 0.15 + 0.35 * fade, aa, st);
+    a = screeStone(w, 0.5, 0.12, 0.2, 0.3 + 0.35 * fade, aa, st, sh);
+    col *= 1.0 - 0.3 * sh;
     return mix(col, st, a);
 }
 
@@ -717,15 +725,21 @@ void main() {
             if (ds < 0.0) {
                 float lw = max(0.05, 1.2 * aa);
                 // (Faint where the top rounds over gently, so it never blots.)
-                col = mix(col, INK, (1.0 - smoothstep(lw, lw + aa * 1.3, gap)) * 0.9 * smoothstep(0.5, 2.0, -ds));
-                if (slope < CLIFF_T) col = mix(col, col * 1.08, 1.0 - smoothstep(0.3, 0.3 + aa, gap));
+                float over = smoothstep(0.5, 2.0, -ds);
+                // The lit rim: the face's top edge under the line, and the brow a little above it.
+                if (slope > CLIFF_T) col = mix(col, ROCK_LIT * 1.16, (smoothstep(lw, lw + 2.0 * aa, gap) - smoothstep(0.3, 0.3 + 3.0 * aa, gap)) * 0.55 * over * face);
+                else col = mix(col, col * 1.1, 1.0 - smoothstep(0.35, 0.35 + aa, gap));
+                col = mix(col, INK, (1.0 - smoothstep(lw, lw + aa * 1.3, gap)) * 0.9 * over);
             } else {
-                foot = (1.0 - smoothstep(0.0, 1.2, gap)) * smoothstep(0.5, 2.0, ds);
+                // The foot: the face's lower part and a square and a half below it in shadow.
+                foot = (1.0 - smoothstep(0.0, 1.6, gap)) * smoothstep(0.5, 2.0, ds);
                 float away = clamp(0.5 - 0.5 * dot(-up, vec2(-0.7071)), 0.0, 1.0);
-                col *= 1.0 - foot * mix(0.2, 0.36, away);
+                col *= 1.0 - foot * mix(0.3, 0.46, away);
             }
         }
         if ((int(d.g + 0.5) & 4) != 0 && !shaped) col = scree(col, w, max(foot, 0.25), aa);
+        // (Scree ground a little dusty, its edge wavering as other surfaces'.)
+        if ((int(dw.g + 0.5) & 4) != 0 && !shaped) col = mix(col, ROCK_LIT * 0.85, 0.16);
         // Tier contour: bold ink on cliffs, thin dashed line on gentle slopes (on steps only the
         // cliff's: a contour would cut across the treads; on a plaza too, where a graded square's
         // straight contours read as seams across its fans).

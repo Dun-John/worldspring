@@ -46,8 +46,8 @@ const float SAMPLES = 257.0;
 // by the way the face looks (lit from the upper left).
 const float CLIFF_T = 1.2;
 const vec3 ROCK_LIT = vec3(0.58, 0.53, 0.45);
-const vec3 ROCK_MID = vec3(0.49, 0.45, 0.39);
-const vec3 ROCK_SHADE = vec3(0.39, 0.36, 0.32);
+const vec3 ROCK_MID = vec3(0.45, 0.41, 0.36);
+const vec3 ROCK_SHADE = vec3(0.33, 0.30, 0.27);
 const float COAST_ENCODE_FT = 250000.0;
 
 const vec3 PALETTE[19] = vec3[19](
@@ -277,33 +277,64 @@ void main() {
         if (beachy && above < 6.0 && slope < 0.08) col = mix(col, SAND, 1.0 - smoothstep(3.0, 6.0, above));
     }
 
-    // Hillshade, normalized so flat ground is 1.0; light from the north-west.
-    vec3 n = normalize(vec3(-g * uExag, 1.0));
+    // Cliffs and escarpments (Roadmap 7 items 169-170). Close in, where a riser is many pixels wide,
+    // its face is drawn as the battlemap's: matte rock by the way it looks, an inked lip where the
+    // grade crosses CLIFF_T going over the rim (convex) with a lit rim under it, and a long shadow
+    // past its foot (concave), all from the grade's change per pixel (no extra height taps).
+    // Farther out a rock band a pixel or two wide floats as a dark smudge: there the scarp is
+    // hatched, short ink strokes down the fall line, bolder where it is steeper, and its hillshade
+    // is tempered, so a run tapers off into the slope's shading. Close in the strokes hatch the
+    // slopes beside a face.
+    float fill = 1.0 - smoothstep(5.0, 14.0, uFtPerPx);
+    float cliff = wet ? 0.0 : smoothstep(0.9, 1.3, slope) * fill;
+    float dsl = length(dslope);
+    vec2 up = g / max(slope, 1e-6);
+    // Far out, risers are the only ground steeper than ~0.3 (mountainsides stay under it at those
+    // levels); close in, the strokes keep to sharp grade changes (a face's sides), not mountainsides.
+    float scarp = wet ? 0.0 : smoothstep(mix(0.25, 0.4, fill), mix(0.45, 1.0, fill), slope) * mix(1.0, smoothstep(0.02, 0.08, dsl), fill) * (1.0 - cliff);
+
+    // Hillshade, normalized so flat ground is 1.0; light from the north-west. (On a hatched scarp
+    // the exaggerated grade is held to a moderate one: the strokes carry it.)
+    vec2 ge = g * uExag;
+    float gl = length(ge);
+    ge *= mix(1.0, min(1.0, 0.35 / max(gl, 1e-6)), smoothstep(0.24, 0.4, slope) * (1.0 - fill));
+    vec3 n = normalize(vec3(-ge, 1.0));
     vec3 L = normalize(vec3(-1.0, -1.0, 1.3));
     float lambert = dot(n, L) / L.z;
     float shade = wet ? mix(1.0, lambert, 0.1) : lambert;
     col *= clamp(mix(1.0, shade, 0.85), 0.3, 1.3);
 
-    // Cliff faces (Roadmap 7 item 170: risers of a few squares at the finest levels), drawn flat
-    // as the battlemap's: one matte rock tone by the way the face looks, an inked top where the
-    // grade crosses CLIFF_T going over the rim (convex) and a shadow just past the foot (concave),
-    // found from the grade's change per pixel (no extra height taps).
-    float cliff = wet ? 0.0 : smoothstep(0.9, 1.3, slope);
     if (!wet) {
-        vec2 up = g / max(slope, 1e-6);
         float facing = dot(-up, vec2(-0.7071));
-        vec3 rock = mix(mix(ROCK_MID, ROCK_LIT, smoothstep(0.14, 0.26, facing)), ROCK_SHADE, smoothstep(0.14, 0.26, -facing));
-        col = mix(col, rock, cliff * 0.92);
-        float dsl = length(dslope);
-        if (dsl > 1e-3) {
+        float away = smoothstep(0.14, 0.26, -facing);
+        vec3 rock = mix(mix(ROCK_MID, ROCK_LIT, smoothstep(0.14, 0.26, facing)), ROCK_SHADE, away);
+        // (Screen y runs down the map as the samples' y does.)
+        float ds = dot(dslope, up) / max(dsl, 1e-6);
+        col = mix(col, rock, cliff * 0.95);
+        if (scarp > 0.0) {
+            col *= 1.0 - 0.14 * scarp * (0.4 + 0.6 * away);
+            // One stroke per 6.4-px cell (a whole number of cells per 512-px grain period, so tiles
+            // agree), jittered, along the fall line.
+            vec2 gc = (uGrainOrigin + vLocal * uTilePx) / 6.4;
+            vec2 cc = mod(floor(gc), 80.0);
+            vec2 v = fract(gc) - 0.5 - (vec2(hash21(cc), hash21(cc + 17.0)) - 0.5) * 0.3;
+            float along = abs(dot(v, up)), across = abs(dot(v, vec2(-up.y, up.x)));
+            float wid = mix(0.05, 0.13, scarp), len = mix(0.2, 0.42, scarp);
+            float tick = (1.0 - smoothstep(wid, wid + 0.16, across)) * (1.0 - smoothstep(len, len + 0.16, along));
+            col = mix(col, INK, tick * scarp * 0.66);
+        }
+        if (dsl > 1e-3 && fill > 0.0) {
             float gap = abs(slope - CLIFF_T) / dsl;
-            float ds = dot(dslope, up) / dsl;
-            // (Screen y runs down the map as the samples' y does.)
-            float sharp = smoothstep(0.08, 0.3, dsl);
+            float sharp = smoothstep(0.04, 0.2, dsl) * fill;
             if (ds < 0.0) {
-                col = mix(col, INK, (1.0 - smoothstep(1.4, 2.6, gap)) * 0.9 * smoothstep(0.3, 0.7, -ds) * sharp);
+                float over = smoothstep(0.3, 0.7, -ds) * sharp;
+                col = mix(col, INK, (1.0 - smoothstep(1.2, 2.2, gap)) * 0.9 * over);
+                // The face's lit rim just under the lip.
+                if (slope > CLIFF_T) col = mix(col, ROCK_LIT * 1.1, (smoothstep(1.8, 2.6, gap) - smoothstep(4.0, 6.0, gap)) * 0.7 * over);
             } else if (slope < CLIFF_T) {
-                col *= 1.0 - 0.22 * (1.0 - smoothstep(0.0, 4.0, gap)) * smoothstep(0.3, 0.7, ds) * sharp;
+                // The foot's shadow, deeper and longer below a face turned from the light.
+                float reach = mix(6.0, 12.0, away);
+                col *= 1.0 - mix(0.3, 0.42, away) * (1.0 - smoothstep(0.0, reach, gap)) * smoothstep(0.3, 0.7, ds) * sharp;
             }
         }
     }
@@ -349,7 +380,7 @@ void main() {
             vec2 dir = normalize(g + 1e-9);
             float across = dot(p0 * 2.2, vec2(-dir.y, dir.x));
             float line = 1.0 - smoothstep(0.0, aa0 * 2.2, abs(fract(across) - 0.5) - 0.34);
-            col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - cliff));
+            col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - cliff) * (1.0 - scarp));
         }
     }
 
