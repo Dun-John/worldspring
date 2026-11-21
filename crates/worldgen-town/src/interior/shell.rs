@@ -53,13 +53,33 @@ pub struct Shell<'a> {
 /// the outline.
 pub const WALL_HALF: f64 = 0.225;
 
+/// A lighthouse on a breakwater's head (`town::harbour`): the unit vector from the head back along
+/// the mole toward the bank.
+pub(super) fn lighthouse_back(l: &Layout, b: &town::Building) -> Option<P> {
+    if func_key(b) != Some("lighthouse") {
+        return None;
+    }
+    let c = geom::centroid(&b.poly);
+    let m = l.moles.iter().find(|m| m.pts.len() >= 2 && m.pts.last().is_some_and(|t| geom::dist(*t, c) < 4.0))?;
+    let n = m.pts.len();
+    let d = sub(m.pts[n - 2], m.pts[n - 1]);
+    let k = geom::dist(m.pts[n - 2], m.pts[n - 1]);
+    (k > 1e-6).then(|| mul(d, 1.0 / k))
+}
+
 impl<'a> Shell<'a> {
     pub fn of(l: &'a Layout, b: &town::Building) -> Shell<'a> {
         if !b.parts.is_empty() {
             return Shell::of_parts(l, b);
         }
         let o = geom::obb(&b.poly);
-        let (u, v) = (o.axis, [-o.axis[1], o.axis[0]]);
+        // (A lighthouse on a breakwater's head: its grid along the mole, `u` back toward the bank,
+        // so a side faces the way out along it: `builder`'s front.)
+        let u = match lighthouse_back(l, b) {
+            Some(back) => back,
+            None => o.axis,
+        };
+        let v = [-u[1], u[0]];
         let (a0, a1) = geom::extent(&b.poly, u);
         let (b0, b1) = geom::extent(&b.poly, v);
         let nx = (crate::core::round((a1 - a0) / SQUARE_FT) as usize).max(2);

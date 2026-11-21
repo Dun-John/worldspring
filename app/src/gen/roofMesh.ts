@@ -1044,34 +1044,47 @@ function circle(cx: number, cy: number, r: number, n: number): number[] {
 /** The plaster of a dome's drum and the flat roof round it (whitewash keeps its own). */
 const PLASTER = 0xb4a68b;
 
-/** A dome of radius r about (cx, cy) on its drum: its shadow on the roof round it, the drum's ring, the
- * dome in three flat tones lit from the NW (a shaded crescent to the SE, the mid tone, a lit cap towards
- * the light), its seams in a few ribs (not whitewash) up to a finial, inked round. */
+/** A dome of radius r about (cx, cy) on its drum: its shadow on the roof round it, the drum's ring and a
+ * lip on it, the dome in sixteen gores rising to a crown pulled towards the NW light (so it stands up off
+ * the roof), each gore in one of three flat tones by the way it faces (lit NW, shaded SE), a lit cap at
+ * the crown, ribs between gores up to a finial and (not whitewash) two courses of tiles round it, inked
+ * round. */
 function dome(g: MeshBuilder, cx: number, cy: number, r: number, tint: number) {
   const n = 24;
-  g.poly(circle(cx + r * 0.24, cy + r * 0.24, r * 1.06, n), 0x000000, 0.3);
-  const drum = circle(cx, cy, r * 1.12, n);
-  g.poly(drum, g.mat === 11 ? shadeHex(tint, 1.04) : PLASTER);
+  const white = g.mat === 11;
+  g.poly(circle(cx + r * 0.3, cy + r * 0.3, r * 1.08, n), 0x000000, 0.32);
+  const drum = circle(cx, cy, r * 1.14, n);
+  g.poly(drum, white ? shadeHex(tint, 0.94) : PLASTER);
   g.outline(drum, INK_LINE, ROOF_INK);
-  // (Each lighter disc inside the last, pushed towards the light.)
+  g.outline(circle(cx, cy, r * 1.07, n), 0.012 * PX, shadeHex(white ? tint : PLASTER, 0.8), 0.8);
+  // (The crown: off the middle towards the light.)
   const nw = -Math.SQRT1_2;
-  for (const [f, o, t] of [
-    [1, 0, 0.86],
-    [0.84, 0.16, 1.0],
-    [0.62, 0.26, 1.12],
-  ]) {
-    g.poly(circle(cx + nw * r * o, cy + nw * r * o, r * f, n), shadeHex(tint, t));
+  const [ax, ay] = [cx + nw * r * 0.22, cy + nw * r * 0.22];
+  const gores = 16;
+  const rim = (k: number): [number, number] => [cx + r * Math.cos((2 * Math.PI * k) / gores), cy + r * Math.sin((2 * Math.PI * k) / gores)];
+  for (let k = 0; k < gores; k++) {
+    const th = (2 * Math.PI * (k + 0.5)) / gores;
+    const t = -(Math.cos(th) + Math.sin(th)) / Math.SQRT2;
+    const c = shadeHex(tint, t > 0.45 ? 1.08 : t > -0.35 ? 0.98 : 0.87);
+    const [p, q] = [rim(k), rim(k + 1)];
+    g.tri(g.vert(p[0], p[1], c, 1), g.vert(q[0], q[1], c, 1), g.vert(ax, ay, c, 1));
   }
-  if (g.mat !== 11) {
-    const rib = shadeHex(tint, 0.72);
-    for (let j = 0; j < 8; j++) {
-      const th = (Math.PI * j) / 4 + Math.PI / 8;
-      g.line(cx + r * 0.97 * Math.cos(th), cy + r * 0.97 * Math.sin(th), cx + r * 0.12 * Math.cos(th), cy + r * 0.12 * Math.sin(th), 0.018 * PX, rib, 0.8);
+  g.poly(circle(ax + nw * r * 0.06, ay + nw * r * 0.06, r * 0.3, 12), shadeHex(tint, 1.14), 0.9);
+  // (Courses of tiles round it, each ring nearer the crown as it rises.)
+  const rib = shadeHex(tint, white ? 0.84 : 0.7);
+  if (!white) {
+    for (const f of [0.72, 0.44]) {
+      const [ox, oy] = [cx + (ax - cx) * (1 - f), cy + (ay - cy) * (1 - f)];
+      g.outline(circle(ox, oy, r * f, n), 0.016 * PX, rib, 0.75);
     }
   }
+  for (let k = 0; k < gores; k += white ? 2 : 1) {
+    const [p] = [rim(k)];
+    g.line(p[0] + (ax - p[0]) * 0.03, p[1] + (ay - p[1]) * 0.03, ax + (p[0] - ax) * 0.12, ay + (p[1] - ay) * 0.12, (k % 2 ? 0.012 : 0.02) * PX, rib, white ? 0.65 : 0.85);
+  }
   g.outline(circle(cx, cy, r, n), INK_OUT, ROOF_INK);
-  g.poly(circle(cx, cy, Math.max(2, r * 0.09), 8), ROOF_INK);
-  g.poly(circle(cx - r * 0.015, cy - r * 0.015, Math.max(1, r * 0.05), 8), 0xb8963e);
+  g.poly(circle(ax, ay, Math.max(2, r * 0.09), 8), ROOF_INK);
+  g.poly(circle(ax - r * 0.015, ay - r * 0.015, Math.max(1, r * 0.05), 8), 0xb8963e);
 }
 
 /** A domed roof: a flat roof behind its parapet round the drum, one dome over its widest middle (two

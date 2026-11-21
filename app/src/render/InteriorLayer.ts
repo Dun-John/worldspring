@@ -24,7 +24,7 @@ import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TER
 import { nearestWall, wallDistance, type WallDistance } from './wallField';
 import { drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetParts, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, YURT_ROOMS, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import { drawWinders, winderLinks } from './interior/winder';
-import { drawLampFloor, drawLampGlass, isLampTop } from './interior/lamp';
+import { LAMP_ROOM, drawLampFloor, drawLampGlass, isLampTop } from './interior/lamp';
 import { ON_WALL, BACKED, UNDERFOOT, ALONG_RUN, setBack, sideOf, sharedKind, SCATTERED, INK, lockColor, TERRAIN_KINDS, SPAN_KINDS, hash2, IRON, padlock, keyGlyph, blob, COVER, underProgram, UNDER_DIM, itemAt, itemVariant, BANNERS, floorColor, floorPattern, OPEN_TOP, itemColor } from './interior/look';
 import { SQUARE_FT } from './scale';
 import { RAIL_SQUARES, drawRails, drawArcade } from './interior/rails';
@@ -1140,6 +1140,8 @@ export class InteriorLayer {
       if (r.squares < 4 || lv.cells[cj * nx + ci] !== ri || r.kind === 'floor' || r.kind === OPEN_BELOW || r.kind === ROOF_SLOPE) return;
       // The small crossings of galleries (3x3 junctions) need no name each.
       if (r.kind === 'junction' && r.squares <= 9) return;
+      // (A lighthouse's lamp room is its lamp: the level's name says it, the lamp left unlabelled.)
+      if (r.kind === LAMP_ROOM) return;
       // A network of sewers: the tunnels need no name in every section.
       if (this.tile && (r.kind === 'sewer tunnel' || r.kind === 'service passage')) return;
       const text = new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 });

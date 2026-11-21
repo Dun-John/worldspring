@@ -82,7 +82,11 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         let made: Vec<Vec<P>> = l.moles.iter().filter(|m| m.pts.last().is_some_and(|t| geom::dist(*t, geom::centroid(&b.poly)) < 4.0)).flat_map(|m| m.polys()).collect();
         let dry = |p: P| made.is_empty() || [[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]].iter().all(|d| made.iter().any(|g| geom::contains(g, add(p, *d))));
         let clear = |k: usize| dry(out(k)) && annex.iter().all(|a| [-1.0, 0.0, 1.0].iter().all(|&t| geom::poly_gap(a, &[along(k, t)]) >= 3.6));
-        if clear(front) {
+        // (On a breakwater's head its grid runs along the mole (`shell::lighthouse_back`): the door
+        // on the side toward the bank, down the lane its annexes leave along the mole's middle.)
+        if shell::lighthouse_back(l, b).is_some() && open[1] > 0 {
+            1
+        } else if clear(front) {
             front
         } else {
             (0..4).filter(|&k| clear(k) && (!any_open || open[k] > 0)).min_by(|&x, &y| geom::dist(out(x), out(front)).total_cmp(&geom::dist(out(y), out(front)))).unwrap_or(front)

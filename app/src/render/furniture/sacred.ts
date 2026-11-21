@@ -313,32 +313,49 @@ export function spurWheel(g: Graphics, f: InteriorItem, light: Light, rnd: () =>
   g.circle(nx, ny, 0.05).fill(IRON[1]).stroke({ width: 0.016, color: INK });
 }
 
-/** A lighthouse's lamp from above (v66b): one big round lamp, a bold brass ring holding its lens, the lens's
- * rings pale round a glowing yellow heart, short rays of light out from it all round. */
+/** A lighthouse's lamp from above (v66b): the lamp room's centrepiece, drawn past its one square to fill the
+ * middle of the round 3x3 room (a walkable ring left inside the glazing), in the lantern's look on the map
+ * (`harbourShapes.drawLantern`): a brass pedestal ring, a great lens of eight bullseye panels in iron frames,
+ * pale glass glowing yellow at its heart, warm rays out between the frames. */
 export function lighthouseLamp(g: Graphics, f: InteriorItem, light: Light, _rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
-  const r = Math.min(f.w, f.h) / 2 - 0.04;
-  // (Rays between the ring's lugs, then its glow.)
+  const r = 1.05 * Math.max(1, Math.min(f.w, f.h));
+  const SILL = 0xc89a3c;
+  // (Its glow and rays on the floor round it, between the lens's frames.)
+  g.circle(cx, cy, r * 1.08).fill({ color: 0xffe29a, alpha: 0.3 });
+  for (let k = 0; k < 8; k++) {
+    const a = ((k + 0.5) / 8) * Math.PI * 2;
+    const [ux, uy] = [Math.cos(a), Math.sin(a)];
+    g.poly([cx + ux * r * 0.8 - uy * r * 0.13, cy + uy * r * 0.8 + ux * r * 0.13, cx + ux * r * 1.22, cy + uy * r * 1.22, cx + ux * r * 0.8 + uy * r * 0.13, cy + uy * r * 0.8 - ux * r * 0.13]).fill({ color: 0xffd65a, alpha: 0.8 });
+  }
+  // The pedestal: a broad brass ring, its shadow away from the light, lit on the light's side.
+  g.circle(cx - light[0] * r * 0.06, cy - light[1] * r * 0.06, r * 0.86).fill({ color: 0x000000, alpha: 0.2 });
+  g.circle(cx, cy, r * 0.84).fill(shade(SILL, 0.8)).stroke({ width: OUT, color: INK });
+  g.circle(cx + light[0] * r * 0.03, cy + light[1] * r * 0.03, r * 0.78).fill(SILL);
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2;
-    const [ux, uy] = [Math.cos(a), Math.sin(a)];
-    g.poly([cx + ux * r * 0.7 - uy * r * 0.12, cy + uy * r * 0.7 + ux * r * 0.12, cx + ux * r * 1.02, cy + uy * r * 1.02, cx + ux * r * 0.7 + uy * r * 0.12, cy + uy * r * 0.7 - ux * r * 0.12]).fill({ color: 0xffd65a, alpha: 0.75 });
+    g.circle(cx + Math.cos(a) * r * 0.79, cy + Math.sin(a) * r * 0.79, r * 0.045).fill(shade(SILL, 0.65)).stroke({ width: LINE * 0.7, color: INK });
   }
-  g.circle(cx, cy, r * 0.86).fill({ color: 0xffe08a, alpha: 0.35 });
-  // The brass ring, lit on the light's side, four lugs bolting it to its stand.
-  g.circle(cx, cy, r * 0.74).fill(BRASS).stroke({ width: OUT, color: INK });
-  g.circle(cx + light[0] * r * 0.04, cy + light[1] * r * 0.04, r * 0.66).fill(shade(BRASS, 1.18));
-  for (let k = 0; k < 4; k++) {
-    const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
-    g.circle(cx + Math.cos(a) * r * 0.7, cy + Math.sin(a) * r * 0.7, r * 0.07).fill(shade(BRASS, 0.7)).stroke({ width: LINE * 0.7, color: INK });
+  // The lens: eight bullseye panels of pale glass, each with its rings round a warm eye, in iron frames.
+  const L = r * 0.7;
+  g.circle(cx, cy, L).fill(0xfff0c0).stroke({ width: LINE, color: INK });
+  for (let k = 0; k < 8; k++) {
+    const a = ((k + 0.5) / 8) * Math.PI * 2;
+    const [ex, ey] = [cx + Math.cos(a) * L * 0.62, cy + Math.sin(a) * L * 0.62];
+    for (const q of [0.28, 0.18]) g.circle(ex, ey, L * q).stroke({ width: 0.016, color: 0xd9a838, alpha: 0.85 });
+    g.circle(ex, ey, L * 0.09).fill({ color: 0xffc21f, alpha: 0.9 });
   }
-  // The lens: pale glass in rings, the yellow heart glowing through it.
-  g.circle(cx, cy, r * 0.56).fill(0xfff3c6).stroke({ width: LINE, color: INK });
-  for (const k of [0.46, 0.36, 0.26]) g.circle(cx, cy, r * k).stroke({ width: 0.018, color: 0xd9a838, alpha: 0.9 });
-  g.circle(cx, cy, r * 0.2).fill(0xffc21f);
-  g.circle(cx, cy, r * 0.11).fill(0xfffbe6);
-  // (A glint on the glass toward the light.)
-  g.circle(cx + light[0] * r * 0.32, cy + light[1] * r * 0.32, r * 0.06).fill(0xffffff);
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2;
+    g.moveTo(cx + Math.cos(a) * L * 0.3, cy + Math.sin(a) * L * 0.3).lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L);
+  }
+  g.stroke({ width: 0.035, color: IRON[0], cap: 'round' });
+  // (The burner at its heart glowing through, a glint on the glass toward the light.)
+  g.circle(cx, cy, L * 0.3).fill(0xffe29a).stroke({ width: 0.03, color: IRON[0] });
+  g.circle(cx, cy, L * 0.2).fill(0xffc21f);
+  g.circle(cx, cy, L * 0.1).fill(0xfffbe6);
+  const [gx, gy] = [cx + light[0] * L * 0.8, cy + light[1] * L * 0.8];
+  g.moveTo(gx - light[1] * L * 0.18, gy + light[0] * L * 0.18).lineTo(gx + light[1] * L * 0.18, gy - light[0] * L * 0.18).stroke({ width: 0.04, color: 0xffffff, alpha: 0.85, cap: 'round' });
 }
 
 /** Cauldron: a round black iron pot on three short legs, the embers of a fire glowing round its foot, a
