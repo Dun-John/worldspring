@@ -18,6 +18,9 @@
 //!   edge and its streets, so from outside the outer gate: castle buildings cut off, outer gates
 //!   not reached, bailey squares sealed (and the largest pocket); the same for every park.
 //! - `slums`: out-of-town slum patches as generated, their buildings, and those with none (`SLUMS_LIST=1`: each).
+//! - `stairs`: steep streets in towns and up (`town::stairs`; default seeds 1-8): feet between stations both at
+//!   `g_on` or steeper, stepped, in a corner's landing, level by rule, and the steep street length without
+//!   stairs (ft) with its worst streets; `STAIRS_TOWN=<name>` prints that settlement's streets' grades.
 //! - `yurts`: round homes' doors (`town::round_off`): how many, the share facing their lane (within 70 ft)
 //!   or the centre within 30 degrees, the share still facing south, interior door squares more than 1.5
 //!   square from the ring's door side, and up to 8 listed per world with seed, layout, id, x,y and angle.
@@ -172,9 +175,10 @@ mod steppe;
 mod patterns;
 mod planning;
 mod wedges;
+mod stairs;
 
 fn main() {
-    const MODES: [&str; 36] = ["wings", "wedges", "planning", "patterns", "streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
+    const MODES: [&str; 37] = ["stairs", "wings", "wedges", "planning", "patterns", "streetsin", "slums", "hand", "same", "fills", "harbours", "horseparks", "steppe", "castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all", "rows"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -191,7 +195,7 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"] || modes == ["planning"] || modes == ["patterns"] || modes == ["wedges"] || modes == ["wings"]) {
+    let worlds = if worlds.is_empty() && (modes == ["yurts"] || modes == ["slums"] || modes == ["fills"] || modes == ["rows"] || modes == ["hand"] || modes == ["steppe"] || modes == ["horseparks"] || modes == ["harbours"] || modes == ["planning"] || modes == ["patterns"] || modes == ["wedges"] || modes == ["wings"] || modes == ["stairs"]) {
         (1..=8).map(|s| s.to_string()).collect()
     } else if worlds.is_empty() {
         vec!["1".into(), "2".into(), "3".into()]
@@ -258,6 +262,7 @@ fn main() {
                 "patterns" => patterns::patterns(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
                 "wedges" => wedges::wedges(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
                 "wings" => wedges::wings(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
+                "stairs" => stairs::stairs_check(&ctx.ex.world, &ctx.ex.t0, &label, &mut r),
                 "castlepieces" => castle_pieces(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),

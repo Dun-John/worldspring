@@ -112,7 +112,8 @@ fn towns_meet_roads_and_water() {
         let ch = if l.stairs.is_empty() { Default::default() } else { channel(t0, l.bbox) };
         for (k, st) in l.stairs.iter().enumerate() {
             let length: f64 = st.pts.windows(2).map(|w| geom::dist(w[0], w[1])).sum();
-            assert!(length >= prm.min_run - 1e-6 && st.rise as f64 >= prm.min_rise - 1e-3, "settlement {i}: a flight at {:?} only {length:.1} ft long, rising {:.1} ft", st.pts[0], st.rise);
+            // (`min_run` long, or two treads where a corner's landing cuts the slope short.)
+            assert!(length >= 2.0 * town::stairs::TREAD - 1e-6 && st.rise as f64 >= prm.min_rise - 1e-3, "settlement {i}: a flight at {:?} only {length:.1} ft long, rising {:.1} ft", st.pts[0], st.rise);
             for seg in st.pts.windows(2) {
                 let (u, d) = (geom::sub(seg[1], seg[0]), geom::dist(seg[0], seg[1]).max(1e-9));
                 let n = (d / 2.5).ceil() as usize;

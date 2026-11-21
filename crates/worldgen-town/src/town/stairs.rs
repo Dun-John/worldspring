@@ -68,7 +68,7 @@ pub struct Profile {
     /// The street's width when it has no pieces.
     pub width: f64,
     /// Station positions along `line` (every 5 ft from its start, and its end), ground height,
-    /// grade, and level (where steps never go: water and ground below it, bridges, plazas, alleys
+    /// grade, and level (where steps never go: water, the river's banks, bridges, plazas, alleys
     /// meeting it).
     pub s: Vec<f64>,
     pub h: Vec<f64>,
@@ -175,8 +175,9 @@ pub(super) fn profiles(site: &Site, pos: &[P], pieces: &Pieces, l: &Layout, g_mi
     let plazas: Vec<([f64; 4], &Vec<P>)> = l.plazas.iter().map(|p| (bbox(&p.pts, PLAZA_CLEAR), &p.pts)).collect();
     let bridges: Vec<([f64; 4], &Vec<P>)> = l.bridges.iter().map(|p| (bbox(p, 0.0), p)).collect();
     let level_at = |p: P| {
+        // (Not ground below a lake's level beside it: a river valley cut below the lake is
+        // drawn as planned, a slope like any other, so it steps like one.)
         site.wet(p)
-            || site.below_shore(p)
             || site.near_river(p, 10.0)
             || bridges.iter().any(|(bb, poly)| inside(bb, p) && contains(poly, p))
             || plazas.iter().any(|(bb, poly)| inside(bb, p) && (contains(poly, p) || (0..poly.len()).any(|k| seg_dist(p, poly[k], poly[(k + 1) % poly.len()]) < PLAZA_CLEAR)))
@@ -367,9 +368,13 @@ pub fn runs(p: &Profile, prm: &StairParams) -> Vec<(f64, f64, f64)> {
     spans
         .into_iter()
         .filter_map(|(s0, s1)| {
+            let (cut0, cut1) = (s0 < p.ends[0], s1 > p.len - p.ends[1]);
             let (s0, s1) = (s0.max(p.ends[0]), s1.min(p.len - p.ends[1]));
             let rise = (p.h_at(s1) - p.h_at(s0)).abs();
-            (s1 - s0 >= prm.min_run && rise >= prm.min_rise).then_some((s0, s1, rise))
+            // A flight cut short by a landing (its slope goes on past the corner, down a street
+            // meeting it) may be shorter than `min_run`: two treads at least.
+            let least = if cut0 || cut1 { 2.0 * TREAD } else { prm.min_run };
+            (s1 - s0 >= least && rise >= prm.min_rise).then_some((s0, s1, rise))
         })
         .collect()
 }
