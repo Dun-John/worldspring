@@ -625,7 +625,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     }
     // (And on the front itself, off the inlet: a square its made ground levelled is the shore's
     // plain ground again, and only its strip along the lots is paved.)
-    let mut on_front = 0;
+    let (mut on_front, mut at_level) = (0, Vec::new());
     for i in 0..settlements.len() {
         let l = worldgen::town::layout(&ex.world, &ex.t0, i);
         let kept: Vec<&worldgen::town::harbour::Quay> = worldgen::town::harbour::quays_kept(&ex.world, &l).collect();
@@ -640,14 +640,29 @@ pub(in super::super) fn ground_edits(base: &World) {
                 {
                     continue;
                 }
-                // (Made ground raised over the shore, or cut down into the bank behind it.)
-                assert!(c.height[q] != plain_c.1.height[q], "the inlet: square {q} on the front it meets still made ground ({} at level {})", c.height[q], f.level);
+                // (Made ground raised over the shore, or cut down into the bank behind it: the
+                // ground there is off the front's level, but where the ground with no front at all
+                // sits at it, below.)
+                if (c.height[q] - f.level).abs() <= 0.01 {
+                    at_level.push((q, f.level));
+                }
                 assert!(worldgen::town::geom::contains(&strip, p) || worldgen::town::geom::poly_gap(&strip, &[p]) < 3.0 || c.urban[q] != battlemap::URBAN_PLAZA, "the inlet: square {q} off the front's strip still paved");
                 on_front += 1;
             }
         }
     }
     assert!(on_front > 0, "the inlet: no square of a front it meets to look at");
+    // (The ground with no front at all may sit at its level: the battlemap's guarantee lifts a
+    // knoll's top a tier and a fifth over the sea, as low a quay's level as there is. Its top is
+    // one square, the ground round it lower: made ground left behind is level over many. The
+    // ground with the front taken away elsewhere is no measure: the guarantee sets its knolls
+    // by the whole chunk.)
+    assert!(at_level.len() * 10 <= on_front, "the inlet: {} of {on_front} squares on the front it meets still at its level", at_level.len());
+    for (q, level) in at_level {
+        let (i, j) = ((q % SQ) as i64, (q / SQ) as i64);
+        let level_by = [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().filter(|(di, dj)| (0..SQ as i64).contains(&(i + di)) && (0..SQ as i64).contains(&(j + dj))).any(|(di, dj)| (c.height[((j + dj) * SQ as i64 + i + di) as usize] - level).abs() <= 0.01);
+        assert!(!level_by, "the inlet: square {q} on the front it meets still made ground ({} at level {level}, and a square by it)", c.height[q]);
+    }
     assert!(agent::building_spot(&ex.world, &ex.t0, &foot([shore[0] - 25.0, shore[1]]), None, "c:99", None).is_err(), "a building in the inlet");
     let tk = fine(shore);
     let shaped_tile = ex.terrain_packed(tk);

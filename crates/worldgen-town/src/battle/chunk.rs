@@ -204,6 +204,9 @@ pub enum ShapeKind {
     Ship = 33,
     /// A lighthouse's lamp gallery over its roof: its middle; `size` its radius (squares).
     Lantern = 34,
+    /// (Roadmap 7) A stone quay front's coping along its face: its line, the water on its
+    /// left-hand normal; `size` the coping's width (squares).
+    Coping = 35,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands

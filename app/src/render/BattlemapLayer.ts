@@ -26,7 +26,7 @@ import { looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { sprites } from './spriteCode';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
-import { drawBreakwaterArmour, drawCog, drawLantern } from './harbourShapes';
+import { drawBreakwaterArmour, drawCog, drawLantern, drawQuayCoping } from './harbourShapes';
 import { drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawGravelWalk, drawRaisedDrawbridge, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
@@ -937,6 +937,8 @@ export class BattlemapLayer {
       else if (s.kind === 13) drawGravelWalk(daisG, s);
       // R5 M20: a breakwater's armour, on the ground and the water by it.
       else if (s.kind === BREAKWATER) drawArmour(daisG, s);
+      // (Roadmap 7: a stone quay front's coping along its face.)
+      else if (s.kind === COPING) drawCoping(daisG, s);
     }
     const battleG = new Graphics();
     for (const r of c.battlements) drawBattlements(battleG, r);
@@ -1276,6 +1278,14 @@ export function dropShadowOf(inf: { name?: string; radius: number; height_ft: nu
 const BREAKWATER = 32;
 const SHIP = 33;
 const LANTERN = 34;
+const COPING = 35;
+
+/** A stone quay front's coping along its line (px), `size` squares across. */
+function drawCoping(g: Graphics, s: Shape) {
+  const pts: [number, number][] = [];
+  for (let i = 0; i + 1 < s.pts.length; i += 2) pts.push([s.pts[i], s.pts[i + 1]]);
+  drawQuayCoping(g, pts, (s.size / PX) * 5, Math.floor(Math.abs(s.pts[0] * 7 + s.pts[1] * 13)) % 997);
+}
 
 /** A breakwater's armour along its line (px), the band `size` squares across. */
 function drawArmour(g: Graphics, s: Shape) {

@@ -681,6 +681,21 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // Parks: a lawn (a formal garden's mown), gravel paths and rounds on it; its pond, stream
         // and raised tier, round features raised a tier and what it sets out (laid out whole by
         // every chunk it reaches, so they agree).
+        // (Roadmap 7: a park or a field never over paving or a deck, where a city's quay front
+        // runs past it.)
+        let stamp_unpaved = |poly: &[[f64; 2]], val: u8, urb_h: &mut Vec<u8>| {
+            let b = bbox(poly);
+            let paved: Vec<(usize, u8)> = if !overlaps(b) {
+                Vec::new()
+            } else {
+                let (i0, j0, i1, j1) = range(b);
+                if i1 < 0.0 || j1 < 0.0 { Vec::new() } else { (j0..=j1 as usize).flat_map(|j| (i0..=i1 as usize).map(move |i| j * HS + i)).filter(|&h| matches!(urb_h[h], URBAN_PLAZA | URBAN_DECK)).map(|h| (h, urb_h[h])).collect() }
+            };
+            stamp(poly, val, urb_h);
+            for &(h, u) in &paved {
+                urb_h[h] = u;
+            }
+        };
         for (pki, pk) in l.parks.iter().enumerate() {
             let b = bbox(&pk.pts);
             if !overlaps((b.0 - 20.0, b.1 - 20.0, b.2 + 20.0, b.3 + 20.0)) {
@@ -746,7 +761,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 park_props.extend(lay.props.iter().copied());
                 continue;
             }
-            stamp(&pk.pts, URBAN_PARK, &mut urb_h);
+            stamp_unpaved(&pk.pts, URBAN_PARK, &mut urb_h);
             park_biomes.push(pb);
             let (i0, j0, i1, j1) = range(b);
             if i1 >= 0.0 && j1 >= 0.0 {
@@ -800,7 +815,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             park_props.extend(lay.props.iter().copied());
         }
         for (fi, f) in l.fields.iter().enumerate() {
-            stamp(f, URBAN_FIELD, &mut urb_h);
+            stamp_unpaved(f, URBAN_FIELD, &mut urb_h);
             if let Some(info) = l.field_info.get(fi) {
                 stamp(f, crate::town::fields::square_byte(info), &mut fld_h);
             }
@@ -1198,9 +1213,18 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // P2 160: a timber quay front planked over (a stone one is the quay's paving).
         // (Roadmap 7: drawn as the hand shore quay's planks, `Deck` style 4, in ~40 ft pieces each
         // owned where its middle is.)
-        for q in crate::town::harbour::quays_kept(world, &l).filter(|q| q.timber) {
+        for q in crate::town::harbour::quays_kept(world, &l) {
             for piece in q.band_pieces(8).iter().filter(|p| owns(crate::town::geom::centroid(p))) {
-                shapes.push(VectorShape { kind: ShapeKind::Deck, size: 4.0, pts: piece.iter().map(local).collect() });
+                if q.timber {
+                    shapes.push(VectorShape { kind: ShapeKind::Deck, size: 4.0, pts: piece.iter().map(local).collect() });
+                    continue;
+                }
+                // (A stone one's coping along its face, the water on the line's left.)
+                let h = piece.len() / 2;
+                let (a, e, b) = (piece[0], piece[h - 1], piece[piece.len() - 1]);
+                let flip = (e[0] - a[0]) * (b[1] - a[1]) - (e[1] - a[1]) * (b[0] - a[0]) > 0.0;
+                let pts: Vec<[f32; 2]> = (0..h).map(|j| if flip { h - 1 - j } else { j }).map(|j| local(&piece[j])).collect();
+                shapes.push(VectorShape { kind: ShapeKind::Coping, size: (2.2 / SQUARE_FT) as f32, pts });
             }
         }
         for b in l.buildings.iter().filter(|b| crate::town::harbour::is_lighthouse(b)) {

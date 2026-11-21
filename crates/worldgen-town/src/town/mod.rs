@@ -1169,6 +1169,19 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         l.pattern = plan.pattern.code();
         l.pattern_mark = pattern::mark(world, t0, index) as u8;
         let hand = build_town(&site, s, r, &plan, &ch, &mut l, survey);
+        // (Roadmap 7: no lot's house stands on a quay front's band, where the front's back,
+        // square to its face, reaches past the lots' fronts.)
+        if !l.quays.is_empty() {
+            let bands: Vec<(Vec<P>, [f64; 4])> = l.quays.iter().map(|q| q.band()).map(|b| { let bb = geom::bbox(&b); (b, bb) }).collect();
+            l.buildings.retain(|b| {
+                b.keep.is_some()
+                    || !b.parts.is_empty()
+                    || bands.iter().all(|(band, bb)| {
+                        let o = geom::bbox(&b.poly);
+                        o[2] < bb[0] || o[0] > bb[2] || o[3] < bb[1] || o[1] > bb[3] || (geom::poly_gap(band, &b.poly) > 0.25 && !geom::contains(band, b.poly[0]))
+                    })
+            });
+        }
         // (Read by a conversion to a hand town alone: `hand::convert`.)
         hand::cap_plan(index, &plan);
         walls_off_river(&site, &mut l, &hand);

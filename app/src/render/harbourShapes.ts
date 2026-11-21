@@ -379,3 +379,40 @@ export function drawLantern(g: Graphics, x: number, y: number, radiusFt = 9.5, s
     g.circle(-C * 0.07, -C * 0.07, C * 0.09).fill(0xe8d48e);
   });
 }
+
+/** A stone quay front's coping along its face `pts` (px), the water on their left-hand normal: a
+ * course of pale dressed blocks `widthFt` across laid along the edge, their joints square to it,
+ * inked boldly along the water, a lit arris just inside. */
+export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1.6, seed = 0) {
+  if (pts.length < 2) return;
+  const rnd = rng((seed ^ Math.imul(Math.round(pts[0][0]), 73856093) ^ Math.imul(Math.round(pts[0][1]), 19349663)) >>> 0);
+  const wid = widthFt * FT;
+  const inner = offsetLine(pts, -wid);
+  const line = (p: [number, number][], width: number, color: number, alpha: number) => {
+    g.moveTo(p[0][0], p[0][1]);
+    for (const [x, y] of p.slice(1)) g.lineTo(x, y);
+    g.stroke({ width, color, alpha, cap: 'butt', join: 'round' });
+  };
+  // (The wall's wet face below it, a soft shade on the water.)
+  line(offsetLine(pts, wid * 0.35), wid * 0.7, 0x2a3e40, 0.3);
+  g.poly([...pts.flat(), ...[...inner].reverse().flat()]).fill(RUBBLE[2]);
+  line(offsetLine(pts, -wid * 0.3), wid * 0.25, RUBBLE[3], 0.8);
+  // The joints: one every 2.4-3.4 ft along the face, square across the course.
+  let carry = rnd() * 2 * FT;
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, ay] = pts[i - 1];
+    const [bx, by] = pts[i];
+    const len = Math.hypot(bx - ax, by - ay);
+    if (len < 1e-6) continue;
+    const [ux, uy] = [(bx - ax) / len, (by - ay) / len];
+    let t = carry;
+    while (t < len) {
+      const [x, y] = [ax + ux * t, ay + uy * t];
+      g.moveTo(x, y).lineTo(x + uy * wid, y - ux * wid).stroke({ width: LINE, color: RUBBLE[0], alpha: 0.75 });
+      t += (2.4 + rnd()) * FT;
+    }
+    carry = t - len;
+  }
+  line(inner, LINE, RUBBLE[0], 0.7);
+  line(pts, OUT, INK, 0.85);
+}

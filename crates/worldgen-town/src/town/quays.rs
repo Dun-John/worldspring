@@ -320,7 +320,9 @@ fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], 
         .collect();
     let face_at = |k: usize, f: f64| add(smp[k].0, mul(normal[k], f));
     // (Where a front must end: by a bridge, an islet, a river crossing its back or meeting its
-    // face, where the sea gives way to a river, across a river's mouth.)
+    // face, across a river's mouth, where the sea gives way to a river round a corner. Roadmap 7:
+    // where it does so along a straight shore, it runs on, its face easing from the one's to the
+    // other's.)
     let hard: Vec<bool> = (0..=n)
         .map(|k| {
             let Some((t, river)) = walk[k] else {
@@ -331,7 +333,10 @@ fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], 
             if site.near_river(b, 0.0) || l.bridges.iter().any(|d| poly_gap(d, &[b]) < 10.0) {
                 return true;
             }
-            if (k.saturating_sub(2)..=(k + 2).min(n)).any(|j| walk[j].is_some_and(|w| w.1 != river)) {
+            // (Where the sea gives way to a river round a corner, the mouth's: a band carried round
+            // it would fold.)
+            let bent = dot(normal[k.saturating_sub(4)], normal[(k + 4).min(n)]) < 0.82;
+            if bent && (k.saturating_sub(2)..=(k + 2).min(n)).any(|j| walk[j].is_some_and(|w| w.1 != river)) {
                 return true;
             }
             let (f, m) = (face_at(k, t + if river { -1.0 } else { FACE_OUT_FT }), face_at(k, 0.5 * (t - back_depth(back[k], t))));
@@ -350,24 +355,27 @@ fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], 
         }
         // (A run from good sample to good sample over gaps of at most `span`, the edge
         // interpolated across them.)
-        let river = walk[k].is_some_and(|w| w.1);
         let (k0, mut k1) = (k, k);
         let mut raw: Vec<f64> = vec![walk[k].map_or(0.0, |w| w.0)];
+        let mut river: Vec<bool> = vec![walk[k].is_some_and(|w| w.1)];
         let mut j = k + 1;
         while j <= n && !hard[j] && j - k1 <= span {
             if good(j) {
                 let (t0, t1) = (raw[raw.len() - 1], walk[j].map_or(0.0, |w| w.0));
                 let gap = j - k1;
+                let r0 = river[river.len() - 1];
                 for g in 1..gap {
                     raw.push(t0 + (t1 - t0) * g as f64 / gap as f64);
+                    river.push(r0);
                 }
                 raw.push(t1);
+                river.push(walk[j].is_some_and(|w| w.1));
                 k1 = j;
             }
             j += 1;
         }
         if k1 - k0 >= 7 {
-            any |= run_front(site, s, l, &smp, &normal, &back, &raw, river, (k0, k1), timber_share, covered);
+            any |= run_front(site, s, l, &smp, &normal, &back, &raw, &river, (k0, k1), timber_share, covered);
         }
         k = k1 + 1;
     }
@@ -375,9 +383,11 @@ fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], 
 }
 
 /// One front along samples `k0..=k1` of a chain (`chain_fronts`): its face smoothed along the
-/// water's edge, split into stone and timber stretches.
+/// water's edge, split into stone and timber stretches; `river` per sample, whether its water is
+/// a river's (the face 1 ft short of the channel there, else `FACE_OUT_FT` past the edge, eased
+/// from the one to the other over ~20 ft either way).
 #[allow(clippy::too_many_arguments)]
-fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal: &[P], back_ft: &[f64], raw: &[f64], river: bool, (k0, k1): (usize, usize), timber_share: f64, covered: &mut [Vec<(f64, f64)>]) -> bool {
+fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal: &[P], back_ft: &[f64], raw: &[f64], river: &[bool], (k0, k1): (usize, usize), timber_share: f64, covered: &mut [Vec<(f64, f64)>]) -> bool {
     let m = raw.len();
     debug_assert_eq!(m, k1 - k0 + 1);
     let smooth = |v: &[f64], r: i64| -> Vec<f64> {
@@ -394,17 +404,21 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
             .collect()
     };
     let sm = smooth(raw, 3);
-    let f: Vec<f64> = if river {
-        (0..m).map(|i| sm[i].min(raw[i]) - 1.0).collect()
+    let on_river = |i: usize| sm[i].min(raw[i]) - 1.0;
+    let f: Vec<f64> = if river.iter().all(|&r| r) {
+        (0..m).map(on_river).collect()
     } else {
         let f1: Vec<f64> = (0..m).map(|i| f64::max(sm[i] + FACE_OUT_FT, raw[i] + 1.0)).collect();
         let f2 = smooth(&f1, 2);
+        let share = smooth(&river.iter().map(|&r| if r { 1.0 } else { 0.0 }).collect::<Vec<f64>>(), 4);
         (0..m)
             .map(|i| {
                 // (Eased back onto the shore at its ends: the quay meets the beach there.)
                 let e = (i.min(m - 1 - i) as f64 / FRONT_TAPER as f64).min(1.0);
                 let fi = f64::max(f2[i], raw[i] + 0.5);
-                (raw[i] + (fi - raw[i]) * e).min(FRONT_REACH_FT + 5.0)
+                let sea = (raw[i] + (fi - raw[i]) * e).min(FRONT_REACH_FT + 5.0);
+                let w = if river[i] { 1.0 } else { f64::min(1.0, 2.0 * share[i]) };
+                sea + (on_river(i) - sea) * w
             })
             .collect()
     };
@@ -467,6 +481,11 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
         return false;
     }
     round_ends(&mut kept);
+    // (Roadmap 7: none whose outline crosses itself, as round a river mouth's corner.)
+    let outline: Vec<P> = kept.iter().map(|q| q.1).chain(kept.iter().rev().map(|q| q.2)).collect();
+    if folds(&outline) {
+        return false;
+    }
     // (The stretch of each side it takes.)
     let mut last_side = usize::MAX;
     for &(i, ..) in &kept {
@@ -512,6 +531,23 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
         l.plazas.push(Plaza { pts, kind: PlazaKind::Quay, spot: places::Spot::None });
     }
     true
+}
+
+/// Whether closed outline `p` crosses itself (two of its sides not next to each other cross).
+fn folds(p: &[P]) -> bool {
+    let n = p.len();
+    let side = |a: P, b: P, c: P| cross(sub(b, a), sub(c, a));
+    let boxes: Vec<[f64; 4]> = (0..n).map(|i| bbox(&[p[i], p[(i + 1) % n]])).collect();
+    (0..n).any(|i| {
+        (i + 2..n).any(|j| {
+            let (bi, bj) = (boxes[i], boxes[j]);
+            if (i == 0 && j == n - 1) || bi[2] < bj[0] || bj[2] < bi[0] || bi[3] < bj[1] || bj[3] < bi[1] {
+                return false;
+            }
+            let (a, b, c, d) = (p[i], p[(i + 1) % n], p[j], p[(j + 1) % n]);
+            side(a, b, c) * side(a, b, d) < -1e-9 && side(c, d, a) * side(c, d, b) < -1e-9
+        })
+    })
 }
 
 /// How far along from each end a front's back corner rounds (ft, `round_ends`).
