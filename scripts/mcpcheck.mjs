@@ -193,7 +193,7 @@ try {
       if (e.as && made(b)) vars.new[e.as] = made(b);
       if (e.as && b.ok?.building) vars.new[`${e.as}_b`] = b.ok.building;
       if (!then) {
-        if (b.error && !e.refused) fail(`${e.old.tool} -> ${e.new.tool}: ${cut(b.error)}`);
+        if (b.error && !(typeof e.refused === 'string' && b.error.includes(e.refused))) fail(`${e.old.tool} -> ${e.new.tool}: ${cut(b.error)}`);
         else agree++;
         continue;
       }
@@ -206,7 +206,9 @@ try {
       if (b.ok) b.ok = drop(swap(b.ok, pairs), Array.isArray(e.ignore) ? e.ignore : []);
       if (a.ok) a.ok = drop(a.ok, Array.isArray(e.ignore) ? e.ignore : []);
       if (a.error && b.error) {
-        agree++;
+        // Refusals (no app open, nothing to restore) agree only when both builds refuse the same way.
+        if (a.error !== b.error) fail(`${e.old.tool} -> ${e.new.tool}: refused differently: old ${cut(a.error)} new ${cut(b.error)}`);
+        else agree++;
         bothRefused.push(e.old.tool);
         if (flag('--why')) console.log(`both refused ${e.old.tool}: old ${cut(a.error)} | new ${cut(b.error)}`);
       }
