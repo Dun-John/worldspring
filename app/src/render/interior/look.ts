@@ -239,3 +239,16 @@ function itemColor(kind: string): number {
       return 0x5e4028;
   }
 }
+
+/** A building's walls as drawn inside (a matte band in an ink outline, `roomShapes.WALL_OUT`), by
+ * what it is built of: dressed stone for fortifications, temples and halls; timber for barns,
+ * mills and sheds; else daub over the frame. Dark enough to read as wall against any floor. */
+const STONE_WALLS = /keep|castle|tower|gate|temple|shrine|chapel|church|cathedral|abbey|monaster|bank|hall|guard|barrack|fort|lighthouse|prison|jail|citadel|palace|library|mausoleum|treasury|armou?ry|bastion|wall|arena/i;
+const TIMBER_WALLS = /barn|stable|mill|warehouse|shed|farm|cabin|hut|longhouse|boathouse|granary|yurt|lodge/i;
+export function wallTone(fn: string): number {
+  if (STONE_WALLS.test(fn)) return 0x57534c;
+  if (TIMBER_WALLS.test(fn)) return 0x4e3b2a;
+  return 0x675c4d;
+}
+/** A window's glass, seated in its ink frame. */
+export const GLASS = 0xb3cbd1;

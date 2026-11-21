@@ -405,12 +405,71 @@ export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel,
   strokeClipped(g, grid, { width: 0.04, color: 0x000000, alpha: 0.35 });
 }
 
-/** The solid wall: the footprint's squares no room has, and the parts of shaped rooms' squares
- * outside their shapes where nothing else shows (over the furniture, as walls are). */
-export function drawMass(g: Graphics, sp: ShapedPlan, color: number, lv?: InteriorLevel) {
-  const pieces = [...massPieces(sp), ...(lv ? discRing(sp, lv) : [])];
-  for (const piece of pieces) g.poly(flat(piece));
-  if (pieces.length) g.fill(color);
+/** The walls' ink outline (the style rule's `OUT`), each side of a wall band. */
+export const WALL_OUT = 0.045;
+
+/** The solid wall's pieces: the footprint's squares no room has, the parts of shaped rooms'
+ * squares outside their shapes where nothing else shows, a round tower's outer face. */
+export const massOf = (sp: ShapedPlan, lv?: InteriorLevel): Pt[][] => [...massPieces(sp), ...(lv ? discRing(sp, lv) : [])];
+
+/** The solid wall (over the furniture, as walls are), in two passes round the walls' own
+ * (`ShapedWalls.paint`): `ink` strokes the pieces' edges twice the outline wide (not those two
+ * pieces share: a seam), `tone` fills them after, so only the outline round their union is left
+ * (a seam's ink where pieces meet off each other's corners is covered). */
+export function drawMass(g: Graphics, pieces: Pt[][], pass: 'ink' | 'tone', color: number) {
+  if (!pieces.length) return;
+  if (pass === 'tone') {
+    for (const piece of pieces) g.poly(flat(piece), true);
+    g.fill(color);
+    return;
+  }
+  const key = (p: Pt) => `${Math.round(p[0] * 1e4)},${Math.round(p[1] * 1e4)}`;
+  const edges = new Map<string, [Pt, Pt] | null>();
+  for (const piece of pieces) {
+    for (let k = 0; k < piece.length; k++) {
+      const [p, q] = [piece[k], piece[(k + 1) % piece.length]];
+      const [kp, kq] = [key(p), key(q)];
+      if (kp === kq) continue;
+      const id = kp < kq ? `${kp};${kq}` : `${kq};${kp}`;
+      edges.set(id, edges.has(id) ? null : [p, q]);
+    }
+  }
+  // (Chained end to end into polylines: a separate segment each is twice the vertices.)
+  const from = new Map<string, [Pt, Pt][]>();
+  for (const e of edges.values()) {
+    if (!e) continue;
+    for (const [p, q] of [e, [e[1], e[0]] as [Pt, Pt]]) {
+      const k = key(p);
+      const list = from.get(k);
+      if (list) list.push([p, q]);
+      else from.set(k, [[p, q]]);
+    }
+  }
+  const used = new Set<[Pt, Pt]>();
+  const take = (k: string): [Pt, Pt] | null => {
+    for (const e of from.get(k) ?? []) {
+      const twin = (from.get(key(e[1])) ?? []).find((f) => key(f[1]) === k && !used.has(f));
+      if (used.has(e) || !twin) continue;
+      used.add(e).add(twin);
+      return e;
+    }
+    return null;
+  };
+  let any = false;
+  for (const k of from.keys()) {
+    for (let e = take(k); e; e = take(k)) {
+      const run: Pt[] = [e[0], e[1]];
+      for (let n = take(key(e[1])); n; n = take(key(n[1]))) run.push(n[1]);
+      const closed = run.length > 3 && key(run[0]) === key(run[run.length - 1]);
+      if (closed) g.poly(flat(run.slice(0, -1)), true);
+      else {
+        g.moveTo(run[0][0], run[0][1]);
+        for (let i = 1; i < run.length; i++) g.lineTo(run[i][0], run[i][1]);
+      }
+      any = true;
+    }
+  }
+  if (any) g.stroke({ width: WALL_OUT * 2, color, cap: 'square', join: 'miter' });
 }
 
 /** Wall thickness of a round wall tower's outer face past its round room's shape (grid units). */
@@ -560,11 +619,52 @@ export function drawnWindows(sp: ShapedPlan, lv: InteriorLevel): DrawnWindow[] {
   return out;
 }
 
+/** A building level's walls, worked out once and painted in passes (`paint`: ink at the wall's
+ * width, then its tone `WALL_OUT` in from each side, open ends trimmed so the ink closes them). */
+export interface ShapedWalls {
+  /** The outer wall's pieces as drawn (a parapet's merlons stand on them; none without an outline). */
+  kept: { a: Pt; b: Pt; out: Pt }[];
+  paint(g: Graphics, interior: number, exterior: number, color: number, trim?: number): void;
+}
+
+/** Lines stroked one way: closed rings and open polylines. */
+type WallLines = { rings: Pt[][]; runs: Pt[][] };
+
+/** `run` with `d` off each end (none left: dropped). */
+function trimmed(run: Pt[], d: number): Pt[] | null {
+  if (d <= 0) return run;
+  const out = run.slice();
+  for (const end of [0, 1]) {
+    const [i, j] = end ? [out.length - 1, out.length - 2] : [0, 1];
+    const [p, q] = [out[i], out[j]];
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    if (l <= d * 2) return null;
+    out[i] = [p[0] + ((q[0] - p[0]) * d) / l, p[1] + ((q[1] - p[1]) * d) / l];
+  }
+  return out;
+}
+
+function strokeLines(g: Graphics, lines: WallLines, trim: number, style: Parameters<Graphics['stroke']>[0]) {
+  let drawn = 0;
+  for (const ring of lines.rings) {
+    g.poly(flat(ring), true);
+    drawn++;
+  }
+  for (const run0 of lines.runs) {
+    const run = trimmed(run0, trim);
+    if (!run) continue;
+    g.moveTo(run[0][0], run[0][1]);
+    for (let k = 1; k < run.length; k++) g.lineTo(run[k][0], run[k][1]);
+    drawn++;
+  }
+  // (A stroke with nothing new drawn would go round the last shape again: only when there is one.)
+  if (drawn) g.stroke(style);
+}
+
 /** A building level's walls as drawn: between rooms on the squares (cut to the outer wall, clear
  * of the shaped rooms), round each shaped room (open at its doors and embrasures) and, with an
- * outline, the outer wall (open at the doors out), `interior` and `exterior` wide. Returns the
- * outer wall's pieces as drawn (a parapet's merlons stand on them; none without an outline). */
-export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, doors: DrawnDoor[], windows: DrawnWindow[], interior: number, exterior: number, color: number): { a: Pt; b: Pt; out: Pt }[] {
+ * outline, the outer wall (open at the doors out), `interior` and `exterior` wide. */
+export function shapedWalls(sp: ShapedPlan, lv: InteriorLevel, doors: DrawnDoor[], windows: DrawnWindow[]): ShapedWalls {
   const { nx, ny, owner, polys, parts } = sp;
   const W = nx + 2;
   const own = (i: number, j: number) => owner[(j + 1) * W + i + 1];
@@ -604,25 +704,14 @@ export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, 
       }
     }
   }
-  // (A stroke with nothing new drawn would go round the last shape again: only when there is one.)
-  let drawn = 0;
+  const grid: WallLines = { rings: [], runs: [] };
   for (const [a, b] of runs) {
     const at = (t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-    for (const s of spansIn(a, b, parts))
-      for (const [p, q] of segOutside(at(s[0]), at(s[1]), cut)) {
-        g.moveTo(p[0], p[1]).lineTo(q[0], q[1]);
-        drawn++;
-      }
+    for (const s of spansIn(a, b, parts)) for (const [p, q] of segOutside(at(s[0]), at(s[1]), cut)) grid.runs.push([p, q]);
   }
-  if (drawn) g.stroke({ width: interior, color, cap: 'square' });
   const near = (m: Pt, gaps: Pt[]) => gaps.some((c) => Math.hypot(c[0] - m[0], c[1] - m[1]) < 0.45);
   const midOf = (p: { a: Pt; b: Pt }): Pt => [(p.a[0] + p.b[0]) / 2, (p.a[1] + p.b[1]) / 2];
-  const polyline = (run: Pt[]) => {
-    g.moveTo(run[0][0], run[0][1]);
-    for (const q of run.slice(1)) g.lineTo(q[0], q[1]);
-    drawn++;
-  };
-  drawn = 0;
+  const shaped: WallLines = { rings: [], runs: [] };
   // Round each shaped room, but where its doors and embrasures go through it and beyond the outer
   // wall (a hall's height left open: its railing is drawn apart).
   polys.forEach((p, r) => {
@@ -637,14 +726,19 @@ export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, 
     // (With an outline, all round: a shaped room ends at the outer wall's inner face, its wall
     // there along that face. On the squares, not along the grid's edge: the outer wall stands there.)
     const keep = (i: number) => !open(midOf(pieces[i])) && (sp.real || insetParts(midOf(pieces[i]), parts) > 0.02);
-    if (pieces.every((_, i) => keep(i))) {
-      g.poly(flat(p), true);
-      drawn++;
-    } else for (const run of keptRuns(pieces, keep)) polyline(run);
+    if (pieces.every((_, i) => keep(i))) shaped.rings.push(p);
+    else shaped.runs.push(...keptRuns(pieces, keep));
   });
-  if (drawn) g.stroke({ width: interior, color, cap: 'butt', join: 'round' });
-  if (!sp.real) return [];
-  drawn = 0;
+  const outer: WallLines = { rings: [], runs: [] };
+  const kept: { a: Pt; b: Pt; out: Pt }[] = [];
+  const paint = (g: Graphics, interior: number, exterior: number, color: number, trim = 0) => {
+    // (Square caps on the squares' walls: their ends show the ink past the tone without a trim.)
+    strokeLines(g, grid, 0, { width: interior, color, cap: 'square' });
+    // (Mitred: the shapes' corners are all obtuse, and a round join is many times the vertices.)
+    strokeLines(g, shaped, trim, { width: interior, color, cap: 'butt', join: 'miter' });
+    if (exterior > 0) strokeLines(g, outer, trim, { width: exterior, color, cap: 'butt', join: 'miter' });
+  };
+  if (!sp.real) return { kept, paint };
   // The outer wall: each part's edges but where they run inside another part, open at the doors out
   // and along a town hall's open arcade (its piers drawn apart: `InteriorLayer.drawArcade`).
   const gaps = doors.filter((d) => d.out && d.outer).map((d) => d.outer!);
@@ -656,27 +750,23 @@ export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, 
       const t = ((m[0] - w.a[0]) * ex + (m[1] - w.a[1]) * ey) / l2;
       return t > 0 && t < 1 && Math.abs((m[0] - w.a[0]) * ey - (m[1] - w.a[1]) * ex) / Math.sqrt(l2) < 0.6;
     });
-  const kept: { a: Pt; b: Pt; out: Pt }[] = [];
   parts.forEach((part, k) => {
     const pieces = boundaryPieces(part);
     const keep = (i: number) => !near(midOf(pieces[i]), gaps) && !onArcade(midOf(pieces[i])) && !parts.some((o, m) => m !== k && insetIn(midOf(pieces[i]), o) > 1e-4);
 
     const all = pieces.every((_, i) => keep(i));
     // (Whole: drawn closed, its corners joined.)
-    if (all) {
-      g.poly(flat(part), true);
-      drawn++;
-    } else for (const run of keptRuns(pieces, keep)) polyline(run);
+    if (all) outer.rings.push(part);
+    else outer.runs.push(...keptRuns(pieces, keep));
     kept.push(...pieces.filter((_, i) => keep(i)));
   });
-  if (drawn) g.stroke({ width: exterior, color, cap: 'butt', join: 'miter' });
-  return kept;
+  return { kept, paint };
 }
 
 /** Floor through a thick wall (a door's threshold, a window's embrasure), with inked sides. */
 export function drawOpening(g: Graphics, quad: Pt[], fill: number, ink: number) {
   g.poly(flat(quad)).fill(fill);
-  g.moveTo(quad[1][0], quad[1][1]).lineTo(quad[2][0], quad[2][1]).moveTo(quad[3][0], quad[3][1]).lineTo(quad[0][0], quad[0][1]).stroke({ width: 0.08, color: ink, cap: 'butt' });
+  g.moveTo(quad[1][0], quad[1][1]).lineTo(quad[2][0], quad[2][1]).moveTo(quad[3][0], quad[3][1]).lineTo(quad[0][0], quad[0][1]).stroke({ width: WALL_OUT * 1.5, color: ink, cap: 'butt' });
 }
 
 // ---------------------------------------------------------------------------------------

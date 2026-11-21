@@ -22,10 +22,10 @@ import { DIST_PAD } from './rockDistance';
 import { underLook } from './underTheme';
 import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TERRAIN_CHANNEL, underField, type UnderField } from './underField';
 import { nearestWall, wallDistance, type WallDistance } from './wallField';
-import { drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetParts, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, YURT_ROOMS, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
+import { drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, shapedWalls, massOf, WALL_OUT, fromSquares, insetParts, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, YURT_ROOMS, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import { drawWinders, winderLinks } from './interior/winder';
 import { LAMP_ROOM, drawLampFloor, drawLampGlass, isLampTop } from './interior/lamp';
-import { ON_WALL, BACKED, UNDERFOOT, ALONG_RUN, setBack, sideOf, sharedKind, SCATTERED, INK, lockColor, TERRAIN_KINDS, SPAN_KINDS, hash2, IRON, padlock, keyGlyph, blob, COVER, underProgram, UNDER_DIM, itemAt, itemVariant, BANNERS, floorColor, floorPattern, OPEN_TOP, itemColor } from './interior/look';
+import { ON_WALL, BACKED, UNDERFOOT, ALONG_RUN, setBack, sideOf, sharedKind, SCATTERED, INK, lockColor, TERRAIN_KINDS, SPAN_KINDS, hash2, IRON, padlock, keyGlyph, blob, COVER, underProgram, UNDER_DIM, itemAt, itemVariant, BANNERS, floorColor, floorPattern, OPEN_TOP, itemColor, wallTone, GLASS } from './interior/look';
 import { SQUARE_FT } from './scale';
 import { RAIL_SQUARES, drawRails, drawArcade } from './interior/rails';
 import { roundVoids, drawRoofs } from './interior/roofs';
@@ -202,6 +202,34 @@ function noteGlyph(tag: string | null): Container {
   return node;
 }
 
+/** A parapet's merlons on the wall band (`wallTone`): lighter, outlined. */
+const MERLON = 0x7d776d;
+
+/** Walls on the squares as outlined bands (`roomShapes.WALL_OUT`): every one's ink, then their
+ * tone over it, one stroke a width each. */
+function inkedWalls<W extends { a: [number, number]; b: [number, number] }>(g: Graphics, walls: W[], width: (w: W) => number, tone: number) {
+  const widths = [...new Set(walls.map(width))].sort((a, b) => b - a);
+  for (const [color, less] of [[INK, 0], [tone, WALL_OUT * 2]]) {
+    for (const wd of widths) {
+      for (const w of walls) if (width(w) === wd) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]);
+      g.stroke({ width: wd - less, color, cap: 'square' });
+    }
+  }
+}
+
+/** Windows at `at` along their walls' tangents: an ink frame seated in the wall band, the glass in
+ * it, a mullion across its middle. */
+function windowPanes(g: Graphics, at: [Pt, Pt][]) {
+  if (!at.length) return;
+  const quad = ([cx, cy]: Pt, [tx, ty]: Pt, l: number, w: number) => [cx - tx * l - ty * w, cy - ty * l + tx * w, cx + tx * l - ty * w, cy + ty * l + tx * w, cx + tx * l + ty * w, cy + ty * l - tx * w, cx - tx * l + ty * w, cy - ty * l - tx * w];
+  for (const [c, t] of at) g.poly(quad(c, t, 0.33, 0.12));
+  g.fill(INK);
+  for (const [c, t] of at) g.poly(quad(c, t, 0.29, 0.075));
+  g.fill(GLASS);
+  for (const [c, t] of at) g.poly(quad(c, t, 0.018, 0.08));
+  g.fill(INK);
+}
+
 export class InteriorLayer {
   /** The world's renames, for level and room names (`l:`/`r:` ids); set by `MapView`. */
   static names: Record<string, string> = {};
@@ -257,6 +285,8 @@ export class InteriorLayer {
   private readonly anchors = new WeakMap<InteriorItem, WallAnchor | null>();
   /** Toward the light (screen NW) in grid axes, rounded to 45 degrees, for items' shading. */
   private light: [number, number] = [-Math.SQRT1_2, -Math.SQRT1_2];
+  /** The building's walls' tone (`wallTone`), for a secret door drawn as wall. */
+  private wallColor = INK;
   /** The other levels' furniture going into the item atlas a little a frame (`update`), so that
    * changing level finds it drawn; null once done (or never: peeks, ghosts, sewer sections). */
   private warming: Iterator<boolean> | null = null;
@@ -956,6 +986,7 @@ export class InteriorLayer {
     // open roof the outer wall is a parapet with merlons. Drawn to a shaped plan, doors and windows
     // stand on the walls as drawn (through a thick wall, with the floor to them).
     const drawn = drawnDoorsOf(it, this.level);
+    const tone = (this.wallColor = wallTone(it.function));
     const panes = sp && lv.z >= 0 ? drawnWindows(sp, lv) : [];
     let parapet: { a: Pt; b: Pt; out: Pt }[] | null = null;
     if (this.underground) {
@@ -986,13 +1017,20 @@ export class InteriorLayer {
       }
     } else if (sp && drawn) {
       // The solid wall over the furniture; the walls; then the floor through thick walls to doors
-      // and windows, over them.
-      drawMass(g, sp, INK, lv);
+      // and windows, over them. Each a band in its tone in an ink outline: all the ink first, the
+      // tone over it, so walls and mass that meet merge into one outlined band.
+      const mass = massOf(sp, lv);
       // (The players' view: no gap for a secret door they haven't found.)
       const hidden = (k: number) => this.style.player && lv.doors[k].kind === 'secret' && !!this.style.doors && !this.style.doors(locKey(it.id, this.level), k).found && !this.style.doors(locKey(it.id, this.level), k).open;
       const gapped = drawn.map((d, k) => (hidden(k) ? { ...d, inner: undefined, outer: undefined, threshold: undefined } : d));
       // (A yurt's lattice and its ink on a circle: `khana`.)
-      const kept = drawShapedWalls(g, sp, lv, gapped, panes, lv.roof ? 0.45 : 0.28, ring ? 0 : 0.45, INK);
+      const walls = shapedWalls(sp, lv, gapped, panes);
+      const [wi, we] = [lv.roof ? 0.45 : 0.28, ring ? 0 : 0.45];
+      drawMass(g, mass, 'ink', INK);
+      walls.paint(g, wi, we, INK);
+      drawMass(g, mass, 'tone', tone);
+      walls.paint(g, wi - WALL_OUT * 2, we - WALL_OUT * 2, tone, WALL_OUT);
+      const kept = walls.kept;
       if (ring) khana(g, ring, gapped.filter((d) => d.out && d.outer));
       // (A parapet where the outer wall stands round an open top: a roof's walk, battlements, a
       // wing's or forebuilding's platform; not round a storey, a tower's room under its cone.)
@@ -1003,11 +1041,11 @@ export class InteriorLayer {
         return r >= 0 && OPEN_TOP.has(lv.rooms[r].kind);
       };
       parapet = sp.real ? kept.filter(open) : null;
-      if (!sp.real) for (const w of lv.walls) if (w.exterior) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: 0.45, color: INK, cap: 'square' });
+      if (!sp.real) inkedWalls(g, lv.walls.filter((w) => w.exterior), () => 0.45, tone);
       for (const d of gapped) if (d.threshold && d.room !== undefined) drawOpening(g, d.threshold, colorOf(d.room), INK);
       for (const w of panes) if (w.splay) drawOpening(g, w.splay, colorOf(w.room), INK);
     } else {
-      for (const w of lv.walls) if (!w.rail && !w.arcade) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: w.exterior || lv.roof ? 0.45 : 0.28, color: INK, cap: 'square' });
+      inkedWalls(g, lv.walls.filter((w) => !w.rail && !w.arcade), (w) => (w.exterior || lv.roof ? 0.45 : 0.28), tone);
     }
     // Railings where a gallery or passage looks down into a hall open two storeys.
     if (!this.underground) drawRails(g, lv, nx, ny, sp);
@@ -1033,7 +1071,7 @@ export class InteriorLayer {
         }
         run -= len;
       }
-      g.fill(0x6f6a61);
+      g.fill(MERLON).stroke({ width: 0.025, color: INK, join: 'miter' });
     } else if (lv.roof && !lv.rooms.some((r) => r.kind === TERRACE) && !isLampTop(lv)) {
       for (const w of lv.walls) {
         if (!w.exterior) continue;
@@ -1046,7 +1084,7 @@ export class InteriorLayer {
           g.rect(px - 0.22 + dx * 0.12, py - 0.22 + dy * 0.12, 0.44, 0.44);
         }
       }
-      g.fill(0x6f6a61);
+      g.fill(MERLON).stroke({ width: 0.025, color: INK, join: 'miter' });
     }
     // A lighthouse's top: the lantern's glazing, the gallery's railing (`interior/lamp`).
     if (!this.underground) drawLampGlass(g, it, this.level, drawn);
@@ -1057,20 +1095,14 @@ export class InteriorLayer {
         sprites().nicheMouth(g, f, this.light, this.propWall(f));
       }
     }
-    // Windows: a pale slot across the exterior wall (a filled rect: fine strokes on the
-    // scaled plan render unreliably); drawn to a shaped plan, on the outer wall as drawn.
-    if (lv.z >= 0 && sp) {
-      for (const { at: [cx, cy], tangent: [tx, ty] } of panes) {
-        g.poly([cx - tx * 0.3 - ty * 0.09, cy - ty * 0.3 + tx * 0.09, cx + tx * 0.3 - ty * 0.09, cy + ty * 0.3 + tx * 0.09, cx + tx * 0.3 + ty * 0.09, cy + ty * 0.3 - tx * 0.09, cx - tx * 0.3 + ty * 0.09, cy - ty * 0.3 - tx * 0.09]);
-      }
-      if (panes.length) g.fill(0xbcd6e0);
-    } else if (lv.z >= 0) {
-      for (const [x0, y0, x1, y1] of lv.windows) {
-        const vert = x0 === x1;
-        if (vert) g.rect(x0 - 0.09, Math.min(y0, y1) + 0.2, 0.18, 0.6);
-        else g.rect(Math.min(x0, x1) + 0.2, y0 - 0.09, 0.6, 0.18);
-      }
-      g.fill(0xbcd6e0);
+    // Windows: glass seated in the wall band in an ink frame, a mullion across its middle (filled
+    // quads: fine strokes on the scaled plan render unreliably); drawn to a shaped plan, on the
+    // outer wall as drawn.
+    if (lv.z >= 0) {
+      const at: [Pt, Pt][] = sp
+        ? panes.map((w) => [w.at, w.tangent])
+        : lv.windows.map(([x0, y0, x1, y1]): [Pt, Pt] => [[(x0 + x1) / 2, (y0 + y1) / 2], x0 === x1 ? [0, 1] : [1, 0]]);
+      windowPanes(g, at);
     }
     const doorState = this.style.doors;
     const loc = locKey(it.id, this.level);
@@ -1270,7 +1302,7 @@ export class InteriorLayer {
           g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.3, color: 0x6f6a61, cap: 'square' });
           g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.08, color: INK, alpha: 0.6, cap: 'square' });
         } else {
-          g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.28, color: INK, cap: 'square' });
+          inkedWalls(g, [d], () => 0.28, this.wallColor);
         }
         return;
       }
