@@ -11,6 +11,7 @@ import { loadSprites } from './spriteCode';
 import { noteMarkers } from '../ui/notes';
 import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type LinkFar, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
+import { SQUARE_FT } from './scale';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
@@ -168,6 +169,10 @@ export interface PointerTool {
   /** A second finger cancels the stroke under way (`cancel`) and pinches the map instead. */
   readonly pinchCancels?: boolean;
 }
+
+/** The rooms an open court is (a palace's court, a monastery's garth, a coaching inn's yard): what stands in one is
+ * drawn on the battlemap as the building's ground floor has it. */
+const COURTS = new Set(['courtyard', 'garth', 'inn yard']);
 
 const TIERS: [number, string][] = [
   [1500, 'Continent'],
@@ -1408,6 +1413,12 @@ export class MapView {
     }
     // The world's own buildings changed or taken away.
     rects.push(...d.buildingRects);
+    // A building round an open court designed anew (here, in the designer or by an agent): the
+    // battlemap draws the court's things as its ground floor has them (`interior::court_props`).
+    if (inside && /^b:/.test(inside.id) && prev.designs?.[inside.id] !== next.designs?.[inside.id] && inside.levels.some((lv) => lv.z === 0 && lv.rooms.some((r) => COURTS.has(r.kind)))) {
+      const pts = [[0, 0], [inside.nx, 0], [0, inside.ny], [inside.nx, inside.ny]].map(([x, y]) => [inside.origin[0] + (inside.axis[0] * x + inside.across[0] * y) * SQUARE_FT, inside.origin[1] + (inside.axis[1] * x + inside.across[1] * y) * SQUARE_FT]);
+      battleRects.push([Math.min(...pts.map((p) => p[0])) - 5, Math.min(...pts.map((p) => p[1])) - 5, Math.max(...pts.map((p) => p[0])) + 5, Math.max(...pts.map((p) => p[1])) + 5]);
+    }
     const replaced = d.replaced;
     // Inside one: shown as it is now (unless it is being designed: the designer shows it).
     const nb = next.buildings ?? {};

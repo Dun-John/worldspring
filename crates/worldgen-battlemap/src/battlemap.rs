@@ -294,6 +294,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut dock: Vec<([f64; 2], f32, Kind, u8, bool)> = Vec::new();
     // Props set out on squares by what they are for (world ft, rotation, kind, variant).
     let mut dressing: Vec<([f64; 2], f32, Kind, u8)> = Vec::new();
+    // What stands in a coaching inn's yard (`interior::court_props`): where its ground floor has it,
+    // whatever battlemap square its middle falls in (the yard's squares the interior's, turned).
+    let mut court_dressing: Vec<([f64; 2], f32, Kind, u8)> = Vec::new();
     // Temples' churchyards in closes (their headstones are the close's dressing).
     let mut churchyards: Vec<Vec<[f64; 2]>> = Vec::new();
     // (R5 towns: the squares of cemeteries' links from their roads, kept up a bank like their walks.)
@@ -1087,16 +1090,20 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         // (A monastery's garth: its cloister well in its middle, its size there.)
                         "cloister_well" => park_props.push((m, 0.0, Kind::Well, 0, (0.8 * crate::town::geom::dist(q[0], q[1]).min(crate::town::geom::dist(q[1], q[2])) / SQUARE_FT).max(0.8) as f32)),
                         "bench" => dressing.push((m, crate::park::facing(back.map_or([0.0, 1.0], |d| [-d[0], -d[1]])), Kind::Bench, 0)),
-                        // (A coaching inn's yard: its trough along its box, its barrels, its cart.)
-                        "water_trough" | "cart" | "barrels" => {
+                        // (A coaching inn's yard: its trough along its box, its barrels, its cart; as
+                        // designed, a barrel or a crate put down there too: `interior::court_props`.)
+                        "water_trough" | "cart" | "barrels" | "barrel" | "crate" => {
                             let (a, e) = (crate::town::geom::sub(q[1], q[0]), crate::town::geom::sub(q[3], q[0]));
-                            let long = if crate::town::geom::dot(a, a) >= crate::town::geom::dot(e, e) { a } else { e };
+                            // (Along its first side but where the other is the longer: a square one along x,
+                            // as the interior draws it, whatever the rounding of its corners.)
+                            let long = if crate::town::geom::dot(e, e) > 1.01 * crate::town::geom::dot(a, a) { e } else { a };
                             let kind = match *kind {
                                 "water_trough" => Kind::WaterTrough,
                                 "cart" => Kind::Cart,
+                                "crate" => Kind::Crate,
                                 _ => Kind::Barrel,
                             };
-                            dressing.push((m, crate::park::facing([-long[1], long[0]]), kind, 0));
+                            court_dressing.push((m, crate::park::facing([-long[1], long[0]]), kind, 0));
                         }
                         _ => {}
                     }
@@ -1845,6 +1852,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 URBAN_PLAZA if quay_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&true) => chunk.surface[k] = Surface::Cobble,
                 URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
                 URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {}
+                // (A coaching inn's yard cobbled in a village too, as its ground floor has it.)
+                URBAN_PLAZA if court_h[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Cobble,
                 URBAN_PLAZA if dirt_sq[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Dirt,
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
                 // (Not at the mouth of a way underground on the flight: it keeps the street.)
@@ -2153,6 +2162,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // What a square is dressed with: each in the chunk holding it, on open ground (paving, a lawn,
     // a street through the square), never on a roof, a road or the water (its layout keeps clear
     // of buildings); a market cross a little larger than its place, to read as a cross from afar.
+    for (p, rot, kind, variant) in court_dressing {
+        let (x, y) = ((p[0] - ox) / SQUARE_FT, (p[1] - oy) / SQUARE_FT);
+        if x >= 0.0 && y >= 0.0 && x < SQ as f64 && y < SQ as f64 {
+            chunk.objects.push(Object { kind, variant, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0, turned: false });
+        }
+    }
     for (p, rot, kind, variant) in dressing {
         let (x, y) = ((p[0] - ox) / SQUARE_FT, (p[1] - oy) / SQUARE_FT);
         if x < 0.0 || y < 0.0 || x >= SQ as f64 || y >= SQ as f64 {

@@ -10,6 +10,41 @@ import { alchemyBench, altar, barricade, bell, cage, cauldron, lighthouseLamp, l
 import { anvil, bar, barrel, bath, bed, bench, bookcase, boothSeat, boothTable, bucket, chair, chest, cot, couch, counter, crates, desk, display, forge, hearth, keg, oven, pew, planter, roofDome, roundTable, rug, shelf, sideboard, table, wardrobe, washingLine, waterJar, workbench } from './home';
 import { gravelWalk } from './under';
 import { VARIED } from './tables';
+import { barrels, cart } from '../atlas/yard';
+import { waterTrough } from '../atlas/street';
+import { PX } from '../scale';
+
+/** A coaching inn's yard's things (`hub::YARD_LOOK`): the battlemap's own pictures (its kind's id and
+ * radius, squares, as `atlas/build` draws them), centred on the item along its longer side (a square
+ * one along x), as the battlemap turns them in the yard; so the yard reads the same inside and out. */
+function yardThing(g: Graphics, f: InteriorItem, v: number) {
+  const [id, r, draw] = f.kind === 'cart' ? [35, 1.3, cart] : f.kind === 'barrels' ? [33, 0.5, barrels] : [46, 0.75, waterTrough];
+  const k = 1 / PX;
+  const [c, s] = f.w >= f.h ? [k, 0] : [0, k];
+  const turn = s ? Math.PI / 2 : 0;
+  // (The transform moves the points but not a stroke's width, nor an arc's radius and angles: those by hand.)
+  const thin: Graphics = new Proxy(g, {
+    get(target, prop, receiver) {
+      const fn = Reflect.get(target, prop, receiver);
+      if (typeof fn !== 'function') return fn;
+      return (...args: unknown[]) => {
+        const st = args[0] as { width?: number } | undefined;
+        const n = args as number[];
+        const a =
+          prop === 'stroke' && st && typeof st === 'object'
+            ? [{ ...st, width: (st.width ?? 1) * k }, ...args.slice(1)]
+            : prop === 'arc'
+              ? [n[0], n[1], n[2] * k, n[3] + turn, n[4] + turn, ...args.slice(5)]
+              : args;
+        const out = (fn as (...x: unknown[]) => unknown).apply(target, a);
+        return out === target ? thin : out;
+      };
+    },
+  });
+  g.save().setTransform(c, s, -s, c, f.x + f.w / 2, f.y + f.h / 2);
+  draw(thin, r * PX, rng(id * 131 + v * 17 + 7), v);
+  g.restore();
+}
 
 /** Draws `f` if it is building furniture drawn here; false otherwise. `fit`: the yurt's ring it stands in. */
 export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: number, back: [number, number] | null = null, fit?: Fit): boolean {
@@ -228,6 +263,11 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       break;
     case 'cloister_well':
       cloisterWell(g, f, light, v, rnd);
+      break;
+    case 'water_trough':
+    case 'barrels':
+    case 'cart':
+      yardThing(g, f, v);
       break;
     case 'dance_floor':
       danceFloor(g, f, v, rnd);

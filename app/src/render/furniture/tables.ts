@@ -129,6 +129,7 @@ export function lookName(kind: string, v: number): string {
 
 /** Furniture drawn here: one of its looks each (`looksOf`), picked by position (InteriorLayer.itemKey). */
 export const VARIED = new Set([
+  'water_trough', 'barrels', 'cart',
   'bed', 'cot', 'table', 'long_table', 'chair', 'bench', 'chest', 'wardrobe', 'shelf', 'bookcase',
   'hearth', 'oven', 'forge', 'anvil', 'workbench', 'counter', 'bar', 'barrel', 'keg_rack', 'crate',
   'sideboard', 'desk', 'display', 'couch', 'pew', 'booth_table', 'booth_seat', 'rug', 'bath', 'bucket',

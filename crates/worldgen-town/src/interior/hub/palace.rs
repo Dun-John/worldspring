@@ -203,6 +203,36 @@ fn side_code(d: (isize, isize)) -> u8 {
     }
 }
 
+impl Plan {
+    /// The pieces of the building's open court as items of its ground floor, on the building's
+    /// grid: a palace's court (`court_pieces`), a monastery's garth (`garth_pieces`) or a coaching
+    /// inn's yard (`yard_pieces`); empty for any other plan. The one list both the ground floor
+    /// puts down and the battlemap draws there (`crate::interior::court_plan`), the same kinds on
+    /// the same squares turned the same way.
+    pub fn court_items(&self) -> Vec<crate::interior::Item> {
+        let mut pieces = self.court_pieces();
+        pieces.extend(self.garth_pieces().into_iter().map(|(k, q)| (k, q, None)));
+        pieces.extend(self.yard_pieces().into_iter().map(|(k, q)| (k, q, None)));
+        pieces
+            .into_iter()
+            .filter_map(|(kind, (s0, s1, t0, t1), back)| {
+                let (a, c) = (self.f.grid(s0 as isize, t0 as isize), self.f.grid(s1 as isize - 1, t1 as isize - 1));
+                let mut it = building_item(kind, a.0.min(c.0) as usize, a.1.min(c.1) as usize, (a.0 - c.0).unsigned_abs() + 1, (a.1 - c.1).unsigned_abs() + 1)?;
+                it.back = back.map(|d| side_code((self.f.ds.0 * d.0 + self.f.dt.0 * d.1, self.f.ds.1 * d.0 + self.f.dt.1 * d.1)));
+                // (Drawn alike inside and out: the yard's things in their first look.)
+                if YARD_LOOK.contains(&kind) {
+                    it.variant = Some(0);
+                }
+                Some(it)
+            })
+            .collect()
+    }
+}
+
+/// A coaching inn's yard's things (`Plan::yard_pieces`): the battlemap's own pictures, drawn in
+/// their first look on both sides.
+pub const YARD_LOOK: &[&str] = &["water_trough", "barrels", "cart"];
+
 /// A piece in the court (`Plan::court_pieces`): its kind, its box in the palace's frame (s0..s1,
 /// t0..t1), the frame step its back is toward.
 pub type CourtPiece = (&'static str, (usize, usize, usize, usize), Option<(isize, isize)>);
@@ -418,13 +448,7 @@ impl Plan {
                     self.join(&mut lay, (bki + 1, sdi - 1), (bki + 1, sdi));
                     self.join(&mut lay, (bki - 1, w as isize - 1 - sdi / 2), (bki, w as isize - 1 - sdi / 2));
                     // The court's fountain, walks and benches (`court_pieces`).
-                    for (kind, (s0, s1, t0, t1), back) in self.court_pieces() {
-                        let (a, c) = (self.f.grid(s0 as isize, t0 as isize), self.f.grid(s1 as isize - 1, t1 as isize - 1));
-                        if let Some(mut it) = building_item(kind, a.0.min(c.0) as usize, a.1.min(c.1) as usize, (a.0 - c.0).unsigned_abs() + 1, (a.1 - c.1).unsigned_abs() + 1) {
-                            it.back = back.map(|d| side_code((self.f.ds.0 * d.0 + self.f.dt.0 * d.1, self.f.ds.1 * d.0 + self.f.dt.1 * d.1)));
-                            lay.items.push(it);
-                        }
-                    }
+                    lay.items.extend(self.court_items());
                 } else {
                     self.put_box(&mut lay, "banqueting hall", fr, d, sd, w - sd);
                     self.put_box(&mut lay, "kitchen", fr, d, 0, sd);

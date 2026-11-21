@@ -795,6 +795,8 @@ impl Plan {
             e.push((side(p, q), p.0 as usize, p.1 as usize));
         }
         lay.hints.arch.push((yard, e));
+        // The yard's trough, barrels and cart, where the battlemap draws them (`court_items`).
+        lay.items.extend(self.court_items());
         Laid { cells: lay.cells, rooms: lay.rooms, hints: lay.hints, public: Some("taproom"), name: "Taproom", roof: false, items: lay.items, towers: Vec::new(), corners: Vec::new(), halls: Vec::new() }
     }
 

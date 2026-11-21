@@ -19,6 +19,10 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("shelf", "shelves", 2, true, 7.0),
     ("bookcase", "bookcase", 3, true, 8.0),
     ("barrel", "barrel", 1, true, 3.5),
+    // (A coaching inn's yard's things, the battlemap's own pictures: `hub::YARD_LOOK`.)
+    ("water_trough", "water trough", 1, true, 2.5),
+    ("barrels", "barrels", 2, true, 3.5),
+    ("cart", "cart", 2, true, 5.0),
     ("keg_rack", "keg rack", 2, true, 5.0),
     ("crate", "crate stack", 2, true, 5.0),
     ("workbench", "workbench", 1, true, 3.0),

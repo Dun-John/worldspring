@@ -184,18 +184,8 @@ pub fn court_plan(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Opt
         [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|g| sh.world_at(g[0], g[1]))
     };
     let pts = corners(front, back, side, f.wid - side);
-    let court = b.poly.iter().map(|q| *pts.iter().min_by(|p, r| geom::dist(**p, *q).total_cmp(&geom::dist(**r, *q))).expect("four corners")).collect();
-    let pieces = plan
-        .court_pieces()
-        .into_iter()
-        .map(|(kind, (s0, s1, t0, t1), back)| {
-            let dir = back.map(|d| {
-                let (gi, gj) = (f.ds.0 * d.0 + f.dt.0 * d.1, f.ds.1 * d.0 + f.dt.1 * d.1);
-                add(mul(sh.u, gi as f64), mul(sh.v, gj as f64))
-            });
-            (kind, corners(s0, s1, t0, t1), dir)
-        })
-        .collect();
+    let court: Vec<P> = b.poly.iter().map(|q| *pts.iter().min_by(|p, r| geom::dist(**p, *q).total_cmp(&geom::dist(**r, *q))).expect("four corners")).collect();
+    let pieces = court_props(world, t0, l, b, &sh, &plan, &court);
     // The forecourt laid out with the town (`town::palace::approach`): its wall along its outer
     // squares' middles, the piers either side of the gate outside its opening.
     let forecourt = l.forecourts.iter().find(|fc| fc.palace == b.id && fc.yard.len() == 4).map(|fc| {
@@ -237,8 +227,8 @@ fn garth_plan(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Option<
         [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|g| sh.world_at(g[0], g[1]))
     };
     let pts = corners(s0, s1, g0, g1);
-    let court = b.poly.iter().map(|q| *pts.iter().min_by(|p, r| geom::dist(**p, *q).total_cmp(&geom::dist(**r, *q))).expect("four corners")).collect();
-    let pieces = plan.garth_pieces().into_iter().map(|(kind, (s0, s1, t0, t1))| (kind, corners(s0, s1, t0, t1), None)).collect();
+    let court: Vec<P> = b.poly.iter().map(|q| *pts.iter().min_by(|p, r| geom::dist(**p, *q).total_cmp(&geom::dist(**r, *q))).expect("four corners")).collect();
+    let pieces = court_props(world, t0, l, b, &sh, &plan, &court);
     // (The church: the frame's corner (s, t), grid units, to world ft.)
     let ((cw, ..), _) = plan.monastery()?;
     let (i, j) = f.grid(0, 0);
@@ -271,8 +261,8 @@ fn yard_and_arch(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Opti
         [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|g| sh.world_at(g[0], g[1]))
     };
     let pts = corners(s0, s1, g0, g1);
-    let court = b.poly.iter().map(|q| *pts.iter().min_by(|p, r| geom::dist(**p, *q).total_cmp(&geom::dist(**r, *q))).expect("four corners")).collect();
-    let mut pieces: Vec<(&'static str, [P; 4], Option<P>)> = plan.yard_pieces().into_iter().map(|(kind, (s0, s1, t0, t1))| (kind, corners(s0, s1, t0, t1), None)).collect();
+    let court: Vec<P> = b.poly.iter().map(|q| *pts.iter().min_by(|p, r| geom::dist(**p, *q).total_cmp(&geom::dist(**r, *q))).expect("four corners")).collect();
+    let mut pieces = court_props(world, t0, l, b, &sh, &plan, &court);
     // (The carriage arch's mouth, "arch": from just inside the front wall to a square out on the
     // street, across its squares.)
     let at = |t: isize, ds: f64, dt: f64| {
@@ -283,6 +273,41 @@ fn yard_and_arch(world: &World, t0: &T0, l: &Layout, b: &town::Building) -> Opti
     pieces.push(("arch", [at(a0, -1.5, -0.5), at(a1, -1.5, 0.5), at(a1, -0.05, 0.5), at(a0, -0.05, -0.5)], None));
     let arch = vec![at(a0, -0.5, -0.5), at(a1, -0.5, 0.5), at(a1, 0.5, 0.5), at(a0, 0.5, -0.5)];
     Some((Court { court, pieces, forecourt: None, church: None, paved: true }, arch))
+}
+
+/// What stands in a building's open court (a palace's court, a monastery's garth, a coaching inn's
+/// yard; `court`, world ft) as the battlemap draws it: each item's kind, its box's corners (world
+/// ft) and the way its back faces (unit, world). One list with the interior's: as generated, the
+/// ground floor's (`hub::Plan::court_items`, which the ground floor puts down); as designed by
+/// hand (while the design builds), the designed ground floor's items standing in the court.
+pub fn court_props(world: &World, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, plan: &hub::Plan, court: &[P]) -> Vec<(&'static str, [P; 4], Option<P>)> {
+    let designed = (!world.file.edits.designs.is_empty())
+        .then(|| world.file.edits.designs.get(&format!("b:{}:{}", l.index, b.id)))
+        .flatten()
+        .and_then(|d| design::designed(world, t0, l, l.index as usize, b, d));
+    let items: Vec<Item> = match designed {
+        Some(it) => {
+            let Some(lv) = it.levels.iter().find(|lv| lv.z == 0) else { return Vec::new() };
+            lv.furniture
+                .iter()
+                .filter(|q| geom::contains(court, sh.world_at(q.x as f64 + 0.5 * q.w as f64, q.y as f64 + 0.5 * q.h as f64)))
+                .cloned()
+                .collect()
+        }
+        None => plan.court_items(),
+    };
+    items
+        .iter()
+        .map(|it| {
+            let (x0, y0, x1, y1) = (it.x as f64, it.y as f64, (it.x + it.w) as f64, (it.y + it.h) as f64);
+            let q = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|g| sh.world_at(g[0], g[1]));
+            let back = it.back.map(|c| {
+                let (gi, gj) = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)][c as usize & 3];
+                add(mul(sh.u, gi), mul(sh.v, gj))
+            });
+            (it.kind, q, back)
+        })
+        .collect()
 }
 
 /// The plan a building laid out by zones is laid out on (`hub::plan`): its frame, its zones (a

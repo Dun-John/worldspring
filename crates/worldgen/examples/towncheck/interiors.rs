@@ -40,6 +40,9 @@ pub(crate) fn interiors(ctx: &mut Ctx, keeps: bool, r: &mut Report) {
     for (f, (n, b)) in by_func.iter().filter(|f| f.1.1 > 0) {
         r.add("functions with interiors breaking a rule", *b as f64, format!("{f}: {b} of {n}"));
     }
+    if !keeps {
+        courts(ctx, r);
+    }
 }
 
 // ---- Buildings laid out by zones. ----
@@ -1453,3 +1456,205 @@ pub(crate) fn same_buildings(a: &Layout, b: &Layout, tag: &str, label: &str, r: 
 }
 
 // ---- Temples, shrines and monasteries. ----
+
+// ---- Open courts: the same things inside and out. ----
+
+/// The battlemap's kind of an item standing in an open court (`interior::court_props`); None for a
+/// walk (drawn as ground) and for what the battlemap does not draw there.
+fn court_kind(kind: &str) -> Option<Kind> {
+    Some(match kind {
+        "water_trough" => Kind::WaterTrough,
+        "cart" => Kind::Cart,
+        "barrels" | "barrel" => Kind::Barrel,
+        "crate" => Kind::Crate,
+        "cloister_well" => Kind::Well,
+        "fountain" => Kind::Fountain,
+        "bench" => Kind::Bench,
+        _ => return None,
+    })
+}
+
+/// A thing in a court as one side draws it: its kind, its middle (world ft, to a tenth), its turn
+/// (radians, modulo a half turn, to a hundredth; 0 for what is drawn unturned).
+type CourtThing = (String, i64, i64, i64);
+
+fn thing(kind: String, at: P, rot: f64, turned: bool) -> CourtThing {
+    let half = std::f64::consts::PI;
+    let r = if turned { ((rot % half) + half) % half } else { 0.0 };
+    let r = if (r - half).abs() < 0.005 { 0.0 } else { r };
+    (kind, (at[0] * 10.0).round() as i64, (at[1] * 10.0).round() as i64, (r * 100.0).round() as i64)
+}
+
+/// World position (ft) of grid point (x, y) of interior `it`.
+fn grid_world(it: &interior::Interior, x: f64, y: f64) -> P {
+    [it.origin[0] + (it.axis[0] * x + it.across[0] * y) * SQUARE_FT, it.origin[1] + (it.axis[1] * x + it.across[1] * y) * SQUARE_FT]
+}
+
+/// The middle (world ft) of an item of interior `it`.
+fn item_mid(it: &interior::Interior, x: u16, y: u16, w: u16, h: u16) -> P {
+    grid_world(it, x as f64 + 0.5 * w as f64, y as f64 + 0.5 * h as f64)
+}
+
+/// The things the interior puts down in court `court` (world ft) on its ground floor, as the battlemap
+/// would draw them (`court_kind`; what it would not, by its own kind).
+fn inside_things(it: &interior::Interior, court: &[P]) -> Vec<CourtThing> {
+    let Some(lv) = it.levels.iter().find(|lv| lv.z == 0) else { return Vec::new() };
+    let mut out: Vec<CourtThing> = lv
+        .furniture
+        .iter()
+        .filter(|q| q.kind != "garden_path")
+        .map(|q| (q, item_mid(it, q.x, q.y, q.w, q.h)))
+        .filter(|(_, m)| contains(court, *m))
+        .map(|(q, m)| match court_kind(q.kind) {
+            Some(Kind::Bench) => {
+                let d = [[0.0, -1.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]][q.back.unwrap_or(0) as usize & 3];
+                let b = add(mul(it.axis, d[0]), mul(it.across, d[1]));
+                thing(format!("{:?}", Kind::Bench), m, libm::atan2(-b[1], -b[0]) - std::f64::consts::FRAC_PI_2, true)
+            }
+            Some(k @ (Kind::Well | Kind::Fountain)) => thing(format!("{k:?}"), m, 0.0, false),
+            Some(k) => {
+                let long = if q.w >= q.h { it.axis } else { it.across };
+                thing(format!("{k:?}"), m, libm::atan2(long[1], long[0]), true)
+            }
+            None => thing(q.kind.to_string(), m, 0.0, false),
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The objects the battlemap draws in court `court` (world ft), from executor `ex`'s chunks.
+fn outside_things(ex: &mut Executor, court: &[P]) -> Vec<CourtThing> {
+    let size = ex.world.geom.tile_size_ft(ex.world.geom.max_level);
+    let (x0, y0, x1, y1) = court.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    let k = |v: f64| (v / size).floor().max(0.0) as u32;
+    let mut out = Vec::new();
+    for ky in k(y0)..=k(y1) {
+        for kx in k(x0)..=k(x1) {
+            let c = ex.battlemap(TileKey::surface(ex.world.geom.max_level, kx, ky));
+            let (ox, oy) = (kx as f64 * size, ky as f64 * size);
+            for o in &c.objects {
+                let m = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+                if contains(court, m) {
+                    let turned = !matches!(o.kind, Kind::Well | Kind::Fountain);
+                    out.push(thing(format!("{:?}", o.kind), m, o.rot as f64, turned));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// What differs between two sides' lists (each sorted): one line, empty when they agree.
+fn court_diff(inside: &[CourtThing], outside: &[CourtThing]) -> String {
+    let only = |a: &[CourtThing], b: &[CourtThing]| a.iter().filter(|t| !b.contains(t)).map(|t| format!("{} ({:.1},{:.1}) turn {:.2}", t.0, t.1 as f64 / 10.0, t.2 as f64 / 10.0, t.3 as f64 / 100.0)).collect::<Vec<_>>();
+    let (i, o) = (only(inside, outside), only(outside, inside));
+    if i.is_empty() && o.is_empty() && inside.len() == outside.len() {
+        return String::new();
+    }
+    format!("inside only [{}], battlemap only [{}]", i.join(", "), o.join(", "))
+}
+
+/// Every building round an open court (a palace's court, a monastery's garth, a coaching inn's yard:
+/// `interior::court_plan`) has the same things in it on its ground floor as on the battlemap (kind,
+/// middle, turn); and one per seed so again once designed by hand with its things moved. A U's or a
+/// court's yard (`Interior::yard`) is shown inside as the battlemap (left open): nothing of the
+/// interior's stands in it.
+fn courts(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&[
+        "open courts checked",
+        "open courts whose things differ inside and on the battlemap",
+        "designed courts checked",
+        "designed courts whose things differ inside and on the battlemap",
+        "designed courts the test design did not take",
+        "U or court yards checked (shown as the battlemap)",
+        "U or court yards with interior things in them",
+    ]);
+    let mut designed_one = false;
+    for li in 0..town::layout_count(&ctx.ex.t0) {
+        let l = town::layout(&ctx.ex.world, &ctx.ex.t0, li);
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed) {
+            let id = format!("b:{li}:{}", b.id);
+            let Some(c) = interior::court_plan(&ctx.ex.world, &ctx.ex.t0, &l, b) else {
+                // (A U's or a court's yard, `town::wings`.)
+                if !town::wings::arms(&b.poly).is_some_and(|a| a.len() >= 3) {
+                    continue;
+                }
+                let Some(it) = interior::generate_id(&ctx.ex.world, &ctx.ex.t0, &id).filter(|it| it.yard.len() == 4) else { continue };
+                r.tally("U or court yards checked (shown as the battlemap)", 1);
+                let yard: Vec<P> = it.yard.iter().map(|p| grid_world(&it, p[0] as f64, p[1] as f64)).collect();
+                let open: Vec<&str> = it
+                    .levels
+                    .iter()
+                    .filter(|lv| lv.z >= 0)
+                    .flat_map(|lv| lv.furniture.iter())
+                    .filter(|q| {
+                        let m = item_mid(&it, q.x, q.y, q.w, q.h);
+                        contains(&yard, m) && !contains(&b.poly, m)
+                    })
+                    .map(|q| q.kind)
+                    .collect();
+                if !open.is_empty() {
+                    r.add("U or court yards with interior things in them", 1.0, format!("{id}: {open:?}"));
+                }
+                continue;
+            };
+            let Some(it) = interior::generate_id(&ctx.ex.world, &ctx.ex.t0, &id) else { continue };
+            r.tally("open courts checked", 1);
+            let (inside, outside) = (inside_things(&it, &c.court), outside_things(&mut ctx.ex, &c.court));
+            let d = court_diff(&inside, &outside);
+            if !d.is_empty() {
+                r.add("open courts whose things differ inside and on the battlemap", 1.0, format!("{id} ({}) at ({:.0},{:.0}): {d}", it.function, c.court[0][0], c.court[0][1]));
+            }
+            // Designed by hand, its yard's things moved a square toward its middle (its barrels
+            // made a crate): the battlemap draws them there.
+            if designed_one || !town::palace::is_coaching(&l, b) {
+                continue;
+            }
+            let Some(gl) = it.levels.iter().position(|lv| lv.z == 0) else { continue };
+            designed_one = true;
+            let sh = interior::Shell::of(&l, b);
+            let mut d = interior::design::from_interior(&it, interior::design::fingerprint(&sh, b));
+            let m = mean(&c.court);
+            for q in d.levels[gl].items.iter_mut().filter(|q| court_kind(&q.kind).is_some() && contains(&c.court, item_mid(&it, q.x, q.y, q.w, q.h))) {
+                let here = dist(item_mid(&it, q.x, q.y, q.w, q.h), m);
+                let toward = |dx: i32, dy: i32| dist(item_mid(&it, (q.x as i32 + dx) as u16, (q.y as i32 + dy) as u16, q.w, q.h), m) < here - 1.0;
+                if toward(1, 0) {
+                    q.x += 1;
+                } else if toward(-1, 0) {
+                    q.x -= 1;
+                } else if toward(0, 1) {
+                    q.y += 1;
+                } else if toward(0, -1) {
+                    q.y -= 1;
+                }
+                if q.kind == "barrels" {
+                    q.kind = "crate".to_string();
+                    (q.w, q.h) = (1, 1);
+                }
+            }
+            let mut file = ctx.ex.world.file.clone();
+            file.edits.designs.insert(id.clone(), d);
+            let Ok(world) = World::new(file) else { continue };
+            let base = std::mem::replace(&mut ctx.ex.world, world);
+            let l2 = town::layout(&ctx.ex.world, &ctx.ex.t0, li);
+            let it2 = interior::generate_id(&ctx.ex.world, &ctx.ex.t0, &id);
+            let c2 = l2.buildings.iter().find(|q| q.id == b.id).and_then(|b2| interior::court_plan(&ctx.ex.world, &ctx.ex.t0, &l2, b2));
+            if let (Some(it2), Some(c2)) = (it2, c2) {
+                r.tally("designed courts checked", 1);
+                let (inside, outside) = (inside_things(&it2, &c2.court), outside_things(&mut ctx.ex, &c2.court));
+                let moved = inside != inside_things(&it, &c.court);
+                let d = court_diff(&inside, &outside);
+                if !moved {
+                    // (The design moved a thing onto a way or a door: set aside, as generated.)
+                    r.tally("designed courts the test design did not take", 1);
+                }
+                if !d.is_empty() {
+                    r.add("designed courts whose things differ inside and on the battlemap", 1.0, format!("{id} designed: {d}"));
+                }
+            }
+            ctx.ex.world = base;
+        }
+    }
+}

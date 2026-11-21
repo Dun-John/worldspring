@@ -15,7 +15,7 @@
 
 use super::kit::{Lay, side};
 use super::{Frame, Kind, Laid, Piece, Plan};
-use crate::interior::{OPEN_BELOW, Shell, building_item, hall, shape};
+use crate::interior::{OPEN_BELOW, Shell, hall, shape};
 use crate::town::{self, geom::{self, P}};
 
 /// A monastery's zones in its frame: the church's width, the west range's depth (s), the east
@@ -234,12 +234,7 @@ impl Plan {
                 self.join(&mut lay, (li - eri - 1, wi - sri + 1), (li - eri, wi - sri + 1));
             }
             // The garth's well and walks.
-            for (kind, (s0, s1, t0, t1)) in self.garth_pieces() {
-                let (a, c) = (self.f.grid(s0 as isize, t0 as isize), self.f.grid(s1 as isize - 1, t1 as isize - 1));
-                if let Some(it) = building_item(kind, a.0.min(c.0) as usize, a.1.min(c.1) as usize, (a.0 - c.0).unsigned_abs() + 1, (a.1 - c.1).unsigned_abs() + 1) {
-                    lay.items.push(it);
-                }
-            }
+            lay.items.extend(self.court_items());
             // The front door from the street into the entrance hall.
             let mut e = Vec::new();
             for t in [cwi, cwi + 1] {
