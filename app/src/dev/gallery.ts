@@ -16,6 +16,7 @@
 // bridged, in a dungeon's flagstones and again in a cave. `&items=dungeon4` (alone, default 48) shows the dungeon set as the DM
 // sees it in play: portcullises down and raised, locks shut and open, keys in three colours, collapsed walls.
 // `&items=cemetery` (alone; `&panels=`, `&sq=`) shows the cemetery props and a cemetery per culture group.
+// `&items=flatroofs` (alone; `&sq=`, default 24) shows dry-culture flat roofs as the battlemap's roof mesh draws them.
 // `&items=harbour` (alone; `&sq=`, default 48) shows the harbour batch: boats, bollards, cranes, net racks and buoys on
 // water or a quay, then the vector pieces (breakwater armour, a cog, a lighthouse's lantern) close up and in a harbour.
 // `&items=breakwaters` and `&items=piers` (alone; `&sq=`, default 48) show the breakwater armour and the timber
@@ -38,6 +39,7 @@ import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
 import { breakwaters, piers } from './galleryTimber';
+import { flatRoofs } from './galleryRoofs';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
 import groundFragment from '../render/shaders/ground.frag?raw';
@@ -505,6 +507,12 @@ export async function runGallery(target: HTMLElement) {
   if (pick?.includes('countryside') || only?.includes(62) || only?.includes(63)) {
     head('Countryside: hedgerow, dry-stone wall, fence (two chunks side by side, cut at the line between), windmill sails');
     y = countryside(root, y, Number(query.get('sq')) || 32);
+  }
+
+  // Flat roofs as the battlemap's roof mesh draws them (`&items=flatroofs` alone; `&sq=`, default 24).
+  if (pick?.includes('flatroofs')) {
+    head('Flat roofs: parapet coping lit to the NW, shaded to the SE, its cast shadow, hatched patches; flat clay and whitewash');
+    y = flatRoofs(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 24);
   }
 
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);

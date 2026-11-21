@@ -233,8 +233,7 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
       continue;
     }
     if (!roof.cone && flat) {
-      const inner = flatRoof(g, roof.pts, tint);
-      if (inner) roofDeck(g, inner, tint, roof.idx, roof.smoke);
+      flatRoof(g, roof.pts, tint);
       if (roof.smoke) smoke(g, roof.pts, 0.2);
       g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
@@ -844,20 +843,23 @@ function inset(pts: number[], w: number): number[] | null {
   return a * sg > 0.15 * Math.abs(signedArea(pts)) ? out : null;
 }
 
-/** A flat roof behind a parapet: the parapet's coping round it (a plain lighter band, inked on both
- * edges), the roof's field inside (patterned), the shadow the NW parapet casts on it towards the SE and
- * the lit inner face of the far side, and a small water spout (two on a long side) out through the
- * parapet on its lee side. */
-function flatRoof(g: MeshBuilder, pts: number[], tint: number): number[] | null {
+/** A flat roof behind a parapet: the parapet's coping round it (a band inked on both edges, lit on the
+ * sides facing the NW light and shaded on the SE ones), the roof's field inside (patterned, a few soft
+ * hatched patches: `colormesh.frag`), the shadow the NW parapet casts on it towards the SE and the lit
+ * inner face of the far side, and a small water spout (two on a long side) out through the parapet on
+ * its lee side. Nothing stands on it here: what does (the stair's hatch, jars, planters) is the
+ * interior's roof terrace's (`furnish_terrace`), which the battlemap can't know without laying out
+ * the building. */
+function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
   const m = pts.length / 2;
   const { ux, uy, halfW } = frame(pts);
-  const w = Math.min(0.9 * FT, halfW * 0.3);
+  const w = Math.min(1.2 * FT, halfW * 0.3);
   const [ox, oy] = [pts[0], pts[1]];
   const uv = (x: number, y: number): [number, number] => [g.seed + ((x - ox) * ux + (y - oy) * uy) / FT, (-(x - ox) * uy + (y - oy) * ux) / FT];
   const inner = inset(pts, w);
   if (!inner) {
     g.patch(pts, uv, shadeHex(tint, 1.02));
-    return null;
+    return;
   }
   // The coping in three tones: lit on the sides facing the NW light, shaded on the SE ones.
   const osg = signedArea(pts) > 0 ? 1 : -1;
@@ -866,7 +868,7 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number): number[] | null 
     const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]];
     const l = Math.hypot(bx - ax, by - ay) || 1;
     const out = (osg * (by - ay) - osg * (bx - ax)) / l / Math.SQRT2;
-    g.poly([ax, ay, bx, by, inner[j * 2], inner[j * 2 + 1], inner[i * 2], inner[i * 2 + 1]], shadeHex(tint, out < -0.3 ? 1.18 : out > 0.3 ? 1.0 : 1.09));
+    g.poly([ax, ay, bx, by, inner[j * 2], inner[j * 2 + 1], inner[i * 2], inner[i * 2 + 1]], shadeHex(tint, out < -0.3 ? 1.28 : out > 0.3 ? 0.86 : 1.1));
   }
   g.patch(inner, uv, shadeHex(tint, 1.0));
   const sg = signedArea(inner) > 0 ? 1 : -1;
@@ -878,11 +880,11 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number): number[] | null 
     const [onx, ony] = [(sg * (by - ay)) / l, (-sg * (bx - ax)) / l];
     const nw = -(onx + ony) / Math.SQRT2;
     if (nw > 0.25) {
-      const d = w * 1.1 * nw;
-      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], 0x000000, 0.22);
+      const d = w * 1.7 * nw;
+      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], 0x000000, 0.3);
     } else if (nw < -0.25) {
-      const d = w * 0.25;
-      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], shadeHex(tint, 1.2), 0.55);
+      const d = w * 0.3;
+      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], shadeHex(tint, 1.22), 0.6);
     }
   }
   g.outline(inner, INK_LINE, ROOF_INK);
@@ -894,7 +896,7 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number): number[] | null 
     const l = Math.hypot(bx - ax, by - ay);
     if (l > best && l > 1.5 * PX && (osg * (by - ay) - osg * (bx - ax)) / l > 0.6) [best, bi] = [l, i];
   }
-  if (bi < 0) return inner;
+  if (bi < 0) return;
   const [ax, ay, bx, by] = [pts[bi * 2], pts[bi * 2 + 1], pts[((bi + 1) % m) * 2], pts[((bi + 1) % m) * 2 + 1]];
   const [ex, ey] = [(bx - ax) / best, (by - ay) / best];
   const [onx, ony] = [osg * ey, -osg * ex];
@@ -907,130 +909,6 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number): number[] | null 
     g.poly(q.map((v) => v + 0.2 * FT), 0x000000, 0.25);
     g.poly(q, 0x8b6b4a);
     g.outline(q, INK_LINE, ROOF_INK);
-  }
-  return inner;
-}
-
-/** Whether (x, y) lies inside a polygon (even-odd). */
-function inside(pts: number[], x: number, y: number): boolean {
-  let hit = false;
-  const m = pts.length / 2;
-  for (let i = 0, j = m - 1; i < m; j = i++) {
-    const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]];
-    if (ay > y !== by > y && x < ((bx - ax) * (y - ay)) / (by - ay) + ax) hit = !hit;
-  }
-  return hit;
-}
-
-/** What a house's flat roof is used for, inside its parapet (`inner`): on a big one an upper room
- * at one end, its own parapet round it and its shadow on the terrace; the hatch the stair comes up
- * through by a corner; and a reed sunshade on its posts, a rug laid out to air or a few water jars,
- * chosen by the building (`idx`; a smoky one keeps its hatch away from the chimney, a fifth along
- * from the low end, and has nothing more). A few big shapes, inked as the props are. */
-function roofDeck(g: MeshBuilder, inner: number[], tint: number, idx: number, smoky: boolean) {
-  const { ux, uy, lo, hi, halfW, rx, ry } = frame(inner);
-  const len = hi - lo;
-  if (len < 6 * FT || halfW < 2.6 * FT) return;
-  const hh = (k: number) => (Math.imul((idx + 1) ^ Math.imul(k + 7, 0x27d4eb2d), 0x9e3779b1) >>> 0) / 4294967296;
-  const at = (t: number, s: number): [number, number] => [rx + ux * t - uy * s, ry + uy * t + ux * s];
-  // Boxes taken, [t, s, a, b]: a box `a` along by `b` across round (t, s), as a polygon, if it lies
-  // inside the parapet clear of those.
-  const taken: number[][] = [];
-  const box = (t: number, s: number, a: number, b: number, free = true): number[] | null => {
-    if (free && taken.some(([t1, s1, a1, b1]) => Math.abs(t - t1) < (a + a1) / 2 && Math.abs(s - s1) < (b + b1) / 2)) return null;
-    const out: number[] = [];
-    for (const [dt, ds] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) out.push(...at(t + (dt * a) / 2, s + (ds * b) / 2));
-    for (let i = 0; i < 8; i += 2) if (!inside(inner, out[i], out[i + 1])) return null;
-    if (free) taken.push([t, s, a + 0.8 * FT, b + 0.8 * FT]);
-    return out;
-  };
-  const mid = (lo + hi) / 2;
-  const side = hh(1) < 0.5 ? 1 : -1;
-  const end = smoky || hh(2) < 0.5 ? 1 : -1;
-  // The upper room, at the far end from the hatch, a little in from the parapet.
-  if (!smoky && len >= 18 * FT && halfW >= 6 * FT && hh(6) < 0.6) {
-    const a = len * (0.34 + 0.14 * hh(7));
-    const b = 2 * halfW - (1.2 + 2.5 * hh(8)) * FT;
-    const [t, s] = [mid - end * (len / 2 - 0.4 * FT - a / 2), side * (halfW - 0.4 * FT - b / 2)];
-    const room = box(t, s, a, b);
-    if (room) {
-      g.poly(room.map((v) => v + 1.6 * FT), 0x000000, 0.26);
-      flatRoof(g, room, shadeHex(tint, 1.08));
-    }
-  }
-  // The hatch: a timber frame round the dark stairwell, a ladder's rungs in it.
-  const [ha, hb] = [3.2 * FT, 2.6 * FT];
-  const ht = mid + end * (len / 2 - 0.5 * FT - ha / 2);
-  const hs = side * (halfW - 0.5 * FT - hb / 2);
-  const hatch = box(ht, hs, ha, hb);
-  if (hatch) {
-    g.poly(hatch, 0x8b6b4a);
-    const hole = box(ht, hs, ha - 0.8 * FT, hb - 0.8 * FT, false)!;
-    g.poly(hole, 0x2b231c);
-    for (const f of [-0.25, 0.1]) {
-      const [p, q] = [at(ht + f * ha, hs - 0.32 * hb), at(ht + f * ha, hs + 0.32 * hb)];
-      g.line(p[0], p[1], q[0], q[1], 0.2 * FT, 0x9a7a55, 1);
-    }
-    g.outline(hole, INK_LINE * 0.7, ROOF_INK);
-    g.outline(hatch, INK_LINE, ROOF_INK);
-  }
-  if (smoky || len < 10 * FT || halfW < 4 * FT) return;
-  // Then one thing on the terrace, the first place it fits from the hatch's end on the far side.
-  const kind = hh(3);
-  const place = (a: number, b: number, inset: number): [number[], number, number] | null => {
-    const s = -side * (halfW - inset - b / 2);
-    for (let k = 0; k <= 8; k++) {
-      const t = mid + end * (len / 2 - 0.5 * FT - a / 2) - end * ((len - a - FT) * k) / 8;
-      const p = box(t, s, a, b);
-      if (p) return [p, t, s];
-    }
-    return null;
-  };
-  if (kind < 0.4) {
-    // A reed sunshade on four posts: its shadow, the mat in straw, the reeds across, lit to the NW.
-    const [a, b] = [Math.min(12 * FT, len * 0.4), Math.min(9 * FT, halfW * 1.15)];
-    const got = place(a, b, 0.6 * FT);
-    if (!got) return;
-    const [mat, t0, s0] = got;
-    g.poly(mat.map((v) => v + 1.3 * FT), 0x000000, 0.24);
-    g.poly(mat, 0xc2a36a);
-    const lit = box(t0 - a * 0.2, s0 - b * 0.2, a * 0.6, b * 0.6, false);
-    if (lit) g.poly(lit, 0xd0b47c);
-    const n = Math.max(3, Math.round(a / (1.6 * FT)));
-    for (let k = 1; k < n; k++) {
-      const t = t0 - a / 2 + (a * k) / n;
-      const [p, q] = [at(t, s0 - b / 2), at(t, s0 + b / 2)];
-      g.line(p[0], p[1], q[0], q[1], 0.1 * FT, 0x9c7f4c, 1);
-    }
-    g.outline(mat, INK_LINE, ROOF_INK);
-  } else if (kind < 0.65) {
-    // A rug laid out to air: one earthy colour, its field a shade darker, a stripe down the middle.
-    const RUGS = [0x9a4a3a, 0x46607a, 0xa8823e, 0x6e4a5e];
-    const c = RUGS[Math.floor(hh(4) * RUGS.length)];
-    const [a, b] = [Math.min(8 * FT, len * 0.36), Math.min(5 * FT, halfW * 0.8)];
-    const got = place(a, b, 1.0 * FT);
-    if (!got) return;
-    const [rug, t0, s0] = got;
-    g.poly(rug, c);
-    g.poly(box(t0, s0, a - 1.2 * FT, b - 1.2 * FT, false) ?? rug, shadeHex(c, 0.86));
-    const [p, q] = [at(t0 - a / 2 + 1.1 * FT, s0), at(t0 + a / 2 - 1.1 * FT, s0)];
-    g.line(p[0], p[1], q[0], q[1], 0.45 * FT, shadeHex(c, 1.22), 1);
-    g.outline(rug, INK_LINE, ROOF_INK);
-  } else if (kind < 0.88) {
-    // Water jars in a row against the parapet.
-    const n = 2 + (hh(5) < 0.5 ? 1 : 0);
-    const got = place(n * 2.5 * FT, 2.4 * FT, 0.5 * FT);
-    if (!got) return;
-    const [, t0, s0] = got;
-    for (let k = 0; k < n; k++) {
-      const [x, y] = at(t0 + (k - (n - 1) / 2) * 2.5 * FT, s0);
-      const r = (1.0 + 0.12 * ((k + 1) % 2)) * FT;
-      g.poly(circle(x + 0.45 * FT, y + 0.45 * FT, r, 14), 0x000000, 0.25);
-      g.poly(circle(x, y, r, 14), 0xa8603e);
-      g.poly(circle(x - 0.22 * r, y - 0.22 * r, r * 0.55, 12), 0xbc7450);
-      g.poly(circle(x, y, r * 0.4, 12), 0x2b231c);
-      g.outline(circle(x, y, r, 14), INK_LINE, ROOF_INK);
-    }
   }
 }
 

@@ -213,6 +213,17 @@ void main() {
                         float d = length(o * vec2(1.0, 1.3)) + 0.35 * sin(o.x * 0.9 + o.y * 0.7 + ph * 20.0);
                         s = mix(1.0, ph < 0.2 ? 0.95 : 1.04, 1.0 - smoothstep(r - 0.8, r + 0.4, d));
                     }
+                    // A few soft patches of hatching (the hand's strokes on a flat roof, so it reads as a
+                    // surface, not a floor plan): diagonal strokes 1.4 ft apart, gone before they alias.
+                    vec2 hc = floor(p / 7.0);
+                    float hp = hash(hc + 71.0);
+                    if (hp < 0.35) {
+                        vec2 o = p - (hc + 0.3 + 0.4 * vec2(hash(hc + 73.0), hash(hc + 79.0))) * 7.0;
+                        float r = 1.8 + 0.9 * fract(hp * 23.0);
+                        float m = 1.0 - smoothstep(r - 0.7, r, length(o * vec2(0.8, 1.2)));
+                        float f = fract((o.x + o.y) / 1.4);
+                        s *= 1.0 - 0.09 * m * kp * smoothstep(4.0, 7.0, 1.4 * pxFt) * ln(min(f, 1.0 - f) * 1.4, lw, px);
+                    }
                 }
                 if (wear > 0.05) {
                     // A patched piece of a slightly different flat tone here and there; a few soft painted moss
