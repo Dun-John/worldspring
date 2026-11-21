@@ -3,6 +3,11 @@
 //! arguments are checked against its own schema (`args::check`, through `view_of`), then it runs a family
 //! module's read handler under the handler's own name (`VIEWS`: the one table of them).
 
+pub(crate) mod finds;
+pub(crate) mod geo;
+pub(crate) mod reads;
+pub(crate) mod streets;
+
 use std::sync::OnceLock;
 
 use serde_json::{Map, Value, json};
@@ -100,11 +105,28 @@ const MOVED: &[(&str, &str)] = &[
     ("restore_islets", "restore {ids}"),
     ("delete_water", "remove {ids}"),
     ("remove_roads", "remove {ids} (restore {ids} brings them back)"),
-    ("remove_fences", "remove {ids} (restore {ids} brings them back; gaps: place_fence {gaps})"),
+    ("remove_fences", "remove {ids} (restore {ids} brings them back; gaps: set_fence {gaps})"),
     ("remove_wharves", "remove {ids}"),
     ("remove_crossings", "remove {ids}"),
     ("delete_link", "remove {ids}"),
     ("delete_sketch_stroke", "remove {ids}"),
+    ("place_objects", "set_objects {objects}"),
+    ("upload_sprite", "set_sprite {name, data_base64}"),
+    ("shape_ground", "set_ground {kind: \"brush\", mode}"),
+    ("set_plateau", "set_ground {kind: \"plateau\"} (with id: set_ground {id})"),
+    ("set_hill", "set_ground {kind: \"hill\"} (with id: set_ground {id})"),
+    ("raise_islet", "set_ground {kind: \"islet\", at}"),
+    ("create_water", "set_water {poly}"),
+    ("update_water", "set_water {id}"),
+    ("place_path", "set_road {path}"),
+    ("place_fence", "set_fence {path}"),
+    ("place_crossing", "set_crossing {from, to}"),
+    ("place_wharf", "set_wharf {kind, path}"),
+    ("create_link", "set_link {a, b}"),
+    ("create_sketch_stroke", "set_sketch_stroke {tool}"),
+    ("update_sketch_stroke", "set_sketch_stroke {id}"),
+    ("set_site_design", "set_design {id, text}"),
+    ("reset_site_design", "set_design {id, reset: true}"),
 ];
 
 /// What the old tool `old` is now: `list {what: "roads"}`.
@@ -123,10 +145,10 @@ pub(crate) fn old_schema(name: &str) -> Value {
         let mut v = old_finds();
         v.extend(crate::tools::own());
         for m in [
-            crate::build::list(), crate::quick::list(), crate::works::list(), crate::sites::list(), crate::settlements::list(),
-            crate::notebook::list(), crate::scatter::list(), crate::crossings::list(), crate::hexes::list(), crate::links::list(), crate::ground::list(), crate::waters::list(),
-            crate::paths::list(), crate::fences::list(), crate::harbour::list(), crate::design::list(), crate::reads::list(), crate::streets::list(), crate::towns::list(),
-            crate::streets_edit::list(), crate::sketch::list(),
+            crate::edit::building::list(), crate::edit::lots::list(), crate::edit::fortify::list(), crate::edit::site::list(), crate::edit::settlement::list(),
+            crate::edit::notebook::list(), crate::edit::objects::list(), crate::edit::crossing::list(), crate::edit::hex::list(), crate::edit::link::list(), crate::edit::ground::list(), crate::edit::water::list(),
+            crate::edit::road::list(), crate::edit::fence::list(), crate::edit::wharf::list(), crate::edit::design::list(), crate::read::reads::list(), crate::read::streets::list(), crate::edit::town::list(),
+            crate::edit::streets::list(), crate::edit::sketch::list(),
         ] {
             v.extend(m);
         }
@@ -172,10 +194,10 @@ pub(crate) fn view_of(tool: &str, obj: &mut Map<String, Value>) -> Option<Result
     let picked = match obj.remove(field) {
         None | Some(Value::Null) => views.iter().find(|(_, v)| v.default).ok_or_else(|| format!("{field}: required, one of {}", values())),
         Some(Value::String(s)) => views.iter().find(|(_, v)| v.value == s).ok_or_else(|| {
-            let hint = crate::args::suggest(&s, views.iter().map(|(_, v)| v.value)).map(|h| format!(" (did you mean {h}?)")).unwrap_or_default();
+            let hint = crate::tools::args::suggest(&s, views.iter().map(|(_, v)| v.value)).map(|h| format!(" (did you mean {h}?)")).unwrap_or_default();
             format!("{field}: one of {}, got \"{s}\"{hint}", values())
         }),
-        Some(x) => Err(crate::args::bad(field, &format!("one of {}", values()), &x)),
+        Some(x) => Err(crate::tools::args::bad(field, &format!("one of {}", values()), &x)),
     };
     let (i, v) = match picked {
         Ok(p) => *p,
@@ -220,7 +242,7 @@ fn union(tool: &str, about: &str, required: &[&str]) -> Value {
 pub fn list() -> Vec<Value> {
     let old = old_finds();
     let find = |n: &str| old.iter().find(|t| t["name"] == n).cloned().expect("old read");
-    let geo = crate::geo::list();
+    let geo = crate::read::geo::list();
     let geo = |n: &str| geo.iter().find(|t| t["name"] == n).cloned().expect("geo read");
     let mut search = find("search_features");
     search["name"] = json!("search");
@@ -258,7 +280,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, Str
             if let Some((radius, per)) = v.circle
                 && let Some(w) = a.as_object_mut().and_then(|o| o.remove("within"))
             {
-                let r = w["radius_ft"].as_f64().ok_or_else(|| crate::args::bad("within", "a circle {at, radius_ft}", &w))?;
+                let r = w["radius_ft"].as_f64().ok_or_else(|| crate::tools::args::bad("within", "a circle {at, radius_ft}", &w))?;
                 a["at"] = if w["at"].is_null() { json!({ "x_ft": w["x_ft"], "y_ft": w["y_ft"] }) } else { w["at"].clone() };
                 a[radius] = json!(r / per);
             }
@@ -286,7 +308,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, Str
                     return Err("kinds: only with at alone (a search round a place); with a query give kind".into());
                 }
                 if a["limit"].as_u64().is_some_and(|l| l > 200) {
-                    return Err(crate::args::bad("limit", "1 to 200 with a query, kind, tag or within", &a["limit"]));
+                    return Err(crate::tools::args::bad("limit", "1 to 200 with a query, kind, tag or within", &a["limit"]));
                 }
                 (Run::Finds, "search_features", a)
             }
@@ -301,19 +323,19 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, Str
 /// The schemas of the reads `finds` runs (world_overview ... focus_view), as they were listed.
 fn old_finds() -> Vec<Value> {
     use crate::tools::{limit_prop, merge};
-    let place_props = crate::args::at_props;
+    let place_props = crate::tools::args::at_props;
     let v = json!([
-        { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts, businesses and sites underground by name, kind or theme). Give a query, kind, tag, within or at. Returns {items, found}; limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building, underground...)" }, "tag": { "type": "string", "description": "Only features whose notes carry this tag" }, "in_notes": { "type": "boolean", "default": false, "description": "The query also matches notes" }, "within": crate::args::area_light("Only features inside (a point) or overlapping: a box, polygon or circle {at, radius_ft}"), "at": { "type": ["string", "array", "object"], "description": "Only within radius_ft of this place, nearest first" }, "radius_ft": { "type": "number", "default": 26400 }, "underground_kinds": { "type": "array", "items": { "type": "string" }, "description": "dungeon, crypt, catacombs, cave, mine, lava tube, sewer, keep dungeon" }, "levels_min": { "type": "integer" }, "levels_max": { "type": "integer" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: where and what it is, extent, notes, regions, nearby settlements and roads, what it holds (districts, buildings, ways underground, sites, members, levels, rooms), its settlement and site; NPCs and plots there.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses and sites, a building's or site's levels and rooms, a region's settlements and sites. Each list is cut to limit (default 200, max 2000); found gives the full count and truncated is true.", "inputSchema": schema(json!({ "id": { "type": "string" }, "limit": limit_prop(200, 2000) }), &["id"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, with id, kind, current and generated name; with settlement its districts, businesses, towers and sites; with inside (a building or site) its levels and rooms. Returns {items, found}; limit (default 200, max 2000) cuts it.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, city, building, site, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string" }, "function": { "type": "string", "description": "Only businesses of this function (inn, blacksmith...), in a settlement or site" }, "limit": limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, slope_deg, biome (the coarse map's: a dry point can read ocean), water (a river or lake within 1000 ft), coast (the sea within 5 mi), areas, the building, district or site there, named features nearby, nearest settlements, and things: everything within radius_ft, topmost first.", "inputSchema": schema(merge(place_props(), json!({ "radius_ft": { "type": "number", "minimum": 0, "maximum": 500, "default": 15 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first, with distance, direction and extent. Returns {items, found}; limit (default 50) cuts it. kinds limits it; districts and businesses only when asked for or within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 500, "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace).", "inputSchema": schema(json!({ "from": crate::args::point_schema("Where from: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]"), "to": crate::args::point_schema("Where to: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]") }), &["from", "to"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_roads", "title": "Roads", "description": "The road network: drawn roads, then stretches between settlements and junctions, with id (rd:), class, length, ends and name. Returns {items, found, named}; limit cuts it. Filter by at and radius_mi, settlement, class or drawn.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 3000, "default": 25 }, "settlement": { "type": "string", "description": "Only roads ending at this settlement" }, "class": { "type": "string", "description": "king's road (also kings road, kings_road), road or track; results say \"king's road\"" }, "drawn": { "type": "boolean", "default": false, "description": "Only roads drawn in the sketch" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, every kind of object with its tactical rules, and the objects near the place by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "minimum": 1, "maximum": 64, "default": 12 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (JPEG 1024x683; width_px 256-1536, format png); needs the app in a visible tab. size_ft is the ground across: ~450 a battlemap, 3000 a village, 20000 a city. An l: or r: id in at shows that level inside (plan, doors, locks, furniture), as does a b:, u: or k: id with level; the map goes back after.", "inputSchema": schema(merge(place_props(), json!({ "level": { "type": "integer", "minimum": 0, "description": "With at b:, u: or k:: show this level inside, 0 the lowest" }, "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 }, "width_px": { "type": "integer", "minimum": 256, "maximum": 1536, "default": 1024, "description": "Pixels across (height 2/3 of it)" }, "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" } })), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]) },
+        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts, businesses and sites underground by name, kind or theme). Give a query, kind, tag, within or at. Returns {items, found}; limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building, underground...)" }, "tag": { "type": "string", "description": "Only features whose notes carry this tag" }, "in_notes": { "type": "boolean", "default": false, "description": "The query also matches notes" }, "within": crate::tools::args::area_light("Only features inside (a point) or overlapping: a box, polygon or circle {at, radius_ft}"), "at": { "type": ["string", "array", "object"], "description": "Only within radius_ft of this place, nearest first" }, "radius_ft": { "type": "number", "default": 26400 }, "underground_kinds": { "type": "array", "items": { "type": "string" }, "description": "dungeon, crypt, catacombs, cave, mine, lava tube, sewer, keep dungeon" }, "levels_min": { "type": "integer" }, "levels_max": { "type": "integer" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]) },
+        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: where and what it is, extent, notes, regions, nearby settlements and roads, what it holds (districts, buildings, ways underground, sites, members, levels, rooms), its settlement and site; NPCs and plots there.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) },
+        { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses and sites, a building's or site's levels and rooms, a region's settlements and sites. Each list is cut to limit (default 200, max 2000); found gives the full count and truncated is true.", "inputSchema": schema(json!({ "id": { "type": "string" }, "limit": limit_prop(200, 2000) }), &["id"]) },
+        { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, with id, kind, current and generated name; with settlement its districts, businesses, towers and sites; with inside (a building or site) its levels and rooms. Returns {items, found}; limit (default 200, max 2000) cuts it.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, city, building, site, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string" }, "function": { "type": "string", "description": "Only businesses of this function (inn, blacksmith...), in a settlement or site" }, "limit": limit_prop(200, 2000) }), &[]) },
+        { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, slope_deg, biome (the coarse map's: a dry point can read ocean), water (a river or lake within 1000 ft), coast (the sea within 5 mi), areas, the building, district or site there, named features nearby, nearest settlements, and things: everything within radius_ft, topmost first.", "inputSchema": schema(merge(place_props(), json!({ "radius_ft": { "type": "number", "minimum": 0, "maximum": 500, "default": 15 } })), &[]) },
+        { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first, with distance, direction and extent. Returns {items, found}; limit (default 50) cuts it. kinds limits it; districts and businesses only when asked for or within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 500, "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]) },
+        { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace).", "inputSchema": schema(json!({ "from": crate::tools::args::point_schema("Where from: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]"), "to": crate::tools::args::point_schema("Where to: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]") }), &["from", "to"]) },
+        { "name": "list_roads", "title": "Roads", "description": "The road network: drawn roads, then stretches between settlements and junctions, with id (rd:), class, length, ends and name. Returns {items, found, named}; limit cuts it. Filter by at and radius_mi, settlement, class or drawn.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 3000, "default": 25 }, "settlement": { "type": "string", "description": "Only roads ending at this settlement" }, "class": { "type": "string", "description": "king's road (also kings road, kings_road), road or track; results say \"king's road\"" }, "drawn": { "type": "boolean", "default": false, "description": "Only roads drawn in the sketch" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } })), &[]) },
+        { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, every kind of object with its tactical rules, and the objects near the place by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "minimum": 1, "maximum": 64, "default": 12 } })), &[]) },
+        { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (JPEG 1024x683; width_px 256-1536, format png); needs the app in a visible tab. size_ft is the ground across: ~450 a battlemap, 3000 a village, 20000 a city. An l: or r: id in at shows that level inside (plan, doors, locks, furniture), as does a b:, u: or k: id with level; the map goes back after.", "inputSchema": schema(merge(place_props(), json!({ "level": { "type": "integer", "minimum": 0, "description": "With at b:, u: or k:: show this level inside, 0 the lowest" }, "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 }, "width_px": { "type": "integer", "minimum": 256, "maximum": 1536, "default": 1024, "description": "Pixels across (height 2/3 of it)" }, "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" } })), &[]) },
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 } })), &[]) },
     ]);
     v.as_array().cloned().unwrap_or_default()

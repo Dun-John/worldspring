@@ -6,7 +6,7 @@ use worldgen::agent;
 use worldgen::town::roof;
 use worldgen::world::{BUILDING_HOMES, Created, CreatedChecks, MAX_FLOORS, ROOFS, STRUCTURES, TINTS};
 
-use crate::args::read_back;
+use crate::tools::args::read_back;
 use crate::Shared;
 use crate::worker::NO_WORLD;
 use crate::tools::{found, schema, text};
@@ -38,7 +38,7 @@ pub fn list() -> Vec<Value> {
     }
     let mut create = props();
     if let Some(m) = create.as_object_mut() {
-        m.insert("near".into(), crate::args::point_schema("Instead of a footprint: the nearest clear spot for width_ft x depth_ft on a street"));
+        m.insert("near".into(), crate::tools::args::point_schema("Instead of a footprint: the nearest clear spot for width_ft x depth_ft on a street"));
         m.insert("width_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: along the street" }));
         m.insert("depth_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400 }));
         m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way" }));
@@ -49,16 +49,16 @@ pub fn list() -> Vec<Value> {
         m.insert("id".into(), json!({ "type": "string", "description": "A building being reshaped" }));
         m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Count the world's own buildings out (would_remove)" }));
     }
-    let mut remove = crate::args::ids_props("building id (b:<layout>:<id>)");
+    let mut remove = crate::tools::args::ids_props("building id (b:<layout>:<id>)");
     if let Some(m) = remove.as_object_mut() {
-        m.insert("within".into(), crate::args::area_schema("Buildings whose middle lies inside: [x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}", 1.0e6));
+        m.insert("within".into(), crate::tools::args::area_schema("Buildings whose middle lies inside: [x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}", 1.0e6));
     }
     vec![
         json!({ "name": "create_building", "title": "Build", "description": "A building drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares; with an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). Refusals name what is in the way; clear: true takes away the world's own buildings. check_building_spot tests first.", "inputSchema": schema(create, &[]) }),
         json!({ "name": "update_building", "title": "Change a building", "description": "Change a building drawn by hand (c:<n>), one of the world's own (b:<layout>:<id>), or a hand-made castle's keep or yard building: footprint (checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; auto goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
-        json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not: blockers (what, id, where) and nearest_clear, the footprint moved to the nearest clear spot.", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not: blockers (what, id, where) and nearest_clear, the footprint moved to the nearest clear spot.", "inputSchema": schema(check, &[]) }),
         json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away the world's own buildings (delete_feature does drawn ones): by id or ids (b:<layout>:<id>) or every one whose middle lies inside within. Others keep their ids. restore_building brings them back.", "inputSchema": schema(remove, &[]) }),
-        json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and update_building changes (its name stays). Refused when one would come back under a drawn building: delete_feature that first.", "inputSchema": schema(crate::args::ids_props("building id"), &[]) }),
+        json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and update_building changes (its name stays). Refused when one would come back under a drawn building: delete_feature that first.", "inputSchema": schema(crate::tools::args::ids_props("building id"), &[]) }),
     ]
 }
 
@@ -72,7 +72,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         },
         "check_building_spot" => check_spot(app, a).await.map(text),
         "remove_buildings" => remove(app, a).await.map(text),
-        "restore_building" => match crate::args::ids(a) {
+        "restore_building" => match crate::tools::args::ids(a) {
             Ok(ids) => restore(app, ids, a["ids"].is_null()).await.map(text),
             Err(e) => Err(e),
         },
@@ -158,7 +158,7 @@ pub(crate) fn known_func(f: &str) -> Result<(), String> {
         return Ok(());
     }
     let keys = worldgen::town::catalog::CATALOG.iter().map(|c| c.key).chain(BUILDING_HOMES);
-    let hint = crate::args::suggest(f, keys.clone()).map(|h| format!(" (did you mean {h}?)")).unwrap_or_default();
+    let hint = crate::tools::args::suggest(f, keys.clone()).map(|h| format!(" (did you mean {h}?)")).unwrap_or_default();
     let few: Vec<&str> = ["inn", "tavern", "blacksmith", "temple", "castle"].into_iter().chain(BUILDING_HOMES.into_iter().take(3)).collect();
     Err(format!("func: a business or home such as {}, got {}{hint}; list (what names) shows the businesses", few.join(", "), json!(f)))
 }
@@ -188,7 +188,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     let change = agent::BuildingChange { func: opt("func"), floors, poly: footprint(a)?, roof: opt("roof"), tint: opt("tint"), material: opt("material"), shape: opt("shape"), shade: shade_arg(a)?, structure: opt("structure") };
     let name = opt("name");
     // (R5 towns: a castle made by hand keeps its pieces' edits itself.)
-    if let Some(v) = crate::works::update_piece(app, &id, &change, name.as_deref(), a).await? {
+    if let Some(v) = crate::edit::fortify::update_piece(app, &id, &change, name.as_deref(), a).await? {
         return Ok(v);
     }
     // (A new footprint: the entrances made in the building follow its middle.)
@@ -197,7 +197,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     // Its inside designed by hand: new storeys follow (in the same change); a new footprint or a
     // ruin sets the design aside.
     let reshaped = change.poly.is_some() || change.structure.as_deref() == Some("ruin");
-    let out = if change.structure.as_deref() == Some("ruin") { crate::sites::entrances_standing_in(app, vec![id.clone()]).await } else { Vec::new() };
+    let out = if change.structure.as_deref() == Some("ruin") { crate::edit::site::entrances_standing_in(app, vec![id.clone()]).await } else { Vec::new() };
     let (edit, design, aside) = app
         .worker
         .with(move |ex| {
@@ -230,7 +230,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
             }
             None => {}
         }
-        let followed = newmid.map(|m| crate::sites::follow_middle(e, &id3, m)).unwrap_or_default();
+        let followed = newmid.map(|m| crate::edit::site::follow_middle(e, &id3, m)).unwrap_or_default();
         Ok(json!({ "tool": "update_building", "id": id3, "entrances_moved": followed }))
     })
     .await?;
@@ -243,16 +243,16 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
         v["entrances_out"] = json!(out);
     }
     if aside {
-        v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_site_design makes a new one");
+        v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_design makes a new one");
     }
     Ok(v)
 }
 
 /// Take away buildings of the world's own: by ids, or every one with its middle in `within`.
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
-    let mut ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::args::ids(a)? };
+    let mut ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::tools::args::ids(a)? };
     let single = a["ids"].is_null();
-    let within = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
+    let within = if a["within"].is_null() { None } else { Some(crate::tools::args::area(app, "within", &a["within"]).await?) };
     if ids.is_empty() && within.is_none() {
         return Err("give id, ids or within".into());
     }
@@ -265,10 +265,10 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             ids.sort();
             ids.dedup();
-            let pieces = crate::works::piece_removals(ex, &mut ids)?;
+            let pieces = crate::edit::fortify::piece_removals(ex, &mut ids)?;
             Ok((ids.into_iter().map(|id| agent::building_removal(&ex.world, &ex.t0, &id).map(|e| (id.clone(), e)).map_err(|m| match asked.iter().position(|x| *x == id) {
                 Some(_) if single => format!("id: {m}"),
-                Some(i) => format!("{}: {m}", crate::args::item(false, i)),
+                Some(i) => format!("{}: {m}", crate::tools::args::item(false, i)),
                 None => format!("{id}: {m}"),
             })).collect::<Result<Vec<_>, String>>()?, pieces))
         })
@@ -279,7 +279,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
         return Ok(json!({ "tool": "remove_buildings", "removed": [], "note": "no building of the world's own has its middle there" }));
     }
     let mut reply = json!({ "tool": "remove_buildings", "count": removed.len(), "removed": removed });
-    let out = crate::sites::entrances_standing_in(app, removed.clone()).await;
+    let out = crate::edit::site::entrances_standing_in(app, removed.clone()).await;
     if !out.is_empty() {
         reply["entrances_out"] = json!(out);
     }
@@ -300,7 +300,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, String> {
     // (R5 towns: a castle made by hand keeps its pieces' edits itself, restored one at a time.)
     if ids.len() == 1 {
-        if let Some(v) = crate::works::restore_piece(app, &ids[0]).await? {
+        if let Some(v) = crate::edit::fortify::restore_piece(app, &ids[0]).await? {
             return Ok(v);
         }
     }
@@ -316,7 +316,7 @@ async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, 
                 .map(|(i, id)| match worldgen::town::pieces::piece_of(&ex.world, &ex.t0, id) {
                     None => Ok(None),
                     Some(p) if ex.world.file.edits.created.iter().any(|c| c.id == p.castle && c.pieces.contains_key(&p.key)) => Ok(Some(id.clone())),
-                    Some(_) => Err(format!("{}: {id} is as built already", crate::args::item(single, i))),
+                    Some(_) => Err(format!("{}: {id} is as built already", crate::tools::args::item(single, i))),
                 })
                 .collect::<Result<Vec<_>, String>>()?)
         })
@@ -329,7 +329,7 @@ async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, 
             out.push(restore_buildings(app, rest, single, at).await?);
         }
         for id in is_piece.into_iter().flatten() {
-            if let Some(v) = crate::works::restore_piece(app, &id).await? {
+            if let Some(v) = crate::edit::fortify::restore_piece(app, &id).await? {
                 out.push(v);
             }
         }
@@ -343,20 +343,20 @@ async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, 
 /// for (for the errors).
 async fn restore_buildings(app: &Shared, ids: Vec<String>, single: bool, at: Vec<usize>) -> Result<Value, String> {
     // The check and the restore happen under one hold of the gate, so nothing can be placed in between.
-    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() { None } else { Some(app.gate.lock().await) };
     let ids2 = ids.clone();
     app.worker.with(move |ex| agent::restore_clash(&ex.world, &ex.t0, &ids2)).await?;
     let ids2 = ids.clone();
     let change = move |e: &mut worldgen::world::Edits| {
         if let Some((i, id)) = ids2.iter().enumerate().find(|(_, id)| !e.buildings.contains_key(*id)) {
-            return Err(format!("{}: {id} is as generated already", crate::args::item(single, at[i])));
+            return Err(format!("{}: {id} is as generated already", crate::tools::args::item(single, at[i])));
         }
         for id in &ids2 {
             e.buildings.remove(id);
         }
         Ok(json!({ "tool": "restore_building", "ids": ids2 }))
     };
-    if crate::batch::active() {
+    if crate::tools::batch::active() {
         app.edit("agent", 0, change).await?;
     } else {
         app.edit_now("agent", 0, change).await?;
@@ -448,7 +448,7 @@ pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result
         }
     };
     let creating = id.is_none();
-    let out = if !creating && a["structure"].as_str() == Some("ruin") { crate::sites::entrances_standing_in(app, vec![c.id.clone()]).await } else { Vec::new() };
+    let out = if !creating && a["structure"].as_str() == Some("ruin") { crate::edit::site::entrances_standing_in(app, vec![c.id.clone()]).await } else { Vec::new() };
     let near_key = if creating && poly.is_none() && !a["near"].is_null() { near_key(app, a) } else { None };
     let (was_floors, was_ruin) = (c.floors, c.structure.as_deref() == Some("ruin"));
     // `clear` (a new building only): the world's own buildings in the way are taken away with it.
@@ -457,7 +457,7 @@ pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result
     let poly = match poly {
         None if creating && !a["near"].is_null() => {
             // The nearest clear lot near a place.
-            let near = crate::args::point(app, "near", &a["near"]).await?;
+            let near = crate::tools::args::point(app, "near", &a["near"]).await?;
             let size = |k: &str| a[k].as_f64().ok_or_else(|| format!("{k}: needed with near"));
             let (w, d) = (size("width_ft")?, size("depth_ft")?);
             // The same call again (a script run twice): mapd remembers this session's `near` calls; one
@@ -610,7 +610,7 @@ pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result
             let mid = [c.x, c.y];
             *slot = c;
             if let Some(h) = &host {
-                reply["entrances_moved"] = json!(crate::sites::follow_middle(e, h, mid));
+                reply["entrances_moved"] = json!(crate::edit::site::follow_middle(e, h, mid));
             }
             if let Some((bid, d)) = design {
                 e.designs.insert(bid, d);
@@ -630,7 +630,7 @@ pub(crate) async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result
                 v["building"] = json!(format!("b:{li}:0"));
             }
             if aside {
-                v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_site_design makes a new one");
+                v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_design makes a new one");
             }
             if let Some(m) = moved {
                 v["moved"] = m;

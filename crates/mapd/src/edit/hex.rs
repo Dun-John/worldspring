@@ -29,12 +29,12 @@ pub fn list() -> Vec<Value> {
     let mut set = fields();
     set["reset"] = json!({ "type": "boolean", "description": "Defaults first, then the fields given" });
     vec![
-        json!({ "name": "get_hex_grid", "title": "Hex grid settings", "description": "The world's overland hex grid settings (defaults where unset; `set` says whether any are).", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "get_hex_grid", "title": "Hex grid settings", "description": "The world's overland hex grid settings (defaults where unset; `set` says whether any are).", "inputSchema": schema(json!({}), &[]) }),
         json!({ "name": "set_hex_grid", "title": "Set the hex grid", "description": "Change the overland hex grid: only the fields given change; reset goes back to the defaults. Returns the grid.", "inputSchema": schema(set, &[]) }),
         json!({ "name": "hex_at", "title": "Hex of a place", "description": "The hex holding a place (`at`), or the hex named by `hex`: label, key, centre, six corners (world ft), on_map and its neighbours. Hex 0101 is the first whole hex at the map's top-left.", "inputSchema": schema(json!({
-            "at": crate::args::point_schema("A place"),
+            "at": crate::tools::args::point_schema("A place"),
             "hex": { "type": "string", "description": "A hex number (CCRR) or \"col,row\"" },
-        }), &[]), "annotations": { "readOnlyHint": true } }),
+        }), &[]) }),
     ]
 }
 
@@ -79,7 +79,7 @@ async fn set(app: &Shared, a: &Value) -> Result<Value, String> {
     let color = match &a["color"] {
         Value::Null => None,
         Value::String(s) if s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit()) => Some(s.to_lowercase()),
-        v => return Err(crate::args::bad("color", "#rrggbb", v)),
+        v => return Err(crate::tools::args::bad("color", "#rrggbb", v)),
     };
     let (size, width, opacity) = (a["size_mi"].as_f64(), a["width"].as_f64(), a["opacity"].as_f64());
     let (ox, oy) = (a["ox_mi"].as_f64(), a["oy_mi"].as_f64());
@@ -194,19 +194,19 @@ fn parse_hex(s: &str) -> Result<(i64, i64), String> {
         let h = s.len() / 2;
         return Ok((s[..h].parse().unwrap_or(0), s[h..].parse().unwrap_or(0)));
     }
-    Err(crate::args::bad("hex", "a number CCRR (0412) or \"col,row\"", &json!(s)))
+    Err(crate::tools::args::bad("hex", "a number CCRR (0412) or \"col,row\"", &json!(s)))
 }
 
 async fn at(app: &Shared, a: &Value) -> Result<Value, String> {
     let g = checked(app.with_edits(|e| e.hexes.get(KEY).cloned()).ok_or(NO_WORLD)?.as_ref());
-    let [w, h] = crate::args::map_size(app).await?;
+    let [w, h] = crate::tools::args::map_size(app).await?;
     let f = frame(&g);
     let (col, row) = match (&a["at"], &a["hex"]) {
         (Value::Null, Value::Null) => return Err("give at (a place or point) or hex (a number or \"col,row\")".into()),
         (Value::Null, Value::String(s)) => parse_hex(s)?,
-        (Value::Null, v) => return Err(crate::args::bad("hex", "a string: a number CCRR (0412) or \"col,row\"", v)),
+        (Value::Null, v) => return Err(crate::tools::args::bad("hex", "a string: a number CCRR (0412) or \"col,row\"", v)),
         (p, Value::Null) => {
-            let [x, y] = crate::args::point(app, "at", p).await?;
+            let [x, y] = crate::tools::args::point(app, "at", p).await?;
             hex_at(&f, x, y)
         }
         _ => return Err("give at or hex, not both".into()),

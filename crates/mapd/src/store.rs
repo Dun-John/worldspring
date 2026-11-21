@@ -2,7 +2,7 @@
 //! `edits.jsonl` (every change: when, who, what), `<dir>/current` (the open world's hash), and
 //! `<dir>/assets/<id>`: uploaded pictures (sprites, portraits) by content hash, shared by all
 //! worlds. `<dir>/<hash>/sketch.json`: sketch changes not regenerated yet, and `remade_from`:
-//! the world it was remade from by `regenerate` (`sketch.rs`).
+//! the world it was remade from by `regenerate` (`edit/sketch.rs`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

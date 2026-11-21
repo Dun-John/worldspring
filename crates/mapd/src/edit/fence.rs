@@ -46,7 +46,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 /// A list of points (world ft) checked against the map.
 async fn points(app: &Shared, field: &str, v: &Value) -> Result<Vec<[f64; 2]>, String> {
     let list = v.as_array().ok_or_else(|| format!("{field}: a list of points"))?;
-    let [w, h] = crate::args::map_size(app).await?;
+    let [w, h] = crate::tools::args::map_size(app).await?;
     let mut out = Vec::with_capacity(list.len());
     for (i, p) in list.iter().enumerate() {
         let f = format!("{field}[{i}]");
@@ -54,7 +54,7 @@ async fn points(app: &Shared, field: &str, v: &Value) -> Result<Vec<[f64; 2]>, S
             Value::Array(a) if a.len() == 2 && a[0].is_number() && a[1].is_number() => [a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)],
             Value::Object(o) if o.get("x_ft").is_some_and(Value::is_number) && o.get("y_ft").is_some_and(Value::is_number) => [o["x_ft"].as_f64().unwrap_or(0.0), o["y_ft"].as_f64().unwrap_or(0.0)],
             _ => {
-                out.push(crate::args::point(app, &f, p).await?);
+                out.push(crate::tools::args::point(app, &f, p).await?);
                 continue;
             }
         };
@@ -77,7 +77,7 @@ fn why(out: &ChangeOut) -> String {
 
 /// Work `ops` out in turn on the world as it is and apply them as one edit (the app's sync sees it).
 async fn run(app: &Shared, ops: Vec<(Vec<String>, Op)>, reply: impl FnOnce(&[ChangeOut]) -> Result<Value, String> + Send + 'static) -> Result<Value, String> {
-    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() { None } else { Some(app.gate.lock().await) };
     let outs = app.worker.with(move |ex| Ok(ops.iter().map(|(ids, op)| fencecut::change(&ex.world, &ex.t0, ids, op, false)).collect::<Vec<_>>())).await?;
     let v = reply(&outs)?;
     let change = v.clone();
@@ -241,7 +241,7 @@ async fn list_fences(app: &Shared, a: &Value) -> Result<Value, String> {
         }
         return Ok(listed(json!(items), limit, json!({})));
     }
-    let at = crate::args::point(app, "at", &a["at"]).await?;
+    let at = crate::tools::args::point(app, "at", &a["at"]).await?;
     let r = a["radius_ft"].as_f64().unwrap_or(200.0).clamp(0.0, fencecut::MAX_NEAR_FT);
     let items = app.worker.with(move |ex| Ok(fencecut::near(&ex.world, &ex.t0, at, r, usize::MAX))).await?;
     Ok(listed(json!(items), limit, json!({ "at": [at[0].round(), at[1].round()], "radius_ft": r })))

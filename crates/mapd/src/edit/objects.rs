@@ -8,7 +8,7 @@ use worldgen::battlemap::{self, KindInfo, catalog};
 use worldgen::world::{Clear, ObjKind, Placed, SpriteMeta};
 
 use crate::Shared;
-use crate::notebook::new_id;
+use crate::edit::notebook::new_id;
 use crate::tools::{listed, schema, text};
 
 const MAX_BATCH: usize = 500;
@@ -30,11 +30,11 @@ const COVERS: [&str; 4] = ["none", "half", "three-quarters", "full"];
 pub fn list() -> Vec<Value> {
     let kind = json!({ "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }], "description": "A built-in kind (id or name) or sprite (s:<asset> or name)" });
     let kinds = json!({ "type": "array", "items": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }] }, "description": "Only these kinds" });
-    let mut within = crate::args::area_schema("[x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}; only a circle takes generated objects", 640.0);
+    let mut within = crate::tools::args::area_schema("[x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}; only a circle takes generated objects", 640.0);
     within["oneOf"][1]["properties"]["kinds"] = kinds.clone();
-    let mut restore_within = crate::args::area_schema("Clears touching a box, polygon or circle", 640.0);
+    let mut restore_within = crate::tools::args::area_schema("Clears touching a box, polygon or circle", 640.0);
     restore_within["oneOf"][1]["properties"]["kinds"] = kinds.clone();
-    let ids = crate::args::ids_props("id");
+    let ids = crate::tools::args::ids_props("id");
     let mut remove = ids.clone();
     if let Some(m) = remove.as_object_mut() {
         m.insert("points".into(), json!({ "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "kind": kind.clone(), "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["kind", "x_ft", "y_ft"] }, "description": "Generated objects, as inspect (what battlemap) lists them" }));
@@ -52,7 +52,7 @@ pub fn list() -> Vec<Value> {
         m.insert("asset".into(), json!({ "type": "string", "description": "An uploaded asset to change" }));
     }
     vec![
-        json!({ "name": "list_sprites", "title": "Object kinds", "description": "What can be put on a battlemap: built-in kinds and uploaded sprites with id, tactical rules and uploaded. Returns {items, found}; limit (default 200, max 1000) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 1000) }), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "list_sprites", "title": "Object kinds", "description": "What can be put on a battlemap: built-in kinds and uploaded sprites with id, tactical rules and uploaded. Returns {items, found}; limit (default 200, max 1000) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 1000) }), &[]) }),
         json!({ "name": "upload_sprite", "title": "Upload a sprite", "description": "Add a picture as an object kind for battlemaps (64 px per 5-ft square is plenty), with its name, size and tactical rules. Give data_base64 or path; or asset to change an uploaded one's rules. Returns its kind id (s:<asset>).", "inputSchema": schema(upload, &[]) }),
         json!({ "name": "place_objects", "title": "Put objects down", "description": "Put objects on the battlemap at world positions (ft): built-in kinds or uploaded sprites, up to 500 at once. They block, cover and hinder by their kind's rules. With an id (o:...), changes one put down before. Returns their ids.", "inputSchema": schema(json!({ "objects": { "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "id": { "type": "string", "description": "A placed object (o:...) to change" }, "kind": kind, "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "rot_deg": { "type": "number", "description": "Degrees clockwise (props that can turn)" }, "scale": { "type": "number", "minimum": 0.2, "maximum": 5, "default": 1 }, "variant": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Look (most kinds have four); default by chance" } } } } }), &["objects"]) }),
         json!({ "name": "remove_objects", "title": "Take objects away", "description": "Take objects off the battlemap: placed ones by id or ids (o:...), generated ones by kind and place (points), or everything inside within (kinds narrows a circle). Returns the ids of the clears (restore_objects undoes them).", "inputSchema": schema(remove, &[]) }),
@@ -97,7 +97,7 @@ pub(crate) fn kind_of(v: &Value, sprites: &std::collections::BTreeMap<String, Sp
     }
     let s = v.as_str().map(str::trim).unwrap_or("");
     if let Some(id) = s.strip_prefix("s:") {
-        return sprites.contains_key(id).then(|| ObjKind::Sprite(s.to_string())).ok_or_else(|| format!("no uploaded sprite {s} (upload_sprite first)"));
+        return sprites.contains_key(id).then(|| ObjKind::Sprite(s.to_string())).ok_or_else(|| format!("no uploaded sprite {s} (set_sprite first)"));
     }
     match sprites.iter().find(|(_, m)| m.name.eq_ignore_ascii_case(s)) {
         Some((id, _)) => Ok(ObjKind::Sprite(format!("s:{id}"))),
@@ -267,7 +267,7 @@ fn put_one(e: &mut worldgen::world::Edits, o: &Value, w: f64, h: f64) -> Result<
     let (id, old) = match &o["id"] {
         Value::Null => (new_id("o"), None),
         Value::String(id) => (id.clone(), Some(e.objects.get(id).cloned().ok_or_else(|| format!("id: no placed object {id}"))?)),
-        v => return Err(crate::args::bad("id", "a placed object's id (o:...)", v)),
+        v => return Err(crate::tools::args::bad("id", "a placed object's id (o:...)", v)),
     };
     let kind = match (&o["kind"], &old) {
         (Value::Null, Some(p)) => p.kind.clone(),
@@ -344,14 +344,14 @@ fn kinds_of(a: &Value, within: &Value) -> Result<Vec<u16>, String> {
 }
 
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::args::ids(a)? };
+    let ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::tools::args::ids(a)? };
     let mut points = Vec::new();
     for (i, o) in a["points"].as_array().into_iter().flatten().enumerate() {
         let kind = builtin(&o["kind"]).ok_or_else(|| format!("points[{i}].kind: built-in kinds only (placed objects go by id), got {}", o["kind"]))?;
         points.push((kind, num(o, "x_ft").map_err(|m| format!("points[{i}].{m}"))?, num(o, "y_ft").map_err(|m| format!("points[{i}].{m}"))?));
     }
     let single = a["ids"].is_null();
-    let area = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
+    let area = if a["within"].is_null() { None } else { Some(crate::tools::args::area(app, "within", &a["within"]).await?) };
     let kinds = kinds_of(a, &a["within"])?;
     if ids.is_empty() && points.is_empty() && area.is_none() {
         return Err("give id, ids, points or within".into());
@@ -359,7 +359,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     app.edit("agent", 0, move |e| {
         let mut removed = Vec::new();
         for (i, id) in ids.iter().enumerate() {
-            e.objects.get(id).ok_or_else(|| format!("{}: no placed object {id}", crate::args::item(single, i)))?;
+            e.objects.get(id).ok_or_else(|| format!("{}: no placed object {id}", crate::tools::args::item(single, i)))?;
         }
         for id in &ids {
             e.objects.remove(id);
@@ -393,7 +393,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
                 e.objects.remove(&k);
                 removed.push(k);
             }
-            if let crate::args::Area::Circle([x, y], r) = area {
+            if let crate::tools::args::Area::Circle([x, y], r) = area {
                 let id = new_id("x");
                 e.cleared.insert(id.clone(), Clear { x, y, kind: None, r: Some(r), kinds });
                 clears.push(id);
@@ -432,16 +432,16 @@ fn edge_dist(q: &[[f64; 2]], p: [f64; 2]) -> f64 {
 }
 
 async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::args::ids(a)? };
+    let ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::tools::args::ids(a)? };
     let single = a["ids"].is_null();
-    let area = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
+    let area = if a["within"].is_null() { None } else { Some(crate::tools::args::area(app, "within", &a["within"]).await?) };
     if ids.is_empty() && area.is_none() {
         return Err("give id, ids or within".into());
     }
     app.edit("agent", 0, move |e| {
         let mut gone = Vec::new();
         for (i, id) in ids.iter().enumerate() {
-            e.cleared.get(id).ok_or_else(|| format!("{}: no clear {id}", crate::args::item(single, i)))?;
+            e.cleared.get(id).ok_or_else(|| format!("{}: no clear {id}", crate::tools::args::item(single, i)))?;
         }
         for id in &ids {
             e.cleared.remove(id);
@@ -452,7 +452,7 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
                 .cleared
                 .iter()
                 .filter(|(_, c)| match &area {
-                    crate::args::Area::Circle(m, r) => (c.x - m[0]).hypot(c.y - m[1]) <= r + c.r.unwrap_or(0.0),
+                    crate::tools::args::Area::Circle(m, r) => (c.x - m[0]).hypot(c.y - m[1]) <= r + c.r.unwrap_or(0.0),
                     other => other.contains([c.x, c.y]) || edge_dist(&other.outline(), [c.x, c.y]) <= c.r.unwrap_or(0.0),
                 })
                 .map(|(k, _)| k.clone())

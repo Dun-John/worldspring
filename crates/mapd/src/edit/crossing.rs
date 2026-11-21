@@ -6,23 +6,23 @@ use worldgen::wharf;
 use worldgen::world::{Crossing, CrossingKind, CrossingMaterial, Edits, FollowCrossing};
 
 use crate::Shared;
-use crate::notebook::new_id;
+use crate::edit::notebook::new_id;
 use crate::tools::{listed, schema, text};
 
 pub fn list() -> Vec<Value> {
     vec![
-        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries) with id, kind, ends, width, length, material, name and notes. Returns {items, found}; limit (default 200) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries) with id, kind, ends, width, length, material, name and notes. Returns {items, found}; limit (default 200) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 2000) }), &[]) }),
         json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), 10-2000 ft long (a ferry 68+), 5-120 ft wide (a ford or ferry 40 at most); a bridge may carry shops. With id, changes that crossing. Returns its id (v:...), shops and the river's banks; an end in the water is refused.", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A crossing to change" },
             "kind": { "type": "string", "enum": ["bridge", "ford", "ferry"] },
-            "from": crate::args::point_schema("One bank (a place)"),
-            "to": crate::args::point_schema("The other bank (a place); the crossing"),
+            "from": crate::tools::args::point_schema("One bank (a place)"),
+            "to": crate::tools::args::point_schema("The other bank (a place); the crossing"),
             "width_ft": { "type": "number", "minimum": 5, "maximum": 120, "default": 12, "description": "Deck, ford or raft width (a ford or ferry at most 40)" },
             "material": { "type": "string", "enum": ["timber", "stone"] },
             "shops": { "type": ["boolean", "object"], "description": "A bridge's shops: true or {depth_ft (the deepest row), frontage_ft, lane_ft, vary}; false takes them off", "properties": {
                 "depth_ft": { "type": "number", "minimum": 10, "maximum": 40 }, "frontage_ft": { "type": "number", "minimum": 12, "maximum": 40 }, "lane_ft": { "type": "number", "minimum": 10, "maximum": 40 }, "vary": { "type": "boolean", "default": true, "description": "Vary each shop's frontage, depth and storeys, with an open landing now and then; false for even rows" } } },
         }), &[]) }),
-        json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id or ids (v:..., all or none).", "inputSchema": schema(crate::args::ids_props("crossing id"), &[]) }),
+        json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id or ids (v:..., all or none).", "inputSchema": schema(crate::tools::args::ids_props("crossing id"), &[]) }),
     ]
 }
 
@@ -109,7 +109,7 @@ fn geom_len(a: [f64; 2], b: [f64; 2]) -> f64 {
 async fn end(app: &Shared, a: &Value, k: &str) -> Result<Option<[f64; 2]>, String> {
     match &a[k] {
         Value::Null => Ok(None),
-        v => crate::args::point(app, k, v).await.map(Some),
+        v => crate::tools::args::point(app, k, v).await.map(Some),
     }
 }
 
@@ -356,12 +356,12 @@ async fn deck_note(app: &Shared, v: &mut Value) -> Result<(), String> {
 }
 
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let single = a["ids"].is_null();
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !e.crossings.contains_key(id) {
-                return Err(format!("{}: no crossing {id}", crate::args::item(single, i)));
+                return Err(format!("{}: no crossing {id}", crate::tools::args::item(single, i)));
             }
         }
         let mut gone = Vec::new();

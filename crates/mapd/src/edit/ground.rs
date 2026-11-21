@@ -15,15 +15,15 @@ use worldgen::world::Edits;
 use worldgen::{agent, town};
 
 use crate::Shared;
-use crate::notebook::new_id;
+use crate::edit::notebook::new_id;
 use crate::tools::{schema, text};
 
 /// How far `ground_heights` reads each way from its place (ft): half its box's side.
 const MAX_READ_FT: f64 = 200.0;
 
 pub fn list() -> Vec<Value> {
-    let pt = crate::args::point_schema("{x_ft, y_ft} or [x_ft, y_ft]");
-    let at = crate::args::point_schema("A place (id, point or [x, y] in ft)");
+    let pt = crate::tools::args::point_schema("{x_ft, y_ft} or [x_ft, y_ft]");
+    let at = crate::tools::args::point_schema("A place (id, point or [x, y] in ft)");
     vec![
         json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground, a round brush: raise, lower, smooth, or restore toward the generated ground (plateaus stay). A dab (at, radius_ft) or a stroke (path, width_ft); buildings, streets and walls follow. At most 48 blocks of 80 ft a stroke, 1500 a world. Returns the blocks changed and the ground's range (ft).", "inputSchema": schema(json!({
             "mode": { "type": "string", "enum": ["raise", "lower", "smooth", "restore"] },
@@ -59,9 +59,9 @@ pub fn list() -> Vec<Value> {
             "peak_ft": { "type": "number", "minimum": 1, "maximum": ground::MAX_HILL_FT, "default": 60, "description": "Its peak over the ground" },
             "crown_ft": { "type": "number", "minimum": 0, "maximum": 512, "default": 0, "description": "A flat crown's radius (at most 0.8 of the narrower half-axis)" },
         }), &[]) }),
-        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus, pits or the world\'s own generated islets (i:..., see list (what ground); its watchtower goes too: removed_towers) away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
-        json!({ "name": "restore_islets", "title": "Bring generated islets back", "description": "Bring the world's own islets (i:...) back after delete_plateau took them away. A watchtower removed with one stays removed (restore_building).", "inputSchema": schema(crate::args::ids_props("islet id (i:...)"), &[]) }),
-        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square within radius_ft (at most 200) of a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus, pits or the world\'s own generated islets (i:..., see list (what ground); its watchtower goes too: removed_towers) away (the ground goes back as it was), by id (h:...), with their names, notes and hidden marks (no restore; the user's Undo in the app brings them back).", "inputSchema": schema(crate::tools::args::ids_props("plateau id (h:...)"), &[]) }),
+        json!({ "name": "restore_islets", "title": "Bring generated islets back", "description": "Bring the world's own islets (i:...) back after delete_plateau took them away. A watchtower removed with one stays removed (restore_building).", "inputSchema": schema(crate::tools::args::ids_props("islet id (i:...)"), &[]) }),
+        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square within radius_ft (at most 200) of a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]) }),
     ]
 }
 
@@ -114,11 +114,11 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
         return Err("at and path: give one".into());
     }
     let (path, radius) = if a["path"].is_null() {
-        (vec![crate::args::place(app, a).await?], num(a, "radius_ft", 15.0)?)
+        (vec![crate::tools::args::place(app, a).await?], num(a, "radius_ft", 15.0)?)
     } else {
         let mut path = Vec::new();
         for (i, p) in a["path"].as_array().ok_or("path: a list of [x_ft, y_ft]")?.iter().enumerate() {
-            path.push(crate::args::point(app, &format!("path[{i}]"), p).await?);
+            path.push(crate::tools::args::point(app, &format!("path[{i}]"), p).await?);
         }
         if path.is_empty() {
             return Err("path: at least one point".into());
@@ -286,7 +286,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         None => None,
     };
     if old.as_ref().is_some_and(|p| p.hill.is_some()) {
-        return Err("that is a hill: set_hill changes it".into());
+        return Err("that is a hill: set_ground changes it (kind hill)".into());
     }
     let edge = match (&a["edge_ft"], &old) {
         (Value::Null, Some(p)) => p.edge as f64,
@@ -297,7 +297,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
     let outline: Option<Vec<[f64; 2]>> = if let Some(o) = a["poly"].as_array() {
         let mut pts = Vec::new();
         for (i, p) in o.iter().enumerate() {
-            pts.push(crate::args::point(app, &format!("poly[{i}]"), p).await?);
+            pts.push(crate::tools::args::point(app, &format!("poly[{i}]"), p).await?);
         }
         Some(pts)
     } else if let Some(around) = a["around"].as_str() {
@@ -416,7 +416,7 @@ async fn set_hill(app: &Shared, a: &Value) -> Result<Value, String> {
     let old = match &id {
         Some(id) => {
             let p = app.with_edits(|e| e.plateaus.get(id).cloned()).flatten().ok_or_else(|| format!("no hill {id}"))?;
-            Some(p.hill.clone().map(|h| (h, p.level as f64)).ok_or_else(|| format!("{id} is a plateau, not a hill: set_plateau changes it"))?)
+            Some(p.hill.clone().map(|h| (h, p.level as f64)).ok_or_else(|| format!("{id} is a plateau, not a hill: set_ground changes it (kind plateau)"))?)
         }
         None => None,
     };
@@ -429,13 +429,13 @@ async fn set_hill(app: &Shared, a: &Value) -> Result<Value, String> {
     let mut crown = opt_num(a, "crown_ft")?;
     let (mut at, mut rx, mut ry, mut angle) = (None, opt_num(a, "rx_ft")?.or(opt_num(a, "radius_ft")?), opt_num(a, "ry_ft")?.or(opt_num(a, "radius_ft")?), opt_num(a, "angle_deg")?);
     if !a["from"].is_null() || !a["to"].is_null() {
-        let (f, t) = (crate::args::point(app, "from", &a["from"]).await?, crate::args::point(app, "to", &a["to"]).await?);
+        let (f, t) = (crate::tools::args::point(app, "from", &a["from"]).await?, crate::tools::args::point(app, "to", &a["to"]).await?);
         let w = num(a, "width_ft", 80.0)?;
         at = Some([(f[0] + t[0]) * 0.5, (f[1] + t[1]) * 0.5]);
         (rx, ry) = (Some((t[0] - f[0]).hypot(t[1] - f[1]) * 0.5 + w), Some(w));
         angle = Some((t[1] - f[1]).atan2(t[0] - f[0]).to_degrees());
     } else if !a["at"].is_null() {
-        at = Some(crate::args::point(app, "at", &a["at"]).await?);
+        at = Some(crate::tools::args::point(app, "at", &a["at"]).await?);
     } else if let Some(around) = a["around"].as_str() {
         let around = around.to_string();
         let key = id.clone().unwrap_or_else(|| "h:around".into());
@@ -495,7 +495,7 @@ async fn generated_islets(app: &Shared, ids: Vec<String>, single: bool) -> Resul
             let all = worldgen::t0::islets::islets(&ex.t0);
             let mut out = Vec::new();
             for (n, id) in ids.iter().enumerate().filter(|(_, id)| id.starts_with("i:")) {
-                let i = all.iter().find(|i| &i.id == id).ok_or_else(|| format!("{}: no generated islet {id}", crate::args::item(single, n)))?;
+                let i = all.iter().find(|i| &i.id == id).ok_or_else(|| format!("{}: no generated islet {id}", crate::tools::args::item(single, n)))?;
                 let tower = worldgen::t0::islets::tower_building(&ex.world, &ex.t0, i);
                 out.push((id.clone(), tower));
             }
@@ -505,13 +505,13 @@ async fn generated_islets(app: &Shared, ids: Vec<String>, single: bool) -> Resul
 }
 
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let single = a["ids"].is_null();
     let islets = generated_islets(app, ids.clone(), single).await?;
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !id.starts_with("i:") && !e.plateaus.contains_key(id) {
-                return Err(format!("{}: no plateau {id}", crate::args::item(single, i)));
+                return Err(format!("{}: no plateau {id}", crate::tools::args::item(single, i)));
             }
         }
         // (Its name, note and hidden mark go with it: nothing brings a plateau back but Undo.)
@@ -541,18 +541,18 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
 
 /// Bring generated islets taken away by `delete_plateau` back (their watchtowers stay removed: `restore_building`).
 async fn restore_islets(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let single = a["ids"].is_null();
     for (i, id) in ids.iter().enumerate() {
         if !id.starts_with("i:") {
-            return Err(format!("{}: {id} is not a generated islet (i:...)", crate::args::item(single, i)));
+            return Err(format!("{}: {id} is not a generated islet (i:...)", crate::tools::args::item(single, i)));
         }
     }
     generated_islets(app, ids.clone(), single).await?;
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !e.hidden.contains(id) {
-                return Err(format!("{}: {id} is not taken away", crate::args::item(single, i)));
+                return Err(format!("{}: {id} is not taken away", crate::tools::args::item(single, i)));
             }
         }
         for id in &ids {
@@ -564,7 +564,7 @@ async fn restore_islets(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 async fn heights(app: &Shared, a: &Value) -> Result<Value, String> {
-    let c = crate::args::place(app, a).await?;
+    let c = crate::tools::args::place(app, a).await?;
     let r = num(a, "radius_ft", 25.0)?;
     app.worker
         .with_mut(move |ex| {

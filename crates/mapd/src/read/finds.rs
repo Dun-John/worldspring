@@ -27,7 +27,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             let (q, kind, tag) = (a["query"].as_str().unwrap_or("").to_string(), a["kind"].as_str().map(str::to_string), a["tag"].as_str().map(|t| t.trim().to_string()));
             let narrows = !a["underground_kinds"].is_null() || !a["levels_min"].is_null() || !a["levels_max"].is_null();
             if q.trim().is_empty() && kind.is_none() && tag.is_none() && a["within"].is_null() && a["at"].is_null() && !narrows {
-                return Err(crate::args::bad("query, kind, tag, within, at", "give at least one (world_overview lists the largest places; list (what names) everything renameable)", &json!({})));
+                return Err(crate::tools::args::bad("query, kind, tag, within, at", "give at least one (world_overview lists the largest places; list (what names) everything renameable)", &json!({})));
             }
             if !a["within"].is_null() && !a["at"].is_null() {
                 return Err("within, at: give one (within takes a circle {at, radius_ft} too)".into());
@@ -35,11 +35,11 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             if !a["radius_ft"].is_null() && a["at"].is_null() {
                 return Err("radius_ft: needs at".into());
             }
-            let within = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
-            let near = if a["at"].is_null() { None } else { Some(crate::args::point(app, "at", &a["at"]).await?) };
+            let within = if a["within"].is_null() { None } else { Some(crate::tools::args::area(app, "within", &a["within"]).await?) };
+            let near = if a["at"].is_null() { None } else { Some(crate::tools::args::point(app, "at", &a["at"]).await?) };
             let radius = a["radius_ft"].as_f64().unwrap_or(5.0 * 5280.0);
             if !(radius > 0.0) {
-                return Err(crate::args::bad("radius_ft", "more than 0", &a["radius_ft"]));
+                return Err(crate::tools::args::bad("radius_ft", "more than 0", &a["radius_ft"]));
             }
             // Underground filters: only sites below ground can meet them.
             let mut under = worldgen::undersearch::UnderOpts::from_json(&json!({ "kinds": a["underground_kinds"], "levels_min": a["levels_min"], "levels_max": a["levels_max"] })).map_err(|e| format!("underground_{e}"))?;
@@ -72,7 +72,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
                         kinds.sort_unstable();
                         kinds.dedup();
                         if !kinds.contains(&k) {
-                            let hint = crate::args::suggest(k, kinds.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
+                            let hint = crate::tools::args::suggest(k, kinds.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
                             return Err(format!("kind: nothing of kind \"{k}\"{hint}; the kinds here: {}", kinds.join(", ")));
                         }
                     }
@@ -87,7 +87,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
         }
         "get_feature" => {
             let id = arg_str(&a, "id")?;
-            app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| crate::args::no_such(&ex.world, &ex.t0, &id))).await.map(text)
+            app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| crate::tools::args::no_such(&ex.world, &ex.t0, &id))).await.map(text)
         }
         "list_children" => {
             let id = arg_str(&a, "id")?;
@@ -112,7 +112,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             let limit = limit_of(&a, 200);
             let function = a["function"].as_str().map(|f| f.trim().to_lowercase());
             if function.is_some() && settlement.is_none() {
-                return Err(crate::args::bad("function", "used with settlement (a settlement's or site's id)", &a["function"]));
+                return Err(crate::tools::args::bad("function", "used with settlement (a settlement's or site's id)", &a["function"]));
             }
             let v = app
                 .worker
@@ -122,7 +122,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
                         let keys: Vec<&str> = worldgen::town::catalog::CATALOG.iter().map(|c| c.key).collect();
                         let label = worldgen::town::catalog::index_of(f).map(|i| worldgen::town::catalog::CATALOG[i as usize].name.to_lowercase());
                         if label.is_none() && !v["names"].as_array().into_iter().flatten().any(|n| n["function"].as_str().is_some_and(|x| x.to_lowercase() == f)) {
-                            let hint = crate::args::suggest(f, keys.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
+                            let hint = crate::tools::args::suggest(f, keys.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
                             return Err(format!("function: no business \"{f}\"{hint}; the keys are as set_building's func"));
                         }
                         let want = label.unwrap_or_else(|| f.to_string());
@@ -139,7 +139,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
                         kinds.sort_unstable();
                         kinds.dedup();
                         if !kinds.contains(&k) {
-                            let hint = crate::args::suggest(k, kinds.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
+                            let hint = crate::tools::args::suggest(k, kinds.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
                             return Err(format!("kind: no names of kind \"{k}\"{hint}; the kinds here: {}", kinds.join(", ")));
                         }
                     }
@@ -171,8 +171,8 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             Ok(text(v))
         }
         "route" => {
-            let (from, fe) = crate::args::point_named(app, "from", &a["from"]).await?;
-            let (to, te) = crate::args::point_named(app, "to", &a["to"]).await?;
+            let (from, fe) = crate::tools::args::point_named(app, "from", &a["from"]).await?;
+            let (to, te) = crate::tools::args::point_named(app, "to", &a["to"]).await?;
             let mut v = app.worker.with(move |ex| Ok(agent::route(&ex.world, &ex.t0, from, to))).await?;
             // A place given by name comes back with its id.
             if let Some(e) = fe {
@@ -190,7 +190,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             if let Some(c) = &class
                 && !["king's road", "road", "track"].contains(&c.to_lowercase().replace('_', " ").replace("kings", "king's").as_str())
             {
-                return Err(crate::args::bad("class", "king's road (or kings_road), road or track", &json!(c)));
+                return Err(crate::tools::args::bad("class", "king's road (or kings_road), road or track", &json!(c)));
             }
             let drawn = a["drawn"].as_bool().unwrap_or(false);
             let limit = a["limit"].as_u64().unwrap_or(50) as usize;
@@ -299,7 +299,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
         "annotate_feature" => {
             let id = arg_str(&a, "id")?;
             if a["notes"].is_null() && a["tags"].is_null() && a["remove_tags"].is_null() {
-                return Err(crate::args::bad("notes, tags, remove_tags", "give at least one", &json!({})));
+                return Err(crate::tools::args::bad("notes, tags, remove_tags", "give at least one", &json!({})));
             }
             let given = |k: &str| a[k].as_array().is_some_and(|v| !v.is_empty());
             if a["notes"].is_null() && !given("tags") && !given("remove_tags") {
@@ -308,13 +308,13 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             let t = match a["notes"].as_str() {
                 Some(t) => Some(t.to_string()),
                 None if a["notes"].is_null() => None,
-                None => return Err(crate::args::bad("notes", "text", &a["notes"])),
+                None => return Err(crate::tools::args::bad("notes", "text", &a["notes"])),
             };
             let tags: Vec<String> = a["tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()).unwrap_or_default();
-            let tags = crate::notebook::canon_tags(tags);
+            let tags = crate::edit::notebook::canon_tags(tags);
             let remove: Vec<String> = a["remove_tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(|t| t.to_string())).collect()).unwrap_or_default();
             if let Some(t) = tags.iter().find(|t| remove.iter().any(|r| r.eq_ignore_ascii_case(t))) {
-                return Err(crate::args::bad("remove_tags", "not also in tags", &json!(t)));
+                return Err(crate::tools::args::bad("remove_tags", "not also in tags", &json!(t)));
             }
             let append = a["append"].as_bool().unwrap_or(false);
             known(app, &id).await?;
@@ -329,7 +329,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
                 let removed: Vec<String> = n.tags.iter().filter(|t| gone(t)).cloned().collect();
                 n.tags.retain(|t| !gone(t));
                 n.tags.extend(tags);
-                n.tags = crate::notebook::canon_tags(std::mem::take(&mut n.tags));
+                n.tags = crate::edit::notebook::canon_tags(std::mem::take(&mut n.tags));
                 let mut v = json!({ "tool": "annotate_feature", "id": key, "notes": n.text, "tags": n.tags });
                 if !remove.is_empty() {
                     v["removed_tags"] = json!(removed);
@@ -347,11 +347,11 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             // A point note (m:) moves with `at`, as move_note.
             let point = id.starts_with("m:") && !a["at"].is_null();
             if point {
-                crate::notebook::write_point(app, "move_note", &json!({ "id": id, "at": a["at"] })).await?;
+                crate::edit::notebook::write_point(app, "move_note", &json!({ "id": id, "at": a["at"] })).await?;
             }
             let moving = a.get("in_building").is_some() || !a["way"].is_null() || (!a["at"].is_null() && !point);
             if !moving && !point && ["name", "notes", "tags"].iter().all(|k| a[k].is_null()) {
-                return Err(crate::args::bad("name, notes, tags", "give at least one", &json!({})));
+                return Err(crate::tools::args::bad("name, notes, tags", "give at least one", &json!({})));
             }
             known(app, &id).await?;
             let moved = if moving { Some(move_entrance(app, &a, &id).await?) } else { None };
@@ -363,7 +363,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             }
             let name = a["name"].as_str().map(|s| s.trim().to_string());
             let notes = a["notes"].as_str().map(str::to_string);
-            let tags: Option<Vec<String>> = a["tags"].as_array().map(|v| crate::notebook::canon_tags(v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()));
+            let tags: Option<Vec<String>> = a["tags"].as_array().map(|v| crate::edit::notebook::canon_tags(v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()));
             let pair = drawn_pair(app, &id).await?;
             app.edit("agent", 0, move |e| {
                 if let Some(n) = &name {

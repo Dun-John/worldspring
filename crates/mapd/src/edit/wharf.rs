@@ -10,22 +10,22 @@ use worldgen::world::{Created, CreatedChecks, CrossingMaterial, Edits, Wharf, Wh
 
 use crate::Shared;
 use crate::worker::NO_WORLD;
-use crate::args::{bbox, round1};
-use crate::notebook::new_id;
+use crate::tools::args::{bbox, round1};
+use crate::edit::notebook::new_id;
 use crate::tools::{limit_of, limit_prop, listed, schema, text};
 
 pub fn list() -> Vec<Value> {
     vec![
         json!({ "name": "raise_islet", "title": "Raise a rock islet", "description": "A rock islet in a river, lake or the sea (water at most 120 ft deep), round at; a building, tower or castle may stand on it. With id (h:...), changes it. Returns id, level, water, outline.", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "An islet to change" },
-            "at": crate::args::point_schema("A place in the water"),
+            "at": crate::tools::args::point_schema("A place in the water"),
             "radius_ft": { "type": "number", "minimum": 10, "maximum": 200, "default": 30 },
             "rise_ft": { "type": "number", "minimum": 1, "maximum": 30, "default": 5, "description": "Its top over the water" },
         }), &[]) }),
         json!({ "name": "place_wharf", "title": "Put a quay, pier or breakwater down", "description": "A quay (paving along a shore), pier (a deck) or breakwater (a stone mole; lighthouse: true builds one at its tip) along path (a pier's or breakwater's first point on the bank). A quay with shore: true follows the water's edge near path (a line drawn along the shore), with optional piers every pier_spacing_ft. With id (q:...), changes it. Returns id, water and bank.", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A wharf to change" },
             "kind": { "type": "string", "enum": ["quay", "pier", "breakwater"] },
-            "path": { "type": "array", "minItems": 2, "maxItems": 512, "items": crate::args::point_schema("A point") },
+            "path": { "type": "array", "minItems": 2, "maxItems": 512, "items": crate::tools::args::point_schema("A point") },
             "width_ft": { "type": "number", "minimum": 6, "maximum": 60, "description": "By kind: MCP.md" },
             "material": { "type": "string", "enum": ["timber", "stone"] },
             "shore": { "type": "boolean", "description": "A quay only: snap path to the water's edge within 60 ft of it and follow it smoothly" },
@@ -33,10 +33,10 @@ pub fn list() -> Vec<Value> {
             "lighthouse": { "type": "boolean" },
         }), &[]) }),
         json!({ "name": "list_wharves", "title": "Quays, piers and breakwaters", "description": "The wharves put down by hand, with the buildings on them.", "inputSchema": schema(json!({
-            "within": crate::args::area_light("Only inside: a box, polygon or circle {at, radius_ft}"),
+            "within": crate::tools::args::area_light("Only inside: a box, polygon or circle {at, radius_ft}"),
             "limit": limit_prop(200, 2000),
         }), &[]) }),
-        json!({ "name": "remove_wharves", "title": "Take wharves away", "description": "Take wharves off the map (q:..., all or none); their lighthouse goes too.", "inputSchema": schema(crate::args::ids_props("wharf id"), &[]) }),
+        json!({ "name": "remove_wharves", "title": "Take wharves away", "description": "Take wharves off the map (q:..., all or none); their lighthouse goes too.", "inputSchema": schema(crate::tools::args::ids_props("wharf id"), &[]) }),
     ]
 }
 
@@ -66,7 +66,7 @@ async fn islet(app: &Shared, a: &Value) -> Result<Value, String> {
     let at = match (&a["at"], &id) {
         (Value::Null, Some(_)) => None,
         (Value::Null, None) => return Err("at: needed (a place in the water: an id, point or [x, y])".into()),
-        (v, _) => Some(crate::args::point(app, "at", v).await?),
+        (v, _) => Some(crate::tools::args::point(app, "at", v).await?),
     };
     let key = id.clone().unwrap_or_else(|| new_id("h"));
     let (p, w, sea, existing, changed) = app
@@ -210,7 +210,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         Some(list) => {
             let mut pts = Vec::new();
             for (i, p) in list.iter().enumerate() {
-                pts.push(crate::args::point(app, &format!("path[{i}]"), p).await?);
+                pts.push(crate::tools::args::point(app, &format!("path[{i}]"), p).await?);
             }
             Some(pts)
         }
@@ -410,7 +410,7 @@ async fn lighthouse_at(app: &Shared, wid: &str, w: &Wharf) -> Result<Option<Stri
 }
 
 async fn list_wharves(app: &Shared, a: &Value) -> Result<Value, String> {
-    let area = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
+    let area = if a["within"].is_null() { None } else { Some(crate::tools::args::area(app, "within", &a["within"]).await?) };
     let limit = limit_of(a, 200);
     let v = app
         .worker
@@ -443,12 +443,12 @@ async fn list_wharves(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let single = a["ids"].is_null();
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !e.wharves.contains_key(id) {
-                return Err(format!("{}: no wharf {id}", crate::args::item(single, i)));
+                return Err(format!("{}: no wharf {id}", crate::tools::args::item(single, i)));
             }
         }
         let (mut gone, mut npcs, mut plots, mut notes) = (Vec::new(), Vec::new(), Vec::new(), false);

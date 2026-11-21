@@ -9,7 +9,7 @@ use worldgen::town::wards;
 use worldgen::world::{LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS};
 
 use crate::Shared;
-use crate::args::town_index;
+use crate::tools::args::town_index;
 use crate::tools::{schema, text};
 
 pub fn list() -> Vec<Value> {
@@ -31,7 +31,6 @@ pub fn list() -> Vec<Value> {
             "title": "A town's wards",
             "description": "A town's or city's plan as the ward editor sees it: patches (number, middle, corners, ward, lots, district, neighbours, merge, reroll, close, park; what was set by hand or refused), corners (number, place, pinned, gate, wall, junction where a square can open, square), districts, max_move_ft and the walls. within: only patches whose middle is in a rectangle. See MCP.md > Towns.",
             "inputSchema": schema(json!({ "id": town, "within": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0_ft, y0_ft, x1_ft, y1_ft]" } }), &["id"]),
-            "annotations": { "readOnlyHint": true },
         }),
         json!({
             "name": "edit_town",
@@ -41,7 +40,7 @@ pub fn list() -> Vec<Value> {
                 "id": town,
                 "moves": { "type": "array", "items": { "type": "object", "properties": { "corner": { "type": "integer", "minimum": 0 }, "to": pt, "by": pt, "as_generated": { "type": "boolean" } }, "required": ["corner"] } },
                 "equalize": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
-                "relax": { "type": "object", "properties": { "at": crate::args::point_schema("The middle: an id, {x_ft, y_ft} or [x_ft, y_ft]"), "radius_ft": { "type": "number", "minimum": 1, "maximum": 5000 }, "amount": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 } }, "required": ["at", "radius_ft"] },
+                "relax": { "type": "object", "properties": { "at": crate::tools::args::point_schema("The middle: an id, {x_ft, y_ft} or [x_ft, y_ft]"), "radius_ft": { "type": "number", "minimum": 1, "maximum": 5000 }, "amount": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 } }, "required": ["at", "radius_ft"] },
                 "patches": { "type": "array", "items": { "type": "object", "properties": {
                     "patch": { "type": "integer", "minimum": 0 },
                     "ward": { "type": "string", "enum": ([TOWN_WARDS.as_slice(), &["auto"]].concat()), "description": "empty: open ground (for buildings of your own)" },
@@ -192,7 +191,7 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     // (relax's middle is a place like any other: an id, {x_ft, y_ft} or [x_ft, y_ft].)
     if let Some(at) = req["relax"].get("at").cloned() {
-        req["relax"]["at"] = json!(crate::args::point(app, "relax.at", &at).await?);
+        req["relax"]["at"] = json!(crate::tools::args::point(app, "relax.at", &at).await?);
     }
     let only_members = members.is_some() && req.as_object().is_some_and(|m| m.is_empty());
     let req: wards::TownRequest = serde_json::from_value(req).map_err(|e| e.to_string())?;

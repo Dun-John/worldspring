@@ -11,15 +11,15 @@ use worldgen::waters::{self, Water, WaterKind};
 use worldgen::world::Edits;
 
 use crate::Shared;
-use crate::args::round1;
-use crate::notebook::new_id;
+use crate::tools::args::round1;
+use crate::edit::notebook::new_id;
 use crate::tools::{listed, schema, text};
 
 /// Points along an outline read for its default level, at most.
 const LEVEL_SAMPLES: usize = 96;
 
 pub fn list() -> Vec<Value> {
-    let pt = crate::args::point_schema("{x_ft, y_ft} or [x_ft, y_ft]");
+    let pt = crate::tools::args::point_schema("{x_ft, y_ft} or [x_ft, y_ft]");
     let kinds: Vec<&str> = WaterKind::ALL.iter().map(|k| k.name()).collect();
     let props = |with_id: bool| {
         let mut p = json!({
@@ -41,7 +41,7 @@ pub fn list() -> Vec<Value> {
     vec![
         json!({ "name": "create_water", "title": "Draw water", "description": "Water drawn by hand: a polygon or brushed band. Its look follows it: the sea's at sea level (dug: a quay), an open band a stream running downhill, a ring a moat, else a pond or lake by depth. Returns id (e:...), look as kind.", "inputSchema": schema(props(false), &["poly"]) }),
         json!({ "name": "update_water", "title": "Change water", "description": "Change water drawn by hand (e:...); what is not given stays.", "inputSchema": schema(props(true), &["id"]) }),
-        json!({ "name": "delete_water", "title": "Take water away", "description": "Take water drawn by hand away (the ground goes back as it was), by id (e:...), with its name, note and hidden mark (no restore; the user's Undo in the app brings it back).", "inputSchema": schema(crate::args::ids_props("water id (e:...)"), &[]) }),
+        json!({ "name": "delete_water", "title": "Take water away", "description": "Take water drawn by hand away (the ground goes back as it was), by id (e:...), with its name, note and hidden mark (no restore; the user's Undo in the app brings it back).", "inputSchema": schema(crate::tools::args::ids_props("water id (e:...)"), &[]) }),
         json!({ "name": "list_waters", "title": "Water drawn by hand", "description": "Water drawn by hand (e:...) as create_water returns it. Returns {items, found}; limit (default 100).", "inputSchema": schema(json!({ "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
     ]
 }
@@ -159,7 +159,7 @@ const SEA_NEAR_FT: f64 = 4.0;
 /// Water with no kind that doesn't reach the sea stands at least this over its level (ft).
 const SEA_CLEAR_FT: f64 = 0.5;
 
-/// A stream's levels along its line (`waters::stream_levels`), the ground as shaped by `others`.
+/// A stream's levels along its line (`stream_levels`), the ground as shaped by `others`.
 fn stream_levels(ex: &mut Executor, w: &Water, others: &Edits) -> Vec<f32> {
     let sea = ex.world.params().sea_level_ft;
     let at: Vec<(f64, Option<f64>)> = waters::stream_samples(&w.centre())
@@ -237,7 +237,7 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
         Some(o) => {
             let mut pts = Vec::new();
             for (i, p) in o.iter().enumerate() {
-                pts.push(crate::args::point(app, &format!("poly[{i}]"), p).await?);
+                pts.push(crate::tools::args::point(app, &format!("poly[{i}]"), p).await?);
             }
             Some(waters::rounded(&pts))
         }
@@ -301,7 +301,7 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
             // The same outline again (a script run twice): that water, nothing added.
             if let Some((eid, ew)) = e.waters.iter().find(|(_, q)| q.pts.len() == w.pts.len() && q.pts.iter().zip(&w.pts).all(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) <= 1.0)) {
                 if ew.kind != w.kind || level_ft.is_some() && (ew.level - w.level).abs() > 0.15 {
-                    return Err(format!("{eid} has this outline: give its id to change it (update_water)"));
+                    return Err(format!("{eid} has this outline: give its id to change it (set_water {{id}})"));
                 }
                 let mut v = water_json(e, eid, ew, sea);
                 v["tool"] = json!("create_water");
@@ -337,12 +337,12 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
 }
 
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let single = a["ids"].is_null();
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !e.waters.contains_key(id) {
-                return Err(format!("{}: no water {id}", crate::args::item(single, i)));
+                return Err(format!("{}: no water {id}", crate::tools::args::item(single, i)));
             }
         }
         for id in &ids {

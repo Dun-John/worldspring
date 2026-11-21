@@ -6,7 +6,7 @@ use worldgen::agent;
 use worldgen::town::pieces;
 use worldgen::world::{BuildingEdit, CASTLE_MAX_FT, CASTLE_MAX_GATES, CASTLE_MIN_FT, CastlePiece, Created, CreatedChecks, KEEP_SHAPES, MOATS, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
 
-use crate::args::read_back;
+use crate::tools::args::read_back;
 use crate::Shared;
 use crate::worker::NO_WORLD;
 use crate::tools::{found, schema, text};
@@ -36,7 +36,7 @@ pub fn props() -> Value {
         "closed": { "type": "boolean", "default": false, "description": "A wall's last corner joins its first (a ring)" },
         "snap": { "type": "boolean", "default": true, "description": "Snap to the 5-ft grid" },
         "remove_in_way": { "type": "boolean", "default": false, "description": "Take away the world's buildings in its way (else refused)" },
-        "raise_hill": { "type": "boolean", "default": false, "description": "A castle on a hill: adds a round hill (as set_hill; h:...) centred on it, 60 to 120 ft high with a flat crown wider than the castle, unless a hill already stands under its middle. delete_plateau takes the hill away." },
+        "raise_hill": { "type": "boolean", "default": false, "description": "A castle on a hill: adds a round hill (as set_ground kind hill; h:...) centred on it, 60 to 120 ft high with a flat crown wider than the castle, unless a hill already stands under its middle. remove takes the hill away." },
     })
 }
 
@@ -168,7 +168,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         if let Some(b) = a["closed"].as_bool() {
             c.closed = b;
         }
-        let ringed = match crate::handwalls::line(app, a, &mut c).await? {
+        let ringed = match crate::edit::handwalls::line(app, a, &mut c).await? {
             Some(r) => {
                 ring_report = r;
                 true
@@ -186,7 +186,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
             c.gates.dedup();
         }
         if !ringed && (creating || c.pts != before || c.closed != was_closed || a["street_gates"].is_boolean()) {
-            ring_report = crate::handwalls::street_gates(app, a, &mut c).await?;
+            ring_report = crate::edit::handwalls::street_gates(app, a, &mut c).await?;
         }
     }
     let pts = if castle { &c.poly } else { &c.pts };
@@ -244,7 +244,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
 
     // A hill raised under a castle (its own entry: undone or taken away like any hill).
     let hill = if castle && a["raise_hill"].as_bool().unwrap_or(false) {
-        let key = crate::notebook::new_id("h");
+        let key = crate::edit::notebook::new_id("h");
         Some((worldgen::ground::castle_hill(&key, &c.poly)?, key))
     } else {
         None
@@ -318,7 +318,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         v["joined"] = json!("its open ends put onto the walls they meet (T-joins)");
     }
     if !castle {
-        crate::handwalls::reply(app, &mut v, ring_report).await;
+        crate::edit::handwalls::reply(app, &mut v, ring_report).await;
     }
     if !removed.is_empty() {
         v["removed"] = json!(removed);

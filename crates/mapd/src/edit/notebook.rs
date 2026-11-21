@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::world::{Npc, NpcPlace, PLOT_STATUSES, Plot, STANCES};
 
-use crate::args::read_back;
+use crate::tools::args::read_back;
 use crate::Shared;
 use crate::tools::{arg_str, known, listed, schema, text};
 
@@ -30,7 +30,7 @@ fn place_props() -> Value {
         "level": { "type": "integer", "minimum": 0, "description": "Level inside a building or site (0 lowest)" },
         "x_ft": { "type": "number", "description": "A point to stand at" },
         "y_ft": { "type": "number" },
-        "at": crate::args::point_schema("Instead of location, x_ft, y_ft: an id (the location) or a point"),
+        "at": crate::tools::args::point_schema("Instead of location, x_ft, y_ft: an id (the location) or a point"),
     })
 }
 
@@ -79,23 +79,22 @@ fn with(a: Value, b: Value) -> Value {
 
 pub fn list() -> Vec<Value> {
     let id = json!({ "id": { "type": "string" } });
-    let ids = crate::args::ids_props("id");
-    let ro = json!({ "readOnlyHint": true });
+    let ids = crate::tools::args::ids_props("id");
     vec![
-        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs, {items, found}; limit (default 100) cuts it and sets truncated. Filter by text, location (also its levels, rooms and, for a settlement, its buildings and sites), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
-        json!({ "name": "get_npc", "title": "NPC", "description": "An NPC in full: appearance, mannerisms, attitude toward the players, goals, notes, where they are and the plots they are in.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
+        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs, {items, found}; limit (default 100) cuts it and sets truncated. Filter by text, location (also its levels, rooms and, for a settlement, its buildings and sites), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES }, "limit": crate::tools::limit_prop(100, 1000) }), &[]) }),
+        json!({ "name": "get_npc", "title": "NPC", "description": "An NPC in full: appearance, mannerisms, attitude toward the players, goals, notes, where they are and the plots they are in.", "inputSchema": schema(id.clone(), &["id"]) }),
         json!({ "name": "create_npc", "title": "Create an NPC", "description": "Add an NPC, optionally placed somewhere (a building's id puts them inside it; the DM sees them there). Returns the NPC with its id.", "inputSchema": schema(with(npc_props(), place_props()), &["name"]) }),
         json!({ "name": "update_npc", "title": "Update an NPC", "description": "Change an NPC's fields (only those given).", "inputSchema": schema(with(id.clone(), npc_props()), &["id"]) }),
         json!({ "name": "delete_npc", "title": "Delete an NPC", "description": "Delete an NPC, or several (id or ids; all or none), and take them out of plots.", "inputSchema": schema(ids.clone(), &[]) }),
         json!({ "name": "place_npc", "title": "Place an NPC", "description": "Put an NPC somewhere: a place id (and level inside), or a point (at, or x_ft and y_ft); an empty location takes them off the map.", "inputSchema": schema(with(id.clone(), place_props()), &["id"]) }),
-        json!({ "name": "list_plots", "title": "Plot points", "description": "The world's plot points (returns {items, found}, at most limit, default 100; truncated: true when cut): title, status, places and NPCs. Filter by text, status, place, NPC or tag.", "inputSchema": schema(json!({ "query": { "type": "string" }, "status": { "type": "string", "enum": PLOT_STATUSES }, "anchor": { "type": "string" }, "npc": { "type": "string" }, "tag": { "type": "string" }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
-        json!({ "name": "get_plot", "title": "Plot point", "description": "A plot point in full.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
+        json!({ "name": "list_plots", "title": "Plot points", "description": "The world's plot points (returns {items, found}, at most limit, default 100; truncated: true when cut): title, status, places and NPCs. Filter by text, status, place, NPC or tag.", "inputSchema": schema(json!({ "query": { "type": "string" }, "status": { "type": "string", "enum": PLOT_STATUSES }, "anchor": { "type": "string" }, "npc": { "type": "string" }, "tag": { "type": "string" }, "limit": crate::tools::limit_prop(100, 1000) }), &[]) }),
+        json!({ "name": "get_plot", "title": "Plot point", "description": "A plot point in full.", "inputSchema": schema(id.clone(), &["id"]) }),
         json!({ "name": "create_plot", "title": "Create a plot point", "description": "Add a plot point tied to places and NPCs. Returns it with its id.", "inputSchema": schema(plot_props(), &["title"]) }),
         json!({ "name": "update_plot", "title": "Update a plot point", "description": "Change a plot point's fields (only those given; lists are replaced).", "inputSchema": schema(with(id.clone(), plot_props()), &["id"]) }),
         json!({ "name": "add_note_at", "title": "Add a note in a room", "description": "Put a note at a point in a building, dungeon or sewer level (site, level, at; or room). Returns it with its m: id.", "inputSchema": schema(with(note_spot(), json!({ "text": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } })), &["text"]) }),
         json!({ "name": "move_note", "title": "Move a point note", "description": "Move an m: note (at, or room on its level).", "inputSchema": schema(with(json!({ "id": { "type": "string" } }), json!({ "at": note_spot()["at"], "room": note_spot()["room"] })), &["id"]) }),
         json!({ "name": "delete_note", "title": "Delete a note", "description": "Delete a note (place, r: or m: id).", "inputSchema": schema(id.clone(), &["id"]) }),
-        json!({ "name": "list_notes", "title": "Notes", "description": "Notes on places, rooms and points: {items, found}, limit default 100. Filter by tag, site, level, kind, query.", "inputSchema": schema(json!({ "query": { "type": "string" }, "tag": { "type": "string" }, "site": { "type": "string" }, "level": { "type": "integer", "minimum": 0 }, "kind": { "type": "string", "enum": ["place", "room", "point"] }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
+        json!({ "name": "list_notes", "title": "Notes", "description": "Notes on places, rooms and points: {items, found}, limit default 100. Filter by tag, site, level, kind, query.", "inputSchema": schema(json!({ "query": { "type": "string" }, "tag": { "type": "string" }, "site": { "type": "string" }, "level": { "type": "integer", "minimum": 0 }, "kind": { "type": "string", "enum": ["place", "room", "point"] }, "limit": crate::tools::limit_prop(100, 1000) }), &[]) }),
         json!({ "name": "delete_plot", "title": "Delete a plot point", "description": "Delete a plot point, or several (id or ids; all or none).", "inputSchema": schema(ids, &[]) }),
     ]
 }
@@ -159,11 +158,11 @@ async fn npc_place(app: &Shared, a: &Value) -> Result<Option<Option<NpcPlace>>, 
         }
         match &a["at"] {
             Value::String(id) => location = Some(id.trim()),
-            p => at = Some(crate::args::point(app, "at", p).await?),
+            p => at = Some(crate::tools::args::point(app, "at", p).await?),
         }
     } else {
         at = match (a["x_ft"].as_f64(), a["y_ft"].as_f64()) {
-            (Some(x), Some(y)) => Some(crate::args::point(app, "x_ft", &json!([x, y])).await?),
+            (Some(x), Some(y)) => Some(crate::tools::args::point(app, "x_ft", &json!([x, y])).await?),
             (Some(_), None) => return Err("y_ft: needed with x_ft".into()),
             (None, Some(_)) => return Err("x_ft: needed with y_ft".into()),
             _ => None,
@@ -237,13 +236,13 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     Some(match name {
         "list_npcs" | "get_npc" | "list_plots" | "get_plot" => read(app, name, a.clone()).await.map(text),
         "create_npc" | "update_npc" | "place_npc" => write_npc(app, name, a).await.map(text),
-        "delete_npc" => match crate::args::ids(a) {
+        "delete_npc" => match crate::tools::args::ids(a) {
             Err(e) => Err(e),
             Ok(ids) => app
                 .edit("agent", 0, move |e| {
                     for (i, id) in ids.iter().enumerate() {
                         if !e.npcs.contains_key(id) {
-                            return Err(format!("{}: no such NPC: {id}", crate::args::item(single, i)));
+                            return Err(format!("{}: no such NPC: {id}", crate::tools::args::item(single, i)));
                         }
                     }
                     let mut names = Vec::new();
@@ -264,13 +263,13 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "delete_note" => delete_note(app, a).await.map(text),
         "list_notes" => list_notes(app, a.clone()).await.map(text),
         "create_plot" | "update_plot" => write_plot(app, name, a).await.map(text),
-        "delete_plot" => match crate::args::ids(a) {
+        "delete_plot" => match crate::tools::args::ids(a) {
             Err(e) => Err(e),
             Ok(ids) => app
                 .edit("agent", 0, move |e| {
                     for (i, id) in ids.iter().enumerate() {
                         if !e.plots.contains_key(id) {
-                            return Err(format!("{}: no such plot point: {id}", crate::args::item(single, i)));
+                            return Err(format!("{}: no such plot point: {id}", crate::tools::args::item(single, i)));
                         }
                     }
                     let names: Vec<String> = ids.iter().filter_map(|id| e.plots.remove(id)).map(|p| p.title).collect();
@@ -455,7 +454,7 @@ fn spot(w: &worldgen::world::World, t0: &worldgen::t0::T0, a: &Value, fixed: Opt
         return Err(if agent::position(w, t0, &site).is_some() {
             format!("{site} has no inside: point notes go in a building, dungeon or sewer level (set_feature notes puts a note on a place on the map)")
         } else {
-            crate::args::no_such(w, t0, &site)
+            crate::tools::args::no_such(w, t0, &site)
         });
     };
     if li >= it.levels.len() {

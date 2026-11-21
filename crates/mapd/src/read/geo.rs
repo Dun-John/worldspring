@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use worldgen::geoquery::{self, NEAREST_DEFAULT_MI, NEAREST_MAX_MI};
 
 use crate::Shared;
-use crate::args::{at_props, bad, place, point_named, point_schema};
+use crate::tools::args::{at_props, bad, place, point_named, point_schema};
 use crate::tools::{schema, text};
 
 const MI: f64 = 5280.0;

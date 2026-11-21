@@ -111,7 +111,7 @@ async function start(bin, p) {
 const fails = [];
 const fail = (s) => fails.push(s);
 const cut = (v) => {
-  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  const s = typeof v === 'string' ? v : String(JSON.stringify(v));
   return s.length > 160 ? s.slice(0, 157) + '...' : s;
 };
 
@@ -203,15 +203,16 @@ try {
         if (made(b)) pairs.push([made(b), made(a)]);
         if (a.ok?.building) vars.old[`${e.as}_b`] = a.ok.building;
       }
-      if (b.ok) b.ok = drop(swap(b.ok, pairs), e.ignore ?? []);
-      if (a.ok) a.ok = drop(a.ok, e.ignore ?? []);
+      if (b.ok) b.ok = drop(swap(b.ok, pairs), Array.isArray(e.ignore) ? e.ignore : []);
+      if (a.ok) a.ok = drop(a.ok, Array.isArray(e.ignore) ? e.ignore : []);
       if (a.error && b.error) {
         agree++;
         bothRefused.push(e.old.tool);
         if (flag('--why')) console.log(`both refused ${e.old.tool}: old ${cut(a.error)} | new ${cut(b.error)}`);
       }
       else if (a.error || b.error) fail(`${e.old.tool} -> ${e.new.tool}: ${a.error ? 'only the old refused' : 'only the new refused'}: ${cut(a.error ?? b.error)}`);
-      else if (!same(a.ok, b.ok) || String(a.parts) !== String(b.parts)) fail(`${e.old.tool} -> ${e.new.tool}: results differ at ${where(a.ok, b.ok)}`);
+      // (`ignore: true`: the reply changed on purpose; both must only succeed.)
+      else if (e.ignore !== true && (!same(a.ok, b.ok) || String(a.parts) !== String(b.parts))) fail(`${e.old.tool} -> ${e.new.tool}: results differ at ${where(a.ok, b.ok)}`);
       else agree++;
     }
     let refused = 0;

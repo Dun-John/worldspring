@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use worldgen::links::{self, End, Link, WAYS};
 
 use crate::Shared;
-use crate::notebook::new_id;
+use crate::edit::notebook::new_id;
 use crate::tools::{listed, schema, text};
 
 fn end_schema(description: &str) -> Value {
@@ -26,11 +26,11 @@ pub fn list() -> Vec<Value> {
         }), &["a", "b"]) }),
         json!({ "name": "list_links", "title": "Links", "description": "Links put down by hand: id, way, name and both ends (level, site, square, name). of: those with an end in a site or level; near: those with an end below a place (its sewer section, or a site or building within 100 ft); check: each with the problems that keep an end from showing (empty: both show).", "inputSchema": schema(json!({
             "of": { "type": "string", "description": "A site (u:, k:, w:, b:) or one of its levels (l:)" },
-            "near": crate::args::point_schema("A place"),
+            "near": crate::tools::args::point_schema("A place"),
             "check": { "type": "boolean", "default": false },
             "limit": crate::tools::limit_prop(200, 2000),
-        }), &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "delete_link", "title": "Take links away", "description": "Take links put down by hand away, by id or ids (j:..., all or none): both ends go.", "inputSchema": schema(crate::args::ids_props("link id"), &[]) }),
+        }), &[]) }),
+        json!({ "name": "delete_link", "title": "Take links away", "description": "Take links put down by hand away, by id or ids (j:..., all or none): both ends go.", "inputSchema": schema(crate::tools::args::ids_props("link id"), &[]) }),
     ]
 }
 
@@ -159,7 +159,7 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn list_links(app: &Shared, a: &Value) -> Result<Value, String> {
     let near = match &a["near"] {
         Value::Null => None,
-        v => Some(crate::args::point(app, "near", v).await?),
+        v => Some(crate::tools::args::point(app, "near", v).await?),
     };
     let of = a["of"].as_str().map(str::to_string);
     let check = a["check"].as_bool().unwrap_or(false);
@@ -191,12 +191,12 @@ async fn list_links(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let single = a["ids"].is_null();
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !e.links.contains_key(id) {
-                return Err(format!("{}: no link {id}", crate::args::item(single, i)));
+                return Err(format!("{}: no link {id}", crate::tools::args::item(single, i)));
             }
         }
         for id in &ids {

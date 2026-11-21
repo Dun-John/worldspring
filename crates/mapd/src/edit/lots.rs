@@ -35,7 +35,7 @@ fn fill_schema() -> Value {
 }
 
 pub fn list() -> Vec<Value> {
-    let mut stamp = crate::build::props();
+    let mut stamp = crate::edit::building::props();
     if let Some(m) = stamp.as_object_mut() {
         m.retain(|k, _| BUILDING_KEYS.contains(&k.as_str()));
         m.insert("kind".into(), json!({ "type": "string", "description": "A business or home key (docs/MCP.md, the funcs catalog): house, shop-like trades, inn, temple, ..." }));
@@ -43,12 +43,12 @@ pub fn list() -> Vec<Value> {
             { "type": "string", "enum": placing::SIZES, "description": "small (0.75), usual (1) or large (1.4 times the kind's footprint)" },
             { "type": "object", "properties": { "width_ft": { "type": "number", "minimum": 10, "maximum": 400 }, "depth_ft": { "type": "number", "minimum": 10, "maximum": 400 } }, "required": ["width_ft", "depth_ft"], "description": "Or the footprint, width along the street" },
         ], "description": "Default usual" }));
-        m.insert("at".into(), crate::args::point_schema("Where: an id, a name, {x_ft, y_ft} or [x_ft, y_ft]"));
+        m.insert("at".into(), crate::tools::args::point_schema("Where: an id, a name, {x_ft, y_ft} or [x_ft, y_ft]"));
         m.insert("facing".into(), json!({ "type": "number", "minimum": 0, "maximum": 360, "description": "Its front's direction, degrees (0 = +x, 90 = +y); left out, it fronts the nearest street" }));
         m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way" }));
         m.insert("preview".into(), json!({ "type": "boolean", "default": false, "description": "Only say where it would land (nothing is made)" }));
     }
-    let mut row = crate::build::props();
+    let mut row = crate::edit::building::props();
     if let Some(m) = row.as_object_mut() {
         m.retain(|_, _| false);
         m.insert("along".into(), json!({ "oneOf": [points_schema(2, 200, "[x_ft, y_ft] ..."), { "type": "string", "description": "rd:... (from list, what roads)" }], "description": "Points or a road stretch id" }));
@@ -98,7 +98,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 
 async fn stamp(app: &Shared, a: &Value) -> Result<Value, String> {
     let kind = a["kind"].as_str().ok_or("missing 'kind'")?.trim().to_lowercase();
-    crate::build::known_func(&kind)?;
+    crate::edit::building::known_func(&kind)?;
     let (w, d) = match &a["size"] {
         Value::Object(o) => (o["width_ft"].as_f64().ok_or("size.width_ft: needed")?, o["depth_ft"].as_f64().ok_or("size.depth_ft: needed")?),
         s => placing::stamp_dims(&kind, s.as_str().unwrap_or("usual")).ok_or_else(|| format!("kind: {kind} has no stamp size (a business or home key)"))?,
@@ -106,7 +106,7 @@ async fn stamp(app: &Shared, a: &Value) -> Result<Value, String> {
     if !(10.0..=400.0).contains(&w) || !(10.0..=400.0).contains(&d) {
         return Err("size: width_ft and depth_ft are 10 to 400 ft".into());
     }
-    let at = crate::args::point(app, "at", &a["at"]).await?;
+    let at = crate::tools::args::point(app, "at", &a["at"]).await?;
     let (facing, clear, preview) = (a["facing"].as_f64(), a["clear"].as_bool().unwrap_or(false), a["preview"].as_bool().unwrap_or(false));
     let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
     let id = format!("c:{n}");
@@ -137,7 +137,7 @@ async fn stamp(app: &Shared, a: &Value) -> Result<Value, String> {
             args[k] = a[k].clone();
         }
     }
-    let mut v = crate::build::build(app, &args, None).await?;
+    let mut v = crate::edit::building::build(app, &args, None).await?;
     v["tool"] = json!("place_stamp");
     extra(&mut v);
     Ok(v)
@@ -163,7 +163,7 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
         Value::Array(p) => p.iter().map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?])).collect::<Option<Vec<_>>>().ok_or("along: points as [x_ft, y_ft]")?,
         _ => return Err("along: points or a road stretch id".into()),
     };
-    let [mw, mh] = crate::args::map_size(app).await?;
+    let [mw, mh] = crate::tools::args::map_size(app).await?;
     if line.iter().any(|p| !(0.0..mw).contains(&p[0]) || !(0.0..mh).contains(&p[1])) {
         return Err(format!("along: a point is off the map, which is {mw} by {mh} ft"));
     }
@@ -174,7 +174,7 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
     };
     let kinds: Vec<String> = a["kinds"].as_array().map(|k| k.iter().filter_map(|s| s.as_str().map(|s| s.trim().to_lowercase())).collect()).unwrap_or_default();
     for k in &kinds {
-        crate::build::known_func(k)?;
+        crate::edit::building::known_func(k)?;
         if k.is_empty() {
             return Err("kinds: a business or home key".into());
         }
@@ -271,7 +271,7 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
             let road_id = match road {
                 None => None,
                 Some((_, placing::RowRoadEdit::Path(p))) => {
-                    let id = crate::notebook::new_id("rw");
+                    let id = crate::edit::notebook::new_id("rw");
                     e.paths.insert(id.clone(), p);
                     Some(json!(id))
                 }
@@ -316,7 +316,7 @@ async fn row(app: &Shared, a: &Value) -> Result<Value, String> {
 fn fill_of(f: &Value) -> Result<worldgen::town::hand::BlockFill, String> {
     let mut f = f.clone();
     if !f.is_object() {
-        return Err(crate::args::bad("fill", "an object", &f));
+        return Err(crate::tools::args::bad("fill", "an object", &f));
     }
     if f["kind"].is_null() {
         f["kind"] = json!("generated");
@@ -329,7 +329,7 @@ fn fill_of(f: &Value) -> Result<worldgen::town::hand::BlockFill, String> {
 
 async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, String> {
     let creating = id.is_none();
-    let poly = crate::build::footprint(a)?;
+    let poly = crate::edit::building::footprint(a)?;
     let mut c = match &id {
         Some(id) => app
             .with_edits(|e| e.created.iter().find(|c| &c.id == id && !c.removed && c.kind == "plot").cloned())
@@ -346,7 +346,7 @@ async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, St
         c.fill = Some(fill_of(&a["fill"])?);
     }
     if let Some(p) = poly {
-        let [mw, mh] = crate::args::map_size(app).await?;
+        let [mw, mh] = crate::tools::args::map_size(app).await?;
         if p.iter().any(|q| !(0.0..mw).contains(&q[0]) || !(0.0..mh).contains(&q[1])) {
             return Err(format!("poly: a corner is off the map, which is {mw} by {mh} ft"));
         }

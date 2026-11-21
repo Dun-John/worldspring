@@ -5,39 +5,12 @@
 //! `cargo run --release -p mapd -- [--port 7777] [--dir worlds] [--app app/dist]`
 //! Any MCP client, e.g. `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`
 
-mod args;
-mod batch;
-mod build;
-mod crossings;
-mod design;
-mod fences;
-mod finds;
-mod geo;
-mod ground;
-mod harbour;
-mod hexes;
-mod links;
-mod handwalls;
+mod edit;
 mod mcp;
-mod notebook;
-mod quick;
 mod read;
-mod reads;
-mod route;
-mod scatter;
-mod sets;
-mod settlements;
-mod sites;
-mod sketch;
-mod store;
-mod streets;
 mod tools;
-mod streets_edit;
-mod towns;
-mod waters;
-mod paths;
+mod store;
 mod worker;
-mod works;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -147,8 +120,8 @@ impl AppState {
 
     /// The open world's edits, read as they are now (inside a batch, as the batch has them).
     pub fn with_edits<R>(&self, f: impl FnOnce(&Edits) -> R) -> Option<R> {
-        if batch::active() {
-            return batch::with_staged(f);
+        if tools::batch::active() {
+            return tools::batch::with_staged(f);
         }
         self.world.lock().unwrap().as_ref().map(|(_, file)| f(&file.edits))
     }
@@ -157,8 +130,8 @@ impl AppState {
     /// saved, logged, given to the generator and sent, as the ops it made, to every app showing
     /// the world (except `from`). Inside a batch only the batch's copy changes.
     pub async fn edit(&self, author: &str, from: u64, f: impl FnOnce(&mut Edits) -> Result<Value, String>) -> Result<Value, String> {
-        if batch::active() {
-            return batch::stage(self, f).await;
+        if tools::batch::active() {
+            return tools::batch::stage(self, f).await;
         }
         let _one = self.gate.lock().await;
         self.edit_now(author, from, f).await
@@ -373,7 +346,7 @@ async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
             let others = app.followers().into_iter().any(|id| id != me);
             app.tabs.lock().unwrap().insert(me, Some(hash));
             // (A world remade by `regenerate` meanwhile: the tab is told to load it.)
-            if let Some(m) = sketch::redirect(app, hash, take, replace) {
+            if let Some(m) = edit::sketch::redirect(app, hash, take, replace) {
                 return Some(m);
             }
             if cur != Some(hash) {

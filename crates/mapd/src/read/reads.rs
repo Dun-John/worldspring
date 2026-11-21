@@ -7,7 +7,7 @@ use worldgen::ground;
 use worldgen::world::{ObjKind, SpriteMeta};
 
 use crate::Shared;
-use crate::args::{Area, area, area_light, bbox, round1};
+use crate::tools::args::{Area, area, area_light, bbox, round1};
 use crate::tools::{limit_of, limit_prop, listed, schema, text};
 
 pub fn list() -> Vec<Value> {
@@ -56,7 +56,7 @@ async fn objects(app: &Shared, a: &Value) -> Result<Value, String> {
     let sprites = app.with_edits(|e| e.sprites.clone()).unwrap_or_default();
     let mut wanted: Vec<ObjKind> = Vec::new();
     for (i, k) in a["kinds"].as_array().into_iter().flatten().enumerate() {
-        wanted.push(crate::scatter::kind_of(k, &sprites).map_err(|e| format!("kinds[{i}]: {e}"))?);
+        wanted.push(crate::edit::objects::kind_of(k, &sprites).map_err(|e| format!("kinds[{i}]: {e}"))?);
     }
     let (mut objects, clears) = app
         .with_edits(|e| {

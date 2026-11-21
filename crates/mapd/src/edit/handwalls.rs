@@ -1,6 +1,6 @@
 //! (R5 towns, M18) A wall drawn by hand round a town's patches (`around_patches`), its gates on
 //! streets (`street_gates`, a way into every ring), and its gates said in the reply: for
-//! `create_feature` kind `wall` and `update_fortification` (`works.rs`).
+//! `create_feature` kind `wall` and `update_fortification` (`edit/fortify.rs`).
 
 use serde_json::{Map, Value, json};
 use worldgen::agent;

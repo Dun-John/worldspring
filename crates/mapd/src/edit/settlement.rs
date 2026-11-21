@@ -19,12 +19,12 @@ fn lives_by_kinds() -> Vec<&'static str> {
 pub fn list() -> Vec<Value> {
     vec![json!({ "name": "create_settlement", "title": "Add a village or town", "description": "Add a village or town without remaking the world, laid out by its generators, joined to the nearest road. By water it stands back from the shore (a third of its radius), its patches following the coast. Refused, saying why, in water, on the shore, crowding a settlement or site, astride a road, on steep ground or over 10 mi from a road. Culture and living, if not given, from the ground. Returns its id (c:...) and its details (as get gives them); delete_feature takes it away, setting aside its edits.", "inputSchema": schema(json!({
         "tier": { "type": "string", "enum": CREATED_SETTLEMENTS },
-        "at": crate::args::point_schema("Where its centre goes (a place)"),
+        "at": crate::tools::args::point_schema("Where its centre goes (a place)"),
         "name": { "type": "string", "minLength": 1, "maxLength": worldgen::world::NAME_MAX, "description": "If left out, named in its culture's style" },
         "culture": { "type": "integer", "minimum": 0, "maximum": 4, "description": "Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 steppe (default: nearest settlement's)" },
         "lives_by": { "type": "string", "enum": lives_by_kinds(), "description": "What it lives by (default: from its ground)" },
         "blank": { "type": "boolean", "default": false, "description": "true: laid out by hand from nothing: roads reaching it run in as streets to one junction at its centre, nothing else (no blocks or buildings) until streets are drawn. Its size class follows the people its homes house" },
-        "link": { "type": "array", "items": crate::args::point_schema("A point ({x_ft, y_ft} or [x_ft, y_ft])"), "minItems": 2, "maxItems": 64, "description": "A lane of its own along these points (world ft) out to the world's roads (its far end within 60 ft of a road joins it); kept as world lanes (lanes/...)" },
+        "link": { "type": "array", "items": crate::tools::args::point_schema("A point ({x_ft, y_ft} or [x_ft, y_ft])"), "minItems": 2, "maxItems": 64, "description": "A lane of its own along these points (world ft) out to the world's roads (its far end within 60 ft of a road joins it); kept as world lanes (lanes/...)" },
     }), &["tier", "at"]) }),
     json!({ "name": "update_settlement", "title": "Change a settlement", "description": "Change a settlement's tier, living, capital, name or culture. Culture: at once for any, laid out in it. One added by hand (c:...) changes at once while an inland village or town (else refused, saying how); the world's own changes the rest by a sketch pin (pending until regenerate, or regenerate: true). Laid out anew in place each time: name, notes, NPCs, plots stay; edits inside are set aside (set_aside).", "inputSchema": schema(json!({
         "id": { "type": "string", "description": "The settlement (a metropolis, city, town or village; c:... for one added by hand)" },
@@ -34,7 +34,7 @@ pub fn list() -> Vec<Value> {
         "name": { "type": "string", "minLength": 1, "maxLength": worldgen::world::NAME_MAX, "description": "Its new name (default: as it is named now)" },
         "culture": { "oneOf": [{ "type": "string", "enum": worldgen::town::culture::NAMES }, { "type": "integer", "minimum": 0, "maximum": 4 }], "description": "north (0), west (1), south (2), dry (3) or steppe (4); the world's own: alone" },
         "regenerate": { "type": "boolean", "default": false, "description": "One of the world's own: remake the world at once (as regenerate)" },
-    }), &["id"]), "annotations": { "openWorldHint": false, "idempotentHint": true } }),
+    }), &["id"]) }),
     ]
 }
 
@@ -45,14 +45,14 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "create_settlement" => create(app, a).await.map(text),
         "update_settlement" => update(app, a).await.map(text),
         "delete_feature" => {
-            let ids = crate::args::ids(a).ok()?;
+            let ids = crate::tools::args::ids(a).ok()?;
             let [id] = &ids[..] else { return None };
             let id = id.clone();
             let k = app.with_edits(|e| e.created.iter().position(|c| c.id == id && !c.removed && c.is_settlement())).flatten()?;
             delete(app, id, k).await.map(text)
         }
         "restore_feature" => {
-            let ids = crate::args::ids(a).ok()?;
+            let ids = crate::tools::args::ids(a).ok()?;
             let removed = |e: &worldgen::world::Edits, id: &String| e.created.iter().position(|c| &c.id == id && c.removed && c.is_settlement());
             let ks: Vec<Option<usize>> = app.with_edits(|e| ids.iter().map(|id| removed(e, id)).collect()).unwrap_or_default();
             if !ks.iter().any(Option::is_some) {
@@ -89,7 +89,7 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     let blank = match &a["blank"] {
         Value::Null => false,
-        v => v.as_bool().ok_or_else(|| crate::args::bad("blank", "true or false", v))?,
+        v => v.as_bool().ok_or_else(|| crate::tools::args::bad("blank", "true or false", v))?,
     };
     let link: Vec<[f64; 2]> = match &a["link"] {
         Value::Null => Vec::new(),
@@ -99,9 +99,9 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
                 Value::Object(_) => Some([p["x_ft"].as_f64()?, p["y_ft"].as_f64()?]),
                 _ => None,
             };
-            v.iter().map(|p| xy(p).filter(|q| q[0].is_finite() && q[1].is_finite()).ok_or_else(|| crate::args::bad("link", "points [x_ft, y_ft] or {x_ft, y_ft}", p))).collect::<Result<_, _>>()?
+            v.iter().map(|p| xy(p).filter(|q| q[0].is_finite() && q[1].is_finite()).ok_or_else(|| crate::tools::args::bad("link", "points [x_ft, y_ft] or {x_ft, y_ft}", p))).collect::<Result<_, _>>()?
         }
-        v => return Err(crate::args::bad("link", "2 to 64 points", v)),
+        v => return Err(crate::tools::args::bad("link", "2 to 64 points", v)),
     };
     let at = crate::tools::place(app, a).await?;
     let asked = a["name"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -177,7 +177,7 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
         return crate::tools::found(app, id.to_string()).await;
     }
     let id = change["id"].as_str().unwrap_or_default().to_string();
-    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(crate::args::read_back("created"))).await?;
+    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(crate::tools::args::read_back("created"))).await?;
     for k in ["blank", "lane"] {
         if !change[k].is_null() {
             v[k] = change[k].clone();
@@ -250,7 +250,7 @@ async fn delete(app: &Shared, id: String, k: usize) -> Result<Value, String> {
 /// `restore_feature` for a deleted village or town: the spot must be free by the checks a new one
 /// meets; what was set aside when it was deleted stays set aside.
 async fn restore(app: &Shared, id: String, k: usize) -> Result<Value, String> {
-    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() { None } else { Some(app.gate.lock().await) };
     let c = app.with_edits(move |e| e.created.get(k).cloned()).flatten().ok_or_else(|| format!("{id} is not a created settlement"))?;
     let (probe, id) = (c.clone(), c.id.clone());
     app.worker
@@ -267,9 +267,9 @@ async fn restore(app: &Shared, id: String, k: usize) -> Result<Value, String> {
         let back = made::restore(e, k, first);
         Ok(json!({ "tool": "restore_feature", "id": id2, "brought_back": back }))
     };
-    let r = if crate::batch::active() { app.edit("agent", 0, change).await? } else { app.edit_now("agent", 0, change).await? };
+    let r = if crate::tools::batch::active() { app.edit("agent", 0, change).await? } else { app.edit_now("agent", 0, change).await? };
     drop(_hold);
-    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(crate::args::read_back("restored"))).await?;
+    let mut v = app.worker.with(move |ex| read_back(ex, &id).ok_or_else(crate::tools::args::read_back("restored"))).await?;
     v["tool"] = json!("restore_feature");
     v["brought_back"] = r["brought_back"].clone();
     v["note"] = json!("what was set aside when it was deleted (names, notes, buildings, NPCs' places, plot points) is brought back where it still fits (brought_back counts them); what was set aside before, by a move or a change of what lays it out, stays set aside");
@@ -330,7 +330,7 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
         }
         return update_culture(app, id, to).await;
     }
-    if crate::batch::active() {
+    if crate::tools::batch::active() {
         return Err("set_settlement can't change one of the world's own settlements in a batch: the sketch is changed (and the world remade) on its own".into());
     }
     let wid = id.clone();
@@ -357,12 +357,12 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
     let economy = (ask.tier.is_some() && new_tier != tier && ask.lives_by.is_none()).then(|| {
         if fits { format!("It keeps what it lives by ({kind}), which a {new_tier} can") } else { format!("What it lives by ({kind}) does not fit a {new_tier}: it is taken from its land") }
     });
-    let fresh = crate::sketch::pin_stroke(spot, &new_tier);
+    let fresh = crate::edit::sketch::pin_stroke(spot, &new_tier);
     let (asked_name, asked_capital) = (ask.name.clone(), ask.capital);
     let given_tier = ask.tier.is_some();
     let (lives_given, asked_kind) = (ask.lives_by.is_some(), ask.lives_by.clone());
     let made_new = pin.is_none();
-    let r = crate::sketch::put_pin(app, pin.map(|k| k as usize), spot, fresh, move |s| {
+    let r = crate::edit::sketch::put_pin(app, pin.map(|k| k as usize), spot, fresh, move |s| {
         if made_new && s.replaces.is_none() {
             // (In place of the world's own: as it was placed, and as it is named now.)
             s.replaces = Some(planned);
@@ -395,7 +395,7 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
         out["economy"] = json!(e);
     }
     if a["regenerate"] == json!(true) {
-        let g = crate::sketch::regenerate(app).await?;
+        let g = crate::edit::sketch::regenerate(app).await?;
         let now = app.worker.with(move |ex| Ok(agent::feature_of_layout(&ex.world, &ex.t0, li))).await?;
         out["pending"] = json!(false);
         out["now"] = json!(now);
@@ -429,7 +429,7 @@ async fn update_culture(app: &Shared, id: String, to: u8) -> Result<Value, Strin
         })
         .await?;
     let rid = id.clone();
-    let now = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &rid).ok_or_else(crate::args::read_back("changed"))).await?;
+    let now = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &rid).ok_or_else(crate::tools::args::read_back("changed"))).await?;
     let mut out = json!({ "id": id, "layout": li, "culture": change["to"], "from": change["from"], "pending": false, "feature": now });
     if change["unchanged"] == json!(true) {
         out["unchanged"] = json!(true);
@@ -445,7 +445,7 @@ async fn update_culture(app: &Shared, id: String, to: u8) -> Result<Value, Strin
 /// `update_settlement` on a village or town added by hand (at `k` in `created`): changed at once
 /// (laid out anew when its tier or kind changes: the edits in it set aside).
 async fn update_made(app: &Shared, id: String, k: usize, ask: Asked) -> Result<Value, String> {
-    let how = "remove it and put a settlement pin there (create_sketch_stroke {tool: pin, at, tier, lives_by, capital, name}), then regenerate";
+    let how = "remove it and put a settlement pin there (set_sketch_stroke {tool: pin, at, tier, lives_by, capital, name}), then regenerate";
     if let Some(t) = ask.tier.as_deref().filter(|t| !CREATED_SETTLEMENTS.contains(t)) {
         return Err(format!("tier: a village or town added by hand stays a village or town ({t} needs the world remade: {how})"));
     }
@@ -489,7 +489,7 @@ async fn update_made(app: &Shared, id: String, k: usize, ask: Asked) -> Result<V
         .await?;
     let set_aside = change["set_aside"].clone();
     let rid = id.clone();
-    let mut v = app.worker.with(move |ex| read_back(ex, &rid).ok_or_else(crate::args::read_back("changed"))).await?;
+    let mut v = app.worker.with(move |ex| read_back(ex, &rid).ok_or_else(crate::tools::args::read_back("changed"))).await?;
     if change["unchanged"] == json!(true) {
         v["unchanged"] = json!(true);
     } else {

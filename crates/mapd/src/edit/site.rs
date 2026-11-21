@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::world::Created;
 
-use crate::args::read_back;
+use crate::tools::args::read_back;
 use crate::Shared;
 use crate::tools::{schema, text};
 
@@ -15,7 +15,7 @@ pub fn list() -> Vec<Value> {
         "name": "restore_feature",
         "title": "Restore deleted sites",
         "description": "Bring back sites deleted with delete_feature (a drawn building by either of its ids): id or ids, all or none. Refused, naming what is in the way, when the spot is taken now. Notes, NPCs and plots that pointed at it are still there.",
-        "inputSchema": schema(crate::args::ids_props("deleted site (c:<n>, or a building's b:<layout>:0)"), &[]),
+        "inputSchema": schema(crate::tools::args::ids_props("deleted site (c:<n>, or a building's b:<layout>:0)"), &[]),
     })]
 }
 
@@ -46,7 +46,7 @@ async fn resolve(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<Sit
             ids.iter()
                 .enumerate()
                 .map(|(i, id)| {
-                    let at = crate::args::item(single, i);
+                    let at = crate::tools::args::item(single, i);
                     let (k, bid) = match agent::drawn_pair(w, t0, id) {
                         Some((k, _, b)) => (k, Some(b)),
                         None => match edits.created.iter().position(|c| &c.id == id) {
@@ -58,7 +58,7 @@ async fn resolve(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<Sit
                                 let hint = if edits.hidden.contains(id) { " (it is hidden: set_feature {id, hidden: false} shows it again)" } else { "" };
                                 return Err(format!("{at}: {id} is not a created site{hint} (other generated features can be hidden: set_feature hidden)"));
                             }
-                            None => return Err(format!("{at}: {}", crate::args::no_such(w, t0, id))),
+                            None => return Err(format!("{at}: {}", crate::tools::args::no_such(w, t0, id))),
                         },
                     };
                     let site = edits.created[k].clone();
@@ -104,7 +104,7 @@ pub fn follow_middle(e: &mut worldgen::world::Edits, bid: &str, mid: [f64; 2]) -
 }
 
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let sites = resolve(app, ids.clone(), a["ids"].is_null()).await?;
     let mut seen = std::collections::HashSet::new();
     let sites: Vec<Site> = sites.into_iter().filter(|s| seen.insert(s.cid.clone())).collect();
@@ -172,7 +172,7 @@ fn out_len_one(v: &Value) -> bool {
 }
 
 async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let sites = resolve(app, ids, a["ids"].is_null()).await?;
     let mut seen = std::collections::HashSet::new();
     let sites: Vec<Site> = sites.into_iter().filter(|s| seen.insert(s.cid.clone())).collect();
@@ -183,7 +183,7 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     // The spot must be free now, by the checks a new one of its kind meets; the check and the
     // un-delete happen under one hold of the gate, so nothing can be placed in between.
-    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() { None } else { Some(app.gate.lock().await) };
     let copies: Vec<(String, usize, Created)> = sites.iter().map(|s| (s.given.clone(), s.li, s.site.clone())).collect();
     app.worker
         .with(move |ex| {
@@ -218,7 +218,7 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
         }
         Ok(json!({ "tool": "restore_feature", "ids": ids2.iter().map(|p| p.1.clone()).collect::<Vec<_>>() }))
     };
-    if crate::batch::active() {
+    if crate::tools::batch::active() {
         app.edit("agent", 0, change).await?;
     } else {
         app.edit_now("agent", 0, change).await?;

@@ -6,12 +6,12 @@ use worldgen::paths::{self, Path, PathKind, PathLine};
 use worldgen::world::{CrossingKind, Edits};
 
 use crate::Shared;
-use crate::args::round1;
-use crate::notebook::new_id;
+use crate::tools::args::round1;
+use crate::edit::notebook::new_id;
 use crate::tools::{listed, schema, text};
 
 pub fn list() -> Vec<Value> {
-    let pt = crate::args::point_schema("[x_ft, y_ft] or {x_ft, y_ft}");
+    let pt = crate::tools::args::point_schema("[x_ft, y_ft] or {x_ft, y_ft}");
     let kinds: Vec<&str> = PathKind::ALL.iter().map(|k| k.name()).collect();
     let props = json!({
         "id": { "type": "string", "description": "A road to change (rw:...); what is not given stays" },
@@ -89,7 +89,7 @@ async fn set(app: &Shared, a: &Value, update: bool) -> Result<Value, String> {
         Some(o) => {
             let mut pts = Vec::new();
             for (i, p) in o.iter().enumerate() {
-                pts.push(crate::args::point(app, &format!("pts[{i}]"), p).await?);
+                pts.push(crate::tools::args::point(app, &format!("pts[{i}]"), p).await?);
             }
             Some(paths::rounded(&pts))
         }
@@ -170,12 +170,12 @@ async fn set(app: &Shared, a: &Value, update: bool) -> Result<Value, String> {
 /// (Roadmap 6 R5) Roads, streets and paths taken off the map or brought back (`roadcut::cut`),
 /// worked out and applied under one hold of the gate, as one edit (the app's sync sees it).
 async fn remove_roads(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids = crate::args::ids(a)?;
+    let ids = crate::tools::args::ids(a)?;
     let restore = a["restore"].as_bool().unwrap_or(false);
     if ids.len() > worldgen::roadcut::MAX_IDS {
         return Err(format!("at most {} ids a call (got {}): nothing was changed", worldgen::roadcut::MAX_IDS, ids.len()));
     }
-    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() { None } else { Some(app.gate.lock().await) };
     let out = app.worker.with(move |ex| Ok(worldgen::roadcut::cut(&ex.world, &ex.t0, &ids, restore, false))).await?;
     let refused: Vec<Value> = out.refused.iter().map(|r| json!({ "id": r.id, "why": r.why })).collect();
     if out.done.is_empty() {

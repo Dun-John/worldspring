@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use worldgen::agent;
 
 use crate::Shared;
-use crate::args::{area, area_light};
+use crate::tools::args::{area, area_light};
 use crate::tools::{limit_of, limit_prop, listed, schema, text};
 
 /// The widest area asked for (ft across): a city's streets run to thousands of points.

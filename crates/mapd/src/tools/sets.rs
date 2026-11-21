@@ -1,4 +1,4 @@
-//! The `set_` tools of features, sites, settlements, buildings and the notebook: one tool makes a thing (no `id`) or
+//! The `set_` tools (every family's but the hex grid's): one tool makes a thing (no `id`) or
 //! changes it (`id`), each mode running its family's handler under the handler's own name (so the changes keep their
 //! `"tool"` labels, the app's history vocabulary). A mode's arguments are checked against its handler's schema
 //! (`route::fit`); a call with parts for several handlers is one change (`batch::as_one`).
@@ -6,8 +6,10 @@
 use serde_json::{Map, Value, json};
 
 use crate::Shared;
-use crate::route::fit;
-use crate::tools::{Run, schema, text};
+use crate::tools::route::fit;
+use worldgen::ground::PlateauKind;
+
+use crate::tools::{Run, merge, schema, text};
 
 /// The public schema of a merged tool: the properties of `olds` (each with its renames: (ours, the handler's)), less
 /// `drop`, plus `extra`.
@@ -51,7 +53,7 @@ pub fn list() -> Vec<Value> {
     npc["properties"]["at"] = json!({ "type": ["string", "object", "array", "null"], "description": "Where they are: a place id (with level inside), {x_ft, y_ft} or [x_ft, y_ft]; null takes them off the map" });
     let plot = union(&[("create_plot", &[]), ("update_plot", &[])], &[], json!({}), &[]);
     let note = union(&[("add_note_at", &[]), ("move_note", &[])], &[], id("A point note (m:...) to change or move"), &[]);
-    vec![
+    let mut out = vec![
         json!({ "name": "set_feature", "title": "Name, notes, hide", "description": "Rename anything named (a feature, building, district, tower, site, level l:, room r:, road stretch rd:, crossing v:; empty name restores the original), set or append its notes and tags (remove_tags takes some off), or hide it from labels and search (hidden). A building drawn by hand is one place: either of its ids.", "inputSchema": feature }),
         json!({ "name": "set_site", "title": "Make or change a site", "description": "Without id, make one (kind): ruin (under: dungeon, crypt, catacombs), tower, camp, waystation, cave, mine, lava_tube, entrance (in_building, way); underground ones take size, levels, theme; castle (poly or rect) or wall (path or around_patches), with gates, keep, moat... (remove_in_way removes buildings in the way). With id: a castle's or wall's outline and parts, an entrance's in_building and way, any site's name.", "inputSchema": site }),
         json!({ "name": "set_settlement", "title": "Make or change a settlement", "description": "Without id: add a village or town at a point (at, tier; name, culture, lives_by, link, blank). With id: change a settlement's tier, culture, lives_by, capital, name (regenerate remakes its layout).", "inputSchema": settlement }),
@@ -61,8 +63,45 @@ pub fn list() -> Vec<Value> {
         json!({ "name": "set_npc", "title": "Make or change an NPC", "description": "Without id: add an NPC (name; appearance, mannerisms, attitude, goals, notes, portrait, stance, status, tags). With id: change the fields given. at puts them somewhere (a place id, and level inside it; or a point), null takes them off the map. Returns the NPC with its id.", "inputSchema": npc }),
         json!({ "name": "set_plot", "title": "Make or change a plot point", "description": "Without id: add a plot point (title; text, status, anchors: places, npcs, tags). With id: change the fields given (lists are replaced). Returns it with its id.", "inputSchema": plot }),
         json!({ "name": "set_note", "title": "Make or change a point note", "description": "Without id: a note at a point in a building, dungeon or sewer level (site, level, at as [x, y] squares; or room) with text and tags; returns its m: id. With id: move it (at, or room on its level) and change its text and tags. Notes on places are set_feature's.", "inputSchema": note }),
+    ];
+    out.extend(more());
+    out
+}
+
+const POINTS: &[(&str, &str)] = &[("path", "points")];
+
+/// The tools of the families that make and change one handler's thing each (objects, sprites, ground, water, roads,
+/// fences, crossings, wharves, links, sketch strokes, designs).
+fn more() -> Vec<Value> {
+    let id = |what: &str| json!({ "id": { "type": "string", "description": what } });
+    let kind = json!({ "kind": { "type": "string", "enum": GROUND.iter().map(|g| g.0).collect::<Vec<_>>(), "description": "brush: mode, at or path, radius_ft, width_ft, strength, hardness, height_ft. plateau (a pit when it digs): poly or around, level_ft or rise_ft, edge_ft, floor, margin_ft. hill: at or from+to or around, peak_ft, crown_ft, radius_ft, rx_ft, ry_ft, angle_deg, width_ft, profile. islet: at, radius_ft, rise_ft. With id it is the id's own (leave it out)" } });
+    let ground = union(&[("shape_ground", &[]), ("set_plateau", &[]), ("set_hill", &[]), ("raise_islet", &[])], &[], merge(kind, id("A plateau, pit, hill or islet to change (h:...)")), &[]);
+    let water = union(&[("create_water", &[]), ("update_water", &[])], &[], id("Water drawn by hand to change (e:...)"), &[]);
+    let road = union(&[("place_path", PATH)], &[], json!({}), &[]);
+    let fence = union(&[("place_fence", POINTS)], &[], json!({}), &[]);
+    let stroke = union(&[("create_sketch_stroke", &[]), ("update_sketch_stroke", &[])], &[], id("A stroke to change (sk:...)"), &[]);
+    let mut design = union(&[("set_site_design", &[]), ("reset_site_design", &[])], &[], json!({ "reset": { "type": "boolean", "default": false, "description": "Drop the design: generated again as it was (id alone)" } }), &["id"]);
+    design["properties"]["text"]["description"] = json!("The text plan (get with view design gives it); not with reset");
+    let same = |old: &str| union(&[(old, &[])], &[], json!({}), &[]);
+    let mut objects = crate::read::old_schema("place_objects");
+    objects["properties"].as_object_mut().map(|o| o.remove("world"));
+    vec![
+        json!({ "name": "set_objects", "title": "Put objects down", "description": "Put objects on the battlemap at world positions (ft): built-in kinds or uploaded sprites (list what sprites), up to 500 at once; each one with an id (o:...) changes one put down before. They block, cover and hinder by their kind's rules. Returns their ids.", "inputSchema": objects }),
+        json!({ "name": "set_sprite", "title": "Add or change a sprite", "description": "Add a picture as an object kind for battlemaps (64 px per 5-ft square is plenty): name, data_base64 or path, size_squares, height_ft and its rules (cover, blocks_movement, blocks_sight, difficult); or asset to change an uploaded one's rules. Returns its kind id (s:<asset>).", "inputSchema": same("upload_sprite") }),
+        json!({ "name": "set_ground", "title": "Shape the ground", "description": "The battlemap's ground by kind: brush (raise, lower, smooth or restore with a round brush: a dab at at or a stroke along path), plateau (an outline levelled at one height; a pit when it digs), hill (round, ridge, knoll or mountain), islet (a rock islet in water). With id (h:...), changes that plateau, hill or islet. Returns its id (h:...) or, for a brush, the blocks changed.", "inputSchema": ground }),
+        json!({ "name": "set_water", "title": "Draw or change water", "description": "Without id: water drawn by hand, a polygon (poly) or brushed band; its look follows it (the sea's at sea level, dug: a quay; an open band a stream; a ring a moat; else a pond or lake by depth). With id (e:...): change it; what is not given stays. Returns its id and look.", "inputSchema": water }),
+        json!({ "name": "set_road", "title": "Draw or change a road", "description": "A road on the ground along path: on the map and battlemap, walked like a road, a bridge over water; scatter and the world's own town buildings keep off it. With id (rw:...), changes one. Returns its rw: id and crossings.", "inputSchema": road }),
+        json!({ "name": "set_fence", "title": "Draw or change a fence", "description": "A fence or hedge along path (over roads, not water): kind, closed, gates. With id, changes one. gaps alone cuts gaps into the fences there (generated ones too). Returns its id.", "inputSchema": fence }),
+        json!({ "name": "set_crossing", "title": "Put a crossing down", "description": "A bridge, ford or ferry from one bank to the other (from, to: world ft), 10-2000 ft long (a ferry 68+), 5-120 ft wide (a ford or ferry 40 at most); a bridge may carry shops. With id (v:...), changes that crossing. Returns its id, shops and the river's banks; an end in the water is refused.", "inputSchema": same("place_crossing") }),
+        json!({ "name": "set_wharf", "title": "Put a quay, pier or breakwater down", "description": "kind quay (paving along a shore; shore: true follows the water's edge near path), pier (a deck) or breakwater (a stone mole; lighthouse: true builds one at its tip) along path, a pier's or breakwater's first point on the bank. With id (q:...), changes one. Returns its id.", "inputSchema": same("place_wharf") }),
+        json!({ "name": "set_link", "title": "Link two places", "description": "Join a square of one place below ground (a) to another's (b): a site underground (a level or room of u:/k:), a sewer section (w:) or a building's cellar (b:). Each end shows on its map as a way across (way: stairs, ladder, passage, trapdoor, rope, portal; default stairs) naming the far end. Returns its id (j:...).", "inputSchema": same("create_link") }),
+        json!({ "name": "set_sketch_stroke", "title": "Draw or change a sketch stroke", "description": "Without id: add a stroke to the world's sketch (tool: land, sea, range, river, forest, biome, road, settlement...: an outline or path, or a pin at at). With id (sk:...): change its points and options; what is not given stays. Stored at once; regenerate remakes the world from the sketch. Returns its id.", "inputSchema": stroke }),
+        json!({ "name": "set_design", "title": "Design a site", "description": "Change an underground site or a building's interior from a text plan: read it with get (view design; format: true gives the full format), change it, send it back (text). Only what the text gives changes. dry_run: true says what would change. reset: true drops the design (generated again as it was).", "inputSchema": design }),
     ]
 }
+
+/// set_ground's kinds: (kind, handler, the module that runs it).
+const GROUND: [(&str, &str, Run); 4] = [("brush", "shape_ground", Run::Ground), ("plateau", "set_plateau", Run::Ground), ("hill", "set_hill", Run::Ground), ("islet", "raise_islet", Run::Harbour)];
 
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
     let r = match name {
@@ -84,6 +123,23 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
             Ok(()) => one(app, a, ("update_plot", "create_plot"), Run::Notebook).await,
         },
         "set_note" => note(app, a).await,
+        "set_objects" => via(app, a, Run::Scatter, "place_objects", &[], "set_objects").await,
+        "set_sprite" => via(app, a, Run::Scatter, "upload_sprite", &[], "set_sprite").await,
+        "set_ground" => ground(app, a).await,
+        "set_water" => {
+            let (old, label) = if given(a, "id") { ("update_water", "set_water with id (a change)") } else { ("create_water", "set_water without id (new water)") };
+            via(app, a, Run::Waters, old, &[], label).await
+        }
+        "set_road" => via(app, a, Run::Paths, "place_path", PATH, "set_road").await,
+        "set_fence" => via(app, a, Run::Fences, "place_fence", POINTS, "set_fence").await,
+        "set_crossing" => via(app, a, Run::Crossings, "place_crossing", &[], "set_crossing").await,
+        "set_wharf" => via(app, a, Run::Harbour, "place_wharf", &[], "set_wharf").await,
+        "set_link" => via(app, a, Run::Links, "create_link", &[], "set_link").await,
+        "set_sketch_stroke" => {
+            let (old, label) = if given(a, "id") { ("update_sketch_stroke", "set_sketch_stroke with id (a change)") } else { ("create_sketch_stroke", "set_sketch_stroke without id (a new stroke)") };
+            via(app, a, Run::Sketch, old, &[], label).await
+        }
+        "set_design" => design(app, a).await,
         _ => return None,
     };
     Some(r.map(text))
@@ -109,12 +165,46 @@ fn dried(a: &Value) -> bool {
 /// Runs the parts as one change; the reply of one, or `{changes, results}` of several (`dry`: marked a dry run).
 async fn run(app: &Shared, steps: Vec<(Run, &'static str, Value)>, dry: bool) -> Result<Value, String> {
     let n = steps.len();
-    let mut out = crate::batch::as_one(app, steps).await.map_err(|(i, e)| if n > 1 && i != crate::batch::NOT_A_STEP { format!("{e}. Nothing was changed.") } else { e })?;
+    let mut out = crate::tools::batch::as_one(app, steps).await.map_err(|(i, e)| if n > 1 && i != crate::tools::batch::NOT_A_STEP { format!("{e}. Nothing was changed.") } else { e })?;
     let mut v = if out.len() == 1 { out.remove(0) } else { json!({ "changes": out.len(), "results": out }) };
     if dry && v.is_object() {
         v["dry_run"] = json!(true);
     }
     Ok(v)
+}
+
+/// One handler under its own name, with our names (`renames`) for its arguments.
+async fn via(app: &Shared, a: &Value, r: Run, old: &'static str, renames: &[(&str, &str)], label: &str) -> Result<Value, String> {
+    let b = fit(a, old, renames, label)?;
+    run(app, vec![(r, old, b)], false).await
+}
+
+async fn ground(app: &Shared, a: &Value) -> Result<Value, String> {
+    let mut b = a.clone();
+    let asked = b.as_object_mut().and_then(|o| o.remove("kind")).and_then(|k| k.as_str().map(str::to_string));
+    let kind = match a["id"].as_str() {
+        None => asked.ok_or("kind: required without id (brush, plateau, hill, islet)")?,
+        Some(id) => {
+            let q = id.to_string();
+            let own = app.with_edits(move |e| e.plateaus.get(&q).map(|p| if p.hill.is_some() { "hill" } else if p.kind == PlateauKind::Islet { "islet" } else { "plateau" })).flatten();
+            let own = own.ok_or_else(|| format!("no such {id} (h: ground shaped by hand: a plateau, pit, hill or islet)"))?;
+            if let Some(k) = asked.filter(|k| k != own) {
+                return Err(format!("{id} is a {own}: kind {own} (or leave kind out), not {k}"));
+            }
+            own.to_string()
+        }
+    };
+    let (_, old, r) = GROUND.iter().find(|g| g.0 == kind).ok_or_else(|| format!("kind: brush, plateau, hill or islet (got {kind})"))?;
+    via(app, &b, *r, old, &[], &format!("kind '{kind}'")).await
+}
+
+async fn design(app: &Shared, a: &Value) -> Result<Value, String> {
+    let mut b = a.clone();
+    b.as_object_mut().map(|o| o.remove("reset"));
+    if a["reset"] == json!(true) {
+        return via(app, &b, Run::Design, "reset_site_design", &[], "set_design with reset").await;
+    }
+    via(app, &b, Run::Design, "set_site_design", &[], "set_design").await
 }
 
 /// A tool with an id (changes, the first handler) or without (makes, the second).

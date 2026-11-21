@@ -47,9 +47,13 @@ async fn family(app: &Shared, id: &str, restore: bool) -> Result<Fam, String> {
     let prefix = id.split(':').next().unwrap_or_default();
     let roads = ROADS.contains(&prefix);
     let fences = FENCES.contains(&prefix);
+    // (A village or town added by hand: its handler sets the edits inside it aside, and brings them back.)
+    let q = id.to_string();
+    let settlement = prefix == "c" && app.with_edits(move |e| e.created.iter().any(|c| c.id == q && c.removed == restore && c.is_settlement())).unwrap_or(false);
     if restore {
         return Ok(match prefix {
             // (A building drawn by hand is a created site; the world's own are buildings.)
+            "c" if settlement => Fam { each: true, ..fam(Run::Settlements, "restore_feature") },
             "c" => fam(Run::Sites, "restore_feature"),
             "b" if crate::tools::drawn_pair(app, id).await?.is_some() => fam(Run::Sites, "restore_feature"),
             "b" => fam(Run::Build, "restore_building"),
@@ -66,6 +70,7 @@ async fn family(app: &Shared, id: &str, restore: bool) -> Result<Fam, String> {
         });
     }
     Ok(match prefix {
+        "c" if settlement => Fam { each: true, ..fam(Run::Settlements, "delete_feature") },
         "c" => fam(Run::Sites, "delete_feature"),
         "b" if crate::tools::drawn_pair(app, id).await?.is_some() => fam(Run::Sites, "delete_feature"),
         "b" => fam(Run::Build, "remove_buildings"),
@@ -94,7 +99,7 @@ async fn not_here(app: &Shared, id: &str, done: &str) -> String {
         .with(move |ex| {
             Ok::<_, String>(match worldgen::agent::position(&ex.world, &ex.t0, &q) {
                 Some(_) => format!("{q} can't be {done}: generated features stay (set_feature {{id, hidden: true}} hides one)"),
-                None => crate::args::no_such(&ex.world, &ex.t0, &q),
+                None => crate::tools::args::no_such(&ex.world, &ex.t0, &q),
             })
         })
         .await
@@ -142,7 +147,7 @@ async fn run(app: &Shared, a: &Value, restore: bool) -> Result<Value, String> {
         return Err("give id or ids, not both".into());
     }
     let single = a["ids"].is_null();
-    let ids: Vec<String> = if given("id") || given("ids") { crate::args::ids(a)? } else { Vec::new() };
+    let ids: Vec<String> = if given("id") || given("ids") { crate::tools::args::ids(a)? } else { Vec::new() };
     if let Some(what) = a["what"].as_str() {
         // The world's own buildings, generated objects and clears by place; a place's note.
         let (run, old) = match (what, restore) {
@@ -160,12 +165,12 @@ async fn run(app: &Shared, a: &Value, restore: bool) -> Result<Value, String> {
                 return Err(format!("what 'notes' takes id, ids; not {k}"));
             }
             let steps = ids.iter().map(|id| (run, old, json!({ "id": id }))).collect();
-            return crate::batch::as_one(app, steps).await.map(reply).map_err(|(i, e)| at_step(&ids, i, e));
+            return crate::tools::batch::as_one(app, steps).await.map(reply).map_err(|(i, e)| at_step(&ids, i, e));
         }
         let mut b = a.clone();
         b.as_object_mut().map(|o| o.remove("what"));
         let b = fit(&b, old, &[], &format!("what '{what}'"))?;
-        return crate::batch::as_one(app, vec![(run, old, b)]).await.map(reply).map_err(|(_, e)| e);
+        return crate::tools::batch::as_one(app, vec![(run, old, b)]).await.map(reply).map_err(|(_, e)| e);
     }
     for k in ["within", "points", "kinds"] {
         if given(k) {
@@ -178,7 +183,7 @@ async fn run(app: &Shared, a: &Value, restore: bool) -> Result<Value, String> {
     // The ids by family, in the order first given; one call for each family (or each id, where it takes one).
     let mut groups: Vec<(Fam, Vec<String>)> = Vec::new();
     for (i, id) in ids.iter().enumerate() {
-        let f = family(app, id, restore).await.map_err(|e| format!("{}: {e}", crate::args::item(single, i)))?;
+        let f = family(app, id, restore).await.map_err(|e| format!("{}: {e}", crate::tools::args::item(single, i)))?;
         match groups.iter_mut().find(|(g, _)| *g == f && !f.each) {
             Some((_, list)) => list.push(id.clone()),
             None => groups.push((f, vec![id.clone()])),
@@ -196,7 +201,7 @@ async fn run(app: &Shared, a: &Value, restore: bool) -> Result<Value, String> {
         })
         .collect();
     let lists: Vec<String> = groups.iter().map(|(_, l)| l.join(", ")).collect();
-    crate::batch::as_one(app, steps).await.map(reply).map_err(|(i, e)| if one { e } else { at_step(&lists, i, e) })
+    crate::tools::batch::as_one(app, steps).await.map(reply).map_err(|(i, e)| if one { e } else { at_step(&lists, i, e) })
 }
 
 /// A part's error, naming the ids it had (`batch::NOT_A_STEP`: no part's).
@@ -227,7 +232,7 @@ pub(crate) fn fit(a: &Value, old: &str, renames: &[(&str, &str)], label: &str) -
         return Err(format!("{label} takes {}; not {}", takes.join(", "), ours(k)));
     }
     let mut v = Value::Object(obj);
-    crate::args::walk_all(&s, &mut v).map_err(|e| {
+    crate::tools::args::walk_all(&s, &mut v).map_err(|e| {
         // (The first error's field in this tool's name.)
         let head = e.split([':', '[', '.']).next().unwrap_or_default();
         format!("{}{}", ours(head), &e[head.len()..])

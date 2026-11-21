@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use worldgen::town::{hand, handedit};
 
 use crate::Shared;
-use crate::args::town_index;
+use crate::tools::args::town_index;
 use crate::tools::{schema, text};
 
 pub fn list() -> Vec<Value> {
@@ -18,7 +18,6 @@ pub fn list() -> Vec<Value> {
             "title": "A hand town's streets",
             "description": "A hand-laid town's junctions, streets, blocks, rows, areas, walls and problems (world ft). See MCP.md.",
             "inputSchema": schema(json!({ "id": town }), &["id"]),
-            "annotations": { "readOnlyHint": true },
         }),
         json!({
             "name": "edit_streets",
@@ -70,7 +69,7 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     if ops.is_empty() {
         return Err("ops is empty".into());
     }
-    if ops.len() > 1 && crate::batch::active() {
+    if ops.len() > 1 && crate::tools::batch::active() {
         return Err("inside a batch, one op per edit_streets call (each op is built on the last one's result)".into());
     }
     if ops.len() > 1 && dry {
@@ -78,7 +77,7 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     // Each change is computed and applied under one hold of the gate (the whole list), so no other
     // edit can land between a change and the plan it was computed on.
-    let _hold = if crate::batch::active() || dry { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() || dry { None } else { Some(app.gate.lock().await) };
     let mut replies: Vec<Value> = Vec::new();
     for (n, op) in ops.into_iter().enumerate() {
         // (serde ignores extra fields on a variant with none.)

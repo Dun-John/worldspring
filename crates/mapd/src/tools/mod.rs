@@ -1,6 +1,11 @@
 //! The MCP tools: read the world, look at it through the open app, and edit it. Every edit
 //! is saved, logged and shown live in the app.
 
+pub(crate) mod args;
+pub(crate) mod batch;
+pub(crate) mod route;
+pub(crate) mod sets;
+
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::under::design::SiteDesignOps;
@@ -12,9 +17,9 @@ use crate::Shared;
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from the map's top-left corner, x east, y south. \
 Reads: world_overview, search (by name, kind, tag or area; with at alone, what is near), get (one thing by id; view children, design, town_plan, street_plan), list (what: names, roads, objects, ground, npcs...), inspect (a place: what location, battlemap, heights, hex). A place (at) is an id, {x_ft, y_ft} or [x_ft, y_ft]. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
 n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, rd: a road stretch, h: a plateau, e: water drawn by hand; get one wrong and search finds the right one. \
-Edits are saved and appear live in the open app: set_<thing> makes one (no id) or changes it (id): set_feature (name, notes, tags, hidden), set_site, set_settlement, set_building, set_npc, set_plot, set_note...; remove and restore take ids of any family; also place_crossing, place_objects, shape_ground, set_plateau, create_water, edit_town, set_site_design; \
+Edits are saved and appear live in the open app: set_<thing> makes one (no id) or changes it (id): set_feature (name, notes, tags, hidden), set_site, set_settlement, set_building, set_npc, set_plot, set_note...; remove and restore take ids of any family; also set_objects, set_ground (brush, plateau, hill, islet), set_water, set_road, set_fence, set_crossing, set_wharf, set_link, set_design, set_sketch_stroke; plans change with edit_town and edit_streets; \
 many at once go in one batch. Roads and routes: list (what roads), route, road_point (name a road by renaming its rd: stretches). Geometry: nearest (coast, cliff, river, road, flat, highest), search within an area. Read back hand work with list (what objects, ground, waters, drawn_roads, designs). The DM's notebook holds NPCs and plot points tied to places (set_npc, set_plot). \
-render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: a dry_run (set_building and the tools that have one) before a write; \
+render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: a dry_run (set_building, set_building_row, set_design, edit_town, edit_streets) before a write; \
 an error means nothing changed, except a save warning (saved: false), which is not to be repeated; the creates are safe to repeat (the same one again returns what is there); \
 what remove takes, restore brings back where it can (it says when not). Lists are cut by limit (found says how many there were). \
 Out-of-range values are refused, never clamped. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. \
@@ -32,7 +37,7 @@ pub(crate) fn schema(props: Value, required: &[&str]) -> Value {
 }
 
 fn place_props() -> Value {
-    crate::args::at_props()
+    crate::tools::args::at_props()
 }
 
 pub(crate) fn merge(a: Value, b: Value) -> Value {
@@ -48,7 +53,7 @@ pub(crate) fn own() -> Vec<Value> {
     let v = json!([
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, site, a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), a road stretch (rd:) or crossing (v:). Empty restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
         { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "remove_tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to take off (notes may be left out when tags or remove_tags is given)" }, "append": { "type": "boolean", "default": false } }), &["id"]) },
-        { "name": "create_feature", "title": "Create a site", "description": "Add a site on dry land: ruin (over a dungeon, crypt or catacombs), tower, camp, waystation, cave, mine, lava_tube, entrance (a way down); underground ones take size, levels and theme. Or a castle (poly/rect) or wall (pts or around_patches), drawn not placed; buildings in the way are named (remove_in_way removes them). Returns its id and underground ways.", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
+        { "name": "create_feature", "title": "Create a site", "description": "Add a site on dry land: ruin (over a dungeon, crypt or catacombs), tower, camp, waystation, cave, mine, lava_tube, entrance (a way down); underground ones take size, levels and theme. Or a castle (poly/rect) or wall (pts or around_patches), drawn not placed; buildings in the way are named (remove_in_way removes them). Returns its id and underground ways.", "inputSchema": schema(merge(merge(place_props(), crate::edit::fortify::props()), json!({
             "kind": { "type": "string", "enum": CREATABLE.iter().filter(|k| **k != "building").collect::<Vec<_>>() },
             "name": { "type": "string" },
             "under": { "type": "string", "enum": UnderKind::CREATABLE.map(|k| k.key()), "description": "Beneath a ruin (dungeon, crypt, catacombs) or an entrance (any)" },
@@ -60,7 +65,7 @@ pub(crate) fn own() -> Vec<Value> {
         })), &["kind"]) },
         { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids. Also r: rooms, m: notes (at moves an m: note).", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "in_building": { "type": ["string", "null"], "description": "Entrance: into this building; null: out" }, "way": { "type": "string" }, "at": {} }), &["id"]) },
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
-        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete created sites and buildings drawn by hand (id or ids, all or none). Notes, NPCs and plots pointing at them are kept (left_pointing). restore_feature undoes it. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
+        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete created sites and buildings drawn by hand (id or ids, all or none). Notes, NPCs and plots pointing at them are kept (left_pointing). restore_feature undoes it. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::tools::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
     ]);
     v.as_array().cloned().unwrap_or_default()
 }
@@ -155,30 +160,24 @@ pub(crate) const TOOLS: &[Tool] = &[
     t("set_npc", Run::Sets, Hint::Same),
     t("set_plot", Run::Sets, Hint::Same),
     t("set_note", Run::Sets, Hint::Write),
-    t("upload_sprite", Run::Scatter, Hint::Write),
-    t("place_objects", Run::Scatter, Hint::Same),
-    t("place_crossing", Run::Crossings, Hint::Write),
-    t("set_hex_grid", Run::Hexes, Hint::Write),
-    t("create_link", Run::Links, Hint::Write),
-    t("shape_ground", Run::Ground, Hint::Write),
-    t("set_plateau", Run::Ground, Hint::Same),
-    t("set_hill", Run::Ground, Hint::Same),
-    t("create_water", Run::Waters, Hint::Write),
-    t("update_water", Run::Waters, Hint::Same),
-    t("place_path", Run::Paths, Hint::Same),
-    t("place_fence", Run::Fences, Hint::Write),
-    t("raise_islet", Run::Harbour, Hint::Same),
-    t("place_wharf", Run::Harbour, Hint::Write),
-    t("set_site_design", Run::Design, Hint::TakesSame),
-    t("reset_site_design", Run::Design, Hint::TakesSame),
+    t("set_objects", Run::Sets, Hint::Same),
+    t("set_sprite", Run::Sets, Hint::Write),
+    t("set_ground", Run::Sets, Hint::Write),
+    t("set_water", Run::Sets, Hint::Write),
+    t("set_road", Run::Sets, Hint::Same),
+    t("set_fence", Run::Sets, Hint::Write),
+    t("set_crossing", Run::Sets, Hint::Write),
+    t("set_wharf", Run::Sets, Hint::Write),
+    t("set_link", Run::Sets, Hint::Write),
+    t("set_hex_grid", Run::Hexes, Hint::Same),
+    t("set_sketch_stroke", Run::Sets, Hint::Write),
+    t("set_design", Run::Sets, Hint::TakesSame),
     t("edit_town", Run::Towns, Hint::Takes),
-    t("edit_streets", Run::StreetsEdit, Hint::Write),
-    t("create_sketch_stroke", Run::Sketch, Hint::Same),
-    t("update_sketch_stroke", Run::Sketch, Hint::Write),
-    t("regenerate", Run::Sketch, Hint::Takes),
+    t("edit_streets", Run::StreetsEdit, Hint::Takes),
     t("remove", Run::Route, Hint::Takes),
     t("restore", Run::Route, Hint::Same),
     t("batch", Run::Batch, Hint::Takes),
+    t("regenerate", Run::Sketch, Hint::Takes),
 ];
 
 /// The tool called `name`.
@@ -191,9 +190,9 @@ pub fn list() -> Value {
     let mut all = crate::read::list();
     all.extend(own());
     for m in [
-        crate::sets::list(), crate::route::list(), crate::notebook::list(), crate::sites::list(), crate::scatter::list(), crate::build::list(), crate::quick::list(), crate::works::list(), crate::crossings::list(),
-        crate::hexes::list(), crate::links::list(), crate::ground::list(), crate::waters::list(), crate::paths::list(), crate::fences::list(), crate::harbour::list(),
-        crate::design::list(), crate::towns::list(), crate::streets_edit::list(), crate::settlements::list(), crate::sketch::list(), crate::batch::list(),
+        crate::tools::sets::list(), crate::tools::route::list(), crate::edit::notebook::list(), crate::edit::site::list(), crate::edit::objects::list(), crate::edit::building::list(), crate::edit::lots::list(), crate::edit::fortify::list(), crate::edit::crossing::list(),
+        crate::edit::hex::list(), crate::edit::link::list(), crate::edit::ground::list(), crate::edit::water::list(), crate::edit::road::list(), crate::edit::fence::list(), crate::edit::wharf::list(),
+        crate::edit::design::list(), crate::edit::town::list(), crate::edit::streets::list(), crate::edit::settlement::list(), crate::edit::sketch::list(), crate::tools::batch::list(),
     ] {
         all.extend(m);
     }
@@ -241,7 +240,7 @@ pub(crate) fn arg_str(a: &Value, k: &str) -> Result<String, String> {
     a[k].as_str().map(str::to_string).ok_or_else(|| format!("missing '{k}'"))
 }
 
-pub(crate) use crate::args::place;
+pub(crate) use crate::tools::args::place;
 
 tokio::task_local! {
     /// The world a call said it means (its `world`): edits check it again once they hold the gate.
@@ -263,7 +262,7 @@ pub fn other_world(open: Option<u64>, want: u64) -> String {
 
 pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, String> {
     // Old names folded, arguments checked against the tool's schema (batch steps come through here too).
-    let a = crate::args::check(name, &a)?;
+    let a = crate::tools::args::check(name, &a)?;
     let before = app.changes.load(std::sync::atomic::Ordering::Relaxed);
     let r = match a["world"].as_str() {
         None => Box::pin(dispatch(app, name, a)).await,
@@ -282,7 +281,7 @@ pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
 /// the tool's own reply was built after the save): an error would invite a repeat of a change that stands.
 fn unsaved_note(app: &Shared, name: &str, r: Result<Vec<Value>, String>, changed: bool) -> Result<Vec<Value>, String> {
     let write = tool(name).is_some_and(|t| !matches!(t.hint, Hint::Read | Hint::View));
-    if !write || !changed || crate::batch::active() || !app.unsaved.load(std::sync::atomic::Ordering::Relaxed) {
+    if !write || !changed || crate::tools::batch::active() || !app.unsaved.load(std::sync::atomic::Ordering::Relaxed) {
         return r;
     }
     let mut out = r?;
@@ -307,32 +306,32 @@ pub(crate) async fn run(app: &Shared, run: Run, name: &str, a: &Value) -> Result
     let r = match run {
         Run::Read => return Box::pin(crate::read::call(app, name, a)).await,
         Run::Create => return create(app, a.clone()).await.map(text),
-        Run::Sets => crate::sets::call(app, name, a).await,
-        Run::Route => crate::route::call(app, name, a).await,
-        Run::Finds => crate::finds::call(app, name, a).await,
-        Run::Batch => crate::batch::call(app, name, a).await,
-        Run::Notebook => crate::notebook::call(app, name, a).await,
-        Run::Build => crate::build::call(app, name, a).await,
-        Run::Quick => crate::quick::call(app, name, a).await,
-        Run::Works => crate::works::call(app, name, a).await,
-        Run::Sites => crate::sites::call(app, name, a).await,
-        Run::Scatter => crate::scatter::call(app, name, a).await,
-        Run::Hexes => crate::hexes::call(app, name, a).await,
-        Run::Links => crate::links::call(app, name, a).await,
-        Run::Crossings => crate::crossings::call(app, name, a).await,
-        Run::Ground => crate::ground::call(app, name, a).await,
-        Run::Waters => crate::waters::call(app, name, a).await,
-        Run::Paths => crate::paths::call(app, name, a).await,
-        Run::Fences => crate::fences::call(app, name, a).await,
-        Run::Harbour => crate::harbour::call(app, name, a).await,
-        Run::Design => crate::design::call(app, name, a).await,
-        Run::Towns => crate::towns::call(app, name, a).await,
-        Run::StreetsEdit => crate::streets_edit::call(app, name, a).await,
-        Run::Settlements => crate::settlements::call(app, name, a).await,
-        Run::Sketch => crate::sketch::call(app, name, a).await,
-        Run::Reads => crate::reads::call(app, name, a).await,
-        Run::Streets => crate::streets::call(app, name, a).await,
-        Run::Geo => crate::geo::call(app, name, a).await,
+        Run::Sets => crate::tools::sets::call(app, name, a).await,
+        Run::Route => crate::tools::route::call(app, name, a).await,
+        Run::Finds => crate::read::finds::call(app, name, a).await,
+        Run::Batch => crate::tools::batch::call(app, name, a).await,
+        Run::Notebook => crate::edit::notebook::call(app, name, a).await,
+        Run::Build => crate::edit::building::call(app, name, a).await,
+        Run::Quick => crate::edit::lots::call(app, name, a).await,
+        Run::Works => crate::edit::fortify::call(app, name, a).await,
+        Run::Sites => crate::edit::site::call(app, name, a).await,
+        Run::Scatter => crate::edit::objects::call(app, name, a).await,
+        Run::Hexes => crate::edit::hex::call(app, name, a).await,
+        Run::Links => crate::edit::link::call(app, name, a).await,
+        Run::Crossings => crate::edit::crossing::call(app, name, a).await,
+        Run::Ground => crate::edit::ground::call(app, name, a).await,
+        Run::Waters => crate::edit::water::call(app, name, a).await,
+        Run::Paths => crate::edit::road::call(app, name, a).await,
+        Run::Fences => crate::edit::fence::call(app, name, a).await,
+        Run::Harbour => crate::edit::wharf::call(app, name, a).await,
+        Run::Design => crate::edit::design::call(app, name, a).await,
+        Run::Towns => crate::edit::town::call(app, name, a).await,
+        Run::StreetsEdit => crate::edit::streets::call(app, name, a).await,
+        Run::Settlements => crate::edit::settlement::call(app, name, a).await,
+        Run::Sketch => crate::edit::sketch::call(app, name, a).await,
+        Run::Reads => crate::read::reads::call(app, name, a).await,
+        Run::Streets => crate::read::streets::call(app, name, a).await,
+        Run::Geo => crate::read::geo::call(app, name, a).await,
     };
     r.unwrap_or_else(|| Err(format!("unknown tool: {name}")))
 }
@@ -350,7 +349,7 @@ pub(crate) async fn known(app: &Shared, id: &str) -> Result<(), String> {
             // (A city's sewers or a section of them: no place of their own on the map.)
             Some(true) => Ok(()),
             Some(false) => Err(format!("no sewers {id2} (w:<layout> a city's, w:<layout>:<sx>:<sy> a 480-ft section under a paved street)")),
-            None => agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| crate::args::no_such(&ex.world, &ex.t0, &id2)),
+            None => agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| crate::tools::args::no_such(&ex.world, &ex.t0, &id2)),
         })
         .await
 }
@@ -384,7 +383,7 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
         return Err("buildings are drawn with set_building".into());
     }
     if kind == "castle" || kind == "wall" {
-        return crate::works::place(app, &a, None, Some(&kind)).await;
+        return crate::edit::fortify::place(app, &a, None, Some(&kind)).await;
     }
     if !a["in_building"].is_null() || !a["way"].is_null() {
         return create_in_building(app, a, kind).await;
@@ -455,7 +454,7 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     let mut v = app
         .worker
         .with(move |ex| {
-            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(crate::args::read_back("created"))?;
+            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(crate::tools::args::read_back("created"))?;
             same_name_note(&mut v, agent::same_named(&ex.world, &ex.t0, &name, &id), &name);
             Ok(v)
         })
@@ -534,7 +533,7 @@ async fn host_building(app: &Shared, rawq: String) -> Result<(String, String, [f
 
 /// An edit with the gate already held by the caller (inside a batch the batch stages it).
 async fn edit_held(app: &Shared, f: impl FnOnce(&mut Edits) -> Result<Value, String>) -> Result<Value, String> {
-    if crate::batch::active() { app.edit("agent", 0, f).await } else { app.edit_now("agent", 0, f).await }
+    if crate::tools::batch::active() { app.edit("agent", 0, f).await } else { app.edit_now("agent", 0, f).await }
 }
 
 /// A way down into building `bid` ({bname}) must not set aside the design drawn by hand for it: refused when that design has no room for it.
@@ -543,7 +542,7 @@ async fn design_room(app: &Shared, bid: &str, bname: &str) -> Result<(), String>
     app.worker
         .with(move |ex| Ok(worldgen::interior::design::room_for_way_down(&ex.world, &ex.t0, &b2)))
         .await?
-        .map_err(|why| format!("{bid} ({bname}) has a design drawn by hand and {why}: a way down would set it aside. set_site_design: add a cellar or free a square, then try again; nothing was changed"))
+        .map_err(|why| format!("{bid} ({bname}) has a design drawn by hand and {why}: a way down would set it aside. set_design: add a cellar or free a square, then try again; nothing was changed"))
 }
 
 /// Add to `v`'s note that another feature has the name `name`, if one does (`other` its id).
@@ -560,7 +559,7 @@ fn same_name_note(v: &mut Value, other: Option<String>, name: &str) {
 /// or, with null, back out (to `at`, else the nearest spot outside). Ids stay. Returns `{tool, id, in_building, way, moved, note?}`.
 pub(crate) async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<Value, String> {
     // The checks and the write happen under one hold of the gate (as `restore_feature`): nothing can be placed in between.
-    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() { None } else { Some(app.gate.lock().await) };
     let into = a.get("in_building").cloned();
     let way = a["way"].as_str().map(str::to_string);
     let (idc, kind) = (id.to_string(), app.with_edits(|e| e.created.iter().find(|c| c.id == id && !c.removed).map(|c| c.kind.clone())).flatten());
@@ -577,7 +576,7 @@ pub(crate) async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<V
         Some(Value::String(raw)) => {
             let (bid, bname, mid, poly) = host_building(app, raw.clone()).await?;
             if !a["at"].is_null() && a["at"].as_str() != Some(raw.as_str()) {
-                let p = crate::args::point(app, "at", &a["at"]).await?;
+                let p = crate::tools::args::point(app, "at", &a["at"]).await?;
                 if !worldgen::town::geom::contains(&poly, p) {
                     return Err(format!("at: that point is not inside {bid} ({bname}); leave `at` out (the way down goes at the building's middle)"));
                 }
@@ -601,7 +600,7 @@ pub(crate) async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<V
             if way.is_some() {
                 return Err("way: goes with a building (give in_building), not with null".into());
             }
-            let asked = if a["at"].is_null() { None } else { Some(crate::args::point(app, "at", &a["at"]).await?) };
+            let asked = if a["at"].is_null() { None } else { Some(crate::tools::args::point(app, "at", &a["at"]).await?) };
             let from = asked.unwrap_or([cur.x, cur.y]);
             let (kind, under, cid) = (cur.kind.clone(), cur.under.clone(), cur.id.clone());
             let spot = app
@@ -668,7 +667,7 @@ pub(crate) async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<V
             })
             .await?;
         }
-        v["note"] = json!(format!("{u} had a design drawn by hand: it was made for the entrance where it stood and is set aside{} (the generated site stands); set_site_design makes a new one", if drop { " and dropped, it no longer builds" } else { "" }));
+        v["note"] = json!(format!("{u} had a design drawn by hand: it was made for the entrance where it stood and is set aside{} (the generated site stands); set_design makes a new one", if drop { " and dropped, it no longer builds" } else { "" }));
     }
     Ok(v)
 }
@@ -688,7 +687,7 @@ async fn create_in_building(app: &Shared, a: Value, kind: String) -> Result<Valu
         asked_at = Some(place(app, &a).await?);
     }
     // Everything is checked before anything is stored, and the checks and the write happen under one hold of the gate (as `restore_feature`).
-    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
+    let _hold = if crate::tools::batch::active() { None } else { Some(app.gate.lock().await) };
     let (bid, bname, mid, poly) = host_building(app, rawq).await?;
     if let Some(p) = asked_at
         && !worldgen::town::geom::contains(&poly, p)
@@ -735,7 +734,7 @@ async fn create_in_building(app: &Shared, a: Value, kind: String) -> Result<Valu
         .worker
         .with(move |ex| {
             let (w, t0) = (&ex.world, &ex.t0);
-            let mut v = agent::get(w, t0, &id).ok_or_else(crate::args::read_back("created"))?;
+            let mut v = agent::get(w, t0, &id).ok_or_else(crate::tools::args::read_back("created"))?;
             if let Some(el) = agent::layout_of(w, t0, &id)
                 && let Some(l) = agent::way_down_level(w, t0, &host, el)
             {
