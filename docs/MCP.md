@@ -921,7 +921,7 @@ More: `get {view: "design"}` below.
 
 Example:
 ```json
-{"tool": "edit_town", "arguments": {"id": "city:54167bdf", "relax": true, "dry_run": true}}
+{"tool": "edit_town", "arguments": {"id": "city:54167bdf", "relax": {"at": "city:54167bdf", "radius_ft": 300}, "dry_run": true}}
 ```
 Errors: a town not laid out by hand yet: the first edit lays it out; problems come back as `problems`.
 More: `edit_town` below.
@@ -1752,7 +1752,7 @@ none: if one id is refused nothing changes and the error names it.
 | `x:` | refused: a clear is brought back with `restore` | lifts the clear (the generated objects come back) |
 | `h:`, `i:` | takes a plateau, pit or hill away; hides a generated islet (its watchtower goes too) | an islet comes back (`i:` only) |
 | `e:`, `q:`, `v:`, `j:`, `sk:` | water, a wharf, a crossing, a link, a sketch stroke | deleted for good |
-| `rd: mt: tr: pp: rw: ts:` | a road off the map (a stretch takes its towns' approaches: `also`) | the road back |
+| `rd: mt: tr: pp: rw: ts:` | a road off the map (a stretch takes its towns' approaches: `also`) | the road back; a road drawn by hand (`rw:`) is deleted for good |
 | `fr: fh: f: fg:` | a fence, hedge or gap off | back |
 
 "Deleted for good" is refused (`e:1 can't be restored: water drawn by hand is deleted for good (the app's Undo can
