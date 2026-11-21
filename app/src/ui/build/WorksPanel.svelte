@@ -41,7 +41,7 @@
 
 {#snippet changing()}Changing <b>{worksEditing}</b>{/snippet}
 
-<ToolPanel title={mode === 'castle' ? 'Castle' : 'Wall'} {near} {peek} zoomText="Zoom in to draw." {onZoomIn} changing={worksEditing ? changing : undefined} {onDone}>
+<ToolPanel title={mode === 'castle' ? 'Castle' : 'Wall'} {near} {peek} zoomText="draw" {onZoomIn} changing={worksEditing ? changing : undefined} {onDone}>
   {#if onMode && !worksEditing}
     <div class="ws-seg" role="radiogroup" aria-label="Castle or wall">
       <button class:on={mode === 'castle'} role="radio" aria-checked={mode === 'castle'} onclick={() => mode !== 'castle' && onMode('castle')} title="A castle: its walls, gate, keep and yard (K)"><Icon name="castle" size={16} />Castle</button>

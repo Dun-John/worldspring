@@ -47,7 +47,7 @@
 
 {#snippet changing()}Changing the <b>{crossEditing}</b>{/snippet}
 
-<ToolPanel title="Crossing" {near} {peek} zoomText="Zoom in to put one down." {onZoomIn} changing={crossEditing ? changing : undefined} onRemove={onCrossRemove} {onDone}>
+<ToolPanel title="Crossing" {near} {peek} zoomText="put one down" {onZoomIn} changing={crossEditing ? changing : undefined} onRemove={onCrossRemove} {onDone}>
   <div class="ws-seg" role="radiogroup" aria-label="Crossing">
     {#each KINDS as k (k.key)}
       <button

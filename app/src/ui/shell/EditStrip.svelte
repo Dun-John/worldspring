@@ -1,6 +1,7 @@
 <script lang="ts">
   // Edit's strip under the dock's header, the group row (five things to change) and
   // the tool row of the group shown, then the open tool's one-line hint until it has been used.
+  // A tool that can't be used stays tappable: App's openTool toasts why (the reason in its tooltip too).
   // With Select open the row shows the last group's tools, none lit, each one tap away.
   import Icon from '../Icon.svelte';
   import { EDIT_TOOLS, GROUPS, TOOL, type GroupKey, type ToolKey } from './editTools';
@@ -25,6 +26,14 @@
   $effect(() => {
     if (!selecting) tapped = false;
   });
+  // Phones: once a tool is picked, its group and tool rows fold into one line (the tool's name and a way to
+  // unfold them), so the map keeps the screen; picking another tool folds them again.
+  let expanded = $state(false);
+  $effect(() => {
+    void tool;
+    expanded = false;
+  });
+  const compact = $derived(shell.phone && !!tool && !selecting && !expanded);
   const lit = $derived(selecting && !tapped ? null : shell.group);
   const hint = $derived(tool && !peek && !shell.isUsed(tool) ? TOOL[tool].hint : null);
   const tip = (t: ToolKey) => off[t] ?? `${TOOL[t].label} (${TOOL[t].kbd}): ${TOOL[t].hint}`;
@@ -34,7 +43,12 @@
   }
 </script>
 
-<div class="strip" class:selecting class:idle={selecting && !tapped}>
+<div class="strip" class:selecting class:idle={selecting && !tapped} class:compact>
+  {#if compact && tool}
+    <button class="ws-btn quiet current" onclick={() => (expanded = true)} aria-expanded="false" title="Show the groups and tools">
+      <Icon name={TOOL[tool].icon} size={16} /><b>{TOOL[tool].label}</b><span class="ws-grow"></span><span class="ws-muted">Change tool</span><Icon name="chevron-down" size={16} />
+    </button>
+  {:else}
   <div class="ws-strip groups" role="tablist" aria-label="What to change">
     {#each GROUPS as g (g.key)}
       <button role="tab" aria-selected={lit === g.key} class:has={openGroup === g.key} title={g.label} onclick={() => pick(g.key)}>
@@ -44,11 +58,12 @@
   </div>
   <div class="ws-seg tools" class:idle={selecting && !tapped} role="radiogroup" aria-label={GROUPS.find((g) => g.key === shell.group)?.label}>
     {#each tools as t (t.key)}
-      <button class:on={tool === t.key} aria-pressed={tool === t.key} disabled={!!off[t.key] && tool !== t.key} title={tip(t.key)} onclick={() => onTool(t.key)}>
+      <button class:on={tool === t.key} aria-pressed={tool === t.key} class:off={!!off[t.key] && tool !== t.key} aria-disabled={!!off[t.key] && tool !== t.key} title={tip(t.key)} onclick={() => onTool(t.key)}>
         <Icon name={t.icon} size={16} /><span>{t.short}</span>
       </button>
     {/each}
   </div>
+  {/if}
   {#if hint}<div class="ws-hint line">{hint}</div>{/if}
 </div>
 
@@ -68,6 +83,16 @@
   .groups > button.has:not([aria-selected='true']) {
     color: var(--ink);
     font-weight: bold;
+  }
+  /* Dimmed like a disabled button, but still tappable: it says why (a toast; phones have no hover). */
+  .tools > button.off {
+    opacity: 0.5;
+  }
+  .current {
+    width: calc(100% - 12px);
+    margin: 2px 6px 0;
+    gap: 8px;
+    text-align: left;
   }
   .tools {
     margin: 6px 6px 0;

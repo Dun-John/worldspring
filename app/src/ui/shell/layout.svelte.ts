@@ -84,6 +84,8 @@ class Shell {
   dockLeft = $state(Infinity);
   /** the Edit group whose tools the tool row shows (the open tool's, or the last one picked). */
   group = $state<GroupKey>('settlements');
+  /** How far in the open tool needs the map ("L14 or a battlemap"), for its Zoom in banner; App sets it. */
+  reachWhere: () => string = () => 'a battlemap';
   /** the Edit tool open (App's, worked out from the panels), else null. */
   toolNow: () => ToolKey | null = () => null;
   /** Tools used since their hints were last shown (the rest are read from storage). */

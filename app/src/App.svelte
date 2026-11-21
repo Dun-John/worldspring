@@ -4,6 +4,7 @@
   import type { Conflict, Created, Edits, Feature, NamedPlaces, Npc, Overlay, Plateau, Plot, StreetRequest, Stroke, TownRequest, WorldFile, WorldParams, GenIslet, Thing, Water } from './gen/protocol';
   import { townUnderlay, underlay } from './editor/trace/underlay.svelte';
   import { tracer } from './editor/trace/tracer.svelte';
+  import { BUILD_FT_PER_PX, reachOf, type ReachKind } from './editor/reach';
   import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
@@ -107,7 +108,7 @@
   const progress = $derived(hud?.progress ?? null);
   const status = $derived(hud?.status ?? '');
   /** Close enough to draw buildings. */
-  const near = $derived((hud?.ftPerPx ?? 99) < 2);
+  const near = $derived((hud?.ftPerPx ?? 99) < BUILD_FT_PER_PX);
   const battlemapTier = $derived(hud?.tier === 'Battlemap');
   let bench = $state<BenchResult | null>(null);
   let benchRunning = $state(false);
@@ -1913,6 +1914,24 @@
     toast,
   });
 
+  /** What the open tool needs the map to be (its Zoom in banner, where Zoom in flies, the cursor). */
+  const reachKind = $derived<ReachKind>(groundOn ? (G.ground.mode === 'hill' || G.ground.mode === 'select' ? 'hill' : 'ground') : 'build');
+  function reachNow() {
+    return reachOf(reachKind, view.geom ?? { domain_ft: 1, max_level: 0 }, view.app.renderer.resolution);
+  }
+  shell.reachWhere = () => reachNow().where;
+  function zoomToReach() {
+    const c = hud?.cursor ?? view.cam;
+    const cx = 'cx' in c ? c.cx : c.x;
+    const cy = 'cx' in c ? c.cy : c.y;
+    view.flyTo({ cx, cy, zoom: clampZoom(Math.max(view.cam.zoom, reachNow().zoom)) });
+  }
+  /** The open Edit tool can't act yet (the map is too far out): the pointer says so over the map. */
+  const outOfReach = $derived((buildOn && B.buildMode !== 'select' && !near) || (groundOn && !inside && !G.groundNear));
+  $effect(() => {
+    container?.classList.toggle('ws-noreach', outOfReach);
+  });
+
   // the Edit tool open, worked out from the panels (`ui/shell/editTools.ts`); the
   // tool row follows it to its group.
   const editTool = $derived<ToolKey | null>(
@@ -3180,7 +3199,7 @@
             bind:fence={B.fences.fence}
             bind:harbour={B.harbour}
             harbourPicked={B.harbourPicked}
-            onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 0.5)) })}
+            onZoomIn={zoomToReach}
           >
             {#snippet select()}<SelectPanel sel={Sel} {peek} purpose={Sel.purpose} />{/snippet}
           </BuildPanel>
@@ -3236,7 +3255,7 @@
             {peek}
             onPlateau={(id, p) => G.groundArmed?.change(id, p)}
             onRemove={() => G.groundArmed?.remove()}
-            onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 2)) })}
+            onZoomIn={zoomToReach}
           />
         {:else if scatterOn}
           <ScatterPanel

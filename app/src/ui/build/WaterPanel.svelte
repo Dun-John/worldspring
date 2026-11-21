@@ -37,7 +37,7 @@
 
 {#snippet changing()}Changing <b>{waterPicked?.name || 'this water'}</b>{/snippet}
 
-<ToolPanel title="Water" {near} {peek} zoomText="Zoom in to draw it." {onZoomIn} changing={waterPicked ? changing : undefined} onRemove={onWaterRemove} {onDone}>
+<ToolPanel title="Water" {near} {peek} zoomText="draw it" {onZoomIn} changing={waterPicked ? changing : undefined} onRemove={onWaterRemove} {onDone}>
   {#if !waterPicked}
     <div class="ws-seg" role="radiogroup" aria-label="Shape">
       <button class:on={water.brush} aria-pressed={water.brush} onclick={() => (water = { ...water, brush: true })} title="Paint water along a stroke">Brush</button>

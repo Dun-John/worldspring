@@ -4,6 +4,7 @@
 import { untrack } from 'svelte';
 import type { Edits, Plateau } from '../../gen/protocol';
 import { defaultGround, GroundTool, type GroundSettings } from '../ground';
+import { GROUND_FT_PER_PX, HILL_LEVELS_BELOW_TOP } from '../reach';
 
 /** What the Ground tool needs from the app. */
 export interface GroundHost {
@@ -26,9 +27,9 @@ export function groundTools(host: GroundHost) {
   let groundArmed: GroundTool | null = null;
   /** Hills can be raised on the map's four finest levels too (L11 to L14 on a 1,200-mile world:
    * a mountain miles across is dragged out there), not only on the battlemap. */
-  const hillsNear = $derived(!host.view.interior && (host.hud?.layer.level ?? 0) >= (host.view.geom?.max_level ?? 99) - 3);
-  /** The battlemap is showing (the ground can be shaped), or the map near enough for a hill. */
-  const groundNear = $derived((host.hud?.ftPerPx ?? 99) < 0.7 || (ground.mode === 'hill' && hillsNear));
+  const hillsNear = $derived(!host.view.interior && (host.hud?.layer.level ?? 0) >= (host.view.geom?.max_level ?? 99) - HILL_LEVELS_BELOW_TOP);
+  /** The battlemap is showing (the ground can be shaped), or the map near enough for a hill (Hill, Choose). */
+  const groundNear = $derived((host.hud?.ftPerPx ?? 99) < GROUND_FT_PER_PX || ((ground.mode === 'hill' || ground.mode === 'select') && hillsNear));
   const groundChosen = $derived(groundSel && host.edits.plateaus?.[groundSel] ? { id: groundSel, plateau: host.edits.plateaus[groundSel] } : null);
 
   function armGround() {

@@ -14,7 +14,7 @@
     near: boolean;
     /** Only the strip (the panel is folded down). */
     peek?: boolean;
-    /** What the "Zoom in" line says. */
+    /** What the tool does once close enough (the "Zoom in" line: "Zoom in to L14 or a battlemap to {zoomText}."). */
     zoomText?: string;
     onZoomIn: () => void;
     /** What is being changed (the line's words), else nothing is. */
@@ -39,7 +39,7 @@
     onPlace?: () => void;
   }
 
-  let { title, near, peek = false, zoomText = 'Zoom in to draw.', onZoomIn, changing, onRemove, onDone, children, always, hint, peekHint, more, startOver = false, startExtra, onDrop, quick, place, onPlace }: Props = $props();
+  let { title, near, peek = false, zoomText = 'draw', onZoomIn, changing, onRemove, onDone, children, always, hint, peekHint, more, startOver = false, startExtra, onDrop, quick, place, onPlace }: Props = $props();
 
   const key = $derived(`ws-fold:tool:${shell.toolNow() ?? title}`);
   function readOpen(k: string): boolean {
@@ -71,7 +71,7 @@
 {@render children?.()}
 {#if !near}
   <div class="zoom">
-    <span class="ws-grow">{zoomText}</span>
+    <span class="ws-grow">Zoom in to {shell.reachWhere()} to {zoomText}.</span>
     <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
   </div>
 {/if}

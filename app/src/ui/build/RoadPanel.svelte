@@ -28,7 +28,7 @@
   <div class="ws-hint">Tap its points, then double-tap to end it, or drag it; tap a road to change it.</div>
 {/snippet}
 
-<ToolPanel title="Road" {near} {peek} zoomText="Zoom in to draw it." {onZoomIn} changing={roadPicked ? changing : undefined} onRemove={onRoadRemove} {onDone} peekHint={roadPicked ? undefined : peekHint}>
+<ToolPanel title="Road" {near} {peek} zoomText="draw it" {onZoomIn} changing={roadPicked ? changing : undefined} onRemove={onRoadRemove} {onDone} peekHint={roadPicked ? undefined : peekHint}>
   <div class="ws-seg" role="radiogroup" aria-label="Road">
     {#each PATH_KINDS as k (k.key)}
       <button class:on={roadKind === k.key} aria-pressed={roadKind === k.key} onclick={() => (roadPicked ? onRoadChange({ kind: k.key }) : (road = { ...road, kind: k.key, width: k.width }))}>{k.label}</button>

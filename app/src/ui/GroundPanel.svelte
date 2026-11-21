@@ -33,7 +33,7 @@
     { key: 'smooth', label: 'Smooth', icon: 'relax', kbd: 'E', hint: 'Brush over bumps and steps to ease them toward the ground round them.' },
     { key: 'restore', label: 'Put back', icon: 'reset', kbd: 'R', hint: 'Brush to take brushed changes back toward the ground as generated (plateaus stay).' },
     { key: 'plateau', label: 'Plateau', icon: 'plateau', kbd: 'L', hint: 'Drag a loop round the ground: inside it becomes flat at the level shown. Start on a plateau to extend it.' },
-    { key: 'hill', label: 'Hill', icon: 'mountain', kbd: 'H', hint: 'Drag out from a hill’s middle to its foot (a ridge: along its crest). It rises from the ground with natural slopes to the height below (a big one, miles across, may rise to 2,000 ft). Works on the map’s finer levels too.' },
+    { key: 'hill', label: 'Hill', icon: 'mountain', kbd: 'H', hint: 'Drag out from a hill’s middle to its foot (a ridge: along its crest). It rises from the ground with natural slopes to the height below (a big one, miles across, may rise to 2,000 ft). Works on the map’s finest four levels too.' },
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a plateau, pit or hill to change it, or take it away.' },
   ];
   const PROFILES: { key: HillProfile; label: string; title: string }[] = [
@@ -87,7 +87,7 @@
     <div class="zoom"><span class="ws-grow">Go back out to shape the ground.</span></div>
   {:else if !near}
     <div class="zoom">
-      <span class="ws-grow">Zoom in to the battlemap to shape the ground.</span>
+      <span class="ws-grow">Zoom in to {shell.reachWhere()} to {settings.mode === 'hill' ? 'raise a hill' : settings.mode === 'select' ? 'choose a hill' : 'shape the ground'}.</span>
       <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
     </div>
   {/if}

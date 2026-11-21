@@ -467,3 +467,9 @@ input[type='checkbox'].ws-switch:focus-visible {
   flex: 1;
   min-width: 0;
 }
+
+/* An Edit tool that cannot act at this zoom (App outOfReach). */
+.map.ws-noreach,
+.map.ws-noreach canvas {
+  cursor: not-allowed !important;
+}

@@ -38,7 +38,7 @@
 
 {#snippet changing()}Picked the <b>{harbourPicked}</b>{/snippet}
 
-<ToolPanel title="Harbour" {near} {peek} zoomText="Zoom in to put one down." {onZoomIn} changing={harbourPicked ? changing : undefined} onRemove={onHarbourRemove} {onDone}>
+<ToolPanel title="Harbour" {near} {peek} zoomText="put one down" {onZoomIn} changing={harbourPicked ? changing : undefined} onRemove={onHarbourRemove} {onDone}>
   <div class="ws-seg" role="radiogroup" aria-label="Harbour">
     {#each HARBOUR as h (h.key)}
       <button class:on={harbour.kind === h.key} aria-pressed={harbour.kind === h.key} onclick={() => harbourKind(h.key)} title={h.label}>{h.label}</button>

@@ -26,7 +26,7 @@
   <div class="ws-hint">{fence.mode === 'draw' ? 'Tap its corners, then double-tap to end it, or drag it.' : fence.mode === 'gate' ? 'Tap a fence to put a gate in it.' : 'Drag over a stretch to cut a gap.'}</div>
 {/snippet}
 
-<ToolPanel title="Fence" {near} {peek} zoomText="Zoom in to draw." {onZoomIn} {peekHint}>
+<ToolPanel title="Fence" {near} {peek} zoomText="draw" {onZoomIn} {peekHint}>
   <div class="ws-seg" role="radiogroup" aria-label="What to do">
     {#each MODES as m (m.key)}
       <button class:on={fence.mode === m.key} aria-pressed={fence.mode === m.key} title={m.title} onclick={() => (fence = { ...fence, mode: m.key })}>{m.label}</button>
