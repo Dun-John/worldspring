@@ -17,7 +17,7 @@ fn lives_by_kinds() -> Vec<&'static str> {
 }
 
 pub fn list() -> Vec<Value> {
-    vec![json!({ "name": "create_settlement", "title": "Add a village or town", "description": "Add a village or town without remaking the world, laid out by its generators, joined to the nearest road. By water it stands back from the shore (a third of its radius), its patches following the coast. Refused, saying why, in water, on the shore, crowding a settlement or site, astride a road, on steep ground or over 10 mi from a road. Culture and living, if not given, from the ground. Returns its id (c:...) and get_feature's details; delete_feature takes it away, setting aside its edits.", "inputSchema": schema(json!({
+    vec![json!({ "name": "create_settlement", "title": "Add a village or town", "description": "Add a village or town without remaking the world, laid out by its generators, joined to the nearest road. By water it stands back from the shore (a third of its radius), its patches following the coast. Refused, saying why, in water, on the shore, crowding a settlement or site, astride a road, on steep ground or over 10 mi from a road. Culture and living, if not given, from the ground. Returns its id (c:...) and its details (as get gives them); delete_feature takes it away, setting aside its edits.", "inputSchema": schema(json!({
         "tier": { "type": "string", "enum": CREATED_SETTLEMENTS },
         "at": crate::args::point_schema("Where its centre goes (a place)"),
         "name": { "type": "string", "minLength": 1, "maxLength": worldgen::world::NAME_MAX, "description": "If left out, named in its culture's style" },
@@ -414,7 +414,7 @@ async fn update_culture(app: &Shared, id: String, to: u8) -> Result<Value, Strin
     let (li, generated) = app
         .worker
         .with(move |ex| {
-            let li = agent::layout_of(&ex.world, &ex.t0, &wid).filter(|&li| li < ex.t0.settlements.len()).ok_or_else(|| format!("id: a settlement (a metropolis, city, town or village; search_features finds them), got {wid:?}"))?;
+            let li = agent::layout_of(&ex.world, &ex.t0, &wid).filter(|&li| li < ex.t0.settlements.len()).ok_or_else(|| format!("id: a settlement (a metropolis, city, town or village; search finds them), got {wid:?}"))?;
             Ok((li, ex.t0.settlements[li].culture))
         })
         .await?;

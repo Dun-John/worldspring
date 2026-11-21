@@ -51,7 +51,7 @@ pub fn list() -> Vec<Value> {
     let mut row = crate::build::props();
     if let Some(m) = row.as_object_mut() {
         m.retain(|_, _| false);
-        m.insert("along".into(), json!({ "oneOf": [points_schema(2, 200, "[x_ft, y_ft] ..."), { "type": "string", "description": "rd:... (list_roads)" }], "description": "Points or a road stretch id" }));
+        m.insert("along".into(), json!({ "oneOf": [points_schema(2, 200, "[x_ft, y_ft] ..."), { "type": "string", "description": "rd:... (from list, what roads)" }], "description": "Points or a road stretch id" }));
         m.insert("side".into(), json!({ "type": "string", "enum": ["left", "right", "both"], "default": "both", "description": "Left is [-dy, dx]" }));
         m.insert("depth".into(), json!({ "type": "number", "minimum": placing::DEPTH_RANGE.0, "maximum": placing::DEPTH_RANGE.1, "description": "Lot depth ft (default by the ward)" }));
         m.insert("kinds".into(), json!({ "type": "array", "minItems": 1, "maxItems": 24, "items": { "type": "string" }, "description": "Business or home keys to mix (default the ward's homes, now and then a business)" }));
@@ -147,7 +147,7 @@ async fn stamp(app: &Shared, a: &Value) -> Result<Value, String> {
 async fn road_line(app: &Shared, id: String) -> Result<Vec<[f64; 2]>, String> {
     app.worker
         .with(move |ex| {
-            let i = worldgen::roadids::road_index(&ex.t0, &id).ok_or_else(|| format!("along: no road stretch {id} (list_roads gives the ids)"))?;
+            let i = worldgen::roadids::road_index(&ex.t0, &id).ok_or_else(|| format!("along: no road stretch {id} (list (what roads) gives the ids)"))?;
             Ok(worldgen::roadids::line(&ex.t0.roads.roads[i]))
         })
         .await

@@ -14,9 +14,9 @@ const SNAP_FT: f64 = 60.0;
 
 pub fn list() -> Vec<Value> {
     vec![
-        json!({ "name": "nearest", "title": "Nearest coast, cliff, river, road, flat or highest", "description": "The nearest coast, cliff, river, road or flat ground to a place, or the highest ground, within within_mi (default 5, at most 25): its point, distance, direction and what it is. found is false where there is none; cliff and flat searches are not exhaustive. Thresholds: MCP.md.", "inputSchema": schema(crate::tools::merge(at_props(), json!({
+        json!({ "name": "nearest", "title": "Nearest coast, cliff, river, road, flat or highest", "description": "The nearest coast, cliff, river, road or flat ground to a place, or the highest ground, within radius_ft (default 26,400 = 5 mi, at most 132,000 = 25 mi): its point, distance, direction and what it is. found is false where there is none; cliff and flat searches are not exhaustive. Thresholds: MCP.md.", "inputSchema": schema(crate::tools::merge(at_props(), json!({
             "what": { "type": "string", "enum": ["coast", "cliff", "river", "road", "flat", "highest"] },
-            "within_mi": { "type": "number", "minimum": 0.1, "maximum": NEAREST_MAX_MI, "default": NEAREST_DEFAULT_MI },
+            "radius_ft": { "type": "number", "minimum": 0.1 * MI, "maximum": NEAREST_MAX_MI * MI, "default": NEAREST_DEFAULT_MI * MI },
         })), &["what"]) }),
         json!({ "name": "road_point", "title": "A point along a road", "description": "A point at_mi or fraction along a road: road (an rd: id or a road's name) from one end (from: a place near it; default the first), or from and to along the road route takes. Returns x_ft, y_ft, heading_deg and the stretch there; past the length is refused with it.", "inputSchema": schema(json!({
             "road": { "type": "string", "description": "An rd: id, or the name of a drawn or renamed road" },
@@ -40,13 +40,13 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 async fn nearest(app: &Shared, a: &Value) -> Result<Value, String> {
     let p = place(app, a).await?;
     let what = a["what"].as_str().ok_or_else(|| bad("what", "coast, cliff, river, road, flat or highest", &a["what"]))?.to_string();
-    let mi = a["within_mi"].as_f64().unwrap_or(NEAREST_DEFAULT_MI);
-    if !(0.1..=NEAREST_MAX_MI).contains(&mi) {
-        return Err(bad("within_mi", &format!("0.1 to {NEAREST_MAX_MI} miles"), &a["within_mi"]));
+    let r = a["radius_ft"].as_f64().unwrap_or(NEAREST_DEFAULT_MI * MI);
+    if !(0.1 * MI..=NEAREST_MAX_MI * MI).contains(&r) {
+        return Err(bad("radius_ft", &format!("{} to {} ft", 0.1 * MI, NEAREST_MAX_MI * MI), &a["radius_ft"]));
     }
-    let mut v = app.worker.with_mut(move |ex| geoquery::nearest(ex, p, &what, mi * MI)).await?;
+    let mut v = app.worker.with_mut(move |ex| geoquery::nearest(ex, p, &what, r)).await?;
     v["from"] = json!({ "x_ft": p[0].round(), "y_ft": p[1].round() });
-    v["within_mi"] = json!(mi);
+    v["radius_ft"] = json!(r);
     Ok(v)
 }
 

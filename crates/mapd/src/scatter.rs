@@ -37,7 +37,7 @@ pub fn list() -> Vec<Value> {
     let ids = crate::args::ids_props("id");
     let mut remove = ids.clone();
     if let Some(m) = remove.as_object_mut() {
-        m.insert("points".into(), json!({ "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "kind": kind.clone(), "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["kind", "x_ft", "y_ft"] }, "description": "Generated objects, as get_battlemap lists them" }));
+        m.insert("points".into(), json!({ "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "kind": kind.clone(), "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["kind", "x_ft", "y_ft"] }, "description": "Generated objects, as inspect (what battlemap) lists them" }));
         m.insert("within".into(), within);
         m.insert("kinds".into(), kinds);
     }
@@ -101,7 +101,7 @@ pub(crate) fn kind_of(v: &Value, sprites: &std::collections::BTreeMap<String, Sp
     }
     match sprites.iter().find(|(_, m)| m.name.eq_ignore_ascii_case(s)) {
         Some((id, _)) => Ok(ObjKind::Sprite(format!("s:{id}"))),
-        None => Err(format!("no object kind '{s}' (list_sprites lists them)")),
+        None => Err(format!("no object kind '{s}' (list (what sprites) lists them)")),
     }
 }
 

@@ -27,7 +27,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
             let (q, kind, tag) = (a["query"].as_str().unwrap_or("").to_string(), a["kind"].as_str().map(str::to_string), a["tag"].as_str().map(|t| t.trim().to_string()));
             let narrows = !a["underground_kinds"].is_null() || !a["levels_min"].is_null() || !a["levels_max"].is_null();
             if q.trim().is_empty() && kind.is_none() && tag.is_none() && a["within"].is_null() && a["at"].is_null() && !narrows {
-                return Err(crate::args::bad("query, kind, tag, within, at", "give at least one (world_overview lists the largest places; list_names everything renameable)", &json!({})));
+                return Err(crate::args::bad("query, kind, tag, within, at", "give at least one (world_overview lists the largest places; list (what names) everything renameable)", &json!({})));
             }
             if !a["within"].is_null() && !a["at"].is_null() {
                 return Err("within, at: give one (within takes a circle {at, radius_ft} too)".into());

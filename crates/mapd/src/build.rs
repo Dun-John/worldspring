@@ -160,7 +160,7 @@ pub(crate) fn known_func(f: &str) -> Result<(), String> {
     let keys = worldgen::town::catalog::CATALOG.iter().map(|c| c.key).chain(BUILDING_HOMES);
     let hint = crate::args::suggest(f, keys.clone()).map(|h| format!(" (did you mean {h}?)")).unwrap_or_default();
     let few: Vec<&str> = ["inn", "tavern", "blacksmith", "temple", "castle"].into_iter().chain(BUILDING_HOMES.into_iter().take(3)).collect();
-    Err(format!("func: a business or home such as {}, got {}{hint}; list_names shows the businesses", few.join(", "), json!(f)))
+    Err(format!("func: a business or home such as {}, got {}{hint}; list (what names) shows the businesses", few.join(", "), json!(f)))
 }
 
 /// The `shade` argument: none given, `auto` (`Some(None)`) or a variant 0-4.

@@ -20,7 +20,7 @@ pub async fn line(app: &Shared, a: &Value, c: &mut Created) -> Result<Option<Map
     if a["pts"].is_array() {
         return Err("give the wall's line (pts) or around_patches, not both".into());
     }
-    let patches: Vec<usize> = arr.iter().map(|v| v.as_u64().map(|k| k as usize)).collect::<Option<_>>().ok_or("around_patches: patch numbers (get_town_plan)")?;
+    let patches: Vec<usize> = arr.iter().map(|v| v.as_u64().map(|k| k as usize)).collect::<Option<_>>().ok_or("around_patches: patch numbers (get (view town_plan))")?;
     let sid = a["settlement"].as_str().ok_or("around_patches needs settlement: the town's id")?.to_string();
     let all = a["street_gates"].as_bool().unwrap_or(false);
     let ring = app

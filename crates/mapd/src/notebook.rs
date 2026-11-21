@@ -431,7 +431,7 @@ fn spot(w: &worldgen::world::World, t0: &worldgen::t0::T0, a: &Value, fixed: Opt
                 .filter(|&k| lv.cells[k] == ri as i16)
                 .map(|k| [(k % it.nx) as f64 + 0.5, (k / it.nx) as f64 + 0.5])
                 .min_by(|a, b| d(a).total_cmp(&d(b)))
-                .ok_or_else(|| format!("no such room: {r} (level {l} of {s} has no floor for room {ri}; list_names with inside lists its rooms)"))?;
+                .ok_or_else(|| format!("no such room: {r} (level {l} of {s} has no floor for room {ri}; list (what names) with inside lists its rooms)"))?;
         }
         (site, li, at) = (Some(s.to_string()), Some(l), Some(best));
     } else if let Some(p) = a["at"].as_array() {

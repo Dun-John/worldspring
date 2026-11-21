@@ -54,7 +54,7 @@ pub fn list() -> Vec<Value> {
                     "as_generated": { "type": "boolean" },
                 }, "required": ["patch"] } },
                 "squares": { "type": "array", "items": { "type": "object", "properties": {
-                    "corner": { "type": "integer", "minimum": 0, "description": "A corner where three streets or more meet (junction in get_town_plan)" },
+                    "corner": { "type": "integer", "minimum": 0, "description": "A corner where three streets or more meet (junction in get (view town_plan))" },
                     "kind": { "type": "string", "enum": ([SQUARE_KINDS.as_slice(), &["none", "auto"]].concat()), "description": "The square opened there; none for no square, auto as generated" },
                 }, "required": ["corner", "kind"] } },
                 "walls": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }, walls], "description": "true, false or \"auto\" (as generated), or {built, gates_add, gates_remove (corners), towers_add ([corner, next corner, f 0.05-0.95] or a corner), towers_remove (corner or t:<layout>:<n>)}" },
@@ -181,7 +181,7 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
         let town = id.clone();
         let hand = app.worker.with(move |ex| Ok(agent::layout_of(&ex.world, &ex.t0, &town).is_some_and(|l| worldgen::town::hand::is_hand(&ex.world, l)))).await?;
         if hand {
-            return Err(format!("{id} is laid out by hand: its streets are changed with edit_streets (get_street_plan reads them; edit_streets op back_to_generated returns it to the ward editor)"));
+            return Err(format!("{id} is laid out by hand: its streets are changed with edit_streets (get (view street_plan) reads them; edit_streets op back_to_generated returns it to the ward editor)"));
         }
     }
     let mut req = a.clone();

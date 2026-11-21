@@ -21,6 +21,7 @@ mod handwalls;
 mod mcp;
 mod notebook;
 mod quick;
+mod read;
 mod reads;
 mod scatter;
 mod settlements;

@@ -1,6 +1,6 @@
-//! One vocabulary and argument checks for every tool: old names are folded into the canonical
-//! ones, then the arguments are checked against the tool's own `inputSchema` (the one truth)
-//! before anything runs; and the one place parser (`at`, `near`, `from`, `to`).
+//! Argument checks for every tool: the arguments are checked against the tool's own `inputSchema`
+//! (the one truth; for a tool with views, the view's own) before anything runs; and the one place
+//! parser (`at`, `near`, `from`, `to`).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -9,60 +9,13 @@ use serde_json::{Map, Value, json};
 
 use crate::Shared;
 
-/// Tools that take a place: `at` (an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`), or, as before, `id` or
-/// `x_ft` and `y_ft` beside the other arguments.
-const PLACE_TOOLS: &[&str] = &[
-    "describe_location",
-    "nearest",
-    "features_near",
-    "list_roads",
-    "get_battlemap",
-    "render_view",
-    "focus_view",
-    "create_feature",
-    "create_settlement",
-    "ground_heights",
-    "shape_ground",
-];
-
-/// Old names still accepted: (tool, old, canonical).
-const ALIASES: &[(&str, &str, &str)] = &[
-    ("list_names", "within", "inside"),
-    ("annotate_feature", "text", "notes"),
-    ("update_feature", "text", "notes"),
-    ("create_npc", "text", "notes"),
-    ("update_npc", "text", "notes"),
-    ("create_plot", "notes", "text"),
-    ("update_plot", "notes", "text"),
-    ("upload_sprite", "blocks_move", "blocks_movement"),
-    ("upload_sprite", "size", "size_squares"),
-    ("remove_objects", "area", "within"),
-    ("restore_objects", "area", "within"),
-    ("remove_objects", "at", "points"),
-    ("remove_buildings", "area", "within"),
-    ("set_plateau", "outline", "poly"),
-    ("create_water", "outline", "poly"),
-    ("update_water", "outline", "poly"),
-    ("create_feature", "outline", "poly"),
-    ("create_building", "outline", "poly"),
-    ("update_building", "outline", "poly"),
-    ("check_building_spot", "outline", "poly"),
-    ("create_feature", "path", "pts"),
-    ("update_fortification", "path", "pts"),
-    ("update_fortification", "outline", "poly"),
-];
-
-/// Keys a tool's code reads that its schema doesn't list (tools of files this module's owner
-/// doesn't edit): (tool, key). None are known.
-const EXTRA_KEYS: &[(&str, &str)] = &[];
-
 /// The `at` / point schema: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`.
 pub fn point_schema(description: &str) -> Value {
     // (One compact type: the forms are in the description; `point` says what is wrong with a bad one.)
     json!({ "description": description, "type": ["string", "object", "array"] })
 }
 
-/// The `at` property of the tools in `PLACE_TOOLS`.
+/// The `at` property of the tools that take a place.
 pub fn at_props() -> Value {
     json!({ "at": point_schema("An id, a name, {x_ft, y_ft} or [x_ft, y_ft]") })
 }
@@ -113,22 +66,15 @@ pub fn suggest<'a>(word: &str, names: impl IntoIterator<Item = &'a str>) -> Opti
 /// Each tool's `inputSchema`, by name (from `tools::list`, once).
 fn schemas() -> &'static HashMap<String, Value> {
     static S: OnceLock<HashMap<String, Value>> = OnceLock::new();
-    S.get_or_init(|| {
-        let list = crate::tools::list();
-        // (Tools replaced but still callable by name, unlisted.)
-        let unlisted = crate::paths::unlisted();
-        list.as_array()
-            .into_iter()
-            .flatten()
-            .chain(&unlisted)
-            .filter_map(|t| Some((t["name"].as_str()?.to_string(), t["inputSchema"].clone())))
-            .collect()
-    })
+    S.get_or_init(|| crate::tools::list().as_array().into_iter().flatten().filter_map(|t| Some((t["name"].as_str()?.to_string(), t["inputSchema"].clone()))).collect())
 }
 
-/// A tool's arguments, folded to the canonical names and checked against its schema.
+/// A tool's arguments checked against its schema (for a tool with views, the chosen view's: `read::view_of`).
 pub fn check(tool: &str, args: &Value) -> Result<Value, String> {
     let Some(schema) = schemas().get(tool) else {
+        if let Some(now) = crate::read::moved(tool) {
+            return Err(format!("unknown tool '{tool}': now {now}"));
+        }
         let hint = suggest(tool, schemas().keys().map(String::as_str))
             .map(|s| format!(" (did you mean {s}?)"))
             .unwrap_or_default();
@@ -140,33 +86,23 @@ pub fn check(tool: &str, args: &Value) -> Result<Value, String> {
         v => return Err(bad("arguments", "an object", v)),
     };
     let mut errs = Vec::new();
-    for (t, old, new) in ALIASES {
-        if *t != tool {
-            continue;
-        }
-        if let Some(v) = obj.remove(*old).filter(|v| !v.is_null()) {
-            match obj.get(*new).filter(|n| !n.is_null()) {
-                Some(n) if !same(n, &v) => errs.push(format!("{old} and {new} disagree: give one")),
-                Some(_) => {}
-                None => {
-                    obj.insert((*new).to_string(), v);
-                }
-            }
-        }
-    }
-    if PLACE_TOOLS.contains(&tool) {
-        if let Err(e) = fold_place(&mut obj) {
-            errs.push(e);
-        }
-    }
     if matches!(tool, "create_building" | "update_building" | "check_building_spot") {
         if let Some(Value::String(f)) = obj.get_mut("func") {
             *f = f.trim().to_lowercase();
         }
     }
+    let (schema, picked) = match crate::read::view_of(tool, &mut obj) {
+        None => (schema, None),
+        Some(r) => {
+            let (v, s) = r?;
+            (s, Some(v))
+        }
+    };
     let mut v = Value::Object(obj);
-    let extra: Vec<&str> = EXTRA_KEYS.iter().filter(|(t, _)| *t == tool).map(|(_, k)| *k).collect();
-    walk(schema, &mut v, "", &mut errs, &extra);
+    walk(schema, &mut v, "", &mut errs);
+    if let Some(p) = picked {
+        v[p.field] = json!(p.value);
+    }
     if errs.is_empty() {
         return Ok(v);
     }
@@ -449,13 +385,13 @@ fn items_range(s: &Value) -> Option<String> {
 
 /// Checks `v` against `s`: type, enum, range, items, unknown and missing keys; collects the errors.
 /// Nulls of optional keys are dropped (as if not given) and whole-number floats made integers.
-fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&str]) {
+fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>) {
     let name = if path.is_empty() { "arguments" } else { path };
     if let Some(forms) = s["oneOf"].as_array().or_else(|| s["anyOf"].as_array()) {
         let mut all = Vec::new();
         for f in forms {
             let (mut c, mut e) = (v.clone(), Vec::new());
-            walk(f, &mut c, path, &mut e, &[]);
+            walk(f, &mut c, path, &mut e);
             if e.is_empty() {
                 *v = c;
                 return;
@@ -526,7 +462,7 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
             }
             if s["items"].is_object() {
                 for (i, item) in list.iter_mut().enumerate() {
-                    walk(&s["items"], item, &format!("{path}[{i}]"), errs, &[]);
+                    walk(&s["items"], item, &format!("{path}[{i}]"), errs);
                 }
             }
         }
@@ -535,7 +471,7 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
             let required: Vec<&str> = s["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
             // (A null is as good as left out, except where the schema allows null: `in_building: null` means out.)
             obj.retain(|k, x| !x.is_null() || required.contains(&k.as_str()) || props.get(k).is_some_and(|p| p["type"].as_array().is_some_and(|t| t.iter().any(|t| t == "null"))));
-            let unknown: Vec<String> = obj.keys().filter(|k| !props.contains_key(*k) && !extra.contains(&k.as_str())).cloned().collect();
+            let unknown: Vec<String> = obj.keys().filter(|k| !props.contains_key(*k)).cloned().collect();
             for k in unknown {
                 let hint = suggest(&k, props.keys().map(String::as_str).filter(|p| !obj.contains_key(*p)))
                     .map(|h| format!(" (did you mean {h}?)"))
@@ -549,7 +485,7 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
             }
             for (k, x) in obj.iter_mut() {
                 if let Some(ps) = props.get(k) {
-                    walk(ps, x, &join(path, k), errs, &[]);
+                    walk(ps, x, &join(path, k), errs);
                 }
             }
         }
@@ -567,9 +503,9 @@ pub fn no_such(world: &worldgen::world::World, t0: &worldgen::t0::T0, id: &str) 
     } else if e.plots.contains_key(id) {
         format!("{id} is a plot point, not a place")
     } else if id.starts_with("rd:") {
-        format!("no road stretch {id} (list_roads gives the ids; a stretch whose ends a remake or sketch change moved has a new one)")
+        format!("no road stretch {id} (list (what roads) gives the ids; a stretch whose ends a remake or sketch change moved has a new one)")
     } else if id.starts_with("v:") {
-        format!("no crossing {id} (list_crossings gives the ids)")
+        format!("no crossing {id} (list (what crossings) gives the ids)")
     } else {
         format!("no such feature: {id}")
     }

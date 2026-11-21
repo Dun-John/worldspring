@@ -11,7 +11,7 @@ use crate::tools::{listed, schema, text};
 fn end_schema(description: &str) -> Value {
     json!({ "type": "object", "description": description, "properties": {
         "at": { "type": "string", "description": "A level (l:<site>:<level>, from the bottom), a room (r:<site>:<level>:<room>), or a site: u:/k: (top level), w:<layout>:<sx>:<sy> (sewer section), w:<layout> (a city's sewers: the walkway nearest the other end), b: (cellar)" },
-        "x": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "Square as get_site_design's plan numbers them (a room or site alone: its free square nearest its middle)" },
+        "x": { "type": "integer", "minimum": 0, "maximum": 4095, "description": "Square as the plan from get (view design) numbers them (a room or site alone: its free square nearest its middle)" },
         "y": { "type": "integer", "minimum": 0, "maximum": 4095 },
     }, "required": ["at"] })
 }

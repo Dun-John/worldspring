@@ -87,7 +87,7 @@ fn stroke_props(with_tool: bool) -> Value {
     if with_tool {
         p["tool"] = json!({ "type": "string", "enum": TOOLS, "description": "What the stroke makes (sea is cut out of land; range runs along the line, river down from its first point)" });
     } else {
-        p["id"] = json!({ "type": "string", "description": "The stroke's id (sk:..., from get_sketch)" });
+        p["id"] = json!({ "type": "string", "description": "The stroke's id (sk:..., from list (what sketch))" });
     }
     p
 }
@@ -337,7 +337,7 @@ pub(crate) async fn put_pin(app: &Shared, from: Option<usize>, spot: [f64; 2], f
     let _one = app.gate.lock().await;
     let (hash, file, mut p, _) = state(app)?;
     let at = match from {
-        Some(k) => Some(p.from.iter().position(|f| *f == Some(k)).ok_or("its pin is taken out of the sketch by changes not regenerated yet (get_sketch lists them): put it back, or regenerate first")?),
+        Some(k) => Some(p.from.iter().position(|f| *f == Some(k)).ok_or("its pin is taken out of the sketch by changes not regenerated yet (list (what sketch) lists them): put it back, or regenerate first")?),
         None => p.strokes.iter().zip(&p.from).position(|(s, f)| f.is_none() && s.tool == SketchTool::Pin && s.replaces.is_some() && (s.pts[0][0] - spot[0]).hypot(s.pts[0][1] - spot[1]) < 3.0 * MI),
     };
     let mut s = at.map_or(fresh, |i| p.strokes[i].clone());
@@ -566,8 +566,8 @@ async fn shape(app: &Shared, s: &mut Stroke, tool: &str, a: &Value, wh: [f64; 2]
 
 /// A stroke's place in the sketch by its id (the first, should two be the same).
 fn find(p: &Pending, field: &str, id: &Value) -> Result<usize, String> {
-    let s = id.as_str().ok_or_else(|| bad(field, "a stroke's id (sk:..., from get_sketch)", id))?;
-    p.strokes.iter().position(|x| stroke_id(x) == s).ok_or_else(|| bad(field, "a stroke in the sketch (get_sketch lists them)", id))
+    let s = id.as_str().ok_or_else(|| bad(field, "a stroke's id (sk:..., from list (what sketch))", id))?;
+    p.strokes.iter().position(|x| stroke_id(x) == s).ok_or_else(|| bad(field, "a stroke in the sketch (list (what sketch) lists them)", id))
 }
 
 /// Check the sketch as the generator will (`Sketch::validate`, through `World::new`).

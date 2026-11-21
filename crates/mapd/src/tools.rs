@@ -10,10 +10,10 @@ use worldgen::world::{CREATABLE, Created, CreatedChecks, Edits, Note};
 use crate::Shared;
 
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from the map's top-left corner, x east, y south. \
-Find places with search_features, features_near or world_overview; inspect them with get_feature and list_children. A place (at) is an id, {x_ft, y_ft} or [x_ft, y_ft]. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
-n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, rd: a road stretch, h: a plateau, e: water drawn by hand; get one wrong and search_features finds the right one. \
+Reads: world_overview, search (by name, kind, tag or area; with at alone, what is near), get (one thing by id; view children, design, town_plan, street_plan), list (what: names, roads, objects, ground, npcs...), inspect (a place: what location, battlemap, heights, hex). A place (at) is an id, {x_ft, y_ft} or [x_ft, y_ft]. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
+n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, rd: a road stretch, h: a plateau, e: water drawn by hand; get one wrong and search finds the right one. \
 Edits (rename, annotate, hide, create_feature, create_building, place_crossing, place_objects, shape_ground, set_plateau, create_water, edit_town, set_site_design) are saved and appear live in the open app; \
-many at once go in one batch. Roads and routes: list_roads, route, road_point (name a road by renaming its rd: stretches). Geometry: nearest (coast, cliff, river, road, flat, highest), search_features within an area. Read back hand work: list_objects, list_plateaus, list_waters, list_paths, list_designs. The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
+many at once go in one batch. Roads and routes: list (what roads), route, road_point (name a road by renaming its rd: stretches). Geometry: nearest (coast, cliff, river, road, flat, highest), search within an area. Read back hand work with list (what objects, ground, waters, drawn_roads, designs). The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
 render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: check_building_spot (or a dry_run where a tool has one) before a write; \
 an error means nothing changed, except a save warning (saved: false), which is not to be repeated; the creates are safe to repeat (the same one again returns what is there); \
 deletes come back with restore_feature, restore_objects and restore_building. Lists are cut by limit (found says how many there were). \
@@ -43,20 +43,9 @@ pub(crate) fn merge(a: Value, b: Value) -> Value {
     a
 }
 
-pub fn list() -> Value {
-    let mut v = json!([
-        { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts, businesses and sites underground by name, kind or theme). Give a query, kind, tag, within or at. Returns {items, found}; limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building, underground...)" }, "tag": { "type": "string", "description": "Only features whose notes carry this tag" }, "in_notes": { "type": "boolean", "default": false, "description": "The query also matches notes" }, "within": crate::args::area_light("Only features inside (a point) or overlapping: a box, polygon or circle {at, radius_ft}"), "at": { "type": ["string", "array", "object"], "description": "Only within radius_ft of this place, nearest first" }, "radius_ft": { "type": "number", "default": 26400 }, "underground_kinds": { "type": "array", "items": { "type": "string" }, "description": "dungeon, crypt, catacombs, cave, mine, lava tube, sewer, keep dungeon" }, "levels_min": { "type": "integer" }, "levels_max": { "type": "integer" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: where and what it is, extent, notes, regions, nearby settlements and roads, what it holds (districts, buildings, ways underground, sites, members, levels, rooms), its settlement and site; NPCs and plots there.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses and sites, a building's or site's levels and rooms, a region's settlements and sites. Each list is cut to limit (default 200, max 2000); found gives the full count and truncated is true.", "inputSchema": schema(json!({ "id": { "type": "string" }, "limit": limit_prop(200, 2000) }), &["id"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, with id, kind, current and generated name; with settlement its districts, businesses, towers and sites; with inside (a building or site) its levels and rooms. Returns {items, found}; limit (default 200, max 2000) cuts it.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, city, building, site, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string" }, "function": { "type": "string", "description": "Only businesses of this function (inn, blacksmith...), in a settlement or site" }, "limit": limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, slope_deg, biome (the coarse map's: a dry point can read ocean), water (a river or lake within 1000 ft), coast (the sea within 5 mi), areas, the building, district or site there, named features nearby, nearest settlements, and things: everything within radius_ft, topmost first.", "inputSchema": schema(merge(place_props(), json!({ "radius_ft": { "type": "number", "minimum": 0, "maximum": 500, "default": 15 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first, with distance, direction and extent. Returns {items, found}; limit (default 50) cuts it. kinds limits it; districts and businesses only when asked for or within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 500, "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace).", "inputSchema": schema(json!({ "from": crate::args::point_schema("Where from: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]"), "to": crate::args::point_schema("Where to: an id, a place's name, {x_ft, y_ft} or [x_ft, y_ft]") }), &["from", "to"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_roads", "title": "Roads", "description": "The road network: drawn roads, then stretches between settlements and junctions, with id (rd:), class, length, ends and name. Returns {items, found, named}; limit cuts it. Filter by at and radius_mi, settlement, class or drawn.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 3000, "default": 25 }, "settlement": { "type": "string", "description": "Only roads ending at this settlement" }, "class": { "type": "string", "description": "king's road (also kings road, kings_road), road or track; results say \"king's road\"" }, "drawn": { "type": "boolean", "default": false, "description": "Only roads drawn in the sketch" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, every kind of object with its tactical rules, and the objects near the place by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "minimum": 1, "maximum": 64, "default": 12 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (JPEG 1024x683; width_px 256-1536, format png); needs the app in a visible tab. size_ft is the ground across: ~450 a battlemap, 3000 a village, 20000 a city. An l: or r: id in at shows that level inside (plan, doors, locks, furniture), as does a b:, u: or k: id with level; the map goes back after.", "inputSchema": schema(merge(place_props(), json!({ "level": { "type": "integer", "minimum": 0, "description": "With at b:, u: or k:: show this level inside, 0 the lowest" }, "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 }, "width_px": { "type": "integer", "minimum": 256, "maximum": 1536, "default": 1024, "description": "Pixels across (height 2/3 of it)" }, "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 } })), &[]) },
+/// The entries of the tools this module runs (the feature writes).
+fn own() -> Vec<Value> {
+    let v = json!([
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, site, a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), a road stretch (rd:) or crossing (v:). Empty restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
         { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "remove_tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to take off (notes may be left out when tags or remove_tags is given)" }, "append": { "type": "boolean", "default": false } }), &["id"]) },
         { "name": "create_feature", "title": "Create a site", "description": "Add a site on dry land: ruin (over a dungeon, crypt or catacombs), tower, camp, waystation, cave, mine, lava_tube, entrance (a way down); underground ones take size, levels and theme. Or a castle (poly/rect) or wall (pts or around_patches), drawn not placed; buildings in the way are named (remove_in_way removes them). Returns its id and underground ways.", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
@@ -73,70 +62,178 @@ pub fn list() -> Value {
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
         { "name": "delete_feature", "title": "Delete a created site", "description": "Delete created sites and buildings drawn by hand (id or ids, all or none). Notes, NPCs and plots pointing at them are kept (left_pointing). restore_feature undoes it. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
     ]);
-    if let Some(a) = v.as_array_mut() {
-        a.extend(crate::notebook::list());
-        a.extend(crate::sites::list());
-        a.extend(crate::scatter::list());
-        a.extend(crate::build::list());
-        a.extend(crate::quick::list());
-        a.extend(crate::works::list());
-        a.extend(crate::crossings::list());
-        a.extend(crate::hexes::list());
-        a.extend(crate::links::list());
-        a.extend(crate::ground::list());
-        a.extend(crate::waters::list());
-        a.extend(crate::paths::list());
-        a.extend(crate::fences::list());
-        a.extend(crate::harbour::list());
-        a.extend(crate::design::list());
-        a.extend(crate::reads::list());
-        a.extend(crate::streets::list());
-        a.extend(crate::geo::list());
-        a.extend(crate::towns::list());
-        a.extend(crate::streets_edit::list());
-        a.extend(crate::settlements::list());
-        a.extend(crate::sketch::list());
-        a.extend(crate::batch::list());
-        // Any tool can say which world it means, and has its hints (a tool's own win).
-        for t in a.iter_mut() {
-            let hints = annotations(t["name"].as_str().unwrap_or(""));
-            if !t["annotations"].is_object() {
-                t["annotations"] = json!({});
-            }
-            for (k, v) in hints.as_object().into_iter().flatten() {
-                if t["annotations"].get(k).is_none() {
-                    t["annotations"][k] = v.clone();
-                }
-            }
-            t["inputSchema"]["properties"]["world"] = json!({ "type": "string" });
-        }
-    }
-    v
+    v.as_array().cloned().unwrap_or_default()
 }
 
-/// Tools that only read (or look): `readOnlyHint`.
-const READS: &[&str] = &[
-    "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "list_wharves", "list_objects", "list_plateaus", "list_waters", "list_paths", "list_fences", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_notes", "list_sprites", "check_building_spot", "get_town_plan", "list_streets", "get_sketch", "list_links",
-];
-/// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
-const DESTRUCTIVE: &[&str] = &[
-    "delete_feature", "delete_npc", "delete_plot", "delete_note", "delete_plateau", "delete_water", "remove_paths", "remove_roads", "remove_fences", "remove_wharves", "remove_objects", "remove_buildings", "remove_crossings", "delete_link", "reset_site_design", "set_site_design", "edit_town", "batch",
-];
-/// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
-/// `focus_view` and the creates that return what is already there.
-const IDEMPOTENT: &[&str] = &[
-    "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_building_row", "create_parcel", "update_parcel", "create_npc",
-    "update_npc", "place_npc", "move_note", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "set_hill", "restore_islets", "update_water", "place_path", "raise_islet", "update_fortification", "create_settlement", "update_settlement", "create_sketch_stroke",
+/// Which module runs a tool (`run` matches on it once): `Read` the read tools (`read::call`), the rest a family
+/// module's `call` under the tool's name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Run {
+    Read,
+    Create,
+    Finds,
+    Batch,
+    Notebook,
+    Build,
+    Quick,
+    Works,
+    Sites,
+    Scatter,
+    Hexes,
+    Links,
+    Crossings,
+    Ground,
+    Waters,
+    Paths,
+    Fences,
+    Harbour,
+    Design,
+    Towns,
+    StreetsEdit,
+    Settlements,
+    Sketch,
+    Reads,
+    Streets,
+    Geo,
+}
+
+/// A tool's MCP hints: `Read` reads only; `View` moves the app's view (no change, repeatable); the writes add or
+/// adjust (`Write`), are the same when repeated (`Same`), take work away (`Takes`), or both (`TakesSame`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Hint {
+    Read,
+    View,
+    Write,
+    Same,
+    Takes,
+    TakesSame,
+}
+
+impl Hint {
+    fn annotations(self) -> Value {
+        match self {
+            Hint::Read => json!({ "readOnlyHint": true, "openWorldHint": false }),
+            h => json!({ "readOnlyHint": false, "destructiveHint": matches!(h, Hint::Takes | Hint::TakesSame), "idempotentHint": matches!(h, Hint::View | Hint::Same | Hint::TakesSame), "openWorldHint": false }),
+        }
+    }
+}
+
+/// One tool: its name (as listed and called), the module that runs it, its hints. Its title, description and schema
+/// are the module's (`read::list`, `own`, the family modules' `list`).
+pub(crate) struct Tool {
+    pub name: &'static str,
+    pub run: Run,
+    pub hint: Hint,
+}
+
+const fn t(name: &'static str, run: Run, hint: Hint) -> Tool {
+    Tool { name, run, hint }
+}
+
+/// Every tool, in the order tools/list gives them. The `"tool"` labels of the changes the writes make (sent to the
+/// app, kept in its history: `app/src/sync/history.ts`) are the app's vocabulary and stay as they are whatever a tool
+/// is called here.
+pub(crate) const TOOLS: &[Tool] = &[
+    t("world_overview", Run::Read, Hint::Read),
+    t("search", Run::Read, Hint::Read),
+    t("get", Run::Read, Hint::Read),
+    t("list", Run::Read, Hint::Read),
+    t("inspect", Run::Read, Hint::Read),
+    t("route", Run::Read, Hint::Read),
+    t("nearest", Run::Read, Hint::Read),
+    t("road_point", Run::Read, Hint::Read),
+    t("render_view", Run::Read, Hint::Read),
+    t("focus_view", Run::Read, Hint::View),
+    t("rename_feature", Run::Finds, Hint::Same),
+    t("annotate_feature", Run::Finds, Hint::Write),
+    t("create_feature", Run::Create, Hint::Same),
+    t("update_feature", Run::Finds, Hint::Same),
+    t("hide_feature", Run::Finds, Hint::Same),
+    t("delete_feature", Run::Sites, Hint::Takes),
+    t("create_npc", Run::Notebook, Hint::Same),
+    t("update_npc", Run::Notebook, Hint::Same),
+    t("delete_npc", Run::Notebook, Hint::Takes),
+    t("place_npc", Run::Notebook, Hint::Same),
+    t("create_plot", Run::Notebook, Hint::Same),
+    t("update_plot", Run::Notebook, Hint::Same),
+    t("add_note_at", Run::Notebook, Hint::Write),
+    t("move_note", Run::Notebook, Hint::Same),
+    t("delete_note", Run::Notebook, Hint::Takes),
+    t("delete_plot", Run::Notebook, Hint::Takes),
+    t("restore_feature", Run::Sites, Hint::Same),
+    t("upload_sprite", Run::Scatter, Hint::Write),
+    t("place_objects", Run::Scatter, Hint::Same),
+    t("remove_objects", Run::Scatter, Hint::Takes),
+    t("restore_objects", Run::Scatter, Hint::Same),
+    t("create_building", Run::Build, Hint::Same),
+    t("update_building", Run::Build, Hint::Same),
+    t("check_building_spot", Run::Build, Hint::Read),
+    t("remove_buildings", Run::Build, Hint::Takes),
+    t("restore_building", Run::Build, Hint::Same),
+    t("place_stamp", Run::Quick, Hint::Write),
+    t("create_building_row", Run::Quick, Hint::Same),
+    t("create_parcel", Run::Quick, Hint::Same),
+    t("update_parcel", Run::Quick, Hint::Same),
+    t("update_fortification", Run::Works, Hint::Same),
+    t("place_crossing", Run::Crossings, Hint::Write),
+    t("remove_crossings", Run::Crossings, Hint::Takes),
+    t("set_hex_grid", Run::Hexes, Hint::Write),
+    t("create_link", Run::Links, Hint::Write),
+    t("delete_link", Run::Links, Hint::Takes),
+    t("shape_ground", Run::Ground, Hint::Write),
+    t("set_plateau", Run::Ground, Hint::Same),
+    t("set_hill", Run::Ground, Hint::Same),
+    t("delete_plateau", Run::Ground, Hint::Takes),
+    t("restore_islets", Run::Ground, Hint::Same),
+    t("create_water", Run::Waters, Hint::Write),
+    t("update_water", Run::Waters, Hint::Same),
+    t("delete_water", Run::Waters, Hint::Takes),
+    t("place_path", Run::Paths, Hint::Same),
+    t("remove_roads", Run::Paths, Hint::Takes),
+    t("place_fence", Run::Fences, Hint::Write),
+    t("remove_fences", Run::Fences, Hint::Takes),
+    t("raise_islet", Run::Harbour, Hint::Same),
+    t("place_wharf", Run::Harbour, Hint::Write),
+    t("remove_wharves", Run::Harbour, Hint::Takes),
+    t("set_site_design", Run::Design, Hint::TakesSame),
+    t("reset_site_design", Run::Design, Hint::TakesSame),
+    t("edit_town", Run::Towns, Hint::Takes),
+    t("edit_streets", Run::StreetsEdit, Hint::Write),
+    t("create_settlement", Run::Settlements, Hint::Same),
+    t("update_settlement", Run::Settlements, Hint::Same),
+    t("create_sketch_stroke", Run::Sketch, Hint::Same),
+    t("update_sketch_stroke", Run::Sketch, Hint::Write),
+    t("delete_sketch_stroke", Run::Sketch, Hint::Takes),
+    t("regenerate", Run::Sketch, Hint::Takes),
+    t("batch", Run::Batch, Hint::Takes),
 ];
 
-/// A tool's hints by name, one table for every tool (so a tool in any module gets them): reads say `readOnlyHint` and
-/// `openWorldHint: false`; writes also `destructiveHint` and `idempotentHint`.
-pub(crate) fn annotations(name: &str) -> Value {
-    if READS.contains(&name) {
-        return json!({ "readOnlyHint": true, "openWorldHint": false });
+/// The tool called `name`.
+pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
+    TOOLS.iter().find(|t| t.name == name)
+}
+
+/// tools/list: each tool's entry from its module, with its hints and the optional `world` every tool takes.
+pub fn list() -> Value {
+    let mut all = crate::read::list();
+    all.extend(own());
+    for m in [
+        crate::notebook::list(), crate::sites::list(), crate::scatter::list(), crate::build::list(), crate::quick::list(), crate::works::list(), crate::crossings::list(),
+        crate::hexes::list(), crate::links::list(), crate::ground::list(), crate::waters::list(), crate::paths::list(), crate::fences::list(), crate::harbour::list(),
+        crate::design::list(), crate::towns::list(), crate::streets_edit::list(), crate::settlements::list(), crate::sketch::list(), crate::batch::list(),
+    ] {
+        all.extend(m);
     }
-    json!({ "readOnlyHint": false, "destructiveHint": DESTRUCTIVE.contains(&name), "idempotentHint": IDEMPOTENT.contains(&name), "openWorldHint": false })
+    let out: Vec<Value> = TOOLS
+        .iter()
+        .map(|row| {
+            let mut t = all.iter().find(|t| t["name"] == row.name).cloned().unwrap_or_else(|| panic!("no entry for tool {}", row.name));
+            t["annotations"] = row.hint.annotations();
+            t["inputSchema"]["properties"]["world"] = json!({ "type": "string" });
+            t
+        })
+        .collect();
+    json!(out)
 }
 
 pub(crate) fn text(v: Value) -> Vec<Value> {
@@ -211,7 +308,7 @@ pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
 /// A write that went through while the world could not be saved says so (`saved: false`, once, even where
 /// the tool's own reply was built after the save): an error would invite a repeat of a change that stands.
 fn unsaved_note(app: &Shared, name: &str, r: Result<Vec<Value>, String>, changed: bool) -> Result<Vec<Value>, String> {
-    let write = !READS.contains(&name) && name != "focus_view";
+    let write = tool(name).is_some_and(|t| !matches!(t.hint, Hint::Read | Hint::View));
     if !write || !changed || crate::batch::active() || !app.unsaved.load(std::sync::atomic::Ordering::Relaxed) {
         return r;
     }
@@ -228,82 +325,41 @@ fn unsaved_note(app: &Shared, name: &str, r: Result<Vec<Value>, String>, changed
 }
 
 async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, String> {
-    if let Some(r) = crate::batch::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::notebook::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::build::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::quick::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::works::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::sites::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::scatter::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::hexes::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::links::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::crossings::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::ground::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::waters::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::paths::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::fences::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::harbour::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::design::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::towns::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::streets_edit::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::reads::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::streets::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::geo::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::settlements::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::sketch::call(app, name, &a).await {
-        return r;
-    }
-    if let Some(r) = crate::finds::call(app, name, &a).await {
-        return r;
-    }
-    match name {
-        "create_feature" => create(app, a).await.map(text),
-        _ => Err(format!("unknown tool: {name}")),
-    }
+    let row = tool(name).ok_or_else(|| format!("unknown tool: {name}"))?;
+    run(app, row.run, name, &a).await
+}
+
+/// Runs the handler `name` of `run` (a tool, or a read view's handler: `read::VIEWS`).
+pub(crate) async fn run(app: &Shared, run: Run, name: &str, a: &Value) -> Result<Vec<Value>, String> {
+    let r = match run {
+        Run::Read => return Box::pin(crate::read::call(app, name, a)).await,
+        Run::Create => return create(app, a.clone()).await.map(text),
+        Run::Finds => crate::finds::call(app, name, a).await,
+        Run::Batch => crate::batch::call(app, name, a).await,
+        Run::Notebook => crate::notebook::call(app, name, a).await,
+        Run::Build => crate::build::call(app, name, a).await,
+        Run::Quick => crate::quick::call(app, name, a).await,
+        Run::Works => crate::works::call(app, name, a).await,
+        Run::Sites => crate::sites::call(app, name, a).await,
+        Run::Scatter => crate::scatter::call(app, name, a).await,
+        Run::Hexes => crate::hexes::call(app, name, a).await,
+        Run::Links => crate::links::call(app, name, a).await,
+        Run::Crossings => crate::crossings::call(app, name, a).await,
+        Run::Ground => crate::ground::call(app, name, a).await,
+        Run::Waters => crate::waters::call(app, name, a).await,
+        Run::Paths => crate::paths::call(app, name, a).await,
+        Run::Fences => crate::fences::call(app, name, a).await,
+        Run::Harbour => crate::harbour::call(app, name, a).await,
+        Run::Design => crate::design::call(app, name, a).await,
+        Run::Towns => crate::towns::call(app, name, a).await,
+        Run::StreetsEdit => crate::streets_edit::call(app, name, a).await,
+        Run::Settlements => crate::settlements::call(app, name, a).await,
+        Run::Sketch => crate::sketch::call(app, name, a).await,
+        Run::Reads => crate::reads::call(app, name, a).await,
+        Run::Streets => crate::streets::call(app, name, a).await,
+        Run::Geo => crate::geo::call(app, name, a).await,
+    };
+    r.unwrap_or_else(|| Err(format!("unknown tool: {name}")))
 }
 
 /// The reply for an id that gave nothing: what it was deleted with (a deleted site), else `other`.
@@ -480,7 +536,7 @@ async fn host_building(app: &Shared, rawq: String) -> Result<(String, String, [f
                 return Err(n);
             }
             let Some((li, bi)) = worldgen::sitelinks::parse_building(&id).filter(|(li, _)| *li < worldgen::town::layout_count(t0)) else {
-                return Err(format!("in_building: {rawq} is no building id (b:<layout>:<n>; list_children of a settlement lists them)"));
+                return Err(format!("in_building: {rawq} is no building id (b:<layout>:<n>; get (view children) of a settlement lists them)"));
             };
             let l = worldgen::town::layout(w, t0, li);
             let Some(b) = l.building(bi) else {

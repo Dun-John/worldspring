@@ -35,28 +35,33 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 
 - **Coordinates** are in feet from the map's top-left corner: `x_ft` runs east and `y_ft` runs south. One mile is
   5,280 ft; one battlemap square is 5 ft.
-- **One vocabulary:** the same thing has the same name in every tool (table below). Old names still work (they are
-  accepted, never returned, and not in the tool schemas). Give a new name and its old one with different values and the
-  call is refused (`blocks_move and blocks_movement disagree: give one`); the same value twice is fine.
+- **One vocabulary:** the same thing has the same name in every tool (table below), and only that name: any other is
+  an unknown argument (with a did-you-mean). A tool that is gone answers with what does its work now
+  (`unknown tool 'list_roads': now list {what: "roads"}`).
+- **Reads:** `search`, `get`, `list` and `inspect` (with `world_overview`, `route`, `nearest`, `road_point`, and the
+  views `render_view` and `focus_view`). `get` (`view`: `details`, the default, `children`, `design`, `town_plan`,
+  `street_plan`), `list` (`what`, required) and `inspect` (`what`: `location`, the default, `battlemap`, `heights`,
+  `hex`) each check their arguments against the chosen view's own: an argument of another view is refused naming it
+  (`what 'sprites' takes limit; not settlement`). The schema's `view` / `what` description lists which arguments go
+  with which.
 - **Arguments are checked before anything runs**, for every tool and every `batch` step, against the tool's own
   schema: unknown arguments, types (an integer is a whole number; `"10"` is not a number), `enum` values,
   `minimum`/`maximum`, list sizes and required fields. `null` for an optional argument counts as not given (one exception: `update_feature` `in_building: null` takes an entrance out of its building; `create_feature` `in_building: null` is not given). A
   refusal says which field and what was wrong, up to five at once, with the item's index in lists, and suggests a
   near name when there is one:
   `radius_squares: 1 to 64, got 200` · `hidden: true or false, got "yes"` ·
-  `radius: unknown argument (did you mean radius_mi?)` · `kind: one of city, town, ..., got "citty" (did you mean city?)` ·
-  `unknown tool 'serch_features' (did you mean search_features?)`.
+  `radius: unknown argument (did you mean radius_ft?)` · `kind: one of city, town, ..., got "citty" (did you mean city?)` ·
+  `unknown tool 'serch' (did you mean search?)`.
   A number out of range is refused, never clamped; the ranges and defaults are in the schemas (`minimum`, `maximum`,
   `default`): every range and default below is the schema's. A tool's rules that a schema can't say (one of several fields needed, a polygon that crosses itself)
   are worded the same way: `field: rule, got X`.
 - **Places:** `at` is a place: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`. Other points (`near`, `from`, `to`) take the
-  same three forms. Refused: a point off the map (0 ≤ x < width and 0 ≤ y < height, the same for every tool; the message gives the map's size), `at` together with `id`,
-  `x_ft` or `y_ft` (the same place twice is fine), only one of `x_ft`/`y_ft`, an id that names nothing. A tool whose
-  `id` is not its subject also takes the old `id`, or `x_ft` and `y_ft`, beside its other arguments.
+  same three forms. Refused: a point off the map (0 ≤ x < width and 0 ≤ y < height, the same for every tool; the message gives the map's size),
+  an id that names nothing.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
-  says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`). Every list tool has a
-  `limit` (defaults: `list_names`, `list_children`, `list_sprites`, `list_crossings`, `list_wharves` and `list_objects` 200, `list_npcs`,
-  `list_plots`, `list_plateaus`, `list_designs` and `list_streets` 100, `search_features` 25, `features_near` and `list_roads` 50; `list_children` cuts each of its lists
+  says a limit cut the list; a tool's other fields stay beside them (`named` in `list {what: "roads"}`). Every list tool has a
+  `limit` (defaults: `list {what: "names"}`, `get {view: "children"}`, `list {what: "sprites"}`, `list {what: "crossings"}`, `list {what: "wharves"}` and `list {what: "objects"}` 200, `list {what: "npcs"}`,
+  `list {what: "plots"}`, `list {what: "ground"}`, `list {what: "designs"}` and `list {what: "streets"}` 100, `search` 25, `search` and `list {what: "roads"}` 50; `get {view: "children"}` cuts each of its lists
   and gives the full counts in `found`). A `limit` out of range is refused. Results are compact JSON (no
   indentation), and `render_view` sends a JPEG of 1,024 px unless asked for more.
 - **Safe to repeat:** a create that is asked for again with the same arguments adds nothing and returns what is already
@@ -80,35 +85,35 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 - **Moves are reported:** a tool that puts something elsewhere than asked (a site pushed off a river onto dry land, a
   footprint snapped to the grid, an entrance moved into or out of a building) says so when it is more than 5 ft: `moved: {x_ft, y_ft, ft, why}`.
 
-| What | Name | Also accepted | Tools |
+| What | Name | Notes | Tools |
 |---|---|---|---|
-| A point | `at`: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | `id` (where it is not the tool's subject), `x_ft` + `y_ft` | `describe_location`, `features_near`, `list_roads`, `get_battlemap`, `render_view`, `focus_view`, `create_feature`, `ground_heights`, `shape_ground` |
+| A point | `at`: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | | `inspect`, `search`, `list {what: "roads"}`, `inspect {what: "battlemap"}`, `render_view`, `focus_view`, `create_feature`, `inspect {what: "heights"}`, `shape_ground` |
 | Other points | `near` (`create_building`), `from`/`to` (`route`, `place_crossing`): the same three forms | | |
-| Generated objects to take away | `points` `[{kind, x_ft, y_ft}, ...]` | `at` (a list here only) | `remove_objects` |
+| Generated objects to take away | `points` `[{kind, x_ft, y_ft}, ...]` | | `remove_objects` |
 | An NPC's place | `location` (an id) and/or a point | `at` (an id is the `location`, a point is `x_ft`/`y_ft`) | `create_npc`, `place_npc` |
-| An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects`, `list_streets` (`get_town_plan`: a box) |
-| Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
-| A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` and `update_fortification` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
-| A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `place_wharf`, `create_feature` (wall), `update_fortification` |
+| An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `list` roads and fences: a circle | `remove_buildings`, `remove_objects`, `restore_objects`, `list {what: "streets"}` (`get {view: "town_plan"}`: a box) |
+| Inside a building or site | `inside`: its id | | `list {what: "names"}` |
+| A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` and `update_fortification` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
+| A line | `path` `[[x, y], ...]` | walls take `pts` | `shape_ground`, `place_wharf`, `create_feature` (wall), `update_fortification` |
 | Rock and water | `radius_ft`, `rise_ft` (an islet's top over the water), `lighthouse` (a breakwater's), `shops` (a bridge's: `true` or `{depth_ft, frontage_ft, lane_ft, vary}`) | | `raise_islet`, `place_wharf`, `place_crossing` |
 | One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `restore_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
-| Notes | `notes` on features and NPCs, `text` on plot points | the other one | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
-| A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `blocks_move`, `cover` 0 to 3, `size` | `upload_sprite` |
+| Notes | `notes` on features and NPCs, `text` on plot points | | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
+| A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `cover` 0 to 3 too | `upload_sprite` |
 | Units | `_ft` feet, `_mi` miles, `_squares` squares, `_deg` degrees, in every name that carries one | | |
 | Dry runs | `dry_run`, only where a tool lists it; elsewhere it is an unknown argument | | `set_site_design`, `edit_town` |
-| Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings`, `list_objects`, `list_plateaus`, `list_designs`, `list_streets` |
+| Lists returned | `{items, found}` (+ `truncated`) | | `search`, `list {what: "names"}`, `list {what: "roads"}`, `list {what: "npcs"}`, `list {what: "plots"}`, `list {what: "sprites"}` (each item says `uploaded`), `list {what: "crossings"}`, `list {what: "objects"}`, `list {what: "ground"}`, `list {what: "designs"}`, `list {what: "streets"}` |
 | Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building` (a crossing's ends are never moved; `check_building_spot`'s `nearest_clear` is a suggestion, flat `{x_ft, y_ft, ft, poly}`, not a `moved`) |
 
 - **Names** in results already include renames, and search matches them. Hidden features are left out of search
   unless you ask for them.
-- **Extents:** search results, `get_feature` and `features_near` give each place's `extent`: `bbox_ft` (`[x0, y0,
+- **Extents:** search results, `get` and `search` give each place's `extent`: `bbox_ft` (`[x0, y0,
   x1, y1]`) with `area_sq_mi`, or a river's `length_mi`. Settlements' and sites' areas are their built-up circle; a building drawn by hand has its footprint's box.
 - **Sites in settlements:** a site (created, drawn by hand or generated) is *in* a settlement when its point stands
   within the settlement's holding radius: its built-up area and its outer districts (1.4 built-up radii for a
   village, 2.15 for a town and up). When several hold it, the nearest for its size wins. A wall or castle has one
-  settlement, from its point. Such a site is listed under the settlement (`get_feature` `sites`, `list_children`,
-  `list_names`), and the settlement's NPCs and plots include those at the site.
-- **`settlement` and `site`:** `get_feature` on a site, or on anything inside a settlement's or site's layout
+  settlement, from its point. Such a site is listed under the settlement (`get` `sites`, `get {view: "children"}`,
+  `list {what: "names"}`), and the settlement's NPCs and plots include those at the site.
+- **`settlement` and `site`:** `get` on a site, or on anything inside a settlement's or site's layout
   (building, district, tower, underground site, level, room), gives `settlement`: the town it is in, `{id, name}`,
   or `null` when it stands in none. Inside a site's layout it also gives `site`: `{id, name}` (for levels and rooms,
   `site` is the building's or site's id).
@@ -116,7 +121,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   another world open (the user opened a different one in the app), the call is refused and nothing happens. Pass it in
   long scripted sessions.
 - **An error means nothing changed**, with one exception: a write that went through but could not be saved to disk is
-  a success carrying `saved: false` and a `warning` (don't repeat it). Before a write, `search_features` finds the id
+  a success carrying `saved: false` and a `warning` (don't repeat it). Before a write, `search` finds the id
   of a name you were not sure of, `check_building_spot` and a `dry_run` (where a tool has one) try it without
   keeping it.
 - **Undo:** the user has Undo in the app for each edit. For an agent, deletes come back with `restore_feature`
@@ -133,12 +138,12 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `b:<layout>:<i>` | `b:0:57` | A building in a settlement or site |
 | `d:<layout>:<q>` | `d:0:3` | A district |
 | `t:<layout>:<k>` | `t:0:2` | A wall tower |
-| `rd:<8 hex>` | `rd:c3517b52` | A road stretch (between settlements and junctions, as `list_roads` lists them). Made from its two ends (rounded to 10 ft, either way round; stretches with the same ends told apart by length, so two such twins may swap ids if a sketch change alters one's length), so it stays the same across every edit that leaves the roads as generated (renames, notes, sites, buildings, objects, crossings, town edits); a remake of the world, or a sketch change that moves one of its ends, gives it a new id. Renamed and annotated like a feature |
+| `rd:<8 hex>` | `rd:c3517b52` | A road stretch (between settlements and junctions, as `list {what: "roads"}` lists them). Made from its two ends (rounded to 10 ft, either way round; stretches with the same ends told apart by length, so two such twins may swap ids if a sketch change alters one's length), so it stays the same across every edit that leaves the roads as generated (renames, notes, sites, buildings, objects, crossings, town edits); a remake of the world, or a sketch change that moves one of its ends, gives it a new id. Renamed and annotated like a feature |
 | `v:<id>` | `v:zbfopudy` | A crossing put down by hand (bridge, ford, ferry): renamed and annotated like a feature |
-| `j:<id>` | `j:ohffcybs` | A link put down by hand: a way from a square below ground to another (`create_link`); `get_feature` gives its ends and `problems` |
+| `j:<id>` | `j:ohffcybs` | A link put down by hand: a way from a square below ground to another (`create_link`); `get` gives its ends and `problems` |
 | `sq:<layout>:…` | `sq:0:p0`, `sq:0:20` | A town's square or park: `p<patch>` on a patch, `<corner>` where streets meet, `g<building>` a palace's garden, `r<road>` a cemetery by a road out |
 | `gt:<layout>:<corner>` | `gt:0:243` | A gate in a town's wall (while the town is walled) |
-| `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get_town_plan` |
+| `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get {view: "town_plan"}` |
 | `u:<layout>:<k>` | `u:312:0` | An underground site: dungeon, crypt, cave, mine or lava tube |
 | `w:<layout>:<sx>:<sy>` | `w:0:2:1` | A sewer section |
 | `k:<layout>:…` | | A keep's dungeon |
@@ -164,7 +169,7 @@ settlement from where it stands (its cell, or where its pin was drawn), one of t
 place. When the world is remade (its sketch redrawn), their buildings, interiors, sewers and sites underground are
 generated the same as long as their roads and rivers are, though their layout numbers move when the world has
 more or fewer places before them, and the ids inside them with them (`b:`, `u:`, `w:`, `l:`, `r:`). Look a place up
-again with `get_feature`.
+again with `get`.
 
 When the app remakes a world, the changes stored under layout-local ids (names, notes and hidden marks on
 buildings, districts, rooms and levels; designed dungeons and interiors; building changes; towns laid out anew;
@@ -193,8 +198,8 @@ move to `gone:<n>:<id>` (its name kept under that id in `renames`), and its layo
 | Nature | `continent`, `island`, `ocean`, `sea`, `bay`, `range`, `peak`, `pass`, `volcano`, `river`, `lake`, `waterfall` |
 | Roads | drawn and named in the sketch only: `road` (its `detail` is its class: king's road, road or track) |
 | Regions | `forest`, `jungle`, `taiga`, `desert`, `swamp`, `plains`, `tundra`, `glacier`, `salt_flat`; painted in the sketch only: `blight` (blighted woods), `ashlands`; drawn in the sketch only: `region` |
-| Inside settlements | `district`, `building`, `tower`, `underground`, and the sites standing in it as `site` (in `list_names`) |
-| Inside buildings and sites | `level`, `room` (in `list_names`) |
+| Inside settlements | `district`, `building`, `tower`, `underground`, and the sites standing in it as `site` (in `list {what: "names"}`) |
+| Inside buildings and sites | `level`, `room` (in `list {what: "names"}`) |
 
 ---
 
@@ -231,13 +236,13 @@ A summary of the world:
 ```
 > *"Give me an overview of this world."* · *"Which are the five biggest cities?"*
 
-### `search_features`
+### `search`
 Searches by name, as the places are named now (renames included). From three letters, it also finds districts and
 named businesses (inns, temples, smithies…) and wall or gate towers that have been renamed; road stretches that have been
 renamed (kind `road`, as the roads drawn in the sketch) and crossings put down by hand that have a name (kind `crossing`).
 One of `query`, `kind`, `tag` or `within` must be given (nothing at all is refused); a `kind` nothing has is refused with a "did
 you mean" and the kinds there are. A district, building or tower says its `settlement` as `{id, name}` (and its
-`site`, in a site's layout), as `get_feature` does. A building drawn by hand shows the ward of its own little layout
+`site`, in a site's layout), as `get` does. A building drawn by hand shows the ward of its own little layout
 (`village`), not the one it stands in. Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has its `extent`.
 
 **Sites underground** (kind `underground`, after the places): ways down in towns and ruins and under created sites (`u:`),
@@ -262,7 +267,7 @@ later searches reuse the index).
 | `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, `tower`, … |
 | `tag` | string | none | Only features whose notes carry this tag (any case): the DM's `hook`, `secret`… |
 | `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name); needs a `query`. |
-| `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list_objects`). Hits come nearest the area's middle first. Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters (an empty `kind: building` or `district` search without one says so in `note`). A circle's `radius_ft` must be more than 0. |
+| `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list {what: "objects"}`). Hits come nearest the area's middle first. Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters (an empty `kind: building` or `district` search without one says so in `note`). A circle's `radius_ft` must be more than 0. |
 | `at` | place | none | Only features within `radius_ft` of this place (an id, `{x_ft, y_ft}` or `[x, y]`), nearest first: a circle `within`. Not with `within`. |
 | `radius_ft` | number | 26400 | With `at` (5 mi); more than 0. |
 | `underground_kinds` | array of strings | none | Only sites underground of these kinds: `dungeon`, `crypt`, `catacombs`, `cave`, `mine`, `lava tube`, `sewer`, `keep dungeon` (keys with `_` too). Lists only sites underground. |
@@ -272,18 +277,18 @@ later searches reuse the index).
 | `include_hidden` | boolean | false | Also return hidden features. |
 
 ```json
-{ "name": "search_features", "arguments": { "query": "crypts", "at": "city:bab44567", "radius_ft": 100000 } }
-{ "name": "search_features", "arguments": { "underground_kinds": ["cave", "mine"], "levels_min": 3 } }
-{ "name": "search_features", "arguments": { "query": "gate" } }
-{ "name": "search_features", "arguments": { "query": "", "kind": "volcano" } }
-{ "name": "search_features", "arguments": { "query": "Prancing", "kind": "building" } }
-{ "name": "search_features", "arguments": { "tag": "hook" } }
-{ "name": "search_features", "arguments": { "query": "cult", "in_notes": true } }
-{ "name": "search_features", "arguments": { "kind": "ruin", "within": { "at": "city:bab44567", "radius_ft": 150000 } } }
+{ "name": "search", "arguments": { "query": "crypts", "at": "city:bab44567", "radius_ft": 100000 } }
+{ "name": "search", "arguments": { "underground_kinds": ["cave", "mine"], "levels_min": 3 } }
+{ "name": "search", "arguments": { "query": "gate" } }
+{ "name": "search", "arguments": { "query": "", "kind": "volcano" } }
+{ "name": "search", "arguments": { "query": "Prancing", "kind": "building" } }
+{ "name": "search", "arguments": { "tag": "hook" } }
+{ "name": "search", "arguments": { "query": "cult", "in_notes": true } }
+{ "name": "search", "arguments": { "kind": "ruin", "within": { "at": "city:bab44567", "radius_ft": 150000 } } }
 ```
 > *"Find every inn called something with 'Pony'."* · *"List all the volcanoes."* · *"Is there a town named Wolfbarrow?"*
 
-### `get_feature`
+### `get`
 One feature in detail. What comes back depends on the feature:
 
 | For | Fields |
@@ -297,7 +302,7 @@ One feature in detail. What comes back depends on the feature:
 | Anything in a layout | `settlement` (and in a site's layout `site`): see Conventions. A building drawn by hand (`b:<layout>:0`) used to give its own site as `settlement`; it now gives the town it stands in (or `null`), and its site as `site` |
 | Places with NPCs or plots | `npcs`, `plots`: those at the place, at anything in its layout, at their levels and rooms; for a settlement also at its sites |
 | A building drawn by hand | `notes`, `hidden`, `npcs` and `plots` are the same under its `c:` id and its building id |
-| A road stretch (`rd:`) | `kind: "road"`, `class`, `length_mi`, `from`/`to` (as `list_roads`), `name` (renamed, or the drawn road's; else `null`), `renamed: true`, `drawn_road` `{id, name}` when it is a piece of a road drawn in the sketch, `line` (at most 40 points, ft), position halfway along, `notes`, `hidden`, `nearest_settlements` |
+| A road stretch (`rd:`) | `kind: "road"`, `class`, `length_mi`, `from`/`to` (as `list {what: "roads"}`), `name` (renamed, or the drawn road's; else `null`), `renamed: true`, `drawn_road` `{id, name}` when it is a piece of a road drawn in the sketch, `line` (at most 40 points, ft), position halfway along, `notes`, `hidden`, `nearest_settlements` |
 | A crossing (`v:`) | `kind: "crossing"`, `crossing` (bridge, ford, ferry), ends, width, length, `material`, `name` (as given, else `Timber bridge`, `Stone bridge`, `Ford`, `Ferry`), `generated`, `notes`, `river` (as `place_crossing` gives it) |
 
 | Parameter | Type | | |
@@ -305,12 +310,12 @@ One feature in detail. What comes back depends on the feature:
 | `id` | string | required | |
 
 ```json
-{ "name": "get_feature", "arguments": { "id": "metropolis:6eee9055" } }
-{ "name": "get_feature", "arguments": { "id": "c:2" } }
+{ "name": "get", "arguments": { "id": "metropolis:6eee9055" } }
+{ "name": "get", "arguments": { "id": "c:2" } }
 ```
 > *"Tell me everything about Agentholm."* · *"Which roads leave Gatewatch, and how long are they?"*
 
-### `list_children`
+### `get {view: "children"}`
 What a feature contains:
 
 | Feature | Children |
@@ -327,24 +332,24 @@ What a feature contains:
 | `limit` | integer | 200 | 1 to 2000; each list is cut to it (`found` has the full counts of those cut, `truncated: true`). |
 
 ```json
-{ "name": "list_children", "arguments": { "id": "city:bab44567" } }
-{ "name": "list_children", "arguments": { "id": "u:312:0" } }
+{ "name": "get", "arguments": { "view": "children", "id": "city:bab44567" } }
+{ "name": "get", "arguments": { "view": "children", "id": "u:312:0" } }
 ```
 > *"What shops are in the market district?"* · *"Walk me through the dungeon under the Sunken Bastion, level by level."*
 
-### `list_names`
+### `list {what: "names"}`
 Everything that can be renamed, with ids to pass to `rename_feature`. Each entry has `id`, `kind`, `name` (as
 renamed), `generated` (the name before renames), `x_ft`/`y_ft` where it has a spot, `enter: true` for buildings and
 sites with levels, and `hidden: true` for hidden features. Returns `{items, found}`. A `kind` nothing has is refused
 with a "did you mean" and the kinds there are (`kind: no names of kind "sitee"; did you mean "site"?`). Road stretches
-are listed only once renamed (kind `road`; `list_roads` gives every stretch's id); crossings put down by hand are all
+are listed only once renamed (kind `road`; `list {what: "roads"}` gives every stretch's id); crossings put down by hand are all
 listed (kind `crossing`).
 
 | Parameter | Type | | |
 |---|---|---|---|
 | `kind` | string | optional | Only this kind: `river`, `range`, `city`… or `district`, `building`, `tower`, `underground`, `site`, `level`, `room`. |
 | `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). For a settlement, also the buildings drawn in it (as `b:<layout>:0`: businesses with their `function`, homes as `house`) and every site in it (kind `site`, by the site's own id). |
-| `inside` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). (`within` is accepted too.) |
+| `inside` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). |
 | `function` | string | optional | Only businesses of this function, by `create_building`'s `func` keys (`inn`, `blacksmith`, `temple`…); needs `settlement`. Each building entry also says its `function`. An unknown one is refused with a "did you mean". |
 | `limit` | integer | 200 | 1 to 2000 (`truncated: true` when it cut the list). |
 
@@ -352,15 +357,15 @@ Without `settlement` or `inside` it lists every named feature: oceans, seas, riv
 and created sites.
 
 ```json
-{ "name": "list_names", "arguments": { "kind": "river" } }
-{ "name": "list_names", "arguments": { "settlement": "city:bab44567", "kind": "district" } }
-{ "name": "list_names", "arguments": { "inside": "u:312:0" } }
+{ "name": "list", "arguments": { "what": "names", "kind": "river" } }
+{ "name": "list", "arguments": { "what": "names", "settlement": "city:bab44567", "kind": "district" } }
+{ "name": "list", "arguments": { "what": "names", "inside": "u:312:0" } }
 ```
 > *"Give every room in the crypt under the Sunken Bastion a proper name."* · *"Which rivers have I renamed?"*
 
-### `describe_location`
+### `inspect`
 What is at a point:
-- `elevation_ft` and `under_water`: the 5-ft square at the point as the battlemap draws it (shaped by hand included; `ground_heights` has the squares round it), and the biome. `biome` is the coarse map's and `elevation_ft` / `under_water` the battlemap's, so a dry point near the sea can read `biome: ocean`;
+- `elevation_ft` and `under_water`: the 5-ft square at the point as the battlemap draws it (shaped by hand included; `inspect {what: "heights"}` has the squares round it), and the biome. `biome` is the coarse map's and `elevation_ft` / `under_water` the battlemap's, so a dry point near the sea can read `biome: ocean`;
 - `in`: the areas it lies in, largest first (continent or island, sea, range, forest, lake…);
 - the building, district or site there (a building's `district` is its name as renamed, `district_id` its id; a
   building of a site standing in a settlement, such as one drawn by hand, has the settlement's district there);
@@ -390,29 +395,30 @@ What is at a point:
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
 | `radius_ft` | number, 0 to 500 | default 15 | how far `things` reaches |
 
 ```json
-{ "name": "describe_location", "arguments": { "x_ft": 2310194, "y_ft": 4127619 } }
+{ "name": "inspect", "arguments": { "at": [2310194, 4127619] } }
 ```
 > *"What's at 437 miles east, 781 miles south?"* · *"What's right around the Ruins of Neling?"*
 
-### `features_near`
-Everything named within a radius of a place, nearest first. Distances are to each feature's nearest edge or
+### `search` round a place
+With `at` and none of `query`, `kind`, `tag`, `in_notes`, `within`, `underground_kinds`, `levels_min` or `levels_max`:
+everything named within `radius_ft` of a place, nearest first. Distances are to each feature's nearest edge or
 course (0, direction `here`, inside an area). Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has `distance_mi`, `direction` and `extent`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
-| `radius_mi` | number | 5 | 0.01 to 500 |
-| `kinds` | string array | all | Only these kinds. Districts and businesses come when `kinds` names `district` or `building`, or with no `kinds` within a mile. |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
+| `radius_ft` | number | 26,400 (5 mi) | 50 to 2,640,000 |
+| `kinds` | string array | all | Only these kinds (only here: a search by query takes `kind`). Districts and businesses come when `kinds` names `district` or `building`, or with no `kinds` within a mile. |
 | `limit` | integer | 50 | 1 to 500 |
 | `include_hidden` | boolean | false | |
 
 ```json
-{ "name": "features_near", "arguments": { "x_ft": 2310194, "y_ft": 4127619, "radius_mi": 15, "kinds": ["river", "lake"] } }
-{ "name": "features_near", "arguments": { "id": "city:bab44567", "radius_mi": 0.5, "kinds": ["building"] } }
+{ "name": "search", "arguments": { "at": [2310194, 4127619], "radius_ft": 79200, "kinds": ["river", "lake"] } }
+{ "name": "search", "arguments": { "at": "city:bab44567", "radius_ft": 2640, "kinds": ["building"] } }
 ```
 > *"Which rivers and lakes are within 15 miles of here?"* · *"What's the lake just north of the capital called?"*
 
@@ -438,10 +444,10 @@ The distance between two places:
 > *"How many days does it take to ride from Agentholm to Geirgai at a fast pace?"* · *"What's the route from Gatewatch to the capital, and which towns does it pass?"*
 
 ### `nearest`
-The nearest coast, cliff, river, road or flat ground, or the highest ground, to a place, within `within_mi` miles (default 5, at most 25): a
+The nearest coast, cliff, river, road or flat ground, or the highest ground, to a place, within `radius_ft` (default 26,400 = 5 mi, at most 132,000 = 25 mi): a
 bounded search, never a scan of the whole map. Returns `{what, found, x_ft, y_ft, distance_ft, distance_mi, direction}`
 and, by what, one more; `found: false` (not an error) where there is none within the distance. Coast, cliff and flat
-are answered on the battlemap's own ground (the refined terrain tiles; 5-ft squares as `ground_heights` reads them,
+are answered on the battlemap's own ground (the refined terrain tiles; 5-ft squares as `inspect {what: "heights"}` reads them,
 shaped by hand included): the world's coarse grid (one cell is about 1.2 miles on a 1,200-mile map) only says where to
 look. A first call in a new area takes up to about 0.3 s (the tiles are made), a second one there a few ms. Rivers and
 roads are found on their own lines. Definitions (defined once, `worldgen/src/geoquery.rs`):
@@ -449,7 +455,7 @@ roads are found on their own lines. Definitions (defined once, `worldgen/src/geo
   samples 80 ft apart about the point and about the coarse coast (out to 3 cells from it, as far as the coarse coast can
   be off on a steep coast), then placed on the squares. The point is the last dry square, with the sea's squares beside
   it (a river or lake square is never the coast point). `shore` is `cliff` where the land stands 15 ft or more above the water within 20 ft of it, else `beach`; `rise_ft`
-  is that height, `inland_ft` the highest within 100 ft. Lakes are not coasts (`describe_location`'s `water` has them).
+  is that height, `inland_ft` the highest within 100 ft. Lakes are not coasts (`inspect`'s `water` has them).
 - `cliff`: a drop of 15 ft or more within 20 ft on the squares (about 37 degrees or steeper; the top dry, the foot at its
   ground or at the water over it). Looked for in the coarse cells steeper than 12 degrees within reach (the two nearest
   and the two steepest, scanned on samples 40 ft apart) and along hand-made plateaus (`set_plateau`), then measured on
@@ -466,7 +472,7 @@ roads are found on their own lines. Definitions (defined once, `worldgen/src/geo
   cells gentle with their four neighbours, nearest first, after the tops of hand-made plateaus and the middles of hand-brushed blocks; at most 12 are measured on the squares (the search is not exhaustive: the `note` of a `found: false` says how many were, or that no gentle ground was in reach to measure). The whole patch must be on the map. `slope_deg` is the
   patch's mean slope, `elevation_ft` its middle's. Distance 0 where the point is on one; where the candidates measured
   are all rougher, `found: false` with a `note` saying how rough.
-- `highest`: the highest dry ground within `within_mi` of the place: the ten highest coarse cells in reach are scanned on samples
+- `highest`: the highest dry ground within `radius_ft` of the place: the ten highest coarse cells in reach are scanned on samples
   80 ft apart, the highest few (and the point itself, hand-made plateaus and brushed blocks) measured on the squares. Returns the
   top's point, `elevation_ft` above the sea and `rise_ft` above the place (0 where the place is the highest). A first call in a
   new area is a fraction of a second, a second one there a few ms.
@@ -475,12 +481,12 @@ roads are found on their own lines. Definitions (defined once, `worldgen/src/geo
 |---|---|---|---|
 | `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
 | `what` | string | required | `coast`, `cliff`, `river`, `road`, `flat` or `highest` |
-| `within_mi` | number | 5 | 0.1 to 25 |
+| `radius_ft` | number | 26,400 | 528 to 132,000 |
 
 ```json
-{ "name": "nearest", "arguments": { "at": "city:bab44567", "what": "coast", "within_mi": 25 } }
+{ "name": "nearest", "arguments": { "at": "city:bab44567", "what": "coast", "radius_ft": 132000 } }
 { "name": "nearest", "arguments": { "at": [2310194, 4127619], "what": "flat" } }
-{ "name": "nearest", "arguments": { "at": "city:bab44567", "what": "highest", "within_mi": 2 } }
+{ "name": "nearest", "arguments": { "at": "city:bab44567", "what": "highest", "radius_ft": 10560 } }
 ```
 > *"How far is the nearest cliff from the keep?"* · *"Where is the closest flat ground to build a camp?"*
 
@@ -491,8 +497,8 @@ optionally `from`, or `from` and `to` for the road path `route` takes between th
 the start) or `fraction` (0 to 1), one of the two. With `road`, the start is the road's first end, or the end nearer
 `from` (a place near one end; a name works as in `route`, and is echoed as `from_place`). Returns `x_ft`, `y_ft`,
 `heading_deg` (the way it runs there, clockwise from north: 90 is east), `at_mi`, `fraction`, `stretch` (`{id, class, name?,
-from, to, length_mi}`: the stretch there with its ends, as `list_roads`) and `road` (`{name?, length_mi, stretches, from,
-to}`). Lengths are the stretches' own (`list_roads`' `length_mi`, chord lengths: a long stretch's line drifts some way
+from, to, length_mi}`: the stretch there with its ends, as `list {what: "roads"}`) and `road` (`{name?, length_mi, stretches, from,
+to}`). Lengths are the stretches' own (`list {what: "roads"}`' `length_mi`, chord lengths: a long stretch's line drifts some way
 off the drawn road); the point is then moved onto the road as the battlemap carves it, within 60 ft
 (`moved_onto_road_ft` says how far), or carries a `note` where no carved road is that near. A point
 past the road's length is refused, saying the length. A name for several separate roads is refused, listing a stretch of
@@ -513,7 +519,7 @@ each; no road by that name is refused with a did-you-mean; a `route` with no roa
 ```
 > *"Put a waystation 12 miles down the Trade Way from the capital."* · *"Where is the midpoint of the road between these towns?"*
 
-### `list_roads`
+### `list {what: "roads"}`
 The road network:
 - `named`: the roads drawn and named in the world's sketch, each with its id, name, class, length, the
   settlements along it, in order, and its `stretches` (`rd:` ids); then the stretches renamed alike, one entry per
@@ -527,23 +533,22 @@ The road network:
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | none | Only roads within `radius_mi` of this place. |
-| `radius_mi` | number | 25 | 0.01 to 3000 |
+| `within` | a circle `{at, radius_ft}` | none | Only roads near it (`radius_ft` up to 15,840,000). |
 | `settlement` | id string | none | Only roads ending at this settlement. |
 | `class` | `king's road` (also `kings road`, `kings_road`), `road` or `track` | all | Results always say `king's road`. |
 | `drawn` | boolean | false | Only roads drawn in the sketch. |
 | `limit` | integer | 50 | 1 to 1000 |
 
 ```json
-{ "name": "list_roads", "arguments": { "settlement": "city:bab44567" } }
-{ "name": "list_roads", "arguments": { "drawn": true } }
-{ "name": "list_roads", "arguments": { "x_ft": 2310194, "y_ft": 4127619, "radius_mi": 40, "class": "kings_road" } }
+{ "name": "list", "arguments": { "what": "roads", "settlement": "city:bab44567" } }
+{ "name": "list", "arguments": { "what": "roads", "drawn": true } }
+{ "name": "list", "arguments": { "what": "roads", "within": { "at": [2310194, 4127619], "radius_ft": 211200 }, "class": "kings_road" } }
 ```
 > *"Which roads leave Bladegarden, and where do they go?"* · *"Which towns does the Gilded Roadway pass through?"*
 
 **Naming a road.** A road across country is several stretches. To name the High Road from one city to another:
 `route` between them, then one `rename_feature` per `rd:` id in `by_road.stretches` (in one `batch`), all with the
-same name. `list_roads` then gives it as one entry in `named`, `route` says it `follows` it, and search finds its
+same name. `list {what: "roads"}` then gives it as one entry in `named`, `route` says it `follows` it, and search finds its
 stretches. `name: ""` takes a stretch's name off again. Renaming one stretch of a named road over MCP splits it
 (the app renames all of its stretches together): to rename a whole road, use the batch above with every stretch. Only roads someone named carry a name; nothing is generated.
 
@@ -553,14 +558,14 @@ stretches. `name: ""` takes a stretch's name off again. Renaming one stretch of 
   { "tool": "rename_feature", "arguments": { "id": "rd:28a39f0b", "name": "The High Road" } } ] } }
 ```
 
-### `get_battlemap`
+### `inspect {what: "battlemap"}`
 The 640-ft battlemap chunk (128 × 128 five-foot squares) that contains a place, for running a fight there. It
 lists:
 - the elevation range, surfaces and buildings (`stairs`: a flight of steps on a steep city street, paved, walkable,
   no movement cost; also where ground shaped by hand makes a city street climb steeply; `gravel`: a park's paths);
 - each kind of object in the chunk, with its 5e rules: cover, whether it blocks movement or sight, difficult
   terrain, hazards and their effects;
-- the objects within `radius_squares` of the place (placed objects are read within the one chunk only; `list_objects`
+- the objects within `radius_squares` of the place (placed objects are read within the one chunk only; `list {what: "objects"}`
   lists every one in the world), by grid square (`near_focus`), each with its centre
   (`x_ft`, `y_ft`) and either its `id` (put down by hand: `place_objects` moves or turns it, `remove_objects`
   takes it; `rot_deg` when it was given a turn) or its built-in `kind` (generated: `remove_objects` takes it by
@@ -569,11 +574,11 @@ lists:
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
 | `radius_squares` | number | 12 | 1 to 64 |
 
 ```json
-{ "name": "get_battlemap", "arguments": { "id": "c:2", "radius_squares": 20 } }
+{ "name": "inspect", "arguments": { "what": "battlemap", "at": "c:2", "radius_squares": 20 } }
 ```
 > *"Set up an ambush at the Sunken Bastion: where's the cover, and are there any hazards?"* · *"What terrain is on the bridge outside Gatewatch?"*
 
@@ -591,7 +596,7 @@ few seconds and ask again, or try a larger `size_ft`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
 | `size_ft` | number | 3000 | The ground across the image (50 to 5,000,000). |
 | `level` | integer | none | With `at` a building or site id (`b:`, `u:`, `k:`): its inside on this level, counted from the bottom. An `l:` or `r:` id in `at` shows that level of its site (floor plan, doors, locks, furniture) with no `level` needed; the map goes back as it was. |
 | `width_px` | integer | 1024 | Pixels across, 256 to 1536; the height is two thirds of it. |
@@ -608,8 +613,8 @@ What each `size_ft` shows:
 | ~5,000,000 | The whole continent |
 
 ```json
-{ "name": "render_view", "arguments": { "id": "c:2", "size_ft": 400 } }
-{ "name": "render_view", "arguments": { "id": "range:e48b3d59", "size_ft": 200000 } }
+{ "name": "render_view", "arguments": { "at": "c:2", "size_ft": 400 } }
+{ "name": "render_view", "arguments": { "at": "range:e48b3d59", "size_ft": 200000 } }
 ```
 > *"Show me the battlemap at the ruin."* · *"What does the land around the Katsei Mountains look like?"*
 
@@ -618,11 +623,11 @@ Flies your map view to a place. You see it happen.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
 | `size_ft` | number | 3000 | How much ground fits on screen (50 to 5,000,000). |
 
 ```json
-{ "name": "focus_view", "arguments": { "id": "city:bab44567", "size_ft": 20000 } }
+{ "name": "focus_view", "arguments": { "at": "city:bab44567", "size_ft": 20000 } }
 ```
 > *"Take me to Gatewatch."* · *"Show me where the party is: the crossroads south of Bulol."*
 
@@ -661,8 +666,8 @@ app as one notice. If a step fails, nothing is changed, and the error names the 
 
 ### `rename_feature`
 Renames anything with a name: a feature, building, district, tower, underground site, a site's level (`l:`) or
-room (`r:`), a road stretch (`rd:`, ids from `list_roads` or `route`), a crossing put down by hand (`v:`), a city's whole sewers (`w:<layout>`) or one 480-ft section of them (`w:<layout>:<sx>:<sy>`), or a plateau (`h:`; its name shows in `list_plateaus`). Use
-`list_names` for the ids. The app shows the new names everywhere, including the level list and
+room (`r:`), a road stretch (`rd:`, ids from `list {what: "roads"}` or `route`), a crossing put down by hand (`v:`), a city's whole sewers (`w:<layout>`) or one 480-ft section of them (`w:<layout>:<sx>:<sy>`), or a plateau (`h:`; its name shows in `list {what: "ground"}`). Use
+`list {what: "names"}` for the ids. The app shows the new names everywhere, including the level list and
 the room labels inside. A building drawn by hand is one place, whether it is named by its `c:` id or its
 building id (`b:<layout>:0`): one name, one note (kept under `c:`) and one hidden mark.
 
@@ -688,7 +693,7 @@ section (`w:<layout>:<sx>:<sy>`); `hide_feature` refuses them.
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `id` | string | required | |
-| `notes` | string | one of `notes`, `tags`, `remove_tags` | (`text` is accepted too.) Left out, the notes stay as they are; the reply echoes `notes`. |
+| `notes` | string | one of `notes`, `tags`, `remove_tags` | Left out, the notes stay as they are; the reply echoes `notes`. |
 | `tags` | string[] | none | Added to the existing tags. `[]` alone (no notes, no non-empty `remove_tags`) is refused: "at least 1 item". |
 | `remove_tags` | string[] | none | Taken off; one that is not there is fine. The reply's `removed_tags` says which were, and `tags` what is left. (`update_feature` with `tags: []` clears them all.) |
 | `append` | boolean | false | Add to the existing notes instead of replacing them. |
@@ -736,7 +741,7 @@ battlemap chunk). When that moves it more than 5 ft the result says so: `moved: 
 
 An entrance with `in_building` goes down from the cellar of a roofed building that has one (not a ruin, an open structure or a yurt): the cellar gets the stairs or trapdoor, the dungeon below them the way back up, and the surface shows no opening. The dungeon takes the entrance's name. One building has one entrance of each kind beneath. A building with a hand-drawn design that has no cellar level or no free square on it is refused (`set_site_design`: add a cellar or free a square), nothing changed. The reply's `in_building` has `cellar_level` (the id of the level with the stairs), and `moved` when `at` was given and is not the building's middle. A name another feature already has is made anyway, with a `note` (`another "X" exists: c:14`). Asking again for the same building and kind is that entrance (`existing: true`). `update_feature` moves an
 entrance into a building, or out, keeping its ids.
-`get_feature` of a created site lists its `underground` ids; of an entrance in a building, `in_building` (`{id, name}` (the name as `get_feature` gives the building, kept after it is taken away), with `standing: false` and a note
+`get` of a created site lists its `underground` ids; of an entrance in a building, `in_building` (`{id, name}` (the name as `get` gives the building, kept after it is taken away), with `standing: false` and a note
 when the building is gone, ruined or has no cellar: the entrance then opens on the ground) and `way`; of a building, its `underground` ids. A change that
 takes a building away or leaves it without a cellar (`remove_buildings`, `delete_feature` of a drawn one, `update_building` with `structure: ruin`) lists
 the entrances that stood in it as `entrances_out: [{id, name, now}]`; restoring the building brings the way down back.
@@ -813,8 +818,8 @@ trees. Buildings can be drawn in it (`create_building`): the castle's own yard b
 walls do not). With
 `structure: "ruin"` the walls are broken, some towers fallen and every building a roofless shell.
 
-The keep and the yard's buildings are the castle's pieces (`b:<layout>:<id>`, as `get_feature`, `search_features`
-and `get_battlemap` give them): `update_building` changes one as it changes a town's building (`func`, `name`,
+The keep and the yard's buildings are the castle's pieces (`b:<layout>:<id>`, as `get`, `search`
+and `inspect {what: "battlemap"}` give them): `update_building` changes one as it changes a town's building (`func`, `name`,
 `floors`, `roof`, `tint`, `material`, `shape`, `shade`, `structure`; not its footprint, which is the castle's),
 `remove_buildings` takes a yard building away and `restore_building` puts a piece back as built. `keep_func` and
 `keep_name` on `create_feature` or `update_fortification` are the short form for the keep (`auto` and `""` put them
@@ -840,7 +845,7 @@ builds its own walls (stone, towers, gatehouses and merlons by its culture and w
 it is broken (a tower on each bank); an open wall in the water is refused, a closed one is broken there.
 
 Or a ring round patches of a town's plan: `settlement` (the town's id) and `around_patches` (patch numbers from
-`get_town_plan`) in place of `pts`. Its line is the outer edge of those patches, which is the middle of the street
+`get {view: "town_plan"}`) in place of `pts`. Its line is the outer edge of those patches, which is the middle of the street
 round them: a lane inside the wall and one outside, the blocks untouched (where one district's lots run across a
 patch edge with no street, those buildings are in its way: `sides_without_street` in the refusal). Patches the set
 encloses are inside it (`enclosed_patches`). It is refused for patches in more than one piece (naming the pieces),
@@ -891,7 +896,7 @@ building drawn by hand takes either id, as in `rename_feature` and `annotate_fea
 |---|---|---|---|
 | `id` | string | required | |
 | `name` | string | optional | |
-| `notes` | string | optional | Replaces the notes text. (`text` is accepted too.) |
+| `notes` | string | optional | Replaces the notes text. |
 | `tags` | string[] | optional | Replaces the tags; `[]` clears them. |
 | `in_building` | string or null | optional | An entrance made with `create_feature` only: a building's id (`b:<layout>:<n>`, or the `c:` id of a drawn one) moves it into that building's cellar, its point the building's middle, by the checks and refusals of `create_feature` `in_building`. `null` takes it back out, to `at` if given, else the nearest clear spot just outside the building. Its ids (`c:<n>`, `u:<layout>:0`) stay, so NPCs, plots, notes and renames still point at it. |
 | `way` | string | optional | `stairs` or `trapdoor`: with `in_building`, or alone for an entrance already in a building. |
@@ -907,7 +912,7 @@ are refused. A design drawn by hand for the site underground (`set_site_design`)
 
 ### `hide_feature`
 Hides a feature from the map's labels and from search, or shows it again. It still exists, and
-`search_features` with `include_hidden` finds it. A building drawn by hand is hidden by either id (the mark is
+`search` with `include_hidden` finds it. A building drawn by hand is hidden by either id (the mark is
 kept under its `c:` id), and its business pin is hidden with it.
 A district the ward plan left with no patch can be hidden too (it sits at the town's middle).
 
@@ -926,8 +931,8 @@ A district the ward plan left with no patch can be hidden too (it sits at the to
 Deletes created sites (`c:<n>`: ruins, towers, camps, castles, walls...) and buildings drawn by hand: `id` or `ids`, all or none in one change. A building drawn by hand goes by either of
 its ids (`c:<n>` or `b:<layout>:0`). Generated features can't be deleted, only hidden; the world's own buildings go
 with `remove_buildings`. The ids are retired and never reused: the site's `b:`, `d:`, `u:` and other layout ids stop
-answering (`get_feature` says `b:320:0 was deleted with c:2 (restore_feature brings it back)`), and searches, lists and
-`describe_location` skip it. What pointed at it is kept as it is, and listed per site in `left_pointing` (only what
+answering (`get` says `b:320:0 was deleted with c:2 (restore_feature brings it back)`), and searches, lists and
+`inspect` skip it. What pointed at it is kept as it is, and listed per site in `left_pointing` (only what
 applies): `npcs`, `plots` (ids), `notes: true`, `design: true`, `renames` (a count). Deleting a deleted site is
 refused (`c:11 is already deleted (restore_feature brings it back)`).
 
@@ -946,7 +951,7 @@ Brings back sites deleted with `delete_feature`: `id` or `ids` (`c:<n>`, or a dr
 none, one change). The ids answer again, with the NPCs, plots, notes, design and renames that still pointed at them.
 Refused when the spot is taken now, by the checks a new one of that kind meets (`b:… can't be restored, its place is
 taken: that overlaps …`; for a castle or wall, the world's own buildings in its way are named), or when the site is
-not deleted. Returns the site as `get_feature` does (a building with its `building` id); several return
+not deleted. Returns the site as `get` does (a building with its `building` id); several return
 `{ids, restored: [sites]}`.
 
 ```json
@@ -959,8 +964,8 @@ Adds a village or town without remaking the world. It is laid out by the world's
 (streets, buildings, businesses, districts, battlemaps, interiors), its size drawn from its id, and joined to the
 nearest road as the world's own are (a village by a track running in through its middle, a town by a road to its
 edge). Nothing else in the world changes: other settlements, sites, roads and terrain stay as they were. The result
-is `get_feature`'s details with the new `c:<n>` id, plus `culture`, `lives_by`, `population` and `track_ft` (the
-link's length). Its buildings take the world's building tools (`b:<layout>:<id>`), and `get_town_plan`/`edit_town` take a
+is `get`'s details with the new `c:<n>` id, plus `culture`, `lives_by`, `population` and `track_ft` (the
+link's length). Its buildings take the world's building tools (`b:<layout>:<id>`), and `get {view: "town_plan"}`/`edit_town` take a
 town.
 
 By a sea or lake a village or town stands back from the shore, its centre about a third of its built-up radius
@@ -980,7 +985,7 @@ its culture or its name at once. A city, a capital, a port or a fishing village 
 | Parameter | Type | | |
 |---|---|---|---|
 | `tier` | string | required | `village` or `town`. |
-| `at` | a place | required | Where its centre goes: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]` (the old `id`, or `x_ft` + `y_ft`, still work). |
+| `at` | a place | required | Where its centre goes: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`. |
 | `name` | string | optional | If left out, it is named in its culture's style. |
 | `culture` | integer | optional | Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 open steppe. Default: the nearest settlement's. |
 | `lives_by` | string | optional | `river`, `mining`, `fortress`, `market`, `farming`, `lumber`, `herding` or `oasis`. Default: from its ground. |
@@ -1005,14 +1010,14 @@ Changes a settlement's tier, what it lives by, whether it is the realm's capital
   placed there) are set aside: they stay in the file and resolve nowhere (`set_aside` counts them, `set_aside_by` by
   field). Changed back, it is laid out as generated again (what was set aside stays aside). For one of the world's
   own, give `culture` on its own (tier, lives_by, capital and name go through a pin and `regenerate`); for one added
-  by hand, with any of the others. The result gives `culture` and `from` (names), `feature` (`get_feature`'s details:
+  by hand, with any of the others. The result gives `culture` and `from` (names), `feature` (`get`'s details:
   `layout.culture`), `pending: false`; asked again, `unchanged: true`.
 
 - **A village or town added by hand** (`c:...`) changes at once, with no remake: a village becomes a town or the
   other way, or it lives by something else (inland kinds only). It is laid out anew, so the changes made inside it
   (buildings, its town plan) are set aside (`set_aside` counts them), as `delete_feature` sets them aside; its name,
   notes, NPCs and plot points stay on it. A city or metropolis, the capital, a port or a fishing village is refused,
-  saying how: `delete_feature` it, put a settlement pin there and `regenerate`. The result is `get_feature`'s details
+  saying how: `delete_feature` it, put a settlement pin there and `regenerate`. The result is `get`'s details
   as `create_settlement` gives them.
 - **One of the world's own** changes through a settlement pin in its place in the sketch (`replaces`: the tier it
   was placed at). The pin is stored at once and the result says `pending: true`; `regenerate` (or `regenerate: true`
@@ -1022,7 +1027,7 @@ Changes a settlement's tier, what it lives by, whether it is the realm's capital
   its new id when its tier changes: `now` with `regenerate: true`, or `made` in `regenerate`'s result). It is laid out
   anew, so the changes made inside it are set aside. Its population is drawn in its tier's range. Its name stays as it
   is unless `name` is given, and a name given in a pin wins over a rename. A settlement made by a pin already has
-  that pin changed. Asking again changes the same pin. `get_sketch` lists the pin with the settlement's id
+  that pin changed. Asking again changes the same pin. `list {what: "sketch"}` lists the pin with the settlement's id
   (`settlement`).
 - A **port** or **fishing village** only on a sea or lake shore (fishing also on a river): refused inland, with the
   reason. When the remade world can't follow it, `regenerate`'s `conflicts` say so.
@@ -1054,7 +1059,7 @@ generation). Hex columns and rows count from 1: hex `0101` is the first whole he
 columns or rows); a key is `"col,row"`. Which hexes the players have seen is play state, kept in the browser: these
 tools never see it.
 
-### `get_hex_grid`
+### `list {what: "hex_grid"}`
 No parameters. Returns `{grid, set}`: `grid` is `{size_mi, flat, color, width, opacity, ox_mi, oy_mi, numbers}` (the defaults where nothing is set: 6 mi, flat-topped, `#2b241d` at 0.35, 1.5 px, no offset, numbers on) and `set` says whether any setting has been changed.
 
 ### `set_hex_grid`
@@ -1069,9 +1074,9 @@ No parameters. Returns `{grid, set}`: `grid` is `{size_mi, flat, color, width, o
 | `numbers` | boolean | optional | Hex numbers shown on the map. |
 | `reset` | boolean | optional | Back to the defaults first; fields given are then applied. |
 
-Only the fields given change. Returns `{grid, set}` as `get_hex_grid` does. Changing the grid keeps revealed hexes by number: old keys then name other hexes.
+Only the fields given change. Returns `{grid, set}` as `list {what: "hex_grid"}` does. Changing the grid keeps revealed hexes by number: old keys then name other hexes.
 
-### `hex_at`
+### `inspect {what: "hex"}`
 | Parameter | Type | | |
 |---|---|---|---|
 | `at` | id, name, `{x_ft, y_ft}` or `[x_ft, y_ft]` | one of `at`, `hex` | The hex holding that place (on the map). |
@@ -1084,13 +1089,13 @@ Returns `label` (the number), `key`, `col`, `row`, `centre` and `corners` (six, 
 The sketch is the set of strokes that steer generation: land, sea, mountain ranges and massifs, rivers, lakes, painted
 biomes, volcanoes, settlement pins, sites, regions and roads (World › Sketch in the app). It is part of the world, so
 changing it makes another world. The sketch tools store their changes at once (in `<hash>/sketch.json` beside the
-world), but the world is not remade until `regenerate`; their results say `pending: true`, and `get_sketch` says
+world), but the world is not remade until `regenerate`; their results say `pending: true`, and `list {what: "sketch"}` says
 whether changes wait. They can't go in a `batch`.
 
 A stroke's id is `sk:` and a hash of the stroke: it stays while other strokes come and go, and a changed stroke gets a
 new one (`update_sketch_stroke` returns it). `index` is its place in the sketch, for reading only.
 
-### `get_sketch`
+### `list {what: "sketch"}`
 The strokes (as the pending changes leave them), each with `id`, `index`, `tool` and its points (`path`, or `at` for a
 pin, volcano, site or region named at a point), and its options: `closed`, `radius_mi`, `strength`, `hard`, `biome`,
 `name`, a road's `kind`, a pin's `tier`, `lives_by`, `capital`, `wards`, `added`, `replaces`, `on_water` and `settlement` (the
@@ -1118,7 +1123,7 @@ the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbo
 | `capital` | boolean | pins | The realm's capital. |
 | `wards` | `[string]` | pins | Its districts' names, the central one first (up to 24). |
 | `added` | boolean | pins | Beside the world's own settlements (default true, as Edit › Settlements › Places adds them); false: in place of one of its tier. |
-| `replaces` | string | pins | In place of the world's own settlement at its spot (within 3 mi), changed: the tier the generator placed it at (`get_sketch`'s `replaces`; a city that grew only to a town is placed as a city). Nothing else moves. `update_settlement` makes these pins. |
+| `replaces` | string | pins | In place of the world's own settlement at its spot (within 3 mi), changed: the tier the generator placed it at (`list {what: "sketch"}`'s `replaces`; a city that grew only to a town is placed as a city). Nothing else moves. `update_settlement` makes these pins. |
 | `on_water` | boolean | pins | `false`: a port, fishing village or river town stays where the pin stands (on heights above its river, say) instead of being moved onto its shore or beside its river as the world's own are. Left out: moved. |
 
 An option for another tool is refused (`tier: only for pin, got "town"`), as is a point off the map (the message gives
@@ -1187,24 +1192,24 @@ tools. Ids are random (`n:k3x9q0ab`), so the app and an agent can create at the 
   show inside it on the DM's map as a marker, on their `level` (default: the way in), at their point if given,
   else in that level's biggest room. The DM can drop them into play as a token.
 - A plot point is tied to places (`anchors`) and NPCs (`npcs`).
-- `get_feature` and `describe_location` include the NPCs and plot points there (`npcs`, `plots`). For a
+- `get` and `inspect` include the NPCs and plot points there (`npcs`, `plots`). For a
   settlement or site that includes those in its buildings, districts, towers and ways underground, and on their
   levels and rooms; for a settlement, also those at the sites in it (see Conventions).
 - `focus_view` and `route` take an NPC's id (where they are) or a plot's (its first place).
 - The players' window never gets NPCs, plots or notes.
 
-### `list_npcs`
+### `list {what: "npcs"}`
 | Parameter | Type | | |
 |---|---|---|---|
 | `query` | string | optional | Matches name, appearance, mannerisms, goals, notes, attitude. |
-| `location` | string | optional | A place id. Also finds NPCs on its levels and in its rooms; a settlement's or site's id, NPCs in its buildings, districts, towers and ways underground; a settlement's, NPCs at the sites in it too. A building drawn by hand by either of its ids. |
+| `at` | string | optional | A place id. Also finds NPCs on its levels and in its rooms; a settlement's or site's id, NPCs in its buildings, districts, towers and ways underground; a settlement's, NPCs at the sites in it too. A building drawn by hand by either of its ids. |
 | `tag` | string | optional | |
 | `stance` | string | optional | `hostile`, `unfriendly`, `neutral`, `friendly` or `allied`. |
 | `limit` | integer | 100 | 1 to 1000 (`truncated: true` when it cut the list). |
 
 Returns `{items: [{id, name, stance, status, location: {id, name, level?, x_ft?, y_ft?}, tags}], found}`.
 
-### `get_npc`
+### `get`
 An NPC in full: `name`, `appearance`, `mannerisms`, `attitude: {stance, text}`, `goals`, `notes`, `tags`,
 `portrait` (an asset id), `status`, `location`, and the `plots` they are in.
 
@@ -1212,7 +1217,7 @@ An NPC in full: `name`, `appearance`, `mannerisms`, `attitude: {stance, text}`, 
 | Parameter | Type | | |
 |---|---|---|---|
 | `name` | string | required | |
-| `appearance`, `mannerisms`, `goals`, `notes` | string | optional | `notes` are the DM's (secrets); `text` is accepted for `notes`. |
+| `appearance`, `mannerisms`, `goals`, `notes` | string | optional | `notes` are the DM's (secrets). |
 | `stance` | string | optional | Attitude toward the players (default `neutral`). |
 | `attitude` | string | optional | Why they feel that way, what would change it. |
 | `tags` | string[] | optional | |
@@ -1240,7 +1245,7 @@ one, is that NPC: the result is it, with `"existing": true`, and nothing is adde
 ### `delete_npc`
 `id` or `ids` (all or none, in one edit). They are also taken out of every plot point.
 
-### `list_plots`
+### `list {what: "plots"}`
 | Parameter | Type | | |
 |---|---|---|---|
 | `query` | string | optional | Matches title and text. |
@@ -1252,14 +1257,14 @@ one, is that NPC: the result is it, with `"existing": true`, and nothing is adde
 
 Returns `{items, found}`.
 
-### `get_plot`
+### `get`
 `id`: a plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with its name), `tags`.
 
 ### `create_plot`
 | Parameter | Type | | |
 |---|---|---|---|
 | `title` | string | required | |
-| `text` | string | optional | What is going on, hooks, how it may play out; `notes` is accepted for `text`. |
+| `text` | string | optional | What is going on, hooks, how it may play out. |
 | `status` | string | optional | `idea` (default), `active` or `resolved`. |
 | `anchors` | string[] | optional | Place ids (not NPCs). |
 | `npcs` | string[] | optional | NPC ids; they must exist. |
@@ -1274,7 +1279,7 @@ Safe to repeat: a plot point with the same title (case and surrounding spaces ig
 `"existing": true`; nothing is added. Another title makes a second.
 
 ### `update_plot`
-`id` plus any of `create_plot`'s fields (`title`, `text` or `notes`, `status`, `anchors`, `npcs`, `tags`); lists given replace the old ones.
+`id` plus any of `create_plot`'s fields (`title`, `text`, `status`, `anchors`, `npcs`, `tags`); lists given replace the old ones.
 
 ### `delete_plot`
 `id` or `ids` (all or none).
@@ -1300,7 +1305,7 @@ Returns the note: `id` (`m:<site>:<level>:<own id>`), `kind` "point", `place` (s
 ### `delete_note`
 `id`: the note on a place, a room (`r:`) or a point (`m:`). A building drawn by hand's note is found under either of its ids. Returns the text it had.
 
-### `list_notes`
+### `list {what: "notes"}`
 | Parameter | Type | | |
 |---|---|---|---|
 | `query` | string | optional | Matches the text. |
@@ -1311,7 +1316,7 @@ Returns the note: `id` (`m:<site>:<level>:<own id>`), `kind` "point", `place` (s
 | `limit` | integer | 100 | 1 to 1000 (`truncated: true` when it cut the list). |
 
 Returns `{items, found}`: each has `id`, `kind`, `place` (path of names), `room` (points), `text`, `tags`, and `at` (points). A point note whose site has gone (a world remade) is listed with `place: null` and a `missing` line, so it can still be deleted.
-`get_feature` also takes `r:` and `m:` ids (an `m:` gives its site, level, room, spot and note); `annotate_feature` and `update_feature` add to or change the note on an `r:` room or an existing `m:` point (an `m:` has no name: `update_feature` refuses `name` for it).
+`get` also takes `r:` and `m:` ids (an `m:` gives its site, level, room, spot and note); `annotate_feature` and `update_feature` add to or change the note on an `r:` room or an existing `m:` point (an `m:` has no name: `update_feature` refuses `name` for it).
 
 ---
 
@@ -1321,21 +1326,21 @@ Battlemaps are generated with their trees, rocks, props and hazards. On top of t
 by hand (`o:<id>` entries) and generated ones **taken away** (clears, `x:<id>` entries), by the user (the app's
 **Edit › Land › Props** tool) or by agents. Pictures can be **uploaded** as new kinds of object, with their own tactical
 rules (`s:<asset>` kinds). Objects block, cover and hinder in play mode by their kind's rules, and
-`get_battlemap` lists them. Like the other edits, they are saved, logged, shown live, and leave the world hash
+`inspect {what: "battlemap"}` lists them. Like the other edits, they are saved, logged, shown live, and leave the world hash
 alone; only the battlemap chunk holding each object (by its centre) is made again.
 
-- A **built-in kind** is named by its id or name (`12` or `"boulder"`); `list_sprites` lists them all with their
+- A **built-in kind** is named by its id or name (`12` or `"boulder"`); `list {what: "sprites"}` lists them all with their
   rules.
 - An **uploaded sprite** is named `s:<asset>` (or by its name). Its picture is in the asset store
   (`/assets/<id>`; the id is the first 16 bytes of the picture's SHA-256 in hex, as the app makes it). A top-down
   picture with a transparent background works best, at about 64 px a square.
 
-### `list_sprites`
+### `list {what: "sprites"}`
 Parameter: `limit` (1 to 1000, default 200; `truncated: true` when it cut the list). Returns `{items, found}`: built-in kinds and uploaded sprites in one list, each
 `{kind, name, uploaded, rules}` (an uploaded one also `picture` and `placed`, how many are put down); `rules` are cover (a
 word), blocks_movement, blocks_sight, difficult, height_ft, size_squares and any hazard.
 
-### `list_objects`
+### `list {what: "objects"}`
 Every object put down by hand (`o:`) and every clear (`x:`, generated objects taken away), world-wide, in one `{items, found}`
 list (objects first; `objects` and `clears` beside say how many of each), so an agent that lost its ids can audit or undo.
 
@@ -1351,8 +1356,8 @@ An object item is `{id, what: "object", kind, x_ft, y_ft, variant}` and, when se
 and `kinds` (a circle). `remove_objects` takes objects by id; `restore_objects` brings clears back.
 
 ```json
-{ "name": "list_objects", "arguments": { "within": { "at": "c:2", "radius_ft": 300 } } }
-{ "name": "list_objects", "arguments": { "which": "clears", "kinds": ["boulder"] } }
+{ "name": "list", "arguments": { "what": "objects", "within": { "at": "c:2", "radius_ft": 300 } } }
+{ "name": "list", "arguments": { "what": "objects", "which": "clears", "kinds": ["boulder"] } }
 ```
 > *"What did I put on the bridge map? Take the barrels away."*
 
@@ -1365,7 +1370,7 @@ and `kinds` (a circle). `remove_objects` takes objects by id; `restore_objects` 
 | `name` | string | optional | |
 | `size_squares` | number | optional | Squares across at scale 1 (default 1; 0.2–40). Also `size`. |
 | `cover` | string or integer | optional | `none` (default), `half`, `three-quarters` or `full`, as the rules are returned; or 0 to 3. |
-| `blocks_movement`, `blocks_sight`, `difficult` | boolean | optional | Default false. `blocks_move` is accepted for `blocks_movement`. |
+| `blocks_movement`, `blocks_sight`, `difficult` | boolean | optional | Default false. |
 | `height_ft` | number | optional | 0–500 (default 3). Objects 5 ft and taller draw above tokens' shadows. |
 
 Returns `{kind: "s:<asset>", asset}`. A picture already uploaded (same bytes) under another name or rules adds `existing: true` and `replaced` (its old name and the rules that changed): a picture has one name and one set of rules, the last upload's.
@@ -1407,7 +1412,7 @@ Give another place, turn or scale for a second one on purpose.
 | Parameter | Type | | |
 |---|---|---|---|
 | `id`, `ids` | string / string[] | optional | Objects put down by hand (`o:…`); all or none. |
-| `points` | array | optional | Generated objects: `{kind, x_ft, y_ft}` each, as `get_battlemap` lists them (matched within a quarter square; a point already cleared there adds nothing and its clear is listed under `existing`). Before, this was called `at`, which still works here (`at` is one place everywhere else). |
+| `points` | array | optional | Generated objects: `{kind, x_ft, y_ft}` each, as `inspect {what: "battlemap"}` lists them (matched within a quarter square; a point already cleared there adds nothing and its clear is listed under `existing`). |
 | `within` | area | optional | Everything inside: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`; radius up to 640 ft). A circle takes away placed and generated objects; a box or polygon only those put down by hand (the reply says so). Also `area`. |
 | `kinds` | array | optional | With `within`: only these built-in kinds (ids or names). A `kinds` inside a circle works too. |
 
@@ -1419,8 +1424,8 @@ Returns `{tool, removed: [o:…], clears: [x:…]}` (+ `existing` for points tha
 > *"Clear the trees from a 60-ft circle in the woods north of the ruin so there's room for a fight."*
 
 ### `restore_objects`
-`id` or `ids` (clears, `x:…`; all or none) and/or `within` (a box, a polygon or a circle `{at, radius_ft}`, also
-`area`: every clear touching it: a clear's circle meeting the circle, box or polygon, or its middle inside). The generated objects come back.
+`id` or `ids` (clears, `x:…`; all or none) and/or `within` (a box, a polygon or a circle `{at, radius_ft}`:
+every clear touching it: a clear's circle meeting the circle, box or polygon, or its middle inside). The generated objects come back.
 
 ## Buildings drawn by hand
 
@@ -1428,7 +1433,7 @@ Buildings and towers can be **drawn**, by the user (the app's **Build** menu) or
 and what the building is. Each one is a created site (`c:<n>`, kind `building`) with a layout of its own, so it
 gets everything a generated building has: a roof and walls on the battlemap, an interior with its rooms and
 furniture on every storey (a cellar too), its name on the map and in search. Its building id is `b:<layout>:0`
-(returned as `building`); use it with `get_feature`, `place_npc` and interiors, as for any building. One drawn in
+(returned as `building`); use it with `get`, `place_npc` and interiors, as for any building. One drawn in
 a settlement is listed under it: among its sites and, with a trade, its businesses (`settlement` on its ids names
 the town; see Conventions). Like the other edits, buildings are saved, logged, shown live and leave the world hash
 alone.
@@ -1439,11 +1444,11 @@ alone.
   street (20 ft wide) of Waterdeep at (412510, 380130)`, `that is on Waterdeep's wall at (…)`, `that is on a square
   (market) of Waterdeep at (…)`, `that is on the King's road rd:1a2b3c4d at (…)`; points in whole feet).
   `check_building_spot` asks without building and lists every blocker; `clear: true` takes the world's own
-  buildings away with the new one; `list_streets` shows the streets, walls and squares of an area.
+  buildings away with the new one; `list {what: "streets"}` shows the streets, walls and squares of an area.
 - **Footprint:** any simple shape of 3–64 corners, at least 10 ft across, every corner within 200 ft of its
   middle. L-shapes and other concave plans are fine (their roofs are drawn as several hips).
 - **What it is (`func`):** a business by its catalog key (`inn`, `tavern`, `blacksmith`, `temple`, `castle`,
-  `observatory`, `library`… as `list_names` shows them; the tool's `func` description lists every key) or a home: `hovel`, `house` (default), `townhouse`,
+  `observatory`, `library`… as `list {what: "names"}` shows them; the tool's `func` description lists every key) or a home: `hovel`, `house` (default), `townhouse`,
   `tenement`, `noble_estate`, `farmhouse`, `wizard_tower`. It decides the rooms inside: a taproom and guest
   rooms for an inn, a forge for a smithy, cells for a prison, a round stair and study floors for a wizard's tower
   (when the footprint is round). A `func` the code does not know is refused with the nearest key
@@ -1491,7 +1496,7 @@ where a street is within 300 ft, on the grid when unturned, off squares.
 
 A footprint wholly on a hand bridge's deck (off its lane), a pier or a breakwater stands on it: the reply says `on: "v:…"` or `on: "q:…"`, its floor is the deck's level and it has no cellar. Over a bridge's lane it is refused (`that is on the lane of bridge v:… (keep 24 ft clear down its middle)`). On a rock islet it is an ordinary building.
 
-Returns the site as `get_feature` does, plus `building` (its building id), `on`, `moved: {x_ft, y_ft, ft, why}` when
+Returns the site as `get` does, plus `building` (its building id), `on`, `moved: {x_ft, y_ft, ft, why}` when
 the footprint snapped to the grid (or its point set where it fits) put it more than 5 ft from where it was asked
 (not with `near`, which picks a lot by design), and with `clear` `removed: [{id, name, function}]` (the buildings
 taken away, with their names and trades; absent when none stood there). The same call again returns the
@@ -1554,7 +1559,7 @@ takes one away; one change per call). Each building of a row faces the line it w
 along the row, in the same change: the line is the smooth curve through the points, the lots are set back half the road's width
 (then 4, 10, 18 ft more) and kept off its band. Where the lots would be part of a town (the membership rule of `edit_town` members:
 within 300 ft of its edge or of one of its members), the road is one of the town's streets: in a generated town or village an added
-street (`ts:<layout>:<id>`, listed by `list_streets` with that id; its ends joined to the nearest street within 100 ft unless a
+street (`ts:<layout>:<id>`, listed by `list {what: "streets"}` with that id; its ends joined to the nearest street within 100 ft unless a
 wall is in the way; the town's own buildings on its band give way; it takes the town's street look, the kind setting its width
 only); in a town laid out by hand, streets of its plan (joined at their ends, split where they cross others). Elsewhere it is a
 road drawn by hand (`rw:`, as `place_path` makes). Over water either gets a bridge (a town street a timber deck a little wider than it). Refused with an `rd:` along, and for a town street through the town
@@ -1568,7 +1573,7 @@ least 20 ft across, within 750 ft of their middle; `snap` as for buildings). `fi
 (lots of a ward, default `common`; `lots` small to huge), `{kind: hand}` (left empty) or `{kind: open, open, style?}` (plaza, lawn, park,
 garden, market, cemetery, farmland); default generated common. `name`. A plot may not meet another one (refused naming it); the same
 outline and name again returns that plot (`existing`: true; a new one has no such field). An outline with water, a river, a road or street, or a
-building drawn by hand in it is refused with the reason. Plots are listed by `search_features`/`list_names` (kind `plot`, the fill in `detail`). Returns the plot's feature (`c:<n>`, kind `plot`). `delete_feature` and
+building drawn by hand in it is refused with the reason. Plots are listed by `search`/`list {what: "names"}` (kind `plot`, the fill in `detail`). Returns the plot's feature (`c:<n>`, kind `plot`). `delete_feature` and
 `restore_feature` work on it. (`create_plot` is the notebook's plot point.)
 
 ### `update_parcel`
@@ -1604,10 +1609,10 @@ a `reason` (the first blocker that stays, worded as `create_building`'s refusal)
 { "name": "check_building_spot", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 170, "depth_ft": 130 }, "clear": true } }
 ```
 
-### `list_streets`
+### `list {what: "streets"}`
 Read-only: the streets, walls, squares and roads inside an area, as the map draws them (`create_building` and
 `check_building_spot` refuse a footprint on any of them). `within` (required): a box, polygon or circle whose bounding box is at most
-3,000 ft across (a larger one is refused). `what` (optional): `street`, `wall`, `square` or `road`. `limit` (default
+3,000 ft across (a larger one is refused). `kind` (optional): `street`, `wall`, `square` or `road`. `limit` (default
 100, at most 1,000). Returns `{items, found, truncated?}`, settlement by settlement (streets, walls, squares), then the
 roads; points are whole feet.
 
@@ -1618,13 +1623,13 @@ roads; points are whole feet.
 - `road`: `{id: "rd:...", class, width_ft, pts}`, the world's roads outside and between the settlements, cut to the area.
 
 ```json
-{ "name": "list_streets", "arguments": { "within": { "at": [412500, 380120], "radius_ft": 300 }, "what": "street" } }
+{ "name": "list", "arguments": { "what": "streets", "within": { "at": [412500, 380120], "radius_ft": 300 }, "kind": "street" } }
 ```
 
 ### `remove_buildings`
 Take away buildings of the world's own (drawn ones go with `delete_feature`; a drawn building's id is refused, saying so): `id` or `ids` (`b:<layout>:<id>`),
 and/or every one whose middle lies inside `within`: a polygon `[[x_ft, y_ft], …]`, a box `[x0, y0, x1, y1]` or a
-circle `{at, radius_ft}` (also `area`), such as a ward to clear for buildings of your own. Their ground is free to
+circle `{at, radius_ft}`, such as a ward to clear for buildings of your own. Their ground is free to
 build on; every other building keeps its id. Returns `removed` (the ids) and `count`. (`create_building` with
 `clear: true` does it for the buildings under a new one, and lists them with names and trades.)
 
@@ -1650,15 +1655,15 @@ Crossings put down by hand (`v:<id>`) join one bank to the other, drawn on the b
 bridge is a walkable deck clear of the water (timber, or old stone), a ford a bed brought up to wading depth under
 stepping stones, a ferry jetties out from each end with a raft between. The ends are exactly where they are given
 (never moved), but an end in a river's water is refused, naming the bank point on that side to use. An end on a rock islet (hand-made or the world's) or on a plateau over the water is dry land and passes. A hand bridge's deck climbs straight from the ground (or the water's clearance) at one end to the other, at most 1 in 8, so a long bridge can reach a cliff top (it runs into the cliff face where the climb is capped); shops on it stand at its level where they are. A pier may start on an islet. `raise_islet` reads the water as the battlemap draws it (a spot T0 calls dry but the fine shore floods takes an islet; one it floods but the fine shore dries is dry land). A crossing takes a
-name and notes like a feature (`rename_feature`, `annotate_feature`, `get_feature` with its `v:` id); a named one is
-found by `search_features` (kind `crossing`) and listed in Notes › Gazetteer (nothing is lettered on the map).
+name and notes like a feature (`rename_feature`, `annotate_feature`, `get` with its `v:` id); a named one is
+found by `search` (kind `crossing`) and listed in Notes › Gazetteer (nothing is lettered on the map).
 
 A bridge up to 120 ft wide may carry **shops**: rows of houses and shops (drawn buildings, `c:<n>`, standing `on` the
 bridge) along both sides of its deck, a lane left clear down the middle and 20 ft clear at each end. They are made with
 the bridge (`shops`), follow it when its ends or width change, and are retired when it is removed. See *Shops on Wyrm's
 Crossing* under Recipes.
 
-### `list_crossings`
+### `list {what: "crossings"}`
 Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the list). Returns `{items, found}`: `{id, kind, from, to, width_ft, length_ft, material?, name, notes?}` (`name`: as given, else
 `Timber bridge`, `Stone bridge`, `Ford` or `Ferry`).
 
@@ -1702,7 +1707,7 @@ Water's-edge works put down by hand (`q:<id>`), drawn on the battlemap and the t
 
 Returns `{tool, id, kind, changed, wharf, river | water, bank_ft?}`: `wharf` is `{id, kind, path, width_ft, length_ft, shore?, pier_spacing_ft?, material?, level_ft?, buildings?}` (`shore` and `pier_spacing_ft` on a shore quay, which also gives its `material`) (`level_ft`: the top, above the sea, where there is water under it); `river` `{id, name, width_ft, banks}` and `bank_ft` (how far `path[0]` is from the bank) when a river is within 300 ft, else `water` `{kind, id, name}` (`null`: no water under it); `buildings` the lighthouse made, `retired` and `left_pointing` what was retired. A pier starting in the water is refused, naming the bank: `path[0]: (x, y) is in the water of Shadow Lake (lake:b4da59db): a pier starts on the bank: the nearest dry ground is at about (x, y)` (in a river: `… 419 ft wide there: a pier starts on the bank, at about (x, y)`). A lighthouse that cannot stand (something in the way) refuses a new breakwater, naming what; nothing is put down.
 
-### `list_wharves`
+### `list {what: "wharves"}`
 `within` (a box, a polygon or a circle) and `limit` (1 to 2000, default 200). Returns `{items, found}`: `{id, kind, path, width_ft, length_ft, material?, level_ft?, buildings?}`. The order is the geometry's: by path (point by point, to half a foot), then kind and width, the id last, so quays sharing a first point keep their order from build to build.
 
 ### `remove_wharves`
@@ -1728,7 +1733,7 @@ A design must keep the rules play mode relies on, the same ones every generated 
 A plan that breaks one is refused with the first five reasons and a count (`not saved: level 2: 12 squares of the tomb at 30,4 can't be
 reached; … (and 6 more)`). No boss chamber, or one not on the deepest level, is only noted.
 
-**The plan** (`get_site_design` gives it; `set_site_design` takes it, or any part of it):
+**The plan** (`get {view: "design"}` gives it; `set_site_design` takes it, or any part of it):
 
 ```text
 site crypt · theme tomb · 36 x 30 squares · 2 levels · entry 2,15
@@ -1779,7 +1784,7 @@ level 2: Level 2 · the deep
   way up follows the way down above it.
   Same entries as `items:`; several `+`/`-` lines (and an `items:`) in one block apply in the order written:
   `+items: well 3,0 2x2` / `-items: barrel 9,4; table 4,0`. `items:` alone still replaces the whole level's list.
-- Where a level's floor isn't flat, `get_site_design` adds under its `grid:` a `heights:` legend (`1=5 ft; 2=10 ft; /=ramp`)
+- Where a level's floor isn't flat, `get {view: "design"}` adds under its `grid:` a `heights:` legend (`1=5 ft; 2=10 ft; /=ramp`)
   and a `height grid:` (one character per square, `.` at floor level or rock, `/` a ramp). It is a read-out:
   `set_site_design` ignores it. Heights come from a room's `+5`/`+10` and the raising items `platform` (5 ft),
   `balcony` and `scaffold` (10 ft) and `dais`; `steps`, `climb_ladder` and `rubble_slope` are the ramps that join two
@@ -1790,7 +1795,7 @@ level 2: Level 2 · the deep
 - The header's `<n> levels` adds levels below the deepest (new ones start as rock: give their grids) or fills
   in the deepest ones. A missing `up` under a level's `down` and a missing `exit` at the entry are filled in.
 
-### `get_site_design`
+### `get {view: "design"}`
 | Parameter | Type | | |
 |---|---|---|---|
 | `id` | string | required | The site (`u:<layout>:<k>`) or a building (`b:<layout>:<id>`). |
@@ -1819,7 +1824,7 @@ says so (`set_aside`).
 > *"Dig a third level under the Fallen Shrine's crypt: a landing under a new stair from level 2, a flooded
 > vault beyond it as the boss chamber, furnished."*
 
-**The reply says what changed, not the whole plan** (`get_site_design` has that): `changes`, by level, with only what is
+**The reply says what changed, not the whole plan** (`get {view: "design"}` has that): `changes`, by level, with only what is
 there: `items_added`, `items_removed`, `squares_changed` (count and the rooms' letters), `rooms_changed` (a room's kind,
 raise or shape), `doors_added`, `doors_removed`, `heights_changed` (count and the first squares, `2,7: 0 -> 10 ft`),
 `renamed`, a building's `stairs`; `"no changes"` if none; and the check's `verdict` and `problems`. The same reply, brief,
@@ -1829,10 +1834,10 @@ when saved. With `dry_run` nothing is saved and the same diff comes wrapped: `{"
 ### `reset_site_design`
 `id`: the site (or a building's interior) as generated again.
 
-### `list_designs`
+### `list {what: "designs"}`
 The underground sites (`u:`) and buildings (`b:`) that have a design made by hand, in one `{items, found}` list (`limit` 1 to
 1000, default 100): `{id, name, what: "site" or "building", kind, levels, x_ft, y_ft}` (`x_ft`/`y_ft` only while the site or building stands; one that is gone has `gone: true` instead; `world_overview`'s `designs_set_aside` also lists building designs that no longer fit, and a gone site only here). `within` (a box, a polygon or a circle
-`{at, radius_ft}`) keeps those whose place is inside. `get_feature` of one of them says `designed: true`; `reset_site_design`
+`{at, radius_ft}`) keeps those whose place is inside. `get` of one of them says `designed: true`; `reset_site_design`
 drops a design.
 
 ## Links below ground (paired exits)
@@ -1842,12 +1847,12 @@ site underground (`u:`, a keep's deep dungeons `k:`), a sewer section (`w:<layou
 cellar (`b:`, a level below ground). Each end shows on its own map as a way across (item kind `link`, named by its
 way) that names the far end, so both maps have it; furniture on the square gives way. Ways (`way`): `stairs`
 (default), `ladder`, `passage`, `trapdoor`, `rope`, `portal`. An end is a level and a square: levels are counted from
-the bottom (`l:<site>:<level>`, as level and room ids are), squares as `get_site_design`'s plan numbers them (`x`
-across, `y` down, from 0). Places a link names change only by its ends; `get_feature` of a site or level lists its
-`links`, `describe_location` those with an end below the point. A site designed by hand (`set_site_design`) keeps
+the bottom (`l:<site>:<level>`, as level and room ids are), squares as `get {view: "design"}`'s plan numbers them (`x`
+across, `y` down, from 0). Places a link names change only by its ends; `get` of a site or level lists its
+`links`, `inspect` those with an end below the point. A site designed by hand (`set_site_design`) keeps
 its links: they are put on its levels after the design is built, so a designed site can have as many extra ways out
 (to another site, a cellar or the sewers) as it has links; an end whose square a new design fills with rock stops
-showing (`list_links` `check` says so) until it is moved. A remade world moves the ends with their places. In play
+showing (`list {what: "links"}` `check` says so) until it is moved. A remade world moves the ends with their places. In play
 mode a token on a link's square steps across to the far end's square (the sewers: on the city's one sewer level).
 
 ### `create_link`
@@ -1862,11 +1867,11 @@ another link's square; a building's end must be in a cellar. Refused with the re
 is not floor`). Returns `{id, way, name?, a, b}`, each end `{level, site, x, y, name}` (`name`: the place's, as the
 far end's way names it).
 
-### `list_links`
+### `list {what: "links"}`
 | Parameter | Type | | |
 |---|---|---|---|
 | `of` | string | optional | Only links with an end in this site (`u:`, `k:`, `w:`, `b:`) or level (`l:`). |
-| `near` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | optional | Only links with an end below this place: in the sewer section under it, or in a site or building whose place is within 100 ft. |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | optional | Only links with an end below this place: in the sewer section under it, or in a site or building whose place is within 100 ft. |
 | `check` | boolean | optional | Each with `problems`: what keeps an end from showing (its square no longer floor, a way now there, the place gone); empty when both show. |
 | `limit` | integer | optional | 1 to 2000, default 200 (`truncated: true` when it cut the list). |
 
@@ -1894,8 +1899,8 @@ cellar. Levels count from the bottom in level and room ids (`l:`, `r:`), so when
 levels and rooms, plots' anchors on them and NPCs inside move with them; those on a level filled in go.
 
 A design is made for the building as it is: its grid, footprint and storeys. When the footprint changes (or the
-building is made a ruin) the design is **set aside**: the generated interior stands, `get_site_design` says so
-(`set_aside`), `get_feature` gives `interior_designed`, and `world_overview` lists it in `designs_set_aside`;
+building is made a ruin) the design is **set aside**: the generated interior stands, `get {view: "design"}` says so
+(`set_aside`), `get` gives `interior_designed`, and `world_overview` lists it in `designs_set_aside`;
 put the footprint back and it applies again. When only the storeys change (`update_building` with `floors`, on
 the world's own buildings and those drawn by hand), the design follows in the same change: the floors both have
 stay as designed, new storeys come as generated. The app's designer does the same (*Add a floor on top*, *Take
@@ -2095,7 +2100,7 @@ level -1: Cellar
   `sacks`, `rubble`, `timber`, `bones`, `skeleton`, `skulls`, `urn`, `coffin`, `effigy`, `brazier`,
   `candles`, `sconce`, `lantern`, `banner`, `chains`, `cobweb`, `bedroll`, `tools`, `powder`, `hoard`,
   `offering`, `glyph`, `dais`, `well`, `fountain`, `iron_maiden`, `stocks`, `rat_nest`, `trap`; and uploaded
-  sprites as `s:<asset id>` (as `list_sprites` gives them; underground sites take them too). A sprite keeps its
+  sprites as `s:<asset id>` (as `list {what: "sprites"}` gives them; underground sites take them too). A sprite keeps its
   rules: cover, blocking movement; one that blocks movement blocks sight from 6 ft up (a sprite that blocks
   sight but not movement doesn't indoors), one that doesn't is difficult ground when marked so. `back` and
   `variant` as for a site: `shelf 5,5 2x1 back s` stands with its back to the south wall; a sprite's picture is
@@ -2197,7 +2202,7 @@ farms outside the walls) cut into lots. The ward editor changes that layout with
   drops the edit, and the town is laid out anew from the roads as they are. Edits made before these were kept lay
   the town out anew as before.
 
-### `get_town_plan`
+### `get {view: "town_plan"}`
 A town's plan: `patches` (`patch`, `at`, `corners`, `ward`, `ward_generated` when set by hand, `in_town`,
 `district` with its id, `neighbours`, `lots`, `merged_with`, `reroll`, `lots_like` for a patch sharing another's
 lots, `close` for a temple's with a close as built, `close_generated` when set by hand, `close_refused`: why one
@@ -2214,8 +2219,8 @@ on average) for the one there, `square_generated` when set by hand: a kind or `n
 a park's `formal`, `common`, `cemetery` or `horses`; `name`, `generated`, `x_ft`, `y_ft`, `size_ft`, `patch`, `district` with
 its id, `main` for the square the main streets lead to). Their ids are kept by what they stand on (a patch, a corner,
 a road, a palace), so an edit elsewhere in the town or the walls set on or off move none; a gate is there only
-while the town is walled. `get_feature`, `rename_feature`, notes, `list_names` (`kind` `square`, `park`, `gate`)
-and `search_features` take them as other features.
+while the town is walled. `get`, `rename_feature`, notes, `list {what: "names"}` (`kind` `square`, `park`, `gate`)
+and `search` take them as other features.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -2223,7 +2228,7 @@ and `search_features` take them as other features.
 | `within` | `[x0_ft, y0_ft, x1_ft, y1_ft]` | | Only the patches whose middle is inside, and their corners |
 
 ```json
-{ "name": "get_town_plan", "arguments": { "id": "city:bab44567", "within": [1288000, 2229000, 1289500, 2230500] } }
+{ "name": "get", "arguments": { "view": "town_plan", "id": "city:bab44567", "within": [1288000, 2229000, 1289500, 2230500] } }
 ```
 
 ### `edit_town`
@@ -2242,7 +2247,7 @@ longer leave three streets goes with the change that took them. `added` and `tak
 and footprint (a patch laid out again keeps reusing its new buildings' ids). A square set or taken away changes only
 the lots at its corner: they are trimmed back to it, or come back whole.
 
-Each town and city rolls how planned its streets are (`planning`, 0-1; `get_town_plan` and `get_feature` report
+Each town and city rolls how planned its streets are (`planning`, 0-1; `get {view: "town_plan"}` and `get` report
 it): most are grown (under 0.3: winding streets, irregular blocks), some have a planned quarter beside their grown
 core (0.3-0.7: a side of the town laid out as a grid, larger the higher the value) and a few are planned throughout
 (0.7-1: a regular grid of streets, square blocks or long ones between avenues, the market square its middle block).
@@ -2265,7 +2270,7 @@ anew and the changes made inside it are set aside. The reply carries `pattern` (
 `"auto"`, it keeps the pattern it was laid out on while that edit stands, so a change to the land round it
 doesn't lay its streets out anew. Villages and towns laid out by hand have none.
 
-Gates and towers go in and out of the town's own wall by its corners (`get_town_plan`: corners with `wall: true`;
+Gates and towers go in and out of the town's own wall by its corners (`get {view: "town_plan"}`: corners with `wall: true`;
 `gate_by_hand`, `gate_removed`, and `walls.by_hand` for what was set). A gate put in takes the town's gatehouse
 (its culture's form: square tower, twin drums, arched, bent, log), the id `gt:<layout>:<corner>` and a name like
 the others, and a track (12 ft) out through it to the nearest approach or road, or across the outskirts to the
@@ -2348,7 +2353,7 @@ records you change one by one: junctions, streets between them (straight or with
 Positions are world feet. A town laid out by hand is refused by `edit_town` (the message points here); `back_to_generated`
 drops the records and the town is the ward editor's again, as it was before.
 
-### `get_street_plan`
+### `get {view: "street_plan"}`
 
 `{id}`: the town as its records stand. Returns `{layout, origin, tier, fill (the default for a face with no block), snap_ft (3),
 junctions [{id, p, square, streets}], streets [{id, a, b, bends, width, set_l, set_r, class, bridge}], blocks [{id, at, fill,
@@ -2359,7 +2364,7 @@ poly, open}], walls [{id, pts, closed, spacing, gates, name}], problems [{key, w
 
 `{id, ops: [{op, …}, …]}` (or one op as `op`), `dry_run` (one op, nothing changed). The ops are applied in order, each on the
 result of the last; one that is refused ends the list (the ones before it stay, the message says which). Inside `batch`, one op
-per call. Ids are the numbers `get_street_plan` shows; unknown fields are refused.
+per call. Ids are the numbers `get {view: "street_plan"}` shows; unknown fields are refused.
 
 | op | fields |
 |---|---|
@@ -2421,8 +2426,8 @@ How it applies:
   least 0.03 more than it did (but less than 1: steeper is a cliff), is drawn as steps, its treads across the
   street. A generated flight's square goes back to paving where shaping leaves it gentler than 0.12 and 0.03
   gentler than it was, or puts it on a plateau.
-- Battlemaps and the three finest zooms draw it. The world's own heights (`describe_location`, routes, where
-  settlements stand) don't change, nor does `get_feature`'s `stairs` (the flights as generated); `get_battlemap`
+- Battlemaps and the three finest zooms draw it. The world's own heights (`inspect`, routes, where
+  settlements stand) don't change, nor does `get`'s `stairs` (the flights as generated); `inspect {what: "battlemap"}`
   has the steps as drawn.
 - Limits: a stroke reaches at most 48 blocks; a world holds 1,500 blocks and 256 plateaus.
 - **Rock islets** are plateaus of kind `islet` (`raise_islet`): a rough ring of 12 to 20 corners, its top a few feet over the water of a river, lake or the sea, easing down over 6 ft, drawn as bare rock with a gravel rim. A building, tower or castle may stand on one (`create_feature` and `create_building` accept it, with no `moved`), as on the world's own islets (cities and metropolises on rivers and coasts). `delete_plateau` takes one away, with its name, note and hidden mark.
@@ -2453,14 +2458,14 @@ does). The reply: `blocks` changed, `squares` under the brush, the lowest and hi
 ### `raise_islet`
 A rock islet standing in water. `at` (an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`: in a river's channel, a lake or the sea), `radius_ft` (10–200, default 30), `rise_ft` (1–30, default 5: its top over the water there) and `id` (`h:…`, to change one: what is not given stays, the ring following the id). The outline is made from the id, so the same radius and place give the same ring. Without `id`, an islet whose ring for this place and radius lies within 5 ft at every corner of an existing one's is that one: `existing: true`; another rise is refused, naming it.
 
-Returns `{tool, id, changed, level_ft, water: {kind, id, name, depth_ft}, poly, bbox}` (`level_ft` above the sea; `water.kind` `river`, `lake` or `sea`). Refused: `at: (x, y) is on dry land: an islet stands in a river, lake or the sea`; `at: the water there is 172 ft deep: at most 120`; the plateau limit (256 in a world). `list_plateaus` lists islets (`what: "islet"`).
+Returns `{tool, id, changed, level_ft, water: {kind, id, name, depth_ft}, poly, bbox}` (`level_ft` above the sea; `water.kind` `river`, `lake` or `sea`). Refused: `at: (x, y) is on dry land: an islet stands in a river, lake or the sea`; `at: the water there is 172 ft deep: at most 120`; the plateau limit (256 in a world). `list {what: "ground"}` lists islets (`what: "islet"`).
 
 ```json
 { "name": "raise_islet", "arguments": { "at": [3124704, 3868520], "radius_ft": 130, "rise_ft": 6 } }
 ```
 
 ### `set_plateau`
-A plateau or pit, or a change to one. The outline is `poly` (also `outline`), or `around` a building (`b:`), a keep, a wall
+A plateau or pit, or a change to one. The outline is `poly`, or `around` a building (`b:`), a keep, a wall
 tower (`t:`) or a site (its buildings, towers and walls), its footprint's convex outline grown by `margin_ft`;
 outlines are simplified to at most 48 points. The level is `level_ft` above the sea, or `rise_ft` above the
 ground (as shaped, this plateau left out) at the outline's middle. The reply: `id`, `changed`, `level_ft`,
@@ -2477,7 +2482,7 @@ below the ground, the land round it otherwise.
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `id` | string | | A plateau to change (`h:…`): only the fields given change |
-| `poly` | `[[x_ft, y_ft], …]` | | The outline (world ft, 3 or more corners; also called `outline`) |
+| `poly` | `[[x_ft, y_ft], …]` | | The outline (world ft, 3 or more corners) |
 | `around` | string | | Or a building, tower or site to raise it round |
 | `margin_ft` | number | 10 | Round the footprint, 0–200 |
 | `level_ft` | number | | Its level above the sea, within 20,000 ft |
@@ -2493,7 +2498,7 @@ A hill (`set_hill` changes it; `set_plateau` refuses one).
 
 ### `set_hill`
 Raise a hill, or change one by `id` (fields left out stay; its noise stays its own). Returns `{tool, id, changed,
-profile, peak_ft, x_ft, y_ft, rx_ft, ry_ft, angle_deg, crown_ft, bbox}`. `delete_plateau` takes it away; `list_plateaus`
+profile, peak_ft, x_ft, y_ft, rx_ft, ry_ft, angle_deg, crown_ft, bbox}`. `delete_plateau` takes it away; `list {what: "ground"}`
 lists it (`what: "hill"`, with its form).
 
 | Parameter | Type | Default | |
@@ -2513,21 +2518,21 @@ lists it (`what: "hill"`, with its form).
 { "name": "set_hill", "arguments": { "profile": "ridge", "from": [412000, 380000], "to": [412600, 380200], "width_ft": 90, "peak_ft": 120 } }
 ```
 
-### `list_plateaus`
+### `list {what: "ground"}`
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
 `{id: "h:...", what: "plateau" (or "islet"), name? (if renamed), level_ft, edge_ft, floor? (rock or ground, if set), x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline),
 hills `{id: "h:...", what: "hill", profile, peak_ft, x_ft, y_ft, rx_ft, ry_ft, angle_deg, crown_ft, bbox, poly}` (`peak_ft` over the ground), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
 block's north-west corner), and (unless `generated: false`) the world's own islets in rivers and off coasts
 `{id: "i:<8 hex>", what: "islet", generated: true, level_ft, water_ft, x_ft, y_ft, radius_ft, in: "river" or "sea or lake", tower? (a watchtower stands on it), removed? (taken away), bbox, poly}`.
-`within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
+`within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `inspect {what: "heights"}` reads the heights.
 
 ### `delete_plateau`
 Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).
 Its name (`rename_feature`), note and hidden mark go with it; there is no restore (the user's Undo in the app
 brings all of them back).
 
-Also takes the world's own islets (`i:...`, from `list_plateaus`): a hidden mark takes one off the ground, the shore and the
+Also takes the world's own islets (`i:...`, from `list {what: "ground"}`): a hidden mark takes one off the ground, the shore and the
 map (a bridge deck or pier no longer keeps clear of it only where the town's plan already did), and a watchtower on it is
 removed as a building (`removed_towers`, `b:...`). `restore_islets` undoes it.
 
@@ -2535,7 +2540,7 @@ removed as a building (`removed_towers`, `b:...`). `restore_islets` undoes it.
 Bring the world's own islets (`i:...`) back by `id` or `ids` (all or none) after `delete_plateau` took them away; one not
 taken away is refused. A watchtower taken away with one stays removed (`restore_building`). Returns `{tool, ids}`.
 
-### `ground_heights`
+### `inspect {what: "heights"}`
 Every square of the box reaching `radius_ft` (default 25, at most 200) east, west, north and south of a place:
 `origin` (the first square's middle),
 `columns`, `rows`, `heights_generated` and `heights_shaped` (rows north to south, ft above the sea), their
@@ -2544,7 +2549,7 @@ Every square of the box reaching `radius_ft` (default 25, at most 200) east, wes
 top (knolls, hollows) and levels road beds under roads.
 
 ```json
-{ "name": "ground_heights", "arguments": { "x_ft": 1288677, "y_ft": 2229693, "radius_ft": 60 } }
+{ "name": "inspect", "arguments": { "what": "heights", "at": [1288677, 2229693], "radius_ft": 60 } }
 ```
 > *"Put the Sunken Bastion on a cliff 30 ft above the plain, sheer on every side."* · *"Dig a 10-ft pit with
 > sloping sides in the middle of the market."* · *"Raise a low ridge along the road north of Gatewatch for an
@@ -2588,7 +2593,7 @@ How it applies:
 
 ### `create_water`
 
-`poly` (or `outline`) and optionally `shape` (`polygon`, the default, or `brush`), `width_ft` (a brushed line's,
+`poly` and optionally `shape` (`polygon`, the default, or `brush`), `width_ft` (a brushed line's,
 3 to 80, default 10), `closed` (a brushed line brought round to its first point: a ring), `depth_ft` (1 to 20,
 default 4), `dug` (default false), `level_ft` (above the sea) and `name`. Without a level it takes the sea's or a
 lake's where it reaches one within 4 ft of its shore (the highest; the reply's `joins` says which), else 1 ft
@@ -2629,7 +2634,7 @@ between an open line and anything else finds its level again unless `level_ft` i
 `id` or `ids` (all or none): the water goes with its name, note and hidden mark (no restore; the user's Undo in
 the app brings it back).
 
-### `list_waters`
+### `list {what: "waters"}`
 
 Every water drawn by hand, as `create_water` returns it (`{items, found}`, `limit` 100 by default).
 
@@ -2668,11 +2673,11 @@ material, a, b, length_ft}` each).
 `ids`: roads, streets and paths taken off the map, one by one (each id done or refused alone); `restore: true`
 brings them back. What's left is ground: the ground beneath shows, a park's lawn closes over its path, a bridge
 deck on a removed town street goes with it; buildings, lots, a town's gates, traffic and routes stay as they were.
-- `rd:` a world road's stretch (`list_roads`, `describe_location`) and `mt:` the track to a settlement added by
+- `rd:` a world road's stretch (`list {what: "roads"}`, `inspect`) and `mt:` the track to a settlement added by
   hand. A stretch takes the approach street of each generated town it ends at with it, and brings it back with it:
   those are listed in `also`.
 - `tr:<layout>:<8 hex>` a generated town's or village's own street or lane, `pp:<layout>:<spot>:<j>` a path in one
-  of its parks, gardens or cemeteries (both from `describe_location`'s `things`). Kept while the town is laid out
+  of its parks, gardens or cemeteries (both from `inspect`'s `things`). Kept while the town is laid out
   where it was: a ward edit (`edit_town`) that moves a street's ends gives it a new id, and the removal lapses.
   Laying the town out by hand (`edit_streets` `lay_out_by_hand`) brings them back (its report's `removed_back`
   says how many), `back_to_generated` takes them away again. A hand town's streets are refused (`edit_streets`
@@ -2680,10 +2685,9 @@ deck on a removed town street goes with it; buildings, lots, a town's gates, tra
 - `rw:` a road drawn by hand and `ts:` a street added to a generated town: deleted (with a drawn road's notes);
   not brought back by `restore` (the user's Undo in the app does).
 
-Returns `{removed | restored, also, refused: [{id, why}]}`; an error when nothing was done. (`remove_paths`, the old
-tool for `rw:` ids, is still accepted.)
+Returns `{removed | restored, also, refused: [{id, why}]}`; an error when nothing was done.
 
-### `list_paths`
+### `list {what: "drawn_roads"}`
 
 Every road drawn by hand, as `place_path` returns it (`{items, found}`, `limit` 100 by default).
 
@@ -2726,7 +2730,7 @@ gates}`. A gate within 5 ft of another is refused.
 stay through remakes. Returns `{removed | restored, gaps (the new fg: ids), refused: [{id, why}]}`; an error when
 nothing was done.
 
-### `list_fences`
+### `list {what: "fences"}`
 
 Without `at`: every drawn fence, gap and changed run (`{id, town, found, gone?, kind?, gates?}`; `found` false when
 its town's edits are set aside). With `at` (and `radius_ft`, default 200, at most 2,000): every fence and hedge
@@ -2809,14 +2813,14 @@ It also answers `initialize`, `ping` and `tools/list`.
 | `mapd has another world open (…), not …: nothing was done` | The `world` given isn't the one open: the user switched worlds. |
 | `saved: false`, `warning: made, but not yet saved to disk (…)` | Not an error: the change stands in memory and is saved again every few seconds. Don't repeat the call. |
 | `step N (tool) failed: … Nothing was changed.` | A `batch` step failed; the batch was not applied. |
-| `no such feature: …` | A bad id: check it with `search_features`. |
+| `no such feature: …` | A bad id: check it with `search`. |
 | `that place is under water: pick dry land` / `off the map` | `create_feature` refused the position. |
 | `… is not a created site` | `delete_feature` only removes `c:` sites. Use `hide_feature` for generated ones. |
 | `… was deleted with c:<n> (restore_feature brings it back)` / `… is already deleted` | A deleted site's ids are retired; `restore_feature` undoes the delete. |
 | `under a ruin: …` / `under an entrance: …` / `'under' is for ruins and entrances` | Only ruins and entrances choose what lies beneath them. |
 | `themes for a …: …` / `size must be …` / `levels: 1 to 6` / `… has nothing underground` | `create_feature` options that don't fit the site. |
 | `not saved: …` | `set_site_design`: the plan breaks a rule play mode needs (the reasons follow). |
-| `only underground sites (u:<layout>:<k>) can be designed` / `a city's sewers can't be designed` | `get_site_design` / `set_site_design` take `u:` sites and `b:` buildings, not sewers or keeps' deep dungeons. |
+| `only underground sites (u:<layout>:<k>) can be designed` / `a city's sewers can't be designed` | `get {view: "design"}` / `set_site_design` take `u:` sites and `b:` buildings, not sewers or keeps' deep dungeons. |
 | `a ruin or a yard has no inside to design` | Only roofed buildings have interiors. |
 | `a building's levels are its cellars and storeys` | A building's plan can't add or take away floors: change its storeys with `update_building`; cellars with `cellars <n>`. |
 | `a building has 0 to 3 levels below ground` | `cellars <n>` (or a `level -4` block) asks for too many. |
