@@ -1946,6 +1946,10 @@ export class MapView {
     u.uPatMix = fm * fm * (3 - 2 * fm);
     // Symbols are a cartographic abstraction: fade them out at site/battlemap zoom.
     u.uPatAlpha = Math.min(1, Math.max(0, (ftPerPx - 0.8) / 3.2));
+    // And at region and continent zoom (from ~6 ft/px, gone by 12: zoom -2.6 to -3.6) they would only be
+    // an even wallpaper of dots, so they fade out and are skipped; the forests keep their area tint.
+    const far = Math.min(1, Math.max(0, (ftPerPx - 6) / 6));
+    u.uSymAlpha = u.uPatAlpha * (1 - far * far * (3 - 2 * far));
     if (ftPerPx > 300) [u.uContour, u.uIndexEvery] = [1000, 5];
     else if (ftPerPx > 30) [u.uContour, u.uIndexEvery] = [200, 5];
     else if (ftPerPx > 3) [u.uContour, u.uIndexEvery] = [50, 5];

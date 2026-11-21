@@ -37,6 +37,7 @@ uniform float uIndexEvery;
 uniform float uFtPerPx;
 uniform float uPatMix;
 uniform float uPatAlpha;
+uniform float uSymAlpha;
 
 const vec3 INK = vec3(0.20, 0.18, 0.16);
 const vec3 CONTOUR_INK = vec3(0.42, 0.33, 0.24);
@@ -342,37 +343,41 @@ void main() {
     // Map symbols, blended across two octaves; ecotones dither between the two biomes.
     if (!wet && uPatAlpha > 0.0) {
         float aa0 = max(fwidth(p0.x), 1e-4);
-        float aa1 = max(fwidth(p1.x), 1e-4);
-        // Symbol lattices turned ~20 deg so rows don't line up with the screen. The matrix entries are
-        // multiples of 1/256, so a 256-cell shift of the origin stays a whole-cell shift (no tile seams).
-        mat2 turn = mat2(0.9375, -0.34375, 0.34375, 0.9375);
-        vec2 r0 = turn * p0;
-        vec2 r1 = turn * p1;
-        vec2 c0 = mod(floor(r0), 256.0);
-        vec2 c1 = mod(floor(r1), 256.0);
-        // Ecotones: only strong blends scatter the neighbouring biome's symbols.
-        float mixin = max(0.0, blend - 0.55) * 0.9;
-        // Each octave is only evaluated when the crossfade needs it (uniform branch). The crossfade
-        // drops whole symbols cell by cell instead of fading them, so neither octave shows as ghosts;
-        // the finer octave is drawn over the coarser one.
-        vec4 s0 = vec4(0.0);
-        vec4 s1 = vec4(0.0);
-        if (uPatMix < 0.98) {
-            s0 = symbol(r0, SYMBOL[hash21(c0 + 7.0) < mixin ? b2 : b1], aa0);
-            s0 *= clamp(((1.0 - uPatMix) * 1.1 - 0.05 - hash21(c0 + 13.1)) * 20.0, 0.0, 1.0);
+        // Far zoom: the symbols are gone (uSymAlpha 0), so none of their work is done (uniform branch).
+        if (uSymAlpha > 0.0) {
+            float aa1 = max(fwidth(p1.x), 1e-4);
+            // Symbol lattices turned ~20 deg so rows don't line up with the screen. The matrix entries are
+            // multiples of 1/256, so a 256-cell shift of the origin stays a whole-cell shift (no tile seams).
+            mat2 turn = mat2(0.9375, -0.34375, 0.34375, 0.9375);
+            vec2 r0 = turn * p0;
+            vec2 r1 = turn * p1;
+            vec2 c0 = mod(floor(r0), 256.0);
+            vec2 c1 = mod(floor(r1), 256.0);
+            // Ecotones: only strong blends scatter the neighbouring biome's symbols.
+            float mixin = max(0.0, blend - 0.55) * 0.9;
+            // Each octave is only evaluated when the crossfade needs it (uniform branch). The crossfade
+            // drops whole symbols cell by cell instead of fading them, so neither octave shows as ghosts;
+            // the finer octave is drawn over the coarser one.
+            vec4 s0 = vec4(0.0);
+            vec4 s1 = vec4(0.0);
+            if (uPatMix < 0.98) {
+                s0 = symbol(r0, SYMBOL[hash21(c0 + 7.0) < mixin ? b2 : b1], aa0);
+                s0 *= clamp(((1.0 - uPatMix) * 1.1 - 0.05 - hash21(c0 + 13.1)) * 20.0, 0.0, 1.0);
+            }
+            if (uPatMix > 0.02) {
+                s1 = symbol(r1, SYMBOL[hash21(c1 + 7.0) < mixin ? b2 : b1], aa1);
+                s1 *= clamp((uPatMix * 1.1 - 0.05 - hash21(c1 + 13.1)) * 20.0, 0.0, 1.0);
+            }
+            vec4 s = (s0 + s1 * (1.0 - max(s0.x, s0.y))) * uSymAlpha;
+            col *= 1.0 - 0.16 * s.w;
+            // Crown fill: a little darker and more saturated than the ground, then shaded.
+            vec3 crown = col * 0.78;
+            crown = mix(vec3(dot(crown, vec3(0.3, 0.59, 0.11))), crown, 1.3);
+            col = mix(col, crown, s.x);
+            col *= 1.0 - 0.25 * s.z;
+            col = mix(col, INK, min(s.y * 0.75, 0.9));
+
         }
-        if (uPatMix > 0.02) {
-            s1 = symbol(r1, SYMBOL[hash21(c1 + 7.0) < mixin ? b2 : b1], aa1);
-            s1 *= clamp((uPatMix * 1.1 - 0.05 - hash21(c1 + 13.1)) * 20.0, 0.0, 1.0);
-        }
-        vec4 s = (s0 + s1 * (1.0 - max(s0.x, s0.y))) * uPatAlpha;
-        col *= 1.0 - 0.16 * s.w;
-        // Crown fill: a little darker and more saturated than the ground, then shaded.
-        vec3 crown = col * 0.78;
-        crown = mix(vec3(dot(crown, vec3(0.3, 0.59, 0.11))), crown, 1.3);
-        col = mix(col, crown, s.x);
-        col *= 1.0 - 0.25 * s.z;
-        col = mix(col, INK, min(s.y * 0.75, 0.9));
 
         // Hachures: fine strokes down steep slopes (strokes follow the fall line).
         float steep = smoothstep(0.35, 1.2, slope * uExag);

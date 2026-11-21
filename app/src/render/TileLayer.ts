@@ -109,6 +109,7 @@ export class TileLayer {
     uFtPerPx: { value: 1, type: 'f32' },
     uPatMix: { value: 0, type: 'f32' },
     uPatAlpha: { value: 1, type: 'f32' },
+    uSymAlpha: { value: 1, type: 'f32' },
   });
   readonly riverFrame = new UniformGroup({
     uPpf: { value: 1, type: 'f32' },
