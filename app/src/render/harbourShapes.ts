@@ -166,6 +166,9 @@ export function drawBreakwaterArmour(g: Graphics, pts: [number, number][], sq = 
     line(offsetLine(pts, half * 0.88), 0.7 * FT, 0xf2f6f0, 0.6, 'round');
     for (const [x, y, s, c] of stones) boulder(g, x / k, y / k, s, rnd, w, c);
   });
+  // The made ground's edge coped and inked as every built edge on the water (`drawQuayCoping`),
+  // closing the stones' open outlines along it.
+  drawQuayCoping(g, pts, 1.6, seed, false, k);
 }
 
 /** Half a cog's beam at `u` along it (-1 the sternpost, 1 the stem): round-bellied, both ends drawn in. */
@@ -382,11 +385,13 @@ export function drawLantern(g: Graphics, x: number, y: number, radiusFt = 9.5, s
 
 /** A stone quay front's coping along its face `pts` (px), the water on their left-hand normal: a
  * course of pale dressed blocks `widthFt` across laid along the edge, their joints square to it,
- * inked boldly along the water, a lit arris just inside. */
-export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1.6, seed = 0) {
+ * inked boldly along the water, a lit arris just inside. Every built edge on the water wears it
+ * (quay fronts; a breakwater's edges, `wet` false: its armour shades the water), the timber piers
+ * the same ink. `k`: px per atlas px (a square `k * PX` px). */
+export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1.6, seed = 0, wet = true, k = 1) {
   if (pts.length < 2) return;
   const rnd = rng((seed ^ Math.imul(Math.round(pts[0][0]), 73856093) ^ Math.imul(Math.round(pts[0][1]), 19349663)) >>> 0);
-  const wid = widthFt * FT;
+  const wid = widthFt * FT * k;
   const inner = offsetLine(pts, -wid);
   const line = (p: [number, number][], width: number, color: number, alpha: number) => {
     g.moveTo(p[0][0], p[0][1]);
@@ -394,11 +399,12 @@ export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1
     g.stroke({ width, color, alpha, cap: 'butt', join: 'round' });
   };
   // (The wall's wet face below it, a soft shade on the water.)
-  line(offsetLine(pts, wid * 0.35), wid * 0.7, 0x2a3e40, 0.3);
+  if (wet) line(offsetLine(pts, wid * 0.35), wid * 0.7, 0x2a3e40, 0.3);
   g.poly([...pts.flat(), ...[...inner].reverse().flat()]).fill(RUBBLE[2]);
   line(offsetLine(pts, -wid * 0.3), wid * 0.25, RUBBLE[3], 0.8);
-  // The joints: one every 2.4-3.4 ft along the face, square across the course.
-  let carry = rnd() * 2 * FT;
+  // The joints: one every 2.4-3.4 ft along the face, square across the course (one stroke for all).
+  let carry = rnd() * 2 * FT * k;
+  let joints = 0;
   for (let i = 1; i < pts.length; i++) {
     const [ax, ay] = pts[i - 1];
     const [bx, by] = pts[i];
@@ -408,11 +414,13 @@ export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1
     let t = carry;
     while (t < len) {
       const [x, y] = [ax + ux * t, ay + uy * t];
-      g.moveTo(x, y).lineTo(x + uy * wid, y - ux * wid).stroke({ width: LINE, color: RUBBLE[0], alpha: 0.75 });
-      t += (2.4 + rnd()) * FT;
+      g.moveTo(x, y).lineTo(x + uy * wid, y - ux * wid);
+      joints++;
+      t += (2.4 + rnd()) * FT * k;
     }
     carry = t - len;
   }
-  line(inner, LINE, RUBBLE[0], 0.7);
-  line(pts, OUT, INK, 0.85);
+  if (joints) g.stroke({ width: LINE * k, color: RUBBLE[0], alpha: 0.75 });
+  line(inner, LINE * k, RUBBLE[0], 0.7);
+  line(pts, OUT * k, INK, 1);
 }

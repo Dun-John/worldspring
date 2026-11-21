@@ -5,7 +5,7 @@
 import type { Graphics } from 'pixi.js';
 import type { Shape } from '../gen/battlePrep';
 import { PX } from './scale';
-import { INK, FT } from './pen';
+import { INK, FT, OUT } from './pen';
 
 export { INK, FT };
 /** Towards the light (north-west, the upper left of the screen). */
@@ -23,8 +23,8 @@ const PLANKS: [number, number][] = [
 ];
 /** The underside between the planks: a lighter warm mid-brown, greyer than the planks so it reads as the side. */
 const UNDERSIDE = 0x8e6e4c;
-/** The deck's bold ink round its outer edge. */
-const PLANK_INK = 3;
+/** The deck's bold ink round its outer edge: every built edge's (`OUT`; quay coping, breakwater). */
+const PLANK_INK = OUT;
 /** The light ink between the planks: thin, part see-through, so the deck reads as boards, not a grid of bars. */
 const SEAM = { width: 1.2, color: INK, alpha: 0.38, join: 'round' as const };
 /** The planks' grain and knots: a soft shade of the plank itself. */

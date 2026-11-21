@@ -1362,7 +1362,7 @@ function stairsPanel(root: Container, y0: number, width: number, nolabels: boole
     '    if (on) col = treads(col, q, 0.0);',
     '    vec2 f = fract(q);',
     '    vec2 g = min(f, 1.0 - f) * uPxPerSq;',
-    '    col = mix(col, vec3(0.0), (1.0 - smoothstep(0.4, 1.2, min(g.x, g.y))) * 0.14);',
+    '    col = mix(col, vec3(0.0), (1.0 - smoothstep(0.4, 1.2, min(g.x, g.y))) * 0.14 * (1.0 - gStair));',
     '    finalColor = vec4(col, 1.0);',
     '}',
   ].join('\n');

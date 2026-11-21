@@ -314,16 +314,20 @@ uniform vec4 uStairs[128];
 uniform float uStairN;
 
 // Roadmap 7 (177) steps, in the sprites' cartoon style: each tread a flat top tone with a lit nosing
-// at its front (downhill) edge under a bold ink line, the riser above it a flat shaded band, in the
-// props' palettes: dressed stone (`atlas` STONE) laid in a few broad blocks on a street's flight,
-// timber (`atlas` WOOD) boards on a narrow footpath's (axis `w` 1). The ground's light and shade
-// carry over. Fades out where the treads crowd on screen and where the ground is a cliff.
+// at its front (downhill) edge under a bold ink line, the riser above it a flat shaded band (lighter
+// where it faces the upper-left light), in the props' palettes: dressed stone (`atlas` STONE) laid in
+// a few broad blocks on a street's flight, timber (`atlas` WOOD) boards on a narrow footpath's (axis
+// `w` 1). Bold ink along the flight's sides; the 5-ft grid stays off it (`gStair`). Where the treads
+// would crowd on screen they are drawn two, four... at a time, so a flight reads as steps at any
+// zoom. Fades out where the ground is a cliff.
 const vec3 STEP_STONE_TOP = vec3(0.64, 0.60, 0.54);
 const vec3 STEP_STONE_LIT = vec3(0.80, 0.76, 0.68);
 const vec3 STEP_STONE_RISE = vec3(0.45, 0.42, 0.38);
 const vec3 STEP_WOOD_TOP = vec3(0.60, 0.46, 0.30);
 const vec3 STEP_WOOD_LIT = vec3(0.74, 0.60, 0.40);
 const vec3 STEP_WOOD_RISE = vec3(0.37, 0.26, 0.15);
+// How much of the pixel the steps cover (the grid leaves it alone there).
+float gStair = 0.0;
 vec3 treads(vec3 col, vec2 q, float steep) {
     float best = 1e9;
     vec4 axis = vec4(0.0);
@@ -348,20 +352,25 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     if (best > 0.6) return col;
     vec2 u = normalize(axis.zw - axis.xy);
     vec2 pa = q - axis.xy;
-    float x = (more.y + dot(pa, u)) / more.z;
+    // Treads drawn n at a time (a power of two) so each is at least ~9 px deep on screen.
+    float n = exp2(max(0.0, ceil(log2(9.0 / max(more.z * uPxPerSq, 0.1)))));
+    float depth = more.z * n;
+    float tAlong = dot(pa, u);
+    float x = (more.y + tAlong) / depth;
     float fr = fract(x);
     float step_ = floor(x);
-    // Squares per tread on screen: fade the treads out below a few pixels.
-    float px = more.z * uPxPerSq;
-    float show = smoothstep(2.5, 5.0, px) * (1.0 - steep);
+    float px = depth * uPxPerSq;
+    float show = 1.0 - steep;
     float aa = 1.0 / max(px, 1.0);
     bool wood = more.w > 0.5;
     // The ground's light and shade under the flat tones (its hillshade, the edge's blend).
     float lum = dot(col, vec3(0.333));
-    float shade = clamp(lum / dot(SURF[19], vec3(0.333)), 0.65, 1.25);
+    float shade = clamp(lum / dot(SURF[19], vec3(0.333)), 0.75, 1.2);
     vec3 top = wood ? STEP_WOOD_TOP : STEP_STONE_TOP;
     vec3 lit = wood ? STEP_WOOD_LIT : STEP_STONE_LIT;
     vec3 rise = wood ? STEP_WOOD_RISE : STEP_STONE_RISE;
+    // A riser looks downhill: lighter where that faces the light (upper left).
+    rise = mix(rise, mix(rise, top, 0.45), clamp(dot(-u, vec2(-0.7071)), 0.0, 1.0));
     // Across the flight: stone in broad blocks (about a square and a half, offset tread by tread),
     // timber as one board per tread, its grain a faint line along it.
     float across = (pa.x * u.y - pa.y * u.x);
@@ -374,11 +383,11 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     vec3 c = mix(mix(top, lit, nose), rise, riser) * shade;
     // A thin dark line where the tread meets the riser, and the block joints over the top only.
     float back = 1.0 - smoothstep(0.0, 1.2, abs(fr - 0.7) * px);
-    c = mix(c, INK, back * 0.45);
+    c = mix(c, INK, back * 0.2);
     if (!wood) {
         float jd = min(fract(ab), 1.0 - fract(ab)) * bw * uPxPerSq;
         float joint = (1.0 - smoothstep(0.6, 1.4, jd)) * (1.0 - riser);
-        c = mix(c, INK, joint * 0.6);
+        c = mix(c, INK, joint * 0.4);
     } else {
         float grain = 1.0 - smoothstep(0.3, 1.0, abs(fr - 0.42) * px);
         c = mix(c, rise, grain * 0.35);
@@ -388,9 +397,17 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     float hw = clamp(0.06 * px, 1.0, 3.0);
     float ink = 1.0 - smoothstep(hw - 0.5, hw + 0.5, d);
     c = mix(c, INK, ink * 0.9);
-    // (Soft at the flight's sides, where the street's own paving takes over.)
-    float edge = 1.0 - smoothstep(0.35, 0.6, best);
-    return mix(col, c, show * edge);
+    // Bold ink along the flight's sides (`OUT`, 0.045 sq, at least a pixel and a half), the steps
+    // ending crisply at it, the street's own ground beyond; the ends fade into the street's paving.
+    float sideD = (abs(across) - more.x) * uPxPerSq;
+    float sw = max(0.0225 * uPxPerSq, 0.75);
+    float sideInk = 1.0 - smoothstep(sw - 0.5, sw + 0.5, abs(sideD));
+    float inside = 1.0 - smoothstep(-0.5, 0.5, sideD);
+    float endOut = max(-tAlong, tAlong - length(axis.zw - axis.xy));
+    float k = show * (1.0 - smoothstep(0.0, 0.35, endOut));
+    c = mix(mix(col, c, inside), INK, sideInk * 0.9);
+    gStair = k * max(inside, sideInk);
+    return mix(col, c, k);
 }
 
 // Roadmap 7 (170) cliffs, in the sprites' cartoon style: a dark matte rock face in three tones by
@@ -494,6 +511,9 @@ void main() {
     bool plaza = (int(dw.g + 0.5) & 64) != 0;
 
     ivec2 sq = ivec2(floor(q));
+    // On a flight of steps: its squares warped or not (so the treads end at their own inked sides,
+    // not at the warped boundary).
+    bool onStair = surf == 19 || int(dataAt(sq).r + 0.5) == 19;
     // Roads: smooth edges from filtered coverage instead of square steps.
     vec2 road = roadAt(q);
     float cov = road.x + (vnoise(w * 2.3) - 0.5) * 0.12;
@@ -667,7 +687,7 @@ void main() {
     float hx = heightsAt(q + vec2(0.5, 0.0)).x - heightsAt(q - vec2(0.5, 0.0)).x;
     float hy = heightsAt(q + vec2(0.0, 0.5)).x - heightsAt(q - vec2(0.0, 0.5)).x;
     // (Steps are level treads: their slope shades less.)
-    float relief = surf == 19 ? 0.5 : 1.6;
+    float relief = onStair ? 0.5 : 1.6;
     vec3 n = normalize(vec3(-hx / 5.0 * relief, -hy / 5.0 * relief, 1.0));
     vec3 L = normalize(vec3(-1.0, -1.0, 1.4));
     // v63 underground: small closed relief (data bit 8, the edges' 128: `battlemap::soft_relief`,
@@ -707,13 +727,13 @@ void main() {
     // Horizontal distance (squares) to the nearest line drawn.
     float distSq = min(fr, 1.0 - fr) * 5.0 * stride / max(slope, 0.02) / 5.0;
     // Steps climb steeper ground before it is a cliff.
-    float steep = surf == 19 ? smoothstep(1.0, 1.4, slope) : smoothstep(0.45, 0.8, slope);
+    float steep = onStair ? smoothstep(1.0, 1.4, slope) : smoothstep(0.45, 0.8, slope);
     // (Soft relief: a faint face, and the gentle slopes' dashed contour.)
     float face = softRelief ? 0.25 * steep : steep;
     if (softRelief) steep = 0.0;
     if (depth <= 0.0) {
         vec2 up = grad / max(slope, 1e-4);
-        bool shaped = surf == 19 || fanned || onRoad || softRelief;
+        bool shaped = onStair || fanned || onRoad || softRelief;
         if (face > 0.0) col = cliffFace(col, w, h, up, slope, shaped ? 0.0 : face, aa);
         // The face's top and foot: the line where the grade crosses CLIFF_T, from how fast the grade
         // changes there (convex: the top, inked; concave: the foot, its lower face and a square below
@@ -748,8 +768,8 @@ void main() {
         float dash = mix(step(0.35, fract((w.x + w.y) * 1.5)), 1.0, steep);
         // (Faded out up the face, where its ledges and top line draw it instead.)
         float ledged = shaped ? 0.0 : smoothstep(0.6, 1.0, slope);
-        col = mix(col, INK, line * dash * mix(0.4, 0.85, steep) * (surf == 19 || fanned ? steep : 1.0) * (1.0 - ledged));
-        if (surf == 19) col = treads(col, q, steep);
+        col = mix(col, INK, line * dash * mix(0.4, 0.85, steep) * (onStair || fanned ? steep : 1.0) * (1.0 - ledged));
+        if (onStair) col = treads(col, q, steep);
     }
 
     // 5-ft grid.
@@ -760,7 +780,7 @@ void main() {
         // show, flat paving as grass, so faded streets don't look tiled).
         bool hard = surf == 16 || surf == 19 || surf == 20;
         float wt = hard ? 0.45 : (surf == 14 ? mix(0.28, 0.45, gStones) : 0.28);
-        col = mix(col, INK, line * wt * uGrid);
+        col = mix(col, INK, line * wt * uGrid * (1.0 - gStair));
     }
 
     finalColor = vec4(col * uAlpha, uAlpha);
