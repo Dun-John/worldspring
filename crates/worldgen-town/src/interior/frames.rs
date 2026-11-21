@@ -519,7 +519,8 @@ pub(super) fn lighthouse_squares(inside: &[bool], whole: &[bool], nx: usize, ny:
     let at = |k: usize| [(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5];
     let mut by: Vec<usize> = (0..nx * ny).filter(|&k| whole[k]).collect();
     by.sort_by(|&a, &b| geom::dist(at(a), mid).total_cmp(&geom::dist(at(b), mid)).then(a.cmp(&b)));
-    let mut inner: Vec<usize> = by.iter().copied().filter(|&k| geom::dist(at(k), mid) <= 1.0).collect();
+    // (Roadmap 7 P8, v66b: a round lamp room, three squares across on a 7-by-7 floor.)
+    let mut inner: Vec<usize> = by.iter().copied().filter(|&k| geom::dist(at(k), mid) <= 1.5).collect();
     if inner.len() < 2 {
         inner = by.iter().copied().take(2).collect();
     }

@@ -589,6 +589,10 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         }
         finish_rooms(&mut rooms, &cells, n);
         let mut lvl = connect(cells, rooms, n, n, stairs, front, z == 0, None, &ext_free, &mut rng);
+        // (A round tower's room round inside, as its wall is outside, while its squares fit the circle.)
+        if round && shape::fits(&lvl.cells, n, 0, shape::ROUND) {
+            lvl.rooms[0].shape = shape::ROUND;
+        }
         windows(&mut lvl, n, n, z == 0);
         lvl.z = z;
         lvl.name = name.to_string();

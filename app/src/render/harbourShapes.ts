@@ -337,27 +337,35 @@ export function drawLantern(g: Graphics, x: number, y: number, radiusFt = 9.5, s
       const a = (i / 18) * Math.PI * 2;
       g.circle(Math.cos(a) * R * 0.92, Math.sin(a) * R * 0.92, w(2.3)).fill(IRON[1]).stroke({ width: w(0.8), color: INK });
     }
-    // The lantern: eight panes of glass round the lamp, its shadow to the south-east, iron glazing
-    // bars at the corners, a glint on the north-west panes.
-    const oct = (r: number, dx = 0, dy = 0) => Array.from({ length: 8 }, (_, i) => [dx + Math.cos(((i + 0.5) / 8) * Math.PI * 2) * r, dy + Math.sin(((i + 0.5) / 8) * Math.PI * 2) * r]).flat();
-    g.poly(oct(G, 0.45 * FT, 0.45 * FT)).fill({ color: 0x000000, alpha: lit ? 0.14 : 0.25 });
-    g.poly(oct(G)).fill(lit ? 0xffd77a : 0x5d6e76).stroke({ width: w(OUT), color: INK, join: 'round' });
-    g.poly(oct(G * 0.86)).fill(lit ? 0xfff0c0 : 0x7d8e94);
-    for (const i of [4, 5]) {
-      const [a, b] = [((i + 0.5) / 8) * Math.PI * 2, ((i + 1.5) / 8) * Math.PI * 2];
-      g.moveTo(Math.cos(a) * G * 0.93, Math.sin(a) * G * 0.93).lineTo(Math.cos(b) * G * 0.93, Math.sin(b) * G * 0.93);
+    // The lantern (v66b, as the lamp room's drawn inside: `interior/lamp.ts`): light rays out over the
+    // gallery when lit, a brass sill, a ring of twelve glass panes between thin iron mullions, warm inside.
+    if (lit) {
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+        const s = 0.12;
+        g.poly([Math.cos(a - s) * G, Math.sin(a - s) * G, Math.cos(a - s * 0.6) * R * 1.12, Math.sin(a - s * 0.6) * R * 1.12, Math.cos(a + s * 0.6) * R * 1.12, Math.sin(a + s * 0.6) * R * 1.12, Math.cos(a + s) * G, Math.sin(a + s) * G]).fill({ color: 0xffd65a, alpha: 0.3 });
+      }
     }
-    g.stroke({ width: w(2), color: 0xffffff, alpha: 0.75 });
-    for (let i = 0; i < 8; i++) {
-      const a = ((i + 0.5) / 8) * Math.PI * 2;
-      g.moveTo(Math.cos(a) * G * 0.66, Math.sin(a) * G * 0.66).lineTo(Math.cos(a) * G, Math.sin(a) * G);
+    g.circle(0.45 * FT, 0.45 * FT, G * 1.04).fill({ color: 0x000000, alpha: lit ? 0.14 : 0.25 });
+    g.circle(0, 0, G * 1.04).fill(0xc89a3c).stroke({ width: w(OUT), color: INK });
+    g.circle(0, 0, G * 0.97).fill(lit ? 0xfff0c0 : 0x7d8e94);
+    g.circle(0, 0, G * 0.97).stroke({ width: G * 0.14, color: lit ? 0xffe29a : 0x6a7c84 });
+    g.circle(0, 0, G * 0.97).stroke({ width: w(1), color: INK, alpha: 0.6 });
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      g.moveTo(Math.cos(a) * G * 0.68, Math.sin(a) * G * 0.68).lineTo(Math.cos(a) * G * 1.02, Math.sin(a) * G * 1.02);
     }
-    g.stroke({ width: w(2.4), color: IRON[0] });
+    g.stroke({ width: w(1.4), color: IRON[0] });
+    for (const i of [7, 8]) {
+      const [a, b] = [((i + 0.2) / 12) * Math.PI * 2, ((i + 0.8) / 12) * Math.PI * 2];
+      g.moveTo(Math.cos(a) * G * 0.9, Math.sin(a) * G * 0.9).lineTo(Math.cos(b) * G * 0.9, Math.sin(b) * G * 0.9);
+    }
+    g.stroke({ width: w(1.6), color: 0xffffff, alpha: 0.8 });
     // The cap: a copper dome in eight ribbed gores, verdigris, lit on the north-west, the vent's
     // ball on top.
-    const C = G * 0.58;
+    const C = G * 0.52;
     const copper = [0x4f6a60, 0x6f8a7e, 0x93ab9c];
-    g.poly(oct(C / Math.cos(Math.PI / 8))).fill(copper[0]).stroke({ width: w(LINE), color: INK, join: 'round' });
+    g.circle(0, 0, C).fill(copper[0]).stroke({ width: w(LINE), color: INK, join: 'round' });
     const gore = (a0: number, color: number) => g.poly([0, 0, ...Array.from({ length: 9 }, (_, i) => [Math.cos(Math.PI * (a0 + i * 0.0625)) * C * 0.96, Math.sin(Math.PI * (a0 + i * 0.0625)) * C * 0.96]).flat()]).fill(color);
     gore(0.75, copper[2]);
     gore(0.25, shade(copper[0], 0.9));

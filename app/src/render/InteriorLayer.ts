@@ -23,7 +23,8 @@ import { underLook } from './underTheme';
 import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TERRAIN_CHANNEL, underField, type UnderField } from './underField';
 import { nearestWall, wallDistance, type WallDistance } from './wallField';
 import { drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetParts, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, YURT_ROOMS, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
-import { drawWinders } from './interior/winder';
+import { drawWinders, winderLinks } from './interior/winder';
+import { drawLampFloor, drawLampGlass, isLampTop } from './interior/lamp';
 import { ON_WALL, BACKED, UNDERFOOT, ALONG_RUN, setBack, sideOf, sharedKind, SCATTERED, INK, lockColor, TERRAIN_KINDS, SPAN_KINDS, hash2, IRON, padlock, keyGlyph, blob, COVER, underProgram, UNDER_DIM, itemAt, itemVariant, BANNERS, floorColor, floorPattern, OPEN_TOP, itemColor } from './interior/look';
 import { SQUARE_FT } from './scale';
 import { RAIL_SQUARES, drawRails, drawArcade } from './interior/rails';
@@ -403,11 +404,12 @@ export class InteriorLayer {
       if (this.level + 1 < n && it.levels[this.level + 1].has_stairs) out.push(level(this.level + 1, 'up', 'stairs up'));
       if (this.level > 0 && it.levels[this.level - 1].has_stairs) out.push(level(this.level - 1, 'down', 'stairs down'));
     }
-    // A round tower's winding stair: up from its run, down from it or its well to the floor below.
-    if (!this.underground && item && (item.kind === 'winder' || item.kind === 'stair_well')) {
-      const winds = (li: number) => it.levels[li]?.furniture.some((f) => f.kind === 'winder');
-      if (item.kind === 'winder' && this.level + 1 < n && winds(this.level + 1)) out.push(level(this.level + 1, 'up', 'up the winding stair'));
-      if (this.level > 0 && winds(this.level - 1)) out.push(level(this.level - 1, 'down', 'down the winding stair'));
+    // A round tower's winding stair: up from the landing at the top of its run, down from the one
+    // where it comes up (the same square on both floors, marked by an arrow: `winderLinks`).
+    if (!this.underground && item?.kind === 'winder') {
+      const { up, down } = winderLinks(it, this.level);
+      if (up.has(`${i},${j}`)) out.push(level(this.level + 1, 'up', 'up the winding stair'));
+      if (down.has(`${i},${j}`)) out.push(level(this.level - 1, 'down', 'down the winding stair'));
     }
     // A building's front door (or a back door): out into the street.
     if (!this.underground && this.level === it.entry_level) {
@@ -909,6 +911,7 @@ export class InteriorLayer {
     };
     if (lv.has_stairs && !stairsCut) drawStairs(g);
     if (!this.underground) drawWinders(g, it, this.level);
+    if (!this.underground) drawLampFloor(g, it, this.level);
     // Furniture, as sprites from the item atlas (or drawn here without a renderer).
     // (Underground, the shader paints sewage and lava channels.)
     const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
@@ -1031,7 +1034,7 @@ export class InteriorLayer {
         run -= len;
       }
       g.fill(0x6f6a61);
-    } else if (lv.roof && !lv.rooms.some((r) => r.kind === TERRACE)) {
+    } else if (lv.roof && !lv.rooms.some((r) => r.kind === TERRACE) && !isLampTop(lv)) {
       for (const w of lv.walls) {
         if (!w.exterior) continue;
         const len = Math.abs(w.b[0] - w.a[0]) + Math.abs(w.b[1] - w.a[1]);
@@ -1045,6 +1048,8 @@ export class InteriorLayer {
       }
       g.fill(0x6f6a61);
     }
+    // A lighthouse's top: the lantern's glazing, the gallery's railing (`interior/lamp`).
+    if (!this.underground) drawLampGlass(g, it, this.level, drawn);
     // Burial niches cut into the rock: the wall is open across their mouths.
     if (this.underground) {
       for (const f of lv.furniture) {

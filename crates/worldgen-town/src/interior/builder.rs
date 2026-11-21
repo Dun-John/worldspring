@@ -370,15 +370,14 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
                 w.lay(&mut lvl, nx, ny, li);
             }
         }
-        // A lighthouse's lamp in the lamp room on its roof: off its doorway, the farthest from where
-        // the winding stair comes out.
+        // A lighthouse's lamp in the middle of the lamp room on its roof (off its doorway).
         if let Some((_, lp, inner)) = &lamp
             && z == ROOF
         {
-            let land = wind.as_ref().and_then(|w| w.run(li).first().copied());
             let doorway = super::winder::doorways(&lvl, nx, ny);
-            let d = |k: usize| land.map_or(0.0, |l| geom::dist([(k % nx) as f64, (k / nx) as f64], [(l % nx) as f64, (l / nx) as f64]));
-            let at = inner.iter().copied().filter(|k| !doorway.contains(k) && lvl.cells[*k] >= 0).max_by(|&a, &b| d(a).total_cmp(&d(b)).then(b.cmp(&a))).or(Some(*lp).filter(|&k| lvl.cells[k] >= 0 && !doorway.contains(&k)));
+            let mid = [0.5 * nx as f64, 0.5 * ny as f64];
+            let d = |k: usize| geom::dist([(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5], mid);
+            let at = inner.iter().copied().filter(|k| !doorway.contains(k) && lvl.cells[*k] >= 0).min_by(|&a, &b| d(a).total_cmp(&d(b)).then(a.cmp(&b))).or(Some(*lp).filter(|&k| lvl.cells[k] >= 0 && !doorway.contains(&k)));
             if let Some(k) = at {
                 push_item(&mut lvl.furniture, "lighthouse_lamp", k % nx, k / nx);
             }

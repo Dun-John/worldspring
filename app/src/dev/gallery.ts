@@ -688,12 +688,16 @@ function lighthouse(root: Container, y0: number, width: number, nolabels: boolea
   const wellOf = (li: number) => (li === 0 ? [] : Array.from({ length: step >> 1 }, (_, t) => ring[(foot + (li - 1) * step + step - (step >> 1) + t) % ring.length]));
   const gap = 1;
   const s = Math.min(sq, (width - 32) / (floors.length * (n + gap)));
+  // (One building, its four levels each shown by its own layer: the stair's landings pair up floor to floor.)
+  const levels: Interior['levels'] = [];
+  const it = { id: 'b:lighthouse', settlement: 0, building: 0, name: null, function: 'lighthouse', origin: [0, 0], axis: [1, 0], across: [0, 1], nx: n, ny: n, levels, entry_level: 0, stairs: [0, 0, 0, 0] } as unknown as Interior;
   floors.forEach((kind, f) => {
     const cells = new Array<number>(n * n).fill(-1);
-    const rooms: Interior['levels'][number]['rooms'] = kind === 'lamp room' ? [{ kind: ' ', squares: 0, raise_ft: 0, center: [3.5, 3.5] }, { kind: ' ', squares: 0, raise_ft: 0, center: [3.5, 3.5] }] : [{ kind: ' ', squares: 0, raise_ft: 0, center: [3.5, 3.5], shape: 1 }];
+    // (The roof: the round lamp room three squares across in the middle, the gallery round it.)
+    const rooms: Interior['levels'][number]['rooms'] = kind === 'lamp room' ? [{ kind: 'lamp room', squares: 0, raise_ft: 0, center: [3.5, 3.5], shape: 1 }, { kind: 'lamp gallery', squares: 0, raise_ft: 0, center: [3.5, 3.5] }] : [{ kind: ' ', squares: 0, raise_ft: 0, center: [3.5, 3.5], shape: 1 }];
     for (let k = 0; k < n * n; k++) {
       const [i, j] = [k % n, Math.floor(k / n)];
-      const r = kind === 'lamp room' ? (Math.abs(i - 3) + Math.abs(j - 3) <= 1 ? 0 : 1) : round(i, j) ? 0 : -1;
+      const r = !round(i, j) ? -1 : kind === 'lamp room' ? (Math.abs(i - 3) <= 1 && Math.abs(j - 3) <= 1 ? 0 : 1) : 0;
       if (r >= 0) {
         cells[k] = r;
         rooms[r].squares++;
@@ -713,10 +717,18 @@ function lighthouse(root: Container, y0: number, width: number, nolabels: boolea
       if (a !== undefined) item('desk', a % n, Math.floor(a / n));
       if (b !== undefined) item('barrel', b % n, Math.floor(b / n));
     } else for (const [t, k] of free.entries()) item(t % 3 === 1 ? 'barrel' : 'crate', k % n, Math.floor(k / n));
-    const doors = f === 0 ? [{ a: [3, 7] as [number, number], b: [4, 7] as [number, number], kind: 'front', rooms: [0, -1] as [number, number], lock: 0 }] : [];
-    const level = { z: f, name: kind, elevation_ft: 0, cells, rooms, walls: [], doors, windows: [], furniture, roof: kind === 'lamp room', has_stairs: false, natural: false };
-    const it = { id: `b:lighthouse-${f}`, settlement: 0, building: 0, name: null, function: 'lighthouse', origin: [0, 0], axis: [1, 0], across: [0, 1], nx: n, ny: n, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] } as unknown as Interior;
-    const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+    const doors: Interior['levels'][number]['doors'] = f === 0 ? [{ a: [3, 7], b: [4, 7], kind: 'front', rooms: [0, -1], lock: 0 }] : [];
+    if (kind === 'lamp room') {
+      // (The lamp room's door toward the landing.)
+      const [dx, dy] = [(run[0] % n) + 0.5 - 3.5, Math.floor(run[0] / n) + 0.5 - 3.5];
+      const e = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 5 : 2) : dy > 0 ? 5 : 2;
+      doors.push({ a: Math.abs(dx) > Math.abs(dy) ? [e, 3] : [3, e], b: Math.abs(dx) > Math.abs(dy) ? [e, 4] : [4, e], kind: 'door', rooms: [0, 1], lock: 0 } as Interior['levels'][number]['doors'][number]);
+    }
+    levels.push({ z: f, name: kind, elevation_ft: 0, cells, rooms, walls: [], doors, windows: [], furniture, roof: kind === 'lamp room', has_stairs: false, natural: false } as unknown as Interior['levels'][number]);
+  });
+  floors.forEach((kind, f) => {
+    // (Peeked: no room names, no dimming round it.)
+    const layer = new InteriorLayer(it, 0, true, false, { player: false, doors: null }, false, undefined, f);
     const holder = new Container();
     holder.addChild(layer.container);
     holder.scale.set(s);
