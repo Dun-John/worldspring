@@ -303,7 +303,14 @@ fn fence_edits() {
         let l = town::layout(&ex.world, &ex.t0, vi);
         let srcs = fence::sources(&l, &ex.t0, fence::EVERYWHERE);
         let long = |s: &(u8, P, P, FenceKind), tag: u8, d: f64| s.0 == tag && geom_dist(s.1, s.2) >= d && inner(geom::lerp(s.1, s.2, 0.5), 60.0);
-        let hedges: Vec<(u8, P, P, FenceKind)> = srcs.iter().copied().filter(|s| long(s, fence::CROFT, 30.0) && s.3 == FenceKind::Hedgerow).collect();
+        // (Away from rivers: a bank's cliff squares are hard going with or without the hedge.)
+        let dry = |s: &(u8, P, P, FenceKind)| {
+            [0.0, 0.5, 1.0].iter().all(|&t| {
+                let p = geom::lerp(s.1, s.2, t);
+                worldgen::lod::rivers::surface_near(&ex.t0.rivers, p[0], p[1], 200.0, ex.t0.cell_ft).is_none()
+            })
+        };
+        let hedges: Vec<(u8, P, P, FenceKind)> = srcs.iter().copied().filter(|s| long(s, fence::CROFT, 30.0) && s.3 == FenceKind::Hedgerow && dry(s)).collect();
         let sides: Vec<(u8, P, P, FenceKind)> = srcs.iter().copied().filter(|s| long(s, fence::FIELD, 40.0)).collect();
         let drawn = |ex: &mut Executor, s: &(u8, P, P, FenceKind)| {
             let m = geom::lerp(s.1, s.2, 0.5);

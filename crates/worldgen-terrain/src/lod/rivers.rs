@@ -38,6 +38,10 @@ const LEVEE_BACK: f64 = 0.15;
 /// Where across its reach (a fraction) the valley starts easing back up to the ground, so
 /// where the ground stands high above an incised river its sides steepen gradually.
 const VALLEY_EASE: f64 = 0.4;
+/// How much wider than the river its mouth opens where it meets standing water (over the
+/// first three quarters of its last segment, from the last land cell to the first wet one):
+/// a funnel, not a constant-width notch in the shore.
+const MOUTH_FLARE: f64 = 1.6;
 
 #[derive(Clone, Debug, Default)]
 pub struct RiverCurve {
@@ -59,6 +63,9 @@ pub struct RiverCurve {
     /// Water surface at eighths of each segment (`RiverNet::settle`; empty: linear between
     /// the control points).
     pub prof: Vec<[f32; 9]>,
+    /// Ends in a lake or the sea (not in another river): its last segment widens into an
+    /// estuary (`MOUTH_FLARE`). Derived from the net (`RiverNet::new`), not saved.
+    pub mouth: bool,
 }
 
 /// All river curves plus a coarse spatial index of their segments.
@@ -115,7 +122,7 @@ impl RiverCurve {
             phase[k] = phase[k - 1] + std::f64::consts::TAU * d / wavelength_ft(w);
             wphase[k] = wphase[k - 1] + d / (4.0 * w);
         }
-        RiverCurve { pts, z, q, taper, s, phase, wphase, seed, prof: Vec::new() }
+        RiverCurve { pts, z, q, taper, s, phase, wphase, seed, prof: Vec::new(), mouth: false }
     }
 
     pub fn segments(&self) -> usize {
@@ -180,9 +187,14 @@ impl RiverCurve {
         };
         let s = lerp(self.s[k], self.s[k1]);
         let phase = lerp(self.phase[k], self.phase[k1]);
-        let taper = lerp(self.taper[k] as f64, self.taper[k1] as f64);
+        // A mouth's last segment runs from its last land cell to the first wet one, the shore
+        // about halfway: the river keeps its bends to the shore, not straightening a cell early.
+        let at_mouth = self.mouth && k + 1 == self.segments();
+        let taper = if at_mouth { self.taper[k] as f64 * (1.0 - smoothstep(0.45, 1.0, t)) } else { lerp(self.taper[k] as f64, self.taper[k1] as f64) };
         let w = width_ft(q);
         let lambda = wavelength_ft(w);
+        // (The estuary's widening is the channel's only: the meanders keep the river's scale.)
+        let w_out = if at_mouth { (w * (1.0 + MOUTH_FLARE * smoothstep(0.0, 0.75, t))).min(width_ft(1e9)) } else { w };
 
         // Sinuosity from the slope at each control point (centred difference), interpolated,
         // so meander amplitude is continuous across joints.
@@ -235,7 +247,7 @@ impl RiverCurve {
         // Cell-scale drift: even small streams never run straight between T0 cells.
         let drift_len = 2.5 * cell_ft;
         let drift = 0.22 * cell_ft * gradient2(self.seed ^ 0x99, s / drift_len, 0.13);
-        Frame { base, nrm, z, w, q, taper, lambda_local: lambda / rate, amp, phase: angle, wiggle, drift_len, drift }
+        Frame { base, nrm, z, w: w_out, q, taper, lambda_local: lambda / rate, amp, phase: angle, wiggle, drift_len, drift }
     }
 }
 
@@ -256,7 +268,17 @@ struct Frame {
 }
 
 impl RiverNet {
-    pub fn new(rivers: Vec<RiverCurve>, map_w_ft: f64, map_h_ft: f64, cell_ft: f64) -> RiverNet {
+    pub fn new(mut rivers: Vec<RiverCurve>, map_w_ft: f64, map_h_ft: f64, cell_ft: f64) -> RiverNet {
+        // A river whose last point is no point of another river's ends in standing water.
+        let mut joints: crate::core::hash::FastSet<(u64, u64)> = Default::default();
+        for r in &rivers {
+            for p in r.pts.iter().take(r.pts.len().saturating_sub(1)) {
+                joints.insert((p[0].to_bits(), p[1].to_bits()));
+            }
+        }
+        for r in &mut rivers {
+            r.mouth = r.pts.last().is_some_and(|p| !joints.contains(&(p[0].to_bits(), p[1].to_bits())));
+        }
         let bin_ft = cell_ft * 8.0;
         let bins_w = (map_w_ft / bin_ft).ceil() as usize + 1;
         let bins_h = (map_h_ft / bin_ft).ceil() as usize + 1;
@@ -358,12 +380,25 @@ impl RiverNet {
         }
         // Meanders and drift carry the curve up to a cell off its cells' line: where that puts
         // it over ground lower than its water (a neighbouring valley), it would stand on a dike.
-        // There the wander is halved (up to three times), drawing it back toward its cells.
+        // There the wander is halved (up to three times), drawing it back toward its cells. Only
+        // where the wander is to blame: where the cells' own line stands as high over the ground
+        // (a fall the levels step down over, a low shore by the mouth), calming would only
+        // straighten the river into a canal and lift it no less.
         for r in &mut self.rivers {
+            let base_perched: Vec<bool> = (0..r.segments())
+                .map(|k| {
+                    (1..8).any(|j| {
+                        let t = j as f64 / 8.0;
+                        let p = r.frame(k, t, cell_ft).base;
+                        let level = r.z[k] as f64 + (r.z[k + 1] - r.z[k]) as f64 * t;
+                        !wet(p[0], p[1]) && level > ground(p[0], p[1]) + 3.0
+                    })
+                })
+                .collect();
             for _ in 0..3 {
                 let mut calm = vec![false; r.pts.len()];
                 for k in 0..r.segments() {
-                    if r.taper[k] <= 0.0 && r.taper[k + 1] <= 0.0 {
+                    if (r.taper[k] <= 0.0 && r.taper[k + 1] <= 0.0) || base_perched[k] {
                         continue;
                     }
                     let perched = (1..8).any(|j| {
@@ -673,7 +708,10 @@ pub struct Piece {
 /// carving reach), so wide rivers are sampled from farther out than creeks.
 pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing: f64, cell_ft: f64) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
-    let seg_w = |r: &RiverCurve, k: usize| width_ft(r.q[k].max(r.q[k + 1]) as f64);
+    let seg_w = |r: &RiverCurve, k: usize| {
+        let w = width_ft(r.q[k].max(r.q[k + 1]) as f64);
+        if r.mouth && k + 1 == r.segments() { (w * (1.0 + MOUTH_FLARE)).min(width_ft(1e9)) } else { w }
+    };
     // Bins with the widest river's pad, then each segment by its own.
     let near: Vec<(u32, u32)> = net
         .segments_near(rect[0], rect[1], rect[2], rect[3], pad(width_ft(1e9)))
