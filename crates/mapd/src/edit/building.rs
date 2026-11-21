@@ -39,7 +39,7 @@ pub fn list() -> Vec<Value> {
     let mut create = props();
     if let Some(m) = create.as_object_mut() {
         m.insert("near".into(), crate::tools::args::point_schema("Instead of a footprint: the nearest clear spot for width_ft x depth_ft on a street"));
-        m.insert("width_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: along the street" }));
+        m.insert("width_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "Along the street (with near)" }));
         m.insert("depth_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400 }));
         m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way" }));
     }

@@ -586,7 +586,7 @@ pub fn restore_clash(world: &World, t0: &T0, ids: &[String]) -> Result<(), Strin
             if let Some(c) = drawn
                 && l.buildings.iter().any(|b| polys_overlap(&inner, &b.poly))
             {
-                return Err(format!("{id} would come back under {} (drawn by hand): delete_feature {} first", c.id, c.id));
+                return Err(format!("{id} would come back under {} (drawn by hand): remove {} first", c.id, c.id));
             }
         }
     }

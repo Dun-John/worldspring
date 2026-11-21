@@ -25,6 +25,9 @@ const fn fam(run: Run, old: &'static str) -> Fam {
 const ROADS: [&str; 6] = ["rd", "mt", "tr", "pp", "rw", "ts"];
 const FENCES: [&str; 4] = ["fr", "fh", "f", "fg"];
 
+/// Every id prefix `remove` routes.
+const REMOVABLE: [&str; 26] = ["c", "b", "n", "p", "m", "r", "o", "x", "h", "i", "g", "e", "q", "v", "j", "sk", "rd", "mt", "tr", "pp", "rw", "ts", "fr", "fh", "f", "fg"];
+
 /// What a family that has no restore is called, for the refusal.
 fn for_good(prefix: &str) -> Option<&'static str> {
     Some(match prefix {
@@ -99,7 +102,11 @@ async fn not_here(app: &Shared, id: &str, done: &str) -> String {
         .with(move |ex| {
             Ok::<_, String>(match worldgen::agent::position(&ex.world, &ex.t0, &q) {
                 Some(_) => format!("{q} can't be {done}: generated features stay (set_feature {{id, hidden: true}} hides one)"),
-                None => crate::tools::args::no_such(&ex.world, &ex.t0, &q),
+                None => {
+                    let p = q.split(':').next().unwrap_or_default();
+                    let n = crate::tools::args::no_such(&ex.world, &ex.t0, &q);
+                    if n.starts_with("no such feature") && !REMOVABLE.contains(&p) { format!("unknown id prefix {p:?} in {q} (remove and restore take: {})", REMOVABLE.join(" ")) } else { n }
+                }
             })
         })
         .await
@@ -119,7 +126,7 @@ pub fn list() -> Vec<Value> {
     restore.insert("within".into(), crate::read::old_schema("restore_objects")["properties"]["within"].clone());
     vec![
         json!({ "name": "remove", "title": "Take away", "description": "Take things away by id (id or ids, any families, all or none, one change): created sites and drawn buildings (c:, b:), the world's own buildings (b:), NPCs (n:), plot points (p:), notes (m:, r:), objects (o:), ground (h:, i:), water (e:), roads (rd: mt: tr: pp: rw: ts:), fences (fr: fh: f: fg:), wharves (q:), crossings (v:), links (j:), sketch strokes (sk:). what: buildings / objects take within (objects also points, kinds); notes the notes on places. Generated features can only be hidden (set_feature).", "inputSchema": schema(Value::Object(remove), &[]) }),
-        json!({ "name": "restore", "title": "Bring back", "description": "Bring back what remove took (id or ids, all or none, one change): created sites and drawn buildings (c:, b:), the world's own buildings (b:, as generated), clears (x:), generated islets (i:), roads and fences by their ids; or what: objects with within (every clear touching it). NPCs, notes, water, wharves, crossings, links, strokes and ground shaped by hand are deleted for good.", "inputSchema": schema(Value::Object(restore), &[]) }),
+        json!({ "name": "restore", "title": "Bring back", "description": "Bring back what remove took (id or ids, all or none, one change): created sites and drawn buildings (c:, b:), the world's own buildings (b:, as generated), clears (x:), generated islets (i:), roads (not drawn roads, rw:) and fences by their ids; or what: objects with within (every clear touching it). NPCs, notes, water, wharves, crossings, links, strokes and ground shaped by hand are deleted for good.", "inputSchema": schema(Value::Object(restore), &[]) }),
     ]
 }
 

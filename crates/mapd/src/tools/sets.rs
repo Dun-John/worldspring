@@ -130,10 +130,10 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
             let (old, label) = if given(a, "id") { ("update_water", "set_water with id (a change)") } else { ("create_water", "set_water without id (new water)") };
             via(app, a, Run::Waters, old, &[], label).await
         }
-        "set_road" => via(app, a, Run::Paths, "place_path", PATH, "set_road").await,
+        "set_road" => via(app, a, Run::Paths, "place_path", PATH, "set_road").await.map(|v| echo(v, "set_road", &[("pts", "path")])),
         "set_fence" => via(app, a, Run::Fences, "place_fence", POINTS, "set_fence").await,
         "set_crossing" => via(app, a, Run::Crossings, "place_crossing", &[], "set_crossing").await,
-        "set_wharf" => via(app, a, Run::Harbour, "place_wharf", &[], "set_wharf").await,
+        "set_wharf" => via(app, a, Run::Harbour, "place_wharf", &[], "set_wharf").await.map(|v| echo(v, "set_wharf", &[])),
         "set_link" => via(app, a, Run::Links, "create_link", &[], "set_link").await,
         "set_sketch_stroke" => {
             let (old, label) = if given(a, "id") { ("update_sketch_stroke", "set_sketch_stroke with id (a change)") } else { ("create_sketch_stroke", "set_sketch_stroke without id (a new stroke)") };
@@ -143,6 +143,21 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         _ => return None,
     };
     Some(r.map(text))
+}
+
+/// A reply in the merged tool's words: its name as `tool`, the old argument names given new ones.
+fn echo(mut v: Value, tool: &str, renames: &[(&str, &str)]) -> Value {
+    if let Some(o) = v.as_object_mut() {
+        if o.contains_key("tool") {
+            o.insert("tool".into(), json!(tool));
+        }
+        for (old, new) in renames {
+            if let Some(x) = o.remove(*old) {
+                o.insert((*new).into(), x);
+            }
+        }
+    }
+    v
 }
 
 fn given(a: &Value, k: &str) -> bool {
@@ -319,7 +334,11 @@ async fn building(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     if given(a, "id") {
         let b = fit(&b, "update_building", &[], "set_building with id (a change)")?;
-        return run(app, vec![(Run::Build, "update_building", b)], false).await;
+        let mut v = run(app, vec![(Run::Build, "update_building", b)], false).await?;
+        if let Some(d) = v["detail"].as_str().and_then(|d| d.strip_prefix("created ")) {
+            v["detail"] = json!(format!("updated {d}"));
+        }
+        return Ok(v);
     }
     let b = fit(&b, "create_building", NEAR, "set_building without id (a new one)")?;
     run(app, vec![(Run::Build, "create_building", b)], false).await

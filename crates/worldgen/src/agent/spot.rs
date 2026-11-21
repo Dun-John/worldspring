@@ -324,7 +324,7 @@ impl Blocker {
                 let inn = self.place.as_deref().map(|p| format!(" in {p}")).unwrap_or_default();
                 let mut m = format!("that overlaps {}{with_id}{inn}{}", self.name.as_deref().unwrap_or("a building"), at.replacen(" at", ", at", 1));
                 if clear && !self.removable {
-                    m += &format!("; it is drawn by hand: delete_feature {id} first");
+                    m += &format!("; it is drawn by hand: remove {id} first");
                 }
                 m
             }
