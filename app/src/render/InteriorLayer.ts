@@ -987,7 +987,7 @@ export class InteriorLayer {
     } else if (sp && drawn) {
       // The solid wall over the furniture; the walls; then the floor through thick walls to doors
       // and windows, over them.
-      drawMass(g, sp, INK);
+      drawMass(g, sp, INK, lv);
       // (The players' view: no gap for a secret door they haven't found.)
       const hidden = (k: number) => this.style.player && lv.doors[k].kind === 'secret' && !!this.style.doors && !this.style.doors(locKey(it.id, this.level), k).found && !this.style.doors(locKey(it.id, this.level), k).open;
       const gapped = drawn.map((d, k) => (hidden(k) ? { ...d, inner: undefined, outer: undefined, threshold: undefined } : d));

@@ -132,6 +132,8 @@ export interface ShapedPlan {
   under: Int32Array;
   /** By room: its shape, cut to the outer wall (null for square rooms). */
   polys: (Pt[] | null)[];
+  /** A round wall tower's outer face (`t:` interiors, no outline): its middle, the shape's radius and the face's. */
+  disc?: { c: Pt; r0: number; r: number };
 }
 
 /** A door as drawn: its leaf's closed line (`a`-`b`); off its square edge (`moved`) when it stands
@@ -405,10 +407,35 @@ export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel,
 
 /** The solid wall: the footprint's squares no room has, and the parts of shaped rooms' squares
  * outside their shapes where nothing else shows (over the furniture, as walls are). */
-export function drawMass(g: Graphics, sp: ShapedPlan, color: number) {
-  const pieces = massPieces(sp);
+export function drawMass(g: Graphics, sp: ShapedPlan, color: number, lv?: InteriorLevel) {
+  const pieces = [...massPieces(sp), ...(lv ? discRing(sp, lv) : [])];
   for (const piece of pieces) g.poly(flat(piece));
   if (pieces.length) g.fill(color);
+}
+
+/** Wall thickness of a round wall tower's outer face past its round room's shape (grid units). */
+const TOWER_FACE = 0.58;
+const DISC_SIDES = 48;
+
+/** A round wall tower's outer face: the ring from the room's shape out to the circle, as convex
+ * pieces; none where a floor of another room lies (a wall walk's squares leaving the tower). */
+function discRing(sp: ShapedPlan, lv: InteriorLevel): Pt[][] {
+  const d = sp.disc;
+  if (!d) return [];
+  const out: Pt[][] = [];
+  const pt = (a: number, r: number): Pt => [d.c[0] + Math.cos(a) * r, d.c[1] + Math.sin(a) * r];
+  for (let k = 0; k < DISC_SIDES; k++) {
+    const [a0, a1] = [(k / DISC_SIDES) * Math.PI * 2, ((k + 1) / DISC_SIDES) * Math.PI * 2];
+    const am = (a0 + a1) / 2;
+    const m = pt(am, (d.r0 + d.r) / 2);
+    const [i, j] = [Math.floor(m[0]), Math.floor(m[1])];
+    const room = i >= 0 && j >= 0 && i < sp.nx && j < sp.ny ? lv.cells[j * sp.nx + i] : -1;
+    if (room > 0 || (room === 0 && !sp.polys[0])) continue;
+    // (Inner edge on the circle through the shape's corners; its chord's slivers are the squares' mass.)
+    const rin = d.r0 * 0.995;
+    out.push([pt(a0, rin), pt(a1, rin), pt(a1, d.r), pt(a0, d.r)]);
+  }
+  return out;
 }
 
 /** The solid wall's pieces (convex). */
@@ -417,11 +444,15 @@ export function massPieces(sp: ShapedPlan): Pt[][] {
   // (The shapes reach past their own squares, up to half a square: none is covered.)
   const shapes = polys.filter((p): p is Pt[] => !!p?.length).map((p) => ({ p, box: [Math.min(...p.map((q) => q[0])), Math.min(...p.map((q) => q[1])), Math.max(...p.map((q) => q[0])), Math.max(...p.map((q) => q[1]))] }));
   const out: Pt[][] = [];
+  const d = sp.disc;
+  const face: Pt[] | null = d ? Array.from({ length: DISC_SIDES }, (_, k): Pt => [d.c[0] + Math.cos((k / DISC_SIDES) * Math.PI * 2) * d.r, d.c[1] + Math.sin((k / DISC_SIDES) * Math.PI * 2) * d.r]) : null;
   for (let j = -1; j <= ny; j++) {
     for (let i = -1; i <= nx; i++) {
       if (shownAt(sp, i, j) !== MASS) continue;
       let pieces = clipParts(squareAt(i, j), parts);
       for (const { p, box } of shapes) if (box[0] < i + 1 && box[2] > i && box[1] < j + 1 && box[3] > j) pieces = pieces.flatMap((q) => subtractConvex(q, p));
+      // (A round tower's own squares, outside its shape: only within the outer face.)
+      if (face && i >= 0 && j >= 0 && i < nx && j < ny && sp.under[j * nx + i] !== -1) pieces = pieces.map((q) => clipConvex(q, face)).filter((q) => q.length);
       out.push(...pieces);
     }
   }
@@ -745,6 +776,14 @@ function planOf(it: Interior, level: number): { plan: ShapedPlan | null; doors: 
       outlines = it.outlines.filter((_, p) => holds.has(p));
     }
     const plan = shapedPlan(outlines, lv, it.nx, it.ny, footOf(it.levels, it.nx * it.ny));
+    // (A round wall tower: its outer face a circle, not the squares round its round room.)
+    const rp = plan && !plan.real && it.id.startsWith('t:') ? plan.polys[0] : null;
+    if (plan && rp && lv.rooms[0]?.shape === ROUND && rp.length >= 8) {
+      const xs = rp.map((q) => q[0]);
+      const ys = rp.map((q) => q[1]);
+      const r0 = (Math.max(...xs) - Math.min(...xs) + Math.max(...ys) - Math.min(...ys)) / 4;
+      plan.disc = { c: [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2], r0, r: r0 + TOWER_FACE };
+    }
     const doors = plan ? lv.doors.map((d) => doorSegment(plan, lv, d)) : null;
     // (A yurt's door on the south point of its ring, as the battlemap draws it.)
     const ring = yurtRing(it, level);
