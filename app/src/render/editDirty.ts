@@ -3,7 +3,7 @@
 // reaches, and the ids whose labels, roads or fences change. MapView does the rest (labels, the
 // towns' hints and reach, the generators).
 
-import { type Clear, type Created, type Edits, type Placed, type Rect, WORKS_MARGIN_FT } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Placed, type Plateau, type Rect, WORKS_MARGIN_FT } from '../gen/protocol';
 import { curve as pathCurve, pathWidth } from '../editor/paths';
 import { BLOCK, parseKey } from '../editor/groundCodec';
 import { shore } from '../editor/water';
@@ -55,6 +55,8 @@ export interface EditDirty {
   worksRects: Rect[];
   /** Areas of ground changed: brushed blocks (one box), plateaus, water drawn by hand. */
   ground: Rect[];
+  /** Hills changed, as they were and are (a big one is drawn on coarser levels too: `hillLevel`). */
+  hills: Plateau[];
   /** The world's islets (`i:`) taken away or brought back. */
   islets: string[];
   /** Site tile areas round the world's own buildings changed. */
@@ -188,6 +190,7 @@ export function editDirty(prev: Edits, next: Edits, changed?: Record<string, str
   // Ground shaped by hand: the battlemaps over it, and every building that may stand on it
   // (a building rides on the ground under its corners: 160 ft takes in the largest).
   const ground: Rect[] = [];
+  const hills: Plateau[] = [];
   const pg = prev.ground ?? {};
   const ng = next.ground ?? {};
   const box: Rect = [Infinity, Infinity, -Infinity, -Infinity];
@@ -211,6 +214,7 @@ export function editDirty(prev: Edits, next: Edits, changed?: Record<string, str
     if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
     for (const p of [a, b]) {
       if (!p) continue;
+      if (p.kind === 'hill') hills.push(p);
       const e = Math.max(p.edge ?? 0, 5) + 5;
       ground.push([Math.min(...p.pts.map((q) => q[0])) - e, Math.min(...p.pts.map((q) => q[1])) - e, Math.max(...p.pts.map((q) => q[0])) + e, Math.max(...p.pts.map((q) => q[1])) + e]);
     }
@@ -335,5 +339,5 @@ export function editDirty(prev: Edits, next: Edits, changed?: Record<string, str
       }
     }
   }
-  return { createdChanged, createdRects, castles, made, relabel, renamedInside, roadNames, battleRects, put, worksRects, ground, islets, buildingRects, replaced, fenceIds, replanned, members, streets, cultures, cutIds, fenceRects };
+  return { createdChanged, createdRects, castles, made, relabel, renamedInside, roadNames, battleRects, put, worksRects, ground, hills, islets, buildingRects, replaced, fenceIds, replanned, members, streets, cultures, cutIds, fenceRects };
 }

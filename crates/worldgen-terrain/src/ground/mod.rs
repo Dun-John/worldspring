@@ -229,7 +229,7 @@ impl<'a> Shaper<'a> {
         self.reach
     }
 
-    /// The hills' height at a point (ft over the ground, before `soft_shift`).
+    /// The hills' height at a point (ft over the ground).
     pub fn hill_at(&self, x: f64, y: f64) -> f64 {
         self.hills.iter().map(|h| h.height(x, y)).sum()
     }
@@ -331,7 +331,8 @@ impl<'a> Shaper<'a> {
                 };
             }
         }
-        h += soft_shift(if self.hills.is_empty() { d } else { d + self.hill_at(x, y) });
+        // (Hills on top, as they are: a big one rises far past the brush's limit.)
+        h += soft_shift(d) + if self.hills.is_empty() { 0.0 } else { self.hill_at(x, y) };
         // Ground that was dry stays above the water by it (raising wet ground makes land).
         if g >= hw {
             h = h.max(g0.min(hw as f64 + 0.5));
@@ -402,6 +403,34 @@ impl<'a> Shaper<'a> {
     /// Whether a plateau that may draw a rock floor is among what it holds.
     pub fn has_floors(&self) -> bool {
         self.plats.iter().any(|p| p.look == Look::Ground && !p.raise && p.floor != Some(Floor::Ground))
+    }
+}
+
+/// The hills big enough for a map level coarser than the three finest to draw (`Hill::shows_at`,
+/// `spacing` its sample spacing, ft) that meet `rect` (world ft); `None` when none do.
+pub struct BigHills(Vec<hill::Near>);
+
+impl BigHills {
+    pub fn new(edits: &crate::world::Edits, rect: [f64; 4], spacing: f64) -> Option<BigHills> {
+        let near = |b: [f64; 4]| !(b[2] < rect[0] || b[0] > rect[2] || b[3] < rect[1] || b[1] > rect[3]);
+        let hills: Vec<hill::Near> = edits
+            .plateaus
+            .values()
+            .filter(|p| usable(p) && p.kind == PlateauKind::Hill && p.hill.as_ref().is_some_and(|h| h.shows_at(spacing)))
+            .filter_map(hill::Near::of)
+            .filter(|h| near(h.b))
+            .collect();
+        (!hills.is_empty()).then_some(BigHills(hills))
+    }
+
+    /// Their height at a point (ft over the ground).
+    pub fn at(&self, x: f64, y: f64) -> f64 {
+        self.0.iter().map(|h| h.height(x, y)).sum()
+    }
+
+    /// The rectangle they reach (world ft).
+    pub fn reach(&self) -> [f64; 4] {
+        self.0.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, h| [r[0].min(h.b[0]), r[1].min(h.b[1]), r[2].max(h.b[2]), r[3].max(h.b[3])])
     }
 }
 

@@ -210,8 +210,9 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     out
 }
 
-/// A tile's heights as drawn, at the three finest levels: the ground shaped by hand
-/// (`ground::Shaper`, a sheer edge eased over a sample or a battlemap square, whichever is wider)
+/// A tile's heights as drawn, at the three finest levels: the ground shaped by hand (coarser
+/// levels: only the hills big enough to show there, `ground::BigHills`); at the finest three
+/// by `ground::Shaper` (a sheer edge eased over a sample or a battlemap square, whichever is wider)
 /// over the samples it reaches, one round the texels for the gradients; `None` where nothing
 /// shaped reaches the tile. Each sample is a pure function of its position (seamless), and at the
 /// finest level a battlemap square's centre is shaped exactly as the battlemap shapes it.
@@ -223,19 +224,33 @@ pub fn shaped_heights(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) 
 /// when none can: `ground::Plateau::floor`) and the water's surface where water drawn by hand
 /// holds it (NaN elsewhere; empty when none meets the tile: `waters`).
 fn shaped(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Option<(Vec<f32>, Vec<bool>, Vec<f32>)> {
-    if key.level + 2 < world.geom.max_level {
-        return None;
-    }
     let s = world.geom.spacing_ft(key.level);
     let (gx0, gy0) = (key.x as i64 * TILE_N as i64, key.y as i64 * TILE_N as i64);
     let (lo, hi) = (|g: i64| (g - 1) as f64 * s, |g: i64| (g + TILE_SAMPLES as i64) as f64 * s);
     let rect = [lo(gx0), lo(gy0), hi(gx0), hi(gy0)];
+    // The span of samples (-1 to TILE_SAMPLES, tile-local) inside a reach.
+    let span = |a: f64, b: f64, g0: i64| ((crate::core::ceil(a / s) as i64 - g0).max(-1), (crate::core::floor(b / s) as i64 - g0).min(TILE_SAMPLES as i64));
+    if key.level + 2 < world.geom.max_level {
+        // Coarser levels draw only hills big enough to show there (each sample by its global
+        // lattice index, so tiles agree at seams; never in `padded`, so refinement doesn't see it).
+        let hills = crate::ground::BigHills::new(&world.file.edits, rect, s)?;
+        let r = hills.reach();
+        let ((i0, i1), (j0, j1)) = (span(r[0], r[2], gx0), span(r[1], r[3], gy0));
+        let mut out = tile.padded.clone();
+        for j in j0..=j1 {
+            let y = (gy0 + j) as f64 * s;
+            for i in i0..=i1 {
+                let x = (gx0 + i) as f64 * s;
+                let k = (j + HALO as i64) as usize * PADDED + (i + HALO as i64) as usize;
+                out[k] += hills.at(x, y) as f32;
+            }
+        }
+        return Some((out, Vec::new(), Vec::new()));
+    }
     // (R5 M20: and big ports' breakwaters, as the battlemap shapes them.)
     let moles = crate::town::harbour::raised_near(world, t0, rect);
     let sh = crate::ground::Shaper::with_extra(&world.file.edits, t0, &moles, rect, s.max(crate::battlemap::SQUARE_FT))?;
     let r = sh.reach();
-    // The samples (-1 to TILE_SAMPLES, tile-local) inside the reach.
-    let span = |a: f64, b: f64, g0: i64| ((crate::core::ceil(a / s) as i64 - g0).max(-1), (crate::core::floor(b / s) as i64 - g0).min(TILE_SAMPLES as i64));
     let ((i0, i1), (j0, j1)) = (span(r[0], r[2], gx0), span(r[1], r[3], gy0));
     let mut out = tile.padded.clone();
     let mut rock = if sh.has_floors() { vec![false; out.len()] } else { Vec::new() };

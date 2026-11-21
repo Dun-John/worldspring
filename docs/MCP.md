@@ -683,13 +683,13 @@ More: `set_sprite` below.
 | `margin_ft` | number 0 to 200, default `10` | How far round the footprint |
 | `mode` | `raise` \| `lower` \| `smooth` \| `restore` |  |
 | `path` | array | A stroke's points (world ft) |
-| `peak_ft` | number 1 to 300.0, default `60` | Its peak over the ground |
+| `peak_ft` | number 1 to 2000.0, default `60` | Its peak over the ground (over 300 ft only on a big hill) |
 | `poly` | array |  |
 | `profile` | `round` \| `ridge` \| `knoll` \| `mountain` |  |
 | `radius_ft` | number 2.5 to 200, default `15` | A dab's radius |
 | `rise_ft` | number -300.0 to 300.0, default `10` |  |
-| `rx_ft` | number 10.0 to 640.0 | Half-axis along angle_deg |
-| `ry_ft` | number 10.0 to 640.0 | Half-axis across (default rx_ft) |
+| `rx_ft` | number 10.0 to 26400.0 | Half-axis along angle_deg |
+| `ry_ft` | number 10.0 to 26400.0 | Half-axis across (default rx_ft) |
 | `strength` | number 0 to 1, default `0.5` |  |
 | `to` | string or object or array | A place (id, point or [x, y] in ft) |
 | `width_ft` | number 5 to 400, default `30` | A stroke's width |
@@ -3244,15 +3244,15 @@ levelled as plateaus and pits, or raised as hills. Two edits fields hold it:
   spanning at most 1,280 ft), `level` (ft on the world's datum: above the sea plus the sea's level), `edge` (0 to
   60 ft; absent: 0, a sheer cliff at the outline). A hill is an entry with `kind: "hill"` and a `hill` form
   `{profile, at: [x, y], rx, ry, angle?, crown?, seed}` (profile `round`, `ridge`, `knoll` or `mountain`; half-axes
-  10 to 640 ft, `rx` along `angle` degrees clockwise from east; `crown` a flat top's radius); its `level` is its
-  peak in ft over the ground (1 to 300) and `pts` its footprint's outline. Use `set_ground {kind: "hill"}` rather than writing them.
+  10 ft up to 7,920 (round), 5,280 (knoll), 13,200 (mountain) or 26,400 along and 5,280 across (ridge), `rx` along `angle` degrees clockwise from east; `crown` a flat top's radius); its `level` is its
+  peak in ft over the ground (1 to 300; a big one up to 0.45 of its narrower half-axis, at most 1,000 round or knoll, 1,500 ridge, 2,000 mountain) and `pts` its footprint's outline. Use `set_ground {kind: "hill"}` rather than writing them.
 
 How it applies:
 
 - Plateaus first, largest first (a terrace or pit inside a plateau goes on top of it): inside the outline the
   ground is at the level; outside it eases back to the ground over `edge` ft (a sheer one over a square). Then the
-  brushed change and the hills together, taken as they are up to 220 ft and easing smoothly toward 300 ft either
-  way beyond (plateaus and pits have no limit: they stand at their level). Ground that was dry never sinks below
+  brushed change, taken as it is up to 220 ft and easing smoothly toward 300 ft either
+  way beyond, and the hills on top of it as they are (plateaus and pits have no limit: they stand at their level). Ground that was dry never sinks below
   the water beside it; raising ground under water makes dry land.
 - A hill rises from the ground at its footprint's edge to its peak, with a little shape noise of its own (keyed by
   its `seed`): `round` smooth all round, `ridge` a crest along `rx`, `knoll` steeper with rocky outcrops, `mountain`

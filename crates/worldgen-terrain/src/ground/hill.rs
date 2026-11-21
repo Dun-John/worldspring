@@ -1,7 +1,7 @@
 //! Hills raised by hand (Roadmap 7 item 172): a `Plateau` of kind `Hill` whose `hill` gives its
 //! footprint (an ellipse, or a ridge's capsule along `rx`) and profile, and whose `level` is its
-//! peak over the ground. Its height is added to the ground with the brushed change (so the two
-//! together ease into `MAX_SHIFT_FT`): a pure function of world position and the hill (its noise
+//! peak over the ground. Its height is added to the ground on top of the brushed change (that
+//! eased into `MAX_SHIFT_FT`, the hills not): a pure function of world position and the hill (its noise
 //! keyed by its own seed), smooth down to 0 at the footprint's edge. A knoll's and a mountain's
 //! slopes gather into steeper bands (outcrops) between gentler benches, steep enough for the
 //! battlemap's cliff faces.
@@ -27,8 +27,16 @@ pub(super) struct Near {
     /// A ridge's steeper side (+1 or -1 across it) and where along it its crest is highest.
     side: f64,
     high: f64,
+    /// How much finer detail it has than a small hill's (0 up to `DETAIL_FT` across its
+    /// narrower half-axis, toward 1 for one miles across): its outline, spurs and outcrops.
+    detail: f64,
+    /// Fbm octaves for its swells (more on a big one).
+    octaves: u32,
     pub(super) b: [f64; 4],
 }
+
+/// The narrower half-axis (ft) up to which a hill has a small hill's detail.
+const DETAIL_FT: f64 = 640.0;
 
 /// Outline points of a footprint (`Hill::problem` bounds `pts`).
 const OUTLINE_PTS: usize = 32;
@@ -61,7 +69,9 @@ impl Near {
             rx: h.rx,
             ry: h.ry,
             crown: ((h.crown.max(0.0) as f64) / narrow).min(0.8),
-            peak: (p.level as f64).clamp(-(MAX_HILL_FT as f64), MAX_HILL_FT as f64),
+            peak: (p.level as f64).clamp(-(MAX_PEAK_FT as f64), MAX_PEAK_FT as f64),
+            detail: 1.0 - DETAIL_FT / narrow.max(DETAIL_FT),
+            octaves: 3 + (libm::log2(narrow.max(DETAIL_FT) / DETAIL_FT) as u32).min(3),
             cos: libm::cos(a),
             sin: libm::sin(a),
             seed,
@@ -85,7 +95,12 @@ impl Near {
         // Noise lengths from the hill's own size: a few wobbles round it.
         let k = 1.0 / (0.55 * narrow).max(12.0);
         let (a, b) = (u / self.rx, v / self.ry);
-        let wob = 1.0 + 0.06 * (0.5 + 0.5 * gradient2(self.seed, u * k, v * k));
+        let d = self.detail;
+        let mut wob = 1.0 + 0.06 * (0.5 + 0.5 * gradient2(self.seed, u * k, v * k));
+        // (A big one's outline ragged finer too, still inward only.)
+        if d > 0.0 {
+            wob += d * (0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x71, u * 4.0 * k, v * 4.0 * k)) + 0.025 * (0.5 + 0.5 * gradient2(self.seed ^ 0x72, u * 11.0 * k, v * 11.0 * k)));
+        }
         if self.profile == HillProfile::Ridge {
             return self.ridge(a, b, u, v, k, wob);
         }
@@ -101,11 +116,23 @@ impl Near {
             let c2 = c * c;
             c2 * c2 * c2
         };
-        let spur = lobe(self.spurs[0]).max(lobe(self.spurs[1]));
+        let mut spur = lobe(self.spurs[0]).max(lobe(self.spurs[1]));
+        // (A big one has lesser spurs all round, and a more broken outline between them.)
+        let mut m_fine = 0.0;
+        if d > 0.0 && self.crown <= 0.0 {
+            // (Joined smoothly, not by max: on a big one a kink in the outline's scale shows as a
+            // crease running up to the peak; and the finer terms only out toward the rim, so they
+            // don't pinch into a star round the peak.)
+            let rim = smoothstep(0.35, 0.95, r0);
+            let (l0, l1) = (lobe(self.spurs[0]), lobe(self.spurs[1]));
+            let more = 0.8 * d * rim * smoothstep(0.15, 0.6, gradient2(self.seed ^ 0x34, da * 3.4 + 4.1, db * 3.4 - 0.7));
+            spur = 1.0 - (1.0 - l0) * (1.0 - l1) * (1.0 - more);
+            m_fine = rim * d * (0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x33, da * 6.3 + 1.1, db * 6.3)) + 0.03 * (0.5 + 0.5 * gradient2(self.seed ^ 0x35, da * 13.0 - 2.9, db * 13.0)));
+        }
         let m = if self.crown > 0.0 {
             1.0 - 0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x31, da * 1.6, db * 1.6))
         } else {
-            0.92 + 0.08 * spur - 0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x31, da * 1.6 + 2.3, db * 1.6)) - 0.03 * (0.5 + 0.5 * gradient2(self.seed ^ 0x32, da * 3.1 + 7.3, db * 3.1))
+            0.92 + 0.08 * spur - 0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x31, da * 1.6 + 2.3, db * 1.6)) - 0.03 * (0.5 + 0.5 * gradient2(self.seed ^ 0x32, da * 3.1 + 7.3, db * 3.1)) - m_fine
         };
         let (sa, sb) = (a * wob / m.clamp(0.6, 1.0), b * wob / m.clamp(0.6, 1.0));
         let rs2 = sa * sa + sb * sb;
@@ -122,17 +149,20 @@ impl Near {
         // Outcrops on one or two arcs of the slope, broken along their length.
         let seed = self.seed;
         let arc = smoothstep(-0.05, 0.3, gradient2(seed ^ 0x0d, ea * 1.2 + 3.1, eb * 1.2 - 1.7));
-        let mask = |i: f64| arc * smoothstep(-0.12, 0.18, gradient2(seed ^ 0x0e, ea * 3.6 + i * 5.3, eb * 3.6 - i * 2.9));
+        // (A big one's outcrops broken into more, shorter pieces round it.)
+        let fq = 3.6 * (1.0 + 1.5 * d);
+        let arc = if d > 0.0 { arc.max(d * smoothstep(-0.25, 0.2, gradient2(seed ^ 0x1d, ea * 2.7 - 0.4, eb * 2.7 + 5.2))) } else { arc };
+        let mask = |i: f64| arc * smoothstep(-0.12, 0.18, gradient2(seed ^ 0x0e, ea * fq + i * 5.3, eb * fq - i * 2.9));
         let mut f = match self.profile {
-            HillProfile::Knoll => self.outcrops(dome, 3.0, 0.2, u, v, k, mask),
+            HillProfile::Knoll => self.outcrops(dome, self.bands(3.0, 45.0), self.riser(0.2), u, v, k, mask),
             HillProfile::Mountain => {
                 let concave = (1.0 - t) * (1.0 - t);
-                self.outcrops(0.6 * concave + 0.4 * dome, 4.0, 0.14, u, v, k, mask)
+                self.outcrops(0.6 * concave + 0.4 * dome, self.bands(4.0, 75.0), self.riser(0.14), u, v, k, mask)
             }
             _ => dome,
         };
         // Low swells on the slopes (none at the crown or the foot), and the spurs standing out of them.
-        f += (0.07 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, 3, 2.0, 0.5) + if self.crown > 0.0 { 0.0 } else { 0.12 * spur }) * 4.0 * t * (1.0 - t);
+        f += (0.07 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, self.octaves, 2.0, 0.5) + if self.crown > 0.0 { 0.0 } else { 0.12 * spur }) * 4.0 * t * (1.0 - t);
         self.peak * f.max(0.0)
     }
 
@@ -156,7 +186,9 @@ impl Near {
         let spur_side = [if pick(3) < 0.5 { -1.0 } else { 1.0 }, if pick(4) < 0.5 { -1.0 } else { 1.0 }];
         let spur = [bump(spur_at[0], 0.24), bump(spur_at[1], 0.16) * (0.4 + 0.6 * pick(5))];
         // Its two edges (half-widths out from its axis), each ragged on its own.
-        let width = 0.8 + 0.14 * n(0x2b, a * 2.1, 0.9) + 0.04 * n(0x2a, a * 6.1, 2.3);
+        // (A long one wobbles at its own width's scale along it too: `u / ry`.)
+        let (d, ua) = (self.detail, u / self.ry);
+        let width = 0.8 + 0.14 * n(0x2b, a * 2.1, 0.9) + 0.04 * n(0x2a, a * 6.1, 2.3) + if d > 0.0 { d * (0.08 * n(0x3a, ua * 0.9, 1.3) + 0.04 * n(0x3c, ua * 2.3, 0.2)) } else { 0.0 };
         let edge = |s: f64, salt: u64| {
             let out = (0..2).map(|i| if spur_side[i] == s { 0.5 * spur[i] } else { 0.0 }).sum::<f64>();
             (width + out + 0.1 * n(salt, a * 4.7, 3.1) + 0.03 * n(salt ^ 0x9, a * 11.0, 0.4)).min(lim).max(0.0)
@@ -167,7 +199,7 @@ impl Near {
         }
         // The crest: leaning to the steep side (more where it is high), wandering across it.
         let high2 = if self.high > 0.0 { self.high - 0.75 } else { self.high + 0.75 };
-        let lift = 0.4 + 0.52 * bump(self.high, 0.5) + 0.34 * bump(high2, 0.32) + 0.08 * n(0x2d, a * 3.2, 0.37);
+        let lift = 0.4 + 0.52 * bump(self.high, 0.5) + 0.34 * bump(high2, 0.32) + 0.08 * n(0x2d, a * 3.2, 0.37) + if d > 0.0 { d * 0.12 * n(0x3b, ua * 0.6, 0.4) } else { 0.0 };
         let ends = 1.0 - smoothstep(0.45, 1.0, crate::core::fabs(a));
         let lift = lift.clamp(0.0, 1.0) * ends;
         let lean = self.side * (0.06 + 0.2 * smoothstep(0.5, 1.0, lift / ends.max(1e-9)));
@@ -191,9 +223,9 @@ impl Near {
         let fall = if t < C1 { m * t * t / (2.0 * C1) } else if t > 1.0 - C2 { 1.0 - m * (1.0 - t) * (1.0 - t) / (2.0 * C2) } else { m * (t - 0.5 * C1) };
         let dome = (1.0 - fall) * (1.0 + 0.35 * near_spur * t * (1.0 - t));
         let steep = smoothstep(0.02, 0.15, self.side * (b - bc) / run.max(1e-9));
-        let mask = |i: f64| steep * smoothstep(0.6, 0.85, lift) * smoothstep(0.0, 0.3, n(0x0e, a * 4.5 + i * 3.7, 0.8 + i * 1.3));
-        let mut f = self.outcrops(dome * lift, 2.0, 0.17, u, v, k, mask);
-        f += 0.06 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, 3, 2.0, 0.5) * 4.0 * t * (1.0 - t) * ends;
+        let mask = |i: f64| steep * smoothstep(0.6, 0.85, lift) * smoothstep(0.0, 0.3, n(0x0e, a * 4.5 + d * ua * 1.2 + i * 3.7, 0.8 + i * 1.3));
+        let mut f = self.outcrops(dome * lift, self.bands(2.0, 80.0), self.riser(0.17), u, v, k, mask);
+        f += 0.06 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, self.octaves, 2.0, 0.5) * 4.0 * t * (1.0 - t) * ends;
         self.peak * f.max(0.0)
     }
 
@@ -203,12 +235,27 @@ impl Near {
     /// Eased off at the foot and the crown.
     #[allow(clippy::too_many_arguments)]
     fn outcrops(&self, base: f64, bands: f64, w: f64, u: f64, v: f64, k: f64, mask: impl Fn(f64) -> f64) -> f64 {
-        let warp = 0.45 * gradient2(self.seed ^ 0x0c, u * 1.7 * k, v * 1.7 * k);
+        let mut warp = 0.45 * gradient2(self.seed ^ 0x0c, u * 1.7 * k, v * 1.7 * k);
+        if self.detail > 0.0 {
+            warp += self.detail * 0.3 * gradient2(self.seed ^ 0x0f, u * 6.0 * k, v * 6.0 * k);
+        }
         let g = base * bands + warp;
         let i = crate::core::floor(g);
         let stepped = (i + smoothstep(0.5 - w, 0.5 + w, g - i) - warp) / bands;
         let keep = smoothstep(0.0, 0.18, base) * (1.0 - smoothstep(0.65, 0.9, base));
         base + (stepped - base) * keep * mask(i)
+    }
+
+    /// Its outcrop bands: `least`, or one for each `step` ft of its peak (a big one has more).
+    fn bands(&self, least: f64, step: f64) -> f64 {
+        least.max(crate::core::floor(self.peak / step))
+    }
+
+    /// Its risers' width (of a band, at most `widest`): narrow enough on a big, gentle one to
+    /// stay crags (a riser's grade is about peak / (2 w narrow); a big one's a little steeper).
+    fn riser(&self, widest: f64) -> f64 {
+        let narrow = if self.profile == HillProfile::Ridge { self.ry } else { self.rx.min(self.ry) };
+        widest.min(crate::core::fabs(self.peak) / ((3.0 + self.detail) * narrow)).max(0.02)
     }
 }
 
@@ -249,6 +296,6 @@ pub fn castle_hill(key: &str, poly: &[[f64; 2]]) -> Result<Plateau, String> {
     let reach = poly.iter().map(|p| crate::core::sqrt((p[0] - at[0]) * (p[0] - at[0]) + (p[1] - at[1]) * (p[1] - at[1]))).fold(0.0, f64::max);
     let crown = reach * 1.15 + 10.0;
     let peak = (50.0 + 0.4 * crown).clamp(60.0, 120.0);
-    let r = (crown + 3.0 * peak).min(*HILL_RADIUS_FT.end());
+    let r = (crown + 3.0 * peak).min(640.0);
     hill_for(key, HillProfile::Round, at, r, r, 0.0, peak, crown.min(0.8 * r))
 }

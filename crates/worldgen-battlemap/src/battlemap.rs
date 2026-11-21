@@ -207,7 +207,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             for r in 0..PADDED {
                 for c in 0..PADDED {
                     let (x, y) = ((gx0 + c as i64) as f64 * half, (gy0 + r as i64) as f64 * half);
-                    p[r * PADDED + c] += crate::ground::soft_shift(s.hill_at(x, y)) as f32;
+                    p[r * PADDED + c] += s.hill_at(x, y) as f32;
                 }
             }
             std::borrow::Cow::Owned(p)

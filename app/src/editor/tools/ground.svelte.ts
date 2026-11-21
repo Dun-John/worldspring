@@ -24,8 +24,11 @@ export function groundTools(host: GroundHost) {
   /** The plateau chosen (Choose). */
   let groundSel = $state<string | null>(null);
   let groundArmed: GroundTool | null = null;
-  /** The battlemap is showing (the ground can be shaped). */
-  const groundNear = $derived((host.hud?.ftPerPx ?? 99) < 0.7);
+  /** Hills can be raised on the map's four finest levels too (L11 to L14 on a 1,200-mile world:
+   * a mountain miles across is dragged out there), not only on the battlemap. */
+  const hillsNear = $derived(!host.view.interior && (host.hud?.layer.level ?? 0) >= (host.view.geom?.max_level ?? 99) - 3);
+  /** The battlemap is showing (the ground can be shaped), or the map near enough for a hill. */
+  const groundNear = $derived((host.hud?.ftPerPx ?? 99) < 0.7 || (ground.mode === 'hill' && hillsNear));
   const groundChosen = $derived(groundSel && host.edits.plateaus?.[groundSel] ? { id: groundSel, plateau: host.edits.plateaus[groundSel] } : null);
 
   function armGround() {
@@ -34,6 +37,7 @@ export function groundTools(host: GroundHost) {
       settings: () => ground,
       edits: () => host.edits,
       battlemap: () => (host.view.battle?.stats.alpha ?? 0) > 0 && !host.view.interior,
+      hillsHere: () => hillsNear,
       ground: (gx, gy) => host.view.battle?.groundAt(gx, gy) ?? null,
       sea: () => host.view.geom?.sea_level_ft ?? 0,
       preview: (box, at) => host.view.battle?.previewGround(box, at),
@@ -97,7 +101,7 @@ export function groundTools(host: GroundHost) {
     set ground(v) { ground = v; },
     get groundArmed() { return groundArmed; },
     set groundArmed(v) { groundArmed = v; },
-    groundNear,
+    get groundNear() { return groundNear; },
     groundChosen,
     armGround,
     disarmGround,

@@ -380,8 +380,9 @@ export class GenClient {
    * there is made again (results from then on carry `epoch`). */
   /** `hint`: the edits these follow and the keys each field's changes touch since (from their
    * ops); used for a field when the workers have that field as it was, so it isn't searched. */
-  /** `groundRects`: where the ground was shaped (the three finest levels' tiles draw it). */
-  setEdits(edits: Edits, rects: Rect[], epoch: number, battleRects: Rect[] = [], hint?: { prev: Edits; changed: Record<string, string[]> }, groundRects: Rect[] = [], allRects: Rect[] = []) {
+  /** `groundRects`: where the ground was shaped (the three finest levels' tiles draw it; `groundLevels`, by
+   * rect, the coarsest level that does, where a big hill does on coarser ones too). */
+  setEdits(edits: Edits, rects: Rect[], epoch: number, battleRects: Rect[] = [], hint?: { prev: Edits; changed: Record<string, string[]> }, groundRects: Rect[] = [], allRects: Rect[] = [], groundLevels: number[] = []) {
     // Only the fields that changed (edits are never changed in place: a field that is the same
     // object is unchanged); of a keyed field, only the entries that changed, unless most did.
     const fields: Record<string, string> = {};
@@ -410,7 +411,7 @@ export class GenClient {
       fields[f] = JSON.stringify(b);
     }
     this.sentFields = { ...now };
-    this.send({ type: 'edits', fields, patches, rects, epoch, battleRects, groundRects, allRects });
+    this.send({ type: 'edits', fields, patches, rects, epoch, battleRects, groundRects, allRects, groundLevels });
   }
   /** The edits' fields as last sent (by reference). */
   private sentFields: Record<string, unknown> | null = null;

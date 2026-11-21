@@ -72,7 +72,7 @@ export const EDIT_TOOLS: EditToolDef[] = [
   { key: 'crossing', group: 'roads', label: 'Crossing', short: 'Crossing', icon: 'bridge', kbd: 'X', tab: 'build', mode: 'crossing', hint: 'Click across a river: a bridge, ford or ferry goes bank to bank.' },
   { key: 'water', group: 'roads', label: 'Water', short: 'Water', icon: 'lake', kbd: 'I', tab: 'build', mode: 'water', hint: 'Paint water along a stroke, or outline it.' },
   { key: 'docks', group: 'roads', label: 'Docks & islets', short: 'Docks & islets', icon: 'waves', kbd: 'H', tab: 'build', mode: 'harbour', hint: 'Quays, piers, breakwaters and islets at the water’s edge.' },
-  { key: 'ground', group: 'land', label: 'Ground', short: 'Ground', icon: 'raise', kbd: 'M', tab: 'ground', hint: 'Raise, lower or smooth the battlemap’s ground, or draw a plateau.' },
+  { key: 'ground', group: 'land', label: 'Ground', short: 'Ground', icon: 'raise', kbd: 'M', tab: 'ground', hint: 'Raise, lower or smooth the battlemap’s ground, draw a plateau, or raise a hill (a big one on the map too).' },
   { key: 'fences', group: 'land', label: 'Fences & hedges', short: 'Fences', icon: 'wall', kbd: 'F', tab: 'build', mode: 'fence', hint: 'Pick a kind, then drag or click a line; Gate and Erase work on any fence.' },
   { key: 'trees', group: 'land', label: 'Props', short: 'Props', icon: 'tree', kbd: 'C', tab: 'scatter', hint: 'Trees, rocks and props: place one, brush many, or erase.' },
   { key: 'rooms', group: 'rooms', label: 'Rooms', short: 'Rooms', icon: 'room', kbd: 'D', tab: 'design', links: false, hint: 'Go into a building, or down into a site, to design its rooms.' },

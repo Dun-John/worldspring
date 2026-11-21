@@ -4,6 +4,7 @@ import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
 import { type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, SITE_MIN_LEVEL, halfToFloat, linkSites } from '../gen/protocol';
+import { hillLevel } from '../editor/hill';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
@@ -1405,6 +1406,19 @@ export class MapView {
     const tileLevel = this.geom ? Math.max(0, this.geom.max_level - 2) : 0;
     const pad = this.geom ? this.geom.domain_ft / 2 ** tileLevel / TILE_N : 0;
     const groundRects: Rect[] = ground.map((r) => [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]);
+    // (A big hill is drawn on coarser levels too, down to `hillLevel`: its box there, a sample round it.)
+    const groundLevels: number[] = groundRects.map(() => tileLevel);
+    if (this.geom) {
+      for (const p of d.hills) {
+        const l = hillLevel(p, this.geom.max_level, this.geom.domain_ft, TILE_N);
+        if (l >= tileLevel) continue;
+        const e = this.geom.domain_ft / 2 ** l / TILE_N;
+        const xs = p.pts.map((q) => q[0]);
+        const ys = p.pts.map((q) => q[1]);
+        groundRects.push([Math.min(...xs) - e, Math.min(...ys) - e, Math.max(...xs) + e, Math.max(...ys) + e]);
+        groundLevels.push(l);
+      }
+    }
     // Inside a building over it: shown as it now stands (its floors follow the ground).
     const inside = this.interior?.interior;
     if (inside && ground.length && /^[btck]:/.test(inside.id) && inside.id !== this.designing) {
@@ -1526,9 +1540,9 @@ export class MapView {
     }
     if (rects.length || battleRects.length) {
       const epoch = ++this.editEpoch;
-      this.gen.setEdits(next, rects, epoch, battleRects, changed && { prev, changed }, groundRects);
+      this.gen.setEdits(next, rects, epoch, battleRects, changed && { prev, changed }, groundRects, [], groundLevels);
       if (rects.length) this.tiles?.invalidate(rects, SITE_MIN_LEVEL, epoch);
-      if (groundRects.length) this.tiles?.invalidate(groundRects, tileLevel, epoch, true);
+      for (const l of new Set(groundLevels)) this.tiles?.invalidate(groundRects.filter((_, i) => groundLevels[i] === l), l, epoch, true);
       this.battle?.invalidate([...rects, ...battleRects], epoch);
       if (added.length) this.battle?.preview(added, epoch);
       // Wanted again next frame though the wants look the same: one made before this edit and

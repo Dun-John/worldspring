@@ -4,7 +4,7 @@
   // level or edge, or taken away. Each stroke or change is one step to undo.
   import type { HillProfile, Plateau } from '../gen/protocol';
   import type { GroundMode, GroundSettings } from '../editor/ground';
-  import { changedHill, MAX_HILL_FT } from '../editor/hill';
+  import { changedHill, maxPeak, maxRadius, profilePeak } from '../editor/hill';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
   import { foldOpen, setFold, shell } from './shell/layout.svelte';
@@ -33,7 +33,7 @@
     { key: 'smooth', label: 'Smooth', icon: 'relax', kbd: 'E', hint: 'Brush over bumps and steps to ease them toward the ground round them.' },
     { key: 'restore', label: 'Put back', icon: 'reset', kbd: 'R', hint: 'Brush to take brushed changes back toward the ground as generated (plateaus stay).' },
     { key: 'plateau', label: 'Plateau', icon: 'plateau', kbd: 'L', hint: 'Drag a loop round the ground: inside it becomes flat at the level shown. Start on a plateau to extend it.' },
-    { key: 'hill', label: 'Hill', icon: 'mountain', kbd: 'H', hint: 'Drag out from a hill’s middle to its foot (a ridge: along its crest). It rises from the ground with natural slopes to the height below.' },
+    { key: 'hill', label: 'Hill', icon: 'mountain', kbd: 'H', hint: 'Drag out from a hill’s middle to its foot (a ridge: along its crest). It rises from the ground with natural slopes to the height below (a big one, miles across, may rise to 2,000 ft). Works on the map’s finer levels too.' },
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a plateau, pit or hill to change it, or take it away.' },
   ];
   const PROFILES: { key: HillProfile; label: string; title: string }[] = [
@@ -139,8 +139,8 @@
         {/each}
       </div>
       <label class="ws-slider">
-        <span>Height</span><output>{settings.hillPeak} ft</output>
-        <input type="range" min="10" max={MAX_HILL_FT} step="5" bind:value={settings.hillPeak} />
+        <span>Height</span><output>{settings.hillPeak.toLocaleString('en')} ft{settings.hillPeak > 300 ? ' (if big enough)' : ''}</output>
+        <input type="range" min="10" max={profilePeak(settings.hillProfile)} step="10" bind:value={settings.hillPeak} />
       </label>
       <details class="ws-group" open={foldOpen('ground')} ontoggle={(e) => setFold('ground', e.currentTarget.open)}>
         <summary>More options</summary>
@@ -148,7 +148,7 @@
           {#if settings.hillProfile === 'ridge'}
             <label class="ws-slider">
               <span>Half-width</span><output>{settings.ridgeWidth} ft</output>
-              <input type="range" min="20" max="300" step="10" bind:value={settings.ridgeWidth} />
+              <input type="range" min="20" max={maxRadius('ridge')[1]} step="20" bind:value={settings.ridgeWidth} />
             </label>
           {:else}
             <label class="ws-slider">
@@ -173,7 +173,7 @@
         </label>
         <label class="ws-slider">
           <span>Height</span><output>{Math.round(hill.level)} ft</output>
-          <input type="range" min="10" max={MAX_HILL_FT} step="5" value={hill.level} onchange={(e) => changeHill({ peak: Number(e.currentTarget.value) })} />
+          <input type="range" min="10" max={hill.hill ? maxPeak(hill.hill.profile, hill.hill.rx, hill.hill.ry) : 300} step="10" value={hill.level} onchange={(e) => changeHill({ peak: Number(e.currentTarget.value) })} />
         </label>
         <div class="row">
           <button class="ws-btn" onclick={onRemove} title="Take it away (Delete)"><Icon name="trash" size={16} /> Take away</button>

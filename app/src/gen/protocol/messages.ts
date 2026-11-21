@@ -51,8 +51,9 @@ export type ToCoordinator =
    * sites changed: cached site-level tiles and battlemaps there are dropped. Results sent
    * afterwards carry `epoch`. `battleRects`: where only battlemaps change (objects put down or
    * taken away). `allRects`: where roads were taken away (tiles at every level). `groundRects`: where the ground was shaped by hand: the three finest levels'
-   * tiles there are packed again (their samples, as generated, still serve finer tiles). */
-  | { type: 'edits'; fields: Record<string, string>; patches: Record<string, EditsPatch>; rects: Rect[]; epoch: number; battleRects?: Rect[]; groundRects?: Rect[]; allRects?: Rect[] };
+   * tiles there are packed again (their samples, as generated, still serve finer tiles); `groundLevels`, by rect, the
+   * coarsest level packed again (default the third finest: a big hill shows on coarser ones). */
+  | { type: 'edits'; fields: Record<string, string>; patches: Record<string, EditsPatch>; rects: Rect[]; epoch: number; battleRects?: Rect[]; groundRects?: Rect[]; allRects?: Rect[]; groundLevels?: number[] };
 
 /** Some entries of a keyed edits field changed: those set (whole) and those taken out. */
 export interface EditsPatch {

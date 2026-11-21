@@ -25,9 +25,54 @@ pub const MAX_SHIFT_FT: f64 = 300.0;
 pub const SHIFT_KNEE_FT: f64 = 220.0;
 /// A block's values are tenths of a foot, at most this far either way (300 ft).
 pub const MAX_ADD: i32 = 3000;
-/// A hill's peak (ft over the ground) and its footprint's half-axes (ft).
+/// A hill's peak (ft over the ground: any hill may rise this far, a big one further, `Hill::max_peak`)
+/// and its footprint's half-axes (ft; each profile's largest: `HillProfile::max_radius`).
 pub const MAX_HILL_FT: f32 = 300.0;
-pub const HILL_RADIUS_FT: std::ops::RangeInclusive<f64> = 10.0..=640.0;
+/// The highest any hill may rise (a mountain miles across).
+pub const MAX_PEAK_FT: f32 = 2000.0;
+pub const HILL_RADIUS_FT: std::ops::RangeInclusive<f64> = 10.0..=26_400.0;
+/// Map levels coarser than the three finest draw a hill where its narrower half-axis spans at
+/// least this many of their samples (`Hill::shows_at`).
+pub const HILL_SHOW_SAMPLES: f64 = 8.0;
+
+impl HillProfile {
+    /// Its footprint's largest half-axes (ft): along, across (a ridge: half its length, its half-width).
+    pub fn max_radius(self) -> (f64, f64) {
+        match self {
+            HillProfile::Round => (7920.0, 7920.0),
+            HillProfile::Knoll => (5280.0, 5280.0),
+            HillProfile::Mountain => (13_200.0, 13_200.0),
+            HillProfile::Ridge => (26_400.0, 5280.0),
+        }
+    }
+
+    /// The highest its peak may be (ft).
+    pub fn max_peak(self) -> f64 {
+        match self {
+            HillProfile::Round | HillProfile::Knoll => 1000.0,
+            HillProfile::Mountain => MAX_PEAK_FT as f64,
+            HillProfile::Ridge => 1500.0,
+        }
+    }
+}
+
+impl Hill {
+    /// Its narrower half-axis (ft; a ridge's half-width).
+    pub fn narrow(&self) -> f64 {
+        if self.profile == HillProfile::Ridge { self.ry } else { self.rx.min(self.ry) }
+    }
+
+    /// The highest its peak may be (ft): `MAX_HILL_FT` for any, up to 0.45 of its narrower
+    /// half-axis for a big one (natural slopes), at most its profile's `max_peak`.
+    pub fn max_peak(&self) -> f64 {
+        (0.45 * self.narrow()).clamp(MAX_HILL_FT as f64, self.profile.max_peak())
+    }
+
+    /// Whether a map level of sample spacing `spacing` (ft) coarser than the three finest draws it.
+    pub fn shows_at(&self, spacing: f64) -> bool {
+        self.narrow() >= HILL_SHOW_SAMPLES * spacing
+    }
+}
 
 /// The change `d` (ft) as the ground takes it: as it is up to `SHIFT_KNEE_FT`, then easing
 /// smoothly (no kink, no clip) toward `MAX_SHIFT_FT` either way.
@@ -250,7 +295,7 @@ impl Plateau {
             return Some(format!("edge is 0 to {MAX_EDGE_FT} ft"));
         }
         let b = bbox(&self.pts);
-        if b[2] - b[0] > MAX_PLATEAU_SPAN_FT || b[3] - b[1] > MAX_PLATEAU_SPAN_FT {
+        if self.kind != PlateauKind::Hill && (b[2] - b[0] > MAX_PLATEAU_SPAN_FT || b[3] - b[1] > MAX_PLATEAU_SPAN_FT) {
             return Some(format!("an outline spans at most {MAX_PLATEAU_SPAN_FT} ft"));
         }
         if geom::area(&self.pts).abs() < 25.0 {
@@ -263,11 +308,14 @@ impl Plateau {
             return Some("a hill has its form, and only a hill".into());
         }
         if let Some(h) = &self.hill {
-            if !(1.0..=MAX_HILL_FT).contains(&self.level) {
-                return Some(format!("a hill's peak is 1 to {MAX_HILL_FT} ft over the ground"));
+            let (ax, ay) = h.profile.max_radius();
+            let lo = *HILL_RADIUS_FT.start();
+            if !(lo..=ax).contains(&h.rx) || !(lo..=ay).contains(&h.ry) || !h.at[0].is_finite() || !h.at[1].is_finite() || !h.angle.is_finite() {
+                return Some(if ax == ay { format!("this hill's half-axes are {lo} to {ax} ft") } else { format!("a ridge reaches {lo} to {ax} ft along from its middle, {lo} to {ay} ft across") });
             }
-            if !HILL_RADIUS_FT.contains(&h.rx) || !HILL_RADIUS_FT.contains(&h.ry) || !h.at[0].is_finite() || !h.at[1].is_finite() || !h.angle.is_finite() {
-                return Some(format!("a hill's half-axes are {} to {} ft", HILL_RADIUS_FT.start(), HILL_RADIUS_FT.end()));
+            let top = h.max_peak();
+            if !(1.0..=top).contains(&(self.level as f64)) {
+                return Some(format!("this hill's peak is 1 to {top:.0} ft over the ground (a bigger one may rise higher)"));
             }
             if !(0.0..=0.8 * h.rx.min(h.ry) as f32).contains(&h.crown) {
                 return Some("a hill's crown is at most 0.8 of its narrower half-axis".into());

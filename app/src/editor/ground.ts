@@ -8,7 +8,7 @@
 // pile up; the values written are what `worldgen::ground::stamp_brush` would write for the same
 // touches. A loop's level is the plateau's it starts on, else the ground there plus the offset.
 import type { Edits, HillProfile, Plateau } from '../gen/protocol';
-import { hillFor, hillOutline, softShift } from './hill';
+import { hillFor, hillOutline, maxPeak, softShift } from './hill';
 import type { Camera } from '../render/camera';
 import { SQUARE_FT } from '../render/scale';
 import type { Graphics } from 'pixi.js';
@@ -61,6 +61,8 @@ export interface GroundHost {
   edits(): Edits;
   /** Whether the battlemap is showing (and we are not inside a building or site). */
   battlemap(): boolean;
+  /** Whether the map is near enough to raise hills on (its finer levels; see `groundTools`). */
+  hillsHere(): boolean;
   /** A square's shown ground and the water there (ft), or null where it isn't loaded. */
   ground(gx: number, gy: number): [number, number] | null;
   /** The sea's level (ft): heights are shown above it. */
@@ -208,6 +210,13 @@ export class GroundTool implements PointerTool {
 
   constructor(private readonly host: GroundHost) {}
 
+  /** Whether the tool works here: on the battlemap; Hill and Choose (hills only) on the map's finer levels too. */
+  private here(): boolean {
+    if (this.host.battlemap()) return true;
+    const m = this.host.settings().mode;
+    return (m === 'hill' || m === 'select') && this.host.hillsHere();
+  }
+
   private brush(): Brush | null {
     const m = this.host.settings().mode;
     return m === 'plateau' || m === 'hill' || m === 'select' ? null : m;
@@ -217,7 +226,9 @@ export class GroundTool implements PointerTool {
   plateauAt(x: number, y: number, near = 0): string | null {
     let best: string | null = null;
     let score = Infinity;
+    const map = !this.host.battlemap();
     for (const [id, p] of Object.entries(this.host.edits().plateaus ?? {})) {
+      if (map && p.kind !== 'hill') continue;
       const pts = p.pts as [number, number][];
       const [x0, y0, x1, y1] = bbox(pts);
       if (x < x0 - near || x > x1 + near || y < y0 - near || y > y1 + near) continue;
@@ -249,7 +260,7 @@ export class GroundTool implements PointerTool {
   refresh() {
     const at = this.at;
     const s = this.host.settings();
-    if (!at || !this.host.battlemap()) {
+    if (!at || !this.here()) {
       this.host.ring(0, 0, null);
       this.host.chip(0, 0, null);
       return;
@@ -266,7 +277,9 @@ export class GroundTool implements PointerTool {
     const r = 12 / this.host.ppf();
     if (!this.drag) return this.host.chip(x + r, y + r, `${s.hillPeak} ft high · drag ${s.hillProfile === 'ridge' ? 'along its crest' : 'out from its middle'}`);
     const f = hillDrag(s, this.drag.a, this.drag.b);
-    this.host.chip(x + r, y + r, `${s.hillPeak} ft high · ${Math.round(2 * f.rx)} × ${Math.round(2 * f.ry)} ft`);
+    const peak = Math.min(s.hillPeak, maxPeak(s.hillProfile, f.rx, f.ry));
+    const len = (ft: number) => (ft >= 5280 ? `${(ft / 5280).toFixed(1)} mi` : `${Math.round(ft).toLocaleString('en')} ft`);
+    this.host.chip(x + r, y + r, `${Math.round(peak).toLocaleString('en')} ft high${peak < s.hillPeak ? ' (bigger to rise higher)' : ''} · ${len(2 * f.rx)} × ${len(2 * f.ry)}`);
   }
 
   private selectChip(x: number, y: number) {
@@ -278,7 +291,7 @@ export class GroundTool implements PointerTool {
   }
 
   down(x: number, y: number, e: PointerEvent): boolean {
-    if (e.button !== 0 || !this.host.battlemap()) return false;
+    if (e.button !== 0 || !this.here()) return false;
     const s = this.host.settings();
     this.at = [x, y];
     // (Choose picks by a tap: a drag pans the map.)
@@ -357,7 +370,8 @@ export class GroundTool implements PointerTool {
       this.drag = null;
       const f = hillDrag(s, a, [x, y]);
       const id = newObjectId('h');
-      const p = hillFor(id, s.hillProfile, f.at, f.rx, f.ry, f.angle, s.hillPeak);
+      // (The height set, or as high as one of this size may rise.)
+      const p = hillFor(id, s.hillProfile, f.at, f.rx, f.ry, f.angle, Math.min(s.hillPeak, maxPeak(s.hillProfile, f.rx, f.ry)));
       if (typeof p === 'string') return this.host.hint(p);
       this.host.commit({}, { [id]: p }, { tool: 'set_hill' });
       this.host.select(id);
@@ -385,7 +399,7 @@ export class GroundTool implements PointerTool {
 
   /** Choose: a click or tap picks the plateau there (or lets the chosen one go). */
   tap(x: number, y: number, e: PointerEvent): boolean {
-    if (e.button !== 0 || this.host.settings().mode !== 'select' || !this.host.battlemap()) return false;
+    if (e.button !== 0 || this.host.settings().mode !== 'select' || !this.here()) return false;
     const id = this.plateauAt(x, y, Math.max(6, e.pointerType === 'mouse' ? 0 : 16) / this.host.ppf());
     this.host.select(id);
     if (!id) this.host.hint('Click a plateau or pit to change it');
@@ -578,7 +592,9 @@ export class GroundTool implements PointerTool {
   /** Plateaus' outlines (the chosen one bold, the one a click would choose lit), and the loop
    * being drawn. */
   draw(g: Graphics, cam: Camera) {
-    if (!this.host.battlemap()) return;
+    if (!this.here()) return;
+    // (Off the battlemap only hills are drawn and chosen: plateaus and pits show only there.)
+    const map = !this.host.battlemap();
     const plateaus = this.host.edits().plateaus ?? {};
     const sel = this.host.selected();
     const [vx0, vy0] = cam.screenToWorld(0, 0);
@@ -593,6 +609,7 @@ export class GroundTool implements PointerTool {
       g.stroke({ width, color, alpha });
     };
     for (const [id, p] of Object.entries(plateaus)) {
+      if (map && p.kind !== 'hill') continue;
       const pts = p.pts as [number, number][];
       const [x0, y0, x1, y1] = bbox(pts);
       if (x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1) continue;

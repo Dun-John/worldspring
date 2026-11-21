@@ -344,13 +344,14 @@ function onEdits(m: Extract<ToCoordinator, { type: 'edits' }>) {
     if (!battle && l < SITE_MIN_LEVEL) return false;
     return m.rects.some(hit) || (battle && (battleRects.some(hit) || allRects.some(hit)));
   };
-  // Ground shaped by hand: the three finest levels' tiles over it are drawn from it.
+  // Ground shaped by hand: the three finest levels' tiles over it are drawn from it (a big hill:
+  // coarser ones too, `groundLevels`).
   const reshaped = (id: string) => {
     if (id.startsWith('b/') || !groundRects.length) return false;
     const [l, x, y] = id.split('/').map(Number);
-    if (l < geom!.max_level - 2) return false;
     const ts = geom!.domain_ft / 2 ** l;
-    return groundRects.some((r) => (x + 1) * ts > r[0] && x * ts < r[2] && (y + 1) * ts > r[1] && y * ts < r[3]);
+    const fine = geom!.max_level - 2;
+    return groundRects.some((r, i) => l >= (m.groundLevels?.[i] ?? fine) && (x + 1) * ts > r[0] && x * ts < r[2] && (y + 1) * ts > r[1] && y * ts < r[3]);
   };
   for (const id of [...cache.keys()]) {
     if (touched(id)) {

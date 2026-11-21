@@ -4,13 +4,43 @@
 // the ground from the form alone.
 import type { HillProfile, Plateau } from '../gen/protocol';
 
+/** Any hill may rise this far; a big one further (`maxPeak`, as `Hill::max_peak`). */
 export const MAX_HILL_FT = 300;
-export const HILL_RADIUS: [number, number] = [10, 640];
+export const MIN_HILL_RADIUS = 10;
 const OUTLINE_PTS = 32;
+
+/** A profile's largest half-axes (ft): along, across (`HillProfile::max_radius`; a ridge: half
+ * its length, its half-width). */
+export function maxRadius(profile: HillProfile): [number, number] {
+  return profile === 'mountain' ? [13200, 13200] : profile === 'ridge' ? [26400, 5280] : profile === 'knoll' ? [5280, 5280] : [7920, 7920];
+}
+
+/** The highest a profile's peak may be (ft). */
+export const profilePeak = (profile: HillProfile) => (profile === 'mountain' ? 2000 : profile === 'ridge' ? 1500 : 1000);
+
+/** The highest a hill of this size may rise (ft): 300 for any, up to 0.45 of its narrower
+ * half-axis for a big one, at most its profile's (`Hill::max_peak`). */
+export function maxPeak(profile: HillProfile, rx: number, ry: number): number {
+  const narrow = profile === 'ridge' ? ry : Math.min(rx, ry);
+  return Math.min(profilePeak(profile), Math.max(MAX_HILL_FT, 0.45 * narrow));
+}
+
+/** The coarsest map level that draws a hill (`Hill::shows_at`: its narrower half-axis spans at
+ * least 8 of that level's samples), never finer than the three finest's first. */
+export function hillLevel(p: Plateau, maxLevel: number, domainFt: number, tileN: number): number {
+  const h = p.hill;
+  const fine = Math.max(0, maxLevel - 2);
+  if (!h) return fine;
+  const narrow = h.profile === 'ridge' ? h.ry : Math.min(h.rx, h.ry);
+  let l = fine;
+  while (l > 0 && narrow >= 8 * (domainFt / 2 ** (l - 1) / tileN)) l--;
+  // (One coarser besides: a tile at the bound redrawn needlessly rather than missed.)
+  return Math.max(0, l - 1);
+}
 
 const half = (v: number) => Math.round(v * 2) / 2;
 
-/** The brushed change and hills as the ground takes them (`ground::soft_shift`): as they are up
+/** The brushed change as the ground takes it (`ground::soft_shift`; hills stand on top): as it is up
  * to 220 ft, then easing toward 300 ft either way. */
 export function softShift(d: number): number {
   const [knee, max] = [220, 300];
@@ -24,7 +54,10 @@ export function softShift(d: number): number {
 export function changedHill(p: Plateau, change: { profile?: HillProfile; peak?: number; crown?: number }): Plateau | string {
   const h = p.hill;
   if (!h) return 'That is not a hill';
-  const out = hillFor('', change.profile ?? h.profile, h.at, h.rx, h.ry, h.angle ?? 0, change.peak ?? p.level, change.crown ?? h.crown ?? 0);
+  const profile = change.profile ?? h.profile;
+  // (A profile that may not rise so high for this size takes the highest it may.)
+  const peak = Math.min(change.peak ?? p.level, maxPeak(profile, h.rx, h.ry));
+  const out = hillFor('', profile, h.at, h.rx, h.ry, h.angle ?? 0, peak, change.crown ?? h.crown ?? 0);
   if (typeof out === 'string' || !out.hill) return out;
   out.hill.seed = h.seed;
   return out;
@@ -55,9 +88,12 @@ export function hillOutline(profile: HillProfile, at: [number, number], rx: numb
 /** A hill, or what is wrong with it. */
 export function hillFor(id: string, profile: HillProfile, at: [number, number], rx: number, ry: number, angle: number, peak: number, crown = 0): Plateau | string {
   [rx, ry] = [half(rx), half(ry)];
-  if (rx < HILL_RADIUS[0] || ry < HILL_RADIUS[0]) return 'Drag farther: that hill is too small';
-  if (rx > HILL_RADIUS[1] || ry > HILL_RADIUS[1]) return `A hill reaches at most ${HILL_RADIUS[1]} ft from its middle`;
-  if (!(peak >= 1 && peak <= MAX_HILL_FT)) return `A hill's peak is 1 to ${MAX_HILL_FT} ft over the ground`;
+  if (rx < MIN_HILL_RADIUS || ry < MIN_HILL_RADIUS) return 'Drag farther: that hill is too small';
+  const [ax, ay] = maxRadius(profile);
+  const mi = (ft: number) => `${(ft / 5280).toLocaleString('en', { maximumFractionDigits: 1 })} mi`;
+  if (rx > ax || ry > ay) return profile === 'ridge' ? `A ridge is at most ${mi(2 * ax)} long and ${mi(2 * ay)} wide` : `This hill is at most ${mi(2 * ax)} across`;
+  const top = maxPeak(profile, rx, ry);
+  if (!(peak >= 1 && peak <= top)) return `This hill's peak is 1 to ${Math.floor(top)} ft over the ground (a bigger one may rise higher)`;
   angle = ((Math.round(angle * 10) / 10) % 360 + 360) % 360;
   crown = Math.min(half(Math.max(0, crown)), 0.8 * Math.min(rx, ry));
   const ctr: [number, number] = [half(at[0]), half(at[1])];
@@ -74,6 +110,6 @@ export function castleHill(id: string, poly: [number, number][]): Plateau | stri
   const reach = Math.max(...poly.map((p) => Math.hypot(p[0] - at[0], p[1] - at[1])));
   const crown = reach * 1.15 + 10;
   const peak = Math.max(60, Math.min(120, 50 + 0.4 * crown));
-  const r = Math.min(HILL_RADIUS[1], crown + 3 * peak);
+  const r = Math.min(640, crown + 3 * peak);
   return hillFor(id, 'round', at, r, r, 0, peak, Math.min(crown, 0.8 * r));
 }
