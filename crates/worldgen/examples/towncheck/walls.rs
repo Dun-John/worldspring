@@ -507,6 +507,7 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         "big ports",
         "breakwaters",
         "big ports without a breakwater",
+        "big ports on deep water, no breakwater (info)",
         "breakwater squares wet",
         "breakwater squares unpaved",
         "breakwater armour pieces",
@@ -529,6 +530,7 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         "quay front squares unpaved",
         "coastal cities",
         "coastal cities without a quay front",
+        "coastal cities short of the shore (info)",
         "quay front ft",
         "quay face samples",
         "quay face to water ft (sum)",
@@ -559,8 +561,13 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         let st = &ctx.ex.t0.settlements[si];
         if l.tier >= worldgen::t0::settle::Tier::City && st.coastal {
             r.tally("coastal cities", 1);
-            if l.quays.is_empty() {
+            // (Only where its patches meet the water: a quay strip or a pier. Seeds 4's and 5's L5
+            // are coastal in T0 but have no patch side on the shore, so nothing to front.)
+            let meets = !l.piers.is_empty() || l.plazas.iter().any(|p| p.kind == town::PlazaKind::Quay);
+            if l.quays.is_empty() && meets {
                 r.add("coastal cities without a quay front", 1.0, format!("L{si} {:?} at ({:.0}, {:.0}) river {}", l.tier, st.x, st.y, st.river));
+            } else if l.quays.is_empty() {
+                r.add("coastal cities short of the shore (info)", 1.0, format!("L{si} {:?} at ({:.0}, {:.0})", l.tier, st.x, st.y));
             }
         }
         for qf in &l.quays {
@@ -625,7 +632,12 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                     n += 1;
                     if c.water_level[q] >= c.height[q] {
                         wet += 1;
-                    } else if !matches!(c.urban[q], worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET | worldgen::battlemap::URBAN_DECK) {
+                    } else if !matches!(
+                        c.urban[q],
+                        // (A drain grate's or a way down's mouth, and a wall tower's floor, sit on the
+                        // quay's paving: their codes only keep props off.)
+                        worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET | worldgen::battlemap::URBAN_DECK | worldgen::battlemap::URBAN_ENTRANCE | worldgen::battlemap::URBAN_TOWER_FLOOR
+                    ) {
                         unpaved += 1;
                     }
                 }
@@ -680,6 +692,11 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
             r.tally("harbour masters in big ports", 1);
         } else {
             r.add("big ports without a harbour master", 1.0, tag.clone());
+        }
+        // (Water too deep for one is the coast's, no miss: seed 5's L18 lies on ~190 ft of water.)
+        if l.moles.is_empty() && why == harbour::TOO_DEEP {
+            r.add("big ports on deep water, no breakwater (info)", 1.0, tag.clone());
+            continue;
         }
         if l.moles.is_empty() {
             r.add("big ports without a breakwater", 1.0, format!("{tag}: {why}"));

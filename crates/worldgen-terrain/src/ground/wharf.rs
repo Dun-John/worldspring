@@ -146,13 +146,23 @@ pub fn shore_back(w: &Wharf) -> Vec<P> {
     }
     let run = along[n - 1];
     let reach = (2.5 * w.width.max(10.0)).min(0.35 * run).max(1e-6);
-    (0..n)
+    let mut back: Vec<P> = (0..n)
         .map(|k| {
             let d = along[k].min(run - along[k]);
             let e = crate::core::sqrt(crate::core::noise::smoothstep(0.0, 1.0, d / reach)).max(0.04);
             geom::add(pts[k], geom::mul(normal[k], w.width * e))
         })
-        .collect()
+        .collect();
+    // (Where the shore bends inland tighter than the quay is wide, the offset would fold back on
+    // itself: a point that steps backward along the face is held at the last, so the back closes
+    // to a corner there and never crosses itself.)
+    for k in 1..n {
+        let tan = [normal[k][1], -normal[k][0]];
+        if geom::dot(geom::sub(back[k], back[k - 1]), tan) < 0.0 {
+            back[k] = back[k - 1];
+        }
+    }
+    back
 }
 
 /// A shore quay's length (ft) in each of its pieces (`shore_pieces`).

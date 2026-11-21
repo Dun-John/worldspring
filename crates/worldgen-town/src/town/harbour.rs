@@ -387,7 +387,7 @@ fn breakwater(site: &Site, s: &Settlement, l: &Layout, all: &[(P, P)]) -> Result
     let reach = piers.iter().map(|&(_, t)| dot(sub(t, o), d)).fold(f64::MIN, f64::max);
     let first = unit(hash2(0x3b1e_7a77, s.seed as i64, 0)) < 0.5;
     let mut why = NO_SHORE;
-    let tries = [(1.0, 50.0), (1.0, 90.0), (1.0, 30.0), (1.0, 140.0)];
+    let tries = [(1.0, 50.0), (1.0, 90.0), (1.0, 30.0), (1.0, 140.0), (1.0, 200.0), (1.0, 270.0)];
     // (How far it gets: past finding a bank, past the water's depth, past what is in the way.)
     let mut stage = 0;
     let mut note = |st: usize, w: &'static str, why: &mut &'static str| {
@@ -413,7 +413,9 @@ fn breakwater(site: &Site, s: &Settlement, l: &Layout, all: &[(P, P)]) -> Result
             // The bank: where the ground out along the piers' way first meets the water, 6 ft back
             // onto land.
             let wet = |t: f64| site.wet_standing(loc(add(q, mul(d, t))));
-            let Some(t) = (0..150).map(|k| -300.0 + 4.0 * k as f64).find(|&t| wet(t) && !wet(t - 4.0) && wet(t + 8.0)) else {
+            // (Within 300 ft either way, else out to 600 ft.)
+            let bank = |t: &f64| wet(*t) && !wet(*t - 4.0) && wet(*t + 8.0);
+            let Some(t) = (0..150).map(|k| -300.0 + 4.0 * k as f64).find(bank).or_else(|| (0..75).flat_map(|k| [300.0 + 4.0 * k as f64, -304.0 - 4.0 * k as f64]).find(bank)) else {
                 continue;
             };
             let root = add(q, mul(d, t - 10.0));

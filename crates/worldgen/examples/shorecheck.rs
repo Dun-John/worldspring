@@ -2,7 +2,7 @@
 //! each coastal settlement, takes the most curved ~500 ft stretch, brushes a stroke 12 ft inland of
 //! it with a ±5 ft wobble (`wharf::shore_line`), and reports how steady the quay is: its width
 //! (back line to face) and its face's offset out from the water's edge, as max deviations.
-//! `cargo run --release -p worldgen --example shorecheck -- [seeds, default 1-8] [width ft, default 20]`
+//! `cargo run --release -p worldgen --example shorecheck -- [seeds: 1-8 (default), 1,3 or 1 2 3] [w=<width ft, default 20>]`
 mod common;
 
 use worldgen::core::geom::{add, dist, dot, mul, seg_dist, sub, unit};
@@ -75,15 +75,22 @@ fn polyline_dist(p: P, line: &[P]) -> f64 {
 
 fn main() {
     let a = common::args();
-    let seeds: Vec<u64> = match a.get(0) {
-        Some(s) if s.contains('-') => {
-            let (x, y) = s.split_once('-').unwrap();
-            (x.parse().unwrap()..=y.parse().unwrap()).collect()
+    // (Seeds as `1-8`, `1,3` or `1 2 3`; the width as `w=N`: a bare second number once read as
+    // the width ran seed 1 alone with a 2 ft quay.)
+    let mut seeds: Vec<u64> = Vec::new();
+    let mut width = 20.0;
+    for s in &a.pos {
+        if let Some(w) = s.strip_prefix("w=") {
+            width = w.parse().expect("w=<width ft>");
+        } else if let Some((x, y)) = s.split_once('-') {
+            seeds.extend(x.parse::<u64>().unwrap()..=y.parse().unwrap());
+        } else {
+            seeds.extend(s.split(',').map(|v| v.parse::<u64>().unwrap()));
         }
-        Some(s) => s.split(',').map(|v| v.parse().unwrap()).collect(),
-        None => (1..=8).collect(),
-    };
-    let width = a.num(1, 20.0);
+    }
+    if seeds.is_empty() {
+        seeds = (1..=8).collect();
+    }
     let mut worst: (f64, f64) = (0.0, 0.0);
     for seed in seeds {
         let ex = Executor::new(common::world(&seed.to_string()));
@@ -137,7 +144,9 @@ fn main() {
             along[k] = along[k - 1] + dist(w.pts[k - 1], w.pts[k]);
         }
         let run = *along.last().unwrap();
-        let reach = w.width.max(10.0).min(0.3 * run);
+        // (`shore_back`'s own taper: 2.5 widths, at most 0.35 of the run. Measured only from 1 widths
+        // in, the taper's last 30 ft read as a 6-8 ft narrowing.)
+        let reach = (2.5 * w.width.max(10.0)).min(0.35 * run);
         let (mut dw, mut folds) = (0.0f64, 0);
         let (mut df, mut sum_f, mut nf) = (0.0f64, 0.0, 0);
         for k in 0..w.pts.len() {
