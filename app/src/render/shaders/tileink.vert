@@ -32,6 +32,9 @@ void main() {
     vec2 sb = (m * vec3(aB, 1.0)).xy;
     float style = aQ.x;
     float minPx = style < 0.5 ? 0.45 : (style < 1.5 || style > 4.5 ? 1.2 : (style < 2.5 || style > 3.5 ? 2.2 : 0.0));
+    // (A gate's towers (30 ft round, `payload` gate_towers) drawn larger than the wall's other towers out at
+    // the city zooms, a pair astride each road where it goes through the wall.)
+    if (style > 1.5 && style < 2.5 && aW.x > 29.0) minPx = mix(2.2, 3.4, smoothstep(5.0, 12.0, 1.0 / uPpf));
     float hw = max(minPx, 0.5 * aW.x * uPpf);
     vec2 dir = sb - sa;
     float len = length(dir);

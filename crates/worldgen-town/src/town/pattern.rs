@@ -73,6 +73,18 @@ pub fn mark(world: &World, t0: &T0, index: usize) -> u64 {
 /// rings round a city's keep in the north and west and round a steppe camp (some), radial for
 /// some southern and dry cities and capitals; the grid else.
 pub(super) fn auto(site: &Site, s: &Settlement, r: f64, planning: f64) -> Pattern {
+    // (Rings need room to show: a town smaller than `RINGS_MIN_R` would come out as a core and a
+    // ring or two of thick street, so it keeps the grid.)
+    match pick(site, s, r, planning) {
+        Pattern::Rings if r < RINGS_MIN_R => Pattern::Grid,
+        p => p,
+    }
+}
+
+/// The least urban radius (ft) a town picks rings at by itself (set by hand, any town has them).
+pub const RINGS_MIN_R: f64 = 400.0;
+
+fn pick(site: &Site, s: &Settlement, r: f64, planning: f64) -> Pattern {
     if planning < super::planning::MIXED {
         return Pattern::Grid;
     }

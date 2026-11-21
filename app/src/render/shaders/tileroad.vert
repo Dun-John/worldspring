@@ -31,7 +31,9 @@ void main() {
     float cls = aQ.x;
     float w = aW.x;
     // Symbolic half width (px) by class, or the real bed once it is wider on screen.
-    float symbolic = cls < 0.5 ? 1.25 : (cls < 1.5 ? 0.9 : (cls < 2.5 ? 0.6 : (cls < 3.5 ? 0.0 : (cls < 4.5 ? 0.9 : 0.7))));
+    // (A town's streets keep a hairline, its main streets a band, out to the city zooms, so its pattern
+    // reads over the roofs.)
+    float symbolic = cls < 0.5 ? 1.25 : (cls < 1.5 ? 0.9 : (cls < 2.5 ? 0.6 : (cls < 3.5 ? 0.45 : (cls < 4.5 ? 1.5 : 0.7))));
     float bedPx = 0.5 * w * uPpf;
     // A ferry's line stays a line (its rope), however close.
     float hw = cls > 4.5 ? max(symbolic, min(bedPx * 0.15, 2.0)) : max(symbolic, bedPx);
@@ -51,7 +53,7 @@ void main() {
     vPpf = uPpf;
     // Lesser roads appear as you zoom in (ft per px thresholds).
     float ftpx = 1.0 / uPpf;
-    vFade = cls < 0.5 ? 1.0 : (cls < 1.5 || cls > 3.5 ? 1.0 - smoothstep(2500.0, 4500.0, ftpx) : (cls < 2.5 ? 1.0 - smoothstep(700.0, 1400.0, ftpx) : 1.0 - smoothstep(6.0, 14.0, ftpx)));
+    vFade = cls < 0.5 ? 1.0 : (cls < 1.5 || cls > 3.5 ? 1.0 - smoothstep(2500.0, 4500.0, ftpx) : (cls < 2.5 ? 1.0 - smoothstep(700.0, 1400.0, ftpx) : 1.0 - smoothstep(16.0, 28.0, ftpx)));
     gl_Position = vec4((uProjectionMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
     // Roads not shown at this zoom: off screen, so they cost no fragments at all.
     if (vFade <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);

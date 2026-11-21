@@ -83,7 +83,7 @@ pub(crate) fn patterns(world: &World, t0: &T0, label: &str, r: &mut Report) {
         let hs = straight(&l, ur);
         let wide: f64 = l.roads.iter().filter(|x| x.1 == 4 && x.2 > 20.0).map(|x| x.0.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>()).sum();
         r.value(&format!("high street % ({p})"), 100.0 * hs, format!("{label} L{li}"));
-        say!("    {label} L{li} {} {p} (planning {}): round {:.0}%, out {:.0}%, high street {:.0}% ({wide:.0} ft wide); {n} buildings, {sharp} corner < 60, {eye} eye < 70, {over} overlapping; fx {:.4} fy {:.4}", s.tier.name(), l.planning, 100.0 * ring, 100.0 * spoke, 100.0 * hs, l.center[0] / world.geom.map_w_ft, l.center[1] / world.geom.map_h_ft);
+        say!("    {label} L{li} {} {p} (planning {}): round {:.0}%, out {:.0}%, high street {:.0}% ({wide:.0} ft wide); {n} buildings (r {ur:.0} ft), {sharp} corner < 60, {eye} eye < 70, {over} overlapping; fx {:.4} fy {:.4}", s.tier.name(), l.planning, 100.0 * ring, 100.0 * spoke, 100.0 * hs, l.center[0] / world.geom.map_w_ft, l.center[1] / world.geom.map_h_ft);
         r.tally(&format!("towns {p}"), 1);
         r.value(&format!("round % ({p})"), 100.0 * ring, format!("{label} L{li}"));
         r.value(&format!("out % ({p})"), 100.0 * spoke, format!("{label} L{li}"));

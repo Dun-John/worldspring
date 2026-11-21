@@ -29,7 +29,11 @@ void main() {
     float cover = 1.0 - smoothstep(vHalf - 0.5, vHalf + 0.5, d);
     bool street = vClass > 2.5;
     bool paved = vClass < 0.5 || street;
-    vec3 line = street ? (vClass > 3.5 ? INK : PAVED) : (vClass > 1.5 ? INK_TRACK : INK);
+    // (From the city zooms out a street is a pale line between the roofs, a main street paler, as on
+    // a printed town plan; a main street inks again once the town is a speck.)
+    float ftpx = 1.0 / vPpf;
+    vec3 pale = vClass > 3.5 ? mix(vec3(0.88, 0.85, 0.76), INK, smoothstep(40.0, 120.0, ftpx)) : vec3(0.76, 0.72, 0.63);
+    vec3 line = street ? pale : (vClass > 1.5 ? INK_TRACK : INK);
     // Bed: surface in the middle, ink along the edges (town streets meet blocks, no ink).
     vec3 surface = paved ? PAVED : EARTH;
     if (paved && vPpf > 1.0) {
