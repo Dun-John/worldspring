@@ -164,25 +164,32 @@ pub(super) fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen:
         assert!(public(stair_room), "{tag}: the stairs are in the {}", g.rooms[stair_room.max(0) as usize].kind);
         drinking = true;
     }
-    // (Roadmap 7 P8) A round tower's winding stair: a run on every level from its lowest up to the
-    // one under the top, each run's top square clear floor on the level above where that level's
-    // run starts; the flood on a level starts from its run and where the run below comes out.
-    let runs: Vec<Vec<usize>> = it.levels.iter().map(|lv| lv.furniture.iter().filter(|f| f.kind == "winder").map(|f| f.y as usize * nx + f.x as usize).collect()).collect();
+    // (Roadmap 7 P8) A round tower's winding stairs (`winder` squares, a level's runs in climbing
+    // order, each run's squares side by side): each run of two squares or more comes out on the
+    // level above, its top square clear floor there where a run of that level starts (a lone square
+    // on the stair's top level); each lone square the top of a run below; a run starts from nothing
+    // below only on the lowest level with one or the entry level; without a stair block, a run on
+    // every level from the lowest up. The flood on a level starts from its runs.
+    let runs: Vec<Vec<Vec<usize>>> = it.levels.iter().map(|lv| winder_runs(lv, nx)).collect();
     let lowest = runs.iter().position(|r| !r.is_empty());
-    let mut came: Vec<Option<usize>> = vec![None; it.levels.len()];
     if let Some(lo) = lowest {
-        for li in lo + 1..it.levels.len() {
-            let lv = &it.levels[li];
-            assert!(!runs[li - 1].is_empty(), "{tag}: no winding stair up to {}", lv.name);
-            let top = *runs[li - 1].last().unwrap();
-            assert!(lv.cells[top] >= 0 && !lv.furniture.iter().any(|f| f.blocks_move && f.x as usize == top % nx && f.y as usize == top / nx), "{tag} {}: the winding stair comes out off the floor", lv.name);
-            assert!(runs[li].is_empty() || runs[li][0] == top, "{tag} {}: the winding stair doesn't go on where it comes out", lv.name);
-            came[li] = Some(top);
+        for (li, lv) in it.levels.iter().enumerate() {
+            for r in &runs[li] {
+                let (foot, top) = (r[0], *r.last().unwrap());
+                if r.len() >= 2 {
+                    let up = it.levels.get(li + 1);
+                    assert!(up.is_some_and(|u| u.cells[top] >= 0 && !u.furniture.iter().any(|f| f.blocks_move && f.x as usize == top % nx && f.y as usize == top / nx)), "{tag} {}: the winding stair comes out off the floor", lv.name);
+                    assert!(runs[li + 1].iter().any(|q| q[0] == top), "{tag} {}: the winding stair doesn't go on where it comes out", lv.name);
+                }
+                let below = li > 0 && runs[li - 1].iter().any(|q| q.len() >= 2 && *q.last().unwrap() == foot);
+                assert!(below || (r.len() >= 2 && (li == lo || li == it.entry_level)), "{tag} {}: a winding stair from nowhere at {foot} (li {li} lo {lo} entry {} runs {:?} below {:?})", lv.name, it.entry_level, runs[li], if li > 0 { runs[li - 1].clone() } else { vec![] });
+            }
+            assert!(li <= lo || !runs[li].is_empty() || it.levels.iter().any(|l| l.has_stairs), "{tag}: no winding stair up to {}", lv.name);
         }
     }
     let st = it.stairs;
     let on_stairs = |i: usize, j: usize| i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
-    for (li, lv) in it.levels.iter().enumerate() {
+    for lv in &it.levels {
         if lv.has_stairs {
             for j in st[1]..st[1] + st[3] {
                 for i in st[0]..st[0] + st[2] {
@@ -233,7 +240,7 @@ pub(super) fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen:
         let mut starts: Vec<usize> = if lv.has_stairs {
             vec![st[1] * nx + st[0]]
         } else {
-            lv.furniture.iter().filter(|f| matches!(f.kind, "spiral_stair" | "winder")).map(|f| f.y as usize * nx + f.x as usize).chain(came[li]).collect()
+            lv.furniture.iter().filter(|f| matches!(f.kind, "spiral_stair" | "winder")).map(|f| f.y as usize * nx + f.x as usize).collect()
         };
         if starts.is_empty() && lv.z == 0 {
             starts = lv.doors.iter().filter(|d| d.rooms[1] < 0).flat_map(door_sq).filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] >= 0).collect();
@@ -345,4 +352,18 @@ pub(super) fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen:
 
 pub(super) fn geom_dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// A level's winding stair runs (`winder` squares in climbing order, a new run wherever the next
+/// square isn't beside the last).
+pub(super) fn winder_runs(lv: &worldgen::interior::Level, nx: usize) -> Vec<Vec<usize>> {
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    for f in lv.furniture.iter().filter(|f| f.kind == "winder") {
+        let k = f.y as usize * nx + f.x as usize;
+        match runs.last_mut() {
+            Some(r) if r.last().is_some_and(|&q| (q % nx).abs_diff(k % nx) <= 1 && (q / nx).abs_diff(k / nx) <= 1) => r.push(k),
+            _ => runs.push(vec![k]),
+        }
+    }
+    runs
 }

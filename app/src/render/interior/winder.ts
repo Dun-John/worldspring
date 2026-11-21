@@ -35,7 +35,14 @@ const shade = (c: number, k: number) => {
 /** The arc a level's squares of one kind cover: from the first's angle to the last's, a half step
  * beyond each (radians, rising clockwise on screen). */
 function arcOf(sq: [number, number][], cx: number, cy: number): [number, number] | null {
-  if (sq.length < 2) return null;
+  if (!sq.length) return null;
+  if (sq.length === 1) {
+    // (A lone square: its own width round the ring.)
+    const [i, j] = sq[0];
+    const [dx, dy] = [i + 0.5 - cx, j + 0.5 - cy];
+    const [a, half] = [Math.atan2(dy, dx), 0.5 / Math.max(0.5, Math.hypot(dx, dy))];
+    return [a - half, a + half];
+  }
   const ang: number[] = [];
   for (const [i, j] of sq) {
     let a = Math.atan2(j + 0.5 - cy, i + 0.5 - cx);
@@ -89,16 +96,52 @@ function treads(g: Graphics, cx: number, cy: number, r0: number, r1: number, a0:
   }
 }
 
-/** Level `li`'s winding stair, if it has one: its run up, and the well over the run below. */
+/** The box round a room's squares on a level, as `winderFrame` finds the floor's. */
+function roomFrame(it: Interior, lv: InteriorLevel, room: number): { cx: number; cy: number; r: number } | null {
+  let [i0, i1, j0, j1] = [Infinity, -Infinity, Infinity, -Infinity];
+  for (let k = 0; k < lv.cells.length; k++) {
+    if (lv.cells[k] !== room) continue;
+    const [i, j] = [k % it.nx, Math.floor(k / it.nx)];
+    [i0, i1, j0, j1] = [Math.min(i0, i), Math.max(i1, i), Math.min(j0, j), Math.max(j1, j)];
+  }
+  if (i0 > i1) return null;
+  return { cx: (i0 + i1 + 1) / 2, cy: (j0 + j1 + 1) / 2, r: (i1 - i0 + 1 + (j1 - j0 + 1)) / 4 };
+}
+
+type Sq = { kind: string; x: number; y: number };
+
+/** Level `li`'s winding stairs, if it has any: each one's run up, and the well over the run below.
+ * A round tower's winds round its floor; a keep's round towers' each round its own room. */
 export function drawWinders(g: Graphics, it: Interior, li: number) {
   const lv: InteriorLevel | undefined = it.levels[li];
-  if (!lv || !lv.furniture.some((f) => f.kind === 'winder' || f.kind === 'stair_well')) return;
-  const fr = winderFrame(it);
-  if (!fr) return;
+  if (!lv) return;
+  const sqs: Sq[] = lv.furniture.filter((f) => f.kind === 'winder' || f.kind === 'stair_well');
+  if (!sqs.length) return;
+  const floor = winderFrame(it);
+  // (The squares in stairs side by side: one group each.)
+  const group: number[] = sqs.map((_, k) => k);
+  const find = (k: number): number => (group[k] === k ? k : (group[k] = find(group[k])));
+  for (let a = 0; a < sqs.length; a++)
+    for (let b = a + 1; b < sqs.length; b++)
+      if (Math.abs(sqs[a].x - sqs[b].x) <= 1 && Math.abs(sqs[a].y - sqs[b].y) <= 1) group[find(a)] = find(b);
+  const groups = new Map<number, Sq[]>();
+  sqs.forEach((q, k) => {
+    const r = find(k);
+    groups.set(r, [...(groups.get(r) ?? []), q]);
+  });
+  for (const part of groups.values()) {
+    // (Round the floor's middle where it lies under the floor's wall, else round its own room's.)
+    const fits = floor && part.every((q) => Math.hypot(q.x + 0.5 - floor.cx, q.y + 0.5 - floor.cy) >= floor.r - 1.6);
+    const fr = fits ? floor : roomFrame(it, lv, lv.cells[part[0].y * it.nx + part[0].x]);
+    if (fr) drawWinder(g, fr, part);
+  }
+}
+
+function drawWinder(g: Graphics, fr: { cx: number; cy: number; r: number }, part: Sq[]) {
   const { cx, cy, r } = fr;
   // (The wall side tucked under the wall; the open side a square in from it.)
   const [r0, r1] = [Math.max(r * 0.4, r - 1.05), r + 0.12];
-  const of = (kind: string) => lv.furniture.filter((f) => f.kind === kind).map((f) => [f.x, f.y] as [number, number]);
+  const of = (kind: string) => part.filter((f) => f.kind === kind).map((f) => [f.x, f.y] as [number, number]);
   const well = arcOf(of('stair_well'), cx, cy);
   if (well) {
     // The run below seen through the well: its upper treads, dark in the shaft, the floor's edge inked round it.
@@ -112,7 +155,7 @@ export function drawWinders(g: Graphics, it: Interior, li: number) {
     arcLine(g, cx, cy, r0 - 0.05, a0, a1);
     g.stroke({ width: 0.06, color: RAIL });
   }
-  const run = arcOf(of('winder'), cx, cy);
+  const run = of('winder').length >= 2 ? arcOf(of('winder'), cx, cy) : null;
   if (run) {
     const [a0, a1] = run;
     // (About sixteen treads to a storey's half turn.)

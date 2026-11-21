@@ -8,11 +8,12 @@
 use super::*;
 
 /// A round floor's stair band: its squares in order round the floor's middle, clockwise on screen
-/// (grid y down) from the grid's +x side, and the first run's foot (an index into them).
+/// (grid y down) from the grid's +x side, and where each level's run starts on it.
 #[derive(Clone, Debug)]
 pub(super) struct Winder {
     pub ring: Vec<usize>,
-    pub foot: usize,
+    /// Where each level's run starts round the ring (from the lowest level; rising, unwrapped).
+    pub starts: Vec<usize>,
 }
 
 /// The middle (grid units) and half the width of a level's floor: the box round its squares, as the
@@ -39,45 +40,116 @@ fn turn(d: [f64; 2]) -> f64 {
     }
 }
 
-/// The stair band of a round floor (`inside`) and its foot beside the ground floor's door (`levels[0]`'s
-/// front door: the band square after the one nearest the door's inside square, climbing away from
-/// it; with the levels above laid out too, as far on as keeps their landings and the most of its
-/// squares off their doorways); None for a floor too small for a ring of four squares.
-pub(super) fn plan(levels: &[&Level], inside: &[bool], nx: usize, ny: usize) -> Option<Winder> {
+/// A round floor's stair band (`inside`): its squares within a square of the wall, in order round
+/// the floor's middle; None for one too small for a ring of four.
+pub(super) fn ring_of(inside: &[bool], nx: usize, ny: usize) -> Option<Vec<usize>> {
     let (c, r) = frame(inside, nx, ny)?;
     let at = |k: usize| [(k % nx) as f64 + 0.5 - c[0], (k / nx) as f64 + 0.5 - c[1]];
     let mut ring: Vec<usize> = (0..nx * ny).filter(|&k| inside[k] && geom::len(at(k)) >= r - 1.0 - 1e-9).collect();
     ring.sort_by(|&a, &b| turn(at(a)).total_cmp(&turn(at(b))).then(a.cmp(&b)));
-    if ring.len() < 4 {
-        return None;
-    }
-    let lvl = levels.first()?;
+    (ring.len() >= 4).then_some(ring)
+}
+
+/// The winding stair of a round floor (`inside`) through `total` levels, `levels` the ones built so
+/// far from its lowest (their doorways and links kept clear where the band allows), its run on
+/// level `ground` starting beside that level's front door (climbing away from it).
+pub(super) fn plan(levels: &[&Level], ground: usize, total: usize, inside: &[bool], nx: usize, ny: usize) -> Option<Winder> {
+    let ring = ring_of(inside, nx, ny)?;
+    let lvl = levels.get(ground)?;
     let door = lvl.doors.iter().find(|d| d.kind == "front").or_else(|| lvl.doors.iter().find(|d| d.rooms[1] < 0))?;
     let sq = door_squares(door).into_iter().filter(|&(i, j)| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).map(|(i, j)| j as usize * nx + i as usize).find(|&k| inside[k])?;
-    let d = at(sq);
-    let near = (0..ring.len()).min_by(|&a, &b| geom::dist(at(ring[a]), d).total_cmp(&geom::dist(at(ring[b]), d)).then(a.cmp(&b)))?;
+    Some(plan_ring(ring, levels, ground, total, Some(sq), nx, ny).0)
+}
+
+/// The winding stair round `ring` (`ring_of`) through `total` levels (`levels` the ones built so
+/// far), its foot on level `ground` beside square `door` if given: each run about half a turn,
+/// shorter (down to a square) where that keeps every doorway and link off the runs and wells; and
+/// whether it does (none may, as round a keep tower with a door on every floor).
+pub(super) fn plan_ring(ring: Vec<usize>, levels: &[&Level], ground: usize, total: usize, door: Option<usize>, nx: usize, ny: usize) -> (Winder, bool) {
     let n = ring.len();
-    // (The ground floor's run clear of the door's square: its foot from beside it to a run short of it.)
-    let feet = n - n / 2 - 1;
-    let mut w = Winder { ring, foot: (near + 1) % n };
-    let mut best: Option<(usize, usize)> = None;
-    for f in 0..feet {
-        w.foot = (near + 1 + f) % n;
-        let mut bad = 0;
-        for (li, lv) in levels.iter().enumerate() {
-            let doorway = doorways(lv, nx, ny);
-            // (A landing in a doorway counts as many as the rest.)
-            if li > 0 && doorway.contains(&w.run(li, levels.len().max(li + 1))[0]) {
-                bad += 100;
+    let step = n / 2;
+    let total = total.max(1);
+    // (Per level, each ring square: 0 free, 1 a doorway, 2 a link's.)
+    let avoid: Vec<Vec<u8>> = (0..total)
+        .map(|li| {
+            let mut a = vec![0u8; n];
+            if let Some(lv) = levels.get(li) {
+                let (door, link): (Vec<usize>, Vec<usize>) = (doorways(lv, nx, ny), lv.links.iter().map(|q| q.y as usize * nx + q.x as usize).collect());
+                for (t, k) in ring.iter().enumerate() {
+                    a[t] = if link.contains(k) { 2 } else { door.contains(k) as u8 };
+                }
             }
-            bad += w.run(li, levels.len()).iter().chain(&w.well(li)).filter(|k| doorway.contains(k)).count();
+            a
+        })
+        .collect();
+    // (The ring square nearest the door: the ground floor's foot best the one after it.)
+    let at = |k: usize| [(k % nx) as f64, (k / nx) as f64];
+    let near = door.and_then(|d| (0..n).min_by(|&a, &b| geom::dist(at(ring[a]), at(d)).total_cmp(&geom::dist(at(ring[b]), at(d))).then(a.cmp(&b))));
+    const HIT: u64 = 1_000_000;
+    // (A link's square never: what stands there would go.)
+    let hits = |li: usize, from: usize, len: usize| (from..=from + len).map(|p| [0, HIT, 10 * HIT][avoid[li][p % n] as usize]).sum::<u64>();
+
+    let pref = |li: usize, p: usize| if li == ground { near.map_or(0, |q| ((p + 2 * n - q - 1) % n) as u64) } else { 0 };
+    // Cheapest runs level by level: a state is where the last run came out and its length (the well
+    // above it over its upper half, short of its top); a run short of half a turn costs the more
+    // the shorter, so the shortening is shared between levels.
+    let lens = step.max(2) + 1;
+    let idx = |p: usize, len: usize| p * lens + len;
+    // (Each level's table: cost, the state it came from, where its run started.)
+    let mut tables: Vec<Vec<Option<(u64, usize, usize)>>> = Vec::new();
+    let mut best: Option<(u64, usize)> = None;
+    for li in 0..total {
+        let top = li + 1 == total;
+        let mut t: Vec<Option<(u64, usize, usize)>> = vec![None; n * lens];
+        let froms: Vec<(usize, u64, usize, usize)> = if li == 0 {
+            (0..n).map(|p| (p, 0, 0, usize::MAX)).collect()
+        } else {
+            tables[li - 1].iter().enumerate().filter_map(|(s, e)| e.map(|(c, _, _)| (s / lens, c, s % lens, s))).collect()
+        };
+        for (p, c0, plen, s) in froms {
+            let h = plen / 2;
+            let well = if h > 0 { hits(li, p + n - h, h - 1) } else { 0 };
+            let c = c0 + well * 2 + pref(li, p);
+            if top {
+                let c = c + hits(li, p, 0);
+                if best.is_none_or(|b| c < b.0) {
+                    best = Some((c, s));
+                }
+                continue;
+            }
+            for len in 1..lens.min(n) {
+                if len + 1 + h > n {
+                    break;
+                }
+                let c = c + hits(li, p, len) + (step.abs_diff(len) as u64).pow(2) * 10;
+                let e = idx((p + len) % n, len);
+                if t[e].is_none_or(|q| c < q.0) {
+                    t[e] = Some((c, s, p));
+                }
+            }
         }
-        if best.is_none_or(|b| bad < b.0) {
-            best = Some((bad, w.foot));
+        tables.push(t);
+    }
+    // (Back from the cheapest top: each level's run's start.)
+    let mut starts = vec![0usize; total];
+    let mut s = best.map_or(usize::MAX, |b| b.1);
+    if total == 1 {
+        starts[0] = near.map_or(0, |q| (q + 1) % n);
+    } else {
+        starts[total - 1] = s / lens;
+        for li in (0..total - 1).rev() {
+            let Some((_, prev, p)) = tables[li][s] else { break };
+            starts[li] = p;
+            s = prev;
         }
     }
-    w.foot = best?.1;
-    Some(w)
+    // (Unwrapped: each start on from the one before.)
+    for li in 1..total {
+        while starts[li] <= starts[li - 1] {
+            starts[li] += n;
+        }
+    }
+    (Winder { ring, starts }, best.is_some_and(|b| b.0 < HIT))
 }
 
 /// The squares either side of a level's doors, on the grid.
@@ -92,35 +164,29 @@ pub(super) fn door_squares(d: &Door) -> [(isize, isize); 2] {
 }
 
 impl Winder {
-    /// Squares the stair climbs a storey by (half a turn), and a run's length (its top square the
-    /// next run's foot).
-    fn step(&self) -> usize {
-        self.ring.len() / 2
-    }
-
-    /// Level `li`'s run (from the ground floor, 0) of `n` levels: on the top level, the square the
-    /// run below comes out on alone (kept clear).
-    pub fn run(&self, li: usize, n: usize) -> Vec<usize> {
-        let s = self.foot + li * self.step();
-        let len = if li + 1 >= n { 0 } else { self.step() };
-        (0..=len).map(|t| self.ring[(s + t) % self.ring.len()]).collect()
+    /// Level `li`'s run (from the lowest, 0): from its start to the next level's (its top that run's
+    /// foot); on the top level, the square the run below comes out on alone (kept clear).
+    pub fn run(&self, li: usize) -> Vec<usize> {
+        let Some(&s) = self.starts.get(li) else { return Vec::new() };
+        let e = self.starts.get(li + 1).copied().unwrap_or(s);
+        (s..=e).map(|t| self.ring[t % self.ring.len()]).collect()
     }
 
     /// Level `li`'s stair well: over the upper half of the run below, short of its top.
     pub fn well(&self, li: usize) -> Vec<usize> {
-        if li == 0 {
+        if li == 0 || li >= self.starts.len() {
             return Vec::new();
         }
-        let s = self.foot + (li - 1) * self.step();
-        let h = self.step() / 2;
-        (self.step() - h..self.step()).map(|t| self.ring[(s + t) % self.ring.len()]).collect()
+        let s = self.starts[li];
+        let h = (s - self.starts[li - 1]) / 2;
+        (s - h..s).map(|t| self.ring[t % self.ring.len()]).collect()
     }
 
-    /// Lay level `li`'s run and well (of `n` levels) on `lvl`: on its floor, off its doorways.
-    pub fn lay(&self, lvl: &mut Level, nx: usize, ny: usize, li: usize, n: usize) {
+    /// Lay level `li`'s run and well on `lvl`: on its floor, the well off its doorways (a run kept
+    /// whole, through a doorway where `plan_ring` found no way round one).
+    pub fn lay(&self, lvl: &mut Level, nx: usize, ny: usize, li: usize) {
         let doorway = doorways(lvl, nx, ny);
-        let ok = |k: usize| lvl.cells[k] >= 0 && !doorway.contains(&k);
-        let (run, well): (Vec<usize>, Vec<usize>) = (self.run(li, n).into_iter().filter(|&k| ok(k)).collect(), self.well(li).into_iter().filter(|&k| ok(k)).collect());
+        let (run, well): (Vec<usize>, Vec<usize>) = (self.run(li).into_iter().filter(|&k| lvl.cells[k] >= 0).collect(), self.well(li).into_iter().filter(|&k| lvl.cells[k] >= 0 && !doorway.contains(&k)).collect());
         // (Nothing else on them: what stood there goes.)
         let on = |f: &Item, k: usize| (f.x as usize..(f.x + f.w) as usize).contains(&(k % nx)) && (f.y as usize..(f.y + f.h) as usize).contains(&(k / nx));
         lvl.furniture.retain(|f| !run.iter().chain(&well).any(|&k| on(f, k)));

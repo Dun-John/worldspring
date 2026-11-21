@@ -213,8 +213,7 @@ fn agent_edits_guarantee() {
     let f = WorldFile { edits: e, ..w3.file.clone() };
     let mut ex = Executor::new(World::new(f).unwrap());
     assert_eq!(ex.world.hash, base.hash, "buildings changed the world hash");
-    // (A round tower's stair winds up its wall from its door, Roadmap 7 P8: no cellar under it.)
-    for (c, levels, roof) in [(&inn, 4, 1 | 2 << 2), (&tower, 4, 2)] {
+    for (c, levels, roof) in [(&inn, 4, 1 | 2 << 2), (&tower, 5, 2)] {
         let li = agent::layout_of(&ex.world, &ex.t0, &c.id).expect("the building's layout");
         let l = town::layout(&ex.world, &ex.t0, li);
         assert!(l.buildings.len() == 1 && l.buildings[0].poly == c.poly, "{}: not laid out as drawn", c.id);

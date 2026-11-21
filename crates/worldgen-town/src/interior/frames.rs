@@ -560,10 +560,11 @@ pub(super) fn lighthouse_squares(inside: &[bool], whole: &[bool], nx: usize, ny:
 }
 
 /// A lighthouse's roof (Roadmap 7 P8): its lamp room on the `inner` squares under the glazed
-/// lantern, the gallery round it outside the glass (on every square of the grid: it stands out
-/// past the tower's wall), a door between them; reached by its spiral stair (`st`).
-pub(super) fn lamp_top(nx: usize, ny: usize, inner: &[usize], st: [usize; 4], rng: &mut Pcg32) -> Level {
-    let mut cells = vec![1i16; nx * ny];
+/// lantern, the gallery round it outside the glass (on the tower's floor squares, inside its
+/// parapet, as its design rebuilds it), a door between them; reached by its stair (`st`).
+pub(super) fn lamp_top(nx: usize, ny: usize, inside: &[bool], inner: &[usize], st: [usize; 4], rng: &mut Pcg32) -> Level {
+    // (The gallery on the floor's squares only, inside the parapet.)
+    let mut cells: Vec<i16> = inside.iter().map(|&q| if q { 1 } else { -1 }).collect();
     for &k in inner {
         cells[k] = 0;
     }

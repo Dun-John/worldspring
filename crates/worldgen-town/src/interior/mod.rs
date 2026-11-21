@@ -606,12 +606,11 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         levels.push(lvl);
     }
     // (Its winding stair laid with every level's doors known, then the furniture.)
-    let wind = if round { winder::plan(&levels.iter().collect::<Vec<_>>(), &in_tower, n, n) } else { None };
-    let count = levels.len();
+    let wind = if round { winder::plan(&levels.iter().collect::<Vec<_>>(), 0, levels.len(), &in_tower, n, n) } else { None };
     for (li, lvl) in levels.iter_mut().enumerate() {
         lvl.has_stairs &= !round;
         if let Some(w) = &wind {
-            w.lay(lvl, n, n, li, count);
+            w.lay(lvl, n, n, li);
         }
         furnish(lvl, n, n, stairs, None, &mut rng);
     }

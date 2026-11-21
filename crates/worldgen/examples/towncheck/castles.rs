@@ -778,7 +778,10 @@ pub(crate) fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: 
     let tomb = l.building(id.rsplit(':').next().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX)).is_some_and(|b| b.func == town::catalog::index_of("tomb").map(|f| f as u16));
     // (A yurt is one round room on one storey, not built from a design: `town::yurts`.)
     let yurt = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|q| q.kind == "yurt");
-    must!(it.levels.len() >= 2 || tomb || yurt || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
+    // (A one-storey building with no cellar, as `interior::has_cellar` has it: a lighthouse
+    // keeper's cottage, its oil store.)
+    let lone = id.starts_with("b:") && l.building(id.rsplit(':').next().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX)).is_some_and(|b| b.floors <= 1 && !interior::has_cellar(b));
+    must!(it.levels.len() >= 2 || tomb || yurt || lone || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
     if id.starts_with("b:") {
         match interior::design::design_of(world, t0, id, false) {
             Ok((d, _)) => match interior::design::problems(world, t0, id, &d) {

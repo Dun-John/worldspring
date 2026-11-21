@@ -300,11 +300,8 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
             (Some(g), 0, None) => (g.clone(), None),
             // (Its lamp room's door toward where the winding stair comes out.)
             (_, ROOF, None) if lamp.is_some() => {
-                let land = wind.as_ref().map_or(stairs, |w| {
-                    let k = w.run(li, zs.len())[0];
-                    [k % nx, k / nx, 1, 1]
-                });
-                (lamp_top(nx, ny, lamp.as_ref().map_or(&[][..], |l| &l.2[..]), land, &mut rng), None)
+                let land = wind.as_ref().and_then(|w| w.run(li).first().copied()).map_or(stairs, |k| [k % nx, k / nx, 1, 1]);
+                (lamp_top(nx, ny, inside, lamp.as_ref().map_or(&[][..], |l| &l.2[..]), land, &mut rng), None)
             }
             (_, TOWER_TOP, None) => (tower_tops(&inside, nx, ny, t, towers.as_deref().unwrap_or_default(), stairs, &mut rng), None),
             _ => {
@@ -352,15 +349,25 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
                 }
             }
         }
-        // A round tower's winding stair up its wall, from beside its door to the floor under its top
-        // (the ground floor first: no cellar under it).
+        // A round tower's winding stair up its wall, from its cellar (under the ground floor's well)
+        // to the floor under its top, its ground floor's run from beside its door; the cellar's
+        // ways down laid round it.
         if winding {
             lvl.has_stairs = false;
             if z == 0 {
-                wind = super::winder::plan(&[&lvl], inside, nx, ny);
+                let known: Vec<&Level> = levels.iter().chain([&lvl]).collect();
+                wind = super::winder::plan(&known, li, zs.len(), inside, nx, ny);
+                for (lj, below) in levels.iter_mut().enumerate() {
+                    if let Some(w) = &wind {
+                        w.lay(below, nx, ny, lj);
+                    }
+                    if below.z == -1 {
+                        cellar_links(Some(below), world, t0, l, b, &sh, stairs, false);
+                    }
+                }
             }
             if let Some(w) = &wind {
-                w.lay(&mut lvl, nx, ny, li, zs.len());
+                w.lay(&mut lvl, nx, ny, li);
             }
         }
         // A lighthouse's lamp in the lamp room on its roof: off its doorway, the farthest from where
@@ -368,7 +375,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         if let Some((_, lp, inner)) = &lamp
             && z == ROOF
         {
-            let land = wind.as_ref().map(|w| w.run(li, zs.len())[0]);
+            let land = wind.as_ref().and_then(|w| w.run(li).first().copied());
             let doorway = super::winder::doorways(&lvl, nx, ny);
             let d = |k: usize| land.map_or(0.0, |l| geom::dist([(k % nx) as f64, (k / nx) as f64], [(l % nx) as f64, (l / nx) as f64]));
             let at = inner.iter().copied().filter(|k| !doorway.contains(k) && lvl.cells[*k] >= 0).max_by(|&a, &b| d(a).total_cmp(&d(b)).then(b.cmp(&a))).or(Some(*lp).filter(|&k| lvl.cells[k] >= 0 && !doorway.contains(&k)));
@@ -400,7 +407,10 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
             for (sq, round, mid) in &sh.towers {
                 let r = lvl.cells[*mid];
                 if r >= 0 {
-                    push_item(&mut lvl.furniture, "spiral_stair", mid % nx, mid / nx);
+                    // (A round one's stair winds up its wall: laid once every floor is built.)
+                    if !*round {
+                        push_item(&mut lvl.furniture, "spiral_stair", mid % nx, mid / nx);
+                    }
                     if *round && sq.iter().all(|&k| lvl.cells[k] == r) && shape::fits(&lvl.cells, nx, r, shape::ROUND) {
                         lvl.rooms[r as usize].shape = shape::ROUND;
                     }
@@ -515,7 +525,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         if let Some(p) = &plan {
             p.clear_tops(&mut lvl);
         }
-        if z == -1 {
+        if z == -1 && !winding {
             cellar_links(Some(&mut lvl), world, t0, l, b, &sh, stairs, false);
         }
         // (A guild's arms in its own look; a thieves' guild hangs none.)
@@ -524,6 +534,28 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
             None => lvl.furniture.retain(|it| it.kind != "guild_arms"),
         }
         levels.push(lvl);
+    }
+    // (Roadmap 7 P8) A keep of pieces' round towers: each one's stair winds up its wall from the
+    // ground floor to its top, kept off its doorways, beside the ground floor's way in.
+
+    if arch == Arch::Keep {
+        for (sq, _, mid) in sh.towers.iter().filter(|t| t.1) {
+            let on: Vec<usize> = (0..levels.len()).filter(|&li| levels[li].z >= 0 && levels[li].cells[*mid] >= 0).collect();
+            let mut mask = vec![false; nx * ny];
+            for &k in sq {
+                mask[k] = true;
+            }
+            let known: Vec<&Level> = on.iter().map(|&li| &levels[li]).collect();
+            let door = known.first().and_then(|g| super::winder::doorways(g, nx, ny).into_iter().find(|&k| mask[k]));
+            // (Where no winding stair keeps off its doorways, a spiral stair in its middle.)
+            let wind = super::winder::ring_of(&mask, nx, ny).filter(|_| on.len() >= 2).map(|ring| super::winder::plan_ring(ring, &known, 0, on.len(), door, nx, ny)).filter(|w| w.1);
+            for (lj, &li) in on.iter().enumerate() {
+                match &wind {
+                    Some((w, _)) => w.lay(&mut levels[li], nx, ny, lj),
+                    None => push_item(&mut levels[li].furniture, "spiral_stair", mid % nx, mid / nx),
+                }
+            }
+        }
     }
     Interior {
         id: format!("b:{}:{}", l.index, bi),

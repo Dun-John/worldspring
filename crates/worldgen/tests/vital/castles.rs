@@ -233,7 +233,19 @@ pub(super) fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::t
                 let room = lv.cells[*mid];
                 assert!(sq.iter().all(|&k| lv.cells[k] == room), "{tag} {}: tower {ti}'s room doesn't fill it", lv.name);
                 assert!((lv.rooms[room as usize].shape == interior::shape::ROUND) == *round, "{tag} {}: tower {ti}'s room is drawn {} round", lv.name, if *round { "not" } else { "" });
-                assert!(lv.furniture.iter().any(|f| f.kind == "spiral_stair" && f.y as usize * nx + f.x as usize == *mid), "{tag} {}: tower {ti} without its spiral stair", lv.name);
+                // (A square tower's spiral stair at its middle; a round one's stair winds up its
+                // wall, a run in it from each of its levels to the next, `common::check_interior`.)
+                let ws: Vec<Vec<usize>> = winder_runs(lv, nx).into_iter().filter(|r| r.iter().all(|k| sq.contains(k))).collect();
+                if *round {
+                    if li != *on.last().unwrap() {
+                        let up = &it.levels[li + 1];
+                        let linked = ws.iter().any(|r| r.len() >= 2 && up.furniture.iter().any(|f| f.kind == "winder" && f.y as usize * nx + f.x as usize == *r.last().unwrap()));
+                        assert!(linked, "{tag} {}: tower {ti}'s winding stair doesn't rise to the level above", lv.name);
+                    }
+                    assert!(li == on[0] || ws.iter().any(|r| it.levels[li - 1].furniture.iter().any(|f| f.kind == "winder" && f.y as usize * nx + f.x as usize == r[0])), "{tag} {}: tower {ti}'s winding stair doesn't come up from the level below", lv.name);
+                } else {
+                    assert!(lv.furniture.iter().any(|f| f.kind == "spiral_stair" && f.y as usize * nx + f.x as usize == *mid), "{tag} {}: tower {ti} without its spiral stair", lv.name);
+                }
                 assert!(lv.doors.iter().any(|d| d.rooms.contains(&room)), "{tag} {}: tower {ti}'s room has no way in", lv.name);
             }
         }

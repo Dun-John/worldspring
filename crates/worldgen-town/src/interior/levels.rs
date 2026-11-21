@@ -216,7 +216,7 @@ pub(super) fn keep_tower_squares(nx: usize, ny: usize) -> usize {
 }
 
 /// (Roadmap 7 P8) A round tower of more than one level (a lighthouse, a mage's tower, a watchtower,
-/// a round tower mill): its stair winds up the inside of its wall (`winder`), no cellar under it.
+/// a round tower mill): its stair winds up the inside of its wall (`winder`), from its cellar if it has one.
 pub fn winds(b: &town::Building) -> bool {
     arch_of(b) == Arch::Tower && round_ish(b) && (b.floors >= 2 || battlements(b).is_some())
 }
