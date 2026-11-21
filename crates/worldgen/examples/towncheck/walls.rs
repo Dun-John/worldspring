@@ -526,6 +526,9 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         "quay cranes",
         "quay fronts",
         "timber quay fronts",
+        "quay chains",
+        "quay fronts folded (outline or band crosses itself)",
+        "quay gaps along a city's shore (ends within 150 ft)",
         "quay front squares wet",
         "quay front squares unpaved",
         "coastal cities",
@@ -568,6 +571,32 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                 r.add("coastal cities without a quay front", 1.0, format!("L{si} {:?} at ({:.0}, {:.0}) river {}", l.tier, st.x, st.y, st.river));
             } else if l.quays.is_empty() {
                 r.add("coastal cities short of the shore (info)", 1.0, format!("L{si} {:?} at ({:.0}, {:.0})", l.tier, st.x, st.y));
+            }
+        }
+        // (Roadmap 7: its fronts' chains (pieces joined end to end), and the gaps between them: a
+        // chain's end within 150 ft of another chain's.)
+        if !l.quays.is_empty() {
+            let all: Vec<&harbour::Quay> = l.quays.iter().collect();
+            let ends: Vec<(usize, [f64; 2])> = all
+                .iter()
+                .enumerate()
+                .flat_map(|(k, q)| {
+                    let (j, h) = (q.joined(&all), q.pts.len() / 2);
+                    let mut v = Vec::new();
+                    if !j[0] {
+                        v.push((k, q.pts[0]));
+                    }
+                    if !j[1] {
+                        v.push((k, q.pts[h - 1]));
+                    }
+                    v
+                })
+                .collect();
+            r.tally("quay chains", ends.len() / 2);
+            for (a, &(ka, pa)) in ends.iter().enumerate() {
+                if let Some(&(_, pb)) = ends.iter().skip(a + 1).find(|&&(kb, pb)| kb != ka && town::geom::dist(pa, pb) < 150.0) {
+                    r.add("quay gaps along a city's shore (ends within 150 ft)", 1.0, format!("L{si} {:.0} ft at {}", town::geom::dist(pa, pb), at(pa)));
+                }
             }
         }
         for qf in &l.quays {
@@ -617,12 +646,44 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
             r.tally("quay fronts", 1);
+            // (Roadmap 7: its outline and its band's never cross themselves.)
+            let crosses = |p: &[[f64; 2]]| -> Option<[f64; 2]> {
+                let n = p.len();
+                let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                for i in 0..n {
+                    for j in i + 2..n {
+                        if i == 0 && j == n - 1 {
+                            continue;
+                        }
+                        let (a, b, c, d) = (p[i], p[(i + 1) % n], p[j], p[(j + 1) % n]);
+                        if side(a, b, c) * side(a, b, d) < -1e-9 && side(c, d, a) * side(c, d, b) < -1e-9 {
+                            return Some(a);
+                        }
+                    }
+                }
+                None
+            };
+            for (what, poly) in [("outline", qf.pts.clone()), ("band", qf.band())] {
+                if let Some(p) = crosses(&poly) {
+                    r.add("quay fronts folded (outline or band crosses itself)", 1.0, format!("L{si} {what} at {}", at(p)));
+                }
+            }
             if std::env::var("QUAY_ENDS").is_ok() {
-                say!("    quay end L{si} {} / {}", at(qf.pts[0]), at(qf.pts[qf.pts.len() / 2 - 1]));
+                say!("    quay end L{si} {} / {} timber {}", at(qf.pts[0]), at(qf.pts[qf.pts.len() / 2 - 1]), qf.timber);
+                if std::env::var("QUAY_BAND").is_ok() {
+                    let b = qf.band();
+                    let h = b.len() / 2;
+                    for i in 0..h {
+                        let (f, n) = (b[i], b[2 * h - 1 - i]);
+                        let k = qf.pts[2 * h - 1 - i];
+                        say!("      {i} face {:.1},{:.1} in {:.1},{:.1} back {:.1},{:.1}", f[0], f[1], n[0], n[1], k[0], k[1]);
+                    }
+                }
             }
             r.tally("timber quay fronts", qf.timber as usize);
             let bb = town::geom::bbox(&qf.pts);
             let (mut wet, mut unpaved, mut n) = (0, 0, 0);
+            let mut codes: Vec<u8> = Vec::new();
             for (cx, cy, c) in &chunks_round(ctx, [bb[0] - 10.0, bb[1] - 10.0, bb[2] + 10.0, bb[3] + 10.0]) {
                 for q in 0..SQ * SQ {
                     let p = [cx + ((q % SQ) as f64 + 0.5) * SQUARE_FT, cy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
@@ -639,6 +700,9 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                         worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET | worldgen::battlemap::URBAN_DECK | worldgen::battlemap::URBAN_ENTRANCE | worldgen::battlemap::URBAN_TOWER_FLOOR
                     ) {
                         unpaved += 1;
+                        if !codes.contains(&c.urban[q]) {
+                            codes.push(c.urban[q]);
+                        }
                     }
                 }
             }
@@ -647,7 +711,7 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                 r.add("quay front squares wet", wet as f64, format!("{qtag}: {wet} of {n}"));
             }
             if unpaved > 0 {
-                r.add("quay front squares unpaved", unpaved as f64, format!("{qtag}: {unpaved} of {n}"));
+                r.add("quay front squares unpaved", unpaved as f64, format!("{qtag}: {unpaved} of {n}, timber {}, codes {codes:?}", qf.timber));
             }
         }
         if l.piers.is_empty() {
@@ -724,7 +788,7 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                     if c.water_level[q] >= c.height[q] {
                         wet += 1;
                     // (A town street run onto its root is paved too.)
-                    } else if !matches!(c.urban[q], worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET) {
+                    } else if !matches!(c.urban[q], worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET | worldgen::battlemap::URBAN_DECK) {
                         unpaved += 1;
                     }
                 }

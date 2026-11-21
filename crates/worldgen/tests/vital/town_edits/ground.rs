@@ -385,13 +385,19 @@ pub(in super::super) fn ground_edits(base: &World) {
                 rows.push(k2);
             }
         }
-        (rows.len() >= 3 && (!front || rows.iter().any(|&k2| meets_at(centre(&k, k2 % SQ, k2 / SQ))))).then_some((k, rows))
+        // (And one row with water for an islet 45 ft out in T0, as the islet below takes it.)
+        let isle = |k2: usize| {
+            let p = centre(&k, k2 % SQ, k2 / SQ);
+            ground::islet_for("h:isle", [p[0] + 45.0, p[1]], 18.0, 6.0, &ex.t0).is_ok()
+        };
+        (rows.len() >= 3 && (!front || rows.iter().any(|&k2| meets_at(centre(&k, k2 % SQ, k2 / SQ)))) && rows.iter().any(|&k2| isle(k2))).then_some((k, rows))
     };
     let chunks: Vec<TileKey> = settlements.iter().map(|s| TileKey::surface(lvl, (s.x / size) as u32, (s.y / size) as u32)).collect();
     // (The chunks the fronts stand in, then the settlements'.)
-    let front_chunks: Vec<TileKey> = city_fronts.iter().map(|f| {
+    let front_chunks: Vec<TileKey> = city_fronts.iter().flat_map(|f| {
         let b = worldgen::ground::bbox(f);
-        TileKey::surface(lvl, (0.5 * (b[0] + b[2]) / size) as u32, (0.5 * (b[1] + b[3]) / size) as u32)
+        let (x0, y0, x1, y1) = ((b[0] / size) as u32, (b[1] / size) as u32, (b[2] / size) as u32, (b[3] / size) as u32);
+        (y0..=y1).flat_map(move |y| (x0..=x1).map(move |x| TileKey::surface(lvl, x, y)))
     }).collect();
     let (key, shores) = front_chunks
         .iter()
@@ -564,8 +570,12 @@ pub(in super::super) fn ground_edits(base: &World) {
     // (No building, deck (a quay, a pier) or wall on the 50 ft inland the inlet cuts: it clears
     // none of them.)
     // (And for the ponds below: open dry ground west of a shore, on its row.)
-    // (Flat: the ponds stand 2 ft over it.)
-    let open = |k2: usize| (k2 - 6..=k2 + 6).all(|q| !wet(&plain_c.1, q) && plain_c.1.building[q] == 0 && (plain_c.1.height[q] - plain_c.1.height[k2]).abs() < 1.5);
+    // (Flat: the ponds stand 2 ft over it. Off a city's quay front: one gives way to them and
+    // its levelled ground with it.)
+    let open = |k2: usize| {
+        (k2 - 6..=k2 + 6).all(|q| !wet(&plain_c.1, q) && plain_c.1.building[q] == 0 && (plain_c.1.height[q] - plain_c.1.height[k2]).abs() < 1.5)
+            && city_fronts.iter().all(|f| !worldgen::town::geom::contains(f, at(k2)) && worldgen::town::geom::poly_gap(f, &[at(k2)]) >= 60.0)
+    };
     let west_of = |k2: usize| {
         let (j, i0) = (k2 / SQ, k2 % SQ);
         let mut west: Vec<usize> = (14..i0.saturating_sub(10)).collect();
@@ -613,7 +623,7 @@ pub(in super::super) fn ground_edits(base: &World) {
     for q in outside {
         assert!(c.height[q] == plain_c.1.height[q] && c.water_level[q] == plain_c.1.water_level[q], "the inlet changed the ground outside it at square {q}");
     }
-    // (And on the front itself, off the inlet: a square its made ground raised is the shore's
+    // (And on the front itself, off the inlet: a square its made ground levelled is the shore's
     // plain ground again, and only its strip along the lots is paved.)
     let mut on_front = 0;
     for i in 0..settlements.len() {
@@ -630,7 +640,8 @@ pub(in super::super) fn ground_edits(base: &World) {
                 {
                     continue;
                 }
-                assert!(c.height[q] < f.level - 0.01, "the inlet: square {q} on the front it meets still made ground ({} at level {})", c.height[q], f.level);
+                // (Made ground raised over the shore, or cut down into the bank behind it.)
+                assert!(c.height[q] != plain_c.1.height[q], "the inlet: square {q} on the front it meets still made ground ({} at level {})", c.height[q], f.level);
                 assert!(worldgen::town::geom::contains(&strip, p) || worldgen::town::geom::poly_gap(&strip, &[p]) < 3.0 || c.urban[q] != battlemap::URBAN_PLAZA, "the inlet: square {q} off the front's strip still paved");
                 on_front += 1;
             }

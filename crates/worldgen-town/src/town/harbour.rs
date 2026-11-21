@@ -227,11 +227,72 @@ impl Quay {
     /// The quay proper along its face, `QUAY_BAND_FT` deep (or as deep as it is): the stone or
     /// timber the map draws, a timber front's deck; behind it the lots' paving (its quay plaza).
     pub fn band(&self) -> Vec<P> {
-        let (p, h) = (&self.pts, self.pts.len() / 2);
-        let to = |face: P, back: P| add(face, mul(sub(back, face), QUAY_BAND_FT / dist(back, face).max(QUAY_BAND_FT)));
-        let mut out: Vec<P> = p[..h].to_vec();
-        out.extend((0..h).rev().map(|i| to(p[i], p[2 * h - 1 - i])));
+        let h = self.pts.len() / 2;
+        let mut out: Vec<P> = self.pts[..h].to_vec();
+        out.extend(self.band_line().into_iter().rev());
         out
+    }
+    /// The band's back line (`band`), along the face: each face point carried square to the face
+    /// (Roadmap 7: not toward its back point, which may lie askew), `QUAY_BAND_FT` or as deep as
+    /// the quay is there.
+    fn band_line(&self) -> Vec<P> {
+        let (p, h) = (&self.pts, self.pts.len() / 2);
+        (0..h)
+            .map(|i| {
+                let (face, back) = (p[i], p[2 * h - 1 - i]);
+                let t = sub(p[(i + 3).min(h - 1)], p[i.saturating_sub(3)]);
+                let tl = dist(t, [0.0, 0.0]);
+                let deep = QUAY_BAND_FT.min(dist(back, face));
+                if tl < 1e-6 {
+                    return add(face, mul(sub(back, face), deep / dist(back, face).max(1e-9)));
+                }
+                let mut nrm = [-t[1] / tl, t[0] / tl];
+                if dot(nrm, sub(back, face)) < 0.0 {
+                    nrm = mul(nrm, -1.0);
+                }
+                add(face, mul(nrm, deep))
+            })
+            .collect::<Vec<P>>()
+            .into_iter()
+            .enumerate()
+            .fold(Vec::with_capacity(h), |mut out: Vec<P>, (i, q)| {
+                // (Where a tight bend would turn it back on itself it waits at its last point.)
+                let q = match out.last() {
+                    Some(&last) if dot(sub(q, last), sub(p[i], p[i - 1])) < 0.0 => last,
+                    _ => q,
+                };
+                out.push(q);
+                out
+            })
+    }
+    /// What lies behind its band (`band`): the lots' paving behind a timber front's deck (the
+    /// band's back line, then its own back); `None` where it is no deeper than the band.
+    pub fn behind(&self) -> Option<Vec<P>> {
+        let (p, h) = (&self.pts, self.pts.len() / 2);
+        if (0..h).all(|i| dist(p[i], p[2 * h - 1 - i]) <= QUAY_BAND_FT + 0.5) {
+            return None;
+        }
+        let mut out = self.band_line();
+        out.extend_from_slice(&p[h..]);
+        Some(out)
+    }
+    /// Its band (`band`) cut along its face into pieces of about `n` face points (each its first
+    /// half face, its second the band's back the other way), as the battlemap's decks take them.
+    pub fn band_pieces(&self, n: usize) -> Vec<Vec<P>> {
+        let b = self.band();
+        let h = b.len() / 2;
+        if h < 2 {
+            return Vec::new();
+        }
+        let np = (crate::core::round((h - 1) as f64 / n.max(1) as f64) as usize).max(1);
+        (0..np)
+            .map(|j| {
+                let (a, e) = (j * (h - 1) / np, (j + 1) * (h - 1) / np);
+                let mut out: Vec<P> = b[a..=e].to_vec();
+                out.extend((a..=e).rev().map(|i| b[2 * h - 1 - i]));
+                out
+            })
+            .collect()
     }
     /// Its made ground as the ground shaper takes it; at an end `open` (no front joins on there),
     /// a slip easing down onto the beach and into the water over 10 ft.

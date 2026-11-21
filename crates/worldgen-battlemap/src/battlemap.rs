@@ -547,7 +547,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // A town's green and a temple's close are lawns; a village's green keeps the ground
             // round it as it is.
             let lawn = pl.kind.is_lawn() && l.tier >= crate::t0::settle::Tier::Town;
-            stamp(p, if lawn { URBAN_PARK } else { URBAN_PLAZA }, &mut urb_h);
+            // (Roadmap 7: a standing timber front's paving only behind its deck, the band planked.)
+            let timber = (pl.kind == K::Quay && matches!(p_cow, std::borrow::Cow::Borrowed(_))).then(|| l.quays.iter().find(|q| q.timber && q.pts == pl.pts)).flatten();
+            match timber {
+                Some(q) => {
+                    stamp(&q.band(), URBAN_DECK, &mut urb_h);
+                    if let Some(b) = q.behind() {
+                        stamp(&b, URBAN_PLAZA, &mut urb_h);
+                    }
+                }
+                None => stamp(p, if lawn { URBAN_PARK } else { URBAN_PLAZA }, &mut urb_h),
+            }
             if !lawn && pl.kind != K::Bailey && crate::town::yurts::dirt_squares(&l) {
                 let b = bbox(p);
                 if overlaps(b) {
@@ -1186,8 +1196,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             armour(&m.pts, &m.edges(crate::town::harbour::MOLE_HEAD_FT), &hh, &hw, hx0, hy0, &owns, &local, &mut shapes);
         }
         // P2 160: a timber quay front planked over (a stone one is the quay's paving).
-        for q in crate::town::harbour::quays_kept(world, &l).filter(|q| q.timber && owns(crate::town::geom::centroid(&q.pts))) {
-            shapes.push(VectorShape { kind: ShapeKind::Deck, size: 0.0, pts: q.band().iter().map(local).collect() });
+        // (Roadmap 7: drawn as the hand shore quay's planks, `Deck` style 4, in ~40 ft pieces each
+        // owned where its middle is.)
+        for q in crate::town::harbour::quays_kept(world, &l).filter(|q| q.timber) {
+            for piece in q.band_pieces(8).iter().filter(|p| owns(crate::town::geom::centroid(p))) {
+                shapes.push(VectorShape { kind: ShapeKind::Deck, size: 4.0, pts: piece.iter().map(local).collect() });
+            }
         }
         for b in l.buildings.iter().filter(|b| crate::town::harbour::is_lighthouse(b)) {
             let c = crate::town::geom::mean(&b.poly);

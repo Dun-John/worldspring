@@ -38,10 +38,14 @@ pub(super) fn lay(site: &Site, s: &Settlement, plan: &TownPlan, n_inner: usize, 
                 out = mul(out, -1.0);
             }
             let quay = vec![a, b, sub(b, mul(out, 14.0)), sub(a, mul(out, 14.0))];
-            if s.tier >= Tier::City && ward[i].is_some_and(fronts_water) {
-                // (Laid along the whole shore at once below, `fronts`; out on the right of a->b.)
+            if s.tier >= Tier::City && ward[i].is_some_and(|w| w != Ward::Farm) {
+                // (Laid along the whole shore at once below, `fronts`; out on the right of a->b.
+                // Roadmap 7: a ward whose lots don't front the water (a castle, temple close,
+                // estate, barracks, park) carries the chain on with a narrow back, so the town's
+                // shore keeps one quay.)
                 let right = u[1] * out[0] - u[0] * out[1] > 0.0;
-                sides.push(if right { Side { a, b, va, vb, out } } else { Side { a: b, b: a, va: vb, vb: va, out } });
+                let back = if ward[i].is_some_and(fronts_water) { FRONT_BACK_FT } else { NARROW_BACK_FT };
+                sides.push(if right { Side { a, b, va, vb, out, back } } else { Side { a: b, b: a, va: vb, vb: va, out, back } });
             } else if !site.wet(centroid(&quay)) && !site.near_river(centroid(&quay), 10.0) {
                 l.plazas.push(Plaza { pts: quay, kind: PlazaKind::Quay, spot: places::Spot::None });
             }
@@ -118,32 +122,57 @@ struct Side {
     va: usize,
     vb: usize,
     out: P,
+    /// How far behind it the quay's back lies (ft): the lots' fronts, `FRONT_BACK_FT`, or
+    /// `NARROW_BACK_FT` along a ward whose lots don't front the water.
+    back: f64,
 }
 
 /// The farthest out (ft past the patch's side) a quay front is carried to find the water.
 const FRONT_REACH_FT: f64 = 100.0;
+/// The farthest back (ft behind the patch's side) a front looks for the water's edge where the
+/// side lies out in the water.
+const FRONT_INLAND_FT: f64 = 160.0;
 /// The shore's samples along the sides (ft, about).
 const FRONT_STEP_FT: f64 = 5.0;
 /// The lots' fronts behind the patch's side (ft): the quay's back.
 const FRONT_BACK_FT: f64 = 14.0;
+/// The quay's back behind the side of a ward whose lots don't front the water (ft).
+const NARROW_BACK_FT: f64 = 4.0;
+/// The longest stretch (ft) with no water in reach a front is carried over, its face
+/// interpolated between the water's edge either side (a small headland, a slipway).
+const FRONT_BRIDGE_FT: f64 = 100.0;
 /// The face past the water's edge (ft) on the sea or a lake; on a river it stops 1 ft short.
 const FACE_OUT_FT: f64 = 3.0;
 /// A quay's end eases its face back onto the shore over this many samples.
 const FRONT_TAPER: usize = 3;
-/// A stone or timber stretch of a quay, about (ft).
-const FRONT_PIECE_FT: f64 = 150.0;
+/// A stone or timber section of a quay, about (ft): a front shorter than 1.5 of them is one
+/// material throughout.
+const FRONT_PIECE_FT: f64 = 400.0;
 
-/// One shore sample (`chain_fronts`): its point, side, place along that side (ft), side's normal.
-type Sample = (P, usize, f64, P);
+/// The least depth of a quay from its face's water's edge to its back (ft).
+const FRONT_MIN_DEPTH_FT: f64 = 20.0;
+
+/// How far behind the patch's side a quay's back lies (ft) for a back `back` behind it and the
+/// water's edge `t` out from it (behind it where negative): `back`, or `FRONT_MIN_DEPTH_FT`
+/// behind the edge where the side lies out in the water.
+fn back_depth(back: f64, t: f64) -> f64 {
+    f64::max(back, FRONT_MIN_DEPTH_FT - t)
+}
+
+/// One shore sample (`chain_fronts`): its point, side, place along that side (ft), side's normal,
+/// the quay's back behind it (ft).
+type Sample = (P, usize, f64, P, f64);
 
 /// P2 160: the quay fronts along a city's built shore (`sides`): the sides chained where they
 /// meet, and along each chain the water's edge found every ~5 ft (`FRONT_STEP_FT`, walking out
-/// along the shore's smoothed normal to where the water starts and holds). A front is a run of
-/// samples with the water in reach: its face traces the edge, smoothed and `FACE_OUT_FT` past it
+/// along the shore's smoothed normal to where the water starts and holds, or back inland where
+/// the side lies out in the water). A front is a run of samples with the water in reach (over
+/// gaps of up to `FRONT_BRIDGE_FT`): its face traces the edge, smoothed and `FACE_OUT_FT` past it
 /// (on a river 1 ft short of the channel), eased onto the shore at its ends; its back the lots'
-/// fronts. Clear of network roads, bridges, islets and river mouths. Stone and timber in
-/// stretches of ~150 ft (`timber_share` of them), each its own front and quay plaza. The parts of
-/// the sides no front takes keep the 14 ft strip plaza where water lies off them.
+/// fronts, at least `FRONT_MIN_DEPTH_FT` behind the edge. Streets meet it; bridges, islets and
+/// river mouths end it. Stone or timber along it, a long one in sections of ~400 ft
+/// (`timber_share` of them), each its own front and quay plaza. The sides of a chain with no
+/// front keep the strip plaza where water lies off them.
 fn fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], sides: &[Side], timber_share: f64) {
     if sides.is_empty() {
         return;
@@ -166,13 +195,19 @@ fn fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], sides:
         }
     }
     let mut covered: Vec<Vec<(f64, f64)>> = vec![Vec::new(); sides.len()];
+    let mut fronted = vec![false; sides.len()];
     for chain in &chains {
-        chain_fronts(site, s, l, islets, sides, chain, timber_share, &mut covered);
+        if chain_fronts(site, s, l, islets, sides, chain, timber_share, &mut covered) {
+            for &i in chain {
+                fronted[i] = true;
+            }
+        }
     }
-    // (The rest of each side: the strip where water lies off it.)
+    // (The rest of each side of a chain no front took: the strip where water lies off it. A
+    // chain with a front keeps it alone, no square strips beside it.)
     for (i, sd) in sides.iter().enumerate() {
         let el = dist(sd.a, sd.b);
-        if el < 1.0 {
+        if el < 1.0 || fronted[i] {
             continue;
         }
         let u = mul(sub(sd.b, sd.a), 1.0 / el);
@@ -190,7 +225,7 @@ fn fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], sides:
         }
         for (g0, g1) in gaps {
             let (p0, p1) = (add(sd.a, mul(u, g0)), add(sd.a, mul(u, g1)));
-            let rest = vec![p0, p1, sub(p1, mul(sd.out, FRONT_BACK_FT)), sub(p0, mul(sd.out, FRONT_BACK_FT))];
+            let rest = vec![p0, p1, sub(p1, mul(sd.out, sd.back)), sub(p0, mul(sd.out, sd.back))];
             let by_water = cov.is_empty() || (0..=15).any(|j| site.wet(add(lerp(p0, p1, 0.5), mul(sd.out, 10.0 * j as f64))));
             if g1 - g0 >= 10.0 && by_water && !site.wet(centroid(&rest)) && !site.near_river(centroid(&rest), 10.0) {
                 l.plazas.push(Plaza { pts: rest, kind: PlazaKind::Quay, spot: places::Spot::None });
@@ -200,12 +235,15 @@ fn fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], sides:
 }
 
 /// The fronts along one chain of sides (`fronts`); records the stretch of each side they take.
+/// Roadmap 7: one front along the whole chain, but where a bridge, an islet or a river mouth
+/// ends it, or more than `FRONT_BRIDGE_FT` of it has no water in reach; streets and roads meet
+/// the quay, they don't cut it. Whether it laid any front.
 #[allow(clippy::too_many_arguments)]
-fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], sides: &[Side], chain: &[usize], timber_share: f64, covered: &mut [Vec<(f64, f64)>]) {
+fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], sides: &[Side], chain: &[usize], timber_share: f64, covered: &mut [Vec<(f64, f64)>]) -> bool {
     let lens: Vec<f64> = chain.iter().map(|&i| dist(sides[i].a, sides[i].b)).collect();
     let total: f64 = lens.iter().sum();
     if total < 30.0 {
-        return;
+        return false;
     }
     let n = crate::core::ceil(total / FRONT_STEP_FT) as usize;
     let step = total / n as f64;
@@ -219,42 +257,55 @@ fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], 
             }
             let sd = &sides[chain[j]];
             let at = at.min(lens[j]);
-            (lerp(sd.a, sd.b, at / lens[j].max(1e-9)), chain[j], at, sd.out)
+            (lerp(sd.a, sd.b, at / lens[j].max(1e-9)), chain[j], at, sd.out, sd.back)
         })
         .collect();
-    // (The shore's normal: the sides' smoothed over 20 ft either way, so corners round.)
+    // (The shore's normal and the back's depth: the sides' smoothed over 20 ft either way, so
+    // corners round.)
     let reach = crate::core::ceil(20.0 / step) as i64;
-    let normal: Vec<P> = (0..=n as i64)
-        .map(|k| {
-            let mut v = [0.0, 0.0];
-            for j in (k - reach).max(0)..=(k + reach).min(n as i64) {
-                v = add(v, mul(smp[j as usize].3, (reach + 1 - (j - k).abs()) as f64));
-            }
-            mul(v, 1.0 / dist(v, [0.0, 0.0]).max(1e-9))
-        })
-        .collect();
+    let mut normal: Vec<P> = Vec::with_capacity(n + 1);
+    let mut back: Vec<f64> = Vec::with_capacity(n + 1);
+    for k in 0..=n as i64 {
+        let (mut v, mut d, mut w) = ([0.0, 0.0], 0.0, 0.0);
+        for j in (k - reach).max(0)..=(k + reach).min(n as i64) {
+            let wj = (reach + 1 - (j - k).abs()) as f64;
+            v = add(v, mul(smp[j as usize].3, wj));
+            d += smp[j as usize].4 * wj;
+            w += wj;
+        }
+        normal.push(mul(v, 1.0 / dist(v, [0.0, 0.0]).max(1e-9)));
+        back.push(d / w);
+    }
     // (The water's edge along the normal: where water starts and holds 20 ft, or to the reach;
-    // and whether it is a river's.)
+    // where the patch's side lies out in the water, back inland to where the ground starts and
+    // holds 6 ft. And whether it is a river's.)
     let walk: Vec<Option<(f64, bool)>> = (0..=n)
         .map(|k| {
             let (p, nn) = (smp[k].0, normal[k]);
             let at = |t: f64| site.wet(add(p, mul(nn, t)));
             let mut t = -12.0;
-            if at(t) {
-                return None;
-            }
-            let mut start: Option<f64> = None;
-            while t < FRONT_REACH_FT {
-                t += 2.0;
-                if !at(t) {
-                    start = None;
-                } else if start.is_none() {
-                    start = Some(t);
-                } else if start.is_some_and(|s0| t - s0 >= 20.0) {
-                    break;
+            let (mut lo, mut hi) = if at(t) {
+                while t > -FRONT_INLAND_FT && (at(t) || at(t - 6.0)) {
+                    t -= 2.0;
                 }
-            }
-            let (mut lo, mut hi) = (start? - 2.0, start?);
+                if at(t) || at(t - 6.0) {
+                    return None;
+                }
+                (t, t + 2.0)
+            } else {
+                let mut start: Option<f64> = None;
+                while t < FRONT_REACH_FT {
+                    t += 2.0;
+                    if !at(t) {
+                        start = None;
+                    } else if start.is_none() {
+                        start = Some(t);
+                    } else if start.is_some_and(|s0| t - s0 >= 20.0) {
+                        break;
+                    }
+                }
+                (start? - 2.0, start?)
+            };
             for _ in 0..3 {
                 let m = 0.5 * (lo + hi);
                 if at(m) {
@@ -268,42 +319,67 @@ fn chain_fronts(site: &Site, s: &Settlement, l: &mut Layout, islets: &[Vec<P>], 
         })
         .collect();
     let face_at = |k: usize, f: f64| add(smp[k].0, mul(normal[k], f));
-    let ok: Vec<bool> = (0..=n)
+    // (Where a front must end: by a bridge, an islet, a river crossing its back or meeting its
+    // face, where the sea gives way to a river, across a river's mouth.)
+    let hard: Vec<bool> = (0..=n)
         .map(|k| {
-            let Some((t, river)) = walk[k] else { return false };
-            if t < -6.0 || (k.saturating_sub(2)..=(k + 2).min(n)).any(|j| walk[j].is_some_and(|w| w.1 != river)) {
-                return false;
+            let Some((t, river)) = walk[k] else {
+                let (p, b) = (smp[k].0, face_at(k, -back[k]));
+                return (site.wet(face_at(k, -12.0)) && site.near_river(p, 0.0)) || site.near_river(b, 0.0) || l.bridges.iter().any(|d| poly_gap(d, &[b]) < 10.0);
+            };
+            let b = face_at(k, -back_depth(back[k], t));
+            if site.near_river(b, 0.0) || l.bridges.iter().any(|d| poly_gap(d, &[b]) < 10.0) {
+                return true;
             }
-            let (f, m, b) = (face_at(k, t + if river { -1.0 } else { FACE_OUT_FT }), face_at(k, 0.5 * (t - FRONT_BACK_FT)), face_at(k, -FRONT_BACK_FT));
-            !site.near_river(f, if river { 0.0 } else { 4.0 })
-                && !site.near_river(b, 0.0)
-                && [f, m, b].iter().all(|&q| !site.near_network_road(q, 6.0) && l.bridges.iter().all(|d| poly_gap(d, &[q]) >= 10.0))
-                && islets.iter().all(|i| poly_gap(i, &[f]) >= 5.0)
+            if (k.saturating_sub(2)..=(k + 2).min(n)).any(|j| walk[j].is_some_and(|w| w.1 != river)) {
+                return true;
+            }
+            let (f, m) = (face_at(k, t + if river { -1.0 } else { FACE_OUT_FT }), face_at(k, 0.5 * (t - back_depth(back[k], t))));
+            site.near_river(f, if river { 0.0 } else { 4.0 }) || [f, m].iter().any(|&q| l.bridges.iter().any(|d| poly_gap(d, &[q]) < 10.0)) || islets.iter().any(|i| poly_gap(i, &[f]) < 5.0)
         })
         .collect();
+    // (The water's edge where it is in reach.)
+    let good = |k: usize| !hard[k] && walk[k].is_some();
+    let span = crate::core::round(FRONT_BRIDGE_FT / step) as usize;
+    let mut any = false;
     let mut k = 0;
     while k <= n {
-        if !ok[k] {
+        if !good(k) {
             k += 1;
             continue;
         }
-        let k0 = k;
-        while k <= n && ok[k] {
-            k += 1;
+        // (A run from good sample to good sample over gaps of at most `span`, the edge
+        // interpolated across them.)
+        let river = walk[k].is_some_and(|w| w.1);
+        let (k0, mut k1) = (k, k);
+        let mut raw: Vec<f64> = vec![walk[k].map_or(0.0, |w| w.0)];
+        let mut j = k + 1;
+        while j <= n && !hard[j] && j - k1 <= span {
+            if good(j) {
+                let (t0, t1) = (raw[raw.len() - 1], walk[j].map_or(0.0, |w| w.0));
+                let gap = j - k1;
+                for g in 1..gap {
+                    raw.push(t0 + (t1 - t0) * g as f64 / gap as f64);
+                }
+                raw.push(t1);
+                k1 = j;
+            }
+            j += 1;
         }
-        if k - 1 - k0 >= 6 {
-            run_front(site, s, l, &smp, &normal, &walk, (k0, k - 1), timber_share, covered);
+        if k1 - k0 >= 7 {
+            any |= run_front(site, s, l, &smp, &normal, &back, &raw, river, (k0, k1), timber_share, covered);
         }
+        k = k1 + 1;
     }
+    any
 }
 
 /// One front along samples `k0..=k1` of a chain (`chain_fronts`): its face smoothed along the
 /// water's edge, split into stone and timber stretches.
 #[allow(clippy::too_many_arguments)]
-fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal: &[P], walk: &[Option<(f64, bool)>], (k0, k1): (usize, usize), timber_share: f64, covered: &mut [Vec<(f64, f64)>]) {
-    let river = walk[k0].is_some_and(|w| w.1);
-    let raw: Vec<f64> = (k0..=k1).map(|k| walk[k].map_or(0.0, |w| w.0)).collect();
+fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal: &[P], back_ft: &[f64], raw: &[f64], river: bool, (k0, k1): (usize, usize), timber_share: f64, covered: &mut [Vec<(f64, f64)>]) -> bool {
     let m = raw.len();
+    debug_assert_eq!(m, k1 - k0 + 1);
     let smooth = |v: &[f64], r: i64| -> Vec<f64> {
         (0..m as i64)
             .map(|i| {
@@ -317,7 +393,7 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
             })
             .collect()
     };
-    let sm = smooth(&raw, 3);
+    let sm = smooth(raw, 3);
     let f: Vec<f64> = if river {
         (0..m).map(|i| sm[i].min(raw[i]) - 1.0).collect()
     } else {
@@ -332,27 +408,69 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
             })
             .collect()
     };
-    // (Face and back in order along the shore: a sample where either would turn back is left out.)
-    let mut kept: Vec<(usize, P, P)> = Vec::new();
+    // (Its back: the lots' fronts, or `FRONT_MIN_DEPTH_FT` behind the water's edge, smoothed.)
+    let bk = smooth(&(0..m).map(|i| back_depth(back_ft[k0 + i], sm[i].min(raw[i]))).collect::<Vec<f64>>(), 3);
+    // (The face in order along the shore: a sample where it would turn back is left out.)
+    let face: Vec<P> = (0..m).map(|i| add(smp[k0 + i].0, mul(normal[k0 + i], f[i]))).collect();
+    let mut idx: Vec<usize> = Vec::new();
     for i in 0..m {
         let k = k0 + i;
-        let (face, back) = (add(smp[k].0, mul(normal[k], f[i])), sub(smp[k].0, mul(normal[k], FRONT_BACK_FT)));
         let tan = [-normal[k][1], normal[k][0]];
-        if let Some(&(_, lf, lb)) = kept.last() {
-            if dot(sub(face, lf), tan) < 1.0 || dot(sub(back, lb), tan) < 0.5 {
+        if idx.last().is_some_and(|&j| dot(sub(face[i], face[j]), tan) < 1.0) {
+            continue;
+        }
+        // (Nor turn sharper than ~50 degrees on the last step, where the shore runs askew of the side.)
+        if let [.., h, j] = idx[..] {
+            let (u, v) = (sub(face[j], face[h]), sub(face[i], face[j]));
+            if dot(u, v) < 0.6 * dist(u, [0.0, 0.0]) * dist(v, [0.0, 0.0]) {
                 continue;
             }
         }
-        kept.push((i, face, back));
+        idx.push(i);
+    }
+    let q = idx.len();
+    if q < 4 {
+        return false;
+    }
+    // (Roadmap 7: the back square behind the face, as deep as the lots' fronts lie behind it there,
+    // smoothed, so the outline is an offset of the face and never askew of it or folded.)
+    let inward: Vec<P> = (0..q)
+        .map(|a| {
+            let t = sub(face[idx[(a + 3).min(q - 1)]], face[idx[a.saturating_sub(3)]]);
+            let tl = dist(t, [0.0, 0.0]).max(1e-9);
+            let n = [-t[1] / tl, t[0] / tl];
+            if dot(n, normal[k0 + idx[a]]) > 0.0 { mul(n, -1.0) } else { n }
+        })
+        .collect();
+    let depth = smooth_list(
+        &(0..q)
+            .map(|a| {
+                let i = idx[a];
+                let back = sub(smp[k0 + i].0, mul(normal[k0 + i], bk[i]));
+                dot(sub(back, face[i]), inward[a]).max(FRONT_MIN_DEPTH_FT)
+            })
+            .collect::<Vec<f64>>(),
+        3,
+    );
+    // (The back in order too.)
+    let mut kept: Vec<(usize, P, P)> = Vec::new();
+    for a in 0..q {
+        let (i, back) = (idx[a], add(face[idx[a]], mul(inward[a], depth[a])));
+        let tan = [-inward[a][1], inward[a][0]];
+        let tan = if dot(tan, [-normal[k0 + i][1], normal[k0 + i][0]]) < 0.0 { mul(tan, -1.0) } else { tan };
+        if kept.last().is_some_and(|&(_, _, lb)| dot(sub(back, lb), tan) < 0.5) {
+            continue;
+        }
+        kept.push((i, face[i], back));
     }
     if kept.len() < 4 {
-        return;
+        return false;
     }
     round_ends(&mut kept);
     // (The stretch of each side it takes.)
     let mut last_side = usize::MAX;
     for &(i, ..) in &kept {
-        let (_, side, at, _) = smp[k0 + i];
+        let (_, side, at, ..) = smp[k0 + i];
         if side != last_side {
             covered[side].push((at, at));
             last_side = side;
@@ -365,16 +483,17 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
         &crate::world::Wharf {
             kind: crate::world::WharfKind::Quay,
             pts: vec![site.world(mi.2), site.world(mi.1)],
-            width: f[mi.0] + FRONT_BACK_FT,
+            width: f[mi.0] + bk[mi.0],
             material: crate::world::CrossingMaterial::Stone,
             shore: false,
             piers: 0.0,
         },
         site.t0,
     );
-    // (Stone and timber stretches of ~150 ft, by their places; the same kind next to it joins on.)
+    // (Roadmap 7: one material along it, or on a long front sections of ~400 ft, by their
+    // places; the same kind next to it joins on, a change of kind a square joint.)
     let len = (kept.len() - 1) as f64 * FRONT_STEP_FT;
-    let np = (crate::core::round(len / FRONT_PIECE_FT) as usize).clamp(1, kept.len() - 1);
+    let np = if len < 1.5 * FRONT_PIECE_FT { 1 } else { (crate::core::round(len / FRONT_PIECE_FT) as usize).clamp(1, kept.len() - 1) };
     let cut = |j: usize| j * (kept.len() - 1) / np;
     let mut pieces: Vec<(usize, usize, bool)> = Vec::new();
     for j in 0..np {
@@ -392,24 +511,41 @@ fn run_front(site: &Site, s: &Settlement, l: &mut Layout, smp: &[Sample], normal
         l.quays.push(super::harbour::Quay { pts: pts.clone(), level, timber });
         l.plazas.push(Plaza { pts, kind: PlazaKind::Quay, spot: places::Spot::None });
     }
+    true
 }
 
-/// A front's ends rounded off along the shore (`run_front`): over about its width from each end
-/// its back closes on the face in a quarter ellipse, so the quay and its paving come to a round
-/// end on the beach instead of a straight cut. (A pair a quarter of the way along each end's first
-/// step rounds the very end.)
-fn round_ends(kept: &mut Vec<(usize, P, P)>) {
-    let quarter = |a: (usize, P, P), b: (usize, P, P)| (a.0, lerp(a.1, b.1, 0.25), lerp(a.2, b.2, 0.25));
-    let (first, last) = (quarter(kept[0], kept[1]), quarter(kept[kept.len() - 1], kept[kept.len() - 2]));
-    kept.insert(1, first);
-    let n = kept.len();
-    kept.insert(n - 1, last);
+/// How far along from each end a front's back corner rounds (ft, `round_ends`).
+const END_ROUND_FT: f64 = 10.0;
+/// The share of its width a front keeps at its very end (`round_ends`).
+const END_KEEP: f64 = 0.35;
+
+/// `v` smoothed with a tent of radius `r` samples.
+fn smooth_list(v: &[f64], r: i64) -> Vec<f64> {
+    let m = v.len() as i64;
+    (0..m)
+        .map(|i| {
+            let (mut sum, mut w) = (0.0, 0.0);
+            for j in (i - r).max(0)..=(i + r).min(m - 1) {
+                let wj = (r + 1 - (j - i).abs()) as f64;
+                sum += v[j as usize] * wj;
+                w += wj;
+            }
+            sum / w
+        })
+        .collect()
+}
+
+/// A front's ends rounded off along the shore (`run_front`): over `END_ROUND_FT` from each end
+/// its back closes toward the face in a quarter ellipse, keeping `END_KEEP` of the width at the
+/// end, so the quay comes to a blunt, round-cornered end on the beach.
+fn round_ends(kept: &mut [(usize, P, P)]) {
     let n = kept.len();
     let run: f64 = kept.windows(2).map(|w| dist(w[0].1, w[1].1)).sum();
     for end in 0..2 {
         let at = |j: usize| if end == 0 { j } else { n - 1 - j };
-        let wide = dist(kept[at(0)].1, kept[at(0)].2).max(dist(kept[at(2)].1, kept[at(2)].2));
-        let reach = wide.max(10.0).min(0.3 * run);
+        // (Roadmap 7: a short round on the back corner, the end square across the shore, no
+        // lens's point.)
+        let reach = END_ROUND_FT.min(0.3 * run);
         let mut d = 0.0;
         for j in 0..n / 2 {
             if j > 0 {
@@ -419,7 +555,7 @@ fn round_ends(kept: &mut Vec<(usize, P, P)>) {
                 break;
             }
             let u = 1.0 - d / reach;
-            let e = crate::core::sqrt(1.0 - u * u).max(0.04);
+            let e = crate::core::sqrt(1.0 - u * u).max(END_KEEP);
             let (i, face, back) = kept[at(j)];
             kept[at(j)] = (i, face, add(face, mul(sub(back, face), e)));
         }

@@ -450,7 +450,19 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[
             for p in l.plazas.iter().filter(|p| l.tier != crate::t0::settle::Tier::Village && !p.kind.is_lawn() && p.kind != crate::town::PlazaKind::Bailey) {
                 // (R5 item 123: a steppe town's squares are trodden dirt, as its yurts' ground.)
                 let code = if crate::town::yurts::dirt_squares(&l) { 8 } else { 1 };
-                for tri in ears(&crate::town::harbour::plaza_pts(world, l, p)) {
+                let pts = crate::town::harbour::plaza_pts(world, l, p);
+                // (Roadmap 7: a standing quay front's paving, a long thin strip along the shore, in
+                // quads from face to back, each with the tile holding it: no slivers across tiles.)
+                if p.kind == crate::town::PlazaKind::Quay && matches!(pts, std::borrow::Cow::Borrowed(_)) && pts.len() >= 4 && l.quays.iter().any(|q| q.pts == p.pts) {
+                    let h = pts.len() / 2;
+                    for i in 0..h - 1 {
+                        for tri in ears(&[pts[i], pts[i + 1], pts[2 * h - 2 - i], pts[2 * h - 1 - i]]) {
+                            push(&tri, code);
+                        }
+                    }
+                    continue;
+                }
+                for tri in ears(&pts) {
                     push(&tri, code);
                 }
             }
@@ -570,8 +582,14 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[
                 }
             }
             // P2 160: a city's quay fronts along the face, made ground (45), a timber one planked over (6).
+            // (Roadmap 7: one outline along the whole front, drawn by every tile it crosses, so the
+            // next tile's paving never covers it.)
             for q in crate::town::harbour::quays_kept(world, l) {
-                push(&q.band(), if q.timber && key.level >= BUILDING_MIN_LEVEL { 6 } else { 45 });
+                let band = q.band();
+                let b = crate::town::geom::bbox(&band);
+                whole.set(Some(b[2] >= ox && b[0] < ox + size && b[3] >= oy && b[1] < oy + size));
+                push(&band, if q.timber && key.level >= BUILDING_MIN_LEVEL { 6 } else { 45 });
+                whole.set(None);
             }
             for m in &l.monuments {
                 push(m, 7);
