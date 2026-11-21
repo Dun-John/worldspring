@@ -748,12 +748,13 @@ export class BattlemapLayer {
       if (!show) continue;
       c.lastUsed = now;
       const [sx, sy] = cam.worldToScreen(c.x * ts, c.y * ts);
-      // (The objects' layers, low and tall, turn opaque early in the fade, so the town map's paths
-      // under the battlemap's half-faded ground never show through a pond or a statue.)
+      // (The objects' layers, low and tall, and the walls and roofs turn opaque early in the fade, so
+      // the town map's paths under the battlemap's half-faded ground never show through a pond or a
+      // statue, nor its grass through a roof.)
       for (const p of c.parts) {
         p.position.set(sx, sy);
         p.scale.set(pxPerSq / PX);
-        p.alpha = p === c.decks ? 1 : p === c.parts[1] || p === c.parts[3] ? objectAlpha : alpha;
+        p.alpha = p === c.decks ? 1 : p === c.parts[1] || p === c.parts[2] || p === c.parts[3] ? objectAlpha : alpha;
       }
       const u = c.uniforms.uniforms;
       u.uAlpha = 1;
