@@ -123,8 +123,8 @@ fn main() {
             [-u[1], u[0]]
         }).collect();
         let stroke: Vec<P> = (0..line.len()).step_by(3).map(|k| add(line[k], mul(normal[k], 12.0 + 5.0 * libm::sin(k as f64 * 5.0 / 60.0 * std::f64::consts::TAU)))).collect();
-        let pts = match wharf::shore_line(t0, &stroke) {
-            Ok(p) => p,
+        let pts = match wharf::shore_line(&ex.world, t0, &stroke) {
+            Ok(p) => p.into_iter().max_by_key(|p| p.len()).unwrap_or_default(),
             Err(e) => {
                 println!("seed {seed}: {place}: {e}");
                 continue;

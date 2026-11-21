@@ -28,7 +28,7 @@ pub fn list() -> Vec<Value> {
             "path": { "type": "array", "minItems": 2, "maxItems": 512, "items": crate::tools::args::point_schema("A point") },
             "width_ft": { "type": "number", "minimum": 6, "maximum": 60, "description": "By kind: MCP.md" },
             "material": { "type": "string", "enum": ["timber", "stone"] },
-            "shore": { "type": "boolean", "description": "A quay only: snap path to the water's edge within 60 ft of it and follow it smoothly" },
+            "shore": { "type": "boolean", "description": "A quay only: snap path to the water's edge (as the map draws it) within 60 ft of it and follow it smoothly; parts of path away from the shore are left out" },
             "pier_spacing_ft": { "type": "number", "minimum": 0, "maximum": 400, "description": "A shore quay's piers, this far apart (0: none; else 30 to 400)" },
             "lighthouse": { "type": "boolean" },
         }), &[]) }),
@@ -236,8 +236,19 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     if piers.is_some_and(|p| p != 0.0) && !shore {
         return Err("pier_spacing_ft: only a quay with shore: true has piers".into());
     }
+    // (A path that leaves the shore: its longest stretch along it, the others named in a note.)
+    let mut stretches = None;
     let path = match path {
-        Some(p) if shore => Some(app.worker.with(move |ex| Ok(wharf::shore_line(&ex.t0, &p))).await?.map_err(|e| format!("path: {e}"))?),
+        Some(p) if shore => {
+            let mut pieces = app.worker.with(move |ex| Ok(wharf::shore_line(&ex.world, &ex.t0, &p))).await?.map_err(|e| format!("path: {e}"))?;
+            let run = |p: &Vec<[f64; 2]>| p.windows(2).map(|s| geom::dist(s[0], s[1])).sum::<f64>();
+            let k = (0..pieces.len()).fold(0, |b, k| if run(&pieces[k]) > run(&pieces[b]) { k } else { b });
+            let best = pieces.remove(k);
+            if !pieces.is_empty() {
+                stretches = Some(json!(pieces.iter().map(|p| json!({ "from": p[0], "to": p[p.len() - 1], "length_ft": run(p).round() })).collect::<Vec<_>>()));
+            }
+            Some(best)
+        }
         p => p,
     };
     let w = match &old {
@@ -374,6 +385,10 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     if let Some(l) = left {
         v["left_pointing"] = l;
+    }
+    if let Some(s) = stretches {
+        v["other_shore_stretches"] = s;
+        v["note"] = json!("the path left the water's edge: its longest stretch along it was put down; place the others (other_shore_stretches) with their own path");
     }
     Ok(v)
 }

@@ -399,6 +399,8 @@ impl FollowCrossing for crate::world::Edits {
 /// for, and how far out past the edge its face stands (as a town's quay fronts').
 pub const SHORE_STEP_FT: f64 = 5.0;
 pub const SHORE_REACH_FT: f64 = 60.0;
+/// How far from a stroke the shore is looked for, to say how far off it is.
+pub const SHORE_FAR_FT: f64 = 600.0;
 pub const SHORE_FACE_OUT_FT: f64 = 3.0;
 
 /// `p` resampled every `step` ft along it (its ends kept).
@@ -439,11 +441,29 @@ fn smooth_pts(v: &[P], r: usize) -> Vec<P> {
         .collect()
 }
 
+/// The water a shore quay is snapped to, as the map draws it: sea and lake over the drawn
+/// ground (`town::Shore`, hand water, islets and plateaus too), and river channels.
+pub struct ShoreWater<'a> {
+    shore: crate::town::Shore<'a>,
+}
+
+impl<'a> ShoreWater<'a> {
+    /// Over `rect` (x0, y0, x1, y1 world ft).
+    pub fn new(world: &'a crate::world::World, t0: &'a T0, rect: [f64; 4]) -> ShoreWater<'a> {
+        ShoreWater { shore: crate::town::Shore::new(world, t0, rect) }
+    }
+
+    /// Whether `p` (world ft) is in the water.
+    pub fn wet(&self, p: P) -> bool {
+        self.shore.wet(p) || self.shore.in_river(p)
+    }
+}
+
 /// The water's edge across `p` along `n` (toward the water): the distance (ft, from `-reach` to
 /// `reach`) where the land gives way to water that holds 16 ft (or to the reach). `None` when it
 /// is wet at `-reach` or dry all the way.
-fn edge_across(t0: &T0, p: P, n: P, reach: f64) -> Option<f64> {
-    let wet = |t: f64| wetness(t0, geom::add(p, geom::mul(n, t))) > 0.0;
+fn edge_across(water: &ShoreWater, p: P, n: P, reach: f64) -> Option<f64> {
+    let wet = |t: f64| water.wet(geom::add(p, geom::mul(n, t)));
     if wet(-reach) {
         return None;
     }
@@ -471,11 +491,11 @@ fn edge_across(t0: &T0, p: P, n: P, reach: f64) -> Option<f64> {
 }
 
 /// The water's edge along `line` (`edge_across` at each point, along its normals toward the
-/// water, `out` the side: 1 left, -1 right): the longest run found, short gaps (up to 30 ft)
-/// filled in between their neighbours. Its points, or `None` with fewer than 4.
-fn trace_edge(t0: &T0, line: &[P], out: f64, reach: f64) -> Option<Vec<P>> {
+/// water, `out` the side: 1 left, -1 right), short gaps (up to 30 ft) filled in between their
+/// neighbours: each run of it found (4 points or more), in order along `line`.
+fn trace_edge(water: &ShoreWater, line: &[P], out: f64, reach: f64) -> Vec<Vec<P>> {
     let normal: Vec<P> = shore_normals(line).into_iter().map(|q| geom::mul(q, out)).collect();
-    let mut t: Vec<Option<f64>> = line.iter().zip(&normal).map(|(&p, &n)| edge_across(t0, p, n, reach)).collect();
+    let mut t: Vec<Option<f64>> = line.iter().zip(&normal).map(|(&p, &n)| edge_across(water, p, n, reach)).collect();
     let n = t.len();
     let mut k = 0;
     while k < n {
@@ -494,50 +514,110 @@ fn trace_edge(t0: &T0, line: &[P], out: f64, reach: f64) -> Option<Vec<P>> {
             }
         }
     }
-    let (mut best, mut k) = ((0, 0), 0);
+    let (mut runs, mut k) = (Vec::new(), 0);
     while k < n {
         let k0 = k;
         while k < n && t[k].is_some() {
             k += 1;
         }
-        if k - k0 > best.1 - best.0 {
-            best = (k0, k);
+        if k - k0 >= 4 {
+            runs.push((k0..k).map(|k| geom::add(line[k], geom::mul(normal[k], t[k].unwrap()))).collect());
         }
         k = k.max(k0 + 1);
     }
-    (best.1 - best.0 >= 4).then(|| (best.0..best.1).map(|k| geom::add(line[k], geom::mul(normal[k], t[k].unwrap()))).collect())
+    runs
 }
 
-/// R7 173: a quay brushed along the shore: `stroke` (world ft, as dragged near the water's edge)
-/// snapped to the edge T0 has within `SHORE_REACH_FT` of it, smoothed, and its face set
-/// `SHORE_FACE_OUT_FT` out over the water: the points of a shore quay (`Wharf::shore`), every
-/// ~`SHORE_STEP_FT`, the dry side on the left. Or why not (no shore near it, too short, too long).
-pub fn shore_line(t0: &T0, stroke: &[P]) -> Result<Vec<P>, String> {
+/// How far (ft) from `line` the water's edge is found nearest (on rays every 22.5 degrees from
+/// every fourth point, 5 ft steps), up to `max`.
+fn nearest_shore(water: &ShoreWater, line: &[P], max: f64) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for &p in line.iter().step_by(4).chain(line.last()) {
+        let here = water.wet(p);
+        for r in 0..16 {
+            let a = r as f64 * core::f64::consts::TAU / 16.0;
+            let d = [libm::cos(a), libm::sin(a)];
+            let mut t = 5.0;
+            while t <= best.unwrap_or(max).min(max) {
+                if water.wet(geom::add(p, geom::mul(d, t))) != here {
+                    best = Some(t);
+                    break;
+                }
+                t += 5.0;
+            }
+        }
+    }
+    best
+}
+
+/// R7 173: the pieces of a quay brushed along the shore: `stroke` (world ft, as dragged near the
+/// water's edge) snapped to the edge of the water the map draws (`ShoreWater`) within
+/// `SHORE_REACH_FT` of it, smoothed, and its face set `SHORE_FACE_OUT_FT` out over the water: for
+/// each part of the stroke that follows the shore, in order along it, the points of a shore quay
+/// (`Wharf::shore`), every ~`SHORE_STEP_FT`, the dry side on the left. Or why none (no shore near
+/// it, too short, too long).
+pub fn shore_line(world: &crate::world::World, t0: &T0, stroke: &[P]) -> Result<Vec<Vec<P>>, String> {
     let stroke: Vec<P> = stroke.iter().copied().filter(|p| p[0].is_finite() && p[1].is_finite()).collect();
     let len: f64 = stroke.windows(2).map(|s| geom::dist(s[0], s[1])).sum();
     if stroke.len() < 2 || len < 20.0 {
-        return Err("drag at least 20 ft along the shore".into());
+        return Err("drag at least 20 ft along the water's edge".into());
     }
     if len > 1.5 * Wharf::MAX_LENGTH_FT {
         return Err(format!("a quay is at most {:.0} ft long (this stroke is {len:.0})", Wharf::MAX_LENGTH_FT));
     }
+    let b = stroke.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let pad = SHORE_FAR_FT + 20.0;
+    let water = ShoreWater::new(world, t0, [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]);
     // (The stroke steadied over 20 ft either way, and which side of it the water lies: where more
-    // of it is wet 30 ft off.)
+    // of it is wet 30 ft off, else 60 ft.)
     let line = smooth_pts(&resample(&stroke, SHORE_STEP_FT), 4);
     let normal = shore_normals(&line);
-    let wet_off = |s: f64| line.iter().zip(&normal).filter(|(p, n)| wetness(t0, geom::add(**p, geom::mul(**n, s * 30.0))) > 0.0).count();
-    let (left, right) = (wet_off(1.0), wet_off(-1.0));
-    if left == 0 && right == 0 && line.iter().all(|&p| wetness(t0, p) <= 0.0) {
-        return Err("no water within 30 ft of the stroke: drag along the shore".into());
+    let wet_off = |s: f64| line.iter().zip(&normal).filter(|(p, n)| water.wet(geom::add(**p, geom::mul(**n, s)))).count();
+    let (mut left, mut right) = (wet_off(30.0), wet_off(-30.0));
+    if left == right {
+        (left, right) = (left + wet_off(SHORE_REACH_FT), right + wet_off(-SHORE_REACH_FT));
+    }
+    let too_far = || match nearest_shore(&water, &line, SHORE_FAR_FT) {
+        Some(d) if d > SHORE_REACH_FT => format!("draw along the water's edge: the nearest shore is {:.0} ft from the stroke", 5.0 * crate::core::round(d / 5.0)),
+        Some(_) => "draw along the water's edge (on it, a little into the water or onto the land), not across it".into(),
+        None => format!("draw along the water's edge: there is no shore within {SHORE_FAR_FT:.0} ft of the stroke"),
+    };
+    if left == 0 && right == 0 {
+        return Err(too_far());
     }
     let out = if left >= right { 1.0 } else { -1.0 };
-    let no_shore = || format!("no shore within {SHORE_REACH_FT:.0} ft of the stroke: drag along the water's edge");
     // (First the edge across the stroke; then across that edge smoothed, which follows the
-    // shore's own bends.)
-    let e1 = trace_edge(t0, &line, out, SHORE_REACH_FT).ok_or_else(no_shore)?;
-    let e1 = smooth_pts(&resample(&e1, SHORE_STEP_FT), 4);
-    let e2 = trace_edge(t0, &e1, out, 25.0).ok_or_else(no_shore)?;
-    let mut edge = smooth_pts(&resample(&smooth_pts(&e2, 2), SHORE_STEP_FT), 3);
+    // shore's own bends. Pieces in stroke order: `shore_face` turns each so its dry side is on
+    // the left.)
+    let mut pieces = Vec::new();
+    for e1 in trace_edge(&water, &line, out, SHORE_REACH_FT) {
+        let e1 = smooth_pts(&resample(&e1, SHORE_STEP_FT), 4);
+        for e2 in trace_edge(&water, &e1, out, 25.0) {
+            if let Some(pts) = shore_face(&e2, out) {
+                pieces.push(pts);
+            }
+        }
+    }
+    if pieces.is_empty() {
+        return Err(too_far());
+    }
+    for pts in &pieces {
+        let run: f64 = pts.windows(2).map(|s| geom::dist(s[0], s[1])).sum();
+        if run > Wharf::MAX_LENGTH_FT {
+            return Err(format!("a quay is at most {:.0} ft long (this one along the shore is {run:.0})", Wharf::MAX_LENGTH_FT));
+        }
+        if pts.len() > Wharf::MAX_SHORE_PTS {
+            return Err(format!("a quay along the shore has at most {} points", Wharf::MAX_SHORE_PTS));
+        }
+    }
+    Ok(pieces)
+}
+
+/// A shore quay's face from the water's edge `e2` (traced with the water on side `out`): smoothed,
+/// the dry side on the left, `SHORE_FACE_OUT_FT` out, in order along the shore, every
+/// ~`SHORE_STEP_FT`. None when shorter than 20 ft.
+fn shore_face(e2: &[P], out: f64) -> Option<Vec<P>> {
+    let mut edge = smooth_pts(&resample(&smooth_pts(e2, 2), SHORE_STEP_FT), 3);
     // (The dry side on the left: the water on the right.)
     if out > 0.0 {
         edge.reverse();
@@ -553,17 +633,59 @@ pub fn shore_line(t0: &T0, stroke: &[P]) -> Result<Vec<P>, String> {
         }
         kept.push(f);
     }
+    if kept.len() < 2 {
+        return None;
+    }
     let mut pts: Vec<P> = resample(&kept, SHORE_STEP_FT).into_iter().map(|p| [crate::core::round(p[0] * 10.0) * 0.1, crate::core::round(p[1] * 10.0) * 0.1]).collect();
     pts.dedup_by(|a, b| geom::dist(*a, *b) < Wharf::MIN_SHORE_SIDE_FT);
     let run: f64 = pts.windows(2).map(|s| geom::dist(s[0], s[1])).sum();
-    if pts.len() < 4 || run < 20.0 {
-        return Err(no_shore());
+    (pts.len() >= 4 && run >= 20.0).then_some(pts)
+}
+
+/// The cell (ft) of the shore brush's hint (`shore_hint`), and how many cells a side its tile has.
+pub const SHORE_HINT_CELL_FT: f64 = 4.0;
+pub const SHORE_HINT_CELLS: usize = 64;
+
+/// R7 173: the water's edge the shore brush snaps to (`ShoreWater`) over the hint tile (i, j)
+/// (`SHORE_HINT_CELLS` cells of `SHORE_HINT_CELL_FT` a side, from `i * side, j * side`): its
+/// pieces (x0, y0, x1, y1 world ft), each across one cell between two crossings of the edge on
+/// the cell's sides (placed to a foot).
+pub fn shore_hint(world: &crate::world::World, t0: &T0, i: i64, j: i64) -> Vec<[f64; 4]> {
+    let (c, n) = (SHORE_HINT_CELL_FT, SHORE_HINT_CELLS);
+    let side = c * n as f64;
+    let (x0, y0) = (i as f64 * side, j as f64 * side);
+    let water = ShoreWater::new(world, t0, [x0 - c, y0 - c, x0 + side + c, y0 + side + c]);
+    let at = |a: usize, b: usize| [(i * n as i64 + a as i64) as f64 * c, (j * n as i64 + b as i64) as f64 * c];
+    let wet: Vec<bool> = (0..=n).flat_map(|b| (0..=n).map(move |a| (a, b))).map(|(a, b)| water.wet(at(a, b))).collect();
+    let w = |a: usize, b: usize| wet[b * (n + 1) + a];
+    // (Where the edge crosses the cell side p-q, wet `wp` at p: bisected.)
+    let cross = |p: P, q: P, wp: bool| {
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..3 {
+            let m = 0.5 * (lo + hi);
+            if water.wet(geom::lerp(p, q, m)) == wp {
+                lo = m;
+            } else {
+                hi = m;
+            }
+        }
+        geom::lerp(p, q, 0.5 * (lo + hi))
+    };
+    let mut out = Vec::new();
+    for b in 0..n {
+        for a in 0..n {
+            let corners = [(a, b), (a + 1, b), (a + 1, b + 1), (a, b + 1)];
+            let mut hits = Vec::with_capacity(4);
+            for k in 0..4 {
+                let (p, q) = (corners[k], corners[(k + 1) % 4]);
+                if w(p.0, p.1) != w(q.0, q.1) {
+                    hits.push(cross(at(p.0, p.1), at(q.0, q.1), w(p.0, p.1)));
+                }
+            }
+            for h in hits.chunks_exact(2) {
+                out.push([crate::core::round(h[0][0]), crate::core::round(h[0][1]), crate::core::round(h[1][0]), crate::core::round(h[1][1])]);
+            }
+        }
     }
-    if run > Wharf::MAX_LENGTH_FT {
-        return Err(format!("a quay is at most {:.0} ft long (this one along the shore is {run:.0})", Wharf::MAX_LENGTH_FT));
-    }
-    if pts.len() > Wharf::MAX_SHORE_PTS {
-        return Err(format!("a quay along the shore has at most {} points", Wharf::MAX_SHORE_PTS));
-    }
-    Ok(pts)
+    out
 }

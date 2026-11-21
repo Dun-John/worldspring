@@ -797,7 +797,7 @@ More: `set_crossing` below.
 | `material` | `timber` \| `stone` |  |
 | `path` | array |  |
 | `pier_spacing_ft` | number 0 to 400 | A shore quay's piers, this far apart (0: none; else 30 to 400) |
-| `shore` | boolean | A quay only: snap path to the water's edge within 60 ft of it and follow it smoothly |
+| `shore` | boolean | A quay only: snap path to the water's edge (as the map draws it) within 60 ft of it and follow it smoothly; parts of path away from the shore are left out |
 | `width_ft` | number 6 to 60 | By kind: MCP.md |
 
 Example:
@@ -2537,7 +2537,7 @@ Water's-edge works put down by hand (`q:<id>`), drawn on the battlemap and the t
 |---|---|---|---|
 | `kind` | string | required for a new one | `quay`, `pier` or `breakwater`. |
 | `path` | `[[x_ft, y_ft], …]` | required for a new one | 2 to 16 points (each an id, point or `[x, y]`), each side at least 10 ft, 2,000 ft in all. A pier's or breakwater's first point is on the bank: more than 5 ft into the water is refused. With `shore`, a line drawn along the shore (up to 512 points, at least 20 ft long). |
-| `shore` | boolean | optional | A quay's: follow the shore. `path` is snapped to the water's edge within 60 ft of it, smoothed, and the quay's face set 3 ft out over the water, with its paving `width_ft` to the dry side in a band of even width and round ends; the stored `path` is that face (points about 5 ft apart). No shore near `path` is refused (`path: no shore within 60 ft of the stroke: …`). A shore quay keeps `shore` when changed; a new `path` is snapped again. |
+| `shore` | boolean | optional | A quay's: follow the shore. `path` is snapped to the water's edge as the map draws it (sea, lake, river, hand water) within 60 ft of it, smoothed, and the quay's face set 3 ft out over the water, with its paving `width_ft` to the dry side in a band of even width and round ends; the stored `path` is that face (points about 5 ft apart). Where `path` follows the shore only in parts, its longest stretch along it is put down and the others are listed in `other_shore_stretches` (`{from, to, length_ft}`) with a `note`; no shore near `path` is refused (`path: draw along the water's edge: the nearest shore is N ft from the stroke`). A shore quay keeps `shore` when changed; a new `path` is snapped again. |
 | `pier_spacing_ft` | number | optional | A shore quay's piers: 0 (default, none) or 30–400 ft apart along it, none within half that of its ends; each 40 ft straight out from its face, 10 ft wide, of the quay's material, where there is water under it. |
 | `width_ft` | number | optional | A quay 10–60 (default 20), a pier 6–30 (10), a breakwater 12–60 (24). |
 | `material` | string | optional | A pier's or quay's: `timber` (default) or `stone`. A breakwater is stone. A shore quay of timber is planked over. |

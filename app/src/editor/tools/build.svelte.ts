@@ -91,6 +91,7 @@ export function buildTools(app: BuildHost) {
       islet: (at) => void w.harbourIslet(at),
       wharf: (a, b) => void w.harbourWharf(a, b),
       shore: (stroke) => void w.harbourShore(stroke),
+      shoreHint: (i, j) => app.view.gen.shoreHint(i, j),
       pick: (id) => (w.harbourPicked = id),
       hint: (t) => app.toast(t),
     });

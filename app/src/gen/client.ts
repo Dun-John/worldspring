@@ -179,9 +179,16 @@ export class GenClient {
     return this.ask({ op: 'islet', key, x, y, radius, rise }).then((j) => JSON.parse(j));
   }
 
-  /** A stroke brushed along the shore snapped to the water's edge: a shore quay's points, or why not. */
-  shoreLine(stroke: [number, number][]): Promise<{ pts: [number, number][] } | { error: string } | null> {
+  /** A stroke brushed along the shore snapped to the water's edge: each part of it along the
+   * shore a shore quay's points, or why none. */
+  shoreLine(stroke: [number, number][]): Promise<{ pieces: [number, number][][] } | { error: string } | null> {
     return this.ask({ op: 'shoreline', stroke: JSON.stringify(stroke) }).then((j) => JSON.parse(j));
+  }
+
+  /** The water's edge the shore brush snaps to over hint tile (i, j) (`wharf::shore_hint`):
+   * pieces `[x0, y0, x1, y1]` (world ft). */
+  shoreHint(i: number, j: number): Promise<[number, number, number, number][] | null> {
+    return this.ask({ op: 'shorehint', i, j }).then((s) => JSON.parse(s));
   }
 
   /** Whether a wharf can be put down (a breakwater's lighthouse too, when asked): why not, or its lighthouse. */

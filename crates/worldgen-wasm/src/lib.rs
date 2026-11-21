@@ -433,13 +433,19 @@ impl Ctx {
     }
 
     /// R7 173: a stroke brushed along the shore (`[[x, y], ...]` JSON) snapped to the water's edge
-    /// (`wharf::shore_line`): `{pts}` (a shore quay's) or `{error}`.
+    /// (`wharf::shore_line`): `{pieces}` (each a shore quay's points) or `{error}`.
     pub fn shore_line_json(&self, stroke: &str) -> String {
         let Ok(s) = serde_json::from_str::<Vec<[f64; 2]>>(stroke) else { return r#"{"error":"bad stroke"}"#.into() };
-        self.with_t0("null", |t0| match worldgen::wharf::shore_line(t0, &s) {
-            Ok(pts) => serde_json::json!({ "pts": pts }).to_string(),
+        self.with_t0("null", |t0| match worldgen::wharf::shore_line(&self.world, t0, &s) {
+            Ok(pieces) => serde_json::json!({ "pieces": pieces }).to_string(),
             Err(e) => serde_json::json!({ "error": e }).to_string(),
         })
+    }
+
+    /// R7 173: the water's edge the shore brush snaps to over hint tile (i, j)
+    /// (`wharf::shore_hint`): `[[x0, y0, x1, y1], ...]`.
+    pub fn shore_hint_json(&self, i: i32, j: i32) -> String {
+        self.with_t0("null", |t0| serde_json::json!(worldgen::wharf::shore_hint(&self.world, t0, i as i64, j as i64)).to_string())
     }
 
     /// Whether a wharf (`Wharf` JSON) can be put down: `{}` with, for a breakwater asked to have one (`lighthouse`), its

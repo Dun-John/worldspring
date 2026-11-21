@@ -312,17 +312,30 @@ export function waterways(app: BuildHost) {
   }
 
   /** R7 173: a quay brushed along the shore: the stroke snapped to the water's edge by the
-   * generator (`wharf::shore_line`), checked, then put down as one change. */
+   * generator (`wharf::shore_line`), each part of it along the shore checked, then put down
+   * together as one change. */
   async function harbourShore(stroke: Pt[]) {
     const s = await app.view.gen.shoreLine(stroke);
     if (!s) return app.toast('The map could not answer: try again');
     if ('error' in s) return app.toast(cap(s.error));
-    const w = shoreQuayOf(harbour, s.pts);
-    const r = await app.view.gen.wharfCheck(w, false);
-    if (!r) return app.toast('The map could not answer: try again');
-    if ('error' in r) return app.toast(cap(r.error));
-    const id = newObjectId('q');
-    app.applyEdits({ ...app.edits, wharves: { ...(app.edits.wharves ?? {}), [id]: w } }, { tool: 'place_wharf', id, kind: 'quay', changed: false, shore: true }, 'user');
+    const wharves = { ...(app.edits.wharves ?? {}) };
+    const ids: string[] = [];
+    let problem: string | null = null;
+    for (const pts of s.pieces) {
+      const w = shoreQuayOf(harbour, pts);
+      const r = await app.view.gen.wharfCheck(w, false);
+      if (!r) return app.toast('The map could not answer: try again');
+      if ('error' in r) {
+        problem ??= r.error;
+        continue;
+      }
+      const id = newObjectId('q');
+      wharves[id] = w;
+      ids.push(id);
+    }
+    if (!ids.length) return app.toast(cap(problem ?? 'draw along the water\'s edge'));
+    app.applyEdits({ ...app.edits, wharves }, { tool: 'place_wharf', id: ids[0], ...(ids.length > 1 ? { ids } : {}), kind: 'quay', changed: false, shore: true }, 'user');
+    if (ids.length > 1 || problem) app.toast(`${ids.length} quay${ids.length > 1 ? 's' : ''} along the shore: the parts of the stroke away from the water's edge were left out`);
   }
 
   /** The wharf picked is taken away, its lighthouse with it. */

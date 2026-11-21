@@ -98,18 +98,74 @@ export interface HarbourHost {
   wharf(a: Pt, b: Pt): void;
   /** A quay brushed along the shore (the stroke, world ft). */
   shore(stroke: Pt[]): void;
+  /** The water's edge the shore brush snaps to over hint tile (i, j) (`wharf::shore_hint`). */
+  shoreHint(i: number, j: number): Promise<[number, number, number, number][] | null>;
   /** A wharf put down earlier was clicked. */
   pick(id: string): void;
   hint(text: string): void;
 }
 
+/** A shore hint tile's side (ft: `wharf::SHORE_HINT_CELL_FT` x `SHORE_HINT_CELLS`), and how far
+ * from the water's edge a stroke snaps to it (a little inside `wharf::SHORE_REACH_FT`). */
+const HINT_TILE_FT = 256;
+const SNAP_FT = 55;
+
 export class HarbourTool implements PointerTool {
   private from: Pt | null = null;
   private stroke: Pt[] | null = null;
+  /** Per stroke point: whether it is within `SNAP_FT` of the water's edge (null: not known yet). */
+  private strokeOk: (boolean | null)[] = [];
   private cursor: Pt | null = null;
   readonly hoverFollows = true;
+  /** The shore hint's tiles by `i,j` (null while asked for), for the edits they were made with. */
+  private hints = new Map<string, [number, number, number, number][] | null>();
+  private hintEdits: Edits | null = null;
+  private asking = 0;
 
   constructor(private readonly host: HarbourHost) {}
+
+  /** The hint tile `i,j` (asked for when missing, a few at a time): its pieces, or undefined. */
+  private hintTile(i: number, j: number): [number, number, number, number][] | undefined {
+    const edits = this.host.edits();
+    if (edits !== this.hintEdits) {
+      this.hints.clear();
+      this.hintEdits = edits;
+      this.strokeOk = this.strokeOk.map(() => null);
+    }
+    const key = `${i},${j}`;
+    if (this.hints.has(key)) return this.hints.get(key) ?? undefined;
+    if (this.asking >= 4) return undefined;
+    if (this.hints.size > 400) this.hints.clear();
+    this.hints.set(key, null);
+    this.asking++;
+    void this.host
+      .shoreHint(i, j)
+      .then((segs) => {
+        if (this.hintEdits === edits) this.hints.set(key, segs ?? []);
+      })
+      .catch(() => this.hints.delete(key))
+      .finally(() => this.asking--);
+    return undefined;
+  }
+
+  /** Whether `p` is within `SNAP_FT` of the water's edge (null while its hint tiles load). */
+  private nearShore(p: Pt): boolean | null {
+    const t = HINT_TILE_FT;
+    const [i0, i1] = [Math.floor((p[0] - SNAP_FT) / t), Math.floor((p[0] + SNAP_FT) / t)];
+    const [j0, j1] = [Math.floor((p[1] - SNAP_FT) / t), Math.floor((p[1] + SNAP_FT) / t)];
+    let known = true;
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const segs = this.hintTile(i, j);
+        if (!segs) {
+          known = false;
+          continue;
+        }
+        for (const s of segs) if (segDist(p, [s[0], s[1]], [s[2], s[3]]) <= SNAP_FT) return true;
+      }
+    }
+    return known ? false : null;
+  }
 
   private snap(x: number, y: number): Pt {
     return [Math.round(x * 2) / 2, Math.round(y * 2) / 2];
@@ -121,6 +177,7 @@ export class HarbourTool implements PointerTool {
     if (this.host.settings().kind !== 'islet' && !this.at(this.cursor)) this.from = this.cursor;
     else this.from = null;
     this.stroke = this.from && this.host.settings().kind === 'quay' ? [this.from] : null;
+    this.strokeOk = [];
     return true;
   }
 
@@ -212,14 +269,39 @@ export class HarbourTool implements PointerTool {
       g.circle(sx, sy, 2.5).fill({ color: ink });
       return;
     }
+    if (s.kind === 'quay' && (!this.from || this.stroke) && cam.ppf * HINT_TILE_FT >= 48) {
+      // (The water's edge the brush snaps to, round the cursor: a thin line.)
+      const [ci, cj] = [Math.floor(this.cursor[0] / HINT_TILE_FT), Math.floor(this.cursor[1] / HINT_TILE_FT)];
+      for (let j = cj - 1; j <= cj + 1; j++) {
+        for (let i = ci - 1; i <= ci + 1; i++) {
+          for (const e of this.hintTile(i, j) ?? []) {
+            const [a, b] = [scr([e[0], e[1]]), scr([e[2], e[3]])];
+            g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
+          }
+        }
+      }
+      g.stroke({ width: 1.5, color: 0xfacc15, alpha: 0.95 });
+    }
     if (!this.from) {
       const [sx, sy] = scr(this.cursor);
       g.circle(sx, sy, 3).fill({ color: ink });
       return;
     }
     if (this.stroke) {
-      // (The brush: where it was dragged; the quay snaps to the water's edge on release.)
-      g.poly(this.stroke.flatMap((q) => scr(q)), false).stroke({ width: 3, color: ink, alpha: 0.8 });
+      // (The brush: where it was dragged, green where it is near enough the water's edge to
+      // snap to it, red where not; the quay snaps on release.)
+      const st = this.stroke;
+      while (this.strokeOk.length < st.length) this.strokeOk.push(null);
+      for (let k = 0; k < st.length; k++) if (this.strokeOk[k] === null) this.strokeOk[k] = this.nearShore(st[k]);
+      const colour = (ok: boolean | null) => (ok === null ? ink : ok ? 0x22c55e : 0xef4444);
+      let k0 = 0;
+      for (let k = 1; k <= st.length; k++) {
+        if (k < st.length && this.strokeOk[k] === this.strokeOk[k0]) continue;
+        // (A run of one colour, joined to the next run's first point.)
+        const run = st.slice(k0, Math.min(k + 1, st.length));
+        if (run.length >= 2) g.poly(run.flatMap((q) => scr(q)), false).stroke({ width: 3, color: colour(this.strokeOk[k0]), alpha: 0.9 });
+        k0 = k;
+      }
       return;
     }
     const [a, b] = [this.from, this.cursor];

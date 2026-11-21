@@ -60,6 +60,8 @@ export type Ask =
   | { op: 'wharfcheck'; wharf: string; lighthouse: boolean }
   /** A brushed stroke snapped to the water's edge: a shore quay's points (`wharf::shore_line`). */
   | { op: 'shoreline'; stroke: string }
+  /** The water's edge the shore brush snaps to over a hint tile (`wharf::shore_hint`). */
+  | { op: 'shorehint'; i: number; j: number }
   /** An underground site as a design (the one given, else its own), changed by `action`, with
    * what it builds and its problems (`under::design::design_json`). */
   | { op: 'design'; id: string; design?: string; action?: string }
