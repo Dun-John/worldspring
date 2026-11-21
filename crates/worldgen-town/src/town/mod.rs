@@ -367,6 +367,9 @@ pub struct Layout {
     /// the mark of the one set by hand it was laid out with (`pattern::mark`, 0: auto).
     pub pattern: u8,
     pub pattern_mark: u8,
+    /// (Roadmap 7) How many lot houses were left off for standing on a quay front's band
+    /// (`generate`, after `build_town`; a count for the checks).
+    pub quay_dropped: u16,
     pub roof_seed: u64,
     pub roof_age: u8,
     /// Castles' moats (v63 castles: `moat`).
@@ -716,6 +719,7 @@ impl Layout {
             planning: 0,
             pattern: 0,
             pattern_mark: 0,
+            quay_dropped: 0,
             roof_seed: 0,
             roof_age: 0,
             moats: Vec::new(),
@@ -1173,6 +1177,7 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
         // square to its face, reaches past the lots' fronts.)
         if !l.quays.is_empty() {
             let bands: Vec<(Vec<P>, [f64; 4])> = l.quays.iter().map(|q| q.band()).map(|b| { let bb = geom::bbox(&b); (b, bb) }).collect();
+            let was = l.buildings.len();
             l.buildings.retain(|b| {
                 b.keep.is_some()
                     || !b.parts.is_empty()
@@ -1181,6 +1186,9 @@ fn generate_in(world: &World, t0: &T0, index: usize, s: &Settlement, edit: Optio
                         o[2] < bb[0] || o[0] > bb[2] || o[3] < bb[1] || o[1] > bb[3] || (geom::poly_gap(band, &b.poly) > 0.25 && !geom::contains(band, b.poly[0]))
                     })
             });
+            l.quay_dropped = (was - l.buildings.len()) as u16;
+            quays::lanes(&site, &mut l);
+            quays::aprons(&site, &mut l);
         }
         // (Read by a conversion to a hand town alone: `hand::convert`.)
         hand::cap_plan(index, &plan);

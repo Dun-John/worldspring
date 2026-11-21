@@ -1067,6 +1067,8 @@ pub(crate) fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
         if let Some(a) = text.find(", pattern: 0, pattern_mark: 0") {
             text.replace_range(a..a + ", pattern: 0, pattern_mark: 0".len(), "");
         }
+        // (Nor the count of lot houses dropped off quay bands, recorded since v66.)
+        text = text.replace(", quay_dropped: 0", "");
         // (Nor the castle's and the market's patches, recorded later.)
         if let Some(a) = text.find(", castle_patch: ")
             && let Some(b) = text[a..].find(", bbox: ")

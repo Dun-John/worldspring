@@ -543,6 +543,11 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
         "quay face to water 11-30 ft",
         "quay face samples over 10 ft from the water",
         "quay face samples with no water within 30 ft",
+        "quay back samples",
+        "quay back samples with an unpaved verge (10-30 ft to paving or a house)",
+        "street ends 8-150 ft short of a quay front",
+        "lot houses dropped for touching a quay band",
+        "lanes carried on to a quay",
         "bollards",
         "net racks",
     ]);
@@ -599,8 +604,110 @@ pub(crate) fn ports(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
         }
+        if !l.quays.is_empty() {
+            r.tally("lot houses dropped for touching a quay band", l.quay_dropped as usize);
+            r.tally("lanes carried on to a quay", l.roads.iter().filter(|r| r.1 == 3 && r.2 == 9.0).count());
+            if let Some((x, y)) = std::env::var("QUAY_AT").ok().and_then(|v| v.split_once(',').and_then(|(a, b)| Some((a.parse::<f64>().ok()?, b.parse::<f64>().ok()?)))) {
+                if town::geom::dist(l.center, [x, y]) < l.radius + 300.0 {
+                    let row: Vec<String> = (-16..=16)
+                        .map(|k| {
+                            let p = [x + 5.0 * k as f64, y];
+                            let c = ctx.chunk((p[0] / size) as u32, (p[1] / size) as u32);
+                            let q = (((p[1] / size).fract() * SQ as f64) as usize) * SQ + ((p[0] / size).fract() * SQ as f64) as usize;
+                            format!("{}{}{}", c.urban[q], if c.building[q] != 0 { "B" } else { "" }, if c.water_level[q] >= c.height[q] { "w" } else { "" })
+                        })
+                        .collect();
+                    say!("      row L{si} at ({x}, {y}) x-80..+80: {}", row.join(" "));
+                }
+            }
+            if std::env::var("QUAY_VERGE").is_ok() {
+                for pl in l.plazas.iter().filter(|p| p.kind == town::PlazaKind::Yard).take(6) {
+                    let bb = town::geom::bbox(&pl.pts);
+                    let mut hist = [0usize; 16];
+                    for (cx, cy, c) in &chunks_round(ctx, bb) {
+                        for q in 0..SQ * SQ {
+                            let p = [cx + ((q % SQ) as f64 + 0.5) * SQUARE_FT, cy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                            if contains(&pl.pts, p) {
+                                hist[(c.urban[q] as usize).min(15)] += 1;
+                            }
+                        }
+                    }
+                    say!("      yard L{si} at {} pts {} urban {:?}", at(pl.pts[0]), pl.pts.len(), hist);
+                }
+            }
+            if l.quay_dropped > 0 {
+                r.add("lot houses dropped for touching a quay band", l.quay_dropped as f64, format!("L{si} {:?} at {}: {}", l.tier, at(l.center), l.quay_dropped));
+            }
+            // (Polish: a street or lane whose end points at a quay front 8-150 ft ahead, with no
+            // other way between: it stops at a building row or a strip of beach.)
+            let ways: Vec<&Vec<[f64; 2]>> = l.streets.iter().chain(l.roads.iter().filter(|r| r.1 >= 3).map(|r| &r.0)).collect();
+            for (wi, w) in ways.iter().enumerate() {
+                if w.len() < 2 {
+                    continue;
+                }
+                for (e, p) in [(w[0], w[1]), (w[w.len() - 1], w[w.len() - 2])] {
+                    let d = town::geom::dist(e, p);
+                    if d < 1.0 {
+                        continue;
+                    }
+                    let u = [(e[0] - p[0]) / d, (e[1] - p[1]) / d];
+                    let hit = (2..=31).map(|j| 5.0 * j as f64).find(|&t| {
+                        let q = [e[0] + u[0] * t, e[1] + u[1] * t];
+                        l.quays.iter().any(|qf| contains(&qf.pts, q))
+                    });
+                    let Some(t) = hit else { continue };
+                    let crossed = (2..(t / 5.0) as usize).any(|j| {
+                        let q = [e[0] + u[0] * 5.0 * j as f64, e[1] + u[1] * 5.0 * j as f64];
+                        ways.iter().enumerate().any(|(wj, w2)| wj != wi && w2.windows(2).any(|s| town::geom::seg_dist(q, s[0], s[1]) < 4.0))
+                    });
+                    let carried = l.roads.iter().any(|r| r.1 == 3 && r.2 == 9.0 && town::geom::dist(r.0[0], e) < 2.0);
+                    if !crossed && !carried && l.quays.iter().all(|qf| town::geom::poly_gap(&qf.pts, &[e]) > 8.0) {
+                        r.add("street ends 8-150 ft short of a quay front", 1.0, format!("L{si} {t:.0} ft at {}", at(e)));
+                    }
+                }
+            }
+        }
         for qf in &l.quays {
             let face = qf.face();
+            // (Polish: behind its back, a strip of bare ground before the town's paving or a house.)
+            {
+                let h = qf.pts.len() / 2;
+                for i in 3..h.saturating_sub(3) {
+                    let (f, b) = (qf.pts[i], qf.pts[2 * h - 1 - i]);
+                    let dd = town::geom::dist(f, b);
+                    if dd < 1.0 {
+                        continue;
+                    }
+                    let v = [(b[0] - f[0]) / dd, (b[1] - f[1]) / dd];
+                    let sq = |ctx: &mut Ctx, p: [f64; 2]| -> (u8, bool, bool) {
+                        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+                        let c = ctx.chunk(k(p[0]), k(p[1]));
+                        let (ii, jj) = (((p[0] - k(p[0]) as f64 * size) / SQUARE_FT) as usize, ((p[1] - k(p[1]) as f64 * size) / SQUARE_FT) as usize);
+                        let q = jj.min(SQ - 1) * SQ + ii.min(SQ - 1);
+                        (c.urban[q], c.building[q] != 0, c.water_level[q] >= c.height[q])
+                    };
+                    let paved = |u: u8| matches!(u, worldgen::battlemap::URBAN_PLAZA | worldgen::battlemap::URBAN_STREET | worldgen::battlemap::URBAN_DECK | worldgen::battlemap::URBAN_ENTRANCE);
+                    r.tally("quay back samples", 1);
+                    let first = sq(ctx, [b[0] + v[0] * 3.0, b[1] + v[1] * 3.0]);
+                    if first.0 != 0 || first.1 || first.2 {
+                        continue;
+                    }
+                    let end = (1..=6).map(|j| 3.0 + 5.0 * j as f64).find(|&t| {
+                        let (u, bld, wet) = sq(ctx, [b[0] + v[0] * t, b[1] + v[1] * t]);
+                        u != 0 || bld || wet
+                    });
+                    if let Some(t) = end {
+                        let (u, bld, _) = sq(ctx, [b[0] + v[0] * t, b[1] + v[1] * t]);
+                        if t >= 10.0 && (paved(u) || bld) && std::env::var("QUAY_VERGE").is_ok() {
+                            let codes: Vec<String> = (0..8).map(|j| { let p = [b[0] + v[0] * (3.0 + 5.0 * j as f64), b[1] + v[1] * (3.0 + 5.0 * j as f64)]; let (u, bl, _) = sq(ctx, p); format!("{u}{}{}{}", if bl { "B" } else { "" }, if l.districts.iter().any(|d| contains(d, p)) { "d" } else { "" }, if l.blocks.iter().any(|d| contains(d, p)) { "k" } else { "" }) + if l.plazas.iter().any(|pl| pl.kind == town::PlazaKind::Yard && contains(&pl.pts, p)) { "Y" } else { "" } }).collect();
+                            say!("      verge L{si} at {} back {:.0}: {}", at(b), dd, codes.join(" "));
+                        }
+                        if t >= 10.0 && (paved(u) || bld) {
+                            r.add("quay back samples with an unpaved verge (10-30 ft to paving or a house)", 1.0, format!("L{si} {t:.0} ft at {}", at(b)));
+                        }
+                    }
+                }
+            }
             r.tally("quay front ft", face.windows(2).map(|w| town::geom::dist(w[0], w[1])).sum::<f64>() as usize);
             // (How the face follows the shore: from each point every ~5 ft along it, out square to
             // it, the first wet square on the battlemap within 30 ft.)

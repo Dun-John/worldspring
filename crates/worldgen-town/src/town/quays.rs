@@ -597,3 +597,173 @@ fn round_ends(kept: &mut [(usize, P, P)]) {
         }
     }
 }
+
+/// How far behind a quay front's back its apron is carried at most to the houses (ft, `aprons`).
+const APRON_FT: f64 = 60.0;
+
+/// Roadmap 7: the paving behind each quay front carried on to the houses (or the street, a
+/// square) behind it, where they stand within `APRON_FT` of its back: the lots' front ground on
+/// the water is paved, no strip of beach between the quay and the town. Square to the back, as
+/// deep as the nearest of its neighbours (no fingers between houses); none where open ground, a
+/// park, a field, a close or a wall lies behind it. After the houses, so after those dropped off
+/// the bands (`generate`). Yards: paved, nothing set out on them.
+pub(super) fn aprons(site: &Site, l: &mut Layout) {
+    let mut out: Vec<Vec<P>> = Vec::new();
+    for q in &l.quays {
+        let h = q.pts.len() / 2;
+        if h < 2 {
+            continue;
+        }
+        let bb = bbox(&q.pts);
+        let near = |o: [f64; 4]| o[2] >= bb[0] - APRON_FT - 5.0 && o[0] <= bb[2] + APRON_FT + 5.0 && o[3] >= bb[1] - APRON_FT - 5.0 && o[1] <= bb[3] + APRON_FT + 5.0;
+        let houses: Vec<(&Vec<P>, [f64; 4])> = l.buildings.iter().map(|b| (&b.poly, bbox(&b.poly))).filter(|(_, o)| near(*o)).collect();
+        let paved: Vec<(&Vec<P>, [f64; 4])> = l.plazas.iter().filter(|p| !p.kind.is_lawn() && p.kind != PlazaKind::Bailey && p.pts != q.pts).map(|p| (&p.pts, bbox(&p.pts))).filter(|(_, o)| near(*o)).collect();
+        let open: Vec<(&Vec<P>, [f64; 4])> = l.parks.iter().map(|p| &p.pts).chain(l.fields.iter()).chain(l.plazas.iter().filter(|p| p.kind.is_lawn() || p.kind == PlazaKind::Bailey).map(|p| &p.pts)).map(|p| (p, bbox(p))).filter(|(_, o)| near(*o)).collect();
+        let inside = |set: &[(&Vec<P>, [f64; 4])], p: P| set.iter().any(|(poly, o)| p[0] >= o[0] && p[0] <= o[2] && p[1] >= o[1] && p[1] <= o[3] && geom::contains(poly, p));
+        let on_way = |p: P| l.streets.iter().any(|s| s.windows(2).any(|w| seg_dist(p, w[0], w[1]) < 4.0)) || l.roads.iter().any(|r| r.0.windows(2).any(|w| seg_dist(p, w[0], w[1]) < 0.5 * r.2));
+        let walled = |p: P| l.walls.iter().any(|w| w.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 8.0)) || l.castles.iter().any(|&(c, r)| dist(c, p) < r + 8.0);
+        // (How deep the apron goes behind each back point: to the first house, street or square,
+        // or none.)
+        let deep: Vec<(P, P, f64)> = (0..h)
+            .map(|i| {
+                let (f, b) = (q.pts[i], q.pts[2 * h - 1 - i]);
+                let dd = dist(f, b);
+                if dd < 1.0 {
+                    return (b, [0.0, 0.0], 0.0);
+                }
+                let v = mul(sub(b, f), 1.0 / dd);
+                let mut t = 1.0;
+                while t <= APRON_FT {
+                    let p = add(b, mul(v, t));
+                    if inside(&open, p) || walled(p) || site.wet(p) || site.near_river(p, 4.0) {
+                        return (b, v, 0.0);
+                    }
+                    if inside(&houses, p) {
+                        return (b, v, t - 1.0);
+                    }
+                    if inside(&paved, p) || on_way(p) {
+                        return (b, v, t);
+                    }
+                    t += 1.0;
+                }
+                (b, v, 0.0)
+            })
+            .collect();
+        let e: Vec<f64> = (0..h).map(|i| if deep[i].2 <= 0.0 { 0.0 } else { (i.saturating_sub(1)..=(i + 1).min(h - 1)).map(|j| deep[j].2).filter(|&d| d > 0.0).fold(f64::INFINITY, f64::min) }).collect();
+        // (In runs of back points it reaches 3 ft or more behind, each one plaza; a run whose
+        // outline would cross itself (round a tight bend) is laid in quads.)
+        let mut i = 0;
+        while i < h {
+            if e[i] < 3.0 {
+                i += 1;
+                continue;
+            }
+            let i0 = i;
+            while i + 1 < h && e[i + 1] >= 3.0 {
+                i += 1;
+            }
+            let i1 = i;
+            i += 1;
+            if i1 == i0 {
+                continue;
+            }
+            let back: Vec<P> = (i0..=i1).map(|j| deep[j].0).collect();
+            let far: Vec<P> = (i0..=i1).map(|j| add(deep[j].0, mul(deep[j].1, e[j]))).collect();
+            let poly: Vec<P> = back.iter().copied().chain(far.iter().rev().copied()).collect();
+            if !folds(&poly) {
+                out.push(poly);
+            } else {
+                for j in 0..back.len() - 1 {
+                    let quad = vec![back[j], back[j + 1], far[j + 1], far[j]];
+                    if !folds(&quad) {
+                        out.push(quad);
+                    }
+                }
+            }
+        }
+    }
+    l.plazas.extend(out.into_iter().map(|pts| Plaza { pts, kind: PlazaKind::Yard, spot: places::Spot::None }));
+}
+
+/// The farthest (ft) a street or lane is carried on to meet a quay front ahead of it (`lanes`).
+const LANE_REACH_FT: f64 = 155.0;
+/// A lane carried on to the quay (ft wide, `lanes`).
+const LANE_FT: f64 = 9.0;
+
+/// Roadmap 7: a street or lane whose end points at a quay front within `LANE_REACH_FT`, with no
+/// other way, square, park, wall or water between, is carried on to the quay as a paved lane,
+/// the lot houses in its way left off (none past a keep or a building of parts: that one stays
+/// short). After the houses (`generate`).
+pub(super) fn lanes(site: &Site, l: &mut Layout) {
+    if l.quays.is_empty() {
+        return;
+    }
+    let in_quay = |l: &Layout, p: P| l.quays.iter().any(|q| geom::contains(&q.pts, p));
+    let ways: Vec<Vec<P>> = l.streets.iter().cloned().chain(l.roads.iter().filter(|r| r.1 >= 3).map(|r| r.0.clone())).collect();
+    let mut laid: Vec<(P, P)> = Vec::new();
+    for (wi, w) in ways.iter().enumerate() {
+        if w.len() < 2 {
+            continue;
+        }
+        for (e, p) in [(w[0], w[1]), (w[w.len() - 1], w[w.len() - 2])] {
+            let d = dist(e, p);
+            if d < 1.0 || l.quays.iter().any(|q| poly_gap(&q.pts, &[e]) <= 8.0) {
+                continue;
+            }
+            let u = mul(sub(e, p), 1.0 / d);
+            let at = |t: f64| add(e, mul(u, t));
+            let Some(t1) = (2..=31).map(|j| 5.0 * j as f64).find(|&t| t <= LANE_REACH_FT && in_quay(l, at(t))) else { continue };
+            // (Just into the quay: its back found to the foot.)
+            let (mut lo, mut hi) = (t1 - 5.0, t1);
+            for _ in 0..4 {
+                let m = 0.5 * (lo + hi);
+                if in_quay(l, at(m)) {
+                    hi = m;
+                } else {
+                    lo = m;
+                }
+            }
+            let end = at(hi + 1.0);
+            let blocked = (1..crate::core::ceil(hi / 2.5) as usize).any(|j| {
+                let t = 2.5 * j as f64;
+                let q = at(t);
+                (t >= 10.0 && ways.iter().enumerate().any(|(wj, w2)| wj != wi && w2.windows(2).any(|s| seg_dist(q, s[0], s[1]) < 4.0)))
+                    || site.wet(q)
+                    || site.near_river(q, 4.0)
+                    || l.walls.iter().any(|ww| ww.windows(2).any(|s| seg_dist(q, s[0], s[1]) < 8.0))
+                    || l.castles.iter().any(|&(c, r)| dist(c, q) < r + 8.0)
+                    || l.parks.iter().any(|pk| geom::contains(&pk.pts, q))
+                    || l.fields.iter().any(|f| geom::contains(f, q))
+                    || l.plazas.iter().any(|pl| pl.kind != PlazaKind::Quay && pl.kind != PlazaKind::Yard && geom::contains(&pl.pts, q))
+                    || l.buildings.iter().any(|b| (b.keep.is_some() || !b.parts.is_empty()) && poly_gap(&b.poly, &[q]) < 0.5 * LANE_FT)
+            });
+            // (Nor beside one already carried on.)
+            if blocked || laid.iter().any(|&(a, b)| seg_dist(e, a, b) < 20.0 || seg_dist(end, a, b) < 20.0) {
+                continue;
+            }
+            l.buildings.retain(|b| b.keep.is_some() || !b.parts.is_empty() || seg_poly_gap(e, end, &b.poly) >= 0.5 * LANE_FT);
+            laid.push((e, end));
+        }
+    }
+    for (a, b) in laid {
+        l.roads.push((vec![a, b], 3, LANE_FT));
+    }
+}
+
+/// How near segment `a`-`b` comes to convex polygon `poly` (0 where it crosses or lies inside).
+fn seg_poly_gap(a: P, b: P, poly: &[P]) -> f64 {
+    let n = poly.len();
+    if geom::contains(poly, a) || geom::contains(poly, b) {
+        return 0.0;
+    }
+    let mut g = f64::INFINITY;
+    for i in 0..n {
+        let (c, d) = (poly[i], poly[(i + 1) % n]);
+        let s = |p: P, q: P, r: P| cross(sub(q, p), sub(r, p));
+        if s(a, b, c) * s(a, b, d) < 0.0 && s(c, d, a) * s(c, d, b) < 0.0 {
+            return 0.0;
+        }
+        g = g.min(seg_dist(c, a, b)).min(seg_dist(a, c, d)).min(seg_dist(b, c, d));
+    }
+    g
+}
