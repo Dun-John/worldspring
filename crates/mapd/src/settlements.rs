@@ -59,7 +59,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
                 return None;
             }
             if ids.len() != 1 {
-                return Some(Err("restore_feature: a deleted village or town is restored on its own (one id per call), apart from other sites".into()));
+                return Some(Err("restore: a deleted village or town is restored on its own (one id per call), apart from other sites".into()));
             }
             restore(app, ids[0].clone(), ks[0]?).await.map(text)
         }
@@ -240,7 +240,7 @@ async fn delete(app: &Shared, id: String, k: usize) -> Result<Value, String> {
         }
         let mut reply = json!({ "tool": "delete_feature", "deleted": [v], "id": id, "set_aside": n });
         if any || n > 0 {
-            reply["note"] = json!("what was made inside it (names, notes, buildings, NPCs' places, plot points) is set aside, moved off its layout number; restore_feature brings the settlement back with them");
+            reply["note"] = json!("what was made inside it (names, notes, buildings, NPCs' places, plot points) is set aside, moved off its layout number; restore brings the settlement back with them");
         }
         Ok(reply)
     })
@@ -288,7 +288,7 @@ struct Asked {
 fn asked(a: &Value) -> Result<Asked, String> {
     for k in a.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() {
         if !["id", "tier", "lives_by", "capital", "name", "culture", "regenerate"].contains(&k.as_str()) {
-            return Err(format!("{k}: unknown argument (update_settlement takes id, tier, lives_by, capital, name, culture, regenerate)"));
+            return Err(format!("{k}: unknown argument (set_settlement with id takes id, tier, lives_by, capital, name, culture, regenerate)"));
         }
     }
     let word = |k: &str, of: &[&str]| match &a[k] {
@@ -331,7 +331,7 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
         return update_culture(app, id, to).await;
     }
     if crate::batch::active() {
-        return Err("update_settlement can't change one of the world's own settlements in a batch: the sketch is changed (and the world remade) on its own".into());
+        return Err("set_settlement can't change one of the world's own settlements in a batch: the sketch is changed (and the world remade) on its own".into());
     }
     let wid = id.clone();
     let lives = ask.lives_by.clone();
@@ -445,7 +445,7 @@ async fn update_culture(app: &Shared, id: String, to: u8) -> Result<Value, Strin
 /// `update_settlement` on a village or town added by hand (at `k` in `created`): changed at once
 /// (laid out anew when its tier or kind changes: the edits in it set aside).
 async fn update_made(app: &Shared, id: String, k: usize, ask: Asked) -> Result<Value, String> {
-    let how = "delete_feature it and put a settlement pin there (create_sketch_stroke {tool: pin, at, tier, lives_by, capital, name}), then regenerate";
+    let how = "remove it and put a settlement pin there (create_sketch_stroke {tool: pin, at, tier, lives_by, capital, name}), then regenerate";
     if let Some(t) = ask.tier.as_deref().filter(|t| !CREATED_SETTLEMENTS.contains(t)) {
         return Err(format!("tier: a village or town added by hand stays a village or town ({t} needs the world remade: {how})"));
     }

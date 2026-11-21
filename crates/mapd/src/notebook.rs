@@ -453,7 +453,7 @@ fn spot(w: &worldgen::world::World, t0: &worldgen::t0::T0, a: &Value, fixed: Opt
             return Err(format!("{site} is a whole sewer network: a note goes in one of its 480-ft sections, w:{l}:<sx>:<sy> (or give room: an r: id)"));
         }
         return Err(if agent::position(w, t0, &site).is_some() {
-            format!("{site} has no inside: point notes go in a building, dungeon or sewer level (annotate_feature puts a note on a place on the map)")
+            format!("{site} has no inside: point notes go in a building, dungeon or sewer level (set_feature notes puts a note on a place on the map)")
         } else {
             crate::args::no_such(w, t0, &site)
         });

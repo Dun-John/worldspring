@@ -334,7 +334,7 @@ async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, St
         Some(id) => app
             .with_edits(|e| e.created.iter().find(|c| &c.id == id && !c.removed && c.kind == "plot").cloned())
             .ok_or(NO_WORLD)?
-            .ok_or_else(|| format!("{id} is not a parcel (a plot made by create_parcel)"))?,
+            .ok_or_else(|| format!("{id} is not a parcel (a plot made by set_parcel)"))?,
         None => {
             if poly.is_none() {
                 return Err("give the outline: poly".into());
@@ -364,7 +364,7 @@ async fn parcel(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, St
         .with_edits(|e| e.created.iter().find(|o| o.kind == "plot" && !o.removed && o.id != mine && !(creating && other.same_site(o, [other.x, other.y])) && agent::polys_overlap_pub(&o.poly, &other.poly)).map(|o| o.id.clone()))
         .flatten();
     if let Some(o) = hit {
-        return Err(format!("that outline meets the parcel {o}: change or delete_feature that first"));
+        return Err(format!("that outline meets the parcel {o}: change or remove that first"));
     }
     if let Some(why) = app.worker.with({ let (p, id) = (c.poly.clone(), mine.clone()); move |ex| Ok(placing::parcel_blocker(&ex.world, &ex.t0, &p, Some(&id))) }).await? {
         return Err(why);

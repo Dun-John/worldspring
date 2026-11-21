@@ -19,9 +19,10 @@ pub fn list() -> Vec<Value> {
         "points": { "type": "array", "minItems": 2 },
         "closed": { "type": "boolean" },
         "gates": { "type": "array", "description": "Points for 5-ft gates" },
+        "gaps": { "type": "array", "description": "Instead of a fence: cut gaps into fences, [{points, width_ft?: 5}]" },
     });
     vec![
-        json!({ "name": "place_fence", "title": "Draw a fence", "description": "A fence or hedge along points (over roads, not water). With id, changes one. Returns its id.", "inputSchema": schema(props, &[]) }),
+        json!({ "name": "place_fence", "title": "Draw a fence", "description": "A fence or hedge along points (over roads, not water). With id, changes one. Returns its id. gaps alone cuts gaps into the fences there.", "inputSchema": schema(props, &[]) }),
         json!({ "name": "remove_fences", "title": "Take fences away", "description": "Fences and hedges off by id (fr:, fh:, f:; fg: a gap; restore: back), or cut along gaps.", "inputSchema": schema(json!({ "ids": { "type": "array", "minItems": 1 }, "gaps": { "type": "array", "description": "[{points, width_ft?: 5}]" }, "restore": { "type": "boolean" } }), &[]) }),
         json!({ "name": "list_fences", "title": "Fences and hedges", "description": "Drawn fences, gaps, changed runs; with at, all near.", "inputSchema": schema(json!({ "at": { "type": ["string", "object", "array"] }, "radius_ft": { "type": "number", "maximum": 2000 }, "limit": { "type": "integer", "minimum": 1 } }), &[]) }),
     ]
@@ -30,6 +31,11 @@ pub fn list() -> Vec<Value> {
 /// Run a fence tool (None: not one of these).
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
     Some(match name {
+        // (gaps alone: cut into the fences there, as `remove_fences` did.)
+        "place_fence" if !a["gaps"].is_null() => match a.as_object().and_then(|o| o.keys().find(|k| !matches!(k.as_str(), "gaps" | "world"))) {
+            Some(k) => Err(format!("gaps: alone (cut into the fences there), not with {k}")),
+            None => remove(app, a).await.map(text),
+        },
         "place_fence" => place(app, a).await.map(text),
         "remove_fences" => remove(app, a).await.map(text),
         "list_fences" => list_fences(app, a).await.map(text),

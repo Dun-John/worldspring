@@ -11,7 +11,7 @@
 //           calls run there on an identical fresh world and the results must agree; without it the new calls
 //           must only succeed. Then the refusals in the map (old names, arguments a view doesn't take) must be
 //           refused with the text given;
-//   --call  one call, its reply printed (for writing map entries).
+//   --call  one call, its reply printed (for writing map entries); --why prints the errors of calls both refused.
 // With neither --list nor --map nor --call, both. Prints failures and a summary only.
 
 import { spawn } from 'node:child_process';
@@ -135,7 +135,8 @@ function where(a, b, at = '') {
   }
   return `${at || '.'}: old ${cut(a)} new ${cut(b)}`;
 }
-// `$name` in a call's arguments: the id an earlier entry with `as: name` made (each build its own).
+// `$name` in a call's arguments: the id an earlier entry with `as: name` made (each build its own; `$name_b`: the
+// building id of a building drawn by hand).
 function fill(v, vars) {
   if (typeof v === 'string') return v.replace(/\$(\w+)/g, (m, k) => vars[k] ?? m);
   if (Array.isArray(v)) return v.map((x) => fill(x, vars));
@@ -148,6 +149,8 @@ function swap(v, pairs) {
   for (const [n, o] of pairs) s = s.split(JSON.stringify(n).slice(1, -1)).join(JSON.stringify(o).slice(1, -1));
   return JSON.parse(s);
 }
+// The id an entry made: its reply's id, or the first of its ids.
+const made = (r) => r.ok?.id ?? r.ok?.ids?.[0];
 const drop = (v, keys) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([k]) => !keys.includes(k))) : v);
 
 const servers = [];
@@ -187,22 +190,25 @@ try {
     const pairs = [];
     for (const e of map.entries) {
       const b = await now.call(e.new.tool, fill(e.new.arguments, vars.new));
-      if (e.as && b.ok?.id) vars.new[e.as] = b.ok.id;
+      if (e.as && made(b)) vars.new[e.as] = made(b);
+      if (e.as && b.ok?.building) vars.new[`${e.as}_b`] = b.ok.building;
       if (!then) {
         if (b.error && !e.refused) fail(`${e.old.tool} -> ${e.new.tool}: ${cut(b.error)}`);
         else agree++;
         continue;
       }
       const a = await then.call(e.old.tool, fill(e.old.arguments, vars.old));
-      if (e.as && a.ok?.id) {
-        vars.old[e.as] = a.ok.id;
-        if (b.ok?.id) pairs.push([b.ok.id, a.ok.id]);
+      if (e.as && made(a)) {
+        vars.old[e.as] = made(a);
+        if (made(b)) pairs.push([made(b), made(a)]);
+        if (a.ok?.building) vars.old[`${e.as}_b`] = a.ok.building;
       }
       if (b.ok) b.ok = drop(swap(b.ok, pairs), e.ignore ?? []);
       if (a.ok) a.ok = drop(a.ok, e.ignore ?? []);
       if (a.error && b.error) {
         agree++;
         bothRefused.push(e.old.tool);
+        if (flag('--why')) console.log(`both refused ${e.old.tool}: old ${cut(a.error)} | new ${cut(b.error)}`);
       }
       else if (a.error || b.error) fail(`${e.old.tool} -> ${e.new.tool}: ${a.error ? 'only the old refused' : 'only the new refused'}: ${cut(a.error ?? b.error)}`);
       else if (!same(a.ok, b.ok) || String(a.parts) !== String(b.parts)) fail(`${e.old.tool} -> ${e.new.tool}: results differ at ${where(a.ok, b.ok)}`);

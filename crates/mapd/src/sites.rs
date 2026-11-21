@@ -52,11 +52,11 @@ async fn resolve(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<Sit
                         None => match edits.created.iter().position(|c| &c.id == id) {
                             Some(k) => (k, None),
                             None if agent::generated_building(t0, id).is_some() => {
-                                return Err(format!("{at}: {id} is one of the world's own buildings: they go with remove_buildings (restore_building brings them back)"));
+                                return Err(format!("{at}: {id} is one of the world's own buildings: they go with remove too (restore brings them back)"));
                             }
                             None if agent::position(w, t0, id).is_some() => {
-                                let hint = if edits.hidden.contains(id) { " (it is hidden: hide_feature hidden:false shows it again)" } else { "" };
-                                return Err(format!("{at}: {id} is not a created site{hint} (other generated features can be hidden with hide_feature)"));
+                                let hint = if edits.hidden.contains(id) { " (it is hidden: set_feature {id, hidden: false} shows it again)" } else { "" };
+                                return Err(format!("{at}: {id} is not a created site{hint} (other generated features can be hidden: set_feature hidden)"));
                             }
                             None => return Err(format!("{at}: {}", crate::args::no_such(w, t0, id))),
                         },
@@ -112,7 +112,7 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
     app.edit("agent", 0, move |e| {
         for s in &sites {
             if e.created.iter().any(|c| c.id == s.cid && c.removed) {
-                return Err(format!("{} is already deleted (restore_feature brings it back)", s.given));
+                return Err(format!("{} is already deleted (restore brings it back)", s.given));
             }
         }
         let mut out = Vec::new();
@@ -157,7 +157,7 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
             reply["id"] = reply["deleted"][0]["id"].clone();
         }
         if any {
-            reply["note"] = json!("what still points at a deleted site is kept as it is, for restore_feature");
+            reply["note"] = json!("what still points at a deleted site is kept as it is, for restore");
         }
         if !entrances_out.is_empty() {
             reply["entrances_out"] = json!(entrances_out);

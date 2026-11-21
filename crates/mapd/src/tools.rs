@@ -12,11 +12,11 @@ use crate::Shared;
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from the map's top-left corner, x east, y south. \
 Reads: world_overview, search (by name, kind, tag or area; with at alone, what is near), get (one thing by id; view children, design, town_plan, street_plan), list (what: names, roads, objects, ground, npcs...), inspect (a place: what location, battlemap, heights, hex). A place (at) is an id, {x_ft, y_ft} or [x_ft, y_ft]. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
 n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, rd: a road stretch, h: a plateau, e: water drawn by hand; get one wrong and search finds the right one. \
-Edits (rename, annotate, hide, create_feature, create_building, place_crossing, place_objects, shape_ground, set_plateau, create_water, edit_town, set_site_design) are saved and appear live in the open app; \
-many at once go in one batch. Roads and routes: list (what roads), route, road_point (name a road by renaming its rd: stretches). Geometry: nearest (coast, cliff, river, road, flat, highest), search within an area. Read back hand work with list (what objects, ground, waters, drawn_roads, designs). The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
-render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: check_building_spot (or a dry_run where a tool has one) before a write; \
+Edits are saved and appear live in the open app: set_<thing> makes one (no id) or changes it (id): set_feature (name, notes, tags, hidden), set_site, set_settlement, set_building, set_npc, set_plot, set_note...; remove and restore take ids of any family; also place_crossing, place_objects, shape_ground, set_plateau, create_water, edit_town, set_site_design; \
+many at once go in one batch. Roads and routes: list (what roads), route, road_point (name a road by renaming its rd: stretches). Geometry: nearest (coast, cliff, river, road, flat, highest), search within an area. Read back hand work with list (what objects, ground, waters, drawn_roads, designs). The DM's notebook holds NPCs and plot points tied to places (set_npc, set_plot). \
+render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: a dry_run (set_building and the tools that have one) before a write; \
 an error means nothing changed, except a save warning (saved: false), which is not to be repeated; the creates are safe to repeat (the same one again returns what is there); \
-deletes come back with restore_feature, restore_objects and restore_building. Lists are cut by limit (found says how many there were). \
+what remove takes, restore brings back where it can (it says when not). Lists are cut by limit (found says how many there were). \
 Out-of-range values are refused, never clamped. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. \
 Not possible: reshaping the sketch, drawing borders, founding or deleting settlements, moving a feature. The full reference is docs/MCP.md.";
 
@@ -44,7 +44,7 @@ pub(crate) fn merge(a: Value, b: Value) -> Value {
 }
 
 /// The entries of the tools this module runs (the feature writes).
-fn own() -> Vec<Value> {
+pub(crate) fn own() -> Vec<Value> {
     let v = json!([
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, site, a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), a road stretch (rd:) or crossing (v:). Empty restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
         { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "remove_tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to take off (notes may be left out when tags or remove_tags is given)" }, "append": { "type": "boolean", "default": false } }), &["id"]) },
@@ -70,6 +70,8 @@ fn own() -> Vec<Value> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Run {
     Read,
+    Sets,
+    Route,
     Create,
     Finds,
     Batch,
@@ -144,67 +146,38 @@ pub(crate) const TOOLS: &[Tool] = &[
     t("road_point", Run::Read, Hint::Read),
     t("render_view", Run::Read, Hint::Read),
     t("focus_view", Run::Read, Hint::View),
-    t("rename_feature", Run::Finds, Hint::Same),
-    t("annotate_feature", Run::Finds, Hint::Write),
-    t("create_feature", Run::Create, Hint::Same),
-    t("update_feature", Run::Finds, Hint::Same),
-    t("hide_feature", Run::Finds, Hint::Same),
-    t("delete_feature", Run::Sites, Hint::Takes),
-    t("create_npc", Run::Notebook, Hint::Same),
-    t("update_npc", Run::Notebook, Hint::Same),
-    t("delete_npc", Run::Notebook, Hint::Takes),
-    t("place_npc", Run::Notebook, Hint::Same),
-    t("create_plot", Run::Notebook, Hint::Same),
-    t("update_plot", Run::Notebook, Hint::Same),
-    t("add_note_at", Run::Notebook, Hint::Write),
-    t("move_note", Run::Notebook, Hint::Same),
-    t("delete_note", Run::Notebook, Hint::Takes),
-    t("delete_plot", Run::Notebook, Hint::Takes),
-    t("restore_feature", Run::Sites, Hint::Same),
+    t("set_feature", Run::Sets, Hint::Same),
+    t("set_site", Run::Sets, Hint::Same),
+    t("set_settlement", Run::Sets, Hint::Same),
+    t("set_building", Run::Sets, Hint::Same),
+    t("set_building_row", Run::Sets, Hint::Same),
+    t("set_parcel", Run::Sets, Hint::Same),
+    t("set_npc", Run::Sets, Hint::Same),
+    t("set_plot", Run::Sets, Hint::Same),
+    t("set_note", Run::Sets, Hint::Write),
     t("upload_sprite", Run::Scatter, Hint::Write),
     t("place_objects", Run::Scatter, Hint::Same),
-    t("remove_objects", Run::Scatter, Hint::Takes),
-    t("restore_objects", Run::Scatter, Hint::Same),
-    t("create_building", Run::Build, Hint::Same),
-    t("update_building", Run::Build, Hint::Same),
-    t("check_building_spot", Run::Build, Hint::Read),
-    t("remove_buildings", Run::Build, Hint::Takes),
-    t("restore_building", Run::Build, Hint::Same),
-    t("place_stamp", Run::Quick, Hint::Write),
-    t("create_building_row", Run::Quick, Hint::Same),
-    t("create_parcel", Run::Quick, Hint::Same),
-    t("update_parcel", Run::Quick, Hint::Same),
-    t("update_fortification", Run::Works, Hint::Same),
     t("place_crossing", Run::Crossings, Hint::Write),
-    t("remove_crossings", Run::Crossings, Hint::Takes),
     t("set_hex_grid", Run::Hexes, Hint::Write),
     t("create_link", Run::Links, Hint::Write),
-    t("delete_link", Run::Links, Hint::Takes),
     t("shape_ground", Run::Ground, Hint::Write),
     t("set_plateau", Run::Ground, Hint::Same),
     t("set_hill", Run::Ground, Hint::Same),
-    t("delete_plateau", Run::Ground, Hint::Takes),
-    t("restore_islets", Run::Ground, Hint::Same),
     t("create_water", Run::Waters, Hint::Write),
     t("update_water", Run::Waters, Hint::Same),
-    t("delete_water", Run::Waters, Hint::Takes),
     t("place_path", Run::Paths, Hint::Same),
-    t("remove_roads", Run::Paths, Hint::Takes),
     t("place_fence", Run::Fences, Hint::Write),
-    t("remove_fences", Run::Fences, Hint::Takes),
     t("raise_islet", Run::Harbour, Hint::Same),
     t("place_wharf", Run::Harbour, Hint::Write),
-    t("remove_wharves", Run::Harbour, Hint::Takes),
     t("set_site_design", Run::Design, Hint::TakesSame),
     t("reset_site_design", Run::Design, Hint::TakesSame),
     t("edit_town", Run::Towns, Hint::Takes),
     t("edit_streets", Run::StreetsEdit, Hint::Write),
-    t("create_settlement", Run::Settlements, Hint::Same),
-    t("update_settlement", Run::Settlements, Hint::Same),
     t("create_sketch_stroke", Run::Sketch, Hint::Same),
     t("update_sketch_stroke", Run::Sketch, Hint::Write),
-    t("delete_sketch_stroke", Run::Sketch, Hint::Takes),
     t("regenerate", Run::Sketch, Hint::Takes),
+    t("remove", Run::Route, Hint::Takes),
+    t("restore", Run::Route, Hint::Same),
     t("batch", Run::Batch, Hint::Takes),
 ];
 
@@ -218,7 +191,7 @@ pub fn list() -> Value {
     let mut all = crate::read::list();
     all.extend(own());
     for m in [
-        crate::notebook::list(), crate::sites::list(), crate::scatter::list(), crate::build::list(), crate::quick::list(), crate::works::list(), crate::crossings::list(),
+        crate::sets::list(), crate::route::list(), crate::notebook::list(), crate::sites::list(), crate::scatter::list(), crate::build::list(), crate::quick::list(), crate::works::list(), crate::crossings::list(),
         crate::hexes::list(), crate::links::list(), crate::ground::list(), crate::waters::list(), crate::paths::list(), crate::fences::list(), crate::harbour::list(),
         crate::design::list(), crate::towns::list(), crate::streets_edit::list(), crate::settlements::list(), crate::sketch::list(), crate::batch::list(),
     ] {
@@ -334,6 +307,8 @@ pub(crate) async fn run(app: &Shared, run: Run, name: &str, a: &Value) -> Result
     let r = match run {
         Run::Read => return Box::pin(crate::read::call(app, name, a)).await,
         Run::Create => return create(app, a.clone()).await.map(text),
+        Run::Sets => crate::sets::call(app, name, a).await,
+        Run::Route => crate::route::call(app, name, a).await,
         Run::Finds => crate::finds::call(app, name, a).await,
         Run::Batch => crate::batch::call(app, name, a).await,
         Run::Notebook => crate::notebook::call(app, name, a).await,
@@ -406,7 +381,7 @@ pub(crate) fn note_key(e: &mut Edits, pair: Option<(usize, String, String)>, id:
 async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     let kind = arg_str(&a, "kind")?;
     if kind == "building" {
-        return Err("buildings are drawn with create_building".into());
+        return Err("buildings are drawn with set_building".into());
     }
     if kind == "castle" || kind == "wall" {
         return crate::works::place(app, &a, None, Some(&kind)).await;
@@ -526,7 +501,7 @@ async fn host_building(app: &Shared, rawq: String) -> Result<(String, String, [f
             let id = if rawq.starts_with("c:") {
                 match agent::drawn_pair(w, t0, &rawq) {
                     Some((k, _, b)) if !w.file.edits.created[k].removed => b,
-                    Some(_) => return Err(format!("{rawq} was deleted (restore_building brings it back)")),
+                    Some(_) => return Err(format!("{rawq} was deleted (restore brings it back)")),
                     None => return Err(format!("{rawq}: no building drawn by hand has that id (in_building takes a building's id, b:<layout>:<n>)")),
                 }
             } else {
@@ -541,7 +516,7 @@ async fn host_building(app: &Shared, rawq: String) -> Result<(String, String, [f
             let l = worldgen::town::layout(w, t0, li);
             let Some(b) = l.building(bi) else {
                 let taken = w.file.edits.buildings.get(&id).is_some_and(|e| e.removed);
-                return Err(if taken { format!("{id} was taken away (restore_building brings it back)") } else { format!("in_building: no building {id}") });
+                return Err(if taken { format!("{id} was taken away (restore brings it back)") } else { format!("in_building: no building {id}") });
             };
             let name = agent::building_label(w, t0, &id).unwrap_or_else(|| b.label().to_string());
             match b.structure {
@@ -591,8 +566,8 @@ pub(crate) async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<V
     let (idc, kind) = (id.to_string(), app.with_edits(|e| e.created.iter().find(|c| c.id == id && !c.removed).map(|c| c.kind.clone())).flatten());
     let Some(cur) = app.with_edits(|e| e.created.iter().find(|c| c.id == idc && !c.removed && c.kind == "entrance").cloned()).flatten() else {
         return Err(match (kind, into.is_some()) {
-            (Some(k), _) => format!("in_building is for entrances (c:<n> of one made with create_feature); {id} is a {k}"),
-            (None, true) => format!("in_building is for entrances (c:<n> of one made with create_feature); {id} is not one"),
+            (Some(k), _) => format!("in_building is for entrances (c:<n> of one made with set_site); {id} is a {k}"),
+            (None, true) => format!("in_building is for entrances (c:<n> of one made with set_site); {id} is not one"),
             (None, false) => "way and at are for an entrance moved with in_building".to_string(),
         });
     };

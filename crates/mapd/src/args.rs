@@ -86,7 +86,7 @@ pub fn check(tool: &str, args: &Value) -> Result<Value, String> {
         v => return Err(bad("arguments", "an object", v)),
     };
     let mut errs = Vec::new();
-    if matches!(tool, "create_building" | "update_building" | "check_building_spot") {
+    if tool == "set_building" {
         if let Some(Value::String(f)) = obj.get_mut("func") {
             *f = f.trim().to_lowercase();
         }
@@ -113,6 +113,17 @@ pub fn check(tool: &str, args: &Value) -> Result<Value, String> {
         msg.push_str(&format!("; and {more} more"));
     }
     Err(msg)
+}
+
+/// `v` checked against `schema` (a handler's own, for a merged tool's mode: `route::fit`); errors as `check` gives them.
+pub fn walk_all(schema: &Value, v: &mut Value) -> Result<(), String> {
+    let mut errs = Vec::new();
+    walk(schema, v, "", &mut errs);
+    if errs.is_empty() {
+        return Ok(());
+    }
+    errs.truncate(5);
+    Err(errs.join("; "))
 }
 
 /// Equal as JSON, numbers by value (`5` and `5.0` agree), also inside lists and objects.

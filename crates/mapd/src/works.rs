@@ -396,9 +396,9 @@ pub async fn update_piece(app: &Shared, id: &str, change: &agent::BuildingChange
     let (id2, change, name) = (id.to_string(), change.clone(), name.map(str::to_string));
     // (Asked for in words update_building has none for: answered, not skipped.)
     let stray = if args["removed"].as_bool() == Some(true) {
-        Some(format!("{id} is a piece of a castle: update_building does not take it away (remove_buildings does, a yard building only; the keep goes with update_fortification keep: false)"))
+        Some(format!("{id} is a piece of a castle: set_building does not take it away (remove does, a yard building only; the keep goes with set_site {{id, keep: false}})"))
     } else if args.get("footprint").is_some() {
-        Some(format!("{id} is a piece of a castle: its footprint is the castle's (redraw the castle with update_fortification); update_building has no footprint argument"))
+        Some(format!("{id} is a piece of a castle: its footprint is the castle's (redraw the castle with set_site {{id}}); set_building has no footprint argument"))
     } else {
         None
     };

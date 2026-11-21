@@ -64,7 +64,47 @@ const MOVED: &[(&str, &str)] = &[
     ("features_near", "search {at, radius_ft}"),
     ("get_npc", "get {id}"),
     ("get_plot", "get {id}"),
-    ("remove_paths", "remove_roads"),
+    ("remove_paths", "remove {ids}"),
+    ("rename_feature", "set_feature {id, name}"),
+    ("annotate_feature", "set_feature {id, notes, tags}"),
+    ("update_feature", "set_feature {id, name, notes, tags} (an entrance's in_building: set_site; an m: note's at: set_note)"),
+    ("hide_feature", "set_feature {id, hidden}"),
+    ("create_feature", "set_site {kind, at}"),
+    ("update_fortification", "set_site {id}"),
+    ("delete_feature", "remove {ids}"),
+    ("restore_feature", "restore {ids}"),
+    ("create_settlement", "set_settlement {at, tier}"),
+    ("update_settlement", "set_settlement {id}"),
+    ("create_building", "set_building"),
+    ("update_building", "set_building {id}"),
+    ("check_building_spot", "set_building {dry_run: true}"),
+    ("place_stamp", "set_building {at, stamp}"),
+    ("remove_buildings", "remove {ids} (or {what: \"buildings\", within})"),
+    ("restore_building", "restore {ids}"),
+    ("create_building_row", "set_building_row {path}"),
+    ("create_parcel", "set_parcel {poly}"),
+    ("update_parcel", "set_parcel {id}"),
+    ("create_npc", "set_npc {name}"),
+    ("update_npc", "set_npc {id}"),
+    ("place_npc", "set_npc {id, at}"),
+    ("delete_npc", "remove {ids}"),
+    ("create_plot", "set_plot {title}"),
+    ("update_plot", "set_plot {id}"),
+    ("delete_plot", "remove {ids}"),
+    ("add_note_at", "set_note {site, level, text}"),
+    ("move_note", "set_note {id, at}"),
+    ("delete_note", "remove {ids} (a place's note: remove {what: \"notes\", id})"),
+    ("remove_objects", "remove {ids} (or {what: \"objects\", within, points, kinds})"),
+    ("restore_objects", "restore {ids} (or {what: \"objects\", within})"),
+    ("delete_plateau", "remove {ids}"),
+    ("restore_islets", "restore {ids}"),
+    ("delete_water", "remove {ids}"),
+    ("remove_roads", "remove {ids} (restore {ids} brings them back)"),
+    ("remove_fences", "remove {ids} (restore {ids} brings them back; gaps: place_fence {gaps})"),
+    ("remove_wharves", "remove {ids}"),
+    ("remove_crossings", "remove {ids}"),
+    ("delete_link", "remove {ids}"),
+    ("delete_sketch_stroke", "remove {ids}"),
 ];
 
 /// What the old tool `old` is now: `list {what: "roads"}`.
@@ -75,12 +115,15 @@ pub(crate) fn moved(old: &str) -> Option<String> {
     MOVED.iter().find(|(o, _)| *o == old).map(|(_, n)| n.to_string())
 }
 
-/// The handlers' schemas (the old read tools': theirs here, and those in the family modules' lists), by name.
-fn old_schema(name: &str) -> Value {
+/// The handlers' schemas (the old read tools': theirs here, and those in the family modules' lists), by name: a view's,
+/// or a merged write tool's mode (`route::fit`).
+pub(crate) fn old_schema(name: &str) -> Value {
     static S: OnceLock<Vec<Value>> = OnceLock::new();
     let all = S.get_or_init(|| {
         let mut v = old_finds();
+        v.extend(crate::tools::own());
         for m in [
+            crate::build::list(), crate::quick::list(), crate::works::list(), crate::sites::list(), crate::settlements::list(),
             crate::notebook::list(), crate::scatter::list(), crate::crossings::list(), crate::hexes::list(), crate::links::list(), crate::ground::list(), crate::waters::list(),
             crate::paths::list(), crate::fences::list(), crate::harbour::list(), crate::design::list(), crate::reads::list(), crate::streets::list(), crate::towns::list(),
             crate::streets_edit::list(), crate::sketch::list(),

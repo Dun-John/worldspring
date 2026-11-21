@@ -123,7 +123,7 @@ async fn run(app: &Shared, name: &str, a: &Value) -> Result<Vec<Value>, String> 
                         let label = worldgen::town::catalog::index_of(f).map(|i| worldgen::town::catalog::CATALOG[i as usize].name.to_lowercase());
                         if label.is_none() && !v["names"].as_array().into_iter().flatten().any(|n| n["function"].as_str().is_some_and(|x| x.to_lowercase() == f)) {
                             let hint = crate::args::suggest(f, keys.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
-                            return Err(format!("function: no business \"{f}\"{hint}; the keys are as create_building's func"));
+                            return Err(format!("function: no business \"{f}\"{hint}; the keys are as set_building's func"));
                         }
                         let want = label.unwrap_or_else(|| f.to_string());
                         if let Some(l) = v["names"].as_array_mut() {

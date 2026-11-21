@@ -142,7 +142,7 @@ async fn check_spot(app: &Shared, a: &Value) -> Result<Value, String> {
                     v["note"] = if v["blockers"]["items"].as_array().is_some_and(|i| i.iter().any(|b| matches!(b["what"].as_str(), Some("water")))) {
                         json!("the footprint is in the water: pick dry land (no clear spot within 400 ft, moved on 5-ft steps, not turned)")
                     } else {
-                        json!("no clear spot within 400 ft (the footprint moved on 5-ft steps, not turned): try create_building near with width_ft and depth_ft")
+                        json!("no clear spot within 400 ft (the footprint moved on 5-ft steps, not turned): try set_building at with width_ft and depth_ft")
                     };
                 }
             }
