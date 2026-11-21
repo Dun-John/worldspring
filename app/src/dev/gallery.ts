@@ -52,7 +52,7 @@ const FURNITURE: [string, number, number][] = [
   ['cauldron', 1, 1], ['workbench', 2, 1], ['alchemy_bench', 2, 1], ['weapon_rack', 1, 1], ['weapon_rack', 2, 1], ['rack', 1, 2], ['cage', 2, 2], ['cage', 1, 1],
   ['altar', 2, 1], ['statue', 1, 1], ['pillar', 1, 1], ['sarcophagus', 1, 2], ['bell', 2, 2], ['throne', 1, 1], ['rug', 2, 3], ['rug', 2, 2], ['rug', 2, 1],
   ['bath', 1, 2], ['bath', 2, 2], ['bucket', 1, 1], ['water_jar', 1, 1], ['planter', 1, 1], ['planter', 2, 1], ['washing_line', 3, 1], ['roof_dome', 4, 4], ['trapdoor', 1, 1], ['winch', 1, 1], ['millstones', 2, 2], ['spur_wheel', 2, 2], ['telescope', 2, 2], ['barricade', 2, 1],
-  ['stage', 3, 2], ['spiral_stair', 1, 1], ['link_down', 1, 1], ['lighthouse_lamp', 1, 1], ['lighthouse_lamp', 2, 2],
+  ['stage', 3, 2], ['spiral_stair', 1, 1], ['spiral_stair', 2, 2], ['link_down', 1, 1], ['lighthouse_lamp', 1, 1], ['lighthouse_lamp', 2, 2],
   ['throne_dais', 4, 2], ['throne_dais', 3, 2], ['low_dais', 3, 2], ['chair_of_office', 1, 1], ['high_table', 4, 1], ['carpet_runner', 1, 5], ['carpet_runner', 2, 4],
   ['tapestry', 3, 1], ['tapestry', 2, 1], ['wall_banner', 1, 1], ['standing_banner', 1, 1], ['font', 1, 1], ['cloister_well', 2, 2],
   ['dance_floor', 5, 5], ['dance_floor', 4, 3], ['harpsichord', 1, 2], ['musicians_corner', 2, 2], ['refreshment_table', 3, 1], ['refreshment_table', 2, 1],
@@ -479,7 +479,7 @@ export async function runGallery(target: HTMLElement) {
   }
   // The lighthouse: its tower top from above, then its levels (`&items=lighthouse`).
   if (!only && pick?.includes('lighthouse')) {
-    head('Lighthouse: the tower top from above (lit, dark; 18 and 20 ft towers), then its levels as generated: stair foot, watch room, lamp room with its gallery');
+    head('Lighthouse: the tower top from above (lit, dark; 34 and 35 ft towers), then its levels as generated: stair foot, watch room, lamp room with its gallery');
     y = lighthouse(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 64);
   }
 
@@ -639,9 +639,10 @@ const WATER = 0x5e8a8e;
 const QUAY = 0xb4ab96;
 
 /** `&items=lighthouse`: the tower's top as the battlemap draws it over its roof (`drawLantern`) on its
- * breakwater's head, lit and dark, at `sq` px a square; then a 4-by-4 tower's levels laid out as `interior`
- * lays a lighthouse's (`frames::lamp_top`): its spiral stair by the middle on each, the lamp room on the
- * middle squares of the roof with the gallery round it. */
+ * breakwater's head, lit and dark, at `sq` px a square; then a 7-by-7 tower's levels laid out as `interior`
+ * lays a lighthouse's (`frames::lighthouse_squares`, `lamp_top`): its spiral stair two by two against the
+ * wall on each, furniture round the rim, the lamp room on the middle squares of the roof with the gallery
+ * round it. */
 function lighthouse(root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
   let y = y0;
   const g = new Graphics();
@@ -652,19 +653,21 @@ function lighthouse(root: Container, y0: number, width: number, nolabels: boolea
     t.position.set(x, yy);
     root.addChild(t);
   };
-  const cell = 8 * sq;
+  const cell = 10 * sq;
   let x = 16;
-  for (const [r, lit] of [[9, true], [10, false], [10, true]] as const) {
+  for (const [r, lit] of [[17, true], [17.5, false], [17.5, true]] as const) {
     if (x + cell > width - 16) break;
     g.rect(x, y, cell, cell).fill(WATER);
-    g.circle(x + cell / 2, y + cell / 2, (18 / 5) * sq).fill(QUAY).stroke({ width: 2, color: 0x1d1a14 });
+    g.circle(x + cell / 2, y + cell / 2, (22 / 5) * sq).fill(QUAY).stroke({ width: 2, color: 0x1d1a14 });
     drawLantern(g, x + cell / 2, y + cell / 2, r, sq, lit);
-    label(`${2 * r}-ft tower, ${lit ? 'lit' : 'dark'}`, x, y + cell + 2);
+    label(`${Math.round(2 * r)}-ft tower, ${lit ? 'lit' : 'dark'}`, x, y + cell + 2);
     x += cell + 16;
   }
   y += cell + 34;
-  // Its levels: three 4-by-4 floors side by side (a round tower's squares, the corners out but on the roof).
-  const n = 4;
+  // Its levels: three 7-by-7 floors side by side (a round tower's squares, the corners out but on the roof).
+  const n = 7;
+  const span = [2, 1, 0, 0, 0, 1, 2];
+  const round = (i: number, j: number) => i >= span[j] && i <= n - 1 - span[j];
   const gap = 2;
   const nx = 3 * n + 4 * gap - 2;
   const cells = new Array<number>(nx * (n + 2)).fill(-1);
@@ -672,15 +675,15 @@ function lighthouse(root: Container, y0: number, width: number, nolabels: boolea
   const furniture: InteriorItem[] = [];
   const item = (kind: string, x: number, y: number, w = 1, h = 1) => furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3 });
   const floors: [string, (i: number, j: number) => number][] = [
-    ['stair foot', (i, j) => ((i === 0 || i === n - 1) && (j === 0 || j === n - 1) ? -1 : 0)],
-    ['watch room', (i, j) => ((i === 0 || i === n - 1) && (j === 0 || j === n - 1) ? -1 : 0)],
-    ['lamp room', (i, j) => (i >= 1 && i <= 2 && j >= 1 && j <= 2 ? 0 : 1)],
+    ['stair foot', (i, j) => (round(i, j) ? 0 : -1)],
+    ['watch room', (i, j) => (round(i, j) ? 0 : -1)],
+    ['lamp room', (i, j) => (Math.abs(i - 3) + Math.abs(j - 3) <= 1 ? 0 : 1)],
   ];
   floors.forEach(([kind, room], f) => {
     const x0 = gap - 1 + f * (n + gap);
     const base = rooms.length;
     const kinds = kind === 'lamp room' ? ['lamp room', 'lamp gallery'] : [kind];
-    for (const k of kinds) rooms.push({ kind: ' ', squares: 0, raise_ft: 0, center: [x0 + n / 2, 1 + n / 2], ...(k.endsWith('gallery') ? {} : { shape: 1 }) });
+    for (const k of kinds) rooms.push({ kind: ' ', squares: 0, raise_ft: 0, center: [x0 + n / 2, 1 + n / 2], ...(kind === 'lamp room' ? {} : { shape: 1 }) });
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const r = room(i, j);
       if (r >= 0) {
@@ -688,14 +691,16 @@ function lighthouse(root: Container, y0: number, width: number, nolabels: boolea
         rooms[base + r].squares++;
       }
     }
-    item('spiral_stair', x0 + 1, 1 + 1);
-    if (kind === 'lamp room') item('lighthouse_lamp', x0 + 2, 1 + 2);
+    item('spiral_stair', x0 + 1, 1 + 4, 2, 2);
+    if (kind === 'lamp room') item('lighthouse_lamp', x0 + 3, 1 + 2);
     else if (kind === 'watch room') {
-      item('desk', x0 + 1, 1 + 3, 2, 1);
-      item('barrel', x0 + 3, 1 + 2);
+      item('desk', x0 + 6, 1 + 2, 1, 2);
+      item('chair', x0 + 5, 1 + 5);
+      item('barrel', x0 + 4, 1 + 6);
     } else {
-      item('crate', x0 + 2, 1 + 3);
-      item('barrel', x0 + 3, 1 + 1);
+      for (const [i, j] of [[0, 2], [2, 0], [3, 0], [5, 1], [6, 2], [6, 3], [5, 5]]) item('crate', x0 + i, 1 + j);
+      item('barrel', x0 + 4, 1 + 0);
+      item('barrel', x0 + 4, 1 + 6);
     }
   });
   const level = { z: 0, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };

@@ -78,7 +78,10 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         };
         let out = |k: usize| along(k, 0.0);
         // (Its door's outside square anywhere along the middle of that side, a battlemap square off them.)
-        let clear = |k: usize| annex.iter().all(|a| [-1.0, 0.0, 1.0].iter().all(|&t| geom::poly_gap(a, &[along(k, t)]) >= 3.6));
+        // (And on the breakwater's made ground, the whole square round it, not out on its armour.)
+        let made: Vec<Vec<P>> = l.moles.iter().filter(|m| m.pts.last().is_some_and(|t| geom::dist(*t, geom::centroid(&b.poly)) < 4.0)).flat_map(|m| m.polys()).collect();
+        let dry = |p: P| made.is_empty() || [[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]].iter().all(|d| made.iter().any(|g| geom::contains(g, add(p, *d))));
+        let clear = |k: usize| dry(out(k)) && annex.iter().all(|a| [-1.0, 0.0, 1.0].iter().all(|&t| geom::poly_gap(a, &[along(k, t)]) >= 3.6));
         if clear(front) {
             front
         } else {
@@ -170,18 +173,18 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     let whole = off_towers(sh.whole.clone());
     // (A tower mill's stair up its wall, a straight one: the stones and the gearing in the middle.)
     let arch_st = if mill { Arch::Warehouse } else { arch };
-    // (Roadmap 7 P8: a lighthouse's spiral stair by its middle, from its foot to its lamp room,
-    // the lamp beside it there: `lighthouse_squares`.)
-    let lamp = if arch == Arch::Tower && key == Some("lighthouse") && plan.is_none() { lighthouse_squares(&whole, nx, ny, front) } else { None };
+    // (Roadmap 7 P8: a lighthouse's spiral stair against its wall, two squares by two, from its
+    // foot to its roof, the lamp room on its middle squares there: `lighthouse_squares`.)
+    let lamp = if arch == Arch::Tower && key == Some("lighthouse") && plan.is_none() { lighthouse_squares(inside, &whole, nx, ny, front) } else { None };
     let mut stairs = match &plan {
         Some(p) => p.stairs,
-        None if lamp.is_some() => lamp.as_ref().map_or([0, 0, 1, 1], |(sp, _, _)| [sp % nx, sp / nx, 1, 1]),
+        None if lamp.is_some() => lamp.as_ref().map_or([0, 0, 1, 1], |(st, _, _)| *st),
         None if mill => mill_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
         None if key == Some("shrine") => shrine_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
         None => place_stairs(&whole, nx, ny, front, arch_st),
     };
     let on = |st: [usize; 4], m: &[bool]| (st[1]..st[1] + st[3]).all(|j| (st[0]..st[0] + st[2]).all(|i| m[j * nx + i]));
-    if plan.is_none() && !on(stairs, &whole) {
+    if plan.is_none() && lamp.is_none() && !on(stairs, &whole) {
         for t in [0.1, 0.0, f64::MIN] {
             let m = off_towers(sh.whole_by(t));
             stairs = place_stairs(&m, nx, ny, front, arch_st);
@@ -338,10 +341,13 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
             }
         }
         // A lighthouse's spiral stair on every floor, its lamp in the lamp room on the roof.
-        if let Some((sp, lp, _)) = &lamp {
+        if let Some((st, lp, _)) = &lamp {
             lvl.has_stairs = false;
-            if lvl.cells[*sp] >= 0 {
-                push_item(&mut lvl.furniture, "spiral_stair", sp % nx, sp / nx);
+            if lvl.cells[st[1] * nx + st[0]] >= 0 || lvl.cells[(st[1] + st[3] - 1) * nx + st[0] + st[2] - 1] >= 0 {
+                push_item(&mut lvl.furniture, "spiral_stair", st[0], st[1]);
+                if let Some(it) = lvl.furniture.last_mut() {
+                    (it.w, it.h) = (st[2] as u16, st[3] as u16);
+                }
             }
             if z == ROOF && lvl.cells[*lp] >= 0 {
                 push_item(&mut lvl.furniture, "lighthouse_lamp", lp % nx, lp / nx);

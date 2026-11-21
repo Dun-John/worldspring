@@ -510,12 +510,14 @@ pub(super) fn tower_tops(inside: &[bool], nx: usize, ny: usize, t: usize, towers
 }
 
 /// A lighthouse's middle (Roadmap 7 P8): the squares of `inside` round the grid's middle (its lamp
-/// room on the roof, at least two), its spiral stair's the one of them farthest from the door
-/// (`front`, as `mill_stairs`), the lamp's the one farthest from the stair.
-pub(super) fn lighthouse_squares(inside: &[bool], nx: usize, ny: usize, front: usize) -> Option<(usize, usize, Vec<usize>)> {
+/// room on the roof, at least two) and its spiral stair, a two-by-two block against the wall
+/// (three of its squares whole, the fourth inside the round, off the middle squares), the one
+/// farthest from the door (`front`, as `mill_stairs`); else one square of the middle, as far; the
+/// lamp's the middle square farthest from the stair.
+pub(super) fn lighthouse_squares(inside: &[bool], whole: &[bool], nx: usize, ny: usize, front: usize) -> Option<([usize; 4], usize, Vec<usize>)> {
     let mid = [0.5 * nx as f64, 0.5 * ny as f64];
     let at = |k: usize| [(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5];
-    let mut by: Vec<usize> = (0..nx * ny).filter(|&k| inside[k]).collect();
+    let mut by: Vec<usize> = (0..nx * ny).filter(|&k| whole[k]).collect();
     by.sort_by(|&a, &b| geom::dist(at(a), mid).total_cmp(&geom::dist(at(b), mid)).then(a.cmp(&b)));
     let mut inner: Vec<usize> = by.iter().copied().filter(|&k| geom::dist(at(k), mid) <= 1.0).collect();
     if inner.len() < 2 {
@@ -530,11 +532,31 @@ pub(super) fn lighthouse_squares(inside: &[bool], nx: usize, ny: usize, front: u
         2 => [mid[0], ny as f64],
         _ => [0.0, mid[1]],
     };
-    let far = |from: P, not: Option<usize>| inner.iter().copied().filter(|&k| Some(k) != not).max_by(|&a, &b| geom::dist(at(a), from).total_cmp(&geom::dist(at(b), from)).then(b.cmp(&a)));
-    let sp = far(door, None)?;
-    let lamp = far(at(sp), Some(sp))?;
+    let mut best: Option<(f64, [usize; 4])> = None;
+    for j in 0..ny.saturating_sub(1) {
+        for i in 0..nx.saturating_sub(1) {
+            let sq = [j * nx + i, j * nx + i + 1, (j + 1) * nx + i, (j + 1) * nx + i + 1];
+            if sq.iter().any(|k| !inside[*k] || inner.contains(k)) || sq.iter().filter(|&&k| whole[k]).count() < 3 {
+                continue;
+            }
+            let d = geom::dist([i as f64 + 1.0, j as f64 + 1.0], door);
+            if best.is_none_or(|b| d > b.0 + 1e-9) {
+                best = Some((d, [i, j, 2, 2]));
+            }
+        }
+    }
+    let st = match best {
+        Some((_, st)) => st,
+        None => {
+            let k = inner.iter().copied().max_by(|&a, &b| geom::dist(at(a), door).total_cmp(&geom::dist(at(b), door)).then(b.cmp(&a)))?;
+            [k % nx, k / nx, 1, 1]
+        }
+    };
+    let c = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
+    let on_st = |k: usize| (st[0]..st[0] + st[2]).contains(&(k % nx)) && (st[1]..st[1] + st[3]).contains(&(k / nx));
+    let lamp = inner.iter().copied().filter(|&k| !on_st(k)).max_by(|&a, &b| geom::dist(at(a), c).total_cmp(&geom::dist(at(b), c)).then(b.cmp(&a)))?;
     inner.sort_unstable();
-    Some((sp, lamp, inner))
+    Some((st, lamp, inner))
 }
 
 /// A lighthouse's roof (Roadmap 7 P8): its lamp room on the `inner` squares under the glazed

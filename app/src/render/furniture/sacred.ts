@@ -669,50 +669,54 @@ export function trapdoor(g: Graphics, f: InteriorItem, light: Light, rnd: () => 
   g.rect(x + 0.46, y + 0.64, 0.08, 0.05).fill(IRON[0]).stroke({ width: 0.012, color: INK });
 }
 
-/** Spiral stair from above: wedge-shaped stone treads winding down round a central post, each outlined
- * in ink, each step down darker than the one above and shaded across itself (lit at its front edge, dark
- * where the next one drops away); the outer edge rough, each tread ending at its own length. */
+/** A spiral stair seen from above: wedge treads fanning clockwise round a newel post, the top one
+ * palest and each lower one darker, every tread a flat tone with a lit nosing and an ink line where
+ * it drops to the next; the dark well showing between the lowest and the top, a handrail round the
+ * outer edge. Sized to its footprint (one square, or a lighthouse's two by two). */
 export function spiralStair(g: Graphics, f: InteriorItem, rnd: () => number) {
+  const s = Math.min(f.w, f.h);
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
-  const r = Math.min(f.w, f.h) * 0.46;
-  const n = 10;
-  const a0 = -Math.PI / 2;
-  const sweep = Math.PI * 2 * 0.92;
-  const reach = Array.from({ length: n }, () => r * (0.84 + 0.14 * rnd()));
-  // The well under the treads, its edge as rough as theirs.
-  const well: number[] = [];
-  for (let i = 0; i < 36; i++) {
-    const a = (i / 36) * Math.PI * 2;
-    const rr = r * (0.97 + 0.06 * rnd());
-    well.push(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
-  }
-  g.poly(well).fill(0x1a1612).stroke({ width: OUT, color: INK, join: 'round' });
+  const r = s * 0.47;
+  const n = 12;
+  const a0 = -Math.PI / 2 + (rnd() - 0.5) * 0.3;
+  const step = (Math.PI * 2 * 0.9) / n;
+  const [rin, rout] = [r * 0.2, r * 0.86];
+  const at = (a: number, rr: number) => [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr];
+  const arc = (from: number, to: number, rr: number, k = 6) => Array.from({ length: k + 1 }, (_, i) => at(from + ((to - from) * i) / k, rr)).flat();
+  // The well: dark, seen down past the lowest tread.
+  g.circle(cx, cy, r).fill(0x14110e);
+  g.poly([...arc(a0 - step * 0.9, a0, rout, 3), ...arc(a0, a0 - step * 0.9, rin, 2)]).fill(0x2a241e);
+  // The treads, the lowest first.
+  const top = 0xd6cdb9;
   for (let i = n - 1; i >= 0; i--) {
-    const t0 = a0 + (i / n) * sweep;
-    const t1 = a0 + ((i + 1) / n) * sweep;
-    const tone = shade(STONE[2], 1.15 - (i / n) * 0.85);
-    const pts = [cx + Math.cos(t0) * r * 0.16, cy + Math.sin(t0) * r * 0.16];
-    for (let k = 0; k <= 4; k++) {
-      const t = t0 + ((t1 - t0) * k) / 4;
-      const rr = reach[i] * (1 + (rnd() - 0.5) * 0.04);
-      pts.push(cx + Math.cos(t) * rr, cy + Math.sin(t) * rr);
-    }
-    pts.push(cx + Math.cos(t1) * r * 0.16, cy + Math.sin(t1) * r * 0.16);
-    // Shaded across the tread in thin slices, lit at its front edge, darker toward the back where the next
-    // step drops away; one ink outline round the whole tread.
-    const slices = 6;
-    for (let k = 0; k < slices; k++) {
-      const ta = t0 + ((t1 - t0) * k) / slices;
-      const tb = t0 + ((t1 - t0) * (k + 1)) / slices;
-      const rr = reach[i];
-      const c = shade(tone, 1.3 - (0.68 * k) / (slices - 1));
-      g.poly([cx + Math.cos(ta) * r * 0.16, cy + Math.sin(ta) * r * 0.16, cx + Math.cos(ta) * rr, cy + Math.sin(ta) * rr, cx + Math.cos(tb) * rr, cy + Math.sin(tb) * rr, cx + Math.cos(tb) * r * 0.16, cy + Math.sin(tb) * r * 0.16]).fill(c);
-    }
-    g.poly(pts).stroke({ width: 0.035, color: INK, join: 'round' });
+    const t0 = a0 + i * step;
+    const t1 = t0 + step;
+    const tone = shade(top, 1 - (0.62 * i) / (n - 1));
+    g.poly([...arc(t0, t1, rout), ...arc(t1, t0, rin, 2)]).fill(tone);
+    // (Its nosing lit along the edge where it drops to the next, the ink line on that edge.)
+    const [lx0, ly0] = at(t1 - step * 0.12, rin * 1.1);
+    const [lx1, ly1] = at(t1 - step * 0.1, rout * 0.97);
+    g.moveTo(lx0, ly0).lineTo(lx1, ly1).stroke({ width: s * 0.03, color: shade(tone, 1.25), cap: 'round' });
+    g.poly([...arc(t0, t1, rout), ...arc(t1, t0, rin, 2)]).stroke({ width: s * 0.016, color: INK, alpha: 0.75, join: 'round' });
+    const [ex, ey] = at(t1, rin);
+    const [fx, fy] = at(t1, rout);
+    g.moveTo(ex, ey).lineTo(fx, fy).stroke({ width: s * 0.026, color: INK, cap: 'round' });
   }
+  // The handrail round the outer edge, from the top tread down to the lowest, on its posts.
+  const end = a0 + n * step;
+  const rail = arc(a0, end, (rout + r) / 2, 40);
+  g.poly(rail, false).stroke({ width: s * 0.075, color: INK, cap: 'round', join: 'round' });
+  g.poly(rail, false).stroke({ width: s * 0.04, color: WOOD[1], cap: 'round', join: 'round' });
+  g.poly(arc(a0, end, (rout + r) / 2 - s * 0.008, 40), false).stroke({ width: s * 0.012, color: WOOD[2], cap: 'round', join: 'round' });
+  for (let i = 0; i <= n; i += 2) {
+    const [px, py] = at(a0 + i * step, (rout + r) / 2);
+    g.circle(px, py, s * 0.03).fill(DARK_WOOD[1]).stroke({ width: s * 0.012, color: INK });
+  }
+  // The outer edge of the well, inked.
+  g.circle(cx, cy, r).stroke({ width: OUT * s, color: INK });
   // The newel post.
-  g.circle(cx, cy, r * 0.17).fill(STONE[1]).stroke({ width: OUT, color: INK });
-  g.circle(cx - r * 0.04, cy - r * 0.04, r * 0.07).fill(STONE[2]);
+  g.circle(cx, cy, rin).fill(STONE[1]).stroke({ width: s * 0.03, color: INK });
+  g.circle(cx - rin * 0.25, cy - rin * 0.25, rin * 0.45).fill(STONE[2]);
 }
 
 /** Stairs down to the deep dungeons: an opening in the floor framed in stone, steps going down into it,

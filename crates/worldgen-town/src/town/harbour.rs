@@ -21,7 +21,7 @@ pub const MOLE_WIDTH_FT: f64 = 24.0;
 pub const MOLE_LEN_FT: (f64, f64) = (200.0, 600.0);
 pub const MOLE_DEPTH_FT: f64 = 40.0;
 /// The radius of a breakwater's round head (ft), the lighthouse standing on it.
-pub const MOLE_HEAD_FT: f64 = 18.0;
+pub const MOLE_HEAD_FT: f64 = 22.0;
 /// The steps of the fill from the bank up to a breakwater's root.
 const RAMP_STEPS: usize = 4;
 /// How long each of those steps is (ft).
@@ -564,7 +564,8 @@ fn resample(line: &[P], n: usize) -> Vec<P> {
     (0..n).map(|k| along(line, total * k as f64 / (n - 1) as f64)).collect()
 }
 
-/// A round lighthouse on each breakwater's head: 18-20 ft across, 3-4 storeys, its ground floor
+/// A round lighthouse on each breakwater's head: 34-35 ft across (seven squares, five whole ones
+/// across inside), 3-4 storeys, its ground floor
 /// at the breakwater's level. Ids follow every other building's.
 fn lighthouses(index: usize, l: &mut Layout) {
     let Some(func) = catalog::index_of("lighthouse") else { return };
@@ -572,7 +573,7 @@ fn lighthouses(index: usize, l: &mut Layout) {
     for m in l.moles.clone() {
         let tip = *m.pts.last().unwrap();
         let h = hash3(0x11e7_4a05, crate::core::round(tip[0]) as i64, crate::core::round(tip[1]) as i64, index as i64);
-        let rad = 9.0 + unit(h);
+        let rad = 17.0 + 0.5 * unit(h);
         let a0 = unit(h ^ 1) * std::f64::consts::TAU;
         let mut poly: Vec<P> = (0..rural::MILL_SIDES)
             .map(|k| {

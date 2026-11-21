@@ -23,8 +23,12 @@ const PLANKS: [number, number][] = [
 ];
 /** The underside between the planks: a lighter warm mid-brown, greyer than the planks so it reads as the side. */
 const UNDERSIDE = 0x8e6e4c;
-/** The planks' bold ink. */
+/** The deck's bold ink round its outer edge. */
 const PLANK_INK = 3;
+/** The light ink between the planks: thin, part see-through, so the deck reads as boards, not a grid of bars. */
+const SEAM = { width: 1.2, color: INK, alpha: 0.38, join: 'round' as const };
+/** The planks' grain and knots: a soft shade of the plank itself. */
+const grainOf = (base: number) => mix(base, WOOD[0], 0.45);
 /** Stone: dark, mid, light, sunlit. */
 export const STONE = [0x6e675c, 0x9a9182, 0xc4baa6, 0xe4dccb];
 /** Old stone, weathered a shade darker and warmer: dark, mid, light, sunlit. */
@@ -137,8 +141,8 @@ function quayDeck(g: Graphics, s: Shape) {
     }
     const plank = (t0: number, t1: number, inset: number) => [...at(a + (a1 - a) * t0, out + inset), ...at(a + (a1 - a) * t1, out + inset), ...at(a + (a1 - a) * t1, w1 - inset * 0.3), ...at(a + (a1 - a) * t0, w0 - inset * 0.3)];
     g.poly(plank(0, 1, 0)).fill(lit);
-    g.poly(plank(0.32, 1, 0)).fill(base);
-    g.poly(plank(0.86, 1, 0)).fill(WOOD[0]);
+    g.poly(plank(0.3, 1, 0)).fill(base);
+    g.poly(plank(0.9, 1, 0)).fill(mix(base, WOOD[0], 0.4));
     if (rnd() < 0.55) {
       const ga = 0.3 + rnd() * 0.3;
       const gd0 = Math.max(w0, w1) * (0.15 + rnd() * 0.3);
@@ -146,14 +150,16 @@ function quayDeck(g: Graphics, s: Shape) {
       const [gx0, gy0] = at(a + (a1 - a) * ga, gd0);
       const [gx1, gy1] = at(a + (a1 - a) * (ga + (rnd() - 0.5) * 0.25), (gd0 + gd1) / 2);
       const [gx2, gy2] = at(a + (a1 - a) * ga, gd1);
-      g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.18, color: WOOD[0], cap: 'round' });
+      g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.09, color: grainOf(base), alpha: 0.7, cap: 'round' });
     }
     if (rnd() < 0.12) {
       const [kx, ky] = at(a + (a1 - a) * (0.4 + rnd() * 0.2), Math.max(w0, w1) * (0.2 + rnd() * 0.6));
-      g.ellipse(kx, ky, FT * 0.3, FT * 0.3).fill(WOOD[0]);
+      g.ellipse(kx, ky, FT * 0.2, FT * 0.2).fill({ color: grainOf(base), alpha: 0.7 });
     }
-    g.poly(plank(0, 1, 0)).stroke({ width: PLANK_INK, color: INK, join: 'round' });
-    a = a1 + FT * 0.24;
+    g.poly(plank(0, 1, 0)).stroke(SEAM);
+    // (The deck's outer edge, over the water, inked boldly.)
+    g.moveTo(...at(a, out)).lineTo(...at(a1, out)).stroke({ width: PLANK_INK, color: INK, cap: 'round' });
+    a = a1 + FT * 0.12;
   }
 }
 
@@ -279,13 +285,13 @@ function timber(g: Graphics, f: Frame, rnd: () => number, fence: boolean) {
   const n = Math.max(1, Math.round((len - FT * 0.3) / (FT * 2.5)));
   const pw = (len - FT * 0.3) / n;
   for (let k = 0; k < n; k++) {
-    const a0 = FT * 0.15 + pw * k + FT * 0.12;
-    const a1 = FT * 0.15 + pw * (k + 1) - FT * 0.12;
+    const a0 = FT * 0.15 + pw * k + FT * 0.06;
+    const a1 = FT * 0.15 + pw * (k + 1) - FT * 0.06;
     const w = a1 - a0;
     const [base, lit] = PLANKS[Math.floor(rnd() * PLANKS.length)];
     const b0 = FT * (0.05 + rnd() * 0.25);
     const b1 = wid - FT * (0.05 + rnd() * 0.25);
-    const [s0, s1] = [(rnd() - 0.5) * FT * 0.25, (rnd() - 0.5) * FT * 0.25];
+    const [s0, s1] = [(rnd() - 0.5) * FT * 0.12, (rnd() - 0.5) * FT * 0.12];
     // A point `t` of the way across the plank (0 the a0 edge) at its b0 or b1 end, `d` in from it.
     const end0 = (t: number) => at(a0 + s0 + w * t, b0);
     const end1 = (t: number) => at(a0 + s1 + w * t, b1);
@@ -293,12 +299,13 @@ function timber(g: Graphics, f: Frame, rnd: () => number, fence: boolean) {
     const outline = band(0, 1);
     // Two flat tones: the lit side of the plank, then the rest, then a dark edge on the far side.
     g.poly(outline).fill(lit);
+    const dark = mix(base, WOOD[0], 0.4);
     if (litA1) {
-      g.poly(band(0, 0.7)).fill(base);
-      g.poly(band(0, 0.16)).fill(WOOD[0]);
+      g.poly(band(0, 0.72)).fill(base);
+      g.poly(band(0, 0.1)).fill(dark);
     } else {
-      g.poly(band(0.3, 1)).fill(base);
-      g.poly(band(0.84, 1)).fill(WOOD[0]);
+      g.poly(band(0.28, 1)).fill(base);
+      g.poly(band(0.9, 1)).fill(dark);
     }
     // One bold grain stroke on some planks, and the odd knot.
     if (rnd() < 0.55) {
@@ -308,13 +315,13 @@ function timber(g: Graphics, f: Frame, rnd: () => number, fence: boolean) {
       const [gx0, gy0] = at(a0 + w * ga, b0 + (b1 - b0) * gb);
       const [gx1, gy1] = at(a0 + w * (ga + (rnd() - 0.5) * 0.3), b0 + (b1 - b0) * (gb + gl * 0.5));
       const [gx2, gy2] = at(a0 + w * ga, b0 + (b1 - b0) * (gb + gl));
-      g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.18, color: WOOD[0], cap: 'round' });
+      g.moveTo(gx0, gy0).quadraticCurveTo(gx1, gy1, gx2, gy2).stroke({ width: FT * 0.09, color: grainOf(base), alpha: 0.7, cap: 'round' });
     }
     if (rnd() < 0.12) {
       const [kx, ky] = at(a0 + w * (0.4 + rnd() * 0.2), b0 + (b1 - b0) * (0.2 + rnd() * 0.6));
-      g.ellipse(kx, ky, FT * 0.3, FT * 0.3).fill(WOOD[0]);
+      g.ellipse(kx, ky, FT * 0.2, FT * 0.2).fill({ color: grainOf(base), alpha: 0.7 });
     }
-    g.poly(outline).stroke({ width: PLANK_INK, color: INK, join: 'round' });
+    g.poly(outline).stroke(SEAM);
   }
   if (fence) railings(g, f, rnd);
   else pilings(g, f, rnd);
