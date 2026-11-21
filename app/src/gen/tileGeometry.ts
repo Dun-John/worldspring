@@ -564,9 +564,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
       // A plot (kind 5) is often concave: ear-clipped, so no wedge crosses its notches (a fan would).
-      // (A breakwater's outline (45) bends along its line, and an L, U or courtyard building's (a roofed
+      // (A timber quay band (6) and a breakwater's outline (45) bend along its line, and an L, U or courtyard building's (a roofed
       // building over 4 corners: `town::wings`) turns in on itself: ear-clipped too.)
-      const ears = (kind === 5 || kind === 45 || (kind === 0 && m > 4)) && m > 3 ? earClip(polys.verts, s0, m) : null;
+      const ears = (kind === 5 || kind === 6 || kind === 45 || (kind === 0 && m > 4)) && m > 3 ? earClip(polys.verts, s0, m) : null;
       for (let k = 1; k + 1 < m; k++) {
         const t = ears ? ears[k - 1] : [0, k, k + 1];
         const corners = [s0 + t[0], s0 + t[1], s0 + t[2]];
