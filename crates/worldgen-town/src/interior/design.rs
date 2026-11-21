@@ -421,7 +421,7 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
         let mut starts: Vec<usize> = if lv.has_stairs {
             vec![st[1] * nx + st[0]]
         } else {
-            lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect()
+            lv.furniture.iter().filter(|f| matches!(f.kind, "spiral_stair" | "winder" | "stair_well")).map(|f| f.y as usize * nx + f.x as usize).collect()
         };
         if starts.is_empty() && lv.z == 0 {
             for d in lv.doors.iter().filter(|d| d.rooms[1] < 0) {

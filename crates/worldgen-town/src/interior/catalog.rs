@@ -109,6 +109,10 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("hoist_trapdoor", "sack hoist trapdoor", 0, false, 0.0),
     ("lighthouse_lamp", "lighthouse lamp", 2, true, 5.0),
     ("sack_hoist", "sack hoist", 1, true, 4.0),
+    // (Roadmap 7 P8: a round tower's winding stair up the inside of its wall, one square of it, in
+    // climbing order on its level (`winder`); and the stair well over the run below.)
+    ("winder", "winding stair", 0, false, 0.0),
+    ("stair_well", "stair well", 0, true, 0.0),
 ];
 
 /// A building's function key as its inside is built by: a hand-made hall is a town hall's and a chapel a shrine's (the nearest kinds

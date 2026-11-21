@@ -213,7 +213,8 @@ fn agent_edits_guarantee() {
     let f = WorldFile { edits: e, ..w3.file.clone() };
     let mut ex = Executor::new(World::new(f).unwrap());
     assert_eq!(ex.world.hash, base.hash, "buildings changed the world hash");
-    for (c, levels, roof) in [(&inn, 4, 1 | 2 << 2), (&tower, 5, 2)] {
+    // (A round tower's stair winds up its wall from its door, Roadmap 7 P8: no cellar under it.)
+    for (c, levels, roof) in [(&inn, 4, 1 | 2 << 2), (&tower, 4, 2)] {
         let li = agent::layout_of(&ex.world, &ex.t0, &c.id).expect("the building's layout");
         let l = town::layout(&ex.world, &ex.t0, li);
         assert!(l.buildings.len() == 1 && l.buildings[0].poly == c.poly, "{}: not laid out as drawn", c.id);
@@ -222,7 +223,9 @@ fn agent_edits_guarantee() {
         assert_eq!(it.levels.iter().any(|l| l.roof), roof & 3 == 1, "{}: a walkable roof or not as chosen", c.id);
         for lv in it.levels.iter().filter(|l| l.z >= 0 && !l.roof) {
             let mut seen = vec![false; lv.rooms.len()];
-            let st = lv.cells[it.stairs[1] * it.nx + it.stairs[0]];
+            // (From the stairs; a round tower's from its winding stair.)
+            let wind = lv.furniture.iter().find(|f| f.kind == "winder").map(|f| f.y as usize * it.nx + f.x as usize);
+            let st = lv.cells[if lv.has_stairs { None } else { wind }.unwrap_or(it.stairs[1] * it.nx + it.stairs[0])];
             let first = lv.doors.iter().find(|d| d.kind == "front").map_or(st, |d| d.rooms[0].max(d.rooms[1]));
             let mut todo = vec![first];
             while let Some(r) = todo.pop() {

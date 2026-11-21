@@ -66,7 +66,7 @@ const FURNITURE: [string, number, number][] = [
 const SETS: Record<string, string[]> = {
   civic: ['strongbox', 'counting_desk', 'job_board', 'stable_stall', 'guild_arms', 'council_table'],
   // (Roadmap 7 P8: the lighthouse's tower top and its lamp room's lamp and stair.)
-  lighthouse: ['lighthouse', 'lighthouse_lamp', 'spiral_stair'],
+  lighthouse: ['lighthouse', 'lighthouse_lamp'],
   // (Roadmap 7 P8: the yard's crates and the furniture crate, redrawn with bolder ink.)
   crates: ['crates', 'crate'],
 };
@@ -479,7 +479,7 @@ export async function runGallery(target: HTMLElement) {
   }
   // The lighthouse: its tower top from above, then its levels (`&items=lighthouse`).
   if (!only && pick?.includes('lighthouse')) {
-    head('Lighthouse: the tower top from above (lit, dark; 34 and 35 ft towers), then its levels as generated: stair foot, watch room, lamp room with its gallery');
+    head('Lighthouse: the tower top from above (lit, dark; 34 and 35 ft towers), then its levels as generated: its winding stair up the wall from the stair foot to the lamp room');
     y = lighthouse(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 64);
   }
 
@@ -640,8 +640,8 @@ const QUAY = 0xb4ab96;
 
 /** `&items=lighthouse`: the tower's top as the battlemap draws it over its roof (`drawLantern`) on its
  * breakwater's head, lit and dark, at `sq` px a square; then a 7-by-7 tower's levels laid out as `interior`
- * lays a lighthouse's (`frames::lighthouse_squares`, `lamp_top`): its spiral stair two by two against the
- * wall on each, furniture round the rim, the lamp room on the middle squares of the roof with the gallery
+ * lays a lighthouse's (`interior/winder.rs`, `lamp_top`): its winding stair up the inside of its wall,
+ * furniture round the rest of the rim, the lamp room on the middle squares of the roof with the gallery
  * round it. */
 function lighthouse(root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
   let y = y0;
@@ -664,56 +664,69 @@ function lighthouse(root: Container, y0: number, width: number, nolabels: boolea
     x += cell + 16;
   }
   y += cell + 34;
-  // Its levels: three 7-by-7 floors side by side (a round tower's squares, the corners out but on the roof).
+  // Its levels: four 7-by-7 floors side by side (a round tower's squares, the corners out but on the roof),
+  // each its own building's level, the winding stair laid as `interior/winder.rs` lays it: the ring of
+  // squares within a square of the wall, half a turn a storey from beside the door (at the bottom).
   const n = 7;
   const span = [2, 1, 0, 0, 0, 1, 2];
   const round = (i: number, j: number) => i >= span[j] && i <= n - 1 - span[j];
-  const gap = 2;
-  const nx = 3 * n + 4 * gap - 2;
-  const cells = new Array<number>(nx * (n + 2)).fill(-1);
-  const rooms: Interior['levels'][number]['rooms'] = [];
-  const furniture: InteriorItem[] = [];
-  const item = (kind: string, x: number, y: number, w = 1, h = 1) => furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3 });
-  const floors: [string, (i: number, j: number) => number][] = [
-    ['stair foot', (i, j) => (round(i, j) ? 0 : -1)],
-    ['watch room', (i, j) => (round(i, j) ? 0 : -1)],
-    ['lamp room', (i, j) => (Math.abs(i - 3) + Math.abs(j - 3) <= 1 ? 0 : 1)],
-  ];
-  floors.forEach(([kind, room], f) => {
-    const x0 = gap - 1 + f * (n + gap);
-    const base = rooms.length;
-    const kinds = kind === 'lamp room' ? ['lamp room', 'lamp gallery'] : [kind];
-    for (const k of kinds) rooms.push({ kind: ' ', squares: 0, raise_ft: 0, center: [x0 + n / 2, 1 + n / 2], ...(kind === 'lamp room' ? {} : { shape: 1 }) });
-    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-      const r = room(i, j);
+  const turn = (dx: number, dy: number) => {
+    const r = Math.abs(dx) + Math.abs(dy);
+    const p = dy / r;
+    return dx >= 0 ? (dy >= 0 ? p : 4 + p) : 2 - p;
+  };
+  const ring: number[] = [];
+  for (let k = 0; k < n * n; k++) if (round(k % n, Math.floor(k / n)) && Math.hypot((k % n) + 0.5 - 3.5, Math.floor(k / n) + 0.5 - 3.5) >= 2.5 - 1e-9) ring.push(k);
+  const at = (k: number): [number, number] => [(k % n) + 0.5 - 3.5, Math.floor(k / n) + 0.5 - 3.5];
+  ring.sort((a, b) => turn(...at(a)) - turn(...at(b)) || a - b);
+  const door = 6 * n + 3;
+  const near = ring.reduce((m, k, i) => (Math.hypot(at(k)[0] - at(door)[0], at(k)[1] - at(door)[1]) < Math.hypot(at(ring[m])[0] - at(door)[0], at(ring[m])[1] - at(door)[1]) ? i : m), 0);
+  const step = ring.length >> 1;
+  const foot = near + 1;
+  const floors = ['stair foot', 'store', 'watch room', 'lamp room'];
+  const runOf = (li: number) => Array.from({ length: li + 1 < floors.length ? step + 1 : 1 }, (_, t) => ring[(foot + li * step + t) % ring.length]);
+  const wellOf = (li: number) => (li === 0 ? [] : Array.from({ length: step >> 1 }, (_, t) => ring[(foot + (li - 1) * step + step - (step >> 1) + t) % ring.length]));
+  const gap = 1;
+  const s = Math.min(sq, (width - 32) / (floors.length * (n + gap)));
+  floors.forEach((kind, f) => {
+    const cells = new Array<number>(n * n).fill(-1);
+    const rooms: Interior['levels'][number]['rooms'] = kind === 'lamp room' ? [{ kind: ' ', squares: 0, raise_ft: 0, center: [3.5, 3.5] }, { kind: ' ', squares: 0, raise_ft: 0, center: [3.5, 3.5] }] : [{ kind: ' ', squares: 0, raise_ft: 0, center: [3.5, 3.5], shape: 1 }];
+    for (let k = 0; k < n * n; k++) {
+      const [i, j] = [k % n, Math.floor(k / n)];
+      const r = kind === 'lamp room' ? (Math.abs(i - 3) + Math.abs(j - 3) <= 1 ? 0 : 1) : round(i, j) ? 0 : -1;
       if (r >= 0) {
-        cells[(1 + j) * nx + x0 + i] = base + r;
-        rooms[base + r].squares++;
+        cells[k] = r;
+        rooms[r].squares++;
       }
     }
-    item('spiral_stair', x0 + 1, 1 + 4, 2, 2);
-    if (kind === 'lamp room') item('lighthouse_lamp', x0 + 3, 1 + 2);
+    const furniture: InteriorItem[] = [];
+    const item = (kind: string, x: number, y: number, w = 1, h = 1, blocks = false) => furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: blocks, height_ft: 3 });
+    const run = runOf(f);
+    const well = wellOf(f);
+    for (const k of run) item('winder', k % n, Math.floor(k / n));
+    for (const k of well) item('stair_well', k % n, Math.floor(k / n), 1, 1, true);
+    // (Furniture against the wall where the stair isn't; the middle clear.)
+    const free = ring.filter((k) => !run.includes(k) && !well.includes(k) && k !== door && cells[k] >= 0);
+    if (kind === 'lamp room') item('lighthouse_lamp', 3, 3);
     else if (kind === 'watch room') {
-      item('desk', x0 + 6, 1 + 2, 1, 2);
-      item('chair', x0 + 5, 1 + 5);
-      item('barrel', x0 + 4, 1 + 6);
-    } else {
-      for (const [i, j] of [[0, 2], [2, 0], [3, 0], [5, 1], [6, 2], [6, 3], [5, 5]]) item('crate', x0 + i, 1 + j);
-      item('barrel', x0 + 4, 1 + 0);
-      item('barrel', x0 + 4, 1 + 6);
-    }
+      const [a, b] = [free[0], free[free.length - 1]];
+      if (a !== undefined) item('desk', a % n, Math.floor(a / n));
+      if (b !== undefined) item('barrel', b % n, Math.floor(b / n));
+    } else for (const [t, k] of free.entries()) item(t % 3 === 1 ? 'barrel' : 'crate', k % n, Math.floor(k / n));
+    const doors = f === 0 ? [{ a: [3, 7] as [number, number], b: [4, 7] as [number, number], kind: 'front', rooms: [0, -1] as [number, number], lock: 0 }] : [];
+    const level = { z: f, name: kind, elevation_ft: 0, cells, rooms, walls: [], doors, windows: [], furniture, roof: kind === 'lamp room', has_stairs: false, natural: false };
+    const it = { id: `b:lighthouse-${f}`, settlement: 0, building: 0, name: null, function: 'lighthouse', origin: [0, 0], axis: [1, 0], across: [0, 1], nx: n, ny: n, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] } as unknown as Interior;
+    const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+    const holder = new Container();
+    holder.addChild(layer.container);
+    holder.scale.set(s);
+    const x0 = 16 + f * (n + gap) * s;
+    holder.position.set(x0, y);
+    layer.container.children[0].visible = false;
+    root.addChild(holder);
+    label(kind === 'lamp room' ? 'roof: lamp room, gallery round it' : kind, x0, y + n * s + 6);
   });
-  const level = { z: 0, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
-  const it: Interior = { id: 'b:lighthouse', settlement: 0, building: 0, name: null, function: 'lighthouse', origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny: n + 2, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] };
-  const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
-  const holder = new Container();
-  holder.addChild(layer.container);
-  holder.scale.set(sq);
-  holder.position.set(16, y);
-  layer.container.children[0].visible = false;
-  root.addChild(holder);
-  floors.forEach(([kind], f) => label(kind === 'lamp room' ? 'roof: lamp room, gallery round it' : kind, 16 + (gap - 1 + f * (n + gap)) * sq, y + (n + 1) * sq + 4));
-  return y + (n + 2) * sq + 40;
+  return y + n * s + 44;
 }
 
 /** `&items=harbour`: each harbour kind's four looks on water (boats, buoys) or quay paving (the rest), on the

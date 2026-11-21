@@ -164,9 +164,25 @@ pub(super) fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen:
         assert!(public(stair_room), "{tag}: the stairs are in the {}", g.rooms[stair_room.max(0) as usize].kind);
         drinking = true;
     }
+    // (Roadmap 7 P8) A round tower's winding stair: a run on every level from its lowest up to the
+    // one under the top, each run's top square clear floor on the level above where that level's
+    // run starts; the flood on a level starts from its run and where the run below comes out.
+    let runs: Vec<Vec<usize>> = it.levels.iter().map(|lv| lv.furniture.iter().filter(|f| f.kind == "winder").map(|f| f.y as usize * nx + f.x as usize).collect()).collect();
+    let lowest = runs.iter().position(|r| !r.is_empty());
+    let mut came: Vec<Option<usize>> = vec![None; it.levels.len()];
+    if let Some(lo) = lowest {
+        for li in lo + 1..it.levels.len() {
+            let lv = &it.levels[li];
+            assert!(!runs[li - 1].is_empty(), "{tag}: no winding stair up to {}", lv.name);
+            let top = *runs[li - 1].last().unwrap();
+            assert!(lv.cells[top] >= 0 && !lv.furniture.iter().any(|f| f.blocks_move && f.x as usize == top % nx && f.y as usize == top / nx), "{tag} {}: the winding stair comes out off the floor", lv.name);
+            assert!(runs[li].is_empty() || runs[li][0] == top, "{tag} {}: the winding stair doesn't go on where it comes out", lv.name);
+            came[li] = Some(top);
+        }
+    }
     let st = it.stairs;
     let on_stairs = |i: usize, j: usize| i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
-    for lv in &it.levels {
+    for (li, lv) in it.levels.iter().enumerate() {
         if lv.has_stairs {
             for j in st[1]..st[1] + st[3] {
                 for i in st[0]..st[0] + st[2] {
@@ -217,7 +233,7 @@ pub(super) fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen:
         let mut starts: Vec<usize> = if lv.has_stairs {
             vec![st[1] * nx + st[0]]
         } else {
-            lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect()
+            lv.furniture.iter().filter(|f| matches!(f.kind, "spiral_stair" | "winder")).map(|f| f.y as usize * nx + f.x as usize).chain(came[li]).collect()
         };
         if starts.is_empty() && lv.z == 0 {
             starts = lv.doors.iter().filter(|d| d.rooms[1] < 0).flat_map(door_sq).filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] >= 0).collect();

@@ -30,6 +30,7 @@ mod frames;
 mod rooms;
 mod doors;
 mod furnish;
+mod winder;
 pub use levels::*;
 pub use catalog::*;
 pub use plans::*;
@@ -540,7 +541,9 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
             t += 1.0;
         }
     }
-    let stairs = place_stairs(&in_tower, n, n, 0, Arch::Tower);
+    // (Roadmap 7 P8: a round tower's stair winds up the inside of its wall, `winder`.)
+    let round = square.is_none() && shaped.is_none();
+    let stairs = if round { [0, 0, 1, 1] } else { place_stairs(&in_tower, n, n, 0, Arch::Tower) };
     // The door faces in: the castle yard for a curtain tower, else the town.
     let inward = l.castles.iter().find(|(c, rad)| geom::dist(*c, at) < rad * 1.3).map_or(l.center, |c| c.0);
     let di = sub(inward, at);
@@ -600,8 +603,17 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
             }
             lvl.roof = true;
         }
-        furnish(&mut lvl, n, n, stairs, None, &mut rng);
         levels.push(lvl);
+    }
+    // (Its winding stair laid with every level's doors known, then the furniture.)
+    let wind = if round { winder::plan(&levels.iter().collect::<Vec<_>>(), &in_tower, n, n) } else { None };
+    let count = levels.len();
+    for (li, lvl) in levels.iter_mut().enumerate() {
+        lvl.has_stairs &= !round;
+        if let Some(w) = &wind {
+            w.lay(lvl, n, n, li, count);
+        }
+        furnish(lvl, n, n, stairs, None, &mut rng);
     }
     Some(Interior {
         id: format!("t:{}:{}", l.index, k),

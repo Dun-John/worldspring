@@ -360,7 +360,7 @@ pub fn has_deep_dungeon(b: &town::Building) -> bool {
 /// deck over the water).
 pub fn has_cellar(b: &town::Building) -> bool {
     // (An islet's watchtower stands on rock in the water; R5 M20: a shop on a deck over it.)
-    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b)) && !b.func.is_some_and(|f| matches!(town::catalog::CATALOG[f as usize].key, "watchtower" | "lighthouse" | "keepers_cottage" | "oil_store")) && b.deck.is_none()
+    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b)) && !b.func.is_some_and(|f| matches!(town::catalog::CATALOG[f as usize].key, "watchtower" | "lighthouse" | "keepers_cottage" | "oil_store")) && b.deck.is_none() && !winds(b)
 }
 
 /// The ways from a cellar to other sites: a trapdoor down into the sewers (on the street side),

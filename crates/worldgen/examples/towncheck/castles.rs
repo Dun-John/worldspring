@@ -884,7 +884,7 @@ pub(crate) fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: 
             })
         };
         let mut starts: Vec<usize> =
-            if lv.has_stairs { vec![st[1] * nx + st[0]] } else { lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect() };
+            if lv.has_stairs { vec![st[1] * nx + st[0]] } else { lv.furniture.iter().filter(|f| matches!(f.kind, "spiral_stair" | "winder" | "stair_well")).map(|f| f.y as usize * nx + f.x as usize).collect() };
         if starts.is_empty() && lv.z == 0 {
             starts =
                 lv.doors.iter().filter(|d| d.rooms[1] < 0).flat_map(door_sq).filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] >= 0).collect();

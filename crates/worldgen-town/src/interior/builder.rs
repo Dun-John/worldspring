@@ -111,6 +111,9 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     let floors = b.floors.max(1) as i8;
     // (A tower mill: its stair up the wall, `mill_stairs`.)
     let mill = arch == Arch::Tower && key == Some("windmill");
+    // (Roadmap 7 P8: a round tower of more than one level: its stair winds up the inside of its
+    // wall, `winder`; no stair block.)
+    let winding = arch == Arch::Tower && winds(b);
     let mut zs: Vec<i8> = vec![-1];
     zs.extend(0..floors);
     // Keeps and towers (or any roof drawn so): walk the battlements on the roof.
@@ -178,13 +181,14 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     let lamp = if arch == Arch::Tower && key == Some("lighthouse") && plan.is_none() { lighthouse_squares(inside, &whole, nx, ny, front) } else { None };
     let mut stairs = match &plan {
         Some(p) => p.stairs,
+        None if winding => [0, 0, 1, 1],
         None if lamp.is_some() => lamp.as_ref().map_or([0, 0, 1, 1], |(st, _, _)| *st),
         None if mill => mill_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
         None if key == Some("shrine") => shrine_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
         None => place_stairs(&whole, nx, ny, front, arch_st),
     };
     let on = |st: [usize; 4], m: &[bool]| (st[1]..st[1] + st[3]).all(|j| (st[0]..st[0] + st[2]).all(|i| m[j * nx + i]));
-    if plan.is_none() && lamp.is_none() && !on(stairs, &whole) {
+    if plan.is_none() && lamp.is_none() && !winding && !on(stairs, &whole) {
         for t in [0.1, 0.0, f64::MIN] {
             let m = off_towers(sh.whole_by(t));
             stairs = place_stairs(&m, nx, ny, front, arch_st);
@@ -257,6 +261,7 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
     let (_, thrones, styled) = hall_kind(world, t0, settlement, b);
     // (A temple's, a shrine's or a monastery's rooms open to every square: `furnish_rooms`, `faith`.)
     let mut levels = Vec::new();
+    let mut wind: Option<super::winder::Winder> = None;
     for (li, &z) in zs.iter().enumerate() {
         let top = li + 1 == zs.len() || matches!(zs.get(li + 1), Some(&ROOF) | Some(&TOWER_TOP));
         // (A keep of pieces' top as the shared code would have it, if its zones won't do.)
@@ -293,7 +298,14 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
         let (mut lvl, hubbed) = match (&ground_pre, z, hubbed) {
             (_, _, Some((lvl, name, roof, items, _))) => (lvl, Some((name, roof, items))),
             (Some(g), 0, None) => (g.clone(), None),
-            (_, ROOF, None) if lamp.is_some() => (lamp_top(nx, ny, lamp.as_ref().map_or(&[][..], |l| &l.2[..]), stairs, &mut rng), None),
+            // (Its lamp room's door toward where the winding stair comes out.)
+            (_, ROOF, None) if lamp.is_some() => {
+                let land = wind.as_ref().map_or(stairs, |w| {
+                    let k = w.run(li, zs.len())[0];
+                    [k % nx, k / nx, 1, 1]
+                });
+                (lamp_top(nx, ny, lamp.as_ref().map_or(&[][..], |l| &l.2[..]), land, &mut rng), None)
+            }
             (_, TOWER_TOP, None) => (tower_tops(&inside, nx, ny, t, towers.as_deref().unwrap_or_default(), stairs, &mut rng), None),
             _ => {
                 // (A monastery's crypt under its church only: `hub::Plan::crypt`.)
@@ -340,17 +352,28 @@ pub(super) fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize
                 }
             }
         }
-        // A lighthouse's spiral stair on every floor, its lamp in the lamp room on the roof.
-        if let Some((st, lp, _)) = &lamp {
+        // A round tower's winding stair up its wall, from beside its door to the floor under its top
+        // (the ground floor first: no cellar under it).
+        if winding {
             lvl.has_stairs = false;
-            if lvl.cells[st[1] * nx + st[0]] >= 0 || lvl.cells[(st[1] + st[3] - 1) * nx + st[0] + st[2] - 1] >= 0 {
-                push_item(&mut lvl.furniture, "spiral_stair", st[0], st[1]);
-                if let Some(it) = lvl.furniture.last_mut() {
-                    (it.w, it.h) = (st[2] as u16, st[3] as u16);
-                }
+            if z == 0 {
+                wind = super::winder::plan(&[&lvl], inside, nx, ny);
             }
-            if z == ROOF && lvl.cells[*lp] >= 0 {
-                push_item(&mut lvl.furniture, "lighthouse_lamp", lp % nx, lp / nx);
+            if let Some(w) = &wind {
+                w.lay(&mut lvl, nx, ny, li, zs.len());
+            }
+        }
+        // A lighthouse's lamp in the lamp room on its roof: off its doorway, the farthest from where
+        // the winding stair comes out.
+        if let Some((_, lp, inner)) = &lamp
+            && z == ROOF
+        {
+            let land = wind.as_ref().map(|w| w.run(li, zs.len())[0]);
+            let doorway = super::winder::doorways(&lvl, nx, ny);
+            let d = |k: usize| land.map_or(0.0, |l| geom::dist([(k % nx) as f64, (k / nx) as f64], [(l % nx) as f64, (l / nx) as f64]));
+            let at = inner.iter().copied().filter(|k| !doorway.contains(k) && lvl.cells[*k] >= 0).max_by(|&a, &b| d(a).total_cmp(&d(b)).then(b.cmp(&a))).or(Some(*lp).filter(|&k| lvl.cells[k] >= 0 && !doorway.contains(&k)));
+            if let Some(k) = at {
+                push_item(&mut lvl.furniture, "lighthouse_lamp", k % nx, k / nx);
             }
         }
         // A town hall's belfry: its spiral stair from the top floor's landing up.

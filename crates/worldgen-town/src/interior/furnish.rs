@@ -46,9 +46,11 @@ pub(crate) fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4
     // Pieces already in place (spiral stairs) stay, with a clear square around them (and a way to
     // them: `entry_squares`).
     let mut furniture: Vec<Item> = lvl.furniture.clone();
+    // (A winding stair's squares alone: the floor beside it is the room's, `winder`.)
     for f in &furniture {
-        for j in (f.y as usize).saturating_sub(1)..((f.y + f.h) as usize + 1).min(ny) {
-            for i in (f.x as usize).saturating_sub(1)..((f.x + f.w) as usize + 1).min(nx) {
+        let r = usize::from(!matches!(f.kind, "winder" | "stair_well"));
+        for j in (f.y as usize).saturating_sub(r)..((f.y + f.h) as usize + r).min(ny) {
+            for i in (f.x as usize).saturating_sub(r)..((f.x + f.w) as usize + r).min(nx) {
                 taken[j * nx + i] = true;
             }
         }
@@ -63,7 +65,7 @@ pub(crate) fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4
             continue;
         }
         let touches = |i: usize, j: usize| [(0isize, -1isize), (1, 0), (0, 1), (-1, 0)].iter().any(|&(di, dj)| room_at(i as isize + di, j as isize + dj) != ri);
-        let spiral = lvl.furniture.iter().any(|f| f.kind == "spiral_stair" && cells[f.y as usize * nx + f.x as usize] == ri);
+        let spiral = lvl.furniture.iter().any(|f| matches!(f.kind, "spiral_stair" | "winder") && cells[f.y as usize * nx + f.x as usize] == ri);
         // A room whose required pieces don't all fit is furnished again from scratch with
         // other random choices (a bar across the only aisle leaves no room for tables).
         let (taken0, blocked0, n0) = (taken.clone(), blocked.clone(), furniture.len());
@@ -507,7 +509,7 @@ pub(super) fn entry_squares(lvl: &Level, nx: usize, ny: usize, st: [usize; 4], r
         }
     }
     // (A spiral stair in it: the way on to the floors above and below.)
-    for f in lvl.furniture.iter().filter(|f| f.kind == "spiral_stair") {
+    for f in lvl.furniture.iter().filter(|f| matches!(f.kind, "spiral_stair" | "winder")) {
         let k = f.y as usize * nx + f.x as usize;
         if lvl.cells[k] == ri {
             out.push(k);

@@ -215,6 +215,12 @@ pub(super) fn keep_tower_squares(nx: usize, ny: usize) -> usize {
     if nx.min(ny) >= 8 { 3 } else { 0 }
 }
 
+/// (Roadmap 7 P8) A round tower of more than one level (a lighthouse, a mage's tower, a watchtower,
+/// a round tower mill): its stair winds up the inside of its wall (`winder`), no cellar under it.
+pub fn winds(b: &town::Building) -> bool {
+    arch_of(b) == Arch::Tower && round_ish(b) && (b.floors >= 2 || battlements(b).is_some())
+}
+
 /// Keeps and towers have a walkable roof: battlements instead of a pitched roof. For a keep,
 /// the side of its corner towers (ft; 0 for none), as the battlemap draws them.
 pub fn battlements(b: &town::Building) -> Option<f64> {

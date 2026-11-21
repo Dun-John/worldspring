@@ -85,6 +85,8 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
     }
   }
   const elevAt = (i: number, j: number) => (seenFt && i >= 0 && j >= 0 && i < nx && j < ny ? seenFt[j * nx + i] : NaN);
+  // (A round tower's winding stair: its treads difficult, as a stair block's.)
+  for (const f of lv.furniture) if (f.kind === 'winder' && f.x < nx && f.y < ny) flags[f.y * nx + f.x] |= DIFFICULT;
   if (lv.has_stairs && !/^[uwk]:/.test(it.id)) {
     const [sx, sy, sw, sh] = it.stairs;
     for (let j = sy; j < sy + sh; j++) for (let i = sx; i < sx + sw; i++) if (i < nx && j < ny) flags[j * nx + i] |= DIFFICULT;

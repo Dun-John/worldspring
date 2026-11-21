@@ -10,6 +10,8 @@ use worldgen::{World, WorldFile};
 const MARKS: &[(&str, char)] = &[
     ("throne_dais", 'T'),
     ("low_dais", 'D'),
+    ("winder", 'w'),
+    ("stair_well", 'o'),
     ("chair_of_office", 'C'),
     ("high_table", 'H'),
     ("carpet_runner", '='),
