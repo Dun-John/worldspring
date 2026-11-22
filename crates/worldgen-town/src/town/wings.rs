@@ -98,7 +98,7 @@ pub(super) fn shape_all(l: &mut Layout, edit: Option<(&crate::World, &Layout)>) 
             }
         }
         for (id, rect) in yards {
-            let taken = |h: &Building| h.id != id && g.building(h.id as usize).is_none() && !edited.contains(&h.id) && contains(&rect, super::geom::centroid(&h.poly));
+            let taken = |h: &Building| h.id != id && g.building(h.id as usize).is_none_or(|w| w.poly != h.poly) && !edited.contains(&h.id) && (contains(&rect, super::geom::centroid(&h.poly)) || super::on_lot(&rect, &h.poly));
             let homes: Vec<Building> = l.buildings.iter().filter(|h| taken(h)).cloned().collect();
             l.buildings.retain(|h| !taken(h));
             if let Some(b) = l.buildings.iter_mut().find(|b| b.id == id) {
