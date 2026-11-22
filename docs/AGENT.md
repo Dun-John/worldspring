@@ -86,14 +86,14 @@ A place (`at`) is an id, a place's name, `{x_ft, y_ft}` or `[x_ft, y_ft]`.
 Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md).
 Every tool call is checked against the tool's schema before it runs (unknown arguments, wrong types and out-of-range
 numbers are refused with the field and the rule), and the same thing has the same name in every tool (places are `at`,
-lists come back as `{items, found}`): see [Conventions](MCP.md#conventions). The reads are `search`, `get` (by id; `view` children, design, town_plan, street_plan), `list` (`what`: names, roads, drawn_roads, streets, crossings, wharves, fences, objects, sprites, ground, waters, designs, links, npcs, plots, notes, sketch, hex_grid) and `inspect` (a place; `what` location, battlemap, heights, hex); each view takes only its own arguments.
+lists come back as `{items, found}`): see [Conventions](MCP.md#conventions). The reads are `search`, `get` (by id; `view` children, design, town_plan, street_plan), `list` (`what`: names, roads, drawn_roads, streets, crossings, wharves, fences, objects, sprites, ground, waters, designs, waterfalls, links, npcs, plots, notes, sketch, hex_grid) and `inspect` (a place; `what` location, battlemap, heights, hex); each view takes only its own arguments.
 
 | Tool | Does |
 |---|---|
 | `world_overview` | Size, land masses, counts of features by kind, the largest settlements, work set aside; the world hash. |
 | `search` | Features by name, kind, tag or area (`within`), each with its extent; with `at` alone, everything within `radius_ft`, nearest first. |
 | `get` | One thing by id: details and relations (`view` `details`), or `children`, `design` (a site's or interior's text plan), `town_plan`, `street_plan`; NPCs (`n:`) and plot points (`p:`) too. |
-| `list` | Many of a kind, `what`: names, roads, drawn_roads, streets, crossings, wharves, fences, objects, sprites, ground, waters, designs, links, npcs, plots, notes, sketch, hex_grid (`{items, found}`). |
+| `list` | Many of a kind, `what`: names, roads, drawn_roads, streets, crossings, wharves, fences, objects, sprites, ground, waters, designs, waterfalls, links, npcs, plots, notes, sketch, hex_grid (`{items, found}`). Waterfalls (`fl:`) give the lip, the way the water runs, top and bottom levels, drop and width, and the cave behind about a third of them (a cave site whose way in is secret: hidden from players until found). |
 | `inspect` | A place, `what`: location (elevation, biome, water, what is near), battlemap (the 640-ft chunk), heights, hex. |
 | `route` | Road or overland distance between two places, with 5e travel days. |
 | `nearest` | The nearest coast, cliff, river, road, flat or highest ground to a place, within `radius_ft`. |

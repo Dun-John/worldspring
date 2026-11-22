@@ -94,6 +94,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             },
             elev_ft: Some(t0.sample(c.x, c.y, t0.cell_ft).round()),
             detail: Some(if c.kind == "place" { String::new() } else { created_detail(c) }),
+            secret: false,
         });
     }
     for (id, kind, extent, people) in town_sizes(world, t0) {

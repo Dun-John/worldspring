@@ -20,6 +20,7 @@ pub fn list() -> Vec<Value> {
             "limit": limit_prop(200, 2000),
         }), &[]) }),
         json!({ "name": "list_plateaus", "title": "Plateaus and brushed ground", "description": "Plateaus, pits and rock islets (h:; what plateau or islet) with outline, level and edge; brushed ground blocks (g:) with place and size; the world's own river and coast islets (i:; generated, removed once taken away with delete_plateau, tower if a watchtower stands on it).", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(100, 1000), "generated": { "type": "boolean", "default": true, "description": "false leaves out the generated islets" } }), &[]) }),
+        json!({ "name": "list_waterfalls", "title": "Waterfalls", "description": "The world's waterfalls (fl:): the lip's place, the way the water runs, top and bottom levels (ft, the world's datum), drop, width; cave if one hides behind the falls (a cave site whose way in is secret: hidden from players until found).", "inputSchema": schema(json!({ "within": within.clone(), "limit": limit_prop(200, 2000) }), &[]) }),
         json!({ "name": "list_designs", "title": "Designed sites and buildings", "description": "Underground sites (u:) and buildings (b:) with a design made by hand: id, name, what, levels, place.", "inputSchema": schema(json!({ "within": within, "limit": limit_prop(100, 1000) }), &[]) }),
     ]
 }
@@ -29,6 +30,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "list_objects" => objects(app, a).await,
         "list_plateaus" => plateaus(app, a).await,
         "list_designs" => designs(app, a).await,
+        "list_waterfalls" => waterfalls(app, a).await,
         _ => return None,
     };
     Some(r.map(text))
@@ -164,6 +166,19 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
                     }));
                 }
             }
+            Ok(json!(items))
+        })
+        .await?;
+    Ok(listed(v, limit, json!({})))
+}
+
+async fn waterfalls(app: &Shared, a: &Value) -> Result<Value, String> {
+    let area = within(app, a).await?;
+    let limit = limit_of(a, 200);
+    let v = app
+        .worker
+        .with(move |ex| {
+            let items: Vec<Value> = ex.t0.rivers.falls.iter().filter(|f| area.as_ref().is_none_or(|ar| ar.contains(f.at))).map(|f| worldgen::falls::fall_json(&ex.t0, f)).collect();
             Ok(json!(items))
         })
         .await?;

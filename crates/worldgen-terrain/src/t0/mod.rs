@@ -501,6 +501,16 @@ impl T0 {
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river, &stays);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = pois::place_pois(&sinp, &settlements, &vents_at, &own_roads);
+        // Caves behind waterfalls (`lod::rivers::Fall::cave`): at the face's foot, where the fall
+        // put them (not moved off the river like the rest).
+        let falls_from = pois.len();
+        let s_fall = world.stream("t0.fall.cave");
+        for f in rivers.falls.iter() {
+            if let Some(c) = f.cave {
+                pois.push(settle::Poi { kind: settle::PoiKind::Cave, x: c[0], y: c[1], seed: crate::core::rng::hash2(s_fall, f.river as i64, f.seg as i64), stroke: None });
+            }
+        }
+        let falls_to = pois.len();
         // The sketch's sites (after the generated ones, so drawing one moves none of them), seeded
         // by where they were drawn.
         let s_site = world.stream("t0.sketch.site");
@@ -516,8 +526,10 @@ impl T0 {
             let margin = if s.tier == settle::Tier::Village { 40.0 } else { 300.0 };
             (s.x, s.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, s.x, s.y, margin, cell, &clear);
         }
-        for p in &mut pois {
-            (p.x, p.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, p.x, p.y, 150.0, cell, &clear);
+        for (i, p) in pois.iter_mut().enumerate() {
+            if !(falls_from..falls_to).contains(&i) {
+                (p.x, p.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, p.x, p.y, 150.0, cell, &clear);
+            }
         }
         progress("roads", 0.0);
         let mut network = roads::build(&rinp, &settlements, &economy.traffic);
@@ -602,6 +614,7 @@ impl T0 {
             pois: &pois,
             courses: &courses,
             roads: &network.roads,
+            falls: &rivers.falls,
         });
         conflicts.append(&mut overlay.conflicts);
         overlay.conflicts = conflicts;
@@ -806,6 +819,13 @@ impl T0 {
     /// The coldness at a wild site's point (layout `layout`: the points of interest follow the settlements); No for a town.
     pub fn cold_of_layout(&self, world: &World, layout: usize) -> crate::model::under::Cold {
         layout.checked_sub(self.settlements.len()).and_then(|p| self.pois.get(p)).map_or(Default::default(), |p| self.cold_at(world, p.x, p.y))
+    }
+
+    /// The waterfall point of interest `poi` is the hidden cave behind, if it is one (secret:
+    /// shown to the DM, hidden from players until found).
+    pub fn fall_of_poi(&self, poi: usize) -> Option<&crate::lod::rivers::Fall> {
+        let p = self.pois.get(poi).filter(|p| p.kind == settle::PoiKind::Cave && p.stroke.is_none())?;
+        self.rivers.fall_with_cave_at(p.x, p.y)
     }
 
     /// The created-site options for point of interest `poi`, if it is a created one or the

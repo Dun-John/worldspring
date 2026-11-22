@@ -3757,6 +3757,7 @@ Kept as they were: `world_overview`, `route`, `render_view`, `focus_view`, `set_
 | `list_objects` | `list {what: "objects"}` |
 | `list_plateaus` | `list {what: "ground"}` |
 | `list_designs` | `list {what: "designs"}` |
+| `list_waterfalls` | `list {what: "waterfalls"}` |
 | `list_streets` | `list {what: "streets"}` |
 | `get_town_plan` | `get {view: "town_plan"}` |
 | `get_street_plan` | `get {view: "street_plan"}` |

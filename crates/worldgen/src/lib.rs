@@ -23,6 +23,7 @@ pub mod t0 {
         pub use worldgen_town::town::sites::tower_building;
     }
 }
+pub mod falls;
 pub mod fencecut;
 pub mod gazetteer;
 pub mod geoquery;

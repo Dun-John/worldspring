@@ -66,7 +66,80 @@ pub struct RiverCurve {
     /// Ends in a lake or the sea (not in another river): its last segment widens into an
     /// estuary (`MOUTH_FLARE`). Derived from the net (`RiverNet::new`), not saved.
     pub mouth: bool,
+    /// Its waterfalls, by segment (`RiverNet::settle`, derived from the profiles: not saved).
+    pub falls: Vec<FallAt>,
 }
+
+/// Where a river's water drops over a lip, as its curve sees it: on segment `seg` the surface
+/// follows the profile to `t` (the lip, `top`), falls to `bottom` by `t1` (the face's foot) and
+/// then keeps at or under the pool's level (`RiverCurve::frame`).
+#[derive(Clone, Copy, Debug)]
+pub struct FallAt {
+    pub seg: u32,
+    pub t: f64,
+    pub t1: f64,
+    pub top: f32,
+    pub bottom: f32,
+    /// Index in `RiverNet::falls`.
+    pub id: u32,
+}
+
+impl FallAt {
+    #[inline]
+    fn level(&self, t: f64, profile: f64) -> f64 {
+        if t <= self.t {
+            profile
+        } else if t < self.t1 {
+            self.top as f64 + (self.bottom - self.top) as f64 * (t - self.t) / (self.t1 - self.t)
+        } else {
+            profile.min(self.bottom as f64)
+        }
+    }
+}
+
+/// A waterfall (Roadmap 7): a river above `FALL_MIN_WIDTH_FT` where its profile drops steeply
+/// over a short reach (a knickpoint: an escarpment, a plateau's rim, a hill's edge, a sea cliff)
+/// falls over a lip instead, into a plunge pool below a face `face_ft` across (ft, world).
+#[derive(Clone, Copy, Debug)]
+pub struct Fall {
+    pub id: u32,
+    pub river: u32,
+    pub seg: u32,
+    /// The lip (the finest curve's point there) and the way the water runs over it (unit).
+    pub at: [f64; 2],
+    pub dir: [f64; 2],
+    /// Water at the lip and in the pool (ft, the world's datum).
+    pub top: f32,
+    pub bottom: f32,
+    /// The channel's width at the lip (ft).
+    pub width: f32,
+    /// How far (ft) the face runs out from the lip to its foot.
+    pub face_ft: f32,
+    /// About one in three falls hides a cave behind the curtain: its mouth (ft), at the face's
+    /// foot beside the pool (a `PoiKind::Cave` site stands there, hidden from players).
+    pub cave: Option<[f64; 2]>,
+}
+
+impl Fall {
+    pub fn drop_ft(&self) -> f32 {
+        self.top - self.bottom
+    }
+}
+
+/// Narrowest river that falls (ft): creeks run down their steps as rapids.
+pub const FALL_MIN_WIDTH_FT: f64 = 12.0;
+/// Steepest eighth of a segment's profile (rise over run) that makes a knickpoint.
+const FALL_GRADIENT: f64 = 0.2;
+/// Least drop (ft) over the lip.
+const FALL_MIN_DROP_FT: f64 = 40.0;
+/// Greatest drop (ft) over one lip: a higher step runs on below the pool as rapids.
+const FALL_MAX_DROP_FT: f64 = 800.0;
+/// The walls of the gorge below a fall (rise over run; elsewhere `BANK_SLOPE`).
+const GORGE_SLOPE: f64 = 0.5;
+/// How far (ft, plus two widths) above a lip the channel's bed is kept to the river's depth.
+const LIP_KEEP_FT: f64 = 120.0;
+/// Falls on one river are at least this many segments apart (the bigger kept).
+const FALL_SPACING_SEGS: u32 = 4;
 
 /// All river curves plus a coarse spatial index of their segments.
 #[derive(Clone, Debug, Default)]
@@ -88,6 +161,8 @@ pub struct RiverNet {
     /// The lattice (ft) of the T0 ground the profiles were last settled on (`T0` settles
     /// once per ground: settling again on the same ground changes nothing).
     pub settled_on: Option<f64>,
+    /// The waterfalls, by id (`settle`: a pure function of the curves and the ground).
+    pub falls: Vec<Fall>,
 }
 
 /// Spacing (ft) of the coarsest level that carves valleys (2.5 · 2^n ≤ 2,500), whose wide,
@@ -103,6 +178,9 @@ pub struct CurvePoint {
     pub z: f64,
     pub w: f64,
     pub q: f64,
+    /// Below a fall's face on its segment: the fall's id (`RiverNet::falls`; `carve` keeps the
+    /// pool's cut from eating back past the lip).
+    pub fall: Option<u32>,
 }
 
 impl RiverCurve {
@@ -122,11 +200,26 @@ impl RiverCurve {
             phase[k] = phase[k - 1] + std::f64::consts::TAU * d / wavelength_ft(w);
             wphase[k] = wphase[k - 1] + d / (4.0 * w);
         }
-        RiverCurve { pts, z, q, taper, s, phase, wphase, seed, prof: Vec::new(), mouth: false }
+        RiverCurve { pts, z, q, taper, s, phase, wphase, seed, prof: Vec::new(), mouth: false, falls: Vec::new() }
     }
 
     pub fn segments(&self) -> usize {
         self.pts.len().saturating_sub(1)
+    }
+
+    /// The water surface on segment `k` at `t` as settled (no falls).
+    fn profile(&self, k: usize, t: f64) -> f64 {
+        match self.prof.get(k) {
+            Some(pr) => {
+                let u = (t * 8.0).clamp(0.0, 8.0);
+                let j = (crate::core::floor(u) as usize).min(7);
+                pr[j] as f64 + (pr[j + 1] - pr[j]) as f64 * (u - j as f64)
+            }
+            None => {
+                let k1 = (k + 1).min(self.pts.len() - 1);
+                self.z[k] as f64 + (self.z[k1] as f64 - self.z[k] as f64) * t
+            }
+        }
     }
 
     /// Point on segment `k` at `t` in [0, 1]. `spacing` is the sample spacing of the level
@@ -145,7 +238,8 @@ impl RiverCurve {
         let resolve = 1.0 - smoothstep(0.04, 0.12, (spacing - 20.0).max(0.0) / f.lambda_local);
         let resolve_drift = 1.0 - smoothstep(0.12, 0.35, spacing / f.drift_len);
         let off = f.taper * (resolve * (f.amp * libm::sin(f.phase) + f.wiggle) + resolve_drift * f.drift);
-        CurvePoint { p: [f.base[0] + f.nrm[0] * off, f.base[1] + f.nrm[1] * off], z: f.z, w: f.w, q: f.q }
+        let fall = self.falls.iter().find(|fa| fa.seg as usize == k && t >= fa.t1).map(|fa| fa.id);
+        CurvePoint { p: [f.base[0] + f.nrm[0] * off, f.base[1] + f.nrm[1] * off], z: f.z, w: f.w, q: f.q, fall }
     }
 
     /// The band the finest curve can wander in around segment `k` at `t`: its centre line
@@ -177,13 +271,10 @@ impl RiverCurve {
         let k1 = (k + 1).min(n - 1);
         let lerp = |a: f64, b: f64| a + (b - a) * t;
         let q = lerp(self.q[k] as f64, self.q[k1] as f64);
-        let z = match self.prof.get(k) {
-            Some(pr) => {
-                let u = (t * 8.0).clamp(0.0, 8.0);
-                let j = (crate::core::floor(u) as usize).min(7);
-                pr[j] as f64 + (pr[j + 1] - pr[j]) as f64 * (u - j as f64)
-            }
-            None => lerp(self.z[k] as f64, self.z[k1] as f64),
+        let z = self.profile(k, t);
+        let z = match self.falls.iter().find(|fa| fa.seg as usize == k) {
+            Some(fa) => fa.level(t, z),
+            None => z,
         };
         let s = lerp(self.s[k], self.s[k1]);
         let phase = lerp(self.phase[k], self.phase[k1]);
@@ -297,7 +388,7 @@ impl RiverNet {
                 }
             }
         }
-        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new(), valley_index: (0, 0, Vec::new()), settled_on: None }
+        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new(), valley_index: (0, 0, Vec::new()), settled_on: None, falls: Vec::new() }
     }
 
     /// Water surfaces that follow the ground: the curve wanders off its cells, and the
@@ -424,6 +515,97 @@ impl RiverNet {
         }
     }
 
+    /// Waterfalls where a river at least `FALL_MIN_WIDTH_FT` wide meets a knickpoint: an eighth
+    /// of a segment's settled profile steeper than `FALL_GRADIENT`, the steep run from there
+    /// dropping at least `FALL_MIN_DROP_FT`. The lip stands a hashed way into that eighth; the
+    /// water then falls over a face about a sixth as wide as it is high (2.5 to 25 ft) to the
+    /// level at the steep run's end, and keeps at or under it (a short gorge below the face) until
+    /// the profile is lower. The biggest falls are kept, `FALL_SPACING_SEGS` apart on a river;
+    /// about a third hide a cave. O(segments).
+    fn find_falls(&mut self, cell_ft: f64) {
+        struct Cand {
+            drop: f64,
+            ri: u32,
+            k: u32,
+            t: f64,
+            t1: f64,
+            top: f64,
+            bottom: f64,
+            face: f64,
+        }
+        let mut cands: Vec<Cand> = Vec::new();
+        for (ri, r) in self.rivers.iter_mut().enumerate() {
+            r.falls.clear();
+            for (k, pr) in r.prof.iter().enumerate() {
+                let w = width_ft(0.5 * (r.q[k] + r.q[k + 1]) as f64);
+                let seg_len = r.s[k + 1] - r.s[k];
+                if w < FALL_MIN_WIDTH_FT || seg_len < 40.0 {
+                    continue;
+                }
+                let eighth = seg_len / 8.0;
+                let grad = |j: usize| (pr[j] - pr[j + 1]) as f64 / eighth;
+                let Some(j) = (0..8).filter(|&j| grad(j) >= FALL_GRADIENT).max_by(|&a, &b| grad(a).total_cmp(&grad(b)).then(b.cmp(&a))) else { continue };
+                let mut end = j + 1;
+                while end < 8 && grad(end) >= 0.5 * FALL_GRADIENT {
+                    end += 1;
+                }
+                let u = crate::core::rng::unit(hash2(r.seed ^ 0xFA11, k as i64, 1));
+                let t = (j as f64 + 0.3 + 0.4 * u) / 8.0;
+                let top = r.profile(k, t);
+                let drop = (top - r.profile(k, end as f64 / 8.0)).min(FALL_MAX_DROP_FT);
+                if drop < FALL_MIN_DROP_FT {
+                    continue;
+                }
+                let face = (drop / 6.0).clamp(2.5, 25.0);
+                let t1 = (t + face / seg_len).min(1.0 - 1e-3);
+                if t1 <= t {
+                    continue;
+                }
+                let bottom = (top - drop).min(r.profile(k, t1));
+                cands.push(Cand { drop: top - bottom, ri: ri as u32, k: k as u32, t, t1, top, bottom, face });
+            }
+        }
+        cands.sort_by(|a, b| b.drop.total_cmp(&a.drop).then(a.ri.cmp(&b.ri)).then(a.k.cmp(&b.k)));
+        let mut kept: Vec<Cand> = Vec::new();
+        for c in cands {
+            if kept.iter().all(|o| o.ri != c.ri || o.k.abs_diff(c.k) >= FALL_SPACING_SEGS) {
+                kept.push(c);
+            }
+        }
+        kept.sort_by(|a, b| a.ri.cmp(&b.ri).then(a.k.cmp(&b.k)));
+        self.falls = kept
+            .iter()
+            .enumerate()
+            .map(|(id, c)| {
+                let r = &mut self.rivers[c.ri as usize];
+                let (top, bottom) = (c.top as f32, c.bottom as f32);
+                r.falls.push(FallAt { seg: c.k, t: c.t, t1: c.t1, top, bottom, id: id as u32 });
+                let at = r.eval(c.k as usize, c.t, 2.5, cell_ft);
+                let foot = r.eval(c.k as usize, c.t1, 2.5, cell_ft).p;
+                let (dx, dy) = (foot[0] - at.p[0], foot[1] - at.p[1]);
+                let l = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
+                let dir = [dx / l, dy / l];
+                let h = hash2(r.seed ^ 0xCA7E, c.k as i64, 2);
+                let cave = (crate::core::rng::unit(h) < 1.0 / 3.0).then(|| {
+                    let side = if h >> 40 & 1 == 0 { 1.0 } else { -1.0 };
+                    let (out, across) = (c.face + 3.0, 0.5 * at.w + 4.0);
+                    [at.p[0] + dir[0] * out - side * dir[1] * across, at.p[1] + dir[1] * out + side * dir[0] * across]
+                });
+                Fall { id: id as u32, river: c.ri, seg: c.k, at: at.p, dir, top, bottom, width: at.w as f32, face_ft: c.face as f32, cave }
+            })
+            .collect();
+    }
+
+    /// The falls whose lip lies in `rect` grown by `pad` (ft).
+    pub fn falls_in(&self, rect: [f64; 4], pad: f64) -> impl Iterator<Item = &Fall> {
+        self.falls.iter().filter(move |f| f.at[0] >= rect[0] - pad && f.at[0] <= rect[2] + pad && f.at[1] >= rect[1] - pad && f.at[1] <= rect[3] + pad)
+    }
+
+    /// The fall a cave site at (x, y) opens behind (its mouth's exact position).
+    pub fn fall_with_cave_at(&self, x: f64, y: f64) -> Option<&Fall> {
+        self.falls.iter().find(|f| f.cave.is_some_and(|c| c[0].to_bits() == x.to_bits() && c[1].to_bits() == y.to_bits()))
+    }
+
     fn settle_profiles(&mut self, ground: &dyn Fn(f64, f64) -> f64, cell_ft: f64) {
         for r in &mut self.rivers {
             let prof: Vec<[f32; 9]> = (0..r.segments())
@@ -442,6 +624,7 @@ impl RiverNet {
                 .collect();
             r.prof = prof;
         }
+        self.find_falls(cell_ft);
         self.coarse = self
             .rivers
             .iter()
@@ -701,6 +884,8 @@ impl CrossingCache {
 /// A sampled polyline piece of one river near a tile.
 pub struct Piece {
     pub pts: Vec<CurvePoint>,
+    /// The falls its points' `fall` name.
+    pub falls: Vec<Fall>,
 }
 
 /// Sample every river curve near the rectangle at a resolution suited to `spacing`.
@@ -748,12 +933,20 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
             let pad = pad(w) + step;
             let inside = |p: [f64; 2]| p[0] >= rect[0] - pad && p[0] <= rect[2] + pad && p[1] >= rect[1] - pad && p[1] <= rect[3] + pad;
             let n = (seg_len / step).ceil().max(1.0) as usize;
-            for j in 0..=n {
+            // A fall's lip and its face's foot are points of every level's line, so the water
+            // drops between them, not over a chord.
+            let mut ts: Vec<f64> = (0..=n).map(|j| j as f64 / n as f64).collect();
+            for fa in r.falls.iter().filter(|fa| fa.seg as usize == k) {
+                ts.retain(|&t| (t - fa.t).abs() > 1e-6 && (t - fa.t1).abs() > 1e-6 || t == 0.0 || t == 1.0);
+                ts.extend([fa.t, fa.t1]);
+                ts.sort_by(f64::total_cmp);
+            }
+            for (j, &t) in ts.iter().enumerate() {
                 // A joint is the previous segment's last point.
                 if j == 0 && k > k0 as usize {
                     continue;
                 }
-                let cp = r.eval(k, j as f64 / n as f64, spacing, cell_ft);
+                let cp = r.eval(k, t, spacing, cell_ft);
                 if inside(cp.p) {
                     // A piece starts and ends one point outside, so the line reaches the edge.
                     if cur.is_empty()
@@ -764,7 +957,7 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
                     cur.push(cp);
                 } else if !cur.is_empty() {
                     cur.push(cp);
-                    out.push(Piece { pts: std::mem::take(&mut cur) });
+                    out.push(Piece { pts: std::mem::take(&mut cur), falls: Vec::new() });
                 }
                 if !inside(cp.p) {
                     last_out = Some(cp);
@@ -772,10 +965,19 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
             }
         }
         if cur.len() >= 2 {
-            out.push(Piece { pts: cur });
+            out.push(Piece { pts: cur, falls: Vec::new() });
         }
     }
     out.retain(|p| p.pts.len() >= 2);
+    for p in &mut out {
+        for c in &p.pts {
+            if let Some(id) = c.fall
+                && !p.falls.iter().any(|f| f.id == id)
+            {
+                p.falls.push(net.falls[id as usize]);
+            }
+        }
+    }
     out
 }
 
@@ -804,6 +1006,23 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
     let mut cut = vec![f32::INFINITY; n];
     let mut near = vec![(f32::INFINITY, 0f32, 0f32); n];
     let mut channel = vec![false; n];
+    // Above a lip the channel keeps its bed (coarser levels' pools, interpolated, sag into it),
+    // and below it the water stands no higher than the fall has it (the channel above would
+    // spread its level round its end, over the face and the pool).
+    let lips: Vec<&Fall> = pieces.iter().flat_map(|p| &p.falls).collect();
+    let fall_cap = |x: f64, y: f64, z: f64| {
+        let mut z = z;
+        for f in &lips {
+            let (rx, ry) = (x - f.at[0], y - f.at[1]);
+            let (u, across) = (rx * f.dir[0] + ry * f.dir[1], (ry * f.dir[0] - rx * f.dir[1]).abs());
+            let face = f.face_ft as f64;
+            if u > 0.0 && u < face + f.width as f64 + 2.0 * spacing && across < 0.5 * f.width as f64 + 2.0 * spacing {
+                let (top, bottom) = (f.top as f64, f.bottom as f64);
+                z = z.min(if u < face { top + (bottom - top) * u / face } else { bottom });
+            }
+        }
+        z
+    };
     for piece in pieces {
         for seg in piece.pts.windows(2) {
             let (a, b) = (&seg[0], &seg[1]);
@@ -817,6 +1036,9 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
             let (iy0, iy1) = (sy0.ceil().max(0.0) as usize, (sy1.floor() as usize).min(dim - 1));
             let (dx, dy) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
             let len2 = (dx * dx + dy * dy).max(1e-9);
+            // Below a fall's face the pool's cut climbs as steeply as the face behind its foot, so
+            // the lip stands (and the ground beside it: the headwall of the gorge below).
+            let lip = a.fall.and_then(|id| piece.falls.iter().find(|f| f.id == id)).map(|f| (f.at, f.dir, f.face_ft as f64, f.drop_ft() as f64 / f.face_ft as f64));
             for iy in iy0..=iy1 {
                 let py = origin[1] + iy as f64 * spacing;
                 // Only the samples of this row inside the segment's capsule (the box round
@@ -838,12 +1060,18 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                     let w = a.w + (b.w - a.w) * t;
                     let z = a.z + (b.z - a.z) * t;
                     let half = 0.5 * w;
-                    let target = if d < half {
+                    let mut target = if d < half {
                         let u = d / half;
                         z - depth_ft(w) * (1.0 - u * u)
                     } else {
-                        z + (d - half) * BANK_SLOPE
+                        z + (d - half) * if lip.is_some() { GORGE_SLOPE } else { BANK_SLOPE }
                     };
+                    if let Some((at, dir, face, slope)) = lip {
+                        let u = (px - at[0]) * dir[0] + (py - at[1]) * dir[1];
+                        if u < face {
+                            target += slope * (face - u);
+                        }
+                    }
                     let k = iy * dim + ix;
                     let h = heights[k] as f64;
                     let mut v = h.min(target);
@@ -859,7 +1087,8 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                         near[k] = here;
                     }
                     if d < half + spacing && (z as f32) > water[k] {
-                        water[k] = z as f32;
+                        let z = if lips.is_empty() { z } else { fall_cap(px, py, z) };
+                        water[k] = water[k].max(z as f32);
                     }
                 }
             }
@@ -870,6 +1099,17 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
             continue;
         }
         let mut v = cut[k] as f64;
+        if channel[k] && !lips.is_empty() {
+            let (x, y) = (origin[0] + (k % dim) as f64 * spacing, origin[1] + (k / dim) as f64 * spacing);
+            for f in &lips {
+                let (rx, ry) = (x - f.at[0], y - f.at[1]);
+                let (u, across) = (rx * f.dir[0] + ry * f.dir[1], (ry * f.dir[0] - rx * f.dir[1]).abs());
+                if u <= 0.0 && u > -(LIP_KEEP_FT + 2.0 * f.width as f64) && across < 0.5 * f.width as f64 + spacing {
+                    let (z, w) = (near[k].1 as f64, near[k].2 as f64);
+                    v = v.max(z - depth_ft(w));
+                }
+            }
+        }
         if !channel[k] && near[k].0 < f32::INFINITY {
             // Natural levee a foot or two high, sized to the river (not the level).
             let (d, z, w) = (near[k].0 as f64, near[k].1 as f64, near[k].2 as f64);

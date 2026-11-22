@@ -39,6 +39,9 @@ pub struct Feature {
     pub elev_ft: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Secret: shown to the DM, hidden from players until found (a cave behind a waterfall).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub secret: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -200,6 +203,8 @@ pub struct Inputs<'a> {
     pub courses: &'a [(usize, Vec<usize>)],
     /// The road network (named drawn roads become features).
     pub roads: &'a [super::roads::RoadPath],
+    /// The waterfalls (`lod::rivers::RiverNet::falls`).
+    pub falls: &'a [crate::lod::rivers::Fall],
 }
 
 /// Biome regions: (kind, how they are named, member biomes, fewest cells to be named).
@@ -450,7 +455,7 @@ impl Builder<'_> {
         while !self.ids.insert(id.clone()) {
             id.push('b');
         }
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, secret: false });
         self.out.shapes.push(Shape::Point { at: [cx * c, cy * c], radius_ft: 0.0 });
         id
     }
@@ -515,7 +520,7 @@ impl Builder<'_> {
             while !self.ids.insert(id.clone()) {
                 id.push('b');
             }
-            self.out.features.push(Feature { id, kind: "road", name: name.to_string(), x: at[0], y: at[1], angle, extent_ft: total, elev_ft: None, detail: Some(class.into()) });
+            self.out.features.push(Feature { id, kind: "road", name: name.to_string(), x: at[0], y: at[1], angle, extent_ft: total, elev_ft: None, detail: Some(class.into()), secret: false });
             self.out.shapes.push(Shape::Line(course));
         }
     }
@@ -1012,6 +1017,11 @@ impl Builder<'_> {
             let elev = self.above_sea(k);
             let id = self.push_named(kind, names.next().unwrap_or_default(), cx, cy, 0.0, extent * 5280.0, Some(elev.round()), None);
             self.radius(SITE_RADIUS_FT);
+            if p.kind == PoiKind::Cave && p.stroke.is_none() && inp.falls.iter().any(|f| f.cave.is_some_and(|q| q[0].to_bits() == p.x.to_bits() && q[1].to_bits() == p.y.to_bits())) {
+                let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();
+                f.detail = Some("behind a waterfall, hidden from players until found".into());
+                f.secret = true;
+            }
             if p.kind == PoiKind::Waystation {
                 let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();
                 f.name = format!("{} Inn", f.name);
@@ -1110,7 +1120,6 @@ impl Builder<'_> {
                 pointed[ri] = Some(li);
             }
         }
-        let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
         for (ri, r) in chains.iter().enumerate() {
             if r.cells.len() < 3 {
                 continue;
@@ -1142,30 +1151,16 @@ impl Builder<'_> {
                 }
             }
             let _ = q;
-
-            // Waterfalls: the steepest drop along the river, if it is a real knickpoint.
-            let mut best: Option<(f64, usize)> = None;
-            for k in 0..if named { r.cells.len() - 1 } else { 0 } {
-                let (a, b) = (r.cells[k] as usize, r.cells[k + 1] as usize);
-                if !inp.land[b] || inp.hydro.lake_of[b] != super::hydro::NO_LAKE {
-                    continue;
-                }
-                let drop = inp.height[a] - inp.height[b];
-                if drop >= 400.0 && drop / inp.cell_ft >= 0.06 && best.is_none_or(|(d, _)| drop > d) {
-                    best = Some((drop, k));
-                }
-            }
-            if let Some((drop, k)) = best {
-                let c = r.cells[k] as usize;
-                let (cx, cy) = ((c % w) as f64 + 0.5 * ((r.cells[k + 1] as usize % w) as f64 - (c % w) as f64), (c / w) as f64 + 0.5 * ((r.cells[k + 1] as usize / w) as f64 - (c / w) as f64));
-                falls.push((drop, cx, cy, c));
-            }
         }
-        // Only the most dramatic drops become named landmarks.
-        falls.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.3.cmp(&b.3)));
-        for &(drop, cx, cy, c) in falls.iter().take(20) {
-            let elev = self.above_sea(c);
-            self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some(elev.round()), Some(format!("drop ~{} ft", fmt_thousands(drop))));
+        // Waterfalls (`lod::rivers::Fall`): only the most dramatic drops become named landmarks.
+        let mut falls: Vec<&crate::lod::rivers::Fall> = inp.falls.iter().collect();
+        falls.sort_by(|a, b| b.drop_ft().total_cmp(&a.drop_ft()).then(a.id.cmp(&b.id)));
+        let sea = inp.world.params().sea_level_ft;
+        for f in falls.into_iter().take(20) {
+            let (cx, cy) = (f.at[0] / inp.cell_ft, f.at[1] / inp.cell_ft);
+            let drop = (f.drop_ft() as f64).round();
+            let cave = if f.cave.is_some() { "; a cave behind the falls (hidden from players)" } else { "" };
+            self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some((f.top as f64 - sea).round()), Some(format!("drop ~{} ft{cave}", fmt_thousands(drop))));
         }
     }
 

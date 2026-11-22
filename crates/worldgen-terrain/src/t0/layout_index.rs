@@ -41,7 +41,12 @@ pub fn layout_identity(t0: &T0, index: usize) -> u64 {
         return hash3(0x7365_7474_6c65_0000, rng_key(t0, index), s.seed as i64, what);
     }
     match t0.pois.get(index - n) {
-        Some(p) => hash3(0x7369_7465_0000_0000, rng_key(t0, index), p.seed as i64, p.kind as i64),
+        Some(p) => {
+            // A site takes its nearest settlement's culture (its roofs, its wall style).
+            let d2 = |s: &&Settlement| (s.x - p.x) * (s.x - p.x) + (s.y - p.y) * (s.y - p.y);
+            let culture = t0.settlements.iter().min_by(|a, b| d2(a).total_cmp(&d2(b))).map_or(0, |s| s.culture as i64);
+            hash3(0x7369_7465_0000_0000, rng_key(t0, index), p.seed as i64, p.kind as i64 | culture << 8)
+        }
         None => 0,
     }
 }

@@ -408,6 +408,16 @@ impl Ctx {
         }
     }
 
+    /// The world's waterfalls (`worldgen::falls::falls_json`): `[{id, x, y, dir, top, bottom, drop,
+    /// width, face, river, cave: {x, y, layout, site, secret} | null}]`, in `rect` (x0, y0, x1, y1 ft)
+    /// when given.
+    pub fn falls_json(&self, rect: Option<Vec<f64>>) -> String {
+        self.with_t0("[]", |t0| {
+            let r = rect.filter(|r| r.len() == 4).map(|r| [r[0], r[1], r[2], r[3]]);
+            worldgen::falls::falls_json(t0, r).to_string()
+        })
+    }
+
     /// The world's generated islets (`t0::islets`): `[{id, x, y, r, river, level, tower: {id, x, y} | null}]`.
     pub fn islets_json(&self) -> String {
         self.with_t0("[]", |t0| {
