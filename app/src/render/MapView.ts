@@ -760,11 +760,11 @@ export class MapView {
   }
 
   /** The waterfall marks as drawn last (for checks): how many, of how many falls, and the
-   * falls drawn on the battlemap's chunks (with their caves, and whether those show). */
-  get fallStats(): { drawn: number; total: number; visible: boolean; battle: number; caves: number; secretCaves: boolean } {
+   * falls drawn on the battlemap's chunks (with their caves, how many of them show, and whether all do). */
+  get fallStats(): { drawn: number; total: number; visible: boolean; battle: number; caves: number; cavesShown: number; secretCaves: boolean } {
     const f = this.fallMarks;
-    const b = this.battle?.fallStats ?? { falls: 0, caves: 0, secretCaves: false };
-    return { drawn: f?.drawn ?? 0, total: f?.total ?? 0, visible: !!f?.container.visible, battle: b.falls, caves: b.caves, secretCaves: b.secretCaves };
+    const b = this.battle?.fallStats ?? { falls: 0, caves: 0, cavesShown: 0, secretCaves: false };
+    return { drawn: f?.drawn ?? 0, total: f?.total ?? 0, visible: !!f?.container.visible, battle: b.falls, caves: b.caves, cavesShown: b.cavesShown, secretCaves: b.secretCaves };
   }
 
   /** Whether the battlemap draws the hidden caves behind waterfalls (the DM's view: on; the players'

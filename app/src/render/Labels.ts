@@ -518,6 +518,8 @@ export class Labels {
         const ey = hw * s + hh * c + pad;
         // Pinned labels grow rightwards from the symbol centred on the spot.
         const ox = style.pin ? this.pinOffset(it) : 0;
+        // A secret cave's name stands off below its spot, clear of the mouth drawn there.
+        if (f.secret) sy += ey + 4 + Math.min(40, 9 * ppf);
         let box: [number, number, number, number] = [sx + ox - ex, sy - ey, sx + ox + ex, sy + ey];
         // The continent's name slides (along its own direction, then across) to the spot that
         // covers the fewest cities' dots and the room their names need.

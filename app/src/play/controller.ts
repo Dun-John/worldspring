@@ -2281,12 +2281,14 @@ export class PlayController implements PointerTool {
   }
 
   /** The renderer's view of the secret caves in this window: `MapView.showSecretCaves` (all or
-   * none: on for the DM, and for the players once every one is found) and, per cave, the hook
+   * none: on for the DM only) and, per cave, the hook
    * `secretCaveShown(site)` for a renderer that draws them one by one. */
   private syncSecretCaves() {
     const v = this.view as unknown as { showSecretCaves?: (on: boolean) => void; secretCaveShown?: ((site: string) => boolean) | null };
     const sites = this.secretSites();
-    const all = this.role === 'dm' || sites.every((f) => this.secretShown(f));
+    // (All at once for the DM only: the players' window shows each found one by itself, and before
+    // the features arrive there are none to find, which must not show them all.)
+    const all = this.role === 'dm';
     // Handed over again only when the found ones change (the renderer re-applies it on each set).
     const found = this.role === 'dm' ? 'dm' : sites.filter((f) => this.secretShown(f)).map((f) => f.site).join(',');
     if (v.secretCaveShown !== undefined && (found !== this.secretFound || v.secretCaveShown === null)) {

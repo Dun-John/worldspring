@@ -6,7 +6,8 @@
 //     (pale, streaked, as long as the face runs out), the inked lip across the channel with the glassy
 //     water just above it, a line of foam puffs at the foot and a light mist over the pool.
 //   drawFallCave(g, x, y, ux, uy, sq = PX, seed = 0)
-//     The dark mouth of the cave behind a curtain at (x, y) px, in its ring of wet rock.
+//     The dark mouth of the cave behind a curtain at (x, y) px, in its ring of wet rock;
+//     drawFallCaveBy(g, x, y, ux, uy, fall, side, ...) puts it in the face behind the sheet's edge.
 //   drawFallMark(g, x, y, ux, uy, wPx, lPx, alpha = 1)
 //     The map's mark in screen px: a pale curtain band `wPx` across and `lPx` along with a few streaks,
 //     an inked lip on its upstream side and a foam pool below; at its smallest it is the map symbol.
@@ -33,9 +34,15 @@ const FOAM_INK = 0x7fa9b2;
 const GLASS = 0x7fb1b4;
 const CAVE = 0x16120f;
 
-/** The sheet's run (ft) seen from above: the face's, at least a few feet, a long one held to the drop's half. */
+/** The sheet's run (ft) seen from above: the face's, at least a few feet, longer for a higher drop
+ * (the water arcs out), held to the drop's half and to 45 ft. */
 export function sheetRun(f: FallSize): number {
-  return Math.min(Math.max(f.face, 4), Math.max(8, f.drop * 0.5));
+  return Math.min(Math.max(f.face, 4) + f.drop * 0.03, Math.max(8, f.drop * 0.5), 45);
+}
+
+/** How much a fall's mist and spray grow with its drop (1 for a low one, up to 3.5). */
+export function mistScale(f: FallSize): number {
+  return 1 + Math.min(2.5, Math.max(0, f.drop - 60) / 180);
 }
 
 /** The plunge pool's radius across (ft): about the sheet's half width, a little more for a higher
@@ -124,19 +131,50 @@ export function drawFall(g: Graphics, x: number, y: number, ux: number, uy: numb
   for (const p of lip.slice(1)) g.lineTo(...p);
   g.stroke({ width: ink(OUT * 2), color: INK, alpha: 0.9, cap: 'round', join: 'round' });
 
-  // Foam puffs along the foot.
-  const nPuff = Math.max(4, Math.min(40, Math.round(f.width / 2.2)));
-  for (let i = 0; i < nPuff; i++) {
-    const b = -half * 1.05 + ((i + 0.5) / nPuff) * 2.1 * half;
-    const r = (1.1 + rnd() * 0.9) * Math.min(1.8, 0.8 + half / 40);
-    const [px, py] = at(L + (rnd() - 0.3) * 1.2, b);
-    g.circle(px, py, r * k).fill(FOAM).stroke({ width: ink(LINE), color: FOAM_INK, alpha: 0.7 });
+  // Foam at the foot in uneven clumps (a few puffs each, one outline round each clump), some
+  // breaking off downstream; bigger and more churned under a higher drop.
+  const m = mistScale(f);
+  const puffR = Math.min(1.8, 0.8 + half / 40) * Math.min(1.6, 0.85 + 0.15 * m);
+  const puffs: [number, number, number][] = [];
+  let b = -half * 1.02;
+  while (b < half * 1.02) {
+    const n = 2 + Math.floor(rnd() * 4);
+    const span = (1.2 + rnd() * 1.8) * puffR * n * 0.5;
+    const a0 = L + (rnd() - 0.4) * 1.5 * m;
+    for (let j = 0; j < n; j++) {
+      const r = puffR * (0.6 + rnd() * 0.8);
+      puffs.push([a0 + (rnd() - 0.3) * 1.4 * m, Math.min(half * 1.05, b + (j / n) * span + (rnd() - 0.5) * puffR), r]);
+    }
+    b += span + puffR * (0.4 + rnd() * 1.8);
   }
-  // A light mist over the pool.
-  for (let i = 0; i < 2; i++) {
-    const [mx, my] = at(L + Ra * (0.15 + 0.3 * i), (rnd() - 0.5) * half * 0.6);
-    g.ellipse(mx, my, half * (0.55 - 0.15 * i) * k, Ra * (0.3 - 0.08 * i) * k).fill({ color: 0xffffff, alpha: 0.16 });
+  for (let i = 0; i < Math.round(2 + half / 8); i++) {
+    puffs.push([L + Ra * (0.25 + rnd() * 0.6), (rnd() - 0.5) * 1.6 * half * 0.8, puffR * (0.35 + rnd() * 0.35)]);
   }
+  for (const [a, bb, r] of puffs) g.circle(...at(a, bb), (r + 0.35) * k).fill({ color: FOAM_INK, alpha: 0.75 });
+  for (const [a, bb, r] of puffs) g.circle(...at(a, bb), r * k).fill(FOAM);
+  for (const [a, bb, r] of puffs) if (r > puffR * 0.9) g.circle(...at(a - r * 0.3, bb - r * 0.25), r * 0.4 * k).fill({ color: 0xffffff, alpha: 0.9 });
+  // Mist over the pool, spreading past the banks under a high drop.
+  const nMist = 2 + Math.round(m);
+  for (let i = 0; i < nMist; i++) {
+    const [mx, my] = at(L + Ra * (0.1 + 0.35 * i), (rnd() - 0.5) * half * 0.8);
+    const s = m * (1 - i / (nMist + 1));
+    g.ellipse(mx, my, (half * 0.55 + 2) * s * k, (Ra * 0.3 + 1) * s * k).fill({ color: 0xffffff, alpha: 0.12 + 0.04 / (i + 1) });
+  }
+}
+
+/** Where a fall's cave mouth is drawn (ft from the lip: along the stream, across it on `side`): in
+ * the cliff face behind the falling sheet, at its edge, so the sheet covers its inner part. */
+export function caveSpot(f: FallSize, side: number): [number, number] {
+  const half = Math.max(f.width, 6) / 2;
+  return [Math.max(2.5, sheetRun(f) * 0.3), side * (half + 1.2)];
+}
+
+/** `drawFallCave` at its spot by the fall whose lip is at (x, y) px (`caveSpot`; draw it before
+ * the fall, so the sheet lies over it). */
+export function drawFallCaveBy(g: Graphics, x: number, y: number, ux: number, uy: number, f: FallSize, side: number, sq = PX, seed = 0) {
+  const [a, b] = caveSpot(f, side);
+  const k = sq / 5;
+  drawFallCave(g, x + (ux * a - uy * b) * k, y + (uy * a + ux * b) * k, ux, uy, sq, seed);
 }
 
 export function drawFallCave(g: Graphics, x: number, y: number, ux: number, uy: number, sq = PX, seed = 0) {

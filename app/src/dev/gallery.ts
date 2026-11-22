@@ -40,7 +40,7 @@ import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
-import { drawFall, drawFallCave, drawFallMark, poolRadius, sheetRun } from '../render/fallShapes';
+import { drawFall, drawFallCaveBy, drawFallMark, poolRadius, sheetRun } from '../render/fallShapes';
 import { breakwaters, piers } from './galleryTimber';
 import { flatRoofs } from './galleryRoofs';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
@@ -798,8 +798,8 @@ function fallsPanel(root: Container, y0: number, width: number, nolabels: boolea
     for (let gx = x + sq; gx < x + w - 1; gx += sq) g.moveTo(gx, y).lineTo(gx, y + h);
     for (let gy = y + sq; gy < y + h - 1; gy += sq) g.moveTo(x, gy).lineTo(x + w, gy);
     g.stroke({ width: 1, color: 0x000000, alpha: 0.1 });
+    if (f.cave) drawFallCaveBy(g, cx, lipY, 0, 1, f, 1, sq, i);
     drawFall(g, cx, lipY, 0, 1, f, sq, i);
-    if (f.cave) drawFallCave(g, cx + (f.width / 2 + 4) * k, lipY + (L + 4) * k, 0, 1, sq, i);
     label(f.name, x, y + h + 2);
     x += w + 20;
     rowH = Math.max(rowH, h);

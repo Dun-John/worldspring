@@ -27,7 +27,7 @@ import { sprites } from './spriteCode';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
 import { drawBreakwaterArmour, drawCog, drawLantern, drawQuayCoping } from './harbourShapes';
-import { drawFall, drawFallCave } from './fallShapes';
+import { drawFall, drawFallCaveBy } from './fallShapes';
 import type { GenFall } from '../gen/protocol';
 import { drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawGravelWalk, drawRaisedDrawbridge, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
@@ -300,13 +300,14 @@ export class BattlemapLayer {
   }
 
   /** The waterfalls and caves on the chunks built (for checks). */
-  get fallStats(): { falls: number; caves: number; secretCaves: boolean } {
-    let [falls, caves] = [0, 0];
+  get fallStats(): { falls: number; caves: number; cavesShown: number; secretCaves: boolean } {
+    let [falls, caves, cavesShown] = [0, 0, 0];
     for (const c of this.chunks.values()) {
       falls += c.falls;
       caves += c.caves ? c.caves.children.length : 0;
+      cavesShown += c.caves ? c.caves.children.filter((g) => g.visible).length : 0;
     }
-    return { falls, caves, secretCaves: this.secretCaves };
+    return { falls, caves, cavesShown, secretCaves: this.secretCaves };
   }
 
   /** Draw objects just put down (world ft) over their chunks at once, until each chunk comes
@@ -1097,7 +1098,7 @@ export class BattlemapLayer {
     parts.push(decks);
     // Waterfalls whose lip lies in the chunk, each drawn whole: over every chunk's ground (so a
     // pool reaching into the next chunk isn't covered by it), under the props; the cave behind
-    // one over it, for the DM (`showSecretCaves`).
+    // one under its sheet, for the DM (`showSecretCaves`).
     const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
     const mine = this.falls.filter((f) => Math.floor(f.x / ts) === cx && Math.floor(f.y / ts) === cy);
     let caveG: Container | null = null;
@@ -1109,17 +1110,18 @@ export class BattlemapLayer {
         drawFall(fallG, ...px(f.x, f.y), f.dir[0], f.dir[1], f, PX, seed);
         if (f.cave) {
           const g = new Graphics();
-          drawFallCave(g, ...px(f.cave.x, f.cave.y), f.dir[0], f.dir[1], PX, seed);
+          // (In the face behind the sheet's edge, on the cave's side of the stream.)
+          const side = (f.cave.y - f.y) * f.dir[0] - (f.cave.x - f.x) * f.dir[1] >= 0 ? 1 : -1;
+          drawFallCaveBy(g, ...px(f.x, f.y), f.dir[0], f.dir[1], f, side, PX, seed);
           g.label = f.cave.site;
           g.visible = this.caveVisible(f.cave.site);
           (caveG ??= new Container()).addChild(g);
         }
       }
+      // (The caves under the falls: each sheet covers its mouth's inner part.)
       const holder = new Container();
+      if (caveG) holder.addChild(caveG);
       holder.addChild(fallG);
-      if (caveG) {
-        holder.addChild(caveG);
-      }
       this.prewarm(holder);
       this.layers[1].addChildAt(holder, 0);
       parts.push(holder);

@@ -2,6 +2,7 @@
 //! drops, how many hide a cave, how many lie within a settlement's reach; then at the finest level
 //! for the first few falls (`N=`, default 3): the river's water and the ground just above the lip,
 //! at the face's foot and below it, and the ground at the cave's mouth (dry, not under the water).
+//! `SCARP=<fall id>`: instead, the ground beside that fall by distance from the bank and along the flow.
 //! `cargo run --release -p worldgen --example fallcheck -- [seeds]`
 
 use worldgen::World;
@@ -53,6 +54,25 @@ fn main() {
             let k = padded_index(((x - ox) / s).round() as i64, ((y - oy) / s).round() as i64);
             (t.padded[k], t.river_water[k])
         };
+        if let Ok(id) = std::env::var("SCARP") {
+            // The ground across the land beside a fall (left side), by distance from the bank and
+            // along the flow: a straight scarp shows as a step at every distance.
+            let f = falls[id.parse::<usize>().unwrap_or(0)];
+            let (face, half) = (f.face_ft as f64, 0.5 * f.width as f64);
+            println!("  fall {} drop {:.0} face {face:.0} width {:.0}; rows: ft beyond the bank, cols: ft along the flow from the lip", f.id, f.drop_ft(), f.width);
+            let us = [-200.0, -60.0, -20.0, 0.0, face, face + 20.0, face + 60.0, face + 200.0];
+            println!("  {:>6}{}", "", us.iter().map(|u| format!("{u:>7.0}")).collect::<String>());
+            for e in [5.0, 20.0, 50.0, 100.0, 200.0, 400.0, 700.0] {
+                let mut row = String::new();
+                for &u in &us {
+                    let o = half + e;
+                    let (x, y) = (f.at[0] + f.dir[0] * u - f.dir[1] * o, f.at[1] + f.dir[1] * u + f.dir[0] * o);
+                    row += &format!("{:>7.0}", sample(&mut ex, x, y).0);
+                }
+                println!("  {e:>6.0}{row}");
+            }
+            continue;
+        }
         let mut picks: Vec<&worldgen::lod::rivers::Fall> = falls.iter().filter(|f| f.cave.is_some()).take(shown.div_ceil(2)).collect();
         picks.extend(falls.iter().filter(|f| f.cave.is_none()).take(shown / 2));
         for f in picks {
