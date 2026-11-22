@@ -70,6 +70,7 @@ mod plaza;
 mod cover;
 // Roadmap 7 (170): cliff faces and their scree.
 mod cliff;
+mod retaining;
 pub use ground::*;
 pub use crossings::*;
 use objects::*;
@@ -277,6 +278,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut crags: Vec<crate::under::surface::Crag> = Vec::new();
     // Squares on a flight of steps (only where a flight comes near the chunk).
     let mut stair_h: Option<Vec<bool>> = None;
+    // What a retaining wall may edge (`retaining`): houses' outlines with their pads (ft), and
+    // flights of steps (each straight piece's ends and width).
+    let mut seats: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
+    let mut flights: Vec<([f64; 2], [f64; 2], f64)> = Vec::new();
     // Where the ground was shaped by hand round a city's streets: the street line nearest each such
     // square (steps follow the slopes made by hand; empty when nothing is shaped here).
     let mut hand_st: Vec<Option<HandStreet>> = Vec::new();
@@ -944,6 +949,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let last = st.pts.len() - 2;
             for (k, seg) in st.pts.windows(2).enumerate() {
                 let b = (seg[0][0].min(seg[1][0]) - half, seg[0][1].min(seg[1][1]) - half, seg[0][0].max(seg[1][0]) + half, seg[0][1].max(seg[1][1]) + half);
+                if overlaps(retaining::grow(b)) {
+                    flights.push((seg[0], seg[1], st.width));
+                }
                 if !overlaps(b) {
                     continue;
                 }
@@ -1055,7 +1063,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         for b in &l.buildings {
             let bb = bbox(&b.poly);
+            let yard = retaining::grow(bb);
             if !overlaps(bb) {
+                if retaining::seated(b) && overlaps(yard) {
+                    seats.push((b.poly.clone(), b.pad_ft + crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft)));
+                }
                 continue;
             }
             match b.structure {
@@ -1184,6 +1196,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         hh[h] = pad + STOREY_FT * b.floors as f32;
                     }
                 }
+            }
+            // (A house on a pad its ground drops from or climbs past: its yard round it at its floor's
+            // level, a retaining wall at the yard's edge, `retaining`; a building on a court or a
+            // deck has its own ground.)
+            if court.is_none() && retaining::seated(b) && overlaps(yard) {
+                let p = if id != 0 { pad } else { b.pad_ft + crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft) };
+                seats.push((b.poly.clone(), p));
             }
         }
         // Walls (8 ft thick), towers and gates, a palace's forecourt (`walls::build`): raised stone,
@@ -1416,6 +1435,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             hh[h] = road_bed[h] + (hh[h] - road_bed[h]) * (1.0 - w);
         }
     }
+    // Houses' yards levelled round their pads, retaining walls at their edges and along flights of
+    // steps cut into the ground or raised over it (`retaining`).
+    let walls_by = retaining::build(
+        &seats,
+        &flights,
+        &retaining::Open { bld_h: &bld_h, road_h: &road_h, urb_h: &urb_h, ent_h: &ent_h, hw: &hw, stair: stair_h.as_deref(), shaped: &moved },
+        &mut hh,
+        (hx0, hy0),
+        (ox, oy, chunk_ft),
+        &mut shapes,
+    );
     // v63 underground: a crag raised behind a dwarven hall's gate on flat ground (its rock drawn
     // below); buildings keep their pads.
     let mut crag_h = vec![0f32; if crags.is_empty() { 0 } else { HS * HS }];
@@ -2551,6 +2581,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     compute_edges(&mut chunk);
     crate::town::rural::mark(&rural, ox, oy, &mut chunk.edges);
     soft_relief::flag(&mut chunk.edges, &soft, &crag_h, &crag_m);
+    if !walls_by.is_empty() {
+        for k in 0..n {
+            if walls_by[(k / SQ + 1) * HS + k % SQ + 1] & retaining::HARD_SQ != 0 {
+                chunk.edges[k] |= 16;
+            }
+        }
+    }
     for (e, &m) in chunk.edges.iter_mut().zip(&cliffs) {
         *e |= m & !cliff::DRAWN;
     }

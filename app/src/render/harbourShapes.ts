@@ -383,6 +383,25 @@ export function drawLantern(g: Graphics, x: number, y: number, radiusFt = 9.5, s
   });
 }
 
+/** A retaining wall along `pts` (px), the low ground on their left-hand normal (`battlemap::retaining`):
+ * the wall's shadow on the low ground, wider the more it stands over it (`riseFt`), then a quay's coping
+ * along its top (`drawQuayCoping`, dry), inked along the face. */
+export function drawRetainingWall(g: Graphics, pts: [number, number][], widthFt = 2.2, riseFt = 4, seed = 0, k = 1) {
+  if (pts.length < 2) return;
+  const strip = (a: [number, number][], b: [number, number][]) => g.poly([...a.flat(), ...[...b].reverse().flat()]);
+  // (The face as the eye catches it from a little off overhead, a band of darker stone wider the
+  // taller it stands, inked at its foot; the shadow on the low ground past it.)
+  const face = Math.min(3.5, Math.max(0.8, 0.3 * riseFt)) * FT * k;
+  const sh = Math.min(3, 0.6 + 0.18 * riseFt) * FT * k;
+  const foot = offsetLine(pts, face);
+  strip(foot, offsetLine(pts, face + sh)).fill({ color: 0x2b2620, alpha: 0.24 });
+  strip(pts, foot).fill(shade(RUBBLE[1], 0.78));
+  g.moveTo(foot[0][0], foot[0][1]);
+  for (const [x, y] of foot.slice(1)) g.lineTo(x, y);
+  g.stroke({ width: LINE * k, color: INK, alpha: 0.85, cap: 'butt', join: 'round' });
+  drawQuayCoping(g, pts, widthFt, seed, false, k);
+}
+
 /** A stone quay front's coping along its face `pts` (px), the water on their left-hand normal: a
  * course of pale dressed blocks `widthFt` across laid along the edge, their joints square to it,
  * inked boldly along the water, a lit arris just inside. Every built edge on the water wears it
