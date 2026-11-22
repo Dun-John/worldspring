@@ -301,6 +301,11 @@ pub(super) trait Ground {
         self.buildable(poly)
     }
     fn pad(&self, poly: &[P]) -> f32;
+    /// `buildable` but for the slope: dry, off the channel (a lot too steep for that, seated on a
+    /// levelled pad instead: `fill::seat`).
+    fn dry(&self, _poly: &[P]) -> bool {
+        false
+    }
     /// The ground's height at a point (ft).
     fn height(&self, p: P) -> f64;
     /// On the water or a river's channel.
@@ -315,6 +320,10 @@ impl Ground for Site<'_> {
     }
     fn stepped(&self, poly: &[P]) -> bool {
         self.terraced(poly)
+    }
+    fn dry(&self, poly: &[P]) -> bool {
+        let c = centroid(poly);
+        !self.wet(c) && !self.near_river(c, 12.0) && self.dry_outline(poly, 10.0)
     }
     fn pad(&self, poly: &[P]) -> f32 {
         Site::pad(self, poly)

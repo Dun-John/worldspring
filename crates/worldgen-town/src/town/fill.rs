@@ -370,16 +370,20 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
             if poly.len() < 3 || area(&poly).abs() < 150.0 {
                 continue;
             }
-            let pads = if site.buildable(&poly) {
-                vec![poly]
+            let pads: Vec<(Vec<P>, Option<f32>)> = if site.buildable(&poly) {
+                vec![(poly, None)]
             } else if dp.stepped && site.stepped(&poly) {
                 // ((P4) A half that reads as a wedge squared off, or left as yard.)
-                step_pads(site, &poly).into_iter().filter_map(|h| if eye_corner(&h) < 70.0 { square_off(&h, poly_on(&h, n, c - d).then_some((n, c - d))).filter(|r| area(r).abs() >= 150.0 && site.buildable(r)) } else { Some(h) }).collect()
+                step_pads(site, &poly).into_iter().filter_map(|h| if eye_corner(&h) < 70.0 { square_off(&h, poly_on(&h, n, c - d).then_some((n, c - d))).filter(|r| area(r).abs() >= 150.0 && site.buildable(r)) } else { Some(h) }).map(|h| (h, None)).collect()
+            } else if let Some((poly, level)) = seat_or_shallower(site, &poly, n, c - d) {
+                vec![(poly, Some(level))]
+            } else if let Some(pair) = seat_pair(site, &poly, n, c - d) {
+                pair
             } else {
                 continue;
             };
-            for poly in pads {
-                let pad = site.pad(&poly);
+            for (poly, level) in pads {
+                let pad = level.unwrap_or_else(|| site.pad(&poly));
                 l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None, deck: None });
             }
         }
@@ -387,6 +391,81 @@ fn lay_block<G: Ground>(site: &G, block: &[P], fronts: &mut Vec<Front>, spans: b
     if thin.is_some() {
         run.1 = Some(acc);
     }
+}
+
+/// Seating a house on a lot too steep to stand as it is (`Ground::buildable`'s 6 ft of relief
+/// across it), dry (`Ground::dry`): its floor on a levelled pad at the street's level along its
+/// front (the door a step or two off it at most), cut into the slope behind by up to 8 ft (its
+/// eaves stand clear of the hill) and raised on its plinth over the fall by up to 16 ft, on a
+/// grade of 0.6 at most (no cliff face). `None`: no seat (a few lots on the steepest ground).
+/// Sampled as `Site::relief` is (corners, edge middles, centre): O(corners), only for the lots
+/// `buildable` turns down.
+fn seat<G: Ground>(site: &G, poly: &[P], n: P, front: f64) -> Option<f32> {
+    const CUT_FT: f64 = 8.0;
+    const FILL_FT: f64 = 16.0;
+    const DOOR_STEP_FT: f64 = 3.0;
+    const MAX_GRADE: f64 = 0.6;
+    let m = poly.len();
+    if m < 3 || !site.dry(poly) {
+        return None;
+    }
+    let c = centroid(poly);
+    let pts: Vec<P> = (0..m).flat_map(|k| [poly[k], lerp(poly[k], poly[(k + 1) % m], 0.5)]).chain(std::iter::once(c)).collect();
+    let hs: Vec<f64> = pts.iter().map(|&p| site.height(p)).collect();
+    let (lo, hi) = hs.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &h| (lo.min(h), hi.max(h)));
+    let width = 2.0 * poly.iter().map(|p| dist(*p, c)).fold(0.0, f64::max);
+    if (hi - lo) / width.max(1.0) > MAX_GRADE {
+        return None;
+    }
+    // (The street's level: the mean of the points along the front, within 2 ft of its line.)
+    let (sum, k) = pts.iter().zip(&hs).filter(|(p, _)| dot(**p, n) >= front - 2.0).fold((0.0, 0.0), |(s, k), (_, &h)| (s + h, k + 1.0));
+    let street = if k > 0.0 { sum / k } else { 0.5 * (lo + hi) };
+    let level = street.max(hi - CUT_FT);
+    (level - street <= DOOR_STEP_FT && level - lo <= FILL_FT).then_some(level as f32)
+}
+
+/// `seat`, or where the ground rises too far behind its front for that, the house made shallower
+/// (seven tenths, then half its depth from the street, its back the yard climbing the hill), as
+/// long as it stays a house (150 sq ft, 14 ft deep).
+fn seat_or_shallower<G: Ground>(site: &G, poly: &[P], n: P, front: f64) -> Option<(Vec<P>, f32)> {
+    if let Some(level) = seat(site, poly, n, front) {
+        return Some((poly.to_vec(), level));
+    }
+    let back = poly.iter().map(|p| dot(*p, n)).fold(f64::MAX, f64::min);
+    [0.7, 0.5].into_iter().find_map(|f| {
+        let cut = front - f * (front - back);
+        let h = clean(&clip_plain(poly, mul(n, -1.0), -cut));
+        if h.len() < 3 || area(&h).abs() < 150.0 || front - cut < 14.0 {
+            return None;
+        }
+        seat(site, &h, n, front).map(|level| (h, level))
+    })
+}
+
+/// A lot on a street climbing along its front too steeply for one pad (`seat_or_shallower`):
+/// halved across the street's fall, a pair of houses a step apart up the street, each on its own
+/// pad (or none, where neither half finds one: at least 14 ft wide each, 150 sq ft). Dry lots
+/// only (`Ground::dry`): one on the water stays open ground.
+fn seat_pair<G: Ground>(site: &G, poly: &[P], n: P, front: f64) -> Option<Vec<(Vec<P>, Option<f32>)>> {
+    if !site.dry(poly) {
+        return None;
+    }
+    let t = [-n[1], n[0]];
+    let k = dot(centroid(poly), t);
+    let halves = [clip_plain(poly, t, k), clip_plain(poly, mul(t, -1.0), -k)];
+    let mut out = Vec::new();
+    for h in halves.iter().map(|h| clean(h)) {
+        let (lo, hi) = extent(&h, t);
+        if h.len() < 3 || area(&h).abs() < 150.0 || hi - lo < 14.0 {
+            continue;
+        }
+        if site.buildable(&h) {
+            out.push((h, None));
+        } else if let Some((h, level)) = seat_or_shallower(site, &h, n, front) {
+            out.push((h, Some(level)));
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// A docks lot on a slope too steep for one pad (`Ground::stepped`): cut across the fall
