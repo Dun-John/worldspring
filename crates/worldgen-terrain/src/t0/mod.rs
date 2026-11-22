@@ -594,8 +594,10 @@ impl T0 {
         // No waterfall in a town's pad (its ground is eased flat) or where a road crosses the
         // river (a bridge or a ford over the lip or the pool): those rivers run on down their
         // steps as rapids, and their caves go with them (the last of the generated sites here).
-        // Nor a cave whose mouth would stand in a lake or the sea below its fall.
+        // Nor a cave whose mouth would stand in a lake or the sea below its fall, or which the
+        // river's own bends (as the finest level draws them) shut in on an island or a spit.
         {
+            let fine = world.geom.spacing_ft(world.geom.max_level);
             let blocked: Vec<(u32, u32)> = rivers.falls.iter().filter(|f| fall_blocked(f, &settlements, &road_net)).map(|f| (f.river, f.seg)).collect();
             let drowned: Vec<(u32, u32)> = rivers
                 .falls
@@ -603,7 +605,8 @@ impl T0 {
                 .filter(|f| {
                     // (Lake or sea at the pool's height or over it: the ground there is cut below the T0's.)
                     let drowns = |x: f64, y: f64| wet(x, y) || ground_t0.sample_water(x, y) as f64 > f.bottom as f64 - 1.0;
-                    !blocked.contains(&(f.river, f.seg)) && f.cave.is_some_and(|c| [[0.0, 0.0], [6.0, 0.0], [-6.0, 0.0], [0.0, 6.0], [0.0, -6.0]].iter().any(|o| drowns(c[0] + o[0], c[1] + o[1])))
+                    !blocked.contains(&(f.river, f.seg))
+                        && f.cave.is_some_and(|c| [[0.0, 0.0], [6.0, 0.0], [-6.0, 0.0], [0.0, 6.0], [0.0, -6.0]].iter().any(|o| drowns(c[0] + o[0], c[1] + o[1])) || cave_pinched(&rivers, c, fine, cell))
                 })
                 .map(|f| (f.river, f.seg))
                 .collect();
@@ -1670,4 +1673,30 @@ fn downsample(w: usize, h: usize, v: &[f64]) -> Vec<f64> {
         }
     }
     out
+}
+
+/// Whether the river's water, as the finest level draws it, rings a fall cave's mouth: most of a
+/// circle 30 ft round it, or two thirds of one 50 ft round it, lies in a river (a braid's island,
+/// or a spit in a tight bend below the pool), so its shelf could not reach the land. O(nearby
+/// curve points).
+fn cave_pinched(rivers: &crate::lod::rivers::RiverNet, c: [f64; 2], fine: f64, cell: f64) -> bool {
+    let pieces = crate::lod::rivers::pieces(rivers, [c[0] - 60.0, c[1] - 60.0, c[0] + 60.0, c[1] + 60.0], &|_| 60.0, fine, cell);
+    let wet = |x: f64, y: f64| {
+        pieces.iter().any(|pc| {
+            pc.pts.windows(2).any(|w| {
+                let (a, b) = (&w[0], &w[1]);
+                let (dx, dy) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
+                let l2 = (dx * dx + dy * dy).max(1e-9);
+                let t = (((x - a.p[0]) * dx + (y - a.p[1]) * dy) / l2).clamp(0.0, 1.0);
+                let (qx, qy) = (a.p[0] + dx * t - x, a.p[1] + dy * t - y);
+                let r = 0.5 * (a.w + (b.w - a.w) * t) + 2.0;
+                qx * qx + qy * qy < r * r
+            })
+        })
+    };
+    let ring = |rho: f64| (0..36).filter(|&k| {
+        let th = k as f64 * (core::f64::consts::PI / 18.0);
+        wet(c[0] + rho * libm::cos(th), c[1] + rho * libm::sin(th))
+    }).count();
+    ring(30.0) >= 30 || ring(50.0) >= 24
 }

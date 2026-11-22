@@ -287,6 +287,7 @@ export class MapView {
   private falls: GenFall[] = [];
   private fallMarks: FallMarks | null = null;
   private secretCaves: boolean | null = null;
+  private caveShown: ((site: string) => boolean) | null = null;
   private placesRect: [number, number, number, number] | null = null;
   /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
   private placesEpoch = 0;
@@ -583,6 +584,7 @@ export class MapView {
     this.battle.raisedOf = (key) => !!this.bridgeRaised?.(key);
     this.battle.sprites = this.edits.sprites ?? {};
     if (this.secretCaves !== null) this.battle.showSecretCaves = this.secretCaves;
+    this.battle.secretCaveShown = this.caveShown;
     this.battle.setFalls(this.falls);
     this.battle.warmup();
     return this.battle;
@@ -770,6 +772,16 @@ export class MapView {
   showSecretCaves(on: boolean) {
     this.secretCaves = on;
     if (this.battle) this.battle.showSecretCaves = on;
+  }
+
+  /** Per cave (by its site, `u:N:0`): drawn although `showSecretCaves` is off. Play mode sets it in
+   * the players' window to the caves they have found. */
+  get secretCaveShown(): ((site: string) => boolean) | null {
+    return this.caveShown;
+  }
+  set secretCaveShown(fn: ((site: string) => boolean) | null) {
+    this.caveShown = fn;
+    if (this.battle) this.battle.secretCaveShown = fn;
   }
 
   /** The bridge marks as drawn last (for checks): how many, of how many crossings. */

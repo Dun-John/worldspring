@@ -84,7 +84,8 @@ interface ChunkView {
   atmosphere: number;
   /** The waterfalls whose lip lies in it (drawn with it), and the hidden caves behind them. */
   falls: number;
-  caves: Graphics | null;
+  /** One Graphics per cave, its `label` the cave's site (shown per `caveShown`). */
+  caves: Container | null;
   lastUsed: number;
   /** Tactical data kept for inspection (HUD, play mode). */
   objects: number;
@@ -213,6 +214,8 @@ export class BattlemapLayer {
   /** The world's waterfalls (`setFalls`): each chunk draws those whose lip lies in it. */
   private falls: GenFall[] = [];
   private secretCaves: boolean;
+  /** Per cave (by site): shown although `showSecretCaves` is off (play mode: found by the players). */
+  private caveShown: ((site: string) => boolean) | null = null;
 
   private readonly chunks = new Map<string, ChunkView>();
   private readonly received = new Map<string, { x: number; y: number; chunk: PreparedChunk; epoch: number }>();
@@ -282,7 +285,18 @@ export class BattlemapLayer {
   }
   set showSecretCaves(on: boolean) {
     this.secretCaves = on;
-    for (const c of this.chunks.values()) if (c.caves) c.caves.visible = on;
+    this.applyCaves();
+  }
+  /** Which caves show one by one while `showSecretCaves` is off (null: none). */
+  set secretCaveShown(fn: ((site: string) => boolean) | null) {
+    this.caveShown = fn;
+    this.applyCaves();
+  }
+  private applyCaves() {
+    for (const c of this.chunks.values()) if (c.caves) for (const g of c.caves.children) g.visible = this.caveVisible(g.label);
+  }
+  private caveVisible(site: string): boolean {
+    return this.secretCaves || !!this.caveShown?.(site);
   }
 
   /** The waterfalls and caves on the chunks built (for checks). */
@@ -290,7 +304,7 @@ export class BattlemapLayer {
     let [falls, caves] = [0, 0];
     for (const c of this.chunks.values()) {
       falls += c.falls;
-      caves += c.caves ? 1 : 0;
+      caves += c.caves ? c.caves.children.length : 0;
     }
     return { falls, caves, secretCaves: this.secretCaves };
   }
@@ -1086,19 +1100,24 @@ export class BattlemapLayer {
     // one over it, for the DM (`showSecretCaves`).
     const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
     const mine = this.falls.filter((f) => Math.floor(f.x / ts) === cx && Math.floor(f.y / ts) === cy);
-    let caveG: Graphics | null = null;
+    let caveG: Container | null = null;
     if (mine.length) {
       const px = (wx: number, wy: number): [number, number] => [((wx - cx * ts) / SQUARE_FT) * PX, ((wy - cy * ts) / SQUARE_FT) * PX];
       const fallG = new Graphics();
       for (const f of mine) {
         const seed = Number(f.id.slice(3)) || 0;
         drawFall(fallG, ...px(f.x, f.y), f.dir[0], f.dir[1], f, PX, seed);
-        if (f.cave) drawFallCave((caveG ??= new Graphics()), ...px(f.cave.x, f.cave.y), f.dir[0], f.dir[1], PX, seed);
+        if (f.cave) {
+          const g = new Graphics();
+          drawFallCave(g, ...px(f.cave.x, f.cave.y), f.dir[0], f.dir[1], PX, seed);
+          g.label = f.cave.site;
+          g.visible = this.caveVisible(f.cave.site);
+          (caveG ??= new Container()).addChild(g);
+        }
       }
       const holder = new Container();
       holder.addChild(fallG);
       if (caveG) {
-        caveG.visible = this.secretCaves;
         holder.addChild(caveG);
       }
       this.prewarm(holder);

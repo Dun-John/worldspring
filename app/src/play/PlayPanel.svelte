@@ -38,6 +38,7 @@
       here: Object.values(play.state.tokens).filter((t) => t.loc === loc).length,
       shapes: Object.values(play.state.shapes).filter((s) => s.loc === loc).length,
       players: play.players,
+      caves: play.secretSitesInView(),
       follow: play.follow,
       lock: play.lock,
       target: play.followTarget,
@@ -147,6 +148,17 @@
   {#if !peek}
     {#if v.tool === 'select'}
       <div class="ws-hint">{touch ? 'Drag tokens; tap a door to open it.' : 'Drag tokens; click a door to open it. Shift-click or shift-drag selects several; Alt-click pings.'}</div>
+      {#if v.caves.length}
+        <section>
+          <div class="ws-label">Hidden caves in view</div>
+          {#each v.caves as c (c.site)}
+            <div class="ws-row">
+              <span class="ws-grow">{c.name}</span>
+              <button class="ws-btn" aria-pressed={c.found} title={c.found ? 'Hide it from the players again' : 'Show its mouth and its way in to the players (or right-click the mouth)'} onclick={() => play.revealSecret(c.site, !c.found)}>{c.found ? 'Hide' : 'Reveal'}</button>
+            </div>
+          {/each}
+        </section>
+      {/if}
     {:else if v.tool === 'token'}
       <section>
         <div class="ws-label">New token</div>

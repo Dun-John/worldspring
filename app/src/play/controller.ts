@@ -2259,6 +2259,19 @@ export class PlayController implements PointerTool {
     return this.secretSites().some((f) => f.site === id && !fallCaveFound(this.state, id));
   }
 
+  /** DM, on the surface: the secret sites in view (nearest the middle first, at most `n`), with
+   * whether the players know them (the play panel's Reveal buttons). */
+  secretSitesInView(n = 4): { site: string; name: string; found: boolean }[] {
+    if (this.role !== 'dm' || this.place?.it || this.place?.sewers) return [];
+    const cam = this.view.cam;
+    const [x0, y0, x1, y1] = cam.viewRect();
+    return this.secretSites()
+      .filter((f) => f.site && f.x >= x0 && f.x <= x1 && f.y >= y0 && f.y <= y1)
+      .sort((a, b) => Math.hypot(a.x - cam.cx, a.y - cam.cy) - Math.hypot(b.x - cam.cx, b.y - cam.cy))
+      .slice(0, n)
+      .map((f) => ({ site: f.site!, name: f.name, found: fallCaveFound(this.state, f.site!) }));
+  }
+
   /** DM: reveal the secret site `site` to the players, or hide it again. */
   revealSecret(site: string, found: boolean) {
     if (this.role !== 'dm') return;
@@ -2274,13 +2287,19 @@ export class PlayController implements PointerTool {
     const v = this.view as unknown as { showSecretCaves?: (on: boolean) => void; secretCaveShown?: ((site: string) => boolean) | null };
     const sites = this.secretSites();
     const all = this.role === 'dm' || sites.every((f) => this.secretShown(f));
-    if (v.secretCaveShown !== undefined) v.secretCaveShown = (site: string) => this.role === 'dm' || fallCaveFound(this.state, site);
+    // Handed over again only when the found ones change (the renderer re-applies it on each set).
+    const found = this.role === 'dm' ? 'dm' : sites.filter((f) => this.secretShown(f)).map((f) => f.site).join(',');
+    if (v.secretCaveShown !== undefined && (found !== this.secretFound || v.secretCaveShown === null)) {
+      this.secretFound = found;
+      v.secretCaveShown = (site: string) => this.role === 'dm' || fallCaveFound(this.state, site);
+    }
     if (all !== this.secretCavesOn) {
       this.secretCavesOn = all;
       v.showSecretCaves?.(all);
     }
   }
   private secretCavesOn: boolean | null = null;
+  private secretFound: string | null = null;
 
   /** Player window: the DM's place pins on or off (pins show in the players' sight only). */
   setDmPlaces(on: boolean) {
