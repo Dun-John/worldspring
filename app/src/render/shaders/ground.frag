@@ -317,7 +317,7 @@ uniform float uStairN;
 // at its front (downhill) edge under a bold ink line, the riser above it a flat shaded band (lighter
 // where it faces the upper-left light), in the props' palettes: dressed stone (`atlas` STONE) laid in
 // a few broad blocks on a street's flight, timber (`atlas` WOOD) boards on a narrow footpath's (axis
-// `w` 1). Bold ink along the flight's sides; the 5-ft grid stays off it (`gStair`). Where the treads
+// `w` 1). The flight's sides are the street's own edge; the 5-ft grid stays off it (`gStair`). Where the treads
 // would crowd on screen they are drawn two, four... at a time, so a flight reads as steps at any
 // zoom. Fades out where the ground is a cliff.
 const vec3 STEP_STONE_TOP = vec3(0.64, 0.60, 0.54);
@@ -328,6 +328,8 @@ const vec3 STEP_WOOD_LIT = vec3(0.74, 0.60, 0.40);
 const vec3 STEP_WOOD_RISE = vec3(0.37, 0.26, 0.15);
 // How much of the pixel the steps cover (the grid leaves it alone there).
 float gStair = 0.0;
+// How much of the pixel a flight's steps may cover, by the paving's soft edge (-1: not at one).
+float gEdge = -1.0;
 vec3 treads(vec3 col, vec2 q, float steep) {
     float best = 1e9;
     vec4 axis = vec4(0.0);
@@ -397,16 +399,14 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     float hw = clamp(0.06 * px, 1.0, 3.0);
     float ink = 1.0 - smoothstep(hw - 0.5, hw + 0.5, d);
     c = mix(c, INK, ink * 0.9);
-    // Bold ink along the flight's sides (`OUT`, 0.045 sq, at least a pixel and a half), the steps
-    // ending crisply at it, the street's own ground beyond; the ends fade into the street's paving.
+    // The flight's sides are the street's own edge (the paving's soft lap with the ground, the
+    // darker rim beside it, no ink line): the steps stop where the paving does, `gEdge`. Where
+    // there is no such edge (by a wall, say) they stop at the flight's width.
     float sideD = (abs(across) - more.x) * uPxPerSq;
-    float sw = max(0.0225 * uPxPerSq, 0.75);
-    float sideInk = 1.0 - smoothstep(sw - 0.5, sw + 0.5, abs(sideD));
-    float inside = 1.0 - smoothstep(-0.5, 0.5, sideD);
+    float inside = gEdge >= 0.0 ? gEdge : 1.0 - smoothstep(-0.5, 0.5, sideD);
     float endOut = max(-tAlong, tAlong - length(axis.zw - axis.xy));
-    float k = show * (1.0 - smoothstep(0.0, 0.35, endOut));
-    c = mix(mix(col, c, inside), INK, sideInk * 0.9);
-    gStair = k * max(inside, sideInk);
+    float k = show * (1.0 - smoothstep(0.0, 0.35, endOut)) * inside;
+    gStair = k;
     return mix(col, c, k);
 }
 
@@ -581,7 +581,7 @@ void main() {
     float fieldA = -1.0;
     int nat = 0;
     vec4 d = dataAt(sq);
-    if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18 || surf == 21)) {
+    if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18 || surf == 19 || surf == 21)) {
         vec2 g = q - 0.5 + warp * 0.3;
         ivec2 gi = ivec2(floor(g));
         vec2 fg = g - floor(g);
@@ -599,7 +599,7 @@ void main() {
             vec4 dk = dataAt(gi + ivec2(k & 1, k >> 1));
             int s = int(dk.r + 0.5);
             float wt = ((k & 1) == 1 ? fg.x : 1.0 - fg.x) * ((k >> 1) == 1 ? fg.y : 1.0 - fg.y) + 1e-4;
-            if (s == 14) {
+            if (s == 14 || s == 19) {
                 sp += wt;
                 if (wt > best) {
                     best = wt;
@@ -672,11 +672,14 @@ void main() {
         float soft = 1.0 - smoothstep(0.5, 0.5 + max(1.5 * aa, 0.02), pave);
         col = mix(col, col * 0.88, band * band * (1.0 - tuft));
         col = mix(col, groundColor(nat, w), max(soft, tuft));
+        gEdge = 1.0 - max(soft, tuft);
     } else if (pave >= 0.0 && surf == nat) {
         // The ground a shade darker along the paving's edge, a rim (as a sprite's) so the street's
         // outline reads from afar.
         col *= 1.0 - 0.09 * smoothstep(0.2, 0.5, pave);
     }
+    // A flight's steps stop where the paving's edge does (its soft, tufted lap with the ground).
+    if (onStair && pave >= 0.0) gEdge = surf != 14 ? 0.0 : (gEdge < 0.0 ? 1.0 : gEdge);
     // Worn verge: the road edge darkens slightly into the surrounding ground (a gravel path's
     // edge, a little).
     float verge = roadInPlaza ? 0.0 : smoothstep(0.3, 0.5, cov) * (1.0 - smoothstep(0.5, 0.62, cov));
