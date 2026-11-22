@@ -207,10 +207,6 @@ pub enum ShapeKind {
     /// (Roadmap 7) A stone quay front's coping along its face: its line, the water on its
     /// left-hand normal; `size` the coping's width (squares).
     Coping = 35,
-    /// A retaining wall's coping along a house's levelled yard or a flight of steps
-    /// (`battlemap::retaining`): its line, the low side on its left-hand normal, then `[rise, 0]`
-    /// (ft, the most it stands over the low side); `size` the coping's width (squares).
-    Retaining = 36,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands

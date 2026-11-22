@@ -99,32 +99,11 @@ function boulder(g: Graphics, x: number, y: number, s: number, rnd: () => number
 }
 
 /** `pts` moved `d` px along their left-hand normal (-uy, ux), the normals averaged at the bends. */
-function offsetLine(pts: [number, number][], d: number, mitre = false): [number, number][] {
-  if (mitre) return mitreLine(pts, d);
+function offsetLine(pts: [number, number][], d: number): [number, number][] {
   return pts.map((p, i) => {
     const [a, b] = [pts[Math.max(0, i - 1)], pts[Math.min(pts.length - 1, i + 1)]];
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
     return [p[0] - ((b[1] - a[1]) / l) * d, p[1] + ((b[0] - a[0]) / l) * d];
-  });
-}
-
-/** `pts` (px) offset `d` along their left-hand normal, each corner mitred (a closed ring's ends,
- * which meet, joined too): a retaining wall turning a yard's corners at its full width. */
-function mitreLine(pts: [number, number][], d: number): [number, number][] {
-  const n = pts.length;
-  const ring = n > 2 && Math.hypot(pts[0][0] - pts[n - 1][0], pts[0][1] - pts[n - 1][1]) < 1e-3;
-  const nrm = (a: [number, number], b: [number, number]): [number, number] => {
-    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-    return [-(b[1] - a[1]) / l, (b[0] - a[0]) / l];
-  };
-  return pts.map((p, i) => {
-    const prev = i > 0 ? pts[i - 1] : ring ? pts[n - 2] : null;
-    const next = i < n - 1 ? pts[i + 1] : ring ? pts[1] : null;
-    const n0 = prev ? nrm(prev, p) : nrm(p, next!);
-    const n1 = next ? nrm(p, next) : n0;
-    const c = 1 + n0[0] * n1[0] + n0[1] * n1[1];
-    const [mx, my] = c > 0.25 ? [(n0[0] + n1[0]) / c, (n0[1] + n1[1]) / c] : [n1[0], n1[1]];
-    return [p[0] + mx * d, p[1] + my * d];
   });
 }
 
@@ -404,36 +383,16 @@ export function drawLantern(g: Graphics, x: number, y: number, radiusFt = 9.5, s
   });
 }
 
-/** A retaining wall along `pts` (px), the low ground on their left-hand normal (`battlemap::retaining`):
- * the wall's shadow on the low ground, wider the more it stands over it (`riseFt`), then a quay's coping
- * along its top (`drawQuayCoping`, dry), inked along the face. */
-export function drawRetainingWall(g: Graphics, pts: [number, number][], widthFt = 2.2, riseFt = 4, seed = 0, k = 1) {
-  if (pts.length < 2) return;
-  const strip = (a: [number, number][], b: [number, number][]) => g.poly([...a.flat(), ...[...b].reverse().flat()]);
-  // (The face as the eye catches it from a little off overhead, a band of darker stone wider the
-  // taller it stands, inked at its foot; the shadow on the low ground past it.)
-  const face = Math.min(3.5, Math.max(0.8, 0.3 * riseFt)) * FT * k;
-  const sh = Math.min(3, 0.6 + 0.18 * riseFt) * FT * k;
-  const foot = offsetLine(pts, face, true);
-  strip(foot, offsetLine(pts, face + sh, true)).fill({ color: 0x2b2620, alpha: 0.24 });
-  strip(pts, foot).fill(shade(RUBBLE[1], 0.78));
-  g.moveTo(foot[0][0], foot[0][1]);
-  for (const [x, y] of foot.slice(1)) g.lineTo(x, y);
-  g.stroke({ width: LINE * k, color: INK, alpha: 0.85, cap: 'butt', join: 'round' });
-  drawQuayCoping(g, pts, widthFt, seed, false, k, true);
-}
-
 /** A stone quay front's coping along its face `pts` (px), the water on their left-hand normal: a
  * course of pale dressed blocks `widthFt` across laid along the edge, their joints square to it,
- * inked boldly along the water, a lit arris just inside (`soft`: a retaining wall's, a shade
- * duller and inked lighter, against grass). Every built edge on the water wears it
+ * inked boldly along the water, a lit arris just inside. Every built edge on the water wears it
  * (quay fronts; a breakwater's edges, `wet` false: its armour shades the water), the timber piers
  * the same ink. `k`: px per atlas px (a square `k * PX` px). */
-export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1.6, seed = 0, wet = true, k = 1, soft = false) {
+export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1.6, seed = 0, wet = true, k = 1) {
   if (pts.length < 2) return;
   const rnd = rng((seed ^ Math.imul(Math.round(pts[0][0]), 73856093) ^ Math.imul(Math.round(pts[0][1]), 19349663)) >>> 0);
   const wid = widthFt * FT * k;
-  const inner = offsetLine(pts, -wid, soft);
+  const inner = offsetLine(pts, -wid);
   const line = (p: [number, number][], width: number, color: number, alpha: number) => {
     g.moveTo(p[0][0], p[0][1]);
     for (const [x, y] of p.slice(1)) g.lineTo(x, y);
@@ -441,8 +400,8 @@ export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1
   };
   // (The wall's wet face below it, a soft shade on the water.)
   if (wet) line(offsetLine(pts, wid * 0.35), wid * 0.7, 0x2a3e40, 0.3);
-  g.poly([...pts.flat(), ...[...inner].reverse().flat()]).fill(soft ? shade(RUBBLE[2], 0.9) : RUBBLE[2]);
-  line(offsetLine(pts, -wid * 0.3, soft), wid * 0.25, RUBBLE[3], 0.8);
+  g.poly([...pts.flat(), ...[...inner].reverse().flat()]).fill(RUBBLE[2]);
+  line(offsetLine(pts, -wid * 0.3), wid * 0.25, RUBBLE[3], 0.8);
   // The joints: one every 2.4-3.4 ft along the face, square across the course (one stroke for all).
   let carry = rnd() * 2 * FT * k;
   let joints = 0;
@@ -463,5 +422,5 @@ export function drawQuayCoping(g: Graphics, pts: [number, number][], widthFt = 1
   }
   if (joints) g.stroke({ width: LINE * k, color: RUBBLE[0], alpha: 0.75 });
   line(inner, LINE * k, RUBBLE[0], 0.7);
-  line(pts, (soft ? LINE * 1.4 : OUT) * k, INK, 1);
+  line(pts, OUT * k, INK, 1);
 }
