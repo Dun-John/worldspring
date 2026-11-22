@@ -229,6 +229,23 @@ export interface GenIslet {
   tower: { id: string; x: number; y: number } | null;
 }
 
+/** A waterfall (`Ctx.falls_json`, `lod::rivers::Fall`), ft: the lip at (x, y), the water running
+ * over it along `dir`; water `top` and `bottom` (`drop` between), the channel's `width` at the lip,
+ * the face's run `face` out to its foot; `cave`: the hidden cave's mouth behind the curtain, if any. */
+export interface GenFall {
+  id: string;
+  x: number;
+  y: number;
+  dir: [number, number];
+  top: number;
+  bottom: number;
+  drop: number;
+  width: number;
+  face: number;
+  river: number;
+  cave: { x: number; y: number; layout: number; site: string; secret: boolean } | null;
+}
+
 export interface BuildingEdit {
   at: [number, number];
   removed?: boolean;

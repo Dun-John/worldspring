@@ -3,7 +3,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Created, type Edits, type Feature, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, SITE_MIN_LEVEL, halfToFloat, linkSites } from '../gen/protocol';
+import { type Created, type Edits, type Feature, type GenFall, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, SITE_MIN_LEVEL, halfToFloat, linkSites } from '../gen/protocol';
 import { hillLevel } from '../editor/hill';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
@@ -15,6 +15,7 @@ import { precompile } from './precompile';
 import { SQUARE_FT } from './scale';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
+import { FallMarks } from './FallMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { Waters } from './Waters';
 import { HexLayer, hexPrograms, type CrawlMode } from './HexLayer';
@@ -282,6 +283,10 @@ export class MapView {
   /** The ferries' water legs: their own layer, shown further in than the lanes. */
   private ferryLanes: SeaLanes | null = null;
   private bridgeMarks: BridgeMarks | null = null;
+  /** The world's waterfalls (`GenClient.falls`, asked for once a world is in) and their map marks. */
+  private falls: GenFall[] = [];
+  private fallMarks: FallMarks | null = null;
+  private secretCaves: boolean | null = null;
   private placesRect: [number, number, number, number] | null = null;
   /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
   private placesEpoch = 0;
@@ -577,6 +582,8 @@ export class MapView {
     this.battle.setGrid(this.gridOn);
     this.battle.raisedOf = (key) => !!this.bridgeRaised?.(key);
     this.battle.sprites = this.edits.sprites ?? {};
+    if (this.secretCaves !== null) this.battle.showSecretCaves = this.secretCaves;
+    this.battle.setFalls(this.falls);
     this.battle.warmup();
     return this.battle;
   }
@@ -748,6 +755,21 @@ export class MapView {
    * segments drawn and whether the track layer shows. */
   get madeStats(): { count: number; towns: number; segments: number; visible: boolean; made: MadeSettlement[] } {
     return { count: this.made.length, towns: this.towns.filter((t) => t.made).length, segments: this.madeTracks?.segments ?? 0, visible: !!this.madeTracks?.container.visible, made: this.made };
+  }
+
+  /** The waterfall marks as drawn last (for checks): how many, of how many falls, and the
+   * falls drawn on the battlemap's chunks (with their caves, and whether those show). */
+  get fallStats(): { drawn: number; total: number; visible: boolean; battle: number; caves: number; secretCaves: boolean } {
+    const f = this.fallMarks;
+    const b = this.battle?.fallStats ?? { falls: 0, caves: 0, secretCaves: false };
+    return { drawn: f?.drawn ?? 0, total: f?.total ?? 0, visible: !!f?.container.visible, battle: b.falls, caves: b.caves, secretCaves: b.secretCaves };
+  }
+
+  /** Whether the battlemap draws the hidden caves behind waterfalls (the DM's view: on; the players'
+   * window: off until play reveals them). */
+  showSecretCaves(on: boolean) {
+    this.secretCaves = on;
+    if (this.battle) this.battle.showSecretCaves = on;
   }
 
   /** The bridge marks as drawn last (for checks): how many, of how many crossings. */
@@ -1190,6 +1212,7 @@ export class MapView {
     this.ferryLanes?.destroy();
     this.hexLayer?.destroy();
     this.bridgeMarks?.destroy();
+    this.fallMarks?.destroy();
     this.madeTracks?.destroy();
     this.drawnRoads?.destroy();
     this.exitBuilding();
@@ -1209,6 +1232,14 @@ export class MapView {
     this.madeTracks = new MadeTracks(this.tiles.riverFrame);
     this.drawnRoads = new DrawnRoads(this.tiles.riverFrame);
     this.bridgeMarks = new BridgeMarks(overlay.bridges ?? []);
+    this.fallMarks = new FallMarks();
+    this.falls = [];
+    void this.gen.falls().then((list) => {
+      if (geom !== this.geom) return;
+      this.falls = list ?? [];
+      this.fallMarks?.set(this.falls);
+      this.battle?.setFalls(this.falls);
+    }, () => {});
     this.hexLayer = new HexLayer();
     this.hexGrid = hexGrid(adjusted ?? world.edits);
     this.hexLayer.set(this.hexGrid, geom.map_w_ft, geom.map_h_ft);
@@ -1239,6 +1270,7 @@ export class MapView {
     this.app.stage.addChild(this.madeTracks.container);
     this.app.stage.addChild(this.drawnRoads.container);
     this.app.stage.addChild(this.bridgeMarks.container);
+    this.app.stage.addChild(this.fallMarks.container);
     this.app.stage.addChild(this.lanes.container);
     this.app.stage.addChild(this.ferryLanes.container);
     this.app.stage.addChild(battle.container);
@@ -1851,6 +1883,7 @@ export class MapView {
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.drawnRoads?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
+      this.fallMarks?.update(this.cam, this.tiles.container.visible && !this.interior, this.battle?.stats.alpha ?? 0);
       // (The three finest levels draw it in the terrain too: the layer over it gives each kind its
       // look there; gone as the battlemap comes in over it.)
       this.waterLayer.update(this.cam, this.tiles.container.visible && !this.interior ? 1 - Math.min(1, Math.max(0, this.battle?.stats.alpha ?? 0)) : 0, level > this.geom!.max_level - 2.5);

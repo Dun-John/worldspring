@@ -31,6 +31,7 @@ const ASK: { [K in Ask['op']]: (a: AskOf<K>, c: Ctx) => string } = {
   spot: (a, c) => c.creation_spot_json(a.kind, a.under, a.id, a.x, a.y),
   bridgelots: (a, c) => c.bridge_lots_json(a.input),
   islets: (_a, c) => c.islets_json(),
+  falls: (_a, c) => c.falls_json(undefined),
   islet: (a, c) => c.islet_json(a.key, a.x, a.y, a.radius, a.rise),
   wharfcheck: (a, c) => c.wharf_check_json(a.wharf, a.lighthouse),
   shoreline: (a, c) => c.shore_line_json(a.stroke),

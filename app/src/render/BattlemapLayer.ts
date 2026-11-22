@@ -27,6 +27,8 @@ import { sprites } from './spriteCode';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
 import { drawBreakwaterArmour, drawCog, drawLantern, drawQuayCoping } from './harbourShapes';
+import { drawFall, drawFallCave } from './fallShapes';
+import type { GenFall } from '../gen/protocol';
 import { drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawGravelWalk, drawRaisedDrawbridge, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
@@ -80,6 +82,9 @@ interface ChunkView {
   atmo: Mesh<Geometry, Shader> | null;
   atmoUniforms: UniformGroup | null;
   atmosphere: number;
+  /** The waterfalls whose lip lies in it (drawn with it), and the hidden caves behind them. */
+  falls: number;
+  caves: Graphics | null;
   lastUsed: number;
   /** Tactical data kept for inspection (HUD, play mode). */
   objects: number;
@@ -205,6 +210,9 @@ export class BattlemapLayer {
   /** The roof patterns' scale (`colormesh.frag`: their detail fades out under ~3 px). */
   private readonly roofFrame = new UniformGroup({ uPxPerSq: { value: 16, type: 'f32' } });
   stats = { chunks: 0, alpha: 0 };
+  /** The world's waterfalls (`setFalls`): each chunk draws those whose lip lies in it. */
+  private falls: GenFall[] = [];
+  private secretCaves: boolean;
 
   private readonly chunks = new Map<string, ChunkView>();
   private readonly received = new Map<string, { x: number; y: number; chunk: PreparedChunk; epoch: number }>();
@@ -243,6 +251,7 @@ export class BattlemapLayer {
     readonly catalog: KindInfo[],
     private readonly player = false,
   ) {
+    this.secretCaves = !player;
     this.container.addChild(...this.layers);
     // A sprite's picture arrived: chunks built without it are built again.
     this.unlisten = onLoaded((asset) => {
@@ -250,6 +259,40 @@ export class BattlemapLayer {
         if (c.prepared && c.sprites.some((s) => s.asset === asset) && !this.received.has(c.id)) this.received.set(c.id, { x: c.x, y: c.y, chunk: c.prepared, epoch: c.epoch });
       }
     });
+  }
+
+  /** The world's waterfalls: chunks built without the ones in them are built again. */
+  setFalls(falls: GenFall[]) {
+    this.falls = falls;
+    const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
+    const count = new Map<string, number>();
+    for (const f of falls) {
+      const id = `${Math.floor(f.x / ts)}/${Math.floor(f.y / ts)}`;
+      count.set(id, (count.get(id) ?? 0) + 1);
+    }
+    for (const c of this.chunks.values()) {
+      if ((count.get(c.id) ?? 0) !== c.falls && c.prepared && !this.received.has(c.id)) this.received.set(c.id, { x: c.x, y: c.y, chunk: c.prepared, epoch: c.epoch });
+    }
+  }
+
+  /** Whether the hidden caves behind waterfalls are drawn: on for the DM, off by default in the
+   * players' window (play mode turns it on as one is found). */
+  get showSecretCaves(): boolean {
+    return this.secretCaves;
+  }
+  set showSecretCaves(on: boolean) {
+    this.secretCaves = on;
+    for (const c of this.chunks.values()) if (c.caves) c.caves.visible = on;
+  }
+
+  /** The waterfalls and caves on the chunks built (for checks). */
+  get fallStats(): { falls: number; caves: number; secretCaves: boolean } {
+    let [falls, caves] = [0, 0];
+    for (const c of this.chunks.values()) {
+      falls += c.falls;
+      caves += c.caves ? 1 : 0;
+    }
+    return { falls, caves, secretCaves: this.secretCaves };
   }
 
   /** Draw objects just put down (world ft) over their chunks at once, until each chunk comes
@@ -1038,6 +1081,30 @@ export class BattlemapLayer {
     decks.addChild(bridgeG, gridG);
     this.layers[2].addChildAt(decks, this.layers[2].getChildIndex(parts[2]));
     parts.push(decks);
+    // Waterfalls whose lip lies in the chunk, each drawn whole: over every chunk's ground (so a
+    // pool reaching into the next chunk isn't covered by it), under the props; the cave behind
+    // one over it, for the DM (`showSecretCaves`).
+    const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
+    const mine = this.falls.filter((f) => Math.floor(f.x / ts) === cx && Math.floor(f.y / ts) === cy);
+    let caveG: Graphics | null = null;
+    if (mine.length) {
+      const px = (wx: number, wy: number): [number, number] => [((wx - cx * ts) / SQUARE_FT) * PX, ((wy - cy * ts) / SQUARE_FT) * PX];
+      const fallG = new Graphics();
+      for (const f of mine) {
+        const seed = Number(f.id.slice(3)) || 0;
+        drawFall(fallG, ...px(f.x, f.y), f.dir[0], f.dir[1], f, PX, seed);
+        if (f.cave) drawFallCave((caveG ??= new Graphics()), ...px(f.cave.x, f.cave.y), f.dir[0], f.dir[1], PX, seed);
+      }
+      const holder = new Container();
+      holder.addChild(fallG);
+      if (caveG) {
+        caveG.visible = this.secretCaves;
+        holder.addChild(caveG);
+      }
+      this.prewarm(holder);
+      this.layers[1].addChildAt(holder, 0);
+      parts.push(holder);
+    }
     if (gateG) {
       // (At the bottom of the towers' layer: over every chunk's walls and roofs, under every tower.)
       const holder = new Container();
@@ -1088,6 +1155,8 @@ export class BattlemapLayer {
       atmo,
       atmoUniforms,
       atmosphere,
+      falls: mine.length,
+      caves: caveG,
       lastUsed: now,
       objects: nObj,
       data,

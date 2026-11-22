@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, PlanningNow, PlanningChange, PatternNow, PatternChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet } from './protocol';
+import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, PlanningNow, PlanningChange, PatternNow, PatternChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet, GenFall } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -172,6 +172,11 @@ export class GenClient {
   /** The world's own islets (rock in rivers and off coasts), with the watchtower on each. */
   islets(): Promise<GenIslet[]> {
     return this.ask({ op: 'islets' }).then((j) => JSON.parse(j));
+  }
+
+  /** The world's waterfalls (the lip, drop, width, and the hidden cave behind some). */
+  falls(): Promise<GenFall[]> {
+    return this.ask({ op: 'falls' }).then((j) => JSON.parse(j));
   }
 
   /** A hand islet round a point: its plateau and the water it stands in, or why not. */

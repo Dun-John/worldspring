@@ -54,6 +54,8 @@ export type Ask =
   | { op: 'bridgelots'; input: string }
   /** The world's generated islets (`t0::islets`). */
   | { op: 'islets' }
+  /** The world's waterfalls (`Ctx.falls_json`). */
+  | { op: 'falls' }
   /** A hand islet round a point (`wharf::islet_at`). */
   | { op: 'islet'; key: string; x: number; y: number; radius: number; rise: number }
   /** Whether a wharf can be put down, with its lighthouse (`wharf::root_problem`). */

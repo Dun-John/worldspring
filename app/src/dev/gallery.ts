@@ -19,6 +19,8 @@
 // `&items=flatroofs` (alone; `&sq=`, default 24) shows dry-culture flat roofs as the battlemap's roof mesh draws them.
 // `&items=harbour` (alone; `&sq=`, default 48) shows the harbour batch: boats, bollards, cranes, net racks and buoys on
 // water or a quay, then the vector pieces (breakwater armour, a cog, a lighthouse's lantern) close up and in a harbour.
+// `&items=falls` (alone; `&sq=`, default 16) shows waterfalls on the battlemap, small and big, with and without the
+// hidden cave, then the map's marks at a few widths.
 // `&items=breakwaters` and `&items=piers` (alone; `&sq=`, default 48) show the breakwater armour and the timber
 // piers, bridges and quays (`dev/galleryTimber.ts`).
 // `&items=fences` (alone; `&sq=`, default 48) shows the fence and wall pieces in runs with a gate, and today's hedge,
@@ -38,6 +40,7 @@ import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
+import { drawFall, drawFallCave, drawFallMark, poolRadius, sheetRun } from '../render/fallShapes';
 import { breakwaters, piers } from './galleryTimber';
 import { flatRoofs } from './galleryRoofs';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
@@ -470,6 +473,12 @@ export async function runGallery(target: HTMLElement) {
     y = harbour(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 48);
   }
 
+  // Waterfalls (`&items=falls` alone).
+  if (!only && pick?.includes('falls')) {
+    head('Waterfalls: lip, sheet, plunge pool, mist and wet rocks (battlemap), the hidden cave behind some (DM only); then the map marks');
+    y = fallsPanel(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 16);
+  }
+
   // Breakwater armour and timber piers, bridges and quays (`&items=breakwaters`, `&items=piers`).
   if (!only && pick?.includes('breakwaters')) {
     head('Breakwaters: big rounded stones, one foam line on the water side (battlemap)');
@@ -747,6 +756,70 @@ function lighthouse(root: Container, y0: number, width: number, nolabels: boolea
     label(kind === 'lamp room' ? 'roof: lamp room, gallery round it' : kind, x0, y + n * s + 6);
   });
   return y + n * s + 44;
+}
+
+/** `&items=falls`: a few falls on a river running down the panel (small and big, with and without
+ * a cave) at `sq` px a square, then the map's marks on a river line at a few widths. */
+function fallsPanel(root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  const k = sq / 5;
+  const label = (s: string, x: number, yy: number) => {
+    if (nolabels) return;
+    const t = new Text({ text: s, style: LABEL });
+    t.position.set(x, yy);
+    root.addChild(t);
+  };
+  const falls = [
+    { width: 18, drop: 60, face: 8, cave: false, name: 'small: 18 ft wide, 60 ft drop' },
+    { width: 23, drop: 99, face: 12, cave: true, name: '23 ft wide, 99 ft drop, cave' },
+    { width: 40, drop: 678, face: 30, cave: false, name: '40 ft wide, 678 ft drop' },
+    { width: 91, drop: 165, face: 20, cave: true, name: 'big: 91 ft wide, 165 ft drop, cave' },
+  ];
+  let x = 16;
+  let y = y0;
+  let rowH = 0;
+  const g = new Graphics();
+  root.addChild(g);
+  falls.forEach((f, i) => {
+    const R = poolRadius(f);
+    const L = sheetRun(f);
+    const [wFt, hFt] = [Math.max(f.width, 2 * R) + 50, 30 + L + 2 * R + 30];
+    const [w, h] = [wFt * k, hFt * k];
+    if (x + w > width - 16) {
+      x = 16;
+      y += rowH + 30;
+      rowH = 0;
+    }
+    // Grass banks, the river down the middle (a little wider below the fall), the 5-ft grid.
+    g.rect(x, y, w, h).fill(0x8f9d5c);
+    const cx = x + w / 2;
+    const lipY = y + 30 * k;
+    g.rect(cx - (f.width / 2) * k, y, f.width * k, lipY - y).fill(0x4f8a90);
+    g.rect(cx - (f.width / 2 + 3) * k, lipY, (f.width + 6) * k, y + h - lipY).fill(0x427c84);
+    for (let gx = x + sq; gx < x + w - 1; gx += sq) g.moveTo(gx, y).lineTo(gx, y + h);
+    for (let gy = y + sq; gy < y + h - 1; gy += sq) g.moveTo(x, gy).lineTo(x + w, gy);
+    g.stroke({ width: 1, color: 0x000000, alpha: 0.1 });
+    drawFall(g, cx, lipY, 0, 1, f, sq, i);
+    if (f.cave) drawFallCave(g, cx + (f.width / 2 + 4) * k, lipY + (L + 4) * k, 0, 1, sq, i);
+    label(f.name, x, y + h + 2);
+    x += w + 20;
+    rowH = Math.max(rowH, h);
+  });
+  y += rowH + 34;
+  // The map marks: on a river line, at the symbol's size and as the river widens.
+  const m = new Graphics();
+  root.addChild(m);
+  const mw = Math.min(width - 32, 760);
+  m.rect(16, y, mw, 120).fill(0xd9cba0);
+  m.moveTo(16, y + 60).bezierCurveTo(16 + mw * 0.3, y + 20, 16 + mw * 0.6, y + 100, 16 + mw, y + 60).stroke({ width: 3, color: 0x5d8fb0 });
+  const marks: [number, number, number][] = [[0.12, 14, 7], [0.32, 18, 9], [0.55, 24, 11], [0.8, 44, 20]];
+  for (const [t, wPx, lPx] of marks) {
+    const mx = 16 + mw * t;
+    const my = y + 60 + Math.sin(t * Math.PI * 2) * -12;
+    m.moveTo(mx, my - 40).lineTo(mx, my + 40).stroke({ width: Math.max(3, wPx * 0.8), color: 0x5d8fb0 });
+    drawFallMark(m, mx, my - lPx / 2, 0, 1, wPx, lPx, 1);
+  }
+  label('map marks: the symbol (14 px) far out, then as wide as the river', 16, y + 122);
+  return y + 150;
 }
 
 /** `&items=harbour`: each harbour kind's four looks on water (boats, buoys) or quay paving (the rest), on the
