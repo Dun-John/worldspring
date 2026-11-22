@@ -1400,6 +1400,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
+    // Below a waterfall the shelf to its cave stays as the river carved it (`rivers::ledge`).
+    for f in t0.rivers.falls_in([hx0, hy0, hx0 + span, hy0 + span], 400.0).filter(|f| f.cave.is_some()) {
+        for (h, v) in hh.iter_mut().enumerate() {
+            if crate::lod::rivers::ledge_zone(f, center(h % HS, h / HS)) {
+                *v = relief_base[h];
+            }
+        }
+    }
     let soft = soft_relief::mask(&reliefs, &relief_base, gsx - 1, gsy - 1);
     // Micro-relief never lifts or digs a road bed, a building, a street, a field or the ground
     // at a way underground.

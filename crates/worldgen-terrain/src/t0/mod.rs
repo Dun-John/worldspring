@@ -591,6 +591,33 @@ impl T0 {
         // Roadside inns stand on the road as drawn (the curve wanders off its control points),
         // before the sketch's sites.
         let drawn: Vec<settle::Poi> = pois.split_off(sketched_from);
+        // No waterfall in a town's pad (its ground is eased flat) or where a road crosses the
+        // river (a bridge or a ford over the lip or the pool): those rivers run on down their
+        // steps as rapids, and their caves go with them (the last of the generated sites here).
+        // Nor a cave whose mouth would stand in a lake or the sea below its fall.
+        {
+            let blocked: Vec<(u32, u32)> = rivers.falls.iter().filter(|f| fall_blocked(f, &settlements, &road_net)).map(|f| (f.river, f.seg)).collect();
+            let drowned: Vec<(u32, u32)> = rivers
+                .falls
+                .iter()
+                .filter(|f| {
+                    // (Lake or sea at the pool's height or over it: the ground there is cut below the T0's.)
+                    let drowns = |x: f64, y: f64| wet(x, y) || ground_t0.sample_water(x, y) as f64 > f.bottom as f64 - 1.0;
+                    !blocked.contains(&(f.river, f.seg)) && f.cave.is_some_and(|c| [[0.0, 0.0], [6.0, 0.0], [-6.0, 0.0], [0.0, 6.0], [0.0, -6.0]].iter().any(|o| drowns(c[0] + o[0], c[1] + o[1])))
+                })
+                .map(|f| (f.river, f.seg))
+                .collect();
+            if !blocked.is_empty() || !drowned.is_empty() {
+                let gone: Vec<[f64; 2]> = rivers.falls.iter().filter(|f| blocked.contains(&(f.river, f.seg)) || drowned.contains(&(f.river, f.seg))).filter_map(|f| f.cave).collect();
+                rivers.drop_falls(&blocked);
+                rivers.drop_caves(&drowned);
+                let mut i = 0;
+                pois.retain(|p| {
+                    i += 1;
+                    !((falls_from..falls_to).contains(&(i - 1)) && gone.iter().any(|c| c[0].to_bits() == p.x.to_bits() && c[1].to_bits() == p.y.to_bits()))
+                });
+            }
+        }
         for ws in &network.waystations {
             let mut ws = ws.clone();
             (ws.x, ws.y) = road_net.nearest_point(ws.x, ws.y, 1.5 * cell).unwrap_or((ws.x, ws.y));
@@ -1286,6 +1313,15 @@ impl T0 {
         for v in &self.landform.data {
             out.extend_from_slice(&v.to_le_bytes());
         }
+        // Waterfalls kept from standing (optional, after the terraces): count, then (river, segment).
+        // and those without their caves.
+        for list in [&self.rivers.dropped_falls, &self.rivers.caveless_falls] {
+            out.extend_from_slice(&(list.len() as u32).to_le_bytes());
+            for &(r, k) in list {
+                out.extend_from_slice(&r.to_le_bytes());
+                out.extend_from_slice(&k.to_le_bytes());
+            }
+        }
         out
     }
 
@@ -1424,8 +1460,20 @@ impl T0 {
         {
             landform = Grid::from_vec(w, h, take(n * 4)?.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect());
         }
+        let mut fall_lists: [Vec<(u32, u32)>; 2] = Default::default();
+        for list in &mut fall_lists {
+            if let Ok(b) = take(4) {
+                for _ in 0..u32::from_le_bytes(b.try_into().unwrap()) {
+                    let r = u32::from_le_bytes(take(4)?.try_into().unwrap());
+                    list.push((r, u32::from_le_bytes(take(4)?.try_into().unwrap())));
+                }
+            }
+        }
+        let [dropped_falls, caveless_falls] = fall_lists;
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
+        let mut rivers = RiverNet::new(curves, map_w, map_h, cell_ft);
+        (rivers.dropped_falls, rivers.caveless_falls) = (dropped_falls, caveless_falls);
         Ok(Self::from_grids(
             Grid::from_vec(w, h, f32s(base)),
             Grid::from_vec(w, h, f32s(base + n * 4)),
@@ -1433,7 +1481,7 @@ impl T0 {
             Grid::from_vec(w, h, biome),
             cell_ft,
             biome_seed,
-            RiverNet::new(curves, map_w, map_h, cell_ft),
+            rivers,
             RoadNet::new(road_curves, map_w, map_h, cell_ft),
         )
         .with_settlements(settlements, pois)
@@ -1441,6 +1489,22 @@ impl T0 {
         .with_landform(landform))
     }
 }
+
+/// Whether a waterfall would stand in a settlement's pad or under a road (`T0::generate` drops
+/// it): its lip, its face's foot or its cave within a road's reach, or within a pad.
+fn fall_blocked(f: &crate::lod::rivers::Fall, settlements: &[settle::Settlement], roads: &RoadNet) -> bool {
+    let face = f.face_ft as f64;
+    let foot = [f.at[0] + f.dir[0] * face, f.at[1] + f.dir[1] * face];
+    let spread = 0.5 * f.width as f64 + face;
+    let in_pad = settlements.iter().any(|s| {
+        let (dx, dy) = (s.x - f.at[0], s.y - f.at[1]);
+        crate::core::sqrt(dx * dx + dy * dy) < radii::pad_extent(radii::reach(s)) + spread
+    });
+    in_pad || [Some(f.at), Some(foot), f.cave].into_iter().flatten().any(|p| roads.nearest_point(p[0], p[1], 0.5 * f.width as f64 + FALL_ROAD_CLEAR_FT).is_some())
+}
+
+/// How far (ft, past the river's half width) a road keeps from a waterfall.
+const FALL_ROAD_CLEAR_FT: f64 = 60.0;
 
 /// (water level or `DRY`, wet fraction 0..1) at a world position, with the shoreline wobble
 /// (see `T0::sample_lake`); usable before the T0 exists.

@@ -161,8 +161,15 @@ pub struct RiverNet {
     /// The lattice (ft) of the T0 ground the profiles were last settled on (`T0` settles
     /// once per ground: settling again on the same ground changes nothing).
     pub settled_on: Option<f64>,
-    /// The waterfalls, by id (`settle`: a pure function of the curves and the ground).
+    /// The waterfalls, by id (`settle`: a pure function of the curves and the ground, less
+    /// `dropped_falls`).
     pub falls: Vec<Fall>,
+    /// Falls kept from standing, by (river, segment): those in a town's pad or under a road
+    /// (`T0::generate` finds them once the towns and roads stand; saved with the T0).
+    pub dropped_falls: Vec<(u32, u32)>,
+    /// Falls that hide no cave after all, by (river, segment): their caves' mouths stood in a
+    /// lake or the sea (`T0::generate`; saved with the T0).
+    pub caveless_falls: Vec<(u32, u32)>,
 }
 
 /// Spacing (ft) of the coarsest level that carves valleys (2.5 · 2^n ≤ 2,500), whose wide,
@@ -388,7 +395,7 @@ impl RiverNet {
                 }
             }
         }
-        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new(), valley_index: (0, 0, Vec::new()), settled_on: None, falls: Vec::new() }
+        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new(), valley_index: (0, 0, Vec::new()), settled_on: None, falls: Vec::new(), dropped_falls: Vec::new(), caveless_falls: Vec::new() }
     }
 
     /// Water surfaces that follow the ground: the curve wanders off its cells, and the
@@ -572,6 +579,8 @@ impl RiverNet {
                 kept.push(c);
             }
         }
+        // (After the spacing: a dropped fall leaves no smaller one in its place.)
+        kept.retain(|c| !self.dropped_falls.contains(&(c.ri, c.k)));
         kept.sort_by(|a, b| a.ri.cmp(&b.ri).then(a.k.cmp(&b.k)));
         self.falls = kept
             .iter()
@@ -586,14 +595,55 @@ impl RiverNet {
                 let l = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
                 let dir = [dx / l, dy / l];
                 let h = hash2(r.seed ^ 0xCA7E, c.k as i64, 2);
-                let cave = (crate::core::rng::unit(h) < 1.0 / 3.0).then(|| {
+                // (By the finest curve just below the foot, its water's edge there: the shelf
+                // `ledge` carves runs along it.)
+                let cave = (crate::core::rng::unit(h) < 1.0 / 3.0 && !self.caveless_falls.contains(&(c.ri, c.k))).then(|| {
                     let side = if h >> 40 & 1 == 0 { 1.0 } else { -1.0 };
-                    let (out, across) = (c.face + 3.0, 0.5 * at.w + 4.0);
-                    [at.p[0] + dir[0] * out - side * dir[1] * across, at.p[1] + dir[1] * out + side * dir[0] * across]
+                    let seg_len = (r.s[c.k as usize + 1] - r.s[c.k as usize]).max(1.0);
+                    let (ta, tb) = ((c.t1 + 3.0 / seg_len).min(1.0), (c.t1 + 9.0 / seg_len).min(1.0));
+                    let (a, b) = (r.eval(c.k as usize, ta, 2.5, cell_ft), r.eval(c.k as usize, tb, 2.5, cell_ft));
+                    let (tx, ty) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
+                    let tl = crate::core::sqrt(tx * tx + ty * ty);
+                    let t = if tl > 1e-6 { [tx / tl, ty / tl] } else { dir };
+                    let across = 0.5 * a.w + 5.0;
+                    [a.p[0] - side * t[1] * across, a.p[1] + side * t[0] * across]
                 });
                 Fall { id: id as u32, river: c.ri, seg: c.k, at: at.p, dir, top, bottom, width: at.w as f32, face_ft: c.face as f32, cave }
             })
             .collect();
+    }
+
+    /// Keep the falls at `drop` (river, segment) from standing: their rivers run on down their
+    /// steps as rapids, the falls after them renumbered (as `find_falls` would have them).
+    pub fn drop_falls(&mut self, drop: &[(u32, u32)]) {
+        self.dropped_falls.extend_from_slice(drop);
+        self.dropped_falls.sort_unstable();
+        self.dropped_falls.dedup();
+        let dropped = &self.dropped_falls;
+        let mut new_id = vec![u32::MAX; self.falls.len()];
+        self.falls.retain(|f| !dropped.contains(&(f.river, f.seg)));
+        for (id, f) in self.falls.iter_mut().enumerate() {
+            new_id[f.id as usize] = id as u32;
+            f.id = id as u32;
+        }
+        for r in &mut self.rivers {
+            r.falls.retain(|fa| new_id[fa.id as usize] != u32::MAX);
+            for fa in &mut r.falls {
+                fa.id = new_id[fa.id as usize];
+            }
+        }
+    }
+
+    /// Take the caves from the falls at `at` (river, segment).
+    pub fn drop_caves(&mut self, at: &[(u32, u32)]) {
+        self.caveless_falls.extend_from_slice(at);
+        self.caveless_falls.sort_unstable();
+        self.caveless_falls.dedup();
+        for f in &mut self.falls {
+            if self.caveless_falls.contains(&(f.river, f.seg)) {
+                f.cave = None;
+            }
+        }
     }
 
     /// The falls whose lip lies in `rect` grown by `pad` (ft).
@@ -884,7 +934,8 @@ impl CrossingCache {
 /// A sampled polyline piece of one river near a tile.
 pub struct Piece {
     pub pts: Vec<CurvePoint>,
-    /// The falls its points' `fall` name.
+    /// The falls its points' `fall` name (and, on a tile's first piece, every fall whose carving
+    /// reaches the tile).
     pub falls: Vec<Fall>,
 }
 
@@ -975,6 +1026,28 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
                 && !p.falls.iter().any(|f| f.id == id)
             {
                 p.falls.push(net.falls[id as usize]);
+            }
+        }
+    }
+    // What a fall carves (the bed kept above its lip, the cap on the water below, a cave's shelf
+    // running on past the fall's own points: `carve`, `ledge`) reaches tiles its points may
+    // not: every tile it reaches carves it alike, so its fall goes with the first piece of each.
+    if let Some(first) = out.first_mut() {
+        let more: Vec<Fall> = net
+            .falls
+            .iter()
+            .filter(|f| {
+                let p = pad(f.width as f64);
+                let r = LIP_KEEP_FT + 3.0 * f.width as f64 + f.face_ft as f64 + 2.0 * spacing;
+                let b = [f.at[0] - r, f.at[1] - r, f.at[0] + r, f.at[1] + r];
+                let b = ledge_box(f).map_or(b, |l| [b[0].min(l[0]), b[1].min(l[1]), b[2].max(l[2]), b[3].max(l[3])]);
+                b[0] <= rect[2] + p && b[2] >= rect[0] - p && b[1] <= rect[3] + p && b[3] >= rect[1] - p
+            })
+            .copied()
+            .collect();
+        for f in more {
+            if !first.falls.iter().any(|o| o.id == f.id) {
+                first.falls.push(f);
             }
         }
     }
@@ -1124,6 +1197,135 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
             }
         }
         heights[k] = v as f32;
+    }
+    if spacing <= LEDGE_MAX_SPACING_FT {
+        for f in lips.iter().filter(|f| f.cave.is_some()) {
+            ledge(pieces, f, heights, water, dim, origin, spacing);
+        }
+    }
+}
+
+/// The rock shelf to a fall's cave: how far out from the water's edge it starts and how wide it
+/// runs (ft), how far past the face's foot (plus the river's width), how high over the water,
+/// and the finest spacing that carves it (coarser levels cannot hold it; finer ones carve
+/// their own).
+const LEDGE_FROM_FT: f64 = 1.0;
+const LEDGE_WIDTH_FT: f64 = 11.0;
+const LEDGE_RUN_FT: f64 = 60.0;
+const LEDGE_RISE_FT: f64 = 2.0;
+/// Steepest the shelf descends (rise over run) where the river runs on down steeply below the pool.
+const LEDGE_SLOPE: f64 = 0.6;
+const LEDGE_MAX_SPACING_FT: f64 = 5.0;
+/// The shelf takes in the ground this far (ft) round the cave's mouth.
+const LEDGE_MOUTH_FT: f64 = 7.5;
+/// Beyond the shelf below the mouth, the ground keeps within this slope of it for this far (ft),
+/// so a pit or a wall beside it is a ramp off it.
+const LEDGE_SKIRT_FT: f64 = 15.0;
+const LEDGE_SKIRT_SLOPE: f64 = 0.8;
+
+/// The box (ft) round a fall's cave shelf and its skirt (`ledge`; none without a cave).
+fn ledge_box(f: &Fall) -> Option<[f64; 4]> {
+    let cave = f.cave?;
+    let (face, half_w) = (f.face_ft as f64, 0.5 * f.width as f64);
+    let (u0, u1) = (face - 3.0, face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w);
+    let reach = half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT;
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for u in [u0, u1] {
+        for v in [-reach, reach] {
+            let p = [f.at[0] + f.dir[0] * u - f.dir[1] * v, f.at[1] + f.dir[1] * u + f.dir[0] * v];
+            b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
+        }
+    }
+    let m = LEDGE_MOUTH_FT + reach;
+    Some([b[0].min(cave[0] - m), b[1].min(cave[1] - m), b[2].max(cave[0] + m), b[3].max(cave[1] + m)])
+}
+
+/// Whether `p` (ft) lies where a fall's cave shelf may run (`ledge`): from just behind the face's
+/// foot to the shelf's end, out to its skirt on either side. The battlemap keeps its micro-relief
+/// out of there.
+pub fn ledge_zone(f: &Fall, p: [f64; 2]) -> bool {
+    let (face, half_w) = (f.face_ft as f64, 0.5 * f.width as f64);
+    let r = [p[0] - f.at[0], p[1] - f.at[1]];
+    let u = r[0] * f.dir[0] + r[1] * f.dir[1];
+    let v = f.dir[0] * r[1] - f.dir[1] * r[0];
+    let near_mouth = f.cave.is_some_and(|c| (p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]) <= (LEDGE_MOUTH_FT + LEDGE_SKIRT_FT) * (LEDGE_MOUTH_FT + LEDGE_SKIRT_FT));
+    near_mouth || f.cave.is_some() && u >= face - 3.0 && u <= face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w && v.abs() <= half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT
+}
+
+/// A walkable shelf of rock from behind the falling water, past the cave's mouth and on along
+/// the bank on its side below the pool (a strip `LEDGE_WIDTH_FT` wide by the water's edge,
+/// `LEDGE_RISE_FT` over the pool, then over the river below or easing down at `LEDGE_SLOPE`), so
+/// the cave is always reached from the land downstream. Dry: the water beside it stays below it.
+/// A pure function of position (the nearest point of the rivers' pieces near the tile).
+fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim: usize, origin: [f64; 2], spacing: f64) {
+    let Some(cave) = f.cave else { return };
+    let (face, half_w) = (f.face_ft as f64, 0.5 * f.width as f64);
+    let (u0, u1) = (face - 3.0, face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w);
+    let reach = half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT + spacing;
+    let Some(b) = ledge_box(f) else { return };
+    let (lo, hi) = ([b[0] - spacing, b[1] - spacing], [b[2] + spacing, b[3] + spacing]);
+    // The rivers' segments near it (the nearest point decides the side and the water's edge).
+    let segs: Vec<(&CurvePoint, &CurvePoint)> = pieces
+        .iter()
+        .flat_map(|p| p.pts.windows(2).map(|s| (&s[0], &s[1])))
+        .filter(|(a, b)| {
+            let r = 0.5 * a.w.max(b.w) + reach;
+            a.p[0].min(b.p[0]) - r <= hi[0] && a.p[0].max(b.p[0]) + r >= lo[0] && a.p[1].min(b.p[1]) - r <= hi[1] && a.p[1].max(b.p[1]) + r >= lo[1]
+        })
+        .collect();
+    if segs.is_empty() {
+        return;
+    }
+    // The nearest point of the rivers to (x, y): (squared distance, side, level, width).
+    let nearest = |x: f64, y: f64| {
+        let mut best = (f64::INFINITY, 0.0, 0.0, 0.0);
+        for &(a, b) in &segs {
+            let (dx, dy) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
+            let len2 = (dx * dx + dy * dy).max(1e-9);
+            let t = (((x - a.p[0]) * dx + (y - a.p[1]) * dy) / len2).clamp(0.0, 1.0);
+            let (qx, qy) = (a.p[0] + dx * t - x, a.p[1] + dy * t - y);
+            let d2 = qx * qx + qy * qy;
+            if d2 < best.0 {
+                best = (d2, dx * (y - a.p[1]) - dy * (x - a.p[0]), a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
+            }
+        }
+        best
+    };
+    // (The cave's side of the river, as the river runs past its mouth.)
+    let side = nearest(cave[0], cave[1]).1.signum();
+    let i0 = (((lo[0] - origin[0]) / spacing).ceil().max(0.0) as usize).min(dim);
+    let i1 = (((hi[0] - origin[0]) / spacing).floor() + 1.0).clamp(0.0, dim as f64) as usize;
+    let j0 = (((lo[1] - origin[1]) / spacing).ceil().max(0.0) as usize).min(dim);
+    let j1 = (((hi[1] - origin[1]) / spacing).floor() + 1.0).clamp(0.0, dim as f64) as usize;
+    let bottom = f.bottom as f64;
+    for j in j0..j1 {
+        let y = origin[1] + j as f64 * spacing;
+        for i in i0..i1 {
+            let x = origin[0] + i as f64 * spacing;
+            let r = [x - f.at[0], y - f.at[1]];
+            let u = r[0] * f.dir[0] + r[1] * f.dir[1];
+            // (And round the mouth itself, whichever way the water's edge runs there.)
+            let mouth = (x - cave[0]) * (x - cave[0]) + (y - cave[1]) * (y - cave[1]) <= LEDGE_MOUTH_FT * LEDGE_MOUTH_FT;
+            if !mouth && (u < u0 || u > u1) {
+                continue;
+            }
+            let best = nearest(x, y);
+            let (d, on, z, w) = (crate::core::sqrt(best.0), best.1, best.2, best.3);
+            let out = d - 0.5 * w;
+            let skirt = if mouth { 0.0 } else { out - LEDGE_FROM_FT - LEDGE_WIDTH_FT };
+            if !mouth && (on * side <= 0.0 || out < LEDGE_FROM_FT || skirt > LEDGE_SKIRT_FT || (skirt > 0.0 && u <= face + 3.0)) {
+                continue;
+            }
+            let shelf = (z.min(bottom) + LEDGE_RISE_FT).max(bottom + LEDGE_RISE_FT - LEDGE_SLOPE * (u - face - 3.0).max(0.0));
+            let k = j * dim + i;
+            if skirt > 0.0 {
+                let give = LEDGE_SKIRT_SLOPE * skirt;
+                heights[k] = (heights[k] as f64).clamp(shelf - give, shelf + give) as f32;
+            } else {
+                heights[k] = shelf as f32;
+                water[k] = water[k].min((shelf - 0.5) as f32);
+            }
+        }
     }
 }
 

@@ -3,7 +3,7 @@
 // characters can see, and the link to the player window; in the player window it follows the
 // DM (state, location, camera, place pins) and draws the players' view.
 import { layoutOfId } from '../editor/reanchor';
-import { linkSites, type Feature, type Interior, type LinkEdit, type WorldFile } from '../gen/protocol';
+import { linkSites, type Feature, type Interior, type LinkEdit, type Overlay, type WorldFile } from '../gen/protocol';
 import type { InteriorLayer } from '../render/InteriorLayer';
 import type { MapView, PointerTool } from '../render/MapView';
 import { hexAt, hexFrame, hexKey, hexRing, parseHexKey, type HexFrame, type HexSeen } from '../render/hex';
@@ -14,7 +14,7 @@ import { PIN, PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { forgetRehosted } from './rehosted';
 import { hasImage, loadSession, putImage, saveSession } from './session';
-import { apply, emptyState, hexSeenOf, type HexMode, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
+import { apply, emptyState, fallCaveFound, fallCaveKey, hexSeenOf, type HexMode, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
 import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, rulerTerrain, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 import { floorOf } from '../gen/floor';
 
@@ -1696,6 +1696,14 @@ export class PlayController implements PointerTool {
         return true;
       }
     }
+    // On the surface by a secret site's mouth: the players learn of it (or forget it again).
+    if (!place.it && !place.sewers) {
+      const near = this.secretSites().find((f) => Math.hypot(f.x - wx, f.y - wy) <= 20);
+      if (near?.site) {
+        this.revealSecret(near.site, !fallCaveFound(this.state, near.site));
+        return true;
+      }
+    }
     if (door && dd?.kind === 'secret') {
       const st = this.door(door.sec.doorLoc, door.k);
       this.dispatch({ t: 'door', key: `${door.sec.doorLoc}#${door.k}`, state: { ...st, found: !st.found, open: st.found ? false : st.open } });
@@ -1953,6 +1961,7 @@ export class PlayController implements PointerTool {
       const labels = this.view.labels;
       if (labels && labels.conceal !== this.concealFn) labels.conceal = this.concealFn;
     }
+    this.syncSecretCaves();
     this.layer.update(now);
   }
 
@@ -2046,6 +2055,7 @@ export class PlayController implements PointerTool {
    * revealed under fog; else anywhere).
    */
   private conceal(f: Feature, path?: [number, number][], area = false): boolean {
+    if (f.secret && !this.secretShown(f)) return true;
     if (this.on && this.state.hexMode === 'crawl' && this.hexHidden(f, path, area)) return true;
     if (!POI_KINDS.has(f.kind) && !f.id.startsWith('c:')) return false;
     if (!this.dmPlaces) return true;
@@ -2225,6 +2235,53 @@ export class PlayController implements PointerTool {
     }
   }
 
+  // ---------------------------------------------------------------------------------------
+  // Secret sites (a cave behind a waterfall): the DM sees them; the players' window shows its
+  // label, its mouth and its way in only once the DM has revealed it (a play op, kept in the
+  // session with the doors: `fallCaveKey`).
+
+  /** The secret sites' features (`Feature.secret`, with their `site`). */
+  secretSites(): Feature[] {
+    const o = this.view.overlay;
+    if (this.secretOf !== o) [this.secretOf, this.secrets] = [o, (o?.features ?? []).filter((f) => f.secret && f.site)];
+    return this.secrets;
+  }
+  private secretOf: Overlay | null = null;
+  private secrets: Feature[] = [];
+
+  /** Whether this window shows the secret site `f` (the DM's always; the players' once found). */
+  secretShown(f: Feature): boolean {
+    return this.role === 'dm' || (!!f.site && fallCaveFound(this.state, f.site));
+  }
+
+  /** Whether site `id` (`u:<layout>:0`) is a secret one the players don't know yet. */
+  secretSite(id: string): boolean {
+    return this.secretSites().some((f) => f.site === id && !fallCaveFound(this.state, id));
+  }
+
+  /** DM: reveal the secret site `site` to the players, or hide it again. */
+  revealSecret(site: string, found: boolean) {
+    if (this.role !== 'dm') return;
+    const key = fallCaveKey(site);
+    this.dispatch({ t: 'door', key, state: { ...(this.state.doors[key] ?? {}), found } });
+    this.onChange();
+  }
+
+  /** The renderer's view of the secret caves in this window: `MapView.showSecretCaves` (all or
+   * none: on for the DM, and for the players once every one is found) and, per cave, the hook
+   * `secretCaveShown(site)` for a renderer that draws them one by one. */
+  private syncSecretCaves() {
+    const v = this.view as unknown as { showSecretCaves?: (on: boolean) => void; secretCaveShown?: ((site: string) => boolean) | null };
+    const sites = this.secretSites();
+    const all = this.role === 'dm' || sites.every((f) => this.secretShown(f));
+    if (v.secretCaveShown !== undefined) v.secretCaveShown = (site: string) => this.role === 'dm' || fallCaveFound(this.state, site);
+    if (all !== this.secretCavesOn) {
+      this.secretCavesOn = all;
+      v.showSecretCaves?.(all);
+    }
+  }
+  private secretCavesOn: boolean | null = null;
+
   /** Player window: the DM's place pins on or off (pins show in the players' sight only). */
   setDmPlaces(on: boolean) {
     this.dmPlaces = on;
@@ -2238,6 +2295,11 @@ export class PlayController implements PointerTool {
     if (!v.geom) return;
     const cur = v.interior?.interior.id ?? null;
     if (sc.interior === null) {
+      if (cur) v.exitBuilding();
+      return;
+    }
+    // (Not into a secret site the players don't know yet: they wait on the surface.)
+    if (this.role === 'player' && this.secretSite(sc.interior)) {
       if (cur) v.exitBuilding();
       return;
     }

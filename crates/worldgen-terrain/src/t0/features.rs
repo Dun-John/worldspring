@@ -42,6 +42,9 @@ pub struct Feature {
     /// Secret: shown to the DM, hidden from players until found (a cave behind a waterfall).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub secret: bool,
+    /// A secret place's site (`u:<layout>:0`), which players don't enter until it is found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -455,7 +458,7 @@ impl Builder<'_> {
         while !self.ids.insert(id.clone()) {
             id.push('b');
         }
-        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, secret: false });
+        self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail, secret: false, site: None });
         self.out.shapes.push(Shape::Point { at: [cx * c, cy * c], radius_ft: 0.0 });
         id
     }
@@ -520,7 +523,7 @@ impl Builder<'_> {
             while !self.ids.insert(id.clone()) {
                 id.push('b');
             }
-            self.out.features.push(Feature { id, kind: "road", name: name.to_string(), x: at[0], y: at[1], angle, extent_ft: total, elev_ft: None, detail: Some(class.into()), secret: false });
+            self.out.features.push(Feature { id, kind: "road", name: name.to_string(), x: at[0], y: at[1], angle, extent_ft: total, elev_ft: None, detail: Some(class.into()), secret: false, site: None });
             self.out.shapes.push(Shape::Line(course));
         }
     }
@@ -1010,7 +1013,7 @@ impl Builder<'_> {
             // A pinned settlement keeps the name drawn with it.
             self.drawn_name(s.pin);
         }
-        for p in inp.pois {
+        for (pi, p) in inp.pois.iter().enumerate() {
             let (cx, cy) = (p.x / c, p.y / c);
             let (kind, _, extent) = poi_kind(p);
             let k = (cy.round() as usize).min(inp.h - 1) * inp.w + (cx.round() as usize).min(inp.w - 1);
@@ -1021,6 +1024,7 @@ impl Builder<'_> {
                 let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();
                 f.detail = Some("behind a waterfall, hidden from players until found".into());
                 f.secret = true;
+                f.site = Some(format!("u:{}:0", inp.settlements.len() + pi));
             }
             if p.kind == PoiKind::Waystation {
                 let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();

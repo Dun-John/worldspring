@@ -417,6 +417,7 @@
     {#if scope !== null}{@render caret(f.id, !!opened[f.id], () => expand(f.id, scope))}{:else}<span class="pad"></span>{/if}
     {#if kind}<span class="kind" title={kind}><Icon name={kindIcon(f.kind)} size={13} /></span>{/if}
     {@render name(f.id, f.name)}
+    {#if f.secret}<span class="secret" title="Behind a waterfall: hidden from the players until revealed in play">secret</span>{/if}
     {#if kind}<span class="muted what">{kind}</span>{/if}
     {#if town}<button class="muted in" onclick={() => reveal(town.id)} title="Show it under {town.name}">in {town.name}</button>{/if}
     {@render acts(f.id, f.name)}
@@ -651,6 +652,15 @@
 </aside>
 
 <style>
+  .secret {
+    flex: none;
+    font-size: 10px;
+    line-height: 14px;
+    padding: 0 4px;
+    border-radius: 3px;
+    color: #fbf7ec;
+    background: #7a4a8a;
+  }
   .gazetteer {
     display: flex;
     flex-direction: column;

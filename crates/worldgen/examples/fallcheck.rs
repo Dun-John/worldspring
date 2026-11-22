@@ -27,7 +27,21 @@ fn main() {
         let mut sorted = drops.clone();
         sorted.sort_by(f32::total_cmp);
         let med = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
-        println!("seed {seed}: {} falls (drop {lo:.0}-{hi:.0} ft, median {med:.0}), {caves} caves ({cave_pois} cave sites), {near_town} within a town's pad | T0 {ms} ms", falls.len());
+        let (dropped, caveless) = (ex.t0.rivers.dropped_falls.len(), ex.t0.rivers.caveless_falls.len());
+        println!("seed {seed}: {} falls (drop {lo:.0}-{hi:.0} ft, median {med:.0}), {caves} caves ({cave_pois} cave sites), {near_town} within a town's pad; {dropped} dropped by towns and roads, {caveless} caves drowned | T0 {ms} ms", falls.len());
+        if std::env::var("ALL").is_ok() {
+            // Every cave: walked to from its chunk's edge (or a big stretch of ground)?
+            let mut bad = Vec::new();
+            let mut least = usize::MAX;
+            for f in falls.iter().filter(|f| f.cave.is_some()) {
+                let (reached, edge, wet, _) = reach(&mut ex, f.cave.unwrap());
+                least = least.min(reached);
+                if !edge || wet {
+                    bad.push(format!("fl:{} ({reached} sq, wet {wet})", f.id));
+                }
+            }
+            println!("  all {caves} caves: least reached {least} squares; not to the edge: {}", if bad.is_empty() { "none".into() } else { bad.join(", ") });
+        }
         let g = ex.world.geom.clone();
         let level = g.max_level;
         let s = g.spacing_ft(level);

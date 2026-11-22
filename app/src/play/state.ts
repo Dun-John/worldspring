@@ -72,6 +72,13 @@ export interface DoorState {
   unlocked?: boolean;
 }
 
+/** A secret site's way in (a cave behind a waterfall) the players know about: kept with the doors,
+ * as `<site>#fall` → { found } (so a remade world moves it with the site). */
+export const fallCaveKey = (site: string) => `${site}#fall`;
+
+/** Whether the players know of the secret site `site` (`Feature.site`). */
+export const fallCaveFound = (s: PlayState, site: string) => !!s.doors[fallCaveKey(site)]?.found;
+
 export interface LocSettings {
   /** Fog of war: players see only what has been revealed. */
   fog: boolean;

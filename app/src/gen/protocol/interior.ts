@@ -231,6 +231,10 @@ export interface Feature {
   extent_ft: number;
   elev_ft?: number;
   detail?: string;
+  /** Secret: the DM sees it, players don't until it is found (a cave behind a waterfall). */
+  secret?: boolean;
+  /** A secret place's site (`u:<layout>:0`). */
+  site?: string;
 }
 
 export interface Overlay {

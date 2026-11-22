@@ -305,62 +305,65 @@ fn dwarven_crag_seams() {
 /// from its chunk's edge (dry squares, no step over 5 ft).
 #[test]
 fn waterfalls_drop_and_cave_reachable() {
-    let world = World::from_json(&world_json(1)).unwrap();
-    let g = world.geom.clone();
-    let bytes = worldgen::t0::T0::generate(&world).to_bytes();
-    let mut ex = Executor::new(world);
-    let falls = ex.t0.rivers.falls.clone();
-    assert!(!falls.is_empty(), "no waterfalls");
-    assert_eq!(format!("{:?}", worldgen::t0::T0::from_bytes(&bytes).unwrap().rivers.falls), format!("{falls:?}"), "falls differ after load");
-    let level = g.max_level;
-    let (s, size, n, h) = (g.spacing_ft(level), g.tile_size_ft(level), TILE_N as i64, HALO as i64);
-    let picks: Vec<_> = falls.iter().filter(|f| f.cave.is_some()).take(3).chain(falls.iter().filter(|f| f.cave.is_none()).take(1)).copied().collect();
-    for f in picks {
-        let at = |d: f64| [f.at[0] + f.dir[0] * d, f.at[1] + f.dir[1] * d];
-        let mut water = |p: [f64; 2]| {
-            let key = TileKey::surface(level, (p[0] / size) as u32, (p[1] / size) as u32);
-            let (ox, oy) = g.tile_origin_ft(&key);
-            let t = ex.terrain(key);
-            let k = padded_index(((p[0] - ox) / s).round() as i64, ((p[1] - oy) / s).round() as i64);
-            (t.padded[k], t.river_water[k])
-        };
-        let (bed, above) = water(at(-15.0));
-        let (_, below) = water(at(f.face_ft as f64 + 30.0));
-        assert!(bed < above && (above - f.top).abs() < 25.0, "fall {}: water above the lip {above} (bed {bed}), top {}", f.id, f.top);
-        assert!(below - f.bottom < 25.0 && above - below > 0.6 * f.drop_ft(), "fall {}: water below {below}, above {above}, drop {}", f.id, f.drop_ft());
-        let (x, y) = ((f.at[0] / size) as u32, (f.at[1] / size) as u32);
-        let a = ex.terrain(TileKey::surface(level, x, y)).padded.clone();
-        let right = ex.terrain(TileKey::surface(level, x + 1, y)).padded.clone();
-        let down = ex.terrain(TileKey::surface(level, x, y + 1)).padded.clone();
-        for j in -h..=n + h {
-            for d in -h..=h {
-                assert_eq!(a[padded_index(n + d, j)].to_bits(), right[padded_index(d, j)].to_bits(), "fall {}: x seam", f.id);
-                assert_eq!(a[padded_index(j, n + d)].to_bits(), down[padded_index(j, d)].to_bits(), "fall {}: y seam", f.id);
-            }
-        }
-        let Some(c) = f.cave else { continue };
-        let key = TileKey::surface(level, (c[0] / size) as u32, (c[1] / size) as u32);
-        let (ox, oy) = g.tile_origin_ft(&key);
-        let ch = ex.battlemap(key);
-        let sq = worldgen::battlemap::SQ;
-        let ft = size / sq as f64;
-        let start = (((c[1] - oy) / ft) as usize).min(sq - 1) * sq + (((c[0] - ox) / ft) as usize).min(sq - 1);
-        let dry = |k: usize| ch.water_level[k] <= ch.height[k];
-        assert!(dry(start), "fall {}: cave mouth under water", f.id);
-        let mut seen = vec![false; sq * sq];
-        let (mut stack, mut edge) = (vec![start], false);
-        seen[start] = true;
-        while let Some(k) = stack.pop() {
-            let (i, j) = (k % sq, k / sq);
-            edge |= i == 0 || j == 0 || i + 1 == sq || j + 1 == sq;
-            let next = [(i + 1 < sq).then(|| k + 1), (i > 0).then(|| k - 1), (j + 1 < sq).then(|| k + sq), (j > 0).then(|| k - sq)];
-            for q in next.into_iter().flatten() {
-                if !seen[q] && dry(q) && (ch.height[q] - ch.height[k]).abs() <= 5.0 {
-                    seen[q] = true;
-                    stack.push(q);
+    // (Two worlds' first eight caves: each one reached by its shelf, `rivers::ledge`.)
+    for seed in [1, 3] {
+        let world = World::from_json(&world_json(seed)).unwrap();
+        let g = world.geom.clone();
+        let bytes = worldgen::t0::T0::generate(&world).to_bytes();
+        let mut ex = Executor::new(world);
+        let falls = ex.t0.rivers.falls.clone();
+        assert!(!falls.is_empty(), "no waterfalls");
+        assert_eq!(format!("{:?}", worldgen::t0::T0::from_bytes(&bytes).unwrap().rivers.falls), format!("{falls:?}"), "falls differ after load");
+        let level = g.max_level;
+        let (s, size, n, h) = (g.spacing_ft(level), g.tile_size_ft(level), TILE_N as i64, HALO as i64);
+        let picks: Vec<_> = falls.iter().filter(|f| f.cave.is_some()).take(8).chain(falls.iter().filter(|f| f.cave.is_none()).take(1)).copied().collect();
+        for f in picks {
+            let at = |d: f64| [f.at[0] + f.dir[0] * d, f.at[1] + f.dir[1] * d];
+            let mut water = |p: [f64; 2]| {
+                let key = TileKey::surface(level, (p[0] / size) as u32, (p[1] / size) as u32);
+                let (ox, oy) = g.tile_origin_ft(&key);
+                let t = ex.terrain(key);
+                let k = padded_index(((p[0] - ox) / s).round() as i64, ((p[1] - oy) / s).round() as i64);
+                (t.padded[k], t.river_water[k])
+            };
+            let (bed, above) = water(at(-15.0));
+            let (_, below) = water(at(f.face_ft as f64 + 30.0));
+            assert!(bed < above && (above - f.top).abs() < 25.0, "fall {}: water above the lip {above} (bed {bed}), top {}", f.id, f.top);
+            assert!(below - f.bottom < 25.0 && above - below > 0.6 * f.drop_ft(), "fall {}: water below {below}, above {above}, drop {}", f.id, f.drop_ft());
+            let (x, y) = ((f.at[0] / size) as u32, (f.at[1] / size) as u32);
+            let a = ex.terrain(TileKey::surface(level, x, y)).padded.clone();
+            let right = ex.terrain(TileKey::surface(level, x + 1, y)).padded.clone();
+            let down = ex.terrain(TileKey::surface(level, x, y + 1)).padded.clone();
+            for j in -h..=n + h {
+                for d in -h..=h {
+                    assert_eq!(a[padded_index(n + d, j)].to_bits(), right[padded_index(d, j)].to_bits(), "fall {}: x seam", f.id);
+                    assert_eq!(a[padded_index(j, n + d)].to_bits(), down[padded_index(j, d)].to_bits(), "fall {}: y seam", f.id);
                 }
             }
+            let Some(c) = f.cave else { continue };
+            let key = TileKey::surface(level, (c[0] / size) as u32, (c[1] / size) as u32);
+            let (ox, oy) = g.tile_origin_ft(&key);
+            let ch = ex.battlemap(key);
+            let sq = worldgen::battlemap::SQ;
+            let ft = size / sq as f64;
+            let start = (((c[1] - oy) / ft) as usize).min(sq - 1) * sq + (((c[0] - ox) / ft) as usize).min(sq - 1);
+            let dry = |k: usize| ch.water_level[k] <= ch.height[k];
+            assert!(dry(start), "fall {}: cave mouth under water", f.id);
+            let mut seen = vec![false; sq * sq];
+            let (mut stack, mut edge) = (vec![start], false);
+            seen[start] = true;
+            while let Some(k) = stack.pop() {
+                let (i, j) = (k % sq, k / sq);
+                edge |= i == 0 || j == 0 || i + 1 == sq || j + 1 == sq;
+                let next = [(i + 1 < sq).then(|| k + 1), (i > 0).then(|| k - 1), (j + 1 < sq).then(|| k + sq), (j > 0).then(|| k - sq)];
+                for q in next.into_iter().flatten() {
+                    if !seen[q] && dry(q) && (ch.height[q] - ch.height[k]).abs() <= 5.0 {
+                        seen[q] = true;
+                        stack.push(q);
+                    }
+                }
+            }
+            assert!(edge, "fall {}: cave at ({:.0}, {:.0}) can't be walked to from its chunk's edge", f.id, c[0], c[1]);
         }
-        assert!(edge, "fall {}: cave at ({:.0}, {:.0}) can't be walked to from its chunk's edge", f.id, c[0], c[1]);
     }
 }
