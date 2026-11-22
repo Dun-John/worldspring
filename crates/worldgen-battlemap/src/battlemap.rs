@@ -279,7 +279,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Squares on a flight of steps (only where a flight comes near the chunk).
     let mut stair_h: Option<Vec<bool>> = None;
     // What a retaining wall may edge (`retaining`): houses' outlines with their pads (ft), and
-    // flights of steps (each straight piece's ends and width).
+    // flights of steps (each axis's ends and width).
     let mut seats: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
     let mut flights: Vec<([f64; 2], [f64; 2], f64)> = Vec::new();
     // Where the ground was shaped by hand round a city's streets: the street line nearest each such
@@ -949,9 +949,6 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let last = st.pts.len() - 2;
             for (k, seg) in st.pts.windows(2).enumerate() {
                 let b = (seg[0][0].min(seg[1][0]) - half, seg[0][1].min(seg[1][1]) - half, seg[0][0].max(seg[1][0]) + half, seg[0][1].max(seg[1][1]) + half);
-                if overlaps(retaining::grow(b)) {
-                    flights.push((seg[0], seg[1], st.width));
-                }
                 if !overlaps(b) {
                     continue;
                 }
@@ -982,6 +979,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             for ax in crate::town::stairs::axes(&l.stairs) {
                 let half = 0.5 * ax.width;
                 let b = (ax.a[0].min(ax.b[0]) - half, ax.a[1].min(ax.b[1]) - half, ax.a[0].max(ax.b[0]) + half, ax.a[1].max(ax.b[1]) + half);
+                if overlaps(retaining::grow(b)) {
+                    flights.push((ax.a, ax.b, ax.width));
+                }
                 if overlaps(b) {
                     let pts = vec![local(&ax.a), local(&ax.b), [(ax.s0 / SQUARE_FT) as f32, (ax.tread / SQUARE_FT) as f32]];
                     shapes.push(VectorShape { kind: ShapeKind::Stairs, size: (ax.width / SQUARE_FT) as f32, pts });
@@ -2585,6 +2585,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for k in 0..n {
             if walls_by[(k / SQ + 1) * HS + k % SQ + 1] & retaining::HARD_SQ != 0 {
                 chunk.edges[k] |= 16;
+            }
+            // (By a wall its face stands for the step: the ground's relief there shaded soft.)
+            if walls_by[(k / SQ + 1) * HS + k % SQ + 1] & retaining::BY_WALL != 0 {
+                chunk.edges[k] |= soft_relief::SOFT;
             }
         }
     }
