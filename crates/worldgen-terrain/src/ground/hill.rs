@@ -32,6 +32,9 @@ pub(super) struct Near {
     detail: f64,
     /// Fbm octaves for its swells (more on a big one).
     octaves: u32,
+    /// Whether its slopes gather into outcrops (`outcrops`): on the battlemap, not on map tiles,
+    /// whose samples are too coarse to draw crags (`smooth`).
+    crags: bool,
     pub(super) b: [f64; 4],
 }
 
@@ -72,6 +75,7 @@ impl Near {
             peak: (p.level as f64).clamp(-(MAX_PEAK_FT as f64), MAX_PEAK_FT as f64),
             detail: 1.0 - DETAIL_FT / narrow.max(DETAIL_FT),
             octaves: 3 + (libm::log2(narrow.max(DETAIL_FT) / DETAIL_FT) as u32).min(3),
+            crags: true,
             cos: libm::cos(a),
             sin: libm::sin(a),
             seed,
@@ -82,6 +86,13 @@ impl Near {
             high: 0.5 * (pick(6) * 2.0 - 1.0),
             b: footprint_bounds(h),
         })
+    }
+
+    /// As the map draws it: the slopes without their outcrops (the map's samples, 5 ft at the finest
+    /// and coarser above, would show a crag as blocks and rings; the battlemap keeps them).
+    pub(super) fn smooth(mut self) -> Near {
+        self.crags = false;
+        self
     }
 
     /// Its height (ft over the ground) at (x, y).
@@ -134,7 +145,11 @@ impl Near {
         } else {
             0.92 + 0.08 * spur - 0.05 * (0.5 + 0.5 * gradient2(self.seed ^ 0x31, da * 1.6 + 2.3, db * 1.6)) - 0.03 * (0.5 + 0.5 * gradient2(self.seed ^ 0x32, da * 3.1 + 7.3, db * 3.1)) - m_fine
         };
-        let (sa, sb) = (a * wob / m.clamp(0.6, 1.0), b * wob / m.clamp(0.6, 1.0));
+        // (What goes by direction from the middle, its stretch and its spurs, eased to none there:
+        // else the middle is a point where creases meet.)
+        let ease = smoothstep(0.0, 0.35, r0);
+        let m = 1.0 + (m.clamp(0.6, 1.0) - 1.0) * ease;
+        let (sa, sb) = (a * wob / m, b * wob / m);
         let rs2 = sa * sa + sb * sb;
         if rs2 >= 1.0 {
             return 0.0;
@@ -146,6 +161,26 @@ impl Near {
         let (ea, eb) = if r > 1e-9 { (pa / r, pb / r) } else { (1.0, 0.0) };
         let t = ((r - self.crown) / (1.0 - self.crown)).clamp(0.0, 1.0);
         let dome = 1.0 - smoothstep(0.0, 1.0, t);
+        // A mountain's concave slopes, rounded off in the last few hundredths of the way to the peak
+        // (else a cone's point, whose grade turns with the footprint's stretch: a star of crags).
+        const TIP: f64 = 0.08;
+        let tc = (crate::core::sqrt(t * t + TIP * TIP) - TIP) / (crate::core::sqrt(1.0 + TIP * TIP) - TIP);
+        let concave = (1.0 - tc) * (1.0 - tc);
+        let mut f = if !self.crags || !matches!(self.profile, HillProfile::Knoll | HillProfile::Mountain) {
+            if self.profile == HillProfile::Mountain { 0.6 * concave + 0.4 * dome } else { dome }
+        } else {
+            self.cragged(dome, concave, ea, eb, u, v, k)
+        };
+        // Low swells on the slopes (none at the crown or the foot), and the spurs standing out of them.
+        f += (0.07 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, self.octaves, 2.0, 0.5) + if self.crown > 0.0 { 0.0 } else { 0.12 * spur * ease }) * 4.0 * t * (1.0 - t);
+        self.peak * f.max(0.0)
+    }
+
+    /// A knoll's or a mountain's profile (`dome`, and a mountain's `concave` slopes, along (`ea`, `eb`))
+    /// with its outcrops.
+    #[allow(clippy::too_many_arguments)]
+    fn cragged(&self, dome: f64, concave: f64, ea: f64, eb: f64, u: f64, v: f64, k: f64) -> f64 {
+        let d = self.detail;
         // Outcrops on one or two arcs of the slope, broken along their length.
         let seed = self.seed;
         let arc = smoothstep(-0.05, 0.3, gradient2(seed ^ 0x0d, ea * 1.2 + 3.1, eb * 1.2 - 1.7));
@@ -153,17 +188,11 @@ impl Near {
         let fq = 3.6 * (1.0 + 1.5 * d);
         let arc = if d > 0.0 { arc.max(d * smoothstep(-0.25, 0.2, gradient2(seed ^ 0x1d, ea * 2.7 - 0.4, eb * 2.7 + 5.2))) } else { arc };
         let mask = |i: f64| arc * smoothstep(-0.12, 0.18, gradient2(seed ^ 0x0e, ea * fq + i * 5.3, eb * fq - i * 2.9));
-        let mut f = match self.profile {
-            HillProfile::Knoll => self.outcrops(dome, self.bands(3.0, 45.0), self.riser(0.2), u, v, k, mask),
-            HillProfile::Mountain => {
-                let concave = (1.0 - t) * (1.0 - t);
-                self.outcrops(0.6 * concave + 0.4 * dome, self.bands(4.0, 75.0), self.riser(0.14), u, v, k, mask)
-            }
-            _ => dome,
-        };
-        // Low swells on the slopes (none at the crown or the foot), and the spurs standing out of them.
-        f += (0.07 * crate::core::noise::fbm(self.seed ^ 0x51, u * 2.0 * k, v * 2.0 * k, self.octaves, 2.0, 0.5) + if self.crown > 0.0 { 0.0 } else { 0.12 * spur }) * 4.0 * t * (1.0 - t);
-        self.peak * f.max(0.0)
+        if self.profile == HillProfile::Knoll {
+            self.outcrops(dome, self.bands(3.0, 45.0), self.riser(0.2), u, v, k, mask)
+        } else {
+            self.outcrops(0.6 * concave + 0.4 * dome, self.bands(4.0, 75.0), self.riser(0.14), u, v, k, mask)
+        }
     }
 
     /// A ridge at (`a`, `b`) in its half-axes: a rounded crest that wanders across it and leans to
@@ -235,6 +264,9 @@ impl Near {
     /// Eased off at the foot and the crown.
     #[allow(clippy::too_many_arguments)]
     fn outcrops(&self, base: f64, bands: f64, w: f64, u: f64, v: f64, k: f64, mask: impl Fn(f64) -> f64) -> f64 {
+        if !self.crags {
+            return base;
+        }
         let mut warp = 0.45 * gradient2(self.seed ^ 0x0c, u * 1.7 * k, v * 1.7 * k);
         if self.detail > 0.0 {
             warp += self.detail * 0.3 * gradient2(self.seed ^ 0x0f, u * 6.0 * k, v * 6.0 * k);

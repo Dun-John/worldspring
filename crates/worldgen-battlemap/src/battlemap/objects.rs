@@ -47,6 +47,24 @@ pub(super) fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_
                 if biome[k] != b || c.surface[k].is_road() || c.building[k] != 0 {
                     continue;
                 }
+                // No trees or plants on a beach (a hot desert's own sand keeps its palms and cacti), nor a
+                // tree whose trunk stands by one.
+                let plant = TREES_AND_COVER.contains(&kind);
+                if plant && beach_sand(c, k, b) {
+                    continue;
+                }
+                if is_tree {
+                    let rr = crate::core::ceil(info(kind as u16).radius as f64) as i64;
+                    let by_beach = (-rr..=rr).any(|dy| {
+                        (-rr..=rr).any(|dx| {
+                            let (x, y) = (ix + dx, iy + dy);
+                            x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && beach_sand(c, y as usize * SQ + x as usize, b)
+                        })
+                    });
+                    if by_beach {
+                        continue;
+                    }
+                }
                 // Tundra: no bushes on its snow patches, no drifts on its grass.
                 if b == Biome::Tundra && matches!((c.surface[k], kind), (Surface::Snow, Kind::Bush) | (Surface::TundraGrass, Kind::Snowdrift)) {
                     continue;
@@ -118,6 +136,11 @@ pub(super) fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_
             }
         }
     }
+}
+
+/// A beach square: sand that is not the biome's own (a hot desert's).
+fn beach_sand(c: &Chunk, k: usize, b: Biome) -> bool {
+    c.surface[k] == Surface::Sand && b != Biome::HotDesert
 }
 
 fn is_cover(o: &Object) -> bool {
@@ -413,6 +436,8 @@ pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: 
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         // (Tundra's grass patches: no drifts, those keep to its snow.)
         0 if biome[k] == Biome::Tundra && c.surface[k] == Surface::TundraGrass => [Kind::Boulder, Kind::Bush, Kind::RockPile][rng.below(3) as usize],
+        // (A beach: rocks, no plants.)
+        0 if beach_sand(c, k, biome[k]) => [Kind::Boulder, Kind::RockPile][rng.below(2) as usize],
         0 => fallback_cover(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], false, rng),
     };

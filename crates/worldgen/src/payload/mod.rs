@@ -249,7 +249,8 @@ fn shaped(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Option<(V
     }
     // (R5 M20: and big ports' breakwaters, as the battlemap shapes them.)
     let moles = crate::town::harbour::raised_near(world, t0, rect);
-    let sh = crate::ground::Shaper::with_extra(&world.file.edits, t0, &moles, rect, s.max(crate::battlemap::SQUARE_FT))?;
+    // (Hills without their crags: the battlemap draws those.)
+    let sh = crate::ground::Shaper::with_extra(&world.file.edits, t0, &moles, rect, s.max(crate::battlemap::SQUARE_FT))?.smooth_hills();
     let r = sh.reach();
     let ((i0, i1), (j0, j1)) = (span(r[0], r[2], gx0), span(r[1], r[3], gy0));
     let mut out = tile.padded.clone();

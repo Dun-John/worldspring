@@ -73,8 +73,9 @@ const vec3 PALETTE[19] = vec3[19](
     vec3(0.60, 0.56, 0.51)  // ashlands
 );
 
-// Symbol per biome: 0 none, 1 canopy, 2 conifer, 3 dense canopy, 4 marsh, 5 sand, 6 sparse dots, 7 tufts, 8 scree.
-const int SYMBOL[19] = int[19](0, 0, 0, 7, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
+// Symbol per biome: 0 none, 4 marsh, 5 sand, 7 tufts, 8 scree. No tree symbols: trees are the
+// battlemap's (its sprites); on the map the woods are their area tint alone.
+const int SYMBOL[19] = int[19](0, 0, 0, 7, 8, 0, 0, 0, 7, 7, 5, 5, 0, 0, 4, 5, 0, 0, 8);
 const vec3 TUNDRA_PALE = vec3(0.88, 0.89, 0.80);
 const vec3 HEATHER_DAB = vec3(0.78, 0.72, 0.74);
 // Tundra: `uTundra` repeats every this many pattern cells (a divisor of 256: seamless where the
@@ -109,119 +110,36 @@ float segment(vec2 p, vec2 a, vec2 b) {
     return length(pa - ba * h);
 }
 
-// Map symbol at pattern coordinate p (cells). Returns (fill, ink, tone, ground shadow):
-// fill and ink are coverage; tone (dark > 0, lit < 0) and ground shadow come premultiplied by coverage.
-vec4 symbol(vec2 p, int kind, float aa) {
+// Map symbol at pattern coordinate p (cells): its ink coverage.
+float symbol(vec2 p, int kind, float aa) {
     vec2 c = mod(floor(p), 256.0);
     vec2 f = fract(p);
     vec2 h = hash22(c);
     vec2 o = 0.5 + (h - 0.5) * 0.45;
     vec2 d = f - o;
-    if (kind == 1 || kind == 3) {
-        // Tree clumps: per cell 1, 2 or (rarely) 3 lobed crowns, each kept inside its own part of the
-        // cell (the nearest of m points), so no neighbour search. A crown is 3-5 circles on a slightly
-        // squashed ring (each wider than the ring, so the middle is covered): inked outline, a dark
-        // crescent on the SE side away from the NW light, a lit spot on the NW lobes, a ground shadow
-        // to the SE and, at close zoom, a trunk on some. Crown reach is 2.45 R (dense 2.3 R) from its point.
-        bool dense = kind == 3;
-        // Groves and clearings: value noise per cell (period 32 = 256 / 8, so it tiles with the cells).
-        // (Ordinary forest stays mostly wooded: groves nearly closed, clearings the exception.)
-        float grove = smoothstep(0.2, 0.55, pnoise((c + 0.5) * 0.125, 32.0));
-        if (h.x > (dense ? 0.84 + 0.14 * grove : 0.3 + 0.65 * grove)) return vec4(0.0);
-        float h3 = hash21(c + 31.7);
-        vec2 g = hash22(c + 3.7);
-        int m = h.y < (dense ? 0.8 : 0.68) ? 1 : h.y < (dense ? 0.97 : 0.93) ? 2 : 3;
-        vec2 ctr = vec2(0.5);
-        float sub = 0.0;
-        if (m > 1) {
-            vec2 cs = m == 2 ? vec2(-1.0, 0.0) : vec2(-0.5, 0.8660);
-            vec2 v = normalize(g - 0.5 + 1e-4) * (m == 2 ? 0.25 : 0.27);
-            float best = 1e3;
-            for (int k = 0; k < 3; k++) {
-                if (k < m) {
-                    vec2 e = f - 0.5 - v;
-                    float dd = dot(e, e);
-                    if (dd < best) { best = dd; ctr = 0.5 + v; sub = float(k + 1); }
-                    v = vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
-                }
-            }
-        }
-        vec2 k2 = hash22(c + sub * 4.13 + 0.71);
-        float reach;
-        if (m == 1) {
-            reach = dense ? 0.44 + 0.03 * k2.x : 0.34 * (0.7 + 0.6 * k2.x);
-            ctr += (g - 0.5) * 2.0 * max(0.0, 0.48 - reach);
-        } else {
-            reach = (m == 2 ? 0.24 : 0.22) * (0.82 + 0.18 * k2.x);
-        }
-        // Dense crowns nearly fill the cell (fake overlap); they get no trunk, so need less room.
-        float R = reach / (dense ? 2.3 : 2.45);
-        vec2 q = f - ctr + vec2(0.0, 0.1 * R);
-        int n = dense ? 4 + int(h3 * 1.999) : 3 + int(fract(h3 + k2.y * 3.7) * 2.999);
-        vec2 cs = n == 3 ? vec2(-0.5, 0.8660) : n == 4 ? vec2(0.0, 1.0) : vec2(0.3090, 0.9511);
-        float a0 = k2.y * 6.2831;
-        vec2 v = vec2(cos(a0), sin(a0)) * R;
-        float sd = 1e3;
-        vec2 dw = vec2(0.0);
-        float rw = R;
-        for (int k = 0; k < 5; k++) {
-            if (k < n) {
-                float rk = R * (1.05 + 0.3 * fract(h3 * 7.31 * float(k + 1) + k2.x));
-                vec2 dk = q - v * vec2(1.0, 0.85);
-                float e = length(dk) - rk;
-                if (e < sd) { sd = e; dw = dk; rw = rk; }
-                v = vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
-            }
-        }
-        float fill = 1.0 - smoothstep(-aa, 0.0, sd);
-        // Crescent: inside the lobe but outside a copy of it shifted towards the NW light.
-        float shade = smoothstep(rw - aa, rw + aa, length(dw + vec2(rw * 0.6)));
-        float lit = (1.0 - smoothstep(rw * 0.45 - aa, rw * 0.45 + aa, length(dw + vec2(rw * 0.4)))) * step(dot(q - dw, vec2(1.0)), 0.0);
-        float tone = (dense ? 0.35 : 0.0) + shade - 0.7 * lit * (1.0 - shade);
-        float ink = 1.0 - smoothstep(0.0, aa * 1.6, abs(sd));
-        float tw = (dense ? 0.0 : 1.0) * step(fract(h3 * 5.1 + k2.y), 0.55) * (1.0 - smoothstep(40.0, 120.0, uFtPerPx));
-        float trunk = tw * (1.0 - smoothstep(0.0, aa, segment(q, vec2(0.0, R), vec2(0.0, 2.5 * R)))) * (1.0 - fill);
-        float ground = 1.0 - smoothstep(-aa, aa, length((q - vec2(0.28, 0.32) * R) * vec2(1.0, 1.25)) - 1.95 * R);
-        return vec4(fill, 1.2 * max(ink, trunk), tone * fill, ground * (1.0 - fill));
-    }
-    if (kind == 2) {
-        if (h.x > 0.8) return vec4(0.0);
-        // Isosceles triangle, apex up, like a conifer.
-        vec2 q = vec2(abs(d.x), d.y + 0.05);
-        float w = 0.22, top = -0.30, bot = 0.22;
-        float t = (q.y - top) / (bot - top);
-        float edge = q.x - w * t;
-        float inside = step(top, q.y) * step(q.y, bot);
-        float fill = inside * (1.0 - smoothstep(-aa, 0.0, edge));
-        float ink = max(inside * (1.0 - smoothstep(0.0, aa * 1.2, abs(edge))), (1.0 - smoothstep(0.0, aa, abs(q.y - bot))) * step(q.x, w));
-        float trunk = 1.0 - smoothstep(0.0, aa, segment(d, vec2(0.0, bot - 0.05), vec2(0.0, bot + 0.1)));
-        return vec4(fill, max(ink, trunk), 0.0, 0.0);
-    }
     if (kind == 4) {
-        if (h.x > 0.6) return vec4(0.0);
+        if (h.x > 0.6) return 0.0;
         float l = segment(f, vec2(0.25, o.y), vec2(0.75, o.y));
         l = min(l, segment(f, vec2(0.35, o.y + 0.16), vec2(0.65, o.y + 0.16)));
-        return vec4(0.0, 1.0 - smoothstep(0.0, aa, l), 0.0, 0.0);
+        return 1.0 - smoothstep(0.0, aa, l);
     }
-    if (kind == 5 || kind == 6) {
-        float p0 = kind == 5 ? 0.35 : 0.12;
-        if (h.x > p0) return vec4(0.0);
-        float r = kind == 5 ? 0.06 : 0.09;
-        return vec4(0.0, 1.0 - smoothstep(r - aa, r, length(d)), 0.0, 0.0);
+    if (kind == 5) {
+        if (h.x > 0.35) return 0.0;
+        return 1.0 - smoothstep(0.06 - aa, 0.06, length(d));
     }
     if (kind == 7) {
-        if (h.x > 0.06) return vec4(0.0);
+        if (h.x > 0.06) return 0.0;
         float l = min(segment(d, vec2(-0.1, 0.08), vec2(-0.04, -0.08)), segment(d, vec2(0.0, 0.08), vec2(0.0, -0.1)));
         l = min(l, segment(d, vec2(0.1, 0.08), vec2(0.04, -0.08)));
-        return vec4(0.0, 1.0 - smoothstep(0.0, aa, l), 0.0, 0.0);
+        return 1.0 - smoothstep(0.0, aa, l);
     }
     if (kind == 8) {
-        if (h.x > 0.45) return vec4(0.0);
+        if (h.x > 0.45) return 0.0;
         float a = h.y * 6.2831;
         vec2 dir = vec2(cos(a), sin(a)) * 0.12;
-        return vec4(0.0, 1.0 - smoothstep(0.0, aa, segment(d, -dir, dir)), 0.0, 0.0);
+        return 1.0 - smoothstep(0.0, aa, segment(d, -dir, dir));
     }
-    return vec4(0.0);
+    return 0.0;
 }
 
 // Tundra: pale frosted grass, faintly painted by the ground texture `d` (`uTundra`, both pattern
@@ -290,9 +208,11 @@ void main() {
     float cliff = wet ? 0.0 : smoothstep(0.9, 1.3, slope) * fill;
     float dsl = length(dslope);
     vec2 up = g / max(slope, 1e-6);
-    // Far out, risers are the only ground steeper than ~0.3 (mountainsides stay under it at those
-    // levels); close in, the strokes keep to sharp grade changes (a face's sides), not mountainsides.
-    float scarp = wet ? 0.0 : smoothstep(mix(0.25, 0.4, fill), mix(0.45, 1.0, fill), slope) * mix(1.0, smoothstep(0.02, 0.08, dsl), fill) * (1.0 - cliff);
+    // Far out, risers are the only natural ground steeper than ~0.3 (mountainsides stay under it at
+    // those levels), and a riser a pixel or two wide changes grade sharply from pixel to pixel; so
+    // at every zoom the strokes keep to sharp grade changes (a face's sides), not to an even steep
+    // slope (a hill raised by hand, which keeps the plain hillshade).
+    float scarp = wet ? 0.0 : smoothstep(mix(0.25, 0.4, fill), mix(0.45, 1.0, fill), slope) * mix(smoothstep(0.08, 0.25, dsl / max(slope, 0.05)), smoothstep(0.02, 0.08, dsl), fill) * (1.0 - cliff);
 
     // Hillshade, normalized so flat ground is 1.0; light from the north-west. (On a hatched scarp
     // the exaggerated grade is held to a moderate one: the strokes carry it.)
@@ -343,9 +263,11 @@ void main() {
     // Map symbols, blended across two octaves; ecotones dither between the two biomes.
     if (!wet && uPatAlpha > 0.0) {
         float aa0 = max(fwidth(p0.x), 1e-4);
-        // Far zoom: the symbols are gone (uSymAlpha 0), so none of their work is done (uniform branch).
-        if (uSymAlpha > 0.0) {
-            float aa1 = max(fwidth(p1.x), 1e-4);
+        float aa1 = max(fwidth(p1.x), 1e-4);
+        // Far zoom: the symbols are gone (uSymAlpha 0), so none of their work is done (uniform branch);
+        // nor where neither biome has a symbol (the woods: no tree symbols on the map).
+        float mixin = max(0.0, blend - 0.55) * 0.9;
+        if (uSymAlpha > 0.0 && (SYMBOL[b1] != 0 || (mixin > 0.0 && SYMBOL[b2] != 0))) {
             // Symbol lattices turned ~20 deg so rows don't line up with the screen. The matrix entries are
             // multiples of 1/256, so a 256-cell shift of the origin stays a whole-cell shift (no tile seams).
             mat2 turn = mat2(0.9375, -0.34375, 0.34375, 0.9375);
@@ -353,13 +275,12 @@ void main() {
             vec2 r1 = turn * p1;
             vec2 c0 = mod(floor(r0), 256.0);
             vec2 c1 = mod(floor(r1), 256.0);
-            // Ecotones: only strong blends scatter the neighbouring biome's symbols.
-            float mixin = max(0.0, blend - 0.55) * 0.9;
+            // Ecotones: only strong blends (`mixin`) scatter the neighbouring biome's symbols.
             // Each octave is only evaluated when the crossfade needs it (uniform branch). The crossfade
             // drops whole symbols cell by cell instead of fading them, so neither octave shows as ghosts;
             // the finer octave is drawn over the coarser one.
-            vec4 s0 = vec4(0.0);
-            vec4 s1 = vec4(0.0);
+            float s0 = 0.0;
+            float s1 = 0.0;
             if (uPatMix < 0.98) {
                 s0 = symbol(r0, SYMBOL[hash21(c0 + 7.0) < mixin ? b2 : b1], aa0);
                 s0 *= clamp(((1.0 - uPatMix) * 1.1 - 0.05 - hash21(c0 + 13.1)) * 20.0, 0.0, 1.0);
@@ -368,24 +289,21 @@ void main() {
                 s1 = symbol(r1, SYMBOL[hash21(c1 + 7.0) < mixin ? b2 : b1], aa1);
                 s1 *= clamp((uPatMix * 1.1 - 0.05 - hash21(c1 + 13.1)) * 20.0, 0.0, 1.0);
             }
-            vec4 s = (s0 + s1 * (1.0 - max(s0.x, s0.y))) * uSymAlpha;
-            col *= 1.0 - 0.16 * s.w;
-            // Crown fill: a little darker and more saturated than the ground, then shaded.
-            vec3 crown = col * 0.78;
-            crown = mix(vec3(dot(crown, vec3(0.3, 0.59, 0.11))), crown, 1.3);
-            col = mix(col, crown, s.x);
-            col *= 1.0 - 0.25 * s.z;
-            col = mix(col, INK, min(s.y * 0.75, 0.9));
-
+            float ink = max(s0, s1) * uSymAlpha;
+            col = mix(col, INK, min(ink * 0.75, 0.9));
         }
 
-        // Hachures: fine strokes down steep slopes (strokes follow the fall line).
+        // Hachures: fine strokes down steep slopes (strokes follow the fall line). Where the fall line
+        // turns fast (round a small steep hill) the strokes, measured across it from the pattern's
+        // origin, crowd into rows of dots: there they fade out (`fa`: their rate per pixel, about
+        // 1 to 1.4 times `aa0 * 2.2` on an even slope).
         float steep = smoothstep(0.35, 1.2, slope * uExag);
+        vec2 dir = normalize(g + 1e-9);
+        float across = dot(p0 * 2.2, vec2(-dir.y, dir.x));
+        float fa = fwidth(across);
         if (steep > 0.0) {
-            vec2 dir = normalize(g + 1e-9);
-            float across = dot(p0 * 2.2, vec2(-dir.y, dir.x));
             float line = 1.0 - smoothstep(0.0, aa0 * 2.2, abs(fract(across) - 0.5) - 0.34);
-            col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - cliff) * (1.0 - scarp));
+            col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - cliff) * (1.0 - scarp) * (1.0 - smoothstep(2.5, 4.0, fa / (aa0 * 2.2))));
         }
     }
 

@@ -235,6 +235,12 @@ impl<'a> Shaper<'a> {
     }
 
     /// Whether any hill meets what it covers.
+    /// Its hills as map tiles draw them: without their outcrops (`hill::Near::smooth`).
+    pub fn smooth_hills(mut self) -> Self {
+        self.hills = std::mem::take(&mut self.hills).into_iter().map(hill::Near::smooth).collect();
+        self
+    }
+
     pub fn has_hills(&self) -> bool {
         !self.hills.is_empty()
     }
@@ -419,6 +425,7 @@ impl BigHills {
             .filter(|p| usable(p) && p.kind == PlateauKind::Hill && p.hill.as_ref().is_some_and(|h| h.shows_at(spacing)))
             .filter_map(hill::Near::of)
             .filter(|h| near(h.b))
+            .map(hill::Near::smooth)
             .collect();
         (!hills.is_empty()).then_some(BigHills(hills))
     }
