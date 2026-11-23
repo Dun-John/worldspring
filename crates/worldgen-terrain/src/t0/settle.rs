@@ -197,6 +197,8 @@ pub struct Poi {
     pub seed: u64,
     /// The sketch stroke that placed it, if any (`world::SketchTool::Site`).
     pub stroke: Option<u32>,
+    /// The waterfall (river, segment: `lod::rivers::Fall`) a cave stands behind, if it is one.
+    pub fall: Option<(u32, u32)>,
 }
 
 pub struct Inputs<'a> {

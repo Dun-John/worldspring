@@ -109,7 +109,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
             if kind == PoiKind::Ruin && !dwarven_ground(inp, k, seed) {
                 continue;
             }
-            out.push(Poi { kind, x, y, seed, stroke: None });
+            out.push(Poi { kind, x, y, seed, stroke: None, fall: None });
             placed += 1;
         }
     }
@@ -159,7 +159,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
             if kind == PoiKind::Cave && rng.next_f64() >= cave_pull(people[k] as f64) {
                 continue;
             }
-            out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
+            out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None, fall: None });
             placed += 1;
         }
     }
@@ -178,7 +178,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
             if !inp.land[k] || inp.hydro.lake_of[k] != NO_LAKE || inp.height[k] < sea + 20.0 || !away(x, y, &out, 1.0 * 5280.0, 2.0 * 5280.0) {
                 continue;
             }
-            out.push(Poi { kind: PoiKind::LavaTube, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
+            out.push(Poi { kind: PoiKind::LavaTube, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None, fall: None });
             break;
         }
     }

@@ -1020,7 +1020,7 @@ impl Builder<'_> {
             let elev = self.above_sea(k);
             let id = self.push_named(kind, names.next().unwrap_or_default(), cx, cy, 0.0, extent * 5280.0, Some(elev.round()), None);
             self.radius(SITE_RADIUS_FT);
-            if p.kind == PoiKind::Cave && p.stroke.is_none() && inp.falls.iter().any(|f| f.cave.is_some_and(|q| q[0].to_bits() == p.x.to_bits() && q[1].to_bits() == p.y.to_bits())) {
+            if p.kind == PoiKind::Cave && p.stroke.is_none() && p.fall.is_some_and(|(r, k)| inp.falls.iter().any(|f| f.river == r && f.seg == k && f.cave.is_some())) {
                 let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();
                 f.detail = Some("behind a waterfall, hidden from players until found".into());
                 f.secret = true;
@@ -1163,8 +1163,8 @@ impl Builder<'_> {
         for f in falls.into_iter().take(20) {
             let (cx, cy) = (f.at[0] / inp.cell_ft, f.at[1] / inp.cell_ft);
             let drop = (f.drop_ft() as f64).round();
-            let cave = if f.cave.is_some() { "; a cave behind the falls (hidden from players)" } else { "" };
-            self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some((f.top as f64 - sea).round()), Some(format!("drop ~{} ft{cave}", fmt_thousands(drop))));
+            // (Nothing of a cave behind it: players see this; the cave is its own secret feature.)
+            self.push("waterfall", NameKind::Waterfall, cx, cy, 0.0, 30.0 * inp.cell_ft, Some((f.top as f64 - sea).round()), Some(format!("drop ~{} ft", fmt_thousands(drop))));
         }
     }
 

@@ -301,8 +301,9 @@ fn dwarven_crag_seams() {
 
 /// Waterfalls: the same on a T0 loaded from bytes; at the finest level the river's water stands
 /// at the fall's top above the lip and at its bottom below the face (the drop is on the ground),
-/// the lip's tile meets its neighbors bit-for-bit, and the cave behind a fall can be walked into
-/// from its chunk's edge (dry squares, no step over 5 ft).
+/// every tile round the lip's carving and its shelf (and the lip's at the next coarser level) meets
+/// its neighbors bit-for-bit, the cave behind a fall can be walked into from its chunk's edge (dry
+/// squares, no step over 5 ft), and no feature players see tells of a cave.
 #[test]
 fn waterfalls_drop_and_cave_reachable() {
     // (Two worlds' first eight caves: each one reached by its shelf, `rivers::ledge`.)
@@ -313,6 +314,8 @@ fn waterfalls_drop_and_cave_reachable() {
         let mut ex = Executor::new(world);
         let falls = ex.t0.rivers.falls.clone();
         assert!(!falls.is_empty(), "no waterfalls");
+        let features = &ex.t0.extra.as_ref().unwrap().overlay.features;
+        assert!(features.iter().filter(|f| !f.secret).all(|f| !f.detail.as_deref().unwrap_or("").contains("cave")), "a feature players see tells of a cave");
         assert_eq!(format!("{:?}", worldgen::t0::T0::from_bytes(&bytes).unwrap().rivers.falls), format!("{falls:?}"), "falls differ after load");
         let level = g.max_level;
         let (s, size, n, h) = (g.spacing_ft(level), g.tile_size_ft(level), TILE_N as i64, HALO as i64);
@@ -330,14 +333,27 @@ fn waterfalls_drop_and_cave_reachable() {
             let (_, below) = water(at(f.face_ft as f64 + 30.0));
             assert!(bed < above && (above - f.top).abs() < 25.0, "fall {}: water above the lip {above} (bed {bed}), top {}", f.id, f.top);
             assert!(below - f.bottom < 25.0 && above - below > 0.6 * f.drop_ft(), "fall {}: water below {below}, above {above}, drop {}", f.id, f.drop_ft());
-            let (x, y) = ((f.at[0] / size) as u32, (f.at[1] / size) as u32);
-            let a = ex.terrain(TileKey::surface(level, x, y)).padded.clone();
-            let right = ex.terrain(TileKey::surface(level, x + 1, y)).padded.clone();
-            let down = ex.terrain(TileKey::surface(level, x, y + 1)).padded.clone();
-            for j in -h..=n + h {
-                for d in -h..=h {
-                    assert_eq!(a[padded_index(n + d, j)].to_bits(), right[padded_index(d, j)].to_bits(), "fall {}: x seam", f.id);
-                    assert_eq!(a[padded_index(j, n + d)].to_bits(), down[padded_index(j, d)].to_bits(), "fall {}: y seam", f.id);
+            // (The tiles the lip's kept bed, its pool and its shelf reach, each with the tile to its
+            // right and below; then the lip's tile one level up.)
+            let r = 120.0 + 3.0 * f.width as f64 + 2.0 * f.face_ft as f64 + 100.0;
+            let span = |c: f64, sz: f64| ((c - r).max(0.0) / sz) as u32..=((c + r) / sz) as u32;
+            let mut seams = Vec::new();
+            for y in span(f.at[1], size) {
+                for x in span(f.at[0], size) {
+                    seams.push((level, x, y));
+                }
+            }
+            let up = g.tile_size_ft(level - 1);
+            seams.push((level - 1, (f.at[0] / up) as u32, (f.at[1] / up) as u32));
+            for (lv, x, y) in seams {
+                let a = ex.terrain(TileKey::surface(lv, x, y)).padded.clone();
+                let right = ex.terrain(TileKey::surface(lv, x + 1, y)).padded.clone();
+                let down = ex.terrain(TileKey::surface(lv, x, y + 1)).padded.clone();
+                for j in -h..=n + h {
+                    for d in -h..=h {
+                        assert_eq!(a[padded_index(n + d, j)].to_bits(), right[padded_index(d, j)].to_bits(), "fall {}: x seam at {lv}/{x}/{y}", f.id);
+                        assert_eq!(a[padded_index(j, n + d)].to_bits(), down[padded_index(j, d)].to_bits(), "fall {}: y seam at {lv}/{x}/{y}", f.id);
+                    }
                 }
             }
             let Some(c) = f.cave else { continue };

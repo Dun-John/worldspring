@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 /// and `bottom` on the world's datum; `cave`: `{x, y, layout, site, secret: true}` or null).
 pub fn fall_json(t0: &T0, f: &crate::lod::rivers::Fall) -> Value {
     let cave = f.cave.map(|c| {
-        let layout = (0..t0.pois.len()).find(|&i| t0.pois[i].x.to_bits() == c[0].to_bits() && t0.pois[i].y.to_bits() == c[1].to_bits()).map(|i| t0.settlements.len() + i);
+        let layout = t0.pois.iter().position(|p| p.fall == Some((f.river, f.seg))).map(|i| t0.settlements.len() + i);
         json!({ "x": c[0], "y": c[1], "layout": layout, "site": layout.map(|l| format!("u:{l}:0")), "secret": true })
     });
     let r1 = |v: f64| (v * 10.0).round() / 10.0;

@@ -243,7 +243,7 @@ export interface GenFall {
   width: number;
   face: number;
   river: number;
-  cave: { x: number; y: number; layout: number; site: string; secret: boolean } | null;
+  cave: { x: number; y: number; layout: number | null; site: string | null; secret: boolean } | null;
 }
 
 export interface BuildingEdit {

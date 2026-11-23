@@ -197,6 +197,9 @@ export class MapView {
   /** Play's drawbridges raised, by door key (`BattlemapLayer.raisedOf`); null: all lowered. */
   bridgeRaised: ((key: string) => boolean) | null = null;
   labels: Labels | null = null;
+  /** What hides labels in this window (the players': play mode's), handed to each `Labels` as it
+   * is made, so none draws before it has it. */
+  labelConceal: Labels['conceal'] = null;
   /** Named features: the generated ones, then created sites. */
   overlay: Overlay | null = null;
   private baseOverlay: Overlay | null = null;
@@ -1237,6 +1240,7 @@ export class MapView {
     this.islets = null;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
+    this.labels.conceal = this.labelConceal;
     this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);
     this.lanes.on = this.seaLanes;
     this.ferryLanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2], true);

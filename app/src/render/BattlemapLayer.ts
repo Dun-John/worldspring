@@ -82,8 +82,9 @@ interface ChunkView {
   atmo: Mesh<Geometry, Shader> | null;
   atmoUniforms: UniformGroup | null;
   atmosphere: number;
-  /** The waterfalls whose lip lies in it (drawn with it), and the hidden caves behind them. */
-  falls: number;
+  /** The waterfalls drawn on it (`fallChunks`: ids, sorted, comma-joined), and the hidden caves
+   * behind them. */
+  falls: string;
   /** One Graphics per cave, its `label` the cave's site (shown per `caveShown`): its mouth under
    * the sheet; `cavesThrough` the same over it (its dim shape seen through the water). */
   caves: Container | null;
@@ -268,17 +269,17 @@ export class BattlemapLayer {
     });
   }
 
-  /** The world's waterfalls: chunks built without the ones in them are built again. */
+  /** The world's waterfalls: chunks built without the ones on them are built again. */
   setFalls(falls: GenFall[]) {
     this.falls = falls;
     const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
-    const count = new Map<string, number>();
+    const ids = new Map<string, string[]>();
     for (const f of falls) {
-      const id = `${Math.floor(f.x / ts)}/${Math.floor(f.y / ts)}`;
-      count.set(id, (count.get(id) ?? 0) + 1);
+      const [x0, y0, x1, y1] = fallChunks(f, ts);
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) ids.set(`${x}/${y}`, [...(ids.get(`${x}/${y}`) ?? []), f.id]);
     }
     for (const c of this.chunks.values()) {
-      if ((count.get(c.id) ?? 0) !== c.falls && c.prepared && !this.received.has(c.id)) this.received.set(c.id, { x: c.x, y: c.y, chunk: c.prepared, epoch: c.epoch });
+      if ((ids.get(c.id) ?? []).sort().join(',') !== c.falls && c.prepared && !this.received.has(c.id)) this.received.set(c.id, { x: c.x, y: c.y, chunk: c.prepared, epoch: c.epoch });
     }
   }
 
@@ -302,19 +303,23 @@ export class BattlemapLayer {
       if (c.caveMarks) c.caveMarks.visible = this.secretCaves;
     }
   }
-  private caveVisible(site: string): boolean {
-    return this.secretCaves || !!this.caveShown?.(site);
+  private caveVisible(site: string | null): boolean {
+    // (A cave without its site is the DM's only.)
+    return this.secretCaves || (!!site && !!this.caveShown?.(site));
   }
 
   /** The waterfalls and caves on the chunks built (for checks). */
   get fallStats(): { falls: number; caves: number; cavesShown: number; secretCaves: boolean } {
-    let [falls, caves, cavesShown] = [0, 0, 0];
+    // (Each counted once, though drawn on every chunk it spans.)
+    const [falls, caves, cavesShown] = [new Set<string>(), new Set<string>(), new Set<string>()];
     for (const c of this.chunks.values()) {
-      falls += c.falls;
-      caves += c.caves ? c.caves.children.length : 0;
-      cavesShown += c.caves ? c.caves.children.filter((g) => g.visible).length : 0;
+      for (const id of c.falls ? c.falls.split(',') : []) falls.add(id);
+      for (const g of c.caves?.children ?? []) {
+        caves.add(g.label || g.uid.toString());
+        if (g.visible) cavesShown.add(g.label || g.uid.toString());
+      }
     }
-    return { falls, caves, cavesShown, secretCaves: this.secretCaves };
+    return { falls: falls.size, caves: caves.size, cavesShown: cavesShown.size, secretCaves: this.secretCaves };
   }
 
   /** Draw objects just put down (world ft) over their chunks at once, until each chunk comes
@@ -1103,11 +1108,14 @@ export class BattlemapLayer {
     decks.addChild(bridgeG, gridG);
     this.layers[2].addChildAt(decks, this.layers[2].getChildIndex(parts[2]));
     parts.push(decks);
-    // Waterfalls whose lip lies in the chunk, each drawn whole: over every chunk's ground (so a
-    // pool reaching into the next chunk isn't covered by it), under the props; the cave behind
-    // one under its sheet, for the DM (`showSecretCaves`).
+    // Waterfalls on the chunk (`fallChunks`): over every chunk's ground, under the props; one
+    // spanning chunks is drawn on each, held to it (so a pool shows with only its own chunk built,
+    // and never twice); the cave behind one under its sheet, for the DM (`showSecretCaves`).
     const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
-    const mine = this.falls.filter((f) => Math.floor(f.x / ts) === cx && Math.floor(f.y / ts) === cy);
+    const mine = this.falls.filter((f) => {
+      const [x0, y0, x1, y1] = fallChunks(f, ts);
+      return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+    });
     let caveG: Container | null = null;
     let throughG: Container | null = null;
     let markG: Graphics | null = null;
@@ -1125,12 +1133,12 @@ export class BattlemapLayer {
           const at = px(f.cave.x, f.cave.y);
           const g = new Graphics();
           drawFallCave(g, ...at, f.dir[0], f.dir[1], PX, seed, scale);
-          g.label = f.cave.site;
+          g.label = f.cave.site ?? '';
           g.visible = this.caveVisible(f.cave.site);
           (caveG ??= new Container()).addChild(g);
           const t = new Graphics();
           drawFallCaveThrough(t, ...at, f.dir[0], f.dir[1], PX, scale);
-          t.label = f.cave.site;
+          t.label = f.cave.site ?? '';
           t.visible = g.visible;
           (throughG ??= new Container()).addChild(t);
           drawCaveMark((markG ??= new Graphics()), ...at, 7 * scale + 2);
@@ -1144,6 +1152,13 @@ export class BattlemapLayer {
       if (markG) {
         markG.visible = this.secretCaves;
         holder.addChild(markG);
+      }
+      if (mine.some((f) => fallChunks(f, ts).some((v, i) => v !== (i % 2 ? cy : cx)))) {
+        // (Held to the chunk: a fall here runs on into the next one, which draws the rest.)
+        const side = (ts / SQUARE_FT) * PX;
+        const clip = new Graphics().rect(0, 0, side, side).fill(0xffffff);
+        holder.addChild(clip);
+        holder.mask = clip;
       }
       this.prewarm(holder);
       this.layers[1].addChildAt(holder, 0);
@@ -1199,7 +1214,7 @@ export class BattlemapLayer {
       atmo,
       atmoUniforms,
       atmosphere,
-      falls: mine.length,
+      falls: mine.map((f) => f.id).sort().join(','),
       caves: caveG,
       cavesThrough: throughG,
       caveMarks: markG,
@@ -1282,6 +1297,13 @@ function parkEdge(raised: Uint8Array | null): boolean {
     }
   }
   return false;
+}
+
+/** The chunks (x0, y0, x1, y1; `ts` ft square) a waterfall's drawing can reach: its sheet, its
+ * pool and the rocks round them (a bound, from its lip). */
+function fallChunks(f: GenFall, ts: number): [number, number, number, number] {
+  const r = f.face + 2 * Math.max(f.width, 6) + 60;
+  return [Math.floor((f.x - r) / ts), Math.floor((f.y - r) / ts), Math.floor((f.x + r) / ts), Math.floor((f.y + r) / ts)];
 }
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined

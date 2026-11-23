@@ -633,7 +633,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
                 let far_from_town = settlements.iter().all(|s| crate::core::sqrt((s.x - x) * (s.x - x) + (s.y - y) * (s.y - y)) > 10.0 * 5280.0);
                 let far_from_other = waystations.iter().all(|q| crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) > 15.0 * 5280.0);
                 if far_from_town && far_from_other {
-                    waystations.push(Poi { kind: PoiKind::Waystation, x, y, seed: crate::core::rng::hash2(stream, (x / 10.0) as i64, (y / 10.0) as i64), stroke: None });
+                    waystations.push(Poi { kind: PoiKind::Waystation, x, y, seed: crate::core::rng::hash2(stream, (x / 10.0) as i64, (y / 10.0) as i64), stroke: None, fall: None });
                 }
             }
         }

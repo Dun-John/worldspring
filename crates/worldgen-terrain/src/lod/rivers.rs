@@ -663,9 +663,13 @@ impl RiverNet {
         self.falls.iter().filter(move |f| f.at[0] >= rect[0] - pad && f.at[0] <= rect[2] + pad && f.at[1] >= rect[1] - pad && f.at[1] <= rect[3] + pad)
     }
 
-    /// The fall a cave site at (x, y) opens behind (its mouth's exact position).
-    pub fn fall_with_cave_at(&self, x: f64, y: f64) -> Option<&Fall> {
-        self.falls.iter().find(|f| f.cave.is_some_and(|c| c[0].to_bits() == x.to_bits() && c[1].to_bits() == y.to_bits()))
+    /// The falls whose sheet or shelf (`sheet_zone`, `ledge_zone`) may reach into `rect` (ft):
+    /// each padded by its own width and face.
+    pub fn falls_touching(&self, rect: [f64; 4]) -> impl Iterator<Item = &Fall> {
+        self.falls.iter().filter(move |f| {
+            let pad = zone_reach_ft(f);
+            f.at[0] >= rect[0] - pad && f.at[0] <= rect[2] + pad && f.at[1] >= rect[1] - pad && f.at[1] <= rect[3] + pad
+        })
     }
 
     fn settle_profiles(&mut self, ground: &dyn Fn(f64, f64) -> f64, cell_ft: f64) {
@@ -1047,21 +1051,11 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
     // running on past the fall's own points: `carve`, `ledge`) reaches tiles its points may
     // not: every tile it reaches carves it alike, so its fall goes with the first piece of each.
     if let Some(first) = out.first_mut() {
-        let more: Vec<Fall> = net
-            .falls
-            .iter()
-            .filter(|f| {
-                let p = pad(f.width as f64);
-                let r = (LIP_KEEP_FT + 3.0 * f.width as f64 + f.face_ft as f64).max(fall_ease_max(f) + FALL_EASE_FADE_FT) + 2.0 * spacing;
-                let b = [f.at[0] - r, f.at[1] - r, f.at[0] + r, f.at[1] + r];
-                let b = ledge_box(f).map_or(b, |l| [b[0].min(l[0]), b[1].min(l[1]), b[2].max(l[2]), b[3].max(l[3])]);
-                b[0] <= rect[2] + p && b[2] >= rect[0] - p && b[1] <= rect[3] + p && b[3] >= rect[1] - p
-            })
-            .copied()
-            .collect();
-        for f in more {
-            if !first.falls.iter().any(|o| o.id == f.id) {
-                first.falls.push(f);
+        for f in &net.falls {
+            // (A bound round the lip, never short of it: an extra fall carves nothing.)
+            let p = pad(2.0 * f.width as f64) + fall_reach_ft(f) + 2.0 * spacing;
+            if f.at[0] + p >= rect[0] && f.at[0] - p <= rect[2] && f.at[1] + p >= rect[1] && f.at[1] - p <= rect[3] && !first.falls.iter().any(|o| o.id == f.id) {
+                first.falls.push(*f);
             }
         }
     }
@@ -1128,15 +1122,6 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
             // Below a fall's face the pool's cut climbs as steeply as the face behind its foot, so
             // the lip stands (and the ground beside it: the headwall of the gorge below).
             let lip = a.fall.and_then(|id| piece.falls.iter().find(|f| f.id == id)).map(|f| (f.at, f.dir, f.face_ft as f64, f.drop_ft() as f64 / f.face_ft as f64));
-            // This river's falls near the segment: their drop eases out over the land beside them.
-            let eased: Vec<&Fall> = lips
-                .iter()
-                .copied()
-                .filter(|f| {
-                    let r = fall_ease_max(f) + FALL_EASE_FADE_FT + reach;
-                    f.river == piece.river && a.p[0].min(b.p[0]) - r <= f.at[0] && a.p[0].max(b.p[0]) + r >= f.at[0] && a.p[1].min(b.p[1]) - r <= f.at[1] && a.p[1].max(b.p[1]) + r >= f.at[1]
-                })
-                .collect();
             for iy in iy0..=iy1 {
                 let py = origin[1] + iy as f64 * spacing;
                 // Only the samples of this row inside the segment's capsule (the box round
@@ -1158,12 +1143,10 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                     let w = a.w + (b.w - a.w) * t;
                     let z = a.z + (b.z - a.z) * t;
                     let half = 0.5 * w;
-                    let q = [a.p[0] + dx * t, a.p[1] + dy * t];
                     let mut target = if d < half {
                         let u = d / half;
                         z - depth_ft(w) * (1.0 - u * u)
                     } else {
-                        let z = eased.iter().fold(z, |z, f| z + fall_ease(f, q, z, [px, py], d - half).0);
                         z + (d - half) * if lip.is_some() { GORGE_SLOPE } else { BANK_SLOPE }
                     };
                     if let Some((at, dir, face, slope)) = lip
@@ -1184,8 +1167,7 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                     if d < half {
                         channel[k] = true;
                     }
-                    let zl = if d < half { z } else { eased.iter().fold(z, |z, f| z + fall_ease(f, q, z, [px, py], d - half).1) };
-                    let here = (d as f32, zl as f32, w as f32);
+                    let here = (d as f32, z as f32, w as f32);
                     if here.0 < near[k].0 || (here.0 == near[k].0 && (here.1, here.2) < (near[k].1, near[k].2)) {
                         near[k] = here;
                     }
@@ -1230,6 +1212,24 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                 }
             }
         }
+        if !channel[k] && !lips.is_empty() {
+            // By a fall the river's levels (the top held above the lip, the pool's below the face)
+            // are not the land's: past a strip by the water the ground is left as it lies, over a
+            // round about the lip (the cliff only beside the channel, no scarp across the valley).
+            let (x, y) = (origin[0] + (k % dim) as f64 * spacing, origin[1] + (k / dim) as f64 * spacing);
+            let (d, w) = (near[k].0 as f64, near[k].2 as f64);
+            let keep = FALL_EASE_KEEP_FT + FALL_EASE_KEEP_WIDTHS * w + LEDGE_REACH_FT;
+            let side = smoothstep(keep, keep + FALL_LAND_BLEND_FT, d - 0.5 * w);
+            if side > 0.0 {
+                let near_lip = lips.iter().fold(0.0f64, |m, f| {
+                    let r1 = fall_ease_max(f) + FALL_EASE_FADE_FT;
+                    let (rx, ry) = (x - f.at[0], y - f.at[1]);
+                    let r2 = rx * rx + ry * ry;
+                    if r2 >= r1 * r1 { m } else { m.max(1.0 - smoothstep(0.5 * r1, r1, crate::core::sqrt(r2))) }
+                });
+                v += (heights[k] as f64 - v) * side * near_lip;
+            }
+        }
         heights[k] = v as f32;
     }
     if spacing <= LEDGE_MAX_SPACING_FT {
@@ -1239,52 +1239,18 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
     }
 }
 
-/// How the land beside a fall takes its drop (`fall_ease`): the step the river makes over the face
-/// eases out, with the distance `e` from the water's edge, over `face + e * spread` ft (spread at
-/// least `FALL_EASE_SPREAD`, or the drop over `FALL_EASE_CLIFF_FT`: the cliff beside the falling
-/// water stands about that far out past the kept strip), up to `face + FALL_EASE_MAX_DROPS * drop`, and fades out
-/// for river points `FALL_EASE_FADE_FT` past that from the lip.
-const FALL_EASE_SPREAD: f64 = 3.0;
-const FALL_EASE_CLIFF_FT: f64 = 50.0;
+/// How far round a fall the land beside the river is left as it lies (`carve`): fully out to half
+/// of `face + FALL_EASE_MAX_DROPS * drop + FALL_EASE_FADE_FT` from the lip, fading out to all of it.
 const FALL_EASE_MAX_DROPS: f64 = 3.0;
 const FALL_EASE_FADE_FT: f64 = 120.0;
 /// Out to this far (ft, plus widths) from the water's edge the banks keep the river's levels.
 const FALL_EASE_KEEP_FT: f64 = 15.0;
 const FALL_EASE_KEEP_WIDTHS: f64 = 0.25;
+/// Past that strip the carving fades out over this far (ft).
+const FALL_LAND_BLEND_FT: f64 = 60.0;
 
 fn fall_ease_max(f: &Fall) -> f64 {
     f.face_ft as f64 + FALL_EASE_MAX_DROPS * f.drop_ft() as f64
-}
-
-/// What the land beside a fall carves to instead of the river's level `z` at its point `q` (for
-/// a sample `p` `e` ft beyond the water's edge): (a lift for the cut, a drop for the levee). The
-/// river steps over the face; carving the valley sides to its level as it is would cut a straight
-/// scarp across the whole valley. Instead, past a strip by the water (`FALL_EASE_KEEP_FT`) both
-/// keep to a level easing from the top to the pool over a reach centred on the face, widening
-/// outwards: below it the cut is lifted, above it the levee lowered, so the land is left more as
-/// it lies (the cliff only near the channel). How far down the drop a river point lies is read
-/// from its level, so a river bending back past the fall is still judged right.
-#[inline]
-fn fall_ease(f: &Fall, q: [f64; 2], z: f64, p: [f64; 2], e: f64) -> (f64, f64) {
-    let (top, drop, face) = (f.top as f64, f.drop_ft() as f64, f.face_ft as f64);
-    if drop <= 0.0 {
-        return (0.0, 0.0);
-    }
-    let (qx, qy) = (q[0] - f.at[0], q[1] - f.at[1]);
-    let r = crate::core::sqrt(qx * qx + qy * qy);
-    let max = fall_ease_max(f);
-    if r >= max + FALL_EASE_FADE_FT {
-        return (0.0, 0.0);
-    }
-    let fade = 1.0 - smoothstep(max, max + FALL_EASE_FADE_FT, r);
-    let below = ((top - z) / drop).clamp(0.0, 1.0);
-    let e = (e - FALL_EASE_KEEP_FT - FALL_EASE_KEEP_WIDTHS * f.width as f64).max(0.0);
-    let len = (face + e * FALL_EASE_SPREAD.max(drop / FALL_EASE_CLIFF_FT)).min(max).max(face);
-    let u = (p[0] - f.at[0]) * f.dir[0] + (p[1] - f.at[1]) * f.dir[1];
-    let ramp = ((u - 0.5 * face) / len + 0.5).clamp(0.0, 1.0);
-    let lift = drop * (below - ramp).max(0.0);
-    let sink = drop * (ramp - below).max(0.0);
-    (fade * lift, -fade * sink)
 }
 
 /// The rock shelf to a fall's cave: how far out from the water's edge it starts and how wide it
@@ -1325,6 +1291,18 @@ pub fn behind_mouth(face: f64, width: f64, side: f64) -> (f64, f64) {
     (0.5 * (behind_back(face) + face + BEHIND_PAST_FOOT_FT), side * BEHIND_MOUTH_ACROSS * 0.5 * width)
 }
 
+/// How far (ft) from its lip anything a fall carves can reach (`carve`, `ledge`: the bed kept
+/// above it, the cap on the water below, the drop eased over the land, the shelf and its skirt),
+/// past the carving reach of the river beside it.
+pub fn fall_reach_ft(f: &Fall) -> f64 {
+    let (face, w) = (f.face_ft as f64, f.width as f64);
+    let ledge = face + 3.0 + LEDGE_RUN_FT + w + 0.75 * w + LEDGE_REACH_FT;
+    (LIP_KEEP_FT + 3.0 * w + face).max(fall_ease_max(f) + FALL_EASE_FADE_FT).max(ledge)
+}
+
+/// How far out (ft) past the water's edge the shelf and its skirt run.
+const LEDGE_REACH_FT: f64 = LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT;
+
 /// The box (ft) round a fall's shelf and its skirt (`ledge`; none without one).
 fn ledge_box(f: &Fall) -> Option<[f64; 4]> {
     f.bank?;
@@ -1339,6 +1317,12 @@ fn ledge_box(f: &Fall) -> Option<[f64; 4]> {
         }
     }
     Some(b)
+}
+
+/// How far (ft) from its lip `sheet_zone` and `ledge_zone` reach (a bound).
+fn zone_reach_ft(f: &Fall) -> f64 {
+    let (face, w) = (f.face_ft as f64, f.width as f64);
+    face + 3.0 + LEDGE_RUN_FT + w + 0.75 * w + LEDGE_REACH_FT + 8.0
 }
 
 /// Whether `p` (ft) lies on or by a fall's falling sheet as the map draws it (from just above the
@@ -1379,6 +1363,13 @@ fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim
     let reach = half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT + spacing;
     let Some(b) = ledge_box(f) else { return };
     let (lo, hi) = ([b[0] - spacing, b[1] - spacing], [b[2] + spacing, b[3] + spacing]);
+    let i0 = (((lo[0] - origin[0]) / spacing).ceil().max(0.0) as usize).min(dim);
+    let i1 = (((hi[0] - origin[0]) / spacing).floor() + 1.0).clamp(0.0, dim as f64) as usize;
+    let j0 = (((lo[1] - origin[1]) / spacing).ceil().max(0.0) as usize).min(dim);
+    let j1 = (((hi[1] - origin[1]) / spacing).floor() + 1.0).clamp(0.0, dim as f64) as usize;
+    if i0 >= i1 || j0 >= j1 {
+        return;
+    }
     // The rivers' segments near it (the nearest point decides the side and the water's edge).
     let segs: Vec<(&CurvePoint, &CurvePoint)> = pieces
         .iter()
@@ -1391,7 +1382,9 @@ fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim
     if segs.is_empty() {
         return;
     }
-    // The nearest point of the rivers to (x, y): (squared distance, side, level, width).
+    // The nearest point of the rivers to (x, y), of those whose water's edge lies within the
+    // shelf's reach (`LEDGE_REACH_FT`): (squared distance, side, level, width). Only those: every
+    // tile round the point samples them (`pieces`' pad runs past that reach), so tiles agree.
     let nearest = |x: f64, y: f64| {
         let mut best = (f64::INFINITY, 0.0, 0.0, 0.0);
         for &(a, b) in &segs {
@@ -1400,7 +1393,8 @@ fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim
             let t = (((x - a.p[0]) * dx + (y - a.p[1]) * dy) / len2).clamp(0.0, 1.0);
             let (qx, qy) = (a.p[0] + dx * t - x, a.p[1] + dy * t - y);
             let d2 = qx * qx + qy * qy;
-            if d2 < best.0 {
+            let edge = 0.5 * (a.w + (b.w - a.w) * t) + LEDGE_REACH_FT;
+            if d2 < best.0 && d2 <= edge * edge {
                 best = (d2, dx * (y - a.p[1]) - dy * (x - a.p[0]), a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
             }
         }
@@ -1415,10 +1409,6 @@ fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim
     };
     // (Behind the water: from past the mouth, the far side of the middle, out to the bank's strip.)
     let (bv0, bv1) = (-BEHIND_MOUTH_ACROSS * half_w - BEHIND_BEYOND_MOUTH_FT, half_w + LEDGE_FROM_FT + LEDGE_WIDTH_FT);
-    let i0 = (((lo[0] - origin[0]) / spacing).ceil().max(0.0) as usize).min(dim);
-    let i1 = (((hi[0] - origin[0]) / spacing).floor() + 1.0).clamp(0.0, dim as f64) as usize;
-    let j0 = (((lo[1] - origin[1]) / spacing).ceil().max(0.0) as usize).min(dim);
-    let j1 = (((hi[1] - origin[1]) / spacing).floor() + 1.0).clamp(0.0, dim as f64) as usize;
     let bottom = f.bottom as f64;
     for j in j0..j1 {
         let y = origin[1] + j as f64 * spacing;
@@ -1438,6 +1428,9 @@ fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim
                 continue;
             }
             let best = nearest(x, y);
+            if best.0 == f64::INFINITY {
+                continue;
+            }
             let (d, on, z, w) = (crate::core::sqrt(best.0), best.1, best.2, best.3);
             let out = d - 0.5 * w;
             let skirt = out - LEDGE_FROM_FT - LEDGE_WIDTH_FT;

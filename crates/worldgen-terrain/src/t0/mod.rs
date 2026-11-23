@@ -503,21 +503,19 @@ impl T0 {
         let mut pois = pois::place_pois(&sinp, &settlements, &vents_at, &own_roads);
         // Caves behind waterfalls (`lod::rivers::Fall::cave`): at the face's foot, where the fall
         // put them (not moved off the river like the rest).
-        let falls_from = pois.len();
         let s_fall = world.stream("t0.fall.cave");
         for f in rivers.falls.iter() {
             if let Some(c) = f.cave {
-                pois.push(settle::Poi { kind: settle::PoiKind::Cave, x: c[0], y: c[1], seed: crate::core::rng::hash2(s_fall, f.river as i64, f.seg as i64), stroke: None });
+                pois.push(settle::Poi { kind: settle::PoiKind::Cave, x: c[0], y: c[1], seed: crate::core::rng::hash2(s_fall, f.river as i64, f.seg as i64), stroke: None, fall: Some((f.river, f.seg)) });
             }
         }
-        let falls_to = pois.len();
         // The sketch's sites (after the generated ones, so drawing one moves none of them), seeded
         // by where they were drawn.
         let s_site = world.stream("t0.sketch.site");
         let sketched_from = pois.len();
         for s in &sites {
             let seed = crate::core::rng::hash2(s_site, (s.x / 10.0) as i64, (s.y / 10.0) as i64);
-            pois.push(settle::Poi { kind: s.kind, x: s.x, y: s.y, seed, stroke: Some(s.stroke as u32) });
+            pois.push(settle::Poi { kind: s.kind, x: s.x, y: s.y, seed, stroke: Some(s.stroke as u32), fall: None });
         }
         // Towns sit beside rivers, not in them (the fine channel meanders through T0 cells).
         let clear = crate::lod::rivers::ClearCache::default();
@@ -526,8 +524,8 @@ impl T0 {
             let margin = if s.tier == settle::Tier::Village { 40.0 } else { 300.0 };
             (s.x, s.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, s.x, s.y, margin, cell, &clear);
         }
-        for (i, p) in pois.iter_mut().enumerate() {
-            if !(falls_from..falls_to).contains(&i) {
+        for p in pois.iter_mut() {
+            if p.fall.is_none() {
                 (p.x, p.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, p.x, p.y, 150.0, cell, &clear);
             }
         }
@@ -612,14 +610,9 @@ impl T0 {
                 .map(|f| (f.river, f.seg))
                 .collect();
             if !blocked.is_empty() || !drowned.is_empty() {
-                let gone: Vec<[f64; 2]> = rivers.falls.iter().filter(|f| blocked.contains(&(f.river, f.seg)) || drowned.contains(&(f.river, f.seg))).filter_map(|f| f.cave).collect();
                 rivers.drop_falls(&blocked);
                 rivers.drop_caves(&drowned);
-                let mut i = 0;
-                pois.retain(|p| {
-                    i += 1;
-                    !((falls_from..falls_to).contains(&(i - 1)) && gone.iter().any(|c| c[0].to_bits() == p.x.to_bits() && c[1].to_bits() == p.y.to_bits()))
-                });
+                pois.retain(|p| p.fall.is_none_or(|k| !blocked.contains(&k) && !drowned.contains(&k)));
             }
         }
         for ws in &network.waystations {
@@ -806,7 +799,7 @@ impl T0 {
                 };
                 self.made.push(made::Made { poi: self.base_pois + k, class: made::link_class(s.tier), s, track, z });
             }
-            self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None });
+            self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None, fall: None });
             self.created.push(CreatedSite { removed: c.removed, reach, under, spec });
         }
         self.lanes = if world.file.edits.streets.is_empty() { Vec::new() } else { made::lanes(world, self) };
@@ -855,8 +848,8 @@ impl T0 {
     /// The waterfall point of interest `poi` is the hidden cave behind, if it is one (secret:
     /// shown to the DM, hidden from players until found).
     pub fn fall_of_poi(&self, poi: usize) -> Option<&crate::lod::rivers::Fall> {
-        let p = self.pois.get(poi).filter(|p| p.kind == settle::PoiKind::Cave && p.stroke.is_none())?;
-        self.rivers.fall_with_cave_at(p.x, p.y)
+        let (r, k) = self.pois.get(poi)?.fall?;
+        self.rivers.falls.iter().find(|f| f.river == r && f.seg == k && f.cave.is_some())
     }
 
     /// The created-site options for point of interest `poi`, if it is a created one or the
@@ -1326,6 +1319,15 @@ impl T0 {
                 out.extend_from_slice(&k.to_le_bytes());
             }
         }
+        // Caves behind waterfalls (optional, after those): count, then per cave its POI's index
+        // and its fall's (river, segment), u32 each.
+        let caves: Vec<(usize, (u32, u32))> = self.pois.iter().enumerate().filter_map(|(i, p)| p.fall.map(|k| (i, k))).collect();
+        out.extend_from_slice(&(caves.len() as u32).to_le_bytes());
+        for (i, (r, k)) in caves {
+            for v in [i as u32, r, k] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
         out
     }
 
@@ -1423,7 +1425,7 @@ impl T0 {
             let y = f64::from_le_bytes(take(8)?.try_into().unwrap());
             let seed = u64::from_le_bytes(take(8)?.try_into().unwrap());
             let stroke = u32::from_le_bytes(take(4)?.try_into().unwrap());
-            pois.push(settle::Poi { kind, x, y, seed, stroke: (stroke != u32::MAX).then_some(stroke) });
+            pois.push(settle::Poi { kind, x, y, seed, stroke: (stroke != u32::MAX).then_some(stroke), fall: None });
         }
         let mut sea_lanes = Vec::new();
         if let Ok(b) = take(4) {
@@ -1474,6 +1476,16 @@ impl T0 {
             }
         }
         let [dropped_falls, caveless_falls] = fall_lists;
+        if let Ok(b) = take(4) {
+            for _ in 0..u32::from_le_bytes(b.try_into().unwrap()) {
+                let i = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+                let r = u32::from_le_bytes(take(4)?.try_into().unwrap());
+                let k = u32::from_le_bytes(take(4)?.try_into().unwrap());
+                if let Some(p) = pois.get_mut(i) {
+                    p.fall = Some((r, k));
+                }
+            }
+        }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
         let mut rivers = RiverNet::new(curves, map_w, map_h, cell_ft);

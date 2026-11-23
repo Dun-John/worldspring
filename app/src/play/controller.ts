@@ -273,6 +273,9 @@ export class PlayController implements PointerTool {
       this.channel.send({ t: 'dm' });
     } else {
       view.tool = this;
+      // (From the first frame of every label set: a secret site's name never shows.)
+      view.labelConceal = this.concealFn;
+      if (view.labels) view.labels.conceal = this.concealFn;
       window.addEventListener('beforeunload', () => this.channel.send({ t: 'bye' }));
     }
   }
@@ -2256,6 +2259,8 @@ export class PlayController implements PointerTool {
 
   /** Whether site `id` (`u:<layout>:0`) is a secret one the players don't know yet. */
   secretSite(id: string): boolean {
+    // (Players: no site at all before the world's features are here to tell.)
+    if (this.role === 'player' && !this.view.overlay) return id.startsWith('u:');
     return this.secretSites().some((f) => f.site === id && !fallCaveFound(this.state, id));
   }
 

@@ -1404,7 +1404,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     // Behind and below a waterfall its shelf stays as the river carved it (`rivers::ledge`).
-    for f in t0.rivers.falls_in([hx0, hy0, hx0 + span, hy0 + span], 400.0).filter(|f| f.bank.is_some()) {
+    for f in t0.rivers.falls_touching([hx0, hy0, hx0 + span, hy0 + span]).filter(|f| f.bank.is_some()) {
         for (h, v) in hh.iter_mut().enumerate() {
             if crate::lod::rivers::ledge_zone(f, center(h % HS, h / HS)) {
                 *v = relief_base[h];
@@ -2310,7 +2310,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     };
     // Nothing generated stands on a waterfall's sheet or the shelf behind it (`rivers::sheet_zone`),
     // and the guarantee keeps off it.
-    let near_falls: Vec<&crate::lod::rivers::Fall> = t0.rivers.falls_in([ox, oy, ox + chunk_ft, oy + chunk_ft], 80.0).collect();
+    let near_falls: Vec<&crate::lod::rivers::Fall> = t0.rivers.falls_touching([ox, oy, ox + chunk_ft, oy + chunk_ft]).collect();
     let on_sheet = |p: [f64; 2]| near_falls.iter().any(|f| crate::lod::rivers::sheet_zone(f, p));
     // Nothing generated stands on a cliff face (item 170): what did moves off it, and the guarantee
     // keeps off it (filling any gap the move left).
