@@ -40,6 +40,11 @@ export interface GenStats {
   cached: number;
   jobs: number;
   avgMs: number;
+  /** Generated layouts built so far by settlement index: per generator worker, how many times
+   * (a debug count: `window.__ws.layoutBuilds()` in dev). */
+  builds?: Record<number, number[]>;
+  /** The generator workers each settlement's jobs go to (`no`s as in `builds`; debug). */
+  owners?: Record<number, number[]>;
 }
 
 export type ToCoordinator =
@@ -85,11 +90,18 @@ export type ToGen =
    * entries of others (`{field: EditsPatch}`): `Ctx::patch_edits`. */
   | { type: 'edits'; json: string | null; patch: string | null }
   /** The overlay's settlements and sites (`[{id, kind, name}]`) for a T0 loaded without it: `Ctx::set_place_names`. */
-  | { type: 'places'; json: string };
+  | { type: 'places'; json: string }
+  /** Each settlement's bounds again (after edits): answered with `bounds`. */
+  | { type: 'bounds' }
+  /** Build settlement `town`'s layout into this worker's memo (`Ctx::warm_town`): answered with `done`. */
+  | { type: 'warmtown'; id: number; town: number };
 
+/** `built`: the layouts this worker built as generated meanwhile (`Ctx::take_built`, layout indices). */
 export type FromGen =
-  | { type: 'inited'; t0: ArrayBuffer | null; overlay: string | null; ms: number }
+  /** `bounds`: each settlement's (`Ctx::town_bounds`, x0, y0, x1, y1 flat), from the worker that made T0. */
+  | { type: 'inited'; t0: ArrayBuffer | null; overlay: string | null; ms: number; bounds?: Float64Array }
   | { type: 'progress'; stage: string; frac: number }
-  | { type: 'done'; id: number; buf: ArrayBuffer | null; chunk?: PreparedChunk; ms: number }
-  | { type: 'answer'; id: number; json: string }
-  | { type: 'error'; id?: number; message: string };
+  | { type: 'done'; id: number; buf: ArrayBuffer | null; chunk?: PreparedChunk; ms: number; built?: number[] }
+  | { type: 'answer'; id: number; json: string; built?: number[] }
+  | { type: 'bounds'; bounds: Float64Array }
+  | { type: 'error'; id?: number; message: string; built?: number[] };

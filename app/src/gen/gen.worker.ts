@@ -14,6 +14,11 @@ let wasm: ReturnType<typeof init> | null = null;
 const load = () => (wasm ??= init());
 
 const post = (msg: FromGen, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
+/** The layouts built since the last report (for the scheduler's town affinity and a debug count). */
+const built = (): number[] | undefined => {
+  const b = ctx?.take_built();
+  return b?.length ? Array.from(b) : undefined;
+};
 
 type AskOf<K extends Ask['op']> = Extract<Ask, { op: K }>;
 /** One handler per question, each exactly its call into the WASM context (a missing op fails to compile). */
@@ -98,7 +103,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
         t0 = bytes.buffer as ArrayBuffer;
         overlay = ctx.overlay_json();
       }
-      post({ type: 'inited', t0, overlay, ms: performance.now() - start }, t0 ? [t0] : []);
+      const bounds = m.t0 ? undefined : ctx.town_bounds();
+      post({ type: 'inited', t0, overlay, ms: performance.now() - start, bounds }, t0 ? [t0] : []);
     } else if (m.type === 'edits') {
       if (m.json) ctx?.set_edit_fields(m.json);
       if (m.patch) ctx?.patch_edits(m.patch);
@@ -115,7 +121,14 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
       } catch (err) {
         console.error(`[gen] ${a.op} failed:`, err);
       }
-      post({ type: 'answer', id: m.id, json });
+      post({ type: 'answer', id: m.id, json, built: built() });
+    } else if (m.type === 'bounds') {
+      if (ctx) post({ type: 'bounds', bounds: ctx.town_bounds() });
+    } else if (m.type === 'warmtown') {
+      if (!ctx) throw new Error('worker not initialized');
+      const start = performance.now();
+      ctx.warm_town(m.town);
+      post({ type: 'done', id: m.id, buf: null, ms: performance.now() - start, built: built() });
     } else if (m.type === 'job') {
       if (!ctx) throw new Error('worker not initialized');
       const start = performance.now();
@@ -123,13 +136,13 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
         // Decoded and tessellated here, off the main thread.
         kinds ??= JSON.parse(battlemap_catalog_json()) as KindTactics[];
         const chunk = prepareChunk(ctx.gen_battlemap(m.level, m.x, m.y, m.parent!).buffer as ArrayBuffer, m.x, m.y, kinds);
-        post({ type: 'done', id: m.id, buf: null, chunk, ms: performance.now() - start }, chunkTransfer(chunk));
+        post({ type: 'done', id: m.id, buf: null, chunk, ms: performance.now() - start, built: built() }, chunkTransfer(chunk));
       } else {
         const buf = ctx.gen_terrain(m.level, m.x, m.y, m.parent ?? undefined).buffer as ArrayBuffer;
-        post({ type: 'done', id: m.id, buf, ms: performance.now() - start }, [buf]);
+        post({ type: 'done', id: m.id, buf, ms: performance.now() - start, built: built() }, [buf]);
       }
     }
   } catch (err) {
-    post({ type: 'error', id: m.type === 'job' ? m.id : undefined, message: String(err) });
+    post({ type: 'error', id: m.type === 'job' || m.type === 'warmtown' ? m.id : undefined, message: String(err), built: built() });
   }
 };

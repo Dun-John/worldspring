@@ -18,6 +18,7 @@ import {
   type ToCoordinator,
   type ToGen,
   type WantTile,
+  type Ask,
   SITE_MIN_LEVEL,
 } from './protocol';
 
@@ -25,6 +26,15 @@ const CACHE_MAX = 200;
 const BATTLE_CACHE_MAX = 24;
 /** In LRU positions: each level of coarseness counts as this many uses more recent. */
 const LEVEL_KEEP_BONUS = 12;
+/** A job that only builds a settlement's layout into a worker's memo (`warmtown`), ahead of its tiles. */
+const KIND_WARM = 3;
+/** Warm jobs come after every tile (`pri` is below this for all of them). */
+const WARM_PRI = 1e9;
+/** A second (third) worker may build a town its owners have built once the ready jobs waiting on
+ * it would keep them busy this many times as long as a build of it took (both as measured here):
+ * a city's cold build costs seconds, a tile over a built one a small part of that. */
+const SPILL_BUILDS = 2;
+const MAX_OWNERS = 3;
 
 interface Job {
   kind: number;
@@ -33,11 +43,15 @@ interface Job {
   y: number;
   pri: number;
   deps: string[];
+  /** The settlements whose layouts it reads (by `townBounds`), for the worker it goes to. */
+  towns: number[];
 }
 
 interface GenWorker {
   w: Worker;
   busy: boolean;
+  /** Its place in the debug count (`builds`). */
+  no: number;
 }
 
 let ctx: Ctx | null = null;
@@ -53,7 +67,7 @@ const cache = new Map<string, TerrainPayload>();
 const battleCache = new Map<string, PreparedChunk>();
 let wanted = new Map<string, WantTile>();
 const pending = new Map<string, Job>();
-const inflight = new Map<number, { id: string; worker: GenWorker }>();
+const inflight = new Map<number, { id: string; worker: GenWorker; towns: number[] }>();
 const inflightIds = new Set<string>();
 /** Jobs started before an edit that touches them: their results are dropped. */
 const staleInflight = new Set<string>();
@@ -68,6 +82,24 @@ let editFields: Record<string, unknown> = {};
 /** The overlay's settlements and sites, for the workers that load T0 without the overlay. */
 let placesJson = '[]';
 let epoch = 0;
+// Town affinity. Each worker keeps the layouts it built (a thread-local memo), and a metropolis
+// takes seconds: every tile over a town goes to a worker that has it (or is building it), so
+// one zoom builds it once, not once per cold worker.
+/** Each settlement's bounds, flat (x0, y0, x1, y1), as `town::layouts_near` tests them. */
+let townBounds: Float64Array = new Float64Array(0);
+/** The settlements a tile's (terrain id) layouts read, worked out once per bounds. */
+const townsOf = new Map<string, number[]>();
+/** The workers each settlement went to (they have its layout, or are building it). */
+const owners = new Map<number, Set<GenWorker>>();
+/** Of those, the ones that finished a job with it (its layout made there). */
+const madeBy = new Map<number, Set<GenWorker>>();
+/** Debug: generated layouts built, by settlement, per worker. */
+const builds = new Map<number, number[]>();
+/** How long a job that built a settlement's layout took (the longest), and the jobs over it
+ * that found it made ([total ms, count]), for `canTake`'s spill. */
+const buildMs = new Map<number, number>();
+const tileMs = new Map<number, [number, number]>();
+let workerNo = 0;
 let jobsDone = 0;
 let msTotal = 0;
 
@@ -76,7 +108,7 @@ const post = (msg: FromCoordinator, transfer: Transferable[] = []) =>
 
 function spawnWorker(): GenWorker {
   const w = new Worker(new URL('./gen.worker.ts', import.meta.url), { type: 'module' });
-  return { w, busy: false };
+  return { w, busy: false, no: workerNo++ };
 }
 
 /** Send a message and resolve with the first non-progress reply (progress is forwarded). */
@@ -107,6 +139,14 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   editFields = {};
   placesJson = '[]';
   wanted = new Map();
+  townBounds = new Float64Array(0);
+  townsOf.clear();
+  owners.clear();
+  madeBy.clear();
+  builds.clear();
+  buildMs.clear();
+  tileMs.clear();
+  workerNo = 0;
 
   await init();
   post({ type: 'catalog', catalog: battlemap_catalog_json() });
@@ -133,6 +173,7 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   // (The names of this world's places first: each worker gets them as it joins, before any ask.)
   const feats = (JSON.parse(firstReply.overlay ?? '{"features":[]}') as { features: { id: string; kind: string; name: string }[] }).features;
   placesJson = JSON.stringify(feats.map((f) => ({ id: f.id, kind: f.kind, name: f.name })));
+  townBounds = firstReply.bounds ?? new Float64Array(0);
   join(first);
   const t0 = firstReply.t0;
   rest.forEach((gw, k) => {
@@ -195,10 +236,76 @@ function schedule(kind: number, level: number, x: number, y: number, pri: number
     return;
   }
   const deps = depsOf(kind, level, x, y);
-  pending.set(id, { kind, level, x, y, pri, deps });
+  pending.set(id, { kind, level, x, y, pri, deps, towns: jobTowns(kind, id, deps) });
   for (const d of deps) {
     const [l, dx, dy] = d.split('/').map(Number);
     schedule(KIND_TERRAIN, l, dx, dy, pri - 0.5, true);
+  }
+}
+
+/** The settlements whose layouts a terrain tile reads (none above site levels). */
+function tileTowns(id: string): number[] {
+  const known = townsOf.get(id);
+  if (known) return known;
+  const [l, x, y] = id.split('/').map(Number);
+  const out: number[] = [];
+  if (l >= SITE_MIN_LEVEL && geom) {
+    const ts = geom.domain_ft / 2 ** l;
+    out.push(...biggestFirst(townsIn([x * ts, y * ts, (x + 1) * ts, (y + 1) * ts])));
+  }
+  townsOf.set(id, out);
+  return out;
+}
+
+/** A job's settlements (a battlemap reads the layouts over its terrain tile). */
+const jobTowns = (kind: number, id: string, deps: string[]): number[] => (kind === KIND_BATTLEMAP ? (deps.length ? tileTowns(deps[0]) : []) : tileTowns(id));
+
+/** Settlements biggest first (by bounds): a job goes by the first. */
+function biggestFirst(towns: number[]): number[] {
+  const b = townBounds;
+  const area = (i: number) => (b[i * 4 + 2] - b[i * 4]) * (b[i * 4 + 3] - b[i * 4 + 1]);
+  return towns.sort((p, q) => area(q) - area(p) || p - q);
+}
+
+/** The settlement a question reads the layout of, if it is about a place (biggest there). */
+function askTown(a: Ask): number | undefined {
+  if (a.op === 'districts') return a.settlement < townBounds.length / 4 ? a.settlement : undefined;
+  const r: Rect | null =
+    a.op === 'inview' ? a.rect : a.op === 'query' ? [a.x, a.y, a.x, a.y] : a.op === 'pick' ? [a.x - a.radius, a.y - a.radius, a.x + a.radius, a.y + a.radius] : a.op === 'fencesnear' ? [a.x - a.r, a.y - a.r, a.x + a.r, a.y + a.r] : null;
+  return r ? biggestFirst(townsIn(r))[0] : undefined;
+}
+
+function townsIn(r: Rect): number[] {
+  const out: number[] = [];
+  const b = townBounds;
+  for (let i = 0; i < b.length; i += 4) if (b[i + 2] >= r[0] && b[i] <= r[2] && b[i + 3] >= r[1] && b[i + 1] <= r[3]) out.push(i / 4);
+  return out;
+}
+
+/** Zooming from region to local (the two levels above site levels): the settlements in view or
+ * within about a screen of it get built ahead (`warmtown`), biggest and nearest first, each by
+ * the worker that is to own it, after every tile. */
+function scheduleWarm(tiles: WantTile[]) {
+  let finest = -1;
+  for (const t of tiles) if (t.kind !== 'battlemap') finest = Math.max(finest, t.level);
+  if (!geom || finest < SITE_MIN_LEVEL - 2 || finest >= SITE_MIN_LEVEL) return;
+  const ts = geom.domain_ft / 2 ** finest;
+  const r: Rect = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const t of tiles) {
+    if (t.kind === 'battlemap' || t.level !== finest) continue;
+    r[0] = Math.min(r[0], t.x * ts);
+    r[1] = Math.min(r[1], t.y * ts);
+    r[2] = Math.max(r[2], (t.x + 1) * ts);
+    r[3] = Math.max(r[3], (t.y + 1) * ts);
+  }
+  const [cx, cy, hw, hh] = [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2, r[2] - r[0], r[3] - r[1]];
+  for (const i of townsIn([cx - hw, cy - hh, cx + hw, cy + hh])) {
+    const id = `w/${i}`;
+    if (owners.get(i)?.size || inflightIds.has(id)) continue;
+    const b = townBounds.subarray(i * 4, i * 4 + 4);
+    const reach = Math.max(1, (b[2] - b[0]) / 2);
+    const d = Math.hypot((b[0] + b[2]) / 2 - cx, (b[1] + b[3]) / 2 - cy);
+    pending.set(id, { kind: KIND_WARM, level: 0, x: i, y: 0, pri: WARM_PRI + d / reach, deps: [], towns: [i] });
   }
 }
 
@@ -215,33 +322,96 @@ function onWant(tiles: WantTile[]) {
     wanted.set(id, t);
     schedule(kind, t.level, t.x, t.y, t.pri);
   }
+  scheduleWarm(tiles);
   pump();
 }
 
+const ownersOf = (t: number) => owners.get(t);
+
+/** Whether `gw` may take `job` (town affinity, by the biggest settlement it reads: the others
+ * cost little to build again): that town is unowned or owned by `gw`, or it has a long backlog
+ * (`SPILL_BUILDS`) and an owner that has built it (never a second cold build while the first is
+ * still going). */
+function canTake(gw: GenWorker, job: Job, backlog: Map<number, number>): boolean {
+  const t = job.towns[0];
+  const o = t === undefined ? undefined : ownersOf(t);
+  if (!o?.size || o.has(gw)) return true;
+  const build = buildMs.get(t);
+  const tile = tileMs.get(t);
+  if (o.size >= MAX_OWNERS || !madeBy.get(t)?.size || build === undefined || !tile) return false;
+  return ((backlog.get(t) ?? 0) * (tile[0] / tile[1])) / o.size > SPILL_BUILDS * build;
+}
+
+/** Warm jobs running at once: they leave two workers (one of two) to the tiles in view. */
+const warmCap = () => (workers.length >= 3 ? workers.length - 2 : workers.length - 1);
+
+function claim(gw: GenWorker, t: number | undefined) {
+  if (t !== undefined) {
+    let o = owners.get(t);
+    if (!o) owners.set(t, (o = new Set()));
+    o.add(gw);
+  }
+}
+
 function pump() {
+  const ready: [string, Job][] = [];
+  for (const entry of pending) if (entry[1].deps.every((d) => cache.has(d))) ready.push(entry);
+  if (!ready.length) return;
+  const backlog = new Map<number, number>();
+  for (const [, { towns }] of ready) if (towns.length) backlog.set(towns[0], (backlog.get(towns[0]) ?? 0) + 1);
+  let warming = 0;
+  for (const { id } of inflight.values()) if (id.startsWith('w/')) warming++;
+  const taken = new Set<string>();
   for (const gw of workers) {
     if (gw.busy) continue;
     let best: [string, Job] | null = null;
-    for (const entry of pending) {
+    for (const entry of ready) {
       const job = entry[1];
-      if (!job.deps.every((d) => cache.has(d))) continue;
-      if (!best || job.pri < best[1].pri) best = entry;
+      if (taken.has(entry[0]) || (best && job.pri >= best[1].pri)) continue;
+      if (job.kind === KIND_WARM ? warming >= warmCap() || !!ownersOf(job.x)?.size : !canTake(gw, job, backlog)) continue;
+      best = entry;
     }
-    if (!best) return;
+    if (!best) continue;
     const [id, job] = best;
+    taken.add(id);
     pending.delete(id);
-    const parent = job.deps.length ? cache.get(job.deps[0])!.padded.slice() : null;
+    if (job.towns.length) backlog.set(job.towns[0], (backlog.get(job.towns[0]) ?? 1) - 1);
+    claim(gw, job.towns[0]);
     const jobNo = nextJobId++;
     gw.busy = true;
-    inflight.set(jobNo, { id, worker: gw });
+    inflight.set(jobNo, { id, worker: gw, towns: job.towns });
     inflightIds.add(id);
+    if (job.kind === KIND_WARM) {
+      warming++;
+      gw.w.postMessage({ type: 'warmtown', id: jobNo, town: job.x } satisfies ToGen);
+      continue;
+    }
+    const parent = job.deps.length ? cache.get(job.deps[0])!.padded.slice() : null;
     const msg: ToGen = { type: 'job', id: jobNo, kind: job.kind, level: job.level, x: job.x, y: job.y, parent };
     gw.w.postMessage(msg, parent ? [parent.buffer] : []);
   }
 }
 
+/** Debug count of the layouts a worker reports built. */
+function countBuilt(gw: GenWorker, built: number[] | undefined) {
+  const n = townBounds.length / 4;
+  for (const t of built ?? []) {
+    if (t >= n) continue;
+    let c = builds.get(t);
+    if (!c) builds.set(t, (c = []));
+    c[gw.no] = (c[gw.no] ?? 0) + 1;
+  }
+}
+
 function onGenMessage(gw: GenWorker, m: FromGen) {
   if (m.type === 'inited' || m.type === 'progress') return;
+  if (m.type === 'bounds') {
+    townBounds = m.bounds;
+    townsOf.clear();
+    for (const [id, job] of pending) if (job.kind !== KIND_WARM) job.towns = jobTowns(job.kind, id, job.deps);
+    return;
+  }
+  countBuilt(gw, m.built);
   if (m.type === 'answer') {
     post({ type: 'answer', id: m.id, json: m.json });
     return;
@@ -250,7 +420,22 @@ function onGenMessage(gw: GenWorker, m: FromGen) {
   const job = m.id !== undefined ? inflight.get(m.id) : undefined;
   if (m.id !== undefined) inflight.delete(m.id);
   if (job) inflightIds.delete(job.id);
-  if (m.type === 'error') {
+  if (job && m.type === 'done') {
+    const key = job.towns[0];
+    if (m.built?.includes(key)) buildMs.set(key, Math.max(buildMs.get(key) ?? 0, m.ms));
+    else if (key !== undefined && !job.id.startsWith('w/')) {
+      const a = tileMs.get(key) ?? [0, 0];
+      tileMs.set(key, [a[0] + m.ms, a[1] + 1]);
+    }
+    for (const t of job.towns) {
+      let o = madeBy.get(t);
+      if (!o) madeBy.set(t, (o = new Set()));
+      o.add(gw);
+    }
+  }
+  if (job?.id.startsWith('w/')) {
+    if (m.type === 'error') console.warn(`[gen] warming ${job.id} failed: ${m.message}`);
+  } else if (m.type === 'error') {
     post({ type: 'error', message: `generation failed for ${job?.id}: ${m.message}` });
   } else if (m.type === 'done' && job && staleInflight.delete(job.id)) {
     // Made before an edit here: make it again if it is still wanted (a tile drawn from ground
@@ -331,6 +516,8 @@ function onEdits(m: Extract<ToCoordinator, { type: 'edits' }>) {
   const json = Object.keys(m.fields).length ? fieldsJson(m.fields) : null;
   const patch = Object.keys(m.patches).length ? JSON.stringify(m.patches) : null;
   if (json || patch) for (const gw of workers) gw.w.postMessage({ type: 'edits', json, patch } satisfies ToGen);
+  // (A town laid out by hand or given streets reaches elsewhere: the tiles it reads go by its bounds.)
+  if ((json || patch) && workers.length) workers[0].w.postMessage({ type: 'bounds' } satisfies ToGen);
   const battleRects = m.battleRects ?? [];
   const groundRects = m.groundRects ?? [];
   const allRects = m.allRects ?? [];
@@ -361,6 +548,7 @@ function onEdits(m: Extract<ToCoordinator, { type: 'edits' }>) {
   }
   for (const id of [...battleCache.keys()]) if (touched(id)) battleCache.delete(id);
   for (const { id } of inflight.values()) {
+    if (id.startsWith('w/')) continue;
     if (touched(id)) {
       staleInflight.add(id);
       keepSamples.delete(id);
@@ -399,6 +587,8 @@ setInterval(() => {
       cached: cache.size + battleCache.size,
       jobs: jobsDone,
       avgMs: jobsDone ? msTotal / jobsDone : 0,
+      builds: Object.fromEntries(builds),
+      owners: Object.fromEntries([...owners].map(([t, o]) => [t, [...o].map((w) => w.no)])),
     },
   });
 }, 250);
@@ -412,8 +602,16 @@ self.onmessage = (e: MessageEvent<ToCoordinator>) => {
   } else if (m.type === 'edits') {
     onEdits(m);
   } else if (m.type === 'ask') {
-    // Questions go to the last worker, so its settlement layouts stay warm between them.
-    const gw = workers[workers.length - 1];
+    // Questions go to the last worker, so its settlement layouts stay warm between them; a
+    // town's districts to a worker that has its layout (or is to build it: then it owns it).
+    // (So with the other questions about a place in a town: what is here, what is in view.)
+    let gw = workers[workers.length - 1];
+    const t = gw ? askTown(m.ask) : undefined;
+    if (t !== undefined) {
+      const made = [...(madeBy.get(t) ?? [])];
+      gw = made.find((w) => !w.busy) ?? made[0] ?? [...(owners.get(t) ?? [])][0] ?? gw;
+      claim(gw, t);
+    }
     if (gw) gw.w.postMessage({ type: 'ask', id: m.id, ask: m.ask });
     else post({ type: 'answer', id: m.id, json: 'null' });
   }

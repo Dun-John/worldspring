@@ -89,6 +89,14 @@ thread_local! {
     /// (183) The roads a town's ward edit kept (`plan::frozen_fp`) when its layout was built, by
     /// layout index (none: 0).
     static FROZEN: RefCell<FastMap<u32, u64>> = RefCell::new(FastMap::default());
+    /// Layouts built as generated since `take_built` was last called (a debug count for the app's
+    /// scheduler; read by nothing that makes output).
+    static BUILT: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The layout indices built as generated (not found in the memo) since the last call.
+pub fn take_built() -> Vec<u32> {
+    BUILT.with(|b| std::mem::take(&mut *b.borrow_mut()))
 }
 
 /// What a cached wall layout was built from: the towns it reached, the fingerprint of their
@@ -388,6 +396,7 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     }
     let n = t0.settlements.len();
     let l = Rc::new(if is_settlement(t0, index) { generate(world, t0, index) } else { sites::generate(world, t0, index - n, key) });
+    BUILT.with(|b| b.borrow_mut().push(key));
     let deps = wall_of(world, t0, index).map(|c| {
         let w = sites::wall_lanes(world, t0, c);
         WallDeps { towns_fp: towns_fp(world, t0, &w.reached), lanes_fp: w.fp, reached: w.reached }
@@ -614,6 +623,31 @@ fn print_of(l: &Layout) -> u64 {
 /// Settlement and site layouts whose reach intersects the rectangle (world ft). Layout index
 /// `i` is settlement `i`, then POI `i - settlements.len()`.
 pub fn layouts_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<Rc<Layout>> {
+    indices_near(world, t0, rect).into_iter().map(|i| layout(world, t0, i)).collect()
+}
+
+/// Each settlement's bounds as `indices_near` tests them (x0, y0, x1, y1 ft): its streets' if
+/// laid out by hand, else its reach's square, widened to the streets added to it. For the app's
+/// scheduler (which worker builds which town), none built.
+pub fn town_bounds(world: &World, t0: &T0) -> Vec<[f64; 4]> {
+    let edits = &world.file.edits;
+    let union = |a: [f64; 4], b: [f64; 4]| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
+    t0.settlements
+        .iter()
+        .enumerate()
+        .map(|(i, s)| match hand::bounds(&edits.streets, i) {
+            Some(b) => b,
+            None => {
+                let r = reach(s);
+                let b = [s.x - r, s.y - r, s.x + r, s.y + r];
+                if edits.towns.contains_key(&i.to_string()) { added::bounds(edits, i).map_or(b, |a| union(a, b)) } else { b }
+            }
+        })
+        .collect()
+}
+
+/// The layout indices `layouts_near` reads for the rectangle, in its order, none built.
+pub fn indices_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<usize> {
     let hit = |x: f64, y: f64, r: f64| x + r >= rect[0] && x - r <= rect[2] && y + r >= rect[1] && y - r <= rect[3];
     let n = t0.settlements.len();
     let edits = &world.file.edits;
@@ -654,7 +688,7 @@ pub fn layouts_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<Rc<Layout>> {
             (hit(p.x, p.y, c.map_or(sites::SITE_REACH_FT, |c| c.reach)) || by_added(n + i)) && !c.is_some_and(|c| c.removed)
         })
         .map(|(i, _)| n + i);
-    towns.chain(pois).map(|i| layout(world, t0, i)).collect()
+    towns.chain(pois).collect()
 }
 
 // ---------------------------------------------------------------------------------------

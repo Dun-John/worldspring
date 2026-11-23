@@ -841,6 +841,28 @@ impl Ctx {
     }
 
     /// Generate one terrain tile. `parent` is the parent's padded heights for refined levels.
+    /// Each settlement's bounds (`town::town_bounds`), flat (x0, y0, x1, y1 per settlement index),
+    /// for the scheduler's choice of worker. Empty before T0.
+    pub fn town_bounds(&self) -> Vec<f64> {
+        self.t0.as_ref().map_or(Vec::new(), |t0| worldgen::town::town_bounds(&self.world, t0).into_iter().flatten().collect())
+    }
+
+    /// Build settlement `index`'s layout into this worker's memo (`town::layout`), so the tiles
+    /// over it that follow find it made. Nothing returned.
+    pub fn warm_town(&self, index: u32) -> Result<(), JsError> {
+        let t0 = self.loaded()?;
+        if (index as usize) < t0.settlements.len() {
+            let _ = worldgen::town::layout(&self.world, t0, index as usize);
+        }
+        Ok(())
+    }
+
+    /// The layouts this worker built as generated since the last call (`town::take_built`, a debug
+    /// count).
+    pub fn take_built(&self) -> Vec<u32> {
+        worldgen::town::take_built()
+    }
+
     pub fn gen_terrain(&self, level: u8, x: u32, y: u32, parent: Option<Vec<f32>>) -> Result<Vec<u8>, JsError> {
         let t0 = self.loaded()?;
         let key = TileKey::surface(level, x, y);

@@ -43,11 +43,26 @@ export class GenClient {
   private asks = new Map<number, (json: string) => void>();
   private nextAsk = 1;
 
+  /** Debug: generated layouts built so far, by settlement index, per generator worker. */
+  private builds: Record<number, number[]> = {};
+  private owners: Record<number, number[]> = {};
+
   constructor() {
+    if (import.meta.env.DEV) {
+      const w = window as unknown as { __ws?: Record<string, unknown> };
+      // `__ws.layoutBuilds()`: {settlement: [builds on worker 0, 1, ...]} (worker 0 made T0).
+      (w.__ws ??= {}).layoutBuilds = () => structuredClone(this.builds);
+      // `__ws.townOwners()`: {settlement: [the workers its tiles go to]}.
+      w.__ws.townOwners = () => structuredClone(this.owners);
+    }
     this.worker.onmessage = (e: MessageEvent<FromCoordinator>) => {
       const m = e.data;
       if (m.type === 'tile') this.onTile(m.tile, m.epoch);
-      else if (m.type === 'stats') this.onStats(m.stats);
+      else if (m.type === 'stats') {
+        this.builds = m.stats.builds ?? {};
+        this.owners = m.stats.owners ?? {};
+        this.onStats(m.stats);
+      }
       else if (m.type === 'progress') this.onProgress(m.stage, m.frac);
       else if (m.type === 'battlemap') this.onBattlemap(m.level, m.x, m.y, m.chunk, m.epoch);
       else if (m.type === 'catalog') this.onCatalog(JSON.parse(m.catalog) as KindInfo[]);
