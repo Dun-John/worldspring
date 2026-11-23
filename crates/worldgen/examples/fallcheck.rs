@@ -34,9 +34,21 @@ fn main() {
             // Every cave: walked to from its chunk's edge (or a big stretch of ground)?
             let mut bad = Vec::new();
             let mut least = usize::MAX;
-            for f in falls.iter().filter(|f| f.cave.is_some()) {
+            let only: Option<u32> = std::env::var("DUMP").ok().and_then(|v| v.parse().ok());
+            for f in falls.iter().filter(|f| f.cave.is_some() && only.is_none_or(|o| o == f.id)) {
                 let (reached, edge, wet, _) = reach(&mut ex, f.cave.unwrap());
                 least = least.min(reached);
+                if std::env::var("NEAR").is_ok() {
+                    // Other rivers near the cave (a confluence?): river ids and their nearest distance.
+                    let c = f.cave.unwrap();
+                    let ps = worldgen::lod::rivers::pieces(&ex.t0.rivers, [c[0] - 1.0, c[1] - 1.0, c[0] + 1.0, c[1] + 1.0], &|_| 300.0, 5.0, ex.t0.cell_ft);
+                    let mut m: Vec<(u32, i64)> = Vec::new();
+                    for p in &ps {
+                        let d = p.pts.iter().map(|q| (q.p[0] - c[0]).hypot(q.p[1] - c[1])).fold(f64::MAX, f64::min) as i64;
+                        if let Some(e) = m.iter_mut().find(|e| e.0 == p.river) { e.1 = e.1.min(d) } else { m.push((p.river, d)) }
+                    }
+                    println!("  fl:{} river {} edge {edge}: near {:?}", f.id, f.river, m);
+                }
                 if !edge || wet {
                     bad.push(format!("fl:{} ({reached} sq, wet {wet}; w {:.0} face {:.0} drop {:.0})", f.id, f.width, f.face_ft, f.drop_ft()));
                 }
@@ -44,7 +56,7 @@ fn main() {
             println!("  all {caves} caves: least reached {least} squares; not to the edge: {}", if bad.is_empty() { "none".into() } else { bad.join(", ") });
         }
         let g = ex.world.geom.clone();
-        let level = g.max_level;
+        let level = std::env::var("LEVEL").ok().and_then(|v| v.parse::<i64>().ok()).map_or(g.max_level, |d| (g.max_level as i64 - d) as _);
         let s = g.spacing_ft(level);
         let size = g.tile_size_ft(level);
         let sample = |ex: &mut Executor, x: f64, y: f64| {
@@ -54,20 +66,42 @@ fn main() {
             let k = padded_index(((x - ox) / s).round() as i64, ((y - oy) / s).round() as i64);
             (t.padded[k], t.river_water[k])
         };
+        if let Ok(id) = std::env::var("BM") {
+            // Battlemap squares beside a fall: height and surface by ft beyond the lip's line (rows) and along the flow (cols).
+            let f = falls[id.parse::<usize>().unwrap_or(0)];
+            let sq = worldgen::battlemap::SQ;
+            for e in [-120.0, -60.0, 60.0, 120.0] {
+                let mut row = String::new();
+                for u in (-8..=8).map(|k| k as f64 * 5.0) {
+                    let (x, y) = (f.at[0] + f.dir[0] * u - f.dir[1] * e, f.at[1] + f.dir[1] * u + f.dir[0] * e);
+                    let key = TileKey::surface(level, (x / size) as u32, (y / size) as u32);
+                    let (ox, oy) = g.tile_origin_ft(&key);
+                    let ch = ex.battlemap(key);
+                    let ft = size / sq as f64;
+                    let k = (((y - oy) / ft) as usize).min(sq - 1) * sq + (((x - ox) / ft) as usize).min(sq - 1);
+                    let b = ex.t0.sample_biome(x, y, ex.t0.biome_warp(x, y))[0];
+                    row += &format!(" {:?}/{b}", ch.surface[k]);
+                }
+                println!("  e {e:>5}:{row}");
+            }
+            continue;
+        }
         if let Ok(id) = std::env::var("SCARP") {
             // The ground across the land beside a fall (left side), by distance from the bank and
             // along the flow: a straight scarp shows as a step at every distance.
             let f = falls[id.parse::<usize>().unwrap_or(0)];
             let (face, half) = (f.face_ft as f64, 0.5 * f.width as f64);
             println!("  fall {} drop {:.0} face {face:.0} width {:.0}; rows: ft beyond the bank, cols: ft along the flow from the lip", f.id, f.drop_ft(), f.width);
-            let us = [-200.0, -60.0, -20.0, 0.0, face, face + 20.0, face + 60.0, face + 200.0];
+            let us: Vec<f64> = match std::env::var("US") { Ok(v) => v.split(',').filter_map(|x| x.parse().ok()).collect(), _ => vec![-200.0, -60.0, -20.0, 0.0, face, face + 20.0, face + 60.0, face + 200.0] };
             println!("  {:>6}{}", "", us.iter().map(|u| format!("{u:>7.0}")).collect::<String>());
-            for e in [5.0, 20.0, 50.0, 100.0, 200.0, 400.0, 700.0] {
+            let es: Vec<f64> = match std::env::var("ES") { Ok(v) => v.split(',').filter_map(|x| x.parse().ok()).collect(), _ => vec![5.0, 20.0, 50.0, 100.0, 200.0, 400.0, 700.0] };
+            for e in es {
                 let mut row = String::new();
                 for &u in &us {
-                    let o = half + e;
+                    let o = if e < 0.0 { e - half } else { half + e };
                     let (x, y) = (f.at[0] + f.dir[0] * u - f.dir[1] * o, f.at[1] + f.dir[1] * u + f.dir[0] * o);
-                    row += &format!("{:>7.0}", sample(&mut ex, x, y).0);
+                    let h = if std::env::var("T0G").is_ok() { ex.t0.ground_at(x, y, s) } else { sample(&mut ex, x, y).0 as f64 };
+                    row += &format!("{:>7.0}", h);
                 }
                 println!("  {e:>6.0}{row}");
             }
@@ -150,6 +184,20 @@ fn reach(ex: &mut Executor, c: [f64; 2]) -> (usize, bool, bool, bool) {
         }
         if j > 0 {
             go(k - sq, ch.edges[k - sq] & 2 != 0);
+        }
+    }
+    if std::env::var("DUMP").is_ok() {
+        // Around the mouth: 'M' mouth, '#' reached, '~' water, else the height over the mouth's in tens of ft (0-9, '+' higher, '-' lower).
+        let h0 = ch.height[start];
+        for j in j0.saturating_sub(30)..(j0 + 31).min(sq) {
+            let row: String = (i0.saturating_sub(40)..(i0 + 41).min(sq)).map(|i| {
+                let k = j * sq + i;
+                if k == start { 'M' } else if seen[k] { '#' } else if wet(k) { '~' } else {
+                    let d = ((ch.height[k] - h0) / 10.0).floor() as i64;
+                    if d < 0 { '-' } else if d > 9 { '+' } else { char::from(b'0' + d as u8) }
+                }
+            }).collect();
+            println!("  {row}");
         }
     }
     (n, edge, wet(start), ch.edges[start] & 16 != 0)

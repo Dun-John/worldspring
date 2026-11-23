@@ -1319,7 +1319,7 @@ impl T0 {
                 out.extend_from_slice(&k.to_le_bytes());
             }
         }
-        // Caves behind waterfalls (optional, after those): count, then per cave its POI's index
+        // Caves behind waterfalls (required: `from_bytes`), after those: count, then per cave its POI's index
         // and its fall's (river, segment), u32 each.
         let caves: Vec<(usize, (u32, u32))> = self.pois.iter().enumerate().filter_map(|(i, p)| p.fall.map(|k| (i, k))).collect();
         out.extend_from_slice(&(caves.len() as u32).to_le_bytes());
@@ -1476,7 +1476,11 @@ impl T0 {
             }
         }
         let [dropped_falls, caveless_falls] = fall_lists;
-        if let Ok(b) = take(4) {
+        // (Required, unlike the sections before it: without it a cave behind a fall would read
+        // as an ordinary site and show to players, so a blob from before it is refused. Blobs
+        // only pass between one build's workers, so none should lack it.)
+        {
+            let b = take(4).map_err(|_| "T0 blob without its waterfall caves (from an older build)".to_string())?;
             for _ in 0..u32::from_le_bytes(b.try_into().unwrap()) {
                 let i = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
                 let r = u32::from_le_bytes(take(4)?.try_into().unwrap());

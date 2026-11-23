@@ -257,6 +257,11 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     });
     let cols = plan.as_ref().map(|p| p.columns(&(-h..=n + h).map(|ci| (gx0 + ci) as f64 * s).collect::<Vec<_>>()));
 
+    // By a fall the gorge's walls and the valley sides reshaped round it (`rivers::fall_land`)
+    // would roughen the ground about it in blotches: there the roughness follows the smooth
+    // ground's slope (`T0::ground_sampler`) instead of the parent cell's.
+    let calm_falls = crate::lod::rivers::falls_calm_in(&t0.rivers, [tx0, ty0, tx1, ty1]);
+    let calm_ground = (!calm_falls.is_empty()).then(|| t0.ground_sampler(world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1))));
     // Landforms: where the T0 ground is terraced, each level steps it again, so risers narrow
     // as the samples do (`t0::landform`); road corridors are left to the road's profile.
     let sharpen = !t0.landform.data.is_empty() && s >= SHARPEN_MIN_FT;
@@ -315,7 +320,16 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             let (a, b, c, d) = (par(pu, pv), par(pu + 1, pv), par(pu, pv + 1), par(pu + 1, pv + 1));
             let sx = ((b - a) + (d - c)) as f64 * 0.5 * inv_2s;
             let sy = ((c - a) + (d - b)) as f64 * 0.5 * inv_2s;
-            let slope = crate::core::sqrt(sx * sx + sy * sy);
+            let mut slope = crate::core::sqrt(sx * sx + sy * sy);
+            if let Some(g) = &calm_ground {
+                let (x, y) = ((gx0 + ci) as f64 * s, (gy0 + cj) as f64 * s);
+                let w = calm_falls.iter().fold(0.0f64, |m, f| m.max(crate::lod::rivers::fall_calm(f, [x, y])));
+                if w > 0.0 {
+                    let e = 2.0 * s;
+                    let (gx, gy) = ((g(x + e, y) - g(x - e, y)) / (2.0 * e), (g(x, y + e) - g(x, y - e)) / (2.0 * e));
+                    slope += (slope.min(crate::core::sqrt(gx * gx + gy * gy)) - slope) * w;
+                }
+            }
 
             let above = base - p.sea_level_ft;
             let mut rough = 0.22 + 2.4 * smoothstep(0.03, 0.6, slope) + 0.8 * smoothstep(1_500.0, 6_000.0, above);
