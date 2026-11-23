@@ -5,7 +5,7 @@ import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, PlanningNow, PlanningChange, PatternNow, PatternChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet, GenFall } from './protocol';
+import type { RoadCut, RemovedRoad, FenceCut, ChangedFences, Ask, Removal, StampAsk, StampAnswer, RowAsk, RowAnswer, CultureChange, PlanningNow, PlanningChange, PatternNow, PatternChange, Crossing, Plateau, Wharf, BuildingEdit, PieceEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, TownStandin, Edits, Interior, MadeSettlement, SettlementFacts, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, MembersChange, GenStats, Geom, Hit, Thing, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, StreetChange, StreetPlan, StreetReport, StreetRequest, WantTile, WorldFile, GenIslet, GenFall } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -314,6 +314,13 @@ export class GenClient {
   /** A settlement's named districts, for labels. */
   districts(settlement: number): Promise<DistrictLabel[]> {
     return this.ask({ op: 'districts', settlement }).then((j) => (JSON.parse(j) as DistrictLabel[] | null) ?? []);
+  }
+
+  /** A town's plan alone (wall, gates, main streets, bridges, ward patches), drawn in place of
+   * its streets while its layout is still being built; null for a village or a hand-laid town.
+   * Answered by a free worker (the coordinator keeps them per edit generation). */
+  standin(town: number): Promise<TownStandin | null> {
+    return this.ask({ op: 'standin', town }).then((j) => JSON.parse(j) as TownStandin | null);
   }
 
   /** The roads someone named and the crossings put down by hand (labels, search, gazetteer). */

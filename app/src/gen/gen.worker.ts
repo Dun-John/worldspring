@@ -75,6 +75,7 @@ const ASK: { [K in Ask['op']]: (a: AskOf<K>, c: Ctx) => string } = {
   remakeprints: (a, c) => c.remake_prints_json(a.edits, new Uint32Array(a.played)),
   follow: (a, c) => c.follow_json(a.input),
   districts: (a, c) => c.districts_json(a.settlement),
+  standin: (a, c) => c.town_standin_json(a.town),
 };
 
 self.onmessage = async (e: MessageEvent<ToGen>) => {

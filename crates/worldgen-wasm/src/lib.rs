@@ -857,6 +857,52 @@ impl Ctx {
         Ok(())
     }
 
+    /// Town `index`'s plan as a stand-in outline (`town::standin`), compact JSON in whole ft:
+    /// `{"w":[[closed, x, y, ...]], "g":[x, y, ...], "s":[[x, y, ...]], "b":[[...]], "p":[[ward, x, y, ...]]}`;
+    /// `null` for a village, a site or a town laid out by hand.
+    pub fn town_standin_json(&self, index: u32) -> Result<String, JsError> {
+        use std::fmt::Write;
+        let t0 = self.loaded()?;
+        let Some(o) = worldgen::town::standin(&self.world, t0, index as usize) else { return Ok("null".into()) };
+        let mut s = String::with_capacity(4096);
+        let pts = |s: &mut String, head: Option<i64>, ps: &[[f64; 2]]| {
+            s.push('[');
+            let mut first = true;
+            if let Some(h) = head {
+                let _ = write!(s, "{h}");
+                first = false;
+            }
+            for p in ps {
+                let _ = write!(s, "{}{},{}", if first { "" } else { "," }, p[0].round() as i64, p[1].round() as i64);
+                first = false;
+            }
+            s.push(']');
+        };
+        let list = |s: &mut String, name: &str, items: &mut dyn Iterator<Item = (Option<i64>, &[[f64; 2]])>| {
+            let _ = write!(s, "\"{name}\":[");
+            for (k, (h, ps)) in items.enumerate() {
+                if k > 0 {
+                    s.push(',');
+                }
+                pts(s, h, ps);
+            }
+            s.push(']');
+        };
+        s.push('{');
+        list(&mut s, "w", &mut o.walls.iter().map(|(c, closed)| (Some(*closed as i64), c.as_slice())));
+        s.push(',');
+        s.push_str("\"g\":");
+        pts(&mut s, None, &o.gates);
+        s.push(',');
+        list(&mut s, "s", &mut o.streets.iter().map(|c| (None, c.as_slice())));
+        s.push(',');
+        list(&mut s, "b", &mut o.bridges.iter().map(|c| (None, c.as_slice())));
+        s.push(',');
+        list(&mut s, "p", &mut o.patches.iter().map(|(c, w)| (Some(*w as i64), c.as_slice())));
+        s.push('}');
+        Ok(s)
+    }
+
     /// The layouts this worker built as generated since the last call (`town::take_built`, a debug
     /// count).
     pub fn take_built(&self) -> Vec<u32> {

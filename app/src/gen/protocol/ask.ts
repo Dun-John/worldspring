@@ -12,6 +12,8 @@ export type Ask =
   /** `rect` (x0, y0, x1, y1 ft) limits the search to that area. */
   | { op: 'search'; q: string; rect?: [number, number, number, number] }
   | { op: 'districts'; settlement: number }
+  /** A town's plan alone (`town::standin`), as a stand-in outline while its layout is built. */
+  | { op: 'standin'; town: number }
   /** The roads someone named and the crossings put down by hand (`roadids::named_json`). */
   | { op: 'named' }
   /** Underground sites by name, kind, theme and what is attached (`undersearch::search_json`; `filters` JSON). */

@@ -15,6 +15,7 @@ import { precompile } from './precompile';
 import { SQUARE_FT } from './scale';
 import { Labels } from './Labels';
 import { BridgeMarks } from './BridgeMarks';
+import { TownStandins } from './TownStandins';
 import { FallMarks } from './FallMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { Waters } from './Waters';
@@ -286,6 +287,11 @@ export class MapView {
   /** The ferries' water legs: their own layer, shown further in than the lanes. */
   private ferryLanes: SeaLanes | null = null;
   private bridgeMarks: BridgeMarks | null = null;
+  /** Towns' plans drawn while their tiles are made (`TownStandins`), and the edits they are of. */
+  private standins: TownStandins | null = null;
+  private standinEpoch = 0;
+  /** Dev (`?holdsites`): no tile from `SITE_MIN_LEVEL` is asked for, so the stand-ins stay. */
+  private readonly holdSites = import.meta.env.DEV && new URLSearchParams(location.search).has('holdsites');
   /** The world's waterfalls (`GenClient.falls`, asked for once a world is in) and their map marks. */
   private falls: GenFall[] = [];
   private fallMarks: FallMarks | null = null;
@@ -1227,6 +1233,8 @@ export class MapView {
     this.ferryLanes?.destroy();
     this.hexLayer?.destroy();
     this.bridgeMarks?.destroy();
+    this.standins?.destroy();
+    this.standins = null;
     this.fallMarks?.destroy();
     this.madeTracks?.destroy();
     this.drawnRoads?.destroy();
@@ -1248,6 +1256,8 @@ export class MapView {
     this.madeTracks = new MadeTracks(this.tiles.riverFrame);
     this.drawnRoads = new DrawnRoads(this.tiles.riverFrame);
     this.bridgeMarks = new BridgeMarks(overlay.bridges ?? []);
+    this.standins = new TownStandins((town) => this.gen.standin(town));
+    this.standinEpoch = this.editEpoch;
     this.fallMarks = new FallMarks();
     this.falls = [];
     void this.gen.falls().then((list) => {
@@ -1286,6 +1296,7 @@ export class MapView {
     this.app.stage.addChild(this.madeTracks.container);
     this.app.stage.addChild(this.drawnRoads.container);
     this.app.stage.addChild(this.bridgeMarks.container);
+    this.app.stage.addChild(this.standins.container);
     this.app.stage.addChild(this.fallMarks.container);
     this.app.stage.addChild(this.lanes.container);
     this.app.stage.addChild(this.ferryLanes.container);
@@ -1847,6 +1858,7 @@ export class MapView {
       const want: WantTile[] = this.tiles.update(this.cam, this.app.renderer.resolution, now, [this.camVel[0] * LEAD_MS, this.camVel[1] * LEAD_MS]);
       // (Not in the sewers: the town's battlemap isn't drawn there, so none of it is asked for or built.)
       if (this.battle && !this.sewers) want.push(...this.battle.update(this.cam, now));
+      if (this.holdSites) for (let k = want.length - 1; k >= 0; k--) if (want[k].kind === 'battlemap' || want[k].level >= SITE_MIN_LEVEL) want.splice(k, 1);
       this.lastWants = want.length;
       // Under a fully built battlemap the tile layer is invisible, and in the sewers (solid rock
       // round the tunnels) the whole street map: skip drawing them. (The town's battlemaps under
@@ -1899,6 +1911,14 @@ export class MapView {
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.drawnRoads?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
+      if (this.standins) {
+        if (this.standinEpoch !== this.editEpoch) {
+          this.standinEpoch = this.editEpoch;
+          this.standins.reset();
+        }
+        const tiles = this.tiles;
+        this.standins.update(this.cam, now, this.towns, (r, t) => tiles.siteReady(r, t), tiles.container.visible && !this.interior);
+      }
       this.fallMarks?.update(this.cam, this.tiles.container.visible && !this.interior, this.battle?.stats.alpha ?? 0);
       // (The three finest levels draw it in the terrain too: the layer over it gives each kind its
       // look there; gone as the battlemap comes in over it.)

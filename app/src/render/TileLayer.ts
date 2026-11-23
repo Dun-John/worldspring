@@ -3,7 +3,7 @@
 // tile for every spot (never blank), fades new tiles in, and keeps a GPU LRU.
 import { BufferImageSource, Container, Geometry, GlProgram, Mesh, RenderTexture, Shader, Texture, UniformGroup, type Renderer } from 'pixi.js';
 import type { GenClient } from '../gen/client';
-import { TILE_N, TILE_SAMPLES, halfToFloat, tileId, type Geom, type Rect, type TileMsg, type WantTile } from '../gen/protocol';
+import { SITE_MIN_LEVEL, TILE_N, TILE_SAMPLES, halfToFloat, tileId, type Geom, type Rect, type TileMsg, type WantTile } from '../gen/protocol';
 import { buildRiverGeometry, buildSiteGeometry, type RiverGeometry } from '../gen/tileGeometry';
 import type { Camera } from './camera';
 import fragment from './shaders/terrain.frag?raw';
@@ -147,6 +147,9 @@ export class TileLayer {
   /** Tiles uploaded in the last update (for the frame profile). */
   lastUploads = 0;
   private viewRms = 0.3;
+  /** The last update's target level and tiles (for `siteReady`). */
+  private lastL = 0;
+  private lastTarget: { x: number; y: number; inView: boolean }[] = [];
 
   /** Tundra's ground texture (shared by every tile). */
   private readonly tundra = tundraSource();
@@ -230,6 +233,8 @@ export class TileLayer {
     }
 
     this.drainUploads(needed, now);
+    this.lastL = L;
+    this.lastTarget = target;
 
     // Draw set: every target tile if present (fading or not), plus its nearest ready
     // ancestor wherever the target tile is missing or still fading in.
@@ -314,6 +319,26 @@ export class TileLayer {
       queuedUploads: this.uploads.size,
     };
     return want;
+  }
+
+  /** How far the towns' real plans are drawn over `r` (world ft) in view: of the target tiles in
+   * view over it, the least faded in of one from `SITE_MIN_LEVEL` (0 none, 1 drawn); null at
+   * zooms where no tile draws a town (or none of `r` is in view). */
+  siteReady(r: Rect, now: number): number | null {
+    const L = this.lastL;
+    if (L < SITE_MIN_LEVEL) return null;
+    const ts = this.geom.domain_ft / 2 ** L;
+    let least: number | null = null;
+    for (const { x, y, inView } of this.lastTarget) {
+      if (!inView || (x + 1) * ts < r[0] || x * ts > r[2] || (y + 1) * ts < r[1] || y * ts > r[3]) continue;
+      let a = 0;
+      for (let l = L, ax = x, ay = y; l >= SITE_MIN_LEVEL && a < 1; l--, ax >>= 1, ay >>= 1) {
+        const t = this.tiles.get(tileId(l, ax, ay));
+        if (t) a = Math.max(a, Math.min(1, (now - t.arrived) / FADE_MS));
+      }
+      least = Math.min(least ?? 1, a);
+    }
+    return least;
   }
 
   /** Mean gradient RMS over the current view, for adaptive hillshade exaggeration. */

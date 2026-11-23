@@ -263,3 +263,13 @@ export interface SeaLane {
   e: [number, number];
   p: number[];
 }
+
+/** A town's plan alone (`town::standin`), whole ft, flat point lists: wall runs (closed 0/1
+ * first), gates, main streets, bridges, ward patches (`Ward as u8` first, 255 none). */
+export interface TownStandin {
+  w: number[][];
+  g: number[];
+  s: number[][];
+  b: number[][];
+  p: number[][];
+}

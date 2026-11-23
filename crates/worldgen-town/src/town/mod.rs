@@ -70,6 +70,8 @@ mod layouts;
 mod ground;
 mod lined;
 mod plan;
+pub mod standin;
+pub use standin::{Standin, standin};
 mod seeds;
 mod wallring;
 mod shanty;

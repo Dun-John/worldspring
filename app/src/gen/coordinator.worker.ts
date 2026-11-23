@@ -99,6 +99,15 @@ const builds = new Map<number, number[]>();
  * that found it made ([total ms, count]), for `canTake`'s spill. */
 const buildMs = new Map<number, number>();
 const tileMs = new Map<number, [number, number]>();
+// Stand-ins: a town's plan alone (`standin` asks), drawn while its layout is built. Each goes to
+// a free worker that does not own the town (its owner is busy building it), before any tile or
+// warm job, and is kept for this edit generation.
+/** Plans answered (JSON), by settlement, and the epoch they were asked in. */
+const standins = new Map<number, string>();
+let standinEpoch = 0;
+/** Asks waiting for a free worker, and those being answered (by ask id). */
+const standinWait: { id: number; town: number }[] = [];
+const standinRunning = new Map<number, { gw: GenWorker; town: number; epoch: number }>();
 let workerNo = 0;
 let jobsDone = 0;
 let msTotal = 0;
@@ -138,6 +147,9 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   keepSamples.clear();
   editFields = {};
   placesJson = '[]';
+  standins.clear();
+  standinWait.length = 0;
+  standinRunning.clear();
   wanted = new Map();
   townBounds = new Float64Array(0);
   townsOf.clear();
@@ -353,7 +365,41 @@ function claim(gw: GenWorker, t: number | undefined) {
   }
 }
 
+/** Stand-in asks to free workers, a town's non-owners first; one per town at a time. */
+function pumpStandins() {
+  for (let k = 0; k < standinWait.length; ) {
+    const { id, town } = standinWait[k];
+    if ([...standinRunning.values()].some((r) => r.town === town)) {
+      k++;
+      continue;
+    }
+    const free = workers.filter((w) => !w.busy);
+    const gw = free.find((w) => !owners.get(town)?.has(w)) ?? free[0];
+    if (!gw) return;
+    standinWait.splice(k, 1);
+    gw.busy = true;
+    standinRunning.set(id, { gw, town, epoch });
+    gw.w.postMessage({ type: 'ask', id, ask: { op: 'standin', town } } satisfies ToGen);
+  }
+}
+
+/** A stand-in answered: kept (if no edit came since it was asked), and sent to every ask for it. */
+function onStandin(gw: GenWorker, id: number, json: string) {
+  const r = standinRunning.get(id)!;
+  standinRunning.delete(id);
+  gw.busy = false;
+  if (r.epoch === epoch) standins.set(r.town, json);
+  post({ type: 'answer', id, json });
+  for (let k = standinWait.length - 1; k >= 0; k--) {
+    if (standinWait[k].town === r.town && r.epoch === epoch) {
+      post({ type: 'answer', id: standinWait[k].id, json });
+      standinWait.splice(k, 1);
+    }
+  }
+}
+
 function pump() {
+  pumpStandins();
   const ready: [string, Job][] = [];
   for (const entry of pending) if (entry[1].deps.every((d) => cache.has(d))) ready.push(entry);
   if (!ready.length) return;
@@ -413,6 +459,11 @@ function onGenMessage(gw: GenWorker, m: FromGen) {
   }
   countBuilt(gw, m.built);
   if (m.type === 'answer') {
+    if (standinRunning.has(m.id)) {
+      onStandin(gw, m.id, m.json);
+      pump();
+      return;
+    }
     post({ type: 'answer', id: m.id, json: m.json });
     return;
   }
@@ -513,6 +564,10 @@ function onEdits(m: Extract<ToCoordinator, { type: 'edits' }>) {
     for (const k of p.unset) delete field[k];
   }
   epoch = m.epoch;
+  if (standinEpoch !== epoch) {
+    standins.clear();
+    standinEpoch = epoch;
+  }
   const json = Object.keys(m.fields).length ? fieldsJson(m.fields) : null;
   const patch = Object.keys(m.patches).length ? JSON.stringify(m.patches) : null;
   if (json || patch) for (const gw of workers) gw.w.postMessage({ type: 'edits', json, patch } satisfies ToGen);
@@ -601,6 +656,13 @@ self.onmessage = (e: MessageEvent<ToCoordinator>) => {
     if (ctx) onWant(m.tiles);
   } else if (m.type === 'edits') {
     onEdits(m);
+  } else if (m.type === 'ask' && m.ask.op === 'standin') {
+    const kept = standins.get(m.ask.town);
+    if (kept !== undefined) post({ type: 'answer', id: m.id, json: kept });
+    else {
+      standinWait.push({ id: m.id, town: m.ask.town });
+      pump();
+    }
   } else if (m.type === 'ask') {
     // Questions go to the last worker, so its settlement layouts stay warm between them; a
     // town's districts to a worker that has its layout (or is to build it: then it owns it).
