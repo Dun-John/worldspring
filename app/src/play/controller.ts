@@ -1965,6 +1965,7 @@ export class PlayController implements PointerTool {
       if (labels && labels.conceal !== this.concealFn) labels.conceal = this.concealFn;
     }
     this.syncSecretCaves();
+    this.releaseHeldScene();
     this.layer.update(now);
   }
 
@@ -2307,6 +2308,17 @@ export class PlayController implements PointerTool {
   }
   private secretCavesOn: boolean | null = null;
   private secretFound: string | null = null;
+  /** Players: the DM's scene held back at a secret site (`applyScene`). */
+  private heldScene: Scene | null = null;
+
+  /** Players: go into the site held back once it may be entered (the features arrived and it is no
+   * secret one, or the DM revealed it), if the DM is still there and the view still follows the DM. */
+  private releaseHeldScene() {
+    const sc = this.heldScene;
+    if (!sc || sc.interior === null || this.secretSite(sc.interior)) return;
+    this.heldScene = null;
+    if (sc === this.dmScene && !this.followTarget) void this.applyScene(sc);
+  }
 
   /** Player window: the DM's place pins on or off (pins show in the players' sight only). */
   setDmPlaces(on: boolean) {
@@ -2324,8 +2336,11 @@ export class PlayController implements PointerTool {
       if (cur) v.exitBuilding();
       return;
     }
-    // (Not into a secret site the players don't know yet: they wait on the surface.)
+    // (Not into a secret site the players don't know yet: they wait on the surface, until it is
+    // found or, before the world's features are here, until they are: `releaseHeldScene`.)
+    this.heldScene = null;
     if (this.role === 'player' && this.secretSite(sc.interior)) {
+      this.heldScene = sc;
       if (cur) v.exitBuilding();
       return;
     }

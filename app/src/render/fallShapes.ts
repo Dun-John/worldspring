@@ -39,10 +39,10 @@ const FOAM_INK = 0x7fa9b2;
 const GLASS = 0x7fb1b4;
 const CAVE = 0x16120f;
 
-/** The sheet's run (ft) seen from above: the face's, at least a few feet, longer for a higher drop
- * (the water arcs out), held to the drop's half and to 45 ft. */
+/** The sheet's run (ft) seen from above: from the lip to the face's foot (the carved scarp the
+ * battlemap shows), at least a few feet, held to 60 ft. */
 export function sheetRun(f: FallSize): number {
-  return Math.min(Math.max(f.face, 4) + f.drop * 0.03, Math.max(8, f.drop * 0.5), 45);
+  return Math.min(Math.max(f.face, 4), 60);
 }
 
 /** How much a fall's mist and spray grow with its drop (1 for a low one, up to 3.5). */
@@ -50,11 +50,10 @@ export function mistScale(f: FallSize): number {
   return 1 + Math.min(2.5, Math.max(0, f.drop - 60) / 180);
 }
 
-/** The plunge pool's radius across (ft): about the sheet's half width, a little more for a higher
- * drop, held to the banks. */
+/** The plunge pool's radius across (ft): within the channel's half width at the lip (the pool is
+ * the river's own bed below the face, so it never spills onto the banks). */
 export function poolRadius(f: FallSize): number {
-  const half = Math.max(f.width, 6) / 2;
-  return Math.min(half + 3, Math.max(half * 0.95, Math.min(6 + f.drop * 0.05, 30)));
+  return (Math.max(f.width, 6) / 2) * 0.92;
 }
 
 /** A closed smooth curve through the midpoints of `pts` (each point its control): a hand-drawn blob. */
@@ -80,7 +79,7 @@ export function drawFall(g: Graphics, x: number, y: number, ux: number, uy: numb
   const L = sheetRun(f);
   const R = poolRadius(f);
   const Ra = R * 0.8;
-  const pc = L + Ra * 0.75;
+  const pc = L + Ra * 0.6;
   const ink = (w: number) => Math.max(1, (w * sq) / PX);
   // A bold stroke: the house weight up close, at least `ft` feet wide on a big fall (so it isn't a
   // hairline when the battlemap is seen from farther out).
@@ -109,7 +108,7 @@ export function drawFall(g: Graphics, x: number, y: number, ux: number, uy: numb
   for (const [t0, t1] of [[-1.1, -0.25], [0.3, 1.0]]) {
     for (let j = 0; j <= 8; j++) {
       const t = t0 + ((t1 - t0) * j) / 8;
-      const p = at(pc + Math.cos(t) * Ra * 1.18, Math.sin(t) * R * 1.12);
+      const p = at(pc + Math.cos(t) * Ra * 1.15, Math.sin(t) * R * 1.04);
       if (j === 0) g.moveTo(...p);
       else g.lineTo(...p);
     }
@@ -140,51 +139,90 @@ export function drawFall(g: Graphics, x: number, y: number, ux: number, uy: numb
   }
 
   // The glassy water just above the lip, its upstream edge soft.
+  const hw = half * 0.96;
   const bow = Math.min(1.6, half * 0.08);
-  g.moveTo(...at(-2.4, -half)).quadraticCurveTo(...at(-2.4 - bow, 0), ...at(-2.4, half));
-  g.lineTo(...at(0, half)).quadraticCurveTo(...at(bow, 0), ...at(0, -half)).closePath();
+  g.moveTo(...at(-2.4, -hw)).quadraticCurveTo(...at(-2.4 - bow, 0), ...at(-2.4, hw));
+  g.lineTo(...at(0, hw)).quadraticCurveTo(...at(bow, 0), ...at(0, -hw)).closePath();
   g.fill({ color: 0xa6d0d2, alpha: 0.3 });
-  // The falling sheet: the lip bowed a little downstream, the sides flaring out a touch, the foot
-  // in a few soft scallops (the foam hides most of it); pale, outlined in ink.
+  // The falling sheet, within the channel: the lip bowed a little downstream, the sides wavering in
+  // a few soft bulges down the face (no straight ruled edges on a long run), the foot in a few soft
+  // scallops (the foam hides most of it); pale, outlined in ink. A long run breaks into tiers, each
+  // step a bowed band of foam across the water.
   const ns = Math.max(3, Math.min(9, Math.round(half / 4)));
-  const scal = Math.min(2.2, 0.6 + L * 0.08);
+  const scal = Math.min(2.2, 0.6 + Math.min(L, 2 * half) * 0.08);
   const bulge = Array.from({ length: ns }, () => [0.7 + 0.6 * rnd(), 0.2 * rnd()]);
+  const nSide = Math.max(1, Math.min(5, Math.round(L / Math.max(8, half))));
+  const sideW = Array.from({ length: 2 * nSide }, () => 1.0 + 0.07 * rnd());
+  // (Down one side `s` in `nSide` bulges: from the lip to the foot, or back up with `up`.)
+  const edge = (s: number, up: boolean) => {
+    for (let i = 0; i < nSide; i++) {
+      const j = up ? nSide - 1 - i : i;
+      const t1 = up ? j / nSide : (j + 1) / nSide;
+      g.quadraticCurveTo(...at(L * ((j + 0.5) / nSide), s * half * sideW[(s > 0 ? 0 : nSide) + j]), ...at(L * t1, s * hw * (t1 > 0.99 || t1 < 0.01 ? 1 : 0.88)));
+    }
+  };
   const sheet = () => {
-    g.moveTo(...at(0, -half)).quadraticCurveTo(...at(bow, 0), ...at(0, half));
-    g.quadraticCurveTo(...at(L * 0.6, half * 1.01), ...at(L, half * 1.14));
+    g.moveTo(...at(0, -hw)).quadraticCurveTo(...at(bow, 0), ...at(0, hw));
+    edge(1, false);
     for (let j = 1; j <= ns; j++) {
-      const b0 = half * 1.14 - ((j - 0.5) / ns) * 2 * half * 1.14;
-      const b1 = half * 1.14 - (j / ns) * 2 * half * 1.14;
+      const b0 = hw - ((j - 0.5) / ns) * 2 * hw;
+      const b1 = hw - (j / ns) * 2 * hw;
       g.quadraticCurveTo(...at(L + scal * bulge[j - 1][0], b0), ...at(L - scal * bulge[j - 1][1], b1));
     }
-    g.quadraticCurveTo(...at(L * 0.6, -half * 1.01), ...at(0, -half));
+    edge(-1, true);
     g.closePath();
   };
   sheet();
   g.fill({ color: SHEET, alpha: 0.96 });
-  // A paler foot, as one soft band over the sheet's lower half.
-  g.moveTo(...at(L * 0.5, -half)).quadraticCurveTo(...at(L * 0.62, 0), ...at(L * 0.5, half));
-  g.lineTo(...at(L * 0.95, half * 1.1)).lineTo(...at(L * 0.95, -half * 1.1)).closePath();
+  // The tiers (a long face steps down: one band of foam per step), and a paler foot as one soft band.
+  const nT = Math.min(4, Math.floor(L / Math.max(8, half * 1.2)));
+  const tiers = Array.from({ length: nT }, (_, j) => L * ((j + 1) / (nT + 1)) * (0.94 + 0.12 * rnd()));
+  const f0 = nT ? tiers[nT - 1] + (L - tiers[nT - 1]) * 0.45 : L * 0.5;
+  g.moveTo(...at(f0, -hw)).quadraticCurveTo(...at(f0 + (L - f0) * 0.25, 0), ...at(f0, hw));
+  g.lineTo(...at(L * 0.97, hw)).lineTo(...at(L * 0.97, -hw)).closePath();
   g.fill({ color: 0xffffff, alpha: 0.4 });
-  // A few bold streaks down the sheet, white, a blue one between some; tapering off toward the foot.
+  // A few bold streaks down each tier, white, a blue one between some; tapering off toward its foot.
   const nStreak = Math.max(3, Math.min(10, Math.round(f.width / 7)));
   const sw = bold(LINE * 2.6, Math.min(1.5, 0.55 + half * 0.03));
-  for (let i = 0; i < nStreak; i++) {
-    const b = -half + ((i + 0.5 + (rnd() - 0.5) * 0.4) / nStreak) * 2 * half;
-    const a0 = (0.06 + rnd() * 0.12) * L;
-    const a1 = L * (0.55 + rnd() * 0.35);
-    g.moveTo(...at(a0, b)).quadraticCurveTo(...at((a0 + a1) / 2, b * 1.02), ...at(a1, b * (1 + 0.05 * (a1 / L))));
-    g.stroke({ width: sw, color: 0xffffff, alpha: 0.95, cap: 'round' });
-    if (i < nStreak - 1 && rnd() < 0.55) {
-      const bd = b + (half / nStreak) * (0.85 + rnd() * 0.3);
-      g.moveTo(...at(L * 0.12, bd)).lineTo(...at(L * (0.35 + rnd() * 0.25), bd));
-      g.stroke({ width: sw * 0.7, color: STREAK_DARK, alpha: 0.9, cap: 'round' });
+  const cuts = [0, ...tiers, L];
+  for (let t = 0; t + 1 < cuts.length; t++) {
+    const [s0, s1] = [cuts[t], cuts[t + 1]];
+    const seg = s1 - s0;
+    const shift = t ? (rnd() - 0.5) * 0.5 : 0;
+    for (let i = 0; i < nStreak; i++) {
+      const b = -hw * 0.92 + ((i + 0.5 + shift + (rnd() - 0.5) * 0.4) / nStreak) * 2 * hw * 0.92;
+      const a0 = s0 + (t ? 0.2 : 0.06 + rnd() * 0.12) * seg;
+      const a1 = s0 + seg * (0.55 + rnd() * 0.35);
+      g.moveTo(...at(a0, b)).quadraticCurveTo(...at((a0 + a1) / 2, b * 1.02), ...at(a1, b * 1.03));
+      g.stroke({ width: sw, color: 0xffffff, alpha: 0.95, cap: 'round' });
+      if (i < nStreak - 1 && rnd() < 0.55) {
+        const bd = b + (hw / nStreak) * (0.85 + rnd() * 0.3);
+        g.moveTo(...at(s0 + seg * 0.12, bd)).lineTo(...at(s0 + seg * (0.35 + rnd() * 0.25), bd));
+        g.stroke({ width: sw * 0.7, color: STREAK_DARK, alpha: 0.9, cap: 'round' });
+      }
     }
   }
   sheet();
   g.stroke({ width: ink(OUT), color: INK, alpha: 0.55, join: 'round' });
+  // Each tier's step: a soft blue shade just above it, then a bowed band of small foam puffs.
+  const tierR = Math.min(2.4, 0.9 + half / 22);
+  for (const ta of tiers) {
+    const tb = Math.min(2, half * 0.1);
+    const ua = ta - tierR * 1.2;
+    g.moveTo(...at(ua, -hw * 0.95)).quadraticCurveTo(...at(ua + tb, 0), ...at(ua, hw * 0.95));
+    g.stroke({ width: bold(LINE * 2.4, 0.5), color: STREAK_DARK, alpha: 0.85, cap: 'round' });
+    const n = Math.max(3, Math.round((2 * hw) / (tierR * 1.5)));
+    const pts: [number, number, number][] = [];
+    for (let j = 0; j < n; j++) {
+      const u = (j + 0.5) / n;
+      const c = 2 * u - 1;
+      pts.push([ta + tb * (1 - c * c) + (rnd() - 0.5) * tierR * 0.5, hw * 0.9 * c, tierR * (0.7 + rnd() * 0.45)]);
+    }
+    for (const [pa, pb, r] of pts) g.circle(...at(pa, pb), r * k + ink(OUT)).fill({ color: FOAM_INK, alpha: 1 });
+    for (const [pa, pb, r] of pts) g.circle(...at(pa, pb), r * k).fill(FOAM);
+  }
   // The lip: a bold ink line across the channel where the smooth water breaks.
-  g.moveTo(...at(0, -half - 0.6)).quadraticCurveTo(...at(bow, 0), ...at(0, half + 0.6));
+  g.moveTo(...at(0, -hw - 0.3)).quadraticCurveTo(...at(bow, 0), ...at(0, hw + 0.3));
   g.stroke({ width: bold(OUT * 2, 0.6), color: INK, alpha: 0.9, cap: 'round' });
 
   // Foam at the foot in a few irregular clumps (puffs inside one outline each), a couple breaking
@@ -193,7 +231,7 @@ export function drawFall(g: Graphics, x: number, y: number, ux: number, uy: numb
   const clumps = Math.max(2, Math.min(6, Math.round(half / 5)));
   const puffs: [number, number, number][] = [];
   for (let c = 0; c < clumps; c++) {
-    const bc = -half + ((c + 0.5 + (rnd() - 0.5) * 0.5) / clumps) * 2 * half;
+    const bc = (-half + ((c + 0.5 + (rnd() - 0.5) * 0.5) / clumps) * 2 * half) * Math.max(0.3, 1 - puffR / half);
     const ac = L + (rnd() - 0.3) * 1.2 * m;
     const n = 3 + Math.floor(rnd() * 3);
     const span = Math.min((2 * half) / clumps, puffR * 2.6);

@@ -27,7 +27,7 @@ import { sprites } from './spriteCode';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
 import { drawBreakwaterArmour, drawCog, drawLantern, drawQuayCoping } from './harbourShapes';
-import { caveScale, drawCaveMark, drawFall, drawFallCave, drawFallCaveThrough } from './fallShapes';
+import { caveScale, drawCaveMark, drawFall, drawFallCave, drawFallCaveThrough, mistScale, sheetRun } from './fallShapes';
 import type { GenFall } from '../gen/protocol';
 import { drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawGravelWalk, drawRaisedDrawbridge, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
@@ -1141,7 +1141,8 @@ export class BattlemapLayer {
           t.label = f.cave.site ?? '';
           t.visible = g.visible;
           (throughG ??= new Container()).addChild(t);
-          drawCaveMark((markG ??= new Graphics()), ...at, 7 * scale + 2);
+          // (The DM's ring: on the chunk the mouth stands on only, and not held to it.)
+          if (Math.floor(f.cave.x / ts) === cx && Math.floor(f.cave.y / ts) === cy) drawCaveMark((markG ??= new Graphics()), ...at, 7 * scale + 2);
         }
       }
       // (The caves under the falls, their dim shapes and the DM's marks over them.)
@@ -1149,10 +1150,6 @@ export class BattlemapLayer {
       if (caveG) holder.addChild(caveG);
       holder.addChild(fallG);
       if (throughG) holder.addChild(throughG);
-      if (markG) {
-        markG.visible = this.secretCaves;
-        holder.addChild(markG);
-      }
       if (mine.some((f) => fallChunks(f, ts).some((v, i) => v !== (i % 2 ? cy : cx)))) {
         // (Held to the chunk: a fall here runs on into the next one, which draws the rest.)
         const side = (ts / SQUARE_FT) * PX;
@@ -1160,9 +1157,15 @@ export class BattlemapLayer {
         holder.addChild(clip);
         holder.mask = clip;
       }
-      this.prewarm(holder);
-      this.layers[1].addChildAt(holder, 0);
-      parts.push(holder);
+      const top = new Container();
+      top.addChild(holder);
+      if (markG) {
+        markG.visible = this.secretCaves;
+        top.addChild(markG);
+      }
+      this.prewarm(top);
+      this.layers[1].addChildAt(top, 0);
+      parts.push(top);
     }
     if (gateG) {
       // (At the bottom of the towers' layer: over every chunk's walls and roofs, under every tower.)
@@ -1300,9 +1303,9 @@ function parkEdge(raised: Uint8Array | null): boolean {
 }
 
 /** The chunks (x0, y0, x1, y1; `ts` ft square) a waterfall's drawing can reach: its sheet, its
- * pool and the rocks round them (a bound, from its lip). */
+ * pool, the rocks round them and its foam and mist (a bound, from its lip). */
 function fallChunks(f: GenFall, ts: number): [number, number, number, number] {
-  const r = f.face + 2 * Math.max(f.width, 6) + 60;
+  const r = sheetRun(f) + 2 * Math.max(f.width, 6) + 40 + 12 * mistScale(f);
   return [Math.floor((f.x - r) / ts), Math.floor((f.y - r) / ts), Math.floor((f.x + r) / ts), Math.floor((f.y + r) / ts)];
 }
 
