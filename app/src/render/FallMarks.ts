@@ -15,6 +15,9 @@ const smooth = (a: number, b: number, x: number) => {
 /** The smallest mark (px across): the map symbol. */
 const MIN_W = 20;
 
+/** Continent zoom starts here (ft per px, MapView's TIERS): no fall marks from here out. */
+const CONTINENT_FTPX = 1500;
+
 /** The drop (ft) a fall needs to show at `ftpx` ft per px: every fall at site zoom, only the
  * highest toward the whole map. */
 export function dropShownFrom(ftpx: number): number {
@@ -58,7 +61,9 @@ export class FallMarks {
    * has come in over them (0-1: the mark fades out under its own fall). */
   update(cam: Camera, show: boolean, under: number) {
     const ftpx = 1 / cam.ppf;
-    const fade = 1 - Math.min(1, Math.max(0, under));
+    // Gone at continent zoom (1500 ft/px and out), faded out over the last of region zoom.
+    const far = Math.min(1, Math.max(0, (CONTINENT_FTPX - ftpx) / 500));
+    const fade = (1 - Math.min(1, Math.max(0, under))) * far;
     this.container.visible = show && fade > 0.02 && this.falls.length > 0;
     if (!this.container.visible) {
       this.drawn = 0;
