@@ -115,9 +115,14 @@ pub struct Fall {
     pub width: f32,
     /// How far (ft) the face runs out from the lip to its foot.
     pub face_ft: f32,
-    /// About one in three falls hides a cave behind the curtain: its mouth (ft), at the face's
-    /// foot beside the pool (a `PoiKind::Cave` site stands there, hidden from players).
+    /// About one in three falls hides a cave behind the curtain: its mouth (ft), in the cliff at
+    /// the back of the shelf behind the falling water, within the sheet's width (a
+    /// `PoiKind::Cave` site stands there, hidden from players).
     pub cave: Option<[f64; 2]>,
+    /// Where the shelf behind the water (`ledge`) comes out on its bank, by the water's edge just
+    /// below the face's foot (ft). Every fall has one, cave or not (so a shelf tells nothing),
+    /// unless the bank there is drowned or shut in (`RiverNet::drop_caves`).
+    pub bank: Option<[f64; 2]>,
 }
 
 impl Fall {
@@ -597,8 +602,8 @@ impl RiverNet {
                 let h = hash2(r.seed ^ 0xCA7E, c.k as i64, 2);
                 // (By the finest curve just below the foot, its water's edge there: the shelf
                 // `ledge` carves runs along it.)
-                let cave = (crate::core::rng::unit(h) < 1.0 / 3.0 && !self.caveless_falls.contains(&(c.ri, c.k))).then(|| {
-                    let side = if h >> 40 & 1 == 0 { 1.0 } else { -1.0 };
+                let side = if h >> 40 & 1 == 0 { 1.0 } else { -1.0 };
+                let bank = (!self.caveless_falls.contains(&(c.ri, c.k))).then(|| {
                     let seg_len = (r.s[c.k as usize + 1] - r.s[c.k as usize]).max(1.0);
                     let (ta, tb) = ((c.t1 + 3.0 / seg_len).min(1.0), (c.t1 + 9.0 / seg_len).min(1.0));
                     let (a, b) = (r.eval(c.k as usize, ta, 2.5, cell_ft), r.eval(c.k as usize, tb, 2.5, cell_ft));
@@ -608,7 +613,13 @@ impl RiverNet {
                     let across = 0.5 * a.w + 5.0;
                     [a.p[0] - side * t[1] * across, a.p[1] + side * t[0] * across]
                 });
-                Fall { id: id as u32, river: c.ri, seg: c.k, at: at.p, dir, top, bottom, width: at.w as f32, face_ft: c.face as f32, cave }
+                // (The mouth: on the shelf behind the sheet, a quarter of the way across from the
+                // middle toward the shelf's bank.)
+                let cave = (crate::core::rng::unit(h) < 1.0 / 3.0 && bank.is_some()).then(|| {
+                    let (u, v) = behind_mouth(c.face, at.w, side);
+                    [at.p[0] + dir[0] * u - dir[1] * v, at.p[1] + dir[1] * u + dir[0] * v]
+                });
+                Fall { id: id as u32, river: c.ri, seg: c.k, at: at.p, dir, top, bottom, width: at.w as f32, face_ft: c.face as f32, cave, bank }
             })
             .collect();
     }
@@ -642,6 +653,7 @@ impl RiverNet {
         for f in &mut self.falls {
             if self.caveless_falls.contains(&(f.river, f.seg)) {
                 f.cave = None;
+                f.bank = None;
             }
         }
     }
@@ -1221,7 +1233,7 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
         heights[k] = v as f32;
     }
     if spacing <= LEDGE_MAX_SPACING_FT {
-        for f in lips.iter().filter(|f| f.cave.is_some()) {
+        for f in lips.iter().filter(|f| f.bank.is_some()) {
             ledge(pieces, f, heights, water, dim, origin, spacing);
         }
     }
@@ -1286,18 +1298,38 @@ const LEDGE_RISE_FT: f64 = 2.0;
 /// Steepest the shelf descends (rise over run) where the river runs on down steeply below the pool.
 const LEDGE_SLOPE: f64 = 0.6;
 const LEDGE_MAX_SPACING_FT: f64 = 5.0;
-/// The shelf takes in the ground this far (ft) round the cave's mouth.
-const LEDGE_MOUTH_FT: f64 = 7.5;
-/// Beyond the shelf below the mouth, the ground keeps within this slope of it for this far (ft),
+/// Beyond the shelf below the face, the ground keeps within this slope of it for this far (ft),
 /// so a pit or a wall beside it is a ramp off it.
 const LEDGE_SKIRT_FT: f64 = 15.0;
 const LEDGE_SKIRT_SLOPE: f64 = 0.8;
+/// Behind the falling water the shelf runs across the channel at the face's foot, from
+/// `behind_back` (ft from the lip) to this far past the foot, and across from the bank on its side
+/// to this far (ft) past the cave's mouth.
+const BEHIND_PAST_FOOT_FT: f64 = 1.0;
+const BEHIND_BEYOND_MOUTH_FT: f64 = 4.0;
+/// The mouth: this fraction of the half width out from the middle of the channel toward the
+/// shelf's bank (along the stream, `behind_mouth`).
+const BEHIND_MOUTH_ACROSS: f64 = 0.25;
 
-/// The box (ft) round a fall's cave shelf and its skirt (`ledge`; none without a cave).
+/// How far (ft from the lip) the shelf behind a fall's water reaches back into its face: about
+/// 9 ft deep, cut into the lower part of the face (never its top fifth, so the lip stands).
+#[inline]
+fn behind_back(face: f64) -> f64 {
+    (face - 9.0).max(0.2 * face)
+}
+
+/// Where a cave's mouth stands behind a fall of `face` and `width` (ft), the shelf's bank on
+/// `side` (+1 to the stream's left): (along the stream from the lip, across it). Midway across the
+/// shelf (its 5-ft square stays on it), in the cliff at its back as the map draws it.
+pub fn behind_mouth(face: f64, width: f64, side: f64) -> (f64, f64) {
+    (0.5 * (behind_back(face) + face + BEHIND_PAST_FOOT_FT), side * BEHIND_MOUTH_ACROSS * 0.5 * width)
+}
+
+/// The box (ft) round a fall's shelf and its skirt (`ledge`; none without one).
 fn ledge_box(f: &Fall) -> Option<[f64; 4]> {
-    let cave = f.cave?;
+    f.bank?;
     let (face, half_w) = (f.face_ft as f64, 0.5 * f.width as f64);
-    let (u0, u1) = (face - 3.0, face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w);
+    let (u0, u1) = (behind_back(face).min(face - 3.0), face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w);
     let reach = half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT;
     let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
     for u in [u0, u1] {
@@ -1306,31 +1338,44 @@ fn ledge_box(f: &Fall) -> Option<[f64; 4]> {
             b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
         }
     }
-    let m = LEDGE_MOUTH_FT + reach;
-    Some([b[0].min(cave[0] - m), b[1].min(cave[1] - m), b[2].max(cave[0] + m), b[3].max(cave[1] + m)])
+    Some(b)
 }
 
-/// Whether `p` (ft) lies where a fall's cave shelf may run (`ledge`): from just behind the face's
-/// foot to the shelf's end, out to its skirt on either side. The battlemap keeps its micro-relief
-/// out of there.
+/// Whether `p` (ft) lies on or by a fall's falling sheet as the map draws it (from just above the
+/// lip to past the face's foot, out past its sides), over the shelf behind it: the battlemap's
+/// scatter keeps off it.
+pub fn sheet_zone(f: &Fall, p: [f64; 2]) -> bool {
+    let (face, half_w) = (f.face_ft as f64, 0.5 * f.width as f64);
+    let r = [p[0] - f.at[0], p[1] - f.at[1]];
+    let u = r[0] * f.dir[0] + r[1] * f.dir[1];
+    let v = f.dir[0] * r[1] - f.dir[1] * r[0];
+    u >= -3.0 && u <= face + 8.0 && v.abs() <= half_w + 6.0
+}
+
+/// Whether `p` (ft) lies where a fall's shelf may run (`ledge`): from the back of the shelf behind
+/// the water to the shelf's end, out to its skirt on either side. The battlemap keeps its
+/// micro-relief out of there.
 pub fn ledge_zone(f: &Fall, p: [f64; 2]) -> bool {
     let (face, half_w) = (f.face_ft as f64, 0.5 * f.width as f64);
     let r = [p[0] - f.at[0], p[1] - f.at[1]];
     let u = r[0] * f.dir[0] + r[1] * f.dir[1];
     let v = f.dir[0] * r[1] - f.dir[1] * r[0];
-    let near_mouth = f.cave.is_some_and(|c| (p[0] - c[0]) * (p[0] - c[0]) + (p[1] - c[1]) * (p[1] - c[1]) <= (LEDGE_MOUTH_FT + LEDGE_SKIRT_FT) * (LEDGE_MOUTH_FT + LEDGE_SKIRT_FT));
-    near_mouth || f.cave.is_some() && u >= face - 3.0 && u <= face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w && v.abs() <= half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT
+    f.bank.is_some() && u >= behind_back(face).min(face - 3.0) - 2.0 && u <= face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w && v.abs() <= half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT
 }
 
-/// A walkable shelf of rock from behind the falling water, past the cave's mouth and on along
-/// the bank on its side below the pool (a strip `LEDGE_WIDTH_FT` wide by the water's edge,
+/// A walkable shelf of rock behind the falling water (across the channel at the face's foot,
+/// cut back into the face, from the bank on its side to past the cave's mouth or the middle),
+/// then on along that bank below the pool (a strip `LEDGE_WIDTH_FT` wide by the water's edge,
 /// `LEDGE_RISE_FT` over the pool, then over the river below or easing down at `LEDGE_SLOPE`), so
-/// the cave is always reached from the land downstream. Dry: the water beside it stays below it.
-/// A pure function of position (the nearest point of the rivers' pieces near the tile).
+/// the space behind the curtain, and a cave there, is always reached from the land downstream.
+/// Every fall with a `bank` has one, so it tells nothing of a cave. Dry: the water beside it
+/// stays below it. A pure function of position (the nearest point of the rivers' pieces near the
+/// tile).
 fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim: usize, origin: [f64; 2], spacing: f64) {
-    let Some(cave) = f.cave else { return };
+    let Some(bank) = f.bank else { return };
     let (face, half_w) = (f.face_ft as f64, 0.5 * f.width as f64);
-    let (u0, u1) = (face - 3.0, face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w);
+    let back = behind_back(face);
+    let (u0, u1) = (back.min(face - 3.0), face + 3.0 + LEDGE_RUN_FT + 2.0 * half_w);
     let reach = half_w * 1.5 + LEDGE_FROM_FT + LEDGE_WIDTH_FT + LEDGE_SKIRT_FT + spacing;
     let Some(b) = ledge_box(f) else { return };
     let (lo, hi) = ([b[0] - spacing, b[1] - spacing], [b[2] + spacing, b[3] + spacing]);
@@ -1361,8 +1406,15 @@ fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim
         }
         best
     };
-    // (The cave's side of the river, as the river runs past its mouth.)
-    let side = nearest(cave[0], cave[1]).1.signum();
+    // (The shelf's side of the river, as the river runs past its bank; and across the lip's
+    // line, the same side.)
+    let side = nearest(bank[0], bank[1]).1.signum();
+    let vside = {
+        let r = [bank[0] - f.at[0], bank[1] - f.at[1]];
+        (f.dir[0] * r[1] - f.dir[1] * r[0]).signum()
+    };
+    // (Behind the water: from past the mouth, the far side of the middle, out to the bank's strip.)
+    let (bv0, bv1) = (-BEHIND_MOUTH_ACROSS * half_w - BEHIND_BEYOND_MOUTH_FT, half_w + LEDGE_FROM_FT + LEDGE_WIDTH_FT);
     let i0 = (((lo[0] - origin[0]) / spacing).ceil().max(0.0) as usize).min(dim);
     let i1 = (((hi[0] - origin[0]) / spacing).floor() + 1.0).clamp(0.0, dim as f64) as usize;
     let j0 = (((lo[1] - origin[1]) / spacing).ceil().max(0.0) as usize).min(dim);
@@ -1374,20 +1426,25 @@ fn ledge(pieces: &[Piece], f: &Fall, heights: &mut [f32], water: &mut [f32], dim
             let x = origin[0] + i as f64 * spacing;
             let r = [x - f.at[0], y - f.at[1]];
             let u = r[0] * f.dir[0] + r[1] * f.dir[1];
-            // (And round the mouth itself, whichever way the water's edge runs there.)
-            let mouth = (x - cave[0]) * (x - cave[0]) + (y - cave[1]) * (y - cave[1]) <= LEDGE_MOUTH_FT * LEDGE_MOUTH_FT;
-            if !mouth && (u < u0 || u > u1) {
+            if u < u0 || u > u1 {
+                continue;
+            }
+            let k = j * dim + i;
+            let v = (f.dir[0] * r[1] - f.dir[1] * r[0]) * vside;
+            if u >= back && u <= face + BEHIND_PAST_FOOT_FT && v >= bv0 && v <= bv1 {
+                let shelf = bottom + LEDGE_RISE_FT;
+                heights[k] = shelf as f32;
+                water[k] = water[k].min((shelf - 0.5) as f32);
                 continue;
             }
             let best = nearest(x, y);
             let (d, on, z, w) = (crate::core::sqrt(best.0), best.1, best.2, best.3);
             let out = d - 0.5 * w;
-            let skirt = if mouth { 0.0 } else { out - LEDGE_FROM_FT - LEDGE_WIDTH_FT };
-            if !mouth && (on * side <= 0.0 || out < LEDGE_FROM_FT || skirt > LEDGE_SKIRT_FT || (skirt > 0.0 && u <= face + 3.0)) {
+            let skirt = out - LEDGE_FROM_FT - LEDGE_WIDTH_FT;
+            if on * side <= 0.0 || out < LEDGE_FROM_FT || skirt > LEDGE_SKIRT_FT || (skirt > 0.0 && u <= face + 3.0) {
                 continue;
             }
             let shelf = (z.min(bottom) + LEDGE_RISE_FT).max(bottom + LEDGE_RISE_FT - LEDGE_SLOPE * (u - face - 3.0).max(0.0));
-            let k = j * dim + i;
             if skirt > 0.0 {
                 let give = LEDGE_SKIRT_SLOPE * skirt;
                 heights[k] = (heights[k] as f64).clamp(shelf - give, shelf + give) as f32;

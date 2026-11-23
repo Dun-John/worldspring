@@ -594,8 +594,9 @@ impl T0 {
         // No waterfall in a town's pad (its ground is eased flat) or where a road crosses the
         // river (a bridge or a ford over the lip or the pool): those rivers run on down their
         // steps as rapids, and their caves go with them (the last of the generated sites here).
-        // Nor a cave whose mouth would stand in a lake or the sea below its fall, or which the
-        // river's own bends (as the finest level draws them) shut in on an island or a spit.
+        // Nor a shelf behind a fall (and the cave there) whose bank would stand in a lake or the
+        // sea below it, nor a cave whose shelf's bank the river's own bends (as the finest level
+        // draws them) shut in on an island or a spit.
         {
             let fine = world.geom.spacing_ft(world.geom.max_level);
             let blocked: Vec<(u32, u32)> = rivers.falls.iter().filter(|f| fall_blocked(f, &settlements, &road_net)).map(|f| (f.river, f.seg)).collect();
@@ -606,7 +607,7 @@ impl T0 {
                     // (Lake or sea at the pool's height or over it: the ground there is cut below the T0's.)
                     let drowns = |x: f64, y: f64| wet(x, y) || ground_t0.sample_water(x, y) as f64 > f.bottom as f64 - 1.0;
                     !blocked.contains(&(f.river, f.seg))
-                        && f.cave.is_some_and(|c| [[0.0, 0.0], [6.0, 0.0], [-6.0, 0.0], [0.0, 6.0], [0.0, -6.0]].iter().any(|o| drowns(c[0] + o[0], c[1] + o[1])) || cave_pinched(&rivers, c, fine, cell))
+                        && f.bank.is_some_and(|c| [[0.0, 0.0], [6.0, 0.0], [-6.0, 0.0], [0.0, 6.0], [0.0, -6.0]].iter().any(|o| drowns(c[0] + o[0], c[1] + o[1])) || f.cave.is_some() && cave_pinched(&rivers, c, fine, cell))
                 })
                 .map(|f| (f.river, f.seg))
                 .collect();
@@ -1503,7 +1504,7 @@ fn fall_blocked(f: &crate::lod::rivers::Fall, settlements: &[settle::Settlement]
         let (dx, dy) = (s.x - f.at[0], s.y - f.at[1]);
         crate::core::sqrt(dx * dx + dy * dy) < radii::pad_extent(radii::reach(s)) + spread
     });
-    in_pad || [Some(f.at), Some(foot), f.cave].into_iter().flatten().any(|p| roads.nearest_point(p[0], p[1], 0.5 * f.width as f64 + FALL_ROAD_CLEAR_FT).is_some())
+    in_pad || [Some(f.at), Some(foot), f.cave.and(f.bank)].into_iter().flatten().any(|p| roads.nearest_point(p[0], p[1], 0.5 * f.width as f64 + FALL_ROAD_CLEAR_FT).is_some())
 }
 
 /// How far (ft, past the river's half width) a road keeps from a waterfall.
@@ -1675,9 +1676,10 @@ fn downsample(w: usize, h: usize, v: &[f64]) -> Vec<f64> {
     out
 }
 
-/// Whether the river's water, as the finest level draws it, rings a fall cave's mouth: most of a
-/// circle 30 ft round it, or two thirds of one 50 ft round it, lies in a river (a braid's island,
-/// or a spit in a tight bend below the pool), so its shelf could not reach the land. O(nearby
+/// Whether the river's water, as the finest level draws it, rings the bank a fall cave's shelf
+/// comes out on (`Fall::bank`): most of a circle 30 ft round it, or two thirds of one 50 ft round
+/// it, lies in a river (a braid's island, or a spit in a tight bend below the pool), so its shelf
+/// could not reach the land. O(nearby
 /// curve points).
 fn cave_pinched(rivers: &crate::lod::rivers::RiverNet, c: [f64; 2], fine: f64, cell: f64) -> bool {
     let pieces = crate::lod::rivers::pieces(rivers, [c[0] - 60.0, c[1] - 60.0, c[0] + 60.0, c[1] + 60.0], &|_| 60.0, fine, cell);

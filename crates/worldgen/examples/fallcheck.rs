@@ -38,7 +38,7 @@ fn main() {
                 let (reached, edge, wet, _) = reach(&mut ex, f.cave.unwrap());
                 least = least.min(reached);
                 if !edge || wet {
-                    bad.push(format!("fl:{} ({reached} sq, wet {wet})", f.id));
+                    bad.push(format!("fl:{} ({reached} sq, wet {wet}; w {:.0} face {:.0} drop {:.0})", f.id, f.width, f.face_ft, f.drop_ft()));
                 }
             }
             println!("  all {caves} caves: least reached {least} squares; not to the edge: {}", if bad.is_empty() { "none".into() } else { bad.join(", ") });

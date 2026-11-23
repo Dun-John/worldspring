@@ -27,7 +27,7 @@ import { sprites } from './spriteCode';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
 import { drawBreakwaterArmour, drawCog, drawLantern, drawQuayCoping } from './harbourShapes';
-import { drawFall, drawFallCaveBy } from './fallShapes';
+import { caveScale, drawCaveMark, drawFall, drawFallCave, drawFallCaveThrough } from './fallShapes';
 import type { GenFall } from '../gen/protocol';
 import { drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawGravelWalk, drawRaisedDrawbridge, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
@@ -84,8 +84,12 @@ interface ChunkView {
   atmosphere: number;
   /** The waterfalls whose lip lies in it (drawn with it), and the hidden caves behind them. */
   falls: number;
-  /** One Graphics per cave, its `label` the cave's site (shown per `caveShown`). */
+  /** One Graphics per cave, its `label` the cave's site (shown per `caveShown`): its mouth under
+   * the sheet; `cavesThrough` the same over it (its dim shape seen through the water). */
   caves: Container | null;
+  cavesThrough: Container | null;
+  /** The DM's marks round the caves (shown with `showSecretCaves` only). */
+  caveMarks: Container | null;
   lastUsed: number;
   /** Tactical data kept for inspection (HUD, play mode). */
   objects: number;
@@ -293,7 +297,10 @@ export class BattlemapLayer {
     this.applyCaves();
   }
   private applyCaves() {
-    for (const c of this.chunks.values()) if (c.caves) for (const g of c.caves.children) g.visible = this.caveVisible(g.label);
+    for (const c of this.chunks.values()) {
+      for (const list of [c.caves, c.cavesThrough]) if (list) for (const g of list.children) g.visible = this.caveVisible(g.label);
+      if (c.caveMarks) c.caveMarks.visible = this.secretCaves;
+    }
   }
   private caveVisible(site: string): boolean {
     return this.secretCaves || !!this.caveShown?.(site);
@@ -1102,6 +1109,8 @@ export class BattlemapLayer {
     const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
     const mine = this.falls.filter((f) => Math.floor(f.x / ts) === cx && Math.floor(f.y / ts) === cy);
     let caveG: Container | null = null;
+    let throughG: Container | null = null;
+    let markG: Graphics | null = null;
     if (mine.length) {
       const px = (wx: number, wy: number): [number, number] => [((wx - cx * ts) / SQUARE_FT) * PX, ((wy - cy * ts) / SQUARE_FT) * PX];
       const fallG = new Graphics();
@@ -1109,19 +1118,33 @@ export class BattlemapLayer {
         const seed = Number(f.id.slice(3)) || 0;
         drawFall(fallG, ...px(f.x, f.y), f.dir[0], f.dir[1], f, PX, seed);
         if (f.cave) {
+          // (On the shelf behind the sheet, where the generator cut it: under the falling water,
+          // its dim shape over it, held within the sheet's width.)
+          const off = (f.cave.y - f.y) * f.dir[0] - (f.cave.x - f.x) * f.dir[1];
+          const scale = caveScale(f.width, off);
+          const at = px(f.cave.x, f.cave.y);
           const g = new Graphics();
-          // (In the face behind the sheet's edge, on the cave's side of the stream.)
-          const side = (f.cave.y - f.y) * f.dir[0] - (f.cave.x - f.x) * f.dir[1] >= 0 ? 1 : -1;
-          drawFallCaveBy(g, ...px(f.x, f.y), f.dir[0], f.dir[1], f, side, PX, seed);
+          drawFallCave(g, ...at, f.dir[0], f.dir[1], PX, seed, scale);
           g.label = f.cave.site;
           g.visible = this.caveVisible(f.cave.site);
           (caveG ??= new Container()).addChild(g);
+          const t = new Graphics();
+          drawFallCaveThrough(t, ...at, f.dir[0], f.dir[1], PX, scale);
+          t.label = f.cave.site;
+          t.visible = g.visible;
+          (throughG ??= new Container()).addChild(t);
+          drawCaveMark((markG ??= new Graphics()), ...at, 7 * scale + 2);
         }
       }
-      // (The caves under the falls: each sheet covers its mouth's inner part.)
+      // (The caves under the falls, their dim shapes and the DM's marks over them.)
       const holder = new Container();
       if (caveG) holder.addChild(caveG);
       holder.addChild(fallG);
+      if (throughG) holder.addChild(throughG);
+      if (markG) {
+        markG.visible = this.secretCaves;
+        holder.addChild(markG);
+      }
       this.prewarm(holder);
       this.layers[1].addChildAt(holder, 0);
       parts.push(holder);
@@ -1178,6 +1201,8 @@ export class BattlemapLayer {
       atmosphere,
       falls: mine.length,
       caves: caveG,
+      cavesThrough: throughG,
+      caveMarks: markG,
       lastUsed: now,
       objects: nObj,
       data,

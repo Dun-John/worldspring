@@ -40,7 +40,7 @@ import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
-import { drawFall, drawFallCaveBy, drawFallMark, poolRadius, sheetRun } from '../render/fallShapes';
+import { caveScale, caveSpot, drawCaveMark, drawFall, drawFallCaveBy, drawFallCaveThrough, drawFallMark, poolRadius, sheetRun } from '../render/fallShapes';
 import { breakwaters, piers } from './galleryTimber';
 import { flatRoofs } from './galleryRoofs';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
@@ -800,6 +800,11 @@ function fallsPanel(root: Container, y0: number, width: number, nolabels: boolea
     g.stroke({ width: 1, color: 0x000000, alpha: 0.1 });
     if (f.cave) drawFallCaveBy(g, cx, lipY, 0, 1, f, 1, sq, i);
     drawFall(g, cx, lipY, 0, 1, f, sq, i);
+    if (f.cave) {
+      const [a, b] = caveSpot(f, 1);
+      drawFallCaveThrough(g, cx - b * k, lipY + a * k, 0, 1, sq, caveScale(f.width, b));
+      drawCaveMark(g, cx - b * k, lipY + a * k, 7 * caveScale(f.width, b) + 2, sq);
+    }
     label(f.name, x, y + h + 2);
     x += w + 20;
     rowH = Math.max(rowH, h);

@@ -826,7 +826,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // (An entrance made in a building's cellar is drawn by the building: the same for each of the
         // layout's entrances, so asked once.)
         let in_building = !l.entrances.is_empty() && crate::sitelinks::building_of(world, t0, l.index as usize).is_some();
-        for e in l.entrances.iter().filter(|_| !in_building) {
+        // (A cave behind a waterfall is drawn by the app under the falling water, hidden from
+        // players until found: nothing of it on the ground here, no cleared ring either.)
+        let behind_fall = l.site && (l.index as usize).checked_sub(t0.settlements.len()).is_some_and(|p| t0.fall_of_poi(p).is_some());
+        for e in l.entrances.iter().filter(|_| !in_building && !behind_fall) {
             use crate::town::geom::{add, mul};
             let in_yard = l.buildings.iter().any(|b| b.structure == crate::town::Structure::Open && crate::town::geom::contains(&b.poly, e.at));
             let style = match e.kind {
@@ -1400,8 +1403,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
-    // Below a waterfall the shelf to its cave stays as the river carved it (`rivers::ledge`).
-    for f in t0.rivers.falls_in([hx0, hy0, hx0 + span, hy0 + span], 400.0).filter(|f| f.cave.is_some()) {
+    // Behind and below a waterfall its shelf stays as the river carved it (`rivers::ledge`).
+    for f in t0.rivers.falls_in([hx0, hy0, hx0 + span, hy0 + span], 400.0).filter(|f| f.bank.is_some()) {
         for (h, v) in hh.iter_mut().enumerate() {
             if crate::lod::rivers::ledge_zone(f, center(h % HS, h / HS)) {
                 *v = relief_base[h];
@@ -2305,16 +2308,24 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             })
             .collect()
     };
+    // Nothing generated stands on a waterfall's sheet or the shelf behind it (`rivers::sheet_zone`),
+    // and the guarantee keeps off it.
+    let near_falls: Vec<&crate::lod::rivers::Fall> = t0.rivers.falls_in([ox, oy, ox + chunk_ft, oy + chunk_ft], 80.0).collect();
+    let on_sheet = |p: [f64; 2]| near_falls.iter().any(|f| crate::lod::rivers::sheet_zone(f, p));
     // Nothing generated stands on a cliff face (item 170): what did moves off it, and the guarantee
     // keeps off it (filling any gap the move left).
     let faces = cliff::marks(&chunk, &cliff_pad, &sidx);
     cliff::clear_faces(&mut chunk, &faces);
+    if !near_falls.is_empty() {
+        chunk.objects.retain(|o| !on_sheet([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT]));
+    }
     let keep_off: Vec<bool> = (0..n)
         .map(|k| {
             let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
             let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR);
             let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
             cliff::keep_clear(faces[k])
+                || on_sheet(p)
                 || (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy)))
                 || in_gate(p, 2.5)
                 || features.iter().any(|f| crate::town::geom::dist(p, f.0) < f.1 + 4.0)
@@ -2411,7 +2422,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
-    let lodge: Vec<bool> = faces.iter().map(|&m| cliff::keep_clear(m)).collect();
+    // (Not behind a waterfall's sheet.)
+    let lodge: Vec<bool> = faces.iter().enumerate().map(|(k, &m)| cliff::keep_clear(m) && !on_sheet([ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT])).collect();
     enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &lodge, &park, &bailey);
     // R5 towns (114): a steppe town's stone daises (its squares', a horse park's, the guarantee's
     // there) are banks of earth trodden by hooves (`PlazaFeature::Mound`).

@@ -5,9 +5,12 @@
 //     wet rocks at the sides, the round foamy plunge pool below with its ripple rings, the falling sheet
 //     (pale, streaked, as long as the face runs out), the inked lip across the channel with the glassy
 //     water just above it, a line of foam puffs at the foot and a light mist over the pool.
-//   drawFallCave(g, x, y, ux, uy, sq = PX, seed = 0)
-//     The dark mouth of the cave behind a curtain at (x, y) px, in its ring of wet rock;
-//     drawFallCaveBy(g, x, y, ux, uy, fall, side, ...) puts it in the face behind the sheet's edge.
+//   drawFallCave(g, x, y, ux, uy, sq = PX, seed = 0, scale = 1)
+//     The dark mouth of the cave behind a curtain at (x, y) px, in its ring of wet rock (drawn under
+//     the sheet); drawFallCaveBy(g, x, y, ux, uy, fall, side, ...) puts it on the shelf behind the
+//     sheet (`caveSpot`). drawFallCaveThrough: the mouth's dim shape seen through the sheet (over it).
+//   drawCaveMark(g, x, y, rFt, sq = PX)
+//     The DM's dashed violet ring round a hidden cave's mouth (over the fall).
 //   drawFallMark(g, x, y, ux, uy, wPx, lPx, alpha = 1)
 //     The map's mark in screen px: a pale curtain band `wPx` across and `lPx` along with a few streaks,
 //     an inked lip on its upstream side and a foam pool below; at its smallest it is the map symbol.
@@ -162,23 +165,33 @@ export function drawFall(g: Graphics, x: number, y: number, ux: number, uy: numb
   }
 }
 
-/** Where a fall's cave mouth is drawn (ft from the lip: along the stream, across it on `side`): in
- * the cliff face behind the falling sheet, at its edge, so the sheet covers its inner part. */
+/** Where a fall's cave mouth stands (ft from the lip: along the stream, across it on `side`), as
+ * the generator puts it (`lod::rivers::behind_mouth`): midway across the shelf behind the falling
+ * sheet, a quarter of the half width out from the middle. (The battlemap draws it where `falls_json`
+ * says; this is for drawings without one.) */
 export function caveSpot(f: FallSize, side: number): [number, number] {
-  const half = Math.max(f.width, 6) / 2;
-  return [Math.max(2.5, sheetRun(f) * 0.3), side * (half + 1.2)];
+  const back = Math.max(f.face - 9, 0.2 * f.face);
+  return [0.5 * (back + f.face + 1), side * 0.25 * (f.width / 2)];
+}
+
+/** How much `drawFallCave` shrinks a mouth `off` ft across from the middle so it stays within the
+ * sheet of a fall `width` ft wide. */
+export function caveScale(width: number, off: number): number {
+  return Math.max(0.35, Math.min(1, (Math.max(width, 6) / 2 - Math.abs(off) - 0.5) / 6.4));
 }
 
 /** `drawFallCave` at its spot by the fall whose lip is at (x, y) px (`caveSpot`; draw it before
- * the fall, so the sheet lies over it). */
+ * the fall, so the sheet lies over it, then `drawFallCaveThrough` over the fall). */
 export function drawFallCaveBy(g: Graphics, x: number, y: number, ux: number, uy: number, f: FallSize, side: number, sq = PX, seed = 0) {
   const [a, b] = caveSpot(f, side);
   const k = sq / 5;
-  drawFallCave(g, x + (ux * a - uy * b) * k, y + (uy * a + ux * b) * k, ux, uy, sq, seed);
+  drawFallCave(g, x + (ux * a - uy * b) * k, y + (uy * a + ux * b) * k, ux, uy, sq, seed, caveScale(f.width, b));
 }
 
-export function drawFallCave(g: Graphics, x: number, y: number, ux: number, uy: number, sq = PX, seed = 0) {
-  const k = sq / 5;
+/** The mouth of the cave behind a curtain at (x, y) px, in its ring of wet rock, `scale` times
+ * its full size (12 ft across). */
+export function drawFallCave(g: Graphics, x: number, y: number, ux: number, uy: number, sq = PX, seed = 0, scale = 1) {
+  const k = (sq / 5) * scale;
   const rnd = rng(seed * 104729 + 3);
   const rot = Math.atan2(uy, ux) + Math.PI / 2;
   const [c, s] = [Math.cos(rot), Math.sin(rot)];
@@ -201,6 +214,41 @@ export function drawFallCave(g: Graphics, x: number, y: number, ux: number, uy: 
   }
   g.poly(mouth).fill(CAVE).stroke({ width: ink(OUT), color: INK, alpha: 0.9 });
   g.ellipse(...pt(0, 0.5), 2.6 * k, 1.5 * k).fill({ color: 0x000000, alpha: 0.6 });
+}
+
+/** The cave's mouth as it shows through the falling sheet over it (draw over the fall): a dim dark
+ * shape, soft-edged, at (x, y) px, `scale` as `drawFallCave`. */
+export function drawFallCaveThrough(g: Graphics, x: number, y: number, ux: number, uy: number, sq = PX, scale = 1) {
+  const k = (sq / 5) * scale;
+  const rot = Math.atan2(uy, ux) + Math.PI / 2;
+  const [c, s] = [Math.cos(rot), Math.sin(rot)];
+  const mouth = (r: number) => {
+    const pts: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const t = (i / 12) * Math.PI * 2;
+      const [a, b] = [Math.cos(t) * 4.1 * r, (Math.sin(t) * 2.7 + (Math.sin(t) > 0 ? 0.4 : 0)) * r];
+      pts.push(x + (a * c - b * s) * k, y + (a * s + b * c) * k);
+    }
+    return pts;
+  };
+  g.poly(mouth(1.25)).fill({ color: 0x1f3a40, alpha: 0.16 });
+  g.poly(mouth(1)).fill({ color: CAVE, alpha: 0.3 });
+}
+
+/** The DM's mark for a hidden cave (draw over the fall): a dashed violet ring of radius `rFt` ft
+ * round its mouth at (x, y) px, a dot at its middle. */
+export function drawCaveMark(g: Graphics, x: number, y: number, rFt: number, sq = PX) {
+  const r = (rFt * sq) / 5;
+  const n = 14;
+  const w = Math.max(2, (0.7 * sq) / 5);
+  g.circle(x, y, r).stroke({ width: w * 2.2, color: 0x2a1640, alpha: 0.35 });
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2;
+    const a1 = a0 + ((Math.PI * 2) / n) * 0.55;
+    g.moveTo(x + Math.cos(a0) * r, y + Math.sin(a0) * r).arc(x, y, r, a0, a1);
+  }
+  g.stroke({ width: w, color: 0xc58bff, alpha: 1, cap: 'round' });
+  g.circle(x, y, Math.max(2, (0.9 * sq) / 5)).fill({ color: 0xc58bff, alpha: 1 }).stroke({ width: w * 0.5, color: 0x2a1640, alpha: 0.8 });
 }
 
 export function drawFallMark(g: Graphics, x: number, y: number, ux: number, uy: number, wPx: number, lPx: number, alpha = 1) {
