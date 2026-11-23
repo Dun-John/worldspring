@@ -858,7 +858,7 @@ impl Ctx {
     }
 
     /// Town `index`'s plan as a stand-in outline (`town::standin`), compact JSON in whole ft:
-    /// `{"w":[[closed, x, y, ...]], "g":[x, y, ...], "s":[[x, y, ...]], "b":[[...]], "p":[[ward, x, y, ...]]}`;
+    /// `{"w":[[closed, x, y, ...]], "g":[x, y, ...], "s":[[x, y, ...]], "b":[[...]], "p":[[ward, x, y, ...]], "c": cell, "q": [x0, x1, y, ...]}` (the water runs);
     /// `null` for a village, a site or a town laid out by hand.
     pub fn town_standin_json(&self, index: u32) -> Result<String, JsError> {
         use std::fmt::Write;
@@ -899,7 +899,11 @@ impl Ctx {
         list(&mut s, "b", &mut o.bridges.iter().map(|c| (None, c.as_slice())));
         s.push(',');
         list(&mut s, "p", &mut o.patches.iter().map(|(c, w)| (Some(*w as i64), c.as_slice())));
-        s.push('}');
+        let _ = write!(s, ",\"c\":{},\"q\":[", o.water_cell);
+        for (k, r) in o.water.iter().enumerate() {
+            let _ = write!(s, "{}{},{},{}", if k > 0 { "," } else { "" }, r[0].round() as i64, r[1].round() as i64, r[2].round() as i64);
+        }
+        s.push_str("]}");
         Ok(s)
     }
 

@@ -35,6 +35,9 @@ const WARM_PRI = 1e9;
  * a city's cold build costs seconds, a tile over a built one a small part of that. */
 const SPILL_BUILDS = 2;
 const MAX_OWNERS = 3;
+/** ...and never for less than this much waiting work (ms per owner): a small town's few tiles are
+ * done sooner than another worker would build it (its builds were repeated on a fast pan). */
+const SPILL_MIN_MS = 600;
 
 interface Job {
   kind: number;
@@ -351,7 +354,8 @@ function canTake(gw: GenWorker, job: Job, backlog: Map<number, number>): boolean
   const build = buildMs.get(t);
   const tile = tileMs.get(t);
   if (o.size >= MAX_OWNERS || !madeBy.get(t)?.size || build === undefined || !tile) return false;
-  return ((backlog.get(t) ?? 0) * (tile[0] / tile[1])) / o.size > SPILL_BUILDS * build;
+  const wait = ((backlog.get(t) ?? 0) * (tile[0] / tile[1])) / o.size;
+  return wait > SPILL_BUILDS * build && wait > SPILL_MIN_MS;
 }
 
 /** Warm jobs running at once: they leave two workers (one of two) to the tiles in view. */

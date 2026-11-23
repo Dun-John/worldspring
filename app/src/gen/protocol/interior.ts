@@ -272,4 +272,7 @@ export interface TownStandin {
   s: number[][];
   b: number[][];
   p: number[][];
+  /** Water (sea, lake, river) over the patches: runs x0, x1, y (ft) of cells `c` ft tall. */
+  c: number;
+  q: number[];
 }

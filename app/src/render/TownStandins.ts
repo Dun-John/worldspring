@@ -16,6 +16,8 @@ const PARK = 0x999e80;
 const MAIN_STREET = 0xe0d9c2;
 const STREET = 0xc2b8a1;
 const WALL = 0xdbcca6;
+// (`tileriver.frag`'s water.)
+const WATER = 0x69879c;
 const INK = 0x2b241c;
 const WARD_PLAZA = 0;
 const WARD_PARK = 12;
@@ -141,6 +143,9 @@ function draw(g: Graphics, p: TownStandin, ftpx: number, o: [number, number]) {
       .fill({ color: ward === WARD_PLAZA ? PLAZA : ward === WARD_PARK ? PARK : BLOCK })
       .stroke({ width: lane, color: STREET, join: 'round' });
   }
+  // Water over the blocks (the real plan cuts them by it), under the streets, bridges and wall.
+  for (let k = 0; k + 2 < p.q.length; k += 3) g.rect(p.q[k] - o[0], p.q[k + 2] - o[1], p.q[k + 1] - p.q[k], p.c + 0.5);
+  if (p.q.length) g.fill({ color: WATER });
   const main = Math.max(MAIN_FT, MAIN_PX * ftpx);
   for (const s of [...p.s, ...p.b]) {
     if (s.length < 4) continue;

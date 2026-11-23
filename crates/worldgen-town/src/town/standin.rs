@@ -18,6 +18,10 @@ pub struct Standin {
     pub bridges: Vec<Vec<P>>,
     /// The town's patches on dry land, and each one's ward (`Ward as u8`, 255 none).
     pub patches: Vec<(Vec<P>, u8)>,
+    /// Water within the patches (the sea, a lake and the river, as the layout cuts its
+    /// blocks by them): runs `[x0, x1, y]` (world ft) of cells `water_cell` ft tall.
+    pub water: Vec<[f64; 3]>,
+    pub water_cell: f64,
 }
 
 thread_local! {
@@ -73,5 +77,41 @@ fn make(world: &World, t0: &T0, index: usize, s: &Settlement) -> Standin {
     let streets = plan.paths.iter().filter(|p| p.len() > 1).map(|p| p.iter().map(|&v| at(v)).collect()).collect();
     let bridges = plan.bridged.iter().filter(|b| b.1).map(|&((a, b, c), _)| vec![at(a), at(b), at(c)]).collect();
     let patches = (0..plan.n_inner).filter(|&i| plan.usable(i)).map(|i| (mesh.faces[i].iter().map(|&v| at(v)).collect(), ward[i].map_or(255, |w| w as u8))).collect();
-    Standin { center, walls, gates, streets, bridges, patches }
+    // Water by the site's own test (`Site::wet`: standing water in the drawn shore, and the river
+    // channel), sampled where a patch is and joined into runs along x.
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    let mut polys: Vec<([f64; 4], Vec<P>)> = Vec::new();
+    for i in (0..plan.n_inner).filter(|&i| plan.usable(i)) {
+        let poly: Vec<P> = mesh.faces[i].iter().map(|&v| mesh.pos[v]).collect();
+        let bb = poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        for k in 0..2 {
+            lo[k] = lo[k].min(bb[k]);
+            hi[k] = hi[k].max(bb[k + 2]);
+        }
+        polys.push((bb, poly));
+    }
+    let mut water = Vec::new();
+    let mut water_cell = 0.0;
+    if lo[0] <= hi[0] {
+        water_cell = (((hi[0] - lo[0]).max(hi[1] - lo[1])) / 220.0).clamp(10.0, 40.0).round();
+        let (i0, i1) = (crate::core::floor(lo[0] / water_cell) as i64, crate::core::ceil(hi[0] / water_cell) as i64);
+        let (j0, j1) = (crate::core::floor(lo[1] / water_cell) as i64, crate::core::ceil(hi[1] / water_cell) as i64);
+        for j in j0..j1 {
+            let y = (j as f64 + 0.5) * water_cell;
+            let mut run: Option<i64> = None;
+            for i in i0..=i1 {
+                let q = [(i as f64 + 0.5) * water_cell, y];
+                let wet = i < i1 && polys.iter().any(|(bb, poly)| q[0] >= bb[0] && q[0] <= bb[2] && q[1] >= bb[1] && q[1] <= bb[3] && contains(poly, q)) && site.wet(q);
+                match (wet, run) {
+                    (true, None) => run = Some(i),
+                    (false, Some(a)) => {
+                        water.push([a as f64 * water_cell + center[0], i as f64 * water_cell + center[0], j as f64 * water_cell + center[1]]);
+                        run = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Standin { center, walls, gates, streets, bridges, patches, water, water_cell }
 }
