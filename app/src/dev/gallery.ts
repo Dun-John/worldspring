@@ -816,14 +816,14 @@ function fallsPanel(root: Container, y0: number, width: number, nolabels: boolea
   const mw = Math.min(width - 32, 760);
   m.rect(16, y, mw, 120).fill(0xd9cba0);
   m.moveTo(16, y + 60).bezierCurveTo(16 + mw * 0.3, y + 20, 16 + mw * 0.6, y + 100, 16 + mw, y + 60).stroke({ width: 3, color: 0x5d8fb0 });
-  const marks: [number, number, number][] = [[0.12, 14, 7], [0.32, 18, 9], [0.55, 24, 11], [0.8, 44, 20]];
+  const marks: [number, number, number][] = [[0.12, 20, 10], [0.32, 22, 11], [0.55, 24, 11], [0.8, 44, 20]];
   for (const [t, wPx, lPx] of marks) {
     const mx = 16 + mw * t;
     const my = y + 60 + Math.sin(t * Math.PI * 2) * -12;
     m.moveTo(mx, my - 40).lineTo(mx, my + 40).stroke({ width: Math.max(3, wPx * 0.8), color: 0x5d8fb0 });
     drawFallMark(m, mx, my - lPx / 2, 0, 1, wPx, lPx, 1);
   }
-  label('map marks: the symbol (14 px) far out, then as wide as the river', 16, y + 122);
+  label('map marks: the symbol (20 px) far out, then as wide as the river', 16, y + 122);
   return y + 150;
 }
 

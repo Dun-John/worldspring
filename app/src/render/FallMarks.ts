@@ -13,7 +13,7 @@ const smooth = (a: number, b: number, x: number) => {
 };
 
 /** The smallest mark (px across): the map symbol. */
-const MIN_W = 14;
+const MIN_W = 20;
 
 /** The drop (ft) a fall needs to show at `ftpx` ft per px: every fall at site zoom, only the
  * highest toward the whole map. */
@@ -34,8 +34,19 @@ export class FallMarks {
     this.container.visible = false;
   }
 
+  /** The widest channel and longest sheet (ft) of any fall: they bound a mark's reach for culling. */
+  private maxWidth = 0;
+  private maxRun = 0;
+
   set(falls: GenFall[]) {
-    this.falls = falls;
+    // Sorted by x once, so a camera move only walks the falls in the view's columns.
+    this.falls = [...falls].sort((a, b) => a.x - b.x);
+    this.maxWidth = 0;
+    this.maxRun = 0;
+    for (const f of falls) {
+      this.maxWidth = Math.max(this.maxWidth, f.width);
+      this.maxRun = Math.max(this.maxRun, sheetRun(f));
+    }
     this.key = '';
   }
 
@@ -63,7 +74,19 @@ export class FallMarks {
     g.clear();
     this.drawn = 0;
     const need = dropShownFrom(ftpx);
-    for (const f of this.falls) {
+    // (The farthest any mark reaches past its spot, as `pad` below at its largest.)
+    const wMax = Math.max(MIN_W, this.maxWidth * cam.ppf * 1.35);
+    const padMax = (wMax + Math.max(wMax * 0.5, this.maxRun * cam.ppf, 5)) * 2 * ftpx;
+    const falls = this.falls;
+    let lo = 0;
+    let hi = falls.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (falls[mid].x < x0 - padMax) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < falls.length && falls[i].x <= x1 + padMax; i++) {
+      const f = falls[i];
       const a = smooth(need - 25, need + 25, f.drop);
       if (a < 0.02) continue;
       // (A little wider than the channel at the lip: the tiles draw the river a touch wide.)

@@ -231,26 +231,6 @@ void main() {
         vec3 rock = mix(mix(ROCK_MID, ROCK_LIT, smoothstep(0.14, 0.26, facing)), ROCK_SHADE, away);
         // (Screen y runs down the map as the samples' y does.)
         float ds = dot(dslope, up) / max(dsl, 1e-6);
-        if (cliff > 0.0) {
-            // As the battlemap's faces: bands down it by height (at least ~9 px each on screen), each
-            // under an ink lip with a pale ledge on it and its top in shade, and bold cracks down the
-            // fall line every few cells, in runs; so a face reads as rock, not as a bare track.
-            float pxPerFt = 1.0 / (max(slope, 0.05) * uFtPerPx);
-            float iv = 10.0 * exp2(max(0.0, ceil(log2(9.0 / (10.0 * pxPerFt)))));
-            vec2 gc = (uGrainOrigin + vLocal * uTilePx) / 6.4;
-            vec2 cc = mod(floor(gc * 0.25), 80.0);
-            float tl = (h + iv * 0.35 * (hash21(cc) - 0.5)) / iv;
-            float above = fract(tl) * iv * pxPerFt;
-            float onLo = step(0.3, hash21(vec2(floor(tl), 7.0)));
-            rock *= 1.0 + 0.06 * (floor(hash21(vec2(floor(tl), 3.0)) * 2.999) - 1.0);
-            rock = mix(rock, rock * 0.74, (1.0 - smoothstep(2.0, 6.0, iv * pxPerFt - above)) * onLo);
-            rock = mix(rock, ROCK_LIT * 1.06, (smoothstep(1.0, 1.6, above) - smoothstep(2.6, 3.4, above)) * onLo);
-            rock = mix(rock, INK, (1.0 - smoothstep(0.9, 1.5, above)) * onLo * 0.8);
-            float across = dot(gc, vec2(-up.y, up.x)) * 0.36 + 0.3 * hash21(floor(gc * 0.5));
-            float crack = 1.0 - smoothstep(0.1, 0.22, abs(fract(across) - 0.5) * 2.0);
-            float runs = step(0.45, hash21(vec2(floor(across), floor(dot(gc, up) * 0.3))));
-            rock = mix(rock, rock * 0.6, crack * runs * step(3.4, above));
-        }
         col = mix(col, rock, cliff * 0.95);
         if (scarp > 0.0) {
             col *= 1.0 - 0.14 * scarp * (0.4 + 0.6 * away);

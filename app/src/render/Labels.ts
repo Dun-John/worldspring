@@ -372,6 +372,15 @@ export class Labels {
     return it.style.badge ? hw - BADGE_R : hw - it.style.size * 0.4;
   }
 
+  /** How far (px) a label stands off its spot beyond the pin's: a secret cave's name below the
+   * mouth and the DM's ring round it (up to 9 ft across), a waterfall's right of its mark. */
+  private standOff(it: Placed, ppf: number): [number, number] {
+    const [hw, hh] = it.half ?? [0, 0];
+    if (it.f.secret) return [0, hh + 8 + Math.min(160, 11 * ppf)];
+    if (it.f.kind === 'waterfall') return [hw + 14 + Math.min(80, 8 * ppf), 0];
+    return [0, 0];
+  }
+
   update(cam: Camera, now: number) {
     const moved = Math.abs(cam.zoom - this.lastZoom) > 0.01;
     // Full layout on zoom changes and periodically while panning; otherwise just translate.
@@ -392,7 +401,8 @@ export class Labels {
           const [sx, sy] = cam.worldToScreen(it.f.x, it.f.y);
           const ox = it.style.pin ? this.pinOffset(it) : 0;
           const cont = it.style.prio >= 100 && !it.style.keep;
-          it.text?.position.set(sx + ox + (cont ? (it.ox ?? 0) : 0), sy + (it.style.keep || cont ? (it.oy ?? 0) : 0));
+          const [so, sd] = it.style.keep ? [0, 0] : this.standOff(it, cam.ppf);
+          it.text?.position.set(sx + ox + so + (cont ? (it.ox ?? 0) : 0), sy + sd + (it.style.keep || cont ? (it.oy ?? 0) : 0));
           it.dot?.position.set(sx, sy);
         }
       }
@@ -498,7 +508,8 @@ export class Labels {
         continue;
       }
       const px = f.extent_ft * ppf;
-      let show = px >= style.minPx && px <= style.maxPx;
+      // (A secret cave's name only at site zoom and closer, by its mouth.)
+      let show = px >= style.minPx && px <= style.maxPx && (!f.secret || ppf >= 1 / 20);
       let sx = 0;
       let sy = 0;
       if (show) {
@@ -517,9 +528,9 @@ export class Labels {
         const ex = hw * c + hh * s + pad;
         const ey = hw * s + hh * c + pad;
         // Pinned labels grow rightwards from the symbol centred on the spot.
-        const ox = style.pin ? this.pinOffset(it) : 0;
-        // A secret cave's name stands off below its spot, clear of the mouth drawn there.
-        if (f.secret) sy += ey + 4 + Math.min(40, 9 * ppf);
+        const [so, sd] = this.standOff(it, ppf);
+        const ox = (style.pin ? this.pinOffset(it) : 0) + so;
+        sy += sd;
         let box: [number, number, number, number] = [sx + ox - ex, sy - ey, sx + ox + ex, sy + ey];
         // The continent's name slides (along its own direction, then across) to the spot that
         // covers the fewest cities' dots and the room their names need.
