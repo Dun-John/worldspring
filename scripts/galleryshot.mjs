@@ -4,7 +4,7 @@
 // Files: <family>-<n>[-nolabels].png (families: battlemap, furniture, underground, and each themed panel, `streets` too).
 // Opens Windows Chrome as scripts/shot.mjs does (one window for all sheets, always closed at the end). SHOT_WIN=w,h
 // sets its size (default 1620,1000); SHOT_DPR sets the device pixel ratio. `--only=a,b` (before the out dir) takes only those
-// families (`--only=options`: the sprite audit's options panel).
+// families.
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 // `<sheet>.txt` beside each PNG listing `number id-or-name` (from the page's `window.__galleryOrder`).
 const compact = process.argv.includes('--compact');
 const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7).split(',');
+const inkSheet = only?.includes('ink');
 const [outDir = 'sheets', base = 'http://localhost:5173/'] = process.argv.slice(2).filter((a) => a !== '--compact' && !a.startsWith('--only='));
 mkdirSync(outDir, { recursive: true });
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,8 +47,8 @@ const jobs = [
   ...chunks(setOf('UNDER_DRAWN'), 20).map((names, i) => ({ family: 'underground', n: i + 1, query: `&items=${names.join(',')}` })),
   ...PANELS.map((p) => ({ family: p, n: 1, query: `&items=${p}` })),
   { family: 'streets', n: 1, query: '&panels=streets' },
-  { family: 'options', n: 1, query: '&panels=options' },
 ].filter((j) => !only || only.includes(j.family));
+if (inkSheet) jobs.length = 0;
 
 const chromePath = [process.env.CHROME_PATH, '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].filter(Boolean).find((p) => existsSync(p));
 if (!chromePath) throw new Error('no Chrome found (set CHROME_PATH)');
@@ -66,7 +67,7 @@ const chrome = spawn(chromePath, [
   '--window-position=0,0',
   `--window-size=${process.env.SHOT_WIN ?? '1620,1000'}`,
   ...(process.env.SHOT_DPR ? [`--force-device-scale-factor=${process.env.SHOT_DPR}`] : []),
-  q(jobs[0].query),
+  inkSheet ? base : q(jobs[0].query),
 ]);
 // Compact mode: the lists to split (kinds are completed with the catalog's others once the page is up).
 const compactLists = () => [
@@ -164,6 +165,37 @@ try {
       }
     }
   };
+  if (inkSheet) {
+    // `--only=ink`: the sprite audit's ink A/B: the same sprites drawn with today's ink and with `&ink=2b2118`, stacked in one PNG.
+    const query = '&scale=1&sq=64&items=conifer,crates,cart,well,boulder,bench,rowboat,bed,table,bookcase,chest,coffin,rock_column,ore_cart';
+    const halves = [['today 0x1d1a14', ''], ['umber #2b2118', '&ink=2b2118']];
+    const imgs = [];
+    for (const [, extra] of halves) {
+      const f = join(outDir, `ink-half${imgs.length}.png`);
+      await sheet(`${base}?gallery=1${query}${extra}`, f);
+      imgs.push(readFileSync(f).toString('base64'));
+    }
+    await send('Page.navigate', { url: 'about:blank' });
+    await sleep(500);
+    const out = await send('Runtime.evaluate', {
+      awaitPromise: true,
+      returnByValue: true,
+      expression: `(async () => {
+        const load = (b) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + b; });
+        const ims = await Promise.all(${JSON.stringify(imgs)}.map(load));
+        const labels = ${JSON.stringify(halves.map((h) => h[0]))};
+        const cap = 36, w = Math.max(...ims.map((i) => i.width)), h = ims.reduce((a, i) => a + i.height + cap, 0);
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+        let y = 0;
+        ims.forEach((im, k) => { g.fillStyle = '#222'; g.fillRect(0, y, w, cap); g.fillStyle = '#fff'; g.font = 'bold 22px sans-serif'; g.fillText('ink: ' + labels[k], 12, y + 26); g.drawImage(im, 0, y + cap); y += im.height + cap; });
+        return c.toDataURL('image/png');
+      })()`,
+    });
+    const file = join(outDir, 'ink-ab.png');
+    writeFileSync(file, Buffer.from(out.result.value.split(',')[1], 'base64'));
+    console.log(file);
+  }
   if (compact) {
     const lists = compactLists();
     await sheet(q(`&kinds=${KINDS[0].join(',')}`), '', true);
