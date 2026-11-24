@@ -307,6 +307,18 @@ export async function runGallery(target: HTMLElement) {
   const only = query.get('kinds')?.split(',').map(Number);
   const pick = query.get('panels') === 'streets' ? ['streets'] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
   const trueScale = query.has('scale');
+  // `&index=1`: a small number at each cell's corner (reading order); `window.__galleryOrder` lists what each stands for.
+  const indexed = query.has('index');
+  // `&family=battlemap|furniture|underground`: only that family's section (names in several families show in each otherwise).
+  const family = query.get('family');
+  const order: string[] = [];
+  (window as unknown as { __galleryOrder: string[] }).__galleryOrder = order;
+  const tag = (x: number, ty: number, n: number) => {
+    const t = new Text({ text: String(n), style: { ...LABEL, fontSize: 11, fill: 0xffffff } });
+    t.position.set(x + 2, ty + 1);
+    const bg = new Graphics().rect(x, ty, t.width + 4, t.height + 2).fill({ color: 0x000000, alpha: 0.75 });
+    root.addChild(bg, t);
+  };
   const sq = Number(query.get('sq')) || (trueScale ? 44 : 48);
   const ground = query.has('ground') ? parseInt(query.get('ground') || '948c80', 16) : null;
   if (query.has('turn')) {
@@ -335,7 +347,7 @@ export async function runGallery(target: HTMLElement) {
   }
   // (`&items=` naming battlemap kinds, as the `crates` set does, shows those kinds' frames too.)
   const pickKinds = pick?.length ? catalog.filter((info) => pick.includes(info.name)).map((info) => info.id) : [];
-  if (!pick || pickKinds.length) {
+  if ((!pick || pickKinds.length) && (!family || family === 'battlemap')) {
     head(`Battlemap objects (atlas, ${catalog.length} kinds × ${VARIANTS} variants; market stalls 16, four to a row)`);
     const atlas = buildAtlas(app.renderer, catalog);
     const scale = sq / PX;
@@ -386,6 +398,8 @@ export async function runGallery(target: HTMLElement) {
           s.position.set(cx, cy);
           root.addChild(s);
         }
+        order.push(`${info.id} ${info.name}`);
+        if (indexed) tag(x0, y, order.length);
         if (!query.has('nolabels')) {
           const t = new Text({ text: `${info.id} ${info.name.replace(/_/g, ' ')} (r ${info.radius})`, style: LABEL });
           t.position.set(x0, y + rows * cell + 2);
@@ -416,6 +430,7 @@ export async function runGallery(target: HTMLElement) {
     ['Underground props (item atlas)', 'u:gallery', 'dungeon', UNDER],
   ] as const) {
     if (only) break;
+    if (family && family !== (id.startsWith('u') ? 'underground' : 'furniture')) continue;
     const list = chosen(items as unknown as [string, number, number][], id.startsWith('u'));
     if (!list.length) continue;
     head(title);
@@ -432,6 +447,12 @@ export async function runGallery(target: HTMLElement) {
       const g = new Graphics();
       for (const [gx, gy] of discs) bodyDisc(g, 16 + gx * SQ, y + gy * SQ, SQ);
       root.addChild(g);
+    }
+    if (indexed) {
+      [...spots].sort((a, b) => a[2] - b[2] || a[1] - b[1]).forEach(([label, gx, gy]) => {
+        order.push(label);
+        tag(16 + gx * SQ, y + (gy - 0.95) * SQ, order.length);
+      });
     }
     for (const [label, gx, gy] of query.has('nolabels') ? [] : spots) {
       const t = new Text({ text: label, style: { ...LABEL, fill: id.startsWith('u') ? 0xf3ead8 : 0x2a2219, fontSize: 12 } });

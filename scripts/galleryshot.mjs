@@ -10,7 +10,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const [outDir = 'sheets', base = 'http://localhost:5173/'] = process.argv.slice(2);
+// `--compact` (before the out dir): sheets for an image reviewer, none over 1600 x 1800 px: battlemap, furniture and underground only,
+// one look per item, split until each fits, only the unlabelled version with a number in each cell's corner (`&index=1`) and a
+// `<sheet>.txt` beside each PNG listing `number id-or-name` (from the page's `window.__galleryOrder`).
+const compact = process.argv.includes('--compact');
+const [outDir = 'sheets', base = 'http://localhost:5173/'] = process.argv.slice(2).filter((a) => a !== '--compact');
 mkdirSync(outDir, { recursive: true });
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tables = readFileSync(join(root, 'app/src/render/furniture/tables.ts'), 'utf8');
@@ -32,7 +36,8 @@ const KINDS = [
 ];
 const PANELS = ['temple', 'terrain', 'dungeon4', 'civic', 'forecourt', 'townwalls', 'cemetery', 'flatroofs', 'harbour', 'falls', 'breakwaters', 'piers', 'lighthouse', 'fences', 'shadows', 'stairs', 'countryside'];
 const common = '&scale=1&looks=1';
-const q = (s) => `${base}?gallery=1${common}${s}`;
+const q = (s) => `${base}?gallery=1${compact ? '&scale=1&index=1&nolabels=1' : common}${s}`;
+const MAX_H = 1800;
 const jobs = [
   ...KINDS.map((ids, i) => ({ family: 'battlemap', n: i + 1, query: `&kinds=${ids.join(',')}` })),
   ...chunks(setOf('VARIED'), 20).map((names, i) => ({ family: 'furniture', n: i + 1, query: `&items=${names.join(',')}` })),
@@ -60,6 +65,12 @@ const chrome = spawn(chromePath, [
   ...(process.env.SHOT_DPR ? [`--force-device-scale-factor=${process.env.SHOT_DPR}`] : []),
   q(jobs[0].query),
 ]);
+// Compact mode: the lists to split (kinds are completed with the catalog's others once the page is up).
+const compactLists = () => [
+  ['battlemap', 'kinds', KINDS.flat(), 4],
+  ['furniture', 'items', setOf('VARIED'), 8],
+  ['underground', 'items', setOf('UNDER_DRAWN'), 8],
+];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ws;
 let nextId = 1;
@@ -104,7 +115,7 @@ try {
   await send('Page.enable');
 
   /** Load a gallery URL, wait for it to finish drawing, write the page's canvas as a PNG. */
-  const sheet = async (url, file) => {
+  const sheet = async (url, file, onlyMeasure = false) => {
     await send('Page.navigate', { url });
     let ready = false;
     for (let i = 0; i < 240 && !ready; i++) {
@@ -114,10 +125,29 @@ try {
     if (!ready) throw new Error('gallery not ready: ' + url);
     await sleep(500);
     const size = await evaluate(`(() => { const r = document.querySelector('canvas').getBoundingClientRect(); return [Math.ceil(r.width), Math.ceil(r.height)]; })()`);
+    if (onlyMeasure) return size;
     const [w, h] = [size[0], Math.min(size[1], 16000)];
     const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: w, height: h, scale: 1 } });
     writeFileSync(file, Buffer.from(shot.data, 'base64'));
     console.log(file, `${w}x${size[1]}`, `${Math.round(Buffer.from(shot.data, 'base64').length / 1024)} KB`);
+    return size;
+  };
+
+  /** Compact: shoot `list` as one sheet if it fits MAX_H, else split it in halves. Returns the next sheet number. */
+  const compactSheet = async (family, param, list, n) => {
+    const url = q(`&family=${family}&${param}=${list.join(',')}`);
+    const size = await sheet(url, '', true);
+    if (size[1] > MAX_H && list.length > 1) {
+      const half = Math.ceil(list.length / 2);
+      n = await compactSheet(family, param, list.slice(0, half), n);
+      return compactSheet(family, param, list.slice(half), n);
+    }
+    const file = join(outDir, `${family}-${n}.png`);
+    await sheet(url, file);
+    const order = (await evaluate('window.__galleryOrder')) ?? [];
+    writeFileSync(file.replace(/\.png$/, '.txt'), order.map((o, i) => `${i + 1} ${o}`).join('\n') + '\n');
+    if (size[1] > MAX_H || size[0] > 1600) console.error('OVER CAP', file, size.join('x'));
+    return n + 1;
   };
 
   const run = async (job) => {
@@ -131,6 +161,25 @@ try {
       }
     }
   };
+  if (compact) {
+    const lists = compactLists();
+    await sheet(q(`&kinds=${KINDS[0].join(',')}`), '', true);
+    const all = (await evaluate('window.__galleryKinds')) ?? [];
+    const listed = new Set(KINDS.flat());
+    lists[0][2] = [...KINDS.flat(), ...all.filter((id) => !listed.has(id))];
+    for (const [family, param, list, per] of lists) {
+      let n = 1;
+      for (const c of chunks(list, per)) {
+        try {
+          n = await compactSheet(family, param, c, n);
+        } catch (e) {
+          failed++;
+          console.error('FAILED', family, String(e.message ?? e));
+        }
+      }
+    }
+    jobs.length = 0;
+  }
   for (const job of jobs) {
     await run(job);
     // Once the catalog is known: the kinds no family above lists, in chunks of 20.
