@@ -644,7 +644,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     // market fits round them; a town's features go where the market leaves room.
                     let patterned = l.tier >= crate::t0::settle::Tier::City;
                     if patterned {
-                        plaza_features(p, &l.monuments, &[], &lanes, seed, true, pl.kind == K::Civic, &mut features);
+                        plaza_features(p, &l.monuments, &[], &lanes, seed, true, pl.kind == K::Civic, l.tier, &mut features);
                     }
                     let mut keep: Vec<([f64; 2], f64)> = features[ffirst..].iter().map(|f| (f.0, f.1)).collect();
                     let mut room = Room::new(p, &l, &lanes, &keep, seed ^ 0xd3a1);
@@ -662,7 +662,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         // (Clear of the market cross as of a monument.)
                         let mut stands = l.monuments.clone();
                         stands.extend(cross.map(|x| crate::town::geom::circle(x.0, cross_ft(), 8)));
-                        plaza_features(p, &stands, &stalls[first..], &lanes, seed, false, false, &mut features);
+                        plaza_features(p, &stands, &stalls[first..], &lanes, seed, false, false, l.tier, &mut features);
                     }
                     // Then round its edge: notices, troughs, lamps; a civic square's stocks.
                     room.taken.extend(features[ffirst..].iter().map(|f| (f.0, f.1 + 2.0)));
@@ -676,6 +676,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if l.culture % 5 == 4 {
             for f in features[steppe_from..].iter_mut().filter(|f| f.2 == PlazaFeature::Planter) {
                 f.2 = PlazaFeature::Dais;
+                // (The tier's own dais size, not the planter's.)
+                let (a, b) = plaza::across(l.tier, false);
+                f.1 = (0.25 * (a + b) - 2.0).max(0.5);
             }
         }
         // Parks: a lawn (a formal garden's mown), gravel paths and rounds on it; its pond, stream
@@ -2136,17 +2139,22 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         chunk.objects.push(Object { kind: p.kind, variant: p.variant, x: x as f32, y: y as f32, rot: p.rot, scale: p.scale, sprite: 0, turned: false });
     }
-    // Plaza features: drawn by the chunk holding the centre; a planter's tree stands in it.
+    // Plaza features: drawn by every chunk the round reaches (the same shape in each, a pure
+    // function of the global centre, so a fountain on a seam is whole); a planter's tree stands in
+    // the chunk holding the centre.
     for &(fc, r, kind, ang) in &features {
         let (x, y) = ((fc[0] - ox) / SQUARE_FT, (fc[1] - oy) / SQUARE_FT);
-        if x < 0.0 || y < 0.0 || x >= SQ as f64 || y >= SQ as f64 {
-            continue;
-        }
         // Drawn a little past the raised squares' centres, so the round covers them.
         let rv = (r + 2.0) / SQUARE_FT;
+        // (The steps reach a square or so past the rim.)
+        let reach = rv + 1.5;
+        if x < -reach || y < -reach || x >= SQ as f64 + reach || y >= SQ as f64 + reach {
+            continue;
+        }
         let rim = [(x + rv * libm::cos(ang)) as f32, (y + rv * libm::sin(ang)) as f32];
         chunk.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[x as f32, y as f32], rim] });
-        if kind == PlazaFeature::Planter {
+        let inside = x >= 0.0 && y >= 0.0 && x < SQ as f64 && y < SQ as f64;
+        if kind == PlazaFeature::Planter && inside {
             chunk.objects.push(Object { kind: Kind::TreeDeciduous, variant: (hash2(seed, x as i64, y as i64) >> 20) as u8 & 7, x: x as f32, y: y as f32, rot: 0.0, scale: 0.9, sprite: 0, turned: false });
         }
     }
@@ -2424,7 +2432,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     // (Not behind a waterfall's sheet.)
     let lodge: Vec<bool> = faces.iter().enumerate().map(|(k, &m)| cliff::keep_clear(m) && !on_sheet([ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT])).collect();
-    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &lodge, &park, &bailey);
+    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &lodge, &park, &bailey, tier_here.unwrap_or(crate::t0::settle::Tier::Town));
     // R5 towns (114): a steppe town's stone daises (its squares', a horse park's, the guarantee's
     // there) are banks of earth trodden by hooves (`PlazaFeature::Mound`).
     if steppe_any && steppe_all {

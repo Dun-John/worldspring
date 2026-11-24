@@ -582,6 +582,28 @@ pub(super) fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0:
 ///   of the lanes, its shrubs and plants, sometimes stocks;
 /// - a temple's close: a standing cross before the temple, a hedge round its churchyard behind it
 ///   and headstones in rows square to it, the biome's trees round the close.
+/// A fountain's or a dais's drawn width across (ft) by the settlement's tier: a well-head in a
+/// village, a basin in a town, grander in a city. The drawn round is the radius plus 2 ft.
+pub(super) fn across(tier: crate::t0::settle::Tier, fountain: bool) -> (f64, f64) {
+    use crate::t0::settle::Tier as T;
+    match (tier, fountain) {
+        (T::Village, true) => (3.0, 4.0),
+        (T::Town, true) => (6.0, 10.0),
+        (T::City, true) => (10.0, 12.0),
+        (T::Metropolis, true) => (12.0, 14.0),
+        (T::Village, false) => (5.0, 5.0),
+        (T::Town, false) => (6.0, 8.0),
+        (T::City, false) => (8.0, 10.0),
+        (T::Metropolis, false) => (10.0, 12.0),
+    }
+}
+
+/// A radius (ft) from the band of `across`.
+fn radius_for(rng: &mut Pcg32, tier: crate::t0::settle::Tier, fountain: bool) -> f64 {
+    let (a, b) = across(tier, fountain);
+    (0.5 * rng.range(a, b + 1e-6) - 2.0).max(0.5)
+}
+
 pub(super) fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes: &[([f64; 2], [f64; 2], f64)], seed: u64, features: &mut Vec<([f64; 2], f64, PlazaFeature, f64)>, out: &mut Vec<([f64; 2], f32, Kind, u8)>) {
     use crate::town::PlazaKind as K;
     use crate::town::geom::{add, area, centroid, contains, dist, len, lerp, mul, sub};
@@ -609,7 +631,7 @@ pub(super) fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0:
         if !room.free(c, 7.0, false) {
             return false;
         }
-        features.push((c, 6.0, PlazaFeature::Dais, rng.range(0.0, std::f64::consts::TAU)));
+        features.push((c, 2.5, PlazaFeature::Dais, rng.range(0.0, std::f64::consts::TAU)));
         room.taken.push((c, 9.0));
         out.push((c, 0.0, Kind::Well, rng.below(4) as u8));
         true
@@ -691,7 +713,7 @@ pub(super) fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0:
             cover(&mut room, &mut rng, out, 40);
         }
         K::FountainSquare => {
-            let fr = (0.3 * reach).clamp(7.0, 12.0);
+            let fr = radius_for(&mut rng, l.tier, true);
             if room.free(c, fr + 2.0, false) {
                 features.push((c, fr, PlazaFeature::Fountain, rng.range(0.0, std::f64::consts::TAU)));
                 room.taken.push((c, fr + 4.0));
@@ -984,6 +1006,7 @@ pub(super) fn plaza_features(
     seed: u64,
     patterned: bool,
     civic: bool,
+    tier: crate::t0::settle::Tier,
     out: &mut Vec<([f64; 2], f64, PlazaFeature, f64)>,
 ) {
     use crate::town::geom::{add, area, centroid, contains, dist, dot, main_axis, mul, seg_dist, sub};
@@ -1018,13 +1041,13 @@ pub(super) fn plaza_features(
             let p = [rng.range(x0, x1), rng.range(y0, y1)];
             let roll = rng.next_f64();
             let (kind, r) = if roll < 0.35 {
-                (PlazaFeature::Fountain, rng.range(9.0, 13.0))
+                (PlazaFeature::Fountain, radius_for(&mut rng, tier, true))
             } else if roll < 0.65 {
                 (PlazaFeature::Planter, rng.range(6.0, 9.0))
             } else if roll < 0.85 {
                 (PlazaFeature::Cross, rng.range(5.0, 7.0))
             } else {
-                (PlazaFeature::Dais, rng.range(7.0, 10.0))
+                (PlazaFeature::Dais, radius_for(&mut rng, tier, false))
             };
             let ang = rng.range(0.0, TAU);
             if fits(&out[..], p, r) {
@@ -1063,7 +1086,7 @@ pub(super) fn plaza_features(
         ds.sort_by(|a, b| (a - reach * frac).abs().total_cmp(&(b - reach * frac).abs()));
         ds
     };
-    let (r_tree, r_fountain, r_cross, r_dais) = (rng.range(6.0, 8.0), rng.range(9.0, 12.0), rng.range(5.0, 6.5), rng.range(7.0, 9.0));
+    let (r_tree, r_fountain, r_cross, r_dais) = (rng.range(6.0, 8.0), radius_for(&mut rng, tier, true), rng.range(5.0, 6.5), radius_for(&mut rng, tier, false));
     let minor = if rng.next_f64() < 0.6 { (PlazaFeature::Cross, r_cross) } else { (PlazaFeature::Dais, r_dais) };
     let style = rng.below(3);
     // (A civic square has its cross for a landmark (`main_cross`) and trees by its edges, no more.)

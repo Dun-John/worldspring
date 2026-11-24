@@ -419,7 +419,7 @@ impl Windows {
 /// by its own cell (global), and squares marked (on a plateau) get no knoll or built feature.
 /// `park`: the parks' squares (1 a common's, 2 a formal garden's; empty: none).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool], lodge: &[bool], park: &[u8], bailey: &[u8]) {
+pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool], lodge: &[bool], park: &[u8], bailey: &[u8], tier: crate::t0::settle::Tier) {
     let mut chunk_rng = Pcg32::new(hash3(seed, gsx, gsy, 0xe4f), 9);
     let keyed = !shaped.is_empty();
     let cell_rng = |phase: i64, x: i64, y: i64| Pcg32::new(hash3(seed, x, y, 0xe4f ^ (phase << 16)), 9);
@@ -480,7 +480,7 @@ pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: 
             } else {
                 &mut chunk_rng
             };
-            raise(c, &cells, rng, gsx, gsy, sea, shaped, park, bailey, &mut room);
+            raise(c, &cells, rng, gsx, gsy, sea, shaped, park, bailey, &mut room, tier);
         }
     }
     // Plaza paving answers to the guarantee itself rather than cell by cell: every 32x32 window
@@ -514,7 +514,7 @@ pub(super) fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: 
         } else {
             &mut chunk_rng
         };
-        raised += raise(c, &cells, rng, gsx, gsy, sea, shaped, park, bailey, &mut room) as usize;
+        raised += raise(c, &cells, rng, gsx, gsy, sea, shaped, park, bailey, &mut room, tier) as usize;
     }
 
 
@@ -753,8 +753,8 @@ fn place_in(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, kind_of: &dyn Fn(&C
 /// A horse park's squares in the parks' marks (`enforce`'s `park`; R5 towns, 114).
 pub(super) const HORSE_PARK_MARK: u8 = 32;
 
-fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room: &mut Option<Vec<u8>>) -> bool {
-    let raised = raise_on(c, cells, rng, gsx, gsy, sea, shaped, park, bailey, room);
+fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room: &mut Option<Vec<u8>>, tier: crate::t0::settle::Tier) -> bool {
+    let raised = raise_on(c, cells, rng, gsx, gsy, sea, shaped, park, bailey, room, tier);
     if raised {
         *room = None;
     }
@@ -762,7 +762,7 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
 }
 
 #[allow(clippy::too_many_arguments)]
-fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room_cache: &mut Option<Vec<u8>>) -> bool {
+fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room_cache: &mut Option<Vec<u8>>, tier: crate::t0::settle::Tier) -> bool {
     // (Never on a motte: it is its own rise. `bailey` bit 4.)
     let interior = |k: usize| {
         let (x, y) = (k % SQ, k / SQ);
@@ -811,7 +811,7 @@ fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64,
                 [PlazaFeature::Dais, PlazaFeature::Fountain, PlazaFeature::Planter, PlazaFeature::Cross][rng.below(4) as usize]
             }
         };
-        if built_feature(c, &town, rng, sea, &free, &kind) {
+        if built_feature(c, &town, rng, sea, tier, &free, &kind) {
             return true;
         }
     }
@@ -843,7 +843,7 @@ fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64,
             if lawns.is_empty() {
                 return false;
             }
-            return (!garden(spot) && outcrop(c, &lawns, rng, sea, &free)) || built_feature(c, &lawns, rng, sea, &free, &|_, _, _| PlazaFeature::Planter);
+            return (!garden(spot) && outcrop(c, &lawns, rng, sea, &free)) || built_feature(c, &lawns, rng, sea, tier, &free, &|_, _, _| PlazaFeature::Planter);
         }
         if most < 2 {
             return false;
@@ -911,8 +911,8 @@ fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64,
 
 /// A round built feature raised a tier (`kind` by the square and its radius in squares) on one of
 /// `cands`, the largest round that fits (2.3, 1.5, 1 or half a square) on `free` squares of the first
-/// one's tier clear of what stands there; a planter with a tree in it. Whether one was.
-fn built_feature(c: &mut Chunk, cands: &[usize], rng: &mut Pcg32, sea: f64, free: &dyn Fn(&Chunk, usize) -> bool, kind: &dyn Fn(usize, f64, &mut Pcg32) -> PlazaFeature) -> bool {
+/// one's tier clear of what stands there (a fountain or a dais within `tier`'s band); a planter with a tree in it. Whether one was.
+fn built_feature(c: &mut Chunk, cands: &[usize], rng: &mut Pcg32, sea: f64, tier: crate::t0::settle::Tier, free: &dyn Fn(&Chunk, usize) -> bool, kind: &dyn Fn(usize, f64, &mut Pcg32) -> PlazaFeature) -> bool {
     let mut taken = vec![false; SQ * SQ];
     for o in &c.objects {
         let r = info(o.kind as u16).radius * o.scale + 0.5;
@@ -949,12 +949,27 @@ fn built_feature(c: &mut Chunk, cands: &[usize], rng: &mut Pcg32, sea: f64, free
     let Some((k, r, offs)) = placed else { return false };
     let top = ((base as f64 + 1.2) * TIER_FT + sea) as f32;
     let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
-    let kind = kind(k, r, rng);
+    let mut kind = kind(k, r, rng);
+    // (A fountain or a dais keeps to its tier's band, by the plaza's: drawn across no more than its
+    // band's top, so the round must cover the raised squares' centres within it, else a planter.)
+    let cap = match kind {
+        PlazaFeature::Fountain => Some(plaza::across(tier, true).1),
+        PlazaFeature::Dais => Some(plaza::across(tier, false).1),
+        _ => None,
+    };
+    let mut rv = r as f32 + 0.45;
+    if let Some(cap) = cap {
+        let max = (cap / (2.0 * SQUARE_FT)) as f32;
+        if max >= r as f32 + 0.2 {
+            rv = rv.min(max);
+        } else {
+            kind = PlazaFeature::Planter;
+        }
+    }
     for &(dx, dy) in &offs {
         c.height[(y + dy) as usize * SQ + (x + dx) as usize] = top;
     }
     let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-    let rv = r as f32 + 0.45;
     let ang = rng.range(0.0, std::f64::consts::TAU);
     c.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[cx, cy], [cx + rv * libm::cos(ang) as f32, cy + rv * libm::sin(ang) as f32]] });
     if kind == PlazaFeature::Planter {

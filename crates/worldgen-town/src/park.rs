@@ -508,7 +508,9 @@ fn formal(p: &Park, biome: Biome, city: bool, rng: &mut Pcg32) -> ParkLayout {
     // one), in a gravel round.
     let (rb, rr) = if o.short >= 150.0 {
         let rb = (0.045 * o.short).clamp(9.0, 15.0);
-        out.features.push((c, rb, PlazaFeature::Fountain));
+        // (The basin keeps to the plaza's band: 14 ft across in a city, 10 in a town; the gravel round
+        // and the cleared ground keep the garden's size, the basin in the middle of it.)
+        out.features.push((c, rb.min(if city { 5.0 } else { 3.0 }), PlazaFeature::Fountain));
         (rb, rb + 9.0)
     } else {
         out.props.push((c, 0.0, Kind::Fountain, [0, 1, 2][rng.below(3) as usize], 1.3));
@@ -940,10 +942,10 @@ fn parterre(q: &[P], bosquet: bool, look: Looks, rng: &mut Pcg32, clear: &mut Cl
     if room {
         match (bosquet, look.mid) {
             (false, 0) => out.features.push((qc, 5.5, PlazaFeature::Planter)),
-            (_, 1) => out.features.push((qc, 6.5, PlazaFeature::Fountain)),
+            (_, 1) => out.features.push((qc, 3.0, PlazaFeature::Fountain)),
             (true, 2) => out.props.push((qc, along(u), Kind::Pond, 2, 1.0)),
             _ => {
-                out.features.push((qc, 4.5, PlazaFeature::Dais));
+                out.features.push((qc, 3.0, PlazaFeature::Dais));
                 out.props.push((qc, 0.0, Kind::GardenStatue, look.statue, 1.0));
             }
         }
