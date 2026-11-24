@@ -34,6 +34,7 @@ import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { SQUARE_FT } from './scale';
 import { bridgeCells, bridgeKey, drawDais, drawStructures } from './battlemap/structures';
+import { NATURAL, stoneTone, type PlazaGround } from './battlemap/plaza';
 import { drawBattlements } from './battlemap/keeps';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
 import type { Camera } from './camera';
@@ -173,26 +174,32 @@ const SURFACES = [
   'gravel path',
   'tundra grass',
 ];
-/** Cobbles' tints by culture (`ground.frag` `uStone`, times the cobble grey; `Layout::culture`):
- * north cool blue-grey granite, west warm grey-buff, south warm honey limestone, dry pale ochre
- * sandstone, steppe khaki fieldstone. Each within about 8% of the grey's value, saturation <= 0.35. */
-const STONE_TONES = [
-  [0.96, 0.97, 1.04],
-  [1.01, 1.0, 0.97],
-  [1.07, 1.04, 0.89],
-  [1.15, 1.08, 0.95],
-  [0.99, 1.0, 0.89],
-];
-/** A chunk's `stone` word's tint: its culture's, varied a little by city; none (roads out of
- * town) the plain grey. */
-function stoneTone(stone: number): Float32Array {
-  if (!stone) return new Float32Array([1, 1, 1]);
-  const t = STONE_TONES[((stone >>> 24) + 4) % 5];
-  const h = Math.imul(stone & 0xffffff, 0x9e3779b1) >>> 0;
-  // (Up to 3% in value and 2% in warmth either way.)
-  const v = 1 + 0.06 * ((h >>> 24) / 255 - 0.5);
-  const warm = 0.04 * (((h >>> 16) & 255) / 255 - 0.5);
-  return new Float32Array([t[0] * v * (1 + warm), t[1] * v, t[2] * v * (1 - warm)]);
+/**
+ * What a dais or fountain (`s`, shape kind 5) stands on: the town's stone tone, the surface at its foot (the
+ * commonest round it just outside its rim) and the land's own ground about the square (the commonest natural
+ * surface in rings out to 20 squares; -1 if the chunk is all paving there).
+ */
+function plazaGround(c: PreparedChunk, s: Shape, cx: number, cy: number): PlazaGround {
+  const [x, y] = [s.pts[0] / PX, s.pts[1] / PX];
+  const r = Math.hypot(s.pts[2] - s.pts[0], s.pts[3] - s.pts[1]) / PX;
+  const at = (i: number, j: number) => (i < 0 || j < 0 || i >= SQ || j >= SQ ? -1 : c.surface[j * SQ + i]);
+  const commonest = (d0: number, d1: number, ok: (v: number) => boolean, share = 0) => {
+    const n = new Map<number, number>();
+    let all = 0;
+    for (let d = d0; d <= d1; d += 2)
+      for (let k = 0; k < 24; k++) {
+        const t = (k / 24) * Math.PI * 2;
+        const v = at(Math.floor(x + Math.cos(t) * d), Math.floor(y + Math.sin(t) * d));
+        if (v >= 0) all++;
+        if (v >= 0 && ok(v)) n.set(v, (n.get(v) ?? 0) + 1);
+      }
+    let [best, most] = [-1, 0];
+    for (const [v, m] of n) if (m > most) [best, most] = [v, m];
+    // (A share of every sampled square, not just the natural ones: lane mud and gardens don't make a biome.)
+    return most > 0 && most >= share * all ? best : -1;
+  };
+  const foot = commonest(r + 0.7, r + 0.7, (v) => v !== 17);
+  return { tone: stoneTone(c.stone), foot: foot >= 0 ? foot : 14, nature: commonest(r + 2, r + 20, (v) => NATURAL.has(v), 0.55), wx: cx * SQ * PX, wy: cy * SQ * PX };
 }
 
 /** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`; `battlemap::MAX_STAIR_AXES`). */
@@ -1003,7 +1010,7 @@ export class BattlemapLayer {
     // Daises and a court's gravel walks sit on the ground, under every prop.
     const daisG = new Graphics();
     for (const s of c.shapes) {
-      if (s.kind === 5) drawDais(daisG, s);
+      if (s.kind === 5) drawDais(daisG, s, plazaGround(c, s, cx, cy));
       else if (s.kind === 13) drawGravelWalk(daisG, s);
       // R5 M20: a breakwater's armour, on the ground and the water by it.
       else if (s.kind === BREAKWATER) drawArmour(daisG, s);

@@ -47,6 +47,7 @@ const jobs = [
   ...chunks(setOf('UNDER_DRAWN'), 20).map((names, i) => ({ family: 'underground', n: i + 1, query: `&items=${names.join(',')}` })),
   ...PANELS.map((p) => ({ family: p, n: 1, query: `&items=${p}` })),
   { family: 'streets', n: 1, query: '&panels=streets' },
+  { family: 'plaza', n: 1, query: '&panels=plaza' },
 ].filter((j) => !only || only.includes(j.family));
 if (inkSheet) jobs.length = 0;
 

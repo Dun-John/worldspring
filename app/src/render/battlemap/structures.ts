@@ -6,6 +6,7 @@ import { SQUARE_FT } from '../scale';
 import { drawBounds, drawSails, isBound, SAILS } from '../countryside';
 import { drawCaveMouth, drawThemedEntrance } from '../entrances';
 import { drawDrain, drawManhole } from './grates';
+import { drawPlazaDais, drawPlazaFountain, type PlazaGround } from './plaza';
 import { drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawWalls, drawWallTower, GATE_DEPTH } from '../walls';
 
 const STONE = 0x9c968b;
@@ -82,15 +83,18 @@ export function drawStructures(shapes: Shape[], ox = 0, oy = 0, gates = shapes.f
 /**
  * A round feature a tier above the paving (`size`: 0 dais, 1 fountain, 2 planter, 3 market
  * cross; `pts`: the centre, then a point on the rim where its steps come down): a drop shadow,
- * a moulded stone round, and steps curving down one side.
+ * a moulded stone round, and steps curving down one side. A dais and a fountain are drawn to the ground they
+ * stand on (`ground`: the town's stone tone and the surfaces about; `plaza.ts`), plain grey on cobbles without it.
  */
-export function drawDais(g: Graphics, s: Shape) {
+export function drawDais(g: Graphics, s: Shape, ground: PlazaGround = { tone: [1, 1, 1], foot: 14, nature: -1, wx: 0, wy: 0 }) {
   const [cx, cy] = [s.pts[0], s.pts[1]];
   const [dx, dy] = [s.pts[2] - cx, s.pts[3] - cy];
   const r = Math.hypot(dx, dy) || PX;
   const a = Math.atan2(dy, dx);
   const kind = Math.round(s.size / PX);
   if (kind === 4) return drawMound(g, cx, cy, r, a);
+  if (kind === 0) return drawPlazaDais(g, cx, cy, r, a, ground);
+  if (kind === 1) return drawPlazaFountain(g, cx, cy, r, a, ground);
   // Steps: three curved treads out from the rim.
   for (let k = 2; k >= 0; k--) {
     const ro = r + PX * 0.28 * (k + 1);

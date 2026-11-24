@@ -28,7 +28,8 @@
 // `&scale=1` draws every battlemap kind at exactly `&sq=` px a square (default 44, never shrunk to fit a cell) on a faint
 // 5-ft grid with a 2-ft body disc beside it, and a body disc on a free floor square of each furniture and prop room.
 // `&panels=streets` (alone) shows the street's drain grate and sewer manhole at true size with the cart, barrels,
-// crates, lamp post and a body disc, on cobbles and on plain ground. `scripts/galleryshot.mjs` screenshots the lot.
+// crates, lamp post and a body disc, on cobbles and on plain ground. `&panels=plaza` (alone; `&sq=`, default 32) shows a
+// square's fountain and dais at three radii on six grounds. `scripts/galleryshot.mjs` screenshots the lot.
 // The page sets `window.__galleryReady` when it has drawn, and `window.__galleryKinds` (the catalog's ids).
 import { Application, Container, Geometry, GlProgram, Graphics, Mesh, Shader, Sprite, Text, UniformGroup, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
@@ -42,7 +43,8 @@ import { buildAtlas } from '../render/atlas/build';
 import { loadSprites } from '../render/spriteCode';
 import { drawnTurned, dropShadowOf, isStanding, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, topGrid } from '../render/walls';
-import { drawStructures } from '../render/battlemap/structures';
+import { drawDais, drawStructures } from '../render/battlemap/structures';
+import { groundColour, STONE_TONES, type PlazaGround } from '../render/battlemap/plaza';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
@@ -306,7 +308,7 @@ export async function runGallery(target: HTMLElement) {
   const query = new URLSearchParams(location.search);
   const only = query.get('kinds')?.split(',').map(Number);
   const panel = query.get('panels');
-  const pick = panel === 'streets' ? [panel] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
+  const pick = panel === 'streets' || panel === 'plaza' ? [panel] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
   const trueScale = query.has('scale');
   // `&index=1`: a small number at each cell's corner (reading order); `window.__galleryOrder` lists what each stands for.
   const indexed = query.has('index');
@@ -606,6 +608,12 @@ export async function runGallery(target: HTMLElement) {
     y = streets(app, catalog, root, y, width, query.has('nolabels'), sq);
   }
 
+  // A square's fountain and dais on six grounds (`&panels=plaza`).
+  if (pick?.includes('plaza')) {
+    head('Plaza: fountain 3 / 8 / 14 ft and dais 5 / 9 / 13 ft (radius) on six grounds, the 5-ft grid and a 2-ft body disc');
+    y = plaza(root, y, query.has('nolabels'), Number(query.get('sq')) || 32);
+  }
+
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
@@ -693,6 +701,89 @@ function streets(app: Application, catalog: KindInfo[], root: Container, y0: num
   }
   return y;
 }
+
+/** `&panels=plaza`: rows of grounds (granite flags, honey sandstone, grass, desert sand, snow, jungle mud), each with the
+ * battlemap's own `drawDais` fountain and dais at a small, middle and large radius, the town's stone tone and the
+ * surfaces as `BattlemapLayer` would pass them, on the 5-ft grid with a body disc, at `sq` px a square. */
+function plaza(root: Container, y0: number, nolabels: boolean, sq: number): number {
+  const grounds: { label: string; foot: number; nature: number; tone: number[] }[] = [
+    { label: 'granite flags (north)', foot: 14, nature: 0, tone: STONE_TONES[0] },
+    { label: 'honey sandstone (south)', foot: 14, nature: 2, tone: STONE_TONES[2] },
+    { label: 'grass (west)', foot: 0, nature: 0, tone: STONE_TONES[1] },
+    { label: 'desert sand (dry)', foot: 3, nature: 3, tone: STONE_TONES[3] },
+    { label: 'snow (north)', foot: 4, nature: 4, tone: STONE_TONES[0] },
+    { label: 'jungle mud (south)', foot: 6, nature: 1, tone: STONE_TONES[2] },
+  ];
+  // (kind, radius in feet)
+  const cells: [number, number][] = [[1, 3], [1, 8], [1, 14], [0, 5], [0, 9], [0, 13]];
+  const ws = cells.map(([, ft]) => Math.ceil(2 * (ft / 5 + 1.1)));
+  const hSq = Math.max(...ws);
+  const k = sq / PX;
+  let y = y0;
+  grounds.forEach((gd, row) => {
+    const x0 = 16;
+    const w = ws.reduce((a, b) => a + b, 0) * sq;
+    const h = hSq * sq;
+    const base = groundColour(gd.foot, gd.tone);
+    const g = new Graphics().rect(x0, y, w, h).fill(base);
+    if (gd.foot === 14) {
+      // Flags in staggered courses (a fixed pattern).
+      let n = 11 + row;
+      for (let yy = y, r = 0; yy < y + h; yy += sq * 0.5, r++)
+        for (let xx = x0 - (r % 2) * sq * 0.35; xx < x0 + w; xx += sq * 0.7) {
+          n = (n * 1103515245 + 12345) & 0x7fffffff;
+          const t = 0.94 + ((n >> 8) % 7) * 0.02;
+          const [ax, bx] = [Math.max(x0, xx), Math.min(x0 + w, xx + sq * 0.7)];
+          g.rect(ax + 1, yy + 1, bx - ax - 2, Math.min(sq * 0.5, y + h - yy) - 2).fill(mulHex(base, t));
+        }
+    } else {
+      let n = 5 + row;
+      for (let i = 0; i < (w * h) / (sq * sq) * 0.8; i++) {
+        n = (n * 1103515245 + 12345) & 0x7fffffff;
+        const px = x0 + ((n >> 4) % 10000) / 10000 * w;
+        n = (n * 1103515245 + 12345) & 0x7fffffff;
+        const py = y + ((n >> 4) % 10000) / 10000 * h;
+        g.circle(px, py, sq * 0.08).fill({ color: mulHex(base, (n & 1) ? 0.9 : 1.08), alpha: 0.6 });
+      }
+    }
+    fiveFootGrid(g, x0 + w / 2, y + h / 2, w / 2, h / 2, sq);
+    root.addChild(g);
+    let x = x0;
+    cells.forEach(([kind, ft], col) => {
+      const cw = ws[col] * sq;
+      const [cx, cy] = [x + cw / 2, y + h / 2];
+      const a = [Math.PI / 2, Math.PI * 0.25, Math.PI, Math.PI * 1.5, 0, Math.PI * 0.75][(col + row) % 6];
+      const rp = (ft / 5) * PX;
+      const ground: PlazaGround = { tone: gd.tone, foot: gd.foot, nature: gd.nature, wx: (col * 997 + row * 31) * PX, wy: (row * 1301 + col * 17) * PX };
+      const f = new Graphics();
+      drawDais(f, { kind: 5, size: kind * PX, pts: [0, 0, Math.cos(a) * rp, Math.sin(a) * rp] } as Shape, ground);
+      f.scale.set(k);
+      f.position.set(cx, cy);
+      root.addChild(f);
+      const d = new Graphics();
+      bodyDisc(d, x + sq * 0.5, y + h - sq * 0.5, sq);
+      root.addChild(d);
+      if (!nolabels) {
+        const t = new Text({ text: `${kind ? 'fountain' : 'dais'} ${ft} ft`, style: { ...LABEL, fontSize: 11 } });
+        t.position.set(x + 3, y + 2);
+        root.addChild(t);
+        if (!col) {
+          const l = new Text({ text: gd.label, style: { ...LABEL, fontSize: 11 } });
+          l.position.set(x + 3, y + 15);
+          root.addChild(l);
+        }
+      }
+      x += cw;
+    });
+    y += h + 14;
+  });
+  return y + 30;
+}
+
+const mulHex = (c: number, f: number) => {
+  const ch = (s: number) => Math.max(0, Math.min(255, Math.round(((c >> s) & 255) * f)));
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+};
 
 /** The fence kinds laid in pieces and the gate (until the catalog has them: `town::fence::KINDS`, R6), with a
  * radius in squares and a height in feet; the gate has three looks. */
