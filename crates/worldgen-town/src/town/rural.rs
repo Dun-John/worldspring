@@ -475,17 +475,17 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     };
     // (Nothing runs over a village's green.)
     let greens: Vec<&Vec<P>> = l.plazas.iter().filter(|p| p.kind == super::PlazaKind::Green && boxes_meet(grow(bbox(&p.pts), 4.0), near)).map(|p| &p.pts).collect();
-    let piece_runs = |a: P, b: P, kind: RunKind, keep: &dyn Fn(P) -> bool, out: &mut Battle| {
+    let piece_runs = |a: P, b: P, kind: RunKind, keep: &dyn Fn(P) -> bool, tight: bool, out: &mut Battle| {
         if !boxes_meet(bbox(&[a, b]), near) {
             return;
         }
-        let m = (dist(a, b) / 4.0).ceil().max(1.0) as usize;
+        let m = (dist(a, b) / if tight { 1.0 } else { 4.0 }).ceil().max(1.0) as usize;
         let mut from: Option<usize> = None;
         for j in 0..=m {
             let mid = lerp(a, b, (j as f64 + 0.5) / m as f64);
             let ok = j < m && boxes_meet([mid[0], mid[1], mid[0], mid[1]], mids) && keep(mid) && !blocked(mid) && !greens.iter().any(|g| contains(g, mid)) && {
                 let (p, q) = (lerp(a, b, j as f64 / m as f64), lerp(a, b, (j + 1) as f64 / m as f64));
-                !on_way(p, q) && !by_roof(p, q)
+                !on_way(p, q) && (tight || !by_roof(p, q))
             };
             match (ok, from) {
                 (true, None) => from = Some(j),
@@ -504,19 +504,22 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     // (Roadmap 6 R6: a run as changed by hand: gone, another kind, its gates cut out, their leaves
     // in the chunk holding them.)
     let emit = |tag: u8, a: P, b: P, kind: RunKind, keep: &dyn Fn(P) -> bool, out: &mut Battle| {
+        // (A graveyard lot's runs are cut by the roofs round it already, `cemetery::lot_bounds`: laid
+        // in feet, not 4 ft pieces, so they meet a house's wall.)
+        let tight = tag == super::fence::LOT;
         let Some(ch) = cut.and_then(|c| c.run(tag, a, b)) else {
-            return piece_runs(a, b, kind, keep, out);
+            return piece_runs(a, b, kind, keep, tight, out);
         };
         if ch.gone {
             return;
         }
         let kind = ch.kind.map_or(kind, |k| super::fence::run_kind(k, kind));
         if ch.gates.is_empty() {
-            return piece_runs(a, b, kind, keep, out);
+            return piece_runs(a, b, kind, keep, tight, out);
         }
         let (s, e) = super::fence::canonical(a, b);
         for (p, q) in super::fence::subtract(s, e, &ch.gates, &[]) {
-            piece_runs(p, q, kind, keep, out);
+            piece_runs(p, q, kind, keep, tight, out);
         }
         for (p, turn) in super::fence::gate_points(s, e, &ch.gates) {
             if inside(p) && !blocked(p) {
@@ -600,6 +603,14 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
                 _ => RunKind::DryWall,
             };
             emit(super::fence::CEMETERY, a, b, kind, &|_| true, out);
+        }
+    }
+    // (Roadmap 7, 193) A town graveyard lot's low wall or hedge on its outline, a gap at its gate on
+    // the street (`cemetery::lot_bounds`); where a house stands beside it, the house's wall closes it.
+    if l.buildings.iter().any(|b| b.structure == Structure::Open && boxes_meet(bbox(&b.poly), near)) {
+        for (a, b, bound) in super::cemetery::lot_bounds(l, near) {
+            let kind = if bound == super::cemetery::Bound::Hedge { RunKind::Hedge } else { RunKind::DryWall };
+            emit(super::fence::LOT, a, b, kind, &|_| true, out);
         }
     }
     // R5 towns (114): a horse park's corrals, post and rail, a gap at each gate (`horses::bounds`).

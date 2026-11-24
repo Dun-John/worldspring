@@ -742,7 +742,7 @@ pub fn plan(pk: &Park) -> Option<Plan> {
                             out.props.push((p, 0.0, Kind::Cairn, rng.below(4) as u8, 1.0));
                             room.discs.push((p, 2.0));
                         } else {
-                            out.props.push((p, 0.0, Kind::Headstone, rng.below(4) as u8, 1.0));
+                            out.props.push((p, libm::atan2(t[1], t[0]) as f32, Kind::Headstone, rng.below(4) as u8, 1.0));
                         }
                     }
                     k += 1;
@@ -962,4 +962,250 @@ pub(super) fn raise(site: &Site, l: &mut Layout, generated: Option<&Layout>) {
             l.buildings.insert(at, b);
         }
     }
+}
+
+// Roadmap 7 (193): a town's graveyard lot (a building "graveyard", open to the sky) laid to its plot.
+
+/// How far a graveyard lot's own wall stands in from its outline (ft): 2.5 ft and more off a street's
+/// edge (as `rural`'s runs keep off a way), within `rural`'s 3 ft of a house beside it, so the house's
+/// own wall closes the lot there.
+pub const LOT_WALL_IN: f64 = 2.75;
+/// How far in its wall stands on its way in's side (ft): 5 ft and more off a street's paving at the
+/// lot's edge, so the side walls run on to meet it (`rural` leaves a gap where a run comes within 5 ft
+/// of a way across it).
+const LOT_FRONT_IN: f64 = 6.0;
+/// A lot's walk from its gate to the stair (ft wide), and the gate's gap in its wall.
+const LOT_WALK_W: f64 = 5.0;
+const LOT_GAP: f64 = 7.0;
+
+/// A graveyard lot laid out (world ft): its frame from the way in (the longest side facing a street,
+/// else the longest: `along` it, `inward` from it), the wall's line (`LOT_WALL_IN` in from the outline,
+/// `LOT_FRONT_IN` on the way in's side)
+/// and its gate (on the line, `LOT_GAP` wide), the walk from the lot's edge to the catacomb stair's
+/// mouth, the stair (its mouth at `stair` facing the gate, running `inward`; under a mausoleum 3
+/// squares wide and 4 deep when one fits inside the wall, else the plain stair; `fits` false when not
+/// even that does), and the headstones in rows along the way in's side, 10 ft apart, 15 ft between
+/// the rows, the walk and the stair left clear. `own`: the lot's own wall and rows (not a temple
+/// close's churchyard nor a village's, which are laid with their close or village).
+#[derive(Clone, Debug)]
+pub struct Lot {
+    pub along: P,
+    pub inward: P,
+    pub gate: P,
+    pub wall: Vec<P>,
+    pub bound: Bound,
+    pub walk: (P, P, f64),
+    pub stair: P,
+    pub mausoleum: bool,
+    pub fits: bool,
+    pub stones: Vec<(P, u8)>,
+    pub own: bool,
+    /// Whether the way in faces a street (else the lot's longest side).
+    pub street: bool,
+}
+
+/// The stair's footprint in its frame (ft from its mouth: back, front, half across), with a foot
+/// round it; and how far its door's slabs reach out in front of the mouth.
+fn stair_box(mausoleum: bool) -> (f64, f64, f64, f64) {
+    let sq = crate::battle::SQUARE_FT;
+    if mausoleum { (-1.5 * sq - 1.0, 2.5 * sq + 1.0, 1.5 * sq + 1.0, 2.5 * sq) } else { (-0.5 * sq - 1.0, 1.6 * sq + 1.0, 0.6 * sq + 1.0, 1.5 * sq) }
+}
+
+/// A graveyard lot's plan (None: not an open lot, or too small for a wall's line). A pure function of
+/// the lot and the layout's blocks and buildings round it (the same from every chunk).
+pub fn lot(l: &Layout, b: &Building) -> Option<Lot> {
+    let pts = &b.poly;
+    let m = pts.len();
+    if b.structure != Structure::Open || m < 3 {
+        return None;
+    }
+    let c = centroid(pts);
+    if !contains(pts, c) {
+        return None;
+    }
+    let ccw = area(pts) > 0.0;
+    let el = |e: usize| dist(pts[e], pts[(e + 1) % m]);
+    let outward = |e: usize| {
+        let d = mul(sub(pts[(e + 1) % m], pts[e]), 1.0 / el(e).max(1e-9));
+        if ccw { [d[1], -d[0]] } else { [-d[1], d[0]] }
+    };
+    // A side faces a street where the ground 4 ft out is on a street drawn as a road or a square, or
+    // in no block and under no building.
+    let bb = grow(bbox(pts), 10.0);
+    let blds: Vec<&Vec<P>> = l.buildings.iter().filter(|o| o.id != b.id && boxes_meet(bbox(&o.poly), bb)).map(|o| &o.poly).collect();
+    let blks: Vec<&Vec<P>> = l.blocks.iter().filter(|k| boxes_meet(bbox(k), bb)).collect();
+    let squares: Vec<&Vec<P>> = l.plazas.iter().filter(|p| boxes_meet(bbox(&p.pts), bb)).map(|p| &p.pts).collect();
+    let ways: Vec<(P, P, f64)> = l.roads.iter().flat_map(|(q, _, w)| q.windows(2).map(move |s| (s[0], s[1], 0.5 * w + 1.0))).filter(|&(a, e, h)| boxes_meet(grow(bbox(&[a, e]), h), bb)).collect();
+    let street = |q: P| {
+        ways.iter().any(|&(a, e, h)| seg_dist(q, a, e) < h) || squares.iter().any(|k| contains(k, q)) || (!blds.iter().any(|o| contains(o, q)) && !blks.iter().any(|k| contains(k, q)))
+    };
+    let faces = |e: usize| [0.25, 0.5, 0.75].iter().filter(|&&s| street(add(lerp(pts[e], pts[(e + 1) % m], s), mul(outward(e), 4.0)))).count() >= 2;
+    let longest = |a: &usize, b: &usize| el(*a).total_cmp(&el(*b)).then(b.cmp(a));
+    let front = (0..m).filter(|&e| el(e) >= 15.0 && faces(e)).max_by(longest);
+    // (Else the longest side with open ground before it, a lane's or a yard's, else the longest.)
+    let open = |e: usize| [0.25, 0.5, 0.75].iter().filter(|&&s| !blds.iter().any(|o| contains(o, add(lerp(pts[e], pts[(e + 1) % m], s), mul(outward(e), 4.0))))).count() >= 2;
+    let e = front.or_else(|| (0..m).filter(|&e| el(e) >= 15.0 && open(e)).max_by(longest)).unwrap_or_else(|| (0..m).max_by(longest).unwrap_or(0));
+    let wall = inset(pts, &(0..m).map(|k| if k == e { LOT_FRONT_IN } else { LOT_WALL_IN }).collect::<Vec<_>>());
+    if wall.len() < 3 {
+        return None;
+    }
+    let a = pts[e];
+    let t = mul(sub(pts[(e + 1) % m], a), 1.0 / el(e).max(1e-9));
+    let n = mul(outward(e), -1.0);
+    // The way in across from the lot's middle, kept off the side's ends.
+    let half = 0.5 * LOT_GAP + 1.5;
+    let x = if el(e) > 2.0 * half { dot(sub(c, a), t).clamp(half, el(e) - half) } else { 0.5 * el(e) };
+    let edge = add(a, mul(t, x));
+    let gate = add(edge, mul(n, LOT_FRONT_IN));
+    let deep = exit(&wall, add(gate, mul(n, 0.5)), n) + 0.5;
+    // The stair on the walk, nearest the lot's middle that it fits inside the wall: the mausoleum
+    // first, else the plain stair.
+    let fits_at = |at: P, maus: bool| {
+        let (a0, a1, s, door) = stair_box(maus);
+        let p = |u: f64, v: f64| add(at, add(mul(n, u), mul(t, v)));
+        [p(a0, -s), p(a1, -s), p(a1, s), p(a0, s), p(a0, 0.0), p(a1, 0.0), p(0.5 * (a0 + a1), -s), p(0.5 * (a0 + a1), s), p(-door, 0.0)].iter().all(|q| contains(&wall, *q))
+    };
+    let d0 = dot(sub(c, gate), n).clamp(0.0, deep.max(0.0));
+    let steps = (deep / 2.5) as i64 * 2 + 1;
+    let tries: Vec<f64> = (0..steps).map(|k| d0 + 2.5 * ((k + 1) / 2) as f64 * if k % 2 == 1 { 1.0 } else { -1.0 }).filter(|d| (0.0..=deep).contains(d)).collect();
+    let on = |d: f64| add(gate, mul(n, d));
+    let found = [true, false].iter().find_map(|&maus| tries.iter().find(|&&d| fits_at(on(d), maus)).map(|&d| (on(d), maus)));
+    let (stair, mausoleum, fits) = match found {
+        Some((at, maus)) => (at, maus, true),
+        None => (on(d0), false, false),
+    };
+    let (a0, a1, s, door) = stair_box(mausoleum);
+    let own = !l.plazas.iter().any(|p| p.kind == super::PlazaKind::TempleClose && contains(&p.pts, c)) && !l.crofts.iter().any(|p| contains(&p.pts, c));
+    // (A lot too small across for a boundary and the stair gets none, not stubs.)
+    let across = |d: P| wall.iter().map(|q| dot(*q, d)).fold((f64::MAX, f64::MIN), |r, v| (r.0.min(v), r.1.max(v)));
+    let (sn, st) = (across(n), across(t));
+    let small = (sn.1 - sn.0).min(st.1 - st.0) < 35.0;
+    let bound = match l.culture % 5 {
+        _ if small => Bound::None,
+        4 => Bound::None,
+        1 => Bound::Hedge,
+        _ => Bound::Wall,
+    };
+    let mouth = sub(stair, mul(n, door));
+    let mut stones = Vec::new();
+    if own {
+        // Rows along the way in's side; the walk and the stair (and a yard round it) left clear.
+        let key = hash2(0x6a7e_5193, crate::core::round(pts[0][0]) as i64, crate::core::round(pts[0][1]) as i64);
+        let (lo, hi) = wall.iter().map(|q| dot(sub(*q, edge), t)).fold((f64::MAX, f64::MIN), |r, v| (r.0.min(v), r.1.max(v)));
+        let clear = |p: P| {
+            let r = sub(p, stair);
+            let (u, v) = (dot(r, n), dot(r, t));
+            (u > a0 - 3.0 && u < a1 + 3.0 && v.abs() < s + 3.0) || seg_dist(p, edge, mouth) < 0.5 * LOT_WALK_W + 2.0
+        };
+        let mut j = 0i64;
+        while 5.0 + 15.0 * j as f64 <= deep - 2.0 {
+            let dj = 5.0 + 15.0 * j as f64;
+            for side in [-1i64, 1] {
+                let mut k = 0i64;
+                while 5.0 + 10.0 * k as f64 <= (if side < 0 { -lo } else { hi }) {
+                    let p = add(gate, add(mul(n, dj), mul(t, side as f64 * (5.0 + 10.0 * k as f64))));
+                    let h = hash3(key, j, side * (k + 1), 0x57);
+                    if contains(&wall, p) && depth(&wall, p) >= 2.0 && !clear(p) && unit(h) < 0.8 {
+                        stones.push((p, (hash3(key, j, side * (k + 1), 0x58) % 4) as u8));
+                    }
+                    k += 1;
+                }
+            }
+            j += 1;
+        }
+    }
+    Some(Lot { along: t, inward: n, gate, wall, bound, walk: (edge, mouth, LOT_WALK_W), stair, mausoleum, fits, stones, own, street: front.is_some() })
+}
+
+/// The walls' (or hedges') runs round the layout's own graveyard lots near `near` (world ft): each
+/// lot's wall line but for the gap at its gate and where a house's wall closes it (the line within
+/// 3 ft of a roof); a run cut by a roof runs on to meet it (within a foot), for `rural::battle`.
+pub fn lot_bounds(l: &Layout, near: [f64; 4]) -> Vec<(P, P, Bound)> {
+    let mut out = Vec::new();
+    for b in l.buildings.iter().filter(|b| b.structure == Structure::Open && boxes_meet(grow(bbox(&b.poly), 8.0), near)) {
+        let Some(lp) = lot(l, b).filter(|p| p.own && p.bound != Bound::None) else { continue };
+        let bb = grow(bbox(&b.poly), 10.0);
+        let roofs: Vec<&Vec<P>> = l.buildings.iter().filter(|o| o.id != b.id && o.structure == Structure::Roofed && boxes_meet(bbox(&o.poly), bb)).map(|o| &o.poly).collect();
+        let gap = |q: P| roofs.iter().map(|r| depth_or_gap(r, q)).fold(f64::MAX, f64::min);
+        // The wall's loop in 0.25 ft cells: a cell stands unless it is in the gate's gap or within 3 ft
+        // of a roof (a house's wall closes the lot there). Each run of standing cells is laid per
+        // side; where a roof cut it, a stub runs on straight to the roof, to within half a foot.
+        let m = lp.wall.len();
+        let cum: Vec<f64> = (0..=m).scan(0.0, |s, e| {
+            let v = *s;
+            *s += dist(lp.wall[e % m], lp.wall[(e + 1) % m]);
+            Some(v)
+        }).collect();
+        let per = cum[m];
+        if per < 1.0 {
+            continue;
+        }
+        let nc = (per / 0.25).ceil() as usize;
+        let at = |s: f64| {
+            let s = s.rem_euclid(per);
+            let e = (0..m).rev().find(|&e| cum[e] <= s).unwrap_or(0);
+            let (a, q) = (lp.wall[e], lp.wall[(e + 1) % m]);
+            lerp(a, q, (s - cum[e]) / (cum[e + 1] - cum[e]).max(1e-9))
+        };
+        let cell = |i: usize| per * (i as f64 + 0.5) / nc as f64;
+        let state = |i: usize| -> u8 {
+            let p = at(cell(i % nc));
+            if dist(p, lp.gate) < 0.5 * LOT_GAP { 2 } else if gap(p) < 3.0 { 1 } else { 0 }
+        };
+        let st: Vec<u8> = (0..nc).map(state).collect();
+        let Some(start) = st.iter().position(|&x| x != 0) else {
+            for e in 0..m {
+                out.push((lp.wall[e], lp.wall[(e + 1) % m], lp.bound));
+            }
+            continue;
+        };
+        let mut i = start;
+        let stop = start + nc;
+        while i < stop {
+            if st[i % nc] != 0 {
+                i += 1;
+                continue;
+            }
+            let i0 = i;
+            while i < stop && st[i % nc] == 0 {
+                i += 1;
+            }
+            let (s0, s1) = (per * i0 as f64 / nc as f64, per * i as f64 / nc as f64);
+            // The run's pieces, a corner apart.
+            let mut x = s0;
+            while x < s1 - 1e-9 {
+                let xm = x.rem_euclid(per);
+                let e = (0..m).rev().find(|&e| cum[e] <= xm).unwrap_or(0);
+                let to = (x + (cum[e + 1] - xm).max(1e-6)).min(s1);
+                if to - x > 0.3 {
+                    out.push((at(x), at(to - 1e-6), lp.bound));
+                }
+                x = to;
+            }
+            // (An end the roof cut; one by the gate's gap is left open.)
+            for (end, before) in [(s0, st[(i0 + nc - 1) % nc]), (s1, st[i % nc])] {
+                if before != 1 {
+                    continue;
+                }
+                let p = at(end);
+                let mut best: Option<(f64, P)> = None;
+                for r in &roofs {
+                    for k in 0..r.len() {
+                        let (a, q) = (r[k], r[(k + 1) % r.len()]);
+                        let ab = sub(q, a);
+                        let tt = (dot(sub(p, a), ab) / dot(ab, ab).max(1e-9)).clamp(0.0, 1.0);
+                        let c = add(a, mul(ab, tt));
+                        let d = dist(p, c);
+                        if best.is_none_or(|(bd, _)| d < bd) {
+                            best = Some((d, c));
+                        }
+                    }
+                }
+                if let Some((d, c)) = best.filter(|&(d, _)| d > 0.6 && d < 8.0) {
+                    out.push((p, add(p, mul(sub(c, p), (d - 0.4) / d)), lp.bound));
+                }
+            }
+        }
+    }
+    out
 }

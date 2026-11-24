@@ -768,7 +768,13 @@ void main() {
         // straight contours read as seams across its fans).
         float lineW = mix(0.035, 0.07, steep);
         float line = 1.0 - smoothstep(lineW, lineW + aa * 1.3, distSq);
-        float dash = mix(step(0.35, fract((w.x + w.y) * 1.5)), 1.0, steep);
+        // (None on ground all but flat: a town's level ground on a 5-ft line, tilted a hair, would
+        // draw its contour as a long hatched strip across it.)
+        // (A town's graded ground runs at a 2% grade: its contours too, Roadmap 7, 192.)
+        line *= smoothstep(0.022, 0.035, slope);
+        // (Dashed across both diagonals: one alone leaves a contour along the other a solid
+        // hairline, as a town inn's on its square.)
+        float dash = mix(step(0.35, fract((w.x + w.y) * 1.5)) * step(0.3, fract((w.x - w.y) * 1.1)), 1.0, steep);
         // (Faded out up the face, where its ledges and top line draw it instead.)
         float ledged = shaped ? 0.0 : smoothstep(0.6, 1.0, slope);
         col = mix(col, INK, line * dash * mix(0.4, 0.85, steep) * (onStair || fanned ? steep : 1.0) * (1.0 - ledged));

@@ -38,6 +38,7 @@ pub const FIELD: u8 = b'f';
 pub const ROW: u8 = b'r';
 pub const CROFT: u8 = b'c';
 pub const CEMETERY: u8 = b'm';
+pub const LOT: u8 = b'l';
 pub const CORRAL: u8 = b'h';
 pub const PEN: u8 = b'y';
 pub const GARDEN: u8 = b'w';
@@ -227,6 +228,10 @@ pub fn sources(l: &Layout, t0: &T0, near: [f64; 4]) -> Vec<(u8, P, P, FenceKind)
             let kind = if matches!(bound, cemetery::Bound::Hedge) { FenceKind::Hedgerow } else { FenceKind::DryStoneWall };
             add(CEMETERY, a, b, kind, &mut out);
         }
+    }
+    for (a, b, bound) in cemetery::lot_bounds(l, near) {
+        let kind = if matches!(bound, cemetery::Bound::Hedge) { FenceKind::Hedgerow } else { FenceKind::DryStoneWall };
+        add(LOT, a, b, kind, &mut out);
     }
     for (a, b) in horses::bounds(l, near) {
         add(CORRAL, a, b, FenceKind::PostAndRail, &mut out);

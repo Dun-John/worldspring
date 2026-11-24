@@ -99,6 +99,95 @@ pub(crate) fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
     for c in cams {
         say!("{c}");
     }
+    graveyard_lots(ctx, r);
+}
+
+// Roadmap 7 (193)
+pub(crate) const LOT_RULES: [&str; 6] = [
+    "R lot stairs not fitting inside the wall",
+    "R lot stair entrances off the plan",
+    "R lot headstones outside the wall or on the walk",
+    "R lot gates with a wall across them (looked at)",
+    "R lot stairs drawn otherwise than planned (looked at)",
+    "R lot stairs with no catacomb site",
+];
+
+/// Graveyard lots (Roadmap 7, 193): each laid to its plot (`cemetery::lot`): its stair on its walk inside
+/// its wall, the layout's entrance there; on the battlemap (the first 8 turned off the map's axes): the
+/// headstones laid, the wall's gap at the gate, the stair drawn as planned.
+pub(crate) fn graveyard_lots(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&LOT_RULES);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let mut look: Vec<(usize, town::cemetery::Lot, Vec<P>)> = Vec::new();
+    let mut cams = Vec::new();
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Open) {
+            let Some(lp) = town::cemetery::lot(&l, b) else {
+                r.tally("lots with no plan", 1);
+                continue;
+            };
+            r.tally(&format!("lots {} ({})", if lp.own { "own" } else { "in a close or village" }, l.tier.name()), 1);
+            r.tally(if lp.street { "lots facing a street" } else { "lots by their longest side" }, 1);
+            // (Catacombs under cities alone.)
+            let city = l.tier >= worldgen::t0::settle::Tier::City;
+            if city {
+                r.tally(if !lp.fits { "city lots: stair fitting nowhere" } else if lp.mausoleum { "city lots: mausoleum" } else { "city lots: plain stair" }, 1);
+            }
+            r.tally("lot headstones planned", lp.stones.len());
+            let ang = libm::atan2(lp.inward[1], lp.inward[0]).to_degrees().rem_euclid(90.0);
+            let turned = ang > 5.0 && ang < 85.0;
+            r.tally(if turned { "lots turned off the map's axes" } else { "lots square to the map" }, 1);
+            if city && !lp.fits {
+                r.add("R lot stairs not fitting inside the wall", 1.0, format!("L{li} b{} {}", b.id, at(centroid(&b.poly))));
+            }
+            let ents: Vec<_> = l.entrances.iter().enumerate().filter(|(_, e)| e.kind == worldgen::under::UnderKind::Catacombs && contains(&b.poly, e.at)).collect();
+            if city && !ents.iter().any(|(_, e)| dist(e.at, lp.stair) < 0.01 && dist(e.dir, lp.inward) < 1e-6) {
+                r.add("R lot stair entrances off the plan", 1.0, format!("L{li} b{} {}", b.id, at(lp.stair)));
+            }
+            for &(p, _) in &lp.stones {
+                if !contains(&lp.wall, p) || seg_dist(p, lp.walk.0, lp.walk.1) < 0.5 * lp.walk.2 {
+                    r.add("R lot headstones outside the wall or on the walk", 1.0, format!("L{li} b{} {}", b.id, at(p)));
+                }
+            }
+            if turned && lp.own && (city || look.len() < 4) && look.len() < 8 {
+                if let Some((k, _)) = ents.first() {
+                    let site = worldgen::under::generate(world, t0, li, *k);
+                    if site.is_none() {
+                        r.add("R lot stairs with no catacomb site", 1.0, format!("L{li} b{}", b.id));
+                    }
+                }
+                let c = centroid(&b.poly);
+                cams.push(format!("    L{li} b{} {} {}{}: fx {:.6} fy {:.6} ({:.0}° off axis) stair {} site u:{li}:{}", b.id, l.tier.name(), if lp.mausoleum { "mausoleum" } else { "plain stair" }, if lp.street { "" } else { ", no street side" }, c[0] / mw, c[1] / mh, ang.min(90.0 - ang), at(lp.stair), ents.first().map_or(-1, |e| e.0 as i64)));
+                look.push((li, lp, b.poly.clone()));
+            }
+        }
+    }
+    for (li, lp, poly) in look {
+        let w = ctx.window(bbox(&poly));
+        let laid = w.objects.iter().filter(|(p, n)| contains(&poly, *p) && n == "headstone").count();
+        r.tally("lot headstones planned (looked at)", lp.stones.len());
+        r.tally("lot headstones laid (looked at)", laid);
+        let runs = w.runs.iter().filter(|(a, b)| contains(&poly, lerp(*a, *b, 0.5))).count();
+        r.tally("lot wall runs (looked at)", runs);
+        if w.runs.iter().any(|(a, b)| seg_dist(lp.gate, *a, *b) < 2.0) {
+            r.add("R lot gates with a wall across them (looked at)", 1.0, format!("L{li} {}", at(lp.gate)));
+        }
+        // The chunk's entrance shape at the stair: style 2 a mausoleum, else a plain stair.
+        let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+        let (kx, ky) = ((lp.stair[0] / size).floor() as u32, (lp.stair[1] / size).floor() as u32);
+        let ch = ctx.chunk(kx, ky);
+        let o = [kx as f64 * size, ky as f64 * size];
+        let style = ch.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Entrance).find(|s| dist([o[0] + s.pts[0][0] as f64 * SQUARE_FT, o[1] + s.pts[0][1] as f64 * SQUARE_FT], lp.stair) < 1.0).map(|s| (s.size as u32) >> 4);
+        if style.is_some() && style != Some(if lp.mausoleum { 2 } else { 0 }) {
+            r.add("R lot stairs drawn otherwise than planned (looked at)", 1.0, format!("L{li} {} style {style:?}", at(lp.stair)));
+        }
+    }
+    say!("  graveyard lot cameras:");
+    for c in cams {
+        say!("{c}");
+    }
 }
 
 pub(crate) const CEM_RULES: [&str; 12] = [

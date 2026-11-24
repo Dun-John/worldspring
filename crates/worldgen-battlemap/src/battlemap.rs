@@ -656,7 +656,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         dressing.push(x);
                     }
                     if let Some(m) = Market::of(pl.kind) {
-                        market_blocks(p, &l.monuments, &keep, m, seed, &mut stalls);
+                        market_stalls(p, &l.monuments, &keep, &lanes, m, seed, l.index, &mut stalls);
                     }
                     if !patterned {
                         // (Clear of the market cross as of a monument.)
@@ -836,7 +836,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let behind_fall = l.site && (l.index as usize).checked_sub(t0.settlements.len()).is_some_and(|p| t0.fall_of_poi(p).is_some());
         for e in l.entrances.iter().filter(|_| !in_building && !behind_fall) {
             use crate::town::geom::{add, mul};
-            let in_yard = l.buildings.iter().any(|b| b.structure == crate::town::Structure::Open && crate::town::geom::contains(&b.poly, e.at));
+            // (Roadmap 7, 193: a mausoleum where one fits inside the lot's wall, else the plain stair.)
+            let in_yard = l.buildings.iter().any(|b| b.structure == crate::town::Structure::Open && crate::town::geom::contains(&b.poly, e.at) && crate::town::cemetery::lot(&l, b).is_some_and(|p| p.mausoleum));
             let style = match e.kind {
                 crate::under::UnderKind::Dungeon | crate::under::UnderKind::Crypt => 1u8,
                 crate::under::UnderKind::Catacombs if in_yard => 2,
@@ -1074,6 +1075,24 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     let c = crate::town::geom::centroid(&b.poly);
                     if l.plazas.iter().any(|p| p.kind == crate::town::PlazaKind::TempleClose && crate::town::geom::contains(&p.pts, c)) {
                         churchyards.push(b.poly.clone());
+                    } else if let Some(lp) = crate::town::cemetery::lot(&l, b).filter(|p| p.own) {
+                        // (Roadmap 7, 193) A town's graveyard lot: its headstones in rows along its way
+                        // in, its walk gravel from the street to the stair (`cemetery::lot`).
+                        churchyards.push(b.poly.clone());
+                        park_props.extend(lp.stones.iter().map(|&(p, v)| (p, libm::atan2(lp.along[1], lp.along[0]) as f32, Kind::Headstone, v, 1.0)));
+                        let (a, e, w) = lp.walk;
+                        let half = 0.5 * w + 1.5;
+                        let (i0, j0, i1, j1) = range((a[0].min(e[0]) - half, a[1].min(e[1]) - half, a[0].max(e[0]) + half, a[1].max(e[1]) + half));
+                        if i1 >= 0.0 && j1 >= 0.0 {
+                            for j in j0..=j1 as usize {
+                                for i in i0..=i1 as usize {
+                                    let h = j * HS + i;
+                                    if urb_h[h] == URBAN_GRAVEYARD && crate::town::geom::contains(&b.poly, center(i, j)) && crate::town::geom::seg_dist(center(i, j), a, e) < half {
+                                        urb_h[h] = URBAN_PATH;
+                                    }
+                                }
+                            }
+                        }
                     }
                     continue;
                 }
@@ -1139,6 +1158,45 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             court_dressing.push((m, crate::park::facing([-long[1], long[0]]), kind, 0));
                         }
                         _ => {}
+                    }
+                }
+            }
+            // (Roadmap 7, 192) A coaching inn's lane: the squares between its arch's mouth and the
+            // street the street's surface, two squares wide and square to the wall, a few at most
+            // and only if they reach the street across bare ground.
+            if let Some(q) = arch.as_ref().and_then(|a| a.as_ref()).filter(|q| q.len() == 4) {
+                let (a, bb, d) = (q[0], q[1], q[3]);
+                let len = crate::town::geom::dist(a, bb);
+                let dn = crate::town::geom::dist(a, d);
+                if len > 1e-6 && dn > 1e-6 {
+                    let (u, n) = ([(bb[0] - a[0]) / len, (bb[1] - a[1]) / len], [(a[0] - d[0]) / dn, (a[1] - d[1]) / dn]);
+                    let at = |t: f64, s: f64| {
+                        let p = [a[0] + u[0] * t + n[0] * s, a[1] + u[1] * t + n[1] * s];
+                        let (i, j) = (((p[0] - hx0) / SQUARE_FT).floor(), ((p[1] - hy0) / SQUARE_FT).floor());
+                        (i >= 0.0 && j >= 0.0 && i < HS as f64 && j < HS as f64).then(|| j as usize * HS + i as usize)
+                    };
+                    // (Each of the mouth's two squares across: out from the wall until a street square.)
+                    let mut lane: Vec<usize> = Vec::new();
+                    for col in [0.125, 0.375, 0.625, 0.875] {
+                        let mut run: Vec<usize> = Vec::new();
+                        let mut reached = false;
+                        for step in 0..6 {
+                            let Some(h) = at(col * len, (step as f64 + 0.5) * SQUARE_FT) else { break };
+                            if urb_h[h] == URBAN_STREET && bld_h[h] == 0 {
+                                reached = true;
+                                break;
+                            }
+                            if urb_h[h] != 0 || bld_h[h] != 0 || road_h[h] != 0 {
+                                break;
+                            }
+                            run.push(h);
+                        }
+                        if reached {
+                            lane.extend(run);
+                        }
+                    }
+                    for h in lane {
+                        urb_h[h] = URBAN_STREET;
                     }
                 }
             }
@@ -1816,6 +1874,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             match urb_h[h] {
                 _ if ent_h[h] => URBAN_ENTRANCE,
                 URBAN_PATH if hw[h] > hh[h] || (cliff(h) && !in_yard(h)) => URBAN_PARK,
+                // (A coaching inn's yard is its street's paving, laid as the street's, not in a plaza's fans.)
+                URBAN_PLAZA if court_h[h] => URBAN_STREET,
                 u => u,
             }
         })
@@ -1906,8 +1966,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 URBAN_PLAZA if quay_h.get((k / SQ + 1) * HS + k % SQ + 1) == Some(&true) => chunk.surface[k] = Surface::Cobble,
                 URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
                 URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {}
-                // (A coaching inn's yard cobbled in a village too, as its ground floor has it.)
-                URBAN_PLAZA if court_h[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Cobble,
+                // (A coaching inn's yard takes its street's surface, as its ground floor has it: cobbles in a
+                // town, packed earth in a village.)
+                URBAN_PLAZA if court_h[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_PLAZA if dirt_sq[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Dirt,
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
                 // (Not at the mouth of a way underground on the flight: it keeps the street.)
@@ -2255,7 +2316,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || (!wet_ok && chunk.water_level[k] > chunk.height[k]) || !(lawn || (gravel_ok && chunk.urban[k] == URBAN_PATH)) {
             continue;
         }
-        let o = Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: false };
+        // (Headstones stand square to their row: drawn at `rot`, as one turned by hand is.)
+        let o = Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: kind == Kind::Headstone };
         if off_buildings(&chunk, &o) {
             chunk.objects.push(o);
         }

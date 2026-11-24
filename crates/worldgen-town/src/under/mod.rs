@@ -177,7 +177,8 @@ pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
 /// Ways underground in a city: a sewer grate on a street in every section the paved streets
 /// run far enough into (never under a tower or in a gate's passage, nor by a palace's
 /// forecourt), catacomb stairs in each graveyard and beside each mausoleum and catacomb house.
-pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
+/// (`_seed`: none of it drawn at random since Roadmap 7, 193.)
+pub fn city_entrances(l: &Layout, t0: &T0, _seed: u64) -> Vec<Entrance> {
     let mut out = Vec::new();
     let segs = street_segments(l);
     // Clear of the towers and the gatehouses between them (a gate's passage reaches 26 ft from
@@ -236,26 +237,13 @@ pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
             }
         }
     }
-    let mut rng = Pcg32::new(seed ^ 0xca7a, 17);
     for b in &l.buildings {
         let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
-        let c = town::geom::centroid(&b.poly);
-        if b.structure == Structure::Open && town::geom::contains(&b.poly, c) {
-            // A mausoleum over the stair among the graves, square to the headstone rows (the
-            // battlemap grid): 4 squares deep, 3 wide, its door at `at` (a square's centre).
-            // It runs along the yard's long side, whichever way fits.
-            let sq = crate::battle::SQUARE_FT;
-            let at = [crate::core::floor(c[0] / sq) * sq + 0.5 * sq, crate::core::floor(c[1] / sq) * sq + 0.5 * sq];
-            let (x0, y0, x1, y1) = b.poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
-            let flip = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
-            let mut dirs = if x1 - x0 >= y1 - y0 { [[flip, 0.0], [0.0, flip]] } else { [[0.0, flip], [flip, 0.0]] }.to_vec();
-            dirs.extend(dirs.clone().iter().map(|d| mul(*d, -1.0)));
-            let fits = |d: P| {
-                let side = [-d[1], d[0]];
-                [(-1.5, -1.5), (2.5, -1.5), (2.5, 1.5), (-1.5, 1.5)].iter().all(|&(a, s)| town::geom::contains(&b.poly, add(at, add(mul(d, a * sq), mul(side, s * sq)))))
-            };
-            let dir = dirs.iter().copied().find(|d| fits(*d)).unwrap_or(dirs[0]);
-            out.push(Entrance { at, dir, kind: UnderKind::Catacombs, id: 0 });
+        if let Some(lp) = town::cemetery::lot(&l, b) {
+            // (Roadmap 7, 193) The stair on the lot's walk, square to its way in, its mouth toward
+            // the gate and the site running in under the lot from it; a mausoleum over it where one
+            // fits inside the wall (`cemetery::lot`).
+            out.push(Entrance { at: lp.stair, dir: lp.inward, kind: UnderKind::Catacombs, id: 0 });
         } else if matches!(key, Some("catacombs" | "mausoleum")) {
             // A stair beside the house, running in under it.
             let m = b.poly.len();

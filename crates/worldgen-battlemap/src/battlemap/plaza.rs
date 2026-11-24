@@ -882,141 +882,319 @@ pub(super) fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0:
     }
 }
 
-/// A town plaza's market as a little town of its own: jittered seeds inside a wobbly oval round
-/// the well make Voronoi cells, each pulled back from its neighbours so lanes run between them
-/// (streets for players and passers-by). Each block's outline is rounded and wobbled, and its
-/// stalls follow that curve shoulder to shoulder, facing out onto the lanes, with a gap to get
-/// in; crates and barrels stack inside. The cell at the well (and a few others) stays an open
-/// square, as does any cell holding a monument; stalls keep clear of the features (`keep`: centre
-/// and radius, laid out first on a city's square). A pure function of the plaza (world ft), so
-/// every chunk lays out the same market.
-pub(super) fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 2], f64)], mk: Market, seed: u64, out: &mut Vec<([f64; 2], f32, Kind)>) {
-    use crate::town::geom::{add, area, centroid, clip_plain, contains, dist, dot, len, main_axis, mul, sub};
-    let c = centroid(poly);
-    let mut rng = Pcg32::new(hash2(seed ^ 0x3a2c, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64), 11);
-    // Blocks follow the plaza's long axis, a little askew.
-    let eu0 = main_axis(poly);
-    let skew = rng.range(-0.15, 0.15);
-    let (cs, sn) = (libm::cos(skew), libm::sin(skew));
-    let eu = [eu0[0] * cs - eu0[1] * sn, eu0[0] * sn + eu0[1] * cs];
-    let ev = [-eu[1], eu[0]];
-    let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-    for q in poly {
-        let d = sub(*q, c);
-        let (u, v) = (dot(d, eu), dot(d, ev));
-        (u0, u1, v0, v1) = (u0.min(u), u1.max(u), v0.min(v), v1.max(v));
-    }
-    // On a great square the market keeps to a block round the well; the rest stays open.
-    let (hu, hv) = (rng.range(mk.hu.0, mk.hu.1), rng.range(mk.hv.0, mk.hv.1));
-    (u0, u1, v0, v1) = (u0.max(-hu), u1.min(hu), v0.max(-hv), v1.min(hv));
-    if u1 - u0 < 40.0 || v1 - v0 < 30.0 {
+/// A stall's half width (along its front) and half depth (ft), as `marketStall` draws it.
+const STALL_HW: f64 = 4.7;
+const STALL_HD: f64 = 3.5;
+/// Stalls side by side: one every this many ft.
+const STALL_PITCH: f64 = 10.0;
+/// The round about the square's middle (its well or fountain) stalls keep clear of (ft).
+const CENTRE_CLEAR: f64 = 24.0;
+
+/// A market's stalls, carts and stock on its square (world ft). Each town keeps one way of setting
+/// out its markets, drawn from its index (`town`): short double rows with aisles (`market_rows`),
+/// a ring round the square's edge (`market_ring`) or loose clusters (`market_clusters`). A pure
+/// function of the plaza, so every chunk lays out the same market. Stalls keep clear of the
+/// monuments and the features (`keep`: centre and radius) and of the streets and roads (`lanes`:
+/// segment and half width) where they enter or cross the square.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn market_stalls(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 2], f64)], lanes: &[([f64; 2], [f64; 2], f64)], mk: Market, seed: u64, town: u32, out: &mut Vec<([f64; 2], f32, Kind)>) {
+    let Some(s) = Stalls::new(poly, monuments, keep, lanes, mk, seed) else {
         return;
+    };
+    match hash2(seed ^ 0x51a7, town as i64, 0) % 3 {
+        0 => market_rows(&s, out),
+        1 => market_ring(&s, out),
+        _ => market_clusters(&s, out),
     }
-    let at = |u: f64, v: f64| add(c, add(mul(eu, u), mul(ev, v)));
-    // Seeds on a jittered grid about 50 ft apart.
-    let pitch = 50.0;
-    let (nu, nv) = (((u1 - u0) / pitch).ceil() as i64, ((v1 - v0) / pitch).ceil() as i64);
-    let mut seeds: Vec<[f64; 2]> = Vec::new();
-    for j in 0..nv {
-        for i in 0..nu {
-            let u = u0 + (i as f64 + 0.5) * (u1 - u0) / nu as f64 + rng.range(-13.0, 13.0);
-            let v = v0 + (j as f64 + 0.5) * (v1 - v0) / nv as f64 + rng.range(-13.0, 13.0);
-            seeds.push(at(u, v));
+}
+
+/// What the cheap market layouts share: the square, its frame (`eu` along its long axis), the
+/// part round the well the market keeps to (`u0..u1`, `v0..v1` in that frame), what stalls keep
+/// clear of, and the noise (pure in the plaza and an index).
+struct Stalls<'a> {
+    poly: &'a [[f64; 2]],
+    c: [f64; 2],
+    eu: [f64; 2],
+    ev: [f64; 2],
+    u0: f64,
+    u1: f64,
+    v0: f64,
+    v1: f64,
+    stands: Vec<([f64; 2], f64)>,
+    lanes: Vec<([f64; 2], [f64; 2], f64)>,
+    mk: Market,
+    seed: u64,
+}
+
+impl<'a> Stalls<'a> {
+    fn new(poly: &'a [[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 2], f64)], lanes: &[([f64; 2], [f64; 2], f64)], mk: Market, seed: u64) -> Option<Stalls<'a>> {
+        use crate::town::geom::{centroid, dist, dot, main_axis, sub};
+        let c = centroid(poly);
+        let seed = hash2(seed ^ 0x3a2d, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64);
+        let eu = main_axis(poly);
+        let ev = [-eu[1], eu[0]];
+        let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for q in poly {
+            let d = sub(*q, c);
+            let (u, v) = (dot(d, eu), dot(d, ev));
+            (u0, u1, v0, v1) = (u0.min(u), u1.max(u), v0.min(v), v1.max(v));
+        }
+        let h = |salt: i64| unit(hash3(seed, 0, 0, salt));
+        let (hu, hv) = (mk.hu.0 + (mk.hu.1 - mk.hu.0) * h(1), mk.hv.0 + (mk.hv.1 - mk.hv.0) * h(2));
+        (u0, u1, v0, v1) = (u0.max(-hu), u1.min(hu), v0.max(-hv), v1.min(hv));
+        if u1 - u0 < 40.0 || v1 - v0 < 30.0 {
+            return None;
+        }
+        let mut stands: Vec<([f64; 2], f64)> = monuments.iter().map(|m| (centroid(m), m.iter().map(|q| dist(*q, centroid(m))).fold(0.0, f64::max))).collect();
+        stands.extend_from_slice(keep);
+        let b = bounds(poly);
+        let lanes = lanes.iter().copied().filter(|&(a, e, w)| a[0].max(e[0]) >= b.0 - w - 10.0 && a[0].min(e[0]) <= b.2 + w + 10.0 && a[1].max(e[1]) >= b.1 - w - 10.0 && a[1].min(e[1]) <= b.3 + w + 10.0).collect();
+        Some(Stalls { poly, c, eu, ev, u0, u1, v0, v1, stands, lanes, mk, seed })
+    }
+
+    /// The point `u` ft along the square's long axis and `v` across it from the middle.
+    fn at(&self, u: f64, v: f64) -> [f64; 2] {
+        [self.c[0] + self.eu[0] * u + self.ev[0] * v, self.c[1] + self.eu[1] * u + self.ev[1] * v]
+    }
+
+    /// Noise (0–1) by index.
+    fn h(&self, a: i64, b: i64, salt: i64) -> f64 {
+        unit(hash3(self.seed, a, b, salt))
+    }
+
+    /// Whether a thing `r` ft round fits at `p`: on the square, `centre` ft (and its size) off the
+    /// middle, a 5-ft walk round the monuments and features, off the streets and roads.
+    fn free(&self, p: [f64; 2], r: f64, centre: f64) -> bool {
+        use crate::town::geom::{contains, dist, outline_dist, seg_dist};
+        dist(p, self.c) >= centre + r
+            && contains(self.poly, p)
+            && outline_dist(self.poly, p) >= r + 1.0
+            && self.stands.iter().all(|&(q, sr)| dist(p, q) >= sr + r + 5.0)
+            && self.lanes.iter().all(|&(a, b, w)| seg_dist(p, a, b) >= w + r + 1.0)
+    }
+
+    /// A stall at `p` facing `front` (a unit vector) if it fits; whether it went in.
+    fn stall(&self, p: [f64; 2], front: [f64; 2], salt: (i64, i64), centre: f64, out: &mut Vec<([f64; 2], f32, Kind)>) -> bool {
+        if !self.free(p, STALL_HW + 1.2, centre) {
+            return false;
+        }
+        // Sprites face south (+y) unturned.
+        let rot = libm::atan2(front[1], front[0]) - std::f64::consts::FRAC_PI_2 + 0.12 * (self.h(salt.0, salt.1, 91) - 0.5);
+        out.push((p, rot as f32, Kind::MarketStall));
+        true
+    }
+
+    /// A cart along `dir`, or a stack of two or three crates and barrels, at `p` if it fits.
+    fn stock(&self, p: [f64; 2], dir: [f64; 2], cart: bool, salt: (i64, i64), centre: f64, out: &mut Vec<([f64; 2], f32, Kind)>) {
+        if cart {
+            if self.free(p, 6.5, centre) {
+                out.push((p, (libm::atan2(dir[1], dir[0]) - std::f64::consts::FRAC_PI_2) as f32, Kind::Cart));
+            }
+            return;
+        }
+        if !self.free(p, 4.0, centre) {
+            return;
+        }
+        for k in 0..2 + (self.h(salt.0, salt.1, 92) < 0.5) as i64 {
+            let (a, b) = (self.h(salt.0, salt.1, 93 + 3 * k), self.h(salt.0, salt.1, 94 + 3 * k));
+            let q = [p[0] + (a - 0.5) * 5.0, p[1] + (b - 0.5) * 5.0];
+            let kind = if self.h(salt.0, salt.1, 95 + 3 * k) < 0.5 { Kind::Crate } else { Kind::Barrel };
+            out.push((q, (a * std::f64::consts::TAU) as f32, kind));
         }
     }
-    let well = (0..seeds.len()).min_by(|&a, &b| dist(seeds[a], c).total_cmp(&dist(seeds[b], c)));
-    // The market's edge: a wobbly oval, not a box.
-    let (mu, mv, ru, rv) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0, (u1 - u0) / 2.0, (v1 - v0) / 2.0);
-    let (ph1, ph2) = (rng.range(0.0, 6.28), rng.range(0.0, 6.28));
-    let bounds: Vec<[f64; 2]> = (0..28)
-        .map(|k| {
-            let t = std::f64::consts::TAU * k as f64 / 28.0;
-            let w = 1.0 + 0.07 * libm::sin(3.0 * t + ph1) + 0.04 * libm::sin(5.0 * t + ph2);
-            at(mu + ru * w * libm::cos(t) * 1.12, mv + rv * w * libm::sin(t) * 1.12)
-        })
-        .collect();
-    // Monuments on the square (a statue on its plinth) and its features keep a 9-ft walk round
-    // them clear; a cell holding a monument stays open.
-    let plinths: Vec<([f64; 2], f64)> = monuments.iter().map(|m| (centroid(m), m.iter().map(|q| dist(*q, centroid(m))).fold(0.0, f64::max))).collect();
-    let clear = |p: [f64; 2], r: f64| plinths.iter().chain(keep).all(|&(mc, mr)| dist(p, mc) > mr + 9.0 + r);
-    let half_lane = 5.0;
-    for (i, &s) in seeds.iter().enumerate() {
-        // Open squares: the well's cell and a few others (decided first, so the rng runs the
-        // same whatever the cell's shape).
-        let open = Some(i) == well || rng.next_f64() < mk.open;
-        let mut cell = bounds.clone();
-        for (j, &o) in seeds.iter().enumerate() {
-            if i == j || dist(s, o) > 3.0 * pitch {
-                continue;
-            }
-            let d = sub(o, s);
-            let n = mul(d, 1.0 / len(d));
-            cell = clip_plain(&cell, n, dot(add(s, mul(d, 0.5)), n) - half_lane);
-            if cell.len() < 3 {
-                break;
-            }
-        }
-        if open || cell.len() < 3 || area(&cell).abs() < 250.0 || plinths.iter().any(|&(mc, _)| contains(&cell, mc)) {
+}
+
+/// Market layout 1: short double rows back to back along the square's long axis (stalls facing
+/// out onto the aisles, 10 to 14 ft wide), runs of four to seven with walks between, a wide cross
+/// aisle and a long one meeting at the well, which keeps its round clear. Now and then a run is
+/// left out, a stall missing, a cart or a stack of crates and barrels at a run's end. O(stalls).
+fn market_rows(s: &Stalls, out: &mut Vec<([f64; 2], f32, Kind)>) {
+    use crate::town::geom::mul;
+    // A double row's depth, back to back with its goods out front (16 ft).
+    let deep = 2.0 * (2.0 * STALL_HD + 0.2) + 1.6;
+    for k in crate::core::floor(s.v0 / 28.0 - 0.5) as i64..=crate::core::ceil(s.v1 / 28.0) as i64 {
+        // Rows 26 to 30 ft apart (aisles of 10 to 14 ft), none on the middle line (the long aisle).
+        let v = (k as f64 + 0.5) * 28.0 + 2.0 * (s.h(k, 0, 1) - 0.5);
+        if v - deep / 2.0 < s.v0 || v + deep / 2.0 > s.v1 {
             continue;
         }
-        // Round the corners (Chaikin), then wobble the outline in and out about the middle.
-        let mid = centroid(&cell);
-        let mut outline = cell.clone();
-        for _ in 0..3 {
-            let m = outline.len();
-            outline = (0..m).flat_map(|e| {
-                let (a, b) = (outline[e], outline[(e + 1) % m]);
-                [add(mul(a, 0.75), mul(b, 0.25)), add(mul(a, 0.25), mul(b, 0.75))]
-            }).collect();
+        // The cross aisle, 16 to 20 ft wide, a little off the middle row by row.
+        let cross = 8.0 + 2.0 * s.h(k, 0, 2);
+        let shift = 6.0 * (s.h(k, 0, 3) - 0.5);
+        for (side, dir) in [(0i64, 1.0f64), (1, -1.0)] {
+            let reach = if dir > 0.0 { s.u1 - shift } else { shift - s.u0 };
+            let mut u = cross;
+            for run in 0..64i64 {
+                let id = (k, side * 64 + run);
+                let n = 4 + (s.h(id.0, id.1, 4) * 4.0) as i64;
+                // The run fits as far as the market reaches (a stall or two short at its end).
+                let n = n.min(((reach - u) / STALL_PITCH) as i64);
+                if n < 2 {
+                    break;
+                }
+                let gone = s.h(id.0, id.1, 5) < 0.2 + 1.4 * s.mk.open;
+                if !gone {
+                    for i in 0..n {
+                        let uc = shift + dir * (u + (i as f64 + 0.5) * STALL_PITCH);
+                        for (f, sign) in [(0i64, 1.0f64), (1, -1.0)] {
+                            if s.h(id.0, id.1 * 16 + i, 6 + f) >= (0.9 - s.mk.drop) * 9.2 / s.mk.spacing {
+                                continue;
+                            }
+                            s.stall(s.at(uc, v + sign * (STALL_HD + 0.2)), mul(s.ev, sign), (id.1 * 16 + i, k * 2 + f), CENTRE_CLEAR, out);
+                        }
+                    }
+                }
+                u += n as f64 * STALL_PITCH;
+                // At the run's end: a cart (with room past it) or some stock, now and then.
+                let end = s.h(id.0, id.1, 7);
+                let gap = 8.0 + 7.0 * s.h(id.0, id.1, 8);
+                if !gone && end < 0.12 {
+                    s.stock(s.at(shift + dir * (u + 8.0), v), s.eu, true, id, CENTRE_CLEAR, out);
+                    u += 16.0 + gap;
+                } else if !gone && end < 0.4 {
+                    s.stock(s.at(shift + dir * (u + 3.0), v), s.eu, false, id, CENTRE_CLEAR, out);
+                    u += 6.0 + gap;
+                } else {
+                    u += gap;
+                }
+            }
         }
-        let (wa, wk, wp) = (rng.range(0.04, 0.1), 2.0 + rng.below(3) as f64, rng.range(0.0, 6.28));
-        for q in &mut outline {
-            let d = sub(*q, mid);
-            let ang = libm::atan2(d[1], d[0]);
-            *q = add(mid, mul(d, 1.0 + wa * libm::sin(wk * ang + wp)));
+    }
+}
+
+/// Market layout 2: stalls line the square's edge (kept to the part round the well), backs to the
+/// houses with a lane left in front of their doors, awnings toward the middle; runs of three to
+/// six with a way through between, none across a street's mouth. The middle stays open but for a
+/// few carts and the well. O(stalls + the outline's corners).
+fn market_ring(s: &Stalls, out: &mut Vec<([f64; 2], f32, Kind)>) {
+    use crate::town::geom::{add, area, clip_plain, dist, dot, mul, outline_dist, sub};
+    let half = [(s.eu, s.u1), (mul(s.eu, -1.0), -s.u0), (s.ev, s.v1), (mul(s.ev, -1.0), -s.v0)];
+    let mut path = s.poly.to_vec();
+    for (n, h) in half {
+        path = clip_plain(&path, n, dot(s.c, n) + h);
+        if path.len() < 3 {
+            return;
         }
-        let ccw = area(&outline) > 0.0;
-        let m = outline.len();
-        let seg: Vec<f64> = (0..m).map(|e| dist(outline[e], outline[(e + 1) % m])).collect();
-        let total: f64 = seg.iter().sum();
-        let count = (total / mk.spacing).floor() as usize;
-        if count < 3 {
+    }
+    let ccw = area(&path) > 0.0;
+    let m = path.len();
+    let seg: Vec<f64> = (0..m).map(|e| dist(path[e], path[(e + 1) % m])).collect();
+    let total: f64 = seg.iter().sum();
+    let count = (total / STALL_PITCH) as i64;
+    // A lane of 7 ft behind the stalls, by the doors.
+    let inset = 7.0 + STALL_HD;
+    let (mut e, mut acc) = (0usize, 0.0);
+    let mut placed: Vec<[f64; 2]> = Vec::new();
+    let (mut run, mut left) = (0i64, 0i64);
+    let mut gone = false;
+    for k in 0..count {
+        let want = (k as f64 + 0.5) * total / count as f64;
+        while e < m - 1 && acc + seg[e] < want {
+            acc += seg[e];
+            e += 1;
+        }
+        // Runs of three to six, a slot (or two) left out between for a way through.
+        if left == 0 {
+            run += 1;
+            left = 3 + (s.h(run, 0, 1) * 4.0) as i64 + 1 + (s.h(run, 0, 2) < 0.3) as i64;
+            gone = s.h(run, 0, 3) < s.mk.open;
+        }
+        left -= 1;
+        if left < 1 + (s.h(run, 0, 2) < 0.3) as i64 || gone || s.h(k, 0, 4) < s.mk.drop {
             continue;
         }
-        let step = total / count as f64;
-        // A way in: two stalls left out somewhere round the ring.
-        let gap = if count >= 8 { Some(rng.below(count as u32) as usize) } else { None };
-        let (mut e, mut acc) = (0usize, 0.0);
-        for k in 0..count {
-            let want = (k as f64 + 0.5) * step;
-            while e < m - 1 && acc + seg[e] < want {
-                acc += seg[e];
-                e += 1;
-            }
-            if gap.is_some_and(|g| k == g || k == (g + 1) % count) || rng.next_f64() < mk.drop {
-                continue;
-            }
-            let (a, b) = (outline[e], outline[(e + 1) % m]);
-            let t = mul(sub(b, a), 1.0 / seg[e].max(1e-9));
-            let on = add(a, mul(t, want - acc));
-            // Outward normal: the stall's front, onto the lane.
-            let n = if ccw { [t[1], -t[0]] } else { [-t[1], t[0]] };
-            let p = add(on, mul(n, -3.5));
-            let fits = [-4.5, 4.5].iter().all(|&o| contains(poly, add(p, mul(t, o)))) && clear(p, 5.0);
-            if !fits {
-                continue;
-            }
-            // Sprites face south (+y) unturned.
-            let rot = (libm::atan2(n[1], n[0]) - std::f64::consts::FRAC_PI_2 + rng.range(-0.08, 0.08)) as f32;
-            let kind = if rng.next_f64() < 0.05 { Kind::Cart } else { Kind::MarketStall };
-            out.push((p, rot, kind));
+        let (a, b) = (path[e], path[(e + 1) % m]);
+        let t = mul(sub(b, a), 1.0 / seg[e].max(1e-9));
+        let inward = if ccw { [-t[1], t[0]] } else { [t[1], -t[0]] };
+        let p = add(add(a, mul(t, want - acc)), mul(inward, inset));
+        // Clear of the ring's other sides (a corner) and of the stall before.
+        if outline_dist(&path, p) < inset - 0.5 || placed.iter().rev().take(3).chain(placed.iter().take(3)).any(|q| dist(*q, p) < 2.0 * STALL_HW + 0.5) {
+            continue;
         }
-        // Stock in the block's back.
-        if area(&cell).abs() > 500.0 && contains(poly, mid) && clear(mid, 4.0) {
-            for _ in 0..1 + rng.below(3) {
-                let p = add(mid, [rng.range(-4.0, 4.0), rng.range(-4.0, 4.0)]);
-                let kind = if rng.next_f64() < 0.5 { Kind::Crate } else { Kind::Barrel };
-                out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, kind));
+        if s.stall(p, inward, (k, 1), 0.0, out) {
+            placed.push(p);
+        }
+    }
+    // A few carts in the open middle, a good way off the stalls and the well.
+    let (ru, rv) = ((s.u1 - s.u0) / 2.0, (s.v1 - s.v0) / 2.0);
+    let (mu, mv) = ((s.u0 + s.u1) / 2.0, (s.v0 + s.v1) / 2.0);
+    for k in 0..2 + (s.h(0, 1, 5) * 3.0) as i64 {
+        let ang = std::f64::consts::TAU * (k as f64 + s.h(k, 1, 6)) / 4.0;
+        let r = 0.35 + 0.2 * s.h(k, 1, 7);
+        let p = s.at(mu + ru * r * libm::cos(ang), mv + rv * r * libm::sin(ang));
+        if outline_dist(&path, p) > inset + 14.0 {
+            let a = s.h(k, 1, 8) * std::f64::consts::TAU;
+            s.stock(p, [libm::cos(a), libm::sin(a)], s.h(k, 1, 9) < 0.7, (k, 2), CENTRE_CLEAR, out);
+        }
+    }
+}
+
+/// Market layout 3: loose knots of three to five stalls (a short row, an L or a U round a little
+/// court) on a jittered 52-ft lattice, some lattice cells left empty; stock behind each knot, a
+/// cart beside some. Most of the square stays open. O(stalls).
+fn market_clusters(s: &Stalls, out: &mut Vec<([f64; 2], f32, Kind)>) {
+    use crate::town::geom::{add, mul};
+    let pitch = 52.0;
+    // (No knot reaches more than 23 ft from its point, and the points stay 46 ft apart.)
+    let empty = |i: i64, j: i64| s.h(i, j, 3) < 0.12 + 0.6 * s.mk.open;
+    for j in crate::core::floor(s.v0 / pitch) as i64..=crate::core::floor(s.v1 / pitch) as i64 {
+        for i in crate::core::floor(s.u0 / pitch) as i64..=crate::core::floor(s.u1 / pitch) as i64 {
+            let (u, v) = ((i as f64 + 0.5) * pitch + 6.0 * (s.h(i, j, 1) - 0.5), (j as f64 + 0.5) * pitch + 6.0 * (s.h(i, j, 2) - 0.5));
+            if u < s.u0 - 5.0 || u > s.u1 + 5.0 || v < s.v0 - 5.0 || v > s.v1 + 5.0 || empty(i, j) {
+                continue;
+            }
+            // The knot's frame: square to the square, a quarter turn or more, a little askew.
+            let q = (s.h(i, j, 4) * 4.0) as i64;
+            let tilt = 0.3 * (s.h(i, j, 5) - 0.5) + std::f64::consts::FRAC_PI_2 * q as f64;
+            let (cs, sn) = (libm::cos(tilt), libm::sin(tilt));
+            let a = [s.eu[0] * cs - s.eu[1] * sn, s.eu[0] * sn + s.eu[1] * cs];
+            let b = [-a[1], a[0]];
+            let o = s.at(u, v);
+            let pt = |x: f64, y: f64| add(o, add(mul(a, x), mul(b, y)));
+            // Stalls (along a, across b, front) and where the stock goes.
+            let side = STALL_HW + STALL_HD + 0.6;
+            let mut slots: Vec<([f64; 2], [f64; 2])> = Vec::new();
+            let shape = s.h(i, j, 6);
+            let back = if shape < 0.35 {
+                // A short row, three or four.
+                let n = 3 + (s.h(i, j, 7) < 0.5) as i64;
+                for k in 0..n {
+                    slots.push((pt((k as f64 - (n - 1) as f64 / 2.0) * STALL_PITCH, 0.0), b));
+                }
+                pt(0.0, -8.0)
+            } else if shape < 0.7 {
+                // An L, two or three along, two down its side, facing out.
+                let n = 2 + (s.h(i, j, 7) < 0.5) as i64;
+                for k in 0..n {
+                    slots.push((pt((k as f64 - (n - 1) as f64 / 2.0) * STALL_PITCH, 0.0), b));
+                }
+                for k in 0..2 {
+                    slots.push((pt(-side - (n - 1) as f64 * STALL_PITCH / 2.0, -1.2 - k as f64 * STALL_PITCH), mul(a, -1.0)));
+                }
+                pt(6.0, -9.0)
+            } else {
+                // A U round a little court open at the front: two or three at the back, one each side.
+                let n = 2 + (s.h(i, j, 7) < 0.4) as i64;
+                let w = n as f64 * STALL_PITCH / 2.0;
+                for k in 0..n {
+                    slots.push((pt((k as f64 - (n - 1) as f64 / 2.0) * STALL_PITCH, 0.0), b));
+                }
+                slots.push((pt(w - STALL_HW + side, 6.0), mul(a, -1.0)));
+                slots.push((pt(-w + STALL_HW - side, 6.0), a));
+                pt(0.0, -8.0)
+            };
+            let mut any = false;
+            for (k, &(p, f)) in slots.iter().enumerate() {
+                if s.h(i * 8 + k as i64, j, 8) >= s.mk.drop {
+                    any |= s.stall(p, f, (i * 8 + k as i64, j), CENTRE_CLEAR, out);
+                }
+            }
+            if any {
+                s.stock(back, a, false, (i, j * 4), CENTRE_CLEAR, out);
+                // A cart half way to the next cell along, when that is left empty.
+                if s.h(i, j, 9) < 0.5 && empty(i + 1, j) {
+                    s.stock(s.at(u + pitch / 2.0, v), s.eu, true, (i, j * 4 + 1), CENTRE_CLEAR, out);
+                }
             }
         }
     }
