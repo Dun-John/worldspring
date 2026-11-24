@@ -38,6 +38,8 @@ uniform float uFtPerPx;
 uniform float uPatMix;
 uniform float uPatAlpha;
 uniform float uSymAlpha;
+// Forest tufts' strength by zoom (gone as the battlemap's trees come in).
+uniform float uForestAlpha;
 
 const vec3 INK = vec3(0.20, 0.18, 0.16);
 const vec3 CONTOUR_INK = vec3(0.42, 0.33, 0.24);
@@ -76,6 +78,10 @@ const vec3 PALETTE[19] = vec3[19](
 // Symbol per biome: 0 none, 4 marsh, 5 sand, 7 tufts, 8 scree. No tree symbols: trees are the
 // battlemap's (its sprites); on the map the woods are their area tint alone.
 const int SYMBOL[19] = int[19](0, 0, 0, 7, 8, 0, 0, 0, 7, 7, 5, 5, 0, 0, 4, 5, 0, 0, 8);
+// Woods per biome: 0 none, 1 conifer (taiga), 2 leafy (temperate, rainforest, blighted), 3 jungle.
+const int WOOD[19] = int[19](0, 0, 0, 0, 0, 1, 2, 2, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, 0);
+// Per wood kind (none, conifer, leafy, jungle): tuft density.
+const float TUFTS[4] = float[4](0.0, 0.3, 0.26, 0.4);
 const vec3 TUNDRA_PALE = vec3(0.88, 0.89, 0.80);
 const vec3 HEATHER_DAB = vec3(0.78, 0.72, 0.74);
 // Tundra: `uTundra` repeats every this many pattern cells (a divisor of 256: seamless where the
@@ -149,6 +155,32 @@ vec3 tundraTone(vec3 col, vec4 d) {
     grass *= 1.0 + 0.06 * d.a - 0.10 * d.g;
     return mix(grass, grass * (HEATHER_DAB / TUNDRA_PALE), 0.3 * d.r);
 }
+// Forest tufts (Roadmap 7 item 197), in a world-anchored pattern octave `q` (cells, the
+// symbol octave scaled by a power of two; hashes mod `per`, its 256-cell wrap, so tiles agree);
+// `aa` is cells per pixel. Returns a tint factor around 1.
+
+// Tufts: a short drawn mark in some cells: a scallop (leafy), a caret (conifer), a double scallop
+// (jungle). Line about 0.9 px wide.
+float tuft(vec2 q, float per, float aa, int kind, float dens) {
+    vec2 c = mod(floor(q), per);
+    vec2 h = hash22(c);
+    if (h.x > dens) return 1.0;
+    // (Back from the 45-deg lattice to the screen's axes: the marks stand upright.)
+    vec2 d = mat2(0.5, 0.5, -0.5, 0.5) * (fract(q) - (0.5 + (h - 0.5) * 0.5)) * 1.4142;
+    float l;
+    if (kind == 1) {
+        l = min(segment(d, vec2(-0.13, 0.07), vec2(0.0, -0.1)), segment(d, vec2(0.13, 0.07), vec2(0.0, -0.1)));
+    } else if (kind == 3) {
+        vec2 a = d - vec2(-0.1, 0.03), b = d - vec2(0.1, 0.03);
+        l = min(a.y < 0.0 ? abs(length(a) - 0.1) : length(vec2(abs(a.x) - 0.1, a.y)), b.y < 0.0 ? abs(length(b) - 0.1) : length(vec2(abs(b.x) - 0.1, b.y)));
+    } else {
+        vec2 a = d - vec2(0.0, 0.05);
+        l = a.y < 0.0 ? abs(length(a) - 0.15) : length(vec2(abs(a.x) - 0.15, a.y));
+    }
+    float w = aa * 0.45;
+    return 1.0 - 0.16 * (1.0 - smoothstep(w, w + aa, l));
+}
+
 void main() {
     if (vLocal.x > uMapEnd.x || vLocal.y > uMapEnd.y) discard;
     vec4 t = texture(uTex, vUV);
@@ -190,6 +222,39 @@ void main() {
             float k0 = uPat0.z / TUNDRA_CELLS, k1 = uPat1.z / TUNDRA_CELLS;
             vec4 d = mix(textureGrad(uTundra, p0 / TUNDRA_CELLS, lx * k0, ly * k0), textureGrad(uTundra, p1 / TUNDRA_CELLS, lx * k1, ly * k1), uPatMix);
             col = mix(col, tundraTone(col, d), moor);
+        }
+        // Woods: hatched tufts, feathered by the biome blend.
+        int w1 = WOOD[b1], w2 = WOOD[b2];
+        float wood = (w1 != 0 ? 1.0 - blend * 0.5 : 0.0) + (w2 != 0 ? blend * 0.5 : 0.0);
+        if (uForestAlpha > 0.0 && wood > 0.0) {
+            float fa = uForestAlpha * smoothstep(0.15, 0.6, wood);
+            int wk = w1 != 0 ? w1 : w2;
+            int wk2 = w2 != 0 ? w2 : w1;
+            float m = uPatMix;
+            float tex0 = 1.0, tex1 = 1.0;
+            // Marks (cells 1.4 of a symbol cell) dropped cell by cell across the octave crossfade, as the
+            // symbols are. The lattice is turned 45 deg (so rows don't line up with the screen) by an
+            // integer matrix: a 256-cell wrap of the origin is a whole number of periods `per`, so
+            // tiles agree.
+            const float S = 0.5;
+            const float per = 256.0 * S;
+            mat2 diag = mat2(1.0, -1.0, 1.0, 1.0);
+            vec2 q0 = diag * p0 * S, q1 = diag * p1 * S;
+            float a0 = (abs(lx.x) + abs(ly.x)) * uPat0.z * S * 1.4142, a1 = (abs(lx.x) + abs(ly.x)) * uPat1.z * S * 1.4142;
+            float dn = mix(TUFTS[wk], TUFTS[wk2], blend * 0.5);
+            if (m < 0.98) {
+                vec2 c0 = mod(floor(q0), per);
+                float keep = clamp(((1.0 - m) * 1.1 - 0.05 - hash21(c0 + 13.1)) * 20.0, 0.0, 1.0);
+                if (keep > 0.0) tex0 = mix(1.0, tuft(q0, per, a0, hash21(c0 + 7.0) < blend * 0.5 ? wk2 : wk, dn), keep);
+            }
+            if (m > 0.02) {
+                vec2 c1 = mod(floor(q1), per);
+                float keep = clamp((m * 1.1 - 0.05 - hash21(c1 + 13.1)) * 20.0, 0.0, 1.0);
+                if (keep > 0.0) tex1 = mix(1.0, tuft(q1, per, a1, hash21(c1 + 7.0) < blend * 0.5 ? wk2 : wk, dn), keep);
+            }
+            // Each octave's marks where its own are (darker of the two wins).
+            float t = abs(tex0 - 1.0) > abs(tex1 - 1.0) ? tex0 : tex1;
+            col *= mix(1.0, t, fa * smoothstep(0.3, 0.7, wood));
         }
         float above = h - water;
         bool beachy = b1 != 2 && b1 != 3 && b1 != 5 && b1 != 14;

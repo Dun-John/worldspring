@@ -175,7 +175,7 @@ export interface PointerTool {
 
 /** The rooms an open court is (a palace's court, a monastery's garth, a coaching inn's yard): what stands in one is
  * drawn on the battlemap as the building's ground floor has it. */
-const COURTS = new Set(['courtyard', 'garth', 'inn yard']);
+const COURTS = new Set(['courtyard', 'garth', 'inn yard', 'dirt yard']);
 
 const TIERS: [number, string][] = [
   [1500, 'Continent'],
@@ -2019,6 +2019,9 @@ export class MapView {
     // an even wallpaper of dots, so they fade out and are skipped; the forests keep their area tint.
     const far = Math.min(1, Math.max(0, (ftPerPx - 6) / 6));
     u.uSymAlpha = u.uPatAlpha * (1 - far * far * (3 - 2 * far));
+    // Forest tufts: out to the whole continent, gone (0.9 to 0.5 ft/px) as the battlemap's trees come in.
+    const near = Math.min(1, Math.max(0, (ftPerPx - 0.5) / 0.4));
+    u.uForestAlpha = near * near * (3 - 2 * near);
     if (ftPerPx > 300) [u.uContour, u.uIndexEvery] = [1000, 5];
     else if (ftPerPx > 30) [u.uContour, u.uIndexEvery] = [200, 5];
     else if (ftPerPx > 3) [u.uContour, u.uIndexEvery] = [50, 5];
