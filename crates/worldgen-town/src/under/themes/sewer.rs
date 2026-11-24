@@ -258,8 +258,13 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
         if outfalls >= 2 || p.cells[k] != tunnel || p.taken[k] || keep(&p, k) {
             continue;
         }
-        if neighbours(k, nx, ny).any(|m| p.cells[m] < 0 && *is_wet[m].get_or_insert_with(|| wet(t0, centre(m)))) {
-            p.put(Item::new("outfall", "outfall grate", k % nx, k / nx, 1, 1, 0, false, 0.0, Some("strong current: DC 12 Str (Athletics) or swept 20 ft toward the water")));
+        let wet_side = neighbours(k, nx, ny).find(|&m| p.cells[m] < 0 && *is_wet[m].get_or_insert_with(|| wet(t0, centre(m))));
+        if let Some(m) = wet_side {
+            // Its back is against the wall that has the water behind it: 0 north 1 east 2 south 3 west.
+            let back = if m + nx == k { 0 } else if m == k + 1 { 1 } else if m == k + nx { 2 } else { 3 };
+            let mut grate = Item::new("outfall", "outfall grate", k % nx, k / nx, 1, 1, 0, false, 0.0, Some("strong current: DC 12 Str (Athletics) or swept 20 ft toward the water"));
+            grate.back = Some(back);
+            p.put(grate);
             outfalls += 1;
         }
     }
