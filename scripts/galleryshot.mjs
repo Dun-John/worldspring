@@ -49,6 +49,7 @@ const jobs = [
   { family: 'streets', n: 1, query: '&panels=streets' },
   { family: 'plaza', n: 1, query: '&panels=plaza' },
   { family: 'plaza', n: 2, query: '&panels=plaza&set=2' },
+  { family: 'plaza', n: 3, query: '&panels=plaza&set=3' },
 ].filter((j) => !only || only.includes(j.family));
 if (inkSheet) jobs.length = 0;
 

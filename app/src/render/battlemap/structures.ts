@@ -6,7 +6,9 @@ import { SQUARE_FT } from '../scale';
 import { drawBounds, drawSails, isBound, SAILS } from '../countryside';
 import { drawCaveMouth, drawThemedEntrance } from '../entrances';
 import { drawDrain, drawManhole } from './grates';
-import { drawPlazaCross, drawPlazaDais, drawPlazaFountain, drawPlazaMound, drawPlazaPlanter, type PlazaGround } from './plaza';
+import { apron, boxR, creep, dress, dressOf, drawPlazaCross, drawPlazaDais, drawPlazaFountain, drawPlazaMound, drawPlazaPlanter, edgeLight, groundShadow, mix, ruinRamp, type PlazaGround } from './plaza';
+import { INK, LINE, OUT } from '../pen';
+import { rngAt } from '../bridges';
 import { drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawWalls, drawWallTower, GATE_DEPTH } from '../walls';
 
 const STONE = 0x9c968b;
@@ -61,7 +63,10 @@ export function bridgeCells(s: Shape, cx: number, cy: number): number[] {
  * three, and a forecourt's garden wall, gate piers and gate. Bridges, piers and drawbridges are drawn apart
  * (`bridges.ts`; a drawbridge in pieces, for play). (`ox`, `oy`: the chunk's corner in world px, for the bounds' patterns.)
  */
-export function drawStructures(shapes: Shape[], ox = 0, oy = 0, gates = shapes.filter((s) => s.kind === 9)): Graphics {
+const PAVING: PlazaGround = { tone: [1, 1, 1], foot: 14, nature: -1, wx: 0, wy: 0 };
+
+/** (`groundOf`: the ground a way underground stands on, as `BattlemapLayer.plazaGround`; plain paving without it.) */
+export function drawStructures(shapes: Shape[], ox = 0, oy = 0, gates = shapes.filter((s) => s.kind === 9), groundOf?: (s: Shape) => PlazaGround): Graphics {
   const g = new Graphics();
   // (v63 countryside: hedgerows, dry-stone walls and fences low under the rest; a windmill's sails.)
   const bounds = shapes.filter((s) => isBound(s.kind));
@@ -71,7 +76,7 @@ export function drawStructures(shapes: Shape[], ox = 0, oy = 0, gates = shapes.f
   if (walls.length) drawWalls(g, walls, gates);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
-  for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);
+  for (const s of shapes) if (s.kind === 4) drawEntrance(g, s, groundOf?.(s) ?? PAVING);
   // A forecourt's low garden wall, its gate's piers, then the open leaves.
   const garden = shapes.filter((s) => s.kind === 10);
   if (garden.length) drawGardenWalls(g, garden);
@@ -103,7 +108,7 @@ export function drawDais(g: Graphics, s: Shape, ground: PlazaGround = { tone: [1
  * cave mouth, a timber-framed mine adit with rails running out, a lava-tube skylight, a round
  * sewer grate in the street. `pts`: the opening, then a point one square in along the passage.
  */
-function drawEntrance(g: Graphics, s: Shape) {
+function drawEntrance(g: Graphics, s: Shape, ground: PlazaGround) {
   const [x, y] = [s.pts[0], s.pts[1]];
   const l = Math.hypot(s.pts[2] - x, s.pts[3] - y) || 1;
   const [ux, uy] = [(s.pts[2] - x) / l, (s.pts[3] - y) / l];
@@ -130,8 +135,8 @@ function drawEntrance(g: Graphics, s: Shape) {
     seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) | 0;
     return ((seed ^ (seed >>> 13)) >>> 0) / 4294967296;
   };
-  if (code >> 4 === 1) return drawRuinStair(g, at, quad, rnd);
-  if (code >> 4 === 2) return drawMausoleum(g, at, quad, rnd);
+  if (code >> 4 === 1) return drawRuinStair(g, at, quad, rnd, ground);
+  if (code >> 4 === 2) return drawMausoleum(g, at, quad, rnd, ground);
   if (code >> 4 === 3) return drawDrain(g, at, quad);
   if (code >> 4 >= 4 && code >> 4 <= 6) return drawThemedEntrance(g, code >> 4, at, rnd);
   switch (code & 15) {
@@ -192,97 +197,154 @@ const stoneShade = (k: number) => {
   return (v << 16) | (v << 8) | Math.max(0, v - 10);
 };
 
+/** A stone's colour `k` of the way from lit (0) to the dark of the stair's depth (1). */
+const deepen = (light: number, k: number) => mix(light, 0x1b1714, Math.min(0.9, k * 0.85));
+const circle = (x: number, y: number, r: number, n = 14) => Array.from({ length: n * 2 }, (_, i) => (i & 1 ? y + Math.sin((i >> 1) / n * Math.PI * 2) * r : x + Math.cos((i >> 1) / n * Math.PI * 2) * r));
+
 /**
- * A stair down through a ruin's floor, about 6 ft wide and 12 deep: cracked steps darkening
- * into the dark, a kerb of fallen blocks with gaps, rubble and moss strewn round it.
+ * A stair down through a ruin's floor: a flight one square wide (5 ft) and 12 ft long, its treads
+ * darkening into a dark mouth, a kerb of fallen blocks with gaps either side; the rest of the
+ * old floor round it broken slabs with the ground showing between, a few fallen stones. The
+ * stone weathered from the chunk's own tone, a worn ring of the ground's earth (or a paved
+ * margin) at its foot.
  */
-function drawRuinStair(g: Graphics, at: At, quad: Quad, rnd: () => number) {
-  // A shadowed pit, then the steps.
-  g.poly(quad(-0.6, 2.1, -0.7, 0.7)).fill({ color: 0x000000, alpha: 0.25 });
-  g.poly(quad(-0.5, 2, -0.6, 0.6)).fill(0x1b1714);
-  for (let k = 0; k < 5; k++) {
-    const a = -0.5 + k * 0.5;
-    const col = stoneShade(Math.min(1, k / 4.5));
-    // Each step a few slabs, some cracked or missing.
-    for (let b = -0.55; b < 0.5; b += 0.37) {
-      if (rnd() < 0.12 && k > 1) continue;
-      const w = 0.33 + rnd() * 0.03;
-      g.poly(quad(a + 0.02, a + 0.42 - rnd() * 0.06, b, b + w)).fill(col);
-      if (rnd() < 0.3) g.moveTo(...at(a + 0.05, b + w * rnd())).lineTo(...at(a + 0.38, b + w * rnd())).stroke({ width: 1.5, color: 0x2a2520, alpha: 0.7 });
+function drawRuinStair(g: Graphics, at: At, quad: Quad, rnd: () => number, gr: PlazaGround) {
+  const st = ruinRamp(gr);
+  const [o, e] = [at(0, 0), at(1, 0)];
+  const [cx, cy] = at(0.75, 0);
+  const R = boxR(1.95 * PX, 1.7 * PX, Math.atan2(e[1] - o[1], e[0] - o[0]));
+  const sr = rngAt(gr.wx + o[0], gr.wy + o[1]);
+  apron(g, cx, cy, R, gr, sr);
+  // The broken floor either side: big worn slabs, a few gone to the ground beneath.
+  for (const side of [-1, 1]) {
+    for (let a = -0.6; a < 2.2; a += 0.7) {
+      for (const [b0, b1] of [[0.86, 1.5]]) {
+        if (rnd() < 0.25) continue;
+        const j = (rnd() - 0.5) * 0.08;
+        const la = 0.66 - rnd() * 0.1;
+        const [p0, p1] = side < 0 ? [-b1, -b0] : [b0, b1];
+        const p = [...at(a + j, p0), ...at(a + la + j, p0 - j), ...at(a + la - j, p1), ...at(a - j, p1 + j)];
+        g.poly(p).fill(rnd() < 0.5 ? st.mid : mix(st.mid, st.dark, 0.25)).stroke({ width: LINE * 1.1, color: INK, alpha: 0.8, join: 'round' });
+      }
     }
-    g.moveTo(...at(a + 0.42, -0.55)).lineTo(...at(a + 0.42, 0.55)).stroke({ width: 1.2, color: 0x2a2520, alpha: 0.6 });
   }
+  // The mouth, then the treads (1 ft each seen from above), lit at the top, dark below.
+  g.poly(quad(-0.5, 2, -0.5, 0.5)).fill(0x1b1714);
+  const n = 10;
+  for (let k = 0; k < n; k++) {
+    const a = -0.5 + k * 0.25;
+    g.poly(quad(a, a + 0.2, -0.47, 0.47)).fill(deepen(k === 0 ? st.sun : st.light, k / (n - 1.5)));
+  }
+  // Two bold cracks across the upper treads, and a corner broken off one.
+  for (const [a0, b0, a1, b1] of [[-0.45, -0.3, 0.2, 0.05], [0.3, 0.35, 0.7, 0.1]]) g.moveTo(...at(a0, b0)).lineTo(...at((a0 + a1) / 2, b0 + 0.12)).lineTo(...at(a1, b1));
+  g.stroke({ width: LINE * 1.2, color: INK, alpha: 0.75, join: 'round' });
+  g.poly(quad(0.5, 0.7, 0.3, 0.47)).fill(0x1b1714);
   // The kerb: worn blocks along both sides and the back, some fallen out of line.
   const block = (a: number, b: number, la: number, lb: number) => {
-    const j = (rnd() - 0.5) * 0.12;
+    const j = (rnd() - 0.5) * 0.1;
     const p = [...at(a + j, b - j), ...at(a + la + j, b - j), ...at(a + la - j, b + lb + j), ...at(a - j, b + lb + j)];
-    g.poly(p.map((v) => v + 3)).fill({ color: 0x000000, alpha: 0.3 });
-    g.poly(p).fill(rnd() < 0.5 ? STONE : STONE_TOP).stroke({ width: 1.8, color: ROOF_INK });
+    groundShadow(g, p, gr);
+    g.poly(p).fill(rnd() < 0.5 ? st.mid : st.light).stroke({ width: LINE * 1.3, color: INK, join: 'round' });
+    edgeLight(g, p, st, LINE * 0.8);
   };
   for (let a = -0.5; a < 2; a += 0.62) {
     for (const side of [-1, 1]) {
-      if (rnd() < 0.25) continue;
-      block(a, side < 0 ? -0.95 : 0.62, 0.56, 0.34);
+      if (rnd() < 0.2) continue;
+      block(a, side < 0 ? -0.82 : 0.5, 0.56, 0.32);
     }
   }
-  for (let b = -0.95; b < 0.95; b += 0.62) if (rnd() > 0.3) block(2, b, 0.34, 0.56);
-  // Rubble and moss about the mouth.
-  for (let k = 0; k < 10; k++) {
+  for (let b = -0.82; b < 0.8; b += 0.56) if (rnd() > 0.25) block(2, b, 0.32, 0.52);
+  // A few fallen stones about the mouth.
+  for (let k = 0; k < 6; k++) {
     const a = -1 + rnd() * 3.4;
-    const b = (rnd() < 0.5 ? -1 : 1) * (1.05 + rnd() * 0.7);
-    const r = 0.06 + rnd() * 0.1;
-    const [cx, cy] = at(a, b);
-    g.circle(cx + 2, cy + 2, r * PX).fill({ color: 0x000000, alpha: 0.25 });
-    g.circle(cx, cy, r * PX).fill(stoneShade(0.15 + rnd() * 0.3)).stroke({ width: 1.2, color: ROOF_INK, alpha: 0.8 });
+    const b = (rnd() < 0.5 ? -1 : 1) * (1.6 + rnd() * 0.35);
+    const r = (0.08 + rnd() * 0.1) * PX;
+    const [x, y] = at(a, b);
+    groundShadow(g, circle(x, y, r, 8), gr, 0.6);
+    g.poly(circle(x, y, r, 8)).fill(rnd() < 0.5 ? st.mid : st.light).stroke({ width: LINE, color: INK, alpha: 0.85 });
   }
-  for (let k = 0; k < 4; k++) {
-    const [cx, cy] = at(rnd() * 2.2, (rnd() - 0.5) * 1.9);
-    g.circle(cx, cy, (0.15 + rnd() * 0.15) * PX).fill({ color: 0x55703a, alpha: 0.45 });
-  }
+  dress(g, cx, cy, R, (t) => R(t) * 0.85, dressOf(gr), gr, sr);
 }
 
 /**
  * A graveyard mausoleum over the catacomb stair, 3 squares wide and 4 deep: a pale stone
- * plinth, heavy walls on three sides, columns either side of the open door, the stair going
- * down inside; a slab path out of the door, urns at its corners.
+ * plinth, heavy walls on three sides, columns either side of a 4-ft door; inside a flagged
+ * chamber, a stone coffin along each side wall and a stair one square wide going down between them; a slab path out of the door, urns at its corners. The stone from the chunk's tone (weathered),
+ * a paved margin about the plinth on paving, the ground creeping up to it on grass.
  */
-function drawMausoleum(g: Graphics, at: At, quad: Quad, rnd: () => number) {
-  // Shadow (light from the NW), plinth, the threshold slabs out front.
-  g.poly(quad(-1.5, 2.5, -1.5, 1.5).map((v) => v + 0.35 * PX)).fill({ color: 0x000000, alpha: 0.3 });
-  g.poly(quad(-1.5, 2.5, -1.5, 1.5)).fill(0xc4bdae).stroke({ width: 2.5, color: ROOF_INK });
-  for (let k = 0; k < 2; k++) g.poly(quad(-2.4 + k * 0.45, -2.4 + k * 0.45 + 0.4, -0.55, 0.55)).fill(0xa8a294).stroke({ width: 1.2, color: ROOF_INK, alpha: 0.8 });
-  // Walls on the sides and back.
-  const wall = 0x8f897d;
-  g.poly(quad(-1.2, 2.5, -1.5, -1.05)).fill(wall).stroke({ width: 2, color: ROOF_INK });
-  g.poly(quad(-1.2, 2.5, 1.05, 1.5)).fill(wall).stroke({ width: 2, color: ROOF_INK });
-  g.poly(quad(2.05, 2.5, -1.05, 1.05)).fill(wall).stroke({ width: 2, color: ROOF_INK });
+function drawMausoleum(g: Graphics, at: At, quad: Quad, rnd: () => number, gr: PlazaGround) {
+  const st = ruinRamp(gr);
+  const [o, e] = [at(0, 0), at(1, 0)];
+  const [cx, cy] = at(0.5, 0);
+  const sr = rngAt(gr.wx + o[0], gr.wy + o[1]);
+  creep(g, cx, cy, boxR(2.05 * PX, 1.6 * PX, Math.atan2(e[1] - o[1], e[0] - o[0])), gr, sr);
+  // The plinth with its shadow on the ground, the threshold slabs out front.
+  const plinth = quad(-1.5, 2.5, -1.5, 1.5);
+  groundShadow(g, plinth, gr, 1.4);
+  g.poly(plinth).fill(st.light).stroke({ width: OUT, color: INK, join: 'miter' });
+  edgeLight(g, plinth, st, LINE);
+  for (let k = 0; k < 2; k++) g.poly(quad(-2.4 + k * 0.45, -2.4 + k * 0.45 + 0.4, -0.55, 0.55)).fill(st.mid).stroke({ width: LINE * 1.3, color: INK, alpha: 0.85 });
+  // Walls on the sides and back, throwing a little shadow on the plinth.
+  const walls = [quad(-1.2, 2.5, -1.5, -1.05), quad(-1.2, 2.5, 1.05, 1.5), quad(2.05, 2.5, -1.05, 1.05)];
+  for (const w of walls) g.poly(w.map((v) => v + PX * 0.09)).fill({ color: st.dark, alpha: 0.3 });
+  for (const w of walls) {
+    g.poly(w).fill(st.mid).stroke({ width: LINE * 1.6, color: INK, join: 'miter' });
+    edgeLight(g, w, st, LINE * 0.9);
+  }
   // Coping along the wall tops.
   for (const b of [-1.28, 1.28]) g.moveTo(...at(-1.15, b)).lineTo(...at(2.45, b));
   g.moveTo(...at(2.28, -1.25)).lineTo(...at(2.28, 1.25));
-  g.stroke({ width: 1.5, color: 0xd6cfbf, alpha: 0.8 });
-  // The stair inside, darkening as it goes down toward the back.
-  g.poly(quad(-0.6, 2.05, -1.05, 1.05)).fill(0x1b1714);
-  for (let k = 0; k < 5; k++) {
-    const a = -0.55 + k * 0.52;
-    g.poly(quad(a, a + 0.44, -0.98, 0.98)).fill(stoneShade(0.1 + k * 0.2));
+  g.stroke({ width: LINE * 0.8, color: st.sun, alpha: 0.8 });
+  // The chamber floor: flagstones in the stone's mid tone, a few big joints.
+  g.poly(quad(-1.2, 2.05, -1.05, 1.05)).fill(st.mid);
+  g.moveTo(...at(-0.55, -1.05)).lineTo(...at(-0.55, 1.05)).moveTo(...at(0.1, -1.05)).lineTo(...at(0.1, -0.58)).moveTo(...at(0.1, 0.58)).lineTo(...at(0.1, 1.05));
+  for (const b of [-0.3, 0.3]) g.moveTo(...at(-1.2, b)).lineTo(...at(-0.55, b));
+  g.moveTo(...at(-0.55, 0)).lineTo(...at(0.05, 0));
+  g.stroke({ width: LINE * 0.9, color: st.dark, alpha: 0.7 });
+  // A stone coffin lid along each side wall, a carved panel on it.
+  for (const side of [-1, 1]) {
+    const [b0, b1] = side < 0 ? [-1.0, -0.62] : [0.62, 1.0];
+    const lid = quad(0.2, 1.85, b0, b1);
+    groundShadow(g, lid, gr, 0.7);
+    g.poly(lid).fill(st.light).stroke({ width: LINE * 1.3, color: INK, join: 'miter' });
+    edgeLight(g, lid, st, LINE * 0.8);
+    g.poly(quad(0.38, 1.67, b0 + 0.09, b1 - 0.09)).stroke({ width: LINE * 0.9, color: st.dark, alpha: 0.75, join: 'miter' });
   }
-  // Columns either side of the door, a lintel slab across.
+  // The stair down, one square wide between low side walls, toward the back: treads a foot
+  // deep, lit at the top and darkening into the dark mouth.
+  g.poly(quad(0.05, 2.05, -0.5, 0.5)).fill(0x1b1714);
+  for (let k = 0; k < 10; k++) {
+    const a = 0.05 + k * 0.2;
+    g.poly(quad(a, a + 0.16, -0.46, 0.46)).fill(deepen(k === 0 ? st.sun : st.light, k / 8.5));
+  }
+  for (const b of [-0.58, 0.5]) {
+    const w = quad(0.05, 2.05, b, b + 0.08);
+    g.poly(w).fill(st.light).stroke({ width: LINE * 1.1, color: INK, join: 'miter' });
+  }
+  g.poly(quad(0.05, 2.05, -0.58, 0.58)).stroke({ width: LINE * 1.2, color: INK, alpha: 0.8, join: 'miter' });
+  // The doorway, about 4 ft wide between short returns of the front wall.
+  for (const [b0, b1] of [[-1.05, -0.4], [0.4, 1.05]]) {
+    const w = quad(-1.2, -0.92, b0, b1);
+    g.poly(w).fill(st.mid).stroke({ width: LINE * 1.6, color: INK, join: 'miter' });
+    edgeLight(g, w, st, LINE * 0.9);
+  }
+  // Columns either side of the door, a short shadow in their own round.
   for (const b of [-1.25, 1.25]) {
-    const [cx, cy] = at(-1.25, b);
-    g.circle(cx + 2.5, cy + 2.5, 0.3 * PX).fill({ color: 0x000000, alpha: 0.3 });
-    g.circle(cx, cy, 0.3 * PX).fill(0xd8d1c2).stroke({ width: 2, color: ROOF_INK });
-    g.circle(cx - 1.5, cy - 1.5, 0.12 * PX).fill({ color: 0xffffff, alpha: 0.35 });
+    const [x, y] = at(-1.25, b);
+    const r = 0.3 * PX;
+    groundShadow(g, circle(x, y, r), gr, 0.9);
+    g.poly(circle(x, y, r)).fill(st.sun).stroke({ width: LINE * 1.6, color: INK });
+    g.poly(circle(x - r * 0.12, y - r * 0.12, r * 0.5)).fill({ color: 0xffffff, alpha: 0.25 });
+    g.poly(circle(x + r * 0.15, y + r * 0.15, r * 0.7)).stroke({ width: LINE * 0.8, color: st.dark, alpha: 0.5 });
   }
   // Urns at the front corners of the path.
   for (const b of [-0.85, 0.85]) {
-    const [cx, cy] = at(-2.15, b);
-    g.circle(cx + 2, cy + 2, 0.18 * PX).fill({ color: 0x000000, alpha: 0.3 });
-    g.circle(cx, cy, 0.18 * PX).fill(0x6f675b).stroke({ width: 1.5, color: ROOF_INK });
-    g.circle(cx, cy, 0.08 * PX).fill(0x2a2520);
+    const [x, y] = at(-2.15, b);
+    const r = 0.18 * PX;
+    groundShadow(g, circle(x, y, r, 10), gr, 0.7);
+    g.poly(circle(x, y, r, 10)).fill(st.dark).stroke({ width: LINE, color: INK });
+    g.poly(circle(x, y, r * 0.45, 8)).fill(0x2a2520);
+    g.poly(circle(x - r * 0.3, y - r * 0.3, r * 0.3, 6)).fill({ color: st.sun, alpha: 0.5 });
   }
-  // Moss and lichen on the stone.
-  for (let k = 0; k < 4; k++) {
-    const [cx, cy] = at(-1.1 + rnd() * 3.5, (rnd() < 0.5 ? -1.3 : 1.3) + (rnd() - 0.5) * 0.2);
-    g.circle(cx, cy, (0.08 + rnd() * 0.1) * PX).fill({ color: 0x5f7a3e, alpha: 0.55 });
-  }
+  dress(g, cx, cy, boxR(1.9 * PX, 1.45 * PX, Math.atan2(e[1] - o[1], e[0] - o[0])), boxR(1.6 * PX, 1.2 * PX, Math.atan2(e[1] - o[1], e[0] - o[0])), dressOf(gr), gr, sr);
 }

@@ -614,10 +614,13 @@ export async function runGallery(target: HTMLElement) {
   // A square's fountain and dais on six grounds (`&panels=plaza`).
   if (pick?.includes('plaza')) {
     const set2 = query.get('set') === '2';
-    head(set2
+    const set3 = query.get('set') === '3';
+    head(set3
+      ? 'Plaza (set 3): ruin stair (going down east, then south) and graveyard mausoleum (door on the east, then south side; inside, a 5-ft stair going down west, then north, between two coffin lids) on six grounds, the 5-ft grid and a 2-ft body disc'
+      : set2
       ? 'Plaza (set 2): planter 3 / 7 ft, market cross 5 / 7 ft and mound 6 / 10 ft (radius) on six grounds, the 5-ft grid and a 2-ft body disc'
       : 'Plaza: fountain 3 / 8 / 14 ft and dais 5 / 9 / 13 ft (radius) on six grounds, the 5-ft grid and a 2-ft body disc');
-    y = plaza(root, y, query.has('nolabels'), Number(query.get('sq')) || 32, set2);
+    y = plaza(root, y, query.has('nolabels'), Number(query.get('sq')) || 32, set2, set3);
   }
 
   // The hearth's four looks, against a north and an east wall, on flags and on boards (`&panels=hearth`).
@@ -775,7 +778,7 @@ function streets(app: Application, catalog: KindInfo[], root: Container, y0: num
 /** `&panels=plaza`: rows of grounds (granite flags, honey sandstone, grass, desert sand, snow, jungle mud), each with the
  * battlemap's own `drawDais` fountain and dais at a small, middle and large radius, the town's stone tone and the
  * surfaces as `BattlemapLayer` would pass them, on the 5-ft grid with a body disc, at `sq` px a square. */
-function plaza(root: Container, y0: number, nolabels: boolean, sq: number, set2 = false): number {
+function plaza(root: Container, y0: number, nolabels: boolean, sq: number, set2 = false, set3 = false): number {
   const grounds: { label: string; foot: number; nature: number; tone: number[] }[] = [
     { label: 'granite flags (north)', foot: 14, nature: 0, tone: STONE_TONES[0] },
     { label: 'honey sandstone (south)', foot: 14, nature: 2, tone: STONE_TONES[2] },
@@ -787,8 +790,10 @@ function plaza(root: Container, y0: number, nolabels: boolean, sq: number, set2 
   // (kind, radius in feet)
   // (`&set=2`: planter, market cross and mound.)
   const cells: [number, number][] = set2 ? [[2, 3], [2, 7], [3, 5], [3, 7], [4, 6], [4, 10]] : [[1, 3], [1, 8], [1, 14], [0, 5], [0, 9], [0, 13]];
-  const ws = cells.map(([, ft]) => Math.ceil(2 * (ft / 5 + 1.1)));
-  const hSq = Math.max(...ws);
+  // (`&set=3`: kind = entrance code 16 ruin stair, 32 mausoleum, in feet the width in squares times 5.)
+  if (set3) cells.splice(0, cells.length, [16, 30], [16, 30], [32, 35], [32, 35]);
+  const ws = cells.map(([, ft]) => (set3 ? ft / 5 + 1 : Math.ceil(2 * (ft / 5 + 1.1))));
+  const hSq = set3 ? 7 : Math.max(...ws);
   const k = sq / PX;
   let y = y0;
   grounds.forEach((gd, row) => {
@@ -823,19 +828,22 @@ function plaza(root: Container, y0: number, nolabels: boolean, sq: number, set2 
     cells.forEach(([kind, ft], col) => {
       const cw = ws[col] * sq;
       const [cx, cy] = [x + cw / 2, y + h / 2];
+      const a3 = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
       const a = [Math.PI / 2, Math.PI * 0.25, Math.PI, Math.PI * 1.5, 0, Math.PI * 0.75][(col + row) % 6];
       const rp = (ft / 5) * PX;
       const ground: PlazaGround = { tone: gd.tone, foot: gd.foot, nature: gd.nature, wx: (col * 997 + row * 31) * PX, wy: (row * 1301 + col * 17) * PX };
-      const f = new Graphics();
-      drawDais(f, { kind: 5, size: kind * PX, pts: [0, 0, Math.cos(a) * rp, Math.sin(a) * rp] } as Shape, ground);
+      const f = set3
+        ? drawStructures([{ kind: 4, size: kind * PX, pts: [0, 0, Math.cos(a3[col]) * PX, Math.sin(a3[col]) * PX] } as Shape], 0, 0, undefined, () => ground)
+        : new Graphics();
+      if (!set3) drawDais(f, { kind: 5, size: kind * PX, pts: [0, 0, Math.cos(a) * rp, Math.sin(a) * rp] } as Shape, ground);
       f.scale.set(k);
-      f.position.set(cx, cy);
+      f.position.set(set3 ? cx + (kind === 32 ? -0.5 : -0.75) * sq * (a3[col] === 0 ? 1 : a3[col] === Math.PI ? -1 : 0) : cx, set3 ? cy + (kind === 32 ? 0 : 0) * sq : cy);
       root.addChild(f);
       const d = new Graphics();
       bodyDisc(d, x + sq * 0.5, y + h - sq * 0.5, sq);
       root.addChild(d);
       if (!nolabels) {
-        const t = new Text({ text: `${['dais', 'fountain', 'planter', 'cross', 'mound'][kind]} ${ft} ft`, style: { ...LABEL, fontSize: 11 } });
+        const t = new Text({ text: set3 ? `${kind === 16 ? 'ruin stair' : 'mausoleum'}` : `${['dais', 'fountain', 'planter', 'cross', 'mound'][kind]} ${ft} ft`, style: { ...LABEL, fontSize: 11 } });
         t.position.set(x + 3, y + 2);
         root.addChild(t);
         if (!col) {

@@ -30,7 +30,8 @@ const SEAM = { width: 1.2, color: INK, alpha: 0.38, join: 'round' as const };
 /** The planks' grain and knots: a soft shade of the plank itself. */
 const grainOf = (base: number) => mix(base, WOOD[0], 0.45);
 /** Stone: dark, mid, light, sunlit. */
-export const STONE = [0x6e675c, 0x9a9182, 0xc4baa6, 0xe4dccb];
+const STONE_BASE = [0x6e675c, 0x9a9182, 0xc4baa6, 0xe4dccb];
+export const STONE = STONE_BASE;
 /** Old stone, weathered a shade darker and warmer: dark, mid, light, sunlit. */
 const OLD_STONE = [0x5f584b, 0x8a8170, 0xaea38b, 0xd2c6a8];
 /** Moss: dark, mid, light. */
@@ -43,6 +44,26 @@ export function mix(a: number, b: number, t: number): number {
   const ch = (s: number) => Math.round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t);
   return (ch(16) << 16) | (ch(8) << 8) | ch(0);
 }
+
+/** What a bridge stands on, from its chunk (`BattlemapLayer.bridgeGround`): the town's stone tint, the water's colour
+ * under it, the land's at its ends, and whether a point is dry ground. Without it: plain grey stone, stock water. */
+export interface BridgeGround {
+  tone: ArrayLike<number>;
+  water: number;
+  land: number;
+  dry: (x: number, y: number) => boolean;
+}
+/** The ground of the bridge being drawn (drawing is synchronous). */
+let cur: BridgeGround | null = null;
+/** A stone colour tinted by the town's stone (as the plaza's ramp: grey times the culture's tone). */
+function tint(c: number): number {
+  if (!cur) return c;
+  const ch = (sh: number, k: number) => Math.max(0, Math.min(255, Math.round(((c >> sh) & 255) * cur!.tone[k])));
+  return (ch(16, 0) << 16) | (ch(8, 1) << 8) | ch(0, 2);
+}
+/** A soft darker shade of what lies beneath (not black). */
+const shadeOf = (under: number) => mix(under, 0x1a1c24, 0.5);
+const waterShade = () => shadeOf(cur?.water ?? 0x4d8085);
 
 /** A stable random per bridge, from where it is. */
 export function rngAt(x: number, y: number): () => number {
@@ -72,8 +93,43 @@ function facing(f: Frame, a: number, b: number): number {
   return ((f.ux * a + f.vx * b) * LX + (f.uy * a + f.vy * b) * LY) / l;
 }
 
+/** A cast shadow: the water's darker shade where the ground below is water, a faint darker land where it is dry
+ * (cell by cell inside the polygon, so a shadow never darkens the bank like a scorch). */
+function castShadow(g: Graphics, poly: number[], alpha: number) {
+  if (!cur) return void g.poly(poly).fill({ color: waterShade(), alpha });
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < poly.length; i += 2) {
+    x0 = Math.min(x0, poly[i]);
+    x1 = Math.max(x1, poly[i]);
+    y0 = Math.min(y0, poly[i + 1]);
+    y1 = Math.max(y1, poly[i + 1]);
+  }
+  const inside = (x: number, y: number) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+      if (poly[i + 1] > y !== poly[j + 1] > y && x < ((poly[j] - poly[i]) * (y - poly[i + 1])) / (poly[j + 1] - poly[i + 1]) + poly[i]) c = !c;
+    }
+    return c;
+  };
+  const wet: number[][] = [];
+  const dryCells: number[][] = [];
+  const cs = FT * 0.5;
+  for (let y = y0; y < y1; y += cs) {
+    for (let x = x0; x < x1; x += cs) {
+      if (!inside(x + cs / 2, y + cs / 2)) continue;
+      (cur.dry(x + cs / 2, y + cs / 2) ? dryCells : wet).push([x, y]);
+    }
+  }
+  const col = mix(cur.land, 0x1a1c24, 0.4);
+  for (const [x, y] of wet) g.rect(x, y, cs + 0.5, cs + 0.5);
+  if (wet.length) g.fill({ color: waterShade(), alpha });
+  for (const [x, y] of dryCells) g.rect(x, y, cs + 0.5, cs + 0.5);
+  if (dryCells.length) g.fill({ color: col, alpha: Math.min(alpha, 0.16) * 0.8 });
+}
+
 /** A deck (`battlemap::ShapeKind::Deck`): its first edge runs along the span; `size` is the style. */
-export function drawDeck(g: Graphics, s: Shape) {
+export function drawDeck(g: Graphics, s: Shape, gr?: BridgeGround) {
+  cur = gr ?? null;
   if (s.pts.length < 8) return;
   const [x0, y0, x1, y1] = s.pts;
   const [x3, y3] = [s.pts[6], s.pts[7]];
@@ -165,13 +221,15 @@ function quayDeck(g: Graphics, s: Shape) {
 
 /** A road bridge (`ShapeKind::RoadBridge`): its centre line, `size` wide, then `[material, 0]`
  * (0 timber, 1 old stone). */
-export function drawRoadBridge(g: Graphics, s: Shape) {
+export function drawRoadBridge(g: Graphics, s: Shape, gr?: BridgeGround) {
+  cur = gr ?? null;
   const [x0, y0, x1, y1] = s.pts;
   const len = Math.hypot(x1 - x0, y1 - y0) || 1;
   const [ux, uy] = [(x1 - x0) / len, (y1 - y0) / len];
   const [vx, vy] = [-uy, ux];
   const f: Frame = { ox: x0 - vx * s.size * 0.5, oy: y0 - vy * s.size * 0.5, ux, uy, vx, vy, len, wid: s.size };
-  if (s.pts.length >= 6 && Math.round(s.pts[4] / PX) === 1) oldStoneBridge(g, f, rngAt(x0 + x1, y0 + y1));
+  const old = s.pts.length >= 6 && Math.round(s.pts[4] / PX) === 1;
+  if (old) oldStoneBridge(g, f, rngAt(x0 + x1, y0 + y1));
   else timber(g, f, rngAt(x0 + x1, y0 + y1), true);
 }
 
@@ -188,7 +246,8 @@ const WET_STONE = [0x5d5a4f, 0x77735f, 0x8d8a72];
  * A ford (`ShapeKind::Ford`): its points are stepping stones (only where there is water, laid
  * by the generator), flat and wet, some half under the water, a faint ripple round each.
  */
-export function drawFord(g: Graphics, s: Shape) {
+export function drawFord(g: Graphics, s: Shape, gr?: BridgeGround) {
+  cur = gr ?? null;
   const n = s.pts.length / 2;
   const rnd = rngAt(s.pts[0] + s.pts[n * 2 - 2], s.pts[1] + s.pts[n * 2 - 1]);
   const stones: [number, number, number, number, boolean][] = [];
@@ -203,7 +262,7 @@ export function drawFord(g: Graphics, s: Shape) {
       pts.push(x + Math.cos(t) * rr, y + Math.sin(t) * rr * 0.8);
     }
     const a = low ? 0.7 : 1.0;
-    g.poly(pts.map((v, i) => v + FT * (i % 2 ? 0.25 : 0.2))).fill({ color: 0x000000, alpha: 0.15 * a });
+    castShadow(g, pts.map((v, i) => v + FT * (i % 2 ? 0.25 : 0.2)), 0.15 * a);
     g.poly(pts).fill({ color: WET_STONE[1], alpha: a }).stroke({ width: 1.8, color: INK, alpha: a });
     g.ellipse(x + LX * r * 0.25, y + LY * r * 0.25, r * 0.5, r * 0.35).fill({ color: WET_STONE[2], alpha: 0.6 * a });
     if (rnd() < 0.4) g.ellipse(x - LX * r * 0.3, y - LY * r * 0.3, r * 0.35, r * 0.25).fill({ color: 0x5e6b3a, alpha: 0.45 * a });
@@ -215,7 +274,8 @@ export function drawFord(g: Graphics, s: Shape) {
  * bank (24 ft long, as `battlemap::JETTY_FT`); a rope on posts across, and the raft (`size`
  * wide) at the third point.
  */
-export function drawFerry(g: Graphics, s: Shape) {
+export function drawFerry(g: Graphics, s: Shape, gr?: BridgeGround) {
+  cur = gr ?? null;
   const [x0, y0, x1, y1] = s.pts;
   const len = Math.hypot(x1 - x0, y1 - y0) || 1;
   const [ux, uy] = [(x1 - x0) / len, (y1 - y0) / len];
@@ -249,7 +309,7 @@ export function drawFerry(g: Graphics, s: Shape) {
   const [cx, cy] = s.pts.length >= 6 ? [s.pts[4], s.pts[5]] : [x0 + ux * len * 0.3, y0 + uy * len * 0.3];
   const f = frameFrom(cx - ux * rl * 0.5, cy - uy * rl * 0.5, ux, uy, rl, rw);
   const corners = [atF(f, 0, 0), atF(f, rl, 0), atF(f, rl, rw), atF(f, 0, rw)].flat();
-  g.poly(corners.map((v, i) => v + FT * (i % 2 ? 1.6 : 1.6))).fill({ color: 0x000000, alpha: 0.28 });
+  castShadow(g, corners.map((v, i) => v + FT * (i % 2 ? 1.6 : 1.6)), 0.25);
   timber(g, f, rnd, false);
   for (const [a, b] of [
     [FT, FT * 0.2],
@@ -273,7 +333,7 @@ function timber(g: Graphics, f: Frame, rnd: () => number, fence: boolean) {
   const { len, wid } = f;
   // Shadow on the water, the underside and the stringers the planks lie on.
   const sh = FT * 2;
-  g.poly(quad(0, len, -FT * 0.3, wid + FT * 0.3).map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.28 });
+  castShadow(g, quad(0, len, -FT * 0.3, wid + FT * 0.3).map((v) => v + sh), 0.25);
   g.poly(quad(FT * 0.2, len - FT * 0.2, 0, wid)).fill(UNDERSIDE).stroke({ width: PLANK_INK, color: INK, join: 'round' });
   const nStr = wid > FT * 18 ? 4 : 3;
   for (let k = 0; k < nStr; k++) {
@@ -330,7 +390,7 @@ function timber(g: Graphics, f: Frame, rnd: () => number, fence: boolean) {
 /** A log seen end on, standing up: bark rim, pale cut top with a growth ring (the fallen log's end). */
 function logEnd(g: Graphics, x: number, y: number, r: number) {
   const [cx, cy] = [x + LX * r * 0.08, y + LY * r * 0.08];
-  g.circle(x + FT * 0.5, y + FT * 0.5, r).fill({ color: 0x000000, alpha: 0.25 });
+  castShadow(g, Array.from({ length: 10 }, (_, i) => [x + FT * 0.5 + Math.cos(i * 0.628) * r, y + FT * 0.5 + Math.sin(i * 0.628) * r]).flat(), 0.25);
   g.circle(x, y, r).fill(WOOD[0]).stroke({ width: 2.2, color: INK });
   g.circle(cx, cy, r * 0.74).fill(0xd2a26a);
   g.circle(cx, cy, r * 0.42).stroke({ width: 1.2, color: 0xa87a4c });
@@ -367,7 +427,7 @@ function railings(g: Graphics, f: Frame, rnd: () => number) {
       }
     };
     path(FT * 0.9, FT * 0.9);
-    g.stroke({ width: rw, color: 0x000000, alpha: 0.22, cap: 'round', join: 'round' });
+    g.stroke({ width: rw, color: shadeOf(WOOD[1]), alpha: 0.22, cap: 'round', join: 'round' });
     path(0, 0);
     g.stroke({ width: rw + 4.4, color: INK, cap: 'round', join: 'round' });
     path(0, 0);
@@ -396,6 +456,7 @@ function pilings(g: Graphics, f: Frame, rnd: () => number) {
  * stream with a wake round their tips, and squared newels at the four corners.
  */
 function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
+  const STONE = STONE_BASE.map(tint);
   const at = (a: number, b: number) => atF(f, a, b);
   const { len, wid } = f;
   const tp = FT * 2;
@@ -422,8 +483,8 @@ function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
     return [left, right];
   };
   const sh = FT * 3.2;
-  g.poly(deck.map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.3 });
-  for (const c of piers) for (const out of [-1, 1]) for (const p of cutwater(c, out)) g.poly(p.map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.3 });
+  castShadow(g, deck.map((v) => v + sh), 0.25);
+  for (const c of piers) for (const out of [-1, 1]) for (const p of cutwater(c, out)) castShadow(g, p.map((v) => v + sh), 0.25);
   // Cutwaters: a wake round the tip, two facets lit or shaded by which way they face.
   for (const c of piers) {
     for (const out of [-1, 1]) {
@@ -444,7 +505,7 @@ function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
     }
   }
   // Paving: rows of setts across the span, some a shade lighter or darker, and worn ruts.
-  g.poly(deck).fill(0xa39a8a);
+  g.poly(deck).fill(tint(0xa39a8a));
   const joints: number[][] = [];
   for (let a = 0; a < len; ) {
     const a1 = Math.min(len, a + FT * (2 + rnd() * 0.5));
@@ -455,14 +516,14 @@ function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
       const r = rnd();
       if (r < 0.16) {
         const [c0, c1] = [Math.max(0, b) + FT * 0.15, Math.min(wid, b1) - FT * 0.15];
-        if (c1 > c0) g.poly([...at(a + FT * 0.15, c0), ...at(a1 - FT * 0.15, c0), ...at(a1 - FT * 0.15, c1), ...at(a + FT * 0.15, c1)]).fill(r < 0.08 ? 0xaea594 : 0x989081);
+        if (c1 > c0) g.poly([...at(a + FT * 0.15, c0), ...at(a1 - FT * 0.15, c0), ...at(a1 - FT * 0.15, c1), ...at(a + FT * 0.15, c1)]).fill(r < 0.08 ? tint(0xaea594) : tint(0x989081));
       }
       b = b1;
     }
     a = a1;
   }
   for (const [x0, y0, x1, y1] of joints) g.moveTo(x0, y0).lineTo(x1, y1);
-  g.stroke({ width: 1.3, color: 0x7a7266, alpha: 0.8 });
+  g.stroke({ width: 1.3, color: tint(0x7a7266), alpha: 0.8 });
   if (wid > FT * 14) {
     for (const d of [-FT * 2.6, FT * 2.6]) g.moveTo(...at(0, wid / 2 + d)).lineTo(...at(len, wid / 2 + d));
     g.stroke({ width: FT * 1.1, color: PLUM, alpha: 0.1 });
@@ -470,7 +531,7 @@ function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
   // Parapets: their shadow on the deck, then ink, stone, the coping and its sunlit edge.
   const rails = [edge(-1, tp * 0.5), edge(1, tp * 0.5)];
   for (const p of rails) g.poly(p.map((v) => v + FT * 0.8), false);
-  g.stroke({ width: tp, color: 0x000000, alpha: 0.25, join: 'round' });
+  g.stroke({ width: tp, color: shadeOf(tint(0xa39a8a)), alpha: 0.25, join: 'round' });
   for (const p of rails) g.poly(p, false);
   g.stroke({ width: tp + 4, color: INK, join: 'round' });
   for (const p of rails) g.poly(p, false);
@@ -495,7 +556,7 @@ function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
   for (const a of [tp * 0.6, len - tp * 0.6]) {
     for (const b of [tp * 0.5, wid - tp * 0.5]) {
       const n = tp * 0.95;
-      g.poly([...at(a - n, b - n), ...at(a + n, b - n), ...at(a + n, b + n), ...at(a - n, b + n)].map((v) => v + FT * 0.6)).fill({ color: 0x000000, alpha: 0.25 });
+      g.poly([...at(a - n, b - n), ...at(a + n, b - n), ...at(a + n, b + n), ...at(a - n, b + n)].map((v) => v + FT * 0.6)).fill({ color: shadeOf(tint(0xa39a8a)), alpha: 0.25 });
       g.poly([...at(a - n, b - n), ...at(a + n, b - n), ...at(a + n, b + n), ...at(a - n, b + n)]).fill(STONE[1]).stroke({ width: 2.2, color: INK, join: 'round' });
       const m = n * 0.62;
       const [dx, dy] = [LX * n * 0.18, LY * n * 0.18];
@@ -511,9 +572,10 @@ function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
  * worn stumps of newels (one may be gone). Refuges only on a wide deck.
  */
 function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
+  const STONE = STONE_BASE.map(tint);
   const at = (a: number, b: number) => atF(f, a, b);
   const { len, wid } = f;
-  const S = OLD_STONE;
+  const S = OLD_STONE.map(tint);
   const tp = FT * 2;
   const land = Math.min(FT * 12, len * 0.2);
   const nPiers = Math.max(0, Math.round((len - 2 * land) / (FT * 26)));
@@ -548,8 +610,8 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
     ];
   };
   const sh = FT * 3;
-  g.poly(deck.map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.3 });
-  for (const c of piers) for (const out of [-1, 1]) for (const p of cutwater(c, out)) g.poly(p.map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.3 });
+  castShadow(g, deck.map((v) => v + sh), 0.25);
+  for (const c of piers) for (const out of [-1, 1]) for (const p of cutwater(c, out)) castShadow(g, p.map((v) => v + sh), 0.25);
   // Cutwaters: a wake, two worn facets lit or shaded, a wet dark band and moss at the waterline.
   for (const c of piers) {
     for (const out of [-1, 1]) {
@@ -574,7 +636,7 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
     }
   }
   // The deck: rough flags of mixed sizes, a few sunken or cracked, grass in the joints.
-  g.poly(deck).fill(0x8f8673);
+  g.poly(deck).fill(tint(0x8f8673));
   const joints: number[][] = [];
   const tufts: [number, number][] = [];
   for (let a = 0; a < len; ) {
@@ -586,7 +648,7 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
       const r = rnd();
       const [c0, c1] = [Math.max(0, b) + FT * 0.2, Math.min(wid, b1) - FT * 0.2];
       if (r < 0.3 && c1 > c0) {
-        g.poly([...at(a + FT * 0.2, c0), ...at(a1 - FT * 0.2, c0), ...at(a1 - FT * 0.2, c1), ...at(a + FT * 0.2, c1)]).fill(r < 0.12 ? 0x9e957f : r < 0.24 ? 0x857c69 : 0x7a7160);
+        g.poly([...at(a + FT * 0.2, c0), ...at(a1 - FT * 0.2, c0), ...at(a1 - FT * 0.2, c1), ...at(a + FT * 0.2, c1)]).fill(r < 0.12 ? tint(0x9e957f) : r < 0.24 ? tint(0x857c69) : tint(0x7a7160));
       }
       // A crack across a flag now and then.
       if (r > 0.86 && c1 > c0) joints.push([...at(a + (a1 - a) * 0.2, c0 + (c1 - c0) * rnd()), ...at(a + (a1 - a) * 0.55, c0 + (c1 - c0) * rnd()), ...at(a + (a1 - a) * 0.8, c0 + (c1 - c0) * rnd())]);
@@ -596,7 +658,7 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
     a = a1;
   }
   for (const j of joints) g.poly(j, false);
-  g.stroke({ width: 1.4, color: 0x625a4b, alpha: 0.85, join: 'round' });
+  g.stroke({ width: 1.4, color: tint(0x625a4b), alpha: 0.85, join: 'round' });
   if (wid > FT * 9) {
     for (const d of [-FT * 2.4, FT * 2.4]) g.moveTo(...at(0, wid / 2 + d)).lineTo(...at(len, wid / 2 + d));
     g.stroke({ width: FT * 1.2, color: PLUM, alpha: 0.12 });
@@ -612,7 +674,7 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
   // edge), its stones' joints at uneven spacing; here and there a stone gone from the top.
   const rails = [edge(-1, tp * 0.5), edge(1, tp * 0.5)];
   for (const p of rails) g.poly(p.map((v) => v + FT * 0.8), false);
-  g.stroke({ width: tp, color: 0x000000, alpha: 0.25, join: 'round' });
+  g.stroke({ width: tp, color: shadeOf(tint(0x8f8673)), alpha: 0.25, join: 'round' });
   for (const p of rails) g.poly(p, false);
   g.stroke({ width: tp + 4, color: INK, join: 'round' });
   for (const p of rails) g.poly(p, false);
@@ -675,7 +737,7 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
         const r = n * (1.12 + (rnd() - 0.5) * 0.2);
         pts.push(...at(a + Math.cos(t) * r, b + Math.sin(t) * r));
       }
-      g.poly(pts.map((v) => v + FT * 0.6)).fill({ color: 0x000000, alpha: 0.25 });
+      g.poly(pts.map((v) => v + FT * 0.6)).fill({ color: shadeOf(tint(0x8f8673)), alpha: 0.25 });
       g.poly(pts).fill(S[1]).stroke({ width: 2.2, color: INK, join: 'round' });
       const [cx, cy] = at(a, b);
       g.circle(cx + LX * n * 0.2, cy + LY * n * 0.2, n * 0.55).fill(S[2]);

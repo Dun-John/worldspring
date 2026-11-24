@@ -24,7 +24,7 @@ import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { DRAWN_R, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { sprites } from './spriteCode';
-import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
+import { type BridgeGround, deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
 import { drawBreakwaterArmour, drawCog, drawLantern, drawQuayCoping } from './harbourShapes';
 import { caveScale, drawCaveMark, drawFall, drawFallCave, drawFallCaveThrough, mistScale, sheetRun } from './fallShapes';
@@ -34,7 +34,7 @@ import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { SQUARE_FT } from './scale';
 import { bridgeCells, bridgeKey, drawDais, drawStructures } from './battlemap/structures';
-import { NATURAL, stoneTone, type PlazaGround } from './battlemap/plaza';
+import { NATURAL, groundColour, stoneTone, type PlazaGround } from './battlemap/plaza';
 import { drawBattlements } from './battlemap/keeps';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
 import type { Camera } from './camera';
@@ -200,6 +200,40 @@ function plazaGround(c: PreparedChunk, s: Shape, cx: number, cy: number): PlazaG
   };
   const foot = commonest(r + 0.7, r + 0.7, (v) => v !== 17);
   return { tone: stoneTone(c.stone), foot: foot >= 0 ? foot : 14, nature: commonest(r + 2, r + 20, (v) => NATURAL.has(v), 0.55), wx: cx * SQ * PX, wy: cy * SQ * PX };
+}
+
+/**
+ * What a bridge, pier or ford (`s`) stands on, for its shadow, stone and landings: the town's stone tone, the commonest
+ * water surface and the commonest dry natural/road surface in its bounding box and a little round it (chunk squares),
+ * and whether a point (chunk px) is dry ground (-1 off the chunk counts as wet: no landing there).
+ */
+function bridgeGround(c: PreparedChunk, s: Shape): BridgeGround {
+  const WATER = [0x4d8085, 0x264a61];
+  const n = s.pts.length >> 1;
+  const surf = (i: number, j: number) => (i < 0 || j < 0 || i >= SQ || j >= SQ ? -1 : c.surface[j * SQ + i]);
+  const wet = (v: number) => v === 10 || v === 11;
+  let [x0, y0, x1, y1] = [1e9, 1e9, -1e9, -1e9];
+  for (let k = 0; k < n; k++) [x0, y0, x1, y1] = [Math.min(x0, s.pts[k * 2] / PX), Math.min(y0, s.pts[k * 2 + 1] / PX), Math.max(x1, s.pts[k * 2] / PX), Math.max(y1, s.pts[k * 2 + 1] / PX)];
+  const nw = new Map<number, number>();
+  const nl = new Map<number, number>();
+  for (let j = Math.floor(y0) - 3; j <= Math.ceil(y1) + 3; j += 2)
+    for (let i = Math.floor(x0) - 3; i <= Math.ceil(x1) + 3; i += 2) {
+      const v = surf(i, j);
+      if (v < 0 || v === 16) continue;
+      const m = wet(v) ? nw : nl;
+      m.set(v, (m.get(v) ?? 0) + 1);
+    }
+  const top = (m: Map<number, number>, d: number) => [...m].reduce((b, e) => (e[1] > b[1] ? e : b), [d, 0])[0];
+  const tone = stoneTone(c.stone);
+  return {
+    tone,
+    water: WATER[top(nw, 10) === 11 ? 1 : 0],
+    land: groundColour(top(nl, 14), tone),
+    dry: (x, y) => {
+      const v = surf(Math.floor(x / PX), Math.floor(y / PX));
+      return v >= 0 && !wet(v);
+    },
+  };
 }
 
 /** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`; `battlemap::MAX_STAIR_AXES`). */
@@ -1027,18 +1061,18 @@ export class BattlemapLayer {
     const bridgeG = new Graphics();
     const gridG = new Graphics();
     for (const s of c.shapes) {
-      if (s.kind === 2) drawDeck(bridgeG, s);
-      else if (s.kind === 3) drawRoadBridge(bridgeG, s);
+      if (s.kind === 2) drawDeck(bridgeG, s, bridgeGround(c, s));
+      else if (s.kind === 3) drawRoadBridge(bridgeG, s, bridgeGround(c, s));
       else if (s.kind === SHIP) {
         // R5 M20: a cog moored by a pier, on the water with the decks.
         drawCog(bridgeG, s.pts[0], s.pts[1], Math.atan2(s.pts[3] - s.pts[1], s.pts[2] - s.pts[0]), (s.size / PX) * 5, PX, Math.round((s.pts[4] ?? 0) / PX));
         continue;
       }
       else if (s.kind === 6) {
-        drawFord(bridgeG, s);
+        drawFord(bridgeG, s, bridgeGround(c, s));
         continue;
       } else if (s.kind === 7) {
-        drawFerry(bridgeG, s);
+        drawFerry(bridgeG, s, bridgeGround(c, s));
         continue;
       } else continue;
       deckGrid(gridG, s);
@@ -1055,8 +1089,8 @@ export class BattlemapLayer {
     // chunk would otherwise end on top of its gate block. The walls still learn from them which way the
     // town lies.)
     const gates = c.shapes.filter((s) => s.kind === 9);
-    const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX, gates);
-    const structHigh = drawbridges.length ? drawStructures(c.shapes.filter((s) => highKind(s.kind))) : null;
+    const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX, gates, (s) => plazaGround(c, s, cx, cy));
+    const structHigh = drawbridges.length ? drawStructures(c.shapes.filter((s) => highKind(s.kind)), 0, 0, undefined, (s) => plazaGround(c, s, cx, cy)) : null;
     const bridges = drawbridges.map((s) => {
       drawDrawbridgeSill(structG, s);
       const deckG = new Graphics();

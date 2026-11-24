@@ -31,7 +31,7 @@ const SURF = [
 ];
 /** Surfaces that are the land's own (not paving, water or building). */
 export const NATURAL = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 21]);
-const PAVED = new Set([14, 16, 19, 20]);
+export const PAVED = new Set([14, 16, 19, 20]);
 
 /** Cobbles' tints by culture (`ground.frag` `uStone`, times the cobble grey; `Layout::culture`):
  * north cool blue-grey granite, west warm grey-buff, south warm honey limestone, dry pale ochre
@@ -55,16 +55,16 @@ export function stoneTone(stone: number): Float32Array {
   return new Float32Array([t[0] * v * (1 + warm), t[1] * v, t[2] * v * (1 - warm)]);
 }
 
-const hex = (r: number, g: number, b: number) => {
+export const hex = (r: number, g: number, b: number) => {
   const c = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
   return (c(r) << 16) | (c(g) << 8) | c(b);
 };
 const rgb = (c: number) => [((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255];
-const mul = (c: number, f: number) => {
+export const mul = (c: number, f: number) => {
   const [r, g, b] = rgb(c);
   return hex(r * f, g * f, b * f);
 };
-const mix = (a: number, b: number, t: number) => {
+export const mix = (a: number, b: number, t: number) => {
   const [x, y] = [rgb(a), rgb(b)];
   return hex(x[0] + (y[0] - x[0]) * t, x[1] + (y[1] - x[1]) * t, x[2] + (y[2] - x[2]) * t);
 };
@@ -75,7 +75,7 @@ export function groundColour(id: number, tone: ArrayLike<number> = [1, 1, 1]): n
 }
 
 /** The stone's ramp from the town's tone: dark (toward plum), mid, light, sunlit (toward cream), joint. */
-function stoneRamp(tone: ArrayLike<number>) {
+export function stoneRamp(tone: ArrayLike<number>) {
   const [r, g, b] = rgb(0xaba395);
   const mid = hex(r * tone[0], g * tone[1], b * tone[2]);
   return {
@@ -86,9 +86,9 @@ function stoneRamp(tone: ArrayLike<number>) {
     joint: mix(mul(mid, 0.7), 0x4a2f3a, 0.1),
   };
 }
-type Ramp = ReturnType<typeof stoneRamp>;
+export type Ramp = ReturnType<typeof stoneRamp>;
 
-type Rf = (a: number) => number;
+export type Rf = (a: number) => number;
 /** `n` points round (cx, cy) at radius `R(a)`. */
 function around(cx: number, cy: number, R: Rf, n = 64, dx = 0, dy = 0): number[] {
   const pts: number[] = [];
@@ -112,7 +112,7 @@ function arcBand(cx: number, cy: number, Ro: Rf, Ri: Rf, a0: number, a1: number,
   return pts;
 }
 /** A lumpy patch of radius `s` (ground dressing, moss, snow). */
-function lump(x: number, y: number, sx: number, sy: number, rot: number, rnd: () => number, n = 8): number[] {
+export function lump(x: number, y: number, sx: number, sy: number, rot: number, rnd: () => number, n = 8): number[] {
   const pts: number[] = [];
   const [c, s] = [Math.cos(rot), Math.sin(rot)];
   for (let i = 0; i < n; i++) {
@@ -152,7 +152,7 @@ function contactShadow(g: Graphics, cx: number, cy: number, R: Rf, foot: number,
 
 /** Where it meets the ground: a kerb of the paving's own stone (radial joints, a few stray stones) on a paved
  * square, else a worn ring of trodden earth with a few tufts where feet don't reach. */
-function apron(g: Graphics, cx: number, cy: number, R: Rf, gr: PlazaGround, rnd: () => number) {
+export function apron(g: Graphics, cx: number, cy: number, R: Rf, gr: PlazaGround, rnd: () => number) {
   const foot = groundColour(gr.foot, gr.tone);
   if (PAVED.has(gr.foot)) {
     const w = PX * 0.3;
@@ -184,9 +184,9 @@ function apron(g: Graphics, cx: number, cy: number, R: Rf, gr: PlazaGround, rnd:
   g.poly(around(cx, cy, worn)).fill({ color: earth, alpha: snowy ? 0.55 : 0.42 });
 }
 
-type Dress = 'moss' | 'sand' | 'snow' | 'ash' | null;
+export type Dress = 'moss' | 'sand' | 'snow' | 'ash' | null;
 /** What dressing the ground about calls for. */
-function dressOf(gr: PlazaGround): Dress {
+export function dressOf(gr: PlazaGround): Dress {
   // Paving with no clear biome about it gets none (a dry square in a garden town is not a swamp).
   if (PAVED.has(gr.foot) && gr.nature < 0) return null;
   const n = gr.nature >= 0 ? gr.nature : gr.foot;
@@ -199,7 +199,7 @@ function dressOf(gr: PlazaGround): Dress {
 
 /** Sparse dressing at the foot and on the north side of the stone: moss in the wet, sand drifted against
  * the north-west foot, a snow cap on the north side, ash dust all round. */
-function dress(g: Graphics, cx: number, cy: number, R: Rf, top: Rf, kind: Dress, gr: PlazaGround, rnd: () => number) {
+export function dress(g: Graphics, cx: number, cy: number, R: Rf, top: Rf, kind: Dress, gr: PlazaGround, rnd: () => number) {
   if (!kind) return;
   const r = R(0);
   const n = Math.max(3, Math.round(r / (PX * 0.45)));
@@ -242,6 +242,56 @@ function dress(g: Graphics, cx: number, cy: number, R: Rf, top: Rf, kind: Dress,
     const d = R(a) * (0.4 + rnd() * 0.75);
     const s = PX * (0.1 + rnd() * 0.14);
     g.poly(lump(cx + Math.cos(a) * d, cy + Math.sin(a) * d, s * 1.5, s, rnd() * 3, rnd)).fill({ color: 0x5a5458, alpha: 0.28 });
+  }
+}
+
+/** The stone of a ruin or tomb: the chunk's tone, weathered (a little darker, greyer, mixed ~15% with the ground). */
+export function ruinRamp(gr: PlazaGround): Ramp {
+  const st = stoneRamp(gr.tone);
+  const foot = groundColour(gr.foot, gr.tone);
+  const w = (c: number) => mix(mul(c, 0.93), foot, 0.15);
+  return { dark: w(st.dark), mid: w(st.mid), light: w(st.light), sun: w(st.sun), joint: w(st.joint) };
+}
+
+/** A soft ground-toned shadow of the polygon `pts` thrown to the south-east (`k` scales the offset). */
+export function groundShadow(g: Graphics, pts: number[], gr: PlazaGround, k = 1) {
+  const o = PX * 0.12 * k;
+  const foot = groundColour(gr.foot, gr.tone);
+  g.poly(pts.map((v) => v + o)).fill({ color: mul(foot, 0.6), alpha: PAVED.has(gr.foot) ? 0.16 : 0.2 });
+}
+
+/** The lit north-west edges of the convex polygon `pts` in the sun colour, the dark south-east ones in the shade. */
+export function edgeLight(g: Graphics, pts: number[], st: Ramp, w = LINE) {
+  const n = pts.length / 2;
+  let [mx, my] = [0, 0];
+  for (let i = 0; i < n; i++) [mx, my] = [mx + pts[2 * i] / n, my + pts[2 * i + 1] / n];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [x0, y0, x1, y1] = [pts[2 * i], pts[2 * i + 1], pts[2 * j], pts[2 * j + 1]];
+    const d = (x0 + x1) / 2 - mx + ((y0 + y1) / 2 - my);
+    g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: d < 0 ? w : w * 1.3, color: d < 0 ? st.sun : st.dark, alpha: d < 0 ? 0.75 : 0.8 });
+  }
+}
+
+/** A rounded rectangle's outline as a radius about (cx, cy): half-extents `ha` along angle `phi`, `hb` across, in px. */
+export function boxR(ha: number, hb: number, phi: number): Rf {
+  return (t) => {
+    const [c, s] = [Math.abs(Math.cos(t - phi)) / ha, Math.abs(Math.sin(t - phi)) / hb];
+    return 1 / Math.pow(c ** 4 + s ** 4, 0.25);
+  };
+}
+
+/** Where a tomb's plinth meets the ground: a paved margin on paving, else the ground's own grass or earth creeping up to it. */
+export function creep(g: Graphics, cx: number, cy: number, R: Rf, gr: PlazaGround, rnd: () => number) {
+  if (PAVED.has(gr.foot)) return apron(g, cx, cy, R, gr, rnd);
+  const foot = groundColour(gr.foot, gr.tone);
+  const green = [0, 1, 2, 9, 21].includes(gr.foot);
+  const n = 16;
+  for (let i = 0; i < n; i++) {
+    const a = ((i + rnd() * 0.6) / n) * Math.PI * 2;
+    const d = R(a) + PX * (0.02 + rnd() * 0.12);
+    const s = PX * (0.1 + rnd() * 0.1);
+    g.poly(lump(cx + Math.cos(a) * d, cy + Math.sin(a) * d, s * 1.5, s, a + Math.PI / 2, rnd)).fill({ color: green ? mix(foot, 0x4f7a32, 0.45) : mul(foot, 0.86), alpha: 0.75 });
   }
 }
 
