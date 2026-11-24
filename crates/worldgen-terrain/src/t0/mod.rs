@@ -86,6 +86,9 @@ pub struct T0 {
     pub sea_lanes: Vec<sealanes::SeaLane>,
     /// The ferries over the sea to near islands (`ferries`; none with generated roads off).
     pub ferries: Vec<ferries::SeaFerry>,
+    /// The active volcanoes' craters (`volcano::active_craters`): lava lakes on battlemaps and
+    /// the far map.
+    pub craters: Vec<volcano::Crater>,
     biome_seed: u64,
     /// mips[0] is `height`; each next level is a 2x2 box downsample.
     mips: Vec<Grid<f32>>,
@@ -711,6 +714,7 @@ impl T0 {
         sealanes::clip_ports(&mut lanes, &|x, y| t0.sample_water(x, y) as f64 > t0.ground_at(x, y, lattice));
         t0.sea_lanes = lanes;
         t0.ferries = network.ferries.clone();
+        t0.craters = volcano::active_craters(&volcanoes, cell);
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
@@ -728,7 +732,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, landform: Grid::from_vec(0, 0, Vec::new()), rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), lanes: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), road_index: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, landform: Grid::from_vec(0, 0, Vec::new()), rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), lanes: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), craters: Vec::new(), biome_seed, mips, ground_cache: Default::default(), islets: Default::default(), road_index: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -749,6 +753,11 @@ impl T0 {
     fn with_sea_lanes(mut self, sea_lanes: Vec<sealanes::SeaLane>, ferries: Vec<ferries::SeaFerry>) -> T0 {
         self.sea_lanes = sea_lanes;
         self.ferries = ferries;
+        self
+    }
+
+    fn with_craters(mut self, craters: Vec<volcano::Crater>) -> T0 {
+        self.craters = craters;
         self
     }
 
@@ -1203,7 +1212,8 @@ impl T0 {
                 let (lanes, fer) = (sealanes::overlay_json(&self.sea_lanes), ferries::overlay_entries(self));
                 let lanes = if fer.is_empty() { lanes } else { format!("{}{}{fer}]", &lanes[..lanes.len() - 1], if lanes.len() > 2 { "," } else { "" }) };
                 let bridges = self.bridge_marks().iter().map(|b| format!("[{:.0},{:.0},{:.2},{:.2},{},{},{:.0}]", b[0], b[1], b[2], b[3], b[4], b[5], b[6])).collect::<Vec<_>>().join(",");
-                format!("{head},\"sea_lanes\":{lanes},\"bridges\":[{bridges}]}}")
+                let craters = self.craters.iter().map(|c| format!("[{:.0},{:.0},{:.0},{:.1},{:.1},{:.6}]", c.x, c.y, c.r, c.r * volcano::LAVA_SHARE, c.r * volcano::SCORCH_SHARE, c.phase())).collect::<Vec<_>>().join(",");
+                format!("{head},\"sea_lanes\":{lanes},\"bridges\":[{bridges}],\"craters\":[{craters}]}}")
             }
             None => o,
         }
@@ -1325,6 +1335,13 @@ impl T0 {
         out.extend_from_slice(&(caves.len() as u32).to_le_bytes());
         for (i, (r, k)) in caves {
             for v in [i as u32, r, k] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        // Active craters (optional, after the caves): count, then (x, y, r) f64 each.
+        out.extend_from_slice(&(self.craters.len() as u32).to_le_bytes());
+        for c in &self.craters {
+            for v in [c.x, c.y, c.r] {
                 out.extend_from_slice(&v.to_le_bytes());
             }
         }
@@ -1490,6 +1507,16 @@ impl T0 {
                 }
             }
         }
+        let mut craters = Vec::new();
+        if let Ok(b) = take(4) {
+            for _ in 0..u32::from_le_bytes(b.try_into().unwrap()) {
+                let mut v = [0.0f64; 3];
+                for x in &mut v {
+                    *x = f64::from_le_bytes(take(8)?.try_into().unwrap());
+                }
+                craters.push(volcano::Crater { x: v[0], y: v[1], r: v[2] });
+            }
+        }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
         let mut rivers = RiverNet::new(curves, map_w, map_h, cell_ft);
@@ -1506,7 +1533,8 @@ impl T0 {
         )
         .with_settlements(settlements, pois)
         .with_sea_lanes(sea_lanes, sea_ferries)
-        .with_landform(landform))
+        .with_landform(landform)
+        .with_craters(craters))
     }
 }
 

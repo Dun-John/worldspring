@@ -119,7 +119,7 @@ pub(super) fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_
                     continue;
                 }
                 let depth = c.water_level[k] - c.height[k];
-                let ok = if wet_ok { depth < 3.0 } else { depth <= 0.0 };
+                let ok = (if wet_ok { depth < 3.0 } else { depth <= 0.0 }) && !matches!(c.surface[k], Surface::Lava);
                 if !ok || (is_tree && slope[k] > 0.8) {
                     continue;
                 }
@@ -148,9 +148,9 @@ fn is_cover(o: &Object) -> bool {
 }
 
 /// Ground the guarantee counts: dry, bridge decks being exempt like the water they span (no
-/// boulders on the bridge).
+/// boulders on the bridge), and a crater's lava lake like water.
 fn dry(c: &Chunk, k: usize) -> bool {
-    c.water_level[k] <= c.height[k] && c.surface[k] != Surface::Planks
+    c.water_level[k] <= c.height[k] && !matches!(c.surface[k], Surface::Planks | Surface::Lava)
 }
 
 /// Where props may go: dry ground that is not a building, road bed or bridge.

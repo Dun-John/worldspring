@@ -731,7 +731,7 @@ impl Plan {
             bx(self, &mut lay, "snug", 0, sdp, w - sw, w);
         }
         bx(self, &mut lay, "private dining room", 0, fr, 0, sd);
-        let yard = bx(self, &mut lay, "inn yard", fr, l - bk, sd, w - sd);
+        let yard = bx(self, &mut lay, if self.dirt { "dirt yard" } else { "inn yard" }, fr, l - bk, sd, w - sd);
         let (a, b) = y.cols(w, sd, sd + 2);
         self.fill(&mut lay, 0, fr, a, b, yard);
         // The side range by the arch: the stables along the yard (the tack room in the corner behind).

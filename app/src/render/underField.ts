@@ -41,9 +41,11 @@ export interface UnderField {
    * (squares), then shape, material, room hash, 255. One blank slot when there are none. */
   shapes: Uint8Array;
   shapeCount: number;
-  /** Caverns breaking in: their floor (and the squares opening into them) blurred as a cave's
-   * (w x h, RGBA, red), else null. */
+  /** (nx x ny) * FIELD_RES, RGBA, else null: red caverns breaking in (their floor and the squares opening into them,
+   * blurred as a cave's: where `caverns`); green the mycelium carpet (`matMask`: where `mat`). */
   cave: Uint8Array | null;
+  caverns: boolean;
+  mat: boolean;
   /** Terrain (`kit::TERRAIN`) as soft masks, blurred (w x h, RGBA: shallow water (deep water
    * too: it lies in water), deep water, chasm, rubble slope), else null. */
   terrain: Uint8Array | null;
@@ -546,8 +548,11 @@ export function underField(it: Interior, level: number): UnderField {
   });
   // Caverns: their floor and the squares opening into them, blurred as a cave's.
   let cave: Uint8Array | null = null;
-  if (caverns) {
-    const [cw, ch] = [nx * R, ny * R];
+  const [cw, ch] = [nx * R, ny * R];
+  const mat = matMask(it, level);
+  if (caverns || mat) cave = new Uint8Array(cw * ch * 4);
+  if (cave && mat) for (let k = 0; k < cw * ch; k++) cave[k * 4 + 1] = (mat[k] * 255 + 0.5) | 0;
+  if (cave && caverns) {
     const mask = new Float32Array(cw * ch);
     for (let j = 0; j < ny; j++) {
       for (let i = 0; i < nx; i++) {
@@ -559,12 +564,56 @@ export function underField(it: Interior, level: number): UnderField {
       }
     }
     const b = blur(mask, cw, ch, 0.42 * R);
-    cave = new Uint8Array(cw * ch * 4);
     for (let k = 0; k < cw * ch; k++) cave[k * 4] = (b[k] * 255 + 0.5) | 0;
   }
   // How far the rock lies from the floor (hatched beside the walls, fading out beyond).
   const dist = rockDistance(f1, w, h, R, rim, nx, ny, (i, j) => lv.cells[j * nx + i] >= 0 && !fromSquares(index[j * nx + i]));
-  return { w: tw, h: th, pad, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level), dist, lift: liftField(it, level) };
+  return { w: tw, h: th, pad, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, caverns, mat: !!mat, terrain: terrainField(it, level), dist, lift: liftField(it, level) };
+}
+
+/** Fungi a mycelium carpet runs on under (glowing, small caps, giant). */
+const ON_MAT = new Set(['fungus', 'toadstool', 'mushroom']);
+
+/**
+ * The mycelium carpet (`UnderField.cave`'s green) as one soft mask, pooled as water is (`terrainField`): its squares,
+ * those of a fungus standing beside it (the carpet runs on under it) and the rock next to it (so it meets the walls),
+ * blurred wide and lifted, so a grove's ragged squares merge into one organic patch. Null where there is none.
+ */
+function matMask(it: Interior, level: number): Float32Array | null {
+  const lv = it.levels[level];
+  const { nx, ny } = it;
+  const items = lv.furniture.filter((f) => f.kind === 'mycelium');
+  if (!items.length) return null;
+  const sq = new Uint8Array(nx * ny);
+  const mark = (f: { x: number; y: number; w: number; h: number }) => {
+    for (let j = Math.max(0, f.y); j < Math.min(ny, f.y + f.h); j++) for (let i = Math.max(0, f.x); i < Math.min(nx, f.x + f.w); i++) sq[j * nx + i] = 1;
+  };
+  items.forEach(mark);
+  const on = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && sq[j * nx + i] === 1;
+  for (const f of lv.furniture) {
+    if (!ON_MAT.has(f.kind)) continue;
+    let by = false;
+    for (let j = f.y - 1; j <= f.y + f.h && !by; j++) for (let i = f.x - 1; i <= f.x + f.w && !by; i++) by = on(i, j);
+    if (by) mark(f);
+  }
+  const spread = sq.slice();
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      if (lv.cells[j * nx + i] >= 0) continue;
+      for (let b = j - 1; b <= j + 1 && !spread[j * nx + i]; b++) for (let a = i - 1; a <= i + 1; a++) if (on(a, b) && lv.cells[b * nx + a] >= 0) spread[j * nx + i] = 1;
+    }
+  }
+  const R = FIELD_RES;
+  const [w, h] = [nx * R, ny * R];
+  const mask = new Float32Array(w * h);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      if (!spread[j * nx + i]) continue;
+      for (let y = j * R; y < (j + 1) * R; y++) mask.fill(1, y * w + i * R, y * w + (i + 1) * R);
+    }
+  }
+  // (Wide, so a ragged edge rounds off and lone squares beside the patch join it; lifted, so a lone square still shows.)
+  return blur(mask, w, h, 0.5 * R).map((v) => Math.min(1, v * 1.25));
 }
 
 /**

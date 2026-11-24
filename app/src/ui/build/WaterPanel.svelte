@@ -27,6 +27,7 @@
     pond: 'a pond, reeds round it',
     moat: 'a ring of still water, as a moat',
     stream: 'a stream running downhill',
+    lava: 'lava (change it in Lava)',
   };
   /** The width shown: the picked line's, or the one new brushed water gets. */
   const waterLine = $derived(waterPicked ? waterPicked.width !== null : water.brush);

@@ -1,5 +1,6 @@
 //! Dev tool: print underground sites as text plans (one letter per room, `.` rock; `E` the way
-//! in, `v`/`^` ways down/up, `*` items, `~` lava, `!` hazards), with timings.
+//! in, `v`/`^` ways down/up, `*` items, `~` lava, `!` hazards; fungi `M` giant, `F` glowing, `T` small caps, `S` shelf, `,`
+//! carpet), with timings.
 //! `cargo run --release -p worldgen --example under -- [seed] [kind|theme...]` (kinds: dungeon, crypt,
 //! cave, mine, lava_tube; themes: `under::THEMES` keys, e.g. temple, sunken_temple; default all, the first site of
 //! each). TEXT=1 prints the design's text form instead (`under::design::to_text`, what agents read and write with
@@ -71,6 +72,7 @@ fn main() {
     let by_theme = wanted.iter().any(|w| themes.contains(&w.as_str()));
     let ledges_only = std::env::var("LEDGES").is_ok();
     let mut ledges = Ledges::default();
+    let mut giants: std::collections::BTreeMap<String, [usize; 2]> = std::collections::BTreeMap::new();
     let boss_only = std::env::var("BOSS").is_ok();
     // BIOME=1: caves of this seed by look (green/dry/cold/rock, or ice whatever the biome), as one line.
     let biome_only = std::env::var("BIOME").is_ok();
@@ -113,6 +115,19 @@ fn main() {
             }
             if ledges_only {
                 ledges.add(&it, &key, ms);
+                continue;
+            }
+            // GIANTS=1: giant mushrooms by size (1 x 1, 2 x 2), per key, as a total line at the end.
+            if std::env::var("GIANTS").is_ok() {
+                let e = giants.entry(key.clone()).or_insert([0usize; 2]);
+                let before = *e;
+                for f in it.levels.iter().flat_map(|l| l.furniture.iter()).filter(|f| f.kind == "mushroom") {
+                    e[(f.w > 1) as usize] += 1;
+                }
+                // (GIANTS=list: a line per site too.)
+                if std::env::var("GIANTS").is_ok_and(|v| v == "list") {
+                    println!("{id} {key} at fx {:.3} fy {:.3}: 1x1 {}, 2x2 {}", at[0] / world.geom.map_w_ft, at[1] / world.geom.map_h_ft, e[0] - before[0], e[1] - before[1]);
+                }
                 continue;
             }
             if boss_only {
@@ -220,6 +235,12 @@ fn main() {
                         "stepping_stone" => ':',
                         "stone_bridge" => '"',
                         "rubble_slope" => '%',
+                        // (Fungi: giant caps, glowing, small caps, shelves, carpet.)
+                        "mushroom" => 'M',
+                        "fungus" => 'F',
+                        "toadstool" => 'T',
+                        "shelf_fungus" => 'S',
+                        "mycelium" => ',',
                         _ if f.hazard.is_some() => '!',
                         _ => '*',
                     };
@@ -249,6 +270,9 @@ fn main() {
     }
     if ledges_only {
         ledges.print();
+    }
+    for (k, [one, two]) in &giants {
+        println!("seed {seed} {k}: giant mushrooms 1x1 {one}, 2x2 {two}");
     }
     if boss_only {
         boss.print();
@@ -558,7 +582,7 @@ fn plan(lv: &interior::Level, ri: usize, nx: usize, inside: &[&interior::Item]) 
                         "banner" => 'f', "candles" => 'i', "forge" => 'F', "anvil" => 'n', "cage" => 'G', "desk" => 'D', "chains" => 'h', "arcane_workbench" => 'K',
                         "arcane_focus" => 'o', "bookshelf" => 'L', "totem" => 't', "bone_mound" => 'M', "nest" => 'N', "bones" => 'z', "chair_of_office" => 'Y',
                         "rock_column" | "basalt" => 'R', "rubble_slope" => '/', "cave_in" => 'k', "ore_vein" => 'V', "tools" => 'l', "rail" => '|', "ore_cart" => 'Q',
-                        "crystal" | "ice" => '*', "fungus" | "mushroom" => 'm', "stalagmite" => 's', _ => '&',
+                        "crystal" | "ice" => '*', "mushroom" => 'm', "fungus" | "toadstool" | "shelf_fungus" | "mycelium" => 'u', "stalagmite" => 's', _ => '&',
                     },
                 },
                 // (The room's name: `Room::center`.)

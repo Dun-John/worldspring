@@ -299,6 +299,7 @@ function openers(k: KeyContext, owners: Shortcut[], inEdit: () => boolean): Shor
     ['V', 'road', () => k.buildRoad(), 'Road (again: footpath, track, gravel, paved, cobbled)'],
     ['X', 'crossing', () => k.buildCross(), 'Crossing (again: bridge, ford, ferry)'],
     ['I', 'water', undefined],
+    ['Shift+I', 'lava', undefined],
     ['H', 'docks', () => k.buildHarbour(), 'Docks & islets (again: islet, quay, pier, breakwater)'],
     ['M', 'ground', undefined],
     ['F', 'fences', () => k.buildFence(), 'Fences & hedges (draw, gate, erase; again: the next kind)'],

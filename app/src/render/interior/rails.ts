@@ -114,3 +114,108 @@ export function drawArcade(g: Graphics, lv: InteriorLevel, nx: number, ny: numbe
 }
 /** The squares between a town hall's arcade piers (`drawArcade`). */
 const ARCADE_PIERS = 2;
+
+/** A coaching inn's yard rooms (`hub::inn`): the carriage arch's lane is the yard's squares through the front range. */
+const YARDS = new Set(['inn yard', 'dirt yard']);
+
+/** (Roadmap 7, 192) A coaching inn's gate passage with its roof off (`roofMesh`'s `archMouth` with it on): from
+ * the carriage arch (a door of kind "arch") in through the front range, as far as both its sides are rooms, not
+ * the yard. Its ceiling a soft shade over the lane (it is roofed), two cart ruts along it, a band of big setts
+ * across it at each mouth, a stone pier each side of each mouth (the wall's ends, straight down), the gate's
+ * two leaves swung back against the passage's walls inside the street's mouth. The lane shows the street's
+ * cobbles (no floor). Nothing where the arch isn't a yard's lane two or three squares wide. */
+export function drawGatePassage(g: Graphics, lv: InteriorLevel, nx: number, ny: number) {
+  const cell = (x: number, y: number) => {
+    const [i, j] = [Math.floor(x), Math.floor(y)];
+    const r = i >= 0 && j >= 0 && i < nx && j < ny ? lv.cells[j * nx + i] : -1;
+    return r >= 0 ? r : -1;
+  };
+  const yard = (x: number, y: number) => {
+    const r = cell(x, y);
+    return r >= 0 && YARDS.has(lv.rooms[r].kind);
+  };
+  // (The arch is a door a square: those in one line end to end are one mouth.)
+  const mouths: { a: Pt; b: Pt }[] = [];
+  for (const d of lv.doors) {
+    if (d.kind !== 'arch') continue;
+    const last = mouths[mouths.length - 1];
+    const along = last && (last.b[0] - last.a[0]) * (d.b[1] - d.a[1]) === (last.b[1] - last.a[1]) * (d.b[0] - d.a[0]);
+    if (along && last.b[0] === d.a[0] && last.b[1] === d.a[1]) last.b = [d.b[0], d.b[1]];
+    else if (along && last.a[0] === d.b[0] && last.a[1] === d.b[1]) last.a = [d.a[0], d.a[1]];
+    else mouths.push({ a: [d.a[0], d.a[1]], b: [d.b[0], d.b[1]] });
+  }
+  for (const d of mouths) {
+    const len = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]);
+    if (len < 1.5 || len > 3.5) continue;
+    const [ux, uy] = [(d.b[0] - d.a[0]) / len, (d.b[1] - d.a[1]) / len];
+    // (In: the lane's side.)
+    let [nx0, ny0] = [-uy, ux];
+    const mid: Pt = [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
+    if (!yard(mid[0] + nx0 * 0.5, mid[1] + ny0 * 0.5)) [nx0, ny0] = [-nx0, -ny0];
+    if (!yard(mid[0] + nx0 * 0.5, mid[1] + ny0 * 0.5)) continue;
+    const p = (t: number, s: number): Pt => [d.a[0] + ux * t + nx0 * s, d.a[1] + uy * t + ny0 * s];
+    // The passage's depth: rows in while the squares either side of the lane are rooms, not the yard.
+    let depth = 0;
+    while (depth < 12) {
+      const s = depth + 0.5;
+      const lane = [0.5, len - 0.5].every((t) => yard(...p(t, s)));
+      const sides = [-0.5, len + 0.5].every((t) => {
+        const r = cell(...p(t, s));
+        return r >= 0 && !YARDS.has(lv.rooms[r].kind);
+      });
+      if (!lane || !sides) break;
+      depth++;
+    }
+    if (depth < 1) continue;
+    const quad = (t0: number, t1: number, s0: number, s1: number) => {
+      const q = [p(t0, s0), p(t1, s0), p(t1, s1), p(t0, s1)];
+      g.poly(q.flat());
+    };
+    // The ceiling's shade over the lane, deepest in the middle, soft at the mouths.
+    quad(0, len, 0, depth);
+    g.fill({ color: 0x2b2219, alpha: 0.1 });
+    quad(0, len, 0.35, depth - 0.35);
+    g.fill({ color: 0x2b2219, alpha: 0.07 });
+    for (const [s0, s1] of [
+      [-0.4, 0],
+      [depth, depth + 0.4],
+    ]) {
+      quad(0, len, s0, s1);
+      g.fill({ color: 0x2b2219, alpha: 0.05 });
+    }
+    // Two cart ruts along it and out a little past each mouth.
+    for (const t of [len / 2 - 0.5, len / 2 + 0.5]) {
+      quad(t - 0.065, t + 0.065, -0.9, depth + 0.9);
+      g.fill({ color: 0x3b3024, alpha: 0.16 });
+    }
+    // The setts at each mouth: big stones across the lane on the wall's line.
+    const n = Math.max(3, Math.round(len / 0.48));
+    for (const s of [0, depth]) {
+      for (let k = 0; k < n; k++) {
+        quad((len * k) / n + 0.02, (len * (k + 1)) / n - 0.02, s - 0.3, s + 0.3);
+        g.fill([0x9d9483, 0x8c8474, 0xa59d8b][(k * 7 + (s ? 1 : 0)) % 3]).stroke({ width: 0.025, color: INK, alpha: 0.45 });
+      }
+    }
+    // The gate's leaves swung back against the passage's walls just inside the street's mouth: timber, a lit
+    // plank, inked.
+    for (const [t0, t1] of [
+      [0.04, 0.2],
+      [len - 0.2, len - 0.04],
+    ]) {
+      quad(t0, t1, 0.4, 0.4 + len / 2);
+      g.fill(0x6e4b2d).stroke({ width: 0.03, color: INK });
+      quad(t0 + 0.04, t1 - 0.04, 0.48, 0.32 + len / 2);
+      g.fill(0x8a6440);
+    }
+    // The piers: the wall's stone ends either side of each mouth, straight down.
+    for (const s of [0, depth]) {
+      for (const t of [-0.28, len + 0.28]) {
+        const [x, y] = p(t, s);
+        const r = 0.3;
+        g.rect(x - r + 0.06, y - r + 0.06, 2 * r, 2 * r).fill({ color: 0x2b2219, alpha: 0.22 });
+        g.rect(x - r, y - r, 2 * r, 2 * r).fill(0x948b7b).stroke({ width: 0.05, color: INK });
+        g.rect(x - r * 0.6, y - r * 0.6, 1.2 * r, 1.2 * r).fill(0xc4baa4);
+      }
+    }
+  }
+}

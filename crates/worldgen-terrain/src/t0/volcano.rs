@@ -41,6 +41,80 @@ pub struct Volcano {
     pub stroke: Option<u32>,
 }
 
+impl Volcano {
+    /// The summit crater's radius in cells (`apply` stamps it; a caldera's is broad).
+    pub fn crater_cells(&self, cell_ft: f64) -> f64 {
+        let r_cells = self.radius_ft / cell_ft;
+        if self.kind == VolcanoKind::Caldera { 0.45 * r_cells } else { (0.09 * r_cells).max(0.6) }
+    }
+}
+
+/// An active volcano's crater (world ft): centre and radius. Its floor holds a lava lake
+/// (`lava_at`), on battlemaps and the far map alike.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crater {
+    pub x: f64,
+    pub y: f64,
+    pub r: f64,
+}
+
+/// The active volcanoes' craters.
+pub fn active_craters(volcanoes: &[Volcano], cell_ft: f64) -> Vec<Crater> {
+    volcanoes.iter().filter(|v| v.activity == Activity::Active).map(|v| Crater { x: v.cx * cell_ft, y: v.cy * cell_ft, r: v.crater_cells(cell_ft) * cell_ft }).collect()
+}
+
+/// The lava lake's share of a crater's radius, and the scorched ground's round it (sent to the
+/// app in the overlay's `craters`, so the far map's disc and the battlemap's lake agree).
+pub const LAVA_SHARE: f64 = 0.22;
+pub const SCORCH_SHARE: f64 = 0.4;
+
+/// The edges' waves round the centre: (waves to a turn, share of the radius). Mirrored as
+/// literals in `craterEdge` in `app/src/render/shaders/terrain.frag` and `ground.frag`: change
+/// them together.
+const EDGE_WAVES: [(f64, f64); 5] = [(3.0, 0.08), (5.0, 0.05), (8.0, 0.035), (13.0, 0.02), (21.0, 0.01)];
+
+impl Crater {
+    /// The crater's edge phase in [0, 1) (six decimals, as the overlay sends it), keyed by where
+    /// it stands.
+    pub fn phase(&self) -> f64 {
+        (crate::core::rng::hash2(0x1a7a_c0de, self.x as i64, self.y as i64) % 1_000_000) as f64 / 1e6
+    }
+}
+
+/// An edge's radius (a share of the crater's) at angle `ang` round it: `share` times a sum of
+/// waves whose phases step by the golden ratio from `ph` (the shaders' `craterEdge`).
+fn crater_edge(ang: f64, ph: f64) -> f64 {
+    let mut e = 1.0;
+    for (i, (k, a)) in EDGE_WAVES.iter().enumerate() {
+        let p = ph + i as f64 * 0.618034;
+        e += a * libm::sin(k * ang + 6.283185307179586 *(p - crate::core::floor(p)));
+    }
+    e
+}
+
+/// What a crater makes of the ground at (x, y) ft: 2 lava, 1 scorched rock, 0 neither. The
+/// edges wander round the centre (waves keyed to the crater's place only, so every chunk and
+/// the app's shaders agree).
+pub fn lava_at(craters: &[Crater], x: f64, y: f64) -> u8 {
+    let mut out = 0;
+    for c in craters {
+        let (dx, dy) = (x - c.x, y - c.y);
+        let reach = c.r * SCORCH_SHARE * 1.2;
+        if dx * dx + dy * dy >= reach * reach {
+            continue;
+        }
+        let d = crate::core::sqrt(dx * dx + dy * dy);
+        let (ang, ph) = (libm::atan2(dy, dx), c.phase());
+        if d < c.r * LAVA_SHARE * crater_edge(ang, ph) {
+            return 2;
+        }
+        if d < c.r * SCORCH_SHARE * crater_edge(ang, ph + 0.5) {
+            out = 1;
+        }
+    }
+    out
+}
+
 /// Cone height (ft) and base radius (mi) ranges per kind.
 fn size(kind: VolcanoKind) -> ((f64, f64), (f64, f64)) {
     match kind {
@@ -124,17 +198,33 @@ pub fn place(world: &World, w: usize, h: usize, cell_ft: f64, arc: &[f64], heigh
             6..=7 => VolcanoKind::Shield,
             _ => VolcanoKind::CinderCone,
         };
-        let activity = match rng.below(20) {
-            0..=6 => Activity::Active,
-            7..=14 => Activity::Dormant,
-            _ => Activity::Extinct,
-        };
+        // (Dormant or extinct here; `wake` picks the few that are active.)
+        let activity = if rng.below(20) < 12 { Activity::Dormant } else { Activity::Extinct };
         let ((h0, h1), (r0, r1)) = size(kind);
         let (height_ft, radius_ft) = (rng.range(h0, h1), rng.range(r0, r1) * 5280.0);
         let cut = (widest / radius_ft).min(1.0);
         out.push(Volcano { cx, cy, kind, activity, height_ft: height_ft * libm::pow(cut, 0.5), radius_ft: radius_ft * cut, stroke: None });
     }
+    wake(world, &mut out);
     out
+}
+
+/// Active volcanoes are rare: of the placed ones (not the drawn, which keep the activity they
+/// were drawn with), none in about a fifth of worlds, one in two fifths, two in three tenths,
+/// three in a tenth; which ones by a hash of where each stands.
+fn wake(world: &World, volcanoes: &mut [Volcano]) {
+    let s = world.stream("t0.volcano.active");
+    let want = match crate::core::rng::mix64(s) % 10 {
+        0..=1 => 0,
+        2..=5 => 1,
+        6..=8 => 2,
+        _ => 3,
+    };
+    let mut placed: Vec<(u64, usize)> = volcanoes.iter().enumerate().filter(|(_, v)| v.stroke.is_none()).map(|(i, v)| (crate::core::rng::hash2(s, v.cx as i64, v.cy as i64), i)).collect();
+    placed.sort_unstable();
+    for &(_, i) in placed.iter().take(want) {
+        volcanoes[i].activity = Activity::Active;
+    }
 }
 
 /// Stamp cones and summit craters onto the height grid (ft): their feet lobed as flows spread
@@ -153,7 +243,7 @@ pub fn apply(volcanoes: &[Volcano], w: usize, h: usize, cell_ft: f64, sea: f64, 
         // Gullies about 4 cells or 1.5 mi apart round the foot, whichever is wider.
         let ring = (r_cells / libm::fmax(4.0, 1.5 * 5280.0 / cell_ft)).max(1.0);
         let caldera = v.kind == VolcanoKind::Caldera;
-        let crater = if caldera { 0.45 * r_cells } else { (0.09 * r_cells).max(0.6) };
+        let crater = v.crater_cells(cell_ft);
         // A caldera's rim, round a broad crater floor a little above the land it stands on.
         let rim = v.height_ft * libm::pow(0.55, 1.4);
         let (x0, x1) = ((v.cx - out).floor().max(0.0) as usize, ((v.cx + out).ceil() as usize).min(w - 1));

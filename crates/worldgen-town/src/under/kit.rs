@@ -155,6 +155,9 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("boulder", "boulder", 3, true, 6.0, None),
     ("rock_column", "rock column", 3, true, 20.0, None),
     ("mushroom", "giant mushrooms", 1, true, 6.0, Some("struck: spores, DC 12 Con save or poisoned for 1 minute")),
+    ("toadstool", "toadstools", 0, false, 0.5, None),
+    ("shelf_fungus", "shelf fungus", 0, false, 0.0, None),
+    ("mycelium", "mycelium carpet", 0, false, 0.0, None),
     ("web", "thick webs", 0, false, 0.0, Some("difficult terrain; DC 12 Dex save or restrained (DC 12 Str to break free)")),
     ("guano", "bat guano", 0, false, 0.0, Some("difficult terrain; open wounds: DC 11 Con save or sewer plague")),
     ("skeleton", "adventurer's remains", 0, false, 0.5, None),
@@ -334,7 +337,8 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "grotto" => &[("stalagmite", 1, 1, Any, 2, 5), ("rock_column", 1, 1, Any, 0, 1), ("moss", 1, 1, Any, 1, 3), ("boulder", 2, 2, Any, 0, 1)],
         "bat roost" => &[("guano", 2, 2, Any, 1, 3), ("stalagmite", 1, 1, Any, 1, 4), ("bones", 1, 1, Any, 0, 2)],
         "crystal grotto" => &[("crystal", 1, 1, Any, 3, 7), ("boulder", 2, 2, Any, 0, 1), ("rock_column", 1, 1, Any, 0, 1)],
-        "fungus grotto" => &[("fungus", 1, 1, Any, 3, 6), ("mushroom", 1, 1, Any, 2, 5), ("moss", 1, 1, Any, 1, 2)],
+        // (Fungi grow in clumps once the kits are in: `fungi::grow_fungi`.)
+        "fungus grotto" => &[("moss", 1, 1, Any, 1, 2)],
         "pool chamber" => &[("stalagmite", 1, 1, Any, 1, 3), ("moss", 1, 1, Any, 1, 3)],
         "ledge" => &[("stalagmite", 1, 1, Any, 0, 2), ("boulder", 2, 2, Any, 0, 1), ("campfire", 1, 1, Any, 0, 1), ("bedroll", 1, 2, Any, 0, 1)],
         // Lava tubes.
@@ -412,7 +416,7 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "brewery" => &[("vat", 1, 1, Any, 2, 3), ("keg_rack", 1, 2, Edge, 1, 2), ("barrel", 1, 1, Edge, 2, 4)],
         "treasury" => &[("chest", 1, 1, Edge, 2, 5), ("hoard", 1, 1, Any, 1, 2), ("statue", 1, 1, Edge, 0, 1), ("trap", 1, 1, Any, 1, 2)],
         "ancestor hall" => &[("statue", 1, 1, Edge, 2, 5), ("sarcophagus", 1, 2, Any, 1, 3), ("candles", 1, 1, Any, 1, 2), ("brazier", 1, 1, Edge, 0, 2)],
-        "mushroom farm" => &[("mushroom", 1, 1, Any, 2, 5), ("fungus", 1, 1, Any, 2, 4), ("barrel", 1, 1, Edge, 0, 1)],
+        "mushroom farm" => &[("barrel", 1, 1, Edge, 0, 1), ("sacks", 1, 1, Edge, 0, 2)],
         "gallery" => &[("sconce", 1, 1, Edge, 1, 3), ("statue", 1, 1, Edge, 0, 1), ("pillar", 1, 1, Any, 0, 2)],
         // Goblin warrens.
         "warren mouth" => &[("bones", 1, 1, Any, 1, 2), ("rubble", 1, 1, Any, 1, 2), ("cage", 2, 2, Edge, 0, 1)],
@@ -440,9 +444,9 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "guardian hall" => &[("statue", 1, 1, Edge, 2, 4), ("pillar", 1, 1, Any, 2, 4), ("trap", 1, 1, Any, 0, 2), ("sconce", 1, 1, Edge, 0, 2)],
         "skull gallery" => &[("skulls", 1, 1, Edge, 3, 6), ("niche", 1, 1, Edge, 2, 5), ("candles", 1, 1, Any, 0, 1)],
         // Themed caves.
-        "fungus forest" => &[("mushroom", 1, 1, Any, 3, 6), ("fungus", 1, 1, Any, 3, 6), ("moss", 1, 1, Any, 1, 2)],
-        "spore grotto" => &[("fungus", 1, 1, Any, 2, 4), ("mushroom", 1, 1, Any, 1, 3), ("web", 1, 1, Edge, 0, 1)],
-        "mycelium hall" => &[("fungus", 1, 1, Any, 4, 8), ("mushroom", 1, 1, Any, 1, 3), ("stalagmite", 1, 1, Any, 0, 2)],
+        "fungus forest" => &[("moss", 1, 1, Any, 1, 2)],
+        "spore grotto" => &[("web", 1, 1, Edge, 0, 1)],
+        "mycelium hall" => &[("stalagmite", 1, 1, Any, 0, 2)],
         "crystal cavern" => &[("crystal", 1, 1, Any, 4, 8), ("stalagmite", 1, 1, Any, 1, 3), ("rock_column", 1, 1, Any, 0, 1)],
         "geode" => &[("crystal", 1, 1, Any, 5, 9), ("boulder", 2, 2, Any, 0, 1)],
         "crystal shelf" => &[("crystal", 1, 1, Any, 1, 3)],
@@ -474,6 +478,7 @@ pub(crate) fn furnish(p: &mut Plan, nx: usize, ny: usize, kind: UnderKind, rng: 
     for (ri, rkind) in rooms {
         furnish_room(p, nx, ny, ri, rkind, kind, rng);
     }
+    super::fungi::grow_fungi(p, nx, ny, kind, rng);
     if p.niches {
         line_niches(p, nx, ny);
     }

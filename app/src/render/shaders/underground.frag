@@ -16,8 +16,9 @@
 //         row 0 the box round its squares (x0, y0, x1, y1), row 1 shape, material, variation.
 //         Their squares are left out of uField and the squares' walls; the floor is drawn from
 //         the shape near them (it may stand up to half a square off the squares).
-// uCave: caverns breaking into a built level, linear: their floor (and the squares opening into
-//         them) blurred as a cave's, drawn with rough rock walls.
+// uCave: linear, 4 texels per square: r caverns breaking into a built level (their floor, and the
+//         squares opening into them, blurred as a cave's, drawn with rough rock walls; where uCaverns),
+//         g the mycelium carpet, pooled (blurred wide: one soft patch a grove; where uMat).
 // uTerrain: terrain (`kit::TERRAIN`), linear, 4 texels per square: r water (shallow, and under
 //         deep water), g deep water, b chasm, a rubble slope; each blurred, spread into the rock
 //         beside it (so it meets the walls). Read only where uHasTerrain.
@@ -62,6 +63,7 @@ uniform float uPad;
 // Shaped rooms on the level (0: none), caverns breaking in (0 or 1).
 uniform float uShapeCount;
 uniform float uCaverns;
+uniform float uMat;
 uniform float uHasTerrain;
 uniform float uHasLift;
 // Squares the quad is drawn past the grid each way (a site's, so its rock fades out round it;
@@ -675,6 +677,46 @@ vec3 terrain(vec3 col, vec2 q, vec2 p, float px) {
     return col;
 }
 
+// A mycelium carpet (uCave.g): a low fungal lawn pooled over the floor from its mask's iso-0.5 edge,
+// wobbled by noise (so it follows no squares): one flat pale dun-green, a touch deeper along its
+// edge, a faint shade just outside it.
+vec3 fungalMat(vec3 col, vec2 q, vec2 p, float px) {
+    float e = 0.25;
+    float m = texture(uCave, q / uN).g;
+    vec2 gm = vec2(texture(uCave, (q + vec2(e, 0.0)) / uN).g - m, texture(uCave, (q + vec2(0.0, e)) / uN).g - m) / e;
+    if (m < 0.02) return col;
+    float aa = max(px * 0.5, 1e-3);
+    float ds = (m - 0.5) / max(length(gm), 0.35) + (vnoise(p * 0.9 + 23.0) - 0.5) * 0.3 + (vnoise(p * 2.6 + 5.0) - 0.5) * 0.1;
+    float inside = smoothstep(-aa, aa, ds);
+    col *= 1.0 - 0.1 * (1.0 - smoothstep(0.0, 0.14, -ds)) * (1.0 - inside);
+    vec3 lawn = mix(vec3(0.55, 0.58, 0.45), min(col * 1.08, vec3(1.0)), 0.35);
+    // (Its edge a soft slightly deeper band, fading in over a quarter square, and a thin darker rim line.)
+    lawn = mix(lawn * 0.9, lawn, smoothstep(0.0, 0.28, ds));
+    lawn = mix(lawn, lawn * 0.62, (1.0 - smoothstep(0.0, max(aa * 2.0, 0.035), abs(ds - 0.025))) * 0.85);
+    // The mycelium: dark root-brown threads webbed over it in patches (two noises' ridges), none at its edge.
+    float deep = smoothstep(0.08, 0.3, ds);
+    float web = max(1.0 - smoothstep(0.008, 0.028, abs(vnoise(p * 2.7 + 11.0) - 0.5)), (1.0 - smoothstep(0.006, 0.022, abs(vnoise(p * 5.9 + 3.0) - 0.5))) * 0.7);
+    lawn = mix(lawn, vec3(0.36, 0.33, 0.24), web * smoothstep(0.42, 0.6, vnoise(p * 0.6 + 31.0)) * deep * 0.8);
+    // Clumps of tiny mushrooms: to some cells of a coarse jittered grid a clump, in it the caps of a
+    // fine jittered grid (a dark ring, a flat cap in the clump's own tone, a pale dot on its lit side).
+    vec2 gc = p / 1.25;
+    vec2 gi = floor(gc);
+    vec2 cen = (gi + 0.3 + 0.4 * vec2(hash21(gi + 3.1), hash21(gi + 7.7))) * 1.25;
+    float clump = step(0.38, hash21(gi + 12.3)) * (1.0 - smoothstep(0.2, 0.38, length(p - cen) + 0.12 * (vnoise(p * 4.0) - 0.5))) * deep;
+    vec2 sc = p * 4.2;
+    vec2 cid = floor(sc);
+    vec2 dv = fract(sc) - (vec2(hash21(cid + 41.0), hash21(cid + 43.7)) * 0.4 + 0.3);
+    float r = 0.15 + 0.1 * hash21(cid + 47.3);
+    float cap = step(0.35, hash21(cid + 45.1)) * step(0.35, clump);
+    float ca = max(px * 4.2 * 0.6, 0.015);
+    vec3 tone = mix(vec3(0.83, 0.74, 0.55), vec3(0.72, 0.47, 0.36), step(0.5, hash21(gi + 19.9)));
+    // (Inked round as the sprites are: `LINE_W` of the outline's own ink.)
+    lawn = mix(lawn, vec3(0.114, 0.102, 0.078), (1.0 - smoothstep(r + 0.105 - ca, r + 0.105 + ca, length(dv))) * cap);
+    lawn = mix(lawn, tone, (1.0 - smoothstep(r - ca, r + ca, length(dv))) * cap);
+    lawn = mix(lawn, min(tone * 1.2, vec3(1.0)), (1.0 - smoothstep(r * 0.35 - ca, r * 0.35 + ca, length(dv + uLight * r * 0.3))) * cap);
+    return mix(col, lawn, inside);
+}
+
 // The sprites' outline weights (squares): a shape's outline, a part's.
 const float OUT_W = 0.045;
 const float LINE_W = 0.025;
@@ -1108,7 +1150,8 @@ void main() {
         }
         if (uHasLift > 0.5) col = ledges(col, lift, q, p, px, hf);
         else col = valueStep(col, topStep(hf));
-        // Water, chasms, rubble slopes.
+        // Mycelium carpets; water, chasms, rubble slopes.
+        if (uMat > 0.5) col = fungalMat(col, q, p, px);
         if (uHasTerrain > 0.5) col = terrain(col, q, p, px);
         // Against the walls: ambient occlusion and the shadow cast from the NW.
         // (A built gallery's top, up by the wall's head, keeps only a thin band of it and none of the

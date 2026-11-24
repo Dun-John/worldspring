@@ -99,7 +99,7 @@ fn battlemap_guarantee() {
             }
             biomes_seen.insert(ex.t0.biome.get(i, j) & 0xff);
 
-            let dry: Vec<bool> = (0..SQ * SQ).map(|k| c.water_level[k] <= c.height[k] && c.surface[k] != battlemap::Surface::Planks).collect();
+            let dry: Vec<bool> = (0..SQ * SQ).map(|k| c.water_level[k] <= c.height[k] && !matches!(c.surface[k], battlemap::Surface::Planks | battlemap::Surface::Lava)).collect();
             // Water of any depth is exempt: the guarantee is for ground you fight on.
             let wet: Vec<bool> = (0..SQ * SQ).map(|k| c.water_level[k] > c.height[k]).collect();
             let dist = battlemap::cover_distance(&c);

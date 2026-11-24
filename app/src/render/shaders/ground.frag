@@ -32,11 +32,14 @@ uniform float uGravel;
 uniform vec3 uStone;
 // Whether the chunk has paving (else its soft edges are skipped).
 uniform float uPaved;
+// Whether drawn lava lies near the chunk (`uLavaF` holds its field; else it is a blank, not sampled).
+uniform float uLava;
+uniform highp sampler2D uLavaF;
 
 const float N = 128.0;
 const vec3 INK = vec3(0.12, 0.10, 0.08);
 
-const vec3 SURF[22] = vec3[22](
+const vec3 SURF[23] = vec3[23](
     vec3(0.40, 0.54, 0.25), // grass
     vec3(0.31, 0.35, 0.19), // forest floor
     vec3(0.64, 0.60, 0.36), // dry grass
@@ -58,8 +61,120 @@ const vec3 SURF[22] = vec3[22](
     vec3(0.66, 0.62, 0.36), // field
     vec3(0.62, 0.59, 0.53), // stairs (dressed stone)
     vec3(0.76, 0.71, 0.60), // gravel (a park's paths)
-    vec3(0.53, 0.53, 0.37)  // tundra grass (sedge and moss)
+    vec3(0.53, 0.53, 0.37), // tundra grass (sedge and moss)
+    vec3(0.37, 0.30, 0.24)  // scorched rock (round a lava lake; drawn graded by `scorchLook` near a crater)
 );
+
+// The nearest active crater: [0] (x, y, lava radius, scorch radius) in the chunk's squares (lava
+// radius 0: none), [1] (edge phase, 0, 0, 0). Its lake and ring are drawn from their edges, not
+// the squares (`BattlemapLayer`, `volcano::lava_at`).
+uniform vec4 uCrater[2];
+
+// Lava lakes (the same functions in terrain.frag: keep the two copies alike, so the far map and the
+// battlemap draw one lake). A crater edge's radius (a share of its nominal one) at angle a round
+// the centre: `volcano::crater_edge`, whose EDGE_WAVES these literals mirror.
+float craterEdge(float a, float ph) {
+    const float TAU = 6.2831853;
+    return 1.0 + 0.08 * sin(3.0 * a + TAU * fract(ph)) + 0.05 * sin(5.0 * a + TAU * fract(ph + 0.618034))
+        + 0.035 * sin(8.0 * a + TAU * fract(ph + 1.236068)) + 0.02 * sin(13.0 * a + TAU * fract(ph + 1.854102))
+        + 0.01 * sin(21.0 * a + TAU * fract(ph + 2.472136));
+}
+
+float lavaHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float lavaNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(lavaHash(i), lavaHash(i + vec2(1.0, 0.0)), f.x), mix(lavaHash(i + vec2(0.0, 1.0)), lavaHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// The lake at p (from its centre, in lava radii), e ft inside its shore, a pixel px ft, its radius
+// rPx pixels: flat orange-red, a few big dark crust plates (cells a tenth of the radius) with a thin
+// bright seam round each (none near the shore), a flat hot rim inside a thin dark crust line along
+// the shore. Plates fade out when their cells are a few pixels (a small lake is a plain glowing spot).
+vec3 lavaLook(vec2 p, float e, float px, float rPx) {
+    vec2 c = p * 10.0;
+    float cellPx = rPx / 10.0;
+    float n = 0.8 * lavaNoise(c + 3.1) + 0.2 * lavaNoise(c * 1.9 + 7.7);
+    float thr = 0.74 + 0.3 * (1.0 - smoothstep(15.0, 70.0, e));
+    float pa = 0.4 / max(cellPx, 1.0);
+    float plate = smoothstep(thr - pa, thr + pa, n);
+    float seam = smoothstep(thr - 0.015 - pa, thr - 0.015 + pa, n) - plate;
+    float pf = smoothstep(3.0, 8.0, cellPx);
+    vec3 col = vec3(0.90, 0.36, 0.12);
+    col = mix(col, vec3(1.0, 0.68, 0.26), 1.0 - smoothstep(7.0, 7.0 + max(px, 3.0), e));
+    col = mix(col, vec3(0.38, 0.18, 0.12), plate * pf);
+    col = mix(col, vec3(1.0, 0.76, 0.34), seam * pf * 0.9);
+    float lw = max(1.2, 0.8 * px);
+    return mix(col, vec3(0.24, 0.11, 0.07), 1.0 - smoothstep(lw, lw + px, e));
+}
+
+// Drawn lava's field at p (chunk squares; `battlemap::Chunk::lava_field`, bilinear between square
+// centres, the same values in every chunk it reaches): (ft inside its shore, ft inside its scorched
+// rock's outer edge), each within ±32. Sampled only where uLava is set.
+const float LAVA_HALO = 5.0;
+vec2 lavaField(vec2 p) {
+    return texture(uLavaF, (p + LAVA_HALO) / (N + 2.0 * LAVA_HALO)).rg * 63.75 - 32.0;
+}
+
+// How deep in drawn lava p (chunk squares) lies, in squares, up to 6.
+float lavaDepth(vec2 p) {
+    return clamp(lavaField(p).x / 5.0, 0.0, 6.0);
+}
+
+// Drawn lava's crust plates at w (world squares, wrapped at 512 as the noise offset is) / q (the
+// chunk's): cells of 8 squares, under half of them holding a plate, a lobed round 1.5 to 3 squares
+// across its middle, kept 1.5 squares clear of the shore all round (its middle's depth, from the
+// field, so a plate by a chunk's edge is the same in both), so a narrow
+// river carries a few small ones or none and none spans it. (plate, thin hot seam round it).
+vec2 lavaPlates(vec2 w, vec2 q, float aaSq) {
+    vec2 cell = floor(w / 8.0);
+    vec2 best = vec2(0.0);
+    for (int k = 0; k < 9; k++) {
+        vec2 cc = cell + vec2(float(k % 3 - 1), float(k / 3 - 1));
+        vec2 id = mod(cc, 64.0);
+        if (lavaHash(id * 1.7 + 11.0) > 0.45) continue;
+        vec2 v = w - (cc + 0.2 + 0.6 * vec2(lavaHash(id + 3.3), lavaHash(id + 7.9))) * 8.0;
+        float rMax = 1.5 + 1.5 * lavaHash(id + 5.1);
+        float l = length(v);
+        if (l > 1.3 * rMax + 0.4) continue;
+        float r = min(rMax, lavaDepth(q - v) - 1.5);
+        if (r < 0.8) continue;
+        float a = atan(v.y, v.x);
+        float ph = 6.2832 * lavaHash(id + 9.4);
+        float e = r * (1.0 + 0.16 * sin(3.0 * a + ph) + 0.08 * sin(5.0 * a + 2.0 * ph)) - l;
+        float plate = smoothstep(-aaSq, aaSq, e);
+        best = max(best, vec2(plate, smoothstep(-0.2 - aaSq, -0.2 + aaSq, e) - plate));
+    }
+    return best;
+}
+
+// (Roadmap 7, 199) Lava drawn by hand (no crater's centre): `lavaLook`'s colours, its plates
+// `lavaPlates`, e ft inside its shore (`lavaD`, from its field), a pixel px ft.
+vec3 drawnLavaLook(vec2 w, vec2 q, float e, float px) {
+    float aaSq = px / 5.0;
+    vec2 ps = lavaPlates(w, q, aaSq);
+    float plate = ps.x;
+    float seam = ps.y;
+    float pf = smoothstep(1.0, 3.0, 1.0 / max(aaSq, 1e-3));
+    vec3 col = vec3(0.90, 0.36, 0.12);
+    col = mix(col, vec3(1.0, 0.68, 0.26), 1.0 - smoothstep(3.5, 3.5 + max(px, 2.0), e));
+    col = mix(col, vec3(0.38, 0.18, 0.12), plate * pf);
+    col = mix(col, vec3(1.0, 0.76, 0.34), seam * pf * 0.9);
+    float lw = max(1.0, 0.8 * px);
+    return mix(col, vec3(0.24, 0.11, 0.07), 1.0 - smoothstep(lw, lw + px, e));
+}
+
+// Scorched rock round a lake, t 0 at its shore to 1 at the ring's outer edge: burnt brown-grey,
+// lighter outward.
+vec3 scorchLook(float t) {
+    return mix(vec3(0.30, 0.21, 0.16), vec3(0.45, 0.39, 0.33), t);
+}
 
 // v63 countryside: the field square's furrows under the pixel (`town::fields::square_byte`: angle in
 // 64ths of a half turn, mode << 6: 0 arable, 1 open-field strips, 2 fallow), set in main.
@@ -569,6 +684,43 @@ void main() {
             }
         }
     }
+    // (Roadmap 7, 199) Lava drawn by hand (away from a crater): its shore from its field (`lavaField`,
+    // smooth and the same across chunks), wobbling a little by the world's noise; lavaD: ft inside it
+    // (drawn over the relief below; never on a bridge's deck or in water). Where the squares' warped
+    // lookup gave lava past the shore: scorched rock, which the band below draws as it should be.
+    float lavaD = -1e9;
+    vec2 lf = vec2(-32.0);
+    bool nearCrater = uCrater[0].z > 0.0 && length(q - uCrater[0].xy) < 1.3 * uCrater[0].w;
+    if (uLava > 0.5 && !nearCrater) {
+        lf = lavaField(q);
+        if (lf.y > -20.0) {
+            // An uneven hand-drawn shore: world-space swells (3-6 squares long, up to ~4 ft) and ripples
+            // (~1 square, ~1.2 ft) displace the field's distances (the same shift for the shore and the
+            // scorched band's edge, so the band keeps its width). The shift fades out where the field
+            // clamps and is scaled by the local width (the deepest of four taps 2.5 squares round), so a
+            // narrow river is only rippled, never pinched shut.
+            float wmax = max(max(lf.x, lavaField(q + vec2(2.5, 0.0)).x), max(lavaField(q - vec2(2.5, 0.0)).x, max(lavaField(q + vec2(0.0, 2.5)).x, lavaField(q - vec2(0.0, 2.5)).x)));
+            float wscale = clamp((wmax + 4.0) / 16.0, 0.15, 1.0);
+            float taper = (1.0 - smoothstep(18.0, 28.0, -lf.y)) * (1.0 - smoothstep(18.0, 28.0, lf.x));
+            float sw1 = vnoise(w * 0.19 + 13.0) + 0.5 * vnoise(w * 0.41 + 29.0) - 0.75;
+            float rp = vnoise(w * 0.85 + 57.0) - 0.5;
+            float disp = (sw1 * 8.0 + rp * 3.0) * wscale * taper;
+            lf += disp;
+        }
+        if (lf.x > -4.0 && !(onRoad && road.y >= 0.75)) {
+            float e = lf.x + (vnoise(w * 0.5 + 91.0) - 0.5) * 0.4;
+            vec2 hq = heightsAt(q);
+            if (hq.y <= hq.x) lavaD = e;
+        }
+        if (lavaD > 0.0) {
+            surf = 12;
+        } else if (surf == 12) {
+            int s0 = int(dataAt(sq).r + 0.5);
+            surf = s0 != 12 ? s0 : 22;
+        }
+    } else if (surf == 12 && !nearCrater) {
+        surf = 22;
+    }
     // Paving's edges with the ground: soft and hand-wobbled from the 2 x 2 squares' bilinear
     // paving (as a gravel path's), not the warped lookup's square steps; between the paving and
     // a natural ground only, every other boundary as it was.
@@ -686,6 +838,76 @@ void main() {
     col = mix(col, col * 0.72, verge * 0.6);
     if (gravel > 0.0) col = mix(col, col * 0.8, smoothstep(0.3, 0.5, gravel) * (1.0 - smoothstep(0.5, 0.64, gravel)) * 0.7);
 
+    // An active crater's scorched ring, drawn from its edges (smooth, not the squares'): graded
+    // lighter outward, blending into the ground round it over its outer few squares. lavaE: how
+    // far inside the lake's shore (squares; the lake is drawn over the relief below).
+    float lavaE = -1e9;
+    vec4 cr = uCrater[0];
+    if (cr.z > 0.0 && depth <= 0.0 && !onRoad && (surf <= 9 || surf == 12 || surf == 21 || surf == 22)) {
+        vec2 v = q - cr.xy;
+        float dd = length(v);
+        if (dd < 1.25 * cr.w) {
+            float a = atan(v.y, v.x);
+            float rl = cr.z * craterEdge(a, uCrater[1].x);
+            float rs = cr.w * craterEdge(a, uCrater[1].x + 0.5);
+            lavaE = rl - dd;
+            bool ring = surf == 12 || surf == 22;
+            if (ring || dd < rs) {
+                float fade = max(0.08 * (rs - rl), 3.0);
+                float sc = 1.0 - smoothstep(rs - fade, rs, dd + (vnoise(w * 0.35) - 0.5) * fade * 0.8);
+                vec3 under = col;
+                if (ring && sc < 0.999) {
+                    // (The ring's own square past its edge: the ground of a square two out that is
+                    // neither, else the ring's outer tone.)
+                    under = scorchLook(1.0);
+                    for (int k = 0; k < 9; k++) {
+                        int s = int(dataAt(sq + 2 * ivec2(k % 3 - 1, k / 3 - 1)).r + 0.5);
+                        if (s <= 9 || s == 21) {
+                            under = groundColor(s, w);
+                            break;
+                        }
+                    }
+                }
+                vec3 burnt = scorchLook(clamp((dd - rl) / (rs - rl), 0.0, 1.0)) * (0.95 + 0.1 * vnoise(w * 0.12 + 9.0));
+                col = mix(under, burnt, sc);
+            }
+        }
+    }
+    // (Roadmap 7, 199) Drawn lava's scorched rock, from its field (smooth, the same across chunks, not
+    // the squares' steps): graded lighter outward from the shore, its outer edge wobbling by the
+    // world's noise and fading into the ground over a square or so. Open ground only, as the
+    // squares are: natural ground the generator left unburnt inside the band (a town's) stays. (A
+    // field is burnt as the ground is: cut back to the band's edge.)
+    if (lavaE < -1e8 && uLava > 0.5 && lf.y > -8.0 && depth <= 0.0 && !onRoad && (surf <= 9 || surf == 12 || surf == 18 || surf == 21 || surf == 22) && !nearCrater) {
+        float s = lf.y + (vnoise(w * 0.3 + 4.0) - 0.5) * 4.0 + (vnoise(w * 1.1 + 2.0) - 0.5) * 1.2;
+        float m = smoothstep(-2.5, 2.5, s);
+        bool ring = surf == 12 || surf == 22;
+        if (!ring && m > 0.0) {
+            ivec2 sc = clamp(sw, ivec2(0), ivec2(int(N) - 1));
+            int s0 = int(dataAt(sc).r + 0.5);
+            vec2 f0 = lavaField(vec2(sc) + 0.5);
+            if ((s0 <= 9 || s0 == 21) && f0.y > 0.2) m = 0.0;
+        }
+        if (m > 0.0) {
+            vec3 under = col;
+            if (ring && m < 0.999) {
+                // (The band's own square past its edge: the ground of a square two out that is
+                // neither, else the band's outer tone.)
+                under = scorchLook(1.0);
+                for (int k = 0; k < 9; k++) {
+                    int s2 = int(dataAt(sq + 2 * ivec2(k % 3 - 1, k / 3 - 1)).r + 0.5);
+                    if (s2 <= 9 || s2 == 18 || s2 == 21) {
+                        under = groundColor(s2, w);
+                        break;
+                    }
+                }
+            }
+            float t = clamp(-lf.x / max(lf.y - lf.x, 1.0), 0.0, 1.0);
+            vec3 burnt = scorchLook(smoothstep(0.0, 0.9, t)) * (0.95 + 0.1 * vnoise(w * 0.12 + 9.0));
+            col = mix(under, burnt, m);
+        }
+    }
+
     // Hillshade from square heights (NW light).
     float hx = heightsAt(q + vec2(0.5, 0.0)).x - heightsAt(q - vec2(0.5, 0.0)).x;
     float hy = heightsAt(q + vec2(0.0, 0.5)).x - heightsAt(q - vec2(0.0, 0.5)).x;
@@ -709,11 +931,6 @@ void main() {
     float fwh = max(fwidth(h), 1e-3);
     float shore = 1.0 - smoothstep(0.0, 1.5, abs(depth) / fwh);
     col = mix(col, INK, shore * 0.8 * step(-3.0, depth));
-
-    if (surf == 12) {
-        float glow = fbm3(w * 0.8 + vec2(0.0, uTime * 0.3));
-        col = mix(vec3(0.95, 0.30, 0.05), vec3(1.0, 0.85, 0.3), glow);
-    }
 
     // Elevation from the smooth height field. Slope in ft per ft; gradient points uphill.
     vec2 grad = vec2(hx, hy) / 5.0;
@@ -779,6 +996,18 @@ void main() {
         float ledged = shaped ? 0.0 : smoothstep(0.6, 1.0, slope);
         col = mix(col, INK, line * dash * mix(0.4, 0.85, steep) * (onStair || fanned ? steep : 1.0) * (1.0 - ledged));
         if (onStair) col = treads(col, q, steep);
+    }
+
+    // Lava (over the relief: a lake lies flat), from the crater's shore line (`lavaLook`, as the
+    // far map's); without one, plain.
+    if (lavaE > -0.5 * aa) {
+        float m = 1.0 - smoothstep(-0.5 * aa, 0.5 * aa, -lavaE);
+        col = mix(col, lavaLook((q - cr.xy) / cr.z, lavaE * 5.0, 5.0 * aa, cr.z * uPxPerSq), m);
+    } else if (lavaD > -2.5 * aa) {
+        // (Drawn by hand: lavaD ft in from its shore, from its field.)
+        col = mix(col, drawnLavaLook(w, q, lavaD, 5.0 * aa), smoothstep(-2.5 * aa, 2.5 * aa, lavaD));
+    } else if (surf == 12 && cr.z <= 0.0) {
+        col = vec3(0.90, 0.36, 0.12);
     }
 
     // 5-ft grid.

@@ -44,7 +44,7 @@ export interface Hill {
   seed: number;
 }
 
-export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat' | 'stream';
+export type WaterKind = 'inlet' | 'basin' | 'lake' | 'pond' | 'moat' | 'stream' | 'lava';
 
 /** A road drawn by hand's type (`worldgen::paths::PathKind`). */
 export type PathKind = 'footpath' | 'track' | 'gravel' | 'paved' | 'cobbled';

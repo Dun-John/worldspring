@@ -4,17 +4,18 @@ import { Graphics, GlProgram } from 'pixi.js';
 import { INK } from '../pen';
 import vertex from '../shaders/terrain.vert?raw';
 import undergroundFragment from '../shaders/underground.frag?raw';
+import yardPaveFragment from '../shaders/yardpave.frag?raw';
 import { YURT_ROOMS, type Pt } from '../roomShapes';
 
 /** Underground props drawn against the wall beside them (their look depends on its side). */
-export const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
+export const ON_WALL = new Set(['tunnel', 'cobweb', 'shelf_fungus', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
 /** Underground props with a back against a wall (a dais's throne; a collapsed wall, the wall it fell from). */
 export const BACKED = new Set(['dais', 'collapsed_wall', 'throne', 'steps', 'climb_ladder', 'arcane_workbench']);
 /** Underground props sharing a building furniture kind's name but drawn their own way below ground (a boss's stone
  * throne); in a building, still the furniture. */
 const OWN_BELOW = new Set(['throne']);
 /** What a wall prop may lie over: the floor and what is strewn on it. */
-export const UNDERFOOT = new Set(['sewage', 'lava', 'rail', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'drain', 'grille']);
+export const UNDERFOOT = new Set(['sewage', 'lava', 'rail', 'guano', 'moss', 'mycelium', 'rubble', 'debris', 'sulfur', 'drain', 'grille']);
 /** Props drawn along the run of a sewer under them (`runDir`). */
 export const ALONG_RUN = new Set(['drain', 'grille']);
 /** An item's `back` (0 north 1 east 2 south 3 west) as a unit step in grid axes. */
@@ -137,6 +138,8 @@ export const COVER = ['no cover', 'half cover', 'three-quarters cover', 'total c
 // Underground levels are painted by a shader (`underground.frag`) from a smooth floor field
 // (`underField.ts`).
 export const underProgram = GlProgram.from({ vertex, fragment: undergroundFragment, name: 'underground' });
+/** A coaching inn's yard paving under its gallery (`yardpave.frag`: the ground's cobbles from world coordinates). */
+export const yardProgram = GlProgram.from({ vertex, fragment: yardPaveFragment, name: 'yardpave' });
 /** How far the map above is dimmed under an underground level (`Sewers` too). */
 export const UNDER_DIM = 0.62;
 /** The piece on square (i, j) of a level: what stands on a platform before the platform. */
@@ -165,6 +168,8 @@ export function floorColor(kind: string, z: number, natural = false, raise = 0):
   if (kind === 'courtyard' || kind === 'garth') return LAWN;
   // (A coaching inn's yard and its arch cobbled.)
   if (kind === 'inn yard') return 0x958f83;
+  // (A village inn's yard and its arch: packed earth, as the street it opens on.)
+  if (kind === 'dirt yard') return 0x9a8667;
   if (kind === 'ballroom') return 0xbb8d5c;
   // (A roof's squares: the walk's stone, under the roof drawn over them, `drawRoofs`.)
   if (kind === 'battlements' || kind === 'wall walk' || kind === ROOF_SLOPE) return 0xa8a296;

@@ -315,7 +315,7 @@ export function selectTools(host: SelectApp) {
         B.roadPicked = id;
         return;
       case 'water':
-        B.setBuildMode('water');
+        B.setBuildMode(id && host.edits.waters?.[id]?.kind === 'lava' ? 'lava' : 'water');
         B.waterPicked = id;
         return;
       case 'crossing':

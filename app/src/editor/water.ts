@@ -43,16 +43,26 @@ export const POND_BELOW_FT = 4;
 /** Water within this of the sea's level is the sea's (`waters::SEA_WITHIN_FT`). */
 export const SEA_WITHIN_FT = 0.25;
 
+/** Build › Lava: a river brushed along a stroke (of a width, `LAVA_WIDTHS`) or a pit outlined. */
+export interface LavaSettings {
+  brush: boolean;
+  width: number;
+}
+
 export const defaultWater = (): WaterSettings => ({ brush: true, width: BRUSH_WIDTHS[0], depth: DEPTHS[0], dug: false });
 
 /** A legacy kind's depth (`WaterKind::depth`). */
-const KIND_DEPTH: Record<WaterKind, number> = { inlet: 12, basin: 10, lake: 8, pond: 3, moat: 6, stream: 1.5 };
+const KIND_DEPTH: Record<WaterKind, number> = { inlet: 12, basin: 10, lake: 8, pond: 3, moat: 6, stream: 1.5, lava: 1 };
 /** Its kind if it was made with one (`Water::legacy`: neither a kind nor a depth is a lake). */
 export const legacy = (w: Water): WaterKind | null => w.kind ?? (w.depth === undefined ? 'lake' : null);
+/** Whether it is lava, not water (`Water::is_lava`: a river along a line, else a pit). */
+export const isLava = (w: Water) => w.kind === 'lava';
+/** A lava river's width when none is given and the widths allowed (`waters::LAVA_WIDTHS`). */
+export const LAVA_WIDTHS: [number, number, number] = [20, 5, 80];
 /** Its width's default and the widths allowed (`Water::widths`). */
 export function widths(w: Water): [number, number, number] {
   const k = legacy(w);
-  return !k ? BRUSH_WIDTHS : k === 'stream' ? [5, 3, 12] : [20, 8, 60];
+  return !k ? BRUSH_WIDTHS : k === 'stream' ? [5, 3, 12] : k === 'lava' ? LAVA_WIDTHS : [20, 8, 60];
 }
 /** Whether it is a line (`Water::is_line`). */
 export const isLine = (w: Water) => !!w.line || legacy(w) === 'stream';
@@ -188,7 +198,7 @@ export function shoreRings(w: Water): Pt[][] {
 
 /** A line's middle (`Water::centre`): an open line's (a stream's) smoothed twice. */
 export function centre(w: Water): Pt[] {
-  return flows(w) ? chaikin(chaikin(w.pts)) : w.pts.slice();
+  return flows(w) || (isLava(w) && !!w.line) ? chaikin(chaikin(w.pts)) : w.pts.slice();
 }
 
 function chaikin(c: Pt[]): Pt[] {

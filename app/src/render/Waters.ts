@@ -12,7 +12,7 @@
 import { AlphaFilter, Container, Graphics } from 'pixi.js';
 import type { Water } from '../gen/protocol';
 import type { Camera } from './camera';
-import { centre, contains, lookOf, shore, shoreRings, widthOf } from '../editor/water';
+import { centre, contains, isLine, lookOf, shore, shoreRings, widthOf } from '../editor/water';
 
 /** The terrain shader's shallow water (`terrain.frag`: 0.70, 0.78, 0.77) and its shore ink. */
 const FILL = 0xb3c7c4;
@@ -35,9 +35,15 @@ const THIN_PX = 2;
 const STREAM_MIN_PX = 1.5;
 
 type Kind = NonNullable<Water['kind']>;
-type Shown = { kind: Kind; dug: boolean; pts: number[]; rings: number[][]; mid: number[] | null; line: number[] | null; px: number };
+type Shown = { kind: Kind; dug: boolean; pts: number[]; rings: number[][]; mid: number[] | null; line: number[] | null; px: number; hot?: { line: number[]; px: number } };
 
-const FILLS: Record<Kind, number> = { inlet: FILL, basin: BASIN, lake: FILL, pond: POND, moat: MOAT, stream: STREAM };
+/** Lava drawn by hand (Roadmap 7, 199): the battlemap's flat orange-red (`lavaLook`) inside a dark
+ * crust rim, a brighter line along its middle when it's wide enough to show one. */
+const LAVA = 0xe65c1f;
+const LAVA_HOT = 0xffad42;
+const LAVA_CRUST = 0x3d1c12;
+
+const FILLS: Record<Kind, number> = { inlet: FILL, basin: BASIN, lake: FILL, pond: POND, moat: MOAT, stream: STREAM, lava: LAVA };
 
 export class Waters {
   readonly container = new Container();
@@ -98,8 +104,8 @@ export class Waters {
       for (const [x, y] of pts0) [bx0, by0, bx1, by1] = [Math.min(bx0, x), Math.min(by0, y), Math.max(bx1, x), Math.max(by1, y)];
       if (bx1 < x0 || bx0 > x1 || by1 < y0 || by0 > y1) continue;
       if (Math.max(bx1 - bx0, by1 - by0) * cam.ppf < 1) continue;
-      const stream = look.kind === 'stream';
-      // (A brushed stream wider than 16 ft is drawn by its shore, as other water.)
+      const stream = look.kind === 'stream' || (look.kind === 'lava' && isLine(w));
+      // (A brushed stream or lava river wider than 16 ft is drawn by its shore, as other water.)
       const thin = stream && widthOf(w) <= 16;
       const kind = look.kind;
       shown.push({
@@ -110,12 +116,15 @@ export class Waters {
         mid: kind === 'lake' ? lakeMiddle(pts0) : null,
         line: thin ? flat(centre(w)) : null,
         px: thin ? Math.max(STREAM_MIN_PX, widthOf(w) * cam.ppf) : Math.max(2, (look.dug && kind !== 'basin' ? EDGE_FT : QUAY_FT) * cam.ppf),
+        hot: kind === 'lava' && isLine(w) ? { line: flat(centre(w)), px: (widthOf(w) * cam.ppf) / 3 } : undefined,
       });
     }
     // Under every fill: the rims (a basin's quay with ink each side of it), so overlapping water is one.
     for (const s of shown) {
       if (s.line) {
-        line(g, s.line).stroke({ width: s.px + 2, color: INK, alpha: 0.85, join: 'round', cap: 'round' });
+        line(g, s.line).stroke({ width: s.px + 2, color: s.kind === 'lava' ? LAVA_CRUST : INK, alpha: 0.85, join: 'round', cap: 'round' });
+      } else if (s.kind === 'lava') {
+        g.poly(s.pts, true).stroke({ width: RIM_PX, color: LAVA_CRUST, alpha: 0.9, join: 'round' });
       } else if (s.kind === 'basin' || s.dug) {
         g.poly(s.pts, true).stroke({ width: 2 * s.px + 2, color: INK, alpha: 0.85, join: 'round' });
         g.poly(s.pts, true).stroke({ width: 2 * s.px, color: QUAY, join: 'round' });
@@ -125,8 +134,13 @@ export class Waters {
       } else if (s.kind !== 'inlet') g.poly(s.pts, true).stroke({ width: RIM_PX, color: INK, alpha: 0.9, join: 'round' });
     }
     for (const s of shown) {
-      if (s.line) line(g, s.line).stroke({ width: s.px, color: FILLS.stream, join: 'round', cap: 'round' });
+      if (s.line) line(g, s.line).stroke({ width: s.px, color: FILLS[s.kind], join: 'round', cap: 'round' });
       else g.poly(s.pts, true).fill({ color: FILLS[s.kind] });
+    }
+    // (Lava's hot middle: a line along a river at a third of its width, 2 px wide at least to show.)
+    for (const s of shown) {
+      if (s.kind !== 'lava' || !s.hot || s.hot.px < 2) continue;
+      line(g, s.hot.line).stroke({ width: s.hot.px, color: LAVA_HOT, alpha: 0.8, join: 'round', cap: 'round' });
     }
     for (const s of shown) {
       if (!s.mid) continue;

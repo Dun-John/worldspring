@@ -45,7 +45,7 @@ const BY_GROUP: Record<string, string[]> = {
   'Worship & tombs': ['altar', 'side_altar', 'god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'statue', 'sarcophagus', 'urn', 'coffin', 'effigy', 'niche', 'offering', 'glyph', 'bell', 'fountain', 'totem', 'arcane_focus'],
   'Light & fire': ['brazier', 'candles', 'sconce', 'lantern', 'campfire'],
   'Prison & grim': ['cage', 'chains', 'iron_maiden', 'stocks', 'rack'],
-  'Cave & nature': ['stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'guano', 'moss', 'nest', 'ice', 'ice_sheet', 'basalt', 'obsidian', 'sulfur', 'glass_pool'],
+  'Cave & nature': ['stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'toadstool', 'shelf_fungus', 'mycelium', 'web', 'guano', 'moss', 'nest', 'ice', 'ice_sheet', 'basalt', 'obsidian', 'sulfur', 'glass_pool'],
   'Mine & works': ['timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'winch'],
   'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'collapsed_wall', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched', 'wall_stub', 'fallen_column', 'bone_mound'],
   'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava', 'cracked_floor', 'flooded_pit'],

@@ -153,7 +153,7 @@ pub(super) fn hand_shore_things(edits: &crate::world::Edits, seed: u64, sea: f64
             // (On the quay's paving, near its edge.)
             W::Basin => (18.0, 4.0),
             W::Stream => (14.0, 3.0),
-            W::Inlet | W::Moat => continue,
+            W::Inlet | W::Moat | W::Lava => continue,
         };
         let sh = w.shore();
         let b = crate::ground::bbox(&sh);

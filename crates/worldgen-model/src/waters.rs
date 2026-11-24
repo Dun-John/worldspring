@@ -53,6 +53,13 @@ pub const MAX_STREAM_LEVELS: usize = 512;
 /// and the depths (ft).
 pub const BRUSH_WIDTH_FT: f64 = 10.0;
 pub const BRUSH_WIDTHS: [f64; 2] = [3.0, 80.0];
+/// A lava river's width when none is given, and the widths it may have (ft).
+pub const LAVA_WIDTH_FT: f64 = 20.0;
+pub const LAVA_WIDTHS: [f64; 2] = [5.0, 80.0];
+/// The scorched rock round lava: this far out (ft) at least, and up to `LAVA_SCORCH_WANDER_FT` more
+/// (a soft, wandering edge keyed to the place only).
+pub const LAVA_SCORCH_FT: f64 = 14.0;
+pub const LAVA_SCORCH_WANDER_FT: f64 = 10.0;
 pub const DEPTH_FT: f64 = 4.0;
 pub const DEPTHS: [f64; 2] = [1.0, 20.0];
 /// Still water shallower than this looks a pond, else a lake.
@@ -77,10 +84,14 @@ pub enum WaterKind {
     Moat,
     /// A small stream: always a line, its level falling along it.
     Stream,
+    /// Lava, not water (Roadmap 7, 199): a river (a line `width` ft wide) or a pit (an outline).
+    /// No water reads it (`shores`, `holding`): it is lava where it lies (`lava_near`, `lava_at`),
+    /// scorched rock round it, and roads bridge it as they do water.
+    Lava,
 }
 
 impl WaterKind {
-    pub const ALL: [WaterKind; 6] = [WaterKind::Inlet, WaterKind::Basin, WaterKind::Lake, WaterKind::Pond, WaterKind::Moat, WaterKind::Stream];
+    pub const ALL: [WaterKind; 7] = [WaterKind::Inlet, WaterKind::Basin, WaterKind::Lake, WaterKind::Pond, WaterKind::Moat, WaterKind::Stream, WaterKind::Lava];
 
     pub fn parse(s: &str) -> Option<WaterKind> {
         Self::ALL.into_iter().find(|k| k.name() == s)
@@ -94,6 +105,7 @@ impl WaterKind {
             WaterKind::Pond => "pond",
             WaterKind::Moat => "moat",
             WaterKind::Stream => "stream",
+            WaterKind::Lava => "lava",
         }
     }
 
@@ -106,6 +118,7 @@ impl WaterKind {
             WaterKind::Pond => 3.0,
             WaterKind::Moat => 6.0,
             WaterKind::Stream => 1.5,
+            WaterKind::Lava => 1.0,
         }
     }
 
@@ -121,12 +134,16 @@ impl WaterKind {
 
     /// Whether it may be drawn as a line (a moat), or only so (a stream).
     pub fn may_be_line(self) -> bool {
-        matches!(self, WaterKind::Moat | WaterKind::Stream)
+        matches!(self, WaterKind::Moat | WaterKind::Stream | WaterKind::Lava)
     }
 
     /// Its line's width when none is given, and the widths allowed (ft).
     pub fn widths(self) -> (f64, [f64; 2]) {
-        if self == WaterKind::Stream { (STREAM_WIDTH_FT, STREAM_WIDTHS) } else { (MOAT_WIDTH_FT, MOAT_WIDTHS) }
+        match self {
+            WaterKind::Stream => (STREAM_WIDTH_FT, STREAM_WIDTHS),
+            WaterKind::Lava => (LAVA_WIDTH_FT, LAVA_WIDTHS),
+            _ => (MOAT_WIDTH_FT, MOAT_WIDTHS),
+        }
     }
 
     /// Whether its level is the sea's by default (else the lowest ground on its shore).
@@ -242,6 +259,9 @@ impl Water {
         {
             return Some(format!("the depth is {} to {} ft", DEPTHS[0], DEPTHS[1]));
         }
+        if self.is_lava() && self.closed {
+            return Some("a lava river is an open line (draw a pit for a ring of lava)".into());
+        }
         if self.is_line() {
             return self.line_problem();
         }
@@ -280,6 +300,17 @@ impl Water {
     /// (`closed`: a ring), `depth` ft deep, dug or natural.
     pub fn drawn(pts: Vec<P>, level: f32, line: bool, width: Option<f64>, closed: bool, depth: f64, dug: bool) -> Water {
         Water { pts, kind: None, level, line, width: width.filter(|_| line), closed: closed && line, levels: Vec::new(), depth: Some(depth), dug: Some(dug) }
+    }
+
+    /// Lava (`WaterKind::Lava`): a river along `pts` `width` ft wide (`line`), else a pit inside them.
+    /// (Its level is no water's: 0.)
+    pub fn lava(pts: Vec<P>, line: bool, width: Option<f64>) -> Water {
+        Water { pts, kind: Some(WaterKind::Lava), level: 0.0, line, width: width.filter(|_| line), closed: false, levels: Vec::new(), depth: None, dug: None }
+    }
+
+    /// Whether it is lava, not water.
+    pub fn is_lava(&self) -> bool {
+        self.kind == Some(WaterKind::Lava)
     }
 
     /// Its kind as made before P146, if it has one (one with neither a kind nor a depth is a lake).
@@ -342,7 +373,12 @@ impl Water {
     /// A line's middle as every reader takes it: a ring's or a moat's the points as drawn, a
     /// stream's smoothed (`chaikin`, its ends kept).
     pub fn centre(&self) -> Vec<P> {
-        if self.flows() { chaikin(&chaikin(&self.pts)) } else { self.pts.clone() }
+        if self.smooth_line() { chaikin(&chaikin(&self.pts)) } else { self.pts.clone() }
+    }
+
+    /// Whether its line is smoothed (a stream's, a lava river's).
+    fn smooth_line(&self) -> bool {
+        self.flows() || self.is_lava() && self.line
     }
 
     fn line_problem(&self) -> Option<String> {
@@ -396,7 +432,7 @@ impl Water {
 
     /// The shore, and where a ring's band crosses from its outer edge to its inner (`band`).
     fn shore_bridge(&self) -> (Arc<[P]>, Option<usize>) {
-        let key = (!self.is_dug(), self.is_line(), self.flows(), self.width_ft().to_bits(), self.closed);
+        let key = (!self.is_dug(), self.is_line(), self.smooth_line(), self.width_ft().to_bits(), self.closed);
         SHORES.with(|c| {
             let mut c = c.borrow_mut();
             if let Some((_, _, s, b)) = c.iter().find(|(k, p, _, _)| *k == key && p.as_slice() == self.pts.as_slice()) {
@@ -803,9 +839,10 @@ impl Near {
 
 const RUN: usize = 16;
 
-/// The usable outlines with their shores (`Water::shore`) and the box round each.
+/// The usable outlines with their shores (`Water::shore`) and the box round each (water only:
+/// lava is read by `lava_near`).
 fn shores(edits: &crate::world::Edits) -> Vec<(&Water, Arc<[P]>, [f64; 4], Option<usize>)> {
-    edits.waters.values().filter(|w| w.usable()).map(|w| {
+    edits.waters.values().filter(|w| !w.is_lava() && w.usable()).map(|w| {
         let (s, k) = w.shore_bridge();
         let b = crate::model::ground::bbox(&s);
         (w, s, b, k)
@@ -1009,5 +1046,110 @@ pub fn level_at(edits: &crate::world::Edits, p: [f64; 2]) -> Option<f32> {
 
 /// The outline drawn by hand holding `p`, if any (its id; the first by id).
 pub fn holding<'a>(edits: &'a crate::world::Edits, p: [f64; 2]) -> Option<&'a str> {
-    edits.waters.iter().find(|(_, w)| w.usable() && geom::contains(&w.shore(), p)).map(|(k, _)| k.as_str())
+    edits.waters.iter().find(|(_, w)| !w.is_lava() && w.usable() && geom::contains(&w.shore(), p)).map(|(k, _)| k.as_str())
+}
+
+/// Lava drawn by hand meeting an area (`lava_near`): its shore (`Water::shore`), the box round it
+/// and its edges in runs of `RUN` with the box round each.
+pub struct LavaNear {
+    pts: Arc<[P]>,
+    b: [f64; 4],
+    runs: Vec<[f64; 4]>,
+}
+
+impl LavaNear {
+    /// Its shore (world ft).
+    pub fn pts(&self) -> &[P] {
+        &self.pts
+    }
+    /// The box round its shore.
+    pub fn bbox(&self) -> [f64; 4] {
+        self.b
+    }
+}
+
+/// How far lava's scorched rock may reach past its shore (ft).
+pub const LAVA_REACH_FT: f64 = LAVA_SCORCH_FT + LAVA_SCORCH_WANDER_FT;
+
+/// The usable lava drawn by hand meeting `rect` (world ft) or within `pad` ft of it, in id order.
+pub fn lava_near(edits: &crate::world::Edits, rect: [f64; 4], pad: f64) -> Vec<LavaNear> {
+    edits
+        .waters
+        .values()
+        .filter(|w| w.is_lava() && w.usable() && w.problem().is_none())
+        .filter_map(|w| {
+            let pts = w.shore();
+            let b = crate::model::ground::bbox(&pts);
+            if !meets(b, rect, pad) {
+                return None;
+            }
+            let n = pts.len();
+            let runs = (0..n).step_by(RUN).map(|k| (k..(k + RUN).min(n)).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, i| {
+                let (p, q) = (pts[i], pts[(i + 1) % n]);
+                [r[0].min(p[0]).min(q[0]), r[1].min(p[1]).min(q[1]), r[2].max(p[0]).max(q[0]), r[3].max(p[1]).max(q[1])]
+            })).collect();
+            Some(LavaNear { pts, b, runs })
+        })
+        .collect()
+}
+
+/// At (x, y): whether lava drawn by hand holds it (`Some(d)`, d ≥ 0 ft in from its shore, up to
+/// `reach`), or how far out from the nearest lava's shore it is (`Some(-d)`, within `reach`), else None.
+pub fn lava_dist(near: &[LavaNear], x: f64, y: f64, reach: f64) -> Option<f64> {
+    let inside = near.iter().any(|n| x >= n.b[0] && x <= n.b[2] && y >= n.b[1] && y <= n.b[3] && geom::contains(&n.pts, [x, y]));
+    let mut d = reach;
+    let mut any = inside;
+    for n in near.iter().filter(|n| x >= n.b[0] - reach && x <= n.b[2] + reach && y >= n.b[1] - reach && y <= n.b[3] + reach) {
+        let m = n.pts.len();
+        for (r, rb) in n.runs.iter().enumerate() {
+            let (dx, dy) = ((rb[0] - x).max(x - rb[2]).max(0.0), (rb[1] - y).max(y - rb[3]).max(0.0));
+            if dx >= d || dy >= d {
+                continue;
+            }
+            for i in r * RUN..((r + 1) * RUN).min(m) {
+                let e = geom::seg_dist([x, y], n.pts[i], n.pts[(i + 1) % m]);
+                if e < d {
+                    d = e;
+                    any = true;
+                }
+            }
+        }
+    }
+    any.then_some(if inside { d } else { -d })
+}
+
+/// What lava drawn by hand makes of the ground at (x, y): 2 lava, 1 scorched rock (out to
+/// `LAVA_SCORCH_FT` and a wandering `LAVA_SCORCH_WANDER_FT` more, keyed to the place only), 0 neither.
+pub fn lava_at(near: &[LavaNear], x: f64, y: f64) -> u8 {
+    match lava_dist(near, x, y, LAVA_REACH_FT) {
+        Some(d) if d >= 0.0 => 2,
+        Some(d) => (-d < lava_scorch_ft(x, y)) as u8,
+        None => 0,
+    }
+}
+
+/// How far out from drawn lava's shore its scorched rock reaches at (x, y) (ft): `LAVA_SCORCH_FT`
+/// and a wandering share of `LAVA_SCORCH_WANDER_FT`, keyed to the place only.
+#[inline]
+pub fn lava_scorch_ft(x: f64, y: f64) -> f64 {
+    let wander = 0.5 + 0.5 * crate::core::noise::fbm(0x1a7a_5c0c, x / 45.0, y / 45.0, 2, 2.0, 0.5);
+    LAVA_SCORCH_FT + LAVA_SCORCH_WANDER_FT * wander.clamp(0.0, 1.0)
+}
+
+/// The battlemap's lava field (`battlemap::Chunk::lava_field`): its values' range either way (ft).
+pub const LAVA_FIELD_FT: f64 = 32.0;
+
+/// Drawn lava's field at (x, y), each clamped to ±`LAVA_FIELD_FT` and quantised to a byte (a
+/// quarter foot a step, 128 at 0): (how far inside its shore, how far inside its scorched rock's
+/// outer edge, the lava counting as inside). `lava_at` is 2 where the first is ≥ 0 (before
+/// quantising), 1 where only the second is > 0.
+pub fn lava_field_at(near: &[LavaNear], x: f64, y: f64) -> (f64, f64) {
+    let d = lava_dist(near, x, y, LAVA_FIELD_FT).unwrap_or(-LAVA_FIELD_FT);
+    (d, d + lava_scorch_ft(x, y))
+}
+
+/// A lava field value (ft) as its byte.
+#[inline]
+pub fn lava_field_byte(v: f64) -> u8 {
+    crate::core::round((v.clamp(-LAVA_FIELD_FT, LAVA_FIELD_FT) + LAVA_FIELD_FT) * 4.0).min(255.0) as u8
 }

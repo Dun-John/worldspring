@@ -3188,6 +3188,7 @@
             onCrossSave={B.saveCrossing}
             onCrossRemove={B.removeCrossing}
             bind:water={B.water}
+            bind:lava={B.lava}
             waterPicked={B.waterPicked && edits.waters?.[B.waterPicked] ? B.waterInfo(edits.waters[B.waterPicked], edits.renames?.[B.waterPicked] ?? '') : null}
             onWaterChange={B.changeWater}
             onWaterRemove={B.removeWater}

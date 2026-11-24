@@ -228,7 +228,8 @@ export function editDirty(prev: Edits, next: Edits, changed?: Record<string, str
     if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
     for (const w of [a, b]) {
       if (!w) continue;
-      const e = 20;
+      // (Lava: its scorched rock's reach, `waters::LAVA_REACH_FT`, and its bridges' landings.)
+      const e = w.kind === 'lava' ? 40 : 20;
       const sh = shore(w);
       ground.push([Math.min(...sh.map((q) => q[0])) - e, Math.min(...sh.map((q) => q[1])) - e, Math.max(...sh.map((q) => q[0])) + e, Math.max(...sh.map((q) => q[1])) + e]);
     }

@@ -77,7 +77,7 @@ pace.
 | `tr:<layout>:<8 hex>`, `pp:<layout>:<spot>:<j>` | A generated town's or village's own street or lane (from its ends); a path in one of its parks, gardens or cemeteries. |
 | `ts:<layout>:<id>` | A street added to a generated town by hand. |
 | `h:<id>`, `g:<x>:<y>` | A plateau or pit; a block of ground brushed by hand (80 ft square, block indices). |
-| `e:<id>` | Water drawn by hand (inlet, basin, lake, pond, moat). |
+| `e:<id>` | Water drawn by hand (inlet, basin, lake, pond, moat), or lava (`kind` lava: a river or a pit). |
 
 A place (`at`) is an id, a place's name, `{x_ft, y_ft}` or `[x_ft, y_ft]`.
 

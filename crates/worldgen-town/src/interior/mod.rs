@@ -297,6 +297,7 @@ pub fn is_circulation(kind: &str) -> bool {
             | "stair hall"
             | "arcade"
             | "inn yard"
+            | "dirt yard"
             | "yard gallery"
     )
 }

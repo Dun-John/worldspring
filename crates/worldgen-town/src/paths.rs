@@ -427,8 +427,12 @@ fn wet_crossings(world: &World, t0: &T0, line: &[P], width: f64, material: Cross
     };
     let grouped = crate::waters::grouped(&world.file.edits);
     let cache = crate::lod::rivers::CrossingCache::default();
+    // (Roadmap 7, 199: lava drawn by hand is crossed as water is, on a stone bridge.)
+    let lb = crate::ground::bbox(line);
+    let lava = crate::waters::lava_near(&world.file.edits, lb, 0.5 * width + 1.0);
+    let in_lava = |q: P| !lava.is_empty() && crate::waters::lava_dist(&lava, q[0], q[1], 0.0).is_some();
     let wet = |q: P| -> bool {
-        if crate::waters::level_in(&grouped, q).is_some() {
+        if in_lava(q) || crate::waters::level_in(&grouped, q).is_some() {
             return true;
         }
         let still = t0.sample_water(q[0], q[1]);
@@ -439,21 +443,24 @@ fn wet_crossings(world: &World, t0: &T0, line: &[P], width: f64, material: Cross
     };
     // Stretches of water along the line (ft along it), those closer than twice the reach one.
     let n = (total / WET_STEP_FT) as usize;
-    let mut runs: Vec<(f64, f64)> = Vec::new();
+    let mut runs: Vec<(f64, f64, bool)> = Vec::new();
     for k in 0..=n {
         let s = k as f64 * WET_STEP_FT;
-        if !wet(point(s)) {
+        let q = point(s);
+        if !wet(q) {
             continue;
         }
+        let hot = in_lava(q);
         match runs.last_mut() {
-            Some(r) if s - r.1 <= 2.0 * BANK_REACH_FT + WET_STEP_FT => r.1 = s,
-            _ => runs.push((s, s)),
+            Some(r) if s - r.1 <= 2.0 * BANK_REACH_FT + WET_STEP_FT => (r.1, r.2) = (s, r.2 || hot),
+            _ => runs.push((s, s, hot)),
         }
     }
     let half_w = 0.5 * width;
     let kind = CrossingKind::Bridge;
     let mut out = Vec::new();
-    for (s0, s1) in runs {
+    for (s0, s1, hot) in runs {
+        let material = if hot { CrossingMaterial::Stone } else { material };
         let (a, b) = ((s0 - BANK_REACH_FT).max(0.0), (s1 + BANK_REACH_FT).min(total));
         if b - a < 2.0 * half_w.min(4.0) {
             continue;
@@ -465,6 +472,115 @@ fn wet_crossings(world: &World, t0: &T0, line: &[P], width: f64, material: Cross
         }
     }
     out
+}
+
+thread_local! {
+    static LAVA_BRIDGES: RefCell<Option<(u64, Arc<[Crossing]>)>> = const { RefCell::new(None) };
+}
+
+/// (Roadmap 7, 199) Stone bridges carrying the network's roads over lava drawn by hand: where a
+/// road (`lod::roads::pieces` round each lava's shore) runs in lava, a bridge from a bank's reach
+/// before to one after, as a road drawn by hand gets (at most `MAX_SPAN_FT` a span). A pure function
+/// of the world (each lava's own box), the same in every chunk.
+pub fn lava_crossings(world: &World, t0: &T0) -> Arc<[Crossing]> {
+    let edits = &world.file.edits;
+    if !edits.waters.values().any(|w| w.is_lava()) {
+        return Arc::from(Vec::new());
+    }
+    let mut h = crate::core::hash::Fnv64::default();
+    h.write(&world.hash.to_le_bytes());
+    for (k, w) in edits.waters.iter().filter(|(_, w)| w.is_lava()) {
+        h.write(k.as_bytes());
+        for v in w.pts.iter().flatten() {
+            h.write(&v.to_le_bytes());
+        }
+        h.write(&w.width_ft().to_le_bytes());
+        h.write(&[w.line as u8, w.closed as u8]);
+    }
+    let key = h.finish();
+    if let Some(c) = LAVA_BRIDGES.with(|c| c.borrow().as_ref().filter(|e| e.0 == key).map(|e| e.1.clone())) {
+        return c;
+    }
+    let all = crate::waters::lava_near(edits, [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 4.0, f64::MAX / 4.0], 0.0);
+    let mut out: Vec<Crossing> = Vec::new();
+    for l in &all {
+        for piece in crate::lod::roads::pieces(&t0.roads, l.bbox(), 30.0, 20.0) {
+            let line: Vec<P> = piece.pts.iter().map(|p| p.p).collect();
+            let width = piece.class.width_ft() + 2.0;
+            let lava = |q: P| crate::waters::lava_dist(&all, q[0], q[1], 0.0).is_some();
+            for c in bridges_over(&line, width, lava) {
+                if !out.iter().any(|o| geom::dist(o.a, c.a) < 1.0 && geom::dist(o.b, c.b) < 1.0) {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    let out: Arc<[Crossing]> = out.into();
+    LAVA_BRIDGES.with(|c| *c.borrow_mut() = Some((key, out.clone())));
+    out
+}
+
+/// The bridges a town's own street `line` (world ft) `width` ft wide needs over lava drawn by
+/// hand (`bridges_over`; its water's bridges are the town's own). A pure function of the world.
+pub fn street_lava_bridges(world: &World, line: &[P], width: f64) -> Vec<Crossing> {
+    let lava = crate::waters::lava_near(&world.file.edits, crate::ground::bbox(line), 0.5 * width + 1.0);
+    if lava.is_empty() {
+        return Vec::new();
+    }
+    bridges_over(line, width, |q| crate::waters::lava_dist(&lava, q[0], q[1], 0.0).is_some())
+}
+
+/// Stone bridges along `line` over the stretches where `hot` holds (sampled `WET_STEP_FT` apart,
+/// stretches closer than twice a bank's reach one), each run a bank's reach past either end.
+fn bridges_over(line: &[P], width: f64, hot: impl Fn(P) -> bool) -> Vec<Crossing> {
+    let mut at_s = vec![0.0];
+    for s in line.windows(2) {
+        at_s.push(at_s[at_s.len() - 1] + geom::dist(s[0], s[1]));
+    }
+    let total = at_s[at_s.len() - 1];
+    if line.len() < 2 || total < 1.0 {
+        return Vec::new();
+    }
+    let point = |s: f64| -> P {
+        let s = s.clamp(0.0, total);
+        let i = at_s.partition_point(|&v| v < s).clamp(1, line.len() - 1);
+        let (s0, s1) = (at_s[i - 1], at_s[i]);
+        let t = if s1 > s0 { (s - s0) / (s1 - s0) } else { 0.0 };
+        [line[i - 1][0] + (line[i][0] - line[i - 1][0]) * t, line[i - 1][1] + (line[i][1] - line[i - 1][1]) * t]
+    };
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    for k in 0..=(total / WET_STEP_FT) as usize {
+        let s = k as f64 * WET_STEP_FT;
+        if !hot(point(s)) {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(r) if s - r.1 <= 2.0 * BANK_REACH_FT + WET_STEP_FT => r.1 = s,
+            _ => runs.push((s, s)),
+        }
+    }
+    let mut out = Vec::new();
+    for (s0, s1) in runs {
+        let (a, b) = ((s0 - BANK_REACH_FT).max(0.0), (s1 + BANK_REACH_FT).min(total));
+        let pieces = ceil((b - a) / MAX_SPAN_FT).max(1.0) as usize;
+        for i in 0..pieces {
+            let (u, v) = (a + (b - a) * i as f64 / pieces as f64, a + (b - a) * (i + 1) as f64 / pieces as f64);
+            out.push(Crossing { kind: CrossingKind::Bridge, a: point(u), b: point(v), width, material: CrossingMaterial::Stone });
+        }
+    }
+    out
+}
+
+/// The lava bridges (`lava_crossings`) within `pad` ft of `rect`.
+pub fn lava_crossings_near(world: &World, t0: &T0, rect: [f64; 4], pad: f64) -> Vec<Crossing> {
+    lava_crossings(world, t0)
+        .iter()
+        .filter(|c| {
+            let r = 0.5 * c.width + pad;
+            c.a[0].min(c.b[0]) - r <= rect[2] && c.a[0].max(c.b[0]) + r >= rect[0] && c.a[1].min(c.b[1]) - r <= rect[3] && c.a[1].max(c.b[1]) + r >= rect[1]
+        })
+        .cloned()
+        .collect()
 }
 
 /// The crossings of every road drawn by hand that come within `pad` ft of `rect`.

@@ -17,7 +17,7 @@ import {
   UniformGroup,
   type Renderer,
 } from 'pixi.js';
-import { builtinKind, FIELD, fromHalf, HS, kindRules, prepareChunk, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Shape } from '../gen/battlePrep';
+import { builtinKind, FIELD, fromHalf, HS, kindRules, LS, prepareChunk, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
@@ -173,6 +173,7 @@ const SURFACES = [
   'stairs',
   'gravel path',
   'tundra grass',
+  'scorched rock',
 ];
 /**
  * What a dais or fountain (`s`, shape kind 5) stands on: the town's stone tone, the surface at its foot (the
@@ -257,6 +258,9 @@ export class BattlemapLayer {
   /** The roof patterns' scale (`colormesh.frag`: their detail fades out under ~3 px). */
   private readonly roofFrame = new UniformGroup({ uPxPerSq: { value: 16, type: 'f32' } });
   stats = { chunks: 0, alpha: 0 };
+  /** The active craters (the overlay's `craters`, as `TileLayer.craters`): each chunk's ground draws
+   *  the nearest one's lava lake and scorched ring smooth from its edge (`ground.frag`). */
+  craters: number[][] = [];
   /** The world's waterfalls (`setFalls`): each chunk draws those whose lip lies in it. */
   private falls: GenFall[] = [];
   private secretCaves: boolean;
@@ -549,6 +553,12 @@ export class BattlemapLayer {
       }
     }
     return best;
+  }
+
+  /** The town's stone tone at a square (global), the cobbles' tint there; plain where its chunk isn't loaded. */
+  stoneAt(gx: number, gy: number): ArrayLike<number> {
+    const c = this.chunks.get(`${Math.floor(gx / SQ)}/${Math.floor(gy / SQ)}`);
+    return (c?.uniforms.uniforms.uStone as Float32Array | undefined) ?? [1, 1, 1];
   }
 
   /** A square's drawn ground and the water there (ft; global square), if its chunk is loaded. */
@@ -920,6 +930,9 @@ export class BattlemapLayer {
     const dataSrc = new BufferImageSource({ resource: data, width: SQ, height: SQ, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
     const hSrc = new BufferImageSource({ resource: hdata, width: HS, height: HS, format: 'rgba16float', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     const textures = [new Texture({ source: dataSrc }), new Texture({ source: hSrc })];
+    // (Roadmap 7, 199) Drawn lava's field, bilinear (a shared blank where no lava lies near).
+    const lavaSrc = c.lava ? new BufferImageSource({ resource: c.lava, width: LS, height: LS, format: 'rg8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' }) : noLavaSource();
+    if (c.lava) textures.push(new Texture({ source: lavaSrc }));
 
     const noiseOff = new Float32Array([((cx * SQ) % 512 + 512) % 512, ((cy * SQ) % 512 + 512) % 512]);
     // Flights of steps crossing the chunk (shape 8): per axis (bottom, top) and (half width,
@@ -932,7 +945,22 @@ export class BattlemapLayer {
       // (Timber steps on a flight 8 ft wide or less: a footpath's; dressed stone on a street's.)
       stairs.set([p[0], p[1], p[2], p[3], (0.5 * s.size) / PX, p[4], p[5], s.size / PX <= 1.6 ? 1 : 0], nStairs++ * 8);
     }
+    // The nearest active crater reaching the chunk: (x, y, lava radius, scorch radius) in the
+    // chunk's squares, then (edge phase, 0, 0, 0); lava radius 0: none.
+    const crater = new Float32Array(8);
+    const cts = SQ * SQUARE_FT;
+    let cBest = Infinity;
+    for (const [x, y, r, rl, rs, ph] of this.craters) {
+      if (rl === undefined) continue;
+      const [dx, dy] = [Math.max(0, Math.abs(x - (cx + 0.5) * cts) - cts / 2), Math.max(0, Math.abs(y - (cy + 0.5) * cts) - cts / 2)];
+      const gap = Math.hypot(dx, dy) - 1.3 * rs;
+      if (gap < 0 && gap < cBest) {
+        cBest = gap;
+        crater.set([(x - cx * cts) / SQUARE_FT, (y - cy * cts) / SQUARE_FT, rl / SQUARE_FT, rs / SQUARE_FT, ph, 0, 0, 0]);
+      }
+    }
     const uniforms = new UniformGroup({
+      uCrater: { value: crater, type: 'vec4<f32>', size: 2 },
       uBase: { value: base, type: 'f32' },
       uAlpha: { value: 1, type: 'f32' },
       uPxPerSq: { value: 16, type: 'f32' },
@@ -945,10 +973,12 @@ export class BattlemapLayer {
       uStone: { value: stoneTone(c.stone), type: 'vec3<f32>' },
       // (Paving here, or a field: their edges with the ground drawn soft, a field's crisp.)
       uPaved: { value: c.surface.includes(14) || c.surface.includes(18) ? 1 : 0, type: 'f32' },
+      // (Drawn lava near: its shore and scorched rock are drawn from `uLavaF`.)
+      uLava: { value: c.lava ? 1 : 0, type: 'f32' },
     });
     const ground = new Mesh({
       geometry: this.quad,
-      shader: new Shader({ glProgram: this.groundProgram, resources: { uData: dataSrc, uHeights: hSrc, uNoise: noiseSource(), chunk: uniforms, battleFrame: this.frame } }),
+      shader: new Shader({ glProgram: this.groundProgram, resources: { uData: dataSrc, uHeights: hSrc, uLavaF: lavaSrc, uNoise: noiseSource(), chunk: uniforms, battleFrame: this.frame } }),
     });
     ground.scale.set(SQ * PX);
     this.prewarm(ground);
@@ -1341,6 +1371,13 @@ function parkEdge(raised: Uint8Array | null): boolean {
     }
   }
   return false;
+}
+
+/** The ground's lava field where no drawn lava lies near (never sampled: `uLava` 0), shared. */
+let noLava: BufferImageSource | null = null;
+function noLavaSource(): BufferImageSource {
+  noLava ??= new BufferImageSource({ resource: new Uint8Array(4), width: 1, height: 1, format: 'rg8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
+  return noLava;
 }
 
 /** The chunks (x0, y0, x1, y1; `ts` ft square) a waterfall's drawing can reach: its sheet, its

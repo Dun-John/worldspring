@@ -29,7 +29,7 @@ pub fn list() -> Vec<Value> {
             "closed": { "type": "boolean", "description": "Brush comes round to its start: a ring" },
             "depth_ft": { "type": "number", "minimum": waters::DEPTHS[0], "maximum": waters::DEPTHS[1], "description": "Default 4" },
             "dug": { "type": "boolean", "description": "Straight sides, stone edge" },
-            "kind": { "type": "string", "enum": kinds.clone(), "description": "Legacy fixed look; leave out" },
+            "kind": { "type": "string", "enum": kinds.clone(), "description": "lava: lava, not water (brush: a river, polygon: a pit; no depth, dug or level); else a legacy fixed look: leave out" },
             "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Surface, ft above the sea (default: the sea's or a lake's it reaches, else under its shore)" },
             "name": { "type": "string", "description": "Its name on the map (empty: none)" },
         });
@@ -181,8 +181,8 @@ async fn set(app: &Shared, a: &Value, change: bool) -> Result<Value, String> {
     };
     let given_kind = match &a["kind"] {
         Value::Null => None,
-        Value::String(k) => Some(WaterKind::parse(k).ok_or("kind: inlet, basin, lake, pond, moat or stream (or leave it out)")?),
-        _ => return Err("kind: inlet, basin, lake, pond, moat or stream (or leave it out)".into()),
+        Value::String(k) => Some(WaterKind::parse(k).ok_or("kind: lava, or a legacy inlet, basin, lake, pond, moat or stream (or leave it out)")?),
+        _ => return Err("kind: lava, or a legacy inlet, basin, lake, pond, moat or stream (or leave it out)".into()),
     };
     let flag = |k: &str| match &a[k] {
         Value::Null => Ok(None),

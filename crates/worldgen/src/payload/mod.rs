@@ -407,6 +407,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut, near: &[
                     push(&d, 6 | stone << 20);
                 }
             }
+            // (And the network's stone bridges over lava drawn by hand.)
+            for c in crate::paths::lava_crossings_near(world, t0, [ox, oy, ox + size, oy + size], 0.0) {
+                for d in crate::battlemap::hand_decks(&c) {
+                    push(&d, 6 | 1 << 20);
+                }
+            }
             // (And the bridges of roads drawn by hand.)
             if !world.file.edits.paths.is_empty() {
                 for c in crate::paths::crossings_near(world, t0, [ox, oy, ox + size, oy + size], 0.0).iter().filter(|c| c.kind == crate::world::CrossingKind::Bridge) {

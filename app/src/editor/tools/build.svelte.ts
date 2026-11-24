@@ -77,10 +77,11 @@ export function buildTools(app: BuildHost) {
     const waterTool = new WaterTool({
       edits: () => app.edits,
       picked: () => w.waterPicked,
-      brush: () => w.water.brush,
-      dug: () => w.water.dug,
-      width: () => w.water.width,
-      placed: w.waterPlaced,
+      // (Build › Lava draws with the same tool: a river brushed, a pit outlined.)
+      brush: () => (buildMode === 'lava' ? w.lava.brush : w.water.brush),
+      dug: () => buildMode !== 'lava' && w.water.dug,
+      width: () => (buildMode === 'lava' ? w.lava.width : w.water.width),
+      placed: (pts, closed) => (buildMode === 'lava' ? w.lavaPlaced(pts) : w.waterPlaced(pts, closed)),
       pick: (id) => (w.waterPicked = id),
       hint: (t) => app.toast(t),
     });
@@ -409,7 +410,7 @@ export function buildTools(app: BuildHost) {
   function tool() {
     if (buildMode === 'select') return null;
     if (buildMode === 'fence') return fences.tool;
-    return buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
+    return buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'water' || buildMode === 'lava' ? buildArmed.water : buildMode === 'road' ? buildArmed.road : buildMode === 'harbour' ? buildArmed.harbour : buildMode === 'stamp' ? buildArmed.stamp : buildMode === 'row' || buildMode === 'lasso' ? buildArmed.path : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
   }
 
   /** The keymap's Build keys: the crossing's kind and the road's type go round; a shape key. */
@@ -449,7 +450,7 @@ export function buildTools(app: BuildHost) {
     build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
   }
   /** Enter: the line or outline drawn ends (Stamp: the ghost is put down). */
-  const finish = () => (buildMode === 'fence' ? void fences.tool.finish() : buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void q.quickPlace() : buildMode === 'water' ? buildArmed?.water.finish() : buildArmed?.tool.finish());
+  const finish = () => (buildMode === 'fence' ? void fences.tool.finish() : buildMode === 'road' ? void buildArmed?.road.finish() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.finish() : buildMode === 'stamp' ? void q.quickPlace() : buildMode === 'water' || buildMode === 'lava' ? buildArmed?.water.finish() : buildArmed?.tool.finish());
   /** Backspace: a corner taken back. */
   const back = () => (buildMode === 'fence' ? void fences.tool.back() : buildMode === 'road' ? void buildArmed?.road.back() : buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildMode === 'row' || buildMode === 'lasso' ? buildArmed?.path.back() : buildArmed?.tool.back());
   /** Escape, in turn: a line being drawn dropped, then what is picked put down. */
@@ -506,6 +507,8 @@ export function buildTools(app: BuildHost) {
     set water(v) { w.water = v; },
     get waterPicked() { return w.waterPicked; },
     set waterPicked(v) { w.waterPicked = v; },
+    get lava() { return w.lava; },
+    set lava(v) { w.lava = v; },
     get road() { return w.road; },
     set road(v) { w.road = v; },
     get roadPicked() { return w.roadPicked; },

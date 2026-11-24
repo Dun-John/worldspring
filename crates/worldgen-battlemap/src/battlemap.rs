@@ -1906,6 +1906,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         yard: Vec::new(),
         stone: 0,
         field: Vec::new(),
+        lava_field: Vec::new(),
     };
     retier(&mut chunk, sea);
 
@@ -2022,6 +2023,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     W::Basin => (QUAY_FT, Surface::Cobble),
                     W::Moat => (4.0, if moat_stone.get_or_insert_with(|| guarded_near(world, t0, [ox, oy, ox + SQ as f64 * SQUARE_FT, oy + SQ as f64 * SQUARE_FT])).iter().any(|&(a, b)| crate::town::geom::seg_dist([x, y], a, b) <= MOAT_STONE_FT) { Surface::Rock } else { Surface::Dirt }),
                     W::Stream => (6.0, Surface::Gravel),
+                    // (Lava is no water: `water_edge` never finds it.)
+                    W::Lava => (-1.0, Surface::Scorched),
                 };
                 if d <= reach {
                     chunk.surface[k] = surface;
@@ -2054,6 +2057,56 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         chunk.field = (0..n).map(|k| if chunk.urban[k] == URBAN_FIELD && (chunk.surface[k] == Surface::Field || (fld_h[(k / SQ + 1) * HS + k % SQ + 1] >> 6 == 3)) { fld_h[(k / SQ + 1) * HS + k % SQ + 1] } else { 0 }).collect();
     }
 
+    // An active volcano's crater: a lava lake on its floor, scorched rock round it (dry open
+    // ground only: a road, a building or a town's ground keeps its own).
+    let craters: Vec<crate::t0::volcano::Crater> = t0.craters.iter().filter(|c| c.x + 1.1 * c.r > ox && c.x - 1.1 * c.r < ox + SQ as f64 * SQUARE_FT && c.y + 1.1 * c.r > oy && c.y - 1.1 * c.r < oy + SQ as f64 * SQUARE_FT).copied().collect();
+    if !craters.is_empty() {
+        for k in 0..n {
+            if chunk.surface[k].is_road() || chunk.building[k] != 0 || chunk.urban[k] != 0 || chunk.water_level[k] > chunk.height[k] {
+                continue;
+            }
+            let (x, y) = (ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT);
+            match crate::t0::volcano::lava_at(&craters, x, y) {
+                2 => chunk.surface[k] = Surface::Lava,
+                1 => chunk.surface[k] = Surface::Scorched,
+                _ => {}
+            }
+        }
+    }
+    // (Roadmap 7, 199) Lava drawn by hand (`waters::lava_near`): lava wherever it lies on dry ground
+    // but a bridge's deck or a building, scorched rock round it on open ground (a road, a building
+    // or a town's ground keeps its own). The squares' ids and the ground's smooth field
+    // (`Chunk::lava_field`, over a ring of squares round the chunk too) come from the same values.
+    let (cx1, cy1) = (ox + SQ as f64 * SQUARE_FT, oy + SQ as f64 * SQUARE_FT);
+    let lava = crate::waters::lava_near(&world.file.edits, [ox, oy, cx1, cy1], LAVA_HALO as f64 * SQUARE_FT + crate::waters::LAVA_FIELD_FT);
+    let mut lava_sq: Vec<(f64, f64)> = Vec::new();
+    if !lava.is_empty() {
+        let at = |i: usize, j: usize| crate::waters::lava_field_at(&lava, ox + (i as f64 - LAVA_HALO as f64 + 0.5) * SQUARE_FT, oy + (j as f64 - LAVA_HALO as f64 + 0.5) * SQUARE_FT);
+        let f: Vec<(f64, f64)> = (0..LS * LS).map(|h| at(h % LS, h / LS)).collect();
+        if f.iter().any(|v| v.0 > -crate::waters::LAVA_FIELD_FT) {
+            chunk.lava_field = f.iter().flat_map(|v| [crate::waters::lava_field_byte(v.0), crate::waters::lava_field_byte(v.1)]).collect();
+            lava_sq = (0..n).map(|k| f[(k / SQ + LAVA_HALO) * LS + k % SQ + LAVA_HALO]).collect();
+        }
+    }
+    if !lava_sq.is_empty() {
+        for k in 0..n {
+            if chunk.building[k] != 0 || chunk.water_level[k] > chunk.height[k] || chunk.surface[k] == Surface::Planks {
+                continue;
+            }
+            // (A field under the lava or its scorched rock is cut back to them, not drawn on.)
+            let field = chunk.urban[k] == URBAN_FIELD;
+            // (`waters::lava_at`, from the field's values.)
+            let (d, s) = lava_sq[k];
+            match if d >= 0.0 { 2 } else { (s > 0.0) as u8 } {
+                2 => chunk.surface[k] = Surface::Lava,
+                1 if !chunk.surface[k].is_road() && (chunk.urban[k] == 0 || field) => chunk.surface[k] = Surface::Scorched,
+                _ => continue,
+            }
+            if field && let Some(f) = chunk.field.get_mut(k) {
+                *f = 0;
+            }
+        }
+    }
     // Road squares (bridges and fords too) two squares round the chunk, and the chunk's
     // streets: scatter keeps its footprint off them, across chunk edges too.
     let road_near: Vec<bool> = (0..RN * RN)
@@ -2659,6 +2712,26 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 chunk.surface[k] = Surface::Dirt;
             }
         }
+    }
+    // (Roadmap 7, 199) Lava (a crater's or one drawn by hand): no plant on it or in the scorched
+    // rock round it, nothing loose on it (the land's scatter and what the guarantee added; a
+    // building's or a town's own props stay). Tested at the thing's middle and round its drawn
+    // reach (a crown's 1.6 footprints, a rock's 1.25), in world ft: the same either side of a
+    // chunk's edge.
+    if !lava.is_empty() || !craters.is_empty() {
+        const RING: [(f64, f64); 8] = [(1.0, 0.0), (0.7071, 0.7071), (0.0, 1.0), (-0.7071, 0.7071), (-1.0, 0.0), (-0.7071, -0.7071), (0.0, -1.0), (0.7071, -0.7071)];
+        let burnt = |x: f64, y: f64| crate::waters::lava_at(&lava, x, y).max(if craters.is_empty() { 0 } else { crate::t0::volcano::lava_at(&craters, x, y) });
+        chunk.objects.retain(|o| {
+            // (Quicksand as a plant: none in the scorched rock.)
+            let plant = TREES_AND_COVER.contains(&o.kind) || o.kind == Kind::Quicksand;
+            if !plant && !matches!(o.kind, Kind::Boulder | Kind::RockSmall | Kind::RockPile | Kind::Scree) {
+                return true;
+            }
+            let r = info(o.kind as u16).radius as f64 * if plant { 1.6 } else { 1.25 } * o.scale as f64 * SQUARE_FT;
+            let (x, y) = (ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT);
+            let limit = if plant { 1 } else { 2 };
+            burnt(x, y) < limit && RING.iter().all(|&(dx, dy)| burnt(x + r * dx, y + r * dy) < limit)
+        });
     }
     chunk
 }

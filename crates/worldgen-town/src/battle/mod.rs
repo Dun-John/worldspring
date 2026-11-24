@@ -66,6 +66,8 @@ pub enum Surface {
     Gravel,
     /// Tundra's sedge and moss: a duller, greyer grass (snow lies in patches among it).
     TundraGrass,
+    /// Burnt black rock round an active crater's lava lake.
+    Scorched,
 }
 
 impl Surface {

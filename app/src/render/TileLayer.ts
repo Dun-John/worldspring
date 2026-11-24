@@ -155,6 +155,9 @@ export class TileLayer {
   /** Tundra's ground texture (shared by every tile). */
   private readonly tundra = tundraSource();
 
+  /** The active volcanoes' craters (the overlay's `craters`: x, y, radius, lava and scorch radius ft, edge phase), drawn glowing. */
+  craters: number[][] = [];
+
   constructor(
     private readonly geom: Geom,
     private readonly gen: GenClient,
@@ -464,6 +467,19 @@ export class TileLayer {
     // there is the edge drawn out into streaks).
     const ts = this.geom.domain_ft / 2 ** m.level;
     const mapEnd = new Float32Array([this.geom.map_w_ft / ts - m.x, this.geom.map_h_ft / ts - m.y]);
+    // Up to four active craters on or near the tile: (x, y, lava radius, scorch radius) in tile
+    // units, then (edge phase, 0, 0, 0); lava radius 0 ends the list.
+    const craters = new Float32Array(32);
+    let nc = 0;
+    for (const [cx, cy, r, rl, rs, ph] of this.craters) {
+      if (rl === undefined) continue;
+      const [x, y] = [cx / ts - m.x, cy / ts - m.y];
+      const pad = (r / ts) * 2 + 0.05;
+      if (nc < 4 && x > -pad && y > -pad && x < 1 + pad && y < 1 + pad) {
+        craters.set([x, y, rl / ts, rs / ts], 4 * nc);
+        craters.set([ph, 0, 0, 0], 16 + 4 * nc++);
+      }
+    }
     const uniforms = new UniformGroup({
       uBase: { value: m.base, type: 'f32' },
       uAlpha: { value: 0, type: 'f32' },
@@ -472,6 +488,7 @@ export class TileLayer {
       uTilePx: { value: 256, type: 'f32' },
       uPat0: { value: pat0, type: 'vec4<f32>' },
       uPat1: { value: pat1, type: 'vec4<f32>' },
+      uCraters: { value: craters, type: 'vec4<f32>', size: 8 },
     });
     const shader = new Shader({
       glProgram: this.program,

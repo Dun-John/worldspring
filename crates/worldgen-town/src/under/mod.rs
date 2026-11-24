@@ -31,6 +31,7 @@ pub mod design;
 pub mod surface;
 mod boss;
 pub use boss::PERILS;
+mod fungi;
 mod grow;
 mod kit;
 mod plan;

@@ -21,6 +21,7 @@ export type ToolKey =
   | 'road'
   | 'crossing'
   | 'water'
+  | 'lava'
   | 'docks'
   | 'ground'
   | 'fences'
@@ -71,6 +72,7 @@ export const EDIT_TOOLS: EditToolDef[] = [
   { key: 'road', group: 'roads', label: 'Road', short: 'Road', icon: 'road', kbd: 'V', tab: 'build', mode: 'road', hint: 'Click its points and double-click to end, or drag; click a road to change it.' },
   { key: 'crossing', group: 'roads', label: 'Crossing', short: 'Crossing', icon: 'bridge', kbd: 'X', tab: 'build', mode: 'crossing', hint: 'Click across a river: a bridge, ford or ferry goes bank to bank.' },
   { key: 'water', group: 'roads', label: 'Water', short: 'Water', icon: 'lake', kbd: 'I', tab: 'build', mode: 'water', hint: 'Paint water along a stroke, or outline it.' },
+  { key: 'lava', group: 'roads', label: 'Lava', short: 'Lava', icon: 'flame', kbd: 'Shift+I', tab: 'build', mode: 'lava', hint: 'Paint a lava river along a stroke, or outline a lava pit.' },
   { key: 'docks', group: 'roads', label: 'Docks & islets', short: 'Docks & islets', icon: 'waves', kbd: 'H', tab: 'build', mode: 'harbour', hint: 'Quays, piers, breakwaters and islets at the water’s edge.' },
   { key: 'ground', group: 'land', label: 'Ground', short: 'Ground', icon: 'raise', kbd: 'M', tab: 'ground', hint: 'Raise, lower or smooth the battlemap’s ground, draw a plateau, or raise a hill (a big one on the map too).' },
   { key: 'fences', group: 'land', label: 'Fences & hedges', short: 'Fences', icon: 'wall', kbd: 'F', tab: 'build', mode: 'fence', hint: 'Pick a kind, then drag or click a line; Gate and Erase work on any fence.' },

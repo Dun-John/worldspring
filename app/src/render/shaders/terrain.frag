@@ -28,6 +28,9 @@ uniform vec2 uGrainOrigin;
 uniform float uTilePx;
 uniform vec4 uPat0;
 uniform vec4 uPat1;
+// Up to four active volcanoes' craters near the tile: [i] (x, y, lava radius, scorch radius) in tile
+// units (lava radius 0 ends the list), [4 + i] (edge phase, 0, 0, 0).
+uniform vec4 uCraters[8];
 
 // Per frame.
 uniform float uExag;
@@ -179,6 +182,56 @@ float tuft(vec2 q, float per, float aa, int kind, float dens) {
     }
     float w = aa * 0.45;
     return 1.0 - 0.16 * (1.0 - smoothstep(w, w + aa, l));
+}
+
+// Lava lakes (the same functions in ground.frag: keep the two copies alike, so the far map and the
+// battlemap draw one lake). A crater edge's radius (a share of its nominal one) at angle a round
+// the centre: `volcano::crater_edge`, whose EDGE_WAVES these literals mirror.
+float craterEdge(float a, float ph) {
+    const float TAU = 6.2831853;
+    return 1.0 + 0.08 * sin(3.0 * a + TAU * fract(ph)) + 0.05 * sin(5.0 * a + TAU * fract(ph + 0.618034))
+        + 0.035 * sin(8.0 * a + TAU * fract(ph + 1.236068)) + 0.02 * sin(13.0 * a + TAU * fract(ph + 1.854102))
+        + 0.01 * sin(21.0 * a + TAU * fract(ph + 2.472136));
+}
+
+float lavaHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float lavaNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(lavaHash(i), lavaHash(i + vec2(1.0, 0.0)), f.x), mix(lavaHash(i + vec2(0.0, 1.0)), lavaHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// The lake at p (from its centre, in lava radii), e ft inside its shore, a pixel px ft, its radius
+// rPx pixels: flat orange-red, a few big dark crust plates (cells a tenth of the radius) with a thin
+// bright seam round each (none near the shore), a flat hot rim inside a thin dark crust line along
+// the shore. Plates fade out when their cells are a few pixels (a small lake is a plain glowing spot).
+vec3 lavaLook(vec2 p, float e, float px, float rPx) {
+    vec2 c = p * 10.0;
+    float cellPx = rPx / 10.0;
+    float n = 0.8 * lavaNoise(c + 3.1) + 0.2 * lavaNoise(c * 1.9 + 7.7);
+    float thr = 0.74 + 0.3 * (1.0 - smoothstep(15.0, 70.0, e));
+    float pa = 0.4 / max(cellPx, 1.0);
+    float plate = smoothstep(thr - pa, thr + pa, n);
+    float seam = smoothstep(thr - 0.015 - pa, thr - 0.015 + pa, n) - plate;
+    float pf = smoothstep(3.0, 8.0, cellPx);
+    vec3 col = vec3(0.90, 0.36, 0.12);
+    col = mix(col, vec3(1.0, 0.68, 0.26), 1.0 - smoothstep(7.0, 7.0 + max(px, 3.0), e));
+    col = mix(col, vec3(0.38, 0.18, 0.12), plate * pf);
+    col = mix(col, vec3(1.0, 0.76, 0.34), seam * pf * 0.9);
+    float lw = max(1.2, 0.8 * px);
+    return mix(col, vec3(0.24, 0.11, 0.07), 1.0 - smoothstep(lw, lw + px, e));
+}
+
+// Scorched rock round a lake, t 0 at its shore to 1 at the ring's outer edge: burnt brown-grey,
+// lighter outward.
+vec3 scorchLook(float t) {
+    return mix(vec3(0.30, 0.21, 0.16), vec3(0.45, 0.39, 0.33), t);
 }
 
 void main() {
@@ -406,6 +459,31 @@ void main() {
     float shore = (1.0 - smoothstep(0.6, 1.6, abs(depth) / fwh)) * (1.0 - smoothstep(1500.0, 3000.0, abs(depth)));
     if (wet) shore *= 1.0 - offshore;
     col = mix(col, INK, shore * 0.9);
+
+    // Active craters: a lava lake in a ring of scorched rock with a warm glow round it, never
+    // smaller than a few pixels so it reads at continent zoom (uniform loop: tiles without one
+    // skip it).
+    if (!wet) {
+        float px = 1.0 / uTilePx;
+        for (int i = 0; i < 4; i++) {
+            vec4 c = uCraters[i];
+            if (c.z <= 0.0) break;
+            vec2 v = vLocal - c.xy;
+            float d = length(v);
+            // (A glow round it that matters only while it is small.)
+            float rg = 1.2 * c.w + 6.0 * px;
+            if (d > rg) continue;
+            float a = atan(v.y, v.x);
+            float ph = uCraters[4 + i].x;
+            float rl = max(c.z * craterEdge(a, ph), 2.5 * px);
+            float rs = max(c.w * craterEdge(a, ph + 0.5), rl + 1.5 * px);
+            col = mix(col, vec3(0.95, 0.52, 0.22), 0.35 * (1.0 - smoothstep(rs, rg, d)) * (1.0 - smoothstep(4.0, 30.0, c.w * uTilePx)));
+            float fade = max(0.12 * (rs - rl), px);
+            col = mix(col, scorchLook(clamp((d - rl) / (rs - rl), 0.0, 1.0)), 1.0 - smoothstep(rs - fade, rs, d));
+            vec3 lava = lavaLook(v / c.z, (rl - d) * uFtPerPx * uTilePx, uFtPerPx, c.z * uTilePx);
+            col = mix(col, lava, 1.0 - smoothstep(rl - 0.5 * px, rl + 0.5 * px, d));
+        }
+    }
 
     // Paper grain (periodic over 512 px).
     vec2 gp = uGrainOrigin + vLocal * uTilePx;

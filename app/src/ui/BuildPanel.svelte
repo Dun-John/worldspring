@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type BuildMode = 'select' | 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'harbour' | 'road' | 'fence';
+  export type BuildMode = 'select' | 'building' | 'stamp' | 'row' | 'lasso' | 'castle' | 'wall' | 'crossing' | 'water' | 'lava' | 'harbour' | 'road' | 'fence';
   /** What the app says of a quick placement's ghost. */
   export interface QuickInfo {
     /** Something is ready to place. */
@@ -17,7 +17,7 @@
   // each in the shared `ToolPanel` frame). The tools themselves are `editor/tools/build.svelte.ts`.
   import type { BuildSettings } from '../editor/build';
   import type { CrossSettings } from '../editor/crossing';
-  import type { WaterSettings } from '../editor/water';
+  import type { LavaSettings, WaterSettings } from '../editor/water';
   import type { PathSettings } from '../editor/paths';
   import type { HarbourSettings } from '../editor/harbour';
   import type { FenceSettings } from '../editor/fence';
@@ -33,6 +33,7 @@
   import RowPanel from './build/RowPanel.svelte';
   import StampPanel from './build/StampPanel.svelte';
   import WaterPanel from './build/WaterPanel.svelte';
+  import LavaPanel from './build/LavaPanel.svelte';
   import WorksPanel from './build/WorksPanel.svelte';
 
   interface Props {
@@ -56,6 +57,7 @@
     /** The crossing picked (what it is), else putting new ones down. */
     crossEditing: string | null;
     water: WaterSettings;
+    lava: LavaSettings;
     /** The water picked (its look, name, a line's width, depth and shore), else drawing new water. */
     waterPicked: { look: WaterKind; name: string; width: number | null; depth: number; dug: boolean } | null;
     onWaterChange: (change: { name?: string; width?: number; depth?: number; dug?: boolean }) => void;
@@ -113,6 +115,7 @@
     cross = $bindable(),
     crossEditing,
     water = $bindable(),
+    lava = $bindable(),
     waterPicked,
     onWaterChange,
     onWaterRemove,
@@ -157,6 +160,8 @@
     <CrossingPanel bind:cross {crossEditing} {onCrossSave} {onCrossRemove} {onDone} {near} {peek} {onZoomIn} />
   {:else if mode === 'water'}
     <WaterPanel bind:water {waterPicked} {onWaterChange} {onWaterRemove} {onDone} {near} {peek} {onZoomIn} />
+  {:else if mode === 'lava'}
+    <LavaPanel bind:lava {waterPicked} {onWaterChange} {onWaterRemove} {onDone} {near} {peek} {onZoomIn} />
   {:else if mode === 'road'}
     <RoadPanel bind:road {roadPicked} {onRoadChange} {onRoadRemove} {onDone} {near} {peek} {onZoomIn} />
   {:else if mode === 'fence'}

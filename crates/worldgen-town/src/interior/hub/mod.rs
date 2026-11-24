@@ -398,6 +398,8 @@ pub struct Plan {
     civ: Option<civic::Zones>,
     /// An inn's or a caravanserai's zones (`inn`).
     inn: Option<inn::Zones>,
+    /// A coaching inn's yard is packed earth, as its street (a village's), not cobbles (`Yard`).
+    pub dirt: bool,
     /// A town hall's belfry's spiral stair (`civic`; its squares `tower_sq`, its top `tower_top`).
     spiral: Option<usize>,
 }
@@ -562,6 +564,7 @@ impl Plan {
             mon: None,
             civ: None,
             inn: None,
+            dirt: false,
             spiral: None,
         }
     }

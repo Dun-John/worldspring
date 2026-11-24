@@ -4,7 +4,7 @@ import type { Created, Crossing, Edits, Water } from '../../gen/protocol';
 import type { Pt } from '../build';
 import { SHOP_FRONT_FT, crossingOf, crossingProblem, defaultCross, shopsWidth, type CrossSettings } from '../crossing';
 import { defaultHarbour, shoreQuayOf, wharfOf, wharfProblem, type HarbourSettings } from '../harbour';
-import { MAX_WATERS, centre, defaultWater, depthOf, flows, isDug, isLine, legacy, lookOf, ofSea, shore, streamLevels, streamSamples, waterProblem, widthOf, type WaterSettings } from '../water';
+import { LAVA_WIDTHS, MAX_WATERS, centre, defaultWater, depthOf, flows, isDug, isLava, isLine, legacy, lookOf, ofSea, shore, streamLevels, streamSamples, waterProblem, widthOf, type LavaSettings, type WaterSettings } from '../water';
 import { MAX_PATHS, defaultPath, kindWidth, pathProblem, type PathSettings } from '../paths';
 import { newObjectId } from '../scatter';
 import type { BuildHost } from './build.svelte';
@@ -16,6 +16,8 @@ export function waterways(app: BuildHost) {
   /** Build › Water: the kind new outlines get, and the water picked (its id), else drawing new ones. */
   let water = $state<WaterSettings>(defaultWater());
   let waterPicked = $state<string | null>(null);
+  /** Build › Lava: a lava river (brushed, of a width) or a pit (an outline); picked lava is `waterPicked`. */
+  let lava = $state<LavaSettings>({ brush: true, width: LAVA_WIDTHS[0] });
   /** Build › Road: the type, width and name new roads get, and the road picked (its id), else drawing new ones. */
   let road = $state<PathSettings>(defaultPath());
   let roadPicked = $state<string | null>(null);
@@ -187,6 +189,21 @@ export function waterways(app: BuildHost) {
     app.applyEdits({ ...app.edits, waters: { ...(app.edits.waters ?? {}), [id]: w } }, { tool: 'create_water', id, kind: lookOf(w, app.view.geom?.sea_level_ft ?? 0).kind }, 'user');
   }
 
+  /** Lava as Build › Lava draws it (`waters::Water::lava`): a river along a line, else a pit. */
+  const lavaOf = (pts: Pt[], brush: boolean, width: number): Water =>
+    brush ? { pts, kind: 'lava', level: 0, line: true, ...(width !== LAVA_WIDTHS[0] ? { width } : {}) } : { pts, kind: 'lava', level: 0 };
+
+  /** Lava drawn in Build › Lava: a river of the width set, or a pit. */
+  function lavaPlaced(pts: Pt[]) {
+    const w = lavaOf(pts, lava.brush, lava.width);
+    const bad = waterProblem(w);
+    if (bad) return app.toast(bad.replace('water', 'lava'));
+    if (Object.keys(app.edits.waters ?? {}).length >= MAX_WATERS) return app.toast(`A world holds at most ${MAX_WATERS} waters and lava`);
+    const id = newObjectId('e');
+    waterPicked = id;
+    app.applyEdits({ ...app.edits, waters: { ...(app.edits.waters ?? {}), [id]: w } }, { tool: 'create_water', id, kind: 'lava' }, 'user');
+  }
+
   /** A line ended in Build › Road: a road of the menu's type, width and name along it. */
   function roadPlaced(pts: Pt[]) {
     const r = { pts, type: road.kind, ...(road.width !== kindWidth(road.kind) ? { width: road.width } : {}), ...(road.name.trim() ? { name: road.name.trim() } : {}) };
@@ -237,6 +254,16 @@ export function waterways(app: BuildHost) {
     if (!id || !w) return;
     let next = app.edits;
     const width = change.width !== undefined && isLine(w) && change.width !== widthOf(w) ? change.width : undefined;
+    if (isLava(w)) {
+      // (Lava has a river's width only: no depth or shore of its own.)
+      if (width !== undefined) {
+        const nw = lavaOf(w.pts, true, width);
+        const bad = waterProblem(nw);
+        if (bad) return app.toast(bad.replace('water', 'lava'));
+        next = { ...next, waters: { ...(next.waters ?? {}), [id]: nw } };
+      }
+      change = { name: change.name };
+    }
     const depth = change.depth !== undefined && change.depth !== depthOf(w) ? change.depth : undefined;
     const dug = change.dug !== undefined && change.dug !== isDug(w) ? change.dug : undefined;
     if (width !== undefined || depth !== undefined || dug !== undefined) {
@@ -354,6 +381,7 @@ export function waterways(app: BuildHost) {
     pickCrossing,
     saveCrossing,
     waterPlaced,
+    lavaPlaced,
     roadPlaced,
     changeRoad,
     removeRoad,
@@ -373,6 +401,8 @@ export function waterways(app: BuildHost) {
     set water(v) { water = v; },
     get waterPicked() { return waterPicked; },
     set waterPicked(v) { waterPicked = v; },
+    get lava() { return lava; },
+    set lava(v) { lava = v; },
     get road() { return road; },
     set road(v) { road = v; },
     get roadPicked() { return roadPicked; },

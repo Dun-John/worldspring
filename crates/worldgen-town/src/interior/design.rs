@@ -213,7 +213,7 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
         });
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);
-    let furniture = lv
+    let furniture: Vec<Item> = lv
         .items
         .iter()
         .filter_map(|f| {
@@ -228,6 +228,23 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
             .map(|it| f.posed(it))
         })
         .collect();
+    // (A roof terrace's name stands off its domes, as generated: on the open square nearest the open squares' middle.)
+    let st = stairs_of(d);
+    for ri in 0..rooms.len() {
+        let domes: Vec<&Item> = furniture.iter().filter(|it: &&Item| it.kind == "roof_dome").collect();
+        if rooms[ri].kind != super::TERRACE || domes.is_empty() {
+            continue;
+        }
+        let mine = |k: usize| cells[k] == ri as i16;
+        let on_st = |k: usize| (st[0]..st[0] + st[2]).contains(&(k % nx)) && (st[1]..st[1] + st[3]).contains(&(k / nx));
+        let blocked = |k: usize| domes.iter().any(|it| (it.x as usize..(it.x + it.w) as usize).contains(&(k % nx)) && (it.y as usize..(it.y + it.h) as usize).contains(&(k / nx)));
+        let free: Vec<usize> = (0..nx * ny).filter(|&k| mine(k) && !blocked(k) && !on_st(k)).collect();
+        let m = free.iter().fold([0.0, 0.0], |a, &k| [a[0] + ((k % nx) as f64 + 0.5) / free.len() as f64, a[1] + ((k / nx) as f64 + 0.5) / free.len() as f64]);
+        let d = |k: usize| crate::core::geom::dist([(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5], m);
+        if let Some(&k) = free.iter().min_by(|&&a, &&b| d(a).total_cmp(&d(b)).then(a.cmp(&b))) {
+            rooms[ri].center = [(k % nx) as f32 + 0.5, (k / nx) as f32 + 0.5];
+        }
+    }
     let mut level = Level {
         z: lv.z,
         name: lv.name.clone(),

@@ -129,7 +129,14 @@ export interface PreparedChunk {
   shapes: Shape[];
   /** Uploaded sprites (object kinds `SPRITE_KIND` + index). */
   sprites: ChunkSprite[];
+  /** (Roadmap 7, 199) Drawn lava's field on the `LS`² grid (the chunk and a `LAVA_HALO`-square ring):
+   * per square (shore, scorched rock's edge), a quarter foot a step, 128 at 0; null: no lava near. */
+  lava: Uint8Array | null;
 }
+
+/** The lava field's ring round the chunk (squares, `battle::LAVA_HALO`) and its grid's side. */
+export const LAVA_HALO = 5;
+export const LS = SQ + 2 * LAVA_HALO;
 
 /** f32 → IEEE half bits (round to nearest). */
 const f32 = new Float32Array(1);
@@ -193,6 +200,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   let raised: Uint8Array | null = null;
   // v63 countryside: field squares' furrows (`battlemap::Chunk::field`), if the chunk has fields.
   let field: Uint8Array | null = null;
+  let lava: Uint8Array | null = null;
   {
     let o = objOffset + nObj * 20 + 2 * nh + n * 2;
     const count = dv.getUint32(o, true);
@@ -262,6 +270,11 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     o += 4;
     if (nField === n && o + n <= buf.byteLength) field = new Uint8Array(buf.slice(o, o + n));
     if (nField <= n) o += nField;
+    // (Roadmap 7, 199) Drawn lava's field (`battlemap::Chunk::lava_field`), if lava lies near.
+    const nLava = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
+    o += 4;
+    if (nLava === LS * LS && o + nLava * 2 <= buf.byteLength) lava = new Uint8Array(buf.slice(o, o + nLava * 2));
+    o += nLava * 2;
     // Uploaded sprites (see `battlemap::pack`).
     const nSprites = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
     o += 4;
@@ -351,6 +364,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     battlements: roofs.filter((r) => r.battlements),
     shapes,
     sprites,
+    lava,
   };
 }
 
@@ -488,6 +502,7 @@ function tacticalFlags(data: Uint8Array, surface: Uint8Array, raised: Uint8Array
 export function chunkTransfer(c: PreparedChunk): Transferable[] {
   const t: Transferable[] = [c.flags.buffer, c.data.buffer, c.hdata.buffer, c.heights.buffer, c.tier.buffer, c.surface.buffer, c.objs.buffer];
   if (c.raised) t.push(c.raised.buffer);
+  if (c.lava) t.push(c.lava.buffer);
   if (c.roofMesh) t.push(c.roofMesh.pos.buffer, c.roofMesh.color.buffer, c.roofMesh.roof.buffer, c.roofMesh.index.buffer);
   return t;
 }

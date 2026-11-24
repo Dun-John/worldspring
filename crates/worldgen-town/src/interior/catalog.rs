@@ -391,7 +391,7 @@ pub(super) fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)
         "chapter house" => &[("bench", Wall(2, 1), 2, 6), ("chair_of_office", Wall(1, 1), 1, 0)],
         "dorter" => &[("cot", Wall(1, 2), 2, 5), ("chest", Wall(1, 1), 1, 8)],
         "scriptorium" => &[("desk", Center(2, 1), 1, 8), ("bookcase", Wall(2, 1), 1, 8), ("shelf", Wall(2, 1), 1, 0)],
-        "cloister walk" | "garth" | "inn yard" | "yard gallery" => &[],
+        "cloister walk" | "garth" | "inn yard" | "dirt yard" | "yard gallery" => &[],
         // (A palace's court: its fountain, walks and benches laid out with it, `hub::Plan::court_pieces`.)
         "courtyard" => &[],
         "antechamber" => &[("bench", Wall(2, 1), 1, 0), ("tapestry", Wall(2, 1), 1, 0), ("chair", Wall(1, 1), 1, 0)],
@@ -443,7 +443,7 @@ pub const ROOM_KINDS: &[&str] = &[
     "scriptorium", "cloister walk", "garth", "arcade", "council chamber", "strongroom", "sample room",
     "masterpiece gallery", "job-board room", "trophy hall", "bunk room", "warded vault", "belfry stair", "belfry",
     "stables", "tack room", "snug", "private dining room", "scullery", "best chamber", "innkeeper's quarters",
-    "inn yard", "yard gallery", "yurt", "meal floor", "stone floor", "bin floor", "dust floor",
+    "inn yard", "dirt yard", "yard gallery", "yurt", "meal floor", "stone floor", "bin floor", "dust floor",
     // R5 towns
     "tomb chamber", "felt hall", "felt sanctuary", "felt common room",
     // Roadmap 7 P8: a lighthouse's, its oil store's

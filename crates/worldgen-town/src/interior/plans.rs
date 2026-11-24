@@ -353,7 +353,10 @@ pub(super) fn zone_plan(world: &World, t0: &T0, l: &Layout, settlement: usize, b
         let d = sub(mul(add(f.front[0], f.front[1]), 0.5), sh.origin);
         [dot(d, sh.u) / SQUARE_FT, dot(d, sh.v) / SQUARE_FT]
     });
-    hub::plan(b, sh, key, corner, &town::keep_tops(b, world.stream("keep.tops")), seed, &near, &ext_free, (capital_of(t0, settlement), city_of(t0, settlement)), front)
+    let mut plan = hub::plan(b, sh, key, corner, &town::keep_tops(b, world.stream("keep.tops")), seed, &near, &ext_free, (capital_of(t0, settlement), city_of(t0, settlement)), front)?;
+    // (A coaching inn's yard takes its street's surface: a village's is packed earth.)
+    plan.dirt = l.tier < crate::t0::settle::Tier::Town;
+    Some(plan)
 }
 
 /// A great hall furnished as a whole (`hall`): its level (index into `Interior::levels`), its room,

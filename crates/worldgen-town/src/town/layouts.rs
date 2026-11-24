@@ -119,7 +119,9 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     let look = if is_settlement(t0, index) { None } else { members::look(world, t0, index) };
     // (R4: streets added to a generated town, laid over it: `added`.)
     let added = added::fingerprint(world, t0, index);
-    if world.file.edits.buildings.is_empty() && roads.is_none() && look.is_none() && added.is_none() {
+    // (Roadmap 7, 199: lava drawn by hand takes the buildings standing in it.)
+    let lava = lava_fingerprint(world, base.bbox);
+    if world.file.edits.buildings.is_empty() && roads.is_none() && look.is_none() && added.is_none() && lava.is_none() {
         return base;
     }
     let key = index as u32;
@@ -127,8 +129,12 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         (Some(f), Some(r)) => crate::core::rng::hash2(f, r as i64, 0x9a75),
         (Some(f), None) => f,
         (None, Some(r)) => crate::core::rng::hash2(world.hash, r as i64, 0x9a76),
-        (None, None) if look.is_some() || added.is_some() => world.hash,
+        (None, None) if look.is_some() || added.is_some() || lava.is_some() => world.hash,
         (None, None) => return base,
+    };
+    let fp = match lava {
+        Some(v) => hash2(fp, v as i64, 0x1a7a),
+        None => fp,
     };
     let fp = match look {
         Some(k) => hash2(fp, k.fingerprint() as i64, 0x100c),
@@ -154,12 +160,62 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     if let Some(k) = look {
         k.apply(&mut l);
     }
+    // (The town's own streets, before any added by hand: those get their bridges in `added::apply`.)
+    let own_streets = l.roads.len();
     if added.is_some() {
         added::apply(world, t0, &mut l);
+    }
+    if lava.is_some() {
+        let near = crate::waters::lava_near(&world.file.edits, l.bbox, 0.0);
+        l.buildings.retain(|b| !in_lava(&near, &b.poly));
+        // Its own streets cross the lava on a deck a little wider than the street, bank to bank
+        // (as one added by hand does).
+        let mut decks = Vec::new();
+        for (pts, _, w) in &l.roads[..own_streets] {
+            for c in crate::paths::street_lava_bridges(world, pts, *w) {
+                let d = sub(c.b, c.a);
+                let u = mul(d, 1.0 / len(d).max(1e-9));
+                decks.push(rect(lerp(c.a, c.b, 0.5), u, c.length(), w + 4.0));
+            }
+        }
+        l.bridges.extend(decks);
     }
     let l = Rc::new(l);
     EDITED.with(|c| c.borrow_mut().insert(key, (fp, l.clone(), base.clone())));
     l
+}
+
+/// A hash of the lava drawn by hand meeting `bbox` (world ft), or `None` without any.
+fn lava_fingerprint(world: &World, bbox: [f64; 4]) -> Option<u64> {
+    let mut h = crate::core::hash::Fnv64::default();
+    let mut any = false;
+    for (k, w) in world.file.edits.waters.iter().filter(|(_, w)| w.is_lava()) {
+        let b = crate::ground::bbox(&w.pts);
+        let m = 0.5 * w.width_ft() + 50.0;
+        if b[0] - m > bbox[2] || b[2] + m < bbox[0] || b[1] - m > bbox[3] || b[3] + m < bbox[1] {
+            continue;
+        }
+        any = true;
+        h.write(k.as_bytes());
+        for v in w.pts.iter().flatten() {
+            h.write(&v.to_le_bytes());
+        }
+        h.write(&w.width_ft().to_le_bytes());
+        h.write(&[w.line as u8, w.closed as u8]);
+    }
+    any.then(|| h.finish())
+}
+
+/// Whether a building's footprint stands in lava or within 2 ft of it (a corner, its middle, or a
+/// point of the lava's shore inside it).
+fn in_lava(near: &[crate::waters::LavaNear], poly: &[P]) -> bool {
+    let b = crate::ground::bbox(poly);
+    near.iter().any(|n| {
+        let nb = n.bbox();
+        !(nb[0] > b[2] + 2.0 || nb[2] < b[0] - 2.0 || nb[1] > b[3] + 2.0 || nb[3] < b[1] - 2.0)
+            && (poly.iter().copied().chain(std::iter::once(centroid(poly))).any(|p| crate::waters::lava_dist(std::slice::from_ref(n), p[0], p[1], 2.0).is_some())
+                || n.pts().iter().any(|&q| contains(poly, q)))
+    })
 }
 
 /// A layout's building edits (`b:<layout>:<id>`), by id.

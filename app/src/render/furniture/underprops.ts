@@ -3,7 +3,8 @@ import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
 import { type Light } from './common';
 import { arcaneFocus, arcaneWorkbench, boneMound, climbLadder, crackedFloor, fallenColumn, floodedPit, scaffold, stoneSteps, stoneThrone, totem, wallStub } from './ruins';
-import { basaltColumns, beastNest, caveBoulder, caveIn, caveMoss, cobweb, crystal, drainLight, fungus, giantMushrooms, glassPool, grateLadder, grille, guano, iceFormation, iceSheet, ladder, obsidianShards, outfall, pipe, pit, ratNest, rockColumn, scorchedRemains, stairsUp, stalagmite, steamVent, sulfurCrust, trap, tunnel, web, well } from './under';
+import { basaltColumns, beastNest, caveBoulder, caveIn, caveMoss, cobweb, crystal, drainLight, glassPool, grateLadder, grille, guano, iceFormation, iceSheet, ladder, obsidianShards, outfall, pipe, pit, ratNest, rockColumn, scorchedRemains, stairsUp, stalagmite, steamVent, sulfurCrust, trap, tunnel, web, well } from './under';
+import { fungus, giantMushrooms, myceliumCarpet, shelfFungus, toadstools } from './fungi';
 import { bedroll, grainSacks, hangingLantern, miningTools, oreCart, oreVein, powderKegs, rails } from './mine';
 import { tatteredBanner } from './hangings';
 import { brazier, candelabrum, collapsedWall, dais, dryFountain, ironMaiden, ritualCircle, shackles, stocks, torchSconce, treasureHoard } from './dungeon';
@@ -86,6 +87,15 @@ export function drawUnderProp(
       break;
     case 'mushroom':
       giantMushrooms(g, f, light, v, rnd);
+      break;
+    case 'toadstool':
+      toadstools(g, f, light, v, rnd);
+      break;
+    case 'shelf_fungus':
+      shelfFungus(g, f, light, v, rnd, w);
+      break;
+    case 'mycelium':
+      myceliumCarpet(g, f, rnd);
       break;
     case 'web':
       web(g, f, rnd);

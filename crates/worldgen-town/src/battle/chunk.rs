@@ -93,7 +93,16 @@ pub struct Chunk {
     /// v63 countryside: each field square's furrows (`town::fields::square_byte`; 0 elsewhere; empty: no
     /// field here).
     pub field: Vec<u8>,
+    /// (Roadmap 7, 199) Lava drawn by hand near the chunk: per square of the `LS`² grid (the chunk
+    /// and a `LAVA_HALO`-square ring round it), the two bytes of `waters::lava_field_at` at its
+    /// centre (empty: no such lava within the field's reach). The ground draws the lava's shore,
+    /// its crust plates' clearance and its scorched rock's edge from it, smooth across chunks.
+    pub lava_field: Vec<u8>,
 }
+
+/// The lava field's ring round the chunk (squares), and its grid's side.
+pub const LAVA_HALO: usize = 5;
+pub const LS: usize = SQ + 2 * LAVA_HALO;
 
 impl Chunk {
     /// An object's tactical rules (a built-in kind's, or an uploaded sprite's).
@@ -264,6 +273,8 @@ pub const RANGE_PART: u8 = 11;
 ///   sprites: count u32, then per uploaded sprite (object kind `SPRITE_KIND` + index): id length
 ///   u8, cover u8, flags u8 (1 blocks movement, 2 blocks sight, 4 difficult), 0, radius f32
 ///   (squares), height f32 (ft), then the asset id (ASCII)
+///   (between the field squares' furrows and the sprites: the lava field, count u32 (0 or LS²),
+///   then per square of the LS² grid (shore, scorch edge) u8)
 pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
     let n = SQ * SQ;
     let mut out = Vec::with_capacity(32 + n * 12 + c.objects.len() * 20);
@@ -338,6 +349,10 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
     // v63 countryside: the field squares' furrows, before the sprite table, which ends the payload (`Chunk::field`): count u32 (0 or SQ²), bytes.
     out.extend_from_slice(&(c.field.len() as u32).to_le_bytes());
     out.extend_from_slice(&c.field);
+    // (Roadmap 7, 199) Drawn lava's field (`Chunk::lava_field`): count u32 (0 or LS²), then (shore,
+    // scorch edge) u8 pairs.
+    out.extend_from_slice(&((c.lava_field.len() / 2) as u32).to_le_bytes());
+    out.extend_from_slice(&c.lava_field);
     out.extend_from_slice(&(c.sprites.len() as u32).to_le_bytes());
     for sp in &c.sprites {
         let i = &sp.info;

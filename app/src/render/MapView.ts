@@ -590,6 +590,7 @@ export class MapView {
     this.catalog = catalog;
     this.battle = new BattlemapLayer(geom, this.app.renderer, catalog, this.role === 'player');
     this.battle.setGrid(this.gridOn);
+    this.battle.craters = this.tiles?.craters ?? [];
     this.battle.raisedOf = (key) => !!this.bridgeRaised?.(key);
     this.battle.sprites = this.edits.sprites ?? {};
     if (this.secretCaves !== null) this.battle.showSecretCaves = this.secretCaves;
@@ -872,6 +873,7 @@ export class MapView {
         }
         if (!it || this.interior) return;
         this.peek?.layer.destroy();
+        if (this.battle) InteriorLayer.paving = this.battle.stoneAt(Math.floor(it.origin[0] / SQUARE_FT), Math.floor(it.origin[1] / SQUARE_FT));
         const layer = new InteriorLayer(it, this.geom.sea_level_ft, true, false, this.interiorStyle);
         layer.container.alpha = 0;
         this.app.stage.addChildAt(layer.container, this.interiorIndex);
@@ -923,6 +925,7 @@ export class MapView {
     } else {
       this.exitBuilding(true);
       this.dropPeek();
+      if (this.battle) InteriorLayer.paving = this.battle.stoneAt(Math.floor(it.origin[0] / SQUARE_FT), Math.floor(it.origin[1] / SQUARE_FT));
       layer = new InteriorLayer(it, this.geom.sea_level_ft, false, false, this.interiorStyle, false, fields, level);
       layer.prefetch(prepareField);
       this.interior = layer;
@@ -1247,6 +1250,8 @@ export class MapView {
     this.overlay = this.baseOverlay = overlay;
     this.islets = null;
     this.tiles = new TileLayer(geom, this.gen);
+    this.tiles.craters = overlay.craters ?? [];
+    if (this.battle) this.battle.craters = this.tiles.craters;
     this.labels = new Labels(overlay.features);
     this.labels.conceal = this.labelConceal;
     this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);

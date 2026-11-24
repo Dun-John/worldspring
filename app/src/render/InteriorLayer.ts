@@ -27,9 +27,9 @@ import { nearestWall, wallDistance, type WallDistance } from './wallField';
 import { drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, shapedWalls, massOf, WALL_OUT, fromSquares, insetParts, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, YURT_ROOMS, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import { drawWinders, winderLinks } from './interior/winder';
 import { LAMP_ROOM, drawLampFloor, drawLampGlass, isLampTop } from './interior/lamp';
-import { ON_WALL, BACKED, UNDERFOOT, ALONG_RUN, setBack, sideOf, sharedKind, SCATTERED, INK, lockColor, TERRAIN_KINDS, SPAN_KINDS, hash2, IRON, padlock, keyGlyph, blob, COVER, underProgram, UNDER_DIM, itemAt, itemVariant, BANNERS, floorColor, floorPattern, OPEN_TOP, itemColor, wallTone, GLASS } from './interior/look';
+import { ON_WALL, BACKED, UNDERFOOT, ALONG_RUN, setBack, sideOf, sharedKind, SCATTERED, INK, lockColor, TERRAIN_KINDS, SPAN_KINDS, hash2, IRON, padlock, keyGlyph, blob, COVER, underProgram, yardProgram, UNDER_DIM, itemAt, itemVariant, BANNERS, floorColor, floorPattern, OPEN_TOP, itemColor, wallTone, GLASS } from './interior/look';
 import { SQUARE_FT } from './scale';
-import { RAIL_SQUARES, drawRails, drawArcade } from './interior/rails';
+import { RAIL_SQUARES, drawRails, drawArcade, drawGatePassage } from './interior/rails';
 import { roundVoids, drawRoofs } from './interior/roofs';
 import { MADDER, ROOM_FELT, KHANA, yurtRugs, khana, yurtDoor } from './interior/yurt';
 
@@ -241,6 +241,8 @@ function onWall(f: InteriorItem): boolean {
 export class InteriorLayer {
   /** The world's renames, for level and room names (`l:`/`r:` ids); set by `MapView`. */
   static names: Record<string, string> = {};
+  /** The town's stone tone where the building stands (the ground's cobbles' tint), for a coaching inn's paving under its gallery; set by `MapView`. */
+  static paving: ArrayLike<number> = [1, 1, 1];
   /** Other sites' names by id, for the ways to them (a dungeon's from its entrance, a building's); set by `MapView`.
    * The renames (`names`) come first. */
   static ways: Record<string, string> = {};
@@ -282,6 +284,8 @@ export class InteriorLayer {
   /** The camera of the last `update` (to find a marker under the pointer). */
   private cam: Camera | null = null;
   /** The underground level's shader mesh, its uniforms and textures. */
+  /** A coaching inn's yard paving mesh (under the gallery): its uniforms, shader and geometry, freed with the plan. */
+  private yard: { uniforms: UniformGroup; shader: Shader; geometry: Geometry } | null = null;
   private under: { uniforms: UniformGroup; sources: BufferImageSource[]; shader: Shader; mesh: Mesh<any, any>; level: number } | null = null;
   /** Underground levels' textures, worked out once each (`underField`). */
   private readonly fields = new Map<number, UnderField>();
@@ -358,9 +362,9 @@ export class InteriorLayer {
   /** Whether a piece of furniture is drawn as an item (from the item atlas, or from its uploaded
    * picture: `f.sprite`), not as floor or not at all here. */
   private drawnAsItem(f: InteriorItem): boolean {
-    // (Underground, the shader paints sewage and lava channels; water, chasms and rubble lie on
-    // the floor, the bridges over them are vector.)
-    if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) return false;
+    // (Underground, the shader paints sewage and lava channels and mycelium carpets; water, chasms
+    // and rubble lie on the floor, the bridges over them are vector.)
+    if (this.underground && (f.kind === 'sewage' || f.kind === 'lava' || f.kind === 'mycelium')) return false;
     if (TERRAIN_KINDS.has(f.kind) || SPAN_KINDS.has(f.kind)) return false;
     // (A round tower's winding stair is drawn whole, on the floor under the walls: `drawWinders`.)
     if (f.kind === 'winder' || f.kind === 'stair_well') return false;
@@ -529,6 +533,10 @@ export class InteriorLayer {
     if (this.under) {
       this.under.uniforms.uniforms.uTime = performance.now() / 1000;
       this.under.uniforms.uniforms.uGrid = undergroundGrid ? 1 : 0;
+    }
+    if (this.yard) {
+      this.yard.uniforms.uniforms.uPxPerSq = s;
+      this.yard.uniforms.uniforms.uGrid = undergroundGrid ? 1 : 0;
     }
     // The other levels' furniture into the atlas, ~1.5 ms of drawing a frame (and its flush,
     // about as much again), so a change of level doesn't draw a whole level's on one frame.
@@ -749,6 +757,14 @@ export class InteriorLayer {
     this.dead = true;
     this.container.destroy({ children: true });
     this.freeUnder();
+    this.freeYard();
+  }
+
+  private freeYard() {
+    if (!this.yard) return;
+    this.yard.shader.destroy();
+    this.yard.geometry.destroy();
+    this.yard = null;
   }
 
   /** Let go of the underground level's shader, then its textures (the shared program and
@@ -767,12 +783,12 @@ export class InteriorLayer {
     this.freeUnder();
     let f = this.fields.get(this.level);
     if (!f) this.fields.set(this.level, (f = underField(it, this.level)));
-    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain, dist, lift } = f;
+    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, caverns, mat, terrain, dist, lift } = f;
     // Built sites keep square corners: walls measured from the squares, the field unsmoothed.
     const square = SQUARE_SITES.has(it.function);
     const fieldSrc = new BufferImageSource({ resource: data, width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: square ? 'nearest' : 'linear', addressMode: 'clamp-to-edge' });
     const cellSrc = new BufferImageSource({ resource: cells, width: nx, height: ny, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
-    // Shaped rooms' boxes and looks; caverns breaking in (a blank texel when there are none).
+    // Shaped rooms' boxes and looks; caverns breaking in and mycelium carpets (a blank texel when there are none).
     const shapeSrc = new BufferImageSource({ resource: shapes, width: Math.max(1, shapeCount), height: 2, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
     const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? nx * FIELD_RES : 1, height: cave ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Water, chasms and rubble slopes (a blank texel when there are none).
@@ -809,7 +825,8 @@ export class InteriorLayer {
       // a seam once every 256 sections, far wider than any city).
       uOrigin: { value: new Float32Array(this.tile ? [wrap(it.origin[0] / 5), wrap(it.origin[1] / 5)] : [0, 0]), type: 'vec2<f32>' },
       uShapeCount: { value: shapeCount, type: 'f32' },
-      uCaverns: { value: cave ? 1 : 0, type: 'f32' },
+      uCaverns: { value: caverns ? 1 : 0, type: 'f32' },
+      uMat: { value: mat ? 1 : 0, type: 'f32' },
       uHasTerrain: { value: terrain ? 1 : 0, type: 'f32' },
       uHasLift: { value: lift ? 1 : 0, type: 'f32' },
     });
@@ -828,6 +845,7 @@ export class InteriorLayer {
     const keep = this.underground && this.under && this.under.level === this.level ? this.under.mesh : null;
     for (const c of this.plan.removeChildren()) if (c !== keep) c.destroy();
     if (keep) this.plan.addChild(keep);
+    this.freeYard();
     this.labels.removeChildren().forEach((c) => c.destroy());
     this.labelSpots = [];
     this.drawMarks();
@@ -837,12 +855,69 @@ export class InteriorLayer {
     let g = new Graphics();
     this.plan.addChild(g);
     const { nx, ny } = it;
-    const colorOf = (r: number) => floorColor(lv.rooms[r].kind, lv.z, lv.natural, lv.rooms[r].raise_ft);
+    // (A coaching inn's yard and its arch lane are the street's own paving, the battlemap ground's cobbles or earth showing through: no floor over them.)
+    const colorOf = (r: number) => (lv.rooms[r].kind === 'inn yard' || lv.rooms[r].kind === 'dirt yard' ? -1 : floorColor(lv.rooms[r].kind, lv.z, lv.natural, lv.rooms[r].raise_ft));
     // A footprint off the grid's rectangle, or shaped rooms: drawn to the walls as they stand.
     const sp = this.underground ? null : shapedPlanOf(it, this.level);
     // A hall open two storeys: the floor below shows through its open height, dimmed (over the
     // floors drawn here, to a round yard's circle).
     if (!this.underground) this.drawBelow(g, sp);
+    // (A coaching inn's yard under the floor above, its gallery's edge and the arch's lane: the range's roof would
+    // show there, the yard being no floor. The paving's own tone over it, flat, in the gallery's shade.)
+    const over = !this.underground && lv.z === 0 ? it.levels.find((u) => u.z === 1) : undefined;
+    if (over) {
+      const under = (i: number, j: number, kind: string) => {
+        if (i < 0 || j < 0 || i >= nx || j >= ny) return false;
+        const r = lv.cells[j * nx + i];
+        return r >= 0 && lv.rooms[r].kind === kind && over.cells[j * nx + i] >= 0;
+      };
+      // (A dirt yard: flat earth.)
+      let any = false;
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          if (!under(i, j, 'dirt yard')) continue;
+          g.rect(i, j, 1, 1);
+          any = true;
+        }
+      }
+      if (any) g.fill(0x8f7c5f);
+      // The inn yard's cobbles, the open yard's and those under the gallery alike: a shader mesh over its squares, the
+      // ground's own cobbles from world coordinates (`yardpave.frag`), so the stones run on unbroken from the street
+      // and the roofs' drawn shadow (the roof being off) doesn't part the open yard from the gallery's ring.
+      const pos: number[] = [];
+      const idx: number[] = [];
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const r = lv.cells[j * nx + i];
+          if (r < 0 || lv.rooms[r].kind !== 'inn yard') continue;
+          const k = pos.length / 2;
+          pos.push(i, j, i + 1, j, i + 1, j + 1, i, j + 1);
+          idx.push(k, k + 1, k + 2, k, k + 2, k + 3);
+        }
+      }
+      if (pos.length) {
+        const wrap512 = (v: number) => ((v % 512) + 512) % 512;
+        const geometry = new Geometry({
+          attributes: { aPosition: { buffer: new Float32Array(pos), format: 'float32x2' }, aUV: { buffer: new Float32Array(pos), format: 'float32x2' } },
+          indexBuffer: new Uint32Array(idx),
+        });
+        const uniforms = new UniformGroup({
+          uOff: { value: new Float32Array([wrap512(it.origin[0] / SQUARE_FT), wrap512(it.origin[1] / SQUARE_FT)]), type: 'vec2<f32>' },
+          uAxis: { value: new Float32Array(it.axis), type: 'vec2<f32>' },
+          uAcross: { value: new Float32Array(it.across), type: 'vec2<f32>' },
+          uPxPerSq: { value: this.cam ? SQUARE_FT * this.cam.ppf : 16, type: 'f32' },
+          uStone: { value: new Float32Array(Array.from(InteriorLayer.paving).slice(0, 3)), type: 'vec3<f32>' },
+          // (The ground's own light on flat paving: as bright as the street's stones outside.)
+          uShade: { value: 0.6, type: 'f32' },
+          uGrid: { value: undergroundGrid ? 1 : 0, type: 'f32' },
+        });
+        const shader = new Shader({ glProgram: yardProgram, resources: { uNoise: noiseSource(), yard: uniforms } });
+        const mesh = new Mesh({ geometry, shader });
+        // (Under the vector parts: the grid's lines, walls and rails over the paving.)
+        this.plan.addChildAt(mesh, 0);
+        this.yard = { uniforms, shader, geometry };
+      }
+    }
     const parts = sp?.real ? sp.parts : null;
     // A yurt: its rugs on the felt under the grid, its lattice wall, its door.
     const ring = this.underground ? null : yurtRing(it, this.level);
@@ -1058,6 +1133,7 @@ export class InteriorLayer {
     // Railings where a gallery or passage looks down into a hall open two storeys.
     if (!this.underground) drawRails(g, lv, nx, ny, sp);
     if (!this.underground) drawArcade(g, lv, nx, ny, !!sp?.real);
+    if (!this.underground) drawGatePassage(g, lv, nx, ny);
     if (lv.has_stairs && stairsCut) drawStairs(g);
     if (parapet?.length) {
       // Merlons along the parapet, a square apart.
@@ -1742,6 +1818,7 @@ export class InteriorLayer {
     }
     return SIDES.reduce((b, [dx, dy], s) => (kind(f.x + dx, f.y + dy) === 'rail' && !two(railsBy(f.x + dx, f.y + dy)) ? b | (1 << s) : b), 0);
   }
+
 
   /** How many squares of rock (0 to 2) stand behind a wall prop's wall side: a niche cut into the rock goes as deep
    * as there is rock before the next room's floor. */

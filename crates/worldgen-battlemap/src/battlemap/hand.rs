@@ -167,6 +167,8 @@ pub(super) fn build(
     if !path_near.is_empty() {
         hand.extend(crate::paths::crossings_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span], 40.0).iter().map(|c| hand_crossing(c, world, t0)));
     }
+    // (Roadmap 7, 199: the network's roads over lava drawn by hand, on stone bridges.)
+    hand.extend(crate::paths::lava_crossings_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span], 40.0).iter().map(|c| hand_crossing(c, world, t0)));
     for (c, top) in hand.iter().filter(|(c, _)| c.kind != ShapeKind::Ferry) {
         let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
         let len = crate::core::sqrt((c.b[0] - c.a[0]) * (c.b[0] - c.a[0]) + (c.b[1] - c.a[1]) * (c.b[1] - c.a[1]));

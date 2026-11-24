@@ -91,7 +91,7 @@ const SETS: Record<string, string[]> = {
 const UNDER: [string, number, number][] = [
   ['exit', 1, 1], ['up', 1, 1], ['down', 1, 1], ['tunnel', 1, 1], ['trapdoor', 1, 1], ['ladder', 1, 1], ['grate_ladder', 1, 1], ['outfall', 1, 1], ['pipe', 1, 1],
   ['trap', 1, 1], ['cave_in', 1, 1], ['pit', 2, 2], ['well', 1, 1], ['stalagmite', 1, 1], ['rock_column', 1, 1], ['boulder', 2, 2],
-  ['crystal', 1, 1], ['fungus', 1, 1], ['mushroom', 1, 1], ['web', 1, 1], ['cobweb', 1, 1], ['guano', 2, 2], ['moss', 1, 1],
+  ['crystal', 1, 1], ['fungus', 1, 1], ['mushroom', 1, 1], ['mushroom', 2, 2], ['toadstool', 1, 1], ['shelf_fungus', 1, 1], ['mycelium', 1, 1], ['web', 1, 1], ['cobweb', 1, 1], ['guano', 2, 2], ['moss', 1, 1],
   ['obsidian', 1, 1], ['basalt', 1, 1], ['vent', 1, 1], ['sulfur', 1, 1], ['scorched', 1, 2], ['glass_pool', 2, 2],
   ['bones', 1, 1], ['skeleton', 1, 2], ['skulls', 1, 1], ['campfire', 1, 1], ['rubble', 1, 1], ['debris', 1, 1], ['rat_nest', 1, 1], ['nest', 1, 1], ['ice', 1, 1], ['ice_sheet', 2, 2],
   ['timber', 1, 1], ['rail', 1, 1], ['ore_cart', 1, 1], ['ore_vein', 1, 1], ['tools', 1, 1], ['lantern', 1, 1], ['winch', 1, 1],
@@ -1764,7 +1764,7 @@ function stairsPanel(root: Container, y0: number, width: number, nolabels: boole
     'uniform vec4 uRect;',
     'uniform vec3 uBeside;',
     cut('const vec3 INK', ';'),
-    cut('const vec3 SURF[22]', ');'),
+    cut('const vec3 SURF[23]', ');'),
     cut('float hash21(vec2 p) {', '\n}'),
     cut('// Roadmap 7 (177) steps', '\n}'),
     'void main() {',

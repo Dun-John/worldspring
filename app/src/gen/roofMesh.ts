@@ -139,9 +139,11 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
   for (const roof of roofs) {
     const off = PX * (0.25 + 0.3 * roof.floors);
     const round = roundOutline(roof);
+    // (A coaching inn's gatehouse roof standing proud of its eaves casts its shadow with the building's, one shade.)
+    const bay = roof.battlements || roof.pts.length < 6 ? null : gateBay(roof);
     for (const pts of courtRanges(roof) ?? [round ?? roof.pts]) {
       g.poly(
-        pts.map((v) => v + off),
+        (bay?.roofed ? withGate(pts, bay) : pts).map((v) => v + off),
         0x000000,
         0.28,
       );
@@ -171,12 +173,13 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
       g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, INK_OUT, ROOF_INK);
       const church = roof.parts.find((p) => p.kind === CHURCH);
       if (church && church.pts.length === 8) churchRoof(g, church.pts, tint);
-      // (A coaching inn round its yard: its carriage arch's mouth on the street front.)
-      archMouth(g, roof);
+      // (A coaching inn round its yard: its gatehouse over the carriage arch on the street front.)
+      archMouth(g, roof, tint, flat);
       continue;
     }
     // (A city's town hall on its arcade: the piers along its front, the roof's eave over them.)
-    arcadePiers(g, roof);
+    // (A coaching inn's carriage arch is no arcade: a roofed passage under the range's own roof, `archMouth`.)
+    if (!roof.parts.some((p) => p.kind === RANGE)) arcadePiers(g, roof);
     // A city's town hall's belfry (`town::belfry`): the hall hipped (or flat), the tower over its
     // corner (`belfryTop`).
     const belfry = roof.parts.find((p) => p.kind === SQUARE_TOWER);
@@ -246,6 +249,7 @@ export function roofMesh(roofs: Roof[]): ColorMesh {
       if (roof.smoke) smoke(g, wings[0], 0.28);
       // (Inked round the ranges, not the footprint: a court's gateway range runs on over its arch.)
       for (const [ax, ay, bx, by] of unionEdges(wings)) g.line(ax, ay, bx, by, INK_OUT, ROOF_INK, 1, INK_OUT / 2);
+      archMouth(g, roof, tint, false);
       continue;
     }
     const round = roof.cone ? null : roundOutline(roof);
@@ -412,57 +416,280 @@ function belfryTop(g: MeshBuilder, pts: number[]) {
   g.outline(lant, INK_LINE, ROOF_INK);
 }
 
-/** A coaching inn's carriage arch (`ARCADE`: its front along the street, then a square in), the roof
- * kept over it: the yard's cobbles out through its mouth onto the street, the dark of the arch under
- * the eave, a stone jamb either side and the arch's ring of stone. */
-function archMouth(g: MeshBuilder, roof: Roof) {
+/** A coaching inn's gate passage (`ARCADE`: its front along the street, then a square in) in its frame: `p(t, d)`
+ * t along the street front from its first corner (px), d out to the street (the yard's side negative); `len` the
+ * lane's width; `depth` the passage's, from the street eave to the yard's (0: not measured); `roofed` where its
+ * gatehouse roof is drawn (a pitched roof and a depth). */
+interface GateBay {
+  p: (t: number, d: number) => [number, number];
+  len: number;
+  depth: number;
+  ux: number;
+  uy: number;
+  nx: number;
+  ny: number;
+  roofed: boolean;
+  /** Where the yard's ground lies past the yard's mouth: the court, else none (outside the ranges). */
+  court: number[] | null;
+  arms: number[][];
+}
+
+/** The gatehouse roof's reach past the eaves (street, yard) and past the lane's sides. */
+const GATE_OUT = 2.5 * FT;
+const GATE_IN = 1.75 * FT;
+const GATE_SIDE = 0.6 * FT;
+
+/** A coaching inn's gate passage (`GateBay`): round its yard (a court) or an L/U of ranges; null for any other
+ * roof. Its depth measured by three chords along the lane (its two sides a touch in, and its middle) through
+ * the range it crosses, which must all enter at the street eave and leave together 2 to 8 squares in. */
+function gateBay(roof: Roof): GateBay | null {
   const front = roof.parts.find((p) => p.kind === ARCADE);
-  if (!front || front.pts.length !== 8) return;
+  if (!front || front.pts.length !== 8 || roof.cone) return null;
+  const courtPart = roof.parts.find((p) => p.kind === COURT);
+  const flat = roof.shape === FLAT || (roof.shape === DOME && !roof.cone);
+  let arms: number[][];
+  if (courtPart && roof.pts.length === 8 && courtPart.pts.length === 8) arms = sideRanges(roof.pts, courtPart.pts);
+  else {
+    arms = roof.parts.filter((p) => p.kind === RANGE).map((p) => p.pts);
+    if (arms.length < 2 || (roof.shape !== HIP && roof.shape !== GABLE)) return null;
+  }
   const [ax, ay, bx, by, cx, cy] = front.pts;
   const len = Math.hypot(bx - ax, by - ay);
-  if (len < PX) return;
+  if (len < PX) return null;
   const [ux, uy] = [(bx - ax) / len, (by - ay) / len];
   // (Out: away from the square in.)
   let [nx, ny] = [-uy, ux];
   if (nx * (cx - bx) + ny * (cy - by) > 0) [nx, ny] = [-nx, -ny];
   const p = (t: number, d: number): [number, number] => [ax + ux * t + nx * d, ay + uy * t + ny * d];
-  const quad = (t0: number, t1: number, d0: number, d1: number) => [...p(t0, d0), ...p(t1, d0), ...p(t1, d1), ...p(t0, d1)];
-  const jamb = PX * 0.3;
-  // The cobbles out from the mouth to the street, a stone each in rows.
-  const out = PX * 0.95;
-  g.poly(quad(jamb, len - jamb, -PX * 0.05, out), 0x6f695e);
-  for (let row = 0; row < 4; row++) {
-    const d = PX * (0.05 + row * 0.23);
-    const shift = row % 2 ? PX * 0.12 : 0;
-    for (let t = jamb + PX * 0.08 + shift; t < len - jamb - PX * 0.12; t += PX * 0.24) {
-      g.poly(quad(t, t + PX * 0.17, d, d + PX * 0.16), (row + Math.round(t / PX)) % 3 ? 0x8c8579 : 0x80796d);
+  let depth = 0;
+  let best: number[] | null = null;
+  for (const arm of arms) {
+    if (arm.length !== 8) continue;
+    let [cxm, cym] = [0, 0];
+    for (let i = 0; i < 4; i++) [cxm, cym] = [cxm + arm[i * 2] / 4, cym + arm[i * 2 + 1] / 4];
+    let [lo, hi, ok] = [Infinity, 0, true];
+    for (const t of [0.12 * PX, len / 2, len - 0.12 * PX]) {
+      const [mx, my] = p(t, -0.02 * PX);
+      const [t0, t1] = chord(arm, mx, my, -nx, -ny, cxm, cym, 12 * PX);
+      if (!(t1 > t0) || t0 > 0.1 * PX || t1 >= 11.9 * PX) {
+        ok = false;
+        break;
+      }
+      lo = Math.min(lo, t1);
+      hi = Math.max(hi, t1);
+    }
+    if (!ok || hi - lo > 0.6 * PX || lo < 2 * PX || lo > 8 * PX) continue;
+    if (!best || lo < depth) [best, depth] = [arm, lo];
+  }
+  return { p, len, depth: best ? depth : 0, ux, uy, nx, ny, roofed: !!best && !flat, court: courtPart?.pts ?? null, arms };
+}
+
+/** A footprint's (or a range's) outline with the gatehouse roof's ends run out past it where its eave holds the
+ * lane's mouth: the street's (and the yard's, on a court's range), so its shadow is cast with the building's. */
+function withGate(pts: number[], bay: GateBay): number[] {
+  const { p, len, depth } = bay;
+  let out = notch(pts, p(-GATE_SIDE, 0), p(len + GATE_SIDE, 0), p(-GATE_SIDE, GATE_OUT), p(len + GATE_SIDE, GATE_OUT));
+  out = notch(out, p(-GATE_SIDE, -depth), p(len + GATE_SIDE, -depth), p(-GATE_SIDE, -depth - GATE_IN), p(len + GATE_SIDE, -depth - GATE_IN));
+  return out;
+}
+
+/** `pts` with the box a0-a1 (on one of its edges) to b0-b1 (out past it) added: its four corners put into that edge
+ * in its own order; `pts` as it was if no edge holds both a0 and a1. */
+function notch(pts: number[], a0: [number, number], a1: [number, number], b0: [number, number], b1: [number, number]): number[] {
+  const m = pts.length / 2;
+  const tol = 0.15 * PX;
+  for (let i = 0; i < m; i++) {
+    const j = (i + 1) % m;
+    const [ex, ey] = [pts[j * 2] - pts[i * 2], pts[j * 2 + 1] - pts[i * 2 + 1]];
+    const el = Math.hypot(ex, ey);
+    if (el < 1e-6) continue;
+    const at = (q: [number, number]) => [((q[0] - pts[i * 2]) * ex + (q[1] - pts[i * 2 + 1]) * ey) / el, Math.abs((q[0] - pts[i * 2]) * ey - (q[1] - pts[i * 2 + 1]) * ex) / el];
+    const [[s0, o0], [s1, o1]] = [at(a0), at(a1)];
+    if (o0 > tol || o1 > tol || Math.min(s0, s1) < -tol || Math.max(s0, s1) > el + tol) continue;
+    const ins = s0 < s1 ? [...a0, ...b0, ...b1, ...a1] : [...a1, ...b1, ...b0, ...a0];
+    return [...pts.slice(0, j * 2 || m * 2), ...ins, ...pts.slice(j * 2 || m * 2)];
+  }
+  return pts;
+}
+
+/** `poly` kept inside the convex polygon `conv`. */
+function clipTo(poly: number[], conv: number[]): number[] {
+  const m = conv.length / 2;
+  let [cx, cy] = [0, 0];
+  for (let i = 0; i < m; i++) [cx, cy] = [cx + conv[i * 2] / m, cy + conv[i * 2 + 1] / m];
+  let out = poly;
+  for (let i = 0; i < m && out.length >= 6; i++) {
+    const [ax, ay, bx, by] = [conv[i * 2], conv[i * 2 + 1], conv[((i + 1) % m) * 2], conv[((i + 1) % m) * 2 + 1]];
+    let [nx, ny] = [-(by - ay), bx - ax];
+    if ((cx - ax) * nx + (cy - ay) * ny > 0) [nx, ny] = [-nx, -ny];
+    out = clipHalf(out, ax, ay, nx, ny);
+  }
+  return out;
+}
+
+/** Whether a point is inside a polygon (even-odd). */
+function inside(pts: number[], x: number, y: number): boolean {
+  const m = pts.length / 2;
+  let c = false;
+  for (let i = 0, j = m - 1; i < m; j = i++) {
+    const [xi, yi, xj, yj] = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+
+/** Gate stone (the piers), lit top and shaded rim; the gate leaves' and the sign's timber; ruts' and the
+ * passage's shade (ground-toned, never black). */
+const GATE_STONE = 0x948b7b;
+const GATE_STONE_LIT = 0xc4baa4;
+const SETT = [0x9d9483, 0x8c8474, 0xa59d8b];
+const GATE_WOOD = 0x6e4b2d;
+const GATE_WOOD_LIT = 0x8a6440;
+const RUT = 0x3b3024;
+const GATE_SHADE = 0x2b2219;
+
+/** A coaching inn's gate passage (`gateBay`) seen from straight above, Roadmap 7, 192: the gatehouse, a gabled
+ * roof across the range over the lane, its ridge along the lane from street to yard and its ends standing out
+ * past both eaves (`GATE_OUT`, `GATE_IN`), a step darker than the range's roof, inked round, its shadow on the
+ * lower roof beside it and soft on the lane under its ends. At the street's mouth the two stone piers either
+ * side, the gate's two leaves swung back flat against the front, a band of big setts across the lane at the
+ * street line and two cart ruts running in; the yard's mouth likewise (piers, setts, ruts) where the yard's
+ * open ground lies. An inn sign on its bracket out from the front by the far pier. Where the passage's depth
+ * can't be measured (or the roof is flat), the street's mouth alone: piers, leaves, setts and ruts. */
+function archMouth(g: MeshBuilder, roof: Roof, tint: number, flat: boolean) {
+  const bay = gateBay(roof);
+  if (!bay) return;
+  const { p, len, depth, ux, uy, nx, ny, court, arms } = bay;
+  const roofed = bay.roofed && !flat;
+  const box = (t0: number, t1: number, d0: number, d1: number) => [...p(t0, d0), ...p(t1, d0), ...p(t1, d1), ...p(t0, d1)];
+  // (The yard's side: its ground only, the court's open sky or past the ranges.)
+  const yard = (poly: number[]): number[] => {
+    if (court) return clipTo(poly, court);
+    const m = poly.length / 2;
+    let [cx, cy] = [0, 0];
+    for (let i = 0; i < m; i++) [cx, cy] = [cx + poly[i * 2] / m, cy + poly[i * 2 + 1] / m];
+    return arms.some((a) => inside(a, cx, cy)) || inside(roof.pts, cx, cy) ? [] : poly;
+  };
+  const put = (poly: number[], c: number, a = 1, side = 1) => {
+    const q = side < 0 ? yard(poly) : poly;
+    if (q.length >= 6) g.poly(q, c, a);
+    return q;
+  };
+  const ink = (poly: number[], w = INK_LINE, a = 0.85) => {
+    if (poly.length >= 6) g.outline(poly, w, ROOF_INK, a);
+  };
+  // Each mouth: `side` 1 the street's (at d 0, out positive), -1 the yard's (at -depth, out negative).
+  const mouths = depth > 0 ? [1, -1] : [1];
+  const [cut, rut] = [len / 2 - 2.5 * FT, len / 2 + 2.5 * FT];
+  for (const side of mouths) {
+    const d0 = side > 0 ? 0 : -depth;
+    const at = (d: number) => d0 + side * d;
+    // Two cart ruts worn into the lane's ground from the passage out across the mouth, fading out.
+    for (const t of [cut, rut]) {
+      // (Under the gatehouse roof from inside the passage; else from the eave.)
+      for (const [a, b, al] of [
+        [roofed || side < 0 ? -0.4 : 0, 0.45, 0.2],
+        [0.45, 0.95, 0.14],
+        [0.95, 1.45, 0.08],
+      ]) {
+        put(box(t - 0.32 * FT, t + 0.32 * FT, at(a * PX), at(b * PX)), RUT, al, side);
+      }
+    }
+    // The threshold: big setts across the lane at the eave line, in a few tones, joints inked faint.
+    const n = Math.max(3, Math.round(len / (2.4 * FT)));
+    for (let k = 0; k < n; k++) {
+      const [t0, t1] = [(len * k) / n, (len * (k + 1)) / n];
+      const q = put(box(t0 + 0.06 * FT, t1 - 0.06 * FT, at(-0.15 * FT), at(4.2 * FT)), SETT[(k * 7 + (side > 0 ? 0 : 1)) % 3], 1, side);
+      ink(q, INK_LINE, 0.45);
+    }
+    // The piers either side of the lane, out from the wall's face: stone, a lit top, inked; their shade SE.
+    for (const [t0, t1] of [
+      [-2.6 * FT, 0],
+      [len, len + 2.6 * FT],
+    ]) {
+      const pier = box(t0, t1, at(-0.4 * FT), at(2.6 * FT));
+      put(
+        pier.map((v) => v + 0.22 * PX),
+        GATE_SHADE,
+        0.22,
+        side,
+      );
+      const q = put(pier, GATE_STONE, 1, side);
+      if (q.length < 6) continue;
+      const inset = box(t0 + 0.45 * FT, t1 - 0.45 * FT, at(0.05 * FT), at(2.15 * FT));
+      put(inset, GATE_STONE_LIT, 1, side);
+      ink(q, INK_LINE, 1);
     }
   }
-  // The arch's dark under the eave: square at the jambs, rounded to its crown in the middle.
-  const dark: number[] = [];
-  const n = 12;
-  for (let k = 0; k <= n; k++) {
-    const t = jamb + ((len - 2 * jamb) * k) / n;
-    const s = Math.sin((Math.PI * k) / n);
-    dark.push(...p(t, -PX * (0.4 + 0.5 * Math.sqrt(s))));
-  }
-  dark.push(...p(len - jamb, PX * 0.02), ...p(jamb, PX * 0.02));
-  g.poly(dark, 0x1f1b18, 0.92);
-  // (Its ring of stone along the curve.)
-  for (let k = 0; k < n; k++) {
-    const [x0, y0, x1, y1] = [dark[k * 2], dark[k * 2 + 1], dark[k * 2 + 2], dark[k * 2 + 3]];
-    g.line(x0, y0, x1, y1, PX * 0.09, 0xc9bfa9, 1);
-  }
-  // The jambs either side, stone, proud of the wall.
+  // The gate's two leaves on the street's mouth, swung back flat against the front either side, past the
+  // piers (only where the front runs on that far): timber, a lit plank, inked.
+  const leaf = len / 2;
   for (const [t0, t1] of [
-    [0, jamb],
-    [len - jamb, len],
+    [-2.6 * FT - leaf, -2.6 * FT],
+    [len + 2.6 * FT, len + 2.6 * FT + leaf],
   ]) {
-    const j = quad(t0, t1, -PX * 0.5, PX * 0.22);
-    g.poly(j.map((v) => v + PX * 0.08), 0x000000, 0.3);
-    g.poly(j, 0xc4baa5);
-    g.outline(j, INK_LINE, ROOF_INK);
+    const [ex, ey] = p(t0 < 0 ? t0 : t1, -0.3 * FT);
+    if (!inside(roof.pts, ex, ey)) continue;
+    const q = box(t0, t1, 0.05 * FT, 0.75 * FT);
+    g.poly(
+      q.map((v) => v + 0.12 * PX),
+      GATE_SHADE,
+      0.2,
+    );
+    g.poly(q, GATE_WOOD);
+    g.poly(box(t0 + 0.2 * FT, t1 - 0.2 * FT, 0.4 * FT, 0.62 * FT), GATE_WOOD_LIT);
+    for (const t of [t0 + leaf / 3, t0 + (2 * leaf) / 3]) g.line(...p(t, 0.1 * FT), ...p(t, 0.7 * FT), INK_LINE * 0.7, ROOF_INK, 0.5);
+    ink(q, INK_LINE, 1);
   }
+  if (roofed) {
+    // The gatehouse roof: one gabled piece over the lane, its ridge along it, standing out past both eaves.
+    const gate = box(-GATE_SIDE, len + GATE_SIDE, GATE_OUT, -depth - GATE_IN);
+    // (The lower range roof's shade beside it, on its side away from the light.)
+    for (const [t, s] of [
+      [-GATE_SIDE, -1],
+      [len + GATE_SIDE, 1],
+    ]) {
+      if (s * (ux + uy) <= 0) continue;
+      for (const [w, a] of [
+        [0.7, 0.1],
+        [1.4, 0.08],
+      ]) {
+        g.poly(box(t, t + s * w * FT, -0.05 * FT, -depth + 0.05 * FT), GATE_SHADE, a);
+      }
+    }
+    gableRoof(g, gate, shadeHex(tint, 0.86), [nx, ny]);
+    g.outline(gate, INK_OUT, ROOF_INK);
+    // Soft shade on the lane's ground under each end (the yard's only on its ground), lane-wide, two steps.
+    for (const side of mouths) {
+      const e = side > 0 ? GATE_OUT : -depth - GATE_IN;
+      for (const [w, a] of [
+        [1.2, 0.1],
+        [2.6, 0.06],
+      ]) {
+        put(box(-GATE_SIDE * 0.5, len + GATE_SIDE * 0.5, e, e + side * w * FT), GATE_SHADE, a, side);
+      }
+    }
+  } else {
+    // (No gatehouse: a soft shade on the lane at the street eave only.)
+    for (const [w, a] of [
+      [1.2, 0.1],
+      [2.6, 0.06],
+    ]) {
+      g.poly(box(0, len, 0, w * FT), GATE_SHADE, a);
+    }
+  }
+  // The inn's sign out over the street from one pier: an iron bracket, the board hung under it edge-on, its
+  // shadow cast long (it hangs high).
+  const st = ux + uy > 0 ? -1.3 * FT : len + 1.3 * FT;
+  const board = box(st - 0.3 * FT, st + 0.3 * FT, 3.1 * FT, 6.1 * FT);
+  g.poly(
+    board.map((v) => v + 0.55 * PX),
+    GATE_SHADE,
+    0.16,
+  );
+  g.poly(board, GATE_WOOD_LIT);
+  ink(board, INK_LINE, 1);
+  g.line(...p(st, 2.2 * FT), ...p(st, 6.6 * FT), 0.14 * FT, 0x2e2a26, 1);
 }
 
 const WING = 4;
