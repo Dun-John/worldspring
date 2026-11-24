@@ -12,14 +12,11 @@ battlemap zoom.
 ## The look in eight rules
 
 1. **Straight down,** orthographic, seen from directly above. No perspective, no visible sides except what a
-   dome or bevel suggests. **Exception:** upright things that only read from the side are drawn from a high
-   angle, with screen up kept up even in rotated sites (`screenAxes(light)`): headstones, glowing fungus,
-   crystals, the skull pile, urn, hanging lantern, candelabrum, iron maiden and stocks, the standing banner and the
-   musicians' corner's harp; on the battlemap also the notice board, signpost, lamp post, the market cross's
-   cross, topiary and garden statues (`upright` in `atlas.ts`; left out of `TURNED` and `TURNABLE` in
-   `BattlemapLayer.ts`, so never drawn turned). "Higher" means
-   nearer straight down, about 60 degrees (heights at half, round sections as fat ovals: `hk` 0.5, `dk` 0.87), never
-   side-on.
+   dome or bevel suggests. **Exceptions (2026-11-23):** only the indoor pillar and the
+   underground crystals keep a high angle (about 60 degrees, `screenAxes(light)`: heights at half, round sections
+   as fat ovals, never side-on). Every other upright is its top seen straight down, life-sized, its height told
+   by its shadow alone: headstones, statues, notice board, signpost, stocks, lamp post, market cross, topiary,
+   standing stone, candle stands, standing banner, harp, iron maiden, urn, skull pile, lantern, totem, thrones.
 2. **Warm light from the north-west** (upper left of the screen). Lit edges go toward cream and yellow,
    the shaded side toward warm plum and blue-brown, never toward grey or black.
 3. **Hand-drawn, not painterly.** Simple broad strokes and flat areas of colour, shaded with 2-3 clear
@@ -93,7 +90,7 @@ rather than one colour darkened and lightened.
 
 | Role | Hex | Use |
 |---|---|---|
-| Ink | `#2b2118` | Silhouette outline (warm umber; the code's current `#1d1a14` is too cold and dark) |
+| Ink | `#1d1a14` | Silhouette outline (`INK` in `render/pen.ts`; kept over umber `#2b2118`, 2026-11-23) |
 | Shade glaze | `#4a2f3a` | Multiply over shaded sides at 25–40% |
 | Sun glaze | `#fff1cf` | Highlights on NW edges at 30–60% |
 | Warm white | `#f6efe0` | Brightest "white" (cloth, bone, flowers, sparkles) |
