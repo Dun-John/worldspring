@@ -302,7 +302,7 @@ export function standingBanner(g: Graphics, f: InteriorItem, light: Light, v: nu
   // u along the bar from its middle, s across it.
   const at = (u: number, s: number): Pt => (along ? [cx + u - 0.25, cy + s] : [cx + s, cy + u - 0.25]);
   const [lx, ly] = light;
-  castShadow(g, ring(cx, cy, 0.14, rnd, 0, 14), light, 0.1);
+  castShadow(g, ring(cx, cy, 0.14, rnd, 0, 14), light, 0.08);
   g.poly(ring(cx, cy, 0.14, rnd, 0.005, 20)).fill(DARK_WOOD[0]).stroke({ width: LINE, color: INK, join: 'round' });
   g.poly(ring(cx + lx * 0.014, cy + ly * 0.014, 0.112, rnd, 0.004, 18)).fill(DARK_WOOD[1]);
   g.poly(ring(cx, cy, 0.075, rnd, 0.003, 14)).stroke({ width: 0.016, color: DARK_WOOD[0] });

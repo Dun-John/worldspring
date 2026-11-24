@@ -1,6 +1,6 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { BRASS, DARK_WOOD, INK, IRON, LINE, type Light, OUT, WOOD, castShadow, frame, glowPool, shade, oval, patch, quad, ring } from './common';
+import { BRASS, DARK_WOOD, INK, IRON, type Light, LINE, OUT, WOOD, castShadow, frame, glowPool, mute, oval, patch, quad, ring, shade } from './common';
 import { BURLAP } from './tomb';
 import { barrel } from './home';
 import { rock } from './under';
@@ -378,7 +378,7 @@ export function bedroll(g: Graphics, f: InteriorItem, light: Light, v: number, r
     [0x6a3a2a, 0x8a4e36, 0xa86a48],
     [0x3a4a6a, 0x4e6288, 0x6a80a8],
     [0x6a5a3a, 0x8a7650, 0xa89068],
-  ][v % 4];
+  ][v % 4].map((c) => mute(c, 0.3));
   const pad = quad(rect(0.14, 0.14, len - 0.1, 0.86), rnd, 0.02);
   castShadow(g, pad, light, 0.05);
   g.poly(pad).fill(0x8a7650).stroke({ width: LINE, color: INK, join: 'round' });

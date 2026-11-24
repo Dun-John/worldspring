@@ -196,70 +196,53 @@ export function ladder(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
   }
 }
 
-/** A drain outlet set flush in the wall, seen from above: a round mouth in a rim (0 iron, bolted; 1 brick,
- * a grate across it; 2 stone, broken away at one side), half in the wall, dark inside with the far side of
- * the bore catching the light. A stain and a thin trickle of muck run out across the floor to a small puddle. */
+/** A drain pipe out of the wall, seen from above: a short run of pipe lying on the floor (0 iron, bolted
+ * flanges; 1 fired clay, its joints thick collars; 2 clay broken off short, a chip beside it), lit along the side
+ * toward the light, ending in a dark open mouth; a trickle of muck out of it to a small flat puddle. */
 export function pipe(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, wall: [number, number]) {
   const { at } = frame(f, wall);
   const look = v % 3;
-  const [cu, cs] = [0.5, 0.04];
-  const [rx, ry, ix, iy] = [0.31, 0.19, 0.18, 0.085];
+  const cu = 0.5;
   const rot = wall[0] !== 0 ? Math.PI / 2 : 0;
-  const tones = look === 0 ? IRON : look === 1 ? [0x5e4234, 0x80604c, 0x9a7a62] : [0x5c5850, 0x7c776c, 0x96917f];
-  const on = (t: number, k: number) => at(cu + Math.cos(t) * (ix + (rx - ix) * k), cs + Math.sin(t) * (iy + (ry - iy) * k));
-  const [end, drift] = [0.4, (rnd() - 0.5) * 0.12];
+  const tones = look === 0 ? IRON : [0x5a4838, 0x76604a, 0x8e7a60];
+  const [hw, cw] = [0.13, 0.17];
+  const end = look === 2 ? 0.58 : 0.74;
+  const [p0, p1] = [at(cu, 0), at(cu + 1, 0)];
+  const side = Math.sign((p1[0] - p0[0]) * light[0] + (p1[1] - p0[1]) * light[1]) || 1;
+  const box = (u0: number, s0: number, u1: number, s1: number) => [...at(u0, s0), ...at(u1, s0), ...at(u1, s1), ...at(u0, s1)];
   const FILTH = 0x46502e;
-  // The stain, and the puddle spread along the foot of the wall, as flat as the scum on the floor.
-  g.poly(oval(...at(cu + drift * 0.4, 0.24), 0.17, 0.15, rot, 14)).fill({ color: 0x343a26, alpha: 0.5 });
-  const edge: number[] = [];
+  // The trickle and the puddle beyond the mouth, flat on the floor.
+  const drift = (rnd() - 0.5) * 0.12;
+  const pool: number[] = [];
   for (let i = 0; i < 14; i++) {
     const t = (i / 14) * Math.PI * 2;
     const k = 0.75 + rnd() * 0.45;
-    edge.push(...at(cu + drift + Math.cos(t) * 0.17 * k, end + Math.sin(t) * 0.075 * k));
+    pool.push(...at(cu + drift + Math.cos(t) * 0.17 * k, end + 0.16 + Math.sin(t) * 0.07 * k));
   }
-  g.poly(edge).fill(FILTH).stroke({ width: 0.018, color: INK, alpha: 0.45, join: 'round' });
-  g.poly(oval(...at(cu + drift - 0.04, end - 0.015), 0.05, 0.016, rot, 8)).fill({ color: 0x626a46, alpha: 0.9 });
-  // The rim: blocks turned to the light lit, away from it shaded. (Broken: a run of them gone.)
-  const n = look === 1 ? 8 : 24;
-  const [a0, a1] = [1, 5];
-  const gone = (i: number) => look === 2 && i >= a0 && i < a1;
-  const [ox, oy] = at(cu, cs);
-  for (let i = 0; i < n; i++) {
-    if (gone(i)) continue;
-    const [t0, t1] = [(i / n) * Math.PI * 2, ((i + 1) / n) * Math.PI * 2];
-    const [mx, my] = on((t0 + t1) / 2, 1);
-    const lit = ((mx - ox) * light[0] + (my - oy) * light[1]) / Math.max(Math.hypot(mx - ox, my - oy), 1e-6);
-    g.poly([...on(t0, 0), ...on(t0, 1), ...on(t1, 1), ...on(t1, 0)]).fill(tones[lit > 0.35 ? 2 : lit < -0.35 ? 0 : 1]);
+  g.poly(pool).fill({ color: FILTH, alpha: 0.85 });
+  g.poly(oval(...at(cu + drift - 0.04, end + 0.15), 0.05, 0.016, rot, 8)).fill({ color: 0x626a46, alpha: 0.9 });
+  // The run: the body in three tones, lit along one side, shaded along the other.
+  g.poly(box(cu - hw, 0, cu + hw, end)).fill(tones[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(box(cu + side * hw * 0.25, 0, cu + side * hw * 0.85, end)).fill(tones[2]);
+  g.poly(box(cu - side * hw, 0, cu - side * hw * 0.6, end)).fill(tones[0]);
+  // Collars (or flanges) at the wall and along the run.
+  const collars = look === 2 ? [0.03, end * 0.5] : [0.03, end * 0.5, end - 0.05];
+  for (const c of collars) {
+    g.poly(box(cu - cw, c - 0.035, cu + cw, c + 0.035)).fill(tones[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.poly(box(cu + side * cw * 0.2, c - 0.03, cu + side * cw * 0.85, c + 0.03)).fill(tones[2]);
+    if (look === 0) for (const k of [-1, 1]) g.circle(...at(cu + k * cw * 0.7, c), 0.015).fill(IRON[0]);
   }
-  // Ink round the rim that is left, with a line across each end of a break.
-  const arc = (i0: number, i1: number) => {
-    const pts: number[] = [];
-    for (let i = i0; i <= i1; i++) pts.push(...on((i / n) * Math.PI * 2, 1));
-    return pts;
-  };
+  // The open mouth, tipped toward us: the rim, the dark bore inside it.
+  const [mx, my] = at(cu, end);
   if (look === 2) {
-    g.poly(arc(a1, n + a0), false).stroke({ width: OUT, color: INK, join: 'round', cap: 'round' });
-    for (const i of [a0, a1]) g.moveTo(...on((i / n) * Math.PI * 2, 0)).lineTo(...on((i / n) * Math.PI * 2, 1)).stroke({ width: LINE, color: INK, cap: 'round' });
-    // Where the rim fell: chips on the floor beside it.
-    for (const [u, s, r] of [[0.86, 0.22, 0.035], [0.78, 0.31, 0.025]]) g.poly(ring(...at(u, s), r, rnd, 0.008, 6)).fill(tones[1]).stroke({ width: 0.018, color: INK });
-  } else {
-    g.poly(arc(0, n - 1)).stroke({ width: OUT, color: INK, join: 'round' });
+    // Broken off: a jagged lip, and the piece that fell.
+    g.poly([...at(cu - hw, end - 0.02), ...at(cu - hw * 0.3, end + 0.03), ...at(cu + hw * 0.2, end - 0.01), ...at(cu + hw, end + 0.025), ...at(cu + hw, end - 0.05), ...at(cu - hw, end - 0.05)]).fill(tones[1]);
+    g.poly(ring(...at(cu + 0.24, end + 0.04), 0.04, rnd, 0.01, 6)).fill(tones[1]).stroke({ width: LINE, color: INK, join: 'round' });
   }
-  if (look === 1) {
-    for (let i = 0; i < n; i++) g.moveTo(...on((i / n) * Math.PI * 2, 0)).lineTo(...on((i / n) * Math.PI * 2, 1)).stroke({ width: 0.02, color: INK });
-  }
-  if (look === 0) {
-    for (const t of [0.8, 2.34, 3.93, 5.5]) g.circle(...on(t, 0.5), 0.02).fill(IRON[0]).stroke({ width: 0.018, color: INK });
-  }
-  // The bore: dark, the far side catching the light (the dark shifted toward the light).
-  g.poly(oval(...at(cu, cs), ix, iy, rot, 18)).fill(shade(tones[0], 0.72));
-  g.poly(oval(...at(cu, cs), ix, iy, rot, 18).map((c, i) => c + light[i % 2] * 0.024)).fill(0x0e0c0a);
-  g.poly(oval(...at(cu, cs), ix, iy, rot, 18)).stroke({ width: LINE, color: INK });
-  if (look === 1) {
-    for (const u of [-0.085, 0, 0.085]) g.moveTo(...at(cu + u, cs - iy * 0.95)).lineTo(...at(cu + u, cs + iy * 0.95)).stroke({ width: 0.024, color: IRON[0], cap: 'round' });
-  }
-  // The muck, out over the lip of the mouth and across the floor.
-  g.moveTo(...at(cu, cs + iy * 0.5)).quadraticCurveTo(...at(cu - drift * 0.6, 0.26), ...at(cu + drift, end)).stroke({ width: 0.024, color: FILTH, cap: 'round' });
+  g.poly(oval(mx, my, hw, 0.05, rot, 14)).fill(tones[look === 0 ? 2 : 1]).stroke({ width: LINE, color: INK });
+  g.poly(oval(mx, my, hw * 0.66, 0.032, rot, 12)).fill(0x0e0c0a);
+  // The muck, out over the lip and across the floor.
+  g.moveTo(...at(cu, end + 0.02)).quadraticCurveTo(...at(cu - drift * 0.5, end + 0.08), ...at(cu + drift, end + 0.14)).stroke({ width: 0.024, color: FILTH, cap: 'round' });
 }
 
 /** An old well: a ring of fitted stones round dark water with a glint, a rope down into it from a beam
@@ -476,7 +459,7 @@ export function stalagmite(g: Graphics, f: InteriorItem, light: Light, rnd: () =
 export function rockColumn(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const r = 0.44;
-  castShadow(g, patch(cx, cy, r, r, rnd, 0.1, 16), light, 1.1);
+  castShadow(g, patch(cx, cy, r, r, rnd, 0.1, 16), light, 0.34);
   const out = patch(cx, cy, r, r, rnd, 0.1, 20);
   g.poly(out).fill(CAVE_ROCK[0]).stroke({ width: OUT, color: INK, join: 'round' });
   g.poly(patch(cx + light[0] * 0.03, cy + light[1] * 0.03, r * 0.86, r * 0.86, rnd, 0.08, 20)).fill(CAVE_ROCK[1]);
@@ -608,7 +591,7 @@ export function fungus(g: Graphics, f: InteriorItem, light: Light, v: number, rn
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const { pt, right } = screenAxes(light);
   const rot = Math.atan2(right[1], right[0]);
-  const c = v % 2 ? [0x3a2f4c, 0x66507e, 0x8a789e, 0xc4bad0] : [0x24433e, 0x3f7a70, 0x68968c, 0xb4cdc4];
+  const c = v % 2 ? [0x3a3240, 0x625668, 0x847a88, 0xbab2b8] : [0x2a3e3a, 0x4a6a62, 0x6e8a82, 0xb0c0b8];
   // [right, up the screen, cap radius]: seen from about 60 degrees up, so the caps are fat ovals; back ones first.
   const caps: [number, number, number][] = [
     [-0.06, 0.12, 0.2],
@@ -643,10 +626,10 @@ export function fungus(g: Graphics, f: InteriorItem, light: Light, v: number, rn
  * showing under the edge on the shaded side. */
 export function giantMushrooms(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const caps = [
-    [0x4a2e42, 0x76566c, 0x9a7a90],
-    [0x5a3c24, 0x86613f, 0xa88360],
-    [0x34405a, 0x566488, 0x7e8aa8],
-    [0x4a2e42, 0x76566c, 0x9a7a90],
+    [0x4a3840, 0x725e66, 0x94808a],
+    [0x5a4030, 0x82654a, 0xa08466],
+    [0x3a4250, 0x5e6676, 0x828a98],
+    [0x4a3840, 0x725e66, 0x94808a],
   ][v % 4];
   const parts: [number, number, number][] = [
     [0.38, 0.58, 0.28],
@@ -669,7 +652,7 @@ export function giantMushrooms(g: Graphics, f: InteriorItem, light: Light, v: nu
     for (let k = 0; k < 4; k++) {
       const a = rnd() * Math.PI * 2;
       const d = r * 0.55 * Math.sqrt(rnd());
-      g.circle(x + Math.cos(a) * d, y + Math.sin(a) * d, r * (0.08 + 0.05 * rnd())).fill({ color: 0xf5ecd6, alpha: 0.85 });
+      g.circle(x + Math.cos(a) * d, y + Math.sin(a) * d, r * (0.08 + 0.05 * rnd())).fill({ color: 0xd2c6ae, alpha: 0.8 });
     }
   }
 }
@@ -806,7 +789,7 @@ export function caveMoss(g: Graphics, f: InteriorItem, light: Light, rnd: () => 
 export function cavePool(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
   const [rx, ry] = [f.w * 0.42, f.h * 0.4];
-  const deep = v % 2 ? [0x1e4a62, 0x2e6a86, 0x4a8eaa, 0x7ab8cc] : [0x1e3e6a, 0x2e5a8a, 0x4a7eaa, 0x7aaad0];
+  const deep = v % 2 ? [0x2a3a3a, 0x3e5654, 0x587270, 0x83968f] : [0x2c3640, 0x404e58, 0x5a6a72, 0x86928f];
   const [p3, p5, p2] = [rnd() * 6.3, rnd() * 6.3, rnd() * 6.3];
   const N = 44;
   const lobe = (k: number, j = 0, dx = 0, dy = 0): number[] => {
@@ -823,15 +806,15 @@ export function cavePool(g: Graphics, f: InteriorItem, light: Light, v: number, 
   g.poly(lobe(0.9, 0, -light[0] * 0.02, -light[1] * 0.02)).fill(deep[2]);
   g.poly(lobe(0.7, 0, -light[0] * 0.05, -light[1] * 0.05)).fill(deep[1]);
   g.poly(lobe(0.42, 0, -light[0] * 0.08, -light[1] * 0.08)).fill(deep[0]);
-  g.poly(lobe(0.97)).stroke({ width: 0.014, color: 0xd8f0f8, alpha: 0.7 });
+  g.poly(lobe(0.97)).stroke({ width: 0.014, color: 0xb8c8c8, alpha: 0.6 });
   for (const [x, y, k] of [
     [cx + rx * 0.25, cy + ry * 0.2, 1],
     [cx - rx * 0.3, cy - ry * 0.1, 0.6],
   ]) {
-    g.poly(oval(x, y, rx * 0.24 * k, ry * 0.07 * k, 0, 18)).stroke({ width: 0.014, color: 0xc8e4f0, alpha: 0.5 });
+    g.poly(oval(x, y, rx * 0.24 * k, ry * 0.07 * k, 0, 18)).stroke({ width: 0.014, color: 0xa8bcc0, alpha: 0.5 });
   }
   const la = Math.atan2(light[1], light[0]) + Math.PI / 2;
-  g.poly(oval(cx + light[0] * rx * 0.42, cy + light[1] * ry * 0.42, rx * 0.24, 0.02, la, 14)).fill({ color: 0xffffff, alpha: 0.6 });
+  g.poly(oval(cx + light[0] * rx * 0.42, cy + light[1] * ry * 0.42, rx * 0.24, 0.024, la, 14)).fill({ color: 0xc8d4d0, alpha: 0.55 });
 }
 
 /** A beast's nest: a broad mound of sticks laid round and round a hollow, longer ones straying past its edge, so
@@ -978,11 +961,11 @@ export function iceSheet(g: Graphics, f: InteriorItem, light: Light, rnd: () => 
   }
 }
 
-const OBSIDIAN = [0x121018, 0x2a2634, 0x4a4560, 0x8a84a8];
+const OBSIDIAN = [0x18161c, 0x2c2a32, 0x5a5664, 0x8a84a8];
 const BASALT = [0x1c1a1c, 0x2e2b2e, 0x46424a, 0x66606a];
 
-/** One flat glassy chip lying on the floor round (x, y) along `a`: a sharp irregular blade split by a ridge, its
- * half toward the light catching a pale sheen, curved ripples (glass breaks in shells), a bright cutting edge. */
+/** One angular shard of dark glass lying on the floor round (x, y) along `a`: a sharp irregular blade split by
+ * a ridge into facets, the one turned to the light a flat matte grey-violet, the rest near black. */
 function glassChip(g: Graphics, x: number, y: number, a: number, len: number, w: number, light: Light, rnd: () => number) {
   const [c, s] = [Math.cos(a), Math.sin(a)];
   const p = (u: number, k: number): [number, number] => [x + c * u - s * k, y + s * u + c * k];
@@ -993,39 +976,31 @@ function glassChip(g: Graphics, x: number, y: number, a: number, len: number, w:
   const R = p(len * (0.15 + 0.2 * rnd()), -w * (0.7 + 0.3 * rnd()));
   const M = p(-len * 0.1, (rnd() - 0.5) * w * 0.3);
   const lit = -s * light[0] + c * light[1] > 0;
-  const sd = lit ? -1 : 1;
-  castShadow(g, [...T, ...L, ...Bl, ...Br, ...R], light, 0.06);
+  castShadow(g, [...T, ...L, ...Bl, ...Br, ...R], light, 0.04);
   g.poly([...T, ...L, ...Bl, ...M]).fill(lit ? OBSIDIAN[2] : OBSIDIAN[0]);
   g.poly([...T, ...M, ...Br, ...R]).fill(lit ? OBSIDIAN[0] : OBSIDIAN[2]);
   g.poly([...M, ...Bl, ...Br]).fill(OBSIDIAN[1]);
-  // Shell ripples on the dark half, the ridge, the outline.
-  for (const k of [0.35, 0.6]) {
-    g.moveTo(...p(len * k, sd * w * 0.15)).quadraticCurveTo(...p(len * (k - 0.05), sd * w * 0.55), ...p(len * (k - 0.25), sd * w * 0.65));
-  }
-  g.stroke({ width: 0.016, color: OBSIDIAN[2], alpha: 0.8 });
-  g.moveTo(...T).lineTo(...M).lineTo(...Bl).moveTo(...M).lineTo(...Br).stroke({ width: 0.016, color: INK, alpha: 0.7 });
-  g.poly([...T, ...L, ...Bl, ...Br, ...R]).stroke({ width: OUT, color: INK, join: 'miter' });
-  g.moveTo(...(lit ? L : R)).lineTo(...T).stroke({ width: 0.014, color: OBSIDIAN[3], cap: 'round' });
-  g.moveTo(...p(len * 0.3, -sd * w * 0.3)).lineTo(...p(len * 0.7, -sd * w * 0.12)).stroke({ width: 0.014, color: 0xffffff, alpha: 0.8, cap: 'round' });
+  g.moveTo(...T).lineTo(...M).lineTo(...Bl).moveTo(...M).lineTo(...Br).stroke({ width: 0.016, color: INK, alpha: 0.8 });
+  g.poly([...T, ...L, ...Bl, ...Br, ...R]).stroke({ width: len > 0.25 ? OUT : LINE, color: INK, join: 'miter' });
 }
 
-/** Obsidian shards: a scatter of broken black volcanic glass, a few big blades and small chips, glossy and sharp. */
+/** Obsidian shards: a few big angular blades of black volcanic glass and a couple of chips, sharp and matte. */
 export function obsidianShards(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const ph = rnd() * Math.PI * 2;
-  for (let i = 0, n = 4 + Math.floor(rnd() * 8); i < n; i++) {
+  for (let i = 0, n = 2 + Math.floor(rnd() * 3); i < n; i++) {
     const a = rnd() * Math.PI * 2;
-    const d = 0.15 + 0.3 * rnd();
-    glassChip(g, cx + Math.cos(a) * d, cy + Math.sin(a) * d, rnd() * Math.PI * 2, 0.04 + 0.04 * rnd(), 0.025 + 0.01 * rnd(), light, rnd);
+    const d = 0.2 + 0.22 * rnd();
+    glassChip(g, cx + Math.cos(a) * d, cy + Math.sin(a) * d, rnd() * Math.PI * 2, 0.07 + 0.04 * rnd(), 0.045 + 0.015 * rnd(), light, rnd);
   }
-  // Two to five big blades at random places and angles, sizes drawn fresh each time.
-  const nb = 2 + Math.floor(rnd() * 4);
+  // Two to four big blades at random places and angles, sizes drawn fresh each time.
+  const nb = 2 + Math.floor(rnd() * 3);
   const big: [number, number, number, number, number][] = [];
   for (let i = 0; i < nb; i++) {
     const a = rnd() * Math.PI * 2;
-    const d = 0.28 * Math.sqrt(rnd());
-    const len = (0.3 - i * 0.04) * (0.6 + 0.6 * rnd());
-    big.push([Math.cos(a) * d, Math.sin(a) * d, ph + i * (1.2 + rnd() * 1.4), len, len * (0.32 + 0.12 * rnd())]);
+    const d = 0.26 * Math.sqrt(rnd());
+    const len = (0.32 - i * 0.04) * (0.7 + 0.5 * rnd());
+    big.push([Math.cos(a) * d, Math.sin(a) * d, ph + i * (1.2 + rnd() * 1.4), len, len * (0.38 + 0.12 * rnd())]);
   }
   for (const [dx, dy, a, len, w] of big) glassChip(g, cx + dx, cy + dy, a, len, w, light, rnd);
 }
@@ -1162,74 +1137,61 @@ export function sulfurCrust(g: Graphics, f: InteriorItem, light: Light, rnd: () 
   }
 }
 
-/** Scorched remains: someone burnt where they fell — a black soot burst on the floor round the body, grey ash
- * over it, charred bones (a blackened skull, ribs, long bones), a few embers still glowing. */
+/** Scorched remains: where someone burnt — an irregular soot patch on the floor, darkest in the middle and fading
+ * out, grey ash in a few drifts, a few char marks (blackened bones and splinters, toned, never inked) and two dim
+ * embers. No outline: it is a stain on the floor. */
 export function scorchedRemains(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
   const long = f.h >= f.w;
-  // A body about 5.5 ft long (a square is 5 ft): B scales the positions along it.
   const B = 1.4;
-  // Along the body (head end first) and across it.
   const p = (u: number, k: number): [number, number] => (long ? [cx + k, cy + u] : [cx + u, cy + k]);
-  const burst: number[] = [];
-  const n = 28;
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const spike = i % 2 ? 0.75 + 0.2 * rnd() : 1 + 0.3 * rnd();
-    burst.push(...p(Math.sin(a) * B * 0.5 * spike, Math.cos(a) * 0.4 * spike));
-  }
-  g.poly(burst).fill({ color: 0x0e0a08, alpha: 0.5 });
-  g.poly(patch(cx, cy, long ? 0.3 : B * 0.44, long ? B * 0.44 : 0.3, rnd, 0.18, 22)).fill({ color: 0x0e0a08, alpha: 0.75 });
-  // Grey ash in drifts over it.
-  for (let i = 0; i < 6; i++) {
-    const [x, y] = p((rnd() - 0.5) * B * 0.6, (rnd() - 0.5) * 0.4);
-    g.poly(patch(x, y, 0.07 + 0.05 * rnd(), 0.05 + 0.04 * rnd(), rnd, 0.3, 10)).fill({ color: 0x8a8480, alpha: 0.55 });
-  }
-  const bone = 0x6a5e50;
-  const ash = 0xd0c8b8;
-  const limb = (a: [number, number], b: [number, number], w: number) => {
-    g.moveTo(...a).lineTo(...b).stroke({ width: w, color: INK, cap: 'round' });
-    g.moveTo(...a).lineTo(...b).stroke({ width: w - 0.025, color: bone, cap: 'round' });
-    g.circle(...a, w * 0.75).fill(bone).stroke({ width: 0.018, color: INK });
-    g.circle(...b, w * 0.75).fill(bone).stroke({ width: 0.018, color: INK });
-    g.moveTo(...a).lineTo(...b).stroke({ width: 0.014, color: ash, alpha: 0.7, cap: 'round' });
-  };
-  limb(p(B * 0.12, 0.06), p(B * 0.36, 0.1), 0.045);
-  limb(p(B * 0.1, -0.08), p(B * 0.32, -0.14), 0.042);
-  limb(p(-B * 0.18, 0.2), p(-B * 0.02, 0.24), 0.035);
-  // Ribs: curved bars either side of a spine.
-  g.moveTo(...p(-B * 0.24, 0)).lineTo(...p(B * 0.06, 0)).stroke({ width: 0.04, color: INK, cap: 'round' });
-  g.moveTo(...p(-B * 0.24, 0)).lineTo(...p(B * 0.06, 0)).stroke({ width: 0.02, color: bone, cap: 'round' });
-  for (let i = 0; i < 4; i++) {
-    const u = -B * 0.2 + i * B * 0.055;
-    for (const sd of [-1, 1]) {
-      for (const [w, c] of [
-        [0.032, INK],
-        [0.015, bone],
-      ]) {
-        g.moveTo(...p(u, sd * 0.02)).quadraticCurveTo(...p(u - 0.02, sd * 0.14), ...p(u + 0.03, sd * 0.17));
-        g.stroke({ width: w, color: c, cap: 'round' });
-      }
+  void light;
+  // The soot: three lopsided lobed layers, fainter outward.
+  const ph = [rnd() * 6.3, rnd() * 6.3];
+  const soot = (k: number) => {
+    const pts: number[] = [];
+    for (let i = 0; i < 26; i++) {
+      const a = (i / 26) * Math.PI * 2;
+      const r = k * (1 + 0.16 * Math.sin(2 * a + ph[0]) + 0.1 * Math.sin(3 * a + ph[1]) + (rnd() - 0.5) * 0.12);
+      pts.push(...p(Math.sin(a) * B * 0.46 * r, Math.cos(a) * 0.4 * r));
     }
+    return pts;
+  };
+  g.poly(soot(1.15)).fill({ color: 0x1a1210, alpha: 0.28 });
+  g.poly(soot(0.92)).fill({ color: 0x1a1210, alpha: 0.4 });
+  g.poly(soot(0.6)).fill({ color: 0x120c0a, alpha: 0.6 });
+  // Ash in a few soft drifts.
+  for (let i = 0; i < 3; i++) {
+    const [x, y] = p((rnd() - 0.5) * B * 0.5, (rnd() - 0.5) * 0.3);
+    g.poly(patch(x, y, 0.1 + 0.05 * rnd(), 0.06 + 0.03 * rnd(), rnd, 0.3, 10)).fill({ color: 0x7a7470, alpha: 0.5 });
   }
-  // The skull at the head end: blackened, ash-grey on top, dark sockets.
-  const [hx, hy] = p(-B * 0.36, 0.02);
-  g.poly(oval(hx, hy, 0.085, 0.095, 0, 16)).fill(bone).stroke({ width: LINE, color: INK, join: 'round' });
-  g.poly(oval(hx + light[0] * 0.025, hy + light[1] * 0.025, 0.05, 0.05, 0, 12)).fill({ color: ash, alpha: 0.8 });
-  g.circle(...p(-B * 0.36 + 0.025, -0.025), 0.022).fill(0x080604);
-  g.circle(...p(-B * 0.36 + 0.025, 0.055), 0.022).fill(0x080604);
-  g.circle(...p(-B * 0.36 + 0.06, 0.015), 0.01).fill(0x080604);
-  // Embers.
-  for (let i = 0; i < 7; i++) {
-    const [x, y] = p((rnd() - 0.5) * B * 0.7, (rnd() - 0.5) * 0.5);
-    g.circle(x, y, 0.03).fill({ color: 0xf08030, alpha: 0.25 });
-    g.circle(x, y, 0.012 + 0.008 * rnd()).fill(i % 2 ? 0xf8a040 : 0xe05818);
+  // Char marks: a few blackened bones and splinters, flat dark strokes with a lit ash-grey streak.
+  for (const [u0, k0, u1, k1, w] of [
+    [-0.34, -0.04, -0.06, 0.02, 0.05],
+    [0.04, 0.1, 0.32, 0.16, 0.045],
+    [0.1, -0.14, 0.28, -0.2, 0.04],
+    [-0.2, 0.2, -0.04, 0.26, 0.035],
+  ]) {
+    const [a, b] = [p(u0 * B, k0), p(u1 * B, k1)];
+    g.moveTo(...a).lineTo(...b).stroke({ width: w, color: 0x2a2220, cap: 'round' });
+    g.moveTo(...a).lineTo(...b).stroke({ width: 0.014, color: 0x6a625a, cap: 'round' });
+  }
+  g.poly(oval(...p(-B * 0.36, 0.02), 0.08, 0.09, 0, 12)).fill(0x2a2220);
+  g.poly(oval(...p(-B * 0.37, 0), 0.045, 0.05, 0, 10)).fill(0x5a524a);
+  // Two dim embers.
+  for (const [u, k] of [
+    [0.12, -0.04],
+    [-0.1, 0.14],
+  ]) {
+    const [x, y] = p(u * B, k);
+    g.circle(x, y, 0.035).fill({ color: 0xc86028, alpha: 0.25 });
+    g.circle(x, y, 0.016).fill(0xd8702a);
   }
 }
 
 /** Cooled glassy pool: a flat sheet of black volcanic glass where lava spread and set, lobed like a spill: a
  * lumpy basalt rim merging into the floor, ropy folds frozen near its edge, angular cracks (one still faintly
- * red), crisp mirror glints, obsidian chips at the rim. */
+ * red), one muted sheen, obsidian chips at the rim. */
 export function glassPool(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
   const [rx, ry] = [f.w * 0.42, f.h * 0.4];
@@ -1288,20 +1250,14 @@ export function glassPool(g: Graphics, f: InteriorItem, light: Light, rnd: () =>
     };
     if (c === 0) {
       line();
-      g.stroke({ width: 0.05, color: 0xa02a10, alpha: 0.35, cap: 'round', join: 'miter' });
-      line();
-      g.stroke({ width: 0.022, color: 0xc03a14, alpha: 0.7, cap: 'round', join: 'miter' });
+      g.stroke({ width: 0.024, color: 0x8a3418, alpha: 0.6, cap: 'round', join: 'miter' });
     }
     line();
     g.stroke({ width: 0.014, color: c === 0 ? 0x3a0a04 : OBSIDIAN[3], alpha: c === 0 ? 1 : 0.55, cap: 'round', join: 'miter' });
   }
-  // Mirror glints: two crisp streaks toward the light and a star.
+  // One flat sheen toward the light, muted: glass, not a mirror.
   const la = Math.atan2(light[1], light[0]) + Math.PI / 2;
-  g.poly(oval(cx + light[0] * rx * 0.42, cy + light[1] * ry * 0.42, rx * 0.26, 0.022, la, 14)).fill({ color: 0xffffff, alpha: 0.85 });
-  g.poly(oval(cx + light[0] * rx * 0.3 + Math.cos(la) * 0.12, cy + light[1] * ry * 0.3 + Math.sin(la) * 0.12, rx * 0.12, 0.014, la, 10)).fill({ color: 0xffffff, alpha: 0.7 });
-  const [sx, sy] = [cx - light[0] * rx * 0.35 + Math.cos(la) * 0.1, cy - light[1] * ry * 0.35 + Math.sin(la) * 0.1];
-  g.poly([sx, sy - 0.05, sx + 0.012, sy, sx, sy + 0.05, sx - 0.012, sy]).fill({ color: 0xffffff, alpha: 0.8 });
-  g.poly([sx - 0.05, sy, sx, sy - 0.012, sx + 0.05, sy, sx, sy + 0.012]).fill({ color: 0xffffff, alpha: 0.8 });
+  g.poly(oval(cx + light[0] * rx * 0.42, cy + light[1] * ry * 0.42, rx * 0.26, 0.03, la, 14)).fill({ color: 0x7a7488, alpha: 0.7 });
   // Lumps on the rim, obsidian chips by it.
   for (let i = 0; i < 7; i++) {
     const a = ((i + rnd() * 0.7) / 7) * Math.PI * 2;

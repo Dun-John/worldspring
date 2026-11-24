@@ -196,8 +196,8 @@ export function openCoffin(g: Graphics, f: InteriorItem, light: Light, rnd: () =
   g.poly(outer).fill(WOOD[0]).stroke({ width: OUT, color: INK, join: 'round' });
   g.poly(shape(0.86)).fill(WOOD[1]);
   g.poly(shape(0.72)).fill(0x1e1712).stroke({ width: 0.018, color: INK });
-  g.poly(shape(0.62)).fill(0x5a2a24);
-  g.poly(shape(0.62).map((q, i) => q + (i % 2 ? light[1] : light[0]) * 0.02)).fill(0x7a3a30);
+  g.poly(shape(0.62)).fill(0x4e342e);
+  g.poly(shape(0.62).map((q, i) => q + (i % 2 ? light[1] : light[0]) * 0.02)).fill(0x664840);
   // Bones in it.
   const [ux, uy] = at(0, 0);
   const [vx, vy] = at(1, 0);
@@ -423,11 +423,11 @@ export function burialUrn(g: Graphics, f: InteriorItem, light: Light, v: number,
  * candle stubs beside it, petals strewn round, a wisp of incense. */
 export function offeringBowl(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const petal = [0xc84a4a, 0xe8c040, 0xe8e0f0, 0xc84a4a][v % 4];
-  for (let i = 0; i < 10; i++) {
+  const petal = [0xa85a4a, 0xc0a050, 0xd0c8c4, 0xa85a4a][v % 4];
+  for (let i = 0; i < 5; i++) {
     const a = rnd() * Math.PI * 2;
     const d = 0.3 + 0.12 * rnd();
-    g.poly(oval(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.022, 0.012, rnd() * Math.PI, 8)).fill(petal).stroke({ width: 0.018, color: INK, alpha: 0.6 });
+    g.poly(oval(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.045, 0.026, rnd() * Math.PI, 8)).fill(petal).stroke({ width: 0.018, color: INK, alpha: 0.6 });
   }
   const r = 0.26;
   castShadow(g, ring(cx, cy, r, rnd, 0.004, 20), light, 0.12);
@@ -435,19 +435,23 @@ export function offeringBowl(g: Graphics, f: InteriorItem, light: Light, v: numb
   g.circle(cx + light[0] * 0.015, cy + light[1] * 0.015, r * 0.92).fill(BRONZE[1]);
   g.circle(cx - light[0] * 0.02, cy - light[1] * 0.02, r * 0.76).fill(BRONZE[0]).stroke({ width: 0.018, color: INK });
   // Offerings.
-  for (let i = 0; i < 7; i++) {
-    const [x, y] = [cx + (rnd() - 0.5) * 0.24, cy + (rnd() - 0.5) * 0.24];
-    g.circle(x, y, 0.035).fill(GILT[1]).stroke({ width: 0.014, color: GILT[0] });
-    g.circle(x + light[0] * 0.01, y + light[1] * 0.01, 0.015).fill(GILT[2]);
+  for (const [dx, dy] of [
+    [-0.1, -0.06],
+    [-0.04, 0.1],
+    [0.1, 0.07],
+  ]) {
+    const [x, y] = [cx + dx + (rnd() - 0.5) * 0.03, cy + dy + (rnd() - 0.5) * 0.03];
+    g.circle(x, y, 0.055).fill(GILT[0]).stroke({ width: 0.016, color: INK });
+    g.circle(x + light[0] * 0.01, y + light[1] * 0.01, 0.042).fill(GILT[1]);
   }
   const [fx, fy] = [cx + 0.06, cy - 0.05];
-  g.circle(fx, fy, 0.07).fill(0x9a2a2a).stroke({ width: 0.018, color: INK });
-  g.circle(fx + light[0] * 0.025, fy + light[1] * 0.025, 0.025).fill(0xe87a6a);
+  g.circle(fx, fy, 0.07).fill(0x7e3a30).stroke({ width: 0.018, color: INK });
+  g.circle(fx + light[0] * 0.02, fy + light[1] * 0.02, 0.035).fill(0x9a5244);
   g.moveTo(fx, fy).lineTo(fx + 0.02, fy - 0.03).stroke({ width: 0.014, color: 0x3a5a22 });
-  for (let i = 0; i < 4; i++) g.poly(oval(cx - 0.08 + i * 0.03, cy + 0.08 - i * 0.02, 0.025, 0.014, i, 8)).fill(petal).stroke({ width: 0.018, color: INK, alpha: 0.6 });
+  for (let i = 0; i < 2; i++) g.poly(oval(cx - 0.08 + i * 0.06, cy + 0.08 - i * 0.04, 0.045, 0.026, i, 8)).fill(petal).stroke({ width: 0.018, color: INK, alpha: 0.6 });
   for (const k of [-1, 1]) candle(g, cx + k * 0.36, cy + k * 0.12);
   // Incense: a thin curling wisp.
-  g.moveTo(cx - 0.1, cy - 0.05).bezierCurveTo(cx - 0.2, cy - 0.15, cx - 0.02, cy - 0.22, cx - 0.12, cy - 0.34).stroke({ width: 0.018, color: 0xe8e8ec, alpha: 0.5, cap: 'round' });
+  g.moveTo(cx - 0.1, cy - 0.05).bezierCurveTo(cx - 0.2, cy - 0.15, cx - 0.02, cy - 0.22, cx - 0.12, cy - 0.34).stroke({ width: 0.022, color: 0xc8c0b4, alpha: 0.4, cap: 'round' });
 }
 
 export const BURLAP = [0x7a6440, 0xa88c5c, 0xc8ac78];
@@ -523,54 +527,37 @@ export function rubbleHeap(g: Graphics, f: InteriorItem, light: Light, rnd: () =
   for (const [x, y, s] of chunks) rock(g, x, y, s, DARK, light, rnd, s > 0.1 ? 5 : 4 + Math.floor(rnd() * 2));
 }
 
-/** Flotsam heap: what the water left — two broken planks, a split barrel hoop, a sodden rag, a bottle, sticks — in
- * a slick of greenish mud. */
+/** Debris: what fell or washed in — one broken beam lying across, a jagged split end, and a few distinct broken
+ * stones of mixed sizes (one big) round it, on a faint damp stain. Few, big pieces: never a speckle. */
 export function flotsamHeap(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  g.poly(patch(cx, cy, 0.42, 0.38, rnd, 0.2, 18)).fill({ color: 0x3a3e24, alpha: 0.45 });
-  for (let i = 0; i < 6; i++) {
-    const a = rnd() * Math.PI;
-    const [x, y] = [cx + (rnd() - 0.5) * 0.6, cy + (rnd() - 0.5) * 0.6];
-    const l = 0.1 + 0.1 * rnd();
-    for (const [w, c] of [
-      [0.04, INK],
-      [0.022, 0x5a4428],
-    ] as const) {
-      g.moveTo(x - Math.cos(a) * l, y - Math.sin(a) * l).lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l).stroke({ width: w, color: c, cap: 'round' });
-    }
+  g.poly(patch(cx, cy, 0.42, 0.36, rnd, 0.2, 18)).fill({ color: 0x2e2a22, alpha: 0.25 });
+  const DEBRIS = [0x5c5850, 0x7c776c, 0x96917f, 0xb0aa98];
+  // The beam: a squared timber, broken off in a jagged end, its lit side, an iron spike in it.
+  const a = rnd() * Math.PI;
+  const [c, sn] = [Math.cos(a), Math.sin(a)];
+  const P = (u: number, k: number): [number, number] => [cx + c * u - sn * k, cy + sn * u + c * k];
+  const [l, w] = [0.4, 0.075];
+  const beam = [...P(-l, -w), ...P(l * 0.62, -w), ...P(l * 0.8, -w * 0.3), ...P(l, -w * 0.05), ...P(l * 0.78, w * 0.35), ...P(l * 0.9, w), ...P(-l, w)];
+  castShadow(g, beam, light, 0.06);
+  g.poly(beam).fill(0x5e4630).stroke({ width: OUT, color: INK, join: 'miter' });
+  const ls = -sn * light[0] + c * light[1] > 0 ? 1 : -1;
+  g.poly([...P(-l + 0.03, ls * w * 0.85), ...P(l * 0.55, ls * w * 0.85), ...P(l * 0.55, ls * w * 0.1), ...P(-l + 0.03, ls * w * 0.1)]).fill(0x86684a);
+  g.moveTo(...P(-l * 0.85, -ls * w * 0.4)).lineTo(...P(l * 0.5, -ls * w * 0.45)).stroke({ width: 0.016, color: 0x3e2e20 });
+  g.circle(...P(-l * 0.7, 0), 0.022).fill(IRON[0]).stroke({ width: 0.016, color: INK });
+  // Broken stones round it: one big, two middling, two chips, kept off the beam.
+  const spots: [number, number, number][] = [
+    [0.22, 0.24, 0.15],
+    [-0.26, 0.2, 0.1],
+    [0.18, -0.26, 0.085],
+    [-0.3, -0.18, 0.05],
+    [0.36, 0.0, 0.045],
+  ];
+  for (const [k, u, r] of spots) {
+    const [x, y] = P(u + (rnd() - 0.5) * 0.04, k + (rnd() - 0.5) * 0.04);
+    castShadow(g, ring(x, y, r * 0.9, rnd, 0, 8), light, r * 0.5);
+    rock(g, x, y, r, DEBRIS, light, rnd, r > 0.08 ? 7 : 5);
   }
-  // A rag.
-  const rag = patch(cx - 0.2, cy + 0.18, 0.13, 0.09, rnd, 0.35, 10);
-  g.poly(rag).fill(0x7a6e5a).stroke({ width: 0.018, color: INK, join: 'round' });
-  g.moveTo(cx - 0.28, cy + 0.16).lineTo(cx - 0.12, cy + 0.22).stroke({ width: 0.014, color: 0x5a5040 });
-  // Broken planks, a jagged end each.
-  const plank = (x: number, y: number, a: number, l: number, w: number) => {
-    const [c, s] = [Math.cos(a), Math.sin(a)];
-    const P = (u: number, k: number): [number, number] => [x + c * u - s * k, y + s * u + c * k];
-    const pts = [...P(-l, -w), ...P(l * 0.7, -w), ...P(l * 0.85, -w * 0.4), ...P(l, -w * 0.1), ...P(l * 0.8, w * 0.3), ...P(l * 0.92, w), ...P(-l, w)];
-    castShadow(g, pts, light, 0.05);
-    g.poly(pts).fill(0x7a5a3c).stroke({ width: 0.02, color: INK, join: 'miter' });
-    g.poly([...P(-l + 0.02, -w + 0.02), ...P(l * 0.6, -w + 0.02), ...P(l * 0.6, -w * 0.1), ...P(-l + 0.02, -w * 0.1)]).fill(0x8e6c48);
-    g.moveTo(...P(-l * 0.9, w * 0.3)).lineTo(...P(l * 0.6, w * 0.35)).stroke({ width: 0.014, color: 0x4a3828 });
-    for (const k of [-0.5, 0.5]) g.circle(...P(-l * 0.8, w * k), 0.014).fill(IRON[0]);
-  };
-  plank(cx - 0.04, cy - 0.06, rnd() * Math.PI, 0.3, 0.06);
-  plank(cx + 0.08, cy + 0.1, rnd() * Math.PI, 0.24, 0.055);
-  // A split hoop.
-  const [ox, oy] = [cx + 0.22, cy - 0.22];
-  g.moveTo(ox + 0.13, oy).arc(ox, oy, 0.13, 0, Math.PI * 1.5).stroke({ width: 0.04, color: INK });
-  g.moveTo(ox + 0.13, oy).arc(ox, oy, 0.13, 0, Math.PI * 1.5).stroke({ width: 0.022, color: IRON[1] });
-  // A bottle.
-  const ba = rnd() * Math.PI * 2;
-  const [bx, by] = [cx - 0.24, cy - 0.22];
-  g.poly(oval(bx, by, 0.09, 0.045, ba, 12)).fill(0x3a6a4a).stroke({ width: 0.018, color: INK });
-  for (const [w, c] of [
-    [0.045, INK],
-    [0.028, 0x3a6a4a],
-  ] as const) {
-    g.moveTo(bx + Math.cos(ba) * 0.08, by + Math.sin(ba) * 0.08).lineTo(bx + Math.cos(ba) * 0.15, by + Math.sin(ba) * 0.15).stroke({ width: w, color: c, cap: 'round' });
-  }
-  g.poly(oval(bx - Math.cos(ba) * 0.02 + light[0] * 0.015, by - Math.sin(ba) * 0.02 + light[1] * 0.015, 0.04, 0.012, ba, 8)).fill({ color: 0xffffff, alpha: 0.6 });
 }
 
 /** Timber prop: a mine set seen from above — two squared posts, their ends showing either side of the rough-hewn

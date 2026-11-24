@@ -23,6 +23,14 @@ export function shade(color: number, f: number): number {
   return (ch(16) << 16) | (ch(8) << 8) | ch(0);
 }
 
+/** `color` a step less saturated: pulled `k` of the way toward a warm grey of its own lightness. */
+export function mute(color: number, k = 0.3): number {
+  const [r, g, b] = [(color >> 16) & 255, (color >> 8) & 255, color & 255];
+  const l = 0.3 * r + 0.59 * g + 0.11 * b;
+  const ch = (c: number, w: number) => Math.round(c + (l * w - c) * k);
+  return (ch(r, 1.04) << 16) | (ch(g, 1) << 8) | ch(b, 0.92);
+}
+
 /** An item laid out along its long side: `at(u, s)` is the grid point `u` squares along it and `s`
  * across, so one drawing serves both orientations. With `back` (the side against a wall, a unit step),
  * the item runs along that wall and `s` 0 is at the wall. */

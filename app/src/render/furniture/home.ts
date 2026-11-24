@@ -1,6 +1,6 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { BOOKS, BRASS, DARK_WOOD, DYES, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, patch, planks, quad, ring, shade } from './common';
+import { BOOKS, BRASS, DARK_WOOD, DYES, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, mute, oval, patch, planks, quad, ring, shade } from './common';
 
 /** A camp cot: canvas stretched between two side poles that run past it at both ends, crossed legs
  * showing beyond the canvas at each end, a blanket thrown over the foot. */
@@ -299,25 +299,64 @@ export function hearth(g: Graphics, f: InteriorItem, rnd: () => number, back: [n
 export function oven(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { len, rect, at } = frame(f, back);
   const [lx, ly] = light;
-  const [cx, cy] = at(len / 2, 0.48);
-  const r = Math.min(len / 2 - 0.1, 0.42);
-  // The dome: rings of brick, darker away from the light.
-  g.poly(ring(cx, cy, r, rnd, 0.02, 24)).fill(BRICK[0]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly(ring(cx + lx * r * 0.08, cy + ly * r * 0.08, r * 0.86, rnd, 0.015, 24)).fill(BRICK[1]);
-  for (const k of [0.62, 0.34]) g.poly(ring(cx + lx * r * 0.1, cy + ly * r * 0.1, r * k, rnd, 0.01, 20)).stroke({ width: LINE, color: BRICK[0], alpha: 0.8 });
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2 + rnd() * 0.2;
-    g.moveTo(cx + Math.cos(a) * r * 0.62, cy + Math.sin(a) * r * 0.62).lineTo(cx + Math.cos(a) * r * 0.86, cy + Math.sin(a) * r * 0.86);
+  const r = Math.min(len / 2 - 0.1, 0.4);
+  const [cx, cy] = at(len / 2, 0.08 + r);
+  // A flat hearth lip of stone slabs in front, toward the room.
+  const lip = quad(rect(len / 2 - r * 1.1, 0.08 + r * 1.7, len / 2 + r * 1.1, 0.97), rnd, 0.01);
+  g.poly(lip).fill(STONE[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.moveTo(...at(len / 2 - r * 0.7, 0.08 + r * 2.05)).lineTo(...at(len / 2 - r * 0.72, 0.96)).stroke({ width: 0.016, color: STONE[0] });
+  // The dome: one smooth clay mound in three flat tones, lit from the light, its short shadow.
+  const dome = ring(cx, cy, r, rnd, 0.025, 26);
+  castShadow(g, dome, light, 0.14);
+  g.poly(dome).fill(BRICK[0]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(ring(cx + lx * r * 0.12, cy + ly * r * 0.12, r * 0.8, rnd, 0.02, 22)).fill(BRICK[1]);
+  g.poly(ring(cx + lx * r * 0.34, cy + ly * r * 0.34, r * 0.32, rnd, 0.02, 14)).fill(BRICK[2]);
+  // A few bricks showing through the clay, laid round the dome.
+  for (const [a, d] of [
+    [-2.4, 0.72],
+    [-1.2, 0.8],
+    [0.1, 0.74],
+    [2.6, 0.78],
+    [-0.4, 0.42],
+  ]) {
+    const [bx, by] = [cx + Math.cos(a) * r * d, cy + Math.sin(a) * r * d];
+    g.poly(oval(bx, by, r * 0.16, r * 0.09, a + Math.PI / 2, 8)).fill(shade(BRICK[1], 1.08)).stroke({ width: 0.016, color: BRICK[0] });
   }
-  g.stroke({ width: 0.015, color: BRICK[0], alpha: 0.8 });
-  g.poly(ring(cx + lx * r * 0.2, cy + ly * r * 0.2, r * 0.22, rnd, 0.01, 12)).fill({ color: BRICK[2], alpha: 0.6 });
-  // The mouth and its sill, toward the room.
-  const mouth = rect(len / 2 - 0.16, 0.8, len / 2 + 0.16, 0.92);
-  g.poly(quad(rect(len / 2 - 0.26, 0.84, len / 2 + 0.26, 0.98), rnd, 0.008)).fill(STONE[1]).stroke({ width: LINE, color: INK });
-  g.poly(quad(mouth, rnd, 0.006)).fill(0x1a1008).stroke({ width: LINE, color: INK });
-  const [mx, my] = at(len / 2, 0.86);
-  g.circle(mx, my, 0.1).fill({ color: 0xf59e0b, alpha: 0.25 });
-  for (let i = 0; i < 5; i++) g.circle(mx + (rnd() - 0.5) * 0.2, my + (rnd() - 0.5) * 0.06, 0.018).fill(rnd() < 0.5 ? 0xf97316 : 0xffc23a);
+  // The mouth seen from above: a dark notch cut into the dome's rim on the room side, a brick rim round it, the
+  // hearth lip in front of it, embers deep inside.
+  const [mu, ms, mw] = [len / 2, 0.08 + r * 2, r * 0.46];
+  const notch = (w: number, d: number, k = 10) => {
+    const pts: number[] = [];
+    for (let i = 0; i <= k; i++) {
+      const t = (i / k) * Math.PI;
+      pts.push(...at(mu + Math.cos(t) * w, ms + 0.02 - Math.sin(t) * d));
+    }
+    return pts;
+  };
+  g.poly(notch(mw + 0.05, r * 0.38 + 0.05)).fill(BRICK[2]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(notch(mw, r * 0.38)).fill(0x1a1008).stroke({ width: LINE, color: INK, join: 'round' });
+  const [ex, ey] = at(mu, ms - r * 0.16);
+  g.poly(oval(ex, ey, mw * 0.55, r * 0.09, 0, 10)).fill({ color: 0xc2501a, alpha: 0.8 });
+  g.circle(ex, ey, 0.022).fill(0xe8902a);
+  // One oven in two has its peel or the morning's loaves on the lip.
+  if (rnd() < 0.5) {
+    for (const [du, ds] of [
+      [-r * 0.92, 0.9],
+      [r * 0.95, 0.88],
+    ]) {
+      const [px, py] = at(mu + du, ds);
+      g.poly(oval(px, py, 0.075, 0.055, rnd() * 0.6, 12)).fill(0xa8703a).stroke({ width: LINE, color: INK });
+      g.poly(oval(px + lx * 0.015, py + ly * 0.015, 0.05, 0.035, 0, 10)).fill(0xc89458);
+      g.moveTo(px - 0.03, py + 0.01).lineTo(px + 0.03, py - 0.01).stroke({ width: 0.014, color: 0x6a4020 });
+    }
+  } else {
+    const [a, b] = [at(mu - r * 1.0, 0.9), at(mu + r * 0.3, 0.9)];
+    g.moveTo(...a).lineTo(...b).stroke({ width: 0.05, color: INK, cap: 'round' });
+    g.moveTo(...a).lineTo(...b).stroke({ width: 0.026, color: WOOD[2], cap: 'round' });
+    const [px, py] = at(mu + r * 0.45, 0.9);
+    g.poly(oval(px, py, 0.1, 0.065, Math.atan2(b[1] - a[1], b[0] - a[0]), 12)).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.poly(oval(px + lx * 0.015, py + ly * 0.015, 0.06, 0.035, Math.atan2(b[1] - a[1], b[0] - a[0]), 10)).fill(WOOD[2]);
+  }
 }
 
 /** Smith's forge against a wall: a block of grey brick (the chimney breast) with a half-round stone
@@ -354,13 +393,13 @@ export function forge(g: Graphics, f: InteriorItem, light: Light, rnd: () => num
   g.stroke({ width: LINE, color: STONE[0] });
   const coals = half(R - 0.12, 0.015);
   g.poly(coals).fill(0x7a1e0e).stroke({ width: LINE, color: INK, join: 'round' });
-  for (let i = 0; i < 70; i++) {
+  for (let i = 0; i < 22; i++) {
     const t = rnd() * Math.PI;
-    const d = (R - 0.16) * Math.sqrt(rnd());
+    const d = (R - 0.2) * Math.sqrt(rnd());
     const [x, y] = at(cu + Math.cos(t) * d, cs + Math.sin(t) * d);
-    g.circle(x, y, 0.025 + 0.02 * rnd()).fill([0x9a2a12, 0xc2410c, 0xd8501a, 0xf97316, 0xffb238][Math.floor(rnd() * rnd() * 5)]);
+    g.circle(x, y, 0.04 + 0.025 * rnd()).fill([0x6a2414, 0x8e3418, 0xa8481e, 0xc0642a, 0xd88a3a][Math.floor(rnd() * rnd() * 5)]);
   }
-  g.poly(half((R - 0.12) * 0.5, 0.01)).fill({ color: 0xffb238, alpha: 0.25 });
+  g.poly(half((R - 0.12) * 0.5, 0.01)).fill({ color: 0xd88a3a, alpha: 0.3 });
   // The brick block against the wall, over the basin's straight edge.
   masonry(g, rect(0.1, WALL_GAP - 0.04, len - 0.62, cs + 0.02), STONE.map((c) => shade(c, 0.85)), rnd, 0.17);
 }
@@ -669,7 +708,7 @@ export function desk(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
 /** Display table in a shop: a cloth over it, hanging past the edges, and wares laid out on it. */
 export function display(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const { len, rect, at } = frame(f);
-  const cloth = shade(DYES[(v + 1) % DYES.length], 0.8);
+  const cloth = mute(shade(DYES[(v + 1) % DYES.length], 0.8), 0.5);
   g.poly(quad(rect(0.06, 0.08, len - 0.06, 0.92), rnd, 0.01)).fill(shade(cloth, 0.75)).stroke({ width: OUT, color: INK, join: 'round' });
   g.poly(quad(rect(0.14, 0.16, len - 0.14, 0.84), rnd, 0.006)).fill(cloth);
   for (const u of [0.3, len - 0.3]) g.moveTo(...at(u, 0.08)).lineTo(...at(u + 0.02, 0.16));
@@ -678,7 +717,7 @@ export function display(g: Graphics, f: InteriorItem, light: Light, v: number, r
   for (let u = 0.35, k = v; u < len - 0.2; u += 0.42, k++) {
     if (k % 3 === 0) {
       const r = rect(u - 0.14, 0.3, u + 0.14, 0.7);
-      g.poly(quad(r, rnd, 0.004)).fill([0xc8a060, 0x6a8aa8, 0xa86a5a][k % 3 === 0 ? (k / 3) % 3 : 0]).stroke({ width: LINE, color: INK });
+      g.poly(quad(r, rnd, 0.004)).fill(mute([0xc8a060, 0x6a8aa8, 0xa86a5a][k % 3 === 0 ? (k / 3) % 3 : 0], 0.3)).stroke({ width: LINE, color: INK });
     } else if (k % 3 === 1) {
       const [cx, cy] = at(u, 0.5);
       g.circle(cx, cy, 0.13).fill(0x8a5a32).stroke({ width: LINE, color: INK });
@@ -693,11 +732,17 @@ export function display(g: Graphics, f: InteriorItem, light: Light, v: number, r
 /** Pew: a long seat with a high back on the side away from the altar, carved ends. */
 export function pew(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { along, len, rect } = frame(f, back);
-  for (const u of [0.04, len - 0.14]) board(g, rect(u, 0.12, u + 0.1, 0.84), DARK_WOOD, light, rnd, !along, 0.02, 0);
-  const seat = board(g, rect(0.12, 0.32, len - 0.12, 0.8), WOOD, light, rnd, along, 0.04, 2);
-  planks(g, seat, along, 2, WOOD[0], rnd);
-  { const r = rect(0.16, 0.35, len - 0.16, 0.47); g.rect(r[0], r[1], r[2] - r[0], r[3] - r[1]).fill({ color: WOOD[2], alpha: 0.85 }); }
-  board(g, rect(0.12, 0.14, len - 0.12, 0.3), DARK_WOOD, light, rnd, along, 0.03, 1);
+  const box = (r: number[]) => [r[0], r[1], r[0], r[3], r[2], r[3], r[2], r[1]];
+  castShadow(g, box(rect(0.06, 0.12, len - 0.06, 0.8)), light, 0.1);
+  // The seat: one broad pale board toward the front, its front edge lit.
+  board(g, rect(0.12, 0.3, len - 0.12, 0.8), WOOD, light, rnd, along, 0.03, 1, LINE);
+  // The back's shadow falling on the seat just in front of it: the back stands up.
+  { const r = rect(0.13, 0.3, len - 0.13, 0.4); g.rect(r[0], r[1], r[2] - r[0], r[3] - r[1]).fill({ color: 0x2a1a10, alpha: 0.35 }); }
+  // The back rail: a narrow dark top rail along the back side, its capping lit.
+  board(g, rect(0.08, 0.12, len - 0.08, 0.3), DARK_WOOD, light, rnd, along, 0.03, 0, OUT);
+  { const r = rect(0.12, 0.17, len - 0.12, 0.21); g.rect(r[0], r[1], r[2] - r[0], r[3] - r[1]).fill({ color: DARK_WOOD[2], alpha: 0.9 }); }
+  // Bench ends: a small square block at each end, standing past the seat and the back.
+  for (const u of [0.04, len - 0.18]) board(g, rect(u, 0.1, u + 0.14, 0.82), DARK_WOOD, light, rnd, !along, 0.025, 0, OUT);
 }
 
 /** Booth table: a square table, plain worn planks. */
@@ -746,7 +791,7 @@ export function rug(g: Graphics, f: InteriorItem, v: number, rnd: () => number) 
     [0x2e4a6a, 0xa8742e, 0xe0cca0],
     [0x6a4a2a, 0x8a2e26, 0xd0b070],
     [0x4a5a32, 0x6a2e3a, 0xd8c08a],
-  ][v % 4];
+  ][v % 4].map((c) => mute(c, 0.3));
   // Fringes at the ends.
   for (const u of [0.1, len - 0.1]) {
     for (let s = 0.2; s < wid - 0.15; s += 0.06) g.moveTo(...at(u, s)).lineTo(...at(u + (u < 1 ? -0.07 : 0.07), s));
@@ -810,21 +855,32 @@ function longBath(g: Graphics, f: InteriorItem, light: Light, rnd: () => number)
   }
 }
 
-/** Bucket: a wooden pail with a thin rim of staves, an iron hoop, a little water, and its iron handle
- * standing up across it between two lugs. */
+/** Bucket: a wooden pail from above: a ring of staves round a dark inside with a little water (a flat pale
+ * glint on it), an iron hoop, and its iron handle tipped over across the top as an arc between two lugs. */
 export function bucket(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
+  const [lx, ly] = light;
   const r = 0.15;
-  g.poly(ring(cx, cy, r, rnd, 0.006, 16)).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
-  g.circle(cx, cy, r * 0.9).stroke({ width: 0.015, color: IRON[0] });
-  g.circle(cx, cy, r * 0.78).fill(0x4e7a8a).stroke({ width: 0.016, color: INK });
-  g.circle(cx + light[0] * 0.035, cy + light[1] * 0.035, 0.026).fill({ color: 0xffffff, alpha: 0.45 });
-  // The handle, standing up: seen from above, a bar straight across the pail between its two lugs.
+  const rim = ring(cx, cy, r, rnd, 0.006, 16);
+  castShadow(g, rim, light, 0.06);
+  g.poly(rim).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.circle(cx + lx * 0.008, cy + ly * 0.008, r * 0.9).stroke({ width: 0.016, color: WOOD[2] });
+  // The staves: seams round the rim and down into the dark.
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 + 0.3;
+    g.moveTo(cx + Math.cos(a) * r * 0.7, cy + Math.sin(a) * r * 0.7).lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+  }
+  g.stroke({ width: 0.016, color: WOOD[0] });
+  // The dark inside, one small dull glint.
+  g.circle(cx, cy, r * 0.7).fill(0x1c140e).stroke({ width: 0.016, color: INK });
+  g.circle(cx + lx * r * 0.3, cy + ly * r * 0.3, r * 0.45).fill(0x2a2018);
+  g.circle(cx - lx * r * 0.28, cy - ly * r * 0.28, 0.014).fill(0x6a6a5a);
+  // The handle tipped over: an iron arc from lug to lug across the top.
   const [ax, bx] = [cx - r * 1.02, cx + r * 1.02];
-  g.moveTo(ax, cy).lineTo(bx, cy).stroke({ width: 0.05, color: INK, cap: 'round' });
-  g.moveTo(ax, cy).lineTo(bx, cy).stroke({ width: 0.026, color: IRON[1], cap: 'round' });
-  g.moveTo(ax + 0.015, cy - 0.005).lineTo(bx - 0.015, cy - 0.005).stroke({ width: 0.014, color: IRON[2], cap: 'round' });
-  for (const x of [ax, bx]) g.circle(x, cy, 0.03).fill(IRON[1]).stroke({ width: 0.018, color: INK });
+  const by = cy + r * 0.95;
+  g.moveTo(ax, cy).quadraticCurveTo(cx, by, bx, cy).stroke({ width: 0.045, color: INK, cap: 'round' });
+  g.moveTo(ax, cy).quadraticCurveTo(cx, by, bx, cy).stroke({ width: 0.022, color: IRON[1], cap: 'round' });
+  for (const x of [ax, bx]) g.circle(x, cy, 0.026).fill(IRON[1]).stroke({ width: 0.016, color: INK });
 }
 
 /** A roof terrace's dome (`interior::furnish_terrace`) from above on its drum: warm plaster in three

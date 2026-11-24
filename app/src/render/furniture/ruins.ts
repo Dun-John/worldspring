@@ -484,43 +484,37 @@ export function floodedPit(g: Graphics, f: InteriorItem, light: Light, rnd: () =
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
   const r = Math.min(f.w, f.h) * 0.45;
   const [lx, ly] = light;
-  const rough = (k: number, j: number, ox = 0, oy = 0) => {
+  const ph = [rnd() * 6.3, rnd() * 6.3];
+  // A lopsided outline shared by the rim, the inner edge and the water, so it is never a target of rings.
+  const rough = (k: number, ox = 0, oy = 0) => {
     const pts: number[] = [];
-    for (let i = 0; i < 20; i++) {
-      const a = (i / 20) * Math.PI * 2;
-      const rr = r * k * (1 + (rnd() - 0.5) * j);
-      pts.push(cx + ox + Math.cos(a) * rr, cy + oy + Math.sin(a) * rr);
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2;
+      const rr = r * k * (1 + 0.07 * Math.sin(2 * a + ph[0]) + 0.05 * Math.sin(3 * a + ph[1]));
+      pts.push(cx + ox + Math.cos(a) * rr * 1.04, cy + oy + Math.sin(a) * rr * 0.96);
     }
     return pts;
   };
-  g.poly(rough(1, 0.1)).fill(STONE[1]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly(rough(0.84, 0.08)).fill(0x4a4540).stroke({ width: LINE, color: INK, join: 'round' });
-  // The water: its shade toward the light (the rim's shadow), the open water, and a lit patch beyond.
-  g.poly(rough(0.76, 0.06)).fill(0x1c2627);
-  g.poly(rough(0.62, 0.08, lx * r * 0.12, ly * r * 0.12)).fill(0x2b3a3b);
-  g.poly(rough(0.32, 0.12, lx * r * 0.3, ly * r * 0.3)).fill(0x364849);
-  // One pale ripple line, curved round the lit side.
-  const a0 = Math.atan2(ly, lx) - 0.7;
-  g.moveTo(cx + Math.cos(a0) * r * 0.5, cy + Math.sin(a0) * r * 0.5);
-  for (let k = 1; k <= 6; k++) {
-    const a = a0 + (k / 6) * 1.4;
-    g.lineTo(cx + Math.cos(a) * r * 0.5, cy + Math.sin(a) * r * 0.5);
+  // The rim of fitted stones: a broad stone band, a few joints across it.
+  g.poly(rough(1)).fill(STONE[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(rough(0.97, lx * 0.02, ly * 0.02)).fill(STONE[2]);
+  g.poly(rough(0.92, -lx * 0.01, -ly * 0.01)).fill(STONE[1]);
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + rnd() * 0.4;
+    g.moveTo(cx + Math.cos(a) * r * 0.8, cy + Math.sin(a) * r * 0.8).lineTo(cx + Math.cos(a) * r * 0.98, cy + Math.sin(a) * r * 0.98);
   }
-  g.stroke({ width: 0.018, color: 0x7f9696, alpha: 0.7, cap: 'round', join: 'round' });
-  // A floating plank, a little scum.
-  const pa = rnd() * Math.PI;
-  const [px, py] = [cx - lx * r * 0.15 + (rnd() - 0.5) * 0.08, cy - ly * r * 0.15 + (rnd() - 0.5) * 0.08];
-  const [ux, uy, vx, vy] = [Math.cos(pa) * 0.14, Math.sin(pa) * 0.14, -Math.sin(pa) * 0.035, Math.cos(pa) * 0.035];
-  g.poly([px - ux - vx, py - uy - vy, px + ux - vx, py + uy - vy, px + ux + vx, py + uy + vy, px - ux + vx, py - uy + vy]).fill(0x6e5638).stroke({ width: LINE * 0.8, color: INK, join: 'round' });
-  for (let i = 0; i < 3; i++) {
+  g.stroke({ width: 0.016, color: STONE[0] });
+  // The still dark water, the rim's shade across its side toward the light.
+  g.poly(rough(0.78)).fill(0x243030).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(rough(0.74, lx * r * 0.06, ly * r * 0.06)).fill(0x182020);
+  g.poly(rough(0.66, -lx * r * 0.1, -ly * r * 0.1)).fill(0x243030);
+  // One pale flat reflection of the opening above, off-centre away from the light.
+  const la = Math.atan2(ly, lx) + Math.PI / 2;
+  g.poly(oval(cx - lx * r * 0.28, cy - ly * r * 0.28, r * 0.26, r * 0.08, la, 12)).fill({ color: 0x8aa0a0, alpha: 0.6 });
+  // Two broken stones fallen on the rim.
+  for (let i = 0; i < 2; i++) {
     const a = rnd() * Math.PI * 2;
-    const d = r * (0.3 + 0.3 * rnd());
-    g.circle(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.022 + 0.012 * rnd()).fill({ color: 0x5c6444, alpha: 0.85 });
-  }
-  // Broken stones on the rim.
-  for (let i = 0; i < 4; i++) {
-    const a = rnd() * Math.PI * 2;
-    g.poly(ring(cx + Math.cos(a) * r * 0.97, cy + Math.sin(a) * r * 0.97, 0.05 + 0.03 * rnd(), rnd, 0.03, 6)).fill(STONE[2]).stroke({ width: LINE, color: INK });
+    g.poly(ring(cx + Math.cos(a) * r * 0.95, cy + Math.sin(a) * r * 0.95, 0.06 + 0.03 * rnd(), rnd, 0.03, 6)).fill(STONE[2]).stroke({ width: LINE, color: INK });
   }
 }
 

@@ -67,8 +67,8 @@ export function brazier(g: Graphics, f: InteriorItem, light: Light, rnd: () => n
 export function candelabrum(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const [lx, ly] = light;
-  glowPool(g, cx, cy, 0.48, 0xfcd36a);
-  castShadow(g, ring(cx, cy, 0.19, rnd, 0.004, 14), light, 0.22);
+  glowPool(g, cx, cy, 0.3, 0xfcd36a);
+  castShadow(g, ring(cx, cy, 0.19, rnd, 0.004, 14), light, 0.12);
   for (let i = 0; i < 5; i++) {
     const a = rnd() * Math.PI * 2;
     const d = 0.24 + 0.1 * rnd();
@@ -187,7 +187,7 @@ export function ironMaiden(g: Graphics, f: InteriorItem, light: Light, rnd: () =
     [0.16, 0.2], [0.125, 0.265], [0.0, 0.272], [-0.125, 0.265], [-0.16, 0.2], [-0.2, 0.02], [-0.21, -0.09], [-0.18, -0.15], [-0.09, -0.175], [-0.095, -0.22], [-0.065, -0.275],
   ];
   const pts = lid.flatMap(([a, b]) => T(a, b));
-  castShadow(g, pts, light, 0.3);
+  castShadow(g, pts, light, 0.17);
   g.poly(patch(...T(0.05, 0.33), 0.08, 0.045, rnd, 0.35, 10)).fill({ color: BLOOD, alpha: 0.8 });
   g.circle(...T(0.12, 0.31), 0.016).fill({ color: BLOOD, alpha: 0.8 });
   g.poly(pts).fill(IRON[0]).stroke({ width: OUT, color: INK, join: 'round' });
@@ -239,7 +239,7 @@ export function stocks(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
     g.moveTo(x, y).lineTo(x + (rnd() - 0.5) * 0.08, y + (rnd() - 0.5) * 0.05).stroke({ width: 0.014, color: 0xc8a860 });
   }
   const plank = [...P(-L, -W), ...P(L, -W), ...P(L, W), ...P(-L, W)];
-  castShadow(g, plank, light, 0.16);
+  castShadow(g, plank, light, 0.07);
   // The two boards meeting at the seam, each a little uneven.
   for (const [b0, b1, k] of [
     [-W, 0, 0.92],

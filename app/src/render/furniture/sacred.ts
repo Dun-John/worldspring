@@ -39,27 +39,34 @@ export function sarcophagus(g: Graphics, f: InteriorItem, light: Light, rnd: () 
   stoneEffigy(g, f, light, rnd, false);
 }
 
-/** Bell, hung in a frame: two heavy beams across the loft, the headstock between them, the bronze bell
- * under it (seen as its crown and lip), its rope running down off one side. */
+/** Bell, hung in a frame, from straight above: the bronze bell is a ring (its lip, lit toward the light) round
+ * its darker shoulder sloping up to the crown; the headstock beam lies across the crown and rests on the two
+ * frame beams either side; the rope drops off the wheel at one end. */
 export function bell(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const { along, len, rect, at } = frame(f);
   const wid = along ? f.h : f.w;
   const [cx, cy] = at(len / 2, wid / 2);
+  const [lx, ly] = light;
   const R = Math.min(len, wid) * 0.32;
-  // The bell: its lip (widest), the waist, the crown, lit toward the light.
-  g.poly(ring(cx, cy, R, rnd, 0.008, 32)).fill(BRONZE[0]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.circle(cx + light[0] * R * 0.08, cy + light[1] * R * 0.08, R * 0.86).fill(BRONZE[1]);
-  g.circle(cx, cy, R * 0.6).stroke({ width: 0.02, color: BRONZE[0] });
-  g.circle(cx + light[0] * R * 0.25, cy + light[1] * R * 0.25, R * 0.42).fill({ color: BRONZE[2], alpha: 0.7 });
-  g.circle(cx, cy, R * 0.22).fill(BRONZE[0]).stroke({ width: LINE, color: INK });
-  // Beams across, the headstock over the crown.
-  for (const s of [wid / 2 - R - 0.1, wid / 2 + R + 0.02]) board(g, rect(0.06, s, len - 0.06, s + 0.1), DARK_WOOD, light, rnd, true, 0.025, 1);
-  board(g, rect(len / 2 - 0.12, wid / 2 - R - 0.06, len / 2 + 0.12, wid / 2 + R + 0.06), WOOD, light, rnd, false, 0.03, 1);
-  // The rope, down off the wheel at one side.
-  const [rx, ry] = at(len / 2 + R + 0.1, wid / 2);
-  g.moveTo(...at(len / 2 + 0.12, wid / 2)).lineTo(rx, ry).stroke({ width: 0.03, color: 0xc8b080 });
-  g.circle(rx, ry, 0.06).stroke({ width: 0.025, color: 0xc8b080 });
-  g.circle(rx, ry, 0.03).stroke({ width: 0.02, color: 0xc8b080 });
+  // The frame beams either side, under the bell's lip.
+  for (const u of [0.08, len - 0.26]) {
+    board(g, rect(u, 0.08, u + 0.18, wid - 0.08), DARK_WOOD, light, rnd, !along, 0.03, 1);
+  }
+  // The bell: the lip a bright bronze ring, the shoulder inside it darker, the crown a small boss.
+  const lip = ring(cx, cy, R, rnd, 0.008, 32);
+  castShadow(g, lip, light, 0.12);
+  g.poly(lip).fill(BRONZE[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.circle(cx + lx * R * 0.06, cy + ly * R * 0.06, R * 0.9).fill(BRONZE[2]);
+  g.circle(cx - lx * R * 0.04, cy - ly * R * 0.04, R * 0.74).fill(BRONZE[0]).stroke({ width: LINE, color: INK });
+  g.circle(cx + lx * R * 0.1, cy + ly * R * 0.1, R * 0.5).fill(shade(BRONZE[1], 0.85));
+  g.circle(cx, cy, R * 0.26).fill(BRONZE[1]).stroke({ width: LINE, color: INK });
+  // The headstock: one stout beam across the crown, from frame beam to frame beam.
+  board(g, rect(0.12, wid / 2 - 0.1, len - 0.12, wid / 2 + 0.1), WOOD, light, rnd, along, 0.03, 1);
+  for (const u of [0.17, len - 0.17]) g.circle(...at(u, wid / 2), 0.035).fill(IRON[1]).stroke({ width: 0.016, color: INK });
+  // The rope, down off the wheel at one end.
+  const [rx, ry] = at(len - 0.17, wid / 2 + R * 0.9);
+  g.moveTo(...at(len - 0.17, wid / 2 + 0.1)).lineTo(rx, ry).stroke({ width: 0.03, color: 0xb8a078 });
+  g.circle(rx, ry, 0.05).fill(0xb8a078).stroke({ width: 0.016, color: INK });
 }
 
 /** What a statue holds or wears that breaks its outline seen from above. */
@@ -309,22 +316,17 @@ export function stoneColumn(g: Graphics, f: InteriorItem, light: Light, t: reado
 }
 
 /** Throne against a wall: a tall back with a pointed gilt crest, carved arms, and a deep red cushion
- * filling the seat, tufted, with gilt finials at the front corners. */
+ * filling the seat, one gilt button in it, with gilt finials at the front corners. */
 export function throne(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { rect, at } = frame(f, back);
   // The seat frame, then the cushion filling it.
   board(g, rect(0.12, WALL_GAP + 0.06, 0.88, 0.9), DARK_WOOD, light, rnd, true, 0.03, 0);
   const [qx0, qy0, qx1, qy1] = rect(0.24, WALL_GAP + 0.16, 0.76, 0.86);
-  g.roundRect(qx0, qy0, qx1 - qx0, qy1 - qy0, 0.07).fill(0x7a2420).stroke({ width: OUT, color: INK });
-  g.roundRect(qx0 + 0.035 + light[0] * 0.015, qy0 + 0.035 + light[1] * 0.015, qx1 - qx0 - 0.07, qy1 - qy0 - 0.07, 0.06).fill(0xb04436);
-  g.roundRect(qx0 + 0.07 + light[0] * 0.03, qy0 + 0.07 + light[1] * 0.03, (qx1 - qx0) * 0.4, (qy1 - qy0) * 0.3, 0.04).fill({ color: 0xd8705a, alpha: 0.6 });
-  for (const [u, s0] of [
-    [0.4, 0.55],
-    [0.6, 0.55],
-    [0.5, 0.7],
-  ]) {
-    g.circle(...at(u, s0), 0.022).fill(GILT[1]).stroke({ width: 0.014, color: shade(GILT[1], 0.55) });
-  }
+  g.roundRect(qx0, qy0, qx1 - qx0, qy1 - qy0, 0.07).fill(0x6a2a24).stroke({ width: OUT, color: INK });
+  g.roundRect(qx0 + 0.035 + light[0] * 0.015, qy0 + 0.035 + light[1] * 0.015, qx1 - qx0 - 0.07, qy1 - qy0 - 0.07, 0.06).fill(0x92463a);
+  g.roundRect(qx0 + 0.07 + light[0] * 0.03, qy0 + 0.07 + light[1] * 0.03, (qx1 - qx0) * 0.4, (qy1 - qy0) * 0.3, 0.04).fill({ color: 0xae6656, alpha: 0.6 });
+  // One gilt button in its middle.
+  g.circle(...at(0.5, 0.6), 0.035).fill(GILT[1]).stroke({ width: 0.016, color: INK });
   // Arms, slim.
   for (const u of [0.12, 0.76]) board(g, rect(u, WALL_GAP + 0.06, u + 0.12, 0.9), DARK_WOOD, light, rnd, false, 0.025, 0);
   for (const u of [0.18, 0.82]) g.circle(...at(u, 0.9), 0.045).fill(GILT[1]).stroke({ width: LINE, color: INK });
@@ -812,72 +814,76 @@ export function barricade(g: Graphics, f: InteriorItem) {
   g.stroke({ width: 0.022, color: 0xc8b080 });
 }
 
-/** Trapdoor: a hatch of planks set into the floor — a dark gap round its edge, iron strap hinges along one
- * side, an iron ring to lift it by. */
+/** Trapdoor: a hatch of planks flush with the floor (no shadow, no raised rim): a thin dark gap round its edge,
+ * two long iron strap hinges from one edge, an iron ring lying flat in its staple to lift it by. */
 export function trapdoor(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const { x, y } = f;
-  g.poly(quad([x + 0.1, y + 0.1, x + 0.9, y + 0.9], rnd, 0.004)).fill(0x14100c);
-  const face = board(g, [x + 0.14, y + 0.14, x + 0.86, y + 0.86], WOOD, light, rnd, false, 0.04, 1);
-  planks(g, face, false, 4, WOOD[0], rnd);
-  // Strap hinges along the top edge, nails in them.
-  for (const hx of [x + 0.28, x + 0.64]) {
-    g.poly(quad([hx, y + 0.13, hx + 0.07, y + 0.3], rnd, 0.002)).fill(IRON[1]).stroke({ width: 0.016, color: INK });
-    g.circle(hx + 0.035, y + 0.24, 0.01).fill(IRON[0]);
+  void light;
+  const [x0, y0, x1, y1] = [x + 0.12, y + 0.12, x + 0.88, y + 0.88];
+  g.poly(quad([x0 - 0.03, y0 - 0.03, x1 + 0.03, y1 + 0.03], rnd, 0.004)).fill(0x14100c);
+  g.poly(quad([x0, y0, x1, y1], rnd, 0.003)).fill(WOOD[1]);
+  // Planks run across the hinges, flat: seams only, a little grain.
+  planks(g, [x0, y0, x1, y1], false, 4, WOOD[0], rnd);
+  for (let i = 0; i < 4; i++) {
+    const px = x0 + (x1 - x0) * (i + 0.3 + rnd() * 0.4) / 4;
+    const py = y0 + 0.2 + rnd() * 0.3;
+    g.moveTo(px, py).lineTo(px + 0.005, py + 0.14);
   }
-  // The ring.
-  g.circle(x + 0.5, y + 0.74, 0.07).stroke({ width: 0.04, color: INK });
-  g.circle(x + 0.5, y + 0.74, 0.07).stroke({ width: 0.022, color: IRON[2] });
-  g.rect(x + 0.46, y + 0.64, 0.08, 0.05).fill(IRON[0]).stroke({ width: 0.016, color: INK });
+  g.stroke({ width: 0.014, color: WOOD[0], alpha: 0.7 });
+  // Strap hinges from the top edge, their knuckles in the gap, two nails each.
+  for (const hx of [x + 0.26, x + 0.66]) {
+    g.poly([hx, y0 - 0.02, hx + 0.09, y0 - 0.02, hx + 0.07, y0 + 0.36, hx + 0.02, y0 + 0.36]).fill(IRON[1]).stroke({ width: 0.016, color: INK, join: 'round' });
+    g.rect(hx - 0.01, y0 - 0.045, 0.11, 0.04).fill(IRON[0]).stroke({ width: 0.016, color: INK });
+    for (const k of [0.1, 0.26]) g.circle(hx + 0.045, y0 + k, 0.012).fill(IRON[0]);
+  }
+  // The ring pull near the far edge, lying flat.
+  g.rect(x + 0.47, y + 0.68, 0.06, 0.04).fill(IRON[0]).stroke({ width: 0.016, color: INK });
+  g.circle(x + 0.5, y + 0.76, 0.065).stroke({ width: 0.04, color: INK });
+  g.circle(x + 0.5, y + 0.76, 0.065).stroke({ width: 0.02, color: IRON[2] });
 }
 
-/** A spiral stair seen from above: wedge treads fanning clockwise round a newel post, the top one
- * palest and each lower one darker, every tread a flat tone with a lit nosing and an ink line where
- * it drops to the next; the dark well showing between the lowest and the top, a handrail round the
- * outer edge. Sized to its footprint (one square, or a lighthouse's two by two). */
+/** A spiral stair seen from above: a few broad wedge treads fanning clockwise round one bold dark newel, the top
+ * one the floor's lit stone (the landing step) and each lower one a step darker within the stone's range, an ink line where it
+ * drops to the next; the dark well open between the lowest and the top, a handrail round the outer edge.
+ * Sized to its footprint (one square, or a lighthouse's two by two). */
 export function spiralStair(g: Graphics, f: InteriorItem, rnd: () => number) {
   const s = Math.min(f.w, f.h);
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
   const r = s * 0.47;
-  const n = 12;
+  const n = 8;
   const a0 = -Math.PI / 2 + (rnd() - 0.5) * 0.3;
-  const step = (Math.PI * 2 * 0.9) / n;
-  const [rin, rout] = [r * 0.2, r * 0.86];
+  const step = (Math.PI * 2 * 0.86) / n;
+  const [rin, rout] = [r * 0.24, r * 0.88];
   const at = (a: number, rr: number) => [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr];
   const arc = (from: number, to: number, rr: number, k = 6) => Array.from({ length: k + 1 }, (_, i) => at(from + ((to - from) * i) / k, rr)).flat();
   // The well: dark, seen down past the lowest tread.
-  g.circle(cx, cy, r).fill(0x14110e);
-  g.poly([...arc(a0 - step * 0.9, a0, rout, 3), ...arc(a0, a0 - step * 0.9, rin, 2)]).fill(0x2a241e);
-  // The treads, the lowest first.
-  const top = 0xd6cdb9;
+  g.circle(cx, cy, r).fill(0x2a2620);
+  // The treads, the lowest first, each a clear step darker going down.
+  const top = 0xb4ac98;
   for (let i = n - 1; i >= 0; i--) {
     const t0 = a0 + i * step;
     const t1 = t0 + step;
-    const tone = shade(top, 1 - (0.62 * i) / (n - 1));
-    g.poly([...arc(t0, t1, rout), ...arc(t1, t0, rin, 2)]).fill(tone);
-    // (Its nosing lit along the edge where it drops to the next, the ink line on that edge.)
-    const [lx0, ly0] = at(t1 - step * 0.12, rin * 1.1);
-    const [lx1, ly1] = at(t1 - step * 0.1, rout * 0.97);
-    g.moveTo(lx0, ly0).lineTo(lx1, ly1).stroke({ width: s * 0.03, color: shade(tone, 1.25), cap: 'round' });
-    g.poly([...arc(t0, t1, rout), ...arc(t1, t0, rin, 2)]).stroke({ width: s * 0.016, color: INK, alpha: 0.75, join: 'round' });
-    const [ex, ey] = at(t1, rin);
-    const [fx, fy] = at(t1, rout);
-    g.moveTo(ex, ey).lineTo(fx, fy).stroke({ width: s * 0.026, color: INK, cap: 'round' });
+    const tone = shade(top, 1 - (0.38 * i) / (n - 1));
+    const tread = [...arc(t0, t1, rout), ...arc(t1, t0, rin, 2)];
+    g.poly(tread).fill(tone).stroke({ width: s * 0.016, color: INK, alpha: 0.7, join: 'round' });
+    // The drop to the next tread down: a bold ink edge.
+    g.moveTo(...(at(t1, rin) as [number, number])).lineTo(...(at(t1, rout) as [number, number])).stroke({ width: s * 0.022, color: INK, cap: 'round' });
   }
-  // The handrail round the outer edge, from the top tread down to the lowest, on its posts.
+  // The top step, the way on: its lit nosing along the edge it is entered by.
+  {
+    const [ax, ay] = at(a0 + step * 0.1, rin * 1.3);
+    const [bx, by] = at(a0 + step * 0.06, rout * 0.95);
+    g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: s * 0.045, color: shade(top, 1.06), cap: 'round' });
+  }
+  // The handrail round the outer edge, from the top tread down to the lowest.
   const end = a0 + n * step;
   const rail = arc(a0, end, (rout + r) / 2, 40);
-  g.poly(rail, false).stroke({ width: s * 0.075, color: INK, cap: 'round', join: 'round' });
-  g.poly(rail, false).stroke({ width: s * 0.04, color: WOOD[1], cap: 'round', join: 'round' });
-  g.poly(arc(a0, end, (rout + r) / 2 - s * 0.008, 40), false).stroke({ width: s * 0.012, color: WOOD[2], cap: 'round', join: 'round' });
-  for (let i = 0; i <= n; i += 2) {
-    const [px, py] = at(a0 + i * step, (rout + r) / 2);
-    g.circle(px, py, s * 0.03).fill(DARK_WOOD[1]).stroke({ width: s * 0.012, color: INK });
-  }
+  g.poly(rail, false).stroke({ width: s * 0.07, color: INK, cap: 'round', join: 'round' });
+  g.poly(rail, false).stroke({ width: s * 0.036, color: WOOD[1], cap: 'round', join: 'round' });
   // The outer edge of the well, inked.
   g.circle(cx, cy, r).stroke({ width: OUT * s, color: INK });
-  // The newel post.
-  g.circle(cx, cy, rin).fill(STONE[1]).stroke({ width: s * 0.03, color: INK });
-  g.circle(cx - rin * 0.25, cy - rin * 0.25, rin * 0.45).fill(STONE[2]);
+  // The newel: one bold dark post.
+  g.circle(cx, cy, rin).fill(DARK_WOOD[0]).stroke({ width: s * 0.035, color: INK });
 }
 
 /** Stairs down to the deep dungeons: an opening in the floor framed in stone, steps going down into it,

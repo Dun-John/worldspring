@@ -156,26 +156,28 @@ export function godStatue(g: Graphics, f: InteriorItem, light: Light, v: number,
   statueFigure(g, ...at(len / 2, 0.5), fw, FIGURE[k], light, rnd, ATTR[k], { hood: k === 2 || k === 7, metal, accent: k === 2 ? 0xdcdce0 : k === 4 ? 0xe8c860 : k === 1 ? 0xb5523a : undefined });
 }
 
-/** Candle stand from straight above: a 2-ft round tray of dark iron with a brass rim (its foot and stem hidden
- * under it), a dish of spilt wax in it, five candles of mixed thickness as cream wax discs each with a bright warm
- * flame (the brightest things on it), the god's colour only in a small boss in the middle with its sign; a warm pool
- * of candlelight round it, faintly tinted by the god's light. */
+/** Candle stand from straight above: a dark iron tripod foot and ring, four separate candles on it as cream wax
+ * tops each with a small flame, the god's colour only in a small boss; a small warm pool of candlelight round it. */
 export function candleStand(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const god = GODS[v % GODS.length];
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const BRASS = [0x6a4e22, 0x9a7a3c, 0xc4a462];
-  glowPool(g, cx, cy, 0.5);
-  glowPool(g, cx, cy, 0.34, god.glow);
-  castShadow(g, ring(cx, cy, 0.2, rnd, 0.004, 16), light, 0.2);
+  glowPool(g, cx, cy, 0.3);
+  glowPool(g, cx, cy, 0.24, god.glow);
   const [lx, ly] = light;
-  g.poly(ring(cx, cy, 0.205, rnd, 0.008, 22)).fill(BRASS[0]).stroke({ width: LINE, color: INK, join: 'round' });
-  g.poly(ring(cx + lx * 0.012, cy + ly * 0.012, 0.18, rnd, 0.006, 20)).fill(BRASS[1]);
-  g.poly(ring(cx - lx * 0.006, cy - ly * 0.006, 0.15, rnd, 0.006, 18)).fill(IRON[0]).stroke({ width: 0.016, color: INK });
-  g.poly(patch(cx + 0.02, cy - 0.01, 0.12, 0.11, rnd, 0.15, 14)).fill({ color: 0xe8dcc0, alpha: 0.5 });
-  g.circle(cx, cy, 0.045).fill(god.metal[1]).stroke({ width: 0.016, color: INK });
-  emblem(g, v, cx, cy, 0.07, [lx, ly], god.metal[0], 0.016);
-  const spots: [number, number, number][] = [[-0.1, -0.07, 0.042], [0.05, -0.12, 0.036], [0.12, 0.02, 0.044], [0.03, 0.12, 0.038], [-0.11, 0.07, 0.036]];
-  for (const [a, b, r] of spots) waxCandle(g, cx + a, cy + b, r * (0.9 + 0.2 * rnd()), light);
+  // A tripod foot of dark iron: three splayed legs and a ring on top of them, the god's boss in the middle.
+  const spots: [number, number, number][] = [[-0.115, -0.08, 0.05], [0.05, -0.13, 0.045], [0.125, 0.03, 0.05], [-0.02, 0.125, 0.045]];
+  for (let k = 0; k < 3; k++) {
+    const a = 0.6 + (k * Math.PI * 2) / 3;
+    g.moveTo(cx, cy).lineTo(cx + Math.cos(a) * 0.2, cy + Math.sin(a) * 0.2).stroke({ width: 0.06, color: INK, cap: 'round' });
+    g.moveTo(cx, cy).lineTo(cx + Math.cos(a) * 0.2, cy + Math.sin(a) * 0.2).stroke({ width: 0.03, color: IRON[0], cap: 'round' });
+  }
+  castShadow(g, ring(cx, cy, 0.17, rnd, 0.004, 16), light, 0.1);
+  g.circle(cx, cy, 0.165).stroke({ width: 0.075, color: INK });
+  g.circle(cx, cy, 0.165).stroke({ width: 0.045, color: IRON[1] });
+  g.circle(cx + lx * 0.01, cy + ly * 0.01, 0.165).stroke({ width: 0.016, color: IRON[2] });
+  g.circle(cx, cy, 0.04).fill(god.metal[1]).stroke({ width: 0.016, color: INK });
+  emblem(g, v, cx, cy, 0.055, [lx, ly], god.metal[0], 0.016);
+  for (const [a, b, r] of spots) waxCandle(g, cx + a, cy + b, r, light);
 }
 
 /** Carved screen across the nave, seen from above: a thin oak partition along its back edge (toward the crossing),
@@ -186,11 +188,18 @@ export function carvedScreen(g: Graphics, f: InteriorItem, light: Light, v: numb
   const { along, len, rect, at } = frame(f, back);
   const god = GODS[v % GODS.length];
   const [s0, s1] = SCREEN_RAIL;
-  castShadow(g, quad(rect(0, s0, len, s1), rnd, 0), light, 1.1);
+  castShadow(g, quad(rect(0, s0, len, s1), rnd, 0), light, 0.1);
   // The rail: dark oak, its lit edge, the tracery carved along it.
   board(g, rect(0, s0, len, s1), OAK, light, rnd, along, 0.025, 0);
   g.poly(quad(rect(0.02, s0 + 0.03, len - 0.02, s1 - 0.03), rnd, 0.002)).fill(shade(OAK[1], 1.08)).stroke({ width: LINE, color: INK });
   tracery(g, at, len, god, 1, len >= 2 ? 0.17 : 0);
+  // Fretwork hinted as a row of narrow pierced openings between the roundels.
+  for (let k = 0; k < Math.round(len); k++) {
+    for (const du of [0.2, 0.8]) {
+      if (len >= 2 && Math.abs(k + du - len / 2) < 0.4) continue;
+      g.poly(quad(rect(k + du - 0.025, s0 + 0.08, k + du + 0.025, s1 - 0.08), rnd, 0)).fill(0x24180f);
+    }
+  }
   screenPosts(g, at, rect, rnd, god, Array.from({ length: Math.floor(len + 1e-6) + 1 }, (_, u) => Math.min(Math.max(u, 0.07), len - 0.07)), 0.07);
   if (len >= 2) {
     const [ex, ey] = at(len / 2, (s0 + s1) / 2);
@@ -201,21 +210,21 @@ export function carvedScreen(g: Graphics, f: InteriorItem, light: Light, v: numb
 }
 
 /** Where across its square the carved screen's rail runs (squares from its back edge), and its gate's beam. */
-const SCREEN_RAIL = [0.05, 0.27];
+const SCREEN_RAIL = [0.05, 0.35];
 
-/** The carved screen's tracery along its rail, `len` squares (`frame`'s `at`): two round quatrefoils a square
- * between its posts (none under the emblem at the middle, `clear` squares about it), each a pale carved roundel
+/** The carved screen's tracery along its rail, `len` squares (`frame`'s `at`): round quatrefoils
+ * between its posts, one a square (none under the emblem at the middle, `clear` squares about it), each a pale carved roundel
  * ringed in ink with four dark lobes pierced through it round a boss of the god's metal; `alpha` under 1 for the
  * gate's beam overhead, seen through. */
 function tracery(g: Graphics, at: (u: number, s: number) => [number, number], len: number, god: (typeof GODS)[number], alpha: number, clear: number) {
   const [s0, s1] = SCREEN_RAIL;
-  const r = 0.085;
+  const r = 0.095;
   const us: number[] = [];
-  for (let k = 0; k < Math.round(len); k++) us.push(k + 0.32, k + 0.68);
+  for (let k = 0; k < Math.round(len); k++) us.push(k + 0.5);
   for (const u of us.filter((u) => Math.abs(u - len / 2) >= clear + r)) {
     const [cx, cy] = at(u, (s0 + s1) / 2);
     g.circle(cx, cy, r).fill({ color: shade(OAK[2], 1.1), alpha }).stroke({ width: 0.016, color: INK, alpha });
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) g.circle(cx + dx * r * 0.4, cy + dy * r * 0.4, r * 0.32).fill({ color: 0x24180f, alpha });
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) g.circle(cx + dx * r * 0.42, cy + dy * r * 0.42, r * 0.36).fill({ color: 0x24180f, alpha });
     g.circle(cx, cy, r * 0.16).fill({ color: god.metal[1], alpha });
   }
 }
@@ -267,7 +276,7 @@ export function screenGate(g: Graphics, f: InteriorItem, light: Light, v: number
     }
     g.stroke({ width: 0.018, color: INK, alpha: 0.55 });
     const pts = [...p(0, -0.05), ...p(leaf, -0.05), ...p(leaf, 0.05), ...p(0, 0.05)];
-    castShadow(g, pts, light, 0.9);
+    castShadow(g, pts, light, 0.1);
     g.poly(pts).fill(OAK[1]).stroke({ width: LINE, color: INK, join: 'round' });
     const holes = Math.max(2, Math.round(leaf * 5));
     for (let k = 1; k <= holes; k++) g.circle(...p((leaf * k) / (holes + 1), 0), 0.017).fill(0x24180f);

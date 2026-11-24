@@ -299,20 +299,20 @@ export function stableStall(g: Graphics, f: InteriorItem, light: Light, v: numbe
     const b = (rnd() - 0.5) * l * 0.6;
     strands.push([[x - c, y - s], [x - Math.sin(a) * b, y + Math.cos(a) * b], [x + c, y + s]]);
   };
-  for (let i = 0; i < 30 * k * W; i++) strand(...at(0.12 + rnd() * (W - 0.24), 0.45 * k + rnd() * (D - 0.55 * k)), 0.05 + rnd() * 0.06);
+  for (let i = 0; i < 11 * k * W; i++) strand(...at(0.16 + rnd() * (W - 0.32), 0.5 * k + rnd() * (D - 0.65 * k)), 0.08 + rnd() * 0.06);
   if (v === 0) {
     // A forkful of fresh straw toward the back, a heap of strands.
     const [hx, hy] = at(W * 0.55, D * 0.66);
     g.poly(patch(hx, hy, 0.22 * Math.min(W, 1), 0.18, rnd, 0.35, 14)).fill({ color: STRAW[1], alpha: 0.5 });
-    for (let i = 0; i < 26; i++) strand(hx + (rnd() - 0.5) * 0.4, hy + (rnd() - 0.5) * 0.34, 0.05 + rnd() * 0.05);
+    for (let i = 0; i < 9; i++) strand(hx + (rnd() - 0.5) * 0.3, hy + (rnd() - 0.5) * 0.26, 0.08 + rnd() * 0.05);
   }
   for (const [p0, p1, p2] of strands) g.moveTo(...p0).quadraticCurveTo(...p1, ...p2);
-  g.stroke({ width: 0.034, color: STRAW[0], alpha: 0.9, cap: 'round' });
+  g.stroke({ width: 0.046, color: STRAW[0], alpha: 0.9, cap: 'round' });
   for (const old of [true, false]) {
     strands.forEach(([p0, p1, p2], i) => {
       if ((i % 3 === 2) === old) g.moveTo(...p0).quadraticCurveTo(...p1, ...p2);
     });
-    g.stroke({ width: 0.017, color: STRAW[old ? 1 : 2], cap: 'round' });
+    g.stroke({ width: 0.024, color: STRAW[old ? 1 : 2], cap: 'round' });
   }
   // The partitions on both long sides (centred on the stall's edges, so a row of stalls shares them), a post at
   // each one's end; the manger across the head, deep, hay heaped in it.
@@ -325,11 +325,11 @@ export function stableStall(g: Graphics, f: InteriorItem, light: Light, v: numbe
   }
   board(g, rect(0.06, WALL_GAP - 0.04, W - 0.06, 0.5 * k), WOOD, light, rnd, along, 0.04, 1);
   g.poly(quad(rect(0.13, WALL_GAP + 0.02, W - 0.13, 0.5 * k - 0.07), rnd, 0.004)).fill(shade(WOOD[0], 0.7)).stroke({ width: LINE, color: INK });
-  for (let i = 0; i < 4 * W; i++) {
-    const [x, y] = at(0.2 + ((W - 0.4) * (i + 0.5)) / (4 * W) + (rnd() - 0.5) * 0.04, (WALL_GAP + 0.5 * k - 0.05) / 2 + (rnd() - 0.5) * 0.03);
-    g.poly(patch(x, y, 0.1, 0.07, rnd, 0.3, 10)).fill(i % 2 ? STRAW[2] : STRAW[1]).stroke({ width: 0.014, color: STRAW[0], join: 'round' });
+  for (let i = 0; i < 2 * W; i++) {
+    const [x, y] = at(0.2 + ((W - 0.4) * (i + 0.5)) / (2 * W) + (rnd() - 0.5) * 0.04, (WALL_GAP + 0.5 * k - 0.05) / 2 + (rnd() - 0.5) * 0.03);
+    g.poly(patch(x, y, Math.min(0.2, (W - 0.4) / (4 * W) + 0.04), 0.09, rnd, 0.25, 12)).fill(i % 2 ? STRAW[2] : STRAW[1]).stroke({ width: 0.016, color: STRAW[0], join: 'round' });
   }
-  for (let i = 0; i < 6 * W; i++) {
+  for (let i = 0; i < 3 * W; i++) {
     const [x, y] = at(0.18 + rnd() * (W - 0.36), WALL_GAP + 0.04 + rnd() * (0.5 * k - WALL_GAP - 0.1));
     const a = rnd() * Math.PI;
     g.moveTo(x - Math.cos(a) * 0.06, y - Math.sin(a) * 0.06).lineTo(x + Math.cos(a) * 0.06, y + Math.sin(a) * 0.06);
