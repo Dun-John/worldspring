@@ -5,6 +5,7 @@ import { MARBLE, candle } from './sacred';
 import { GILT, HOUSES, VELVET } from './tables';
 import { PLUSH, STONE, WALL_GAP } from './home';
 import { screenAxes } from './under';
+import { clothOfEstateB } from './hangings';
 
 // ---------------------------------------------------------------------------------------------------
 // Great halls and ballrooms (`interior::FURNITURE`: throne dais to refreshment table).
@@ -88,7 +89,7 @@ function stateChair(g: Graphics, B: { R: Rect; A: At }, light: Light, rnd: () =>
  * cloth of estate hung on the wall behind gilded high-backed thrones with red cushions; 3-5 a plain raised timber
  * platform with a step up its middle and carved oak thrones. Seated `v % 3`: one throne, a pair, a throne and a
  * lesser chair. */
-export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
+export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number], cloth: 'A' | 'B' = 'A') {
   const { along, len, rect, at } = frame(f, back);
   const wid = along ? f.h : f.w;
   const rich = v % 6 < 3;
@@ -125,18 +126,22 @@ export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number
     // The cloth of estate on the wall behind the seats: blue powdered with gilt, a fringed hem, its rod.
     const c0 = Math.max(0.46, Math.min(...seats.map(([c, w]) => c - w / 2)) - 0.36);
     const c1 = Math.min(len - 0.46, Math.max(...seats.map(([c, w]) => c + w / 2)) + 0.36);
-    const hem = Math.min(0.7, S(1.2));
-    g.poly(quad(rect(c0, top, c1, hem), rnd, 0.004)).fill(0x1e3058).stroke({ width: OUT, color: INK, join: 'round' });
-    g.poly(quad(rect(c0 + 0.05, top + 0.02, c1 - 0.05, hem - 0.06), rnd, 0.003)).fill(0x2e4a82);
-    for (let u = c0 + 0.14; u < c1 - 0.08; u += 0.18) {
-      for (let s = top + 0.1; s < hem - 0.08; s += 0.14) {
-        const [x, y] = at(u + ((Math.round((s - top) / 0.14) % 2) * 0.09), s);
-        g.poly([x, y - 0.025, x + 0.02, y, x, y + 0.025, x - 0.02, y]).fill(GILT[2]);
+    // (`cloth` 'B': the sprite audit's thin band from above, `hangings.ts`.)
+    if (cloth === 'B') clothOfEstateB(g, at, light, c0, c1, top);
+    else {
+      const hem = Math.min(0.7, S(1.2));
+      g.poly(quad(rect(c0, top, c1, hem), rnd, 0.004)).fill(0x1e3058).stroke({ width: OUT, color: INK, join: 'round' });
+      g.poly(quad(rect(c0 + 0.05, top + 0.02, c1 - 0.05, hem - 0.06), rnd, 0.003)).fill(0x2e4a82);
+      for (let u = c0 + 0.14; u < c1 - 0.08; u += 0.18) {
+        for (let s = top + 0.1; s < hem - 0.08; s += 0.14) {
+          const [x, y] = at(u + ((Math.round((s - top) / 0.14) % 2) * 0.09), s);
+          g.poly([x, y - 0.025, x + 0.02, y, x, y + 0.025, x - 0.02, y]).fill(GILT[2]);
+        }
       }
+      for (let u = c0 + 0.04; u < c1 - 0.03; u += 0.045) g.moveTo(...at(u, hem - 0.01)).lineTo(...at(u, hem + 0.04));
+      g.stroke({ width: 0.014, color: GILT[1] });
+      inkLine(g, [at(c0 - 0.06, top), at(c1 + 0.06, top)], 0.04, GILT[1]);
     }
-    for (let u = c0 + 0.04; u < c1 - 0.03; u += 0.045) g.moveTo(...at(u, hem - 0.01)).lineTo(...at(u, hem + 0.04));
-    g.stroke({ width: 0.014, color: GILT[1] });
-    inkLine(g, [at(c0 - 0.06, top), at(c1 + 0.06, top)], 0.04, GILT[1]);
   } else {
     // A raised timber platform of pale boards laid front to back, its front beam dark and pegged, a step of darker
     // oak up the middle of its front, a woven rug under the seats (green with a red border, fringed at its ends).

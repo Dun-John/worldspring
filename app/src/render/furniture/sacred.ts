@@ -4,6 +4,7 @@ import { rng } from '../atlas';
 import { BRASS, DARK_WOOD, DYES, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, oval, patch, planks, quad, ring, shade } from './common';
 import { END_GAP, STONE, WALL_GAP, masonry } from './home';
 import { BRONZE, GILT } from './tables';
+import { stageCurtainB } from './hangings';
 
 /** Pale stone for statues, effigies and fine work: shade, face, lit. */
 export const MARBLE = [0x8e8a80, 0xc4beb0, 0xe2dccd];
@@ -162,7 +163,7 @@ export function throne(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
 /** Stage: a raised platform of planks — its front edge (the apron) darker, a shadow on the floor along the
  * front and sides — a flight of steps up the middle of the front, and a heavy curtain hung along the back,
  * folds in light and dark, a wavy hem, tied back at both ends. */
-export function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
+export function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number], curtain: 'A' | 'B' = 'A') {
   const { along, len, rect, at } = frame(f, back);
   const wid = along ? f.h : f.w;
   const front = wid - 0.36;
@@ -178,6 +179,8 @@ export function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => num
   planks(g, face, along, Math.round(wid * 4), WOOD[0], rnd);
   // The apron: the front edge, darker.
   g.poly(quad(rect(0.06, front - 0.07, len - 0.06, front), rnd, 0.003)).fill(WOOD[0]).stroke({ width: LINE, color: INK });
+  // (`curtain` 'B': the sprite audit's thin gathered band from above, `hangings.ts`.)
+  if (curtain === 'B') return stageCurtainB(g, at, light, len);
   // The curtain: folds along the back, a wavy hem over the boards, tied back at both ends.
   const depth = 0.34;
   const n = Math.round(len * 6);

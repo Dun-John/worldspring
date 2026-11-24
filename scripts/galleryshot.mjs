@@ -3,7 +3,8 @@
 // Usage: node scripts/galleryshot.mjs <out-dir> [base-url=http://localhost:5173/]
 // Files: <family>-<n>[-nolabels].png (families: battlemap, furniture, underground, and each themed panel, `streets` too).
 // Opens Windows Chrome as scripts/shot.mjs does (one window for all sheets, always closed at the end). SHOT_WIN=w,h
-// sets its size (default 1620,1000); SHOT_DPR sets the device pixel ratio.
+// sets its size (default 1620,1000); SHOT_DPR sets the device pixel ratio. `--only=a,b` (before the out dir) takes only those
+// families (`--only=options`: the sprite audit's options panel).
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 // one look per item, split until each fits, only the unlabelled version with a number in each cell's corner (`&index=1`) and a
 // `<sheet>.txt` beside each PNG listing `number id-or-name` (from the page's `window.__galleryOrder`).
 const compact = process.argv.includes('--compact');
-const [outDir = 'sheets', base = 'http://localhost:5173/'] = process.argv.slice(2).filter((a) => a !== '--compact');
+const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7).split(',');
+const [outDir = 'sheets', base = 'http://localhost:5173/'] = process.argv.slice(2).filter((a) => a !== '--compact' && !a.startsWith('--only='));
 mkdirSync(outDir, { recursive: true });
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tables = readFileSync(join(root, 'app/src/render/furniture/tables.ts'), 'utf8');
@@ -44,7 +46,8 @@ const jobs = [
   ...chunks(setOf('UNDER_DRAWN'), 20).map((names, i) => ({ family: 'underground', n: i + 1, query: `&items=${names.join(',')}` })),
   ...PANELS.map((p) => ({ family: p, n: 1, query: `&items=${p}` })),
   { family: 'streets', n: 1, query: '&panels=streets' },
-];
+  { family: 'options', n: 1, query: '&panels=options' },
+].filter((j) => !only || only.includes(j.family));
 
 const chromePath = [process.env.CHROME_PATH, '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].filter(Boolean).find((p) => existsSync(p));
 if (!chromePath) throw new Error('no Chrome found (set CHROME_PATH)');
@@ -183,7 +186,7 @@ try {
   for (const job of jobs) {
     await run(job);
     // Once the catalog is known: the kinds no family above lists, in chunks of 20.
-    if (job === jobs[0]) {
+    if (job === jobs[0] && job.family === 'battlemap') {
       const all = (await evaluate('window.__galleryKinds')) ?? [];
       const listed = new Set(KINDS.flat());
       const rest = all.filter((id) => !listed.has(id));
