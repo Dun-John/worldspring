@@ -6,7 +6,8 @@
 //! 1-square squeezes, the rest two or three wide; a few loops, the rest dead ends. `cave` finishes a level from them:
 //! raised ledges reached by rubble slopes, the way down or the boss chamber (a dead end) at the far end, water by
 //! theme (flooded caves mostly shallow with deep channels and a lake; plain and fungal caves a pool or two and
-//! sometimes a lake on the low ground; crystal, ice and beast-den caves mostly dry), islands in lakes (treasure, a
+//! sometimes a lake on the low ground; crystal, ice and beast-den caves mostly dry; a lava cave's water is lava: a
+//! river, a lake, a pool, with basalt columns), islands in lakes (treasure, a
 //! shrine or the boss), rock columns and stalagmites standing in the big chambers, sometimes a chasm across the
 //! level. `natural_level` turns open squares into chambers (lava tubes).
 
@@ -705,7 +706,7 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
     let dist = p.distances(arrive, ny, None);
     let boss = g.end;
     // (Now and then the boss on an island in its own lake, in a wet cave.)
-    let boss_isle = boss.is_some() && matches!(theme.key, "flooded" | "cave" | "fungal") && rng.next_f64() < if theme.key == "flooded" { 0.6 } else { 0.3 };
+    let boss_isle = boss.is_some() && matches!(theme.key, "flooded" | "cave" | "fungal" | LAVA_CAVE) && rng.next_f64() < if theme.key == "flooded" { 0.6 } else { 0.3 };
     if let Some(b) = boss {
         p.rooms[b as usize].kind = BOSS;
         p.rooms[b as usize].raise = 0.0;
@@ -787,6 +788,21 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
             if let Some(&r) = wet.iter().max_by_key(|&&r| (size(r), -r)) {
                 lakes.push(r);
                 lay_lake(&p, &mut w, r, 0.6, false, rng);
+            }
+        }
+        LAVA_CAVE => {
+            // A lava river winding through the chambers (dry where it runs at a chamber's edge or through a tunnel:
+            // stepped over there), a lava lake in the biggest chamber on the floor (now and then round an island),
+            // a pool in another.
+            stream(&p, ny, &mut w, a as i16, boss, hs, rng);
+            if let Some(&r) = wet.iter().max_by_key(|&&r| (size(r), -r)) {
+                lakes.push(r);
+                lay_lake(&p, &mut w, r, 0.4, false, rng);
+                wet.retain(|&x| x != r);
+            }
+            if !wet.is_empty() {
+                let r = wet[rng.below(wet.len() as u32) as usize];
+                pool(&p, ny, &mut w, r, &h, true);
             }
         }
         "cave" | "fungal" => {
@@ -891,8 +907,10 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
     let pillar = match theme.key {
         "crystal" => "crystal",
         "ice" => "ice",
+        LAVA_CAVE => "basalt",
         _ => "rock_column",
     };
+    let spike = if theme.key == LAVA_CAVE { "basalt" } else { "stalagmite" };
     for r in 0..p.rooms.len() as i16 {
         if p.rooms[r as usize].kind == BOSS || lakes.contains(&r) {
             continue;
@@ -909,7 +927,7 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
                 break;
             }
             let k = inner[rng.below(inner.len() as u32) as usize];
-            let what = if rng.next_f64() < 0.5 { pillar } else { "stalagmite" };
+            let what = if rng.next_f64() < 0.5 { pillar } else { spike };
             if w[k] != DEEP && p.place(item(what, k % nx, k / nx, 1, 1), Some(r), ny) {
                 put += 1;
             }
@@ -917,6 +935,7 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
     }
     if w.iter().any(|&x| x != DRY) {
         p.water = w;
+        p.molten = theme.key == LAVA_CAVE;
     }
     // Sometimes a chasm across the level (not the deepest, not a flooded cave), crossed by rope bridges.
     if !last && theme.key != "flooded" && rng.next_f64() < 0.3 {

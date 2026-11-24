@@ -4,11 +4,14 @@
 //! mirrored core (a hall at the way down from above, cells, reliquary, ossuary, ritual pool in pairs), the rest grown
 //! freely, corridors among them; the deepest ends in the boss chamber, a dead end. A sunken temple is flooded: deep
 //! water in its big halls (ledges along their walls, or bridges and stepping stones), shallow elsewhere, more the
-//! deeper it goes.
+//! deeper it goes. A fire temple (`FIRE_TEMPLE`) is dry: braziers along its nave, its sanctum's altar on an island in
+//! a lava pool (`fire`), its boss's on one in a lava moat (`boss::built`).
 
 use crate::core::rng::Pcg32;
 use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, boss_size, boss_sizes, colonnade, dead_end, fallback, fill, flood_room, pool_room, way_down};
 use crate::under::*;
+use super::cave::{DEEP, DRY, depths};
+use super::dwarven::along_walls;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool, theme: &Theme, area: f64, rng: &mut Pcg32) -> Plan {
@@ -38,7 +41,9 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let sc = |n: usize| ((n as f64) * crate::core::sqrt(area)).round() as usize;
         // (The boss's sanctum on a medium or bigger site: a big apsed hall, `boss_size`, as big as fits.)
         let big = if last { boss_size(area, rng) } else { None };
-        let (sd, sa) = big.map_or_else(|| (pick(5, sc(7), rng), odd(pick(5, sc(7), rng))), |(a, d)| (d, a));
+        // (A fire temple's sanctum a size up: room for its island.)
+        let s0 = if theme.key == FIRE_TEMPLE { 7 } else { 5 };
+        let (sd, sa) = big.map_or_else(|| (pick(s0, sc(s0 + 2), rng), odd(pick(s0, sc(s0 + 2), rng))), |(a, d)| (d, a));
         let cw = if cross { odd(pick(5, sc(7), rng)) } else { 0 };
         let room_left = nx.saturating_sub(x0 + nw + 2 + sd + cw);
         let nave_h = if ny >= 30 { odd(pick(7, sc(9).min(11), rng)) } else { 7 };
@@ -90,7 +95,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         }
         // Then more rooms in pairs, to the theme's count.
         let have = p.rooms.iter().enumerate().filter(|&(r, _)| r as i16 != passage).count();
-        let specs = specs(theme, &["sanctum", "ossuary"], wide, area);
+        let specs = specs(theme, &["sanctum", "fire sanctum", "ossuary"], wide, area);
         g.grow(&mut p, &specs, target.saturating_sub(have), true, rng);
     } else {
         // A hall round the way down from above, its axis through it; a mirrored core grown off it, then the rest.
@@ -110,7 +115,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         if s >= 7 {
             halls.push(g.pieces[core].room);
         }
-        let specs = specs(theme, &["sanctum"], wide, area);
+        let specs = specs(theme, &["sanctum", "fire sanctum"], wide, area);
         let rooms = target.saturating_sub(1);
         let made = g.grow(&mut p, &specs, rooms.div_ceil(2), true, rng);
         g.grow(&mut p, &specs, rooms.saturating_sub(made + 1), false, rng);
@@ -145,7 +150,9 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
             halls.push(r);
         }
     }
-    if theme.water != Wetness::Dry {
+    if theme.key == FIRE_TEMPLE {
+        fire(&mut p, ny, &g, &halls, boss);
+    } else if theme.water != Wetness::Dry {
         flood(&mut p, ny, depth, &halls, boss, rng);
     } else {
         // (A dry temple's ritual pools hold a pool of their own.)
@@ -176,6 +183,46 @@ fn specs(theme: &Theme, skip: &[&str], wide: bool, area: f64) -> Vec<Spec> {
     out.push(Spec { kind: theme.passage, t: Template::Corridor, across: (w, w), deep: (3, up(6)) });
     out.push(Spec { kind: theme.passage, t: Template::Corridor, across: (w, w), deep: (2, 4) });
     out
+}
+
+/// A fire temple's fire: braziers along its big halls' walls (the nave's, the crossing's), and its sanctum (the boss's
+/// is laid as its own, `boss::built`) an altar on an island in a lava pool: a ring of lava a square in from its walls,
+/// crossed by a stone bridge or stepping stones once the locks are in (`kit::lava_at`). A sanctum too small for an
+/// island keeps its floor.
+fn fire(p: &mut Plan, ny: usize, g: &Grower, halls: &[i16], boss: Option<i16>) {
+    let nx = p.nx;
+    for &r in halls {
+        along_walls(p, ny, g, r, "brazier");
+    }
+    let mut w = vec![DRY; p.cells.len()];
+    for r in 0..p.rooms.len() as i16 {
+        if Some(r) == boss || p.rooms[r as usize].kind != "sanctum" {
+            continue;
+        }
+        p.rooms[r as usize].kind = "fire sanctum";
+        let sq = depths(p, ny, r);
+        let isle: Vec<usize> = sq.iter().filter(|s| s.1 >= 3).map(|s| s.0).collect();
+        if isle.is_empty() {
+            continue;
+        }
+        // (Wholly on the island.)
+        let on = |k: usize| isle.contains(&k);
+        let altar = |p: &mut Plan, k: usize| {
+            on(k + 1) && p.place(item("altar", k % nx, k / nx, 2, 1), Some(r), ny) || on(k + nx) && p.place(item("altar", k % nx, k / nx, 1, 2), Some(r), ny)
+        };
+        if !isle.iter().any(|&k| altar(p, k)) {
+            isle.iter().any(|&k| p.place(item("brazier", k % nx, k / nx, 1, 1), Some(r), ny));
+        }
+        for &(k, e) in &sq {
+            if e == 2 && !p.taken[k] {
+                w[k] = DEEP;
+            }
+        }
+    }
+    if w.iter().any(|&x| x != DRY) {
+        p.water = w;
+        p.molten = true;
+    }
 }
 
 /// A sunken temple's water: deep in the big halls (half of them with dry ledges along their walls), shallow pools

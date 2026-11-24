@@ -241,7 +241,7 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
 ];
 
 /// Items that lie on the floor under a span: water, chasms, rubble slopes.
-pub const TERRAIN: [&str; 4] = ["water_shallow", "water_deep", "chasm", "rubble_slope"];
+pub const TERRAIN: [&str; 5] = ["water_shallow", "water_deep", "chasm", "rubble_slope", "lava"];
 /// Items one walks on over deep water or a chasm (a dwarven hall's stone bridge too).
 pub const SPANS: [&str; 3] = ["rope_bridge", "stepping_stone", "stone_bridge"];
 
@@ -345,6 +345,19 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "lava tube" | "tube gallery" => &[("basalt", 1, 1, Any, 1, 3), ("scorched", 1, 2, Any, 0, 1), ("obsidian", 1, 1, Any, 0, 2), ("rubble", 1, 1, Any, 0, 2)],
         "basalt shelf" => &[("basalt", 1, 1, Any, 1, 2), ("sulfur", 1, 1, Any, 0, 2)],
         "side pocket" | "obsidian gallery" => &[("obsidian", 1, 1, Any, 2, 4), ("basalt", 1, 1, Any, 0, 2), ("vent", 1, 1, Any, 0, 1), ("sulfur", 1, 1, Any, 1, 3), ("glass_pool", 2, 2, Any, 0, 1)],
+        // Lava caves, forges, fire temples.
+        "lava cavern" | "basalt hall" => &[("basalt", 1, 1, Any, 2, 5), ("obsidian", 1, 1, Any, 0, 2), ("scorched", 1, 2, Any, 0, 1), ("rubble", 1, 1, Any, 0, 2)],
+        "scorched grotto" => &[("scorched", 1, 2, Any, 1, 2), ("sulfur", 1, 1, Any, 1, 3), ("basalt", 1, 1, Any, 0, 2), ("bones", 1, 1, Any, 0, 1)],
+        "vent chamber" => &[("vent", 1, 1, Any, 1, 3), ("sulfur", 1, 1, Any, 1, 3), ("obsidian", 1, 1, Any, 0, 2), ("glass_pool", 2, 2, Any, 0, 1)],
+        "great forge" => &[("anvil", 1, 1, Any, 2, 3), ("vat", 1, 1, Edge, 1, 2), ("tools", 1, 1, Edge, 1, 2), ("barrel", 1, 1, Edge, 0, 2), ("crate", 1, 1, Edge, 0, 1)],
+        "furnace room" => &[("forge", 1, 1, Edge, 2, 3), ("anvil", 1, 1, Any, 0, 1), ("tools", 1, 1, Edge, 1, 1), ("sacks", 1, 1, Edge, 0, 2)],
+        "quench room" => &[("vat", 1, 1, Any, 2, 3), ("barrel", 1, 1, Edge, 1, 2), ("anvil", 1, 1, Any, 0, 1), ("tools", 1, 1, Edge, 0, 1)],
+        "ore store" => &[("ore_cart", 1, 1, Any, 1, 2), ("rubble", 1, 1, Any, 1, 3), ("crate", 1, 1, Edge, 1, 2), ("tools", 1, 1, Edge, 0, 1)],
+        "coal store" => &[("sacks", 1, 1, Edge, 2, 4), ("rubble", 1, 1, Any, 1, 2), ("barrel", 1, 1, Edge, 0, 2), ("ore_cart", 1, 1, Any, 0, 1)],
+        "smiths' quarters" => &[("cot", 1, 2, Edge, 2, 4), ("chest", 1, 1, Edge, 1, 2), ("table", 1, 2, Any, 0, 1), ("hearth", 1, 1, Edge, 0, 1)],
+        "fire sanctum" => &[("brazier", 1, 1, Edge, 2, 4), ("statue", 1, 1, Edge, 0, 2), ("offering", 1, 1, Edge, 0, 2), ("candles", 1, 1, Any, 0, 1)],
+        "offering pit" => &[("pit", 2, 2, Any, 1, 1), ("offering", 1, 1, Edge, 1, 3), ("brazier", 1, 1, Edge, 1, 2), ("bones", 1, 1, Any, 0, 2)],
+        "brazier hall" => &[("brazier", 1, 1, Edge, 3, 6), ("statue", 1, 1, Edge, 0, 2), ("pillar", 1, 1, Any, 0, 2)],
         // Mines.
         "haulage way" => &[("timber", 1, 1, Edge, 4, 10), ("lantern", 1, 1, Edge, 2, 4), ("tools", 1, 1, Edge, 0, 2)],
         "drift" => &[("timber", 1, 1, Edge, 0, 3), ("ore_vein", 1, 1, Edge, 1, 3), ("cave_in", 1, 1, Any, 0, 1), ("tools", 1, 1, Edge, 0, 1)],
@@ -597,6 +610,8 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
 /// natural set (`boss::wild`). Either may get hazards and a second way in.
 pub(crate) fn boss_chamber(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usize], kind: UnderKind, rng: &mut Pcg32) {
     match kind {
+        // (A forge's or fire temple's worked halls: a built site's.)
+        UnderKind::LavaTube if !p.natural => super::boss::built(p, nx, ny, ri, squares, rng),
         UnderKind::Cave | UnderKind::LavaTube | UnderKind::Mine => super::boss::wild(p, nx, ny, ri, squares, kind, rng),
         _ => super::boss::built(p, nx, ny, ri, squares, rng),
     }
@@ -1237,23 +1252,25 @@ struct Layer {
     t: Vec<u8>,
     span: Vec<u8>,
 }
-const LAID: [&str; 5] = ["", "water_shallow", "water_deep", "chasm", "rubble_slope"];
-const SPANNED: [&str; 3] = ["", "rope_bridge", "stepping_stone"];
+const LAID: [&str; 6] = ["", "water_shallow", "water_deep", "chasm", "rubble_slope", "lava"];
+const SPANNED: [&str; 4] = ["", "rope_bridge", "stepping_stone", "stone_bridge"];
 const SHALLOW: u8 = 1;
 const DEEP: u8 = 2;
 const CHASM: u8 = 3;
 const SLOPE: u8 = 4;
+const LAVA: u8 = 5;
 const BRIDGE: u8 = 1;
 const STONES: u8 = 2;
+const STONE_BRIDGE: u8 = 3;
 
 impl Layer {
     fn new(n: usize) -> Layer {
         Layer { t: vec![0; n], span: vec![0; n] }
     }
 
-    /// Whether square `k` is deep water or chasm with nothing over it.
+    /// Whether square `k` is deep water, chasm or lava with nothing over it.
     fn gap(&self, k: usize) -> bool {
-        (self.t[k] == DEEP || self.t[k] == CHASM) && self.span[k] == 0
+        matches!(self.t[k], DEEP | CHASM | LAVA) && self.span[k] == 0
     }
 
     /// Make every square reached before the terrain reachable again, from the way onto the level and from each side of
@@ -1316,6 +1333,9 @@ impl Layer {
                 let straight = path.iter().all(|&q| q % g.nx == path[0] % g.nx) || path.iter().all(|&q| q / g.nx == path[0] / g.nx);
                 for &q in &path {
                     match self.t[q] {
+                        // (Lava is never waded: a stone bridge where it runs straight, else stepping stones.)
+                        LAVA if bridge && straight => self.span[q] = STONE_BRIDGE,
+                        LAVA => self.span[q] = STONES,
                         DEEP if path.len() <= 2 => self.t[q] = SHALLOW,
                         DEEP | CHASM if bridge && straight => self.span[q] = BRIDGE,
                         _ => self.span[q] = STONES,
@@ -1344,7 +1364,7 @@ impl Layer {
         for (grid, names) in [(&self.t, &LAID[..]), (&self.span, &SPANNED[..])] {
             for (code, kind) in names.iter().enumerate().skip(1) {
                 for (x, y, w, h) in rects(grid, code as u8, nx) {
-                    out.push(item(kind, x, y, w, h));
+                    out.push(if *kind == "lava" { Item { w: w as u16, h: h as u16, ..lava(x, y) } } else { item(kind, x, y, w, h) });
                 }
             }
         }
@@ -1419,6 +1439,20 @@ pub fn water_at(g: &Ground, seed: u64, span: Span, at: &dyn Fn(usize) -> (f64, f
         }
         let h = noise(seed, k % g.nx, k / g.nx, 6.0);
         l.t[k] = if h >= deep { DEEP } else if h >= shallow { SHALLOW } else { 0 };
+    }
+    l.repair(g, span == Span::Bridge);
+    l.items(g.nx)
+}
+
+/// `water_at` laid as lava: lava where it would be deep, dry floor where shallow (a lava cave's banks); then the
+/// repair, over lava a stone bridge where the crossing runs straight and `span` says bridge, else stepping stones.
+pub(crate) fn lava_at(g: &Ground, seed: u64, span: Span, at: &dyn Fn(usize) -> (f64, f64)) -> Vec<Item> {
+    let mut l = Layer::new(g.cells.len());
+    for k in (0..g.cells.len()).filter(|&k| g.free[k]) {
+        let (_, deep) = at(k);
+        if deep <= 1.0 && noise(seed, k % g.nx, k / g.nx, 6.0) >= deep {
+            l.t[k] = LAVA;
+        }
     }
     l.repair(g, span == Span::Bridge);
     l.items(g.nx)

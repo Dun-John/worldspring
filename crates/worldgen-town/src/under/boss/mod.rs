@@ -82,7 +82,8 @@ fn cover_kinds(theme: &str, natural: bool) -> &'static [&'static str] {
     match theme {
         "keep" | "dungeon" | FORTRESS => &["weapon_rack", "barrel", "crate"],
         "dwarven_hall" => &["barrel", "anvil", "keg_rack"],
-        "temple" | "sunken_temple" | "cult_sanctum" => &["urn", "effigy"],
+        FORGE => &["barrel", "anvil", "vat"],
+        "temple" | "sunken_temple" | "cult_sanctum" | FIRE_TEMPLE => &["urn", "effigy"],
         "wizard_lair" => &["bookshelf", "crate", "table"],
         "prison" => &["rack", "stocks", "iron_maiden"],
         "crypt" | "tomb" | "catacombs" => &["coffin", "urn", "effigy"],

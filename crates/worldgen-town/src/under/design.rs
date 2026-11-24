@@ -688,7 +688,8 @@ impl SiteDesignPlan for SiteDesign {
                 "exit" => Item::new("exit", kind.entrance_name(), x, y, 1, 1, 0, false, 0.0, None),
                 "up" => Item::new("up", up_name, x, y, 1, 1, 0, false, 0.0, None),
                 "down" => Item::new("down", down_name, x, y, 1, 1, 0, false, 0.0, None),
-                "lava" => lava(x, y),
+                // (Painted lava is terrain: a w × h rectangle; a tube's channel is 1 × 1.)
+                "lava" => Item { w: w as u16, h: h as u16, ..lava(x, y) },
                 _ => item(k, x, y, w, h),
             };
             p.put(f.posed(it));

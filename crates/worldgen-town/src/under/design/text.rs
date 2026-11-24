@@ -637,7 +637,7 @@ fn parse_item(e: &str, tag: &str, building: bool) -> Result<(DesignItem, bool), 
     if let Some(v) = variant.filter(|&v| v >= crate::interior::item_looks(kind)) {
         return Err(format!("{tag}: item '{e}': {name} has looks 0-{} (variant {v})", crate::interior::item_looks(kind) - 1));
     }
-    let (w, h) = if !building && (WAYS.contains(&kind) || kind == "lava") { (1, 1) } else { size.unwrap_or((1, 1)) };
+    let (w, h) = if !building && (WAYS.contains(&kind)) { (1, 1) } else { size.unwrap_or((1, 1)) };
     Ok((DesignItem { kind: kind.into(), x, y, w: w.max(1), h: h.max(1), back, variant }, size.is_some()))
 }
 

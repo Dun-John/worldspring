@@ -77,7 +77,7 @@
   // The door tool's locks (colours as `Door::lock` and a key's look) and the terrain tool's choices.
   const LOCKS = Array.from({ length: 31 }, (_, i) => i + 1);
   const TERRAINS: [string, string][][] = [
-    [['water_shallow', 'Shallow water'], ['water_deep', 'Deep water'], ['chasm', 'Chasm'], ['rubble_slope', 'Rubble slope']],
+    [['water_shallow', 'Shallow water'], ['water_deep', 'Deep water'], ['chasm', 'Chasm'], ['rubble_slope', 'Rubble slope'], ['lava', 'Lava']],
     [['rope_bridge', 'Rope bridge'], ['stone_bridge', 'Stone bridge'], ['stepping_stone', 'Stepping stones'], ['', 'Clear']],
   ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
@@ -281,7 +281,7 @@
           </div>
         {/each}
         {#if settings.terrain && SPANS.has(settings.terrain)}<span class="ws-hint">Lies over water or a chasm (or bare floor): walkable.</span>
-        {:else if settings.terrain && TERRAIN.has(settings.terrain)}<span class="ws-hint">{settings.terrain === 'water_deep' || settings.terrain === 'chasm' ? 'Blocks movement, not sight.' : 'Walkable, difficult going.'}</span>{/if}
+        {:else if settings.terrain && TERRAIN.has(settings.terrain)}<span class="ws-hint">{settings.terrain === 'water_deep' || settings.terrain === 'chasm' ? 'Blocks movement, not sight.' : settings.terrain === 'lava' ? 'Burns whoever steps in (10d10 fire); nothing else stands on it.' : 'Walkable, difficult going.'}</span>{/if}
       </div>
     {/if}
     {#if settings.mode === 'prop'}

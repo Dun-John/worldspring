@@ -1289,12 +1289,41 @@ void main() {
                 wetCol = mix(wetCol, vec3(0.72, 0.78, 0.74), (1.0 - smoothstep(0.0, 0.08, length(pv + uLight * pr * 0.55) - pr * 0.3)) * 0.35);
                 col = mix(col, wetCol, pud);
             } else {
-                float n1 = vnoise(p * 1.2 + vec2(uTime * 0.05, uTime * 0.03));
-                liq = mix(vec3(0.92, 0.26, 0.05), vec3(1.0, 0.78, 0.25), n1);
-                float crust = smoothstep(0.58, 0.7, vnoise(p * 2.3 + uTime * 0.04));
-                liq = mix(liq, vec3(0.16, 0.08, 0.05), crust * 0.85);
-                // Glow on the floor beside it.
-                col += vec3(0.5, 0.17, 0.03) * smoothstep(0.08, 0.5, l) * 0.7;
+                // Painted like the surface's lava (`drawnLavaLook`): a flat orange body, a pale glow rim
+                // just inside an uneven shore, a few dark cooled plates with a hot seam, scorched rock outside.
+                // (The wobble only near the shore: out in the rock and deep in the lava the field is flat.)
+                float wob0 = 1.6 * (0.7 * vnoise(p * 0.9 + 17.0) + 0.3 * vnoise(p * 2.3 + 5.0) - 0.5);
+                l = here.g + wob0 * smoothstep(0.04, 0.25, here.g) * (1.0 - smoothstep(0.6, 0.85, here.g));
+                lw = max(fwidth(l), 1e-3);
+                inside = smoothstep(0.5 - lw, 0.5 + lw, l);
+                // Squares inside the shore (from the gradient, so the band is even; deep in, just "far"), and
+                // the field's own signed depth (alpha: 0.5 + squares / 8).
+                float sdep = (here.a - 0.5) * 8.0;
+                // (From the depth field, shifted with the wobble; the shore's blur lies ~0.2 squares past the squares' edge.)
+                float ein = sdep + 0.2 + (l - here.g) * 0.77;
+                // Plates: one cell of 8 squares each, a lobed round 1.2 to 2.2 squares across its middle, kept
+                // 1.5 squares clear of the shore (its middle's depth), so a narrow channel has none.
+                vec2 pcl = floor(p / 8.0);
+                vec2 pid8 = mod(pcl, 64.0);
+                vec2 pv = p - (pcl + 0.3 + 0.4 * vec2(hash21(pid8 + 1.3), hash21(pid8 + 8.1))) * 8.0;
+                float prMax = 1.2 + 1.0 * hash21(pid8 + 5.1);
+                float pl = length(pv);
+                float pr = min(prMax, (field(q - pv).a - 0.5) * 8.0 - 1.5);
+                float pa = atan(pv.y, pv.x);
+                float pph = 6.2832 * hash21(pid8 + 9.4);
+                float pe = pr * (1.0 + 0.16 * sin(3.0 * pa + pph) + 0.08 * sin(5.0 * pa + 2.0 * pph)) - pl;
+                float paa = max(px, 0.02);
+                float pvalid = step(hash21(pid8 + 3.7), 0.65) * step(0.8, pr) * (1.0 - smoothstep(0.15, 0.4, px));
+                float plate = smoothstep(-paa, paa, pe) * pvalid;
+                float pseam = max(smoothstep(-0.2 - paa, -0.2 + paa, pe) * pvalid - plate, 0.0);
+                liq = vec3(0.90, 0.36, 0.12);
+                liq = mix(liq, vec3(1.0, 0.68, 0.26), 1.0 - smoothstep(0.42, 0.42 + max(px, 0.04), ein));
+                liq = mix(liq, vec3(0.38, 0.18, 0.12), plate);
+                liq = mix(liq, vec3(1.0, 0.76, 0.34), pseam * 0.9);
+                // Scorched rock about a square wide outside the shore, softly edged, a faint warmth at the shore.
+                float scorch = (1.0 - inside) * (1.0 - smoothstep(0.2, 1.7, -sdep));
+                col = mix(col, col * vec3(0.42, 0.34, 0.3), scorch * 0.9);
+                col += vec3(0.22, 0.07, 0.01) * smoothstep(0.3, 0.5, l) * (1.0 - inside);
             }
             col = mix(col, liq, inside);
             col = mix(col, INK, (1.0 - smoothstep(0.0, lw * 2.0, abs(l - 0.5))) * 0.55);

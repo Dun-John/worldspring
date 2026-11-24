@@ -47,6 +47,8 @@ pub(crate) struct Plan {
     /// Water to lay once the locks and keys are in (`kit::water_at`): per square the noise heights over which it is
     /// shallow and deep (`grow::flood_room`); empty: a dry level.
     pub(crate) water: Vec<[f32; 2]>,
+    /// The water is lava (`kit::lava_at`): its deep squares lava, its shallow ones dry floor.
+    pub(crate) molten: bool,
     /// Line the passage's narrow galleries with burial niches when furnished (`kit::furnish`).
     pub(crate) niches: bool,
     /// The share of its usual loops `kit::guard` adds (doors through shared walls, shortcuts): 1 but on catacombs.
@@ -97,6 +99,7 @@ impl Plan {
             passage: None,
             shortcuts: Vec::new(),
             water: Vec::new(),
+            molten: false,
             niches: false,
             loops: 1.0,
             secrets: usize::MAX,

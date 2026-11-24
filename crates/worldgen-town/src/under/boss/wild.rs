@@ -255,7 +255,7 @@ pub(super) fn wild_dress(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &mu
         }
         "crystal" => scatter(p, "crystal", 5, rng),
         "ice" => scatter(p, "ice", 4, rng),
-        "lava_tube" => {
+        "lava_tube" | LAVA_CAVE => {
             scatter(p, "obsidian", 2, rng);
             scatter(p, "sulfur", 2, rng);
         }

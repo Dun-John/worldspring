@@ -159,7 +159,7 @@ pub(super) const ROYAL_SUF: [&str; 15] = ["bridge", "mere", "ford", "wood", "wel
 
 /// Words for an underground site by its theme (`under::THEMES` keys): its describing words and
 /// its nouns ("The Rime Caves", "Glimmer Grotto").
-pub(super) const THEME_WORDS: [(&str, &[&str], &[&str]); 25] = [
+pub(super) const THEME_WORDS: [(&str, &[&str], &[&str]); 28] = [
     ("cave", &["Echo", "Deep", "Dark", "Drip", "Whispering", "Bat", "Long", "Hollow"], &["Caves", "Caverns", "Hollow", "Grotto"]),
     ("fungal", &["Mould", "Spore", "Toadstool", "Pale", "Puffball", "Mushroom", "Glowcap"], &["Caves", "Grotto", "Hollow", "Caverns"]),
     ("crystal", &["Glimmer", "Shard", "Crystal", "Gleam", "Prism", "Glitter"], &["Caves", "Grotto", "Caverns", "Hollow"]),
@@ -168,6 +168,9 @@ pub(super) const THEME_WORDS: [(&str, &[&str], &[&str]); 25] = [
     ("beast_den", &["Wolf", "Bear", "Fang", "Claw", "Howling", "Gnawbone"], &["Den", "Caves", "Lair", "Hollow"]),
     ("mine", &["Copper", "Iron", "Silver", "Tin", "Lode", "Deep", "Pick", "Lantern", "Coal"], &["Mine", "Delve", "Workings", "Diggings"]),
     ("lava_tube", &["Ember", "Cinder", "Smoke", "Burnt", "Fire", "Scorch", "Black", "Glass"], &["Tubes", "Lava Tubes", "Burrows", "Vents", "Flues", "Tunnels"]),
+    ("lava_cave", &["Ember", "Cinder", "Molten", "Burning", "Fire", "Basalt", "Smoke", "Red"], &["Caves", "Caverns", "Hollow", "Deeps"]),
+    ("forge", &["Anvil", "Hammer", "Ember", "Iron", "Bellows", "Slag", "Smith's", "Fire"], &["Forge", "Forges", "Smithy", "Foundry", "Halls"]),
+    ("fire_temple", &["Flame", "Ember", "Burning", "Ash", "Cinder", "Sun", "Molten"], &["Temple", "Sanctum", "Shrine", "Halls"]),
     ("dungeon", &["Iron", "Black", "Grim", "Forgotten", "Deep", "Lost"], &["Dungeon", "Vaults", "Halls", "Depths"]),
     ("prison", &["Chain", "Shackle", "Iron", "Dread", "Lock", "Weeping"], &["Pits", "Cells", "Gaol", "Oubliette"]),
     ("temple", &["Hallowed", "Holy", "Sun", "Moon", "Silent", "Gilded"], &["Temple", "Sanctum", "Halls"]),

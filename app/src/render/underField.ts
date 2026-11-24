@@ -417,6 +417,99 @@ function sewerFoam(lv: InteriorLevel, paths: number[][], nx: number, ny: number,
   }
 }
 
+/** Squares across a block of lava shore that shares one light (as `BattlemapLayer`'s `LAVA_BLOCK`). */
+const LAVA_BLOCK = 8;
+const lavaShoreKept = new WeakMap<InteriorLevel, { key: string; pts: number[] }>();
+
+/**
+ * Play's lava lights below ground (Roadmap 7, 199), read-only: points (grid squares, x then y) on the shore of
+ * a level's painted lava (`furniture` of kind `lava`: a pool or a tube's one-square channel), one per
+ * `LAVA_BLOCK` block holding a lava square with a dry 4-neighbour (the lava square nearest those squares'
+ * middle), as `BattlemapLayer`'s `chunkLavaShore` does on the surface. Kept per level, remade when its lava changes.
+ */
+export function lavaShorePoints(it: Interior, level: number): number[] {
+  const lv = it.levels[level];
+  if (!lv) return [];
+  const lava = lv.furniture.filter((f) => f.kind === 'lava');
+  const key = `${it.nx}x${it.ny}:${lava.map((f) => `${f.x},${f.y},${f.w},${f.h}`).join(';')}`;
+  const hit = lavaShoreKept.get(lv);
+  if (hit && hit.key === key) return hit.pts;
+  const { nx, ny } = it;
+  const pts: number[] = [];
+  if (lava.length) {
+    const sq = new Uint8Array(nx * ny);
+    for (const f of lava) {
+      for (let j = Math.max(0, f.y); j < Math.min(ny, f.y + Math.max(1, f.h)); j++) {
+        for (let i = Math.max(0, f.x); i < Math.min(nx, f.x + Math.max(1, f.w)); i++) sq[j * nx + i] = 1;
+      }
+    }
+    const dry = (a: number, b: number) => a >= 0 && b >= 0 && a < nx && b < ny && !sq[b * nx + a];
+    for (let by = 0; by * LAVA_BLOCK < ny; by++) {
+      for (let bx = 0; bx * LAVA_BLOCK < nx; bx++) {
+        const [j1, i1] = [Math.min(ny, (by + 1) * LAVA_BLOCK), Math.min(nx, (bx + 1) * LAVA_BLOCK)];
+        let [n, sx, sy] = [0, 0, 0];
+        for (let j = by * LAVA_BLOCK; j < j1; j++) {
+          for (let i = bx * LAVA_BLOCK; i < i1; i++) {
+            if (!sq[j * nx + i] || !(dry(i - 1, j) || dry(i + 1, j) || dry(i, j - 1) || dry(i, j + 1))) continue;
+            n++;
+            sx += i;
+            sy += j;
+          }
+        }
+        if (!n) continue;
+        const [mx, my] = [sx / n, sy / n];
+        let [best, bi, bj] = [Infinity, 0, 0];
+        for (let j = by * LAVA_BLOCK; j < j1; j++) {
+          for (let i = bx * LAVA_BLOCK; i < i1; i++) {
+            if (!sq[j * nx + i]) continue;
+            const d = (i - mx) ** 2 + (j - my) ** 2;
+            if (d < best) [best, bi, bj] = [d, i, j];
+          }
+        }
+        pts.push(bi + 0.5, bj + 0.5);
+      }
+    }
+  }
+  lavaShoreKept.set(lv, { key, pts });
+  return pts;
+}
+
+/** Distance in texels from each texel to the nearest one of `mask` that is not `of` (chamfer, two passes; 0 for those
+ * that aren't `of`). Beyond a few squares it is simply large. */
+function chamfer(mask: Uint8Array, w: number, h: number, of: number): Float32Array {
+  const far = 4 * (w + h);
+  const d = new Float32Array(w * h);
+  for (let k = 0; k < w * h; k++) d[k] = mask[k] === of ? far : 0;
+  const D = Math.SQRT2;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const k = y * w + x;
+      let v = d[k];
+      if (x > 0) v = Math.min(v, d[k - 1] + 1);
+      if (y > 0) {
+        v = Math.min(v, d[k - w] + 1);
+        if (x > 0) v = Math.min(v, d[k - w - 1] + D);
+        if (x < w - 1) v = Math.min(v, d[k - w + 1] + D);
+      }
+      d[k] = v;
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const k = y * w + x;
+      let v = d[k];
+      if (x < w - 1) v = Math.min(v, d[k + 1] + 1);
+      if (y < h - 1) {
+        v = Math.min(v, d[k + w] + 1);
+        if (x < w - 1) v = Math.min(v, d[k + w + 1] + D);
+        if (x > 0) v = Math.min(v, d[k + w - 1] + D);
+      }
+      d[k] = v;
+    }
+  }
+  return d;
+}
+
 /** The textures of a level of an underground site. */
 export function underField(it: Interior, level: number): UnderField {
   const lv = it.levels[level];
@@ -429,14 +522,20 @@ export function underField(it: Interior, level: number): UnderField {
   const [w, h] = [(nx + 2 * rim) * R, (ny + 2 * rim) * R];
   const floor = new Float32Array(w * h);
   const liquid = new Float32Array(w * h);
+  const pooled = new Float32Array(w * h);
   const raised = new Float32Array(w * h);
   // Which way the sewage runs (`flowAngle`), by the nearest run.
   const flow = new Float32Array(w * h).fill(0.5);
   const wet = new Uint8Array(nx * ny);
+  const pool = new Uint8Array(nx * ny);
   let liquidKind = 0;
   for (const f of lv.furniture) {
     if (f.kind === 'sewage' || f.kind === 'lava') {
-      wet[f.y * nx + f.x] = 1;
+      // (Painted lava is a w x h pool (`pool`), a tube's channel one square.)
+      const isPool = f.kind === 'lava' && (f.w > 1 || f.h > 1);
+      for (let j = f.y; j < Math.min(ny, f.y + (isPool ? f.h : 1)); j++) {
+        for (let i = f.x; i < Math.min(nx, f.x + (isPool ? f.w : 1)); i++) (isPool ? pool : wet)[j * nx + i] = 1;
+      }
       liquidKind = f.kind === 'sewage' ? 1 : 2;
     }
   }
@@ -464,6 +563,7 @@ export function underField(it: Interior, level: number): UnderField {
         for (let x = i * R; x < (i + 1) * R; x++) {
           if (square) floor[o + x] = 1;
           liquid[o + x] = wet[k];
+          pooled[o + x] = pool[k];
           raised[o + x] = lift;
         }
       }
@@ -520,7 +620,25 @@ export function underField(it: Interior, level: number): UnderField {
   // runs as one flow rather than beads.
   let f2: Float32Array = liquid;
   if (liquidKind === 1) f2 = blur(liquid, w, h, 0.3 * R);
-  if (liquidKind === 2) f2 = blur(liquid, w, h, 0.6 * R).map((v) => Math.min(1, v * 1.7));
+  if (liquidKind === 2) {
+    f2 = blur(liquid, w, h, 0.6 * R).map((v) => Math.min(1, v * 1.7));
+    // Painted pools merge into one smooth-edged body, as water does (no lift: the edge stays on the squares').
+    if (pool.includes(1)) {
+      const body = blur(pooled, w, h, 0.3 * R);
+      f2 = f2.map((v, k) => Math.max(v, body[k]));
+    }
+    // The alpha channel (sewage's flow, unused here): signed squares from the edge of the lava's squares
+    // (inside positive), smoothed a little, clamped to +-4 and stored as 0.5 + d / 8, so cooled plates keep
+    // clear of the shore, the glow rim runs an even width and the rock beside it scorches.
+    const mask = new Uint8Array(w * h);
+    for (let k = 0; k < w * h; k++) mask[k] = liquid[k] > 0 || pooled[k] > 0 ? 1 : 0;
+    const din = chamfer(mask, w, h, 1);
+    const dout = chamfer(mask, w, h, 0);
+    const sd = new Float32Array(w * h);
+    for (let k = 0; k < w * h; k++) sd[k] = (mask[k] ? din[k] - 0.5 : 0.5 - dout[k]) / R;
+    const soft = blur(sd, w, h, 0.25 * R);
+    for (let k = 0; k < w * h; k++) flow[k] = 0.5 + Math.max(-4, Math.min(4, soft[k])) / 8;
+  }
   const f3 = anyRaised ? blur(raised, w, h, 0.3 * R) : raised;
   // (The texture keeps what the shader reads past the grid's edge.)
   const pad = rim ? FIELD_PAD : 0;

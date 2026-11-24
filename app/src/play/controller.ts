@@ -9,13 +9,14 @@ import type { MapView, PointerTool } from '../render/MapView';
 import { hexAt, hexFrame, hexKey, hexRing, parseHexKey, type HexFrame, type HexSeen } from '../render/hex';
 import { drawnDoorsOf } from '../render/roomShapes';
 import { SECTION_N, type Sewers } from '../render/Sewers';
+import { lavaShorePoints } from '../render/underField';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
 import { PIN, PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { forgetRehosted } from './rehosted';
 import { hasImage, loadSession, putImage, saveSession } from './session';
 import { apply, emptyState, fallCaveFound, fallCaveKey, hexSeenOf, type HexMode, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
-import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, rulerTerrain, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
+import { BLOCKS, bitAt, computeVision, lavaLights, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, rulerTerrain, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 import { floorOf } from '../gen/floor';
 
 export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog' | 'hex';
@@ -397,6 +398,24 @@ export class PlayController implements PointerTool {
   private bridgesChanged() {
     this.doorChanges.set('surface', (this.doorChanges.get('surface') ?? 0) + 1);
     this.view.battle?.refreshBridges();
+  }
+
+  /**
+   * Lava's glow as lights (Roadmap 7, 199), where darkness applies: on the surface, those near the eyes (cached per
+   * chunk in the battlemap layer; the players' window gets the vision this makes, as the DM's); underground, the
+   * level's painted lava (`lavaShorePoints`, kept per level).
+   */
+  private lavaOf(place: Place, eyes: Eye[], dark: boolean): Eye[] {
+    if (!dark || !eyes.length || place.sewers) return [];
+    if (place.it) return lavaLights(lavaShorePoints(place.it, place.level), eyes);
+    if (place.loc !== 'surface') return [];
+    const b = this.view.battle;
+    if (!b) return [];
+    const r = SIGHT + 16;
+    let [i0, j0, i1, j1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const e of eyes) [i0, j0, i1, j1] = [Math.min(i0, e.x - r), Math.min(j0, e.y - r), Math.max(i1, e.x + r), Math.max(j1, e.y + r)];
+    if (!Number.isFinite(i0 + j0 + i1 + j1)) return [];
+    return lavaLights(b.lavaShore(i0, j0, i1, j1), eyes);
   }
 
   /** The tactical grid of the location in view. */
@@ -1993,7 +2012,7 @@ export class PlayController implements PointerTool {
     const settings = settingsOf(s, place.loc);
     const here = Object.values(s.tokens).filter((t) => t.loc === place.loc);
     const eyes: Eye[] = here.filter((t) => t.kind === 'character' && t.vision).map((t) => ({ x: t.x, y: t.y, above: 5, range: SIGHT }));
-    const lights: Eye[] = here.filter((t) => (t.light ?? 0) > 0).map((t) => ({ x: t.x, y: t.y, above: 5, range: t.light! }));
+    const lights: Eye[] = [...this.lavaOf(place, eyes, settings.dark), ...here.filter((t) => (t.light ?? 0) > 0).map((t) => ({ x: t.x, y: t.y, above: 5, range: t.light! }))];
     const pick = here.find((t) => this.selection.has(t.id) && t.vision) ?? here.find((t) => t.vision);
     const v = computeVision(grid, eyes, lights, settings.dark, pick ? [pick.x, pick.y] : undefined);
     if (place.it && !place.sewers && v.w) showNiches(place.it.levels[place.level], place.it.nx, place.it.ny, v);
@@ -2043,7 +2062,7 @@ export class PlayController implements PointerTool {
     if (!grid) return;
     this.followSig = sig;
     const eyes: Eye[] = here.filter((t) => t.kind === 'character' && t.vision).map((t) => ({ x: t.x, y: t.y, above: 5, range: SIGHT }));
-    const lights: Eye[] = here.filter((t) => (t.light ?? 0) > 0).map((t) => ({ x: t.x, y: t.y, above: 5, range: t.light! }));
+    const lights: Eye[] = [...this.lavaOf(tp, eyes, settings.dark), ...here.filter((t) => (t.light ?? 0) > 0).map((t) => ({ x: t.x, y: t.y, above: 5, range: t.light! }))];
     const v = computeVision(grid, eyes, lights, settings.dark);
     if (tp.it && v.w) showNiches(tp.it.levels[tp.level], tp.it.nx, tp.it.ny, v);
     this.followVision = { loc: f.loc, x0: v.x0, y0: v.y0, w: v.w, h: v.h, bits: v.bits };

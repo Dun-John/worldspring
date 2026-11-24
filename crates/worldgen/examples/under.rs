@@ -222,7 +222,7 @@ fn main() {
                     .collect();
                 // (ROOMS=1: rooms and ways only, no furniture.)
                 let bare = std::env::var("ROOMS").is_ok();
-                for f in lv.furniture.iter().filter(|f| !bare || matches!(f.kind, "exit" | "down" | "up" | "water_shallow" | "water_deep" | "chasm" | "rope_bridge" | "stepping_stone" | "stone_bridge")) {
+                for f in lv.furniture.iter().filter(|f| !bare || matches!(f.kind, "exit" | "down" | "up" | "lava" | "water_shallow" | "water_deep" | "chasm" | "rope_bridge" | "stepping_stone" | "stone_bridge")) {
                     let c = match f.kind {
                         "exit" => 'E',
                         "down" => 'v',

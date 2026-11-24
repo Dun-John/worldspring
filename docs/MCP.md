@@ -1570,7 +1570,7 @@ have nothing underground, so they take none of them. Themes by kind of site:
 | catacombs | `catacombs` |
 | cave | `cave`, `fungal`, `crystal`, `ice`, `flooded`, `beast_den` |
 | mine | `mine` |
-| lava_tube | `lava_tube` |
+| lava_tube | `lava_tube`, `lava_cave`, `forge`, `fire_temple` |
 
 A theme sets the rooms (a prison's guard ring, cell blocks and warden's office, a dwarven hall's forges and great hall), how many
 there are, corridor width and the floor. Every site, whatever its theme, size and depth, ends in one boss chamber on

@@ -657,6 +657,29 @@ export class BattlemapLayer {
   }
 
   /**
+   * (Roadmap 7, 199) Play's lava lights: points (global square coordinates, x then y) on the shore of the lava
+   * (surface `lava`, a crater's or drawn by hand) in the loaded chunks that touch the box (global squares), one
+   * per `LAVA_BLOCK`-square block that has lava touching other ground (the lava square nearest the block's
+   * shore squares' middle). Worked out once per chunk (kept while the chunk's surface array lives).
+   */
+  lavaShore(i0: number, j0: number, i1: number, j1: number): number[] {
+    const out: number[] = [];
+    for (let cy = Math.floor(j0 / SQ); cy <= Math.floor(j1 / SQ); cy++) {
+      for (let cx = Math.floor(i0 / SQ); cx <= Math.floor(i1 / SQ); cx++) {
+        const c = this.chunks.get(`${cx}/${cy}`);
+        if (!c) continue;
+        let pts = lavaShores.get(c.surface);
+        if (!pts) {
+          pts = chunkLavaShore(c.surface);
+          lavaShores.set(c.surface, pts);
+        }
+        for (let k = 0; k < pts.length; k += 2) out.push(cx * SQ + pts[k], cy * SQ + pts[k + 1]);
+      }
+    }
+    return out;
+  }
+
+  /**
    * The surface as play mode sees it, square by square (global 5-ft squares): what blocks
    * sight and movement, difficult ground and its height; squares of chunks not in memory are
    * `UNKNOWN` (and open).
@@ -1371,6 +1394,48 @@ function parkEdge(raised: Uint8Array | null): boolean {
     }
   }
   return false;
+}
+
+/** Squares across a block of lava shore that shares one light (about the glow's reach, 40 ft). */
+const LAVA_BLOCK = 8;
+/** `SURFACES` index of lava. */
+const LAVA_SURFACE = 12;
+const lavaShores = new WeakMap<Uint8Array, number[]>();
+
+/** One light point per `LAVA_BLOCK` block holding shore lava (a lava square with a non-lava 4-neighbour in the chunk). */
+function chunkLavaShore(surface: Uint8Array): number[] {
+  const pts: number[] = [];
+  if (!surface.includes(LAVA_SURFACE)) return pts;
+  const nb = SQ / LAVA_BLOCK;
+  for (let by = 0; by < nb; by++) {
+    for (let bx = 0; bx < nb; bx++) {
+      let [n, sx, sy] = [0, 0, 0];
+      for (let j = by * LAVA_BLOCK; j < (by + 1) * LAVA_BLOCK; j++) {
+        for (let i = bx * LAVA_BLOCK; i < (bx + 1) * LAVA_BLOCK; i++) {
+          if (surface[j * SQ + i] !== LAVA_SURFACE) continue;
+          const dry = (a: number, b: number) => a >= 0 && b >= 0 && a < SQ && b < SQ && surface[b * SQ + a] !== LAVA_SURFACE;
+          if (dry(i - 1, j) || dry(i + 1, j) || dry(i, j - 1) || dry(i, j + 1)) {
+            n++;
+            sx += i;
+            sy += j;
+          }
+        }
+      }
+      if (!n) continue;
+      // The shore square nearest the shore squares' middle.
+      const [mx, my] = [sx / n, sy / n];
+      let [best, bi, bj] = [Infinity, 0, 0];
+      for (let j = by * LAVA_BLOCK; j < (by + 1) * LAVA_BLOCK; j++) {
+        for (let i = bx * LAVA_BLOCK; i < (bx + 1) * LAVA_BLOCK; i++) {
+          if (surface[j * SQ + i] !== LAVA_SURFACE) continue;
+          const d = (i - mx) ** 2 + (j - my) ** 2;
+          if (d < best) [best, bi, bj] = [d, i, j];
+        }
+      }
+      pts.push(bi + 0.5, bj + 0.5);
+    }
+  }
+  return pts;
 }
 
 /** The ground's lava field where no drawn lava lies near (never sampled: `uLava` 0), shared. */

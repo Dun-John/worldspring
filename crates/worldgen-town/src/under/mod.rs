@@ -631,7 +631,9 @@ fn site(
             p.reserve_doors();
             let (w, seed) = (std::mem::take(&mut p.water), hash3(rng.next_u32() as u64, d as i64, 0, 0x3a7e));
             let span = if rng.next_f64() < 0.5 { Span::Bridge } else { Span::Stones };
-            let items = water_at(&Ground::of_plan(&p), seed, span, &|k| (w[k][0] as f64, w[k][1] as f64));
+            let at = |k: usize| (w[k][0] as f64, w[k][1] as f64);
+            // (Lava: stone bridges and stepping stones over it.)
+            let items = if p.molten { lava_at(&Ground::of_plan(&p), seed, span, &at) } else { water_at(&Ground::of_plan(&p), seed, span, &at) };
             p.put_all(items);
         }
         if let Some((r, rope)) = p.chasm {

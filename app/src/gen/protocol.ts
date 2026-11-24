@@ -61,7 +61,7 @@ export const THEMES: Record<string, string[]> = {
   catacombs: ['catacombs'],
   cave: ['cave', 'fungal', 'crystal', 'ice', 'flooded', 'beast_den'],
   mine: ['mine'],
-  lava_tube: ['lava_tube'],
+  lava_tube: ['lava_tube', 'lava_cave', 'forge', 'fire_temple'],
 };
 export const STANCES: Stance[] = ['hostile', 'unfriendly', 'neutral', 'friendly', 'allied'];
 export const PLOT_STATUSES: PlotStatus[] = ['idea', 'active', 'resolved'];

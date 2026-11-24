@@ -3,7 +3,9 @@
 //! barracks, stores, armory, mushroom farm, treasury), the great hall at its far end lined with ancestor statues (an
 //! ancestor hall on some levels below; the boss chamber on the deepest). One level in two the gallery breaks at a
 //! chasm hall: a chasm across it, crossed by a stone bridge on the axis or by rope bridges. Mostly square halls, some
-//! octagons; big sites grow to fill their grid. Wide passages; dry.
+//! octagons; big sites grow to fill their grid. Wide passages; dry. A forge (`FORGE`) is laid the same with its
+//! theme's wings (furnace rooms, quench rooms, ore and coal stores, smiths' quarters) and the great forge at the far
+//! end of every level: a lava channel down its middle, furnaces along its walls.
 
 use crate::core::rng::Pcg32;
 use crate::under::grow::{Grower, Piece, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, fallback, fill, first_room, rooms};
@@ -12,7 +14,9 @@ use crate::under::*;
 
 const GALLERY: &str = "pillared gallery";
 const CHASM_HALL: &str = "chasm hall";
-const WINGS: [&str; 7] = ["forge", "brewery", "barracks", "storeroom", "armory", "mushroom farm", "treasury"];
+/// A forge's hall at the far end (`FORGE`).
+const GREAT_FORGE: &str = "great forge";
+const WINGS: [&str; 7] =["forge", "brewery", "barracks", "storeroom", "armory", "mushroom farm", "treasury"];
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool, theme: &Theme, area: f64, rng: &mut Pcg32) -> Plan {
@@ -87,8 +91,11 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
             }
         }
     }
-    // Side wings in pairs off the galleries' long walls, each pair two kinds.
-    let kinds: Vec<&'static str> = if depth == 0 { WINGS.to_vec() } else { WINGS.iter().copied().filter(|&k| k != "brewery").collect() };
+    // Side wings in pairs off the galleries' long walls, each pair two kinds (a forge's: its theme's, but the great
+    // forge).
+    let forge = theme.key == FORGE;
+    let wings: &[&'static str] = if forge { theme.kinds } else { &WINGS };
+    let kinds: Vec<&'static str> = wings.iter().copied().filter(|&k| k != GREAT_FORGE && (depth == 0 || k != "brewery")).collect();
     for &gal in &galleries {
         let w = g.pieces[gal].w.max(g.pieces[gal].h);
         let pairs = (w / 6).max(1);
@@ -119,7 +126,8 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
         }
     }
     // The hall at the far end: the great hall (an ancestor hall on some levels below; the boss chamber deepest).
-    let end_kind = if last { BOSS } else if depth == 0 || depth % 2 == 0 { "great hall" } else { "ancestor hall" };
+    // (A forge's: the great forge on every level but the deepest.)
+    let end_kind = if last { BOSS } else if forge { GREAT_FORGE } else if depth == 0 || depth % 2 == 0 { "great hall" } else { "ancestor hall" };
     let t = if rng.next_f64() < 0.3 { Template::Octagon } else { Template::Rect };
     let mut boss = None;
     // (The boss chamber no smaller than 9 x 9 here; else a big one off the farthest open piece now, `boss_room`, before
@@ -133,7 +141,7 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
                 boss = Some(room);
             } else {
                 halls.push(room);
-                if a >= 9 && t == Template::Rect {
+                if a >= 9 && t == Template::Rect && !forge {
                     pillared.push((room, 2));
                 }
             }
@@ -154,11 +162,31 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
         boss = boss_room(&mut p, &mut g, ny, area, rng);
     }
     finish(&mut p, ny, passage, cw, last, boss, &[], &pillared);
-    // Ancestor statues along the great halls' walls.
+    // Ancestor statues along the great halls' walls; a great forge's lava channel down its middle, the furnaces it
+    // feeds along its walls.
     for r in halls {
-        statues(&mut p, ny, &g, r);
+        if forge {
+            channel(&mut p, ny, &g, r);
+        }
+        along_walls(&mut p, ny, &g, r, if forge { "forge" } else { "statue" });
     }
     p
+}
+
+/// A lava channel down the middle of a hall (`room`, a grown piece) along its longer side, stopping two squares short
+/// of each end wall so the floor joins round it (its way in on the axis stays clear); off what is there already.
+fn channel(p: &mut Plan, ny: usize, g: &Grower, room: i16) {
+    let nx = p.nx;
+    let Some(&Piece { x, y, w, h, .. }) = g.pieces.iter().find(|f| f.room == room) else { return };
+    let along_x = w >= h;
+    let (len, mid) = if along_x { (w, y + h / 2) } else { (h, x + w / 2) };
+    for t in 2..len.saturating_sub(2) {
+        let (i, j) = if along_x { (x + t, mid) } else { (mid, y + t) };
+        let k = j * nx + i;
+        if j < ny && p.cells[k] == room && !p.taken[k] && p.down != Some(k) && k != p.up {
+            p.put(lava(i, j));
+        }
+    }
 }
 
 /// What grows among the halls: the wings' rooms, each small or big, some octagons; short wide passages.
@@ -175,9 +203,9 @@ fn specs(kinds: &[&'static str], cw: usize, area: f64) -> Vec<Spec> {
     out
 }
 
-/// Statues every third square along a hall's two long walls (off doorways and what is there), kept only where every
-/// square stays reachable.
-fn statues(p: &mut Plan, ny: usize, g: &Grower, room: i16) {
+/// `kind` (statues, a forge's furnaces, a fire temple's braziers) every third square along a hall's two long walls
+/// (off doorways and what is there), kept only where every square stays reachable.
+pub(crate) fn along_walls(p: &mut Plan, ny: usize, g: &Grower, room: i16, kind: &'static str) {
     let nx = p.nx;
     let Some(&Piece { x, y, w, h, .. }) = g.pieces.iter().find(|f| f.room == room) else { return };
     let mut near_door = vec![false; p.cells.len()];
@@ -201,7 +229,7 @@ fn statues(p: &mut Plan, ny: usize, g: &Grower, room: i16) {
                     continue;
                 }
                 if !near_door[k] && !p.taken[k] && p.down != Some(k) && k != p.up {
-                    p.place(item("statue", i, j, 1, 1), Some(room), ny);
+                    p.place(item(kind, i, j, 1, 1), Some(room), ny);
                 }
                 break;
             }

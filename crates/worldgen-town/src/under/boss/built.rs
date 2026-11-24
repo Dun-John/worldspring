@@ -11,8 +11,8 @@ pub(crate) fn built(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usiz
     for i in (1..order.len()).rev() {
         order.swap(i, rng.below(i as u32 + 1) as usize);
     }
-    // (A flooded vault's strongroom stands on an island.)
-    if theme == "flooded_vault" && let Some(m) = order.iter().position(|&i| LAYOUTS[i] == "moat") {
+    // (A flooded vault's strongroom stands on an island; a fire temple's altar on one in a lava moat.)
+    if matches!(theme, "flooded_vault" | FIRE_TEMPLE) && let Some(m) = order.iter().position(|&i| LAYOUTS[i] == "moat") {
         order[..=m].rotate_right(1);
     }
     let fallback = far_stage(&h);
@@ -20,7 +20,7 @@ pub(crate) fn built(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usiz
     spread(p, &h, stage, cover_kinds(theme, false), rng);
     let mut kinds = vec!["cracked floor", "pressure plate"];
     match theme {
-        "dwarven_hall" => kinds.push("steam vent"),
+        "dwarven_hall" | FORGE | FIRE_TEMPLE => kinds.push("steam vent"),
         "flooded_vault" | "sunken_temple" => kinds.push("flooded pit"),
         _ => {}
     }
@@ -178,7 +178,13 @@ pub(super) fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut 
                     while b + 1 < w && h.sq(p, d, b + 1).is_some() {
                         b += 1;
                     }
-                    items.push(h.item("chasm", d, a, 1, (b - a + 1) as usize, None));
+                    // (A forge's or fire temple's: a lava channel.)
+                    let n = (b - a + 1) as usize;
+                    items.push(if matches!(theme, FORGE | FIRE_TEMPLE) {
+                        h.rect(d, a, 1, n).map(|(x, y, rw, rh)| Item { w: rw as u16, h: rh as u16, ..super::kit::lava(x, y) })
+                    } else {
+                        h.item("chasm", d, a, 1, n, None)
+                    });
                     a = b + 1;
                 }
             }
@@ -202,7 +208,7 @@ pub(super) fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut 
             };
             let (mw, di, ai, bridge) = [(2, 0), (1, 0), (2, 1), (1, 1), (1, 2)].into_iter().find_map(fits)?;
             let il = il as isize;
-            let molten = theme == "dwarven_hall";
+            let molten = matches!(theme, "dwarven_hall" | FORGE | FIRE_TEMPLE);
             let mut items = Vec::new();
             for d in di - mw..di + il + mw {
                 for a in ai - mw..ai + il + mw {
@@ -412,10 +418,10 @@ pub(super) fn centrepiece(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &m
     match theme {
         // A throne on its dais; a dwarven hall's forge-throne with its forge and anvil off to one side, two squares
         // clear of the dais, the hoard on the other (no chest or braziers: the forge is the fire).
-        "keep" | "dungeon" | "dwarven_hall" => {
+        "keep" | "dungeon" | "dwarven_hall" | FORGE => {
             let (dd, da) = dais(p).unwrap_or((f - 1, m - 1));
             near(p, h, true, "throne", dd + 1, da + 1, 1, 1, back);
-            if theme == "dwarven_hall" {
+            if theme != "keep" && theme != "dungeon" {
                 let west = rng.below(2) == 0;
                 let side = if west { (da - 3).max(0) } else { (da + 5).min(wl) };
                 put(p, "forge", dd + 1, side, 1, 1, back);
@@ -425,7 +431,7 @@ pub(super) fn centrepiece(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &m
             }
         }
         // An altar, and the ritual circle before it.
-        "temple" | "sunken_temple" | "cult_sanctum" => {
+        "temple" | "sunken_temple" | "cult_sanctum" | FIRE_TEMPLE => {
             put(p, "altar", f, m - 1, 1, 2, back);
             // (Before the altar: on a raised stage 3 deep, on it.)
             put(p, "glyph", if top && s.dl >= 3 { f - 2 } else { f - 3 }, m - 1, 2, 2, None);
@@ -530,13 +536,13 @@ pub(super) fn centrepiece(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &m
         }
         extra(p, "chest", f, m - 2, back);
     }
-    if matches!(theme, "keep" | "dungeon" | "temple" | "sunken_temple" | "cult_sanctum" | FORTRESS) {
+    if matches!(theme, "keep" | "dungeon" | "temple" | "sunken_temple" | "cult_sanctum" | FORTRESS | FIRE_TEMPLE) {
         for a in [m - 3, m + 3] {
             extra(p, "brazier", f - 1, a, None);
         }
     }
     match theme {
-        "dwarven_hall" => edge(p, h, "banner", 2, rng),
+        "dwarven_hall" | FORGE => edge(p, h, "banner", 2, rng),
         "keep" | "dungeon" | "cult_sanctum" | "temple" | FORTRESS => edge(p, h, "banner", 2 + rng.below(2) as usize, rng),
         "prison" => edge(p, h, "sconce", 2, rng),
         "bandit_hideout" => edge(p, h, "lantern", 1, rng),

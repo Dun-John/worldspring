@@ -328,6 +328,18 @@ pub const THEMES: &[Theme] = &[
     natural("beast_den", UnderKind::Cave, &["lair", "nest chamber", "gnawing chamber", "bat roost", "cavern"], "ledge"),
     natural("mine", UnderKind::Mine, &[], ""),
     natural("lava_tube", UnderKind::LavaTube, &["lava tube", "tube gallery", "side pocket", "obsidian gallery"], "basalt shelf"),
+    // The lava family (by a volcano, as the lava tube): caverns round a lava river and a lava lake, basalt columns
+    // (`themes::cave`); a forge's worked halls round the great forge and its lava channel (`themes::dwarven`); a fire
+    // temple's nave of braziers, its sanctum's altar on an island in a lava pool (`themes::temple`).
+    Theme { planner: Planner::Cave, ..natural(LAVA_CAVE, UnderKind::LavaTube, &["lava cavern", "basalt hall", "scorched grotto", "vent chamber"], "basalt shelf") },
+    Theme {
+        planner: Planner::Dwarven,
+        ..built(FORGE, UnderKind::LavaTube, "gate hall", &["great forge", "furnace room", "quench room", "ore store", "coal store", "smiths' quarters", "armory", "storeroom"], "gallery", (9, 5), 2)
+    },
+    Theme {
+        planner: Planner::Temple,
+        ..built(FIRE_TEMPLE, UnderKind::LavaTube, "narthex", &["fire sanctum", "shrine", "priests' cells", "offering pit", "vestry", "reliquary", "brazier hall"], "processional way", (7, 4), 2)
+    },
     // (Never drawn for a generated site: a temple on wet ground becomes it, and about 1 in 4 of the rest, `generate`.)
     Theme {
         planner: Planner::Temple,
@@ -340,6 +352,10 @@ pub const THEMES: &[Theme] = &[
 pub const SUNKEN_TEMPLE: &str = "sunken_temple";
 /// A fort's halls with caves eating in: drawn for generated sites under ruins only.
 pub const FORTRESS: &str = "collapsed_fortress";
+/// The lava family's caverns, forge and fire temple (each laid by the planner of its look: cave, dwarven, temple).
+pub const LAVA_CAVE: &str = "lava_cave";
+pub const FORGE: &str = "forge";
+pub const FIRE_TEMPLE: &str = "fire_temple";
 
 /// How old the place over a site is, for its cave-ins (`themes::breach`): under a ruin (or a lone way down in the
 /// wilds) about half the levels get one; under a living town, keep or city about one site in ten; a site made by hand

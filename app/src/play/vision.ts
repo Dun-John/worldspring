@@ -462,3 +462,26 @@ export function shapeLabel(s: Shape, g: GridSettings): string {
   if (s.kind === 'rect') return `${formatDistance(Math.abs(s.dx), g)} × ${formatDistance(Math.abs(s.dy), g)}`;
   return formatDistance(len, g);
 }
+
+/** Lava's glow (Roadmap 7, 199): bright about 20 ft and dim to 40 ft from the lava's edge. Vision has one reach per light: the dim one. */
+export const LAVA_BRIGHT_FT = 20;
+export const LAVA_DIM_FT = 40;
+/** Reach of a light on a lava shore (squares). */
+export const LAVA_LIGHT_RANGE = LAVA_DIM_FT / 5;
+/** Most lava lights taken into one vision update (the nearest to the eyes). */
+export const MAX_LAVA_LIGHTS = 48;
+
+/**
+ * The lights lava gives: from `shore` (points on the lava's shore, global squares: `BattlemapLayer.lavaShore`),
+ * those within reach of `eyes` (their sight plus the glow), the nearest `MAX_LAVA_LIGHTS`. Lava doesn't block sight.
+ */
+export function lavaLights(shore: number[], eyes: Eye[]): Eye[] {
+  const found: { d: number; e: Eye }[] = [];
+  for (let k = 0; k < shore.length; k += 2) {
+    let d = Infinity;
+    for (const e of eyes) d = Math.min(d, Math.max(Math.abs(shore[k] - e.x), Math.abs(shore[k + 1] - e.y)));
+    if (d <= SIGHT + LAVA_LIGHT_RANGE) found.push({ d, e: { x: shore[k], y: shore[k + 1], above: 2, range: LAVA_LIGHT_RANGE } });
+  }
+  found.sort((a, b) => a.d - b.d);
+  return found.slice(0, MAX_LAVA_LIGHTS).map((f) => f.e);
+}
