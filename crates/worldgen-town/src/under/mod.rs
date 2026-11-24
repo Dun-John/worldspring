@@ -103,10 +103,13 @@ pub fn sewer_section(p: P) -> P {
 }
 
 /// Iron drain grates in the paved streets over sewer section `origin` (corner, world ft): each
-/// at a square's middle on a street's line, with the street's way (unit), every 55 ft or so
+/// in the gutter of a street's paving (1.25 ft in from its edge, one side or the other by a
+/// hash; on the street's line where the paving is too narrow for the gutter's square and the
+/// squares round it to be paved), with the street's way (unit), every 55 ft or so
 /// along it from a phase of its own (a hash of its ends: the same seen from any section), at
 /// most six, 40 ft clear of each other and of the street grates down, over dry ground, clear
-/// of towers and gates. From the layout alone: the sewer section lights the floor under them
+/// of towers and gates, of a junction with another street, of buildings, bridges and piers.
+/// From the layout alone: the sewer section lights the floor under them
 /// and the battlemap draws them in the street, each working it out for itself. Cities only.
 pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
     if l.site || l.tier < crate::t0::settle::Tier::City {
@@ -117,9 +120,20 @@ pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
     let ways: Vec<P> = l.entrances.iter().filter(|e| e.kind == UnderKind::Sewer).map(|e| e.at).collect();
     let towers = crate::interior::towers(l);
     let clear = |q: P| towers.iter().all(|&(t, r, gate)| town::geom::dist(q, t) >= r + if gate { 22.0 } else { 5.0 });
+    let segs = street_segments(l);
+    // The squares the battlemap paves for the streets: centre within the street's half width.
+    let paved = |c: P| segs.iter().any(|(a, b, h)| town::geom::seg_dist(c, *a, *b) < *h);
+    let square_c = |q: P| [crate::core::floor(q[0] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT, crate::core::floor(q[1] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT];
+    // Under a building, a bridge or a pier (a deck, not paving), on a plank quay or on a wall.
+    let off_ground = |q: P| {
+        l.walls.iter().any(|w| w.windows(2).any(|e| town::geom::seg_dist(q, e[0], e[1]) < 8.0))
+            || l.buildings.iter().any(|b| town::geom::contains(&b.poly, q) || (0..b.poly.len()).any(|k| town::geom::seg_dist(q, b.poly[k], b.poly[(k + 1) % b.poly.len()]) < 2.0))
+            || l.bridges.iter().chain(&l.piers).any(|d| town::geom::contains(d, q) || (0..d.len()).any(|k| town::geom::seg_dist(q, d[k], d[(k + 1) % d.len()]) < 3.0))
+            || l.quays.iter().filter(|k| k.timber).any(|k| town::geom::contains(&k.band(), q))
+    };
     const STEP: f64 = 55.0;
     let mut out: Vec<(P, P)> = Vec::new();
-    for (a, b, _) in street_segments(l) {
+    for (si, &(a, b, half)) in segs.iter().enumerate() {
         if a[0].max(b[0]) < origin[0] || a[0].min(b[0]) > origin[0] + s || a[1].max(b[1]) < origin[1] || a[1].min(b[1]) > origin[1] + s {
             continue;
         }
@@ -128,14 +142,30 @@ pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
             continue;
         }
         let dir = mul(sub(b, a), 1.0 / len);
-        let phase = crate::core::rng::unit(hash3(l.roof_seed ^ 0xd7a1, crate::core::round(a[0] + b[0]) as i64, crate::core::round(a[1] + b[1]) as i64, 0x96a7)) * STEP;
+        let norm = [-dir[1], dir[0]];
+        let key = (crate::core::round(a[0] + b[0]) as i64, crate::core::round(a[1] + b[1]) as i64);
+        let phase = crate::core::rng::unit(hash3(l.roof_seed ^ 0xd7a1, key.0, key.1, 0x96a7)) * STEP;
         let mut t = phase.max(8.0);
+        let mut n = 0i64;
         while t < len - 8.0 {
-            let q = add(a, mul(dir, t));
+            let on_line = add(a, mul(dir, t));
             t += STEP;
-            let q = [crate::core::floor(q[0] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT, crate::core::floor(q[1] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT];
+            n += 1;
+            let side = if crate::core::rng::unit(hash3(l.roof_seed ^ 0x6c37, key.0, key.1, n)) < 0.5 { -1.0 } else { 1.0 };
+            // The gutter if its square and the four beside it are paved (the paving's edge is
+            // ragged to a square), else the street's line, if its square is.
+            let gutter = half - 1.25;
+            let spot = [gutter, 0.0].into_iter().find_map(|o| {
+                let q = add(on_line, mul(norm, side * o));
+                let c = square_c(q);
+                let ring = o == 0.0 || [[SQUARE_FT, 0.0], [-SQUARE_FT, 0.0], [0.0, SQUARE_FT], [0.0, -SQUARE_FT]].iter().all(|d| paved(add(c, *d)));
+                (ring && paved(c) && paved(q)).then_some(q)
+            });
+            let Some(q) = spot else { continue };
             let apart = |o: &P| town::geom::dist(*o, q) >= 40.0;
-            if out.len() >= 6 || !inside(q) || !ways.iter().all(apart) || !out.iter().all(|(o, _)| apart(o)) || !clear(q) || wet(t0, q) {
+            // Not on another street's paving (a junction's open centre), 2 ft clear of it.
+            let junction = segs.iter().enumerate().any(|(sj, (a2, b2, h2))| sj != si && town::geom::seg_dist(q, *a2, *b2) < *h2 + 2.0);
+            if out.len() >= 6 || !inside(q) || !ways.iter().all(apart) || !out.iter().all(|(o, _)| apart(o)) || !clear(q) || junction || off_ground(q) || wet(t0, q) {
                 continue;
             }
             out.push((q, dir));
