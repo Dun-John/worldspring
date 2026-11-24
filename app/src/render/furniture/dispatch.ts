@@ -209,7 +209,7 @@ function drawKind(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: ()
       bookcase(g, f, light, v, rnd, back ?? [0, -1]);
       break;
     case 'hearth':
-      hearth(g, f, rnd, back ?? [0, -1]);
+      hearth(g, f, rnd, back ?? [0, -1], v);
       break;
     case 'yurt_hearth':
       yurtHearth(g, f, light, v, rnd, back ?? [0, 1]);

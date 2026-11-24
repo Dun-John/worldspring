@@ -126,6 +126,7 @@ export function lookName(kind: string, v: number): string {
   if (kind === 'counting_desk') return ['Oak, green baize', 'Walnut, green baize', 'Oak, red leather', 'Walnut, red leather'][v % 4];
   if (kind === 'job_board') return ['Notices', 'A wanted bill', 'A painted header', 'A map'][v % 4];
   if (kind === 'stable_stall') return ['Empty', 'A bay horse', 'A grey horse', 'A chestnut horse'][v % 4];
+  if (kind === 'hearth') return ['Logs and flame', 'An ember bed', 'Banked', 'Laid ready, cold'][v % 4];
   if (kind === 'council_table') return ['Oval, oak', 'Oak, green baize', 'Oval, walnut', 'Walnut, a blue runner'][v % 4];
   return `Look ${v + 1}`;
 }

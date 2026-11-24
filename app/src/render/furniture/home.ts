@@ -1,5 +1,7 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
+import { BOX_FRONT, hearthFire } from './hearthfire';
+import { trueShape } from './squash';
 import { BOOKS, BRASS, DARK_WOOD, DYES, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, mute, oval, patch, planks, quad, ring, shade } from './common';
 
 /** A camp cot: canvas stretched between two side poles that run past it at both ends, crossed legs
@@ -94,9 +96,9 @@ export function chest(g: Graphics, f: InteriorItem, light: Light, v: number, rnd
     [x + 0.15, y + 0.81],
     [x + 0.85, y + 0.81],
   ]) {
-    g.rect(cx - 0.035, cy - 0.035, 0.07, 0.07).fill(IRON[0]);
+    trueShape(g, cx, cy, () => g.rect(cx - 0.035, cy - 0.035, 0.07, 0.07).fill(IRON[0]));
   }
-  g.rect(x + 0.44, y + 0.74, 0.12, 0.1).fill(BRASS).stroke({ width: LINE, color: INK });
+  trueShape(g, x + 0.5, y + 0.79, () => g.rect(x + 0.44, y + 0.74, 0.12, 0.1).fill(BRASS).stroke({ width: LINE, color: INK }));
   g.circle(x + 0.5, y + 0.8, 0.015).fill(INK);
 }
 
@@ -185,9 +187,12 @@ export function shelf(g: Graphics, f: InteriorItem, light: Light, v: number, rnd
     (u: number, s: number, big: boolean) => pot(u, s, big ? 0.13 : 0.1, [0x6a4028, 0x9a6038, 0x3a2414]),
     (u: number, s: number) => pot(u, s, 0.08, [0x3a5a32, 0x5a8a4a, 0x8a6a3a]),
     (u: number, s: number, big: boolean) => {
-      const h = big ? 0.13 : 0.1;
-      g.poly(quad(rect(u - 0.12, s - h, u + 0.12, s + h), rnd, 0.008)).fill(0xa8865a).stroke({ width: LINE, color: INK });
-      g.moveTo(...at(u - 0.12, s)).lineTo(...at(u + 0.12, s)).stroke({ width: 0.014, color: 0x6a4a2a });
+      const h = big ? 0.1 : 0.08;
+      // A box keeps its proportions on the squashed tier.
+      trueShape(g, ...at(u, s), () => {
+        g.poly(quad(rect(u - 0.12, s - h, u + 0.12, s + h), rnd, 0.008)).fill(0xa8865a).stroke({ width: LINE, color: INK });
+        g.moveTo(...at(u - 0.12, s)).lineTo(...at(u + 0.12, s)).stroke({ width: 0.014, color: 0x6a4a2a });
+      });
     },
     (u: number, s: number, big: boolean) => pot(u, s, big ? 0.11 : 0.09, [0x8a8070, 0xc8c0a8, 0x8a6a3a]),
     (u: number, s: number) => pot(u, s, 0.06, [0x2e4a5a, 0x4a7a8a, 0x5a3a22]),
@@ -227,71 +232,16 @@ export function masonry(g: Graphics, [x0, y0, x1, y1]: number[], t: readonly num
   }
 }
 
-/** A fire in a hearth, along `sBase` from `u0` to `u1` (frame coordinates), reaching back toward `sTop`:
- * a bed of embers, then soft glowing ovals heaped on it, deep orange out to a pale yellow core. */
-function hearthFire(g: Graphics, at: (u: number, s: number) => [number, number], u0: number, u1: number, sBase: number, sTop: number, rnd: () => number) {
-  for (let i = 0; i < 18; i++) g.circle(...at(u0 + (u1 - u0) * rnd(), sTop + (sBase - sTop) * (0.3 + 0.8 * rnd())), 0.018 + 0.016 * rnd()).fill([0x7a2a10, 0xc2410c, 0xf97316, 0xffc23a][Math.floor(rnd() * 4)]);
-  const n = 3;
-  const sm = (sBase + sTop) / 2;
-  const blobs: [number, number, number, number][] = [];
-  for (let i = 0; i < n; i++) {
-    const u = u0 + ((u1 - u0) * (i + 0.5)) / n + (rnd() - 0.5) * 0.04;
-    const big = i === 1 ? 1.25 : 0.8 + 0.15 * rnd();
-    const ru = ((u1 - u0) / n) * 0.72 * big;
-    const rs = (sBase - sTop) * 0.4 * big;
-    blobs.push([u, sm + (rnd() - 0.5) * 0.06, ru, rs]);
-  }
-  for (const [k, color, a] of [
-    [1, 0xc2410c, 0.9],
-    [0.74, 0xf28a1e, 1],
-    [0.48, 0xffc23a, 1],
-    [0.22, 0xfff2c0, 1],
-  ]) {
-    for (const [u, sc, ru, rs] of blobs) {
-      const pts: number[] = [];
-      for (let t = 0; t < 16; t++) {
-        const ang = (t / 16) * Math.PI * 2;
-        pts.push(...at(u + Math.cos(ang) * ru * k, sc + Math.sin(ang) * rs * k));
-      }
-      g.poly(pts).fill({ color, alpha: a });
-    }
-  }
-}
-
-/** Charred logs lying in a fire, their ends glowing. */
-function logs(g: Graphics, cx: number, cy: number, r: number, along: boolean) {
-  for (const d of [-0.35, 0.35]) {
-    const [ax, ay, bx, by] = along ? [cx - r, cy + d * r, cx + r, cy + d * r * 0.6] : [cx + d * r, cy - r, cx + d * r * 0.6, cy + r];
-    g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: r * 0.4 + 0.03, color: INK, cap: 'round' });
-    g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: r * 0.4, color: 0x2a1c14, cap: 'round' });
-    for (const [ex, ey] of [
-      [ax, ay],
-      [bx, by],
-    ]) {
-      g.circle(ex, ey, r * 0.15).fill(0xc2410c);
-      g.circle(ex, ey, r * 0.07).fill(0xffc23a);
-    }
-  }
-}
-
-/** Hearth against a wall: a stone surround open toward the room, the firebox with logs and flames, a
- * flagstone apron in front. */
-export function hearth(g: Graphics, f: InteriorItem, rnd: () => number, back: [number, number]) {
-  const { along, len, rect, at } = frame(f, back);
+/** Hearth against a wall: a stone surround open toward the room, a flagstone apron in front, and in the firebox one of
+ * its four looks `v` (`hearthfire.ts`: A logs and flame, B ember bed, C banked, D laid ready, cold). */
+export function hearth(g: Graphics, f: InteriorItem, rnd: () => number, back: [number, number], v = 0) {
+  const { len, rect, at } = frame(f, back);
   // The apron, then the surround (back and two cheeks), then the firebox.
-  const apron = rect(0.14, 0.62, len - 0.14, 0.96);
+  const apron = rect(0.14, BOX_FRONT - 0.04, len - 0.14, 0.96);
   g.poly(quad(apron, rnd, 0.01)).fill(STONE[1]).stroke({ width: LINE, color: INK });
-  g.moveTo(...at(len / 2, 0.62)).lineTo(...at(len / 2 + (rnd() - 0.5) * 0.1, 0.96)).stroke({ width: LINE, color: STONE[0] });
-  masonry(g, rect(0.06, WALL_GAP - 0.04, len - 0.06, 0.66), STONE, rnd, 0.16);
-  const box = rect(0.38, WALL_GAP + 0.08, len - 0.38, 0.66);
-  g.poly(quad(box, rnd, 0.006)).fill(0x1a1410).stroke({ width: LINE, color: INK });
-  g.poly(quad(rect(0.42, WALL_GAP + 0.12, len - 0.42, 0.4), rnd, 0.006)).fill({ color: 0x2e2620, alpha: 0.9 });
-  // Firelight on the firebox and the apron, then the flames rising off the logs toward the chimney.
-  g.poly(quad(rect(0.4, WALL_GAP + 0.1, len - 0.4, 0.92), rnd, 0)).fill({ color: 0xf59e0b, alpha: 0.12 });
-  // Charred logs under the fire, only their glowing ends showing past the flames.
-  const [cx, cy] = at(len / 2, 0.5);
-  logs(g, cx, cy, Math.min(0.26, len * 0.15), along);
-  hearthFire(g, at, 0.5, len - 0.5, 0.6, WALL_GAP + 0.1, rnd);
+  g.moveTo(...at(len / 2, BOX_FRONT - 0.04)).lineTo(...at(len / 2 + (rnd() - 0.5) * 0.1, 0.96)).stroke({ width: LINE, color: STONE[0] });
+  masonry(g, rect(0.06, WALL_GAP - 0.04, len - 0.06, BOX_FRONT), STONE, rnd, 0.16);
+  hearthFire(g, at, len, v, rnd);
 }
 
 /** Bread oven against a wall: a domed brick oven, its arched mouth toward the room glowing with embers,
@@ -429,16 +379,19 @@ export function workbench(g: Graphics, f: InteriorItem, light: Light, rnd: () =>
   planks(g, face, along, 3, WOOD[0], rnd);
   for (let u = 0.4; u < len - 0.3; u += 0.35) g.circle(...at(u, 0.82), 0.025).fill(0x2a1c10);
   // The vise at the room-side end.
-  board(g, rect(len - 0.36, 0.8, len - 0.14, 0.98), IRON, light, rnd, along, 0.025, 0);
-  g.moveTo(...at(len - 0.25, 0.98)).lineTo(...at(len - 0.25, 1.06)).stroke({ width: 0.03, color: IRON[2], cap: 'round' });
+  trueShape(g, ...at(len - 0.25, 0.8), () => {
+    board(g, rect(len - 0.36, 0.7, len - 0.14, 0.86), IRON, light, rnd, along, 0.025, 0);
+    g.moveTo(...at(len - 0.25, 0.86)).lineTo(...at(len - 0.25, 0.93)).stroke({ width: 0.03, color: IRON[2], cap: 'round' });
+  });
   // Tools hung on the wall rail: a saw, a mallet, chisels.
   g.moveTo(...at(0.15, WALL_GAP - 0.02)).lineTo(...at(len - 0.15, WALL_GAP - 0.02)).stroke({ width: 0.04, color: DARK_WOOD[1] });
+  // (Each tool keeps its own proportions on the squashed bench.)
   const [sx, sy] = at(0.4, WALL_GAP + 0.02);
   const [tx, ty] = at(0.8, WALL_GAP + 0.1);
-  g.poly([sx, sy, tx, ty, ...at(0.8, WALL_GAP + 0.02)]).fill(IRON[2]).stroke({ width: LINE, color: INK });
+  trueShape(g, ...at(0.6, WALL_GAP + 0.06), () => g.poly([sx, sy, tx, ty, ...at(0.8, WALL_GAP + 0.02)]).fill(IRON[2]).stroke({ width: LINE, color: INK }));
   g.circle(...at(1.15, WALL_GAP + 0.08), 0.06).fill(WOOD[1]).stroke({ width: LINE, color: INK });
   g.moveTo(...at(1.15, WALL_GAP + 0.02)).lineTo(...at(1.15, WALL_GAP + 0.03)).stroke({ width: 0.02, color: INK });
-  for (const u of [len - 0.6, len - 0.5]) g.moveTo(...at(u, WALL_GAP)).lineTo(...at(u, WALL_GAP + 0.14)).stroke({ width: 0.025, color: IRON[2], cap: 'round' });
+  for (const u of [len - 0.6, len - 0.5]) trueShape(g, ...at(u, WALL_GAP + 0.07), () => g.moveTo(...at(u, WALL_GAP)).lineTo(...at(u, WALL_GAP + 0.14)).stroke({ width: 0.025, color: IRON[2], cap: 'round' }));
 }
 
 /** Shop counter against a wall: a long, worn top board (paler where hands rest along the front), a
@@ -620,8 +573,11 @@ export function bed(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: 
     const s0 = 0.22 + (i * (wid - 0.44)) / pillows;
     const s1 = 0.22 + ((i + 1) * (wid - 0.44)) / pillows - (pillows > 1 ? 0.06 : 0);
     const [px0, py0, px1, py1] = rect(h0 + 0.26, s0, h0 + 0.58, s1);
-    g.roundRect(px0, py0, px1 - px0, py1 - py0, 0.08).fill(LINEN[2]).stroke({ width: LINE, color: INK });
-    g.moveTo(...at(h0 + 0.42, s0 + 0.12)).lineTo(...at(h0 + 0.42, s1 - 0.12)).stroke({ width: 0.015, color: LINEN[0] });
+    // (A pillow keeps its proportions on the squashed bed.)
+    trueShape(g, (px0 + px1) / 2, (py0 + py1) / 2, () => {
+      g.roundRect(px0, py0, px1 - px0, py1 - py0, 0.08).fill(LINEN[2]).stroke({ width: LINE, color: INK });
+      g.moveTo(...at(h0 + 0.42, s0 + 0.12)).lineTo(...at(h0 + 0.42, s1 - 0.12)).stroke({ width: 0.015, color: LINEN[0] });
+    });
   }
   const dye = DYES[v % DYES.length];
   const top = h0 + 0.72;
@@ -682,14 +638,17 @@ export function desk(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
     const ox = px + (rnd() - 0.5) * 0.08;
     const oy = py + (rnd() - 0.5) * 0.06;
     const pt = (u: number, v: number) => [ox + u * c - v * sn, oy + u * sn + v * c];
-    g.poly([...pt(-hw, -hh), ...pt(hw, -hh), ...pt(hw, hh), ...pt(-hw, hh)]).fill(i === 2 ? LINEN[2] : LINEN[1]).stroke({ width: 0.016, color: INK });
-    if (i === 2) {
-      for (let k = 0; k < 4; k++) {
-        const v = -hh * 0.6 + k * hh * 0.4;
-        g.moveTo(...(pt(-hw * 0.75, v) as [number, number])).lineTo(...(pt(hw * (0.35 + 0.35 * rnd()), v) as [number, number]));
+    // (A sheet keeps its shape on the squashed desk.)
+    trueShape(g, ox, oy, () => {
+      g.poly([...pt(-hw, -hh), ...pt(hw, -hh), ...pt(hw, hh), ...pt(-hw, hh)]).fill(i === 2 ? LINEN[2] : LINEN[1]).stroke({ width: 0.016, color: INK });
+      if (i === 2) {
+        for (let k = 0; k < 4; k++) {
+          const v = -hh * 0.6 + k * hh * 0.4;
+          g.moveTo(...(pt(-hw * 0.75, v) as [number, number])).lineTo(...(pt(hw * (0.35 + 0.35 * rnd()), v) as [number, number]));
+        }
+        g.stroke({ width: 0.016, color: 0x5a4a3a, alpha: 0.8 });
       }
-      g.stroke({ width: 0.016, color: 0x5a4a3a, alpha: 0.8 });
-    }
+    });
   }
   // The ink jar and a quill lying beside it.
   const [jx, jy] = at(len - 0.42, 0.36);
@@ -701,8 +660,10 @@ export function desk(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
   const m = Math.hypot(dx, dy) || 1;
   const [nx, ny] = [-dy / m, dx / m];
   const mid = [qa[0] + dx * 0.55, qa[1] + dy * 0.55];
-  g.poly([qa[0], qa[1], mid[0] + nx * 0.045, mid[1] + ny * 0.045, qb[0], qb[1], mid[0] - nx * 0.025, mid[1] - ny * 0.025]).fill(LINEN[2]).stroke({ width: 0.016, color: INK, join: 'round' });
-  g.moveTo(qa[0], qa[1]).lineTo(qb[0], qb[1]).stroke({ width: 0.016, color: LINEN[0] });
+  trueShape(g, (qa[0] + qb[0]) / 2, (qa[1] + qb[1]) / 2, () => {
+    g.poly([qa[0], qa[1], mid[0] + nx * 0.045, mid[1] + ny * 0.045, qb[0], qb[1], mid[0] - nx * 0.025, mid[1] - ny * 0.025]).fill(LINEN[2]).stroke({ width: 0.016, color: INK, join: 'round' });
+    g.moveTo(qa[0], qa[1]).lineTo(qb[0], qb[1]).stroke({ width: 0.016, color: LINEN[0] });
+  });
 }
 
 /** Display table in a shop: a cloth over it, hanging past the edges, and wares laid out on it. */

@@ -28,7 +28,7 @@
 // `&scale=1` draws every battlemap kind at exactly `&sq=` px a square (default 44, never shrunk to fit a cell) on a faint
 // 5-ft grid with a 2-ft body disc beside it, and a body disc on a free floor square of each furniture and prop room.
 // `&panels=streets` (alone) shows the street's drain grate and sewer manhole at true size with the cart, barrels,
-// crates, lamp post and a body disc, on cobbles and on plain ground. `&panels=plaza` (alone; `&sq=`, default 32) shows a
+// crates, lamp post and a body disc, on cobbles and on plain ground. `&panels=plaza` (alone; `&sq=`, default 32; `&set=2` the planter, cross and mound) shows a
 // square's fountain and dais at three radii on six grounds. `scripts/galleryshot.mjs` screenshots the lot.
 // The page sets `window.__galleryReady` when it has drawn, and `window.__galleryKinds` (the catalog's ids).
 import { Application, Container, Geometry, GlProgram, Graphics, Mesh, Shader, Sprite, Text, UniformGroup, type TextStyleOptions } from 'pixi.js';
@@ -47,6 +47,9 @@ import { drawDais, drawStructures } from '../render/battlemap/structures';
 import { groundColour, STONE_TONES, type PlazaGround } from '../render/battlemap/plaza';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
+import { hearth as drawHearth } from '../render/furniture/home';
+import { lifeSize } from '../render/furniture/lifesize';
+import { rng } from '../render/atlas';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
 import { caveScale, caveSpot, drawCaveMark, drawFall, drawFallCaveBy, drawFallCaveThrough, drawFallMark, poolRadius, sheetRun } from '../render/fallShapes';
 import { breakwaters, piers } from './galleryTimber';
@@ -308,7 +311,7 @@ export async function runGallery(target: HTMLElement) {
   const query = new URLSearchParams(location.search);
   const only = query.get('kinds')?.split(',').map(Number);
   const panel = query.get('panels');
-  const pick = panel === 'streets' || panel === 'plaza' ? [panel] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
+  const pick = panel === 'streets' || panel === 'plaza' ? [panel] : panel === 'hearth' ? ['hearth_panel'] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
   const trueScale = query.has('scale');
   // `&index=1`: a small number at each cell's corner (reading order); `window.__galleryOrder` lists what each stands for.
   const indexed = query.has('index');
@@ -610,14 +613,81 @@ export async function runGallery(target: HTMLElement) {
 
   // A square's fountain and dais on six grounds (`&panels=plaza`).
   if (pick?.includes('plaza')) {
-    head('Plaza: fountain 3 / 8 / 14 ft and dais 5 / 9 / 13 ft (radius) on six grounds, the 5-ft grid and a 2-ft body disc');
-    y = plaza(root, y, query.has('nolabels'), Number(query.get('sq')) || 32);
+    const set2 = query.get('set') === '2';
+    head(set2
+      ? 'Plaza (set 2): planter 3 / 7 ft, market cross 5 / 7 ft and mound 6 / 10 ft (radius) on six grounds, the 5-ft grid and a 2-ft body disc'
+      : 'Plaza: fountain 3 / 8 / 14 ft and dais 5 / 9 / 13 ft (radius) on six grounds, the 5-ft grid and a 2-ft body disc');
+    y = plaza(root, y, query.has('nolabels'), Number(query.get('sq')) || 32, set2);
+  }
+
+  // The hearth's four looks, against a north and an east wall, on flags and on boards (`&panels=hearth`).
+  if (pick?.includes('hearth_panel')) {
+    head('Hearth looks A-D (logs, ember bed, banked, laid cold): N and E walls, flags and boards, 5-ft grid, body disc');
+    y = hearthPanel(root, y, query.has('nolabels'), Number(query.get('hsq')) || 132);
+    head('The same at play size, 40 px a square');
+    y = hearthPanel(root, y, query.has('nolabels'), 40, true);
   }
 
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
   (window as unknown as { __galleryReady: boolean }).__galleryReady = true;
+}
+
+/** `&panels=hearth` (alone; `&hsq=` px a square, default 132): the hearth (2 x 1, life size as the room draws it) with
+ * each of its four looks in a column, a row each for a north and an east wall on stone flags and on timber boards
+ * (`small`: two rows, unlabelled). */
+function hearthPanel(root: Container, y0: number, nolabels: boolean, sq: number, small = false): number {
+  const fires: [number, string][] = [[0, 'A: logs and flame'], [1, 'B: ember bed'], [2, 'C: banked'], [3, 'D: laid, cold']];
+  const rows: [boolean, 'N' | 'E'][] = small ? [[false, 'N'], [true, 'E']] : [[false, 'N'], [false, 'E'], [true, 'N'], [true, 'E']];
+  const C = 2.5;
+  let y = y0;
+  rows.forEach(([timber, wall], r) => {
+    fires.forEach(([fire, label], col) => {
+      const g = new Graphics();
+      const n = wall === 'N';
+      // The room's floor (all but the wall side), the wall, the 5-ft grid, the hearth, a body disc.
+      const fl = n ? [0, 0.5, C, C] : [0, 0, 2, C];
+      let seed = 17 + r * 7 + col;
+      const next = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) >> 8) % 1000 / 1000;
+      g.rect(fl[0], fl[1], fl[2] - fl[0], fl[3] - fl[1]).fill(timber ? 0x8a6440 : 0x8f897d);
+      if (timber) {
+        for (let yy = fl[1]; yy < fl[3] - 0.01; yy += 0.25)
+          for (let xx = fl[0] - next() * 0.8; xx < fl[2]; xx += 1.2) {
+            const [a, b] = [Math.max(fl[0], xx), Math.min(fl[2], xx + 1.2)];
+            g.rect(a + 0.008, yy + 0.008, b - a - 0.016, 0.234).fill(mulHex(0x9c7450, 0.92 + next() * 0.14));
+          }
+      } else {
+        for (let yy = fl[1], k = 0; yy < fl[3] - 0.01; yy += 0.5, k++)
+          for (let xx = fl[0] - (k % 2) * 0.35; xx < fl[2]; xx += 0.7) {
+            const [a, b] = [Math.max(fl[0], xx), Math.min(fl[2], xx + 0.7)];
+            g.rect(a + 0.012, yy + 0.012, b - a - 0.024, Math.min(0.5, fl[3] - yy) - 0.024).fill(mulHex(0xa8a296, 0.92 + next() * 0.12));
+          }
+      }
+      if (n) g.rect(0, 0.3, C, 0.2).fill(0x4a443c).stroke({ width: 0.03, color: 0x1d1a14 });
+      else g.rect(2, 0, 0.2, C).fill(0x4a443c).stroke({ width: 0.03, color: 0x1d1a14 });
+      for (const v of n ? [0.25, 1.25, 2.25] : [1, 2]) g.moveTo(v, n ? 0.5 : 0).lineTo(v, C);
+      for (const v of [0.5, 1.5, 2.5]) g.moveTo(0, v).lineTo(n ? C : 2, v);
+      g.stroke({ width: 1 / sq, color: 0x000000, alpha: 0.14 });
+      const f = { kind: 'hearth', name: 'hearth', x: n ? 0.25 : 1, y: 0.5, w: n ? 2 : 1, h: n ? 1 : 2, cover: 0, blocks_move: true, height_ft: 5 } as InteriorItem;
+      const back: [number, number] = n ? [0, -1] : [1, 0];
+      const rnd = rng(fire * 7919 + f.w * 131 + f.h * 17 + 6 * 1009 + 104);
+      if (!lifeSize(g, f, back, (g2) => drawHearth(g2, f, rnd, back, fire))) drawHearth(g, f, rnd, back, fire);
+      g.scale.set(sq);
+      g.position.set(16 + col * (C * sq + 12), y);
+      root.addChild(g);
+      const d = new Graphics();
+      bodyDisc(d, 16 + col * (C * sq + 12) + 0.5 * sq, y + 2.05 * sq, sq);
+      root.addChild(d);
+      if (!nolabels && !small) {
+        const t = new Text({ text: `${label} · ${wall} wall · ${timber ? 'boards' : 'flags'}`, style: { ...LABEL, fontSize: 12 } });
+        t.position.set(16 + col * (C * sq + 12) + 4, y + 2);
+        root.addChild(t);
+      }
+    });
+    y += C * sq + 14;
+  });
+  return y + 30;
 }
 
 /** `&panels=streets`: a strip of cobbles and one of plain ground, on the 5-ft grid, each with the street's drain grate
@@ -705,7 +775,7 @@ function streets(app: Application, catalog: KindInfo[], root: Container, y0: num
 /** `&panels=plaza`: rows of grounds (granite flags, honey sandstone, grass, desert sand, snow, jungle mud), each with the
  * battlemap's own `drawDais` fountain and dais at a small, middle and large radius, the town's stone tone and the
  * surfaces as `BattlemapLayer` would pass them, on the 5-ft grid with a body disc, at `sq` px a square. */
-function plaza(root: Container, y0: number, nolabels: boolean, sq: number): number {
+function plaza(root: Container, y0: number, nolabels: boolean, sq: number, set2 = false): number {
   const grounds: { label: string; foot: number; nature: number; tone: number[] }[] = [
     { label: 'granite flags (north)', foot: 14, nature: 0, tone: STONE_TONES[0] },
     { label: 'honey sandstone (south)', foot: 14, nature: 2, tone: STONE_TONES[2] },
@@ -715,7 +785,8 @@ function plaza(root: Container, y0: number, nolabels: boolean, sq: number): numb
     { label: 'jungle mud (south)', foot: 6, nature: 1, tone: STONE_TONES[2] },
   ];
   // (kind, radius in feet)
-  const cells: [number, number][] = [[1, 3], [1, 8], [1, 14], [0, 5], [0, 9], [0, 13]];
+  // (`&set=2`: planter, market cross and mound.)
+  const cells: [number, number][] = set2 ? [[2, 3], [2, 7], [3, 5], [3, 7], [4, 6], [4, 10]] : [[1, 3], [1, 8], [1, 14], [0, 5], [0, 9], [0, 13]];
   const ws = cells.map(([, ft]) => Math.ceil(2 * (ft / 5 + 1.1)));
   const hSq = Math.max(...ws);
   const k = sq / PX;
@@ -764,7 +835,7 @@ function plaza(root: Container, y0: number, nolabels: boolean, sq: number): numb
       bodyDisc(d, x + sq * 0.5, y + h - sq * 0.5, sq);
       root.addChild(d);
       if (!nolabels) {
-        const t = new Text({ text: `${kind ? 'fountain' : 'dais'} ${ft} ft`, style: { ...LABEL, fontSize: 11 } });
+        const t = new Text({ text: `${['dais', 'fountain', 'planter', 'cross', 'mound'][kind]} ${ft} ft`, style: { ...LABEL, fontSize: 11 } });
         t.position.set(x + 3, y + 2);
         root.addChild(t);
         if (!col) {
