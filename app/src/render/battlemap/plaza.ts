@@ -1,4 +1,4 @@
-// A square's fountain and speaker's dais (`drawDais` kinds 1 and 0), drawn to sit in the town's own ground: the
+// A square's fountain, speaker's dais, tree planter, market cross and steppe mound (`drawDais` kinds 0 to 4), drawn to sit in the town's own ground: the
 // stone tinted by the culture's tone, the water by the ground about (green in the wet, low in the desert, frozen
 // on snow), a soft shadow of the ground's own colour, a kerb or worn ring into the paving, and a little dressing
 // by ground. Every size from a village trough (3 ft) to a city fountain (14 ft) comes from the radius it is given.
@@ -146,8 +146,8 @@ function stoneBand(g: Graphics, cx: number, cy: number, Ro: Rf, Ri: Rf, st: Ramp
 /** The soft contact shadow of the outline `R`: the ground darkened, a little to the south-east. */
 function contactShadow(g: Graphics, cx: number, cy: number, R: Rf, foot: number, paved: boolean) {
   // One short shape thrown to the south-east, at the outline's own radius so it never shows on the lit sides.
-  const o = PX * (paved ? 0.12 : 0.17);
-  g.poly(around(cx, cy, R, 64, o, o)).fill({ color: mul(foot, 0.6), alpha: paved ? 0.16 : 0.2 });
+  const o = PX * 0.12;
+  g.poly(around(cx, cy, R, 64, o, o)).fill({ color: mul(foot, 0.6), alpha: 0.16 });
 }
 
 /** Where it meets the ground: a kerb of the paving's own stone (radial joints, a few stray stones) on a paved
@@ -482,4 +482,157 @@ export function drawPlazaDais(g: Graphics, cx: number, cy: number, r: number, a:
   g.poly(arcBand(cx, cy, T, scaled(T, 1, -PX * 0.07), Math.PI * 0.85, Math.PI * 1.65, 18)).fill({ color: st.sun, alpha: 0.55 });
   g.poly(top).stroke({ width: LINE, color: INK, join: 'round' });
   dress(g, cx, cy, P, scaled(T, 0.85), dressOf(gr), gr, rnd);
+}
+
+/** The bed's soil by the ground: a muted loam mixed with the ground about; snow lying on it on snow, dry earth on sand,
+ * a grey loam under ash. */
+function soilOf(gr: PlazaGround, kind: Dress) {
+  const foot = groundColour(gr.nature >= 0 && PAVED.has(gr.foot) ? gr.nature : gr.foot, gr.tone);
+  if (kind === 'snow') return { bed: 0xe4e9f0, shade: 0xb9c6dc, fleck: 0x6a5a48 };
+  if (kind === 'sand') return { bed: mix(0x9a7a52, groundColour(3), 0.45), shade: 0x7a5e3e, fleck: 0xc9b08a };
+  if (kind === 'ash') return { bed: mix(0x4e4440, foot, 0.2), shade: 0x2e2826, fleck: 0x6a6266 };
+  const bed = mix(0x5a4632, foot, 0.28);
+  return { bed, shade: mix(bed, 0x2a1e16, 0.45), fleck: mix(bed, 0x6f8a44, 0.5) };
+}
+
+/** A tree's planter on a square or in a yard (`r`: its outer radius, px; `a`: a bearing for its shape): a jointed
+ * stone kerb, round or octagonal by the place's hash, round a bed of soil (the tree's sprite stands on its
+ * middle, which is kept calm). */
+export function drawPlazaPlanter(g: Graphics, cx: number, cy: number, r: number, a: number, gr: PlazaGround) {
+  const rnd = rngAt(gr.wx + cx, gr.wy + cy);
+  const st = stoneRamp(gr.tone);
+  const rs = r / PX;
+  const small = rs < 0.8;
+  const paved = PAVED.has(gr.foot);
+  const v = rnd() < 0.5 ? 0 : 1;
+  const dressing = dressOf(gr);
+  const foot = groundColour(gr.foot, gr.tone);
+  // (An octagon's flats stand at ~0.98 of `r`, its corners a little past: the tree's crown must leave a ring of kerb round it.)
+  const rr = r - (paved ? PX * 0.15 : 0);
+  const P = outline(v === 1 ? rr / 0.94 : rr, v, a, false, rnd);
+  const cope = PX * Math.min(0.34, Math.max(0.18, rs * 0.18));
+  const Ri = scaled(P, 1, -cope);
+  apron(g, cx, cy, P, gr, rnd);
+  contactShadow(g, cx, cy, P, foot, paved);
+  stoneBand(g, cx, cy, P, Ri, st, PX * (small ? 0.6 : 0.85), rnd, 0.25, v === 1 ? a + Math.PI / 8 : 0.3);
+  g.poly(around(cx, cy, P)).stroke({ width: OUT, color: INK, join: 'round' });
+  // The bed: the coping's shade inside its north-west side, a few clods (or bare earth through the snow) by the edge.
+  const S = soilOf(gr, dressing);
+  const bed = around(cx, cy, Ri);
+  const ri = Ri(0.3);
+  g.poly(bed).fill(S.bed);
+  g.poly(arcBand(cx, cy, Ri, (t) => Ri(t) - ri * 0.16 * Math.max(0, lit(t) + 0.25), Math.PI * 0.5, Math.PI * 2, 24)).fill({ color: S.shade, alpha: 0.5 });
+  // (The tree's crown covers the bed, so nothing is drawn on it but the shade under the kerb.)
+  g.poly(bed).stroke({ width: LINE, color: INK, join: 'round' });
+  dress(g, cx, cy, P, Ri, dressing === 'ash' ? null : dressing, gr, rnd);
+}
+
+/** The base of a market cross on a square (`r`: its outer radius, px; `a`: a bearing): two low steps, stepped
+ * octagons or squares by the place's hash, each lit along its north-west edge with its dark riser to the south-east,
+ * the socket stone with the cross's top drawn on it. */
+export function drawPlazaCross(g: Graphics, cx: number, cy: number, r: number, a: number, gr: PlazaGround) {
+  const rnd = rngAt(gr.wx + cx, gr.wy + cy);
+  const st = stoneRamp(gr.tone);
+  const rs = r / PX;
+  const paved = PAVED.has(gr.foot);
+  const oct = rnd() < 0.6;
+  const R0 = r - (paved ? PX * 0.3 : 0);
+  const shape = (R: number): Rf => (oct ? polyR(R, 8, a + Math.PI / 8) : polyR(R, 4, Math.PI / 4));
+  const P = shape(R0);
+  const foot = groundColour(gr.foot, gr.tone);
+  apron(g, cx, cy, P, gr, rnd);
+  contactShadow(g, cx, cy, P, foot, paved);
+  const riser = PX * Math.min(0.16, 0.08 + rs * 0.025);
+  const top = (R: Rf): Rf => (t) => R(t) - riser * (0.5 - 0.5 * lit(t));
+  const step = (R: Rf, inner: Rf, block: number, ink: number) => {
+    const T = top(R);
+    g.poly(around(cx, cy, R)).fill(st.dark).stroke({ width: ink, color: INK, join: 'round' });
+    stoneBand(g, cx, cy, T, inner, st, block, rnd, 0.3, oct ? a + Math.PI / 8 : Math.PI / 4);
+    g.poly(arcBand(cx, cy, T, scaled(T, 1, -PX * 0.06), Math.PI * 0.85, Math.PI * 1.65, 18)).fill({ color: st.sun, alpha: 0.5 });
+    g.poly(around(cx, cy, T)).stroke({ width: LINE, color: INK, join: 'round' });
+  };
+  const P2 = shape(R0 * 0.62);
+  const P3 = shape(Math.max(PX * 0.3, R0 * 0.3));
+  // The lower step's tread runs in to the upper's foot; the upper's to the socket stone's.
+  step(P, P2, PX * 0.9, OUT);
+  // The upper step's short shadow on the lower tread.
+  g.poly(around(cx, cy, P2, 48, riser * 0.8, riser * 0.8)).fill({ color: st.dark, alpha: 0.35 });
+  step(P2, P3, PX * 0.7, LINE);
+  // The socket stone: a calm stepped top one faint joint.
+  const S = top(P3);
+  g.poly(around(cx, cy, P3, 48, riser * 0.5, riser * 0.5)).fill({ color: st.dark, alpha: 0.25 });
+  g.poly(around(cx, cy, S, 48)).fill(st.light).stroke({ width: LINE * 0.8, color: st.joint, alpha: 0.7, join: 'round' });
+  // The cross seen from above: a plus (shaft top in the middle, four short arms), lit north-west, dark south-east, its short shadow to the south-east.
+  const L = Math.min(PX * 0.3, R0 * 0.3 * 0.8), w = L * 0.3, o = L * 0.3;
+  const plus = (dx: number, dy: number, L2 = L, w2 = w) => [-w2, -L2, w2, -L2, w2, -w2, L2, -w2, L2, w2, w2, w2, w2, L2, -w2, L2, -w2, w2, -L2, w2, -L2, -w2, -w2, -w2].map((v, i) => v + (i % 2 ? cy + dy : cx + dx));
+  g.poly(plus(o, o, L * 1.05, w * 1.1)).fill({ color: 0x2a1a20, alpha: 0.32 });
+  g.poly(plus(0, 0)).fill(mix(st.light, st.dark, 0.18));
+  g.poly(plus(-w * 0.25, -w * 0.25, L * 0.97, w * 0.62)).fill(mix(st.light, st.sun, 0.55));
+  // Dark south-east edges of the arms and the shaft top as a small square.
+  const e = w * 0.3;
+  g.rect(cx + w - e, cy + w, e, L - w).fill({ color: st.dark, alpha: 0.6 });
+  g.rect(cx + w, cy + w - e, L - w, e).fill({ color: st.dark, alpha: 0.6 });
+  g.rect(cx - w, cy - w, w * 2, w * 2).fill(st.sun).stroke({ width: LINE * 0.7, color: st.joint, alpha: 0.8, join: 'round' });
+  g.poly(plus(0, 0)).stroke({ width: OUT, color: INK, join: 'round' });
+  dress(g, cx, cy, P, P2, dressOf(gr), gr, rnd);
+}
+
+/** A steppe town's dais (`drawDais` kind 4): a low bank of the trodden ground itself a shade lighter, uneven round its
+ * foot, its far slope shaded to the south-east, hoof prints worn round its edge, a rutted way up where its steps would
+ * be, a few tufts where hooves don't reach. Everything but its shadow inside `r`. */
+export function drawPlazaMound(g: Graphics, cx: number, cy: number, r: number, a: number, gr: PlazaGround) {
+  const rnd = rngAt(gr.wx + cx, gr.wy + cy);
+  const foot = groundColour(gr.foot, gr.tone);
+  const [p1, p2, sq] = [rnd() * 6.28, rnd() * 6.28, 0.86 + rnd() * 0.12];
+  // (An uneven round, a little long across the way up; at most `r` out.)
+  const R = r * 0.84;
+  const Rf0: Rf = (t) => {
+    const l = t - a;
+    const w = R * (1 + 0.08 * Math.sin(3 * l + p1) + 0.05 * Math.cos(5 * l + p2));
+    const [u, v] = [Math.cos(l), Math.sin(l) * sq];
+    return w * Math.hypot(u, v);
+  };
+  const blob = (dx: number, dy: number, k: number) => around(cx + dx, cy + dy, scaled(Rf0, k), 40);
+  const snowy = gr.foot === 4 || gr.foot === 13;
+  const sandy = gr.foot === 3;
+  const light = mix(foot, 0xfff1cf, snowy ? 0.3 : 0.16);
+  contactShadow(g, cx, cy, scaled(Rf0, 1.04), foot, false);
+  g.poly(blob(0, 0, 1.04)).fill(mix(foot, light, 0.25)).stroke({ width: LINE, color: mul(foot, 0.62), alpha: 0.7 });
+  // The far slope's shade, then the lit top.
+  g.poly(arcBand(cx, cy, scaled(Rf0, 1.0), scaled(Rf0, 0.72), -Math.PI * 0.3, Math.PI * 0.8, 20)).fill({ color: mul(foot, 0.8), alpha: 0.45 });
+  g.poly(blob(-R * 0.06, -R * 0.07, 0.76)).fill(mix(foot, light, 0.6));
+  g.poly(blob(-R * 0.11, -R * 0.13, 0.5)).fill({ color: light, alpha: 0.6 });
+  // The way up: a worn, paler tongue down to the foot, two ruts in it.
+  const [ux, uy, vx, vy] = [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a)];
+  const at = (al: number, ac: number): [number, number] => [cx + ux * al + vx * ac, cy + uy * al + vy * ac];
+  const wd = Math.min(PX * 0.7, R * 0.35);
+  const end = Math.min(Rf0(a) * 1.04, r * 0.98);
+  g.poly([...at(R * 0.35, -wd * 0.7), ...at(end * 0.9, -wd), ...at(end, -wd * 0.5), ...at(end, wd * 0.5), ...at(end * 0.9, wd), ...at(R * 0.35, wd * 0.7)]).fill({ color: mix(light, 0xfff1cf, 0.15), alpha: 0.45 });
+  for (const c of [-0.4, 0.4]) g.moveTo(...at(R * 0.4, wd * c)).lineTo(...at(end * 0.98, wd * c * 1.15));
+  g.stroke({ width: LINE, color: mul(foot, 0.6), alpha: 0.6 });
+  // Hoof prints round the edge, in pairs.
+  const prints = Math.round(8 + (r / PX) * 4);
+  for (let k = 0; k < prints; k++) {
+    const t = rnd() * Math.PI * 2;
+    const d = Rf0(t) * (0.8 + rnd() * 0.16);
+    const [hx, hy] = [cx + Math.cos(t) * d, cy + Math.sin(t) * d];
+    const hr = PX * (0.06 + rnd() * 0.03);
+    g.moveTo(hx + hr, hy).arc(hx, hy, hr, 0, Math.PI * 1.3);
+    g.moveTo(hx + PX * 0.17 + hr, hy + PX * 0.09).arc(hx + PX * 0.17, hy + PX * 0.09, hr, 0.3, Math.PI * 1.5);
+  }
+  g.stroke({ width: LINE * 0.8, color: mul(foot, 0.55), alpha: 0.5 });
+  // Tufts on the top and the far slope (none on snow; dry ones on sand).
+  if (!snowy) {
+    const grass = sandy ? [0x8a7a48, 0xa8955a] : [0x6c7c38, 0x7f8f42];
+    for (let k = 0; k < (sandy ? 3 : 6); k++) {
+      const t = rnd() * Math.PI * 2;
+      const d = Rf0(t) * (k < 2 ? rnd() * 0.45 : 0.55 + rnd() * 0.25);
+      const [tx, ty] = [cx + Math.cos(t) * d, cy + Math.sin(t) * d];
+      const h = PX * (0.14 + rnd() * 0.08);
+      for (const dx of [-0.6, 0, 0.6]) g.moveTo(tx + dx * h * 0.3, ty).lineTo(tx + dx * h * 0.8, ty - h * (dx === 0 ? 1.1 : 0.8));
+      g.stroke({ width: LINE * 1.2, color: grass[k % 2], cap: 'round' });
+    }
+  }
+  const kind = dressOf(gr);
+  if (kind === 'snow' || kind === 'ash') dress(g, cx, cy, Rf0, scaled(Rf0, 0.7), kind, gr, rnd);
 }
