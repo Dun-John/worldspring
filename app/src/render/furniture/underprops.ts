@@ -3,7 +3,7 @@ import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
 import { type Light } from './common';
 import { arcaneFocus, arcaneWorkbench, boneMound, climbLadder, crackedFloor, fallenColumn, floodedPit, scaffold, stoneSteps, stoneThrone, totem, wallStub } from './ruins';
-import { basaltColumns, beastNest, caveBoulder, caveIn, caveMoss, cavePool, cobweb, crystal, drainLight, fungus, giantMushrooms, glassPool, grille, guano, iceFormation, iceSheet, ladder, obsidianShards, pipe, pit, ratNest, rockColumn, scorchedRemains, stairsUp, stalagmite, steamVent, sulfurCrust, trap, tunnel, web, well } from './under';
+import { basaltColumns, beastNest, caveBoulder, caveIn, caveMoss, cobweb, crystal, drainLight, fungus, giantMushrooms, glassPool, grille, guano, iceFormation, iceSheet, ladder, obsidianShards, pipe, pit, ratNest, rockColumn, scorchedRemains, stairsUp, stalagmite, steamVent, sulfurCrust, trap, tunnel, web, well } from './under';
 import { bedroll, grainSacks, hangingLantern, miningTools, oreCart, oreVein, powderKegs, rails } from './mine';
 import { tatteredBanner } from './hangings';
 import { brazier, candelabrum, collapsedWall, dais, dryFountain, ironMaiden, ritualCircle, shackles, stocks, torchSconce, treasureHoard } from './dungeon';
@@ -90,9 +90,6 @@ export function drawUnderProp(
       break;
     case 'moss':
       caveMoss(g, f, light, rnd);
-      break;
-    case 'pool':
-      cavePool(g, f, light, v, rnd);
       break;
     case 'nest':
       beastNest(g, f, light, v, rnd);

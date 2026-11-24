@@ -784,39 +784,6 @@ export function caveMoss(g: Graphics, f: InteriorItem, light: Light, rnd: () => 
   }
 }
 
-/** Pool: still blue water with a lobed edge like the glassy pool's, no rim of rock — a darker wet margin on the
- * floor round it, pale shallows along the edge, deepening to the middle, ripple rings and a glint. */
-export function cavePool(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
-  const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
-  const [rx, ry] = [f.w * 0.42, f.h * 0.4];
-  const deep = v % 2 ? [0x2a3a3a, 0x3e5654, 0x587270, 0x83968f] : [0x2c3640, 0x404e58, 0x5a6a72, 0x86928f];
-  const [p3, p5, p2] = [rnd() * 6.3, rnd() * 6.3, rnd() * 6.3];
-  const N = 44;
-  const lobe = (k: number, j = 0, dx = 0, dy = 0): number[] => {
-    const pts: number[] = [];
-    for (let i = 0; i < N; i++) {
-      const a = (i / N) * Math.PI * 2;
-      const r = k * (1 + 0.12 * Math.sin(3 * a + p3) + 0.06 * Math.sin(5 * a + p5) + 0.05 * Math.sin(2 * a + p2) + (rnd() - 0.5) * j);
-      pts.push(cx + dx + Math.cos(a) * rx * r, cy + dy + Math.sin(a) * ry * r);
-    }
-    return pts;
-  };
-  g.poly(lobe(1.1, 0.06)).fill({ color: 0x000000, alpha: 0.18 });
-  g.poly(lobe(1)).fill(deep[3]);
-  g.poly(lobe(0.9, 0, -light[0] * 0.02, -light[1] * 0.02)).fill(deep[2]);
-  g.poly(lobe(0.7, 0, -light[0] * 0.05, -light[1] * 0.05)).fill(deep[1]);
-  g.poly(lobe(0.42, 0, -light[0] * 0.08, -light[1] * 0.08)).fill(deep[0]);
-  g.poly(lobe(0.97)).stroke({ width: 0.014, color: 0xb8c8c8, alpha: 0.6 });
-  for (const [x, y, k] of [
-    [cx + rx * 0.25, cy + ry * 0.2, 1],
-    [cx - rx * 0.3, cy - ry * 0.1, 0.6],
-  ]) {
-    g.poly(oval(x, y, rx * 0.24 * k, ry * 0.07 * k, 0, 18)).stroke({ width: 0.014, color: 0xa8bcc0, alpha: 0.5 });
-  }
-  const la = Math.atan2(light[1], light[0]) + Math.PI / 2;
-  g.poly(oval(cx + light[0] * rx * 0.42, cy + light[1] * ry * 0.42, rx * 0.24, 0.024, la, 14)).fill({ color: 0xc8d4d0, alpha: 0.55 });
-}
-
 /** A beast's nest: a broad mound of sticks laid round and round a hollow, longer ones straying past its edge, so
  * its outline is the sticks' own and never a regular ring. Fur lines the hollow, and in it (by look) a gnawed bone,
  * a clutch of eggs, a wad of fur or a skull. */

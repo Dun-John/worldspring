@@ -152,7 +152,7 @@ export const IN_RING = new Set(['yurt_pallet', 'painted_chest', 'floor_cushion']
  * those against the rock wall take its side. */
 export const UNDER_DRAWN = new Set([
   'exit', 'up', 'down', 'tunnel', 'ladder', 'pipe', 'well', 'pit', 'trap', 'cave_in',
-  'stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'cobweb', 'guano', 'moss', 'pool', 'nest', 'rat_nest', 'ice', 'ice_sheet',
+  'stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'cobweb', 'guano', 'moss', 'nest', 'rat_nest', 'ice', 'ice_sheet',
   'obsidian', 'basalt', 'vent', 'sulfur', 'scorched', 'glass_pool',
   'bones', 'skeleton', 'skulls', 'coffin', 'effigy', 'niche', 'urn', 'offering',
   'campfire', 'rubble', 'debris', 'timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'lantern', 'powder', 'bedroll', 'sacks',

@@ -605,6 +605,23 @@ pub(crate) fn flood_room(p: &mut Plan, ny: usize, room: i16, (shallow, deep): (f
     }
 }
 
+/// A pool in room `room` (laid with the locks in, like `flood_room`): shallow water on the squares off its walls (all
+/// of them in a room too small to have 4 such), a dry rim round it to walk.
+pub(crate) fn pool_room(p: &mut Plan, ny: usize, room: i16) {
+    let nx = p.nx;
+    let all: Vec<usize> = (0..p.cells.len()).filter(|&k| p.cells[k] == room).collect();
+    let mut inner: Vec<usize> = all.iter().copied().filter(|&k| !neighbours(k, nx, ny).any(|m| p.cells[m] != room)).collect();
+    if inner.len() < 4 {
+        inner = all;
+    }
+    if p.water.is_empty() {
+        p.water = vec![[2.0; 2]; p.cells.len()];
+    }
+    for k in inner {
+        p.water[k] = [-1.0, 2.0];
+    }
+}
+
 /// A medium or bigger site's boss chamber (`area` ≥ 1: how much more ground than a medium site it covers), across
 /// the wall its door is in and deep away from it: 9 or 11 by 10-12 squares on a medium site, by 14-16 on a large
 /// one. None on small sites (their chambers keep the old 5-9 squares a side).

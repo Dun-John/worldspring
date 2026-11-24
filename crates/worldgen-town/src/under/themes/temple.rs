@@ -7,7 +7,7 @@
 //! deeper it goes.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, boss_size, boss_sizes, colonnade, dead_end, fallback, fill, flood_room, way_down};
+use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, boss_size, boss_sizes, colonnade, dead_end, fallback, fill, flood_room, pool_room, way_down};
 use crate::under::*;
 
 #[allow(clippy::too_many_arguments)]
@@ -147,6 +147,12 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     }
     if theme.water != Wetness::Dry {
         flood(&mut p, ny, depth, &halls, boss, rng);
+    } else {
+        // (A dry temple's ritual pools hold a pool of their own.)
+        let rooms: Vec<i16> = (0..p.rooms.len() as i16).filter(|&r| Some(r) != boss && p.rooms[r as usize].kind == "ritual pool").collect();
+        for r in rooms {
+            pool_room(&mut p, ny, r);
+        }
     }
     p
 }
