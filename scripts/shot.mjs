@@ -7,30 +7,27 @@
 // Env: SHOT_WIN=w,h sets the window size, SHOT_DPR=2 renders at that device pixel ratio (sharper art),
 // SHOT_PHONE=w,h[,dpr] emulates a phone (that viewport, touch input, mobile layout; e.g. 390,844,3).
 // Each run gets its own Chrome on a free DevTools port (SHOT_PORT=n to pin one), so runs can go side by side.
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { launchChrome } from './lib/chrome.mjs';
 
 const [prefix = 'shot', url = 'http://localhost:5173/', viewsJson = '[{"name":"continent"}]'] = process.argv.slice(2);
 const views = JSON.parse(viewsJson);
-const chromePath = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome']
-  .filter(Boolean)
-  .find((p) => existsSync(p));
-const profile = mkdtempSync(join(tmpdir(), 'pfm-shot-'));
-const chrome = spawn(chromePath, [
-  `--user-data-dir=${profile}`,
-  `--remote-debugging-port=${process.env.SHOT_PORT ?? 0}`,
-  '--no-first-run',
-  '--no-default-browser-check',
-  '--disable-backgrounding-occluded-windows',
-  '--disable-renderer-backgrounding',
-  '--disable-background-timer-throttling',
-  '--window-position=0,0',
-  `--window-size=${process.env.SHOT_WIN ?? '1600,1000'}`,
-  ...(process.env.SHOT_DPR ? [`--force-device-scale-factor=${process.env.SHOT_DPR}`] : []),
-  url,
-]);
+const { chrome, profile } = launchChrome(
+  'pfm-shot-',
+  [
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
+    '--window-position=0,0',
+    `--window-size=${process.env.SHOT_WIN ?? '1600,1000'}`,
+    ...(process.env.SHOT_DPR ? [`--force-device-scale-factor=${process.env.SHOT_DPR}`] : []),
+    url,
+  ],
+  process.env.SHOT_PORT ?? 0,
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let ws;

@@ -5,11 +5,11 @@
 // Opens Windows Chrome as scripts/shot.mjs does (one window for all sheets, always closed at the end). SHOT_WIN=w,h
 // sets its size (default 1620,1000); SHOT_DPR sets the device pixel ratio. `--only=a,b` (before the out dir) takes only those
 // families.
-import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { launchChrome } from './lib/chrome.mjs';
 
 // `--compact` (before the out dir): sheets for an image reviewer, none over 1600 x 1800 px: battlemap, furniture and underground only,
 // one look per item, split until each fits, only the unlabelled version with a number in each cell's corner (`&index=1`) and a
@@ -50,15 +50,7 @@ const jobs = [
 ].filter((j) => !only || only.includes(j.family));
 if (inkSheet) jobs.length = 0;
 
-const chromePath = [process.env.CHROME_PATH, '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome'].filter(Boolean).find((p) => existsSync(p));
-if (!chromePath) throw new Error('no Chrome found (set CHROME_PATH)');
-// A Windows Chrome started from WSL needs its profile where Windows can see it (and as a Windows path).
-const fromWsl = chromePath.startsWith('/mnt/');
-const profile = mkdtempSync(join(fromWsl ? '/mnt/c/Users/Public' : tmpdir(), 'pfm-gal-'));
-const profileArg = fromWsl ? execFileSync('wslpath', ['-w', profile]).toString().trim() : profile;
-const chrome = spawn(chromePath, [
-  `--user-data-dir=${profileArg}`,
-  '--remote-debugging-port=0',
+const { chrome, profile } = launchChrome('pfm-gal-', [
   '--no-first-run',
   '--no-default-browser-check',
   '--disable-backgrounding-occluded-windows',
