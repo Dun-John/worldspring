@@ -5,7 +5,7 @@ import { councilTable, countingDesk, stableStall, strongbox } from './guild';
 import { guildArms, jobBoard, tapestry, wallBanner } from './hangings';
 import { type Fit, floorCushion, paintedChest, yurtHearth, yurtPallet } from './yurt';
 import { candleStand, carvedScreen, godStatue, screenGate, sideAltar } from './gods';
-import { carpetRunner, chairOfOffice, cloisterWell, danceFloor, font, harpsichord, highTable, lowDais, musiciansCorner, refreshmentTable, standingBanner, throneDais } from './hall';
+import { type HallTone, carpetRunner, chairOfOffice, cloisterWell, danceFloor, font, harpsichord, highTable, lowDais, musiciansCorner, refreshmentTable, standingBanner, throneDais } from './hall';
 import { type Light } from './common';
 import { alchemyBench, altar, barricade, bell, cage, cauldron, lighthouseLamp, linkDown, millstones, pillar, sarcophagus, spiralStair, spurWheel, stage, statue, telescope, throne, tortureRack, trapdoor, vat, weaponRack, winch } from './sacred';
 import { anvil, bar, barrel, bath, bed, bench, bookcase, boothSeat, boothTable, bucket, chair, chest, cot, couch, counter, crates, desk, display, forge, hearth, keg, oven, pew, planter, roofDome, roundTable, rug, shelf, sideboard, table, wardrobe, washingLine, waterJar, workbench } from './home';
@@ -48,8 +48,9 @@ function yardThing(g: Graphics, f: InteriorItem, v: number) {
   g.restore();
 }
 
-/** Draws `f` if it is building furniture drawn here; false otherwise. `fit`: the yurt's ring it stands in. */
-export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: number, back: [number, number] | null = null, fit?: Fit): boolean {
+/** Draws `f` if it is building furniture drawn here; false otherwise. `fit`: the yurt's ring it stands in; `tone`: the
+ * room's floor and the building's house, for a hall's dais and high table (`tables.ts` `HALL_TONED`). */
+export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: number, back: [number, number] | null = null, fit?: Fit, tone?: HallTone): boolean {
   if (!VARIED.has(f.kind)) return false;
   const rnd = rng(v * 7919 + f.w * 131 + f.h * 17 + f.kind.length * 1009 + f.kind.charCodeAt(0));
   if (f.kind === 'keg_rack') {
@@ -60,11 +61,11 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
     }
     return true;
   }
-  if (!lifeSize(g, f, back, (g2) => drawKind(g2, f, light, v, rnd, back, fit))) drawKind(g, f, light, v, rnd, back, fit);
+  if (!lifeSize(g, f, back, (g2) => drawKind(g2, f, light, v, rnd, back, fit, tone))) drawKind(g, f, light, v, rnd, back, fit, tone);
   return true;
 }
 
-function drawKind(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number] | null, fit?: Fit) {
+function drawKind(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number] | null, fit?: Fit, tone?: HallTone) {
   switch (f.kind) {
     case 'bed':
       bed(g, f, light, v, rnd, back ?? (f.w > f.h ? [-1, 0] : [0, -1]));
@@ -247,7 +248,7 @@ function drawKind(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: ()
       crates(g, f, light, v, rnd);
       break;
     case 'throne_dais':
-      throneDais(g, f, light, v, rnd, back ?? [0, -1]);
+      throneDais(g, f, light, v, rnd, back ?? [0, -1], tone);
       break;
     case 'low_dais':
       lowDais(g, f, light, v, rnd, back ?? [0, -1]);
@@ -259,7 +260,7 @@ function drawKind(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: ()
       chairOfOffice(g, f, light, v, rnd, back ?? [0, -1]);
       break;
     case 'high_table':
-      highTable(g, f, light, v, rnd, back ?? [0, -1]);
+      highTable(g, f, light, v, rnd, back ?? [0, -1], tone);
       break;
     case 'tapestry':
       tapestry(g, f, light, v, back ?? [0, -1]);

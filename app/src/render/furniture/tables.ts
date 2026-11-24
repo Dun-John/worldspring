@@ -25,6 +25,9 @@ export const HOUSES: { name: string; field: readonly number[]; charge: number; m
   { name: 'Teal, a white saltire', field: [0x1e4a48, 0x2e6e6a, 0x46908a], charge: 0xf0e8d4, mark: 'saltire' },
 ];
 
+/** The pieces drawn in their room's floor colour and their building's house (`drawFurniture`'s `tone`). */
+export const HALL_TONED = new Set(['throne_dais', 'high_table']);
+
 /** The house a building's banners fly when none is set (`Item::variant` absent): one per building, from its id
  * (FNV-1a), so every banner put down in one castle hall matches. */
 export function houseOf(id: string): number {

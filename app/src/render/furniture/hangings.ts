@@ -202,12 +202,8 @@ export function stageCurtain(g: Graphics, at: At, light: Light, len: number) {
   hangingRod(g, at, 0.07, len - 0.07, 0.065);
 }
 
-/** The throne dais's cloth of estate: a thin gathered band of blue powdered with gilt behind the seats. */
+/** The throne dais's cloth of estate: a thin gathered band of greyed blue on its rod behind the seats, plain. */
 export function clothOfEstate(g: Graphics, at: At, light: Light, c0: number, c1: number, top: number) {
-  const hem = hangingCloth(g, at, light, c0, c1, top + 0.015, 0.13, [[0x2e4a82, 1]], { ink: OUT * 0.75 });
-  for (let u = c0 + 0.12; u < c1 - 0.08; u += 0.2) {
-    const [x, y] = at(u + 0.08, top + 0.015 + hem(u) * 0.5);
-    g.poly([x, y - 0.022, x + 0.018, y, x, y + 0.022, x - 0.018, y]).fill(GILT[2]);
-  }
-  hangingRod(g, at, c0 - 0.06, c1 + 0.06, top);
+  hangingCloth(g, at, light, c0, c1, top + 0.015, 0.13, [[0x46608f, 1]], { ink: OUT * 0.75 });
+  hangingRod(g, at, c0 - 0.06, c1 + 0.06, top, 0xb08a44);
 }

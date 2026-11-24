@@ -1,6 +1,6 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { BRASS, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, lit, litEdges, oval, patch, planks, quad, ring, shade } from './common';
+import { BRASS, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, lit, litEdges, mute, oval, patch, planks, quad, ring, shade } from './common';
 import { MARBLE, candle } from './sacred';
 import { GILT, HOUSES, VELVET } from './tables';
 import { PLUSH, STONE, WALL_GAP } from './home';
@@ -40,122 +40,111 @@ export const OAK = [0x4a3220, 0x6e4c2e, 0x8e6a42];
 export const LEATHER = [0x4a2418, 0x74382a, 0x985238];
 export const CUSHIONS = [VELVET, [0x22345a, 0x3a5488, 0x5a78aa], [0x2a4224, 0x44663a, 0x62865a], [0x40243e, 0x663c62, 0x885a82]];
 
-/** A chair of state from above, in its box (`s` 0 at its back): a frame with arms, a cushion filling the seat, a
- * tall back; its crest a pointed gilt one, a carved zigzag, or (a chair of office) three pinnacles. */
-function stateChair(g: Graphics, B: { R: Rect; A: At }, light: Light, rnd: () => number, wood: readonly number[], cushion: readonly number[], crest: 'point' | 'carved' | 'pinnacles', trim: number) {
-  const { R, A } = B;
-  castShadow(g, quad(R(0.06, 0, 0.94, 0.94), rnd, 0), light, 0.2);
-  board(g, R(0.1, 0.14, 0.9, 0.94), wood, light, rnd, true, 0.03, 0);
-  // The cushion filling the seat: one button in its middle, a fold across it.
-  const [qx0, qy0, qx1, qy1] = R(0.26, 0.3, 0.74, 0.86);
-  g.roundRect(qx0, qy0, qx1 - qx0, qy1 - qy0, 0.06).fill(cushion[0]).stroke({ width: OUT, color: INK });
-  g.roundRect(qx0 + 0.03 + light[0] * 0.012, qy0 + 0.03 + light[1] * 0.012, qx1 - qx0 - 0.06, qy1 - qy0 - 0.06, 0.05).fill(cushion[1]);
-  g.poly(quad(R(0.32, 0.36, 0.5, 0.54), rnd, 0.004)).fill({ color: cushion[2], alpha: 0.55 });
-  g.moveTo(...A(0.3, 0.64)).quadraticCurveTo(...A(0.5, 0.6), ...A(0.7, 0.66)).stroke({ width: 0.014, color: cushion[0], alpha: 0.8 });
-  g.circle(...A(0.5, 0.58), 0.022).fill(trim).stroke({ width: 0.014, color: shade(trim, 0.55) });
-  // Arms, their ends carved round.
-  for (const u of [0.1, 0.76]) board(g, R(u, 0.14, u + 0.14, 0.94), wood, light, rnd, false, 0.02, 0);
-  for (const u of [0.17, 0.83]) g.circle(...A(u, 0.9), 0.042).fill(trim).stroke({ width: LINE, color: INK });
-  // The tall back and its crest.
-  board(g, R(0.04, 0, 0.96, 0.22), wood, light, rnd, true, 0.03, 0);
-  if (crest === 'point') {
-    g.poly([...A(0.3, 0.03), ...A(0.5, 0.3), ...A(0.7, 0.03)]).fill(GILT[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    g.poly([...A(0.4, 0.05), ...A(0.5, 0.18), ...A(0.6, 0.05)]).fill(GILT[2]);
-    for (const u of [0.07, 0.93]) g.circle(...A(u, 0.11), 0.05).fill(GILT[1]).stroke({ width: LINE, color: INK });
-  } else if (crest === 'carved') {
-    const zig: Pt[] = [];
-    for (let k = 0; k <= 8; k++) zig.push(A(0.12 + k * 0.095, k % 2 ? 0.07 : 0.15));
-    g.moveTo(...zig[0]);
-    for (const p of zig.slice(1)) g.lineTo(...p);
-    g.stroke({ width: 0.02, color: wood[0], join: 'miter' });
-    for (const u of [0.07, 0.93]) g.circle(...A(u, 0.11), 0.045).fill(wood[2]).stroke({ width: LINE, color: INK });
-  } else {
-    // Pinnacles: little spires along the back, seen from above as diamonds with their ridges.
-    for (const [u, r] of [
-      [0.08, 0.055],
-      [0.5, 0.075],
-      [0.92, 0.055],
-    ]) {
-      const [cx, cy] = A(u, 0.11);
-      g.poly([cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy]).fill(wood[2]).stroke({ width: LINE, color: INK, join: 'round' });
-      g.moveTo(cx - r, cy).lineTo(cx + r, cy).moveTo(cx, cy - r).lineTo(cx, cy + r).stroke({ width: 0.016, color: wood[0] });
-    }
-    g.poly([...A(0.36, 0.2), ...A(0.5, 0.06), ...A(0.64, 0.2)]).stroke({ width: 0.016, color: trim, join: 'round' });
-  }
+/** What a hall's dais and high table take from the room they stand in: its floor colour and the building's house
+ * (`HOUSES`), when the caller knows them. */
+export type HallTone = { floor?: number; house?: number };
+
+/** `a` mixed toward `b` by `t`. */
+function mixC(a: number, b: number, t: number): number {
+  const ch = (s: number) => Math.round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t);
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+/** The hall floors (`interior/look.ts` `floorColor`): flagstones, boards. */
+const STONE_FLOOR = 0x9d978c;
+const TIMBER_FLOOR = 0xa87a4f;
+/** A high table's linen, off-white about the floor's lightness (shade, cloth, lit): not the brightest thing in the hall. */
+const HALL_LINEN = [0xb8ae98, 0xd9d0bd, 0xe2dac8];
+/** A muted gilt for the few metal touches in a hall. */
+const OLD_GILT = 0xb08a44;
+
+/** The floor a dais is built of: the room's own when it is of the dais's stuff (boards warm, flags grey), else
+ * the usual hall floor of that stuff. */
+function daisFloor(tone: HallTone | undefined, timber: boolean): number {
+  const f = tone?.floor;
+  if (f === undefined || f < 0) return timber ? TIMBER_FLOOR : STONE_FLOOR;
+  const warm = ((f >> 16) & 255) - (f & 255) > 45;
+  return warm === timber ? f : timber ? TIMBER_FLOOR : STONE_FLOOR;
 }
 
-/** Throne dais, its back to the wall (w×2): `v` 0-2 two stone steps under a carpet, the platform carpeted and a
- * cloth of estate hung on the wall behind gilded high-backed thrones with red cushions; 3-5 a plain raised timber
- * platform with a step up its middle and carved oak thrones. Seated `v % 3`: one throne, a pair, a throne and a
- * lesser chair. */
-export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
+/** A hall's carpet: the house's colour mixed 60/40 with the floor, a step darker and muted, so it reads as a
+ * dyed wool on that floor (a red house gives a brick runner). */
+export function hallCarpet(tone: HallTone | undefined, floor: number, v = 0): number {
+  return mute(shade(mixC(houseDye(tone?.house ?? v), floor, 0.4), 0.8), 0.25);
+}
+
+/** A house's dye for cloth: its field, or its charge where the field is near white (white and red quarterly). */
+function houseDye(house: number): number {
+  const h = HOUSES[house % HOUSES.length];
+  const c = h.field[1];
+  return 0.3 * ((c >> 16) & 255) + 0.59 * ((c >> 8) & 255) + 0.11 * (c & 255) > 190 ? h.charge : c;
+}
+
+/** A throne from straight above, in its box (`s` 0 at its back), about 3 ft square: an oak seat between two arms,
+ * a small cushion, the high back across its back with one low gable for a crest. */
+function throneSeat(g: Graphics, B: { R: Rect; A: At }, light: Light, rnd: () => number, cushion: number) {
+  const { R, A } = B;
+  castShadow(g, quad(R(0.04, 0, 0.96, 0.96), rnd, 0), light, 0.08);
+  board(g, R(0.08, 0.12, 0.92, 0.96), OAK, light, rnd, true, 0.03, 0);
+  const [qx0, qy0, qx1, qy1] = R(0.28, 0.32, 0.72, 0.84);
+  g.roundRect(qx0, qy0, qx1 - qx0, qy1 - qy0, 0.05).fill(shade(cushion, 0.75)).stroke({ width: LINE, color: INK });
+  g.roundRect(qx0 + 0.025 + light[0] * 0.01, qy0 + 0.025 + light[1] * 0.01, qx1 - qx0 - 0.05, qy1 - qy0 - 0.05, 0.04).fill(cushion);
+  for (const u of [0.08, 0.76]) board(g, R(u, 0.12, u + 0.16, 0.96), OAK, light, rnd, false, 0.02, 0);
+  board(g, R(0.02, 0, 0.98, 0.24), OAK, light, rnd, true, 0.03, 0);
+  g.poly([...A(0.3, 0.04), ...A(0.5, 0.2), ...A(0.7, 0.04)]).fill(OAK[2]).stroke({ width: LINE, color: INK, join: 'round' });
+}
+
+/** Throne dais, its back to the wall (w×2): two broad steps the hall's own floor (the slab a shade lighter, the
+ * risers darker), dressed stone for `v` 0-2 and boards for 3-5, a runner of the house's colour down its middle,
+ * a cloth of estate on the wall behind oak thrones. Seated `v % 3`: one throne, a pair, a throne and a lesser
+ * chair. `tone`: the room's floor and the building's house, when known. */
+export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number], tone?: HallTone) {
   const { along, len, rect, at } = frame(f, back);
   const wid = along ? f.h : f.w;
-  const rich = v % 6 < 3;
+  const timber = v % 6 >= 3;
   const seated = v % 3;
   // Depths as drawn on two squares, kept for other depths.
   const S = (s: number) => (s * wid) / 2;
   const top = WALL_GAP - 0.04;
-  // The seats: middle along, width, lesser.
+  // The seats (3 ft, a lesser chair 2.5 ft): middle along, width, lesser.
   const fit = Math.max(0.5, Math.min(1, seated ? (len - 0.8) / 2.2 : len - 0.6));
   const seats: [number, number, boolean][] =
-    seated === 0 ? [[len / 2, 0.96 * fit, false]] : seated === 1 ? [[len / 2 - 0.55 * fit, 0.96 * fit, false], [len / 2 + 0.55 * fit, 0.96 * fit, false]] : [[len / 2 - 0.3 * fit, 0.96 * fit, false], [len / 2 + 0.62 * fit, 0.7 * fit, true]];
-  const sDeep = Math.min(0.9, S(1.3) - WALL_GAP - 0.06);
-  if (rich) {
-    // Two steps of pale dressed stone up to a marble platform, each lower step darker, the step above shading it.
-    castShadow(g, quad(rect(0.04, top, len - 0.04, S(1.96)), rnd, 0), light, 0.14);
-    const steps: [number, number, readonly number[]][] = [
-      [0.04, S(1.96), [0x6a6256, 0x968c7c, 0xb0a692]],
-      [0.24, S(1.66), [0x7c7468, 0xaca290, 0xc8bea8]],
-      [0.44, S(1.36), MARBLE],
-    ];
-    steps.forEach(([u, s1, t], i) => {
-      board(g, rect(u, top, len - u, s1), t, light, rnd, along, 0.04, 0);
-      if (i) g.poly(quad(rect(u - 0.02, s1, len - u + 0.02, s1 + 0.06), rnd, 0)).fill({ color: 0x1a120a, alpha: 0.35 });
-    });
-    // The platform carpeted, the runner down the steps' middle (the steps' edges showing across it).
-    g.poly(quad(rect(0.56, top + 0.02, len - 0.56, S(1.3)), rnd, 0.004)).fill(0x7a2220).stroke({ width: LINE, color: INK });
-    g.poly(quad(rect(0.62, top + 0.06, len - 0.62, S(1.24)), rnd, 0.003)).stroke({ width: 0.016, color: GILT[1] });
-    const rw = Math.min(0.32, len * 0.1);
-    g.poly(quad(rect(len / 2 - rw, S(1.24), len / 2 + rw, S(1.98)), rnd, 0.004)).fill(0x8a2a24).stroke({ width: LINE, color: INK });
-    for (const u of [len / 2 - rw + 0.05, len / 2 + rw - 0.05]) g.moveTo(...at(u, S(1.3))).lineTo(...at(u, S(1.94)));
-    g.stroke({ width: 0.016, color: GILT[1] });
-    for (const s of [S(1.36), S(1.66)]) g.moveTo(...at(len / 2 - rw, s)).lineTo(...at(len / 2 + rw, s));
-    g.stroke({ width: 0.02, color: 0x4a1410 });
-    // The cloth of estate on the wall behind the seats: blue powdered with gilt, a fringed hem, its rod.
-    const c0 = Math.max(0.46, Math.min(...seats.map(([c, w]) => c - w / 2)) - 0.36);
-    const c1 = Math.min(len - 0.46, Math.max(...seats.map(([c, w]) => c + w / 2)) + 0.36);
-    clothOfEstate(g, at, light, c0, c1, top);
-    // (The cloth once drew two jittered quads: 16 random draws, burnt so the chairs' look stays as it was.)
-    for (let i = 0; i < 16; i++) rnd();
-  } else {
-    // A raised timber platform of pale boards laid front to back, its front beam dark and pegged, a step of darker
-    // oak up the middle of its front, a woven rug under the seats (green with a red border, fringed at its ends).
-    const front = S(1.5);
-    const deck = [0x7a5634, 0xa67c4c, 0xc49a66];
-    castShadow(g, quad(rect(0.06, top, len - 0.06, front), rnd, 0), light, 0.16);
-    castShadow(g, quad(rect(len * 0.28, front - 0.1, len * 0.72, S(1.94)), rnd, 0), light, 0.08);
-    const step = board(g, rect(len * 0.28, front - 0.1, len * 0.72, S(1.94)), OAK.map((c) => shade(c, 0.85)), light, rnd, along, 0.03, 1);
-    planks(g, step, along, 2, OAK[0], rnd);
-    const face = board(g, rect(0.06, top, len - 0.06, front), deck, light, rnd, !along, 0.04, 1);
-    planks(g, face, !along, Math.max(4, Math.round(len * 3)), 0x6a4a2c, rnd);
-    g.poly(quad(rect(0.06, front - 0.1, len - 0.06, front), rnd, 0.003)).fill(OAK[0]).stroke({ width: LINE, color: INK });
-    for (let u = 0.25; u < len - 0.1; u += Math.max(0.5, (len - 0.5) / Math.round((len - 0.5) / 0.7))) g.circle(...at(u, front - 0.05), 0.02).fill(OAK[2]).stroke({ width: 0.014, color: shade(OAK[2], 0.55) });
-    const m0 = Math.max(0.2, Math.min(...seats.map(([c, w]) => c - w / 2)) - 0.2);
-    const m1 = Math.min(len - 0.2, Math.max(...seats.map(([c, w]) => c + w / 2)) + 0.2);
-    const r1 = front - 0.16;
-    for (let t = top + 0.08; t < r1 - 0.03; t += 0.05) for (const [u, e] of [[m0, -0.05], [m1, 0.05]]) g.moveTo(...at(u, t)).lineTo(...at(u + e, t));
-    g.stroke({ width: 0.014, color: 0xecdcb4 });
-    g.poly(quad(rect(m0, top + 0.04, m1, r1), rnd, 0.006)).fill(0x8a2a24).stroke({ width: LINE, color: INK, join: 'round' });
-    g.poly(quad(rect(m0 + 0.06, top + 0.1, m1 - 0.06, r1 - 0.06), rnd, 0.004)).fill(0x3e6038);
-    g.poly(quad(rect(m0 + 0.09, top + 0.13, m1 - 0.09, r1 - 0.09), rnd, 0.003)).stroke({ width: 0.014, color: 0xd8b45a, alpha: 0.85 });
+    seated === 0 ? [[len / 2, 0.6 * fit, false]] : seated === 1 ? [[len / 2 - 0.42 * fit, 0.6 * fit, false], [len / 2 + 0.42 * fit, 0.6 * fit, false]] : [[len / 2 - 0.3 * fit, 0.6 * fit, false], [len / 2 + 0.42 * fit, 0.5 * fit, true]];
+  const floor = daisFloor(tone, timber);
+  const slab = shade(floor, 1.1);
+  const riser = shade(floor, 0.75);
+  // Two steps, the upper set back from the lower's front and ends; each step's dark rim its riser.
+  const lower = rect(0.04, top, len - 0.04, S(1.96));
+  const upper = rect(0.3, top, len - 0.3, S(1.5));
+  castShadow(g, quad(lower, rnd, 0), light, 0.08);
+  const lf = board(g, lower, [riser, shade(floor, 1.05), shade(floor, 1.16)], light, rnd, along, 0.08, 0);
+  if (timber) planks(g, lf, !along, Math.max(4, Math.round(len * 3)), riser, rnd);
+  const uf = board(g, upper, [riser, slab, shade(floor, 1.2)], light, rnd, along, 0.08, 0);
+  if (timber) planks(g, uf, !along, Math.max(4, Math.round(len * 3)), riser, rnd);
+  else {
+    // (The slab's blocks: joints across it about a square apart.)
+    const n = Math.max(1, Math.round(len - 0.6));
+    for (let k = 1; k < n; k++) {
+      const u = 0.3 + ((len - 0.6) * k) / n + (rnd() - 0.5) * 0.06;
+      g.moveTo(...at(u, top + 0.1)).lineTo(...at(u, S(1.5) - 0.1));
+    }
+    g.stroke({ width: 0.016, color: riser, alpha: 0.7 });
   }
+  // The runner from before the seats down both steps, one border stroke; the upper step's edge across it.
+  const carpet = hallCarpet(tone, floor, v);
+  const rw = Math.min(0.3, len * 0.1);
+  const r0 = WALL_GAP + 0.62;
+  g.poly(quad(rect(len / 2 - rw, r0, len / 2 + rw, S(1.98)), rnd, 0.004)).fill(carpet).stroke({ width: LINE, color: INK });
+  g.poly(quad(rect(len / 2 - rw + 0.05, r0 + 0.05, len / 2 + rw - 0.05, S(1.98) - 0.05), rnd, 0.003)).stroke({ width: 0.016, color: shade(carpet, 1.3), alpha: 0.8 });
+  g.moveTo(...at(len / 2 - rw, S(1.5))).lineTo(...at(len / 2 + rw, S(1.5))).stroke({ width: 0.02, color: shade(carpet, 0.6) });
+  // The cloth of estate on the wall behind the seats.
+  const c0 = Math.max(0.46, Math.min(...seats.map(([c, w]) => c - w / 2)) - 0.3);
+  const c1 = Math.min(len - 0.46, Math.max(...seats.map(([c, w]) => c + w / 2)) + 0.3);
+  clothOfEstate(g, at, light, c0, c1, top);
+  const cushion = mute(shade(houseDye(tone?.house ?? v), 0.95), 0.3);
   for (const [c, w, lesser] of seats) {
-    const d = lesser ? sDeep * 0.76 : sDeep;
-    const s0 = WALL_GAP + (lesser ? 0.1 : 0.02);
-    const B = box(rect, at, c - w / 2, s0, c + w / 2, s0 + d);
-    if (rich) stateChair(g, B, light, rnd, lesser ? DARK_WOOD : GILT, VELVET, lesser ? 'carved' : 'point', GILT[1]);
-    else stateChair(g, B, light, rnd, OAK, LEATHER, 'carved', lesser ? OAK[2] : BRASS);
+    const d = lesser ? 0.5 : 0.6;
+    const s0 = WALL_GAP + (lesser ? 0.06 : 0.02);
+    throneSeat(g, box(rect, at, c - w / 2, s0, c + w / 2, s0 + d), light, rnd, cushion);
   }
 }
 
@@ -168,7 +157,7 @@ export function lowDais(g: Graphics, f: InteriorItem, light: Light, v: number, r
   const wid = along ? f.h : f.w;
   const stone = v % 2 === 0;
   const r = rect(0.04, 0.04, len - 0.04, wid - 0.04);
-  castShadow(g, quad(r, rnd, 0), light, stone ? 0.24 : 0.3);
+  castShadow(g, quad(r, rnd, 0), light, stone ? 0.18 : 0.22);
   if (stone) {
     board(g, r, [0x6a6256, 0xaca290, 0xc8bea8], light, rnd, along, 0.1, 0);
     // (Its blocks: joints across it about a square apart, a joint along its middle where it is deep.)
@@ -201,8 +190,8 @@ export function chairOfOffice(g: Graphics, f: InteriorItem, light: Light, v: num
   const step = board(g, rect(0.06, WALL_GAP - 0.04, 0.94, 0.98), stepT, light, rnd, true, 0.04, stone ? 0 : 1);
   if (!stone) planks(g, step, true, 3, 0x6a4e30, rnd);
   const wood = v === 3 ? DARK_WOOD : OAK;
-  const trim = v === 3 ? GILT[1] : BRASS;
-  const cushion = CUSHIONS[v % 4];
+  const trim = v === 3 ? OLD_GILT : shade(BRASS, 0.9);
+  const cushion = CUSHIONS[v % 4].map((c) => mute(c, 0.35));
   const b0 = WALL_GAP - 0.02;
   // The chair's own shadow on the step.
   castShadow(g, quad(rect(0.1, b0, 0.9, 0.84), rnd, 0), light, 0.22);
@@ -231,34 +220,35 @@ export function chairOfOffice(g: Graphics, f: InteriorItem, light: Light, v: num
     g.stroke({ width: 0.016, color: wood[0], cap: 'round' });
   }
   const [mx, my] = at(0.5, b0 + 0.065);
-  g.ellipse(mx, my, 0.1, 0.075).fill(GILT[1]).stroke({ width: LINE, color: INK });
-  g.ellipse(mx + light[0] * 0.015, my + light[1] * 0.015, 0.055, 0.04).fill(GILT[2]);
+  g.ellipse(mx, my, 0.1, 0.075).fill(OLD_GILT).stroke({ width: LINE, color: INK });
+  g.ellipse(mx + light[0] * 0.015, my + light[1] * 0.015, 0.055, 0.04).fill(shade(OLD_GILT, 1.15));
   for (const u of [0.11, 0.89]) {
     const [x, y] = at(u, b0 + 0.065);
     g.circle(x, y, 0.07).fill(trim).stroke({ width: LINE, color: INK });
-    g.circle(x + light[0] * 0.02, y + light[1] * 0.02, 0.03).fill({ color: 0xfff1cf, alpha: 0.7 });
+    g.circle(x + light[0] * 0.02, y + light[1] * 0.02, 0.03).fill({ color: 0xfff1cf, alpha: 0.3 });
   }
 }
 
-/** High table on the dais, the diners' side to the wall: a long board under a white linen cloth hanging in folds
+/** High table on the dais, the diners' side to the wall: a long board under an off-white linen cloth hanging in folds
  * over the front, a coloured runner down it, plates and cups set along the diners' side, a gilt salt in the
  * middle, candlesticks. */
-export function highTable(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
+export function highTable(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number], tone?: HallTone) {
   const { along, len, rect, at } = frame(f, back);
-  const runner = [0x8a2a24, 0x2e4a7a, 0x3e6a34, 0xb08a3a][v % 4];
-  castShadow(g, quad(rect(0.04, 0.12, len - 0.04, 0.94), rnd, 0), light, 0.16);
+  // (The runner the dais's carpet when the house is known, else one of four dyes, muted.)
+  const runner = tone?.house !== undefined ? hallCarpet(tone, daisFloor(tone, false)) : mute([0x8a2a24, 0x2e4a7a, 0x3e6a34, 0xb08a3a][v % 4], 0.35);
+  castShadow(g, quad(rect(0.04, 0.12, len - 0.04, 0.94), rnd, 0), light, 0.12);
   // The cloth: past the board all round, hanging lower at the front, folds down its front.
-  g.poly(quad(rect(0.04, 0.12, len - 0.04, 0.94), rnd, 0.006)).fill(LINEN[0]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly(quad(rect(0.1, 0.16, len - 0.1, 0.8), rnd, 0.004)).fill(LINEN[1]);
+  g.poly(quad(rect(0.04, 0.12, len - 0.04, 0.94), rnd, 0.006)).fill(HALL_LINEN[0]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(quad(rect(0.1, 0.16, len - 0.1, 0.8), rnd, 0.004)).fill(HALL_LINEN[1]);
   litEdges(g, rect(0.1, 0.16, len - 0.1, 0.8), light, 0.03);
-  g.fill({ color: LINEN[2], alpha: 0.8 });
+  g.fill({ color: HALL_LINEN[2], alpha: 0.8 });
   for (let u = 0.3; u < len - 0.15; u += 0.32 + rnd() * 0.08) g.moveTo(...at(u, 0.82)).lineTo(...at(u + 0.02, 0.92));
-  g.stroke({ width: 0.016, color: shade(LINEN[0], 0.82) });
-  g.moveTo(...at(0.1, 0.8)).lineTo(...at(len - 0.1, 0.8)).stroke({ width: 0.014, color: shade(LINEN[0], 0.85) });
+  g.stroke({ width: 0.016, color: shade(HALL_LINEN[0], 0.82) });
+  g.moveTo(...at(0.1, 0.8)).lineTo(...at(len - 0.1, 0.8)).stroke({ width: 0.014, color: shade(HALL_LINEN[0], 0.85) });
   // The runner down the middle, hanging over the ends.
   g.poly(quad(rect(0.02, 0.42, len - 0.02, 0.6), rnd, 0.003)).fill(runner).stroke({ width: LINE, color: INK });
   g.moveTo(...at(0.06, 0.46)).lineTo(...at(len - 0.06, 0.46)).moveTo(...at(0.06, 0.56)).lineTo(...at(len - 0.06, 0.56));
-  g.stroke({ width: 0.016, color: GILT[2], alpha: 0.8 });
+  g.stroke({ width: 0.016, color: shade(runner, 1.35), alpha: 0.7 });
   // Places along the diners' side: a plate and a gilt cup each, a loaf here and there; a roast fowl on a platter
   // in the middle, a candlestick either side of it.
   const places = Math.max(1, Math.round(len * 1.1));
@@ -268,7 +258,7 @@ export function highTable(g: Graphics, f: InteriorItem, light: Light, v: number,
     const [px, py] = at(u, 0.32);
     g.circle(px, py, 0.1).fill(v % 2 ? 0xc0c4c8 : 0xa4a49c).stroke({ width: 0.016, color: INK });
     g.circle(px, py, 0.065).stroke({ width: 0.016, color: 0x6a6e72 });
-    g.circle(...at(u + 0.17, 0.24), 0.04).fill(GILT[1]).stroke({ width: 0.016, color: INK });
+    g.circle(...at(u + 0.17, 0.24), 0.04).fill(OLD_GILT).stroke({ width: 0.016, color: INK });
     g.circle(...at(u + 0.17, 0.24), 0.022).fill(0x6a1e1a);
     if (i % 2 === 0) {
       const [bx, by] = at(u - 0.04, 0.62);

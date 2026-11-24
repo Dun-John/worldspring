@@ -11,6 +11,8 @@ import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
 import { ballistaProp } from './fortProps';
 import { IN_RING, houseOf, looksOf, ORIENTED, PLATFORMS, UNDER_DRAWN, VARIED, type Fit } from './furniture';
+import { HALL_TONED } from './furniture/tables';
+import type { HallTone } from './furniture/hall';
 import { sprites } from './spriteCode';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
@@ -1623,6 +1625,17 @@ export class InteriorLayer {
     return sprites().columnTones(underLook(this.interior.function, this.interior.theme).stone);
   }
 
+  /** A hall's dais or high table: the floor of the room it stands in and the building's house (`HALL_TONED`). */
+  private hallTone(f: InteriorItem): HallTone | undefined {
+    if (this.underground || !HALL_TONED.has(f.kind)) return undefined;
+    const it = this.interior;
+    const lv = it.levels[this.level];
+    const [i, j] = [Math.floor(f.x + f.w / 2), Math.floor(f.y + f.h / 2)];
+    const r = lv && i >= 0 && j >= 0 && i < it.nx && j < it.ny ? lv.cells[j * it.nx + i] : -1;
+    const room = r >= 0 ? lv.rooms[r] : undefined;
+    return { floor: room ? floorColor(room.kind, lv.z, lv.natural, room.raise_ft) : undefined, house: houseOf(it.id) };
+  }
+
   private itemKey(f: InteriorItem): string {
     if (f.kind === 'link') return `link:${f.variant ?? 0}:${this.linkUp(f) ? 1 : 0}:${this.light.map((v) => Math.round(v * 100)).join(',')}`;
     if (this.isWay(f)) return `way:${this.underground ? 'u' : 'b'}:${f.kind}:${f.w}x${f.h}:${this.light.map((v) => Math.round(v * 100)).join(',')}:${this.lookOf(f)}:q${this.wayTurn()}:${this.wayScale(f)}`;
@@ -1635,7 +1648,9 @@ export class InteriorLayer {
       const fit = this.ringFit(f);
       const ring = fit ? `:y${[fit.c[0] - f.x, fit.c[1] - f.y, fit.r].map((v) => v.toFixed(2)).join(',')}` : '';
       const stone = this.underground && f.kind === 'pillar' ? `:s${this.columnTones().join(',')}` : '';
-      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}${stone}`;
+      const ht = this.hallTone(f);
+      const tone = ht ? `:h${ht.floor ?? ''},${ht.house}` : '';
+      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}${stone}${tone}`;
     }
     const turned = this.wallAnchor(f);
     const wall = turned ? `t${turned.step}` : onWall(f) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
@@ -2009,7 +2024,7 @@ export class InteriorLayer {
     const shared = this.sharedKind(kind);
     if (shared) {
       const s = { ...f, kind: shared };
-      if (sprites().drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null, this.ringFit(f))) return;
+      if (sprites().drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null, this.ringFit(f), this.hallTone(f))) return;
     }
     // (Indoor props in a building too.)
     const turned = this.wallAnchor(f);
