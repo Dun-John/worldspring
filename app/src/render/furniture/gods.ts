@@ -214,7 +214,7 @@ function tracery(g: Graphics, at: (u: number, s: number) => [number, number], le
   for (let k = 0; k < Math.round(len); k++) us.push(k + 0.32, k + 0.68);
   for (const u of us.filter((u) => Math.abs(u - len / 2) >= clear + r)) {
     const [cx, cy] = at(u, (s0 + s1) / 2);
-    g.circle(cx, cy, r).fill({ color: shade(OAK[2], 1.1), alpha }).stroke({ width: 0.012, color: INK, alpha });
+    g.circle(cx, cy, r).fill({ color: shade(OAK[2], 1.1), alpha }).stroke({ width: 0.016, color: INK, alpha });
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) g.circle(cx + dx * r * 0.4, cy + dy * r * 0.4, r * 0.32).fill({ color: 0x24180f, alpha });
     g.circle(cx, cy, r * 0.16).fill({ color: god.metal[1], alpha });
   }
@@ -226,7 +226,7 @@ function screenPosts(g: Graphics, at: (u: number, s: number) => [number, number]
   const sm = (s0 + s1) / 2;
   for (const u of us) {
     g.poly(quad(rect(u - hw, s0 - 0.03, u + hw, s1 + 0.03), rnd, 0.003)).fill(OAK[0]).stroke({ width: OUT, color: INK, join: 'round' });
-    g.circle(...at(u, sm), hw * 0.68).fill(god.metal[1]).stroke({ width: 0.012, color: INK });
+    g.circle(...at(u, sm), hw * 0.68).fill(god.metal[1]).stroke({ width: 0.016, color: INK });
     g.circle(...at(u, sm), hw * 0.3).fill(god.accent);
   }
 }
@@ -253,7 +253,7 @@ export function screenGate(g: Graphics, f: InteriorItem, light: Light, v: number
     const u = hw + ((len - 2 * hw) * k) / blocks;
     g.moveTo(...at(u, s0 - 0.05)).lineTo(...at(u, s1 + 0.07));
   }
-  g.stroke({ width: 0.014, color: INK, alpha: 0.7 });
+  g.stroke({ width: 0.016, color: INK, alpha: 0.7 });
   // The leaves, open: each from its post back into the nave, as far as its square allows.
   const leaf = len / 2 - hw - 0.02;
   const open = Math.min(1.3, Math.asin(Math.min(1, (0.92 - sm) / leaf)));
@@ -271,7 +271,7 @@ export function screenGate(g: Graphics, f: InteriorItem, light: Light, v: number
     g.poly(pts).fill(OAK[1]).stroke({ width: LINE, color: INK, join: 'round' });
     const holes = Math.max(2, Math.round(leaf * 5));
     for (let k = 1; k <= holes; k++) g.circle(...p((leaf * k) / (holes + 1), 0), 0.017).fill(0x24180f);
-    g.circle(...p(leaf, 0), 0.03).fill(god.accent).stroke({ width: 0.01, color: INK });
+    g.circle(...p(leaf, 0), 0.03).fill(god.accent).stroke({ width: 0.016, color: INK });
   }
   // The beam overhead: see-through, its edges dashed, the tracery carried on, the emblem at its middle.
   g.poly(rect(0, s0, len, s1)).fill({ color: OAK[1], alpha: 0.55 });

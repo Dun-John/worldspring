@@ -1002,11 +1002,11 @@ function glassChip(g: Graphics, x: number, y: number, a: number, len: number, w:
   for (const k of [0.35, 0.6]) {
     g.moveTo(...p(len * k, sd * w * 0.15)).quadraticCurveTo(...p(len * (k - 0.05), sd * w * 0.55), ...p(len * (k - 0.25), sd * w * 0.65));
   }
-  g.stroke({ width: 0.01, color: OBSIDIAN[2], alpha: 0.8 });
-  g.moveTo(...T).lineTo(...M).lineTo(...Bl).moveTo(...M).lineTo(...Br).stroke({ width: 0.014, color: INK, alpha: 0.7 });
+  g.stroke({ width: 0.016, color: OBSIDIAN[2], alpha: 0.8 });
+  g.moveTo(...T).lineTo(...M).lineTo(...Bl).moveTo(...M).lineTo(...Br).stroke({ width: 0.016, color: INK, alpha: 0.7 });
   g.poly([...T, ...L, ...Bl, ...Br, ...R]).stroke({ width: OUT, color: INK, join: 'miter' });
   g.moveTo(...(lit ? L : R)).lineTo(...T).stroke({ width: 0.014, color: OBSIDIAN[3], cap: 'round' });
-  g.moveTo(...p(len * 0.3, -sd * w * 0.3)).lineTo(...p(len * 0.7, -sd * w * 0.12)).stroke({ width: 0.012, color: 0xffffff, alpha: 0.8, cap: 'round' });
+  g.moveTo(...p(len * 0.3, -sd * w * 0.3)).lineTo(...p(len * 0.7, -sd * w * 0.12)).stroke({ width: 0.014, color: 0xffffff, alpha: 0.8, cap: 'round' });
 }
 
 /** Obsidian shards: a scatter of broken black volcanic glass, a few big blades and small chips, glossy and sharp. */

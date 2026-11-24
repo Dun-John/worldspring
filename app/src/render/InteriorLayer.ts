@@ -2149,7 +2149,7 @@ export class InteriorLayer {
       g.circle(px, py, r).fill(tone(c, 0.72));
       g.circle(px + lx * r * 0.16, py + ly * r * 0.16, r * 0.84).fill(c);
       g.circle(px + lx * r * 0.4, py + ly * r * 0.4, r * 0.36).fill({ color: tone(c, 1.35), alpha: 0.75 });
-      g.circle(px, py, r).stroke({ width: 0.03, color: INK, alpha: 0.65 });
+      g.circle(px, py, r).stroke({ width: 0.025, color: INK });
     };
     const block = (bx: number, by: number, bw: number, bh: number, c: number, lift = 1) => {
       if (lift > 0) g.rect(bx + sx * lift * 1.4, by + sy * lift * 1.4, bw, bh).fill({ color: 0x000000, alpha: 0.32 });
@@ -2160,7 +2160,7 @@ export class InteriorLayer {
       g.rect(bx, ly < 0 ? by : by + bh - e, bw, e).fill({ color: tone(c, 1.3), alpha: 0.6 });
       g.rect(lx < 0 ? bx + bw - e : bx, by, e, bh).fill({ color: tone(c, 0.65), alpha: 0.6 });
       g.rect(bx, ly < 0 ? by + bh - e : by, bw, e).fill({ color: tone(c, 0.65), alpha: 0.6 });
-      g.rect(bx, by, bw, bh).stroke({ width: 0.03, color: INK, alpha: 0.65 });
+      g.rect(bx, by, bw, bh).stroke({ width: 0.025, color: INK });
     };
     switch (kind) {
       case 'sewage':
@@ -2168,17 +2168,17 @@ export class InteriorLayer {
         return true;
       case 'trapdoor':
         block(x + 0.12, y + 0.12, 0.76, 0.76, 0x6e4a2c, 0);
-        g.moveTo(x + 0.12, cy).lineTo(x + 0.88, cy).stroke({ width: 0.04, color: INK, alpha: 0.6 });
+        g.moveTo(x + 0.12, cy).lineTo(x + 0.88, cy).stroke({ width: 0.025, color: INK });
         g.circle(cx, cy + 0.2, 0.07).stroke({ width: 0.03, color: 0x9ca3af });
         return true;
       case 'winch':
         block(x + 0.1, y + 0.2, 0.8, 0.6, 0x6e4a2c, 1.4);
-        g.ellipse(cx, cy, 0.18, 0.28).fill(0x4a4440).stroke({ width: 0.03, color: INK });
+        g.ellipse(cx, cy, 0.18, 0.28).fill(0x4a4440).stroke({ width: 0.025, color: INK });
         return true;
       case 'cot': {
         const along = h >= w;
         shadow(cx, cy, Math.max(w, h) * 0.32, 0.6);
-        g.roundRect(x + 0.15, y + 0.15, w - 0.3, h - 0.3, 0.15).fill(kind === 'cot' ? 0x7d5a3c : 0x6b5d45).stroke({ width: 0.03, color: INK, alpha: 0.6 });
+        g.roundRect(x + 0.15, y + 0.15, w - 0.3, h - 0.3, 0.15).fill(kind === 'cot' ? 0x7d5a3c : 0x6b5d45).stroke({ width: 0.025, color: INK });
         g.roundRect(along ? x + 0.2 : x + 0.2, along ? y + 0.2 : y + 0.2, along ? w - 0.4 : 0.35, along ? 0.35 : h - 0.4, 0.1).fill(0xd8cfbd);
         return true;
       }

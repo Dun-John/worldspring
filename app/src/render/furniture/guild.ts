@@ -31,7 +31,7 @@ function turned(c: Pt, ax: Pt, ay: Pt, ang = 0): (a: number, b: number) => Pt {
 
 /** A coin from above in a metal's tones (shade, face, lit). */
 function coin(g: Graphics, x: number, y: number, r: number, m: readonly number[], light: Light) {
-  g.circle(x, y, r).fill(m[0]).stroke({ width: 0.01, color: INK });
+  g.circle(x, y, r).fill(m[0]).stroke({ width: 0.016, color: INK });
   g.circle(x + light[0] * r * 0.18, y + light[1] * r * 0.18, r * 0.72).fill(m[1]);
   g.circle(x + light[0] * r * 0.4, y + light[1] * r * 0.4, r * 0.25).fill({ color: m[2], alpha: 0.8 });
 }
@@ -56,14 +56,14 @@ export function strongbox(g: Graphics, f: InteriorItem, light: Light, v: number,
     ])
       g.moveTo(hx, y + 0.41).quadraticCurveTo(hx + sd * 0.1, y + 0.49, hx, y + 0.57).stroke({ width: w, color: c, cap: 'round' });
   }
-  const face = board(g, [x0, y0, x1, y1], t, light, rnd, true, 0.06, iron ? 0 : 1);
+  const face = board(g, [x0, y0, x1, y1], t, light, rnd, true, 0.06, iron ? 0 : 1, LINE);
   if (iron) g.poly(quad([face[0] + 0.05, face[1] + 0.05, face[2] - 0.05, face[3] - 0.05], rnd, 0.004)).stroke({ width: LINE, color: IRON[0] });
   else {
     planks(g, face, true, 2, t[0], rnd);
     g.poly(quad([x0 + 0.03, y0 + 0.03, x1 - 0.03, y1 - 0.03], rnd, 0.004)).stroke({ width: 0.035, color: strap[1] });
   }
   for (const sx of [x0 + 0.11, x1 - 0.18]) {
-    g.poly(quad([sx, y0 - 0.005, sx + 0.07, y1 + 0.005], rnd, 0.004)).fill(strap[1]).stroke({ width: LINE, color: INK });
+    g.poly(quad([sx, y0 - 0.005, sx + 0.07, y1 + 0.005], rnd, 0.004)).fill(strap[1]).stroke({ width: 0.016, color: strap[0] });
     for (let k = 0; k < 4; k++) g.circle(sx + 0.035, y0 + 0.06 + ((y1 - y0 - 0.12) * k) / 3, 0.015).fill(stud);
   }
   for (const [cx, cy, dx, dy] of [
@@ -72,11 +72,11 @@ export function strongbox(g: Graphics, f: InteriorItem, light: Light, v: number,
     [x1, y1, -1, -1],
     [x0, y1, 1, -1],
   ]) {
-    g.poly([cx, cy, cx + dx * 0.12, cy, cx + dx * 0.12, cy + dy * 0.045, cx + dx * 0.045, cy + dy * 0.045, cx + dx * 0.045, cy + dy * 0.12, cx, cy + dy * 0.12]).fill(strap[0]).stroke({ width: 0.012, color: INK });
+    g.poly([cx, cy, cx + dx * 0.12, cy, cx + dx * 0.12, cy + dy * 0.045, cx + dx * 0.045, cy + dy * 0.045, cx + dx * 0.045, cy + dy * 0.12, cx, cy + dy * 0.12]).fill(strap[0]);
   }
   // The hasp down the front, the padlock hanging from it: its shackle, a brass body, the keyhole.
   const mx = x + 0.5;
-  g.poly(quad([mx - 0.05, y1 - 0.14, mx + 0.05, y1 + 0.01], rnd, 0.003)).fill(strap[1]).stroke({ width: LINE, color: INK });
+  g.poly(quad([mx - 0.05, y1 - 0.14, mx + 0.05, y1 + 0.01], rnd, 0.003)).fill(strap[1]).stroke({ width: 0.016, color: strap[0] });
   g.circle(mx, y1 - 0.1, 0.016).fill(stud);
   for (const [w, c] of [
     [0.042, INK],
@@ -106,9 +106,9 @@ export function countingDesk(g: Graphics, f: InteriorItem, light: Light, v: numb
   castShadow(g, poly4(-0.28, -0.2, 0.28, 0.2), light, 0.03);
   g.poly(poly4(-0.28, -0.2, 0.28, 0.2)).fill([0x6a2a22, 0x2e4a5a, 0x5a3a1e, 0x3a2a4a][v % 4]).stroke({ width: 0.02, color: INK, join: 'round' });
   g.moveTo(...L(0.06, 0.18)).lineTo(...L(0.09, 0.27)).stroke({ width: 0.022, color: 0xa83228, cap: 'round' });
-  for (const sd of [-1, 1]) g.poly(poly4(sd * 0.012, -0.175, sd * 0.255, 0.175)).fill(PAPERS[1]).stroke({ width: 0.012, color: INK });
+  for (const sd of [-1, 1]) g.poly(poly4(sd * 0.012, -0.175, sd * 0.255, 0.175)).fill(PAPERS[1]).stroke({ width: 0.016, color: INK });
   g.poly(poly4(-0.045, -0.17, 0.045, 0.17)).fill({ color: LINEN[0], alpha: 0.55 });
-  g.moveTo(...L(0, -0.18)).lineTo(...L(0, 0.18)).stroke({ width: 0.012, color: WRITING });
+  g.moveTo(...L(0, -0.18)).lineTo(...L(0, 0.18)).stroke({ width: 0.014, color: WRITING });
   for (let k = 0; k < 5; k++) {
     const b = -0.12 + k * 0.06;
     g.moveTo(...L(-0.22, b)).lineTo(...L(-0.06 - rnd() * 0.06, b));
@@ -116,15 +116,15 @@ export function countingDesk(g: Graphics, f: InteriorItem, light: Light, v: numb
     g.moveTo(...L(0.17, b)).lineTo(...L(0.23, b));
   }
   g.stroke({ width: 0.014, color: WRITING, cap: 'round' });
-  g.moveTo(...L(0.155, -0.15)).lineTo(...L(0.155, 0.15)).stroke({ width: 0.01, color: 0xa83228 });
+  g.moveTo(...L(0.155, -0.15)).lineTo(...L(0.155, 0.15)).stroke({ width: 0.016, color: 0xa83228 });
   // The quill across the right-hand page, the ink jar beyond the book.
   const [qa, qb] = [L(0.08, 0.1), L(0.36, -0.14)];
   const [dx, dy] = [qb[0] - qa[0], qb[1] - qa[1]];
   const m = Math.hypot(dx, dy) || 1;
   const [nx, ny] = [-dy / m, dx / m];
   const mid = [qa[0] + dx * 0.55, qa[1] + dy * 0.55];
-  g.poly([qa[0], qa[1], mid[0] + nx * 0.05, mid[1] + ny * 0.05, qb[0], qb[1], mid[0] - nx * 0.028, mid[1] - ny * 0.028]).fill(LINEN[2]).stroke({ width: 0.012, color: INK, join: 'round' });
-  g.moveTo(qa[0], qa[1]).lineTo(qb[0], qb[1]).stroke({ width: 0.01, color: LINEN[0] });
+  g.poly([qa[0], qa[1], mid[0] + nx * 0.05, mid[1] + ny * 0.05, qb[0], qb[1], mid[0] - nx * 0.028, mid[1] - ny * 0.028]).fill(LINEN[2]).stroke({ width: 0.016, color: INK, join: 'round' });
+  g.moveTo(qa[0], qa[1]).lineTo(qb[0], qb[1]).stroke({ width: 0.016, color: LINEN[0] });
   const [jx, jy] = at(0.28, 0.3);
   g.circle(jx, jy, 0.065).fill(0x2a2a3a).stroke({ width: LINE, color: INK });
   g.circle(jx, jy, 0.035).fill(0x0e0e16);
@@ -155,10 +155,10 @@ export function countingDesk(g: Graphics, f: InteriorItem, light: Light, v: numb
   }
   coin(g, ...B(0.01, -0.2), 0.04, SILVER, light);
   const [wx, wy] = B(-0.01, 0.21);
-  g.rect(wx - 0.03, wy - 0.03, 0.06, 0.06).fill(IRON[1]).stroke({ width: 0.01, color: INK });
+  g.rect(wx - 0.03, wy - 0.03, 0.06, 0.06).fill(IRON[1]).stroke({ width: 0.016, color: INK });
   inkLine(g, [B(0, -0.21), B(0, 0.21)], 0.02, GILT[1]);
   const [kx, ky] = B(0, 0);
-  g.circle(kx, ky, 0.035).fill(GILT[1]).stroke({ width: 0.012, color: INK });
+  g.circle(kx, ky, 0.035).fill(GILT[1]).stroke({ width: 0.016, color: INK });
   g.circle(kx + light[0] * 0.012, ky + light[1] * 0.012, 0.015).fill(GILT[2]);
 }
 
@@ -209,13 +209,13 @@ export function drawHorse(
     const fore = s < 1.5 ? -1 : 1;
     g.poly(oval(x, y, 0.052, 0.052, 0, 10)).fill(coat.legs).stroke({ width: LINE, color: INK });
     const [hx, hy] = H(s + fore * 0.04, a * 1.04, 1);
-    g.poly(oval(hx, hy, 0.036, 0.03, Math.atan2(U[1], U[0]), 10)).fill(0x2e2620).stroke({ width: 0.014, color: INK });
+    g.poly(oval(hx, hy, 0.036, 0.03, Math.atan2(U[1], U[0]), 10)).fill(0x2e2620).stroke({ width: 0.016, color: INK });
   }
   // The tail, hanging behind and swished to one side, strands in it.
   const tail = [H(1.8, -0.7, 0.08), H(1.92, -0.9, 0.08), H(1.98, sd * 0.2, 0.08), H(2.0, sd * 1.4, 0.08), H(1.94, sd * 1.9, 0.08), H(1.88, sd * 1.2, 0.08), H(1.8, 0.7, 0.08)];
   g.poly(tail.flat()).fill(coat.mane).stroke({ width: LINE, color: INK, join: 'round' });
   for (const o of [-0.3, 0.3]) g.moveTo(...H(1.88, o, 0.08)).lineTo(...H(1.97, sd * 0.9 + o, 0.08));
-  g.stroke({ width: 0.012, color: shade(coat.mane, coat.mane > 0x808080 ? 0.75 : 1.8) });
+  g.stroke({ width: 0.014, color: shade(coat.mane, coat.mane > 0x808080 ? 0.75 : 1.8) });
   g.poly(body(1, 0, 0)).fill(c0).stroke({ width: OUT, color: INK, join: 'round' });
   g.poly(body(0.84, light[0] * 0.028, light[1] * 0.028)).fill(c1);
   g.poly(body(0.45, light[0] * 0.06, light[1] * 0.06)).fill({ color: c2, alpha: 0.4 });
@@ -225,7 +225,7 @@ export function drawHorse(
       [1.24, -0.45], [1.42, 0.4], [1.62, -0.25], [1.34, 0.02], [1.54, 0.6], [1.72, 0.3],
     ]) {
       const [x, y] = H(s, a, 0.22);
-      g.poly(patch(x, y, 0.04, 0.036, rnd, 0.2, 9)).fill({ color: 0xf0ece2, alpha: 0.6 }).stroke({ width: 0.01, color: c0, alpha: 0.6 });
+      g.poly(patch(x, y, 0.04, 0.036, rnd, 0.2, 9)).fill({ color: 0xf0ece2, alpha: 0.6 }).stroke({ width: 0.016, color: c0, alpha: 0.6 });
     }
   }
   if (blanket) {
@@ -238,7 +238,7 @@ export function drawHorse(
     };
     g.poly(felt(1.2, 1.64, 0.2)).fill(0xa8443a);
     g.poly(felt(1.25, 1.59, 0.15)).stroke({ width: 0.03, color: 0x3e5a8a, join: 'round' });
-    g.poly([...H(1.33, 0, 0), ...H(1.42, -1, 0.07), ...H(1.51, 0, 0), ...H(1.42, 1, 0.07)]).fill(0xe6d6b0).stroke({ width: 0.012, color: 0x6a2420 });
+    g.poly([...H(1.33, 0, 0), ...H(1.42, -1, 0.07), ...H(1.51, 0, 0), ...H(1.42, 1, 0.07)]).fill(0xe6d6b0).stroke({ width: 0.014, color: 0x6a2420 });
     g.poly(felt(1.2, 1.64, 0.2)).stroke({ width: LINE, color: INK, join: 'round' });
   }
   // Forms: the line of the shoulders across the base of the neck, the points of the hips, the muzzle darker.
@@ -259,7 +259,7 @@ export function drawHorse(
   const mane: Pt[] = [H(0.89, -0.15 * sd, 0.088), H(1.0, -0.12 * sd, 0.124), H(1.1, -0.1 * sd, 0.18), H(1.2, 0, 0.22)];
   for (const [s, w] of [[1.17, 0.21], [1.1, 0.18], [1.04, 0.14], [0.97, 0.11], [0.91, 0.09]] as const) mane.push(H(s, sd * 0.62, w), H(s - 0.03, sd * 0.36, w));
   g.poly(mane.flat()).fill(coat.mane).stroke({ width: LINE, color: INK, join: 'round' });
-  g.poly([...H(0.9, -0.3, 0.088), ...H(0.9, 0.3, 0.088), ...H(0.8, 0.2, 0.12), ...H(0.77, -0.05, 0.12)]).fill(coat.mane).stroke({ width: 0.012, color: INK, join: 'round' });
+  g.poly([...H(0.9, -0.3, 0.088), ...H(0.9, 0.3, 0.088), ...H(0.8, 0.2, 0.12), ...H(0.77, -0.05, 0.12)]).fill(coat.mane).stroke({ width: 0.016, color: INK, join: 'round' });
   // The ears pricked forward and out at the poll.
   for (const e of [-1, 1]) {
     const ear = [H(0.91, e * 0.04, 1), H(0.85, e * 0.1, 1), H(0.79, e * 0.2, 1), H(0.86, e * 0.19, 1), H(0.93, e * 0.13, 1)];
@@ -386,10 +386,10 @@ export function councilTable(g: Graphics, f: InteriorItem, light: Light, v: numb
     g.poly(q(-hw - 0.02, bk, hw + 0.02, -0.12)).fill(chairWood[1]).stroke({ width: OUT, color: INK, join: 'round' });
     g.poly(q(-hw, bk + 0.015, hw, bk + 0.035)).fill({ color: chairWood[2], alpha: 0.7 });
     const trim = grand ? GILT[1] : chairWood[2];
-    for (const sd of [-1, 1]) g.circle(...P(sd * (hw + 0.005), (bk - 0.12) / 2), grand ? 0.045 : 0.032).fill(trim).stroke({ width: 0.012, color: INK });
+    for (const sd of [-1, 1]) g.circle(...P(sd * (hw + 0.005), (bk - 0.12) / 2), grand ? 0.045 : 0.032).fill(trim).stroke({ width: 0.016, color: INK });
     if (grand) {
       const [mx, my] = P(0, (bk - 0.12) / 2);
-      g.ellipse(mx, my, 0.07, 0.045).fill(GILT[1]).stroke({ width: 0.012, color: INK });
+      g.ellipse(mx, my, 0.07, 0.045).fill(GILT[1]).stroke({ width: 0.016, color: INK });
       g.ellipse(mx + light[0] * 0.012, my + light[1] * 0.012, 0.035, 0.022).fill(GILT[2]);
     }
   };
@@ -423,6 +423,6 @@ export function councilTable(g: Graphics, f: InteriorItem, light: Light, v: numb
   if (v === 3) {
     g.poly(quad(rect(cu - rx - 0.04, cs - 0.15, cu + rx + 0.04, cs + 0.15), rnd, 0.003)).fill(0x2e4a7a).stroke({ width: LINE, color: INK });
     for (const o of [-0.1, 0.1]) g.moveTo(...at(cu - rx, cs + o)).lineTo(...at(cu + rx, cs + o));
-    g.stroke({ width: 0.012, color: GILT[2], alpha: 0.8 });
+    g.stroke({ width: 0.014, color: GILT[2], alpha: 0.8 });
   }
 }

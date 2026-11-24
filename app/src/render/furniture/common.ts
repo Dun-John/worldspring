@@ -60,9 +60,9 @@ export function litEdges(g: Graphics, [x0, y0, x1, y1]: number[], [lx, ly]: Ligh
 
 /** A worn board or box from above: square corners, a darker rim on the side away from the light (the
  * face shifted toward it), a faint lit edge, a few grain lines along `along`. Returns the face. */
-export function board(g: Graphics, r: number[], t: readonly number[], light: Light, rnd: () => number, along = true, e = 0.05, grain = 3): number[] {
+export function board(g: Graphics, r: number[], t: readonly number[], light: Light, rnd: () => number, along = true, e = 0.05, grain = 3, ink = OUT): number[] {
   const [lx, ly] = light;
-  g.poly(quad(r, rnd)).fill(t[0]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(quad(r, rnd)).fill(t[0]).stroke({ width: ink, color: INK, join: 'round' });
   const [dx, dy] = [lx * e * 0.7, ly * e * 0.7];
   const face = [r[0] + e * 0.6 + dx, r[1] + e * 0.6 + dy, r[2] - e * 0.6 + dx, r[3] - e * 0.6 + dy];
   g.poly(quad(face, rnd, 0.008)).fill(t[1]);

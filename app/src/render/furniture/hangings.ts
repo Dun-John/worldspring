@@ -167,7 +167,7 @@ export function jobBoard(g: Graphics, f: InteriorItem, light: Light, v: number, 
   const { along, len, rect, at } = frame(f, back);
   const top = WALL_GAP - 0.02;
   const wood = v === 2 ? DARK_WOOD : v === 3 ? [0x8a6a44, 0xb08a5a, 0xc8a274] : WOOD;
-  const depth = 0.07;
+  const depth = 0.14;
   const r = rect(0.08, top, len - 0.08, top + depth);
   castShadow(g, quad(r, rnd, 0), light, 0.06);
   // The pegs: stubs from the wall at each end, past the board.
@@ -177,17 +177,16 @@ export function jobBoard(g: Graphics, f: InteriorItem, light: Light, v: number, 
   g.stroke({ width: 0.03, color: DARK_WOOD[2], cap: 'round' });
   board(g, r, wood, light, rnd, along, 0.02, 0);
   const PAPER = [LINEN[2], LINEN[1], 0xe8d8a8, 0xd8c8a0];
-  // Paper corners: short light ticks off the board's room edge, at odd angles.
-  for (let i = 0; i < 9; i++) {
-    const u = 0.18 + ((len - 0.36) * (i + 0.2 + rnd() * 0.6)) / 9;
-    const s = top + depth;
-    const a = (rnd() - 0.5) * 0.06;
-    g.moveTo(...at(u, s - 0.008)).lineTo(...at(u + a, s + 0.03 + rnd() * 0.025));
-    g.stroke({ width: 0.022, color: PAPER[i % 4], cap: 'round' });
-  }
-  // And the odd one curling over the top edge.
-  for (const u of [len * 0.38, len * 0.71]) g.poly(quad(rect(u, top + 0.012, u + 0.09, top + 0.04), rnd, 0.004)).fill(LINEN[2]).stroke({ width: 0.014, color: INK });
   g.poly(quad(r, rnd, 0)).stroke({ width: LINE, color: INK, join: 'round' });
+  // The notices: tacked to the board's face, their loose feet curling out into the room past its edge.
+  const n = Math.max(3, Math.round((len - 0.4) / 0.26));
+  for (let i = 0; i < n; i++) {
+    const u = 0.2 + ((len - 0.4) * (i + 0.15 + rnd() * 0.25)) / n;
+    const wd = 0.13 + rnd() * 0.06;
+    const out = top + depth + 0.045 + rnd() * 0.05;
+    g.poly(quad(rect(u, top + 0.05, u + wd, out), rnd, 0.012)).fill(PAPER[i % 4]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.circle(...at(u + wd / 2, top + 0.085), 0.016).fill(0x9a3428);
+  }
 }
 
 /** The stage's curtain: a thin gathered band along the back from the rod, its folds in two reds. */

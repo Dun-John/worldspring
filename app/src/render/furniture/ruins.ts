@@ -259,7 +259,7 @@ export function arcaneWorkbench(g: Graphics, f: InteriorItem, light: Light, v: n
     const [x, y] = at(u, WALL_GAP + 0.12);
     g.circle(x, y, 0.055).fill(0x7a6e5a).stroke({ width: LINE, color: INK });
     g.circle(x + lx * 0.012, y + ly * 0.012, 0.035).fill(liquids[(v + k + 1) % liquids.length]);
-    g.circle(x, y, 0.02).fill(0x9a7a52).stroke({ width: 0.012, color: INK });
+    g.circle(x, y, 0.02).fill(0x9a7a52).stroke({ width: 0.014, color: shade(0x9a7a52, 0.55) });
   }
   // The alembic: a copper pot, its glass head, the neck down to the receiver.
   const [px, py] = at(0.5, 0.62);
@@ -395,7 +395,7 @@ export function totem(g: Graphics, f: InteriorItem, light: Light, rnd: () => num
   bone(g, [...T(0.26, -0.3)], [...T(0.38, -0.2)], 0.024, light);
   skullTop(g, ...T(-0.12, 0.33), Math.PI / 2 + 0.4, 0.055, light);
   for (const [a, b, c] of [[0.31, 0.16, 0xb5523a], [0.34, 0.22, 0xc8a04a], [0.29, 0.25, 0x4f72a8], [-0.3, -0.24, 0xc8a04a], [-0.25, -0.3, 0xb5523a]] as const) {
-    g.circle(...T(a, b), 0.017).fill(c).stroke({ width: 0.016, color: INK });
+    g.circle(...T(a, b), 0.017).fill(c).stroke({ width: 0.014, color: shade(c, 0.55) });
   }
   // The wing board, through the post: a long flat bar seen edge-on, feathered ends.
   const wing = (k: number) => [[-0.44, -0.02], [-0.4, -0.045], [-0.1, -0.05], [0.1, -0.05], [0.4, -0.045], [0.44, -0.02], [0.41, 0.0], [0.45, 0.025], [0.4, 0.045], [-0.4, 0.045], [-0.45, 0.025], [-0.41, 0.0]].flatMap(([a, b]) => T(a * k, b * k));

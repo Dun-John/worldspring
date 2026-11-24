@@ -1,6 +1,6 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { BRASS, DARK_WOOD, INK, IRON, LINE, type Light, OUT, WOOD, castShadow, frame, glowPool, oval, patch, quad, ring } from './common';
+import { BRASS, DARK_WOOD, INK, IRON, LINE, type Light, OUT, WOOD, castShadow, frame, glowPool, shade, oval, patch, quad, ring } from './common';
 import { BURLAP } from './tomb';
 import { barrel } from './home';
 import { rock } from './under';
@@ -319,7 +319,7 @@ export function hangingLantern(g: Graphics, f: InteriorItem, light: Light, rnd: 
   }
   g.poly(bail, false).stroke({ width: 0.044, color: INK, cap: 'round', join: 'round' });
   g.poly(bail, false).stroke({ width: 0.02, color: IRON[1], cap: 'round', join: 'round' });
-  for (const k of [-1, 1]) g.circle(cx + nx * 0.07 * k, cy + ny * 0.07 * k, 0.02).fill(IRON[0]).stroke({ width: 0.016, color: INK });
+  for (const k of [-1, 1]) g.circle(cx + nx * 0.07 * k, cy + ny * 0.07 * k, 0.02).fill(IRON[0]).stroke({ width: 0.014, color: 0x2a2620 });
 }
 
 /** Blasting powder kegs: three small kegs standing together, a red flame painted on each lid, grainy black powder

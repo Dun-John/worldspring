@@ -12,7 +12,7 @@ export const MARBLE = [0x8e8a80, 0xc4beb0, 0xe2dccd];
 /** A candle in a holder, its flame and a little glow. */
 export function candle(g: Graphics, x: number, y: number) {
   g.circle(x, y, 0.09).fill({ color: 0xf59e0b, alpha: 0.18 });
-  g.circle(x, y, 0.05).fill(GILT[1]).stroke({ width: 0.012, color: INK });
+  g.circle(x, y, 0.05).fill(GILT[1]).stroke({ width: 0.016, color: INK });
   g.circle(x, y, 0.03).fill(LINEN[2]);
   g.circle(x, y, 0.015).fill(0xffc23a);
 }
@@ -28,8 +28,8 @@ export function altar(g: Graphics, f: InteriorItem, light: Light, v: number, rnd
   g.poly(quad(rect(c0, WALL_GAP + 0.04, c1, 0.88), rnd, 0.005)).fill(cloth).stroke({ width: LINE, color: INK });
   g.poly(quad(rect(c0 + 0.04, 0.8, c1 - 0.04, 0.86), rnd, 0.003)).fill(GILT[1]);
   const [bx0, by0, bx1, by1] = rect(len / 2 - 0.16, 0.38, len / 2 + 0.16, 0.6);
-  g.rect(bx0, by0, bx1 - bx0, by1 - by0).fill(LINEN[2]).stroke({ width: 0.012, color: INK });
-  g.moveTo(...at(len / 2, 0.38)).lineTo(...at(len / 2, 0.6)).stroke({ width: 0.012, color: LINEN[0] });
+  g.rect(bx0, by0, bx1 - bx0, by1 - by0).fill(LINEN[2]).stroke({ width: 0.016, color: INK });
+  g.moveTo(...at(len / 2, 0.38)).lineTo(...at(len / 2, 0.6)).stroke({ width: 0.014, color: LINEN[0] });
   for (const u of [END_GAP + 0.2, len - END_GAP - 0.2]) candle(g, ...at(u, 0.5));
 }
 
@@ -323,7 +323,7 @@ export function throne(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
     [0.6, 0.55],
     [0.5, 0.7],
   ]) {
-    g.circle(...at(u, s0), 0.022).fill(GILT[1]).stroke({ width: 0.01, color: INK });
+    g.circle(...at(u, s0), 0.022).fill(GILT[1]).stroke({ width: 0.014, color: shade(GILT[1], 0.55) });
   }
   // Arms, slim.
   for (const u of [0.12, 0.76]) board(g, rect(u, WALL_GAP + 0.06, u + 0.12, 0.9), DARK_WOOD, light, rnd, false, 0.025, 0);
@@ -365,7 +365,7 @@ function staveRing(g: Graphics, cx: number, cy: number, r: number, inner: number
     const a = (i / n) * Math.PI * 2;
     g.moveTo(cx + Math.cos(a) * r * inner, cy + Math.sin(a) * r * inner).lineTo(cx + Math.cos(a) * r * 0.98, cy + Math.sin(a) * r * 0.98);
   }
-  g.stroke({ width: 0.012, color: WOOD[0] });
+  g.stroke({ width: 0.014, color: WOOD[0] });
   g.circle(cx, cy, r * (0.5 + inner / 2)).stroke({ width: 0.03, color: IRON[0] });
   g.circle(cx, cy, r * inner).stroke({ width: LINE, color: INK });
 }
@@ -536,7 +536,7 @@ export function cauldron(g: Graphics, f: InteriorItem, light: Light, v: number, 
     const a = rnd() * Math.PI * 2;
     const d = r * 0.55 * Math.sqrt(rnd());
     const br = 0.025 + 0.025 * rnd();
-    g.circle(cx + Math.cos(a) * d, cy + Math.sin(a) * d, br).fill(brew[1]).stroke({ width: 0.012, color: brew[2] });
+    g.circle(cx + Math.cos(a) * d, cy + Math.sin(a) * d, br).fill(brew[1]).stroke({ width: 0.014, color: brew[2] });
   }
 }
 
@@ -555,7 +555,7 @@ export function alchemyBench(g: Graphics, f: InteriorItem, light: Light, v: numb
   // Jars along the wall.
   for (let u = END_GAP + 0.14, k = v; u < len - END_GAP - 0.08; u += 0.17, k++) {
     const [x, y] = at(u, WALL_GAP + 0.1);
-    g.circle(x, y, 0.06).fill(0x8a7a62).stroke({ width: 0.012, color: INK });
+    g.circle(x, y, 0.06).fill(0x8a7a62).stroke({ width: 0.016, color: INK });
     g.circle(x, y, 0.03).fill(liquids[(k * 3) % liquids.length]);
   }
   // A retort: a round belly with a long neck reaching out.
@@ -591,20 +591,20 @@ function weapon(g: Graphics, at: (u: number, s: number) => [number, number], u0:
     shaft(u0, u0 + 0.14, 0.03, 0x5a3a22);
     g.moveTo(...at(u0 + 0.14, s - 0.07)).lineTo(...at(u0 + 0.14, s + 0.07)).stroke({ width: 0.035, color: INK, cap: 'round' });
     g.moveTo(...at(u0 + 0.14, s - 0.07)).lineTo(...at(u0 + 0.14, s + 0.07)).stroke({ width: 0.018, color: BRASS, cap: 'round' });
-    g.poly([...at(u0 + 0.15, s - 0.025), ...at(u1 - 0.06, s - 0.02), ...at(u1, s), ...at(u1 - 0.06, s + 0.02), ...at(u0 + 0.15, s + 0.025)]).fill(steel).stroke({ width: 0.012, color: INK });
+    g.poly([...at(u0 + 0.15, s - 0.025), ...at(u1 - 0.06, s - 0.02), ...at(u1, s), ...at(u1 - 0.06, s + 0.02), ...at(u0 + 0.15, s + 0.025)]).fill(steel).stroke({ width: 0.016, color: INK });
   } else if (kind === 1) {
     // Spear: a long haft, a leaf-shaped head.
     shaft(u0, u1 - 0.12, 0.025, WOOD[2]);
-    g.poly([...at(u1 - 0.14, s), ...at(u1 - 0.08, s - 0.04), ...at(u1, s), ...at(u1 - 0.08, s + 0.04)]).fill(steel).stroke({ width: 0.012, color: INK });
+    g.poly([...at(u1 - 0.14, s), ...at(u1 - 0.08, s - 0.04), ...at(u1, s), ...at(u1 - 0.08, s + 0.04)]).fill(steel).stroke({ width: 0.016, color: INK });
   } else if (kind === 2) {
     // Axe: a haft, a crescent blade on one side.
     shaft(u0, u1, 0.03, WOOD[2]);
-    g.poly([...at(u1 - 0.18, s), ...at(u1 - 0.22, s - 0.14), ...at(u1 - 0.06, s - 0.14), ...at(u1 - 0.04, s)]).fill(steel).stroke({ width: 0.012, color: INK });
+    g.poly([...at(u1 - 0.18, s), ...at(u1 - 0.22, s - 0.14), ...at(u1 - 0.06, s - 0.14), ...at(u1 - 0.04, s)]).fill(steel).stroke({ width: 0.016, color: INK });
   } else {
     // Mace: a haft, a flanged iron head.
     shaft(u0, u1 - 0.08, 0.03, WOOD[1]);
     const [hx, hy] = at(u1 - 0.06, s);
-    g.circle(hx, hy, 0.06).fill(IRON[1]).stroke({ width: 0.012, color: INK });
+    g.circle(hx, hy, 0.06).fill(IRON[1]).stroke({ width: 0.016, color: INK });
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
       g.moveTo(hx, hy).lineTo(hx + Math.cos(a) * 0.08, hy + Math.sin(a) * 0.08);
@@ -641,7 +641,7 @@ export function weaponRack(g: Graphics, f: InteriorItem, light: Light, v: number
   const dye = DYES[(v + 1) % DYES.length];
   g.circle(sx, sy, 0.13).fill(dye).stroke({ width: OUT, color: INK });
   g.circle(sx, sy, 0.11).stroke({ width: 0.02, color: IRON[1] });
-  g.circle(sx, sy, 0.04).fill(IRON[2]).stroke({ width: 0.012, color: INK });
+  g.circle(sx, sy, 0.04).fill(IRON[2]).stroke({ width: 0.016, color: INK });
 }
 
 /** The rack (torture): a heavy wooden frame, a roller across each end with ropes to the bed, a big wheel
@@ -673,20 +673,20 @@ export function tortureRack(g: Graphics, f: InteriorItem, light: Light, rnd: () 
 export function cage(g: Graphics, f: InteriorItem, rnd: () => number) {
   const { x, y, w, h } = f;
   const [x0, y0, x1, y1] = [x + 0.08, y + 0.08, x + w - 0.08, y + h - 0.08];
-  g.rect(x0, y0, x1 - x0, y1 - y0).fill(0x2e261c);
+  g.rect(x0, y0, x1 - x0, y1 - y0).fill(0x4a3e2a);
   for (let i = 0; i < 14 * w * h; i++) {
     const [px, py] = [x0 + rnd() * (x1 - x0), y0 + rnd() * (y1 - y0)];
     const a = rnd() * Math.PI;
     g.moveTo(px, py).lineTo(px + Math.cos(a) * 0.1, py + Math.sin(a) * 0.1);
   }
-  g.stroke({ width: 0.014, color: 0x8a7440, alpha: 0.8 });
+  g.stroke({ width: 0.02, color: 0xb09a58, alpha: 0.55 });
   const bar = (ax: number, ay: number, bx: number, by: number, wdt: number) => {
-    g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: wdt + 0.025, color: INK });
+    g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: wdt + 0.032, color: INK });
     g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: wdt, color: IRON[1] });
     g.moveTo(ax - 0.01, ay).lineTo(bx - 0.01, by).stroke({ width: wdt * 0.3, color: IRON[2] });
   };
   // Thick bars one way, about a fifth of a square apart, then the cross-straps.
-  const n = Math.max(3, Math.round((x1 - x0) / 0.19));
+  const n = Math.max(3, Math.round((x1 - x0) / 0.25));
   for (let i = 1; i < n; i++) bar(x0 + ((x1 - x0) * i) / n, y0, x0 + ((x1 - x0) * i) / n, y1, 0.05);
   const straps = h >= 2 ? 3 : 2;
   for (let j = 1; j <= straps; j++) bar(x0, y0 + ((y1 - y0) * j) / (straps + 1), x1, y0 + ((y1 - y0) * j) / (straps + 1), 0.04);
@@ -705,7 +705,7 @@ export function cage(g: Graphics, f: InteriorItem, rnd: () => number) {
   const [dy0, dy1] = [y0 + (y1 - y0) * 0.3, y0 + (y1 - y0) * 0.7];
   g.moveTo(x1, dy0).lineTo(x1, dy1).stroke({ width: 0.13, color: INK });
   g.moveTo(x1, dy0).lineTo(x1, dy1).stroke({ width: 0.08, color: IRON[2] });
-  for (const hy of [dy0, dy1]) g.rect(x1 - 0.07, hy - 0.035, 0.14, 0.07).fill(IRON[0]).stroke({ width: 0.012, color: INK });
+  for (const hy of [dy0, dy1]) g.rect(x1 - 0.07, hy - 0.035, 0.14, 0.07).fill(IRON[0]).stroke({ width: 0.016, color: INK });
   const ly = (dy0 + dy1) / 2;
   g.moveTo(x1 + 0.04, ly - 0.05).arc(x1 + 0.08, ly - 0.05, 0.04, Math.PI, Math.PI * 2).stroke({ width: 0.022, color: IRON[2] });
   g.rect(x1 + 0.02, ly - 0.05, 0.12, 0.11).fill(BRASS).stroke({ width: LINE, color: INK });
@@ -777,7 +777,7 @@ export function telescope(g: Graphics, f: InteriorItem, light: Light, rnd: () =>
   for (const k of [0.1, 0.55]) g.moveTo(cx + ux * L * k - wx * 0.08, cy + uy * L * k - wy * 0.08).lineTo(cx + ux * L * k + wx * 0.08, cy + uy * L * k + wy * 0.08);
   g.stroke({ width: 0.03, color: BRONZE[0] });
   g.poly(oval(cx + ux * L, cy + uy * L, 0.04, 0.11, a, 12)).fill(0x6a9ab0).stroke({ width: LINE, color: INK });
-  g.circle(cx - ux * L * 0.62, cy - uy * L * 0.62, 0.035).fill(BRONZE[0]).stroke({ width: 0.012, color: INK });
+  g.circle(cx - ux * L * 0.62, cy - uy * L * 0.62, 0.035).fill(BRONZE[0]).stroke({ width: 0.016, color: INK });
   // A stool by the eyepiece.
   const [tx, ty] = [cx - ux * L * 1.15, cy - uy * L * 1.15];
   g.poly(ring(tx, ty, 0.13, rnd, 0.01, 12)).fill(WOOD[0]).stroke({ width: LINE, color: INK });
@@ -796,7 +796,7 @@ export function barricade(g: Graphics, f: InteriorItem) {
     // The wedge: wide at the log, narrowing to the point.
     g.poly([...at(u - 0.05, 0.5), ...at(u - 0.02, tip - side * 0.1), ...at(u + 0.02, tip - side * 0.1), ...at(u + 0.05, 0.5)]).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
     g.moveTo(...at(u - 0.02, 0.5)).lineTo(...at(u - 0.008, tip - side * 0.12)).stroke({ width: 0.014, color: WOOD[2] });
-    g.poly([...at(u - 0.025, tip - side * 0.11), ...at(u, tip), ...at(u + 0.025, tip - side * 0.11)]).fill(IRON[0]).stroke({ width: 0.012, color: INK, join: 'round' });
+    g.poly([...at(u - 0.025, tip - side * 0.11), ...at(u, tip), ...at(u + 0.025, tip - side * 0.11)]).fill(IRON[0]).stroke({ width: 0.016, color: INK, join: 'round' });
     g.circle(...at(u - 0.006, tip - side * 0.07), 0.01).fill(IRON[2]);
   });
   // The log, thick, its round end grain at both ends.
@@ -805,7 +805,7 @@ export function barricade(g: Graphics, f: InteriorItem) {
   g.moveTo(...at(0.16, 0.46)).lineTo(...at(len - 0.16, 0.46)).stroke({ width: 0.06, color: WOOD[1], cap: 'round' });
   for (const u of [0.1, len - 0.1]) {
     g.circle(...at(u, 0.5), 0.1).fill(0xb08a58).stroke({ width: LINE, color: INK });
-    g.circle(...at(u, 0.5), 0.05).stroke({ width: 0.01, color: WOOD[0] });
+    g.circle(...at(u, 0.5), 0.05).stroke({ width: 0.016, color: WOOD[0] });
   }
   // Lashings where the stakes pass through.
   for (const u of us) g.moveTo(...at(u - 0.06, 0.4)).lineTo(...at(u + 0.06, 0.6)).moveTo(...at(u + 0.06, 0.4)).lineTo(...at(u - 0.06, 0.6));
@@ -821,13 +821,13 @@ export function trapdoor(g: Graphics, f: InteriorItem, light: Light, rnd: () => 
   planks(g, face, false, 4, WOOD[0], rnd);
   // Strap hinges along the top edge, nails in them.
   for (const hx of [x + 0.28, x + 0.64]) {
-    g.poly(quad([hx, y + 0.13, hx + 0.07, y + 0.3], rnd, 0.002)).fill(IRON[1]).stroke({ width: 0.012, color: INK });
+    g.poly(quad([hx, y + 0.13, hx + 0.07, y + 0.3], rnd, 0.002)).fill(IRON[1]).stroke({ width: 0.016, color: INK });
     g.circle(hx + 0.035, y + 0.24, 0.01).fill(IRON[0]);
   }
   // The ring.
   g.circle(x + 0.5, y + 0.74, 0.07).stroke({ width: 0.04, color: INK });
   g.circle(x + 0.5, y + 0.74, 0.07).stroke({ width: 0.022, color: IRON[2] });
-  g.rect(x + 0.46, y + 0.64, 0.08, 0.05).fill(IRON[0]).stroke({ width: 0.012, color: INK });
+  g.rect(x + 0.46, y + 0.64, 0.08, 0.05).fill(IRON[0]).stroke({ width: 0.016, color: INK });
 }
 
 /** A spiral stair seen from above: wedge treads fanning clockwise round a newel post, the top one

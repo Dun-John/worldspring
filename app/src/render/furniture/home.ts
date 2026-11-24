@@ -140,7 +140,7 @@ export function bookcase(g: Graphics, f: InteriorItem, light: Light, v: number, 
       const c = BOOKS[(k * 5) % BOOKS.length];
       // How far its spine stands out past the case.
       const out = s1 + 0.02 + ((k * 13) % 4) * 0.015;
-      g.poly(quad(rect(u, s0 + 0.03, u + th, out), rnd, 0.004)).fill(c).stroke({ width: 0.012, color: INK });
+      g.poly(quad(rect(u, s0 + 0.03, u + th, out), rnd, 0.004)).fill(c).stroke({ width: 0.016, color: INK });
       // Pages: pale between the covers, behind the spine.
       g.poly(quad(rect(u + th * 0.34, s0 + 0.05, u + th * 0.66, out - 0.08), rnd, 0.002)).fill({ color: LINEN[0], alpha: 0.75 });
       // The spine: the book's colour, a gilt band across it.
@@ -187,7 +187,7 @@ export function shelf(g: Graphics, f: InteriorItem, light: Light, v: number, rnd
     (u: number, s: number, big: boolean) => {
       const h = big ? 0.13 : 0.1;
       g.poly(quad(rect(u - 0.12, s - h, u + 0.12, s + h), rnd, 0.008)).fill(0xa8865a).stroke({ width: LINE, color: INK });
-      g.moveTo(...at(u - 0.12, s)).lineTo(...at(u + 0.12, s)).stroke({ width: 0.012, color: 0x6a4a2a });
+      g.moveTo(...at(u - 0.12, s)).lineTo(...at(u + 0.12, s)).stroke({ width: 0.014, color: 0x6a4a2a });
     },
     (u: number, s: number, big: boolean) => pot(u, s, big ? 0.11 : 0.09, [0x8a8070, 0xc8c0a8, 0x8a6a3a]),
     (u: number, s: number) => pot(u, s, 0.06, [0x2e4a5a, 0x4a7a8a, 0x5a3a22]),
@@ -422,7 +422,7 @@ export function bar(g: Graphics, f: InteriorItem, light: Light, rnd: () => numbe
   const glass = [0x3a6a3a, 0x6a3a2a, 0x2e4a6a, 0xa87a3a, 0x5a3a5e];
   for (let u = END_GAP + 0.1, k = 0; u < len - END_GAP - 0.06; u += 0.11, k++) {
     const [bx, by] = at(u, WALL_GAP + 0.08);
-    g.circle(bx, by, 0.04).fill(glass[(k * 3) % glass.length]).stroke({ width: 0.012, color: INK });
+    g.circle(bx, by, 0.04).fill(glass[(k * 3) % glass.length]).stroke({ width: 0.016, color: INK });
     g.circle(bx - 0.012, by - 0.012, 0.012).fill({ color: 0xffffff, alpha: 0.5 });
   }
   const face = board(g, rect(0.06, 0.56, len - 0.06, 0.94), DARK_WOOD.map((c) => shade(c, 1.15)), light, rnd, along, 0.05, 2);
@@ -440,7 +440,7 @@ export function barrel(g: Graphics, cx: number, cy: number, r: number, light: Li
     const a = (i / 12) * Math.PI * 2;
     g.moveTo(cx + Math.cos(a) * r * 0.7, cy + Math.sin(a) * r * 0.7).lineTo(cx + Math.cos(a) * r * 0.97, cy + Math.sin(a) * r * 0.97);
   }
-  g.stroke({ width: 0.012, color: shade(WOOD[0], 0.7) });
+  g.stroke({ width: 0.014, color: shade(WOOD[0], 0.7) });
   g.circle(cx, cy, r * 0.86).stroke({ width: out < OUT ? 0.03 : 0.045, color: IRON[0] });
   const la = Math.atan2(ly, lx);
   g.moveTo(cx + Math.cos(la - 0.9) * r * 0.86, cy + Math.sin(la - 0.9) * r * 0.86)
@@ -448,7 +448,7 @@ export function barrel(g: Graphics, cx: number, cy: number, r: number, light: Li
     .stroke({ width: 0.015, color: IRON[2] });
   g.circle(cx + lx * r * 0.06, cy + ly * r * 0.06, r * 0.68).fill(WOOD[1]).stroke({ width: LINE, color: IRON[0] });
   for (const d of [-0.3, 0.3]) g.moveTo(cx - r * 0.6, cy + d * r).lineTo(cx + r * 0.6, cy + d * r);
-  g.stroke({ width: 0.012, color: WOOD[0], alpha: 0.85 });
+  g.stroke({ width: 0.014, color: WOOD[0], alpha: 0.85 });
   g.circle(cx + r * 0.3, cy - r * 0.1, r * 0.08).fill(0x2a1c10);
 }
 
@@ -473,7 +473,7 @@ export function keg(g: Graphics, f: InteriorItem, u: number, light: Light, rnd: 
   g.poly(quad(rect(u + 0.24, e0 + 0.03, u + 0.76, e1 - 0.03), rnd, 0.004)).fill(WOOD[1]);
   g.poly(quad(rect(u + 0.38, e0 + 0.03, u + 0.6, e1 - 0.03), rnd, 0.004)).fill({ color: WOOD[2], alpha: 0.7 });
   for (const k of [0.32, 0.44, 0.56, 0.68]) g.moveTo(...at(u + k, e0 + 0.03)).lineTo(...at(u + k, e1 - 0.03));
-  g.stroke({ width: 0.01, color: WOOD[0], alpha: 0.7 });
+  g.stroke({ width: 0.016, color: WOOD[0], alpha: 0.7 });
   // Hoops: bowed bands across, near each end and either side of the middle.
   for (const s0 of [e0 + 0.08, (e0 + e1) / 2 - 0.08, (e0 + e1) / 2 + 0.08, e1 - 0.08]) {
     const bulge = 0.12 * (1 - Math.abs(s0 - (e0 + e1) / 2) / ((e1 - e0) / 2)) + 0.02;
@@ -612,7 +612,7 @@ export function couch(g: Graphics, f: InteriorItem, light: Light, v: number, rnd
     const a = u0 + ((u1 - u0) * i) / n;
     const b = u0 + ((u1 - u0) * (i + 1)) / n;
     pad(rect(a + 0.01, WALL_GAP + 0.15, b - 0.01, 0.88), t.map((c) => shade(c, 1.05)));
-    g.moveTo(...at((a + b) / 2, WALL_GAP + 0.3)).lineTo(...at((a + b) / 2 + 0.01, 0.74)).stroke({ width: 0.012, color: t[0], alpha: 0.7 });
+    g.moveTo(...at((a + b) / 2, WALL_GAP + 0.3)).lineTo(...at((a + b) / 2 + 0.01, 0.74)).stroke({ width: 0.014, color: t[0], alpha: 0.7 });
   }
 }
 
@@ -625,7 +625,7 @@ export function sideboard(g: Graphics, f: InteriorItem, light: Light, rnd: () =>
   g.poly(quad(rect(END_GAP + 0.02, 0.74, len - END_GAP - 0.02, 0.8), rnd, 0.004)).fill(DARK_WOOD[1]).stroke({ width: LINE, color: INK });
   const doors = Math.max(2, Math.round(len) * 2);
   for (let i = 1; i < doors; i++) g.moveTo(...at(END_GAP + ((len - 2 * END_GAP) * i) / doors, 0.74)).lineTo(...at(END_GAP + ((len - 2 * END_GAP) * i) / doors, 0.8));
-  g.stroke({ width: 0.012, color: INK });
+  g.stroke({ width: 0.016, color: INK });
   for (let i = 0; i < doors; i++) g.circle(...at(END_GAP + ((len - 2 * END_GAP) * (i + 0.5)) / doors, 0.77), 0.018).fill(BRASS);
 }
 
@@ -643,13 +643,13 @@ export function desk(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
     const ox = px + (rnd() - 0.5) * 0.08;
     const oy = py + (rnd() - 0.5) * 0.06;
     const pt = (u: number, v: number) => [ox + u * c - v * sn, oy + u * sn + v * c];
-    g.poly([...pt(-hw, -hh), ...pt(hw, -hh), ...pt(hw, hh), ...pt(-hw, hh)]).fill(i === 2 ? LINEN[2] : LINEN[1]).stroke({ width: 0.012, color: INK });
+    g.poly([...pt(-hw, -hh), ...pt(hw, -hh), ...pt(hw, hh), ...pt(-hw, hh)]).fill(i === 2 ? LINEN[2] : LINEN[1]).stroke({ width: 0.016, color: INK });
     if (i === 2) {
       for (let k = 0; k < 4; k++) {
         const v = -hh * 0.6 + k * hh * 0.4;
         g.moveTo(...(pt(-hw * 0.75, v) as [number, number])).lineTo(...(pt(hw * (0.35 + 0.35 * rnd()), v) as [number, number]));
       }
-      g.stroke({ width: 0.01, color: 0x5a4a3a, alpha: 0.8 });
+      g.stroke({ width: 0.016, color: 0x5a4a3a, alpha: 0.8 });
     }
   }
   // The ink jar and a quill lying beside it.
@@ -662,8 +662,8 @@ export function desk(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
   const m = Math.hypot(dx, dy) || 1;
   const [nx, ny] = [-dy / m, dx / m];
   const mid = [qa[0] + dx * 0.55, qa[1] + dy * 0.55];
-  g.poly([qa[0], qa[1], mid[0] + nx * 0.045, mid[1] + ny * 0.045, qb[0], qb[1], mid[0] - nx * 0.025, mid[1] - ny * 0.025]).fill(LINEN[2]).stroke({ width: 0.012, color: INK, join: 'round' });
-  g.moveTo(qa[0], qa[1]).lineTo(qb[0], qb[1]).stroke({ width: 0.01, color: LINEN[0] });
+  g.poly([qa[0], qa[1], mid[0] + nx * 0.045, mid[1] + ny * 0.045, qb[0], qb[1], mid[0] - nx * 0.025, mid[1] - ny * 0.025]).fill(LINEN[2]).stroke({ width: 0.016, color: INK, join: 'round' });
+  g.moveTo(qa[0], qa[1]).lineTo(qb[0], qb[1]).stroke({ width: 0.016, color: LINEN[0] });
 }
 
 /** Display table in a shop: a cloth over it, hanging past the edges, and wares laid out on it. */
@@ -751,7 +751,7 @@ export function rug(g: Graphics, f: InteriorItem, v: number, rnd: () => number) 
   for (const u of [0.1, len - 0.1]) {
     for (let s = 0.2; s < wid - 0.15; s += 0.06) g.moveTo(...at(u, s)).lineTo(...at(u + (u < 1 ? -0.07 : 0.07), s));
   }
-  g.stroke({ width: 0.012, color: 0xe0d0b0 });
+  g.stroke({ width: 0.014, color: 0xe0d0b0 });
   g.poly(quad(rect(0.12, 0.12, len - 0.12, wid - 0.12), rnd, 0.006)).fill(border).stroke({ width: LINE, color: INK });
   g.poly(quad(rect(0.22, 0.22, len - 0.22, wid - 0.22), rnd, 0.004)).fill(ground);
   g.poly(quad(rect(0.27, 0.27, len - 0.27, wid - 0.27), rnd, 0.002)).stroke({ width: 0.015, color: motif, alpha: 0.8 });
@@ -787,7 +787,7 @@ export function bath(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
     const a = (i / 32) * Math.PI * 2;
     g.moveTo(cx + Math.cos(a) * rx * kx, cy + Math.sin(a) * ry * ky).lineTo(cx + Math.cos(a) * rx * 0.99, cy + Math.sin(a) * ry * 0.99);
   }
-  g.stroke({ width: 0.008, color: WOOD[0] });
+  g.stroke({ width: 0.014, color: WOOD[0] });
   g.poly(oval(1 - (t * 0.5) / rx, 1 - (t * 0.5) / ry)).stroke({ width: 0.018, color: IRON[0] });
   g.poly(oval(kx, ky)).fill(0x3e6a7a).stroke({ width: LINE, color: INK });
   g.poly(oval(kx * 0.7, ky * 0.65, light[0] * rx * 0.12, light[1] * ry * 0.12)).fill({ color: 0x5a8a9a, alpha: 0.8 });
@@ -817,13 +817,13 @@ export function bucket(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
   const r = 0.15;
   g.poly(ring(cx, cy, r, rnd, 0.006, 16)).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
   g.circle(cx, cy, r * 0.9).stroke({ width: 0.015, color: IRON[0] });
-  g.circle(cx, cy, r * 0.78).fill(0x4e7a8a).stroke({ width: 0.01, color: INK });
+  g.circle(cx, cy, r * 0.78).fill(0x4e7a8a).stroke({ width: 0.016, color: INK });
   g.circle(cx + light[0] * 0.035, cy + light[1] * 0.035, 0.026).fill({ color: 0xffffff, alpha: 0.45 });
   // The handle, standing up: seen from above, a bar straight across the pail between its two lugs.
   const [ax, bx] = [cx - r * 1.02, cx + r * 1.02];
   g.moveTo(ax, cy).lineTo(bx, cy).stroke({ width: 0.05, color: INK, cap: 'round' });
   g.moveTo(ax, cy).lineTo(bx, cy).stroke({ width: 0.026, color: IRON[1], cap: 'round' });
-  g.moveTo(ax + 0.015, cy - 0.005).lineTo(bx - 0.015, cy - 0.005).stroke({ width: 0.008, color: IRON[2], cap: 'round' });
+  g.moveTo(ax + 0.015, cy - 0.005).lineTo(bx - 0.015, cy - 0.005).stroke({ width: 0.014, color: IRON[2], cap: 'round' });
   for (const x of [ax, bx]) g.circle(x, cy, 0.03).fill(IRON[1]).stroke({ width: 0.018, color: INK });
 }
 

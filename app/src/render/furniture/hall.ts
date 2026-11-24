@@ -52,7 +52,7 @@ function stateChair(g: Graphics, B: { R: Rect; A: At }, light: Light, rnd: () =>
   g.roundRect(qx0 + 0.03 + light[0] * 0.012, qy0 + 0.03 + light[1] * 0.012, qx1 - qx0 - 0.06, qy1 - qy0 - 0.06, 0.05).fill(cushion[1]);
   g.poly(quad(R(0.32, 0.36, 0.5, 0.54), rnd, 0.004)).fill({ color: cushion[2], alpha: 0.55 });
   g.moveTo(...A(0.3, 0.64)).quadraticCurveTo(...A(0.5, 0.6), ...A(0.7, 0.66)).stroke({ width: 0.014, color: cushion[0], alpha: 0.8 });
-  g.circle(...A(0.5, 0.58), 0.022).fill(trim).stroke({ width: 0.01, color: INK });
+  g.circle(...A(0.5, 0.58), 0.022).fill(trim).stroke({ width: 0.014, color: shade(trim, 0.55) });
   // Arms, their ends carved round.
   for (const u of [0.1, 0.76]) board(g, R(u, 0.14, u + 0.14, 0.94), wood, light, rnd, false, 0.02, 0);
   for (const u of [0.17, 0.83]) g.circle(...A(u, 0.9), 0.042).fill(trim).stroke({ width: LINE, color: INK });
@@ -78,7 +78,7 @@ function stateChair(g: Graphics, B: { R: Rect; A: At }, light: Light, rnd: () =>
     ]) {
       const [cx, cy] = A(u, 0.11);
       g.poly([cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy]).fill(wood[2]).stroke({ width: LINE, color: INK, join: 'round' });
-      g.moveTo(cx - r, cy).lineTo(cx + r, cy).moveTo(cx, cy - r).lineTo(cx, cy + r).stroke({ width: 0.01, color: wood[0] });
+      g.moveTo(cx - r, cy).lineTo(cx + r, cy).moveTo(cx, cy - r).lineTo(cx, cy + r).stroke({ width: 0.016, color: wood[0] });
     }
     g.poly([...A(0.36, 0.2), ...A(0.5, 0.06), ...A(0.64, 0.2)]).stroke({ width: 0.016, color: trim, join: 'round' });
   }
@@ -140,7 +140,7 @@ export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number
     const face = board(g, rect(0.06, top, len - 0.06, front), deck, light, rnd, !along, 0.04, 1);
     planks(g, face, !along, Math.max(4, Math.round(len * 3)), 0x6a4a2c, rnd);
     g.poly(quad(rect(0.06, front - 0.1, len - 0.06, front), rnd, 0.003)).fill(OAK[0]).stroke({ width: LINE, color: INK });
-    for (let u = 0.25; u < len - 0.1; u += Math.max(0.5, (len - 0.5) / Math.round((len - 0.5) / 0.7))) g.circle(...at(u, front - 0.05), 0.02).fill(OAK[2]).stroke({ width: 0.008, color: INK });
+    for (let u = 0.25; u < len - 0.1; u += Math.max(0.5, (len - 0.5) / Math.round((len - 0.5) / 0.7))) g.circle(...at(u, front - 0.05), 0.02).fill(OAK[2]).stroke({ width: 0.014, color: shade(OAK[2], 0.55) });
     const m0 = Math.max(0.2, Math.min(...seats.map(([c, w]) => c - w / 2)) - 0.2);
     const m1 = Math.min(len - 0.2, Math.max(...seats.map(([c, w]) => c + w / 2)) + 0.2);
     const r1 = front - 0.16;
@@ -184,7 +184,7 @@ export function lowDais(g: Graphics, f: InteriorItem, light: Light, v: number, r
     planks(g, face, !along, Math.max(4, Math.round(len * 3)), 0x6a4a2c, rnd);
     const front = wid - 0.04;
     g.poly(quad(rect(0.04, front - 0.12, len - 0.04, front), rnd, 0.003)).fill(OAK[0]).stroke({ width: LINE, color: INK });
-    for (let u = 0.25; u < len - 0.1; u += Math.max(0.5, (len - 0.5) / Math.round((len - 0.5) / 0.7))) g.circle(...at(u, front - 0.06), 0.02).fill(OAK[2]).stroke({ width: 0.008, color: INK });
+    for (let u = 0.25; u < len - 0.1; u += Math.max(0.5, (len - 0.5) / Math.round((len - 0.5) / 0.7))) g.circle(...at(u, front - 0.06), 0.02).fill(OAK[2]).stroke({ width: 0.014, color: shade(OAK[2], 0.55) });
   }
 }
 
@@ -219,7 +219,7 @@ export function chairOfOffice(g: Graphics, f: InteriorItem, light: Light, v: num
     const [x, y] = at(u, 0.8);
     g.circle(x, y, 0.075).fill(wood[1]).stroke({ width: LINE, color: INK });
     g.circle(x + light[0] * 0.015, y + light[1] * 0.015, 0.04).fill(wood[2]);
-    g.circle(x, y, 0.022).fill(trim).stroke({ width: 0.008, color: INK });
+    g.circle(x, y, 0.022).fill(trim).stroke({ width: 0.014, color: shade(trim, 0.55) });
   }
   // The tall back: its shadow over the seat, the thick top rail, ball finials, a carved gilt cartouche with a
   // scroll either side.
@@ -254,11 +254,11 @@ export function highTable(g: Graphics, f: InteriorItem, light: Light, v: number,
   g.fill({ color: LINEN[2], alpha: 0.8 });
   for (let u = 0.3; u < len - 0.15; u += 0.32 + rnd() * 0.08) g.moveTo(...at(u, 0.82)).lineTo(...at(u + 0.02, 0.92));
   g.stroke({ width: 0.016, color: shade(LINEN[0], 0.82) });
-  g.moveTo(...at(0.1, 0.8)).lineTo(...at(len - 0.1, 0.8)).stroke({ width: 0.012, color: shade(LINEN[0], 0.85) });
+  g.moveTo(...at(0.1, 0.8)).lineTo(...at(len - 0.1, 0.8)).stroke({ width: 0.014, color: shade(LINEN[0], 0.85) });
   // The runner down the middle, hanging over the ends.
   g.poly(quad(rect(0.02, 0.42, len - 0.02, 0.6), rnd, 0.003)).fill(runner).stroke({ width: LINE, color: INK });
   g.moveTo(...at(0.06, 0.46)).lineTo(...at(len - 0.06, 0.46)).moveTo(...at(0.06, 0.56)).lineTo(...at(len - 0.06, 0.56));
-  g.stroke({ width: 0.01, color: GILT[2], alpha: 0.8 });
+  g.stroke({ width: 0.016, color: GILT[2], alpha: 0.8 });
   // Places along the diners' side: a plate and a gilt cup each, a loaf here and there; a roast fowl on a platter
   // in the middle, a candlestick either side of it.
   const places = Math.max(1, Math.round(len * 1.1));
@@ -266,28 +266,28 @@ export function highTable(g: Graphics, f: InteriorItem, light: Light, v: number,
     const u = 0.3 + ((len - 0.6) * (i + 0.5)) / places;
     if (Math.abs(u - len / 2) < 0.3) continue;
     const [px, py] = at(u, 0.32);
-    g.circle(px, py, 0.1).fill(v % 2 ? 0xc0c4c8 : 0xa4a49c).stroke({ width: 0.014, color: INK });
-    g.circle(px, py, 0.065).stroke({ width: 0.01, color: 0x6a6e72 });
-    g.circle(...at(u + 0.17, 0.24), 0.04).fill(GILT[1]).stroke({ width: 0.012, color: INK });
+    g.circle(px, py, 0.1).fill(v % 2 ? 0xc0c4c8 : 0xa4a49c).stroke({ width: 0.016, color: INK });
+    g.circle(px, py, 0.065).stroke({ width: 0.016, color: 0x6a6e72 });
+    g.circle(...at(u + 0.17, 0.24), 0.04).fill(GILT[1]).stroke({ width: 0.016, color: INK });
     g.circle(...at(u + 0.17, 0.24), 0.022).fill(0x6a1e1a);
     if (i % 2 === 0) {
       const [bx, by] = at(u - 0.04, 0.62);
-      g.poly(oval(bx, by, 0.07, 0.05, along ? 0.3 : 1.9, 12)).fill(0xc08a48).stroke({ width: 0.012, color: INK });
-      g.moveTo(bx - 0.03, by - 0.01).lineTo(bx + 0.02, by + 0.02).stroke({ width: 0.01, color: 0x8a5a2a });
+      g.poly(oval(bx, by, 0.07, 0.05, along ? 0.3 : 1.9, 12)).fill(0xc08a48).stroke({ width: 0.016, color: INK });
+      g.moveTo(bx - 0.03, by - 0.01).lineTo(bx + 0.02, by + 0.02).stroke({ width: 0.016, color: 0x8a5a2a });
     }
   }
   const [sx, sy] = at(len / 2, 0.48);
   const fa = along ? 0 : Math.PI / 2;
   g.poly(oval(sx, sy, 0.24, 0.17, fa, 18)).fill(0xc0c4c8).stroke({ width: 0.016, color: INK });
-  g.poly(oval(sx, sy, 0.19, 0.12, fa, 16)).stroke({ width: 0.01, color: 0x7a7e82 });
+  g.poly(oval(sx, sy, 0.19, 0.12, fa, 16)).stroke({ width: 0.016, color: 0x7a7e82 });
   // The fowl: its breast, two drumsticks with white knuckles toward one end.
   const [ca, sa] = [Math.cos(fa), Math.sin(fa)];
   for (const sd of [-1, 1]) {
     const [lx, ly] = [sx + ca * 0.1 - sa * sd * 0.05, sy + sa * 0.1 + ca * sd * 0.05];
-    g.poly(oval(lx, ly, 0.06, 0.03, fa + sd * 0.4, 10)).fill(0x9a5424).stroke({ width: 0.01, color: INK });
-    g.circle(lx + ca * 0.06, ly + sa * 0.06 + 0, 0.016).fill(0xf6efe0).stroke({ width: 0.006, color: INK });
+    g.poly(oval(lx, ly, 0.06, 0.03, fa + sd * 0.4, 10)).fill(0x9a5424).stroke({ width: 0.016, color: INK });
+    g.circle(lx + ca * 0.06, ly + sa * 0.06 + 0, 0.016).fill(0xf6efe0).stroke({ width: 0.014, color: shade(0xf6efe0, 0.55) });
   }
-  g.poly(oval(sx - ca * 0.02, sy - sa * 0.02, 0.12, 0.085, fa, 14)).fill(0xb06a2e).stroke({ width: 0.014, color: INK });
+  g.poly(oval(sx - ca * 0.02, sy - sa * 0.02, 0.12, 0.085, fa, 14)).fill(0xb06a2e).stroke({ width: 0.016, color: INK });
   g.poly(oval(sx - ca * 0.04 + light[0] * 0.02, sy - sa * 0.04 + light[1] * 0.02, 0.06, 0.04, fa, 10)).fill({ color: 0xe0a060, alpha: 0.7 });
   for (const u of [len / 2 - 0.5, len / 2 + 0.5]) if (u > 0.3 && u < len - 0.3) candle(g, ...at(u, 0.56));
 }
@@ -333,14 +333,14 @@ export function carpetRunner(g: Graphics, f: InteriorItem, v: number, rnd: () =>
   for (const u of [m, len - m]) {
     for (let s = m + 0.06; s < wid - m - 0.04; s += 0.055) g.moveTo(...at(u, s)).lineTo(...at(u + (u < len / 2 ? -0.07 : 0.07), s + (rnd() - 0.5) * 0.02));
   }
-  g.stroke({ width: 0.012, color: 0xe8dcc0 });
+  g.stroke({ width: 0.014, color: 0xe8dcc0 });
   g.poly(quad(rect(m, m, len - m, wid - m), rnd, 0.005)).fill(edge).stroke({ width: LINE, color: INK });
   const e = Math.min(0.12, wid * 0.13);
   g.poly(quad(rect(m + 0.16, m + e, len - m - 0.16, wid - m - e), rnd, 0.003)).fill(ground);
   // The ends' bands: the edge colour with a stripe of the motif.
   for (const u of [m + 0.08, len - m - 0.08]) g.moveTo(...at(u, m + 0.03)).lineTo(...at(u, wid - m - 0.03));
   g.stroke({ width: 0.02, color: motif, alpha: 0.85 });
-  g.poly(quad(rect(m + 0.2, m + e + 0.04, len - m - 0.2, wid - m - e - 0.04), rnd, 0.002)).stroke({ width: 0.012, color: motif, alpha: 0.75 });
+  g.poly(quad(rect(m + 0.2, m + e + 0.04, len - m - 0.2, wid - m - e - 0.04), rnd, 0.002)).stroke({ width: 0.014, color: motif, alpha: 0.75 });
   // A chain of lozenges down the middle, every half square.
   const mid = wid / 2;
   const r = Math.min(0.13, (wid - 2 * m - 2 * e) * 0.3);
@@ -400,7 +400,7 @@ export function danceFloor(g: Graphics, f: InteriorItem, v: number, rnd: () => n
     }
     for (const [[a, b, c, d], turned] of strips) g.rect(a, b, c - a, d - b).fill(shade(turned ? field[1] : field[2], 0.94 + 0.12 * rnd()));
     for (const [[a, b, c, d]] of strips) g.rect(a, b, c - a, d - b);
-    g.stroke({ width: 0.01, color: band[0], alpha: 0.45 });
+    g.stroke({ width: 0.016, color: band[0], alpha: 0.45 });
     for (let j = 0; fy0 + j * cell < fy1 - 0.01; j++) for (let i = 0; fx0 + i * cell < fx1 - 0.01; i++) g.rect(fx0 + i * cell, fy0 + j * cell, Math.min(cell, fx1 - fx0 - i * cell), Math.min(cell, fy1 - fy0 - j * cell));
     g.stroke({ width: 0.016, color: band[0], alpha: 0.6 });
   } else {
@@ -421,7 +421,7 @@ export function danceFloor(g: Graphics, f: InteriorItem, v: number, rnd: () => n
     }
     for (const q of boards) g.poly(q).fill(shade(field[1], 0.92 + 0.16 * rnd()));
     for (const q of boards) g.poly(q);
-    g.stroke({ width: 0.01, color: band[0], alpha: 0.5 });
+    g.stroke({ width: 0.016, color: band[0], alpha: 0.5 });
   }
   // A light stringing round the field.
   g.rect(fx0 - 0.03, fy0 - 0.03, fx1 - fx0 + 0.06, fy1 - fy0 + 0.06).stroke({ width: 0.025, color: inlay[0] });
@@ -441,9 +441,9 @@ export function danceFloor(g: Graphics, f: InteriorItem, v: number, rnd: () => n
     const [lx1, ly1] = [cx + Math.cos(a + Math.PI / 8) * ri, cy + Math.sin(a + Math.PI / 8) * ri];
     g.poly([cx, cy, lx0, ly0, tx, ty]).fill(inlay[0]);
     g.poly([cx, cy, tx, ty, lx1, ly1]).fill(inlay[1]);
-    g.poly([lx0, ly0, tx, ty, lx1, ly1]).stroke({ width: 0.012, color: band[0], join: 'round' });
+    g.poly([lx0, ly0, tx, ty, lx1, ly1]).stroke({ width: 0.014, color: band[0], join: 'round' });
   }
-  g.poly(ring(cx, cy, R * 0.12, rnd, 0, 8)).fill(inlay[1]).stroke({ width: 0.012, color: band[0] });
+  g.poly(ring(cx, cy, R * 0.12, rnd, 0, 8)).fill(inlay[1]).stroke({ width: 0.014, color: band[0] });
 }
 
 /** Harpsichord with its stool (along its length, the keyboard at the near end): a wing-shaped case in black,
@@ -496,7 +496,7 @@ export function harpsichord(g: Graphics, f: InteriorItem, light: Light, v: numbe
     }
     g.moveTo(...at(U(pk) + 0.03, s0 + s)).lineTo(...at(Math.max(U(pk) + 0.06, U(p) - 0.03), s0 + s));
   }
-  g.stroke({ width: 0.006, color: 0x6a5a42 });
+  g.stroke({ width: 0.014, color: 0x6a5a42 });
   // The bridge along the bentside, painted flowers, the rose.
   const br: Pt[] = [];
   for (let i = 0; i <= 10; i++) {
@@ -511,16 +511,16 @@ export function harpsichord(g: Graphics, f: InteriorItem, light: Light, v: numbe
     g.circle(...at(U(p), s0 + 0.08 + rnd() * Math.max(0.05, width(p) - 0.25)), 0.016).fill([0xc8453a, 0x4f72a8, 0xf2c94c, 0x6a8a3a][i % 4]);
   }
   const [rx, ry] = at(U(0.42), s0 + W * 0.4);
-  g.circle(rx, ry, 0.055).fill(GILT[1]).stroke({ width: 0.012, color: INK });
+  g.circle(rx, ry, 0.055).fill(GILT[1]).stroke({ width: 0.016, color: INK });
   g.circle(rx, ry, 0.028).fill(0x3a2a1a);
-  g.poly(outline.flat()).stroke({ width: 0.012, color: GILT[2], alpha: 0.7 });
+  g.poly(outline.flat()).stroke({ width: 0.014, color: GILT[2], alpha: 0.7 });
   // The keyboard between the cheeks: ivory naturals, black sharps in twos and threes, the nameboard behind.
   const [k0, k1] = [s0 + 0.05, s0 + W - 0.05];
   g.poly(quad(rect(kb + 0.17, k0, kb + 0.23, k1), rnd, 0.002)).fill(case_[0]).stroke({ width: LINE, color: INK });
   g.poly(quad(rect(kb + 0.01, k0, kb + 0.17, k1), rnd, 0.002)).fill(0xece2c8).stroke({ width: LINE, color: INK });
   const keyW = 0.042;
   for (let s = k0 + keyW; s < k1 - 0.01; s += keyW) g.moveTo(...at(kb + 0.02, s)).lineTo(...at(kb + 0.17, s));
-  g.stroke({ width: 0.006, color: 0x8a7a5a });
+  g.stroke({ width: 0.014, color: 0x8a7a5a });
   for (let i = 1, n = 0; k0 + i * keyW < k1 - 0.01; i++, n = (n + 1) % 7) {
     if (n === 2 || n === 6) continue;
     const s = k0 + i * keyW;
@@ -529,7 +529,7 @@ export function harpsichord(g: Graphics, f: InteriorItem, light: Light, v: numbe
   // The stool before it.
   const st = rect(0.06, wid / 2 - 0.2, Math.max(0.2, kb - 0.06), wid / 2 + 0.2);
   board(g, st, DARK_WOOD, light, rnd, !along, 0.03, 0);
-  g.roundRect(st[0] + 0.04, st[1] + 0.04, st[2] - st[0] - 0.08, st[3] - st[1] - 0.08, 0.04).fill(PLUSH[v % PLUSH.length][1]).stroke({ width: 0.012, color: INK });
+  g.roundRect(st[0] + 0.04, st[1] + 0.04, st[2] - st[0] - 0.08, st[3] - st[1] - 0.08, 0.04).fill(PLUSH[v % PLUSH.length][1]).stroke({ width: 0.016, color: INK });
 }
 
 /** Musicians' corner against a wall (2×2), from straight above: a harp standing in the back corner (a narrow
@@ -546,7 +546,7 @@ export function musiciansCorner(g: Graphics, f: InteriorItem, light: Light, v: n
   const chair = (u: number, s: number, cushion: readonly number[]) => {
     castShadow(g, q(u, s, -0.2, -0.24, 0.2, 0.2), light, 0.12);
     g.poly(q(u, s, -0.19, -0.18, 0.19, 0.2)).fill(WOOD[1]).stroke({ width: OUT, color: INK, join: 'round' });
-    g.poly(q(u, s, -0.13, -0.11, 0.13, 0.15)).fill(cushion[1]).stroke({ width: 0.012, color: INK });
+    g.poly(q(u, s, -0.13, -0.11, 0.13, 0.15)).fill(cushion[1]).stroke({ width: 0.016, color: INK });
     g.poly(q(u, s, -0.1, -0.08, 0.02, 0.02)).fill({ color: cushion[2], alpha: 0.6 });
     for (const [w, c] of [
       [0.09, INK],
@@ -564,9 +564,9 @@ export function musiciansCorner(g: Graphics, f: InteriorItem, light: Light, v: n
     }
     g.stroke({ width: 0.022, color: INK, cap: 'round' });
     g.poly(q(u, s, -0.23, -0.07, 0.23, 0.07)).fill(DARK_WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    for (const side of [-1, 1]) g.poly(q(u, s, side < 0 ? -0.2 : 0.005, -0.11, side < 0 ? -0.005 : 0.2, 0.04)).fill(LINEN[2]).stroke({ width: 0.01, color: INK });
+    for (const side of [-1, 1]) g.poly(q(u, s, side < 0 ? -0.2 : 0.005, -0.11, side < 0 ? -0.005 : 0.2, 0.04)).fill(LINEN[2]).stroke({ width: 0.016, color: INK });
     for (const side of [-1, 1]) for (const d of [-0.07, -0.04, -0.01, 0.02]) g.moveTo(...at(u + side * 0.03, s + d)).lineTo(...at(u + side * 0.17, s + d));
-    g.stroke({ width: 0.006, color: 0x3a3028 });
+    g.stroke({ width: 0.014, color: 0x3a3028 });
   };
   const [c1u, c2u] = [len * 0.5, len * 0.82];
   const cs = WALL_GAP + 0.3;
@@ -614,14 +614,14 @@ export function musiciansCorner(g: Graphics, f: InteriorItem, light: Light, v: n
     const a1 = a0 + Math.PI / 10;
     g.moveTo(dx + Math.cos(a0) * 0.235, dy + Math.sin(a0) * 0.235).lineTo(dx + Math.cos(a1) * 0.19, dy + Math.sin(a1) * 0.19).lineTo(dx + Math.cos(a1 + Math.PI / 10) * 0.235, dy + Math.sin(a1 + Math.PI / 10) * 0.235);
   }
-  g.stroke({ width: 0.012, color: 0xe8d8b0 });
+  g.stroke({ width: 0.014, color: 0xe8d8b0 });
   g.circle(dx, dy, 0.18).fill(0xecdcb4).stroke({ width: 0.018, color: 0x6a3a1c });
   g.circle(dx + light[0] * 0.05, dy + light[1] * 0.05, 0.08).fill({ color: 0xfff1cf, alpha: 0.45 });
   for (const a of [0.45, 1.25]) {
     const p: Pt = [dx - Math.cos(a) * 0.24, dy - Math.sin(a) * 0.1];
     const e: Pt = [dx + Math.cos(a) * 0.16, dy + Math.sin(a) * 0.22];
     inkLine(g, [p, e], 0.022, WOOD[2]);
-    g.circle(...e, 0.03).fill(WOOD[2]).stroke({ width: 0.01, color: INK });
+    g.circle(...e, 0.03).fill(WOOD[2]).stroke({ width: 0.016, color: INK });
   }
   // The harp in the back corner, from straight above: its frame stands upright, so only a narrow curve shows — the
   // soundbox a strip tapering from the foot to the top, the neck curving back from it to the pillar's head by the foot,
@@ -681,31 +681,31 @@ export function refreshmentTable(g: Graphics, f: InteriorItem, light: Light, v: 
       g.moveTo(...at(ua, sa)).quadraticCurveTo(...at((ua + ub) / 2, sb + (sb - sa) * 0.6), ...at(ub, sa));
     }
     g.stroke({ width: 0.02, color: cloth[3], alpha: 0.85 });
-    for (let i = 0; i <= n; i++) g.circle(...at(0.08 + ((len - 0.16) * i) / n, sa), 0.024).fill(cloth[3]).stroke({ width: 0.008, color: INK });
+    for (let i = 0; i <= n; i++) g.circle(...at(0.08 + ((len - 0.16) * i) / n, sa), 0.024).fill(cloth[3]).stroke({ width: 0.016, color: INK });
   }
   // The punch bowl: a broad silver rim round red punch with slices of orange floating in it, the ladle's cup by
   // the rim and its handle out over it; silver cups round the bowl.
   const [bx, by] = at(len / 2, 0.5);
   g.poly(ring(bx, by, 0.22, rnd, 0.004, 24)).fill(0x8a9096).stroke({ width: OUT, color: INK });
   g.poly(ring(bx + light[0] * 0.012, by + light[1] * 0.012, 0.2, rnd, 0.003, 24)).fill(0xc4c8cc);
-  g.circle(bx, by, 0.15).fill(0x8a1e2a).stroke({ width: 0.01, color: INK });
+  g.circle(bx, by, 0.15).fill(0x8a1e2a).stroke({ width: 0.016, color: INK });
   g.circle(bx + light[0] * 0.05, by + light[1] * 0.05, 0.06).fill({ color: 0xc8485a, alpha: 0.5 });
   for (const [ox, oy] of [
     [-0.06, 0.05],
     [0.05, 0.07],
     [0.02, -0.07],
   ]) {
-    g.circle(bx + ox, by + oy, 0.032).fill(0xf2a03a).stroke({ width: 0.008, color: 0x8a4a1a });
+    g.circle(bx + ox, by + oy, 0.032).fill(0xf2a03a).stroke({ width: 0.014, color: 0x8a4a1a });
     g.circle(bx + ox, by + oy, 0.018).fill(0xf8d07a);
   }
   const la = Math.atan2(light[1], light[0]) + Math.PI * 0.6;
   const [lc, ls] = [Math.cos(la), Math.sin(la)];
   inkLine(g, [[bx + lc * 0.1, by + ls * 0.1], [bx + lc * 0.3, by + ls * 0.3]], 0.018, 0xd8dce0);
-  g.circle(bx + lc * 0.08, by + ls * 0.08, 0.04).fill(0xb8bcc0).stroke({ width: 0.01, color: INK });
+  g.circle(bx + lc * 0.08, by + ls * 0.08, 0.04).fill(0xb8bcc0).stroke({ width: 0.016, color: INK });
   for (const a of [la + 1.6, la + 2.4, la + 3.2, la - 1.4]) {
     const [cx, cy] = [bx + Math.cos(a) * 0.3, by + Math.sin(a) * 0.3];
     if (Math.abs(cy - by) > 0.34 || Math.abs(cx - bx) > len / 2 - 0.1) continue;
-    g.circle(cx, cy, 0.05).fill(0xd8dce0).stroke({ width: 0.012, color: INK });
+    g.circle(cx, cy, 0.05).fill(0xd8dce0).stroke({ width: 0.016, color: INK });
     g.circle(cx, cy, 0.032).fill(0x8a1e2a);
   }
   // A cake on a gilt stand: two tiers iced white and pink, piped round their edges, strawberries on top; a slice
@@ -714,27 +714,27 @@ export function refreshmentTable(g: Graphics, f: InteriorItem, light: Light, v: 
     const [kx, ky] = at(0.44, 0.48);
     g.poly(ring(kx, ky, 0.25, rnd, 0.004, 22)).fill(GILT[1]).stroke({ width: LINE, color: INK });
     g.poly(ring(kx, ky, 0.2, rnd, 0.006, 22)).fill(0xf6efe0).stroke({ width: LINE, color: INK });
-    for (let i = 0; i < 14; i++) g.circle(kx + Math.cos((i / 14) * Math.PI * 2) * 0.175, ky + Math.sin((i / 14) * Math.PI * 2) * 0.175, 0.018).fill(0xffffff).stroke({ width: 0.006, color: 0xb8aa90 });
-    g.poly(ring(kx + light[0] * 0.01, ky + light[1] * 0.01, 0.12, rnd, 0.004, 18)).fill(0xf0b8c0).stroke({ width: 0.012, color: INK });
+    for (let i = 0; i < 14; i++) g.circle(kx + Math.cos((i / 14) * Math.PI * 2) * 0.175, ky + Math.sin((i / 14) * Math.PI * 2) * 0.175, 0.018).fill(0xffffff).stroke({ width: 0.014, color: 0xb8aa90 });
+    g.poly(ring(kx + light[0] * 0.01, ky + light[1] * 0.01, 0.12, rnd, 0.004, 18)).fill(0xf0b8c0).stroke({ width: 0.016, color: INK });
     for (let i = 0; i < 9; i++) g.circle(kx + Math.cos((i / 9) * Math.PI * 2 + 0.3) * 0.1, ky + Math.sin((i / 9) * Math.PI * 2 + 0.3) * 0.1, 0.014).fill(0xffffff);
     for (const [ox, oy] of [
       [-0.03, -0.02],
       [0.035, -0.01],
       [0, 0.035],
     ]) {
-      g.poly(oval(kx + ox, ky + oy, 0.03, 0.024, 0.4, 8)).fill(0xc8202a).stroke({ width: 0.008, color: INK });
+      g.poly(oval(kx + ox, ky + oy, 0.03, 0.024, 0.4, 8)).fill(0xc8202a).stroke({ width: 0.016, color: INK });
       g.circle(kx + ox - 0.012, ky + oy - 0.016, 0.009).fill(0x4a7a2a);
     }
     // The slice on its plate (where there is room beside the bowl).
     if (len >= 3) {
       const [px, py] = at(0.86, 0.72);
-      g.circle(px, py, 0.11).fill(0xf2f0ea).stroke({ width: 0.012, color: INK });
+      g.circle(px, py, 0.11).fill(0xf2f0ea).stroke({ width: 0.016, color: INK });
       const tri: Pt[] = [
         [px - 0.07, py + 0.05],
         [px + 0.08, py + 0.05],
         [px + 0.06, py - 0.06],
       ];
-      g.poly(tri.flat()).fill(0xe0b070).stroke({ width: 0.012, color: INK, join: 'round' });
+      g.poly(tri.flat()).fill(0xe0b070).stroke({ width: 0.016, color: INK, join: 'round' });
       for (const [t, c] of [
         [0.35, 0xb83a4a],
         [0.65, 0xfaf4e8],
@@ -752,11 +752,11 @@ export function refreshmentTable(g: Graphics, f: InteriorItem, light: Light, v: 
       [0.06, -0.04],
       [0, 0.06],
     ].entries()) {
-      g.circle(tx + ox, ty + oy, 0.05).fill(0xd0a060).stroke({ width: 0.008, color: INK });
+      g.circle(tx + ox, ty + oy, 0.05).fill(0xd0a060).stroke({ width: 0.016, color: INK });
       g.circle(tx + ox, ty + oy, 0.028).fill([0xa82a3a, 0xe0a030, 0x6a2a6a][(v + k) % 3]);
     }
     const [gx, gy] = at(len - 0.3, 0.72);
-    for (let i = 0; i < 7; i++) g.circle(gx + (rnd() - 0.5) * 0.1, gy + (rnd() - 0.5) * 0.08, 0.026).fill(0x6a3a6a).stroke({ width: 0.006, color: INK });
+    for (let i = 0; i < 7; i++) g.circle(gx + (rnd() - 0.5) * 0.1, gy + (rnd() - 0.5) * 0.08, 0.026).fill(0x6a3a6a).stroke({ width: 0.016, color: INK });
   }
   for (const u of [len / 2 - 0.42, len / 2 + 0.42]) if (u > 0.25 && u < len - 0.25) candle(g, ...at(u, 0.24));
 }
@@ -808,7 +808,7 @@ export function font(g: Graphics, f: InteriorItem, light: Light, v: number, rnd:
       const a = -Math.PI / 2 - 0.85 + (1.7 * i) / 10;
       g.moveTo(hx, hy).lineTo(hx + Math.cos(a) * 0.14 * sc, hy + Math.sin(a) * 0.14 * sc);
     }
-    g.stroke({ width: 0.012, color: GILT[0] });
+    g.stroke({ width: 0.014, color: GILT[0] });
     return;
   }
   const t = v === 1 ? MARBLE : v === 3 ? STONE.map((c) => shade(c, 0.88)) : STONE;
@@ -877,7 +877,7 @@ export function cloisterWell(g: Graphics, f: InteriorItem, light: Light, v: numb
   for (const sd of [-1, 1]) {
     const q = [...R(sd * (ra - 0.02), -0.07), ...R(sd * (pa - 0.06), -0.07), ...R(sd * (pa - 0.06), 0.07), ...R(sd * (ra - 0.02), 0.07)];
     g.poly(q).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    g.moveTo(...R(sd * (ra + 0.04), -0.07)).lineTo(...R(sd * (ra + 0.04), 0.07)).stroke({ width: 0.012, color: IRON[0] });
+    g.moveTo(...R(sd * (ra + 0.04), -0.07)).lineTo(...R(sd * (ra + 0.04), 0.07)).stroke({ width: 0.014, color: IRON[0] });
   }
   inkLine(g, [R(pa, 0), R(pa + 0.14, 0)], 0.03, IRON[1]);
   inkLine(g, [R(pa + 0.14, 0), R(pa + 0.14, 0.12)], 0.025, IRON[1]);

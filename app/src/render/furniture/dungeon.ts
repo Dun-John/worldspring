@@ -202,7 +202,7 @@ export function ironMaiden(g: Graphics, f: InteriorItem, light: Light, rnd: () =
     g.moveTo(...T(-w + 0.01, b - 0.004)).lineTo(...T(w - 0.01, b - 0.004)).stroke({ width: 0.014, color: IRON[2] });
   }
   for (const [a, b] of [[-0.17, -0.04], [-0.165, 0.06], [-0.14, 0.2], [0.17, -0.04], [0.165, 0.06], [0.14, 0.2], [-0.15, -0.13], [0.15, -0.13]] as const) {
-    g.circle(...T(a, b), 0.014).fill(IRON[2]).stroke({ width: 0.016, color: INK });
+    g.circle(...T(a, b), 0.014).fill(IRON[2]).stroke({ width: 0.014, color: shade(IRON[2], 0.55) });
   }
   // Hinge straps on the shut (left) door's outer edge, each with its knuckle.
   for (const b of [-0.05, 0.16]) {
