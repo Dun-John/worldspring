@@ -32,7 +32,7 @@ export function hitchingRail(g: Graphics, r: number, rnd: () => number, v: numbe
   void r;
   const tones = v === 2 ? GREY_WOOD : WOOD;
   // (R5 towns, 114: stout enough to read at a town's battle zoom.)
-  const [L, T, P, ph] = [4.2 * FT, 0.38 * FT, 4.0 * FT, 0.64 * FT];
+  const [L, T, P, ph] = [4.2 * FT, 0.26 * FT, 4.0 * FT, 0.42 * FT];
   if (v === 2) for (const x of [-P, P]) footGrass(g, x + 0.3 * FT, ph + 2, 0.45 * FT, rnd);
   g.roundRect(-L, -T, L * 2, T * 2, T * 0.7).fill(tones[1]).stroke({ width: OUT, color: INK, join: 'round' });
   g.roundRect(-L + 2, -T + 1.2, L * 2 - 4, T * 0.62, T * 0.3).fill(tones[2]);
@@ -60,21 +60,21 @@ export function hitchingRail(g: Graphics, r: number, rnd: () => number, v: numbe
   };
   if (v === 0 || v === 3) {
     const x = v === 0 ? 0.9 * FT : -1.4 * FT;
-    ink2(() => g.circle(x, T + 0.3 * FT, 0.34 * FT), 2.8, IRON[2]);
+    ink2(() => g.circle(x, T + 0.22 * FT, 0.24 * FT), 2.4, IRON[2]);
   }
   if (v === 1) {
     // A lead rope: three turns round the rail, its end trailing off to the south, frayed.
     const rope = 0xc8b07a;
     const x = -1.3 * FT;
-    for (let k = 0; k < 3; k++) ink2(() => g.moveTo(x + k * 6 - 3, -T - 1.5).lineTo(x + k * 6 + 3, T + 1.5), 3, rope);
-    ink2(() => g.moveTo(x + 13, T).quadraticCurveTo(x + 0.9 * FT, T + 2.1 * FT, x + 2.4 * FT, T + 2.2 * FT), 3, rope);
-    const [ex, ey] = [x + 2.4 * FT, T + 2.2 * FT];
+    for (let k = 0; k < 3; k++) ink2(() => g.moveTo(x + k * 5 - 2.5, -T - 1.2).lineTo(x + k * 5 + 2.5, T + 1.2), 2.6, rope);
+    ink2(() => g.moveTo(x + 13, T).quadraticCurveTo(x + 0.6 * FT, T + 1.2 * FT, x + 1.8 * FT, T + 1.3 * FT), 2.6, rope);
+    const [ex, ey] = [x + 1.8 * FT, T + 1.3 * FT];
     for (const a of [-0.5, 0, 0.5]) g.moveTo(ex, ey).lineTo(ex + Math.cos(a) * 6, ey + Math.sin(a) * 6);
     g.stroke({ width: 1.5, color: shade(rope, 0.7), cap: 'round' });
   }
   if (v === 3) {
     // A wooden bucket of water by the east post, its handle laid over.
-    const [bx, by, R] = [P - 1.5 * FT, T + 1.35 * FT, 1.05 * FT];
+    const [bx, by, R] = [P - 1.2 * FT, T + 0.85 * FT, 0.6 * FT];
     g.circle(bx, by, R).fill(WOOD[2]).stroke({ width: LINE, color: INK });
     for (let k = 0; k < 12; k++) {
       const a = (k / 12) * Math.PI * 2;

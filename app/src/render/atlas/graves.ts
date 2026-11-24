@@ -9,13 +9,15 @@ import { bust } from './yard';
 /** An anvil from above on a stump before a smithy, along x, its horn to +x (to -x in v3): dark iron,
  * its four feet showing past a flat face worn bright, a hardy hole at the heel. A small wooden quench
  * tub of dark water beside it (v1, v3), tongs on the stump (v1), a hammer on it (v2). */
-export function anvil(g: Graphics, r: number, rnd: () => number, v: number) {
+export function anvil(g: Graphics, r0: number, rnd: () => number, v: number) {
+  // (Life size: the face and horn about 3 ft by 1.3, on a 2-ft stump; the catalog radius is 0.4.)
+  const r = r0 * 1.2;
   const f = v === 3 ? -1 : 1;
   const X = (x: number) => f * x;
   const flipped = (pts: number[]) => pts.map((p, i) => (i % 2 ? p : X(p)));
   if (v === 1 || v === 3) {
     // The tub: a hooped stave rim, dark water.
-    const [tx, ty, T] = [X(0.55 * r), 0.48 * r, 0.26 * r];
+    const [tx, ty, T] = [X(0.55 * r), 0.5 * r, 0.22 * r];
     g.circle(tx, ty, T).fill(WOOD[1]).stroke({ width: LINE, color: INK });
     g.circle(tx - T * 0.1, ty - T * 0.1, T * 0.86).stroke({ width: 1.4, color: WOOD[2], alpha: 0.85 });
     g.circle(tx, ty, T * 0.68).fill(0x2a2620).stroke({ width: 1.2, color: INK });
@@ -23,12 +25,12 @@ export function anvil(g: Graphics, r: number, rnd: () => number, v: number) {
   }
   // The stump.
   const [sx, sy] = [X(-0.12 * r), -0.04 * r];
-  g.poly(oval(sx, sy + r * 0.05, r * 0.5, r * 0.44, 0)).fill(BARK[0][1]).stroke({ width: OUT, color: INK });
-  endGrain(g, sx, sy, r * 0.42, r * 0.37, BARK[0]);
+  g.poly(oval(sx, sy + r * 0.05, r * 0.4, r * 0.35, 0)).fill(BARK[0][1]).stroke({ width: OUT, color: INK });
+  endGrain(g, sx, sy, r * 0.33, r * 0.29, BARK[0]);
   // Its feet: a waisted block under the face, flaring out past it at both ends.
   const [h0, h1] = [-0.52 * r, 0.24 * r];
   const feet = flipped([sx * f + h0 + 2, sy - 0.32 * r, sx * f - 0.14 * r, sy - 0.16 * r, sx * f + h1, sy - 0.32 * r, sx * f + h1, sy + 0.32 * r, sx * f - 0.14 * r, sy + 0.16 * r, sx * f + h0 + 2, sy + 0.32 * r]);
-  g.poly(feet).fill(IRON[0]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(feet).fill(IRON[1]).stroke({ width: LINE, color: INK, join: 'round' });
   // The face and the horn tapering off it.
   const w = 0.2 * r;
   const face = flipped([
@@ -40,11 +42,11 @@ export function anvil(g: Graphics, r: number, rnd: () => number, v: number) {
     sx * f + h1, sy + w,
     sx * f + h0, sy + w,
   ]);
-  g.poly(face).fill(IRON[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(face).fill(IRON[2]).stroke({ width: OUT, color: INK, join: 'round' });
   // Lit along its north edge, the face worn bright, the hardy hole.
-  g.poly(flipped([sx * f + h0 + 2, sy - w + 2, sx * f + h1 + 0.18 * r, sy - w * 0.5 + 1, sx * f + h1 + 0.36 * r, sy - 0.02 * r, sx * f + h1, sy - w * 0.35, sx * f + h0 + 2, sy - w * 0.35])).fill(IRON[2]);
+  g.poly(flipped([sx * f + h0 + 2, sy - w + 2, sx * f + h1 + 0.18 * r, sy - w * 0.5 + 1, sx * f + h1 + 0.36 * r, sy - 0.02 * r, sx * f + h1, sy - w * 0.35, sx * f + h0 + 2, sy - w * 0.35])).fill(IRON[3]);
   const worn = sx * f + h0 + 0.14 * r;
-  g.rect(Math.min(X(worn), X(worn + 0.4 * r)), sy - w * 0.25, 0.4 * r, w * 0.55).fill({ color: IRON[3], alpha: 0.75 });
+  g.rect(Math.min(X(worn), X(worn + 0.4 * r)), sy - w * 0.25, 0.4 * r, w * 0.55).fill({ color: 0xc4cad0, alpha: 0.8 });
   g.rect(X(sx * f + h0 + 0.08 * r) - 2, sy - 2, 4, 4).fill(INK);
   if (v === 1) {
     // Tongs laid over the stump's edge.

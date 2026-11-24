@@ -110,34 +110,34 @@ export function vegRow(g: Graphics, r: number, rnd: () => number, v: number) {
 export function wattleFence(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
   const wood = v === 1 ? [0x7a5c3a, 0x9a7a50, 0xbc9c6c] : [0x8c6e46, 0xb08e5c, 0xd4b67e];
-  const [L, T] = [0.5 * PX, 0.1 * PX];
+  const [L, T] = [0.5 * PX, 0.2 * (PX / 5)];
   g.rect(-L, -T, L * 2, T * 2).fill(wood[1]);
-  g.rect(-L, -T + 1.5, L * 2, T * 0.6).fill(wood[2]);
+  g.rect(-L, -T + 0.8, L * 2, T * 0.6).fill(wood[2]);
   // The stakes, about every 0.12 of a square, standing proud of the weave either side.
   const n = 8;
   const step = (L * 2) / n;
   for (let i = 0; i < n; i++) {
     const x = -L + (i + 0.5) * step;
-    g.moveTo(x, -T - 2.2).lineTo(x, T + 2.2).stroke({ width: 3, color: INK, cap: 'round' });
-    g.moveTo(x, -T - 1).lineTo(x, T + 1).stroke({ width: 1.4, color: wood[1], cap: 'round' });
+    g.moveTo(x, -T - 1).lineTo(x, T + 1).stroke({ width: 2.6, color: INK, cap: 'round' });
+    g.moveTo(x, -T - 0.2).lineTo(x, T + 0.2).stroke({ width: 1.2, color: wood[1], cap: 'round' });
   }
   // The weave: one withy zig-zagging over and under, stake to stake.
   g.moveTo(-L, 0);
   for (let i = 0; i <= n; i++) g.lineTo(Math.min(L, -L + i * step), (i % 2 ? -1 : 1) * T * 0.45);
-  g.stroke({ width: 2.2, color: shade(wood[2], 1.12), join: 'round' });
+  g.stroke({ width: 1.4, color: shade(wood[2], 1.12), join: 'round' });
   for (const y of [-T, T]) g.moveTo(-L, y).lineTo(L, y);
   g.stroke({ width: LINE, color: INK });
   if (v === 2) {
     for (let i = 0; i < 4; i++) {
       const x = -L + 6 + rnd() * (L * 2 - 12);
-      leaf(g, x, (rnd() < 0.5 ? -1 : 1) * T * 0.7, (rnd() - 0.5) * Math.PI * 2, 7, 3, [0x4e7a34, 0x5e8a40][i % 2], 0.4);
+      leaf(g, x, (rnd() < 0.5 ? -1 : 1) * T * 0.7, (rnd() - 0.5) * Math.PI * 2, 5, 2.2, [0x4e7a34, 0x5e8a40][i % 2], 0.4);
     }
-    flower5(g, -L * 0.3 + rnd() * L * 0.6, -T * 0.3, 4.5, 0xf2eee0, 0xd8c060, rnd());
+    flower5(g, -L * 0.3 + rnd() * L * 0.6, -T * 0.3, 3.4, 0xf2eee0, 0xd8c060, rnd());
   }
   if (v === 3) {
     const x = -L * 0.4 + rnd() * L * 0.8;
-    g.moveTo(x, T * 0.4).quadraticCurveTo(x + 5, T + 4, x + 11, T + 5.5).stroke({ width: 3.6, color: INK, cap: 'round' });
-    g.moveTo(x, T * 0.4).quadraticCurveTo(x + 5, T + 4, x + 11, T + 5.5).stroke({ width: 1.6, color: wood[2], cap: 'round' });
+    g.moveTo(x, T * 0.4).quadraticCurveTo(x + 3, T + 2, x + 7, T + 3).stroke({ width: 3, color: INK, cap: 'round' });
+    g.moveTo(x, T * 0.4).quadraticCurveTo(x + 3, T + 2, x + 7, T + 3).stroke({ width: 1.4, color: wood[2], cap: 'round' });
   }
 }
 
@@ -147,8 +147,8 @@ export function wattleFence(g: Graphics, r: number, rnd: () => number, v: number
 
 /** A straight line inked twice: a dark line `w + 2.4` wide under one of `color`, so a rail or bar has an
  * outline along both sides but none across its ends (pieces end to end read as one rail). */
-function railLine(g: Graphics, x0: number, y0: number, x1: number, y1: number, w: number, color: number) {
-  g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w + 2.4, color: INK });
+function railLine(g: Graphics, x0: number, y0: number, x1: number, y1: number, w: number, color: number, ink = 2.4) {
+  g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w + ink, color: INK });
   g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w, color });
 }
 
@@ -176,7 +176,7 @@ export function picketFence(g: Graphics, r: number, rnd: () => number, v: number
   ][v];
   const L = 0.5 * PX;
   // The rail runs the whole piece under the palings, so the pieces read as one continuous fence.
-  railLine(g, -L, 0, L, 0, 8, v === 2 ? 0x7a6a4a : WOOD[1]);
+  railLine(g, -L, 0, L, 0, 2.4, v === 2 ? 0x7a6a4a : WOOD[1], 1.6);
   const n = 8;
   const step = (L * 2) / n;
   const gone = v === 3 ? 1 + Math.floor(rnd() * 6) : -1;
@@ -184,10 +184,10 @@ export function picketFence(g: Graphics, r: number, rnd: () => number, v: number
     if (i === gone) continue;
     const x = -L + (i + 0.5) * step;
     const askew = v === 3 && i === gone + 1 ? 0.5 : 0;
-    topBlock(g, x, 0, step - 0.8, 12, askew, paint, 1.8);
-    if (v === 1 && rnd() < 0.5) g.circle(x + (rnd() - 0.5) * 2, -0.4, 0.9).fill(WOOD[2]);
+    topBlock(g, x, 0, step - 2.6, 3.8, askew, paint, 1.5);
+    if (v === 1 && rnd() < 0.5) g.circle(x + (rnd() - 0.5) * 2, -0.4, 0.7).fill(WOOD[2]);
   }
-  topBlock(g, 0, 0, 8, 15, 0, paint.map((c) => shade(c, 0.9)), 2.2);
+  topBlock(g, 0, 0, 5.4, 5.4, 0, paint.map((c) => shade(c, 0.9)), 1.6);
 }
 
 /** Iron railing along x from above: its top rail a dark bar, six finials' round tops along it (the bars'
@@ -199,22 +199,22 @@ export function ironRailing(g: Graphics, r: number, rnd: () => number, v: number
   const tip = v === 2 ? [0x5e5434, 0x9a8a5a, 0xc4b688] : iron;
   const L = 0.5 * PX;
   // Two rails the whole piece long (the top one broad), a round finial on every bar, a post cap at the middle.
-  railLine(g, -L, -5, L, -5, 3.2, iron[0]);
-  railLine(g, -L, 0, L, 0, 7, iron[1]);
-  g.moveTo(-L, -1.5).lineTo(L, -1.5).stroke({ width: 1.2, color: iron[2] });
+  railLine(g, -L, -1.1, L, -1.1, 1.2, iron[0], 1.6);
+  railLine(g, -L, 0.4, L, 0.4, 2.2, iron[1], 1.6);
+  g.moveTo(-L, -0.2).lineTo(L, -0.2).stroke({ width: 0.8, color: iron[2] });
   const n = 8;
   const step = (L * 2) / n;
   const bent = v === 3 ? Math.floor(rnd() * 2) : -1;
   for (let i = 0; i < n; i++) {
     const x = -L + (i + 0.5) * step;
-    const y = i === bent ? 4 : 0;
-    if (y) g.moveTo(x, 0).lineTo(x, y).stroke({ width: 3.4, color: INK, cap: 'round' });
-    g.circle(x, y, 4.2).fill(tip[1]).stroke({ width: 1.6, color: INK });
-    g.circle(x - 1, y - 1, 1.1).fill(tip[2]);
+    const y = i === bent ? 2.6 : 0;
+    if (y) g.moveTo(x, 0).lineTo(x, y).stroke({ width: 2.4, color: INK, cap: 'round' });
+    g.circle(x, y, 1.9).fill(tip[1]).stroke({ width: 1.2, color: INK });
+    g.circle(x - 0.5, y - 0.5, 0.6).fill(tip[2]);
   }
-  topBlock(g, 0, 0, 11, 15, 0, iron, 2.2);
-  g.circle(0, 0, 3.4).fill(tip[1]).stroke({ width: 1.4, color: INK });
-  g.circle(-0.8, -0.8, 0.9).fill(tip[2]);
+  topBlock(g, 0, 0, 5, 5, 0, iron, 1.6);
+  g.circle(0, 0, 2).fill(tip[1]).stroke({ width: 1.1, color: INK });
+  g.circle(-0.5, -0.5, 0.6).fill(tip[2]);
 }
 
 /** Stockade along x from above: a palisade's stakes (`stockadeStakes`). */
@@ -251,16 +251,16 @@ function skep(g: Graphics, x: number, y: number, R: number, rnd: () => number) {
  * one bigger, set on the ground (v3). */
 export function beehive(g: Graphics, r: number, rnd: () => number, v: number) {
   if (v === 1) {
-    bevel(g, -r * 0.98, -r * 0.3, r * 0.98, r * 0.38, 3, WOOD, LINE);
-    skep(g, -r * 0.47, -r * 0.02, r * 0.46, rnd);
-    skep(g, r * 0.47, 0.02 * r, r * 0.44, rnd);
+    bevel(g, -r * 0.95, -r * 0.4, r * 0.95, r * 0.45, 3, WOOD, LINE);
+    skep(g, -r * 0.47, -r * 0.02, r * 0.38, rnd);
+    skep(g, r * 0.47, 0.02 * r, r * 0.36, rnd);
     return;
   }
   if (v === 2) {
-    g.poly(oval(0, r * 0.06, r * 0.86, r * 0.78, 0)).fill(BARK[0][1]).stroke({ width: LINE, color: INK });
-    endGrain(g, 0, 0, r * 0.76, r * 0.68, BARK[0]);
+    g.poly(oval(0, r * 0.06, r * 0.62, r * 0.56, 0)).fill(BARK[0][1]).stroke({ width: LINE, color: INK });
+    endGrain(g, 0, 0, r * 0.54, r * 0.49, BARK[0]);
   } else if (v === 0) {
-    bevel(g, -r * 0.82, -r * 0.34, r * 0.82, r * 0.42, 3, WOOD, LINE);
+    bevel(g, -r * 0.62, -r * 0.5, r * 0.62, r * 0.56, 3, WOOD, LINE);
   }
-  skep(g, 0, -r * 0.04, r * (v === 3 ? 0.72 : 0.64), rnd);
+  skep(g, 0, -r * 0.04, r * (v === 3 ? 0.6 : v === 2 ? 0.42 : 0.5), rnd);
 }

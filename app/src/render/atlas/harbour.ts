@@ -248,7 +248,7 @@ export function fishingBoat(g: Graphics, r: number, rnd: () => number, v: number
  * coiled by it (v1); a weathered timber post, its end grain and a split (v2); dressed stone, worn (v3). */
 export function bollard(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
-  const R = 0.95 * FT;
+  const R = 0.5 * FT;
   if (v === 1) {
     // The line: a loop round the post, two parts running off east, the slack coiled to the south-east.
     const rope = (draw: () => void, w: number) => {
@@ -257,9 +257,9 @@ export function bollard(g: Graphics, r: number, rnd: () => number, v: number) {
       draw();
       g.stroke({ width: w, color: ROPE, cap: 'round', join: 'round' });
     };
-    ropeCoil(g, 1.3 * FT, 1.85 * FT, 0.85 * FT);
-    rope(() => g.moveTo(0.4 * FT, R * 0.6).quadraticCurveTo(1.6 * FT, R * 0.9, 1.9 * FT, 1.2 * FT), 2.6);
-    rope(() => g.moveTo(R * 1.0, -R * 0.4).quadraticCurveTo(2.2 * FT, -0.4 * FT, 2.9 * FT, 0.3 * FT), 2.6);
+    ropeCoil(g, 0.85 * FT, 1.0 * FT, 0.46 * FT);
+    rope(() => g.moveTo(0.22 * FT, R * 0.6).quadraticCurveTo(0.9 * FT, R * 0.9, 1.05 * FT, 0.65 * FT), 2);
+    rope(() => g.moveTo(R * 1.0, -R * 0.4).quadraticCurveTo(1.3 * FT, -0.25 * FT, 1.6 * FT, 0.15 * FT), 2);
   }
   // Every post: a wide foot ring, a round cap with a pale rim and a groove, its top lit on the north-west.
   const [foot, cap, rim, top] = v === 2 ? [GREY_WOOD[0], GREY_WOOD[1], GREY_WOOD[3], GREY_WOOD[2]] : v === 3 ? [STONE[0][0], STONE[0][1], STONE[0][3], STONE[0][2]] : [IRON[0], IRON[2], IRON[3], IRON[1]];

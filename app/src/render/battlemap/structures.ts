@@ -242,14 +242,15 @@ function drawEntrance(g: Graphics, s: Shape) {
     case 1:
     case 6: {
       // Stairwell: steps darkening as they go down, a stone kerb round three sides.
-      g.poly(quad(-0.5, 2.5, -1, 1)).fill(0x2a2520);
-      for (let k = 0; k < 6; k++) {
+      // (Life size: a stair 4-5 ft wide and 10 ft long, its kerb half a foot thick.)
+      g.poly(quad(-0.5, 1.5, -0.5, 0.5)).fill(0x2a2520);
+      for (let k = 0; k < 4; k++) {
         const a = -0.5 + k * 0.5;
-        const shade = Math.round(0x9a - k * 0x14);
-        g.poly(quad(a, a + 0.42, -0.95, 0.95)).fill((shade << 16) | (shade << 8) | (shade - 8));
+        const shade = Math.round(0x9a - k * 0x1e);
+        g.poly(quad(a, a + 0.42, -0.45, 0.45)).fill((shade << 16) | (shade << 8) | (shade - 8));
       }
-      g.poly([...at(-0.5, -1), ...at(2.5, -1), ...at(2.5, 1), ...at(-0.5, 1)], false).stroke({ width: 10, color: STONE, join: 'miter' });
-      g.poly([...at(-0.5, -1.12), ...at(2.62, -1.12), ...at(2.62, 1.12), ...at(-0.5, 1.12)], false).stroke({ width: 2.5, color: ROOF_INK, join: 'miter' });
+      g.poly([...at(-0.5, -0.5), ...at(1.5, -0.5), ...at(1.5, 0.5), ...at(-0.5, 0.5)], false).stroke({ width: 7, color: STONE, join: 'miter' });
+      g.poly([...at(-0.5, -0.58), ...at(1.58, -0.58), ...at(1.58, 0.58), ...at(-0.5, 0.58)], false).stroke({ width: 2.5, color: ROOF_INK, join: 'miter' });
       break;
     }
     case 2: {
@@ -259,14 +260,15 @@ function drawEntrance(g: Graphics, s: Shape) {
     }
     case 3: {
       // Mine adit: rails out of a dark opening in a timber frame.
-      for (const b of [-0.35, 0.35]) g.moveTo(...at(-3, b)).lineTo(...at(0.6, b));
-      g.stroke({ width: 3, color: 0x4a4440 });
-      for (let a = -2.8; a < 0.6; a += 0.5) g.moveTo(...at(a, -0.55)).lineTo(...at(a, 0.55));
-      g.stroke({ width: 4, color: 0x6e4a2c });
-      g.poly(quad(0, 1.4, -1.1, 1.1)).fill(0x15120f);
-      g.poly([...at(0, -1.2), ...at(0, 1.2)], false).stroke({ width: 9, color: 0x7a5530, cap: 'round' });
-      for (const b of [-1.15, 1.15]) g.moveTo(...at(0, b)).lineTo(...at(1.3, b));
-      g.stroke({ width: 7, color: 0x6a4428, cap: 'round' });
+      // (Life size: a 6-ft opening, rails 2 ft apart.)
+      for (const b of [-0.2, 0.2]) g.moveTo(...at(-3, b)).lineTo(...at(0.6, b));
+      g.stroke({ width: 2.4, color: 0x4a4440 });
+      for (let a = -2.8; a < 0.6; a += 0.5) g.moveTo(...at(a, -0.35)).lineTo(...at(a, 0.35));
+      g.stroke({ width: 3, color: 0x6e4a2c });
+      g.poly(quad(0, 1.4, -0.65, 0.65)).fill(0x15120f);
+      g.poly([...at(0, -0.7), ...at(0, 0.7)], false).stroke({ width: 7, color: 0x7a5530, cap: 'round' });
+      for (const b of [-0.68, 0.68]) g.moveTo(...at(0, b)).lineTo(...at(1.3, b));
+      g.stroke({ width: 5.5, color: 0x6a4428, cap: 'round' });
       break;
     }
     case 5: {
@@ -294,24 +296,24 @@ const stoneShade = (k: number) => {
 };
 
 /**
- * A stair down through a ruin's floor, 3 squares wide and 4 deep: cracked steps darkening
+ * A stair down through a ruin's floor, about 6 ft wide and 12 deep: cracked steps darkening
  * into the dark, a kerb of fallen blocks with gaps, rubble and moss strewn round it.
  */
 function drawRuinStair(g: Graphics, at: At, quad: Quad, rnd: () => number) {
   // A shadowed pit, then the steps.
-  g.poly(quad(-0.6, 3.6, -1.6, 1.6)).fill({ color: 0x000000, alpha: 0.25 });
-  g.poly(quad(-0.5, 3.5, -1.5, 1.5)).fill(0x1b1714);
-  for (let k = 0; k < 7; k++) {
+  g.poly(quad(-0.6, 2.1, -0.7, 0.7)).fill({ color: 0x000000, alpha: 0.25 });
+  g.poly(quad(-0.5, 2, -0.6, 0.6)).fill(0x1b1714);
+  for (let k = 0; k < 5; k++) {
     const a = -0.5 + k * 0.5;
-    const col = stoneShade(Math.min(1, k / 6.5));
+    const col = stoneShade(Math.min(1, k / 4.5));
     // Each step a few slabs, some cracked or missing.
-    for (let b = -1.45; b < 1.4; b += 0.72) {
+    for (let b = -0.55; b < 0.5; b += 0.37) {
       if (rnd() < 0.12 && k > 1) continue;
-      const w = 0.66 + rnd() * 0.04;
+      const w = 0.33 + rnd() * 0.03;
       g.poly(quad(a + 0.02, a + 0.42 - rnd() * 0.06, b, b + w)).fill(col);
       if (rnd() < 0.3) g.moveTo(...at(a + 0.05, b + w * rnd())).lineTo(...at(a + 0.38, b + w * rnd())).stroke({ width: 1.5, color: 0x2a2520, alpha: 0.7 });
     }
-    g.moveTo(...at(a + 0.42, -1.45)).lineTo(...at(a + 0.42, 1.45)).stroke({ width: 1.2, color: 0x2a2520, alpha: 0.6 });
+    g.moveTo(...at(a + 0.42, -0.55)).lineTo(...at(a + 0.42, 0.55)).stroke({ width: 1.2, color: 0x2a2520, alpha: 0.6 });
   }
   // The kerb: worn blocks along both sides and the back, some fallen out of line.
   const block = (a: number, b: number, la: number, lb: number) => {
@@ -320,24 +322,24 @@ function drawRuinStair(g: Graphics, at: At, quad: Quad, rnd: () => number) {
     g.poly(p.map((v) => v + 3)).fill({ color: 0x000000, alpha: 0.3 });
     g.poly(p).fill(rnd() < 0.5 ? STONE : STONE_TOP).stroke({ width: 1.8, color: ROOF_INK });
   };
-  for (let a = -0.5; a < 3.5; a += 0.62) {
+  for (let a = -0.5; a < 2; a += 0.62) {
     for (const side of [-1, 1]) {
       if (rnd() < 0.25) continue;
-      block(a, side < 0 ? -1.85 : 1.5, 0.56, 0.34);
+      block(a, side < 0 ? -0.95 : 0.62, 0.56, 0.34);
     }
   }
-  for (let b = -1.85; b < 1.8; b += 0.62) if (rnd() > 0.3) block(3.5, b, 0.34, 0.56);
+  for (let b = -0.95; b < 0.95; b += 0.62) if (rnd() > 0.3) block(2, b, 0.34, 0.56);
   // Rubble and moss about the mouth.
   for (let k = 0; k < 10; k++) {
-    const a = -1.6 + rnd() * 5.6;
-    const b = (rnd() < 0.5 ? -1 : 1) * (1.9 + rnd() * 1.1);
-    const r = 0.1 + rnd() * 0.16;
+    const a = -1 + rnd() * 3.4;
+    const b = (rnd() < 0.5 ? -1 : 1) * (1.05 + rnd() * 0.7);
+    const r = 0.06 + rnd() * 0.1;
     const [cx, cy] = at(a, b);
     g.circle(cx + 2, cy + 2, r * PX).fill({ color: 0x000000, alpha: 0.25 });
     g.circle(cx, cy, r * PX).fill(stoneShade(0.15 + rnd() * 0.3)).stroke({ width: 1.2, color: ROOF_INK, alpha: 0.8 });
   }
   for (let k = 0; k < 4; k++) {
-    const [cx, cy] = at(rnd() * 3.5, (rnd() - 0.5) * 3.4);
+    const [cx, cy] = at(rnd() * 2.2, (rnd() - 0.5) * 1.9);
     g.circle(cx, cy, (0.15 + rnd() * 0.15) * PX).fill({ color: 0x55703a, alpha: 0.45 });
   }
 }

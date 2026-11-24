@@ -217,11 +217,11 @@ export function fenceGate(g: Graphics, look: number, rnd: () => number) {
   const timber = look !== 1;
   // The posts' tops: squares of timber, or of iron for an iron gate.
   for (const x of [-h, h]) {
-    const r = FT * (timber ? 0.45 : 0.35);
+    const r = FT * (timber ? 0.3 : 0.22);
     g.rect(x - r, -r, r * 2, r * 2).fill(timber ? WOOD[1] : IRON[1]).stroke({ width: 2, color: INK, join: 'round' });
     g.rect(x - r + 1.2, -r + 1.2, r * 0.9, r * 0.9).fill(timber ? WOOD[2] : IRON[2]);
   }
-  gateLeaves(g, -h, 0, h, 0, [0, 1], timber, 0, rnd, look === 2 ? 1.2 : 1, true);
+  gateLeaves(g, -h, 0, h, 0, [0, 1], timber, 0, rnd, look === 2 ? 1 : 0.85, true);
 }
 
 /**
@@ -257,7 +257,7 @@ function gateLeaves(g: Graphics, ax: number, ay: number, bx: number, by: number,
       const [c0, c1] = [way(t0), way(t1)];
       g.moveTo(hx + c0[0] * len, hy + c0[1] * len).lineTo(hx + c1[0] * len, hy + c1[1] * len);
     }
-    g.stroke({ width: 1.6, color: INK, alpha: 0.45 });
+    g.stroke({ width: bars ? 2 : 1.6, color: INK, alpha: bars ? 0.6 : 0.45 });
     // Its shadow, swept away from the light.
     const outline = [...P(0, -1), ...P(1, -1), ...P(1, 1), ...P(0, 1)];
     g.poly(hull(pairs([...outline, ...outline.map((v) => v + FT * (timber ? 1.5 : 1.1))]))).fill({ color: 0x000000, alpha: timber ? 0.2 : 0.08 });

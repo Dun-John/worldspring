@@ -926,7 +926,7 @@ pub(crate) const KINDS: [(crate::battle::Kind, crate::battle::KindInfo); 6] = {
         // (Boats along +x, the bow at +x: stepped into, rocking underfoot.)
         (Kind::Rowboat, k(Kind::Rowboat, "rowboat", 1.4, false, 1, true, 3.0)),
         (Kind::FishingBoat, k(Kind::FishingBoat, "fishing boat", 2.4, false, 1, true, 4.0)),
-        (Kind::Bollard, k(Kind::Bollard, "bollard", 0.3, false, 1, false, 2.0)),
+        (Kind::Bollard, k(Kind::Bollard, "bollard", 0.2, false, 1, false, 2.0)),
         // (Its jib along +x, over the water.)
         (Kind::DockCrane, k(Kind::DockCrane, "dock crane", 2.2, true, 2, false, 16.0)),
         (Kind::NetRack, k(Kind::NetRack, "net rack", 1.1, true, 1, false, 6.0)),

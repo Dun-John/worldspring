@@ -3,6 +3,7 @@ import { FT, INK, IRON, WOOD, blob, oval, shade } from './common';
 import { boughs, lit, whorl } from './plants';
 import { moss } from './stones';
 import { LINE, OUT } from '../pen';
+import { PX } from '../scale';
 import { blockTop, footGrass, inked, rod } from './street';
 
 /** A raised box from above, lit from the NW: the outline, light top and left bevels, dark bottom and right
@@ -98,34 +99,41 @@ export function crate(g: Graphics, x: number, y: number, s: number, rot: number,
   }
 }
 
-/** Barrels: one, two or three standing together. */
+/** Barrels: one, two or three standing together; every one 2.2 ft across, whatever the cluster (catalog radius 0.49). */
 export function barrels(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
   const n = 1 + (v % 3);
-  if (n === 1) return barrel(g, 0, 0, r * 0.82, rnd);
+  const br = PX * 0.22 * (0.97 + rnd() * 0.06);
+  if (n === 1) return barrel(g, 0, 0, br, rnd);
   const ph = rnd() * Math.PI * 2;
-  const s = n === 2 ? r * 0.48 : r * 0.44;
-  const d = n === 2 ? r * 0.47 : r * 0.5;
+  // Touching, not overlapping: centres a diameter (a hair more) apart.
+  const gap = br * 2.06;
+  const d = n === 2 ? gap / 2 : gap / Math.sqrt(3);
   for (let i = 0; i < n; i++) {
     const a = ph + (i / n) * Math.PI * 2;
-    barrel(g, Math.cos(a) * d, Math.sin(a) * d, s, rnd);
+    barrel(g, Math.cos(a) * d, Math.sin(a) * d, br * (0.98 + rnd() * 0.04), rnd);
   }
 }
 
-/** Crates: one, two side by side, or a small one stacked on a big one. */
+/** Crates: one, two side by side, or one stacked on another, each 2.5 ft across (catalog radius 0.52). */
 export function crates(g: Graphics, r: number, rnd: () => number, v: number) {
-  if (v === 0) crate(g, 0, 0, r * 0.62, (rnd() - 0.5) * 0.4, true);
+  void r;
+  const s = PX * 0.25;
+  const sz = () => s * (0.98 + rnd() * 0.04);
+  if (v === 0) crate(g, 0, 0, sz(), (rnd() - 0.5) * 0.4, true);
   else if (v === 1) {
-    crate(g, -r * 0.45, r * 0.05, r * 0.42, (rnd() - 0.5) * 0.4, false);
-    crate(g, r * 0.45, -r * 0.05, r * 0.42, (rnd() - 0.5) * 0.4, true);
+    crate(g, -s * 1.04, s * 0.04, sz(), (rnd() - 0.5) * 0.2, false);
+    crate(g, s * 1.04, -s * 0.04, sz(), (rnd() - 0.5) * 0.2, true);
   } else if (v === 2) {
-    crate(g, 0, 0, r * 0.65, (rnd() - 0.5) * 0.3, false);
-    crate(g, -r * 0.1, -r * 0.1, r * 0.38, (rnd() - 0.5) * 0.6, true);
+    crate(g, 0, 0, sz(), (rnd() - 0.5) * 0.3, false);
+    crate(g, -s * 0.3, -s * 0.3, sz(), 0.35 + (rnd() - 0.5) * 0.3, true);
   } else {
-    crate(g, r * 0.2, r * 0.15, r * 0.5, (rnd() - 0.5) * 0.4, true);
+    crate(g, s * 0.3, s * 0.25, sz(), (rnd() - 0.5) * 0.4, true);
     // A tied sack leaning on it.
-    g.poly(blob(-r * 0.5, -r * 0.35, r * 0.3, 9, 0.2, rnd)).fill(0xc8b080).stroke({ width: 2, color: INK });
-    g.circle(-r * 0.56, -r * 0.42, r * 0.12).fill(0xe0cca0);
-    g.circle(-r * 0.5, -r * 0.35, r * 0.06).fill(0x8a6a3a);
+    const [sx, sy] = [-s * 0.95, -s * 0.7];
+    g.poly(blob(sx, sy, s * 0.6, 9, 0.2, rnd)).fill(0xc8b080).stroke({ width: 2, color: INK });
+    g.circle(sx - s * 0.1, sy - s * 0.15, s * 0.24).fill(0xe0cca0);
+    g.circle(sx, sy, s * 0.12).fill(0x8a6a3a);
   }
 }
 

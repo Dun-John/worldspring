@@ -66,13 +66,13 @@ pub struct Plan {
 }
 
 /// How big a horse is set out (its sprite at size 1 reads as a pony beside the carts).
-pub const HORSE_SCALE: f32 = 1.35;
+pub const HORSE_SCALE: f32 = 1.0;
 
 /// A prop's footprint (ft along its turn, across), at size 1.
 pub fn size(kind: Kind) -> (f64, f64) {
     match kind {
         // (A horse as its sprite draws it, nose to tail and its tail swished: 2 squares by about
-        // 0.55, its middle `HORSE_AHEAD` ahead of where it stands; at `HORSE_SCALE` 13.5 by 3.7 ft.)
+        // 0.55, its middle `HORSE_AHEAD` ahead of where it stands; at `HORSE_SCALE` 10 by 2.8 ft.)
         Kind::Horse => (10.0, 2.8),
         Kind::HitchingRail => (10.4, 1.4),
         Kind::WaterTrough => (7.0, 3.0),

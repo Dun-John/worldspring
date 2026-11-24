@@ -84,7 +84,7 @@ pub(crate) const KINDS: [(crate::battle::Kind, crate::battle::KindInfo); 2] = {
     }
     [
         // (A field bolt thrower on its trestle, about 10 ft long along its turn, aimed along +x.)
-        (Kind::Ballista, k(Kind::Ballista, "ballista", 1.0, true, 1, false, 5.0)),
+        (Kind::Ballista, k(Kind::Ballista, "ballista", 0.65, true, 1, false, 5.0)),
         // (A heap of dressed round stones, its own and a trebuchet's.)
         (Kind::ShotStones, k(Kind::ShotStones, "shot stones", 0.55, false, 1, true, 2.0)),
     ]

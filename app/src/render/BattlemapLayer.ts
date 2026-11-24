@@ -1359,9 +1359,9 @@ export const SPARSE = new Map([
   ['tall grass', [0.75, 0.45]],
   ['reeds', [0.75, 0.45]],
   ['palm', [0.85, 0.6]],
-  ['topiary', [0.68, 0.9]],
-  ['garden statue', [0.45, 0.9]],
-  ['statue on a plinth', [0.4, 1]],
+  ['topiary', [0.98, 0.9]],
+  ['garden statue', [1.05, 0.9]],
+  ['statue on a plinth', [0.8, 1]],
   ['footbridge', [1, 1.3]],
 ]);
 /** Long things: a shadow drawn out along them, [length, width] in squares at scale 1, and how much further

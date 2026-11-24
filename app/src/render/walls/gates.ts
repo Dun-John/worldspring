@@ -131,11 +131,12 @@ function drawGateBlock(g: Graphics, s: Shape, form: number) {
 export function stockadeStakes(g: Graphics, rnd: () => number) {
   const prev = ST;
   setStone(TONES[5]);
-  const n = 3;
+  // (Life size: logs 0.85 ft across, six to the five-foot piece, so the stockade is under a foot deep.)
+  const n = 6;
   const step = PX / n;
   const stakes: [number, number][] = [];
-  for (let k = 0; k < n; k++) stakes.push([-PX * 0.5 + (k + 0.5) * step + (rnd() - 0.5) * FT * 0.12, (rnd() - 0.5) * FT * 0.14]);
-  stakeTops(g, stakes, STAKE);
+  for (let k = 0; k < n; k++) stakes.push([-PX * 0.5 + (k + 0.5) * step + (rnd() - 0.5) * FT * 0.06, (rnd() - 0.5) * FT * 0.08]);
+  stakeTops(g, stakes, FT * 0.4);
   setStone(prev);
 }
 

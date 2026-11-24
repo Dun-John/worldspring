@@ -154,11 +154,15 @@ const DRAW: Record<number, Draw> = {
 
 /** Room in the frame beyond the footprint (squares, by kind id) for things drawn bigger than their catalog radius
  * (tall things drawn from a high angle; the standing stone, whose top is longer than its footprint is wide). */
-const ROOM: Record<number, number> = { 155: 0.85, 142: 0.72, 107: 1.06, 100: 1.9, 101: 0.45, 103: 1.45, 105: 0.84, 62: 1.16, 56: 0.68 };
+const ROOM: Record<number, number> = { 155: 0.85, 142: 0.4, 107: 1.06, 100: 1.9, 101: 0.45, 103: 1.45, 105: 0.84, 62: 1.16, 56: 0.68 };
+
+/** Kinds whose footprint radius was cut to fit the top-down drawing (v66): the drawing keeps its old reference
+ * radius (squares), so it is still the same size on screen. */
+const DRAW_R: Record<number, number> = { 41: 0.9, 60: 0.7, 49: 0.75, 57: 0.55, 50: 0.5, 48: 0.55 };
 
 export function frameRadiusPx(info: KindInfo): number {
   // Radius in atlas px at scale 1 plus room for outlines.
-  return Math.ceil(Math.max(info.radius, ROOM[info.id] ?? 0) * PX + 6);
+  return Math.ceil(Math.max(info.radius, DRAW_R[info.id] ?? 0, ROOM[info.id] ?? 0) * PX + 6);
 }
 
 export function buildAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
@@ -187,7 +191,7 @@ export function buildAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
       const at = place(size);
       const g = new Graphics();
       g.position.set(at.x + rpx, at.y + rpx);
-      (DRAW[info.id] ?? DRAW[12])(g, info.radius * PX, rng(info.id * 131 + v * 17 + 7), v);
+      (DRAW[info.id] ?? DRAW[12])(g, (DRAW_R[info.id] ?? info.radius) * PX, rng(info.id * 131 + v * 17 + 7), v);
       if (import.meta.env.DEV) {
         // Art past the frame is cut off flat (and could bleed into the next frame's mips).
         const b = g.getLocalBounds();
