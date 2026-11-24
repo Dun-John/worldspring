@@ -951,19 +951,38 @@ fn built_feature(c: &mut Chunk, cands: &[usize], rng: &mut Pcg32, sea: f64, tier
     let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
     let mut kind = kind(k, r, rng);
     // (A fountain or a dais keeps to its tier's band, by the plaza's: drawn across no more than its
-    // band's top, so the round must cover the raised squares' centres within it, else a planter.)
-    let cap = match kind {
-        PlazaFeature::Fountain => Some(plaza::across(tier, true).1),
-        PlazaFeature::Dais => Some(plaza::across(tier, false).1),
-        _ => None,
-    };
+    // band's top, so the round must cover the raised squares' centres within it, else a planter. A
+    // planter or a cross's plinth the same, but shrunk to a smaller round rather than changed.)
+    let mut r = r;
+    let mut offs = offs;
     let mut rv = r as f32 + 0.45;
-    if let Some(cap) = cap {
-        let max = (cap / (2.0 * SQUARE_FT)) as f32;
+    if matches!(kind, PlazaFeature::Fountain | PlazaFeature::Dais) {
+        let max = (plaza::across_kind(tier, kind).1 / (2.0 * SQUARE_FT)) as f32;
         if max >= r as f32 + 0.2 {
             rv = rv.min(max);
         } else {
             kind = PlazaFeature::Planter;
+        }
+    }
+    if matches!(kind, PlazaFeature::Planter | PlazaFeature::Cross) {
+        let max = (plaza::across_kind(tier, kind).1 / (2.0 * SQUARE_FT)) as f32;
+        // (A planter's round reaches its raised squares' centres with 0.05 to spare, a cross's 0.2.)
+        let lip = if kind == PlazaFeature::Planter { 0.05 } else { 0.2 };
+        if max < r as f32 + lip {
+            r = [1.5, 1.0, 0.5].into_iter().filter(|&q| q <= r).find(|&q| max >= q as f32 + lip).unwrap_or(0.5);
+            let n = r.floor() as i64;
+            offs = (-n..=n).flat_map(|dy| (-n..=n).map(move |dx| (dx, dy))).filter(|&(dx, dy)| ((dx * dx + dy * dy) as f64) <= r * r).collect();
+            rv = (r as f32 + 0.45).min(max).max(r as f32 + 0.05);
+        }
+    }
+    // (A planter's bed must clear the tree's crown by 3 ft: a round
+    // too small for that is no planter, the tree stands bare.)
+    if kind == PlazaFeature::Planter {
+        rv = rv.min((plaza::across_kind(tier, kind).1 / (2.0 * SQUARE_FT)) as f32);
+        if f64::from(rv) * 2.0 * SQUARE_FT < planter_crown_ft() + 3.0 {
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            c.objects.push(Object { kind: Kind::TreeDeciduous, variant: rng.below(8) as u8, x: cx, y: cy, rot: 0.0, scale: PLANTER_TREE_SCALE, sprite: 0, turned: false });
+            return true;
         }
     }
     for &(dx, dy) in &offs {
@@ -973,7 +992,7 @@ fn built_feature(c: &mut Chunk, cands: &[usize], rng: &mut Pcg32, sea: f64, tier
     let ang = rng.range(0.0, std::f64::consts::TAU);
     c.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[cx, cy], [cx + rv * libm::cos(ang) as f32, cy + rv * libm::sin(ang) as f32]] });
     if kind == PlazaFeature::Planter {
-        c.objects.push(Object { kind: Kind::TreeDeciduous, variant: rng.below(8) as u8, x: cx, y: cy, rot: 0.0, scale: 0.9, sprite: 0, turned: false });
+        c.objects.push(Object { kind: Kind::TreeDeciduous, variant: rng.below(8) as u8, x: cx, y: cy, rot: 0.0, scale: PLANTER_TREE_SCALE, sprite: 0, turned: false });
     }
     retier(c, sea);
     true

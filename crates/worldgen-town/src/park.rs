@@ -30,7 +30,7 @@
 //! A pure function of the park (its outline, sides, ground and key), its biome and the seed, so
 //! every chunk and tile that asks lays out the same.
 
-use crate::battle::{Kind, PlazaFeature};
+use crate::battle::{Kind, PlazaFeature, planter_crown_ft};
 use crate::core::hash::FastMap;
 use crate::core::noise::fbm;
 use crate::core::rng::{Pcg32, hash2, hash3, unit};
@@ -640,14 +640,15 @@ fn formal(p: &Park, biome: Biome, city: bool, rng: &mut Pcg32) -> ParkLayout {
         out.parterres.push(q);
     }
     // A raised planter either side of each half axis, halfway out, clear of the parterres' walks.
+    let bed = planter_bed();
     for &(e, inward) in &ends {
         let mid = lerp(c, e, 0.5);
         let side = perp(inward);
         for s in [-1.0, 1.0] {
-            let q = add(mid, mul(side, s * (0.5 * AXIS_W + 8.0)));
-            if dist(mid, c) > rr + 20.0 && clear.free(q, 6.5, inner_at) {
-                clear.disc(q, 6.5);
-                out.features.push((q, 4.5, PlazaFeature::Planter));
+            let q = add(mid, mul(side, s * (0.5 * AXIS_W + bed + 3.0)));
+            if dist(mid, c) > rr + 20.0 && clear.free(q, bed + 2.0, inner_at) {
+                clear.disc(q, bed + 2.0);
+                out.features.push((q, bed, PlazaFeature::Planter));
             }
         }
     }
@@ -660,6 +661,11 @@ const CHUNK_FT: f64 = crate::battle::SQ as f64 * crate::battle::SQUARE_FT;
 /// The squares (on the world's 5-ft grid) a prop blocks as play mode has it: a hedge every square its
 /// piece is drawn across (`battlePrep` LONG_FOOTPRINT), anything else that blocks the squares within
 /// half its footprint; only those of the chunk it stands in (the chunk holding its middle).
+/// A park planter's radius (ft; drawn 2 ft more): its bed clears its tree's crown by 2 ft all round.
+fn planter_bed() -> f64 {
+    0.5 * (planter_crown_ft() + 4.0) - 2.0
+}
+
 fn blocked_squares(pr: &(P, f32, Kind, u8, f32), out: &mut Vec<(i64, i64)>) {
     let start = out.len();
     blocked_any(pr, out);
@@ -938,10 +944,11 @@ fn parterre(q: &[P], bosquet: bool, look: Looks, rng: &mut Pcg32, clear: &mut Cl
     }
     // The middle, raised a tier.
     let room = depth(q, qc) >= 16.0;
+    let bed = planter_bed();
     let clearing = if bosquet { 16.0 } else { 10.0 };
     if room {
         match (bosquet, look.mid) {
-            (false, 0) => out.features.push((qc, 5.5, PlazaFeature::Planter)),
+            (false, 0) => out.features.push((qc, bed, PlazaFeature::Planter)),
             (_, 1) => out.features.push((qc, 3.0, PlazaFeature::Fountain)),
             (true, 2) => out.props.push((qc, along(u), Kind::Pond, 2, 1.0)),
             _ => {

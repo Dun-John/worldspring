@@ -265,6 +265,16 @@ pub fn kind_of(id: u16) -> Option<Kind> {
     KINDS.get((id as usize).checked_sub(1)?).copied().or_else(|| more().find(|m| m.1.id == id).map(|m| m.0))
 }
 
+/// The scale of the tree a planter holds (`TreeDeciduous`).
+pub const PLANTER_TREE_SCALE: f32 = 0.9;
+
+/// The crown's width across (ft) of a planter's tree: its footprint radius (squares) at the planter's
+/// scale, doubled. A planter's drawn bed must stand clear of it all round.
+#[inline]
+pub fn planter_crown_ft() -> f64 {
+    2.0 * f64::from(info(Kind::TreeDeciduous as u16).radius * PLANTER_TREE_SCALE) * crate::model::consts::SQUARE_FT
+}
+
 #[inline]
 pub fn info(kind: u16) -> &'static KindInfo {
     let i = (kind as usize).saturating_sub(1);

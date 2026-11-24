@@ -598,6 +598,43 @@ pub(super) fn across(tier: crate::t0::settle::Tier, fountain: bool) -> (f64, f64
     }
 }
 
+/// The band (ft across, drawn) of a tree planter or a market cross's plinth by tier. A planter's bed
+/// clears its tree's crown (`planter_crown_ft`) by a visible margin all round, 3 to 5.4 ft by tier;
+/// a cross's plinth stays no wider than a dais.
+pub(super) fn across_kind(tier: crate::t0::settle::Tier, kind: PlazaFeature) -> (f64, f64) {
+    use crate::t0::settle::Tier as T;
+    match kind {
+        PlazaFeature::Fountain => across(tier, true),
+        PlazaFeature::Planter => {
+            let crown = planter_crown_ft();
+            match tier {
+                T::Village => (crown + 3.0, crown + 3.6),
+                T::Town => (crown + 3.4, crown + 4.0),
+                T::City => (crown + 3.6, crown + 4.8),
+                T::Metropolis => (crown + 4.4, crown + 5.4),
+            }
+        }
+        PlazaFeature::Cross => match tier {
+            T::Village => (5.0, 6.0),
+            T::Town => (6.0, 8.0),
+            T::City => (8.0, 10.0),
+            T::Metropolis => (10.0, 12.0),
+        },
+        _ => across(tier, false),
+    }
+}
+
+/// A radius (ft) from the band of `across_kind`.
+pub(super) fn radius_in(rng: &mut Pcg32, tier: crate::t0::settle::Tier, kind: PlazaFeature) -> f64 {
+    let (a, b) = across_kind(tier, kind);
+    (0.5 * rng.range(a, b + 1e-6) - 2.0).max(0.5)
+}
+
+/// `r` (ft) held to the top of `kind`'s band.
+pub(super) fn cap_radius(tier: crate::t0::settle::Tier, kind: PlazaFeature, r: f64) -> f64 {
+    r.min(0.5 * across_kind(tier, kind).1 - 2.0).max(0.5)
+}
+
 /// A radius (ft) from the band of `across`.
 fn radius_for(rng: &mut Pcg32, tier: crate::t0::settle::Tier, fountain: bool) -> f64 {
     let (a, b) = across(tier, fountain);
@@ -1043,9 +1080,9 @@ pub(super) fn plaza_features(
             let (kind, r) = if roll < 0.35 {
                 (PlazaFeature::Fountain, radius_for(&mut rng, tier, true))
             } else if roll < 0.65 {
-                (PlazaFeature::Planter, rng.range(6.0, 9.0))
+                (PlazaFeature::Planter, radius_in(&mut rng, tier, PlazaFeature::Planter))
             } else if roll < 0.85 {
-                (PlazaFeature::Cross, rng.range(5.0, 7.0))
+                (PlazaFeature::Cross, radius_in(&mut rng, tier, PlazaFeature::Cross))
             } else {
                 (PlazaFeature::Dais, radius_for(&mut rng, tier, false))
             };
@@ -1086,7 +1123,7 @@ pub(super) fn plaza_features(
         ds.sort_by(|a, b| (a - reach * frac).abs().total_cmp(&(b - reach * frac).abs()));
         ds
     };
-    let (r_tree, r_fountain, r_cross, r_dais) = (rng.range(6.0, 8.0), radius_for(&mut rng, tier, true), rng.range(5.0, 6.5), radius_for(&mut rng, tier, false));
+    let (r_tree, r_fountain, r_cross, r_dais) = (radius_in(&mut rng, tier, PlazaFeature::Planter), radius_for(&mut rng, tier, true), radius_in(&mut rng, tier, PlazaFeature::Cross), radius_for(&mut rng, tier, false));
     let minor = if rng.next_f64() < 0.6 { (PlazaFeature::Cross, r_cross) } else { (PlazaFeature::Dais, r_dais) };
     let style = rng.below(3);
     // (A civic square has its cross for a landmark (`main_cross`) and trees by its edges, no more.)

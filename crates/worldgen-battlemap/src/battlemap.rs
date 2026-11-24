@@ -813,6 +813,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 axis: lay.axis,
             });
             for &(c, r, kind) in &lay.features {
+                // (Held to the settlement's band for its kind, as its squares' are.)
+                let r = plaza::cap_radius(l.tier, kind, r);
                 features.push((c, r, kind, unit(hash3(seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 0x9a5)) * std::f64::consts::TAU));
             }
             park_props.extend(lay.props.iter().copied());
@@ -2155,7 +2157,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         chunk.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[x as f32, y as f32], rim] });
         let inside = x >= 0.0 && y >= 0.0 && x < SQ as f64 && y < SQ as f64;
         if kind == PlazaFeature::Planter && inside {
-            chunk.objects.push(Object { kind: Kind::TreeDeciduous, variant: (hash2(seed, x as i64, y as i64) >> 20) as u8 & 7, x: x as f32, y: y as f32, rot: 0.0, scale: 0.9, sprite: 0, turned: false });
+            chunk.objects.push(Object { kind: Kind::TreeDeciduous, variant: (hash2(seed, x as i64, y as i64) >> 20) as u8 & 7, x: x as f32, y: y as f32, rot: 0.0, scale: PLANTER_TREE_SCALE, sprite: 0, turned: false });
         }
     }
     // The market: each stall in the chunk holding its centre, on open plaza ground.
