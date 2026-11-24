@@ -1330,9 +1330,10 @@ const HALF_TURN = new Map([
   ['hitching rail', -135],
 ]);
 /** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
- * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
- * pools and hazards never turn. */
-export const TURNABLE = new Set(['barrels', 'crates', 'headstone', 'statue on a plinth', 'haystack', 'rock pile', 'well']);
+ * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`), and the uprights drawn straight
+ * down (the notice board to the standing stone). Trees, plants, pools and hazards never turn; nor does the market
+ * cross, whose cross's shadow is drawn into it. */
+export const TURNABLE = new Set(['barrels', 'crates', 'headstone', 'statue on a plinth', 'haystack', 'rock pile', 'well', 'notice board', 'signpost', 'stocks', 'lamp post', 'topiary', 'garden statue', 'standing stone']);
 
 /** Whether a built-in kind is drawn at its `rot`: some always, others only when turned by hand.
  * (Uploaded sprites always are.) */
@@ -1351,17 +1352,16 @@ export function drawnRotation(inf: KindInfo | undefined, turned: boolean, rot: n
   const lo = (from * Math.PI) / 180;
   return ((((rot - lo) % Math.PI) + Math.PI) % Math.PI) + lo;
 }
-/** Sparse plants (blades or fronds with ground between them) and thin upright things (posts drawn from a
- * high angle): a smaller, fainter shadow than a solid crown, as [size, strength] factors. */
+/** Sparse plants (blades or fronds with ground between them): a smaller, fainter shadow than a solid crown; and
+ * things drawn smaller than their catalog footprint (a statue's plinth, a clipped topiary): a smaller one; as
+ * [size, strength] factors. */
 export const SPARSE = new Map([
   ['tall grass', [0.75, 0.45]],
   ['reeds', [0.75, 0.45]],
   ['palm', [0.85, 0.6]],
-  ['signpost', [0.6, 0.55]],
-  ['lamp post', [0.55, 0.55]],
-  ['notice board', [0.85, 0.7]],
-  ['topiary', [0.75, 0.8]],
-  ['garden statue', [0.85, 0.8]],
+  ['topiary', [0.68, 0.9]],
+  ['garden statue', [0.45, 0.9]],
+  ['statue on a plinth', [0.4, 1]],
   ['footbridge', [1, 1.3]],
 ]);
 /** Long things: a shadow drawn out along them, [length, width] in squares at scale 1, and how much further
@@ -1375,6 +1375,16 @@ export const LONG_SHADOW = new Map([
   ['vegetable row', [1.9, 0.7, 0.5]],
   ['horse', [1.5, 0.55, 1]],
   ['hitching rail', [2.0, 0.3, 0.6]],
+  ['headstone', [0.42, 0.13, 0.5]],
+  ['notice board', [1.0, 0.2, 1.5]],
+  ['stocks', [0.95, 0.5, 0.6]],
+  ['standing stone', [0.64, 0.28, 1.3]],
+]);
+/** Tall thin posts (seen straight down, only their tops show): a long thin shadow cast out to the SE from their
+ * foot whatever their turn, [length, width] in squares at scale 1. */
+export const POST_SHADOW = new Map([
+  ['signpost', [1.2, 0.16]],
+  ['lamp post', [1.3, 0.18]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
 export const OWN_SHADOW = new Set(['market cross', 'water wheel', 'kurgan', 'rowboat', 'fishing boat', 'dock crane', 'net rack']);
@@ -1390,7 +1400,7 @@ export function isStanding(inf: KindInfo): boolean {
 
 /** A standing thing's drop shadow (`atlas.shadow`, 128 px across), in atlas px about its centre at `scale`:
  * offset to the SE and sized by its height (a stone 1 ft high casts a small faint one hard by it, a 5-ft
- * crate stack a full one), drawn out along long things, from the foot of upright ones. `builtin`: a
+ * crate stack a full one), drawn out along long things, long and thin from posts. `builtin`: a
  * catalog kind (its own rules by name and id), else an uploaded sprite. */
 export function dropShadowOf(inf: { name?: string; radius: number; height_ft: number }, kind: number, builtin: boolean, scale: number, rotation: number) {
   const h = inf.height_ft;
@@ -1402,11 +1412,19 @@ export function dropShadowOf(inf: { name?: string; radius: number; height_ft: nu
   const short = h < 5;
   const grow = short ? 0.85 + 0.0375 * h : 1;
   const r = inf.radius * PX * scale * size * grow;
+  // (From the standing part when it is off the middle, turned with the frame.)
   const foot = builtin ? (UPRIGHT_FOOT[kind] ?? 0) * scale : 0;
+  const [fx, fy] = [-Math.sin(rotation) * foot, Math.cos(rotation) * foot];
+  const post = POST_SHADOW.get(name);
+  if (post) {
+    const len = post[0] * PX * scale;
+    const d = len * 0.4 * Math.SQRT1_2;
+    return { dx: d, dy: d, sx: len / 128, sy: (post[1] * PX * scale) / 128, rot: Math.PI / 4, alpha: 0.5 };
+  }
   const off = Math.min(1.3, 0.15 + h / 45) * PX * 0.7 * (long ? long[2] : 1) * (short ? 1.8 : 1);
   return {
-    dx: off,
-    dy: foot + off,
+    dx: fx + off,
+    dy: fy + off,
     sx: long ? (long[0] * PX * scale) / 128 : (r * 2.1) / 128,
     sy: long ? (long[1] * PX * scale) / 128 : (r * 2.1) / 128,
     rot: long ? rotation : 0,

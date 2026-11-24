@@ -3,8 +3,8 @@ import { FT, INK, IRON, WOOD, blob, oval, shade } from './common';
 import { LINE, OUT } from './farm';
 import { BARK, STONE, moss, stone } from './stones';
 import { endGrain } from './wood';
-import { footGrass, upright } from './street';
-import { UPRIGHT_FOOT } from '../atlas';
+import { footGrass, trodden } from './street';
+import { bust } from './yard';
 
 /** An anvil from above on a stump before a smithy, along x, its horn to +x (to -x in v3): dark iron,
  * its four feet showing past a flat face worn bright, a hardy hole at the heel. A small wooden quench
@@ -87,55 +87,71 @@ export function cairn(g: Graphics, r0: number, rnd: () => number, v: number) {
   if (v === 1) moss(g, -r * 0.42, -r * 0.4, r * 0.18, rnd);
 }
 
-/** Standing stone, from a high angle like the headstone (upright things only read from the side): a tall rough
- * slab, unworked, narrowing to a broken top (its top showing behind), lit down its left side, shaded on the
- * right, a crack or two and pale lichen; grass and a fallen chip at its foot; one leaning. */
+/** A rough standing stone's top seen straight down at (x, y): an irregular lozenge `rx` by `ry` px turned by
+ * `rot`, its broken top lumpy, lit on the NW with a pale ridge along its crest, a crescent of shade to the SE,
+ * inked (`ink` px). Returns its outline. */
+export function stoneTop(g: Graphics, x: number, y: number, rx: number, ry: number, rot: number, tones: readonly number[], rnd: () => number, ink = OUT): number[] {
+  const [c, s] = [Math.cos(rot), Math.sin(rot)];
+  const out: number[] = [];
+  const n = 14;
+  for (let i = 0; i < n; i++) {
+    const t = (i / n) * Math.PI * 2;
+    // (Pointed toward its ends, a lozenge more than an oval; a notch or two where the top broke.)
+    const ends = Math.abs(Math.cos(t)) ** 3;
+    const k = (0.86 + 0.22 * rnd()) * (1 - 0.18 * (1 - ends) * (i % 3 === 1 ? 1 : 0));
+    const [u, w] = [Math.cos(t) * rx * k, Math.sin(t) * ry * k * (1 - 0.25 * ends)];
+    out.push(x + u * c - w * s, y + u * s + w * c);
+  }
+  const at = (f: number, dx: number, dy: number) => out.map((p, i) => (i % 2 ? y + (p - y) * f + dy : x + (p - x) * f + dx));
+  g.poly(out).fill(tones[0]);
+  g.poly(at(0.86, -ry * 0.12, -ry * 0.16)).fill(tones[1]);
+  // The crest: a pale ridge along its length, toward the light.
+  g.poly(oval(x - ry * 0.18, y - ry * 0.22, rx * 0.6, ry * 0.22, rot, 12)).fill({ color: tones[2], alpha: 0.85 });
+  g.poly(oval(x - ry * 0.3, y - ry * 0.34, rx * 0.28, ry * 0.12, rot, 10)).fill({ color: tones[3], alpha: 0.7 });
+  g.poly(out).stroke({ width: ink, color: INK, join: 'round' });
+  return out;
+}
+
+/** Standing stone, straight down: a tall rough slab's top, a rounded lozenge some 2.5-3 ft long and 1.5 across
+ * (its height told by its long shadow), pale and weathered, one lichen patch and a crack; a ring of bare trodden
+ * earth round its foot with a few packing stones showing, grass at the edge; moss on one (v1), a shorter, rounder
+ * one (v2), and one whose top broke off, the broken piece lying flat in the grass beside it (v3). */
 export function standingStone(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
-  // (A cooler, darker grey than the headstones' stone.)
-  const tones = [STONE[1], STONE[3], STONE[0], STONE[2]][v].map((c) => shade(c, 0.78));
-  // (Drawn well over life size, so it stands taller than the headstones do.)
-  const S = 1.6;
-  const P0 = upright(UPRIGHT_FOOT[101]);
-  const P = (x: number, d: number, h: number) => P0(x * S, d * S, h * S);
-  const H = [8, 9.2, 7, 6.4][v];
-  const lean = v === 3 ? 0.12 : 0;
-  // The outline across its front (x, h), from the left foot up and over the top to the right foot.
-  const j = () => (rnd() - 0.5) * 0.25;
-  const out: [number, number][] = [
-    [-1.5, 0], [-1.6 + j(), H * 0.3], [-1.35 + j(), H * 0.62], [-1.0 + j(), H * 0.9], [-0.45, H], [0.25 + j(), H - 0.15], [0.75, H - 0.55 + j()],
-    [1.05 + j(), H * 0.8], [1.3 + j(), H * 0.5], [1.5 + j(), H * 0.2], [1.45, 0],
-  ];
-  const face = (d: number) => out.flatMap(([x, h]) => P(x + lean * h, d, h));
-  const ink = { width: 2.2, color: INK, join: 'round' as const };
-  // Its shadow cast to the lower right across the grass.
-  {
-    const [b0, b1] = [P(-1.5, 0.4, 0), P(1.45, 0.4, 0)];
-    const [dx, dy] = [H * S * FT * 0.3, H * S * FT * 0.12];
-    g.poly([b0[0], b0[1], b1[0], b1[1], b1[0] + dx, b1[1] + dy, b0[0] + dx * 0.9 + 6, b0[1] + dy + 4]).fill({ color: 0x1c1a14, alpha: 0.36 });
+  const tones = [STONE[1], STONE[3], STONE[0], STONE[2]][v].map((c) => shade(c, 0.97));
+  const [rx, ry] = [[1.45, 0.76], [1.5, 0.78], [1.25, 0.8], [1.3, 0.72]][v].map((f) => f * FT);
+  const rot = (rnd() - 0.5) * 0.5;
+  // The trodden ring, then the packing stones round the foot, peeping out past the top.
+  trodden(g, 0, 0.1 * FT, rx + 0.55 * FT, ry + 0.6 * FT, rnd);
+  footGrass(g, -rx - 0.6 * FT, 0.6 * FT, 5, rnd);
+  footGrass(g, rx * 0.7, ry + 0.7 * FT, 4.5, rnd);
+  footGrass(g, rx + 0.3 * FT, -ry - 0.2 * FT, 4, rnd);
+  const [c, s] = [Math.cos(rot), Math.sin(rot)];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + 0.5 + rnd() * 0.6;
+    const [u, w] = [Math.cos(a) * (rx + 0.32 * FT), Math.sin(a) * (ry + 0.3 * FT)];
+    stone(g, u * c - w * s, u * s + w * c, 0.17 * FT + rnd() * 1.2, STONE[(i + v) % 4], rnd, 7);
   }
-  for (const x of [-1.7, 1.6]) footGrass(g, x * S * FT, P(0, 0.2, 0)[1], 6, rnd);
-  // Its top, seen from above behind the front face, then the face.
-  g.poly(face(-0.7)).fill(shade(tones[1], 1.05)).stroke(ink);
-  g.poly(face(0)).fill(tones[1]).stroke(ink);
-  // Lit down the left, in shade on the right.
-  // (Points across the front as (x, fraction of the height), leaning with it.)
-  const band = (pts: [number, number][]) => pts.flatMap(([x, f]) => P(x + lean * H * f, 0, H * f));
-  g.poly(band([[-1.5, 0.01], [-1.6, 0.3], [-1.3, 0.62], [-0.95, 0.88], [-0.6, 0.82], [-0.95, 0.4], [-1.05, 0.02]])).fill({ color: tones[3], alpha: 0.6 });
-  g.poly(band([[0.6, 0.72], [1.05, 0.8], [1.3, 0.5], [1.45, 0.005], [0.4, 0.005], [0.75, 0.35]])).fill({ color: tones[0], alpha: 0.5 });
-  // A crack down from the top, a fainter one across.
-  const c0 = 0.1 + (rnd() - 0.5) * 0.5;
-  g.moveTo(...P(c0 + lean * H, 0, H - 0.2)).lineTo(...P(c0 + 0.3 + lean * H * 0.75, 0, H * 0.75)).lineTo(...P(c0 + lean * H * 0.55, 0, H * 0.55));
-  g.stroke({ width: 1.8, color: shade(tones[0], 0.7), cap: 'round', join: 'round' });
-  g.moveTo(...P(-1.1 + lean * H * 0.3, 0, H * 0.3)).lineTo(...P(-0.3 + lean * H * 0.33, 0, H * 0.34)).stroke({ width: 1.2, color: shade(tones[0], 0.8), cap: 'round' });
-  // Lichen: a few pale crusts.
-  for (let i = 0; i < 3; i++) {
-    const [x, h] = [-0.8 + 1.2 * rnd(), H * (0.25 + 0.55 * rnd())];
-    const [px, py] = P(x + lean * h, 0, h);
-    g.poly(oval(px, py, 3 + rnd() * 2.5, 2 + rnd() * 1.5, rnd(), 9)).fill({ color: i === 0 ? 0xc8c48a : 0xb4b88e, alpha: 0.85 });
+  if (v === 3) {
+    // The broken-off top lying flat to the SW: a long low slab, grass grown up round it, its old crest lichened.
+    const [fx, fy] = [-0.7 * FT, 1.65 * FT];
+    const fr = 0.25;
+    stoneTop(g, fx, fy, 1.0 * FT, 0.4 * FT, fr, tones.map((t) => shade(t, 0.94)), rnd, LINE);
+    footGrass(g, fx + 0.9 * FT, fy + 0.2 * FT, 4, rnd);
+    g.poly(oval(fx - 0.3 * FT, fy - 0.05 * FT, 3, 2, 0.3, 9)).fill({ color: 0xc8c48a, alpha: 0.85 });
   }
-  if (v === 1) moss(g, P(-0.9, 0, 0.6)[0], P(-0.9, 0, 0.6)[1], 6, rnd);
-  footGrass(g, P(0.2, 0.2, 0)[0], P(0.2, 0.2, 0)[1] + 1, 4.5, rnd);
+  stoneTop(g, 0, 0, rx, ry, rot, tones, rnd);
+  // A crack across it, one lichen patch, moss on the north of one; a broken top's rough scar.
+  const P = (u: number, w: number): [number, number] => [(u * c - w * s) * rx, (u * s + w * c) * ry];
+  const c0 = 0.15 + (rnd() - 0.5) * 0.3;
+  g.moveTo(...P(c0, -0.75)).lineTo(...P(c0 + 0.1, -0.2)).lineTo(...P(c0 - 0.04, 0.3)).stroke({ width: LINE * 0.8, color: shade(tones[0], 0.7), cap: 'round', join: 'round' });
+  g.poly(oval(...P(-0.45, 0.25), 0.3 * FT, 0.2 * FT, rot + 0.3, 10)).fill({ color: 0xc2c288, alpha: 0.9 });
+  g.poly(oval(...P(-0.4, 0.22), 0.14 * FT, 0.09 * FT, rot, 8)).fill({ color: 0xdedcaa, alpha: 0.8 });
+  if (v === 1) moss(g, ...P(0.35, -0.45), 0.24 * FT, rnd);
+  if (v === 3) {
+    for (const [u, w] of [[-0.1, -0.3], [0.2, 0.1], [0.45, -0.15]]) g.moveTo(...P(u, w)).lineTo(...P(u + 0.12, w + 0.18));
+    g.stroke({ width: LINE * 0.75, color: shade(tones[0], 0.75), cap: 'round' });
+  }
 }
 
 /** Yew from above: a dark, dense evergreen, its crown rounded to a blunt cone: whorls of many short, soft
@@ -240,8 +256,8 @@ export function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
 /** Kurgan: a broad burial mound under grass, drawn at its catalog size (bigger or smaller by its scale): a
  * soft rounded rise on its own shadow, a darker band of turf round its foot, in shade on its south-east side
  * and lit toward the north-west, its crown paler, tufts of grass, a few stones at its foot; on its top a
- * standing stone (a slab laid flat on one, a stone figure on another), a worn path up one, a kerb of stones
- * right round the last. */
+ * standing stone seen straight down (a slab laid flat on one, a stone figure's head and shoulders on another),
+ * a worn path up one, a kerb of stones right round the last. */
 export function kurgan(g: Graphics, r: number, rnd: () => number, v: number) {
   const grass = [
     [0x4a6a2e, 0x668a40, 0x82a452, 0xa0bc6a],
@@ -254,8 +270,8 @@ export function kurgan(g: Graphics, r: number, rnd: () => number, v: number) {
   // Its shadow, then the darker turf at its foot, then the shaded side: the body drawn again a little
   // smaller and toward the light.
   g.poly(rim.map((p, i) => p * 0.98 + R * (i % 2 ? 0.07 : 0.08))).fill({ color: 0x1c1a14, alpha: 0.28 });
-  g.poly(rim).fill(shade(grass[0], 0.5)).stroke({ width: 3, color: shade(grass[0], 0.36), join: 'round' });
-  g.poly(rim.map((p) => p * 0.88 - R * 0.02)).fill(grass[0]);
+  g.poly(rim).fill(shade(grass[0], 0.78)).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(rim.map((p) => p * 0.94 - R * 0.02)).fill(grass[0]);
   g.poly(rim.map((p) => p * 0.8 - R * 0.07)).fill(grass[1]);
   g.poly(rim.map((p) => p * 0.66 - R * 0.12)).fill(grass[2]);
   g.poly(rim.map((p) => p * 0.4 - R * 0.17)).fill({ color: grass[3], alpha: 0.8 });
@@ -287,20 +303,15 @@ export function kurgan(g: Graphics, r: number, rnd: () => number, v: number) {
     g.roundRect(x - 12 * k, y - 7 * k, 24 * k, 4 * k, 2 * k).fill(STONE[1][2]);
     g.poly(at([-3, -8, 1, -1, -1, 8]), false).stroke({ width: 1.4 * k, color: STONE[1][0], cap: 'round' });
   } else if (v !== 1) {
-    // A standing stone on its crown, from a high angle: a rough upright, its top showing, its shadow behind.
+    // A standing stone on its crown, its top seen straight down, its shadow cast long to the SE.
     const t = STONE[v === 3 ? 3 : 0];
-    g.ellipse(x + 8 * k, y + 3 * k, 15 * k, 6 * k).fill({ color: 0x1d2a12, alpha: 0.32 });
-    g.poly(at([-6, 2, -7, -20, -2, -26, 5, -24, 7, 2])).fill(t[1]).stroke({ width: 2 * k, color: INK, join: 'round' });
-    g.poly(at([-7, -20, -2, -26, 5, -24, 1, -19])).fill(t[2]).stroke({ width: 1.4 * k, color: INK, join: 'round' });
-    g.poly(at([-4, -14, -4, -2]), false).stroke({ width: 1.6 * k, color: t[2], alpha: 0.7, cap: 'round' });
+    g.poly(oval(x + 11 * k, y + 11 * k, 16 * k, 5.5 * k, Math.PI / 4, 16)).fill({ color: 0x1d2a12, alpha: 0.32 });
+    stoneTop(g, x, y, 9 * k, 4.8 * k, 0.3, t, rnd, LINE * 1.2);
   }
   if (v === 1) {
-    // A stone figure on its crown, from a high angle: a worn upright block with a face.
-    g.ellipse(x + 6 * k, y + 4 * k, 16 * k, 7 * k).fill({ color: 0x1d2a12, alpha: 0.3 });
-    g.roundRect(x - 8 * k, y - 28 * k, 16 * k, 30 * k, 6 * k).fill(STONE[2][1]).stroke({ width: 2 * k, color: INK });
-    g.roundRect(x - 8 * k, y - 32 * k, 16 * k, 9 * k, 4 * k).fill(STONE[2][2]).stroke({ width: 1.6 * k, color: INK });
-    for (const [a, b, c] of [[-4, -1.5, -17], [1.5, 4, -17], [-4, 4, -6]]) g.moveTo(x + a * k, y + c * k).lineTo(x + b * k, y + c * k);
-    g.stroke({ width: 1.6 * k, color: STONE[2][0], cap: 'round' });
+    // A stone figure on its crown, straight down: a worn head and shoulders, its shadow cast to the SE.
+    g.poly(oval(x + 16 * k, y + 16 * k, 22 * k, 9 * k, Math.PI / 4, 16)).fill({ color: 0x1d2a12, alpha: 0.3 });
+    bust(g, x, y, 2.4, Math.PI / 2 + 0.25, STONE[2], rnd);
   }
 }
 

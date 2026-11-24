@@ -2,11 +2,11 @@ import { Graphics } from 'pixi.js';
 import { PX } from '../scale';
 import { FT, INK, IRON, WOOD, blob, oval, shade } from './common';
 import { leaf, lit } from './plants';
-import { footGrass, inked, ngon, quad4, rod, upright } from './street';
-import { UPRIGHT_FOOT } from '../atlas';
+import { blockTop, footGrass, inked, ngon, rod } from './street';
+import { LINE, OUT } from '../pen';
 import { BARK, STONE, moss, stone } from './stones';
 import { bench, clippedBall, flower5, plank } from './garden';
-import { bevel } from './yard';
+import { bevel, bust } from './yard';
 import { rimBand } from './water';
 import { stripedCanopy } from './camp';
 import { endGrain } from './wood';
@@ -304,139 +304,101 @@ export function bandstand(g: Graphics, r: number, rnd: () => number, v: number) 
   }
 }
 
-/** A square block from a high angle (`P`), `w` ft each side of its middle, from `h0` to `h1` ft up: its
- * front face and its top, inked. Turned corner-on (`diamond`): two faces, the lit west one and the shaded east. */
-function block(g: Graphics, P: (x: number, d: number, h: number) => [number, number], w: number, h0: number, h1: number, tones: readonly number[], diamond = false) {
-  const ink = { width: 2, color: INK, join: 'round' as const };
-  if (diamond) {
-    g.poly(quad4(P(-w, 0, h0), P(0, w, h0), P(0, w, h1), P(-w, 0, h1))).fill(tones[1]).stroke(ink);
-    g.poly(quad4(P(0, w, h0), P(w, 0, h0), P(w, 0, h1), P(0, w, h1))).fill(tones[0]).stroke(ink);
-    g.poly(quad4(P(-w, 0, h1), P(0, -w, h1), P(w, 0, h1), P(0, w, h1))).fill(tones[2]).stroke(ink);
-    return;
-  }
-  g.poly(quad4(P(-w, w, h0), P(w, w, h0), P(w, w, h1), P(-w, w, h1))).fill(tones[1]).stroke(ink);
-  g.poly(quad4(P(-w, -w, h1), P(w, -w, h1), P(w, w, h1), P(-w, w, h1))).fill(tones[2]).stroke(ink);
-}
-
-/** Garden statue, from a high angle (a figure only reads from the side) on a moulded pedestal: a robed
- * figure in marble holding up a wreath (v0); a stone urn spilling flowers and ivy (v1); a warrior in bronze
- * gone green, spear and round shield (v2); an obelisk on stepped plinths (v3). */
+/** Garden statue, straight down, on a moulded pedestal about 2.5 ft square (its base and the cornice over the
+ * die): a robed figure in marble, head and shoulders, holding a laurel wreath up before it (v0); a stone urn, its
+ * scrolled handles out to the sides, its mouth full of flowers and ivy spilling over the rim (v1); a warrior in
+ * bronze gone green, a crested helm, a round shield on the left arm, a spear held out past the pedestal (v2); an
+ * obelisk on stepped plinths, its tapering faces and pyramid point seen from above (v3). */
 export function gardenStatue(g: Graphics, r: number, rnd: () => number, v: number) {
-  // A little over life size, as statues set up to be seen are.
-  const P0 = upright(UPRIGHT_FOOT[60]);
-  const K = 1.3;
-  const P = (x: number, d: number, h: number) => P0(x * K, d * K, h * K);
-  const st = STONE[0];
-  footGrass(g, ...P(-1.5, 0.9, 0), r * 0.2, rnd);
-  footGrass(g, ...P(1.4, 1.2, 0), r * 0.16, rnd);
+  void r;
+  const st = STONE[0].map((c) => shade(c, 1.1));
+  footGrass(g, -1.5 * FT, 1.1 * FT, 5, rnd);
+  footGrass(g, 1.45 * FT, 1.35 * FT, 4, rnd);
   if (v === 3) {
-    block(g, P, 1.55, 0, 0.6, st, true);
-    block(g, P, 1.15, 0.6, 1.3, st.map((c) => shade(c, 1.05)), true);
-    // The shaft, corner-on and tapering: the lit west face, the shaded east one, carved signs down the
-    // west; then the pyramid on top, all four faces seen from above.
-    const [s0, s1, h0, h1, apex] = [0.72, 0.42, 1.3, 9.4, 10.6];
-    const ink = { width: 2, color: INK, join: 'round' as const };
-    g.poly(quad4(P(-s0, 0, h0), P(0, s0, h0), P(0, s1, h1), P(-s1, 0, h1))).fill(st[2]).stroke(ink);
-    g.poly(quad4(P(0, s0, h0), P(s0, 0, h0), P(s1, 0, h1), P(0, s1, h1))).fill(st[1]).stroke(ink);
-    for (let k = 0; k < 6; k++) {
-      const h = h0 + 1 + k * 1.2;
-      const f = 1 - (h - h0) / (h1 - h0);
-      const s = s1 + (s0 - s1) * f;
-      g.moveTo(...P(-s * 0.62, s * 0.38, h)).lineTo(...P(-s * 0.38, s * 0.62, h - 0.15));
+    blockTop(g, -1.35 * FT, -1.35 * FT, 1.35 * FT, 1.35 * FT, st, rnd, OUT);
+    blockTop(g, -1.0 * FT, -1.0 * FT, 1.0 * FT, 1.0 * FT, st.map((c) => shade(c, 1.05)), rnd);
+    // The shaft tapering up from 0.65 ft to 0.38 ft each side, each face toward the light paler; the point.
+    const [s0, s1] = [0.7 * FT, 0.46 * FT];
+    const [ax, ay] = [-1.2, -1.2];
+    const ring = (s: number) => [-s, -s, s, -s, s, s, -s, s];
+    const [o, i] = [ring(s0), ring(s1)];
+    // (North and west toward the light, south and east in shade, the point's facets the plainest split.)
+    const face = [st[2], shade(st[0], 0.95), shade(st[0], 0.85), st[1]];
+    const point = [shade(st[3], 1.04), shade(st[0], 0.9), shade(st[0], 0.78), st[2]];
+    for (let k = 0; k < 4; k++) {
+      const [a, b] = [k * 2, ((k + 1) % 4) * 2];
+      g.poly([o[a], o[a + 1], o[b], o[b + 1], i[b], i[b + 1], i[a], i[a + 1]]).fill(face[k]);
+      g.poly([i[a], i[a + 1], i[b], i[b + 1], ax, ay]).fill(point[k]);
     }
-    g.stroke({ width: 1.6, color: st[0], cap: 'round' });
-    const top = P(0, 0, apex);
-    const faces: [[number, number], [number, number], number][] = [
-      [P(-s1, 0, h1), P(0, -s1, h1), st[3]],
-      [P(0, -s1, h1), P(s1, 0, h1), st[2]],
-      [P(-s1, 0, h1), P(0, s1, h1), st[2]],
-      [P(0, s1, h1), P(s1, 0, h1), st[0]],
-    ];
-    for (const [a, b, c] of faces) g.poly([...a, ...b, ...top]).fill(c).stroke(ink);
-    moss(g, ...P(-1.1, 0.4, 0.6), 0.3 * FT * K, rnd);
+    for (let k = 0; k < 4; k++) g.moveTo(o[k * 2], o[k * 2 + 1]).lineTo(i[k * 2], i[k * 2 + 1]).lineTo(ax, ay);
+    g.stroke({ width: 1.2, color: INK, join: 'round' });
+    g.poly(i).stroke({ width: 1.4, color: INK, join: 'round' });
+    g.poly(o).stroke({ width: LINE, color: INK, join: 'round' });
+    moss(g, -1.15 * FT, 0.6 * FT, 0.28 * FT, rnd);
     return;
   }
-  // The pedestal: a base, the die, a cornice.
-  block(g, P, 1.3, 0, 0.5, st);
-  block(g, P, 1.0, 0.5, 2.7, st.map((c) => shade(c, 1.04)));
-  g.poly(quad4(P(-0.7, 1.0, 1.0), P(0.7, 1.0, 1.0), P(0.7, 1.0, 2.2), P(-0.7, 1.0, 2.2))).stroke({ width: 1.2, color: st[0] });
-  block(g, P, 1.22, 2.7, 3.1, st.map((c) => shade(c, 1.08)));
+  // The pedestal: its base, the cornice over the die.
+  blockTop(g, -1.25 * FT, -1.25 * FT, 1.25 * FT, 1.25 * FT, st, rnd, OUT);
+  blockTop(g, -1.02 * FT, -1.02 * FT, 1.02 * FT, 1.02 * FT, st.map((c) => shade(c, 1.07)), rnd);
   if (v === 1) {
-    // The urn: a profile turned round its axis (foot, stem, swelling body, neck, lip), handles, the earth
-    // in its mouth and the flowers and ivy spilling over.
-    const prof: [number, number][] = [[0.5, 3.1], [0.5, 3.35], [0.22, 3.55], [0.22, 3.85], [0.72, 4.3], [0.92, 4.9], [0.8, 5.5], [0.55, 5.85], [0.84, 6.1]];
-    const out = [...prof.map(([x, h]) => P(x, 0, h)), ...prof.reverse().map(([x, h]) => P(-x, 0, h))].flat();
-    const tones = st.map((c) => shade(c, 1.1));
+    // The urn: two scrolled handles out to the sides, its belly showing past the lip on the shaded side, the
+    // round lip lit on the NW, a dark mouth inside it, a few flowers and one trail of ivy over the rim.
+    const tones = st.map((c) => shade(c, 1.08));
     for (const side of [-1, 1]) {
-      inked(g, () => g.moveTo(...P(side * 0.85, 0, 5.3)).quadraticCurveTo(...P(side * 1.35, 0, 5.4), ...P(side * 0.8, 0, 4.6)), 2.5, tones[1]);
+      inked(g, () => g.moveTo(side * 0.7 * FT, -0.28 * FT).quadraticCurveTo(side * 1.2 * FT, -0.32 * FT, side * 1.1 * FT, 0.12 * FT).quadraticCurveTo(side * 1.0 * FT, 0.38 * FT, side * 0.74 * FT, 0.26 * FT), 3, tones[2]);
     }
-    g.poly(out).fill(tones[1]).stroke({ width: 2, color: INK, join: 'round' });
-    g.poly([...P(-0.6, 0, 4.4), ...P(-0.8, 0, 4.9), ...P(-0.7, 0, 5.4), ...P(-0.35, 0, 5.4), ...P(-0.4, 0, 4.6)]).fill({ color: tones[2], alpha: 0.8 });
-    g.poly([...P(0.4, 0, 4.5), ...P(0.85, 0, 4.9), ...P(0.75, 0, 5.4), ...P(0.5, 0, 5.4)]).fill({ color: tones[0], alpha: 0.5 });
-    g.moveTo(...P(-0.85, 0, 4.9)).lineTo(...P(0.85, 0, 4.9)).stroke({ width: 1.2, color: tones[0] });
-    const rim = (k: number) => Array.from({ length: 16 }, (_, i) => P(Math.cos((i / 16) * Math.PI * 2) * 0.84 * k, Math.sin((i / 16) * Math.PI * 2) * 0.84 * k, 6.1)).flat();
-    g.poly(rim(1)).fill(tones[2]).stroke({ width: 1.8, color: INK, join: 'round' });
-    g.poly(rim(0.78)).fill(0x3e2c1e);
-    for (const [x, d] of [
-      [-0.45, -0.2],
-      [0.35, -0.3],
-      [0, 0.25],
-      [0.5, 0.2],
-    ]) {
-      clippedBall(g, ...P(x, d, 6.4), 0.42 * FT * K, [0x2e4a24, 0x46682e, 0x6a8c3e], rnd);
+    g.circle(1.2, 1.4, 0.9 * FT).fill(tones[0]).stroke({ width: LINE, color: INK });
+    g.circle(0, 0, 0.8 * FT).fill(tones[1]).stroke({ width: LINE, color: INK });
+    g.poly(oval(-0.12 * FT, -0.14 * FT, 0.62 * FT, 0.48 * FT, -0.7, 16)).fill({ color: tones[2], alpha: 0.9 });
+    g.circle(0.4, 0.4, 0.55 * FT).fill(0x2a1e14).stroke({ width: LINE * 0.75, color: INK });
+    g.poly(oval(0.25 * FT, 0.22 * FT, 0.2 * FT, 0.12 * FT, 0.7, 10)).fill({ color: 0x4a3626, alpha: 0.8 });
+    clippedBall(g, -0.16 * FT, -0.12 * FT, 0.26 * FT, [0x2e4a24, 0x46682e, 0x6a8c3e], rnd);
+    for (let k = 0; k < 3; k++) {
+      const d = (0.7 + k * 0.18) * FT;
+      leaf(g, Math.cos(2.2 + k * 0.08) * d, Math.sin(2.2 + k * 0.08) * d, 2.2 + (rnd() - 0.5) * 0.8, 0.26 * FT, 2.2, k % 2 ? 0x46682e : 0x5a7e36);
     }
-    for (const [x, h] of [
-      [-0.75, 5.6],
-      [0.8, 5.2],
-    ]) {
-      for (let k = 0; k < 3; k++) leaf(g, ...P(x + (rnd() - 0.5) * 0.3, 0.3, h - k * 0.5), Math.PI / 2 + (rnd() - 0.5) * 0.8, 0.3 * FT * K, 2.2, 0x46682e);
-    }
-    for (let k = 0; k < 4; k++) flower5(g, ...P(-0.5 + k * 0.35, (k % 2) * 0.25 - 0.1, 6.7), 4, k % 2 ? 0xc8323a : 0xe88aa0, 0xf2c94c, rnd());
+    for (let k = 0; k < 2; k++) flower5(g, (-0.05 + k * 0.28) * FT, (k * 0.22 - 0.2) * FT, 3.4, k ? 0xc8323a : 0xe88aa0, 0xf2c94c, rnd());
     return;
   }
-  // A figure: a robe or tunic to the shoulders, its folds, the head; arms.
-  const tones = v === 0 ? [0xb8b4ac, 0xdcd8d0, 0xf4f2ec] : [0x2e5e50, 0x4e8a74, 0x7ab49a];
-  const ink = { width: 2, color: INK, join: 'round' as const };
-  const [h0, sh, head] = [3.1, 7.0, 7.7];
-  g.poly(oval(...P(0, 0, h0), 0.85 * FT * K, 0.85 * FT * K * 0.87 * 0.5, 0, 14)).fill(tones[0]).stroke(ink);
+  const tones = v === 0 ? [0xb4b0a6, 0xdedad2, 0xf6f4ee] : [0x4a7c6a, 0x6ea68e, 0x9ccab2];
+  const K = 1.1;
+  // Facing south, toward the path, give or take.
+  const a = Math.PI / 2 + (rnd() - 0.5) * 0.4;
+  const [c, s] = [Math.cos(a), Math.sin(a)];
+  const p = (u: number, w: number): [number, number] => [(c * u - s * w) * FT * K, (s * u + c * w) * FT * K];
+  // The robe's hem showing past the shoulders behind.
+  g.poly(oval(...p(-0.35, 0), 0.5 * FT * K, 0.72 * FT * K, a, 14)).fill(tones[0]).stroke({ width: LINE, color: INK, join: 'round' });
   if (v === 2) {
-    // The spear behind, upright in the right hand.
-    rod(g, P(0.8, 0, h0 + 0.2), P(0.8, 0, 10.4), 2, tones[1]);
-    g.poly([...P(0.8, 0, 11.1), ...P(0.62, 0, 10.4), ...P(0.8, 0, 10.1), ...P(0.98, 0, 10.4)]).fill(tones[2]).stroke({ width: 1.5, color: INK, join: 'round' });
+    // The spear held out forward past the pedestal, its leaf blade; the shield on the left arm, edge out.
+    rod(g, p(-0.6, 0.62), p(1.0, 0.68), 1.8, tones[1]);
+    g.poly([...p(0.95, 0.6), ...p(1.38, 0.69), ...p(0.95, 0.78), ...p(0.86, 0.69)]).fill(tones[2]).stroke({ width: 1.1, color: INK, join: 'round' });
+    g.poly(oval(...p(0.3, -0.92), 0.82 * FT * K, 0.32 * FT * K, a + 0.25, 16)).fill(tones[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.poly(oval(...p(0.38, -0.98), 0.2 * FT * K, 0.12 * FT * K, a + 0.25, 10)).fill(tones[2]);
+  } else {
+    // Both arms out forward to the wreath held up before the face.
+    for (const side of [-1, 1]) inked(g, () => g.moveTo(...p(0.1, side * 0.62)).quadraticCurveTo(...p(0.6, side * 0.55), ...p(0.88, side * 0.35)), 2.8, tones[1]);
   }
-  const body = [P(-0.7, 0, h0), P(0.7, 0, h0), P(0.62, 0, 5.2), P(0.58, 0, 6.6), P(0.42, 0, sh), P(-0.42, 0, sh), P(-0.58, 0, 6.6), P(-0.62, 0, 5.2)].flat();
-  g.poly(body).fill(tones[1]).stroke(ink);
-  g.poly([...P(0.05, 0, h0), ...P(0.7, 0, h0), ...P(0.62, 0, 5.2), ...P(0.58, 0, 6.6), ...P(0.3, 0, sh), ...P(0.1, 0, 5.4)]).fill({ color: tones[0], alpha: 0.55 });
-  for (const x of [-0.35, 0, 0.32]) g.moveTo(...P(x * 0.6, 0, 5.6)).quadraticCurveTo(...P(x + 0.08, 0, 4.4), ...P(x, 0, h0 + 0.1));
-  g.stroke({ width: 1.3, color: shade(tones[0], 0.85), cap: 'round' });
-  if (v === 2) g.moveTo(...P(-0.6, 0, 5.3)).lineTo(...P(0.6, 0, 5.3)).stroke({ width: 2.2, color: tones[0] });
-  // The head (a crested helm on the warrior), lit on the NW.
-  const [hx, hy] = P(0, 0, head);
-  g.circle(hx, hy, 0.48 * FT * K).fill(tones[1]).stroke(ink);
-  g.circle(hx - 1.5, hy - 1.8, 0.24 * FT * K).fill(tones[2]);
+  const head = bust(g, 0, 0, K, a, tones, rnd);
+  // The head paler than the shoulders (it stands highest, nearest the light).
+  const [hx, hy] = head(0.12, 0);
+  g.circle(hx - 1, hy - 1, 0.26 * FT * K).fill({ color: shade(tones[2], 1.04), alpha: 0.95 });
+  g.circle(hx, hy, 0.37 * FT * K).stroke({ width: LINE, color: INK });
   if (v === 2) {
-    inked(g, () => g.moveTo(...P(-0.35, 0, head + 0.65)).quadraticCurveTo(...P(0.1, 0, head + 1.4), ...P(0.55, 0, head + 0.5)), 2.6, 0xa8382e);
-    // The shield on the left arm, its boss.
-    const [sx, sy] = P(-0.55, 0.35, 5.2);
-    g.poly(oval(sx, sy, 0.8 * FT * K, 0.8 * FT * K * 0.92, 0, 18)).fill(tones[1]).stroke(ink);
-    g.poly(oval(sx, sy, 0.6 * FT * K, 0.6 * FT * K * 0.92, 0, 18)).stroke({ width: 1.5, color: tones[0] });
-    g.circle(sx, sy, 0.2 * FT * K).fill(tones[2]).stroke({ width: 1.2, color: INK });
-    rod(g, P(0.42, 0, 6.8), P(0.8, 0, 5.6), 3, tones[1]);
-    for (let k = 0; k < 3; k++) g.circle(...P(-0.2 + k * 0.3, 0.05, 4 + k * 0.9), 2.2).fill({ color: 0x8ac4a8, alpha: 0.7 });
+    // The helm's crest from brow to nape.
+    inked(g, () => g.moveTo(...head(0.42, 0)).lineTo(...head(-0.2, 0)), 1.8, 0xa8382e);
+    for (let k = 0; k < 3; k++) g.circle(...p(-0.2 + k * 0.2, 0.45 - k * 0.25), 1.8).fill({ color: 0x8ac4a8, alpha: 0.7 });
     return;
   }
-  // Both arms raised, holding a laurel wreath up over the head: a thick ring of bronze leaves.
-  for (const side of [-1, 1]) inked(g, () => g.moveTo(...P(side * 0.42, 0, 6.8)).quadraticCurveTo(...P(side * 0.75, 0, 8.0), ...P(side * 0.5, 0, 9.2)), 3, tones[1]);
-  const [wx, wy] = P(0, 0, 9.7);
-  const wr = 0.62 * FT * K;
+  // The wreath: a ring of laurel before the face, clear of the head, leaves along it.
+  const [wx, wy] = p(0.95, 0);
+  const wr = 0.42 * FT * K;
   const laurel = [0x3e6040, 0x5e8a54, 0x8ab478];
-  inked(g, () => g.circle(wx, wy, wr), 4, laurel[0]);
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2;
-    const k = i % 2 ? 1.18 : 0.82;
-    leaf(g, wx + Math.cos(a) * wr * k, wy + Math.sin(a) * wr * k * 0.95, a + Math.PI / 2 + (i % 2 ? 0.5 : -0.5), 6.5, 2.4, laurel[1 + (Math.cos(a) + Math.sin(a) < 0 ? 1 : 0)]);
+  inked(g, () => g.circle(wx, wy, wr), 2.6, laurel[0]);
+  for (let i = 0; i < 12; i++) {
+    const t = (i / 12) * Math.PI * 2 + rnd() * 0.2;
+    const k = i % 2 ? 1.14 : 0.86;
+    leaf(g, wx + Math.cos(t) * wr * k, wy + Math.sin(t) * wr * k, t + Math.PI / 2 + (i % 2 ? 0.5 : -0.5), 5, 2.1, laurel[1 + (Math.cos(t) + Math.sin(t) < 0 ? 1 : 0)]);
   }
-  for (const side of [-1, 1]) g.circle(...P(side * 0.5, 0, 9.25), 2.6).fill(tones[1]).stroke({ width: 1.2, color: INK });
 }
 
 /** Footbridge, along x from bank to bank, arching over the water (its shadow is cast with the battlemap's,

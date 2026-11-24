@@ -152,8 +152,9 @@ const DRAW: Record<number, Draw> = {
   155: gate,
 };
 
-/** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */
-const ROOM: Record<number, number> = { 155: 0.85, 142: 0.72, 107: 1.06, 100: 1.9, 101: 6.2, 103: 1.45, 105: 0.84, 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
+/** Room in the frame beyond the footprint (squares, by kind id) for things drawn bigger than their catalog radius
+ * (tall things drawn from a high angle; the standing stone, whose top is longer than its footprint is wide). */
+const ROOM: Record<number, number> = { 155: 0.85, 142: 0.72, 107: 1.06, 100: 1.9, 101: 0.45, 103: 1.45, 105: 0.84, 62: 1.16, 56: 0.68 };
 
 export function frameRadiusPx(info: KindInfo): number {
   // Radius in atlas px at scale 1 plus room for outlines.

@@ -1,8 +1,8 @@
 import { Graphics } from 'pixi.js';
 import { PX } from '../scale';
-import { FT, INK, IRON, WOOD, oval, shade } from './common';
-import { footGrass, inked, rod, upright } from './street';
-import { UPRIGHT_FOOT } from '../atlas';
+import { OUT } from '../pen';
+import { FT, INK, IRON, WOOD, blob, oval, shade } from './common';
+import { footGrass, inked, rod } from './street';
 import { BARK, STONE, moss } from './stones';
 import { bevel } from './yard';
 import { endGrain } from './wood';
@@ -438,63 +438,89 @@ export function clippedBall(g: Graphics, x: number, y: number, s: number, tones:
   }
 }
 
-/** Topiary, from a high angle (it reads by its shape from the side): a clipped ball on a stem in a
- * terracotta pot (v0); a cone (v1); a cone clipped into a spiral (v2); three balls on one stem (v3). */
+/** Topiary, straight down (its clipped shape told by its shading, its height by its shadow): a clipped ball on a
+ * stem in a terracotta pot, the pot's rim and the earth in it showing round the ball (v0); a cone, clipped in
+ * tiers to its point, lit on the NW (v1); a cone clipped into a spiral, the groove winding out from the point (v2);
+ * three balls on one stem, the stem leaning a little so each shows past the one above (v3). */
 export function topiary(g: Graphics, r: number, rnd: () => number, v: number) {
-  const P = upright(UPRIGHT_FOOT[57]);
+  void r;
   const tones = [0x22401c, 0x386026, 0x5c8a34];
-  // A ground point round the foot: on a circle of radius `R` ft, at angle `t` (+y toward the viewer).
-  const ring = (R: number, t: number, h: number) => P(Math.cos(t) * R, Math.sin(t) * R, h);
-  const half = (R: number, h: number, t0: number, t1: number) => Array.from({ length: 13 }, (_, i) => ring(R, t0 + ((t1 - t0) * i) / 12, h)).flat();
   if (v === 0) {
-    // The pot: its body down to the front of its foot, the rim seen from above with the earth in it.
+    // The pot's rim, lit on the NW; the earth inside it; the ball's shadow on the earth.
     const pot = [0x8a4a2e, 0xb8683e, 0xd88a5a];
-    g.poly([...ring(0.95, Math.PI, 1.6), ...half(0.72, 0, Math.PI, 0), ...ring(0.95, 0, 1.6), ...half(0.95, 1.6, 0, Math.PI)]).fill(pot[1]).stroke({ width: 2, color: INK, join: 'round' });
-    g.poly([...ring(0.95, Math.PI, 1.6), ...half(0.72, 0, Math.PI, Math.PI * 0.62), ...half(0.95, 1.6, Math.PI * 0.62, Math.PI)]).fill({ color: pot[2], alpha: 0.6 });
-    g.poly(half(0.95, 1.6, 0, Math.PI * 2)).fill(pot[2]).stroke({ width: 1.8, color: INK, join: 'round' });
-    g.poly(half(0.75, 1.6, 0, Math.PI * 2)).fill(0x3e2c1e);
-    rod(g, P(0, 0, 1.6), P(0, 0, 3.4), 2.4, BARK[0][1]);
-    clippedBall(g, ...P(0, 0, 4.5), 1.4 * FT, tones, rnd);
+    const R = 1.28 * FT;
+    g.circle(0, 0, R).fill(pot[1]);
+    g.poly(oval(-R * 0.08, -R * 0.08, R * 0.92, R * 0.92, 0, 18)).fill(pot[2]);
+    g.poly(oval(R * 0.05, R * 0.05, R * 0.92, R * 0.92, 0, 18)).fill({ color: pot[0], alpha: 0.6 });
+    g.circle(0, 0, R).stroke({ width: OUT, color: INK });
+    g.circle(0, 0, R * 0.82).fill(0x3e2c1e).stroke({ width: 1.1, color: shade(pot[0], 0.6) });
+    g.circle(2.5, 2.5, R * 0.72).fill({ color: 0x1c140c, alpha: 0.5 });
+    clippedBall(g, -1, -1, 0.95 * FT, tones, rnd);
     return;
   }
   // Earth round the foot, grass at its edge.
-  g.poly(half(1.8, 0, 0, Math.PI * 2)).fill(0x4a3828).stroke({ width: 1.2, color: 0x2a1c12 });
-  footGrass(g, ...P(-1.6, 0.4, 0), r * 0.2, rnd);
-  footGrass(g, ...P(1.5, 0.7, 0), r * 0.16, rnd);
+  g.poly(blob(0, 0, 1.85 * FT, 14, 0.1, rnd)).fill(0x4a3828).stroke({ width: 1.2, color: 0x2a1c12, join: 'round' });
+  footGrass(g, -1.6 * FT, 0.9 * FT, 5, rnd);
+  footGrass(g, 1.5 * FT, 1.0 * FT, 4.5, rnd);
   if (v === 3) {
-    rod(g, P(0, 0, 0), P(0, 0, 5.8), 2.6, BARK[0][1]);
-    for (const [h, s] of [
-      [1.4, 1.3],
-      [3.7, 1.0],
-      [5.6, 0.7],
+    // (Each ball drawn over the one below, its shade falling on it to the SE.)
+    for (const [x, y, s] of [
+      [0.15, 0.15, 1.35],
+      [-0.12, -0.12, 1.0],
+      [-0.36, -0.3, 0.66],
     ]) {
-      clippedBall(g, ...P(0, 0, h), s * FT, tones, rnd);
+      g.circle(x * FT + 3, y * FT + 3, s * FT + 1).fill({ color: 0x10200c, alpha: 0.45 });
+      clippedBall(g, x * FT, y * FT, s * FT, tones, rnd);
     }
     return;
   }
-  // A cone: its shaded east side, its lit west side, leaves picked out; on a spiral, the groove winding up.
-  const [R, top] = [1.55, 6.6];
-  const apex = P(0, 0, top);
-  const at = (t: number, h: number) => ring(R * (1 - h / top), t, h);
-  g.poly([...apex, ...half(R, 0.1, 0, Math.PI)]).fill(tones[1]).stroke({ width: 2, color: INK, join: 'round' });
-  g.poly([...apex, ...half(R, 0.1, 0, Math.PI * 0.4)]).fill({ color: tones[0], alpha: 0.75 });
-  g.poly([...apex, ...half(R, 0.1, Math.PI * 0.72, Math.PI)]).fill({ color: tones[2], alpha: 0.7 });
-  for (let i = 0; i < 26; i++) {
-    const h = rnd() * top * 0.85;
-    const t = rnd() * Math.PI;
-    const [x, y] = at(t, h);
-    g.circle(x, y, 1.3 + rnd() * 1.1).fill({ color: t > Math.PI * 0.55 ? shade(tones[2], 1.12) : tones[0], alpha: 0.7 });
-  }
-  if (v === 2) {
-    for (let k = 0; k < 5; k++) {
-      const h0 = 0.4 + k * 1.25;
-      const path = Array.from({ length: 13 }, (_, i) => {
-        const t = Math.PI - (Math.PI * i) / 12;
-        return at(t, h0 + (i / 12) * 0.75);
-      });
-      g.poly(path.flat(), false).stroke({ width: 3.6, color: shade(tones[0], 0.7), cap: 'round', join: 'round' });
-      g.poly(path.map(([x, y]) => [x, y - 2.6]).flat(), false).stroke({ width: 1.6, color: tones[2], cap: 'round', join: 'round' });
+  // The cone: the dark tone, the lit NW side as a broad wedge to the point, tiers of clipped leaves as scalloped
+  // steps (broken, never full rings), leaves picked out.
+  const R = 1.6 * FT;
+  const [ax, ay] = [-0.06 * FT, -0.06 * FT];
+  const out = blob(0, 0, R, 18, 0.07, rnd);
+  g.poly(out).fill(tones[0]);
+  const wedge = (a0: number, a1: number, k: number) => {
+    const pts = [ax, ay];
+    for (let i = 0; i <= 10; i++) {
+      const a = a0 + ((a1 - a0) * i) / 10;
+      pts.push(Math.cos(a) * R * k, Math.sin(a) * R * k);
     }
+    return pts;
+  };
+  g.poly(wedge(-Math.PI * 1.25, Math.PI * 0.25, 0.94)).fill(tones[1]);
+  g.poly(wedge(-Math.PI * 1.05, -Math.PI * 0.2, 0.86)).fill({ color: tones[2], alpha: 0.75 });
+  if (v === 1) {
+    for (const [k, a0, a1] of [
+      [0.72, -2.6, 1.9],
+      [0.44, -1.2, 3.4],
+    ]) {
+      const pts: number[] = [];
+      for (let i = 0; i <= 14; i++) {
+        const a = a0 + ((a1 - a0) * i) / 14;
+        const rr = R * k * (1 + (i % 2 ? 0.05 : -0.03));
+        pts.push(Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      g.poly(pts, false).stroke({ width: 1.6, color: shade(tones[0], 0.75), cap: 'round', join: 'round' });
+    }
+  } else {
+    // The spiral groove from the point outward, two and a half turns, a lit lip on its inner side.
+    const path = (dk: number) =>
+      Array.from({ length: 46 }, (_, i) => {
+        const t = i / 45;
+        const a = -2.3 + t * Math.PI * 5;
+        const rr = R * (0.1 + 0.82 * t) * dk;
+        return [ax * (1 - t) + Math.cos(a) * rr, ay * (1 - t) + Math.sin(a) * rr];
+      }).flat();
+    g.poly(path(1), false).stroke({ width: 3.2, color: shade(tones[0], 0.7), cap: 'round', join: 'round' });
+    g.poly(path(0.9), false).stroke({ width: 1.2, color: tones[2], alpha: 0.8, cap: 'round', join: 'round' });
   }
-  g.poly([...apex, ...half(R, 0.1, 0, Math.PI)]).stroke({ width: 2, color: INK, join: 'round' });
+  for (let i = 0; i < 22; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = R * 0.88 * Math.sqrt(rnd());
+    const [dx, dy] = [Math.cos(a) * d, Math.sin(a) * d];
+    g.circle(dx, dy, 1.2 + rnd() * 1.1).fill({ color: dx + dy < 0 ? shade(tones[2], 1.12) : tones[0], alpha: 0.7 });
+  }
+  g.circle(ax, ay, 1.8).fill(shade(tones[2], 1.15));
+  g.poly(out).stroke({ width: OUT, color: INK, join: 'round' });
 }

@@ -1,7 +1,9 @@
 import { Graphics } from 'pixi.js';
-import { INK, IRON, WOOD, blob, oval, shade } from './common';
+import { FT, INK, IRON, WOOD, blob, oval, shade } from './common';
 import { boughs, lit, whorl } from './plants';
 import { moss } from './stones';
+import { LINE, OUT } from '../pen';
+import { blockTop, footGrass, inked, rod } from './street';
 
 /** A raised box from above, lit from the NW: the outline, light top and left bevels, dark bottom and right
  * bevels `d` wide, and the face. */
@@ -437,123 +439,144 @@ export function haystack(g: Graphics, r: number, rnd: () => number, v: number) {
   }
 }
 
-/** Headstone, seen from a high angle rather than straight down (the one exception, so it reads as a grave):
- * an upright stone with an arched top, its top edge showing as a lit strip behind the arch, its front face
- * carved (a cross or lines of an epitaph), on a base whose top is visible, grass at the foot; moss on one,
- * flowers laid at one, and a standing cross for the last. Headstones are never turned on the map. */
+/** Headstone, straight down: the top edge of an upright stone (about 2 ft by 0.4) at the head of a grave, its
+ * plot laid out before it to the south: an arched stone (its ends rounded, its crown paler) over a grassy mound
+ * (v0); a square-topped stone, moss on it, a kerb of stones round the plot (v1); a stone over a fresh mound of
+ * earth, flowers laid at its foot (v2); a standing cross, its arms a bar from above, over a mound with a few
+ * stones on it (v3). Its drop shadow falls from the stone (`UPRIGHT_FOOT`). */
 export function headstone(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
   const stone = [
     [0x6e6a62, 0x9a968c, 0xc4c0b4],
     [0x625e58, 0x8a877e, 0xb4b0a6],
     [0x726c60, 0xa8a296, 0xd0cabc],
     [0x5e5c56, 0x7e7c74, 0xa8a69c],
   ][v];
-  const ink = { width: 2, color: INK, join: 'round' as const };
-  // The base: a low block, its top face lit, its front face in shade.
-  const [bx, by, bw, bt, bf] = [-r * 0.78, r * 0.52, r * 1.56, r * 0.16, r * 0.22];
-  g.rect(bx, by, bw, bt + bf).fill(stone[0]).stroke(ink);
-  g.rect(bx, by, bw, bt).fill(stone[2]);
-  g.moveTo(bx, by + bt).lineTo(bx + bw, by + bt).stroke({ width: 1.2, color: INK });
-  // Grass along the foot of the base.
-  for (const x of [-r * 0.82, r * 0.78, -r * 0.1]) {
-    const tips = boughs(7, rnd);
-    whorl(g, x, by + bt + bf, r * 0.2, tips, 0.4);
-    g.fill(0x5a7e36).stroke({ width: 1, color: 0x34461e, join: 'round' });
+  const sy = -1.35 * FT;
+  // The plot: a mound (grass, or fresh earth on v2), lit toward the NW, darker to the SE, fading at its foot.
+  const mound = v === 2 ? [0x5e4630, 0x7a5c3e, 0x9a7a56] : [0x4a6a2c, 0x5e823a, 0x7a9c4c];
+  const [mx, my, rx, ry] = [0, 0.45 * FT, 1.0 * FT, 1.55 * FT];
+  const rim = blob(mx, my, 1, 16, 0.12, rnd).map((p, i) => (i % 2 ? my + (p - my) * ry : mx + (p - mx) * rx));
+  g.poly(rim).fill(mound[0]);
+  g.poly(rim.map((p, i) => (i % 2 ? my + (p - my) * 0.82 - 1.5 : mx + (p - mx) * 0.84 - 1.5))).fill(mound[1]);
+  g.poly(oval(mx - rx * 0.3, my - ry * 0.25, rx * 0.4, ry * 0.42, 0.15, 12)).fill({ color: mound[2], alpha: 0.7 });
+  g.poly(rim).stroke({ width: 1.4, color: shade(mound[0], 0.62), join: 'round' });
+  if (v === 2) {
+    // Clods on the fresh earth.
+    for (let i = 0; i < 5; i++) g.circle(mx + (rnd() - 0.5) * rx * 1.2, my + (rnd() - 0.2) * ry, 1.3 + rnd()).fill(shade(mound[0], 0.8));
+  } else {
+    for (const [x, y] of [
+      [-rx * 0.8, my + ry * 0.7],
+      [rx * 0.9, my - ry * 0.2],
+    ]) {
+      footGrass(g, x, y, 4.5, rnd);
+    }
   }
-  const [x0, x1, top, foot] = [-r * 0.58, r * 0.58, -r * 0.92, by + bt * 0.5];
+  if (v === 1) {
+    // A kerb of small dressed stones round the plot.
+    const K = [shade(stone[0], 0.95), stone[1], stone[2]];
+    for (const [x0, y0, x1, y1] of [
+      [-1.25, -1.05, -0.95, 2.1],
+      [0.95, -1.05, 1.25, 2.1],
+      [-0.95, 1.8, 0.95, 2.1],
+    ]) {
+      blockTop(g, x0 * FT, y0 * FT, x1 * FT, y1 * FT, K, rnd);
+    }
+    for (const y of [-0.1, 0.9]) g.moveTo(-1.25 * FT + 1, y * FT).lineTo(-0.95 * FT - 1, y * FT + 1).moveTo(0.95 * FT + 1, y * FT + 0.5).lineTo(1.25 * FT - 1, y * FT);
+    g.stroke({ width: 1, color: shade(stone[0], 0.8) });
+  }
   if (v === 3) {
-    // A standing cross: the top edges of its arms and head lit, the front faces carved with a groove.
-    const arm = r * 0.2;
-    const shape = (dy: number) => [
-      -arm, top + dy, arm, top + dy, arm, top + r * 0.42 + dy, r * 0.62, top + r * 0.42 + dy, r * 0.62, top + r * 0.82 + dy, arm, top + r * 0.82 + dy,
-      arm, foot, -arm, foot, -arm, top + r * 0.82 + dy, -r * 0.62, top + r * 0.82 + dy, -r * 0.62, top + r * 0.42 + dy, -arm, top + r * 0.42 + dy,
-    ];
-    g.poly(shape(-r * 0.12)).fill(stone[2]).stroke(ink);
-    g.poly(shape(0)).fill(stone[1]).stroke(ink);
-    g.moveTo(0, top + r * 0.12).lineTo(0, foot - r * 0.1).moveTo(-r * 0.48, top + r * 0.62).lineTo(r * 0.48, top + r * 0.62);
-    g.stroke({ width: 2, color: stone[0], cap: 'round' });
+    for (let i = 0; i < 3; i++) g.circle((rnd() - 0.5) * rx, my + (rnd() - 0.3) * ry, 1.6 + rnd()).fill(stone[1]).stroke({ width: 1, color: INK });
+    // The cross: the bar of its arms, its head paler at the middle.
+    blockTop(g, -1.05 * FT, sy - 0.24 * FT, 1.05 * FT, sy + 0.24 * FT, stone, rnd);
+    blockTop(g, -0.26 * FT, sy - 0.27 * FT, 0.26 * FT, sy + 0.27 * FT, [stone[1], stone[2], shade(stone[2], 1.08)], rnd);
     return;
   }
-  // The stone: its top edge (seen from above, behind the arch), then the front face.
-  const face = (dy: number) => {
-    const w = (x1 - x0) / 2;
-    const pts: number[] = [x0, foot];
-    for (let i = 0; i <= 12; i++) {
-      const a = Math.PI + (i / 12) * Math.PI;
-      pts.push(Math.cos(a) * w, top + w + Math.sin(a) * w * (v === 2 ? 0.55 : 1) + dy);
-    }
-    pts.push(x1, foot);
-    return pts;
-  };
-  g.poly(face(-r * 0.14)).fill(stone[2]).stroke(ink);
-  g.poly(face(0)).fill(stone[1]).stroke(ink);
-  // The face lit from the upper left, darker toward the lower right.
-  g.poly([x1 - r * 0.22, top + r * 0.6, x1 - 1, top + r * 0.6, x1 - 1, foot - 1, x0 + r * 0.3, foot - 1]).fill({ color: stone[0], alpha: 0.45 });
-  if (v === 0) {
-    // A carved cross: a groove with a lit lower edge.
-    g.moveTo(0, top + r * 0.25).lineTo(0, top + r * 0.95).moveTo(-r * 0.22, top + r * 0.5).lineTo(r * 0.22, top + r * 0.5);
-    g.stroke({ width: 3, color: shade(stone[0], 0.75), cap: 'round' });
-    g.moveTo(1, top + r * 0.27).lineTo(1, top + r * 0.97).moveTo(-r * 0.2, top + r * 0.52 + 1).lineTo(r * 0.24, top + r * 0.52 + 1);
-    g.stroke({ width: 1, color: stone[2], alpha: 0.8, cap: 'round' });
+  // The stone's top edge.
+  const [hw, hd] = [(v === 1 ? 0.95 : 1.0) * FT, (v === 2 ? 0.24 : 0.2) * FT];
+  if (v === 1) {
+    blockTop(g, -hw, sy - hd, hw, sy + hd, stone, rnd);
+    // A corner knocked off, moss on its top.
+    g.poly([hw - 4, sy - hd - 0.5, hw + 0.5, sy - hd - 0.5, hw + 0.5, sy - hd + 3]).fill(stone[0]).stroke({ width: 1, color: INK, join: 'round' });
+    g.poly(oval(-hw * 0.45, sy - 0.5, 4.5, 1.8, 0.1, 10)).fill({ color: 0x6e8a3a, alpha: 0.9 });
+    g.poly(oval(-hw * 0.2, sy + 0.8, 2.5, 1.2, 0, 8)).fill({ color: 0x8aa04a, alpha: 0.85 });
   } else {
-    // An epitaph: short carved lines, the first a little bolder.
-    for (let i = 0; i < 4; i++) {
-      const y = top + r * (0.48 + i * 0.2);
-      const hw = r * (i === 0 ? 0.3 : 0.18 + 0.12 * rnd());
-      g.moveTo(-hw, y).lineTo(hw, y).stroke({ width: i === 0 ? 2.4 : 1.6, color: shade(stone[0], 0.75), cap: 'round' });
+    // Arched: the ends fall away, so they show rounded and darker, the crown pale along the middle.
+    const pts: number[] = [];
+    for (let i = 0; i <= 8; i++) {
+      const a = -Math.PI / 2 + (i / 8) * Math.PI;
+      pts.push(hw - hd + Math.cos(a) * hd * 1.1, sy + Math.sin(a) * hd);
     }
+    for (let i = 0; i <= 8; i++) {
+      const a = Math.PI / 2 + (i / 8) * Math.PI;
+      pts.push(-hw + hd + Math.cos(a) * hd * 1.1, sy + Math.sin(a) * hd);
+    }
+    g.poly(pts).fill(stone[0]);
+    g.poly([-hw * 0.72, sy - hd + 1, hw * 0.72, sy - hd + 1, hw * 0.72, sy + hd - 1, -hw * 0.72, sy + hd - 1]).fill(stone[1]);
+    g.poly([-hw * 0.5, sy - hd + 1.2, hw * 0.4, sy - hd + 1.2, hw * 0.3, sy - 0.2, -hw * 0.5, sy]).fill(stone[2]);
+    g.poly(pts).stroke({ width: LINE, color: INK, join: 'round' });
   }
-  if (v === 1) moss(g, x0 + r * 0.25, top + r * 0.4, r * 0.15, rnd);
   if (v === 2) {
-    for (let i = 0; i < 3; i++) {
-      const x = -r * 0.25 + i * r * 0.22;
-      g.circle(x, by + r * 0.06, r * 0.09).fill([0xe0533d, 0xf2c94c, 0xf6efe0][i]).stroke({ width: 1, color: INK });
-    }
+    // Flowers laid at its foot: stems toward the stone, the heads on the earth.
+    const fy = sy + hd + 0.45 * FT;
+    for (let i = 0; i < 4; i++) g.moveTo(-0.3 * FT + i * 3.5, fy + 2).lineTo(-0.1 * FT + i * 2, sy + hd + 2);
+    g.stroke({ width: 1.1, color: 0x3e6a2a, cap: 'round' });
+    for (let i = 0; i < 4; i++) g.circle(-0.3 * FT + i * 3.5 + (i % 2), fy + 2 + (i % 2) * 2, 2.3).fill([0xe0533d, 0xf2c94c, 0xf6efe0, 0xe0533d][i]).stroke({ width: 1, color: INK });
   }
 }
 
-/** Statue on a plinth: a stepped plinth bevelled toward the light, a figure on it seen from above —
- * head, shoulders and an arm raised with a sword (marble, bronze gone green, or weathered stone), or a
- * winged angel. */
+/** A figure seen straight down at (x, y), facing `a` (radians, 0 toward +x), `k` times life size, in `tones`
+ * [dark, mid, light]: the shoulders an oval about 1.7 ft across, the head a circle a little forward of them, each
+ * shaded away from the light. Returns `p(u, w)`: a point `u` ft forward and `w` ft to its right, in px. */
+export function bust(g: Graphics, x: number, y: number, k: number, a: number, tones: readonly number[], rnd: () => number) {
+  const [c, s] = [Math.cos(a), Math.sin(a)];
+  const p = (u: number, w: number): [number, number] => [x + (c * u - s * w) * FT * k, y + (s * u + c * w) * FT * k];
+  const part = (cx: number, cy: number, rx: number, ry: number, rot: number) => {
+    const o = oval(cx, cy, rx, ry, rot, 16).map((q) => q + (rnd() - 0.5) * 0.7);
+    g.poly(o).fill(tones[0]);
+    g.poly(oval(cx - Math.min(rx, ry) * 0.16, cy - Math.min(rx, ry) * 0.18, rx * 0.84, ry * 0.84, rot, 16)).fill(tones[1]);
+    g.poly(oval(cx - Math.min(rx, ry) * 0.38, cy - Math.min(rx, ry) * 0.4, rx * 0.36, ry * 0.36, rot, 10)).fill({ color: tones[2], alpha: 0.85 });
+    g.poly(o).stroke({ width: LINE, color: INK, join: 'round' });
+  };
+  part(...p(-0.05, 0), 0.46 * FT * k, 0.86 * FT * k, a);
+  part(...p(0.12, 0), 0.38 * FT * k, 0.36 * FT * k, a);
+  return p;
+}
+
+/** Statue on a plinth, straight down: a plinth about 4 ft square in two dressed tiers, lit on the NW, and on it a
+ * figure a little over life size from above, head and shoulders, an arm out holding a sword past the plinth's
+ * edge (marble v0, bronze gone green v1, weathered stone with moss v2), or a winged angel, its wings swept back
+ * (v3). */
 export function statue(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
   const plinth = [0x6e675c, 0x9a9182, 0xc4baa6];
-  bevel(g, -r * 0.95, -r * 0.95, r * 0.95, r * 0.95, r * 0.12, plinth);
-  bevel(g, -r * 0.66, -r * 0.66, r * 0.66, r * 0.66, r * 0.1, plinth.map((c) => shade(c, 1.06)), 2);
+  blockTop(g, -2.0 * FT, -2.0 * FT, 2.0 * FT, 2.0 * FT, plinth, rnd, OUT);
+  blockTop(g, -1.55 * FT, -1.55 * FT, 1.55 * FT, 1.55 * FT, plinth.map((c) => shade(c, 1.06)), rnd, OUT);
   const body = [
-    [0xb8b4ac, 0xdcd8d0, 0xf4f2ec],
-    [0x3e6e60, 0x5e9a84, 0x8ac4a8],
-    [0x7e7a70, 0xa8a296, 0xc8c2b4],
-    [0xb0aca4, 0xd4d0c8, 0xeeece6],
+    [0xa8a49c, 0xdcd8d0, 0xf4f2ec],
+    [0x2e5e50, 0x5e9a84, 0x8ac4a8],
+    [0x6e6a60, 0xa8a296, 0xc8c2b4],
+    [0xa09c94, 0xd4d0c8, 0xeeece6],
   ][v];
+  const K = 1.3;
   const a = -Math.PI / 2 + (rnd() - 0.5) * 0.6;
-  const c = Math.cos(a);
-  const s = Math.sin(a);
-  const p = (u: number, w: number): [number, number] => [c * u - s * w, s * u + c * w];
+  const [c, s] = [Math.cos(a), Math.sin(a)];
+  const p = (u: number, w: number): [number, number] => [(c * u - s * w) * FT * K, (s * u + c * w) * FT * K];
   if (v === 3) {
-    // Wings swept back from the shoulders.
+    // Wings swept back from the shoulders, a few long feathers marked.
     for (const side of [1, -1]) {
-      const pts = [...p(-r * 0.05, side * r * 0.2), ...p(-r * 0.5, side * r * 0.58), ...p(-r * 0.6, side * r * 0.25), ...p(-r * 0.32, side * r * 0.06)];
-      g.poly(pts).fill(body[1]).stroke({ width: 1.8, color: INK, join: 'round' });
-      for (const k of [0.3, 0.42]) g.moveTo(...p(-r * 0.1, side * r * 0.15)).lineTo(...p(-r * k - r * 0.1, side * r * 0.35));
-      g.stroke({ width: 1, color: body[0] });
+      const pts = [...p(0.0, side * 0.35), ...p(-0.7, side * 1.15), ...p(-1.25, side * 0.9), ...p(-1.0, side * 0.45), ...p(-0.45, side * 0.15)];
+      g.poly(pts).fill(body[1]).stroke({ width: LINE, color: INK, join: 'round' });
+      for (const k of [0.55, 0.8]) g.moveTo(...p(-0.2, side * 0.3)).lineTo(...p(-k - 0.2, side * (0.55 + k * 0.3)));
+      g.stroke({ width: 1.1, color: body[0], cap: 'round' });
     }
+  } else {
+    // The sword arm: from the right shoulder out forward, the blade out to the plinth's edge.
+    const [sh, hand, tip] = [p(0.05, 0.62), p(0.75, 0.72), p(1.7, 0.76)];
+    rod(g, hand, tip, 2.2, body[2]);
+    rod(g, p(0.78, 0.5), p(0.72, 0.95), 2.4, body[0]);
+    inked(g, () => g.moveTo(...sh).lineTo(...hand), 0.26 * FT * K, body[1]);
   }
-  // Shoulders, the raised arm holding a sword (blade, crossguard), the head.
-  g.poly(oval(...p(-r * 0.04, 0), r * 0.42, r * 0.24, a + Math.PI / 2)).fill(body[1]).stroke({ width: 2, color: INK });
-  g.poly(oval(...p(r * 0.0, -r * 0.08), r * 0.24, r * 0.12, a + Math.PI / 2)).fill(body[2]);
-  if (v !== 3) {
-    const [sx, sy] = p(0, r * 0.32);
-    const [hx, hy] = p(r * 0.3, r * 0.36);
-    g.moveTo(sx, sy).lineTo(hx, hy).stroke({ width: r * 0.13 + 3, color: INK, cap: 'round' });
-    g.moveTo(sx, sy).lineTo(hx, hy).stroke({ width: r * 0.13, color: body[1], cap: 'round' });
-    const [tx, ty] = p(r * 0.82, r * 0.36);
-    g.moveTo(hx, hy).lineTo(tx, ty).stroke({ width: 5.5, color: INK, cap: 'round' });
-    g.moveTo(hx, hy).lineTo(tx, ty).stroke({ width: 3, color: body[2], cap: 'round' });
-    g.moveTo(...p(r * 0.36, r * 0.24)).lineTo(...p(r * 0.36, r * 0.48)).stroke({ width: 5, color: INK, cap: 'round' });
-    g.moveTo(...p(r * 0.36, r * 0.24)).lineTo(...p(r * 0.36, r * 0.48)).stroke({ width: 2.5, color: body[0], cap: 'round' });
-  }
-  const [lx, ly] = p(r * 0.06, 0);
-  g.circle(lx, ly, r * 0.19).fill(body[1]).stroke({ width: 2, color: INK });
-  g.circle(lx - r * 0.05, ly - r * 0.05, r * 0.09).fill(body[2]);
-  if (v === 2) moss(g, r * 0.45, -r * 0.5, r * 0.14, rnd);
+  bust(g, 0, 0, K, a, body, rnd);
+  if (v === 2) moss(g, ...p(-0.1, -0.5), 0.2 * FT, rnd);
 }
