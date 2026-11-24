@@ -243,182 +243,199 @@ export function fishingBoat(g: Graphics, r: number, rnd: () => number, v: number
   g.circle(mx - 1.5, -1.5, 0.1 * FT).fill(tones[3]);
 }
 
-/** Bollard on a quay, seen from above (about 1.5 ft across): cast iron, its cap lit on the north-west and
- * its foot's shadow to the south-east (v0); the same with a mooring line made fast round it, its slack
- * coiled by it (v1); a weathered timber post, its end grain and a split (v2); dressed stone, worn (v3). */
+/** Bollard on a quay, seen from straight above (about 1.2 ft across): a stout post's domed head, lit on the
+ * north-west and shaded to the south-east, the flared foot peeping out only on the shaded side (its height
+ * told by that and its shadow): cast iron with a lit cap (v0); the same with a mooring line taken a turn
+ * round it and running off east (v1); a weathered timber post, its top checked, a rope turn round it (v2);
+ * dressed stone, an iron ring by its foot (v3). */
 export function bollard(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
-  const R = 0.5 * FT;
-  if (v === 1) {
-    // The line: a loop round the post, two parts running off east, the slack coiled to the south-east.
-    const rope = (draw: () => void, w: number) => {
-      draw();
-      g.stroke({ width: w + 2.4, color: INK, cap: 'round', join: 'round' });
-      draw();
-      g.stroke({ width: w, color: ROPE, cap: 'round', join: 'round' });
-    };
-    ropeCoil(g, 0.85 * FT, 1.0 * FT, 0.46 * FT);
-    rope(() => g.moveTo(0.22 * FT, R * 0.6).quadraticCurveTo(0.9 * FT, R * 0.9, 1.05 * FT, 0.65 * FT), 2);
-    rope(() => g.moveTo(R * 1.0, -R * 0.4).quadraticCurveTo(1.3 * FT, -0.25 * FT, 1.6 * FT, 0.15 * FT), 2);
-  }
-  // Every post: a wide foot ring, a round cap with a pale rim and a groove, its top lit on the north-west.
-  const [foot, cap, rim, top] = v === 2 ? [GREY_WOOD[0], GREY_WOOD[1], GREY_WOOD[3], GREY_WOOD[2]] : v === 3 ? [STONE[0][0], STONE[0][1], STONE[0][3], STONE[0][2]] : [IRON[0], IRON[2], IRON[3], IRON[1]];
-  g.circle(0, 0, R * 1.3).fill(foot).stroke({ width: LINE, color: INK });
-  g.circle(0, 0, R).fill(cap).stroke({ width: LINE, color: INK });
-  g.circle(-1.2, -1.2, R * 0.86).stroke({ width: 2, color: rim, alpha: 0.9 });
-  g.circle(0.8, 0.8, R * 0.62).fill(top).stroke({ width: 1.4, color: shade(foot, 0.8) });
-  g.circle(-R * 0.22, -R * 0.24, R * 0.2).fill(rim);
-  if (v === 1) g.circle(0, 0, R * 1.12).stroke({ width: 2.8, color: ROPE });
-  if (v === 2) g.moveTo(R * 0.15, -R * 0.1).lineTo(R * 0.55, -R * 0.55).stroke({ width: 1.6, color: INK, cap: 'round' });
-  if (v === 3) {
-    // An iron mooring ring let into the stone.
-    g.circle(R * 0.62, R * 0.62, R * 0.28).stroke({ width: 3.4, color: INK });
-    g.circle(R * 0.62, R * 0.62, R * 0.28).stroke({ width: 1.8, color: IRON[2] });
-  }
   void rnd;
+  const R = 0.5 * FT;
+  const t = v === 2 ? GREY_WOOD : v === 3 ? STONE[0] : IRON;
+  const rope = (draw: () => void, w: number) => {
+    draw();
+    g.stroke({ width: w + 2.4, color: INK, cap: 'round', join: 'round' });
+    draw();
+    g.stroke({ width: w, color: ROPE, cap: 'round', join: 'round' });
+  };
+  // Rope tail running off to the frame edge (v1 east, v2 south-west).
+  const tail = v === 1 ? 0 : v === 2 ? Math.PI * 0.8 : null;
+  if (tail !== null) {
+    const [c, s] = [Math.cos(tail), Math.sin(tail)];
+    rope(() => g.moveTo(c * R * 1.25, s * R * 1.25).quadraticCurveTo(c * 1.5 * R + s * 4, s * 1.5 * R - c * 4, c * 2.3 * R, s * 2.3 * R - c * 3), 3);
+  }
+  // The flared foot on the shaded side, then the neck wrapped in rope (a pale ring outside the cap).
+  g.circle(R * 0.2, R * 0.2, R * 1.12).fill(shade(t[0], 0.85)).stroke({ width: LINE, color: INK });
+  if (v !== 3) {
+    g.circle(0, 0, R * 1.3).fill(ROPE).stroke({ width: LINE, color: INK });
+    g.circle(0, 0, R * 1.14).stroke({ width: 1.2, color: shade(ROPE, 0.6) });
+    g.circle(-R * 0.1, -R * 0.1, R * 1.22).stroke({ width: 1.3, color: shade(ROPE, 1.15), alpha: 0.8 });
+  }
+  // The mushroom head: a wide flat cap with a smaller raised centre, one lit NW crescent.
+  g.circle(0, 0, R).fill(t[1]).stroke({ width: LINE, color: INK });
+  g.circle(R * 0.1, R * 0.1, R * 0.62).fill(shade(t[1], 0.88)).stroke({ width: 1.2, color: t[0] });
+  g.circle(-R * 0.06, -R * 0.06, R * 0.56).fill(t[2]);
+  g.moveTo(-R * 0.82, R * 0.1).arc(0, 0, R * 0.84, Math.PI * 0.95, Math.PI * 1.55).stroke({ width: 1.8, color: t[3], cap: 'round' });
+  if (v === 2) g.moveTo(-R * 0.3, -R * 0.1).lineTo(R * 0.1, R * 0.05).lineTo(R * 0.3, -R * 0.25).stroke({ width: 1.1, color: t[0], cap: 'round', join: 'round' });
+  if (v === 3) {
+    g.circle(R * 1.15, R * 1.05, R * 0.38).stroke({ width: 3.4, color: INK });
+    g.circle(R * 1.15, R * 1.05, R * 0.38).stroke({ width: 1.8, color: IRON[2] });
+  }
 }
 
-/** Dock crane, its jib out toward +x (about 22 ft over all): two sill beams crossed under a square post on
- * footing stones, a winch drum with two cranks on the south arm and its rope up to the jib, the jib with a
- * counterweight on its tail and a block at its tip; under the tip a barrel in a sling (v0), a crate in a
- * net (v1), sacks in a cargo net (v2), or, weathered grey, the hook hanging empty (v3). */
+/** Dock crane from straight above, its jib out toward +x (about 22 ft over all): a round timber turntable on
+ * footing stones with the square post top in its middle; one long tapered jib out over the water, iron-banded,
+ * a block at its tip and the rope dropping to the load; at the back a treadwheel, a long slatted drum on
+ * its frame, its rope running to the post. Under the tip a barrel in a sling (v0), a crate in a net (v1),
+ * sacks in a cargo net (v2), or, weathered grey, the hook hanging empty (v3). */
 export function dockCrane(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
   const tones = v === 3 ? GREY_WOOD : WOOD;
-  const px = -3.4 * FT;
-  const [arm, bw] = [4.6 * FT, 0.5 * FT];
-  for (const [x, y] of [
-    [px - arm, 0],
-    [px + arm, 0],
-    [px, -arm],
-    [px, arm],
-  ])
-    stone(g, x, y, 0.85 * FT, STONE[1], rnd, 7);
-  bevel(g, px - arm, -bw, px + arm, bw, 2, tones, OUT);
-  bevel(g, px - bw, -arm, px + bw, arm, 2, tones, OUT);
-  // The winch: a drum along the south arm's cross, rope wound on it, a crank at each end.
-  const [wy, wl, wr] = [2.5 * FT, 1.6 * FT, 0.55 * FT];
-  for (const s of [-1, 1]) bevel(g, px + s * wl - 0.25 * FT, wy - 0.75 * FT, px + s * wl + 0.25 * FT, wy + 0.75 * FT, 1.2, tones, LINE);
-  g.roundRect(px - wl + 0.25 * FT, wy - wr, (wl - 0.25 * FT) * 2, wr * 2, wr * 0.5).fill(tones[1]).stroke({ width: LINE, color: INK });
-  g.rect(px - wl * 0.6, wy - wr + 1.2, wl * 1.2, wr * 2 - 2.4).fill(ROPE);
-  for (let k = 0; k < 3; k++) {
-    const x = px - wl * 0.6 + ((k + 0.5) * wl * 1.2) / 3;
-    g.moveTo(x - 1, wy - wr + 1.5).lineTo(x + 1, wy + wr - 1.5);
-  }
-  g.stroke({ width: 1.6, color: shade(ROPE, 0.6) });
-  g.rect(px - wl * 0.6, wy - wr + 1.2, wl * 1.2, wr * 0.55).fill({ color: 0xffffff, alpha: 0.22 });
-  const crank = (draw: () => void) => {
+  const px = -2.6 * FT;
+  const ink2 = (draw: () => void, w: number, color: number) => {
     draw();
-    g.stroke({ width: 4.6, color: INK, cap: 'round', join: 'round' });
+    g.stroke({ width: w + 2.4, color: INK, cap: 'round', join: 'round' });
     draw();
-    g.stroke({ width: 2.2, color: IRON[2], cap: 'round', join: 'round' });
+    g.stroke({ width: w, color, cap: 'round', join: 'round' });
   };
-  for (const s of [-1, 1]) crank(() => g.moveTo(px + s * (wl + 0.3 * FT), wy).lineTo(px + s * (wl + 0.75 * FT), wy).lineTo(px + s * (wl + 0.75 * FT), wy + s * 1.0 * FT));
-  // The hoist rope from the drum up to the jib.
-  g.moveTo(px + 0.2 * FT, wy - wr).lineTo(px + 1.4 * FT, 0.3 * FT).stroke({ width: 4.2, color: INK, cap: 'round' });
-  g.moveTo(px + 0.2 * FT, wy - wr).lineTo(px + 1.4 * FT, 0.3 * FT).stroke({ width: 2, color: ROPE, cap: 'round' });
-  // The load under the jib's tip.
-  const [tx, lx] = [9.4 * FT, 8.8 * FT];
+  // Footing stones peeping out under the turntable, then the turntable: a disc of planks, lit on the NW.
+  for (const a of [0.8, 2.4, 3.9, 5.5]) stone(g, px + Math.cos(a) * 2.7 * FT, Math.sin(a) * 2.7 * FT, 0.65 * FT, STONE[1], rnd, 7);
+  const T = 2.7 * FT;
+  g.circle(px, 0, T).fill(tones[1]).stroke({ width: OUT, color: INK });
+  g.circle(px - 2, -2, T * 0.86).fill(shade(tones[2], 0.95));
+  for (let k = -2; k <= 2; k++) {
+    const y = k * 0.95 * FT;
+    const hw = Math.sqrt(Math.max(0, T * T - y * y)) - 2;
+    g.moveTo(px - hw, y + 0.47 * FT).lineTo(px + hw, y + 0.47 * FT);
+  }
+  g.stroke({ width: 1.3, color: tones[0], alpha: 0.75 });
+  g.circle(px, 0, T * 0.93).stroke({ width: 2.4, color: IRON[1] });
+  // The treadwheel at the back: a long drum (its axle along x) on two trestles, slats across its tread.
+  const [wx, wl, ww] = [-8.0 * FT, 4.2 * FT, 1.6 * FT];
+  for (const sx of [-1, 1]) bevel(g, wx + sx * ww - 0.35 * FT, -1.1 * FT, wx + sx * ww + 0.35 * FT, 1.1 * FT, 1.5, tones, LINE);
+  g.poly([wx - ww + 0.3 * FT, -wl, wx + ww - 0.3 * FT, -wl + 1, wx + ww - 0.3 * FT, wl, wx - ww + 0.3 * FT, wl - 1]).fill(shade(tones[0], 0.9)).stroke({ width: OUT, color: INK, join: 'round' });
+  for (let y = -wl + 0.5 * FT; y < wl - 0.2 * FT; y += 0.62 * FT) g.rect(wx - ww + 0.55 * FT, y, ww * 2 - 1.1 * FT, 0.32 * FT).fill(shade(tones[2], 0.9 + 0.15 * (y < 0 ? 1 : 0)));
+  for (const sx of [-1, 1]) g.moveTo(wx + sx * (ww - 0.42 * FT), -wl + 2).lineTo(wx + sx * (ww - 0.42 * FT), wl - 2);
+  g.stroke({ width: 0.24 * FT, color: tones[1] });
+  for (const sx of [-1, 1]) g.circle(wx + sx * (ww + 0.05 * FT), 0, 0.3 * FT).fill(IRON[2]).stroke({ width: LINE, color: INK });
+  // Its rope, wound off the axle to the post.
+  ink2(() => g.moveTo(wx + ww + 0.3 * FT, 0.15 * FT).quadraticCurveTo(px - 2.2 * FT, 0.5 * FT, px - 0.8 * FT, 0.2 * FT), 2, ROPE);
+  // The jib: one long timber tapering out to its tip, an iron band or two, a lit north edge.
+  const tx = 9.4 * FT;
+  const [w0, w1] = [0.68 * FT, 0.38 * FT];
+  const j = [px - 1.4 * FT, -w0, tx, -w1, tx, w1, px - 1.4 * FT, w0];
+  g.poly(j).fill(tones[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly([px - 1.4 * FT + 2, -w0 + 1.5, tx - 2, -w1 + 1.2, tx - 2, -w1 * 0.2, px - 1.4 * FT + 2, -w0 * 0.2]).fill(tones[2]);
+  for (const f of [0.35, 0.7]) {
+    const x = px + (tx - px) * f;
+    const w = w0 + (w1 - w0) * ((x - px + 1.4 * FT) / (tx - px + 1.4 * FT));
+    g.rect(x - 0.12 * FT, -w, 0.24 * FT, w * 2).fill(IRON[1]).stroke({ width: 1, color: INK });
+  }
+  // The post top over it all at the turntable's middle, its end grain.
+  bevel(g, px - 0.75 * FT, -0.75 * FT, px + 0.75 * FT, 0.75 * FT, 2.2, tones, OUT);
+  g.circle(px, 0, 0.32 * FT).stroke({ width: 1.1, color: tones[0], alpha: 0.8 });
+  // The block at the tip; the rope from it down to the load hanging a little to the south.
+  const [lx, ly] = [tx + 0.1 * FT, 1.0 * FT];
+  ink2(() => g.moveTo(tx - 0.1 * FT, 0).quadraticCurveTo(tx + 0.25 * FT, ly * 0.4, lx, ly), 1.8, ROPE);
   const sling = (R: number) => {
-    for (const a of [0.6, 2.2, 3.7, 5.3]) g.moveTo(lx, 0).lineTo(lx + Math.cos(a) * R, Math.sin(a) * R);
+    for (const a of [0.6, 2.2, 3.7, 5.3]) g.moveTo(lx, ly).lineTo(lx + Math.cos(a) * R, ly + Math.sin(a) * R);
     g.stroke({ width: 4, color: INK, cap: 'round' });
-    for (const a of [0.6, 2.2, 3.7, 5.3]) g.moveTo(lx, 0).lineTo(lx + Math.cos(a) * R, Math.sin(a) * R);
+    for (const a of [0.6, 2.2, 3.7, 5.3]) g.moveTo(lx, ly).lineTo(lx + Math.cos(a) * R, ly + Math.sin(a) * R);
     g.stroke({ width: 2, color: ROPE, cap: 'round' });
   };
   if (v === 0) {
-    barrel(g, lx, 0, 1.1 * FT, rnd);
-    sling(1.0 * FT);
+    barrel(g, lx, ly, 1.0 * FT, rnd);
+    sling(0.95 * FT);
   } else if (v === 1) {
-    crate(g, lx, 0, 0.95 * FT, 0.25, true);
-    sling(1.25 * FT);
+    crate(g, lx, ly, 0.9 * FT, 0.25, true);
+    sling(1.2 * FT);
   } else if (v === 2) {
     for (const [dx, dy, a] of [
-      [-0.5, -0.45, 0.3],
-      [0.55, -0.3, -0.4],
-      [0, 0.55, 1.2],
+      [-0.45, -0.4, 0.3],
+      [0.5, -0.25, -0.4],
+      [0, 0.5, 1.2],
     ]) {
-      const [cx, cy] = [lx + dx * FT, dy * FT];
-      g.poly(oval(cx, cy, 0.8 * FT, 0.55 * FT, a, 14)).fill(0xc8b080).stroke({ width: LINE, color: INK, join: 'round' });
-      g.poly(oval(cx - 2, cy - 2, 0.45 * FT, 0.28 * FT, a, 10)).fill(0xe0cca0);
+      const [cx, cy] = [lx + dx * FT, ly + dy * FT];
+      g.poly(oval(cx, cy, 0.72 * FT, 0.5 * FT, a, 14)).fill(0xc8b080).stroke({ width: LINE, color: INK, join: 'round' });
+      g.poly(oval(cx - 2, cy - 2, 0.4 * FT, 0.25 * FT, a, 10)).fill(0xe0cca0);
     }
-    g.poly(oval(lx, 0, 1.25 * FT, 1.0 * FT, 0, 16)).stroke({ width: 2.2, color: shade(NET[0], 0.7) });
+    g.poly(oval(lx, ly, 1.15 * FT, 0.95 * FT, 0, 16)).stroke({ width: 2.2, color: shade(NET[0], 0.7) });
+  } else {
+    ink2(() => g.moveTo(lx, ly).arc(lx, ly + 0.3 * FT, 0.3 * FT, -Math.PI / 2, Math.PI * 0.9), 2.2, IRON[3]);
   }
-  // The post (the jib over it), the block at the jib's tip.
-  bevel(g, px - 0.78 * FT, -0.78 * FT, px + 0.78 * FT, 0.78 * FT, 2.4, tones, OUT);
-  // The jib: two timbers spread wide at the post and drawn together at the tip, tied across and laced
-  // with braces, so it reads as a crane's boom; a stone counterweight on its tail.
-  bevel(g, px - 2.9 * FT, -0.95 * FT, px - 1.1 * FT, 0.95 * FT, 2, STONE[1], OUT);
-  const beam = (x0: number, y0: number, x1: number, y1: number, w: number) => {
-    g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w + OUT * 2, color: INK, cap: 'round' });
-    g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w, color: tones[1], cap: 'round' });
-    g.moveTo(x0 - 1, y0 - w * 0.25).lineTo(x1 - 1, y1 - w * 0.25).stroke({ width: w * 0.35, color: tones[2], cap: 'round' });
-  };
-  const [j0, j1] = [0.95 * FT, 0.3 * FT];
-  const jy = (x: number) => j0 + ((j1 - j0) * (x - px)) / (tx - px);
-  for (let k = 0; k < 2; k++) {
-    const [a, b] = [px + (0.4 + k * 1.9) * ((tx - px) / 4), px + (2.0 + k * 1.9) * ((tx - px) / 4)];
-    g.moveTo(a, -jy(a)).lineTo(b, jy(b));
-  }
-  g.stroke({ width: 0.34 * FT + 2.4, color: INK, cap: 'butt' });
-  for (let k = 0; k < 2; k++) {
-    const [a, b] = [px + (0.4 + k * 1.9) * ((tx - px) / 4), px + (2.0 + k * 1.9) * ((tx - px) / 4)];
-    g.moveTo(a, -jy(a)).lineTo(b, jy(b));
-  }
-  g.stroke({ width: 0.34 * FT, color: shade(tones[1], 0.95), cap: 'butt' });
-  for (const sgn of [-1, 1]) beam(px - 1.4 * FT, sgn * j0, tx, sgn * j1, 0.4 * FT);
-  for (const x of [px + 2.8 * FT, px + 7.4 * FT]) {
-    g.rect(x - 0.2 * FT, -jy(x), 0.4 * FT, jy(x) * 2).fill(tones[2]).stroke({ width: LINE, color: INK });
-  }
-  g.roundRect(tx - 0.65 * FT, -0.62 * FT, 1.2 * FT, 1.24 * FT, 0.3 * FT).fill(tones[2]).stroke({ width: LINE, color: INK });
-  g.rect(tx - 0.45 * FT, -0.12 * FT, 0.8 * FT, 0.24 * FT).fill(IRON[0]);
-  if (v === 3) {
-    g.circle(tx + 0.9 * FT, 0, 0.42 * FT).stroke({ width: 0.3 * FT + 2.6, color: INK });
-    g.circle(tx + 0.9 * FT, 0, 0.42 * FT).stroke({ width: 0.3 * FT, color: IRON[3] });
-  }
+  g.roundRect(tx - 0.45 * FT, -0.42 * FT, 0.9 * FT, 0.84 * FT, 0.25 * FT).fill(tones[2]).stroke({ width: LINE, color: INK });
+  g.circle(tx, 0, 0.16 * FT).fill(IRON[1]);
 }
 
-/** Net rack, along x (10 ft), seen from high up: two forked posts, a pole across them, a net hung over it
- * to dry, hanging in scallops weighted with cork floats; one brown net (v0), a tarred net and a green one
- * side by side (v1), a pale hemp net half off with the rest heaped at the foot (v2), weathered grey posts,
- * a basket of floats by them (v3). */
+/** Net rack, along x (10 ft), seen from straight above: a rail between two round post tops, a net thrown
+ * over the rail to dry and spilling to the ground on both sides in a loose, wavy-edged sheet; the fold along
+ * the rail paler, the south side in shade, the mesh a few toned crossing lines, cork floats as dots along its
+ * edges; one brown net (v0), a tarred net and a green one side by side (v1), a pale hemp net over part of the
+ * rail with the rest heaped at the foot (v2), weathered grey posts, a basket of floats by them (v3). */
 export function netRack(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
   const tones = v === 3 ? GREY_WOOD : WOOD;
-  const [X, top, foot] = [4.3 * FT, -1.4 * FT, 1.9 * FT];
+  const X = 4.3 * FT;
   const nets: [number, number, number][] = [[[-3.8, 3.8, NET[0]]], [[-3.9, -0.1, NET[1]], [0.15, 3.9, NET[2]]], [[-3.8, 1.1, NET[3]]], [[-3.8, 3.8, 0x857a58]]][v] as [number, number, number][];
-  // A soft crescent under the net, on the side away from the light, no wider than the rack.
-  g.poly(oval(0.5 * FT, top + 1.5 * FT, X + 0.2 * FT, 1.2 * FT, 0, 24)).fill({ color: 0x000000, alpha: 0.14 });
-  for (const s of [-1, 1]) {
-    g.poly(oval(s * X + 2, foot + 1, 0.5 * FT, 0.24 * FT, 0, 10)).fill({ color: 0x000000, alpha: 0.28 });
-    g.moveTo(s * X, foot).lineTo(s * X, top).stroke({ width: 0.5 * FT + 2.8, color: INK, cap: 'round' });
-    g.moveTo(s * X, foot).lineTo(s * X, top).stroke({ width: 0.5 * FT, color: tones[1], cap: 'round' });
-    g.moveTo(s * X - 0.1 * FT, foot - 2).lineTo(s * X - 0.1 * FT, top + 2).stroke({ width: 1.6, color: tones[3], alpha: 0.8 });
+  // The rail and posts first: the net lies over the rail; its ends show past the net.
+  g.moveTo(-X - 0.3 * FT, 0).lineTo(X + 0.3 * FT, 0).stroke({ width: 0.34 * FT + 2.8, color: INK, cap: 'round' });
+  g.moveTo(-X - 0.3 * FT, 0).lineTo(X + 0.3 * FT, 0).stroke({ width: 0.34 * FT, color: tones[2], cap: 'round' });
+  for (const sx of [-1, 1]) {
+    g.circle(sx * X, 0, 0.42 * FT).fill(tones[1]).stroke({ width: LINE, color: INK });
+    g.circle(sx * X - 1, -1, 0.26 * FT).fill(tones[2]);
+    g.circle(sx * X - 1, -1, 0.12 * FT).stroke({ width: 1, color: tones[0], alpha: 0.7 });
   }
-  if (v === 3) basketOf(g, 2.8 * FT, 2.6 * FT, 0.75 * FT, 'floats', rnd);
-  const depth = 2.7 * FT;
+  if (v === 3) basketOf(g, 2.9 * FT, 2.75 * FT, 0.72 * FT, 'floats', rnd);
   for (const [a, b, color] of nets) {
     const [x0, x1] = [a * FT, b * FT];
-    const seg = (x1 - x0) / Math.max(2, Math.round((x1 - x0) / (1.7 * FT)));
-    const bottom = (x: number) => top + depth - 0.32 * FT * Math.abs(Math.sin((Math.PI * (x - x0)) / seg));
-    const pts = [x0, top, x1, top];
-    for (let x = x1; x >= x0 - 0.01; x -= seg / 8) pts.push(x, bottom(x));
-    // Soft on purpose: the net's edge is its own dark, not ink.
-    g.poly(pts).fill({ color, alpha: 0.92 }).stroke({ width: LINE, color: shade(color, 0.5), join: 'round' });
-    g.rect(x0, top, x1 - x0, 0.4 * FT).fill(shade(color, 1.18));
-    for (let x = x0 + seg / 3; x < x1 - 2; x += seg / 3) g.moveTo(x, top + 2).lineTo(x + 0.08 * FT, bottom(x) - 1);
-    for (const f of [0.36, 0.68]) {
-      g.moveTo(x0 + 1, top + f * (bottom(x0) - top));
-      for (let x = x0 + seg / 8; x <= x1 + 0.01; x += seg / 8) g.lineTo(x, top + f * (bottom(x) - top));
+    const W = (x1 - x0) / FT;
+    // The sheet's two ground edges: wavy, lying a little further out in the middle of each drop.
+    const edge = (sy: number): number[] => {
+      const pts: number[] = [];
+      const n = Math.max(4, Math.round(W * 1.6));
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        const x = x0 + (x1 - x0) * t;
+        const sag = Math.sin(Math.PI * t) * 0.5 + (rnd() - 0.5) * 0.7;
+        pts.push(x + (rnd() - 0.5) * 3, sy * (1.95 + sag) * FT);
+      }
+      return pts;
+    };
+    const north = edge(-1);
+    const south = edge(1);
+    const half = (e: number[]): number[] => {
+      const pts = [x0 - 2, 0];
+      pts.push(...e);
+      pts.push(x1 + 2, 0);
+      return pts;
+    };
+    g.poly(half(north)).fill(shade(color, 1.08));
+    g.poly(half(south)).fill(shade(color, 0.8));
+    // Mesh: a few crossing lines, toned, kept inside the sheet.
+    const mesh = shade(color, 0.58);
+    const lim = 1.6 * FT;
+    for (let x = x0 - lim * 2; x < x1; x += 0.85 * FT) {
+      const [ax, bx] = [Math.max(x, x0 + 3), Math.min(x + lim * 2, x1 - 3)];
+      if (bx <= ax) continue;
+      for (const d of [-1, 1]) g.moveTo(ax, d * (ax - x - lim)).lineTo(bx, d * (bx - x - lim));
     }
-    g.stroke({ width: 1.1, color: shade(color, 0.62), alpha: 0.85 });
-    for (let x = x0; x <= x1 + 0.01; x += seg) g.poly(oval(x, bottom(x) - 1, 0.24 * FT, 0.16 * FT, 0, 10)).fill(CORK).stroke({ width: 1.1, color: INK });
+    g.stroke({ width: 1, color: mesh, alpha: 0.6, cap: 'round' });
+    // Folds where it drapes: a few dark creases from the rail out to the edge, on both sides.
+    for (const e of [north, south]) for (let i = 2; i < e.length / 2 - 1; i += 3) g.moveTo(e[i * 2] + (rnd() - 0.5) * 6, 0).lineTo(e[i * 2], e[i * 2 + 1] * 0.85);
+    g.stroke({ width: 2.2, color: shade(color, 0.5), alpha: 0.7, cap: 'round' });
+    // The fold over the rail: a pale ridge, its shaded south lip.
+    g.moveTo(x0, 0).lineTo(x1, 0).stroke({ width: 0.3 * FT, color: shade(color, 1.3), cap: 'round' });
+    g.moveTo(x0, 0.22 * FT).lineTo(x1, 0.22 * FT).stroke({ width: 1.3, color: shade(color, 0.55), cap: 'round' });
+    // Soft edges in the net's own dark, then the cork floats along both edges.
+    for (const e of [north, south]) {
+      g.moveTo(x0 - 2, 0);
+      for (let i = 0; i < e.length; i += 2) g.lineTo(e[i], e[i + 1]);
+      g.lineTo(x1 + 2, 0).stroke({ width: LINE, color: shade(color, 0.45), join: 'round', cap: 'round' });
+    }
+    for (const e of [north, south]) for (let i = 1; i < e.length / 2 - 1; i += 2) g.circle(e[i * 2], e[i * 2 + 1] * 0.94, 0.17 * FT).fill(CORK).stroke({ width: 1.1, color: INK });
   }
-  if (v === 2) netHeap(g, 2.75 * FT, 1.35 * FT, 1.25 * FT, NET[3], rnd);
-  // The pole over the posts' forks.
-  g.moveTo(-X - 0.35 * FT, top).lineTo(X + 0.35 * FT, top).stroke({ width: 0.36 * FT + 2.8, color: INK, cap: 'round' });
-  g.moveTo(-X - 0.35 * FT, top).lineTo(X + 0.35 * FT, top).stroke({ width: 0.36 * FT, color: tones[2], cap: 'round' });
-  g.moveTo(-X - 0.2 * FT, top - 1.2).lineTo(X + 0.2 * FT, top - 1.2).stroke({ width: 1.2, color: tones[3], cap: 'round' });
-  for (const s of [-1, 1]) g.circle(s * X, top, 0.3 * FT).fill(tones[2]).stroke({ width: LINE, color: INK });
+  if (v === 2) netHeap(g, 2.75 * FT, 1.5 * FT, 1.2 * FT, NET[3], rnd);
 }
 
 /** Buoy afloat, from above, ripples round it: a can buoy painted red with a pale band and a ring on top

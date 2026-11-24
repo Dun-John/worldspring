@@ -23,6 +23,129 @@ export function canopy(g: Graphics, r: number, rnd: () => number, colors: readon
   }
 }
 
+/** Acacia from above: a flat, wide umbrella broken into separate leafy pads with gaps between them, the
+ * forked limbs (dark wood, a lit edge) showing through the gaps and through a few holes in the pads. Each
+ * pad has a shadowed SE underside, a mid tone and sunlit NW tops; a soft shadow lies under the crown. */
+export function acacia(g: Graphics, r: number, rnd: () => number, colors: readonly number[]) {
+  const [dark, mid, light] = colors;
+  const n = 5 + Math.floor(rnd() * 2);
+  const ph = rnd() * Math.PI * 2;
+  const pads: [number, number, number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ph + ((i + (rnd() - 0.5) * 0.4) / n) * Math.PI * 2;
+    const d = r * (0.5 + 0.14 * rnd());
+    pads.push([Math.cos(a) * d, Math.sin(a) * d * 0.82, r * (0.27 + 0.08 * rnd()), lit(a)]);
+  }
+  pads.push([(rnd() - 0.5) * r * 0.2, (rnd() - 0.5) * r * 0.2, r * 0.22, 0.4]);
+  // Each pad a few flat lobes, outlined together.
+  const lobes: [number, number, number, number][] = [];
+  for (const [x, y, rr, l] of pads) {
+    for (let j = 0; j < 3; j++) {
+      const a = rnd() * Math.PI * 2;
+      lobes.push([x + Math.cos(a) * rr * 0.45, y + Math.sin(a) * rr * 0.35, rr * (0.6 + 0.15 * rnd()), l]);
+    }
+  }
+  // The crown's soft shadow on the ground, off to the SE.
+  for (const [x, y, rr] of lobes) g.circle(x + r * 0.08, y + r * 0.1, rr);
+  g.fill({ color: 0x3a3018, alpha: 0.14 });
+  // Limbs from the trunk out to each pad, in two wood tones.
+  const limb = (x0: number, y0: number, x: number, y: number, w: number) => {
+    const cx = x0 + (x - x0) * 0.4 + (y - y0) * 0.15;
+    const cy = y0 + (y - y0) * 0.4 - (x - x0) * 0.15;
+    g.moveTo(x0, y0).quadraticCurveTo(cx, cy, x, y).stroke({ width: w + 2.5, color: INK, cap: 'round' });
+    g.moveTo(x0, y0).quadraticCurveTo(cx, cy, x, y).stroke({ width: w, color: 0x5e3e26, cap: 'round' });
+    g.moveTo(x0 - 0.8, y0 - 0.8).quadraticCurveTo(cx - 0.8, cy - 0.8, x - 0.8, y - 0.8).stroke({ width: w * 0.4, color: 0x9c7446, cap: 'round' });
+  };
+  for (const [x, y] of pads) limb(0, 0, x, y, 4);
+  g.circle(0, 0, r * 0.07).fill(0x5a3e28).stroke({ width: 2, color: INK });
+  for (const [x, y, rr] of lobes) g.circle(x, y, rr + OUT).fill(INK);
+  for (const [x, y, rr] of lobes) g.circle(x, y, rr).fill(dark);
+  for (const [x, y, rr, l] of lobes) g.circle(x - rr * 0.16, y - rr * 0.18, rr * 0.78).fill(shade(mid, 1 + 0.06 * l));
+  // A few holes through the leaves with a limb across them.
+  for (let i = 0; i < 3; i++) {
+    const [x, y, rr] = pads[Math.floor(rnd() * n)];
+    const hx = x + (rnd() - 0.5) * rr * 0.6;
+    const hy = y + (rnd() - 0.5) * rr * 0.5;
+    g.poly(blob(hx, hy, rr * 0.2, 7, 0.4, rnd)).fill(shade(dark, 0.62));
+    const t = rnd() * Math.PI;
+    g.moveTo(hx - Math.cos(t) * rr * 0.17, hy - Math.sin(t) * rr * 0.17).lineTo(hx + Math.cos(t) * rr * 0.17, hy + Math.sin(t) * rr * 0.17).stroke({ width: 2.2, color: 0x5e3e26, cap: 'round' });
+  }
+  for (const [x, y, rr, l] of lobes) g.circle(x - rr * 0.32, y - rr * 0.34, rr * 0.44).fill(shade(light, 1 + 0.07 * l));
+}
+
+/** A broad jungle leaf from (x, y) along `a`: widest a little before its middle, a bold outline in `line`
+ * and a pale midrib. */
+function broadLeaf(g: Graphics, x: number, y: number, a: number, len: number, color: number, line: number, lw: number, bend: number) {
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const w = len * 0.36;
+  const tx = x + c * len - s * len * bend;
+  const ty = y + s * len + c * len * bend;
+  const mx = x + c * len * 0.45 - s * len * bend * 0.5;
+  const my = y + s * len * 0.45 + c * len * bend * 0.5;
+  g.moveTo(x - s * w * 0.25, y + c * w * 0.25)
+    .bezierCurveTo(mx - s * w * 1.25, my + c * w * 1.25, tx - c * len * 0.2 - s * w * 0.5, ty - s * len * 0.2 + c * w * 0.5, tx, ty)
+    .bezierCurveTo(tx - c * len * 0.2 + s * w * 0.5, ty - s * len * 0.2 - c * w * 0.5, mx + s * w * 1.25, my - c * w * 1.25, x + s * w * 0.25, y - c * w * 0.25)
+    .closePath()
+    .fill(color)
+    .stroke({ width: lw, color: line, join: 'round' });
+  g.moveTo(x, y).quadraticCurveTo(mx, my, x + (tx - x) * 0.82, y + (ty - y) * 0.82).stroke({ width: 1.6, color: shade(color, 1.4), cap: 'round' });
+}
+
+/** Jungle tree from above: a full, round crown of big broad leaves in overlapping clumps, a dark under-layer
+ * at the rim, mid clumps over it and a lighter top layer toward the NW, a few leaf tips breaking the outline. */
+export function jungleTree(g: Graphics, r: number, rnd: () => number, colors: readonly number[]) {
+  const [dark, mid, light] = colors;
+  const parts: [number, number, number, number][] = [];
+  const lobes = 9;
+  for (let i = 0; i < lobes; i++) {
+    const a = (i / lobes) * Math.PI * 2 + rnd() * 0.6;
+    const d = r * (0.35 + 0.18 * rnd());
+    parts.push([Math.cos(a) * d, Math.sin(a) * d, r * (0.42 + 0.12 * rnd()), a]);
+  }
+  const line = shade(dark, 0.5);
+  const tone = (a: number, base: number, k: number) => shade(base, 1 + k * lit(a));
+  // Leaf tips past the rim: drawn first, so the crown covers their stalks.
+  const out = [0, 3, 6].map((k) => parts[(k + Math.floor(rnd() * 3)) % lobes]);
+  for (const [x, y, rr, a] of out) {
+    const d = Math.hypot(x, y);
+    const b = a + (rnd() - 0.5) * 0.5;
+    broadLeaf(g, x * 0.6, y * 0.6, b, Math.min(rr + d * 0.4 + r * 0.12, r * 1.04 - d * 0.6), tone(b, dark, 0.15), INK, OUT * 0.8, (rnd() - 0.5) * 0.3);
+  }
+  for (const [x, y, rr] of parts) g.circle(x, y, rr + OUT).fill(INK);
+  g.circle(0, 0, r * 0.55 + OUT).fill(INK);
+  for (const [x, y, rr] of parts) g.circle(x, y, rr).fill(dark);
+  g.circle(0, 0, r * 0.55).fill(dark);
+  // Rim clumps: three leaves fanning out from inside each lobe, the shaded side first.
+  const rim = [...parts].sort((p, q) => lit(p[3]) - lit(q[3]));
+  for (const [x, y, rr, a] of rim) {
+    const d = Math.hypot(x, y);
+    for (const f of [-0.6, 0.6, -0.2, 0.25]) {
+      const b = a + f + (rnd() - 0.5) * 0.25;
+      const len = (rr + d * 0.3 - r * 0.05) * (0.9 + 0.1 * rnd());
+      broadLeaf(g, x * 0.7, y * 0.7, b, len, tone(b, lit(b) > 0.3 ? mid : dark, 0.14), line, 1.6, (rnd() - 0.5) * 0.35);
+    }
+  }
+  // Mid clumps, nearer the centre and a little toward the light.
+  const clump = (cx: number, cy: number, k: number, len: number, base: number, edge: number) => {
+    const a0 = Math.atan2(cy, cx) + (rnd() - 0.5) * 1.2;
+    for (let i = 0; i < k; i++) {
+      const b = a0 + (i - (k - 1) / 2) * 0.75 + (rnd() - 0.5) * 0.3;
+      broadLeaf(g, cx, cy, b, len * (0.85 + 0.25 * rnd()), tone(b, base, 0.12), edge, 1.5, (rnd() - 0.5) * 0.35);
+    }
+  };
+  const ph = rnd() * Math.PI * 2;
+  for (let i = 0; i < 3; i++) {
+    const a = ph + (i / 3) * Math.PI * 2 + (rnd() - 0.5) * 0.6;
+    clump(Math.cos(a) * r * 0.24 - r * 0.06, Math.sin(a) * r * 0.24 - r * 0.06, 3, r * 0.46, mid, line);
+  }
+  clump(r * 0.02, r * 0.02, 4, r * 0.4, mid, line);
+  // The sunlit top layer, toward the NW.
+  const top = shade(light, 1.12);
+  clump(-r * 0.12 + (rnd() - 0.5) * r * 0.08, -r * 0.2, 3, r * 0.32, top, shade(mid, 0.6));
+  clump(-r * 0.22, -r * 0.04 + (rnd() - 0.5) * r * 0.08, 2, r * 0.27, top, shade(mid, 0.6));
+}
+
 /** How much a direction faces the NW light: 1 toward it, -1 away. */
 export function lit(a: number): number {
   return -(Math.cos(a) + Math.sin(a)) * Math.SQRT1_2;
@@ -293,40 +416,49 @@ export function tuft(g: Graphics, x: number, y: number, n: number, len: number, 
   for (const [a, l] of blades) leaf(g, x, y, a, l, w, shade(colors[Math.floor(rnd() * colors.length)], 1 + 0.18 * lit(a)), 0.3, (rnd() - 0.5) * 0.3);
 }
 
-/** Reeds: bold tufts of narrow blades like tall grass (a lighter tuft over a darker one, toned outlines),
- * with brown cattail heads standing among them. */
+/** Reeds: two or three clumps of long thin blades radiating from their tufts (darker long ones under,
+ * lighter short ones on top), and a few brown cattail heads on stalks laid outward over the blades. */
 export function reeds(g: Graphics, r: number, rnd: () => number, v: number) {
   const greens = [
-    [0x5e8a48, 0x7aa456, 0x9cc070],
-    [0x568646, 0x72a058, 0x94bc72],
-    [0x6a8c44, 0x88a652, 0xaac26a],
-    [0x52824c, 0x6e9c5e, 0x8eb878],
+    [0x4e7a3c, 0x6e9a4c, 0x94bc68],
+    [0x48763e, 0x68964e, 0x8cb66a],
+    [0x5a7c38, 0x7c9c46, 0xa2bc60],
+    [0x467442, 0x629252, 0x86b070],
   ][v];
   const n = 2 + Math.floor(rnd() * 2);
   const ph = rnd() * Math.PI * 2;
   const spots: number[][] = [];
   for (let i = 0; i < n; i++) {
     const a = ph + (i / n) * Math.PI * 2;
-    const x = Math.cos(a) * r * 0.28;
-    const y = Math.sin(a) * r * 0.28;
-    spots.push([x, y]);
-    const rr = r * (0.66 + 0.08 * rnd());
-    const tips = boughs(12, rnd).map(([t, k]): [number, number] => [t, k * (0.65 + 0.35 * rnd())]);
-    whorl(g, x, y, rr, tips, 0.35);
-    g.fill(greens[0]).stroke({ width: 1.5, color: shade(greens[0], 0.45), join: 'round' });
-    whorl(g, x - rr * 0.08, y - rr * 0.08, rr * 0.7, tips, 0.35);
-    g.fill(greens[1]);
-    whorl(g, x - rr * 0.14, y - rr * 0.14, rr * 0.38, boughs(8, rnd), 0.4);
-    g.fill(greens[2]);
+    spots.push([Math.cos(a) * r * 0.3, Math.sin(a) * r * 0.3]);
   }
-  // Cattails: brown heads, lit on the NW, outlined in a dark brown.
-  for (let i = 0; i < 4; i++) {
+  // Long dark blades first (all clumps), then mid, then short light ones, so the clumps knit together.
+  for (let layer = 0; layer < 3; layer++) {
+    for (const [x, y] of spots) {
+      const m = [11, 8, 5][layer];
+      const len = r * [0.62, 0.46, 0.28][layer];
+      const tp = rnd() * Math.PI * 2;
+      for (let j = 0; j < m; j++) {
+        const a = tp + ((j + (rnd() - 0.5) * 0.6) / m) * Math.PI * 2;
+        const c = shade(greens[layer], 1 + 0.15 * lit(a));
+        leaf(g, x, y, a, len * (0.7 + 0.3 * rnd()), r * 0.035, c, 0.25, (rnd() - 0.5) * 0.35);
+      }
+    }
+  }
+  // Cattails: a stalk from a tuft out across the blades, the brown head near its end, laid along it.
+  const heads = 3 + (v % 2);
+  for (let i = 0; i < heads; i++) {
     const [x0, y0] = spots[i % n];
-    const a = rnd() * Math.PI * 2;
-    const x = x0 + Math.cos(a) * r * 0.2;
-    const y = y0 + Math.sin(a) * r * 0.2;
-    g.poly(oval(x, y, r * 0.14, r * 0.07, a)).fill(0x6e4428).stroke({ width: 1.5, color: 0x3a2414 });
-    g.poly(oval(x - r * 0.02, y - r * 0.02, r * 0.09, r * 0.03, a)).fill(0x9a6a40);
+    const a = Math.atan2(y0, x0) + (rnd() - 0.5) * 1.6 + (i >= n ? 1.2 : 0);
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    const l = r * (0.5 + 0.15 * rnd());
+    g.moveTo(x0, y0).lineTo(x0 + c * l, y0 + s * l).stroke({ width: 2.5, color: 0x3a4a22, cap: 'round' });
+    g.moveTo(x0, y0).lineTo(x0 + c * l, y0 + s * l).stroke({ width: 1.2, color: 0x7a9a4a, cap: 'round' });
+    const hx = x0 + c * l * 0.72;
+    const hy = y0 + s * l * 0.72;
+    g.poly(oval(hx, hy, r * 0.16, r * 0.06, a)).fill(0x5e3e26).stroke({ width: 1.5, color: INK });
+    g.poly(oval(hx - c * r * 0.01 - r * 0.012, hy - s * r * 0.01 - r * 0.012, r * 0.1, r * 0.022, a)).fill(0x8e6440);
   }
 }
 

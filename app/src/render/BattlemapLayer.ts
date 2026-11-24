@@ -22,7 +22,7 @@ import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
-import { looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
+import { DRAWN_R, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { sprites } from './spriteCode';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { boundAt, isBound, SAILS } from './countryside';
@@ -946,7 +946,7 @@ export class BattlemapLayer {
       const isTall = inf.height_ft >= 5;
       const rotation = custom ? o.rot : drawnRotation(inf as KindInfo, turned, o.rot);
       const standing = custom ? inf.height_ft > 0 : !hazard && isStanding(inf as KindInfo);
-      const sh = standing ? dropShadowOf(inf, custom ? 0 : o.kind, !custom, o.scale, rotation) : null;
+      const sh = standing ? dropShadowOf(inf, custom ? 0 : o.kind, !custom, o.scale, rotation, variant % looks(o.kind)) : null;
       if (sh) {
         // (A short prop's shadow lies under it and the props beside it, over the ground marks; a tall
         // one's falls over the short props and walls about it.)
@@ -1402,7 +1402,7 @@ export function isStanding(inf: KindInfo): boolean {
  * offset to the SE and sized by its height (a stone 1 ft high casts a small faint one hard by it, a 5-ft
  * crate stack a full one), drawn out along long things, long and thin from posts. `builtin`: a
  * catalog kind (its own rules by name and id), else an uploaded sprite. */
-export function dropShadowOf(inf: { name?: string; radius: number; height_ft: number }, kind: number, builtin: boolean, scale: number, rotation: number) {
+export function dropShadowOf(inf: { name?: string; radius: number; height_ft: number }, kind: number, builtin: boolean, scale: number, rotation: number, variant?: number) {
   const h = inf.height_ft;
   const name = builtin ? (inf.name ?? '') : '';
   const [size, strength] = SPARSE.get(name) ?? [1, 1];
@@ -1411,7 +1411,11 @@ export function dropShadowOf(inf: { name?: string; radius: number; height_ft: nu
   // under it, growing as they rise; from 5 ft, the tall things' shadow.)
   const short = h < 5;
   const grow = short ? 0.85 + 0.0375 * h : 1;
-  const r = inf.radius * PX * scale * size * grow;
+  // (No bigger than the art drawn in its frame: a single barrel is far smaller than its kind's footprint.
+  // Without a look, the looks' mean.)
+  const drawn = builtin ? DRAWN_R[kind] : undefined;
+  const dr = !drawn?.length ? Infinity : variant !== undefined ? (drawn[variant % drawn.length] ?? Infinity) : drawn.reduce((a, b) => a + b, 0) / drawn.length;
+  const r = Math.min(inf.radius * PX, dr) * scale * size * grow;
   // (From the standing part when it is off the middle, turned with the frame.)
   const foot = builtin ? (UPRIGHT_FOOT[kind] ?? 0) * scale : 0;
   const [fx, fy] = [-Math.sin(rotation) * foot, Math.cos(rotation) * foot];
@@ -1422,9 +1426,11 @@ export function dropShadowOf(inf: { name?: string; radius: number; height_ft: nu
     return { dx: d, dy: d, sx: len / 128, sy: (post[1] * PX * scale) / 128, rot: Math.PI / 4, alpha: 0.5 };
   }
   const off = Math.min(1.3, 0.15 + h / 45) * PX * 0.7 * (long ? long[2] : 1) * (short ? 1.8 : 1);
+  // (A small prop's shadow stays joined to it: set out no further than about its own radius.)
+  const offAt = short && !long ? Math.min(off, r * 0.7) : off;
   return {
-    dx: fx + off,
-    dy: fy + off,
+    dx: fx + offAt,
+    dy: fy + offAt,
     sx: long ? (long[0] * PX * scale) / 128 : (r * 2.1) / 128,
     sy: long ? (long[1] * PX * scale) / 128 : (r * 2.1) / 128,
     rot: long ? rotation : 0,

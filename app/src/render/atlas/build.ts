@@ -7,7 +7,7 @@ import { PX, MIP_LEVELS, PAD } from '../scale';
 import { Texture, Graphics, type Renderer, Container, Rectangle } from 'pixi.js';
 import { ballista, shotStones } from '../fortProps';
 import type { KindInfo } from '../../gen/client';
-import { brambles, cactus, canopy, conifer, deadTree, mushroomRing, palm, reeds, strokes, tallGrass, wildflowers } from './plants';
+import { acacia, brambles, cactus, canopy, jungleTree, conifer, deadTree, mushroomRing, palm, reeds, strokes, tallGrass, wildflowers } from './plants';
 import { bones, fallenLog, stump } from './wood';
 import { boulderStone, rockPile, scree, smallRocks } from './stones';
 import { barrels, cart, crates, haystack, headstone, marketStall, statue, well } from './yard';
@@ -22,7 +22,7 @@ import { beehive, gate, ironRailing, picketFence, stockade, vegRow, wattleFence 
 import { anvil, cairn, kurgan, lychgate, standingStone, tombSlab, yew } from './graves';
 import { hitchingRail, horse } from './stable';
 import { bollard, buoy, dockCrane, fishingBoat, netRack, rowboat } from './harbour';
-import { looks, type Atlas } from '../atlas';
+import { DRAWN_R, looks, type Atlas } from '../atlas';
 
 /** Atlas width: wide enough that the height stays within 4096 too (many phones' largest texture). */
 const ATLAS_W = 4096;
@@ -33,10 +33,8 @@ const DRAW: Record<number, Draw> = {
   1: (g, r, rnd, v) => canopy(g, r, rnd, [[0x2f4a22, 0x4d6e2d, 0x7a9a3c], [0x34502a, 0x557a32, 0x88a846], [0x3a4a20, 0x62702c, 0x9aa24a], [0x2c4426, 0x46683a, 0x6f9450]][v], 7),
   2: conifer,
   3: palm,
-  4: (g, r, rnd, v) => canopy(g, r, rnd, [[0x1e4a24, 0x2e6a2e, 0x4f8f3a], [0x1c4230, 0x2b6240, 0x4a8850], [0x224a1e, 0x357028, 0x5a9a38], [0x1a3e22, 0x2a5a2e, 0x468040]][v], 9),
-  5: (g, r, rnd) => {
-    canopy(g, r, rnd, [0x5a6a26, 0x7d8a34, 0xa9ad54], 6);
-  },
+  4: (g, r, rnd, v) => jungleTree(g, r, rnd, [[0x163a1c, 0x245a26, 0x3e7a30], [0x14361f, 0x225234, 0x3a7444], [0x1a3c18, 0x2a5e22, 0x467e2e], [0x12321a, 0x204c26, 0x386a34]][v]),
+  5: (g, r, rnd, v) => acacia(g, r, rnd, [[0x5a5c22, 0x8c9a3a, 0xc4c45c], [0x605a24, 0x969a3c, 0xccc464], [0x52602a, 0x84a040, 0xb8cc62], [0x645c26, 0x9c9640, 0xd2c868]][v]),
   6: deadTree,
   7: (g, r, rnd) => {
     canopy(g, r, rnd, [0x3e5e44, 0x5f8058, 0x8aaa78], 8);
@@ -154,7 +152,7 @@ const DRAW: Record<number, Draw> = {
 
 /** Room in the frame beyond the footprint (squares, by kind id) for things drawn bigger than their catalog radius
  * (tall things drawn from a high angle; the standing stone, whose top is longer than its footprint is wide). */
-const ROOM: Record<number, number> = { 155: 0.85, 142: 0.4, 107: 1.06, 100: 1.9, 101: 0.45, 103: 1.45, 105: 0.84, 62: 1.16, 56: 0.68 };
+const ROOM: Record<number, number> = { 106: 1.1, 155: 0.85, 142: 0.4, 107: 1.06, 100: 1.9, 101: 0.45, 103: 1.45, 105: 0.84, 62: 1.16, 56: 0.68 };
 
 /** Kinds whose footprint radius was cut to fit the top-down drawing (v66): the drawing keeps its old reference
  * radius (squares), so it is still the same size on screen. */
@@ -192,9 +190,10 @@ export function buildAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
       const g = new Graphics();
       g.position.set(at.x + rpx, at.y + rpx);
       (DRAW[info.id] ?? DRAW[12])(g, (DRAW_R[info.id] ?? info.radius) * PX, rng(info.id * 131 + v * 17 + 7), v);
+      const b = g.getLocalBounds();
+      (DRAWN_R[info.id] ??= [])[v] = Math.max(1, (b.maxX - b.minX + b.maxY - b.minY) / 4 - 1);
       if (import.meta.env.DEV) {
         // Art past the frame is cut off flat (and could bleed into the next frame's mips).
-        const b = g.getLocalBounds();
         const over = Math.max(-b.minX, b.maxX, -b.minY, b.maxY) - rpx;
         if (over > 0.5) console.warn(`[atlas] ${info.id} ${info.name} v${v}: ${over.toFixed(1)} px past its frame`);
       }

@@ -68,25 +68,28 @@ export function anvil(g: Graphics, r0: number, rnd: () => number, v: number) {
 
 // Roadmap 5 cemeteries: cairns, standing stones, yews, a lychgate, kurgans and tomb slabs.
 
-/** Cairn: a heap of rounded field stones about 4 ft across, the big ones round its foot, smaller ones piled
- * on them toward the middle and a capstone on top; moss on one, a lighter heap of fresh stones on another. */
+/** Cairn: a loose heap of distinct rounded field stones about 4 ft across, no ring or base: the biggest
+ * round its foot (some pushed out, so the outline is lumpy), smaller ones piled on them, a few small ones on
+ * top, each tier a little paler (nearer the sun); dark gaps between the stones; moss on one, fresher stones on another. */
 export function cairn(g: Graphics, r0: number, rnd: () => number, v: number) {
-  // (Drawn a third over its catalog size, a darker heap on a dark ring and a shadow, so it stands out among headstones.)
-  const r = r0 * 1.35;
-  const tones = STONE[v].map((c) => shade(c, 0.82));
-  g.ellipse(r * 0.22, r * 0.3, r * 1.12, r * 0.95).fill({ color: 0x1c1a14, alpha: 0.3 });
-  g.circle(0, 0, r * 0.98).fill(tones[0]).stroke({ width: OUT, color: INK });
-  const ring = (n: number, d: number, s: number, off: number) => {
+  const r = r0 * 1.3;
+  const base = STONE[v].map((c) => shade(c, 0.86));
+  const tier = (k: number) => base.map((c) => shade(c, k));
+  g.poly(blob(r * 0.16, r * 0.2, r * 0.95, 11, 0.3, rnd)).fill({ color: 0x1c1a14, alpha: 0.26 });
+  // The crevices between the stones: a dark lumpy floor under the heap, no outline.
+  g.poly(blob(0, 0, r * 0.7, 10, 0.3, rnd)).fill(shade(base[0], 0.55));
+  const ring = (n: number, d: number, sz: number, tones: readonly number[], off: number, spread: number) => {
     const ph = rnd() * Math.PI * 2;
     for (let i = 0; i < n; i++) {
-      const a = ph + ((i + (rnd() - 0.5) * 0.4) / n) * Math.PI * 2;
-      stone(g, Math.cos(a) * d * r + off, Math.sin(a) * d * r + off, r * s * (0.85 + 0.3 * rnd()), tones, rnd, 9);
+      const a = ph + ((i + (rnd() - 0.5) * 0.5) / n) * Math.PI * 2;
+      const dd = d * (1 - spread / 2 + spread * rnd()) * r;
+      stone(g, Math.cos(a) * dd + off, Math.sin(a) * dd + off, r * sz * (0.8 + 0.4 * rnd()), tones, rnd, 7 + Math.floor(rnd() * 3));
     }
   };
-  ring(8, 0.66, 0.3, 0);
-  ring(5, 0.36, 0.28, -r * 0.04);
-  stone(g, -r * 0.08, -r * 0.08, r * 0.27, v === 3 ? STONE[0] : tones, rnd, 9);
-  if (v === 1) moss(g, -r * 0.42, -r * 0.4, r * 0.18, rnd);
+  ring(8, 0.68, 0.27, tier(1), 0, 0.3);
+  ring(5, 0.36, 0.21, tier(1.07), -r * 0.04, 0.4);
+  ring(2, 0.12, 0.14, v === 3 ? STONE[0] : tier(1.14), -r * 0.08, 0.6);
+  if (v === 1) moss(g, -r * 0.5, -r * 0.38, r * 0.16, rnd);
 }
 
 /** A rough standing stone's top seen straight down at (x, y): an irregular lozenge `rx` by `ry` px turned by
@@ -208,9 +211,10 @@ export function yew(g: Graphics, r: number, rnd: () => number, v: number) {
   }
 }
 
-/** Lychgate from above, its ridge along x and the way through it along y: a short gabled roof (the north
- * plane paler, rows of tiles or shingles, a dark ridge, barge boards at the gable ends), its four corner posts
- * showing past the gables, a step of flags under the eaves either side; a dark opening and a pair of gate posts at each end where the way goes through. */
+/** Lychgate from above: a small gabled roof standing over a path. The path (worn flags, v1 and v3 earth)
+ * runs north-south right through and out past both eaves; the ridge runs across it east-west, a heavy dark
+ * line with a pale lit edge; the north slope sunlit, the south one in shade, both laid with rows of
+ * scalloped tiles or shingles, the ends hipped back; the four post tops just showing past the corners. */
 export function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
   const roof = [
@@ -219,40 +223,61 @@ export function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
     [0x5a3e26, 0x84603a, 0xa8804e],
     [0x5c2e22, 0x84442e, 0xa65e40],
   ][v];
-  // (12 by 7 ft over the gap: a roof, not a post, at the battlemap's middle zoom.)
-  const [rx, ry, px, py] = [6 * FT, 3.5 * FT, 6.45 * FT, 2.6 * FT];
-  // Flagstones under the eaves where the way goes through.
-  for (const s of [-1, 1]) {
-    g.rect(-1.6 * FT, s > 0 ? ry - 2 : -ry - 1.3 * FT + 2, 3.2 * FT, 1.3 * FT).fill(STONE[1][2]).stroke({ width: LINE, color: INK });
-    g.moveTo(0, s > 0 ? ry - 2 : -ry + 2).lineTo(0, s > 0 ? ry + 1.3 * FT - 2 : -ry - 1.3 * FT + 2).stroke({ width: 1, color: STONE[1][0] });
+  const [rx, ry, px, py] = [4.6 * FT, 3.3 * FT, 4.95 * FT, 2.7 * FT];
+  // The path, out past both eaves.
+  const pw = 1.6 * FT;
+  const plen = 7 * FT;
+  const earth = v % 2 === 1;
+  const path = [-pw - 2, -plen, pw + 1, -plen + 3, pw + 3, plen - 2, -pw + 1, plen];
+  g.poly(path).fill(earth ? 0x9a7e58 : STONE[1][2]).stroke({ width: LINE, color: earth ? 0x6a5236 : INK, join: 'round' });
+  if (earth) {
+    for (let i = 0; i < 6; i++) g.circle((rnd() - 0.5) * pw * 1.4, (rnd() - 0.5) * plen * 1.8, 1.5 + rnd() * 1.5).fill(0x7a6244);
+  } else {
+    // Flags: joints across the way and one down the middle, a little crooked.
+    for (let y = -plen + 1.3 * FT; y < plen - 0.5 * FT; y += 1.3 * FT) g.moveTo(-pw, y + (rnd() - 0.5) * 3).lineTo(pw, y + (rnd() - 0.5) * 3);
+    for (let y = -plen; y < plen; y += 2.6 * FT) g.moveTo((rnd() - 0.5) * 6, y).lineTo((rnd() - 0.5) * 6, y + 1.3 * FT);
+    g.stroke({ width: 1.3, color: STONE[1][0], cap: 'round' });
   }
-  // The posts, past the gable ends.
-  for (const sx of [-1, 1]) for (const sy of [-1, 1]) g.rect(sx * px - 0.45 * FT, sy * py - 0.45 * FT, 0.9 * FT, 0.9 * FT).fill(WOOD[1]).stroke({ width: LINE, color: INK });
-  // The roof: an eave overhang with its shadow, the south plane in shade, the north lit, tile rows along the ridge.
-  const ov = 0.5 * FT;
-  g.rect(-rx - ov + 3, -ry - ov + 4, rx * 2 + ov * 2, ry * 2 + ov * 2).fill({ color: 0x1c1a14, alpha: 0.32 });
-  g.rect(-rx - ov, -ry - ov, rx * 2 + ov * 2, ry * 2 + ov * 2).fill(shade(roof[0], 0.8)).stroke({ width: OUT, color: INK, join: 'round' });
-  g.rect(-rx, -ry, rx * 2, ry).fill(shade(roof[2], 1.12));
-  g.rect(-rx, 0, rx * 2, ry).fill(shade(roof[0], 0.9));
-  for (let k = 1; k < 4; k++) {
-    const y = (ry * k) / 4;
-    g.moveTo(-rx + 2, -y).lineTo(rx - 2, -y);
-    g.moveTo(-rx + 2, y).lineTo(rx - 2, y);
+  // Post tops, just past the gable-end corners.
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+    const [x, y] = [sx * px, sy * py];
+    g.poly([x - 0.42 * FT, y - 0.4 * FT, x + 0.4 * FT, y - 0.44 * FT, x + 0.44 * FT, y + 0.4 * FT, x - 0.4 * FT, y + 0.42 * FT]).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.circle(x - 0.1 * FT, y - 0.1 * FT, 0.18 * FT).fill(WOOD[2]);
   }
-  g.stroke({ width: 1.4, color: shade(roof[0], 0.6), alpha: 0.85 });
-  if (v === 3) for (let i = 0; i < 3; i++) moss(g, -rx * 0.6 + rnd() * rx * 1.2, -ry * 0.6 + rnd() * ry * 1.4, 5, rnd);
-  // Barge boards, the eave edges and a heavy ridge: a dark line, a pale cap on its lit side.
-  for (const sx of [-1, 1]) g.rect(sx * rx - (sx > 0 ? 0.35 * FT : 0), -ry, 0.35 * FT, ry * 2).fill(WOOD[0]);
-  g.moveTo(-rx, -ry).lineTo(rx, -ry).moveTo(-rx, ry).lineTo(rx, ry).stroke({ width: 2.4, color: shade(roof[0], 0.45) });
-  g.moveTo(-rx, 0).lineTo(rx, 0).stroke({ width: 6, color: shade(roof[0], 0.5), cap: 'round' });
-  g.moveTo(-rx + 2, -2).lineTo(rx - 2, -2).stroke({ width: 3, color: shade(roof[2], 1.3), cap: 'round' });
-  g.rect(-rx, -ry, rx * 2, ry * 2).stroke({ width: OUT, color: INK, join: 'round' });
-  // The way through: a dark threshold cut in each eave, flags worn pale before it, between two stout gate posts.
+  // The roof: two long slopes meeting at the ridge (y = 0), the ends clipped back in small hipped gables
+  // (a triangle at each end) so it reads as a roof; its outline a little hand-made.
+  const j = () => (rnd() - 0.5) * 2;
+  const C = [-rx + j(), -ry + j(), rx + j(), -ry + j(), rx + j(), ry + j(), -rx + j(), ry + j()];
+  const hx = rx - ry * 0.75;
+  g.poly([C[0], C[1], C[2], C[3], hx, 0, -hx, 0]).fill(roof[2]);
+  g.poly([-hx, 0, hx, 0, C[4], C[5], C[6], C[7]]).fill(shade(roof[0], 0.95));
+  g.poly([C[0], C[1], -hx, 0, C[6], C[7]]).fill(shade(roof[1], 1.05));
+  g.poly([C[2], C[3], hx, 0, C[4], C[5]]).fill(shade(roof[0], 0.8));
+  // Tile rows: scallops along each slope, each row's curves bulging downslope, clipped to the hips.
+  const rows = 3;
+  const tw = 0.95 * FT;
   for (const sy of [-1, 1]) {
-    const y0 = sy > 0 ? ry - 0.9 * FT : -ry - ov;
-    g.rect(-1.5 * FT, y0, 3 * FT, 0.9 * FT + ov).fill({ color: 0x120c07, alpha: 0.9 }).stroke({ width: LINE, color: INK });
-    for (const sx of [-1, 1]) g.rect(sx * 1.5 * FT - 0.4 * FT, sy * ry - 0.4 * FT + sy * ov * 0.6, 0.8 * FT, 0.8 * FT).fill(WOOD[2]).stroke({ width: LINE, color: INK });
+    const tone = sy < 0 ? shade(roof[1], 0.85) : shade(roof[0], 0.7);
+    for (let k = 1; k <= rows; k++) {
+      const f = k / (rows + 0.4);
+      const y = sy * ry * f;
+      const ex = hx + (rx - hx) * f - 2;
+      const off = (k % 2) * tw * 0.5;
+      g.moveTo(-ex, y);
+      for (let x = -ex + off; x < ex - 1; x += tw) {
+        const x1 = Math.min(ex, x + tw);
+        g.quadraticCurveTo((Math.max(x, -ex) + x1) / 2, y + sy * 0.4 * FT, x1, y);
+      }
+      g.stroke({ width: 1.4, color: tone, join: 'round' });
+    }
   }
+  if (v === 3) for (let i = 0; i < 3; i++) moss(g, -rx * 0.5 + rnd() * rx, -ry * 0.6 + rnd() * ry * 1.4, 5, rnd);
+  // The hips: dark lines from the ridge's ends out to the corners; then the ridge, a dark beam with a lit edge.
+  for (const [cx, cy, sx] of [[C[0], C[1], -1], [C[6], C[7], -1], [C[2], C[3], 1], [C[4], C[5], 1]]) g.moveTo(sx * hx, 0).lineTo(cx, cy);
+  g.stroke({ width: 3, color: shade(roof[0], 0.5), cap: 'round' });
+  g.moveTo(-hx, 0).lineTo(hx, 0).stroke({ width: 0.42 * FT, color: shade(roof[0], 0.55), cap: 'round' });
+  g.moveTo(-hx + 2, -0.12 * FT).lineTo(hx - 2, -0.12 * FT).stroke({ width: 2.4, color: shade(roof[2], 1.25), cap: 'round' });
+  g.poly(C).stroke({ width: OUT, color: INK, join: 'round' });
 }
 
 /** Kurgan: a broad burial mound under grass, drawn at its catalog size (bigger or smaller by its scale): a

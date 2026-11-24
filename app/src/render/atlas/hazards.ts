@@ -2,6 +2,7 @@ import { Graphics } from 'pixi.js';
 import { boughs, lit, whorl } from './plants';
 import { INK, blob, shade } from './common';
 import { stone } from './stones';
+import { OUT } from '../pen';
 
 /** Points of `pts` scaled by `k` about (cx, cy) and moved by (dx, dy). */
 function scaled(pts: number[], k: number, cx = 0, cy = 0, dx = 0, dy = 0): number[] {
@@ -60,15 +61,79 @@ export function snowdrift(g: Graphics, r: number, rnd: () => number, v: number) 
   g.stroke({ width: 1.5, color: 0xaab8d0, alpha: 0.9, cap: 'round' });
 }
 
-/** Ice spire: a cluster of pale blue crystal shards. */
+/** One faceted ice pinnacle from above: an irregular outline round a short ridge, each side a flat facet
+ * toned by the way it faces the light, ridge lines where the tone turns. */
+function iceBlock(g: Graphics, cx: number, cy: number, s: number, rnd: () => number, tones: readonly number[]) {
+  const n = 5 + Math.floor(rnd() * 2);
+  const ph = rnd() * Math.PI * 2;
+  const pts: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ph + ((i + (rnd() - 0.5) * 0.5) / n) * Math.PI * 2;
+    const d = s * (0.72 + 0.35 * rnd());
+    pts.push(cx + Math.cos(a) * d, cy + Math.sin(a) * d);
+  }
+  const u = rnd() * Math.PI;
+  const ax = cx + s * 0.1;
+  const ay = cy + s * 0.08;
+  const ends = [
+    [ax - Math.cos(u) * s * 0.2, ay - Math.sin(u) * s * 0.2],
+    [ax + Math.cos(u) * s * 0.2, ay + Math.sin(u) * s * 0.2],
+  ];
+  const near = (i: number) => {
+    const [x, y] = [pts[i * 2], pts[i * 2 + 1]];
+    return Math.hypot(x - ends[0][0], y - ends[0][1]) < Math.hypot(x - ends[1][0], y - ends[1][1]) ? 0 : 1;
+  };
+  const toneOf: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const l = lit(Math.atan2((pts[i * 2 + 1] + pts[j * 2 + 1]) / 2 - ay, (pts[i * 2] + pts[j * 2]) / 2 - ax));
+    toneOf.push(l > 0.3 ? 2 : l < -0.3 ? 0 : 1);
+  }
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const [ei, ej] = [ends[near(i)], ends[near(j)]];
+    const f = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1], ...ej];
+    if (ei !== ej) f.push(...ei);
+    g.poly(f).fill(tones[toneOf[i]]).stroke({ width: 1, color: tones[toneOf[i]], join: 'round' });
+  }
+  // Ridge lines: the crest, and the edges where one facet's tone turns into the next.
+  g.moveTo(ends[0][0], ends[0][1]).lineTo(ends[1][0], ends[1][1]);
+  for (let i = 0; i < n; i++) {
+    if (toneOf[i] === toneOf[(i + n - 1) % n]) continue;
+    const e = ends[near(i)];
+    g.moveTo(pts[i * 2], pts[i * 2 + 1]).lineTo(e[0], e[1]);
+  }
+  g.stroke({ width: 1.4, color: shade(tones[0], 0.7), cap: 'round' });
+  g.poly(pts).stroke({ width: OUT * 0.8, color: INK, join: 'round' });
+  return pts;
+}
+
+/** Ice spire from straight above: a cluster of faceted ice pinnacles, the tallest in the middle, standing
+ * in a pale skirt of snow and meltwater, with a short shadow to the SE. */
 export function iceSpire(g: Graphics, r: number, rnd: () => number, v: number) {
   const tones = [
-    [0x5a8fb8, 0x8ab8da, 0xa8d4ea, 0xeef8ff],
-    [0x5a98b0, 0x86c0d4, 0xa8dae6, 0xeefaff],
-    [0x6a88c0, 0x92b2e0, 0xb2cef0, 0xf2f6ff],
-    [0x5290b0, 0x7cb6d2, 0x9ed2e8, 0xeaf8ff],
+    [0x7a92aa, 0xa8bccc, 0xd4e0e8],
+    [0x7495a6, 0xa2c0cc, 0xd0e2e6],
+    [0x8090ac, 0xaebace, 0xd8deea],
+    [0x7098a4, 0x9ec2ca, 0xcce4e6],
   ][v];
-  crystals(g, r * 0.95, rnd, 6, tones, 0x2e5470);
+  const skirt = blob(r * 0.04, r * 0.06, r * 0.92, 12, 0.3, rnd);
+  fade(g, skirt, 0xd4e0e6, 0.4);
+  g.poly(scaled(skirt, 0.84, r * 0.04, r * 0.06)).fill({ color: 0xd8e4ea, alpha: 0.7 }).stroke({ width: 1.5, color: 0xb6c6d4, join: 'round' });
+  const k = [3, 4, 5, 4][v];
+  const ph = rnd() * Math.PI * 2;
+  const blocks: [number, number, number][] = [];
+  for (let i = 1; i < k; i++) {
+    const a = ph + ((i + (rnd() - 0.5) * 0.6) / (k - 1)) * Math.PI * 2;
+    const s = r * (0.27 + 0.1 * rnd());
+    const d = Math.min(r * (0.4 + 0.12 * rnd()), r * 0.94 - s);
+    blocks.push([Math.cos(a) * d, Math.sin(a) * d, s]);
+  }
+  blocks.sort((p, q) => p[2] - q[2]);
+  blocks.push([(rnd() - 0.5) * r * 0.12, (rnd() - 0.5) * r * 0.12, r * 0.5]);
+  // The short shadow first, under every block.
+  for (const [x, y, s] of blocks) g.poly(blob(x + r * 0.08, y + r * 0.09, s * 0.95, 7, 0.2, rnd)).fill({ color: 0x506680, alpha: 0.28 });
+  for (const [x, y, s] of blocks) iceBlock(g, x, y, s, rnd, tones);
 }
 
 /** Basalt pillar: a honeycomb of hexagonal column tops at different heights (the higher ones lighter),
@@ -240,23 +305,86 @@ export function thinIce(g: Graphics, r: number, rnd: () => number, v: number) {
   g.poly(blob(cx, cy, r * 0.06, 7, 0.5, rnd)).fill(0x163a52).stroke({ width: 1.2, color: 0xf2faff, alpha: 0.85 });
 }
 
-/** Lava: a crusted basalt rim round molten rock, cooler crust plates floating with glowing seams, a hot
- * bright core and a faint glow round it all. */
+/** The part of polygon `pts` with nx*x + ny*y <= c (one Sutherland-Hodgman pass). */
+function clip(pts: number[], nx: number, ny: number, c: number): number[] {
+  const out: number[] = [];
+  const m = pts.length / 2;
+  for (let i = 0; i < m; i++) {
+    const [x0, y0, x1, y1] = [pts[i * 2], pts[i * 2 + 1], pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
+    const d0 = nx * x0 + ny * y0 - c;
+    const d1 = nx * x1 + ny * y1 - c;
+    if (d0 <= 0) out.push(x0, y0);
+    if (d0 <= 0 !== d1 <= 0) {
+      const t = d0 / (d0 - d1);
+      out.push(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+    }
+  }
+  return out;
+}
+
+/** Lava pool: a rim of cracked, cooled basalt round a pool of glowing orange-red melt, dark crust plates
+ * floating on it with hot yellow only in the narrow cracks between them, a faint warm glow just past the rim. */
 export function lava(g: Graphics, r: number, rnd: () => number, v: number) {
-  const edge = blob(0, 0, r * 0.95, 13, 0.15, rnd);
-  fade(g, edge, 0xff7a1a, 0.12);
-  const rim = scaled(edge, 0.9);
-  g.poly(rim).fill(0x3a2620).stroke({ width: 2.5, color: INK, join: 'round' });
-  g.poly(scaled(rim, 0.94, 0, 0, -r * 0.03, -r * 0.03)).fill(0x5a3a2a);
-  const pool = scaled(blob(0, 0, r * 0.95, 12, 0.22, rnd), 0.72);
-  g.poly(pool).fill(0xe8561a).stroke({ width: 1.5, color: 0x8a2a10, join: 'round' });
-  g.poly(scaled(pool, 0.75, 0, 0, -r * 0.03, -r * 0.03)).fill(0xff7a1a);
-  g.poly(blob(-r * 0.05, -r * 0.05, r * 0.3, 9, 0.35, rnd)).fill(0xffb238);
-  g.poly(blob(-r * 0.08, -r * 0.08, r * 0.12, 7, 0.4, rnd)).fill(0xfff2c0);
-  for (let i = 0; i < 4 + v; i++) {
+  const edge = blob(0, 0, r * 0.95, 13, 0.14, rnd);
+  fade(g, edge, 0xd8783a, 0.14);
+  const rim = scaled(edge, 0.82);
+  g.poly(rim).fill(0x2a201c).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(scaled(rim, 0.97, 0, 0, -r * 0.025, -r * 0.025)).fill(0x4a3a32);
+  const pool = scaled(blob(0, 0, r * 0.95, 12, 0.2, rnd), 0.62);
+  g.poly(pool).fill(0xc8441e).stroke({ width: 1.5, color: 0x1a1210, join: 'round' });
+  // Cracks across the rim, from the pool's edge out.
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2 + rnd() * 0.5;
+    const [c, s] = [Math.cos(a), Math.sin(a)];
+    const b = a + (rnd() - 0.5) * 0.3;
+    g.moveTo(c * r * 0.55, s * r * 0.55).lineTo(Math.cos(b) * r * 0.64, Math.sin(b) * r * 0.64).lineTo(Math.cos(a) * r * 0.74, Math.sin(a) * r * 0.74);
+  }
+  g.stroke({ width: 1.4, color: 0x140e0c, cap: 'round', join: 'round' });
+  // Crust plates: the pool split into cells about scattered points, some left open.
+  // Scattered (not a hub and ring, which reads as a wheel).
+  const sites: [number, number][] = [];
+  for (let t = 0; t < 200 && sites.length < 7 + (v % 2); t++) {
     const a = rnd() * Math.PI * 2;
-    const d = r * (0.35 + 0.2 * rnd());
-    g.poly(blob(Math.cos(a) * d, Math.sin(a) * d, r * (0.08 + 0.06 * rnd()), 6, 0.4, rnd)).fill(0x3a2018).stroke({ width: 1.5, color: 0xffb238, join: 'round' });
+    const d = r * 0.52 * Math.sqrt(rnd());
+    const [x, y] = [Math.cos(a) * d, Math.sin(a) * d];
+    if (sites.every(([qx, qy]) => Math.hypot(qx - x, qy - y) > r * 0.24)) sites.push([x, y]);
+  }
+  const m = sites.length;
+  const o = Math.floor(rnd() * m);
+  let o2 = 0;
+  for (let j = 0; j < m; j++) if (j !== o && (o2 === o || Math.hypot(sites[j][0] - sites[o][0], sites[j][1] - sites[o][1]) < Math.hypot(sites[o2][0] - sites[o][0], sites[o2][1] - sites[o][1]))) o2 = j;
+  const open = new Set([o, o2]);
+  const cell = (i: number, base: number[], gap: number, openGap: number) => {
+    let p = base;
+    const [x, y] = sites[i];
+    sites.forEach(([qx, qy], j) => {
+      if (j === i || p.length < 6) return;
+      const l = Math.hypot(qx - x, qy - y) || 1;
+      const [nx, ny] = [(qx - x) / l, (qy - y) / l];
+      p = clip(p, nx, ny, nx * (x + qx) * 0.5 + ny * (y + qy) * 0.5 - (open.has(j) ? openGap : gap));
+    });
+    return p;
+  };
+  const kept = sites.map((_, i) => i).filter((i) => !open.has(i));
+  // The hot cracks: yellow round each plate where it meets another plate.
+  for (const i of kept) {
+    const p = cell(i, pool, 0, r * 0.08);
+    if (p.length >= 6) g.poly(p).fill(0xf0b43c);
+  }
+  for (const i of kept) {
+    const p = cell(i, pool, r * 0.03, r * 0.03);
+    if (p.length < 6) continue;
+    g.poly(p).fill(0x2e221e).stroke({ width: 1.2, color: 0x140e0c, join: 'round' });
+    const [x, y] = sites[i];
+    g.poly(scaled(p, 0.72, x, y, -r * 0.015, -r * 0.015)).fill(0x44342c);
+    if (rnd() < 0.6) {
+      const a = rnd() * Math.PI;
+      const l = r * 0.08;
+      g.moveTo(x - Math.cos(a) * l, y - Math.sin(a) * l)
+        .lineTo(x + (rnd() - 0.5) * l * 0.5, y + (rnd() - 0.5) * l * 0.5)
+        .lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l)
+        .stroke({ width: 1.2, color: 0x140e0c, cap: 'round', join: 'round' });
+    }
   }
 }
 

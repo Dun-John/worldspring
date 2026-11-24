@@ -216,8 +216,9 @@ function towerBody(g: Graphics, s: Shape, look: Look) {
   // (The foot round it: a squat tower's splayed plinth, an earth bastion's battered face, wider.)
   const foot = earth ? FT * 2.2 : squat ? FT * 1.1 : 0;
   // Shadow: the round swept away from the light (one outline, so it doesn't darken twice); a low one's short.
-  const D = PX * (squat ? 0.7 : earth ? 0.8 : 1.1);
+  // (Cast no further than the tower's own radius: D runs along both axes, so its length is D * sqrt 2.)
   const rs = r + foot;
+  const D = Math.min(PX * (squat ? 0.7 : earth ? 0.8 : 1.1), rs * Math.SQRT1_2);
   const shadow: number[] = [];
   for (let k = 0; k <= 12; k++) {
     const t = Math.PI * 0.75 + (k / 12) * Math.PI;

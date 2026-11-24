@@ -238,7 +238,7 @@ export function bandstand(g: Graphics, r: number, rnd: () => number, v: number) 
   g.stroke({ width: 1, color: WOOD[1] });
   g.poly(deck).stroke({ width: 1.8, color: INK, join: 'round' });
   const iron = v === 2;
-  const railTone = iron ? IRON[1] : 0xf2eee4;
+  const railTone = iron ? IRON[1] : 0xd8ceb4;
   const rail = octPts(r * 0.74);
   const pts: [number, number][] = Array.from({ length: 8 }, (_, i) => [rail[i * 2], rail[i * 2 + 1]]);
   // The south side (corners 1 to 2) is open for the steps. (Under a canopy's valance the rail is hidden.)
@@ -264,7 +264,7 @@ export function bandstand(g: Graphics, r: number, rnd: () => number, v: number) 
         const [x0, y0, x1, y1] = [a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0, a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1];
         const [mx, my] = [(x0 + x1) / 2, (y0 + y1) / 2];
         const [nx, ny] = [-mx / Math.hypot(mx, my), -my / Math.hypot(mx, my)];
-        g.poly([x0, y0, x1, y1, mx + nx * 9, my + ny * 9]).fill([0xc8323a, 0xf2c94c, 0x3a6ab0, 0xf6efe0][(k + i) % 4]).stroke({ width: 1.2, color: INK, join: 'round' });
+        g.poly([x0, y0, x1, y1, mx + nx * 9, my + ny * 9]).fill([0xb5523a, 0xd1a24c, 0x4f72a8, 0xecdcb4][(k + i) % 4]).stroke({ width: 1.2, color: INK, join: 'round' });
       }
     }
     // Chairs in a half ring facing the conductor's box at the front, a stand before each, the big drum
@@ -279,27 +279,26 @@ export function bandstand(g: Graphics, r: number, rnd: () => number, v: number) 
       const [sx, sy] = [Math.cos(a) * r * 0.32, Math.sin(a) * r * 0.32];
       // A stand: its iron desk across, a sheet of music open on it.
       rod(g, [sx - s * 7, sy + c * 7], [sx + s * 7, sy - c * 7], 3, IRON[1]);
-      g.moveTo(sx - s * 4.5, sy + c * 4.5).lineTo(sx + s * 4.5, sy - c * 4.5).stroke({ width: 2.6, color: 0xf6efe0 });
+      g.moveTo(sx - s * 4.5, sy + c * 4.5).lineTo(sx + s * 4.5, sy - c * 4.5).stroke({ width: 2.6, color: 0xe2d8c0 });
     }
     g.circle(r * 0.03, -r * 0.47, r * 0.15).fill({ color: 0x1a1008, alpha: 0.3 });
     g.circle(0, -r * 0.5, r * 0.14).fill(0x8a2e26).stroke({ width: 2, color: INK });
-    g.circle(0, -r * 0.5, r * 0.11).fill(0xeee4cc).stroke({ width: 1.2, color: INK });
-    g.circle(-r * 0.03, -r * 0.53, r * 0.04).fill({ color: 0xffffff, alpha: 0.6 });
+    g.circle(0, -r * 0.5, r * 0.11).fill(0xd8ccae).stroke({ width: 1.2, color: INK });
     bevel(g, -r * 0.09, r * 0.14, r * 0.09, r * 0.3, 2, WOOD, 2);
     return;
   }
   g.circle(r * 0.1, r * 0.12, r * 0.66).fill({ color: 0x1a2a30, alpha: 0.25 });
   if (v === 0) {
-    hipRoof(g, ngon(r * 0.66, 8, ph), 0xa04a36);
+    hipRoof(g, ngon(r * 0.66, 8, ph), 0x9a5640);
     finial(g, 0, 0, r * 0.06);
     rod(g, [-r * 0.12, -r * 0.02], [r * 0.12, -r * 0.02], 1.6);
     g.poly([r * 0.12, -r * 0.02, r * 0.07, -r * 0.06, r * 0.07, r * 0.02]).fill(IRON[2]).stroke({ width: 1, color: INK });
   } else if (v === 2) {
-    dome(g, r * 0.54, [0x2e6a58, 0x4e8e76, 0x8ac4a8], 0x2e3a3a);
+    dome(g, r * 0.54, [0x3a6656, 0x5a8672, 0x86aa96], 0x3a4240);
   } else {
     // A canvas canopy in eight broad stripes on its posts, its valance hanging out past the rim, a small
     // finial at the peak.
-    stripedCanopy(g, r * 0.68, 8, 0xe2d6b4, 0xa8382e, r * 0.06, Math.PI / 8);
+    stripedCanopy(g, r * 0.68, 8, 0xdccfae, 0xa8503a, r * 0.06, Math.PI / 8);
     finial(g, 0, 0, r * 0.05);
   }
 }

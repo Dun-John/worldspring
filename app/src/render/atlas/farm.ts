@@ -236,32 +236,53 @@ export function gate(g: Graphics, r: number, rnd: () => number, v: number) {
  * light on the NW shoulder, two or three coils of its straw rope as arcs, its doorway at the foot
  * (south). */
 function skep(g: Graphics, x: number, y: number, R: number, rnd: () => number) {
-  const straw = [0xa8884a, 0xc8a660, 0xe2c88c];
-  g.circle(x, y, R).fill(straw[0]).stroke({ width: R > 0.25 * PX ? OUT : LINE, color: INK });
-  g.circle(x - R * 0.12, y - R * 0.12, R * 0.84).fill(straw[1]);
-  g.circle(x - R * 0.36, y - R * 0.36, R * 0.3).fill({ color: straw[2], alpha: 0.9 });
-  const coils = R > 0.2 * PX ? [0.72, 0.46, 0.22] : [0.66, 0.34];
-  for (const f of coils) {
-    const a0 = Math.PI * (0.05 + 0.2 * rnd());
-    g.moveTo(x + Math.cos(a0) * R * f, y + Math.sin(a0) * R * f).arc(x, y, R * f, a0, a0 + Math.PI * 1.25).stroke({ width: 1.8, color: 0x7e6034, cap: 'round' });
+  const straw = [0xb8964a, 0xe6cc84, 0xf5e4a8];
+  const toned = 0x8a6a30;
+  // From straight above: a pale straw dome, three bold coil rings as toned lines with stitch ticks across
+  // them, a knob at the crown, the doorway bulging at one rim, bees about it.
+  const notch = Math.PI * 0.5 + (rnd() - 0.5) * 0.7;
+  g.circle(x, y, R).fill(straw[1]).stroke({ width: LINE, color: INK });
+  g.circle(x + R * 0.14, y + R * 0.14, R * 0.92).fill({ color: straw[0], alpha: 0.5 });
+  g.circle(x - R * 0.08, y - R * 0.08, R * 0.84).fill(straw[1]);
+  g.circle(x - R * 0.26, y - R * 0.26, R * 0.46).fill({ color: straw[2], alpha: 0.7 });
+  const radii = [0.8, 0.56, 0.32];
+  radii.forEach((f, i) => g.circle(x - R * 0.03 * i, y - R * 0.03 * i, R * f).stroke({ width: Math.max(1.4, R * 0.1), color: toned }));
+  for (let i = 0; i < 3; i++) {
+    const n = 9 - i * 2;
+    const r0 = R * [0.64, 0.41, 0.2][i];
+    const r1 = R * [0.74, 0.51, 0.28][i];
+    for (let k = 0; k < n; k++) {
+      const a = ((k + (i % 2) * 0.5) / n) * Math.PI * 2;
+      const [c, s] = [Math.cos(a), Math.sin(a)];
+      g.moveTo(x + c * r0, y + s * r0).lineTo(x + c * r1, y + s * r1);
+    }
   }
-  g.ellipse(x, y + R * 0.88, R * 0.24, R * 0.14).fill(0x2a1e10);
+  g.stroke({ width: 1.1, color: toned, alpha: 0.9, cap: 'round' });
+  g.circle(x, y, R * 0.17).fill(straw[2]).stroke({ width: 1.4, color: toned });
+  g.circle(x - R * 0.04, y - R * 0.04, R * 0.07).fill(straw[0]);
+  const [nx, ny] = [x + Math.cos(notch) * R * 0.97, y + Math.sin(notch) * R * 0.97];
+  g.poly(oval(nx, ny, R * 0.3, R * 0.18, notch + Math.PI / 2, 10)).fill(0x1c1208).stroke({ width: 1.2, color: INK });
+  for (let i = 0; i < 2; i++) {
+    const a = notch + (rnd() - 0.5) * 1.2;
+    const d = R * (1.15 + 0.2 * rnd());
+    g.circle(x + Math.cos(a) * d, y + Math.sin(a) * d, 1.2).fill(0x3a2a10);
+  }
 }
 
 /** Beehives: a straw skep on a plank (v0); two on a longer plank (v1); one on a sawn stump (v2);
  * one bigger, set on the ground (v3). */
 export function beehive(g: Graphics, r: number, rnd: () => number, v: number) {
+  const board = [0x5e5a52, 0x8a857a, 0xaaa496];
   if (v === 1) {
-    bevel(g, -r * 0.95, -r * 0.4, r * 0.95, r * 0.45, 3, WOOD, LINE);
-    skep(g, -r * 0.47, -r * 0.02, r * 0.38, rnd);
-    skep(g, r * 0.47, 0.02 * r, r * 0.36, rnd);
+    bevel(g, -r * 1.0, -r * 0.55, r * 1.0, r * 0.55, 2, board, LINE);
+    skep(g, -r * 0.48, 0, r * 0.44, rnd);
+    skep(g, r * 0.48, 0, r * 0.44, rnd);
     return;
   }
-  if (v === 2) {
-    g.poly(oval(0, r * 0.06, r * 0.62, r * 0.56, 0)).fill(BARK[0][1]).stroke({ width: LINE, color: INK });
-    endGrain(g, 0, 0, r * 0.54, r * 0.49, BARK[0]);
-  } else if (v === 0) {
-    bevel(g, -r * 0.62, -r * 0.5, r * 0.62, r * 0.56, 3, WOOD, LINE);
-  }
-  skep(g, 0, -r * 0.04, r * (v === 3 ? 0.6 : v === 2 ? 0.42 : 0.5), rnd);
+  // A square grey-wood board showing on all sides, its planks lined.
+  const h = r * (v === 3 ? 1.0 : 0.9);
+  bevel(g, -h, -h, h, h, 2, board, LINE);
+  g.moveTo(-h * 0.98, -h * 0.34).lineTo(h * 0.98, -h * 0.34).moveTo(-h * 0.98, h * 0.34).lineTo(h * 0.98, h * 0.34);
+  g.stroke({ width: 1.1, color: board[0], alpha: 0.8 });
+  skep(g, 0, 0, r * (v === 3 ? 0.78 : v === 2 ? 0.6 : 0.68), rnd);
 }

@@ -25,3 +25,8 @@ export interface Atlas {
  * when negative), by kind id, before the frame is turned (its drop shadow falls from there: `BattlemapLayer`).
  * The headstone stands at the head of its grave; the rest stand at the centre. */
 export const UPRIGHT_FOOT: Record<number, number> = { 39: -1.35 * FT };
+
+/** Each frame's drawn size: about half its art's width and height averaged, atlas px at scale 1, by kind id and
+ * look (filled by `buildAtlas`). A small prop's drop shadow is sized to it, not to its placement radius
+ * (`dropShadowOf`). */
+export const DRAWN_R: number[][] = [];
