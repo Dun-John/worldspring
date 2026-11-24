@@ -30,7 +30,7 @@ export function anvil(g: Graphics, r0: number, rnd: () => number, v: number) {
   // Its feet: a waisted block under the face, flaring out past it at both ends.
   const [h0, h1] = [-0.52 * r, 0.24 * r];
   const feet = flipped([sx * f + h0 + 2, sy - 0.32 * r, sx * f - 0.14 * r, sy - 0.16 * r, sx * f + h1, sy - 0.32 * r, sx * f + h1, sy + 0.32 * r, sx * f - 0.14 * r, sy + 0.16 * r, sx * f + h0 + 2, sy + 0.32 * r]);
-  g.poly(feet).fill(IRON[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(feet).fill(IRON[2]).stroke({ width: LINE, color: INK, join: 'round' });
   // The face and the horn tapering off it.
   const w = 0.2 * r;
   const face = flipped([

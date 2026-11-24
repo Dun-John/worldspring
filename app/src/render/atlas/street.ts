@@ -209,7 +209,7 @@ export function noticeBoard(g: Graphics, r: number, rnd: () => number, v: number
     g.stroke({ width: 1, color: roof[0], alpha: 0.6, cap: 'round' });
     g.moveTo(-o + 1, s - 1.2).lineTo(o - 1, s - 1.2).stroke({ width: 1.4, color: roof[0], alpha: 0.8 });
     g.poly([-o, -1.2, o, -1.2, o, 1.2, -o, 1.2]).fill(roof[0]);
-    g.moveTo(-o, -0.6).lineTo(o, -0.6).stroke({ width: 0.8, color: roof[2], alpha: 0.9 });
+    g.moveTo(-o, -0.6).lineTo(o, -0.6).stroke({ width: LINE * 0.7, color: roof[2], alpha: 0.9 });
     g.poly([...north.slice(0, 4), ...south.slice(4, 8)]).stroke({ width: OUT, color: INK, join: 'round' });
     return;
   }
@@ -541,7 +541,7 @@ export function marketCross(g: Graphics, r: number, rnd: () => number, v: number
     moss(g, -steps[0] * 0.7, -steps[0] * 0.5, 0.26 * FT, rnd);
     const fa = ph + (2.5 / 8) * Math.PI * 2;
     const fr = (steps[1] + steps[2]) * 0.5;
-    for (let i = 0; i < 3; i++) g.circle(Math.cos(fa) * fr + i * 4 - 4, Math.sin(fa) * fr + (i % 2) * 3 - 1, 2.4).fill([0xe0533d, 0xf2c94c, 0xf6efe0][i]).stroke({ width: 0.8, color: INK });
+    for (let i = 0; i < 3; i++) g.circle(Math.cos(fa) * fr + i * 4 - 4, Math.sin(fa) * fr + (i % 2) * 3 - 1, 2.4).fill([0xe0533d, 0xf2c94c, 0xf6efe0][i]).stroke({ width: LINE * 0.7, color: INK });
   }
   // The socket stone, the cross's shadow falling down the steps, then the cross's top over it (a little over
   // life size, as monuments are made).

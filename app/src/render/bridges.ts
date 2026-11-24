@@ -204,7 +204,7 @@ export function drawFord(g: Graphics, s: Shape) {
     }
     const a = low ? 0.7 : 1.0;
     g.poly(pts.map((v, i) => v + FT * (i % 2 ? 0.25 : 0.2))).fill({ color: 0x000000, alpha: 0.15 * a });
-    g.poly(pts).fill({ color: WET_STONE[1], alpha: a }).stroke({ width: 1.8, color: 0x2b2a24, alpha: 0.75 * a });
+    g.poly(pts).fill({ color: WET_STONE[1], alpha: a }).stroke({ width: 1.8, color: INK, alpha: a });
     g.ellipse(x + LX * r * 0.25, y + LY * r * 0.25, r * 0.5, r * 0.35).fill({ color: WET_STONE[2], alpha: 0.6 * a });
     if (rnd() < 0.4) g.ellipse(x - LX * r * 0.3, y - LY * r * 0.3, r * 0.35, r * 0.25).fill({ color: 0x5e6b3a, alpha: 0.45 * a });
   }

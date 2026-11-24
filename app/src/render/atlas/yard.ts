@@ -29,7 +29,7 @@ export function barrel(g: Graphics, x: number, y: number, r: number, rnd: () => 
   g.moveTo(x + Math.cos(Math.PI * 0.8) * r * 0.84, y + Math.sin(Math.PI * 0.8) * r * 0.84)
     .arc(x, y, r * 0.84, Math.PI * 0.8, Math.PI * 1.75)
     .stroke({ width: r * 0.22, color: wood[1], alpha: 0.8 });
-  g.circle(x, y, r * 0.9).stroke({ width: 2, color: 0x34322e });
+  g.circle(x, y, r * 0.9).stroke({ width: 2, color: INK });
   g.moveTo(x - r * 0.9, y).arc(x, y, r * 0.9, Math.PI, Math.PI * 1.5).stroke({ width: 1, color: 0x9a9a92 });
   g.circle(x, y, r * 0.66).fill(wood[1]).stroke({ width: 1.5, color: 0x34322e });
   for (const f of [-0.33, 0.33]) g.moveTo(x - r * 0.6, y + r * f * 0.66).lineTo(x + r * 0.6, y + r * f * 0.66);
@@ -157,7 +157,7 @@ export function cart(g: Graphics, r: number, rnd: () => number, v: number) {
     g.circle(-r * 0.11, wy, r * 0.065).fill(0x6a6a64).stroke({ width: 1, color: INK });
   }
   // The box: outer edge, the floor sunk inside, then the rails' tops.
-  g.rect(bx0, -by, bx1 - bx0, by * 2).fill(wood[0]).stroke({ width: 2.5, color: INK, join: 'round' });
+  g.rect(bx0, -by, bx1 - bx0, by * 2).fill(wood[0]).stroke({ width: OUT, color: INK, join: 'round' });
   const [fx0, fx1, fy0, fy1] = [bx0 + rail, bx1 - rail, -by + rail, by - rail];
   g.rect(fx0, fy0, fx1 - fx0, fy1 - fy0).fill(shade(wood[1], 0.82));
   for (let i = 1; i < 6; i++) {
@@ -175,7 +175,7 @@ export function cart(g: Graphics, r: number, rnd: () => number, v: number) {
   g.rect(bx0, -by, rail, by * 2).fill(shade(wood[2], 0.95));
   g.rect(bx0, by - rail, bx1 - bx0, rail).fill(wood[1]);
   g.rect(bx1 - rail, -by, rail, by * 2).fill(shade(wood[1], 0.92));
-  g.rect(bx0, -by, bx1 - bx0, by * 2).stroke({ width: 2.5, color: INK, join: 'round' });
+  g.rect(bx0, -by, bx1 - bx0, by * 2).stroke({ width: OUT, color: INK, join: 'round' });
   g.rect(fx0, fy0, fx1 - fx0, fy1 - fy0).stroke({ width: 1.2, color: shade(wood[0], 0.8) });
   // The load, each piece with a shadow falling SE on the floor.
   const cx = (fx0 + fx1) / 2;
@@ -203,7 +203,7 @@ export function cart(g: Graphics, r: number, rnd: () => number, v: number) {
     const tips = boughs(22, rnd);
     g.circle(cx + 4, 4, r * 0.34).fill({ color: 0x1a120a, alpha: 0.3 });
     whorl(g, cx, 0, r * 0.36, tips, 0.88);
-    g.fill(0xb08a3a).stroke({ width: 1.5, color: 0x6a4e1e, join: 'round' });
+    g.fill(0xb08a3a).stroke({ width: 1.5, color: INK, join: 'round' });
     whorl(g, cx - r * 0.05, -r * 0.05, r * 0.24, tips, 0.88);
     g.fill(0xd9b04f);
   }
@@ -219,7 +219,7 @@ function stallGoods(g: Graphics, r: number, w: number, h: number, rnd: () => num
       const x = -w * 0.62 + i * w * 0.62;
       const y = h + r * 0.2;
       g.poly(oval(x, y, r * 0.2, r * 0.13, 0)).fill(0x8a6238).stroke({ width: 1.8, color: INK });
-      for (let k = 0; k < 5; k++) g.circle(x + (rnd() - 0.5) * r * 0.24, y + (rnd() - 0.5) * r * 0.12, r * 0.05).fill(fruit[(i + v) % 4]).stroke({ width: 0.8, color: INK });
+      for (let k = 0; k < 5; k++) g.circle(x + (rnd() - 0.5) * r * 0.24, y + (rnd() - 0.5) * r * 0.12, r * 0.05).fill(fruit[(i + v) % 4]).stroke({ width: LINE * 0.7, color: INK });
     }
     return;
   }
@@ -269,7 +269,7 @@ function stallGoods(g: Graphics, r: number, w: number, h: number, rnd: () => num
         g.moveTo(...q(-0.5, 0.05)).quadraticCurveTo(...q(-0.25, -0.3), ...q(0, 0)).quadraticCurveTo(...q(0.25, 0.3), ...q(0.45, -0.02));
         g.stroke({ width, color, cap: 'round' });
       }
-      g.circle(...q(0.46, -0.03), 1.9).fill(0x5a5e34).stroke({ width: 0.8, color: 0x1e2416 });
+      g.circle(...q(0.46, -0.03), 1.9).fill(0x5a5e34).stroke({ width: LINE * 0.7, color: INK });
     }
     g.circle(tx - tr * 0.36, ty - tr * 0.4, tr * 0.1).fill({ color: 0xe6f4ec, alpha: 0.8 });
   } else if (v === 2) {
@@ -344,7 +344,7 @@ export function marketStall(g: Graphics, r: number, rnd: () => number, v: number
     g.circle(px, py, r * 0.05).fill(0x5a3e22).stroke({ width: 1, color: INK });
   }
   // The awning: stripes across, the back half (toward the light) paler.
-  g.rect(-w, -h, w * 2, h * 2).fill(stripe).stroke({ width: 2.5, color: INK, join: 'round' });
+  g.rect(-w, -h, w * 2, h * 2).fill(stripe).stroke({ width: OUT, color: INK, join: 'round' });
   const stripes = 7;
   for (let i = 0; i < stripes; i++) if (i % 2) g.rect(-w + (2 * w * i) / stripes, -h, (2 * w) / stripes, h * 2).fill(cloth);
   g.rect(-w, -h, w * 2, h).fill({ color: 0xffffff, alpha: 0.16 });
@@ -362,7 +362,7 @@ export function marketStall(g: Graphics, r: number, rnd: () => number, v: number
  * or a little shingled roof over it (v2, v3). */
 export function well(g: Graphics, r: number, rnd: () => number, v: number) {
   const stone = [0x6e675c, 0x9a9182, 0xc4baa6];
-  g.circle(0, 0, r * 0.95).fill(stone[0]).stroke({ width: 2.5, color: INK });
+  g.circle(0, 0, r * 0.95).fill(stone[0]).stroke({ width: OUT, color: INK });
   const n = 11;
   for (let i = 0; i < n; i++) {
     const a0 = (i / n) * Math.PI * 2 + 0.05;
@@ -393,7 +393,7 @@ export function well(g: Graphics, r: number, rnd: () => number, v: number) {
     const rw = r * 0.7;
     const rh = r * 0.52;
     const roof = v === 2 ? [0x7a3a2a, 0xa85a3e] : [0x4a5058, 0x6e7680];
-    g.rect(-rw, -rh, rw * 2, rh * 2).fill(roof[0]).stroke({ width: 2.2, color: INK });
+    g.rect(-rw, -rh, rw * 2, rh * 2).fill(roof[0]).stroke({ width: OUT, color: INK });
     g.rect(-rw, -rh, rw * 2, rh).fill(roof[1]);
     for (let k = 1; k < 4; k++) {
       const y = -rh + (rh * k) / 2;
@@ -424,7 +424,7 @@ export function haystack(g: Graphics, r: number, rnd: () => number, v: number) {
   // The dome: many small soft bumps round the edge, so it reads as straw, not as a star.
   const tips = boughs(26, rnd);
   whorl(g, 0, 0, r * 0.88, tips, 0.9);
-  g.fill(straw[0]).stroke({ width: 2.2, color: INK, join: 'round' });
+  g.fill(straw[0]).stroke({ width: OUT, color: INK, join: 'round' });
   whorl(g, -r * 0.06, -r * 0.06, r * 0.72, tips, 0.9);
   g.fill(straw[1]);
   whorl(g, -r * 0.16, -r * 0.16, r * 0.38, boughs(14, rnd), 0.88);

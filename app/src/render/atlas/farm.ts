@@ -176,18 +176,18 @@ export function picketFence(g: Graphics, r: number, rnd: () => number, v: number
   ][v];
   const L = 0.5 * PX;
   // The rail runs the whole piece under the palings, so the pieces read as one continuous fence.
-  railLine(g, -L, 0, L, 0, 2.4, v === 2 ? 0x7a6a4a : WOOD[1], 1.6);
-  const n = 8;
+  railLine(g, -L, 0, L, 0, 2.4, v === 2 ? 0x7a6a4a : WOOD[1], LINE);
+  const n = 7;
   const step = (L * 2) / n;
-  const gone = v === 3 ? 1 + Math.floor(rnd() * 6) : -1;
+  const gone = v === 3 ? 1 + Math.floor(rnd() * 5) : -1;
   for (let i = 0; i < n; i++) {
     if (i === gone) continue;
     const x = -L + (i + 0.5) * step;
     const askew = v === 3 && i === gone + 1 ? 0.5 : 0;
-    topBlock(g, x, 0, step - 2.6, 3.8, askew, paint, 1.5);
+    topBlock(g, x, 0, step - 3.6, 3.8, askew, paint, LINE);
     if (v === 1 && rnd() < 0.5) g.circle(x + (rnd() - 0.5) * 2, -0.4, 0.7).fill(WOOD[2]);
   }
-  topBlock(g, 0, 0, 5.4, 5.4, 0, paint.map((c) => shade(c, 0.9)), 1.6);
+  topBlock(g, 0, 0, 5.4, 5.4, 0, paint.map((c) => shade(c, 0.9)), LINE);
 }
 
 /** Iron railing along x from above: its top rail a dark bar, six finials' round tops along it (the bars'
@@ -199,9 +199,9 @@ export function ironRailing(g: Graphics, r: number, rnd: () => number, v: number
   const tip = v === 2 ? [0x5e5434, 0x9a8a5a, 0xc4b688] : iron;
   const L = 0.5 * PX;
   // Two rails the whole piece long (the top one broad), a round finial on every bar, a post cap at the middle.
-  railLine(g, -L, -1.1, L, -1.1, 1.2, iron[0], 1.6);
-  railLine(g, -L, 0.4, L, 0.4, 2.2, iron[1], 1.6);
-  g.moveTo(-L, -0.2).lineTo(L, -0.2).stroke({ width: 0.8, color: iron[2] });
+  railLine(g, -L, -1.1, L, -1.1, 1.2, iron[1], LINE);
+  railLine(g, -L, 0.4, L, 0.4, 2.0, iron[1], LINE);
+  g.moveTo(-L, 0).lineTo(L, 0).stroke({ width: 0.6, color: iron[2] });
   const n = 8;
   const step = (L * 2) / n;
   const bent = v === 3 ? Math.floor(rnd() * 2) : -1;
@@ -209,10 +209,11 @@ export function ironRailing(g: Graphics, r: number, rnd: () => number, v: number
     const x = -L + (i + 0.5) * step;
     const y = i === bent ? 2.6 : 0;
     if (y) g.moveTo(x, 0).lineTo(x, y).stroke({ width: 2.4, color: INK, cap: 'round' });
+    if (i % 2 && i !== bent) continue;
     g.circle(x, y, 1.9).fill(tip[1]).stroke({ width: 1.2, color: INK });
     g.circle(x - 0.5, y - 0.5, 0.6).fill(tip[2]);
   }
-  topBlock(g, 0, 0, 5, 5, 0, iron, 1.6);
+  topBlock(g, 0, 0, 5, 5, 0, iron, LINE);
   g.circle(0, 0, 2).fill(tip[1]).stroke({ width: 1.1, color: INK });
   g.circle(-0.5, -0.5, 0.6).fill(tip[2]);
 }

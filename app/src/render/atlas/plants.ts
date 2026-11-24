@@ -1,6 +1,7 @@
 import { Graphics } from 'pixi.js';
 import { INK, blob, oval, shade } from './common';
 
+import { OUT } from '../pen';
 /** Leafy canopy: cluster of lobes, dark base → light top-left highlights, ink rim. */
 export function canopy(g: Graphics, r: number, rnd: () => number, colors: readonly number[], lobes: number) {
   const [dark, mid, light] = colors;
@@ -11,7 +12,7 @@ export function canopy(g: Graphics, r: number, rnd: () => number, colors: readon
     parts.push([Math.cos(a) * d, Math.sin(a) * d, r * (0.42 + 0.14 * rnd())]);
   }
   parts.push([0, 0, r * 0.55]);
-  for (const [x, y, rr] of parts) g.circle(x, y, rr + 2).fill(INK);
+  for (const [x, y, rr] of parts) g.circle(x, y, rr + OUT).fill(INK);
   for (const [x, y, rr] of parts) g.circle(x, y, rr).fill(dark);
   for (const [x, y, rr] of parts) g.circle(x - rr * 0.18, y - rr * 0.18, rr * 0.78).fill(mid);
   for (const [x, y, rr] of parts) g.circle(x - rr * 0.34, y - rr * 0.34, rr * 0.42).fill({ color: light, alpha: 0.9 });
@@ -79,7 +80,7 @@ export function conifer(g: Graphics, r: number, rnd: () => number, v: number) {
     const tips = boughs(n, rnd);
     whorl(g, off, off, r * k, tips, inner);
     g.fill(tones[l]);
-    if (l === 0) g.stroke({ width: 2.5, color: INK, join: 'round' });
+    if (l === 0) g.stroke({ width: OUT, color: INK, join: 'round' });
     else g.stroke({ width: 1.5, color: shade(tones[l - 1], 0.75), join: 'round' });
     // The whorl's lit side: the same tips, smaller and pushed toward the light.
     const h = r * k * 0.08;

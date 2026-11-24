@@ -1,6 +1,7 @@
 import { Graphics } from 'pixi.js';
 import { INK, blob, oval, shade } from './common';
 import { BARK, moss } from './stones';
+import { OUT } from '../pen';
 import { lit } from './plants';
 
 /** End grain of a cut trunk: pale wood, growth rings, a crack. */
@@ -51,7 +52,7 @@ export function fallenLog(g: Graphics, r: number, rnd: () => number, v: number) 
   for (let i = bot.length - 2; i >= 0; i -= 2) outline.push(bot[i], bot[i + 1]);
   const ys = mid(0);
   outline.push(x0 + w * 0.1, ys + w * 0.25, x0 - w * 0.05, ys + w * 0.1, x0 + w * 0.15, ys - w * 0.02, x0, ys - w * 0.2);
-  g.poly(outline).fill(bark[0]).stroke({ width: 2.5, color: INK, join: 'round' });
+  g.poly(outline).fill(bark[0]).stroke({ width: OUT, color: INK, join: 'round' });
   // The body (a little in from the shaded side), then a soft lit band near the top edge.
   const body: number[] = [];
   const band: number[] = [];
@@ -115,7 +116,7 @@ export function stump(g: Graphics, r: number, rnd: () => number, v: number) {
       .fill(shade(bark[1], 1 + 0.15 * lit(a)))
       .stroke({ width: 1.8, color: INK, join: 'round' });
   }
-  g.poly(blob(0, 0, r * 0.6, 10, 0.15, rnd)).fill(bark[0]).stroke({ width: 2, color: INK, join: 'round' });
+  g.poly(blob(0, 0, r * 0.6, 10, 0.15, rnd)).fill(bark[0]).stroke({ width: OUT, color: INK, join: 'round' });
   g.poly(blob(-r * 0.03, -r * 0.03, r * 0.52, 10, 0.12, rnd)).fill(bark[1]);
   g.circle(-r * 0.02, -r * 0.02, r * 0.42).fill(0xc89a68);
   g.circle(-r * 0.06, -r * 0.06, r * 0.25).fill({ color: 0xe0b47a, alpha: 0.8 });
