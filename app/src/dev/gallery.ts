@@ -25,6 +25,11 @@
 // piers, bridges and quays (`dev/galleryTimber.ts`).
 // `&items=fences` (alone; `&sq=`, default 48) shows the fence and wall pieces in runs with a gate, and today's hedge,
 // wattle and dry-stone wall beside them.
+// `&scale=1` draws every battlemap kind at exactly `&sq=` px a square (default 44, never shrunk to fit a cell) on a faint
+// 5-ft grid with a 2-ft body disc beside it, and a body disc on a free floor square of each furniture and prop room.
+// `&panels=streets` (alone) shows the street's drain grate and sewer manhole at true size with the cart, barrels,
+// crates, lamp post and a body disc, on cobbles and on plain ground. `scripts/galleryshot.mjs` screenshots the lot.
+// The page sets `window.__galleryReady` when it has drawn, and `window.__galleryKinds` (the catalog's ids).
 import { Application, Container, Geometry, GlProgram, Graphics, Mesh, Shader, Sprite, Text, UniformGroup, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
@@ -37,6 +42,7 @@ import { buildAtlas } from '../render/atlas/build';
 import { loadSprites } from '../render/spriteCode';
 import { drawnTurned, dropShadowOf, isStanding, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, topGrid } from '../render/walls';
+import { drawStructures } from '../render/battlemap/structures';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
@@ -102,7 +108,7 @@ const SLOT = 4;
 /** One room per item in a grid of `cols` (each `size` squares, rock between them); an item may give the
  * side its back is against (0-3), its label and its look. Items too big for a room follow in rows of
  * their own, in rooms big enough for the biggest of them. */
-function sampler(id: string, fn: string, items: [string, number, number, number?, string?, number?][], cols: number, size = SLOT): { it: Interior; spots: [string, number, number][] } {
+function sampler(id: string, fn: string, items: [string, number, number, number?, string?, number?][], cols: number, size = SLOT): { it: Interior; spots: [string, number, number][]; discs: [number, number][] } {
   const fits = (w: number, h: number) => w <= size && h <= size;
   const small = items.filter(([, w, h]) => fits(w, h)).length;
   const big = Math.max(size, ...items.filter(([, w, h]) => !fits(w, h)).map(([, w, h]) => Math.max(w, h) + 1));
@@ -114,6 +120,7 @@ function sampler(id: string, fn: string, items: [string, number, number, number?
   const furniture: InteriorItem[] = [];
   const rooms: Interior['levels'][number]['rooms'] = [];
   const spots: [string, number, number][] = [];
+  const discs: [number, number][] = [];
   let [ks, kb] = [0, 0];
   items.forEach(([kind, w, h, back, label, variant], k) => {
     // Its room: the next in the grid, or past the grid in the big rooms' rows.
@@ -128,12 +135,31 @@ function sampler(id: string, fn: string, items: [string, number, number, number?
     // With a side set: in the middle of the room, so only the side makes it face.
     const y = back === undefined ? y0 : y0 + Math.floor((room - h) / 2);
     furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3, ...(back === undefined ? {} : { back }), ...(variant === undefined ? {} : { variant }) });
+    // A free floor square for the body disc (`&scale=1`): the last the piece doesn't cover, from the room's far corner.
+    free: for (let j = room - 1; j >= 0; j--) for (let i = room - 1; i >= 0; i--) {
+      const [sx, sy] = [x0 + i, y0 + j];
+      if (sx >= x && sx < x + w && sy >= y && sy < y + h) continue;
+      discs.push([sx + 0.5, sy + 0.5]);
+      break free;
+    }
     spots.push([label ?? (w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`), x0, y0 + room]);
   });
   // (`&floor=wood`: rooms above ground, so their floors are boards, not flags.)
   const z = new URLSearchParams(location.search).get('floor') === 'wood' ? 0 : -1;
   const level = { z, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
-  return { it: { id, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, spots };
+  return { it: { id, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, spots, discs };
+}
+
+/** A faint 5-ft grid over the box `hw` x `hh` either side of (`cx`, `cy`), its squares centred on that point (`s` px a square). */
+function fiveFootGrid(g: Graphics, cx: number, cy: number, hw: number, hh: number, s: number) {
+  for (let x = cx - (Math.floor((hw - s / 2) / s) + 0.5) * s; x < cx + hw; x += s) if (x > cx - hw) g.moveTo(x, cy - hh).lineTo(x, cy + hh);
+  for (let y = cy - (Math.floor((hh - s / 2) / s) + 0.5) * s; y < cy + hh; y += s) if (y > cy - hh) g.moveTo(cx - hw, y).lineTo(cx + hw, y);
+  g.stroke({ width: 1, color: 0x000000, alpha: 0.12 });
+}
+
+/** A human's size from above, for scale: a flat disc 2 ft across (0.4 square) with a thin ink outline. */
+function bodyDisc(g: Graphics, x: number, y: number, sq: number) {
+  g.circle(x, y, 0.2 * sq).fill(0xe9dfc4).stroke({ width: 1, color: 0x1d1a14 });
 }
 
 /** The dungeon set (`&items=dungeon4`): pairs of rooms with a door between them as the DM sees them in play
@@ -255,6 +281,7 @@ export async function runGallery(target: HTMLElement) {
   // (The interior layers below draw with it: `sprites()`.)
   await loadSprites();
   const catalog = JSON.parse(battlemap_catalog_json()) as KindInfo[];
+  (window as unknown as { __galleryKinds: number[] }).__galleryKinds = catalog.map((k) => k.id);
   // Kinds the item pickers have no group for (they show under "Other"): give them one in itemGroups.ts.
   const under = JSON.parse(under_catalog_json()) as UnderCatalog;
   const inside = [...under.props, ...under.building.furniture, ...under.building.props].map((p) => p.kind).filter((k) => !ITEM_GROUPS[k]);
@@ -278,14 +305,16 @@ export async function runGallery(target: HTMLElement) {
   // Battlemap objects: every atlas frame, all variants, at about 48 px a square.
   const query = new URLSearchParams(location.search);
   const only = query.get('kinds')?.split(',').map(Number);
-  const pick = query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
-  const sq = Number(query.get('sq')) || 48;
+  const pick = query.get('panels') === 'streets' ? ['streets'] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
+  const trueScale = query.has('scale');
+  const sq = Number(query.get('sq')) || (trueScale ? 44 : 48);
   const ground = query.has('ground') ? parseInt(query.get('ground') || '948c80', 16) : null;
   if (query.has('turn')) {
     turning(app, catalog, root, head, () => y, (v) => (y = v), width, sq);
     const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
     app.stage.addChild(bg, root);
     app.renderer.resize(width, y);
+    (window as unknown as { __galleryReady: boolean }).__galleryReady = true;
     // The pickers' thumbnail sheets, as they come out of `thumbSheet` (one canvas each).
     const atlas = buildAtlas(app.renderer, catalog);
     const sheets: [string, ThumbTile[]][] = [
@@ -313,7 +342,8 @@ export async function runGallery(target: HTMLElement) {
     // On the ground, every frame at full size (as on the battlemap), with the ground round it.
     const shown = only ?? (pickKinds.length ? pickKinds : undefined);
     const widest = Math.max(...catalog.filter((info) => !shown || shown.includes(info.id)).map((info) => atlas.frames[info.id][0].width));
-    const cell = Math.max(104, Math.ceil((sq / 48) * 104), ground === null ? 0 : Math.ceil(widest * scale + 64 * scale));
+    // `&scale=1`: a cell holds the biggest frame at true size with the 2-ft body disc beside it.
+    const cell = trueScale ? Math.ceil(widest * scale) + Math.ceil(0.4 * sq) + 12 : Math.max(104, Math.ceil((sq / 48) * 104), ground === null ? 0 : Math.ceil(widest * scale + 64 * scale));
     const cellW = 4 * cell + 24;
     const per = Math.max(1, Math.floor((width - 32) / cellW));
     let rowH = 0;
@@ -328,8 +358,25 @@ export async function runGallery(target: HTMLElement) {
         const rows = Math.ceil(looks(info.id) / VARIANTS);
         for (let v = 0; v < looks(info.id); v++) {
           const s = new Sprite(atlas.frames[info.id][v]);
-          const fit = Math.min(scale, (cell - 4) / s.texture.width);
-          const [cx, cy] = [x0 + cell / 2 + (v % VARIANTS) * cell, y + cell / 2 + Math.floor(v / VARIANTS) * cell];
+          const fit = trueScale ? scale : Math.min(scale, (cell - 4) / s.texture.width);
+          const [cx, cy] = trueScale
+            ? [x0 + (cell - Math.ceil(0.4 * sq) - 12) / 2 + (v % VARIANTS) * cell, y + cell / 2 + Math.floor(v / VARIANTS) * cell]
+            : [x0 + cell / 2 + (v % VARIANTS) * cell, y + cell / 2 + Math.floor(v / VARIANTS) * cell];
+          if (trueScale) {
+            const half = (cell - Math.ceil(0.4 * sq) - 12) / 2;
+            const g = new Graphics();
+            if (ground !== null) g.rect(cx - half, cy - cell / 2 + 2, half * 2, cell - 4).fill(ground);
+            // The 5-ft grid, a square centred on the sprite, under it.
+            fiveFootGrid(g, cx, cy, half, cell / 2 - 2, sq);
+            bodyDisc(g, cx + half + 6 + 0.2 * sq, cy, sq);
+            root.addChild(g);
+            if (ground !== null && isStanding(info)) root.addChild(dropShadow(atlas, info, cx, cy, fit));
+            s.scale.set(fit);
+            s.anchor.set(0.5);
+            s.position.set(cx, cy);
+            root.addChild(s);
+            continue;
+          }
           if (ground !== null) {
             root.addChild(new Graphics().rect(cx - cell / 2 + 2, cy - cell / 2 + 2, cell - 4, cell - 4).fill(ground));
             if (isStanding(info)) root.addChild(dropShadow(atlas, info, cx, cy, fit));
@@ -339,9 +386,11 @@ export async function runGallery(target: HTMLElement) {
           s.position.set(cx, cy);
           root.addChild(s);
         }
-        const t = new Text({ text: `${info.id} ${info.name.replace(/_/g, ' ')} (r ${info.radius})`, style: LABEL });
-        t.position.set(x0, y + rows * cell + 2);
-        root.addChild(t);
+        if (!query.has('nolabels')) {
+          const t = new Text({ text: `${info.id} ${info.name.replace(/_/g, ' ')} (r ${info.radius})`, style: LABEL });
+          t.position.set(x0, y + rows * cell + 2);
+          root.addChild(t);
+        }
         rowH = Math.max(rowH, rows * cell + 2);
       });
     y += rowH + 50;
@@ -370,7 +419,7 @@ export async function runGallery(target: HTMLElement) {
     const list = chosen(items as unknown as [string, number, number][], id.startsWith('u'));
     if (!list.length) continue;
     head(title);
-    const { it, spots } = sampler(id, fn, list, cols, slot);
+    const { it, spots, discs } = sampler(id, fn, list, cols, slot);
     const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
     const holder = new Container();
     holder.addChild(layer.container);
@@ -379,6 +428,11 @@ export async function runGallery(target: HTMLElement) {
     // The layer dims the map behind it: none here.
     layer.container.children[0].visible = false;
     root.addChild(holder);
+    if (trueScale) {
+      const g = new Graphics();
+      for (const [gx, gy] of discs) bodyDisc(g, 16 + gx * SQ, y + gy * SQ, SQ);
+      root.addChild(g);
+    }
     for (const [label, gx, gy] of query.has('nolabels') ? [] : spots) {
       const t = new Text({ text: label, style: { ...LABEL, fill: id.startsWith('u') ? 0xf3ead8 : 0x2a2219, fontSize: 12 } });
       t.position.set(16 + gx * SQ + 2, y + (gy - 0.95) * SQ);
@@ -524,9 +578,98 @@ export async function runGallery(target: HTMLElement) {
     y = flatRoofs(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 24);
   }
 
+  // The street's drain grate and sewer manhole at true size (`&panels=streets`).
+  if (pick?.includes('streets')) {
+    head('Streets: drain grate, sewer manhole, cart, barrels, crates, lamp post and a 2-ft body disc, at true size on cobbles and on plain ground');
+    y = streets(app, catalog, root, y, width, query.has('nolabels'), sq);
+  }
+
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
+  (window as unknown as { __galleryReady: boolean }).__galleryReady = true;
+}
+
+/** `&panels=streets`: a strip of cobbles and one of plain ground, on the 5-ft grid, each with the street's drain grate
+ * and the sewer manhole (the battlemap's own `drawStructures`), a cart, barrels, crates and a lamp post (atlas
+ * kinds 35, 33, 34, 50, two looks each) and a body disc, all at `sq` px a square. */
+function streets(app: Application, catalog: KindInfo[], root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  const ids = [35, 33, 34, 50];
+  const atlas = buildAtlas(app.renderer, catalog.filter((c) => ids.includes(c.id)));
+  const k = sq / PX;
+  type Piece = { w: number; label: string; draw: (cx: number, cy: number) => void };
+  const pieces: Piece[] = [];
+  const entrance = (code: number): Graphics => drawStructures([{ kind: 4, size: code * PX, pts: [0, 0, PX, 0] }]);
+  for (const [label, code] of [['drain grate', 3 << 4], ['sewer manhole', 5]] as const) {
+    pieces.push({
+      w: 2.4 * sq,
+      label,
+      draw: (cx, cy) => {
+        const g = entrance(code);
+        g.scale.set(k);
+        g.position.set(cx, cy);
+        root.addChild(g);
+      },
+    });
+  }
+  pieces.push({ w: 2.4 * sq, label: 'body disc, 2 ft', draw: (cx, cy) => root.addChild(new Graphics().circle(cx, cy, 0.2 * sq).fill(0xe9dfc4).stroke({ width: 1, color: 0x1d1a14 })) });
+  for (const id of ids) {
+    const info = catalog.find((c) => c.id === id);
+    if (!info) continue;
+    for (let v = 0; v < 2; v++) {
+      const tex = atlas.frames[id][v];
+      pieces.push({
+        w: Math.max(2.4 * sq, tex.width * k + 0.4 * sq),
+        label: `${id} ${info.name.replace(/_/g, ' ')} · ${v}`,
+        draw: (cx, cy) => {
+          const s = new Sprite(tex);
+          s.anchor.set(0.5);
+          s.scale.set(k);
+          s.position.set(cx, cy);
+          root.addChild(s);
+        },
+      });
+    }
+  }
+  const tallest = Math.max(2 * sq, ...ids.flatMap((id) => (catalog.some((c) => c.id === id) ? [atlas.frames[id][0].height * k + 0.4 * sq] : [])));
+  const rowH = Math.ceil(tallest / sq) * sq;
+  let y = y0;
+  for (const cobbled of [true, false]) {
+    // Lay the pieces left to right, wrapping into rows; the strip is as tall as the rows.
+    const x0 = 16;
+    const slots: { p: Piece; cx: number; cy: number }[] = [];
+    let [x, r] = [x0, 0];
+    for (const p of pieces) {
+      if (x + p.w > width - 16 && x > x0) [x, r] = [x0, r + 1];
+      slots.push({ p, cx: x + p.w / 2, cy: y + r * (rowH + 22) + rowH / 2 });
+      x += p.w;
+    }
+    const h = (r + 1) * (rowH + 22) - 22;
+    const w = Math.floor((width - 32) / sq) * sq;
+    const g = new Graphics().rect(x0, y, w, h).fill(cobbled ? 0x8f897d : 0xb8a888);
+    if (cobbled) {
+      // Cobbles: rows of rounded stones, a little varied (a fixed pattern, nothing random).
+      let n = 7;
+      for (let yy = y + 3, row = 0; yy < y + h; yy += 11, row++)
+        for (let xx = x0 + 3 + (row % 2) * 7; xx < x0 + w - 8; xx += 14) {
+          n = (n * 1103515245 + 12345) & 0x7fffffff;
+          const t = (n >> 8) % 3;
+          g.roundRect(xx, yy, 12, 9, 3).fill([0xa6a094, 0x9a9488, 0xaea89c][t]).stroke({ width: 0.8, color: 0x5d574c });
+        }
+    }
+    fiveFootGrid(g, x0 + w / 2, y + h / 2, w / 2, h / 2, sq);
+    root.addChild(g);
+    for (const { p, cx, cy } of slots) {
+      p.draw(cx, cy);
+      if (!nolabels) {
+        const t = new Text({ text: p.label, style: { ...LABEL, fontSize: 11 } });
+        t.position.set(cx - p.w / 2 + 2, cy + rowH / 2 + 2);
+        root.addChild(t);
+      }
+    }
+    y += h + 44;
+  }
+  return y;
 }
 
 /** The fence kinds laid in pieces and the gate (until the catalog has them: `town::fence::KINDS`, R6), with a
