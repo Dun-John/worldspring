@@ -53,7 +53,7 @@ export const LIFE_UNDER: Record<string, Life> = {
   arcane_focus: { free: 0.9 },
   boulder: { free: 0.6 },
   coffin: { free: [0.72, 0.54] },
-  effigy: { free: [0.6, 0.38] },
+  effigy: { free: [0.85, 0.78] },
   pit: { free: 0.82 },
 };
 
