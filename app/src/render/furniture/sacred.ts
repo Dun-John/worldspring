@@ -472,15 +472,10 @@ export function spurWheel(g: Graphics, f: InteriorItem, light: Light, rnd: () =>
  * pale glass glowing yellow at its heart, warm rays out between the frames. */
 export function lighthouseLamp(g: Graphics, f: InteriorItem, light: Light, _rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
-  const r = 1.05 * Math.max(1, Math.min(f.w, f.h));
+  const r = 0.9 * Math.max(1, Math.min(f.w, f.h));
   const SILL = 0xc89a3c;
-  // (Its glow and rays on the floor round it, between the lens's frames.)
-  g.circle(cx, cy, r * 1.08).fill({ color: 0xffe29a, alpha: 0.3 });
-  for (let k = 0; k < 8; k++) {
-    const a = ((k + 0.5) / 8) * Math.PI * 2;
-    const [ux, uy] = [Math.cos(a), Math.sin(a)];
-    g.poly([cx + ux * r * 0.8 - uy * r * 0.13, cy + uy * r * 0.8 + ux * r * 0.13, cx + ux * r * 1.22, cy + uy * r * 1.22, cx + ux * r * 0.8 + uy * r * 0.13, cy + uy * r * 0.8 - ux * r * 0.13]).fill({ color: 0xffd65a, alpha: 0.8 });
-  }
+  // (Its glow on the floor round it: a soft pool, not rays, so nothing spills past the lamp's own box.)
+  g.circle(cx, cy, r * 1.0).fill({ color: 0xffe29a, alpha: 0.26 });
   // The pedestal: a broad brass ring, its shadow away from the light, lit on the light's side.
   g.circle(cx - light[0] * r * 0.06, cy - light[1] * r * 0.06, r * 0.86).fill({ color: 0x000000, alpha: 0.2 });
   g.circle(cx, cy, r * 0.84).fill(shade(SILL, 0.8)).stroke({ width: OUT, color: INK });

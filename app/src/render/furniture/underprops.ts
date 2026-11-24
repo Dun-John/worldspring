@@ -9,6 +9,7 @@ import { tatteredBanner } from './hangings';
 import { brazier, candelabrum, collapsedWall, dais, dryFountain, ironMaiden, ritualCircle, shackles, stocks, torchSconce, treasureHoard } from './dungeon';
 import { burialNiche, burialUrn, coldCampfire, flotsamHeap, offeringBowl, openCoffin, rubbleHeap, scatteredBones, skeletonRemains, skullPile, timberProp } from './tomb';
 import { linkDown, stoneEffigy } from './sacred';
+import { LIFE_UNDER, lifeSize } from './lifesize';
 import { UNDER_DRAWN } from './tables';
 
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
@@ -28,6 +29,7 @@ export function drawUnderProp(
   if (!UNDER_DRAWN.has(f.kind)) return false;
   const rnd = rng(v * 7919 + f.w * 131 + f.h * 17 + f.kind.length * 1009 + f.kind.charCodeAt(0) * 3);
   const w: [number, number] = wall[0] || wall[1] ? wall : [0, -1];
+  const draw = (g: Graphics) => {
   switch (f.kind) {
     case 'exit':
       stairsUp(g, f, rnd, true);
@@ -262,5 +264,7 @@ export function drawUnderProp(
       floodedPit(g, f, light, rnd);
       break;
   }
+  };
+  if (!lifeSize(g, f, null, draw, undefined, LIFE_UNDER)) draw(g);
   return true;
 }

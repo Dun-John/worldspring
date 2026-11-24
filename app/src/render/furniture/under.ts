@@ -182,14 +182,14 @@ export function ladder(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
   const d = 0.014;
   const line = (x0: number, y0: number, x1: number, y1: number, w: number, color: number, ox = 0, oy = 0) =>
     g.moveTo(x0 + ox, y0 + oy).lineTo(x1 + ox, y1 + oy).stroke({ width: w, color, cap: 'round' });
-  for (const u of [0.32, 0.68]) {
+  for (const u of [0.35, 0.65]) {
     const [a, b] = [at(u, -0.22), at(u, 0.7)];
     line(a[0], a[1], b[0], b[1], 0.07, INK);
     line(a[0], a[1], b[0], b[1], 0.04, WOOD[1]);
     line(a[0], a[1], b[0], b[1], 0.014, WOOD[2], lx * d, ly * d);
   }
   for (const s0 of [-0.08, 0.14, 0.32, 0.5]) {
-    const [a, b] = [at(0.32, s0), at(0.68, s0)];
+    const [a, b] = [at(0.35, s0), at(0.65, s0)];
     line(a[0], a[1], b[0], b[1], 0.05, INK);
     line(a[0], a[1], b[0], b[1], 0.028, WOOD[2]);
     line(a[0], a[1], b[0], b[1], 0.01, WOOD[0], -lx * d, -ly * d);

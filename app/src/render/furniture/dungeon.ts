@@ -57,7 +57,8 @@ export function brazier(g: Graphics, f: InteriorItem, light: Light, rnd: () => n
   g.moveTo(cx + Math.cos(la + 2.2) * r * 0.88, cy + Math.sin(la + 2.2) * r * 0.88).arc(cx, cy, r * 0.88, la + 2.2, la + 4.1).stroke({ width: 0.04, color: IRON[0] });
   g.moveTo(cx + Math.cos(la - 1) * r * 0.9, cy + Math.sin(la - 1) * r * 0.9).arc(cx, cy, r * 0.9, la - 1, la + 1).stroke({ width: 0.025, color: IRON[2] });
   g.circle(cx, cy, r * 0.78).fill(0x3a2418).stroke({ width: 0.018, color: INK });
-  fireTop(g, cx, cy, r * 0.7, rnd);
+  g.circle(cx, cy, r * 0.78).stroke({ width: 0.03, color: INK });
+  fireTop(g, cx, cy, r * 0.46, rnd);
 }
 
 /** Candelabrum from straight above: an iron drip-ring about 2 ft across on its branches (the stand hidden under it),
@@ -151,23 +152,23 @@ export function torchSconce(g: Graphics, f: InteriorItem, light: Light, rnd: () 
   void light;
   const [hx, hy] = at(0.5, 0.42);
   glowPool(g, hx, hy, 0.62);
-  g.poly([...at(0.38, 0), ...at(0.62, 0), ...at(0.58, 0.08), ...at(0.42, 0.08)]).fill(IRON[0]).stroke({ width: 0.018, color: INK, join: 'round' });
+  g.poly([...at(0.3, 0), ...at(0.7, 0), ...at(0.64, 0.12), ...at(0.36, 0.12)]).fill(IRON[0]).stroke({ width: 0.024, color: INK, join: 'round' });
   for (const [w, c] of [
-    [0.05, INK],
-    [0.028, IRON[1]],
+    [0.09, INK],
+    [0.056, IRON[1]],
   ] as const) {
-    g.moveTo(...at(0.5, 0.06)).lineTo(...at(0.5, 0.2)).stroke({ width: w, color: c, cap: 'round' });
+    g.moveTo(...at(0.5, 0.08)).lineTo(...at(0.5, 0.24)).stroke({ width: w, color: c, cap: 'round' });
   }
-  g.poly(oval(...at(0.5, 0.2), 0.05, 0.04, 0, 10)).stroke({ width: 0.03, color: INK });
-  g.poly(oval(...at(0.5, 0.2), 0.05, 0.04, 0, 10)).stroke({ width: 0.016, color: IRON[1] });
+  g.poly(oval(...at(0.5, 0.26), 0.13, 0.1, 0, 12)).stroke({ width: 0.05, color: INK });
+  g.poly(oval(...at(0.5, 0.26), 0.13, 0.1, 0, 12)).stroke({ width: 0.026, color: IRON[1] });
   for (const [w, c] of [
-    [0.065, INK],
-    [0.04, WOOD[1]],
+    [0.09, INK],
+    [0.06, WOOD[1]],
   ] as const) {
-    g.moveTo(...at(0.5, 0.12)).lineTo(...at(0.5, 0.36)).stroke({ width: w, color: c, cap: 'round' });
+    g.moveTo(...at(0.5, 0.2)).lineTo(...at(0.5, 0.42)).stroke({ width: w, color: c, cap: 'round' });
   }
-  g.circle(hx, hy, 0.065).fill(0x3a2a1c).stroke({ width: 0.018, color: INK });
-  fireTop(g, hx, hy, 0.09, rnd);
+  g.circle(hx, hy, 0.09).fill(0x3a2a1c).stroke({ width: 0.02, color: INK });
+  fireTop(g, hx, hy, 0.065, rnd);
 }
 
 /** Iron maiden from straight above, about 2.5 by 2 ft: its coffin-shaped iron lid (a rounded bulge for the head at

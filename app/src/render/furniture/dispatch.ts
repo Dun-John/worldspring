@@ -10,6 +10,7 @@ import { type Light } from './common';
 import { alchemyBench, altar, barricade, bell, cage, cauldron, lighthouseLamp, linkDown, millstones, pillar, sarcophagus, spiralStair, spurWheel, stage, statue, telescope, throne, tortureRack, trapdoor, vat, weaponRack, winch } from './sacred';
 import { anvil, bar, barrel, bath, bed, bench, bookcase, boothSeat, boothTable, bucket, chair, chest, cot, couch, counter, crates, desk, display, forge, hearth, keg, oven, pew, planter, roofDome, roundTable, rug, shelf, sideboard, table, wardrobe, washingLine, waterJar, workbench } from './home';
 import { gravelWalk } from './under';
+import { lifeSize } from './lifesize';
 import { VARIED } from './tables';
 import { barrels, cart } from '../atlas/yard';
 import { waterTrough } from '../atlas/street';
@@ -51,6 +52,19 @@ function yardThing(g: Graphics, f: InteriorItem, v: number) {
 export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: number, back: [number, number] | null = null, fit?: Fit): boolean {
   if (!VARIED.has(f.kind)) return false;
   const rnd = rng(v * 7919 + f.w * 131 + f.h * 17 + f.kind.length * 1009 + f.kind.charCodeAt(0));
+  if (f.kind === 'keg_rack') {
+    const bk = back ?? [0, -1];
+    for (let u = 0; u < Math.max(f.w, f.h); u++) {
+      const across = (bk[1] !== 0 ? f.x : f.y) + u + 0.5;
+      if (!lifeSize(g, f, bk, (g2) => keg(g2, f, u, light, rnd, bk), across)) keg(g, f, u, light, rnd, bk);
+    }
+    return true;
+  }
+  if (!lifeSize(g, f, back, (g2) => drawKind(g2, f, light, v, rnd, back, fit))) drawKind(g, f, light, v, rnd, back, fit);
+  return true;
+}
+
+function drawKind(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number] | null, fit?: Fit) {
   switch (f.kind) {
     case 'bed':
       bed(g, f, light, v, rnd, back ?? (f.w > f.h ? [-1, 0] : [0, -1]));
@@ -229,9 +243,6 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
     case 'barrel':
       barrel(g, f.x + f.w / 2, f.y + f.h / 2, Math.min(f.w, f.h) * 0.4, light, rnd);
       break;
-    case 'keg_rack':
-      for (let u = 0; u < Math.max(f.w, f.h); u++) keg(g, f, u, light, rnd, back ?? [0, -1]);
-      break;
     case 'crate':
       crates(g, f, light, v, rnd);
       break;
@@ -319,5 +330,4 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       councilTable(g, f, light, v, rnd);
       break;
   }
-  return true;
 }

@@ -77,6 +77,8 @@ export function bench(g: Graphics, f: InteriorItem, light: Light, rnd: () => num
   for (const u of [0.16, len - 0.26]) board(g, rect(u, 0.26, u + 0.1, 0.74), DARK_WOOD, light, rnd, !along, 0.02, 0);
   const face = board(g, rect(0.06, 0.32, len - 0.06, 0.68), WOOD, light, rnd, along, 0.04, 2);
   planks(g, face, along, 2, WOOD[0], rnd);
+  // A lit band along the back half of the seat, so a bench this shallow still reads as a seat.
+  { const r = rect(0.1, 0.35, len - 0.1, 0.47); g.rect(r[0], r[1], r[2] - r[0], r[3] - r[1]).fill({ color: WOOD[2], alpha: 0.85 }); }
 }
 
 /** Chest, its front toward +y: a lid of planks, two iron bands over it, iron corners and a lock. */
@@ -694,6 +696,7 @@ export function pew(g: Graphics, f: InteriorItem, light: Light, rnd: () => numbe
   for (const u of [0.04, len - 0.14]) board(g, rect(u, 0.12, u + 0.1, 0.84), DARK_WOOD, light, rnd, !along, 0.02, 0);
   const seat = board(g, rect(0.12, 0.32, len - 0.12, 0.8), WOOD, light, rnd, along, 0.04, 2);
   planks(g, seat, along, 2, WOOD[0], rnd);
+  { const r = rect(0.16, 0.35, len - 0.16, 0.47); g.rect(r[0], r[1], r[2] - r[0], r[3] - r[1]).fill({ color: WOOD[2], alpha: 0.85 }); }
   board(g, rect(0.12, 0.14, len - 0.12, 0.3), DARK_WOOD, light, rnd, along, 0.03, 1);
 }
 
@@ -828,7 +831,7 @@ export function bucket(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
  * flat tones lit from the light, a few bold segment lines up to a small finial, its shadow beside it. */
 export function roofDome(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
-  const r = Math.max(f.w, f.h) / 2 + 0.2;
+  const r = Math.min(f.w, f.h) / 2 - OUT / 2;
   const [lx, ly] = light;
   const body = ring(cx, cy, r, rnd, 0.006, 32);
   castShadow(g, body, light, 0.3);

@@ -88,7 +88,7 @@ export function stoneSteps(g: Graphics, f: InteriorItem, light: Light, rnd: () =
 export function climbLadder(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { at } = frame(f, back);
   const [lx, ly] = light;
-  const rail = (side: number, s: number): [number, number] => at(0.5 + side * 0.17, s);
+  const rail = (side: number, s: number): [number, number] => at(0.5 + side * 0.15, s);
   const [s0, s1] = [-0.04, 0.95];
   const rungs = [0.12, 0.37, 0.62, 0.87];
   // The shadow: the same lines moved a little away from the light.
@@ -303,11 +303,12 @@ export function arcaneFocus(g: Graphics, f: InteriorItem, light: Light, rnd: () 
   g.poly(ring(cx, cy, 0.28, rnd, 0.004, 28)).fill(MARBLE[0]).stroke({ width: OUT, color: INK, join: 'round' });
   g.poly(ring(cx + lx * 0.025, cy + ly * 0.025, 0.235, rnd, 0.004, 28)).fill(MARBLE[1]);
   glowPool(g, cx, cy, 0.26, 0xc8b8f0);
-  // The cradle's three claws.
+  // Four bold rune marks on the slab, outside the ring.
   const ph = rnd() * Math.PI * 2;
-  for (let i = 0; i < 3; i++) {
-    const a = ph + (i * Math.PI * 2) / 3;
-    inkLine(g, [[cx + Math.cos(a) * 0.2, cy + Math.sin(a) * 0.2], [cx + Math.cos(a + 0.25) * 0.14, cy + Math.sin(a + 0.25) * 0.14]], 0.03, BRONZE[1]);
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2 + Math.PI / 4;
+    const [mx, my] = [cx + Math.cos(a) * 0.335, cy + Math.sin(a) * 0.335];
+    g.moveTo(mx - 0.04, my - 0.04).lineTo(mx + 0.04, my + 0.04).stroke({ width: 0.035, color: ARCANE[1] });
   }
   // The crystal from above: six facets meeting at its point, each toned by how it faces the light.
   const R = 0.19;
@@ -324,7 +325,7 @@ export function arcaneFocus(g: Graphics, f: InteriorItem, light: Light, rnd: () 
     g.poly([...apex, ...p, ...q]).fill(ARCANE[k > 0.4 ? 2 : k < -0.4 ? 0 : 1]);
   }
   for (const p of pts) g.moveTo(...apex).lineTo(...p);
-  g.stroke({ width: 0.014, color: ARCANE[0], alpha: 0.9 });
+  g.stroke({ width: 0.02, color: ARCANE[0], alpha: 0.9 });
   g.poly(pts.flat()).stroke({ width: LINE, color: INK, join: 'round' });
   g.circle(apex[0] + lx * 0.03, apex[1] + ly * 0.03, 0.022).fill(ARCANE[3]);
 }
