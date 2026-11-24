@@ -167,33 +167,176 @@ export function tunnel(g: Graphics, f: InteriorItem, rnd: () => number, wall: [n
   }
 }
 
-/** A ladder against the wall, up to a grate in the street above: two rails, rungs, a square of grey light
- * falling through the grate onto its foot. */
-export function ladder(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, wall: [number, number], turned = false) {
+/**
+ * A ladder standing against the wall, seen from straight above (`ladder`, `grateLadder`, the ruins'
+ * `climbLadder`): it leans a little, its feet about a foot out from the wall and its top at the wall, so
+ * from above it is strongly foreshortened, a fifth of a square deep and a foot and a half wide. The rail tops
+ * at the wall are nearest the eye (bold ends, the lightest tone); the rails taper down and out from them to
+ * two small feet; the rungs between bunch closer toward the wall, each overlapping the one below. What tells
+ * its height is its shadow: a long, ladder-shaped soft shadow cast on the floor away from the light from the
+ * feet. `tones`: dark, mid, light (`WOOD`, `IRON`); `u` the middle of the ladder along the wall.
+ */
+export function standingLadder(g: Graphics, f: InteriorItem, light: Light, wall: [number, number], tones: readonly number[] = WOOD, u = 0.5) {
+  const { at } = frame(f, wall);
+  const [lx, ly] = light;
+  // The light's way in the ladder's own axes (u along the wall, s out from it).
+  const [o, au, as] = [at(0, 0), at(1, 0), at(0, 1)];
+  const lu = lx * (au[0] - o[0]) + ly * (au[1] - o[1]);
+  const ls = lx * (as[0] - o[0]) + ly * (as[1] - o[1]);
+  const half = 0.15;
+  const [foot, top] = [0.27, 0.03];
+  // Up the ladder (t: 0 the feet, 1 the top) to s out from the wall: the rungs bunch toward the top.
+  const sAt = (t: number) => foot + (top - foot) * Math.pow(t, 0.75);
+  // The shadow, away from the light and out onto the floor (a light behind the wall still throws it clear).
+  let [du, ds] = [-lu, Math.max(-ls, 0.35)];
+  const dn = Math.hypot(du, ds) || 1;
+  [du, ds] = [du / dn, ds / dn];
+  const L = 0.85;
+  const sp = (side: number, t: number) => at(u + side * half + du * L * t, foot + (top - foot) * t + ds * L * t);
+  const RUNGS = [0.18, 0.4, 0.62, 0.84];
+  for (const [w, a] of [[0.08, 0.1], [0.048, 0.18]]) {
+    for (const side of [-1, 1]) g.moveTo(...sp(side, 0)).lineTo(...sp(side, 1.04));
+    g.stroke({ width: w, color: 0x14100c, alpha: a, cap: 'round' });
+    for (const t of RUNGS) g.moveTo(...sp(-1, t)).lineTo(...sp(1, t));
+    g.stroke({ width: w * 0.8, color: 0x14100c, alpha: a, cap: 'butt' });
+  }
+  // The feet, each with a scuff of shadow.
+  for (const side of [-1, 1]) {
+    const [fx, fy] = at(u + side * half, foot);
+    g.poly(oval(fx - lx * 0.012, fy - ly * 0.012, 0.04, 0.04, 0, 10)).fill({ color: 0x14100c, alpha: 0.22 });
+    g.circle(fx, fy, 0.024).fill(tones[0]).stroke({ width: LINE, color: INK });
+  }
+  // The rungs, from the feet up: each a little bigger than the one below (nearer the eye), its top edge lit.
+  RUNGS.forEach((t, k) => {
+    const s = sAt(t);
+    const w = 0.026 + k * 0.003;
+    const [a, b] = [at(u - half, s), at(u + half, s)];
+    g.moveTo(...a).lineTo(...b).stroke({ width: w + 2 * LINE, color: INK, cap: 'butt' });
+    g.moveTo(...a).lineTo(...b).stroke({ width: w, color: tones[1], cap: 'butt' });
+    const [c, d] = [at(u - half, s - w * 0.28), at(u + half, s - w * 0.28)];
+    g.moveTo(...c).lineTo(...d).stroke({ width: 0.014, color: tones[2], cap: 'butt' });
+  });
+  // The rails, tapering from the top (near) to the feet (far), lit down the side toward the light.
+  const litSide = lu < 0 ? -1 : 1;
+  for (const side of [-1, 1]) {
+    const x = u + side * half;
+    const [h0, h1] = [0.016, 0.026];
+    g.poly([...at(x - h0, foot), ...at(x + h0, foot), ...at(x + h1, top), ...at(x - h1, top)]).fill(tones[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.moveTo(...at(x + litSide * h0 * 0.4, foot)).lineTo(...at(x + litSide * h1 * 0.45, top)).stroke({ width: 0.014, color: tones[2] });
+  }
+  // The rail tops at the wall, nearest the eye: bold ends in the lightest tone, a glint toward the light.
+  const pale = shade(tones[2], 1.16);
+  for (const side of [-1, 1]) {
+    const [cx, cy] = at(u + side * half, top);
+    if (tones === IRON) g.circle(cx, cy, 0.036).fill(pale).stroke({ width: LINE, color: INK });
+    else g.roundRect(cx - 0.036, cy - 0.036, 0.072, 0.072, 0.018).fill(pale).stroke({ width: LINE, color: INK });
+    g.circle(cx + lx * 0.012, cy + ly * 0.012, 0.014).fill(shade(pale, 1.12));
+  }
+}
+
+/** A ladder against the wall, up to a grate in the street above: `standingLadder` over a square of grey light
+ * falling through the grate onto its foot (a ladder turned to a curving wall has none: a tilted box reads as a
+ * pale slab). */
+export function ladder(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, wall: [number, number], turned = false, tones: readonly number[] = WOOD) {
   const { at, rect } = frame(f, wall);
-  // The grate's light on the floor below it (a ladder turned to a curving wall has none: a tilted box reads as a pale slab).
   if (!turned) {
     g.poly(quad(rect(0.2, 0.02, 0.8, 0.62), rnd, 0)).fill({ color: 0xd8dce0, alpha: 0.18 });
     for (let k = 1; k < 4; k++) g.moveTo(...at(0.2 + k * 0.15, 0.02)).lineTo(...at(0.2 + k * 0.15, 0.62));
     g.stroke({ width: 0.03, color: 0x14100c, alpha: 0.25 });
   }
-  // Lit from the light's side: the rails and rungs get a bright edge toward it and a dark one away.
+  standingLadder(g, f, light, wall, tones);
+}
+
+/** A sewer's way out (`exit` named for a street grate), seen from above: an iron `standingLadder` against the
+ * wall and the grate's daylight on the floor at its foot, a pale warm rectangle (half a square by two fifths)
+ * crossed by the shadows of five bars, in a soft warm halo. */
+export function grateLadder(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, wall: [number, number]) {
+  const { at } = frame(f, wall);
+  const SUN = 0xffe6a0;
+  const [cx, cy] = at(0.5, 0.26);
+  g.poly(patch(cx, cy, 0.42, 0.36, rnd, 0.1)).fill({ color: SUN, alpha: 0.12 });
+  g.poly(patch(cx, cy, 0.33, 0.28, rnd, 0.08)).fill({ color: SUN, alpha: 0.14 });
+  const [s0, s1] = [0.05, 0.47];
+  g.poly([...at(0.25, s0), ...at(0.75, s0), ...at(0.75, s1), ...at(0.25, s1)]).fill({ color: 0xfff0c4, alpha: 0.4 });
+  for (let k = 0; k < 5; k++) g.moveTo(...at(0.3 + k * 0.1, s0 + 0.01)).lineTo(...at(0.3 + k * 0.1, s1 - 0.01));
+  g.stroke({ width: 0.032, color: 0x2a2418, alpha: 0.3 });
+  standingLadder(g, f, light, wall, IRON);
+}
+
+/** A sewer's outfall, where a run empties to the river or the sea, seen from above: the tunnel's mouth in the
+ * wall under a deep band of arch stones (the voussoirs, seen from above, on the wall line) between two jamb
+ * blocks, the mouth dark behind an iron grille (a rail, five round bar-tops), and the water running out through
+ * it: a sheet as wide as the mouth at the grille, foaming against the bars, widening and fading into the floor,
+ * a few flow lines; a faint wedge of daylight on the floor inside. */
+export function outfall(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, wall: [number, number]) {
+  const { at } = frame(f, wall);
+  const pts = (...uv: number[]) => {
+    const out: number[] = [];
+    for (let i = 0; i < uv.length; i += 2) out.push(...at(uv[i], uv[i + 1]));
+    return out;
+  };
   const [lx, ly] = light;
-  const d = 0.014;
-  const line = (x0: number, y0: number, x1: number, y1: number, w: number, color: number, ox = 0, oy = 0) =>
-    g.moveTo(x0 + ox, y0 + oy).lineTo(x1 + ox, y1 + oy).stroke({ width: w, color, cap: 'round' });
-  for (const u of [0.35, 0.65]) {
-    const [a, b] = [at(u, -0.22), at(u, 0.7)];
-    line(a[0], a[1], b[0], b[1], 0.07, INK);
-    line(a[0], a[1], b[0], b[1], 0.04, WOOD[1]);
-    line(a[0], a[1], b[0], b[1], 0.014, WOOD[2], lx * d, ly * d);
+  // The daylight through the mouth, a faint wedge widening onto the floor.
+  g.poly(pts(0.24, 0.1, 0.76, 0.1, 0.98, 0.96, 0.02, 0.96)).fill({ color: 0xfff0c4, alpha: 0.06 });
+  g.poly(pts(0.3, 0.1, 0.7, 0.1, 0.84, 0.7, 0.16, 0.7)).fill({ color: 0xfff0c4, alpha: 0.07 });
+  // The dark mouth between the arch and the grille, a dull gleam of the water going in.
+  g.poly(pts(0.22, -0.1, 0.78, -0.1, 0.78, 0.17, 0.22, 0.17)).fill(0x12100c);
+  g.poly(pts(0.3, -0.06, 0.7, -0.06, 0.72, 0.12, 0.28, 0.12)).fill({ color: 0x6e7c70, alpha: 0.22 });
+  // The stream: nested sheets, each shorter and a little narrower, so it fades out widening into the floor.
+  const WATER = [0x6e7c70, 0x8e9c8e, 0xc4d0c2];
+  const n = 8;
+  const jit = Array.from({ length: n + 1 }, () => [(rnd() - 0.5) * 0.05, (rnd() - 0.5) * 0.05]);
+  for (const [len, narrow, a] of [[0.92, 1, 0.26], [0.74, 0.94, 0.3], [0.56, 0.88, 0.34], [0.4, 0.84, 0.4], [0.26, 0.82, 0.45]]) {
+    const edge = (side: number) => {
+      const out: number[] = [];
+      for (let k = 0; k <= n; k++) {
+        const s = 0.16 + (len * k) / n;
+        const hw = (0.27 + (s - 0.16) * 0.26) * narrow + (k ? jit[k][side < 0 ? 0 : 1] : 0);
+        out.push(...at(0.5 + side * hw, s));
+      }
+      return out;
+    };
+    const l = edge(-1);
+    const r = edge(1);
+    const sheet: number[] = [...l];
+    for (let k = r.length - 2; k >= 0; k -= 2) sheet.push(r[k], r[k + 1]);
+    g.poly(sheet).fill({ color: WATER[0], alpha: a });
   }
-  for (const s0 of [-0.08, 0.14, 0.32, 0.5]) {
-    const [a, b] = [at(0.35, s0), at(0.65, s0)];
-    line(a[0], a[1], b[0], b[1], 0.05, INK);
-    line(a[0], a[1], b[0], b[1], 0.028, WOOD[2]);
-    line(a[0], a[1], b[0], b[1], 0.01, WOOD[0], -lx * d, -ly * d);
+  // Flow lines, drawn in toward the mouth.
+  for (const [u0, u1, s0, bend] of [[0.36, 0.42, 0.78, -0.05], [0.62, 0.57, 0.66, 0.05], [0.5, 0.5, 0.86, 0.04]]) {
+    const [a, b, c] = [at(u0, s0), at((u0 + u1) / 2 + bend, (s0 + 0.24) / 2), at(u1, 0.24)];
+    g.moveTo(...a).quadraticCurveTo(...b, ...c).stroke({ width: 0.02, color: WATER[2], alpha: 0.75, cap: 'round' });
   }
+  // Foam against the bars.
+  for (let k = 0; k < 6; k++) {
+    const [fx, fy] = at(0.27 + k * 0.092 + (rnd() - 0.5) * 0.03, 0.24 + rnd() * 0.04);
+    g.poly(patch(fx, fy, 0.03 + rnd() * 0.02, 0.022 + rnd() * 0.012, rnd, 0.25, 8)).fill({ color: 0xeef2e8, alpha: 0.8 });
+  }
+  // The grille across the mouth: its shadow away from the light, the rail, five round bar-tops (as `grille`).
+  const rail = pts(0.18, 0.15, 0.82, 0.15, 0.82, 0.2, 0.18, 0.2);
+  const bars = [0.27, 0.385, 0.5, 0.615, 0.73].map((u) => at(u, 0.175));
+  g.poly(rail.map((v, i) => v - (i % 2 ? ly : lx) * 0.06)).fill({ color: 0x000000, alpha: 0.22 });
+  for (const [bx, by] of bars) g.circle(bx - lx * 0.05, by - ly * 0.05, 0.045).fill({ color: 0x000000, alpha: 0.2 });
+  g.poly(rail).fill(IRON[0]).stroke({ width: LINE, color: INK, join: 'round' });
+  for (const [bx, by] of bars) {
+    g.circle(bx, by, 0.05).fill(IRON[1]).stroke({ width: LINE, color: INK });
+    g.circle(bx + lx * 0.014, by + ly * 0.014, 0.018).fill(IRON[2]);
+  }
+  // The jambs, and the arch stones over the mouth on the wall line, a short shadow under them.
+  const [b0, b1] = [-0.44, -0.04];
+  const jambs = [pts(0.04, b0, 0.22, b0, 0.22, 0.22, 0.04, 0.22), pts(0.78, b0, 0.96, b0, 0.96, 0.22, 0.78, 0.22)];
+  const band = pts(0.04, b0, 0.96, b0, 0.96, b1, 0.04, b1);
+  castShadow(g, band, light, 0.08);
+  for (const j of jambs) castShadow(g, j, light, 0.08);
+  for (const j of jambs) g.poly(j).fill(STONE[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  // (Five stones, their joints fanned a little about the mouth's middle.)
+  const m = 5;
+  const joint = (j: number, s: number) => (j === 0 ? 0.04 : j === m ? 0.96 : 0.04 + (0.92 * j) / m + (j - m / 2) * 0.035 * (s < 0 ? -1 : 1));
+  for (let k = 0; k < m; k++) {
+    const c = shade(STONE[k % 2 ? 1 : 2], 0.94 + rnd() * 0.12);
+    g.poly(pts(joint(k, -1), b0, joint(k + 1, -1), b0, joint(k + 1, 1), b1, joint(k, 1), b1)).fill(c).stroke({ width: LINE, color: INK, join: 'round' });
+  }
+  g.poly(band).stroke({ width: OUT, color: INK, join: 'round' });
 }
 
 /** A drain pipe out of the wall, seen from above: a short run of pipe lying on the floor (0 iron, bolted

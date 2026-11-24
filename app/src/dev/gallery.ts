@@ -84,7 +84,7 @@ const SETS: Record<string, string[]> = {
 
 /** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
 const UNDER: [string, number, number][] = [
-  ['exit', 1, 1], ['up', 1, 1], ['down', 1, 1], ['tunnel', 1, 1], ['trapdoor', 1, 1], ['ladder', 1, 1], ['pipe', 1, 1],
+  ['exit', 1, 1], ['up', 1, 1], ['down', 1, 1], ['tunnel', 1, 1], ['trapdoor', 1, 1], ['ladder', 1, 1], ['grate_ladder', 1, 1], ['outfall', 1, 1], ['pipe', 1, 1],
   ['trap', 1, 1], ['cave_in', 1, 1], ['pit', 2, 2], ['well', 1, 1], ['stalagmite', 1, 1], ['rock_column', 1, 1], ['boulder', 2, 2],
   ['crystal', 1, 1], ['fungus', 1, 1], ['mushroom', 1, 1], ['web', 1, 1], ['cobweb', 1, 1], ['guano', 2, 2], ['moss', 1, 1],
   ['obsidian', 1, 1], ['basalt', 1, 1], ['vent', 1, 1], ['sulfur', 1, 1], ['scorched', 1, 2], ['glass_pool', 2, 2],

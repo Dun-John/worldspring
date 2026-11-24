@@ -3,7 +3,7 @@ import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
 import { type Light } from './common';
 import { arcaneFocus, arcaneWorkbench, boneMound, climbLadder, crackedFloor, fallenColumn, floodedPit, scaffold, stoneSteps, stoneThrone, totem, wallStub } from './ruins';
-import { basaltColumns, beastNest, caveBoulder, caveIn, caveMoss, cobweb, crystal, drainLight, fungus, giantMushrooms, glassPool, grille, guano, iceFormation, iceSheet, ladder, obsidianShards, pipe, pit, ratNest, rockColumn, scorchedRemains, stairsUp, stalagmite, steamVent, sulfurCrust, trap, tunnel, web, well } from './under';
+import { basaltColumns, beastNest, caveBoulder, caveIn, caveMoss, cobweb, crystal, drainLight, fungus, giantMushrooms, glassPool, grateLadder, grille, guano, iceFormation, iceSheet, ladder, obsidianShards, outfall, pipe, pit, ratNest, rockColumn, scorchedRemains, stairsUp, stalagmite, steamVent, sulfurCrust, trap, tunnel, web, well } from './under';
 import { bedroll, grainSacks, hangingLantern, miningTools, oreCart, oreVein, powderKegs, rails } from './mine';
 import { tatteredBanner } from './hangings';
 import { brazier, candelabrum, collapsedWall, dais, dryFountain, ironMaiden, ritualCircle, shackles, stocks, torchSconce, treasureHoard } from './dungeon';
@@ -32,7 +32,15 @@ export function drawUnderProp(
   const draw = (g: Graphics) => {
   switch (f.kind) {
     case 'exit':
-      stairsUp(g, f, rnd, true);
+      // (A sewer's ways out are ladders up to a street grate: "Sewer grate", "ladder up to a street grate".)
+      if (/grate/i.test(f.name ?? '')) grateLadder(g, f, light, rnd, w);
+      else stairsUp(g, f, rnd, true);
+      break;
+    case 'grate_ladder':
+      grateLadder(g, f, light, rnd, w);
+      break;
+    case 'outfall':
+      outfall(g, f, light, rnd, w);
       break;
     case 'up':
       stairsUp(g, f, rnd, false);

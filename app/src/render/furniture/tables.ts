@@ -157,7 +157,7 @@ export const UNDER_DRAWN = new Set([
   'bones', 'skeleton', 'skulls', 'coffin', 'effigy', 'niche', 'urn', 'offering',
   'campfire', 'rubble', 'debris', 'timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'lantern', 'powder', 'bedroll', 'sacks',
   'brazier', 'candles', 'chains', 'sconce', 'banner', 'iron_maiden', 'stocks', 'hoard', 'dais', 'fountain', 'glyph',
-  'collapsed_wall', 'drain', 'grille',
+  'collapsed_wall', 'drain', 'grille', 'outfall', 'grate_ladder',
   'throne', 'steps', 'climb_ladder', 'wall_stub', 'fallen_column', 'arcane_workbench', 'arcane_focus', 'bone_mound', 'totem', 'scaffold', 'cracked_floor',
   'flooded_pit',
 ]);

@@ -230,6 +230,12 @@ function windowPanes(g: Graphics, at: [Pt, Pt][]) {
   g.fill(INK);
 }
 
+/** Props drawn against the wall: `ON_WALL`'s, a sewer's outfall, and its ways out up to a street grate (an `exit`
+ * named for the grate, drawn as an iron ladder; other exits are stairs in the floor). */
+function onWall(f: InteriorItem): boolean {
+  return ON_WALL.has(f.kind) || f.kind === 'outfall' || (f.kind === 'exit' && /grate/i.test(f.name ?? ''));
+}
+
 export class InteriorLayer {
   /** The world's renames, for level and room names (`l:`/`r:` ids); set by `MapView`. */
   static names: Record<string, string> = {};
@@ -1387,7 +1393,7 @@ export class InteriorLayer {
     const g = { ...f, back: undefined };
     const shared = this.sharedKind(f.kind);
     if (shared) return ORIENTED.has(shared) ? sideOf(this.backSide({ ...g, kind: shared })) : null;
-    if (ON_WALL.has(f.kind)) return sideOf(this.propWall(g));
+    if (onWall(f)) return sideOf(this.propWall(g));
     if (BACKED.has(f.kind)) return sideOf(this.backWall(g));
     return null;
   }
@@ -1516,7 +1522,7 @@ export class InteriorLayer {
    * and turned, so its light is turned back by the nearest of 16 angles, to stay the screen's NW. (Without an atlas
    * nothing can be turned.) */
   private wallAnchor(f: InteriorItem): WallAnchor | null {
-    if (!ON_WALL.has(f.kind) || !this.underground || !InteriorLayer.renderer || setBack(f)) return null;
+    if (!onWall(f) || !this.underground || !InteriorLayer.renderer || setBack(f)) return null;
     const lv = this.interior.levels[this.level];
     if (lv.paths?.length) return this.lineAnchor(f, lv);
     if (f.kind === 'niche' || this.tile || SQUARE_SITES.has(this.interior.function)) return null;
@@ -1561,12 +1567,12 @@ export class InteriorLayer {
     const it = this.interior;
     let field = this.fields.get(this.level);
     if (!field) this.fields.set(this.level, (field = underField(it, this.level)));
-    const placed = (g: InteriorItem) => ON_WALL.has(g.kind) && g.kind !== 'niche' && !setBack(g);
+    const placed = (g: InteriorItem) => onWall(g) && g.kind !== 'niche' && !setBack(g);
     const walls: RoughWalls = {
       n: lv.furniture.length,
       dist: wallDistance(field, it.nx, it.ny, roughness(it.function)),
-      taken: lv.furniture.filter((g) => ON_WALL.has(g.kind) && !placed(g)).map((g) => [g.x + g.w / 2, g.y + g.h / 2]),
-      solid: lv.furniture.filter((g) => !ON_WALL.has(g.kind) && !UNDERFOOT.has(g.kind) && TERRAIN_CHANNEL[g.kind] === undefined),
+      taken: lv.furniture.filter((g) => onWall(g) && !placed(g)).map((g) => [g.x + g.w / 2, g.y + g.h / 2]),
+      solid: lv.furniture.filter((g) => !onWall(g) && !UNDERFOOT.has(g.kind) && TERRAIN_CHANNEL[g.kind] === undefined),
       doors: lv.doors.map((d) => [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2]),
     };
     this.rough.set(this.level, walls);
@@ -1632,7 +1638,7 @@ export class InteriorLayer {
       return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}${stone}`;
     }
     const turned = this.wallAnchor(f);
-    const wall = turned ? `t${turned.step}` : ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
+    const wall = turned ? `t${turned.step}` : onWall(f) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
     const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) || f.kind === 'key' ? this.lookOf(f) : 0;
     const links = f.kind === 'rail' || f.kind === 'ore_cart' ? `:r${this.railLinks(f)}` : '';
     const rock = f.kind === 'niche' && !turned ? `:k${this.rockBehind(f)}` : '';
@@ -2007,7 +2013,7 @@ export class InteriorLayer {
     }
     // (Indoor props in a building too.)
     const turned = this.wallAnchor(f);
-    if ((this.underground || !shared) && sprites().drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : ALONG_RUN.has(kind) ? this.runDir(f) : [0, 0], this.railLinks(f), !!turned, kind === 'niche' && !turned ? this.rockBehind(f) : 2, kind === 'grille' ? this.runOf(f) : undefined)) return;
+    if ((this.underground || !shared) && sprites().drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : onWall(f) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : ALONG_RUN.has(kind) ? this.runDir(f) : [0, 0], this.railLinks(f), !!turned, kind === 'niche' && !turned ? this.rockBehind(f) : 2, kind === 'grille' ? this.runOf(f) : undefined)) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });
