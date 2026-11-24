@@ -1,10 +1,9 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { INK, IRON, LINE, type Light, OUT, WOOD, board, castShadow, frame, glowPool, oval, patch, ring } from './common';
+import { INK, IRON, LINE, type Light, OUT, WOOD, board, castShadow, frame, glowPool, oval, patch, ring, shade, waxCandle } from './common';
 import { MARBLE } from './sacred';
 import { GILT } from './tables';
 import { STONE, masonry } from './home';
-import { screenAxes } from './under';
 
 /** A fire seen from above at (x, y), about `r` across: an ember bed, then soft glowing ovals heaped on it, deep
  * orange out to a pale yellow core (as in the hearths), a few sparks. */
@@ -61,44 +60,46 @@ export function brazier(g: Graphics, f: InteriorItem, light: Light, rnd: () => n
   fireTop(g, cx, cy, r * 0.7, rnd);
 }
 
-/** Candelabrum, from a high angle like the urn and lantern (from straight above it is only a star of arms): a tall
- * iron stand on three clawed feet, five branches rising from it in pairs of curves round a middle one, a cream
- * candle with a flame in each cup, wax dripped on the floor, a soft glow. */
+/** Candelabrum from straight above: an iron drip-ring about 2 ft across on its branches (the stand hidden under it),
+ * the column's knob in the middle, five candles of mixed thickness round the ring as cream wax discs each with a tiny
+ * flame, wax dripped on the ring and the floor, one soft warm pool of light. */
 export function candelabrum(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const { pt } = screenAxes(light);
-  const P = (a: number, b: number) => pt(cx, cy, a, b);
-  glowPool(g, ...P(0, 0.1), 0.55, 0xfcd36a);
-  castShadow(g, ring(...P(0, -0.4), 0.08, rnd, 0, 8), light, 1.1);
-  for (let i = 0; i < 6; i++) g.poly(oval(...P((rnd() - 0.5) * 0.5, -0.42 + (rnd() - 0.5) * 0.08), 0.025, 0.016, 0, 8)).fill(0xf0e8d0).stroke({ width: 0.018, color: INK });
-  const iron = (pts: [number, number][], w: number) => {
-    for (const [ww, c] of [
-      [w + 0.032, INK],
-      [w, IRON[1]],
-    ] as const) {
-      g.moveTo(...pts[0]);
-      if (pts.length === 3) g.quadraticCurveTo(...pts[1], ...pts[2]);
-      else g.lineTo(...pts[1]);
-      g.stroke({ width: ww, color: c, cap: 'round', join: 'round' });
-    }
-  };
-  // Feet, the column, the branches.
-  for (const k of [-1, 0, 1]) iron([P(0, -0.33), P(k * 0.14, k === 0 ? -0.44 : -0.42)], 0.04);
-  iron([P(0, -0.42), P(0, 0.2)], 0.05);
-  for (const k of [-1, 1]) {
-    iron([P(0, -0.02), P(k * 0.3, -0.04), P(k * 0.3, 0.14)], 0.036);
-    iron([P(0, 0.06), P(k * 0.16, 0.05), P(k * 0.16, 0.2)], 0.036);
+  const [lx, ly] = light;
+  glowPool(g, cx, cy, 0.48, 0xfcd36a);
+  castShadow(g, ring(cx, cy, 0.19, rnd, 0.004, 14), light, 0.22);
+  for (let i = 0; i < 5; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = 0.24 + 0.1 * rnd();
+    g.poly(oval(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.024, 0.017, a, 8)).fill(0xe8dcc0).stroke({ width: 0.016, color: INK });
   }
-  g.poly(oval(...P(0, -0.32), 0.05, 0.035, 0, 10)).fill(IRON[1]).stroke({ width: 0.018, color: INK });
-  // Cups, candles, flames.
-  for (const [a, b] of [[-0.3, 0.14], [-0.16, 0.2], [0, 0.22], [0.16, 0.2], [0.3, 0.14]] as [number, number][]) {
-    g.poly([...P(a - 0.05, b), ...P(a + 0.05, b), ...P(a + 0.035, b - 0.03), ...P(a - 0.035, b - 0.03)]).fill(IRON[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    const candle = [...P(a - 0.03, b + 0.1), ...P(a + 0.03, b + 0.1), ...P(a + 0.03, b), ...P(a - 0.03, b)];
-    g.poly(candle).fill(0xf4ecd8).stroke({ width: LINE, color: INK, join: 'round' });
-    g.poly([...P(a - 0.025, b + 0.1), ...P(a - 0.008, b + 0.1), ...P(a - 0.008, b), ...P(a - 0.025, b)]).fill(0xfffaf0);
-    g.circle(...P(a, b + 0.15), 0.05).fill({ color: 0xffc23a, alpha: 0.25 });
-    g.poly(oval(...P(a, b + 0.135), 0.018, 0.03, Math.atan2(P(0, 1)[1] - P(0, 0)[1], P(0, 1)[0] - P(0, 0)[0]), 10)).fill(0xf9a23a);
-    g.poly(oval(...P(a, b + 0.13), 0.009, 0.016, Math.atan2(P(0, 1)[1] - P(0, 0)[1], P(0, 1)[0] - P(0, 0)[0]), 8)).fill(0xfff2c0);
+  // The ring: an iron band, the branches under it showing as short spokes to the knob.
+  const ph = rnd() * Math.PI * 2;
+  const cups: [number, number, number][] = [];
+  for (let i = 0; i < 5; i++) {
+    const a = ph + (i / 5) * Math.PI * 2 + (rnd() - 0.5) * 0.35;
+    const d = 0.165 + (rnd() - 0.5) * 0.02;
+    cups.push([cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.03 + 0.012 * rnd()]);
+  }
+  for (const [x, y] of cups.slice(0, 3)) {
+    g.moveTo(cx, cy).lineTo(x, y).stroke({ width: 0.05, color: INK, cap: 'round' });
+    g.moveTo(cx, cy).lineTo(x, y).stroke({ width: 0.026, color: IRON[1], cap: 'round' });
+  }
+  for (const [w, c] of [
+    [0.07, INK],
+    [0.042, IRON[1]],
+  ] as const)
+    g.circle(cx, cy, 0.165).stroke({ width: w, color: c });
+  g.moveTo(cx + Math.cos(Math.atan2(ly, lx) - 1) * 0.165, cy + Math.sin(Math.atan2(ly, lx) - 1) * 0.165)
+    .arc(cx, cy, 0.165, Math.atan2(ly, lx) - 1, Math.atan2(ly, lx) + 1)
+    .stroke({ width: 0.016, color: IRON[2] });
+  g.circle(cx, cy, 0.045).fill(IRON[1]).stroke({ width: 0.016, color: INK });
+  g.circle(cx + lx * 0.012, cy + ly * 0.012, 0.022).fill(IRON[2]);
+  // The cups and their candles.
+  for (const [x, y, r] of cups) {
+    g.circle(x, y, r + 0.02).fill(IRON[0]).stroke({ width: 0.016, color: INK });
+    g.poly(patch(x + 0.01, y + 0.012, r * 0.9, r * 0.7, rnd, 0.3, 8)).fill({ color: 0xe8dcc0, alpha: 0.8 });
+    waxCandle(g, x, y, r, light);
   }
 }
 
@@ -169,102 +170,115 @@ export function torchSconce(g: Graphics, f: InteriorItem, light: Light, rnd: () 
   fireTop(g, hx, hy, 0.09, rnd);
 }
 
-/** Iron maiden, from a high angle like the headstones (upright things only read from the side), big: a riveted,
- * iron-banded shell shaped like a person — a domed head with a sculpted grim face, shoulders, a taper to the foot —
- * its two doors swung wide, rows of bright spikes on their insides and in the dark hollow, dried blood on them and
- * pooled below. */
+/** Iron maiden from straight above, about 2.5 by 2 ft: its coffin-shaped iron lid (a rounded bulge for the head at
+ * the top end, broad at the shoulders, narrowing to the foot), split down the middle where the two doors meet; the
+ * left door shut, hung on two hinge straps along its outer edge, the right door just ajar so a dark wedge opens
+ * along the seam with the pale tips of its spikes in it; rivets along the edge and two bands, a small blood stain
+ * at the foot. */
 export function ironMaiden(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const { pt } = screenAxes(light);
-  const P = (a: number, b: number) => pt(cx, cy, a, b);
   const BLOOD = 0x5a1410;
-  castShadow(g, ring(...P(0, -0.44), 0.2, rnd, 0, 12), light, 1.2);
-  g.poly(patch(...P(0.04, -0.46), 0.12, 0.05, rnd, 0.3, 10)).fill({ color: BLOOD, alpha: 0.8 });
-  // The shell: half widths from the foot to the top of the head.
-  const prof: [number, number][] = [[-0.46, 0.17], [-0.2, 0.2], [0.12, 0.22], [0.2, 0.2], [0.26, 0.12], [0.34, 0.12], [0.44, 0.08], [0.48, 0]];
-  const outline: number[] = [];
-  for (const [b, w] of prof) outline.push(...P(w, b));
-  for (const [b, w] of [...prof].reverse()) outline.push(...P(-w, b));
-  // The doors first (behind the shell's edge), hinged at its sides, swung out wide.
-  const spike = (a: number, b: number, dir: number) => {
-    const [tx, ty] = P(a + dir * 0.045, b);
-    const [ux, uy] = P(a, b + 0.018);
-    const [vx, vy] = P(a, b - 0.018);
-    g.poly([ux, uy, tx, ty, vx, vy]).fill(0xe8e4dc).stroke({ width: 0.018, color: INK });
-  };
-  for (const k of [-1, 1]) {
-    const door = [...P(k * 0.2, 0.18), ...P(k * 0.44, 0.12), ...P(k * 0.43, -0.36), ...P(k * 0.18, -0.44)];
-    g.poly(door).fill(IRON[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    g.poly([...P(k * 0.22, 0.15), ...P(k * 0.41, 0.1), ...P(k * 0.4, -0.34), ...P(k * 0.2, -0.41)]).fill(k < 0 ? IRON[2] : IRON[1]);
-    for (let r = 0; r < 5; r++) {
-      for (const t of [0.3, 0.7]) {
-        const a = k * (0.22 + 0.19 * t);
-        const b = 0.08 - r * 0.1 - t * 0.04;
-        spike(a, b, -k);
-        if ((r + (t > 0.5 ? 1 : 0)) % 3 === 0) g.circle(...P(a - k * 0.02, b), 0.012).fill({ color: BLOOD, alpha: 0.85 });
-      }
-    }
-    for (const b of [0.14, -0.38]) g.poly([...P(k * 0.17, b - 0.03), ...P(k * 0.23, b - 0.03), ...P(k * 0.23, b + 0.03), ...P(k * 0.17, b + 0.03)]).fill(IRON[0]).stroke({ width: 0.018, color: INK });
+  const [lx, ly] = light;
+  // T(a, b): a across, b from the head (-) to the foot (+).
+  const T = (a: number, b: number): [number, number] => [cx + a, cy + b];
+  const lid: [number, number][] = [
+    [0, -0.29], [0.065, -0.275], [0.095, -0.22], [0.09, -0.175], [0.18, -0.15], [0.21, -0.09], [0.2, 0.02],
+    [0.16, 0.2], [0.125, 0.265], [0.0, 0.272], [-0.125, 0.265], [-0.16, 0.2], [-0.2, 0.02], [-0.21, -0.09], [-0.18, -0.15], [-0.09, -0.175], [-0.095, -0.22], [-0.065, -0.275],
+  ];
+  const pts = lid.flatMap(([a, b]) => T(a, b));
+  castShadow(g, pts, light, 0.3);
+  g.poly(patch(...T(0.05, 0.33), 0.08, 0.045, rnd, 0.35, 10)).fill({ color: BLOOD, alpha: 0.8 });
+  g.circle(...T(0.12, 0.31), 0.016).fill({ color: BLOOD, alpha: 0.8 });
+  g.poly(pts).fill(IRON[0]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(lid.flatMap(([a, b]) => T(a * 0.86 + lx * 0.014, b * 0.88 + ly * 0.014))).fill(IRON[1]);
+  // The head's dome, lit toward the light.
+  g.poly(oval(...T(0, -0.215), 0.07, 0.06, 0, 14)).fill(IRON[1]).stroke({ width: 0.018, color: shade(IRON[0], 0.8) });
+  g.poly(oval(...T(lx * 0.02, -0.215 + ly * 0.02), 0.035, 0.028, 0, 10)).fill(IRON[2]);
+  // Two bands across, riveted.
+  for (const b of [-0.1, 0.12]) {
+    const w = b < 0 ? 0.2 : 0.175;
+    g.moveTo(...T(-w, b)).lineTo(...T(w, b)).stroke({ width: 0.03, color: INK });
+    g.moveTo(...T(-w + 0.01, b - 0.004)).lineTo(...T(w - 0.01, b - 0.004)).stroke({ width: 0.014, color: IRON[2] });
   }
-  g.poly(outline).fill(IRON[0]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly(outline.map((q, i) => (i % 2 ? cy : cx) + (q - (i % 2 ? cy : cx)) * 0.94 + (i % 2 ? light[1] : light[0]) * 0.02)).fill(IRON[1]);
-  // The hollow, dark, spikes catching the light, blood.
-  const hollow = [...P(-0.14, 0.14), ...P(0.14, 0.14), ...P(0.15, -0.38), ...P(-0.15, -0.38)];
-  g.poly(hollow).fill(0x120c0a).stroke({ width: 0.018, color: INK });
-  for (let r = 0; r < 5; r++) for (const a of [-0.07, 0, 0.07]) {
-    const [sx, sy] = P(a + (r % 2 ? 0.035 : 0), 0.08 - r * 0.1);
-    g.poly([sx, sy - 0.014, sx + 0.012, sy + 0.008, sx - 0.012, sy + 0.008]).fill(r % 2 ? IRON[2] : 0xc8c4bc);
+  for (const [a, b] of [[-0.17, -0.04], [-0.165, 0.06], [-0.14, 0.2], [0.17, -0.04], [0.165, 0.06], [0.14, 0.2], [-0.15, -0.13], [0.15, -0.13]] as const) {
+    g.circle(...T(a, b), 0.014).fill(IRON[2]).stroke({ width: 0.016, color: INK });
   }
-  g.poly(patch(...P(0.02, -0.3), 0.05, 0.03, rnd, 0.4, 8)).fill({ color: BLOOD, alpha: 0.8 });
-  // Bands and rivets on the shell's rim.
-  for (const b of [0.18, -0.12, -0.42]) {
-    const w = 0.2;
-    g.moveTo(...P(-w, b)).lineTo(...P(-0.15, b)).moveTo(...P(0.15, b)).lineTo(...P(w, b));
-    g.stroke({ width: 0.02, color: INK });
-    for (const a of [-0.18, 0.18]) g.circle(...P(a, b), 0.01).fill(IRON[2]);
+  // Hinge straps on the shut (left) door's outer edge, each with its knuckle.
+  for (const b of [-0.05, 0.16]) {
+    const w = b < 0 ? -0.205 : -0.175;
+    g.poly([...T(w, b - 0.025), ...T(-0.06, b - 0.018), ...T(-0.05, b), ...T(-0.06, b + 0.018), ...T(w, b + 0.025)]).fill(IRON[0]).stroke({ width: 0.018, color: INK, join: 'round' });
+    g.moveTo(...T(w + 0.01, b - 0.01)).lineTo(...T(-0.07, b - 0.008)).stroke({ width: 0.014, color: IRON[2] });
+    g.poly(oval(...T(w - 0.012, b), 0.022, 0.034, 0, 10)).fill(IRON[1]).stroke({ width: 0.018, color: INK });
   }
-  // The head and its sculpted face.
-  g.poly(oval(...P(0, 0.34), 0.1, 0.11, 0, 16)).fill(IRON[1]).stroke({ width: 0.018, color: INK });
-  g.poly(oval(...P(-0.02, 0.36), 0.05, 0.05, 0, 10)).fill({ color: IRON[2], alpha: 0.6 });
-  for (const a of [-0.04, 0.04]) {
-    g.poly(oval(...P(a, 0.36), 0.022, 0.012, 0, 8)).fill(INK);
-    g.moveTo(...P(a - 0.03, 0.39)).lineTo(...P(a + 0.02, 0.38)).stroke({ width: 0.016, color: INK });
+  // The seam, and the right door ajar: a dark wedge opening toward the foot, spike tips in it.
+  const gap = [...T(-0.004, -0.17), ...T(0.016, -0.17), ...T(0.07, 0.262), ...T(-0.004, 0.268)];
+  g.poly(gap).fill(0x120c0a).stroke({ width: 0.018, color: INK, join: 'round' });
+  g.moveTo(...T(0.018, -0.168)).lineTo(...T(0.074, 0.258)).stroke({ width: 0.016, color: IRON[2] });
+  for (let i = 0; i < 6; i++) {
+    const t = (i + 0.5) / 6;
+    const b = -0.15 + t * 0.4;
+    const a = 0.004 + t * 0.03 * (0.8 + 0.3 * rnd());
+    g.poly([...T(a - 0.01, b - 0.012), ...T(a + 0.014 + t * 0.012, b), ...T(a - 0.01, b + 0.012)]).fill(0xe0dcd0);
   }
-  g.poly([...P(0, 0.35), ...P(0.015, 0.31), ...P(-0.015, 0.31)]).fill(IRON[0]);
-  g.moveTo(...P(-0.035, 0.28)).quadraticCurveTo(...P(0, 0.295), ...P(0.035, 0.28)).stroke({ width: 0.016, color: INK });
+  g.circle(...T(0.03, 0.2), 0.012).fill({ color: BLOOD, alpha: 0.9 });
 }
 
-/** Stocks, from a high angle: two posts holding a heavy board split along its middle, a head hole between two
- * wrist holes, a hinge at one end and a padlock at the other, straw on the ground before it. */
+/** Stocks from straight above, about 5 ft by 0.8 ft: the heavy board's top edge as a thick plank split along its length, scalloped notches
+ * where the head and wrist holes are cut through the seam, a half-foot square post top at each end, an iron hinge strap at one
+ * end and a padlock at the other, straw on the floor before it. */
 export function stocks(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
-  const { pt } = screenAxes(light);
-  const L = Math.max(f.w, f.h) * 0.42;
-  const P = (a: number, b: number) => pt(cx, cy, a, b);
-  for (let i = 0; i < 12; i++) {
-    const [x, y] = P((rnd() - 0.5) * L * 1.6, -0.3 - rnd() * 0.12);
-    g.moveTo(x, y).lineTo(x + (rnd() - 0.5) * 0.08, y + (rnd() - 0.5) * 0.04).stroke({ width: 0.014, color: 0xc8a860 });
+  const along = f.w >= f.h;
+  const L = 0.5;
+  const W = 0.08;
+  // P(a, b): a along the board from its middle, b across toward the front.
+  const P = (a: number, b: number): [number, number] => (along ? [cx + a, cy + b] : [cx + b, cy + a]);
+  for (let i = 0; i < 16; i++) {
+    const [x, y] = P((rnd() - 0.5) * L * 1.7, 0.12 + rnd() * 0.2);
+    g.moveTo(x, y).lineTo(x + (rnd() - 0.5) * 0.08, y + (rnd() - 0.5) * 0.05).stroke({ width: 0.014, color: 0xc8a860 });
   }
-  castShadow(g, [...P(-L, -0.32), ...P(L, -0.32), ...P(L, -0.2), ...P(-L, -0.2)], light, 0.6);
-  for (const a of [-L * 0.92, L * 0.92]) {
-    const post = [...P(a - 0.06, 0.28), ...P(a + 0.06, 0.28), ...P(a + 0.06, -0.32), ...P(a - 0.06, -0.32)];
-    g.poly(post).fill(WOOD[0]).stroke({ width: OUT, color: INK, join: 'round' });
-    g.poly([...P(a - 0.04, 0.26), ...P(a, 0.26), ...P(a, -0.3), ...P(a - 0.04, -0.3)]).fill(WOOD[1]);
+  const plank = [...P(-L, -W), ...P(L, -W), ...P(L, W), ...P(-L, W)];
+  castShadow(g, plank, light, 0.16);
+  // The two boards meeting at the seam, each a little uneven.
+  for (const [b0, b1, k] of [
+    [-W, 0, 0.92],
+    [0, W, 1],
+  ] as const) {
+    const r = [...P(-L, b0 + (b0 < 0 ? 0.005 : 0)), ...P(L, b0), ...P(L, b1), ...P(-L, b1 - (b1 > 0 ? 0.005 : 0))];
+    g.poly(r).fill(shade(WOOD[1], k)).stroke({ width: LINE, color: INK, join: 'round' });
   }
-  const board = [...P(-L, 0.18), ...P(L, 0.18), ...P(L, -0.14), ...P(-L, -0.14)];
-  g.poly(board).fill(WOOD[1]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly([...P(-L + 0.02, 0.16), ...P(L - 0.02, 0.16), ...P(L - 0.02, 0.09), ...P(-L + 0.02, 0.09)]).fill(WOOD[2]);
-  g.moveTo(...P(-L, 0.02)).lineTo(...P(L, 0.02)).stroke({ width: 0.018, color: INK });
+  g.poly([...P(-L, -W + 0.005), ...P(L, -W), ...P(L, W), ...P(-L, W - 0.005)]).stroke({ width: OUT, color: INK, join: 'round' });
+  const litB = (along ? light[1] : light[0]) < 0 ? -1 : 1;
+  g.poly([...P(-L + 0.03, litB * 0.058), ...P(L - 0.03, litB * 0.058), ...P(L - 0.03, litB * 0.04), ...P(-L + 0.03, litB * 0.04)]).fill(WOOD[2]);
+  // The grain along the boards.
+  for (const b of [-0.045, 0.045]) g.moveTo(...P(-L + 0.06, b)).lineTo(...P(-0.12, b + 0.004)).moveTo(...P(0.12, b)).lineTo(...P(L - 0.06, b - 0.004));
+  g.stroke({ width: 0.014, color: WOOD[0], alpha: 0.7 });
+  // The holes through the seam: a big one for the neck between two for the wrists.
   for (const [a, r] of [
-    [0, 0.08],
-    [-L * 0.5, 0.045],
-    [L * 0.5, 0.045],
+    [0, 0.085],
+    [-0.27, 0.05],
+    [0.27, 0.05],
   ]) {
-    g.poly(oval(...P(a, 0.02), r, r, 0, 14)).fill(0x1e1712).stroke({ width: 0.018, color: INK });
+    const hole: number[] = [];
+    for (let i = 0; i <= 12; i++) {
+      const t = (i / 12) * Math.PI * 2;
+      hole.push(...P(a + Math.cos(t) * r, Math.sin(t) * Math.min(0.058, r * 0.72)));
+    }
+    g.poly(hole).fill(0x0e0a08).stroke({ width: LINE, color: INK });
+    // Its far rim lit where the light falls into it.
+    g.moveTo(...P(a - r * 0.6, -litB * Math.min(0.05, r * 0.6))).lineTo(...P(a + r * 0.6, -litB * Math.min(0.05, r * 0.6))).stroke({ width: 0.014, color: WOOD[2] });
   }
-  g.poly([...P(L - 0.06, 0.06), ...P(L + 0.02, 0.06), ...P(L + 0.02, -0.04), ...P(L - 0.06, -0.04)]).fill(IRON[1]).stroke({ width: 0.018, color: INK });
-  g.poly(oval(...P(L - 0.02, 0.09), 0.025, 0.025, 0, 8)).stroke({ width: 0.014, color: IRON[2] });
-  g.poly([...P(-L, 0.06), ...P(-L + 0.06, 0.06), ...P(-L + 0.06, -0.02), ...P(-L, -0.02)]).fill(IRON[0]);
+  // Posts at the ends, a hinge strap and a padlock.
+  for (const s0 of [-1, 1]) {
+    const a = s0 * (L + 0.045);
+    const post = [...P(a - 0.05, -0.05), ...P(a + 0.05, -0.05), ...P(a + 0.05, 0.05), ...P(a - 0.05, 0.05)];
+    g.poly(post).fill(WOOD[0]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.poly([...P(a - 0.032, -0.032), ...P(a + 0.032, -0.032), ...P(a + 0.032, 0.03), ...P(a - 0.032, 0.03)]).fill(shade(WOOD[1], 0.95));
+    g.moveTo(...P(a - 0.02, 0)).lineTo(...P(a + 0.02, 0.006)).stroke({ width: 0.014, color: WOOD[0] });
+  }
+  g.poly([...P(-L + 0.08, -W), ...P(-L + 0.15, -W), ...P(-L + 0.15, W), ...P(-L + 0.08, W)]).fill(IRON[1]).stroke({ width: 0.018, color: INK });
+  g.poly([...P(L - 0.14, 0.05), ...P(L - 0.07, 0.05), ...P(L - 0.07, 0.14), ...P(L - 0.14, 0.14)]).fill(IRON[1]).stroke({ width: 0.018, color: INK });
+  g.circle(...P(L - 0.105, 0.1), 0.012).fill(INK);
 }
 
 /** Treasure hoard: a heap of gold coins spilling over the floor, a goblet and a crown on it, gems (ruby, sapphire,

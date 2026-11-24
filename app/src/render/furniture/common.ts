@@ -205,3 +205,18 @@ export function skullTop(g: Graphics, x: number, y: number, dir: number, s: numb
 export function glowPool(g: Graphics, x: number, y: number, r: number, color = 0xf8b048) {
   for (let i = 0; i < 5; i++) g.circle(x, y, r * (1 - i * 0.16)).fill({ color, alpha: 0.06 });
 }
+
+/** A candle from straight above at (x, y), `r` across its top: a cream wax disc lit toward the light, and on it a
+ * warm flame (orange, yellow, a pale core) at least 0.05 squares across whatever the candle's size, the brightest
+ * thing on whatever holds it, in a warm halo. */
+export function waxCandle(g: Graphics, x: number, y: number, r: number, light: Light) {
+  g.circle(x, y, Math.max(0.07, r * 2.2)).fill({ color: 0xffc23a, alpha: 0.12 });
+  g.circle(x, y, Math.max(0.05, r * 1.5)).fill({ color: 0xffd46a, alpha: 0.18 });
+  g.circle(x, y, r).fill(0xe4d8bc).stroke({ width: 0.016, color: INK });
+  g.circle(x + light[0] * r * 0.2, y + light[1] * r * 0.2, r * 0.72).fill(0xf6eedc);
+  const rot = Math.atan2(light[1], light[0]);
+  const [fx, fy] = [Math.max(0.026, r * 0.55), Math.max(0.033, r * 0.72)];
+  g.poly(oval(x, y, fx, fy, rot, 12)).fill(0xf28a1e);
+  g.poly(oval(x + light[0] * 0.004, y + light[1] * 0.004, fx * 0.7, fy * 0.7, rot, 12)).fill(0xffc23a);
+  g.poly(oval(x + light[0] * 0.006, y + light[1] * 0.006, fx * 0.38, fy * 0.4, rot, 10)).fill(0xfff6d8);
+}

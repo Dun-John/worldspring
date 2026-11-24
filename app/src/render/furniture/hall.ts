@@ -4,8 +4,7 @@ import { BRASS, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board,
 import { MARBLE, candle } from './sacred';
 import { GILT, HOUSES, VELVET } from './tables';
 import { PLUSH, STONE, WALL_GAP } from './home';
-import { screenAxes } from './under';
-import { clothOfEstate } from './hangings';
+import { clothOfEstate, hangingCloth, hangingRod } from './hangings';
 
 // ---------------------------------------------------------------------------------------------------
 // Great halls and ballrooms (`interior::FURNITURE`: throne dais to refreshment table).
@@ -293,119 +292,30 @@ export function highTable(g: Graphics, f: InteriorItem, light: Light, v: number,
   for (const u of [len / 2 - 0.5, len / 2 + 0.5]) if (u > 0.3 && u < len - 0.3) candle(g, ...at(u, 0.56));
 }
 
-/** A heraldic banner hanging from its rod: `P(a, b)` is the point `a` across from its middle and `b` down from
- * the rod, `w` wide and `len` long, in house `h`'s colours with its charge, two folds down it (the one toward
- * the light paler), a gilt edge on its point or swallowtail. */
-function heraldicBanner(g: Graphics, P: (a: number, b: number) => Pt, w: number, len: number, h: number, light: Light, shadow: number) {
-  const house = HOUSES[h % HOUSES.length];
-  const [f0, f1, f2] = house.field;
-  const bt = len * 0.74;
-  const hw = w / 2;
-  const tail: Pt[] = h % 2 ? [P(hw, len), P(0, bt + (len - bt) * 0.3), P(-hw, len)] : [P(0, len)];
-  const pts = [P(-hw, 0), P(hw, 0), P(hw, bt), ...tail, P(-hw, bt)].flat();
-  if (shadow > 0) castShadow(g, pts, light, shadow);
-  g.poly(pts).fill(f1).stroke({ width: OUT, color: INK, join: 'round' });
-  // Which side faces the light.
-  const [ax, ay] = P(1, 0);
-  const [ox, oy] = P(0, 0);
-  const sideLit = (ax - ox) * light[0] + (ay - oy) * light[1] > 0 ? 1 : -1;
-  const fold = (a: number, color: number, alpha: number) =>
-    g.poly([...P(a - w * 0.1, 0.04), ...P(a + w * 0.1, 0.04), ...P(a + w * 0.08, bt), ...P(a - w * 0.08, bt)]).fill({ color, alpha });
-  fold(sideLit * w * 0.3, f2, 0.6);
-  fold(-sideLit * w * 0.26, f0, 0.45);
-  // The charge.
-  const c = house.charge;
-  const bc = bt * 0.52;
-  const r = Math.min(w, bt) * 0.3;
-  const fillPoly = (q: Pt[]) => g.poly(q.flat()).fill(c).stroke({ width: 0.012, color: INK, join: 'round' });
-  const band = (a0: number, b0: number, a1: number, b1: number, t: number) => {
-    const [dx, dy] = [a1 - a0, b1 - b0];
-    const m = Math.hypot(dx, dy) || 1;
-    const [nx, ny] = [(-dy / m) * t, (dx / m) * t];
-    fillPoly([P(a0 + nx, b0 + ny), P(a1 + nx, b1 + ny), P(a1 - nx, b1 - ny), P(a0 - nx, b0 - ny)]);
-  };
-  switch (house.mark) {
-    case 'tower': {
-      const r = Math.min(w, bt) * 0.38;
-      fillPoly([P(-0.42 * r, bc - 0.55 * r), P(-0.42 * r, bc - 0.9 * r), P(-0.24 * r, bc - 0.9 * r), P(-0.24 * r, bc - 0.72 * r), P(-0.09 * r, bc - 0.72 * r), P(-0.09 * r, bc - 0.9 * r), P(0.09 * r, bc - 0.9 * r), P(0.09 * r, bc - 0.72 * r), P(0.24 * r, bc - 0.72 * r), P(0.24 * r, bc - 0.9 * r), P(0.42 * r, bc - 0.9 * r), P(0.42 * r, bc - 0.55 * r), P(0.5 * r, bc + 0.85 * r), P(-0.5 * r, bc + 0.85 * r)]);
-      g.poly([...P(-0.16 * r, bc + 0.85 * r), ...P(-0.16 * r, bc + 0.4 * r), ...P(0, bc + 0.22 * r), ...P(0.16 * r, bc + 0.4 * r), ...P(0.16 * r, bc + 0.85 * r)]).fill(f0);
-      break;
-    }
-    case 'cross':
-      fillPoly([P(-w * 0.09, 0.06), P(w * 0.09, 0.06), P(w * 0.09, bt), P(-w * 0.09, bt)]);
-      fillPoly([P(-hw + 0.02, bt * 0.34), P(hw - 0.02, bt * 0.34), P(hw - 0.02, bt * 0.34 + w * 0.18), P(-hw + 0.02, bt * 0.34 + w * 0.18)]);
-      break;
-    case 'saltire':
-      band(-hw + 0.03, 0.08, hw - 0.03, bt - 0.02, w * 0.08);
-      band(hw - 0.03, 0.08, -hw + 0.03, bt - 0.02, w * 0.08);
-      break;
-    case 'bend':
-      band(-hw + 0.02, 0.1, hw - 0.02, bt - 0.04, w * 0.1);
-      break;
-    case 'chevron': {
-      const t = w * 0.2;
-      fillPoly([P(-hw + 0.02, bt * 0.72), P(0, bt * 0.3), P(hw - 0.02, bt * 0.72), P(hw - 0.02, bt * 0.72 + t), P(0, bt * 0.3 + t), P(-hw + 0.02, bt * 0.72 + t)]);
-      break;
-    }
-    case 'quarterly':
-      fillPoly([P(-hw + 0.02, 0.05), P(0, 0.05), P(0, bt / 2), P(-hw + 0.02, bt / 2)]);
-      fillPoly([P(0, bt / 2), P(hw - 0.02, bt / 2), P(hw - 0.02, bt), P(0, bt)]);
-      break;
-    case 'star': {
-      const q: Pt[] = [];
-      for (let k = 0; k < 10; k++) {
-        const a = -Math.PI / 2 + (k * Math.PI) / 5;
-        const rr = k % 2 ? r * 0.42 : r;
-        q.push(P(Math.cos(a) * rr, bc + Math.sin(a) * rr));
-      }
-      fillPoly(q);
-      break;
-    }
-    case 'crescent': {
-      const q: Pt[] = [];
-      for (let k = 0; k <= 14; k++) {
-        const a = (-25 + (230 * k) / 14) * (Math.PI / 180);
-        q.push(P(Math.cos(a) * r, bc + Math.sin(a) * r));
-      }
-      for (let k = 14; k >= 0; k--) {
-        const a = (-10 + (200 * k) / 14) * (Math.PI / 180);
-        q.push(P(Math.cos(a) * r * 0.74, bc - r * 0.28 + Math.sin(a) * r * 0.74));
-      }
-      fillPoly(q);
-      break;
-    }
-  }
-  // The sleeve over the rod, the gilt edge round the end.
-  g.poly([...P(-hw, 0), ...P(hw, 0), ...P(hw, 0.05), ...P(-hw, 0.05)]).fill(f0);
-  g.moveTo(...P(hw, bt));
-  for (const p of tail) g.lineTo(...p);
-  g.lineTo(...P(-hw, bt)).stroke({ width: 0.016, color: GILT[1], join: 'round' });
-}
-
-/** Standing banner, from a high angle like the candelabrum (screen up kept up): a weighted round foot, the pole,
- * a crossbar near its top with the banner hanging from it in its house's colours, a gilt spear-point finial. */
+/** Standing banner from straight above: a round weighted foot about 1.4 ft across (two tones, an ink ring), the
+ * pole's top an ink-ringed dot with a gilt spear-point in its middle, a crossbar about 2.5 ft long across it with the
+ * banner hanging from it seen as a band along the bar, its house's field and charge in order along it (as the wall
+ * hangings, `hangingCloth`), and its swallowtail ends showing past the hem as two short tabs. */
 export function standingBanner(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const { pt, right } = screenAxes(light);
-  const P = (a: number, b: number) => pt(cx, cy, a, b);
-  const rot = Math.atan2(right[1], right[0]);
-  const foot = -0.36;
-  const bar = 0.42;
-  castShadow(g, ring(...P(0, foot), 0.07, rnd, 0, 8), light, 1.0);
-  // The foot: a stepped round base, its sides showing below.
-  for (const [r, k, dy] of [
-    [0.19, 0.78, -0.025],
-    [0.13, 1, 0.01],
-  ]) {
-    g.poly(oval(...P(0, foot + dy - 0.03), r, r * 0.6, rot, 16)).fill(shade(DARK_WOOD[1], k * 0.85)).stroke({ width: LINE, color: INK });
-    g.poly(oval(...P(0, foot + dy), r, r * 0.6, rot, 16)).fill(shade(DARK_WOOD[1], k)).stroke({ width: LINE, color: INK });
+  const along = f.w >= f.h;
+  // u along the bar from its middle, s across it.
+  const at = (u: number, s: number): Pt => (along ? [cx + u - 0.25, cy + s] : [cx + s, cy + u - 0.25]);
+  const [lx, ly] = light;
+  castShadow(g, ring(cx, cy, 0.14, rnd, 0, 14), light, 0.1);
+  g.poly(ring(cx, cy, 0.14, rnd, 0.005, 20)).fill(DARK_WOOD[0]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(ring(cx + lx * 0.014, cy + ly * 0.014, 0.112, rnd, 0.004, 18)).fill(DARK_WOOD[1]);
+  g.poly(ring(cx, cy, 0.075, rnd, 0.003, 14)).stroke({ width: 0.016, color: DARK_WOOD[0] });
+  const h = HOUSES[v % HOUSES.length];
+  // The swallowtail: two short tabs past the hem by the middle, under the band.
+  for (const k of [-1, 1]) {
+    const tab = [...at(0.25 + k * 0.035 - 0.03, 0.16), ...at(0.25 + k * 0.035 + 0.03, 0.16), ...at(0.25 + k * 0.05 + 0.018, 0.22), ...at(0.25 + k * 0.05 - 0.018, 0.225)];
+    g.poly(tab).fill(shade(h.field[1], 0.86)).stroke({ width: LINE, color: INK, join: 'round' });
   }
-  inkLine(g, [P(0, foot), P(0, bar + 0.1)], 0.035, DARK_WOOD[1]);
-  heraldicBanner(g, (a, b) => P(a, bar - b), 0.44, 0.5, v, light, 0);
-  inkLine(g, [P(-0.27, bar), P(0.27, bar)], 0.026, DARK_WOOD[1]);
-  for (const a of [-0.27, 0.27]) g.circle(...P(a, bar), 0.026).fill(GILT[1]).stroke({ width: 0.01, color: INK });
-  const tip = [P(-0.035, bar + 0.1), P(0, bar + 0.2), P(0.035, bar + 0.1)];
-  g.poly(tip.flat()).fill(GILT[1]).stroke({ width: 0.012, color: INK, join: 'round' });
+  hangingCloth(g, at, light, 0.03, 0.47, 0.016, 0.16, [[h.field[1], 1], [h.charge, 0.45], [h.field[1], 1]], { fringe: GILT[1] });
+  hangingRod(g, at, 0, 0.5, 0, GILT[1], 0.03);
+  g.circle(cx, cy, 0.036).fill(DARK_WOOD[1]).stroke({ width: LINE, color: INK });
+  g.circle(cx, cy, 0.017).fill(GILT[2]);
 }
 
 /** Carpet runner along its length (one or two squares wide): a field with a border along both sides, a band
@@ -622,8 +532,8 @@ export function harpsichord(g: Graphics, f: InteriorItem, light: Light, v: numbe
   g.roundRect(st[0] + 0.04, st[1] + 0.04, st[2] - st[0] - 0.08, st[3] - st[1] - 0.08, 0.04).fill(PLUSH[v % PLUSH.length][1]).stroke({ width: 0.012, color: INK });
 }
 
-/** Musicians' corner against a wall (2×2): a harp standing in the back corner (from a high angle, screen up kept
- * up), two chairs facing the room with music stands before them (an open book of music on each), a lute (or a
+/** Musicians' corner against a wall (2×2), from straight above: a harp standing in the back corner (a narrow
+ * curved frame, strings fanned in it), two chairs facing the room with music stands before them (an open book of music on each), a lute (or a
  * fiddle and its bow) on one chair, a tabor drum with its sticks on the floor. Odd looks are mirrored. */
 export function musiciansCorner(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
   const { len, at: at0 } = frame(f, back);
@@ -670,18 +580,30 @@ export function musiciansCorner(g: Graphics, f: InteriorItem, light: Light, v: n
   const la = Math.atan2(ey - ly, ex - lx);
   const [ca, sa] = [Math.cos(la), Math.sin(la)];
   const rb = fiddle ? 0.1 : 0.15;
-  inkLine(g, [[lx, ly], [lx + ca * 0.38, ly + sa * 0.38]], 0.032, DARK_WOOD[1]);
-  // The lute's pegbox bent back; the fiddle's scroll.
-  if (!fiddle) inkLine(g, [[lx + ca * 0.38, ly + sa * 0.38], [lx + ca * 0.4 - sa * 0.08, ly + sa * 0.4 + ca * 0.08]], 0.03, DARK_WOOD[0]);
-  else g.circle(lx + ca * 0.39, ly + sa * 0.39, 0.03).fill(DARK_WOOD[0]).stroke({ width: 0.01, color: INK });
-  g.poly(oval(lx - ca * 0.05, ly - sa * 0.05, rb * 1.35, rb, la, 20)).fill(fiddle ? 0x8a4a24 : 0xc08a48).stroke({ width: LINE, color: INK });
-  g.poly(oval(lx - ca * 0.07 + light[0] * 0.02, ly - sa * 0.07 + light[1] * 0.02, rb * 0.9, rb * 0.6, la, 14)).fill({ color: fiddle ? 0xa86a34 : 0xd8a868, alpha: 0.7 });
+  // Flat silhouettes: one tone each, an ink line round, no side shading.
+  const body = fiddle ? 0x8a4a24 : 0xc08a48;
+  const [bx, by] = [lx - ca * 0.05, ly - sa * 0.05];
+  // The lute's pear: a round bowl with a narrower shoulder toward the neck; the fiddle's waisted oval.
+  const parts: number[][] = fiddle
+    ? [oval(bx, by, rb * 1.35, rb, la, 20)]
+    : [oval(bx - ca * 0.03, by - sa * 0.03, rb, rb * 0.95, la, 20), oval(bx + ca * 0.09, by + sa * 0.09, rb * 0.62, rb * 0.6, la, 16)];
+  inkLine(g, [[lx, ly], [lx + ca * 0.38, ly + sa * 0.38]], 0.034, DARK_WOOD[1]);
+  if (!fiddle) {
+    // The pegbox bent back from the neck's end as a short angled stub.
+    const [px, py] = [lx + ca * 0.38, ly + sa * 0.38];
+    const [qa, qb] = [Math.cos(la + 1.15), Math.sin(la + 1.15)];
+    inkLine(g, [[px, py], [px + qa * 0.08, py + qb * 0.08]], 0.036, DARK_WOOD[0]);
+  } else g.circle(lx + ca * 0.39, ly + sa * 0.39, 0.03).fill(DARK_WOOD[0]).stroke({ width: 0.016, color: INK });
+  for (const pt of parts) g.poly(pt).stroke({ width: LINE * 2, color: INK, join: 'round' });
+  for (const pt of parts) g.poly(pt).fill(body);
   if (fiddle) {
-    for (const sd of [-1, 1]) g.poly(oval(lx - ca * 0.04 - sa * sd * 0.045, ly - sa * 0.04 + ca * sd * 0.045, 0.03, 0.008, la, 8)).fill(INK);
-    inkLine(g, [[lx - ca * 0.2 - sa * 0.14, ly - sa * 0.2 + ca * 0.14], [lx + ca * 0.25 - sa * 0.18, ly + sa * 0.25 + ca * 0.18]], 0.012, 0xc8a878);
+    for (const sd of [-1, 1]) g.poly(oval(lx - ca * 0.04 - sa * sd * 0.045, ly - sa * 0.04 + ca * sd * 0.045, 0.03, 0.009, la, 8)).fill(INK);
+    inkLine(g, [[lx - ca * 0.2 - sa * 0.14, ly - sa * 0.2 + ca * 0.14], [lx + ca * 0.25 - sa * 0.18, ly + sa * 0.25 + ca * 0.18]], 0.014, 0xc8a878);
   } else {
-    g.circle(lx + ca * 0.02, ly + sa * 0.02, 0.045).fill(0x2a1a0e);
-    g.circle(lx + ca * 0.02, ly + sa * 0.02, 0.045).stroke({ width: 0.008, color: GILT[1] });
+    // The round sound-hole, and the neck running on over the body to it.
+    inkLine(g, [[bx + ca * 0.1, by + sa * 0.1], [lx + ca * 0.2, ly + sa * 0.2]], 0.03, DARK_WOOD[1]);
+    g.circle(bx - ca * 0.01, by - sa * 0.01, 0.045).fill(0x2a1a0e).stroke({ width: 0.016, color: INK });
+    g.moveTo(bx - ca * 0.12 - sa * 0.05, by - sa * 0.12 + ca * 0.05).lineTo(bx - ca * 0.12 + sa * 0.05, by - sa * 0.12 - ca * 0.05).stroke({ width: 0.02, color: DARK_WOOD[1], cap: 'round' });
   }
   // The tabor on the floor before the stands, its cords round its rim, its sticks across it.
   const [dx, dy] = at(len * 0.22, Math.min(wid - 0.3, cs + 1.08));
@@ -701,25 +623,34 @@ export function musiciansCorner(g: Graphics, f: InteriorItem, light: Light, v: n
     inkLine(g, [p, e], 0.022, WOOD[2]);
     g.circle(...e, 0.03).fill(WOOD[2]).stroke({ width: 0.01, color: INK });
   }
-  // The harp in the back corner, standing: from a high angle like the other uprights (screen up kept up, heights at
-  // half, its round foot a fat oval), well inside the corner's frame.
-  const [hx, hy] = at(len * 0.2, WALL_GAP + 0.42);
-  const { pt, right } = screenAxes(light);
-  const H = (a: number, b: number) => pt(hx, hy, a, b);
-  castShadow(g, ring(...H(0.02, -0.16), 0.07, rnd, 0, 8), light, 0.3);
-  g.poly(oval(...H(0.02, -0.17), 0.12, 0.1, Math.atan2(right[1], right[0]), 14)).fill(WOOD[1]).stroke({ width: LINE, color: INK });
-  g.poly(oval(...H(0.0, -0.15), 0.06, 0.045, Math.atan2(right[1], right[0]), 10)).fill({ color: WOOD[2], alpha: 0.8 });
-  // Strings between the soundbox and the neck, falling straight down the screen.
-  for (let i = 0; i < 6; i++) {
-    const t = (i + 0.5) / 6;
-    g.moveTo(...H(-0.08 + 0.24 * t, -0.13 + 0.3 * t)).lineTo(...H(-0.08 + 0.24 * t, 0.27 + 0.05 * Math.sin(t * Math.PI)));
+  // The harp in the back corner, from straight above: its frame stands upright, so only a narrow curve shows — the
+  // soundbox a strip tapering from the foot to the top, the neck curving back from it to the pillar's head by the foot,
+  // the strings a tight fan between them; a small soft shadow.
+  const L = 0.56;
+  // a along the harp from its foot, b toward the room.
+  const H = (a: number, b: number): Pt => at(0.16 + a, WALL_GAP + 0.3 - a * 0.12 + b);
+  const neck = (t: number): Pt => {
+    // From the soundbox's top (a = L, b = 0.02) bowing out to b ~ 0.2 and back to the pillar's head (a 0.05, b 0.14).
+    const [a0, b0, a1, b1, a2, b2] = [L - 0.02, 0.03, L * 0.5, 0.26, 0.05, 0.15];
+    const k = 1 - t;
+    return H(k * k * a0 + 2 * k * t * a1 + t * t * a2, k * k * b0 + 2 * k * t * b1 + t * t * b2);
+  };
+  castShadow(g, [...H(0, -0.05), ...H(L, -0.02), ...neck(0.5), ...H(0.05, 0.16)], light, 0.08);
+  // The strings: from points up the soundbox to points along the neck.
+  for (let i = 0; i < 7; i++) {
+    const t = (i + 0.5) / 7;
+    g.moveTo(...H(0.06 + (L - 0.12) * t, 0.03)).lineTo(...neck(1 - t * 0.92));
   }
-  g.stroke({ width: 0.012, color: 0xf0e4c0 });
-  // The soundbox slanting up from the foot (its face showing, broad), the curved neck, the pillar.
-  inkLine(g, [H(-0.1, -0.16), H(0.18, 0.2)], 0.1, 0xa8743a);
-  inkLine(g, [H(-0.07, -0.14), H(0.17, 0.17)], 0.03, 0xc8945a);
-  inkLine(g, [H(-0.12, 0.26), H(0.04, 0.36), H(0.2, 0.22)], 0.05, GILT[1], true);
-  inkLine(g, [H(-0.12, -0.14), H(-0.12, 0.27)], 0.045, GILT[1]);
+  g.stroke({ width: 0.016, color: 0xe8d8a8, alpha: 0.9 });
+  // The pillar (foot to the neck's end), the neck, the soundbox over the strings' feet.
+  inkLine(g, [H(0.02, 0.04), H(0.05, 0.15)], 0.03, GILT[1]);
+  const nk: Pt[] = [];
+  for (let i = 0; i <= 10; i++) nk.push(neck(i / 10));
+  inkLine(g, nk, 0.03, GILT[1]);
+  const box = [...H(-0.02, -0.06), ...H(L * 0.5, -0.045), ...H(L, -0.02), ...H(L + 0.01, 0.02), ...H(L * 0.5, 0.04), ...H(-0.02, 0.06)];
+  g.poly(box).fill(0x8a5a2c).stroke({ width: LINE, color: INK, join: 'round' });
+  g.circle(...H(0.0, 0.0), 0.05).fill(0x8a5a2c).stroke({ width: 0.016, color: INK });
+  for (const a of [L * 0.3, L * 0.55]) g.circle(...H(a, 0.005), 0.014).fill(0x3a2414);
 }
 
 /** Refreshment table (clothed, any length): a cloth caught up in swags along both sides, a silver punch bowl in

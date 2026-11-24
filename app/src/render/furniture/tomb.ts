@@ -4,7 +4,7 @@ import { rng } from '../atlas';
 import { BONE, BRASS, INK, IRON, LINE, type Light, OUT, WOOD, bone, castShadow, frame, litEdges, oval, patch, quad, ring, shade, skullTop } from './common';
 import { candle } from './sacred';
 import { BRONZE, GILT } from './tables';
-import { rock, screenAxes } from './under';
+import { rock } from './under';
 
 /** Scattered bones: long bones lying every way, a jaw, ribs, a few knuckle bits; no skull (that's the
  * remains and the pile). */
@@ -139,36 +139,44 @@ export function skeletonRemains(g: Graphics, f: InteriorItem, light: Light, rnd:
   g.moveTo(ox - Math.cos(ma) * 0.03, oy - Math.sin(ma) * 0.03).lineTo(ox + Math.cos(ma) * 0.05, oy + Math.sin(ma) * 0.05).stroke({ width: 0.02, color: IRON[2], cap: 'round' });
 }
 
-/** Skull pile, from a high angle so the faces show (like the headstones): skulls heaped in rows, fewer to the
- * top, each a pale cranium with dark eye sockets, a nose hole and a row of teeth; a few bones under the heap. */
+/** Skull pile from straight above: a low mound about 3 ft across, skulls heaped on it overlapping, the outer ones
+ * lower and darker, most showing their crowns (cranium ovals, a brow shadow at the face end, a seam over the top),
+ * a few lying face up with their eye sockets showing; bones under the edge of the heap. */
 export function skullPile(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const { pt } = screenAxes(light);
-  g.poly(patch(cx, cy, 0.42, 0.42, rnd, 0.1, 18)).fill({ color: 0x000000, alpha: 0.28 });
-  for (let i = 0; i < 4; i++) {
+  const [lx, ly] = light;
+  const mound = patch(cx, cy, 0.3, 0.28, rnd, 0.12, 18);
+  castShadow(g, mound, light, 0.1);
+  for (let i = 0; i < 5; i++) {
     const a = rnd() * Math.PI * 2;
-    const [x, y] = [cx + Math.cos(a) * 0.32, cy + Math.sin(a) * 0.32];
-    bone(g, [x - Math.cos(a + 1.6) * 0.1, y - Math.sin(a + 1.6) * 0.1], [x + Math.cos(a + 1.6) * 0.1, y + Math.sin(a + 1.6) * 0.1], 0.035, light);
+    const [x, y] = [cx + Math.cos(a) * 0.29, cy + Math.sin(a) * 0.27];
+    const t = a + 1.3 + (rnd() - 0.5);
+    bone(g, [x - Math.cos(t) * 0.09, y - Math.sin(t) * 0.09], [x + Math.cos(t) * 0.09, y + Math.sin(t) * 0.09], 0.032, light);
   }
-  const face = (a: number, b: number, s: number) => {
-    const P = (x: number, y: number) => pt(cx, cy, a + x * s, b + y * s);
-    const head = [...P(0, 1.1), ...P(0.7, 0.9), ...P(0.95, 0.35), ...P(0.85, -0.15), ...P(0.55, -0.45), ...P(0.45, -0.85), ...P(-0.45, -0.85), ...P(-0.55, -0.45), ...P(-0.85, -0.15), ...P(-0.95, 0.35), ...P(-0.7, 0.9)];
-    g.poly(head).fill(BONE[1]).stroke({ width: 0.018, color: INK, join: 'round' });
-    g.poly([...P(-0.5, 0.95), ...P(0.3, 1.0), ...P(0.6, 0.6), ...P(-0.2, 0.55)]).fill({ color: BONE[2], alpha: 0.9 });
-    for (const k of [-1, 1]) g.poly(oval(...P(k * 0.4, 0.05), s * 0.26, s * 0.24, 0, 10)).fill(0x1a1410);
-    g.poly([...P(0, -0.15), ...P(0.12, -0.38), ...P(-0.12, -0.38)]).fill(0x1a1410);
-    g.moveTo(...P(-0.35, -0.62)).lineTo(...P(0.35, -0.62)).stroke({ width: 0.016, color: INK });
-    for (const k of [-0.2, 0, 0.2]) g.moveTo(...P(k, -0.5)).lineTo(...P(k, -0.75));
-    g.stroke({ width: 0.016, color: INK });
+  g.poly(mound).fill(shade(BONE[0], 0.62)).stroke({ width: LINE, color: INK, join: 'round' });
+  /** A cranium from above, its face toward `dir`: lit away from the face, a shadowed brow at the face end. */
+  const crown = (x: number, y: number, dir: number, s: number, k: number) => {
+    const [c, sn] = [Math.cos(dir), Math.sin(dir)];
+    g.poly(oval(x, y, s * 1.12, s * 0.9, dir, 14)).fill(shade(BONE[1], k)).stroke({ width: 0.018, color: INK });
+    g.poly(oval(x + lx * s * 0.25 - c * s * 0.15, y + ly * s * 0.25 - sn * s * 0.15, s * 0.6, s * 0.5, dir, 12)).fill({ color: shade(BONE[2], k), alpha: 0.9 });
+    g.moveTo(x + c * s * 0.95 - sn * s * 0.55, y + sn * s * 0.95 + c * s * 0.55).quadraticCurveTo(x + c * s * 1.2, y + sn * s * 1.2, x + c * s * 0.95 + sn * s * 0.55, y + sn * s * 0.95 - c * s * 0.55);
+    g.stroke({ width: 0.024, color: shade(BONE[0], 0.8 * k), cap: 'round' });
+    g.moveTo(x - c * s * 0.8, y - sn * s * 0.8).lineTo(x + c * s * 0.4, y + sn * s * 0.4).stroke({ width: 0.014, color: shade(BONE[0], k), alpha: 0.7 });
   };
-  const s = 0.1;
-  const rows: [number, number][] = [
-    [1, 0.22],
-    [2, 0.06],
-    [3, -0.1],
-    [4, -0.26],
-  ];
-  for (const [n, b] of rows) for (let i = 0; i < n; i++) face((i - (n - 1) / 2) * s * 1.85 + (rnd() - 0.5) * 0.02, b + (rnd() - 0.5) * 0.02, s);
+  // Outer ring first (lower, shaded), then the top of the heap; a few face up.
+  const spots: [number, number, number, number, boolean][] = [];
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + rnd() * 0.5;
+    spots.push([cx + Math.cos(a) * 0.19, cy + Math.sin(a) * 0.17, a + (rnd() - 0.5) * 1.2, 0.82, i === 2 || i === 5]);
+  }
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + rnd();
+    spots.push([cx + Math.cos(a) * 0.07, cy + Math.sin(a) * 0.06, rnd() * Math.PI * 2, 1, i === 1]);
+  }
+  for (const [x, y, dir, k, up] of spots) {
+    if (up) skullTop(g, x, y, dir, 0.072, light);
+    else crown(x, y, dir, 0.066, k);
+  }
 }
 
 /** Open coffin: a six-sided wooden coffin, wide at the shoulders, its lid shoved down over the foot end and
@@ -372,10 +380,9 @@ export function burialNiche(g: Graphics, f: InteriorItem, light: Light, v: numbe
   g.fill({ color: 0x000000, alpha: 0.4 });
 }
 
-/** Burial urn, from high up (from straight above it is only rings, from the side it stands too tall): seen from
- * about 60 degrees, so its round cross-sections show as fat ovals — a narrow foot, a round belly with a painted band
- * round its front, loop handles at the shoulders, a domed lid with a knob on top; lit from the upper left;
- * terracotta, bronze or grey stone. */
+/** Burial urn from straight above, about 1.5 ft across at the shoulder: the round shoulder (widest), lit toward the
+ * light and shaded away, a painted band round it, two handle nubs breaking its outline, the neck and the rim's ring,
+ * the dark round mouth; terracotta, bronze, grey stone, or terracotta with a cream band. */
 export function burialUrn(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const t = [
@@ -384,54 +391,32 @@ export function burialUrn(g: Graphics, f: InteriorItem, light: Light, v: number,
     [0x5e5a52, 0x8a857a, 0xb0aa9e, 0x3a3630],
     [0x6a321c, 0xa0542e, 0xc87a4c, 0xe8dcc0],
   ][v % 4];
-  const { pt, right } = screenAxes(light);
-  const rot = Math.atan2(right[1], right[0]);
-  // Height shows at half, depth at nearly full: a ring of radius w at height h is an oval w by w * 0.87.
-  const [hk, dk] = [0.5, 0.87];
-  const at = (a: number, h: number) => pt(cx, cy, a, h * hk);
-  const ell = (h: number, w: number, a = 0, k = 1) => oval(...at(a, h), w * k, w * dk * k, rot, 20);
-  // The profile, foot to lip: (height, radius).
-  const prof: [number, number][] = [[-0.36, 0.12], [-0.31, 0.11], [-0.27, 0.08], [-0.2, 0.17], [-0.1, 0.25], [0.0, 0.27], [0.1, 0.23], [0.18, 0.14], [0.23, 0.1], [0.26, 0.13]];
-  castShadow(g, ell(-0.36, 0.14), light, 0.35);
-  // Handles, behind the body's outline.
+  const [lx, ly] = light;
+  const R = 0.15;
+  castShadow(g, ring(cx, cy, R, rnd, 0, 16), light, 0.14);
+  // Handle nubs at the shoulder, across the light.
+  const ha = Math.atan2(ly, lx) + Math.PI / 2 + (rnd() - 0.5) * 0.4;
   for (const k of [-1, 1]) {
-    for (const [w, c] of [
-      [0.06, INK],
-      [0.034, k < 0 ? t[1] : t[0]],
-    ] as const) {
-      g.moveTo(...at(k * 0.2, 0.14)).bezierCurveTo(...at(k * 0.34, 0.2), ...at(k * 0.37, 0.02), ...at(k * 0.26, -0.04)).stroke({ width: w, color: c, cap: 'round' });
-    }
+    const [hx, hy] = [cx + Math.cos(ha) * k * (R + 0.01), cy + Math.sin(ha) * k * (R + 0.01)];
+    g.poly(oval(hx, hy, 0.045, 0.03, ha, 10)).fill(t[0]).stroke({ width: LINE, color: INK });
+    g.poly(oval(hx - Math.cos(ha) * k * 0.006, hy - Math.sin(ha) * k * 0.006, 0.02, 0.012, ha, 8)).fill(shade(t[0], 0.6));
   }
-  // The body as the union of its rings: an inked rim, the shaded body, the lit side shifted to the upper left.
-  for (const [h, w] of prof) g.poly(ell(h, w + 0.014));
-  g.fill(INK);
-  for (const [h, w] of prof) g.poly(ell(h, w));
-  g.fill(t[0]);
-  for (const [h, w] of prof) g.poly(ell(h + 0.01, w, -w * 0.1, 0.9));
-  g.fill(t[1]);
-  g.poly(ell(0.04, 0.27, -0.09, 0.3)).fill({ color: t[2], alpha: 0.9 });
-  // The painted band round the belly's near side, dotted.
-  const band = (h: number) => {
-    const pts: [number, number][] = [];
-    for (let i = 0; i <= 16; i++) {
-      const a = Math.PI * (i / 16);
-      pts.push(pt(cx, cy, -Math.cos(a) * 0.265, h * hk - Math.sin(a) * 0.265 * dk));
-    }
-    return pts;
-  };
-  for (const h of [-0.06, 0.04]) {
-    const b = band(h);
-    g.moveTo(...b[0]);
-    for (const q of b.slice(1)) g.lineTo(...q);
+  g.poly(ring(cx, cy, R, rnd, 0.006, 22)).fill(t[0]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(ring(cx + lx * 0.016, cy + ly * 0.016, R * 0.86, rnd, 0.005, 20)).fill(t[1]);
+  g.poly(oval(cx + lx * 0.06, cy + ly * 0.06, 0.05, 0.03, Math.atan2(ly, lx) + Math.PI / 2, 10)).fill({ color: t[2], alpha: 0.8 });
+  // The painted band, dotted.
+  g.circle(cx, cy, R * 0.78).stroke({ width: 0.016, color: t[3], alpha: 0.9 });
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2;
+    g.circle(cx + Math.cos(a) * R * 0.78, cy + Math.sin(a) * R * 0.78, 0.013).fill(t[3]);
   }
-  g.stroke({ width: 0.016, color: t[3] });
-  const mid = band(-0.01);
-  for (let i = 2; i < 16; i += 3) g.circle(...mid[i], 0.013).fill(t[3]);
-  // The lid: the mouth's rim, a dome and a knob, seen mostly from above.
-  g.poly(ell(0.27, 0.135)).fill(t[0]).stroke({ width: 0.018, color: INK });
-  g.poly(ell(0.3, 0.115)).fill(t[1]).stroke({ width: 0.018, color: INK });
-  g.poly(ell(0.32, 0.07, -0.02, 1)).fill({ color: t[2], alpha: 0.6 });
-  g.poly(ell(0.36, 0.035)).fill(t[2]).stroke({ width: 0.018, color: INK });
+  // The neck and rim, the dark mouth.
+  g.circle(cx, cy, 0.085).fill(t[0]).stroke({ width: 0.018, color: INK });
+  g.circle(cx + lx * 0.008, cy + ly * 0.008, 0.075).fill(t[1]);
+  g.circle(cx, cy, 0.055).fill(0x0a0605).stroke({ width: 0.016, color: INK });
+  // The rim lit in a crescent toward the light (north-west).
+  const la = Math.atan2(ly, lx);
+  g.moveTo(cx + Math.cos(la - 1.1) * 0.071, cy + Math.sin(la - 1.1) * 0.071).arc(cx, cy, 0.071, la - 1.1, la + 1.1).stroke({ width: 0.016, color: t[2], cap: 'round' });
 }
 
 /** Offering bowl: a wide shallow bowl on the floor heaped with offerings — coins, a red fruit, petals — two

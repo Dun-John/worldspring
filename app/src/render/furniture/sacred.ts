@@ -62,36 +62,210 @@ export function bell(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
   g.circle(rx, ry, 0.03).stroke({ width: 0.02, color: 0xc8b080 });
 }
 
-/** Statue on a plinth, seen from above: a long shadow across the floor, a plain stepped square plinth,
- * and on it a figure in bronze or warm marble — a big head on broad shoulders over a plain robe, kept
- * simple so it reads at a glance. */
+/** What a statue holds or wears that breaks its outline seen from above. */
+export type StatueAttr = 'sword' | 'staff' | 'wings' | 'arms' | 'bowl' | 'antlers' | 'trident' | 'hammer' | 'bolt' | 'shield' | 'book';
+
+/** A two-tone line: ink under `color`, `w` wide. */
+function rod(g: Graphics, a: [number, number], b: [number, number], w: number, color: number) {
+  g.moveTo(...a).lineTo(...b).stroke({ width: w + 0.024, color: INK, cap: 'round' });
+  g.moveTo(...a).lineTo(...b).stroke({ width: w, color, cap: 'round' });
+}
+
+/**
+ * A standing figure in stone or metal seen from straight above at (cx, cy), facing `fw` (a unit step in grid axes),
+ * a little over life size: the shoulders as a broad rounded oval, the head on them with the nose just past its front,
+ * and what it holds (`attr`), kept inside a 0.38-square plinth; `hood` drapes the head back. Tones `t` shade, face,
+ * lit; `metal` for what it holds. Height shows only by a thin crescent of shade on the side away from the light.
+ */
+export function statueFigure(
+  g: Graphics,
+  cx: number,
+  cy: number,
+  fw: [number, number],
+  t: readonly number[],
+  light: Light,
+  rnd: () => number,
+  attr: StatueAttr,
+  o: { hood?: boolean; metal?: readonly number[]; accent?: number; mirror?: boolean } = {},
+) {
+  const m = o.metal ?? t;
+  const sd = o.mirror ? -1 : 1;
+  // T(a, b): `a` across to the figure's right, `b` forward.
+  const T = (a: number, b: number): [number, number] => [cx - fw[1] * a * sd + fw[0] * b, cy + fw[0] * a * sd + fw[1] * b];
+  const ln = { width: LINE, color: INK, join: 'round' as const };
+  const [lx, ly] = light;
+  const shoulders = (k: number, dx = 0, dy = 0) => {
+    const pts: number[] = [];
+    for (let i = 0; i < 18; i++) {
+      const th = (i / 18) * Math.PI * 2;
+      const wob = 1 + (Math.sin(th * 3 + 1.3) * 0.03 + (i === 4 || i === 13 ? 0.02 : 0));
+      const [x, y] = T(Math.cos(th) * 0.205 * k * wob, -0.015 + Math.sin(th) * 0.105 * k * wob);
+      pts.push(x + dx, y + dy);
+    }
+    return pts;
+  };
+  // No cast shadow on the plinth: only a thin crescent of shade on the side away from the light.
+  g.poly(shoulders(1.02, -lx * 0.024, -ly * 0.024)).fill({ color: 0x2a1e18, alpha: 0.32 });
+  // Behind the shoulders: wings swept back and out, feathered along their trailing edge.
+  if (attr === 'wings') {
+    for (const s of [-1, 1]) {
+      const edge: [number, number][] = [[0.06, -0.06], [0.2, -0.1], [0.3, -0.14], [0.34, -0.22]];
+      for (let i = 0; i <= 4; i++) edge.push([0.33 - i * 0.06, -0.26 - (i % 2 ? 0.02 : 0.05) - i * 0.006]);
+      edge.push([0.06, -0.12]);
+      // (Kept inside the plinth's back edge.)
+      const pts = edge.flatMap(([a, b]) => T(s * a, b * 0.82));
+      g.poly(pts).fill(t[0]).stroke(ln);
+      g.poly([T(s * 0.08, -0.08), T(s * 0.3, -0.15), T(s * 0.32, -0.2), T(s * 0.1, -0.11)].flat()).fill(s * sd * (fw[1] * lx - fw[0] * ly) < 0 ? t[2] : t[1]);
+      for (const a of [0.16, 0.24]) g.moveTo(...T(s * a, -0.15)).lineTo(...T(s * (a + 0.02), -0.25));
+      g.stroke({ width: 0.016, color: shade(t[0], 0.75), cap: 'round' });
+    }
+  }
+  // The shoulders, shaded on the side away from the light, a lit patch toward it.
+  g.poly(shoulders(1)).fill(t[0]).stroke(ln);
+  g.poly(shoulders(0.9, lx * 0.016, ly * 0.016)).fill(t[1]);
+  g.poly(oval(...T(0, -0.02), 0.08, 0.045, Math.atan2(fw[1], fw[0]) + Math.PI / 2, 12).map((c, i) => c + (i % 2 ? ly : lx) * 0.06)).fill({ color: t[2], alpha: 0.75 });
+  // Arms and what they hold.
+  const hand = (p: [number, number]) => g.circle(...p, 0.03).fill(t[1]).stroke({ width: 0.016, color: INK });
+  const arm = (a0: number, p: [number, number]) => rod(g, T(a0, 0.01), p, 0.05, t[1]);
+  if (attr === 'arms') {
+    for (const s of [-1, 1]) {
+      arm(s * 0.15, T(s * 0.28, 0.08));
+      hand(T(s * 0.3, 0.1));
+    }
+  }
+  if (attr === 'bowl') {
+    for (const s of [-1, 1]) arm(s * 0.15, T(s * 0.08, 0.14));
+    const [bx, by] = T(0, 0.2);
+    g.circle(bx, by, 0.075).fill(m[0]).stroke(ln);
+    g.circle(bx + lx * 0.01, by + ly * 0.01, 0.055).fill(m[1]);
+    g.circle(bx - lx * 0.008, by - ly * 0.008, 0.035).fill(shade(m[0], 0.7));
+    if (o.accent !== undefined) g.circle(bx, by, 0.018).fill(o.accent);
+  }
+  if (attr === 'wings' || attr === 'antlers' || attr === 'book') {
+    // Hands brought together before the chest (holding a book open).
+    for (const s of [-1, 1]) arm(s * 0.15, T(s * 0.07, 0.12));
+    if (attr === 'book') {
+      const pg = [T(-0.12, 0.13), T(0.12, 0.13), T(0.13, 0.26), T(-0.13, 0.26)].flat();
+      g.poly(pg).fill(0xeee4cc).stroke(ln);
+      g.poly([T(-0.12, 0.13), T(0, 0.14), T(0, 0.26), T(-0.13, 0.26)].flat()).fill(0xdccfb2);
+      g.moveTo(...T(0, 0.14)).lineTo(...T(0, 0.26)).stroke({ width: 0.018, color: INK });
+      for (const s of [-1, 1]) for (const b of [0.18, 0.22]) g.moveTo(...T(s * 0.03, b)).lineTo(...T(s * 0.1, b));
+      g.stroke({ width: 0.014, color: 0x9a8a6e });
+    }
+    for (const s of [-1, 1]) hand(T(s * 0.07, 0.12));
+  }
+  if (attr === 'shield') {
+    // A round shield on the left arm, a spear upright in the right hand.
+    arm(0.16, T(0.21, 0.08));
+    rod(g, T(0.2, -0.12), T(0.24, 0.3), 0.024, OAK_DARK);
+    g.poly([T(0.215, 0.28), T(0.265, 0.28), T(0.245, 0.36)].flat()).fill(0xb8b4aa).stroke(ln);
+    hand(T(0.21, 0.08));
+    const [sx, sy] = T(-0.2, 0.1);
+    g.poly(oval(sx, sy, 0.12, 0.12, 0, 16)).fill(m[0]).stroke(ln);
+    g.poly(oval(sx + lx * 0.012, sy + ly * 0.012, 0.1, 0.1, 0, 16)).fill(m[1]);
+    g.circle(sx, sy, 0.032).fill(m[2] ?? m[1]).stroke({ width: 0.016, color: INK });
+  }
+  if (attr === 'sword') {
+    arm(0.16, T(0.2, 0.1));
+    rod(g, T(0.21, 0.12), T(0.25, 0.35), 0.03, 0xb8b4aa);
+    g.moveTo(...T(0.212, 0.135)).lineTo(...T(0.243, 0.32)).stroke({ width: 0.014, color: 0xe4e0d4, cap: 'round' });
+    rod(g, T(0.14, 0.13), T(0.28, 0.11), 0.026, m[1]);
+    hand(T(0.205, 0.1));
+  }
+  if (attr === 'staff' || attr === 'trident') {
+    arm(0.16, T(0.21, 0.08));
+    const tip = attr === 'staff' ? T(0.27, 0.22) : T(0.23, 0.27);
+    rod(g, T(0.2, -0.06), tip, 0.028, attr === 'staff' ? OAK_DARK : m[1]);
+    if (attr === 'staff') {
+      g.circle(...tip, 0.04).fill(o.accent ?? m[1]).stroke(ln);
+      g.circle(tip[0] + lx * 0.012, tip[1] + ly * 0.012, 0.016).fill(shade(o.accent ?? m[1], 1.25));
+    } else {
+      rod(g, T(0.15, 0.26), T(0.31, 0.28), 0.024, m[1]);
+      for (const a of [0.15, 0.23, 0.31]) rod(g, T(a, a === 0.23 ? 0.28 : 0.27), T(a + (a - 0.23) * 0.12, 0.36), 0.022, m[1]);
+    }
+    hand(T(0.21, 0.08));
+  }
+  if (attr === 'hammer') {
+    arm(0.16, T(0.21, 0.08));
+    rod(g, T(0.2, 0.06), T(0.25, 0.24), 0.03, OAK_DARK);
+    g.poly([T(0.17, 0.25), T(0.32, 0.21), T(0.34, 0.28), T(0.19, 0.32)].flat()).fill(IRON[1]).stroke(ln);
+    g.moveTo(...T(0.19, 0.26)).lineTo(...T(0.31, 0.23)).stroke({ width: 0.014, color: IRON[2] });
+    hand(T(0.21, 0.08));
+  }
+  if (attr === 'bolt') {
+    arm(0.16, T(0.25, 0.06));
+    const bolt: [number, number][] = [[0.2, 0.04], [0.32, 0.12], [0.27, 0.15], [0.34, 0.3], [0.23, 0.18], [0.28, 0.15], [0.22, 0.09]];
+    g.poly(bolt.flatMap(([a, b]) => T(a, b))).fill(o.accent ?? 0xe8c860).stroke(ln);
+    hand(T(0.25, 0.07));
+  }
+  // The head, the nose just past its front; hooded, the hood drapes back over the shoulders.
+  const [hx, hy] = T(0, 0.015);
+  if (o.hood) {
+    g.poly(oval(...T(0, -0.02), 0.11, 0.13, Math.atan2(fw[1], fw[0]), 16)).fill(t[0]).stroke(ln);
+    const [qx, qy] = T(0, -0.01);
+    g.poly(oval(qx + lx * 0.015, qy + ly * 0.015, 0.09, 0.11, Math.atan2(fw[1], fw[0]), 14)).fill(t[1]);
+    g.moveTo(...T(-0.07, 0.07)).quadraticCurveTo(...T(0, 0.12), ...T(0.07, 0.07)).stroke({ width: 0.018, color: shade(t[0], 0.7), cap: 'round' });
+    g.moveTo(...T(0, 0.03)).lineTo(...T(0.01, -0.1)).stroke({ width: 0.014, color: shade(t[0], 0.8), cap: 'round' });
+  } else {
+    g.circle(...T(0, 0.1), 0.026).fill(t[1]).stroke({ width: 0.016, color: INK });
+    g.circle(hx, hy, 0.095).fill(t[0]).stroke(ln);
+    g.circle(hx + lx * 0.014, hy + ly * 0.014, 0.08).fill(t[1]);
+    g.circle(hx + lx * 0.035, hy + ly * 0.035, 0.036).fill({ color: t[2], alpha: 0.8 });
+    // Hair: a cap over the back half of the crown, darker than the face.
+    const cap: number[] = [];
+    for (let i = 0; i <= 10; i++) {
+      const th = Math.PI + (i / 10) * Math.PI;
+      cap.push(...T(Math.cos(th) * 0.088, 0.015 + Math.sin(th) * 0.088));
+    }
+    cap.push(...T(0.06, -0.01), ...T(0, 0.0), ...T(-0.06, -0.01));
+    g.poly(cap).fill(shade(t[0], 1.05));
+    // Hair or a fillet: a line round the back of the crown.
+    g.moveTo(...T(-0.07, -0.03)).quadraticCurveTo(...T(0, -0.1), ...T(0.07, -0.03)).stroke({ width: 0.016, color: shade(t[0], 0.75), cap: 'round' });
+  }
+  if (attr === 'antlers') {
+    for (const s of [-1, 1]) {
+      const c = 0xc8b08a;
+      rod(g, T(s * 0.07, -0.01), T(s * 0.2, -0.09), 0.026, c);
+      rod(g, T(s * 0.2, -0.09), T(s * 0.32, -0.08), 0.022, c);
+      rod(g, T(s * 0.15, -0.06), T(s * 0.2, 0.04), 0.02, c);
+      rod(g, T(s * 0.26, -0.085), T(s * 0.31, 0.0), 0.018, c);
+      rod(g, T(s * 0.22, -0.095), T(s * 0.25, -0.2), 0.018, c);
+    }
+  }
+  void rnd;
+}
+
+const OAK_DARK = 0x5e4430;
+
+/** A stone plinth from above about (cx, cy), `hu` by `hs` its half sizes in grid x and y, in two steps (the outer plinth darker),
+ * casting a modest shadow. Returns the top's rect. */
+export function plinth(g: Graphics, cx: number, cy: number, hu: number, hs: number, t: readonly number[], light: Light, rnd: () => number): number[] {
+  const outer = [cx - hu, cy - hs, cx + hu, cy + hs];
+  castShadow(g, quad(outer, rnd, 0), light, 0.14);
+  board(g, outer, t.map((c) => shade(c, 0.84)), light, rnd, true, 0.045, 0);
+  const top = [outer[0] + 0.075, outer[1] + 0.075, outer[2] - 0.075, outer[3] - 0.075];
+  board(g, top, t, light, rnd, true, 0.035, 0);
+  return top;
+}
+
+/** Statue on a plinth, seen from straight above, a little over life size: a stepped square plinth about 3.8 ft
+ * across, and on it a figure in bronze (one gone green) or warm marble seen as head and shoulders, holding a sword,
+ * spreading wings, bearing a round shield and spear or holding an open book; facing the room (the gods' figures hold
+ * their own signs, so a plain statue never matches one). */
 export function statue(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
-  const { rect, at } = frame(f, back);
-  const outer = rect(0.08, Math.max(0.08, WALL_GAP - 0.08), 0.92, 0.94);
-  castShadow(g, quad(outer, rnd, 0), light, 0.9);
-  board(g, outer, STONE.map((c) => shade(c, 0.85)), light, rnd, true, 0.05, 0);
-  const [ox0, oy0, ox1, oy1] = outer;
-  board(g, [ox0 + 0.1, oy0 + 0.1, ox1 - 0.1, oy1 - 0.1], STONE, light, rnd, true, 0.04, 0);
-  // Bronze (one gone green) or warm marble.
+  const { at } = frame(f, back);
   const t = [
     [0x6a4a22, 0xa07a3e, 0xd0aa62],
     [0x8a7a62, 0xd2c4a6, 0xf0e4c8],
     [0x3e5e52, 0x5e8a74, 0x8ab8a0],
     [0x8a7a62, 0xd2c4a6, 0xf0e4c8],
   ][v % 4];
-  const [cx, cy] = at(0.5, 0.52);
-  const ink = { width: OUT, color: INK, join: 'round' as const };
-  // A plain robe: a rounded body round the shoulders.
-  g.poly(ring(cx, cy, 0.3, rnd, 0.01, 20)).fill(t[0]).stroke(ink);
-  g.poly(ring(cx + light[0] * 0.02, cy + light[1] * 0.02, 0.25, rnd, 0.008, 20)).fill(t[1]);
-  // Broad shoulders across it.
-  const [sx, sy] = [at(0.18, 0.52), at(0.82, 0.52)];
-  g.moveTo(...sx).lineTo(...sy).stroke({ width: 0.2, color: INK, cap: 'round' });
-  g.moveTo(...sx).lineTo(...sy).stroke({ width: 0.15, color: t[1], cap: 'round' });
-  g.moveTo(sx[0] + light[0] * 0.02, sx[1] + light[1] * 0.03).lineTo(sy[0] + light[0] * 0.02, sy[1] + light[1] * 0.03).stroke({ width: 0.04, color: t[2], cap: 'round', alpha: 0.7 });
-  // The big head.
-  g.circle(cx, cy, 0.17).fill(t[1]).stroke(ink);
-  g.circle(cx + light[0] * 0.05, cy + light[1] * 0.05, 0.085).fill(t[2]);
+  const [cx, cy] = at(0.5, 0.54);
+  plinth(g, cx, cy, 0.38, 0.38, STONE, light, rnd);
+  const [ax, ay] = at(0.5, 1);
+  const fw: [number, number] = [ax - at(0.5, 0)[0], ay - at(0.5, 0)[1]];
+  const attr = (['sword', 'wings', 'shield', 'book'] as const)[v % 4];
+  statueFigure(g, ...at(0.5, 0.5), fw, t, light, rnd, attr, { metal: v % 4 === 0 ? t : BRONZE, accent: 0x6a8a3a });
 }
 
 /** Pillar (a building's): a stone column from above in pale fine stone (`stoneColumn`). */

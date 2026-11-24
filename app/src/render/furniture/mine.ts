@@ -1,9 +1,9 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { BRASS, DARK_WOOD, INK, IRON, LINE, type Light, OUT, WOOD, castShadow, frame, oval, patch, quad, ring } from './common';
+import { BRASS, DARK_WOOD, INK, IRON, LINE, type Light, OUT, WOOD, castShadow, frame, glowPool, oval, patch, quad, ring } from './common';
 import { BURLAP } from './tomb';
 import { barrel } from './home';
-import { rock, screenAxes } from './under';
+import { rock } from './under';
 
 /** A stretch of track across a rail's square: `at(u, o)` is the point a fraction `u` along it from where it starts,
  * `o` squares off its middle line; `to` how far along it runs (1: to the far side) and `stop` whether it ends at a
@@ -282,45 +282,44 @@ export function miningTools(g: Graphics, f: InteriorItem, light: Light, rnd: () 
   g.moveTo(...H(-0.3, -0.09)).lineTo(...H(-0.3, 0.06)).stroke({ width: 0.014, color: IRON[2] });
 }
 
-/** Hanging lantern, seen from high up (about 60 degrees, like the urn): a square iron lantern turned corner-on, its
- * pyramid cap and ring on top, the two near glass sides glowing, a short run of chain above, a pool of warm light on
- * the floor under it. */
+/** Hanging lantern from straight above, about 1.2 ft across: its glass lit bright and warm (an orange edge, a yellow
+ * body, a pale lit core) round a small iron cap with four facets (lit toward the light, shaded away), the carrying
+ * bail laid over to one side as an iron arc; a strong pool of warm light on the floor under it, a small soft shadow. */
 export function hangingLantern(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   void rnd;
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  for (let i = 0; i < 5; i++) g.circle(cx, cy, 0.4 - i * 0.06).fill({ color: 0xf8c860, alpha: 0.06 });
-  const { pt } = screenAxes(light);
-  const [hk, dk] = [0.5, 0.87];
-  // (x across, y depth, h height) to the grid.
-  const Q = (x: number, y: number, h: number) => pt(cx, cy, x, h * hk + y * dk);
-  const sq = (s: number, h: number) => [Q(0, s, h), Q(s, 0, h), Q(0, -s, h), Q(-s, 0, h)];
-  const s = 0.1;
-  const [bot, top] = [sq(s * 1.05, -0.12), sq(s, 0.08)];
-  const flat = (pts: [number, number][]) => pts.flat();
-  // Base, the near glass sides, iron corner posts, the cap.
-  g.poly(flat(bot)).fill(IRON[0]).stroke({ width: 0.018, color: INK, join: 'round' });
-  for (const [i, j, col] of [
-    [3, 2, 0xfff0b0],
-    [2, 1, 0xf0c060],
-  ] as const) {
-    g.poly(flat([bot[i], bot[j], top[j], top[i]])).fill(col).stroke({ width: 0.018, color: INK, join: 'round' });
+  const [lx, ly] = light;
+  glowPool(g, cx, cy, 0.5, 0xf8c860);
+  glowPool(g, cx, cy, 0.3, 0xffd870);
+  const sq = (r: number, dx = 0, dy = 0) => [cx + dx, cy - r + dy, cx + r + dx, cy + dy, cx + dx, cy + r + dy, cx - r + dx, cy + dy];
+  castShadow(g, sq(0.15), light, 0.08);
+  // The glass: a warm square turned corner-on, ink round it, lit from inside.
+  g.poly(sq(0.16)).fill(0xf0a23a).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(sq(0.135)).fill(0xffd264);
+  g.poly(sq(0.1)).fill(0xfff2c0);
+  // The frame's corner posts.
+  for (let i = 0; i < 4; i++) g.circle(sq(0.15)[i * 2], sq(0.15)[i * 2 + 1], 0.016).fill(IRON[0]);
+  // The small cap's facets toward the apex, toned by how they face the light.
+  const c = sq(0.065);
+  const apex: [number, number] = [cx + lx * 0.008, cy + ly * 0.008];
+  for (let i = 0; i < 4; i++) {
+    const [ax, ay, bx, by] = [c[i * 2], c[i * 2 + 1], c[((i + 1) % 4) * 2], c[((i + 1) % 4) * 2 + 1]];
+    const [mx, my] = [(ax + bx) / 2 - cx, (ay + by) / 2 - cy];
+    const d = (mx * lx + my * ly) / Math.hypot(mx, my);
+    g.poly([ax, ay, bx, by, ...apex]).fill(d > 0.3 ? IRON[2] : d < -0.3 ? IRON[0] : IRON[1]);
   }
-  for (const i of [3, 2, 1]) g.moveTo(...bot[i]).lineTo(...top[i]);
-  g.stroke({ width: 0.016, color: IRON[0], cap: 'round' });
-  const apex = Q(0, 0, 0.18);
-  const lit = [IRON[1], IRON[0], IRON[1], IRON[2]];
-  for (let i = 0; i < 4; i++) g.poly(flat([top[i], top[(i + 1) % 4], apex])).fill(lit[i]);
-  g.poly(flat(top)).stroke({ width: 0.016, color: INK, join: 'round' });
-  for (let i = 0; i < 4; i++) g.moveTo(...top[i]).lineTo(...apex);
-  g.stroke({ width: 0.016, color: INK, alpha: 0.8 });
-  // The ring on top and the chain above it.
-  const [ax, ay] = apex;
-  g.poly(oval(ax, ay, 0.028, 0.025, 0, 12)).stroke({ width: 0.022, color: INK });
-  g.poly(oval(ax, ay, 0.028, 0.025, 0, 12)).stroke({ width: 0.014, color: IRON[1] });
-  for (let i = 1; i <= 3; i++) {
-    const [lx, ly] = Q(0, 0, 0.18 + i * 0.045);
-    g.poly(oval(lx, ly, 0.01, 0.015, 0, 8)).stroke({ width: 0.014, color: IRON[0] });
+  g.poly(c).stroke({ width: LINE, color: INK, join: 'round' });
+  // The bail: hinged at two opposite sides of the cap, laid over away from the light as an iron arc out past the glass.
+  const la = Math.atan2(-ly, -lx);
+  const [ex, ey, nx, ny] = [Math.cos(la), Math.sin(la), -Math.sin(la), Math.cos(la)];
+  const bail: number[] = [];
+  for (let i = 0; i <= 14; i++) {
+    const t = (i / 14) * Math.PI;
+    bail.push(cx + nx * 0.07 * Math.cos(t) + ex * 0.25 * Math.sin(t), cy + ny * 0.07 * Math.cos(t) + ey * 0.25 * Math.sin(t));
   }
+  g.poly(bail, false).stroke({ width: 0.044, color: INK, cap: 'round', join: 'round' });
+  g.poly(bail, false).stroke({ width: 0.02, color: IRON[1], cap: 'round', join: 'round' });
+  for (const k of [-1, 1]) g.circle(cx + nx * 0.07 * k, cy + ny * 0.07 * k, 0.02).fill(IRON[0]).stroke({ width: 0.016, color: INK });
 }
 
 /** Blasting powder kegs: three small kegs standing together, a red flame painted on each lid, grainy black powder

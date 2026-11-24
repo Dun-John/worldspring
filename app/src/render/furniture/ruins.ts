@@ -25,34 +25,36 @@ function litAcross(at: (u: number, s: number) => [number, number], light: Light)
   return (bx - ax) * light[0] + (by - ay) * light[1] > 0 ? 1 : -1;
 }
 
-/** Stone throne: a heavy seat hewn from grey stone against `back` — a broad block seat, thick arms ending in round
- * scrolls, a high slab back with a skull boss carved in its top and knobbed corners, a worn red cushion. */
+/** Stone throne from straight above, about 3 ft square, against `back`: the block seat, the high back as a thick
+ * dark bar along the wall side (wider than the seat, with knobbed ends and a skull boss carved in its top), the arms
+ * as two short bars ending in round scrolls, a worn red cushion on the seat. */
 export function stoneThrone(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { rect, at } = frame(f, back);
-  castShadow(g, quad(rect(0.06, 0.04, 0.94, 0.92), rnd, 0), light, 0.8);
-  board(g, rect(0.12, 0.2, 0.88, 0.92), STONE.map((c) => shade(c, 0.92)), light, rnd, true, 0.05, 0);
+  const [u0, u1] = [0.2, 0.8];
+  castShadow(g, quad(rect(u0 - 0.04, 0.09, u1 + 0.04, 0.72), rnd, 0), light, 0.22);
+  board(g, rect(u0 + 0.03, 0.24, u1 - 0.03, 0.72), STONE.map((c) => shade(c, 0.98)), light, rnd, true, 0.04, 0);
   // The cushion.
-  const [qx0, qy0, qx1, qy1] = rect(0.3, 0.34, 0.7, 0.84);
+  const [qx0, qy0, qx1, qy1] = rect(0.34, 0.32, 0.66, 0.66);
   const [lx, ly] = light;
-  g.roundRect(qx0, qy0, qx1 - qx0, qy1 - qy0, 0.06).fill(MADDER[0]).stroke({ width: LINE, color: INK });
-  g.roundRect(qx0 + 0.025 + lx * 0.015, qy0 + 0.025 + ly * 0.015, qx1 - qx0 - 0.05, qy1 - qy0 - 0.05, 0.05).fill(MADDER[1]);
-  g.roundRect(qx0 + 0.06 + lx * 0.03, qy0 + 0.06 + ly * 0.03, (qx1 - qx0) * 0.34, (qy1 - qy0) * 0.26, 0.03).fill({ color: MADDER[2], alpha: 0.6 });
+  g.roundRect(qx0, qy0, qx1 - qx0, qy1 - qy0, 0.05).fill(MADDER[0]).stroke({ width: LINE, color: INK });
+  g.roundRect(qx0 + 0.02 + lx * 0.012, qy0 + 0.02 + ly * 0.012, qx1 - qx0 - 0.04, qy1 - qy0 - 0.04, 0.04).fill(MADDER[1]);
+  g.roundRect(qx0 + 0.045 + lx * 0.02, qy0 + 0.045 + ly * 0.02, (qx1 - qx0) * 0.34, (qy1 - qy0) * 0.26, 0.025).fill({ color: MADDER[2], alpha: 0.6 });
   // Arms, their scrolled fronts.
-  for (const [u0, u1] of [[0.07, 0.3], [0.7, 0.93]]) {
-    board(g, rect(u0, 0.18, u1, 0.94), STONE, light, rnd, false, 0.04, 0);
-    const [sx, sy] = at((u0 + u1) / 2, 0.82);
-    g.circle(sx, sy, 0.06).fill(STONE[1]).stroke({ width: LINE, color: INK });
-    g.circle(sx + lx * 0.015, sy + ly * 0.015, 0.03).fill(STONE[2]);
+  for (const [a0, a1] of [[u0, u0 + 0.12], [u1 - 0.12, u1]]) {
+    board(g, rect(a0, 0.26, a1, 0.58), STONE, light, rnd, false, 0.03, 0);
+    const [sx, sy] = at((a0 + a1) / 2, 0.54);
+    g.circle(sx, sy, 0.045).fill(STONE[1]).stroke({ width: LINE, color: INK });
+    g.circle(sx + lx * 0.012, sy + ly * 0.012, 0.022).fill(STONE[2]);
   }
   // The high back, its corner knobs and the boss.
-  board(g, rect(0.03, 0.02, 0.97, 0.27), STONE.map((c) => shade(c, 1.06)), light, rnd, true, 0.05, 0);
-  for (const u of [0.1, 0.9]) {
-    const [kx, ky] = at(u, 0.14);
-    g.circle(kx, ky, 0.07).fill(STONE[1]).stroke({ width: LINE, color: INK });
-    g.circle(kx + lx * 0.02, ky + ly * 0.02, 0.038).fill(STONE[2]);
+  board(g, rect(u0 - 0.04, 0.09, u1 + 0.04, 0.27), STONE.map((c) => shade(c, 0.72)), light, rnd, true, OUT, 0);
+  for (const u of [u0 + 0.03, u1 - 0.03]) {
+    const [kx, ky] = at(u, 0.18);
+    g.circle(kx, ky, 0.05).fill(shade(STONE[1], 0.8)).stroke({ width: LINE, color: INK });
+    g.circle(kx + lx * 0.014, ky + ly * 0.014, 0.024).fill(shade(STONE[2], 0.82));
   }
-  const [bx, by] = at(0.5, 0.14);
-  skullTop(g, bx, by, Math.atan2(back[1], back[0]), 0.075, light);
+  const [bx, by] = at(0.5, 0.18);
+  skullTop(g, bx, by, Math.atan2(back[1], back[0]), 0.05, light);
 }
 
 /** Stone steps up a raised floor, the way up toward `back`: four treads between low cheek blocks, each higher tread
@@ -376,31 +378,48 @@ export function boneMound(g: Graphics, f: InteriorItem, light: Light, v: number,
   } else skullTop(g, tx, ty, dir, 0.095, light);
 }
 
-/** Totem, seen from straight above: the top of a carved pole in plan — a round cap painted with ochre rings and a
- * skull on it, broad wings spread to both sides, two horns curling out over the top — its shadow thrown across the floor. */
+/** Totem from straight above: the top of a carved post about 2 ft across, seen as the timber's sawn end — growth
+ * rings round an off-centre heart, a carved band round its rim — with a flat wing board through it seen edge-on (one
+ * long bar across, its ends cut as feathers and painted), and offerings on the floor round its foot: a bowl, bones,
+ * beads, a skull. */
 export function totem(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const [lx, ly] = light;
-  const wing = (sgn: number) => [[sgn * 0.14, -0.1], [sgn * 0.46, -0.13], [sgn * 0.48, 0.1], [sgn * 0.4, 0.15], [sgn * 0.14, 0.11]].flatMap(([a, b]) => [cx + a, cy + b]);
-  const horn = (sgn: number) => [[sgn * 0.1, -0.2], [sgn * 0.22, -0.44], [sgn * 0.36, -0.47], [sgn * 0.3, -0.38], [sgn * 0.27, -0.3], [sgn * 0.2, -0.2]].flatMap(([a, b]) => [cx + a, cy + b]);
-  for (const sgn of [-1, 1]) {
-    castShadow(g, wing(sgn), light, 0.5);
-    castShadow(g, horn(sgn), light, 0.5);
+  const T = (a: number, b: number): [number, number] => [cx + a, cy + b];
+  const R = 0.2;
+  // Offerings scattered round the foot, uneven.
+  g.poly(oval(...T(0.17, 0.3), 0.07, 0.055, 0, 12)).fill(0x6a4a2e).stroke({ width: LINE, color: INK });
+  g.poly(oval(...T(0.17, 0.3), 0.048, 0.035, 0, 10)).fill(0x9a4a32);
+  bone(g, [...T(-0.34, 0.12)], [...T(-0.24, 0.3)], 0.026, light);
+  bone(g, [...T(0.26, -0.3)], [...T(0.38, -0.2)], 0.024, light);
+  skullTop(g, ...T(-0.12, 0.33), Math.PI / 2 + 0.4, 0.055, light);
+  for (const [a, b, c] of [[0.31, 0.16, 0xb5523a], [0.34, 0.22, 0xc8a04a], [0.29, 0.25, 0x4f72a8], [-0.3, -0.24, 0xc8a04a], [-0.25, -0.3, 0xb5523a]] as const) {
+    g.circle(...T(a, b), 0.017).fill(c).stroke({ width: 0.016, color: INK });
   }
-  g.circle(cx + lx * 0.05, cy + ly * 0.05, 0.27).fill({ color: 0x14100c, alpha: 0.25 });
-  for (const sgn of [-1, 1]) {
-    g.poly(wing(sgn)).fill(WOOD[1]).stroke({ width: OUT, color: INK, join: 'round' });
-    g.poly([cx + sgn * 0.18, cy - 0.07, cx + sgn * 0.44, cy - 0.09, cx + sgn * 0.44, cy - 0.05, cx + sgn * 0.18, cy - 0.03]).fill({ color: WOOD[2], alpha: 0.8 });
-    g.circle(cx + sgn * 0.33, cy + 0.01, 0.04).fill(0x9a4a32).stroke({ width: LINE, color: INK });
-    g.poly(horn(sgn)).fill(BONE[1]).stroke({ width: LINE, color: INK, join: 'round' });
-    g.moveTo(cx + sgn * 0.14, cy - 0.22).lineTo(cx + sgn * 0.26, cy - 0.41).stroke({ width: 0.02, color: BONE[2], cap: 'round' });
+  // The wing board, through the post: a long flat bar seen edge-on, feathered ends.
+  const wing = (k: number) => [[-0.44, -0.02], [-0.4, -0.045], [-0.1, -0.05], [0.1, -0.05], [0.4, -0.045], [0.44, -0.02], [0.41, 0.0], [0.45, 0.025], [0.4, 0.045], [-0.4, 0.045], [-0.45, 0.025], [-0.41, 0.0]].flatMap(([a, b]) => T(a * k, b * k));
+  castShadow(g, ring(cx, cy, R, rnd, 0, 14), light, 0.3);
+  castShadow(g, wing(1), light, 0.24);
+  g.poly(wing(1)).fill(WOOD[0]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly([...T(-0.42, -0.012 + ly * 0.01), ...T(0.42, -0.012 + ly * 0.01), ...T(0.4, 0.02), ...T(-0.4, 0.02)]).fill(WOOD[1]);
+  for (const s0 of [-1, 1]) {
+    g.poly([...T(s0 * 0.3, -0.045), ...T(s0 * 0.4, -0.045), ...T(s0 * 0.43, 0.0), ...T(s0 * 0.4, 0.045), ...T(s0 * 0.3, 0.045)]).fill(0x9a4a32);
+    for (const a of [0.33, 0.37]) g.moveTo(...T(s0 * a, -0.04)).lineTo(...T(s0 * (a + 0.02), 0.04));
+    g.stroke({ width: 0.016, color: 0x5e2420 });
   }
-  // The round cap with its painted rings.
-  g.circle(cx, cy, 0.26).fill(WOOD[1]).stroke({ width: OUT, color: INK });
-  g.circle(cx, cy, 0.2).fill(0x9a4a32).stroke({ width: 0.018, color: INK });
-  g.circle(cx - lx * 0.01, cy - ly * 0.01, 0.15).fill(WOOD[2]);
-  skullTop(g, cx, cy + 0.01, -Math.PI / 2, 0.13, light);
-  void rnd;
+  // The post's sawn end: rim, carved band, growth rings round an off-centre heart.
+  g.poly(ring(cx, cy, R, rnd, 0.01, 22)).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(ring(cx, cy, R * 0.8, rnd, 0.008, 20)).stroke({ width: 0.03, color: WOOD[0] });
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2 + 0.2;
+    g.moveTo(cx + Math.cos(a) * R * 0.72, cy + Math.sin(a) * R * 0.72).lineTo(cx + Math.cos(a + 0.12) * R * 0.88, cy + Math.sin(a + 0.12) * R * 0.88);
+  }
+  g.stroke({ width: 0.016, color: INK, alpha: 0.6 });
+  const [hx, hy] = [cx - 0.025 + lx * 0.01, cy + 0.02];
+  g.circle(hx, hy, R * 0.66).fill(WOOD[2]);
+  for (const k of [0.46, 0.26]) g.poly(ring(hx + 0.004, hy - 0.004, R * k, rnd, 0.006, 16)).stroke({ width: 0.014, color: shade(WOOD[1], 0.85) });
+  g.circle(hx, hy, 0.012).fill(WOOD[0]);
+  g.moveTo(hx + 0.01, hy - 0.005).lineTo(hx + R * 0.55, hy - R * 0.35).stroke({ width: 0.016, color: shade(WOOD[0], 0.8), cap: 'round' });
 }
 
 /** Scaffolding: a raised timber walkway (its height and edge drawn by the floor heights, so nothing here inks its

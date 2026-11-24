@@ -1,20 +1,19 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { candle } from './sacred';
-import { GODS } from './tables';
+import { type StatueAttr, candle, plinth, statueFigure } from './sacred';
+import { GILT, GODS } from './tables';
 import { END_GAP, STONE, WALL_GAP } from './home';
-import { INK, IRON, LINE, type Light, OUT, board, castShadow, frame, glowPool, oval, quad, ring, shade } from './common';
+import { INK, IRON, LINE, type Light, OUT, board, castShadow, frame, glowPool, oval, patch, quad, ring, shade, waxCandle } from './common';
 import { OAK, type Pt, inkLine } from './hall';
-import { screenAxes } from './under';
 
 /** A god's emblem (look `v`), `r` squares across about (cx, cy), its top toward `up` (a unit step): the sun's
  * disc and rays, the dawn's half sun over the horizon, the moon's crescent, the sea's trident over a wave, the
  * storm's bolt, the forge's hammer over its anvil, the harvest's sheaf, the Watcher's eye under seven stars;
  * in `color` with an ink line. */
-function emblem(g: Graphics, v: number, cx: number, cy: number, r: number, up: Pt, color: number) {
+function emblem(g: Graphics, v: number, cx: number, cy: number, r: number, up: Pt, color: number, minInk = 0.008) {
   const [ux, uy] = up;
   const P = (a: number, b: number): Pt => [cx + (-uy * a + ux * b) * r, cy + (ux * a + uy * b) * r];
-  const ink = { width: Math.max(0.008, 0.06 * r), color: INK, join: 'round' as const };
+  const ink = { width: Math.max(minInk, 0.06 * r), color: INK, join: 'round' as const };
   const poly = (pts: Pt[]) => g.poly(pts.flat()).fill(color).stroke(ink);
   const disc = (a: number, b: number, rr: number, from = 0, to = Math.PI * 2, n = 16) => {
     const pts: Pt[] = [];
@@ -104,139 +103,79 @@ function emblem(g: Graphics, v: number, cx: number, cy: number, r: number, up: P
   }
 }
 
-/** The god's statue on its plinth, seen from above and over life size (a monument): a long shadow, a stepped
- * plinth of the god's stone, the god's emblem on its front; on it the figure (a robe about broad shoulders, the
- * head) in the god's stone or metal, with what marks the god: the sun's rayed halo, the dawn's half sun rising
- * behind the head, the moon's veil and crescent, the sea's trident, the storm's bolt held high, the forge's
- * hammer, the harvest's sheaf, the Watcher's hood and his staff with its eye. A wide plinth (2 squares) has an
- * offering bowl at each end. */
+/** The figure's stone or metal by god: warm marble, sandstone, grey marble, sea-green bronze, slate-blue stone, bronze,
+ * ochre sandstone, pale ash stone (all lighter than the plinth; earthy, never the cloth's or the accent's colours). */
+const FIGURE: number[][] = [
+  [0x8a7a62, 0xd2c4a6, 0xf0e4c8],
+  [0x8a6a4a, 0xbc9a72, 0xdcc09a],
+  [0x7e7c74, 0xb8b4aa, 0xdcd8ce],
+  [0x3e5e52, 0x5e8a74, 0x8ab8a0],
+  [0x6a7684, 0x9eaab6, 0xc6d0d8],
+  [0x5a4220, 0x9a7438, 0xd0a85a],
+  [0x7e6440, 0xae9062, 0xd0b484],
+  [0x7e7484, 0xb2a8b4, 0xd6ccd4],
+];
+/** What each god's figure holds: the sun's raised arms, the dawn's offering bowl, the moon's staff (hooded), the
+ * sea's trident, the storm's bolt, the forge's hammer, the harvest's antlers, the Watcher's wings (hooded). */
+const ATTR: StatueAttr[] = ['arms', 'bowl', 'staff', 'trident', 'bolt', 'hammer', 'antlers', 'wings'];
+
+/** The god's statue on its plinth, seen from straight above and a little over life size (a monument): a stepped
+ * stone plinth about 3.8 ft across, the god's sign inlaid in gilt at its front corner, and on it the figure as head
+ * and shoulders in the god's stone or bronze (`FIGURE`) with what marks the god breaking its outline (`ATTR`),
+ * facing the room. A wide plinth (2 squares) has an offering bowl at each end. */
 export function godStatue(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
-  const { along, len, rect, at } = frame(f, back);
-  const wid = along ? f.h : f.w;
-  const god = GODS[v % GODS.length];
-  const outer = rect(0.06, Math.max(0.06, WALL_GAP - 0.1), len - 0.06, wid - 0.04);
-  castShadow(g, quad(outer, rnd, 0), light, 0.85);
-  board(g, outer, god.stone.map((c) => shade(c, 0.78)), light, rnd, true, 0.05, 0);
-  const [ox0, oy0, ox1, oy1] = outer;
-  board(g, [ox0 + 0.09, oy0 + 0.09, ox1 - 0.09, oy1 - 0.09], god.stone.map((c) => shade(c, 0.92)), light, rnd, true, 0.04, 0);
-  // (The way toward the wall and toward the room, in grid axes.)
-  const [wx, wy] = [at(0, 0)[0] - at(0, 1)[0], at(0, 0)[1] - at(0, 1)[1]];
-  const up: Pt = [wx, wy];
-  const front: Pt = [-wx, -wy];
-  emblem(g, v, ...at(len / 2, wid - 0.13), 0.2, up, god.accent);
-  if (len >= 2) {
-    for (const u of [0.32, len - 0.32]) {
-      const [bx, by] = at(u, wid - 0.3);
-      g.circle(bx, by, 0.11).fill(shade(god.metal[1], 0.9)).stroke({ width: LINE, color: INK });
-      g.circle(bx, by, 0.07).fill(shade(god.metal[0], 0.9));
-      g.circle(bx + light[0] * 0.03, by + light[1] * 0.03, 0.03).fill(god.accent);
-    }
-  }
-  const t = v % GODS.length === 5 || v % GODS.length === 3 ? god.metal : god.stone;
-  const [cx, cy] = at(len / 2, 0.46);
-  const ink = { width: OUT, color: INK, join: 'round' as const };
-  const S = 1.18;
-  const T = (a: number, b: number): Pt => [cx + (-wy * a + front[0] * b) * S, cy + (wx * a + front[1] * b) * S];
-  // (Behind the head, toward the wall: a halo, the rising half sun, a crescent.)
+  const { len, at } = frame(f, back);
   const k = v % GODS.length;
-  if (k === 0 || k === 1) {
-    const rays: Pt[] = [];
-    const n = k === 0 ? 18 : 11;
-    for (let i = 0; i < n; i++) {
-      const th = k === 0 ? (i / n) * Math.PI * 2 : Math.PI + (Math.PI * i) / (n - 1);
-      const rr = i % 2 ? 0.3 : 0.4;
-      rays.push(T(Math.cos(th) * rr, -0.08 + Math.sin(th) * rr * (k === 0 ? 1 : 0.9)));
+  const god = GODS[k];
+  const [cx, cy] = at(len / 2, 0.54);
+  const hu = len >= 2 ? len / 2 - 0.12 : 0.38;
+  const [ax, ay] = at(0, 1);
+  const [ox, oy] = at(0, 0);
+  const fw: Pt = [ax - ox, ay - oy];
+  const ac = at(1, 0);
+  const side: Pt = [ac[0] - ox, ac[1] - oy];
+  // (The plinth's rect in grid axes.)
+  const hx = Math.abs(side[0]) * hu + Math.abs(fw[0]) * 0.38;
+  const hy = Math.abs(side[1]) * hu + Math.abs(fw[1]) * 0.38;
+  plinth(g, cx, cy, hx, hy, STONE.map((c) => shade(c, 1.04)), light, rnd);
+  if (len >= 2) {
+    for (const u of [0.42, len - 0.42]) {
+      const [bx, by] = at(u, 0.54);
+      g.circle(bx, by, 0.1).fill(shade(god.metal[1], 0.9)).stroke({ width: LINE, color: INK });
+      g.circle(bx, by, 0.065).fill(shade(god.metal[0], 0.8));
+      g.circle(bx + light[0] * 0.02, by + light[1] * 0.02, 0.028).fill(god.accent);
     }
-    if (k === 1) rays.push(T(0.38, -0.08), T(-0.38, -0.08));
-    g.poly(rays.flat()).fill(GODS[k].metal[1]).stroke(ink);
-    g.poly(rays.flat().map((c, i) => (i % 2 ? cy + (c - cy) * 0.78 : cx + (c - cx) * 0.78))).fill({ color: GODS[k].metal[2], alpha: 0.6 });
   }
-  if (k === 2) {
-    const cres: Pt[] = [];
-    for (let i = 0; i <= 12; i++) cres.push(T(Math.cos(Math.PI + (Math.PI * i) / 12) * 0.28, -0.12 + Math.sin(Math.PI + (Math.PI * i) / 12) * 0.2));
-    for (let i = 12; i >= 0; i--) cres.push(T(Math.cos(Math.PI + (Math.PI * i) / 12) * 0.22, -0.16 + Math.sin(Math.PI + (Math.PI * i) / 12) * 0.1));
-    g.poly(cres.flat()).fill(god.metal[2]).stroke(ink);
-  }
-  // A plain robe round the shoulders, broad shoulders across it.
-  g.poly(ring(cx, cy, 0.31 * S, rnd, 0.01, 20)).fill(t[0]).stroke(ink);
-  g.poly(ring(cx + light[0] * 0.02, cy + light[1] * 0.02, 0.26 * S, rnd, 0.008, 20)).fill(t[1]);
-  const [sx, sy] = [T(-0.33, 0.02), T(0.33, 0.02)];
-  g.moveTo(...sx).lineTo(...sy).stroke({ width: 0.21 * S, color: INK, cap: 'round' });
-  g.moveTo(...sx).lineTo(...sy).stroke({ width: 0.16 * S, color: t[1], cap: 'round' });
-  g.moveTo(sx[0] + light[0] * 0.02, sx[1] + light[1] * 0.03).lineTo(sy[0] + light[0] * 0.02, sy[1] + light[1] * 0.03).stroke({ width: 0.04, color: t[2], cap: 'round', alpha: 0.7 });
-  // What it holds, over the robe.
-  const held = (pts: Pt[], w: number, c: number) => inkLine(g, pts, w, c);
-  if (k === 3) {
-    held([T(0.3, 0.22), T(-0.16, -0.36)], 0.035, god.metal[1]);
-    g.poly([T(-0.3, -0.3), T(-0.02, -0.42), T(-0.06, -0.48), T(-0.34, -0.36)].flat()).fill(god.metal[1]).stroke(ink);
-    for (const p of [T(-0.36, -0.36), T(-0.2, -0.46), T(-0.04, -0.5)]) held([p, [p[0] + (wx * 0.1), p[1] + (wy * 0.1)]], 0.028, god.metal[2]);
-  }
-  if (k === 4) {
-    const bolt: Pt[] = [T(0.26, 0.04), T(0.44, -0.18), T(0.34, -0.2), T(0.5, -0.44), T(0.28, -0.22), T(0.38, -0.2), T(0.22, 0.02)];
-    g.poly(bolt.flat()).fill(god.accent).stroke(ink);
-  }
-  if (k === 5) {
-    held([T(0.28, 0.2), T(0.2, -0.26)], 0.04, OAK[1]);
-    g.poly([T(0.06, -0.24), T(0.36, -0.3), T(0.38, -0.18), T(0.08, -0.12)].flat()).fill(IRON[1]).stroke(ink);
-  }
-  if (k === 6) {
-    for (const a of [-0.1, 0, 0.1]) held([T(a * 0.6, 0.24), T(a * 1.6, -0.1)], 0.026, GODS[6].metal[1]);
-    for (const a of [-0.1, 0, 0.1]) g.poly(oval(...T(a * 1.9, -0.17), 0.05, 0.09, Math.atan2(front[1], front[0]) + Math.PI / 2 + a * 2, 10)).fill(GODS[6].accent).stroke({ width: LINE, color: INK });
-    held([T(-0.09, 0.1), T(0.09, 0.1)], 0.03, GODS[6].cloth[1]);
-  }
-  if (k === 7) {
-    held([T(0.3, 0.3), T(0.3, -0.36)], 0.032, god.metal[1]);
-    const [ex, ey] = T(0.3, -0.4);
-    g.circle(ex, ey, 0.08).fill(god.accent).stroke(ink);
-    g.circle(ex, ey, 0.035).fill(INK);
-  }
-  // The head (hooded or veiled for the moon and the Watcher).
-  if (k === 2 || k === 7) {
-    g.poly(oval(...T(0, -0.03), 0.2 * S, 0.24 * S, Math.atan2(front[1], front[0]), 16)).fill(k === 2 ? god.stone[2] : god.stone[1]).stroke(ink);
-    g.poly(oval(...T(0, 0.05), 0.12 * S, 0.13 * S, 0, 14)).fill(shade(t[1], 0.85));
-    if (k === 2) g.poly(oval(...T(0, -0.08), 0.15 * S, 0.17 * S, Math.atan2(front[1], front[0]), 14)).fill({ color: 0xffffff, alpha: 0.35 });
-  } else {
-    g.circle(cx, cy, 0.18 * S).fill(t[1]).stroke(ink);
-    g.circle(cx + light[0] * 0.05, cy + light[1] * 0.05, 0.09 * S).fill(t[2]);
-    if (k === 5) g.circle(cx, cy, 0.18 * S).stroke({ width: 0.02, color: god.metal[0], alpha: 0.6 });
-  }
+  // The inlay: the god's sign in gilt, set in the plinth's top by its front corner, its top toward the wall.
+  // (On the figure's left, clear of what it holds in its right hand.)
+  const [fx0, fy0] = at(len / 2, 0.5);
+  const off = len >= 2 ? 0.45 : 0.19;
+  const [ix, iy] = [fx0 + fw[0] * 0.28 + fw[1] * off, fy0 + fw[1] * 0.28 - fw[0] * off];
+  emblem(g, v, ix, iy, 0.17, [-fw[0], -fw[1]], GILT[1], 0.016);
+  const metal = k === 3 || k === 4 ? IRON : k === 5 ? FIGURE[5] : GILT;
+  statueFigure(g, ...at(len / 2, 0.5), fw, FIGURE[k], light, rnd, ATTR[k], { hood: k === 2 || k === 7, metal, accent: k === 2 ? 0xdcdce0 : k === 4 ? 0xe8c860 : k === 1 ? 0xb5523a : undefined });
 }
 
-/** Candle stand, from a high angle as the candelabrum: a round foot, a tall stem and on it a wide round tray
- * (its rim showing) set with candles of mixed heights, the god's emblem cut in a little disc at the top of the
- * stem, flames and a soft glow of the god's colour; in the god's metal. */
+/** Candle stand from straight above: a 2-ft round tray of dark iron with a brass rim (its foot and stem hidden
+ * under it), a dish of spilt wax in it, five candles of mixed thickness as cream wax discs each with a bright warm
+ * flame (the brightest things on it), the god's colour only in a small boss in the middle with its sign; a warm pool
+ * of candlelight round it, faintly tinted by the god's light. */
 export function candleStand(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const god = GODS[v % GODS.length];
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const { pt, right, up } = screenAxes(light);
-  const P = (a: number, b: number) => pt(cx, cy, a, b);
-  const rot = Math.atan2(right[1], right[0]);
-  const m = god.metal;
-  glowPool(g, ...P(0, 0.12), 0.6, god.glow);
-  castShadow(g, ring(...P(0, -0.4), 0.09, rnd, 0, 8), light, 1.1);
-  // The foot and the stem.
-  g.poly(oval(...P(0, -0.42), 0.17, 0.1, rot, 16)).fill(shade(m[1], 0.75)).stroke({ width: LINE, color: INK });
-  g.poly(oval(...P(0, -0.39), 0.12, 0.07, rot, 14)).fill(m[1]).stroke({ width: LINE, color: INK });
-  inkLine(g, [P(0, -0.38), P(0, 0.1)], 0.04, m[1]);
-  g.poly(oval(...P(0, -0.12), 0.05, 0.03, rot, 10)).fill(m[2]).stroke({ width: 0.012, color: INK });
-  // The tray, its candles from the back row forward, their flames.
-  g.poly(oval(...P(0, 0.12), 0.36, 0.2, rot, 22)).fill(shade(m[0], 1.05)).stroke({ width: OUT, color: INK });
-  g.poly(oval(...P(0, 0.135), 0.31, 0.16, rot, 20)).fill(m[1]);
-  g.poly(oval(...P(0, 0.15), 0.25, 0.11, rot, 18)).fill({ color: 0x2a2018, alpha: 0.35 });
-  const spots: [number, number, number][] = [[-0.2, 0.2, 0.12], [0.02, 0.24, 0.16], [0.21, 0.19, 0.1], [-0.11, 0.1, 0.14], [0.12, 0.09, 0.09], [-0.24, 0.07, 0.07], [0.27, 0.06, 0.12], [0, 0.02, 0.1]];
-  for (const [a, b, h] of spots) {
-    const hh = h * (0.85 + 0.3 * rnd());
-    const c = [...P(a - 0.022, b + hh), ...P(a + 0.022, b + hh), ...P(a + 0.022, b), ...P(a - 0.022, b)];
-    g.poly(c).fill(0xf4ecd8).stroke({ width: 0.01, color: INK, join: 'round' });
-    g.poly([...P(a - 0.022, b + hh), ...P(a - 0.006, b + hh), ...P(a - 0.006, b), ...P(a - 0.022, b)]).fill(0xfffaf0);
-    const ua = Math.atan2(up[1], up[0]);
-    g.poly(oval(...P(a, b + hh + 0.03), 0.016, 0.028, ua, 10)).fill(0xf9a23a);
-    g.poly(oval(...P(a, b + hh + 0.025), 0.008, 0.014, ua, 8)).fill(0xfff2c0);
-  }
-  // The god's emblem in a disc on the stem below the tray.
-  const [ex, ey] = P(0, -0.2);
-  g.circle(ex, ey, 0.085).fill(m[0]).stroke({ width: 0.012, color: INK });
-  emblem(g, v, ex, ey, 0.13, up, god.accent);
+  const BRASS = [0x6a4e22, 0x9a7a3c, 0xc4a462];
+  glowPool(g, cx, cy, 0.5);
+  glowPool(g, cx, cy, 0.34, god.glow);
+  castShadow(g, ring(cx, cy, 0.2, rnd, 0.004, 16), light, 0.2);
+  const [lx, ly] = light;
+  g.poly(ring(cx, cy, 0.205, rnd, 0.008, 22)).fill(BRASS[0]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(ring(cx + lx * 0.012, cy + ly * 0.012, 0.18, rnd, 0.006, 20)).fill(BRASS[1]);
+  g.poly(ring(cx - lx * 0.006, cy - ly * 0.006, 0.15, rnd, 0.006, 18)).fill(IRON[0]).stroke({ width: 0.016, color: INK });
+  g.poly(patch(cx + 0.02, cy - 0.01, 0.12, 0.11, rnd, 0.15, 14)).fill({ color: 0xe8dcc0, alpha: 0.5 });
+  g.circle(cx, cy, 0.045).fill(god.metal[1]).stroke({ width: 0.016, color: INK });
+  emblem(g, v, cx, cy, 0.07, [lx, ly], god.metal[0], 0.016);
+  const spots: [number, number, number][] = [[-0.1, -0.07, 0.042], [0.05, -0.12, 0.036], [0.12, 0.02, 0.044], [0.03, 0.12, 0.038], [-0.11, 0.07, 0.036]];
+  for (const [a, b, r] of spots) waxCandle(g, cx + a, cy + b, r * (0.9 + 0.2 * rnd()), light);
 }
 
 /** Carved screen across the nave, seen from above: a thin oak partition along its back edge (toward the crossing),
