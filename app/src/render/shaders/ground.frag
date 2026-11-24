@@ -859,14 +859,18 @@ void main() {
                 if (ring && sc < 0.999) {
                     // (The ring's own square past its edge: the ground of a square two out that is
                     // neither, else the ring's outer tone.)
+                    // (groundColor is called ONCE, after the loop: called inside it, Direct3D's
+                    // compiler unrolled nine copies of it and took 20+ s to compile this shader.)
                     under = scorchLook(1.0);
+                    int pick = -1;
                     for (int k = 0; k < 9; k++) {
                         int s = int(dataAt(sq + 2 * ivec2(k % 3 - 1, k / 3 - 1)).r + 0.5);
                         if (s <= 9 || s == 21) {
-                            under = groundColor(s, w);
+                            pick = s;
                             break;
                         }
                     }
+                    if (pick >= 0) under = groundColor(pick, w);
                 }
                 vec3 burnt = scorchLook(clamp((dd - rl) / (rs - rl), 0.0, 1.0)) * (0.95 + 0.1 * vnoise(w * 0.12 + 9.0));
                 col = mix(under, burnt, sc);
@@ -893,14 +897,17 @@ void main() {
             if (ring && m < 0.999) {
                 // (The band's own square past its edge: the ground of a square two out that is
                 // neither, else the band's outer tone.)
+                // (groundColor once, after the loop: see the crater's above.)
                 under = scorchLook(1.0);
+                int pick = -1;
                 for (int k = 0; k < 9; k++) {
                     int s2 = int(dataAt(sq + 2 * ivec2(k % 3 - 1, k / 3 - 1)).r + 0.5);
                     if (s2 <= 9 || s2 == 18 || s2 == 21) {
-                        under = groundColor(s2, w);
+                        pick = s2;
                         break;
                     }
                 }
+                if (pick >= 0) under = groundColor(pick, w);
             }
             float t = clamp(-lf.x / max(lf.y - lf.x, 1.0), 0.0, 1.0);
             vec3 burnt = scorchLook(smoothstep(0.0, 0.9, t)) * (0.95 + 0.1 * vnoise(w * 0.12 + 9.0));
