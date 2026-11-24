@@ -1,14 +1,16 @@
 // Roadmap 7 P8: a round tower's winding stair up the inside of its wall (`interior/winder.rs`). Its
 // squares are `winder` items in climbing order (clockwise on screen) and, over the run below, the
-// floor's `stair_well`. Drawn on the 5-ft grid so a token's square reads at a glance: two treads to a
-// square, split across the way the stair climbs there, paler the higher; a chevron up each square; the
-// grid over them; a rail on the run's open side. The square where the stair reaches the floor above
-// (the level link, the same square on both floors) is a flat landing with an arrow: up on the floor
-// below, down on the floor above. The well over the run below is a dark shaft, the treads faint in
-// it, railed where it opens onto the floor.
+// floor's `stair_well`. Drawn as a curved flight hugging the wall (item 194): a band of the round
+// wall's width in from it, wedge treads evenly spaced by angle, darker at the foot and paler up, a
+// rail along the open inner side and a curved arrow up the flight; it covers each of the run's squares
+// (a token stands on them). The square where the stair reaches the floor above (the level link, the
+// same square on both floors) is a flat landing; on the floor above it has an arrow down. The well over
+// the run below is the same band dark, the run's top treads dim in it, railed where it opens onto the floor.
 import type { Graphics } from 'pixi.js';
 import type { Interior, InteriorLevel } from '../../gen/protocol';
 import { INK } from './look';
+import { LINE, OUT } from '../pen';
+import { PX } from '../scale';
 
 /** The floor's middle and half width (grid units): the box round the ground floor's squares, as the
  * generator finds it (`winder::frame`). */
@@ -25,7 +27,7 @@ export function winderFrame(it: Interior): { cx: number; cy: number; r: number }
   return { cx: (i0 + i1 + 1) / 2, cy: (j0 + j1 + 1) / 2, r: (i1 - i0 + 1 + (j1 - j0 + 1)) / 4 };
 }
 
-const TREAD = [0xc9b79a, 0xb7a487];
+const TREAD = 0xc9b79a;
 const NOSE = 0xf4e8cc;
 const RAIL = 0x6b4a2c;
 const WELL = 0x221c17;
@@ -71,187 +73,239 @@ export function winderLinks(it: Interior, li: number): { up: Set<string>; down: 
   return { up, down };
 }
 
-/** The way a run climbs through its `k`th square, snapped to the grid's eight directions. */
-function dirAt(run: Sq[], k: number): Sq {
-  const a = run[Math.max(0, k - 1)];
-  const b = run[Math.min(run.length - 1, k + 1)];
-  let [dx, dy] = [b[0] - a[0], b[1] - a[1]];
-  if (!dx && !dy) return [1, 0];
-  const t = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
-  [dx, dy] = [Math.round(Math.cos(t)), Math.round(Math.sin(t))];
-  return [dx, dy];
-}
 
-/** Square (i, j) cut by the line through its middle across `d`: the lower half (toward -d) and the upper. */
-function halves(i: number, j: number, d: Sq): [number[], number[]] {
-  const c: Sq = [i + 0.5, j + 0.5];
-  const corners: Sq[] = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]];
-  const side = (p: Sq) => (p[0] - c[0]) * d[0] + (p[1] - c[1]) * d[1];
-  const cut = (sign: number) => {
-    const out: number[] = [];
-    for (let k = 0; k < 4; k++) {
-      const [p, q] = [corners[k], corners[(k + 1) % 4]];
-      const [sp, sq] = [side(p) * sign, side(q) * sign];
-      if (sp <= 1e-9) out.push(p[0], p[1]);
-      if ((sp < -1e-9 && sq > 1e-9) || (sp > 1e-9 && sq < -1e-9)) {
-        const t = sp / (sp - sq);
-        out.push(p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t);
-      }
+type Circle = { cx: number; cy: number; r: number };
+/** The flight's width in from the wall (grid units: a square is 5 ft) and its ink widths in grid units. */
+const WIDE = 0.92;
+const [OUT_SQ, LINE_SQ] = [OUT / PX, LINE / PX];
+
+/** The circle (middle, wall's inner face) each square of the interior's winding stairs winds round: the
+ * floor's frame where the squares lie in its band, else one fitted to that tower's squares (a round
+ * tower inside a bigger building). */
+function towerCircles(it: Interior): Map<string, Circle> {
+  const sq = new Map<string, Sq>();
+  for (const lv of it.levels) for (const f of lv.furniture) if (f.kind === 'winder' || f.kind === 'stair_well') sq.set(`${f.x},${f.y}`, [f.x, f.y]);
+  const out = new Map<string, Circle>();
+  const frame = winderFrame(it);
+  const seen = new Set<string>();
+  for (const [k0, q0] of sq) {
+    if (seen.has(k0)) continue;
+    // (One tower's squares: those beside each other, on any level.)
+    const group: Sq[] = [];
+    const todo = [q0];
+    seen.add(k0);
+    while (todo.length) {
+      const q = todo.pop()!;
+      group.push(q);
+      for (let dj = -1; dj <= 1; dj++)
+        for (let di = -1; di <= 1; di++) {
+          const k = `${q[0] + di},${q[1] + dj}`;
+          const n = sq.get(k);
+          if (n && !seen.has(k)) {
+            seen.add(k);
+            todo.push(n);
+          }
+        }
     }
-    return out;
-  };
-  return [cut(1), cut(-1)];
+    const pts = group.map((q) => [q[0] + 0.5, q[1] + 0.5]);
+    let c: Circle | null = null;
+    if (frame && pts.every(([x, y]) => Math.hypot(x - frame.cx, y - frame.cy) >= frame.r - 1 - 1e-6 && Math.hypot(x - frame.cx, y - frame.cy) <= frame.r + 0.75)) c = frame;
+    else if (pts.length >= 3) c = fitCircle(pts);
+    c ??= frame;
+    if (c) for (const q of group) out.set(key(q), c);
+  }
+  return out;
 }
 
-/** The riser across square (i, j) (the line between its two treads), as two points. */
-function riser(i: number, j: number, d: Sq): [Sq, Sq] {
-  const l = Math.hypot(d[0], d[1]);
-  const [ux, uy] = [-d[1] / l, d[0] / l];
-  // (Half the square's width along the riser: to its edges, or its corners on a diagonal.)
-  const h = d[0] && d[1] ? Math.SQRT1_2 : 0.5;
-  return [[i + 0.5 - ux * h, j + 0.5 - uy * h], [i + 0.5 + ux * h, j + 0.5 + uy * h]];
+/** The round box a tower's stair squares lie in: a circle through their middles (least squares, Kasa),
+ * its middle snapped to the half square (a box's), its radius out to the wall (the band is the squares
+ * within a square of it, `winder::ring_of`). */
+function fitCircle(pts: number[][]): Circle | null {
+  const [mx, my] = [pts.reduce((a, p) => a + p[0], 0) / pts.length, pts.reduce((a, p) => a + p[1], 0) / pts.length];
+  let [suu, svv, suv, suuu, svvv, suvv, svuu] = [0, 0, 0, 0, 0, 0, 0];
+  for (const [x, y] of pts) {
+    const [u, v] = [x - mx, y - my];
+    [suu, svv, suv] = [suu + u * u, svv + v * v, suv + u * v];
+    [suuu, svvv, suvv, svuu] = [suuu + u * u * u, svvv + v * v * v, suvv + u * v * v, svuu + v * u * u];
+  }
+  const det = suu * svv - suv * suv;
+  if (Math.abs(det) < 1e-9) return null;
+  const [bu, bv] = [0.5 * (suuu + suvv), 0.5 * (svvv + svuu)];
+  const [cx, cy] = [Math.round(((bu * svv - bv * suv) / det + mx) * 2) / 2, Math.round(((bv * suu - bu * suv) / det + my) * 2) / 2];
+  const far = Math.max(...pts.map((p) => Math.hypot(p[0] - cx, p[1] - cy)));
+  return { cx, cy, r: Math.ceil(far * 2 - 1e-6) / 2 };
 }
 
-/** Two treads on square (i, j) climbing along `d`, the lower lit `k0`, the upper `k1`; `ink` for the riser. */
-function treadPair(g: Graphics, i: number, j: number, d: Sq, k0: number, k1: number, ink = 0.85) {
-  const [lo, hi] = halves(i, j, d);
-  g.poly(lo).fill(shade(TREAD[1], k0));
-  g.poly(hi).fill(shade(TREAD[0], k1));
-  const [a, b] = riser(i, j, d);
-  g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: 0.06, color: INK, alpha: ink });
-  // (The upper tread's nosing, lit just past the riser.)
-  const l = Math.hypot(d[0], d[1]);
-  const [ox, oy] = [(d[0] / l) * 0.06, (d[1] / l) * 0.06];
-  g.moveTo(a[0] + ox, a[1] + oy).lineTo(b[0] + ox, b[1] + oy).stroke({ width: 0.04, color: shade(NOSE, 0.55 + 0.45 * k1), alpha: ink });
+/** A run's flight round circle `c`: its squares' angles (climbing, unwrapped), the whole band `lo..hi`,
+ * the treads' `cuts` (from the foot's edge to the top's), short of a landing at either end. */
+type Flight = { th: number[]; lo: number; hi: number; cuts: number[] };
+function flight(run: Sq[], c: Circle, down: boolean, up: boolean): Flight {
+  const th: number[] = [];
+  for (const [i, j] of run) {
+    const a = Math.atan2(j + 0.5 - c.cy, i + 0.5 - c.cx);
+    const p = th[th.length - 1];
+    th.push(p === undefined ? a : p + Math.atan2(Math.sin(a - p), Math.cos(a - p)));
+  }
+  const d = half(c);
+  const n = run.length;
+  const [lo, hi] = [th[0] - d, th[n - 1] + d];
+  if (n < 2) return { th, lo, hi, cuts: [] };
+  const [t0, t1] = [down ? th[0] + d : lo, up ? th[n - 1] - d : hi];
+  if (t1 - t0 < 1e-3) return { th, lo, hi, cuts: [] };
+  // (About eleven treads a quarter turn.)
+  const m = Math.max(2, Math.round(((t1 - t0) / (Math.PI / 2)) * 11));
+  return { th, lo, hi, cuts: Array.from({ length: m + 1 }, (_, k) => t0 + ((t1 - t0) * k) / m) };
 }
 
-/** An arrow across square (i, j) along `d`: a shaft and a bold head, cream over an ink edge. */
-function arrow(g: Graphics, i: number, j: number, d: Sq, len = 0.62) {
-  const l = Math.hypot(d[0], d[1]);
-  const [ux, uy] = [d[0] / l, d[1] / l];
-  const [cx, cy] = [i + 0.5, j + 0.5];
-  const [tx, ty] = [cx + ux * len * 0.5, cy + uy * len * 0.5];
-  const [bx, by] = [cx - ux * len * 0.5, cy - uy * len * 0.5];
-  const head = [tx, ty, tx - ux * 0.26 - uy * 0.2, ty - uy * 0.26 + ux * 0.2, tx - ux * 0.26 + uy * 0.2, ty - uy * 0.26 - ux * 0.2];
-  g.moveTo(bx, by).lineTo(tx - ux * 0.2, ty - uy * 0.2).stroke({ width: 0.17, color: INK, cap: 'round' });
-  g.poly(head).stroke({ width: 0.08, color: INK, join: 'round' });
-  g.moveTo(bx, by).lineTo(tx - ux * 0.2, ty - uy * 0.2).stroke({ width: 0.09, color: MARK, cap: 'round' });
+/** Half a square's angle round the flight's middle line. */
+const half = (c: Circle) => 0.5 / Math.max(1, c.r - WIDE / 2);
+const at = (c: Circle, r: number, a: number): Sq => [c.cx + r * Math.cos(a), c.cy + r * Math.sin(a)];
+
+/** The band between radii r0 < r1 from angle a0 to a1, as a polygon. */
+function sector(c: Circle, r0: number, r1: number, a0: number, a1: number): number[] {
+  const n = Math.max(2, Math.ceil(Math.abs(a1 - a0) / 0.05));
+  const pts: number[] = [];
+  for (let k = 0; k <= n; k++) pts.push(...at(c, r1, a0 + ((a1 - a0) * k) / n));
+  for (let k = n; k >= 0; k--) pts.push(...at(c, r0, a0 + ((a1 - a0) * k) / n));
+  return pts;
+}
+
+/** An arc at radius r from a0 to a1 traced into the path. */
+function arc(g: Graphics, c: Circle, r: number, a0: number, a1: number) {
+  const n = Math.max(2, Math.ceil(Math.abs(a1 - a0) / 0.05));
+  const p = at(c, r, a0);
+  g.moveTo(p[0], p[1]);
+  for (let k = 1; k <= n; k++) {
+    const q = at(c, r, a0 + ((a1 - a0) * k) / n);
+    g.lineTo(q[0], q[1]);
+  }
+}
+
+/** A curved arrow along radius r from angle a0 to a1 (its head there): cream over ink. */
+function arcArrow(g: Graphics, c: Circle, r: number, a0: number, a1: number) {
+  const s = Math.sign(a1 - a0) || 1;
+  const hl = 0.24 / r;
+  const tip = at(c, r, a1);
+  const [tx, ty] = [-Math.sin(a1) * s, Math.cos(a1) * s];
+  const [bx, by] = [tip[0] - tx * 0.26, tip[1] - ty * 0.26];
+  const head = [tip[0], tip[1], bx - ty * 0.17, by + tx * 0.17, bx + ty * 0.17, by - tx * 0.17];
+  arc(g, c, r, a0, a1 - s * hl);
+  g.stroke({ width: 0.15, color: INK, cap: 'round', join: 'round' });
+  g.poly(head).stroke({ width: 0.07, color: INK, join: 'round' });
+  arc(g, c, r, a0, a1 - s * hl);
+  g.stroke({ width: 0.075, color: MARK, cap: 'round', join: 'round' });
   g.poly(head).fill(MARK);
 }
 
-/** A chevron on square (i, j) pointing along `d`. */
-function chevron(g: Graphics, i: number, j: number, d: Sq, size: number, width: number, color: number, alpha: number) {
-  const l = Math.hypot(d[0], d[1]);
-  const [ux, uy] = [d[0] / l, d[1] / l];
-  const [cx, cy] = [i + 0.5 + ux * size * 0.3, j + 0.5 + uy * size * 0.3];
-  g.moveTo(cx - ux * size - uy * size, cy - uy * size + ux * size)
-    .lineTo(cx, cy)
-    .lineTo(cx - ux * size + uy * size, cy - uy * size - ux * size)
-    .stroke({ width, color, alpha, cap: 'round', join: 'round' });
-}
-
-/** A flat landing on square (i, j): paving inset in an ink frame. */
-function landing(g: Graphics, i: number, j: number) {
-  g.rect(i, j, 1, 1).fill(shade(PAD, 0.92));
-  g.rect(i + 0.09, j + 0.09, 0.82, 0.82).fill(PAD).stroke({ width: 0.05, color: INK, alpha: 0.7 });
-}
-
-/** Rails along the sides of squares `sq` that open onto squares `open` says are floor beside them. */
-function rails(g: Graphics, sq: Sq[], open: (i: number, j: number) => boolean, inset: number, width: number) {
-  const segs: [number, number, number, number][] = [];
-  for (const [i, j] of sq) {
-    if (open(i, j - 1)) segs.push([i, j + inset, i + 1, j + inset]);
-    if (open(i + 1, j)) segs.push([i + 1 - inset, j, i + 1 - inset, j + 1]);
-    if (open(i, j + 1)) segs.push([i, j + 1 - inset, i + 1, j + 1 - inset]);
-    if (open(i - 1, j)) segs.push([i + inset, j, i + inset, j + 1]);
+/** Flight `f`'s treads between angles a and b (all if not given), the k-th of m lit `lit(k / m)`. */
+function treads(g: Graphics, c: Circle, f: Flight, lit: (t: number) => number, ink: number, a = -Infinity, b = Infinity) {
+  const [r0, r1] = [c.r - WIDE, c.r];
+  const m = f.cuts.length - 1;
+  const rm = c.r - WIDE / 2;
+  for (let k = 0; k < m; k++) {
+    const [u, v] = [Math.max(a, f.cuts[k]), Math.min(b, f.cuts[k + 1])];
+    if (v - u <= 1e-6) continue;
+    g.poly(sector(c, r0, r1, u, v)).fill(shade(TREAD, lit((k + 0.5) / m)));
   }
-  if (!segs.length) return;
-  for (const s of segs) g.moveTo(s[0], s[1]).lineTo(s[2], s[3]);
-  g.stroke({ width: width + 0.05, color: INK, cap: 'round' });
-  for (const s of segs) g.moveTo(s[0], s[1]).lineTo(s[2], s[3]);
-  g.stroke({ width, color: RAIL, cap: 'round' });
-  for (const s of segs) for (const [x, y] of [[s[0], s[1]], [s[2], s[3]]]) g.circle(x, y, width * 0.75).fill(RAIL).stroke({ width: 0.025, color: INK });
+  // (The risers: ink across the band at each tread's foot, the nosing of the tread above lit just past it.)
+  for (let k = 1; k < m; k++) {
+    const t = f.cuts[k];
+    if (t <= a || t >= b) continue;
+    const [p, q] = [at(c, r0, t), at(c, r1, t)];
+    g.moveTo(p[0], p[1]).lineTo(q[0], q[1]);
+  }
+  g.stroke({ width: LINE_SQ, color: INK, alpha: ink });
+  for (let k = 1; k < m; k++) {
+    const t = f.cuts[k] + 0.045 / rm;
+    if (t <= a || t >= b) continue;
+    const [p, q] = [at(c, r0 + 0.03, t), at(c, r1, t)];
+    g.moveTo(p[0], p[1]).lineTo(q[0], q[1]);
+  }
+  g.stroke({ width: 0.016, color: NOSE, alpha: 0.55 * ink });
 }
 
-/** Level `li`'s winding stairs, if it has any: each run up, its landings, and the well over the run below. */
+/** A rail along the inner edge from a0 to a1, a post at each end. */
+function rail(g: Graphics, c: Circle, a0: number, a1: number) {
+  if (a1 - a0 <= 1e-3) return;
+  const r = c.r - WIDE + 0.045;
+  arc(g, c, r, a0, a1);
+  g.stroke({ width: 0.11, color: INK, cap: 'round', join: 'round' });
+  arc(g, c, r, a0, a1);
+  g.stroke({ width: 0.055, color: RAIL, cap: 'round', join: 'round' });
+  for (const a of [a0, a1]) {
+    const p = at(c, r, a);
+    g.circle(p[0], p[1], 0.065).fill(RAIL).stroke({ width: LINE_SQ, color: INK });
+  }
+}
+
+/** Level `li`'s winding stairs, if it has any: each flight up, its landings, and the well over the run below. */
 export function drawWinders(g: Graphics, it: Interior, li: number) {
   const lv: InteriorLevel | undefined = it.levels[li];
   if (!lv) return;
   const wells: Sq[] = lv.furniture.filter((f) => f.kind === 'stair_well').map((f) => [f.x, f.y]);
   const runs = winderRuns(lv);
   if (!runs.length && !wells.length) return;
-  const { nx, ny } = it;
-  const stair = new Set([...runs.flat(), ...wells].map(key));
-  const floor = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && lv.cells[j * nx + i] >= 0 && !stair.has(`${i},${j}`);
+  const circles = towerCircles(it);
   const { up, down } = winderLinks(it, li);
 
-  // The well: the run below seen down the shaft, its treads dim, a rail where it opens onto the floor.
+  // The well: the band dark over the upper part of the run below, its top treads dim down it.
   if (wells.length) {
-    const below = winderRuns(it.levels[li - 1]);
-    const isWell = new Set(wells.map(key));
-    for (const [i, j] of wells) {
-      g.rect(i, j, 1, 1).fill(WELL);
-      const run = below.find((r) => r.some((q) => q[0] === i && q[1] === j));
-      if (run) {
-        const k = run.findIndex((q) => q[0] === i && q[1] === j);
-        const t = k / Math.max(1, run.length - 1);
-        treadPair(g, i, j, dirAt(run, k), 0.26 + 0.12 * t, 0.3 + 0.12 * t, 0.5);
-      }
-      g.rect(i, j, 1, 1).fill({ color: WELL, alpha: 0.35 });
+    const left = new Set(wells.map(key));
+    const links = winderLinks(it, li - 1);
+    for (const run of winderRuns(it.levels[li - 1])) {
+      const ks = run.map((q, k) => (left.has(key(q)) ? k : -1)).filter((k) => k >= 0);
+      const c = circles.get(key(run[0]));
+      if (!ks.length || !c) continue;
+      for (const k of ks) left.delete(key(run[k]));
+      const n = run.length;
+      const isUp = n >= 2 && links.up.has(key(run[n - 1]));
+      const f = flight(run, c, links.down.has(key(run[0])), isUp);
+      const d = half(c);
+      const a = Math.min(...ks.map((k) => f.th[k])) - d;
+      const b = isUp && f.cuts.length ? f.cuts[f.cuts.length - 1] : Math.max(...ks.map((k) => f.th[k])) + d;
+      g.poly(sector(c, c.r - WIDE, c.r, a, b)).fill(WELL);
+      treads(g, c, f, (t) => 0.22 + 0.4 * t, 0.55, a, b);
+      g.poly(sector(c, c.r - WIDE, c.r, a, b)).fill({ color: WELL, alpha: 0.3 }).stroke({ width: OUT_SQ, color: INK, join: 'round' });
+      // (Railed along the open inner side and across its low end; open toward the landing.)
+      rail(g, c, a, b);
+      const [p, q] = [at(c, c.r - WIDE + 0.045, a), at(c, c.r, a)];
+      g.moveTo(p[0], p[1]).lineTo(q[0], q[1]).stroke({ width: 0.11, color: INK, cap: 'round' });
+      g.moveTo(p[0], p[1]).lineTo(q[0], q[1]).stroke({ width: 0.055, color: RAIL, cap: 'round' });
     }
-    // (Its edge inked; the rail on the sides onto the floor; open toward the landing the run reaches.)
-    for (const [i, j] of wells) g.rect(i, j, 1, 1);
-    g.stroke({ width: 0.04, color: INK, alpha: 0.55 });
-    const segs: number[][] = [];
-    for (const [i, j] of wells) {
-      for (const [di, dj, s] of [[0, -1, [i, j, i + 1, j]], [1, 0, [i + 1, j, i + 1, j + 1]], [0, 1, [i, j + 1, i + 1, j + 1]], [-1, 0, [i, j, i, j + 1]]] as [number, number, number[]][]) {
-        if (!isWell.has(`${i + di},${j + dj}`)) segs.push(s);
-      }
+    // (Any well square not over a run below: a dark square.)
+    for (const s of left) {
+      const [i, j] = s.split(',').map(Number);
+      g.rect(i, j, 1, 1).fill(WELL).stroke({ width: OUT_SQ, color: INK, alpha: 0.7 });
     }
-    for (const s of segs) g.moveTo(s[0], s[1]).lineTo(s[2], s[3]);
-    g.stroke({ width: 0.09, color: INK, cap: 'round' });
-    rails(g, wells, floor, 0.1, 0.08);
   }
 
   for (const run of runs) {
+    const c = circles.get(key(run[0]));
+    if (!c) continue;
     const n = run.length;
-    // (Treads: two a square, the lowest darkest; the landings flat.)
-    const steps = run.map((q, k) => !(k === 0 && down.has(key(q))) && !(k === n - 1 && up.has(key(q))) && !(n === 1));
-    const total = steps.filter(Boolean).length * 2;
-    let t = 0;
-    for (let k = 0; k < n; k++) {
-      const [i, j] = run[k];
-      if (!steps[k]) {
-        landing(g, i, j);
-        continue;
-      }
-      const d = dirAt(run, k);
-      const lit = (s: number) => 0.62 + (0.42 * (s + 0.5)) / Math.max(1, total);
-      treadPair(g, i, j, d, lit(t), lit(t + 1));
-      t += 2;
+    const isDown = down.has(key(run[0]));
+    const isUp = n >= 2 && up.has(key(run[n - 1]));
+    const f = flight(run, c, isDown, isUp);
+    const d = half(c);
+    const rm = c.r - WIDE / 2;
+    // (The landings flat: where the run comes up from below, and where it goes on to the floor above.)
+    const pads: [number, number][] = [];
+    if (isDown || n < 2) pads.push([f.th[0] - d, f.th[0] + d]);
+    if (isUp) pads.push([f.th[n - 1] - d, f.th[n - 1] + d]);
+    for (const [a, b] of pads) g.poly(sector(c, c.r - WIDE, c.r, a, b)).fill(PAD).stroke({ width: LINE_SQ, color: INK, alpha: 0.7, join: 'round' });
+    if (f.cuts.length) {
+      const [t0, t1] = [f.cuts[0], f.cuts[f.cuts.length - 1]];
+      treads(g, c, f, (t) => 0.46 + 0.6 * t, 0.9);
+      // (The flight's edge: ink round the band, the wall side under the wall.)
+      g.poly(sector(c, c.r - WIDE, c.r, t0, t1)).stroke({ width: OUT_SQ, color: INK, join: 'round' });
+      // (The rail on the open side, from a tread up from the foot where the run starts on this floor.)
+      rail(g, c, isDown ? t0 : t0 + Math.min(0.5 / rm, (t1 - t0) * 0.25), t1);
+      // A curved arrow up the flight's middle.
+      const span = Math.min((t1 - t0) * 0.6, 2.4 / rm);
+      const mid = (t0 + t1) / 2;
+      arcArrow(g, c, rm + 0.04, mid - span / 2, mid + span / 2);
     }
-    // The grid over every stair square, each a square a token stands on.
-    for (const [i, j] of run) g.rect(i, j, 1, 1);
-    g.stroke({ width: 0.045, color: INK, alpha: 0.5 });
-    // A chevron up each tread square; the foot's bold, the way up.
-    const first = steps.indexOf(true);
-    for (let k = 0; k < n; k++) {
-      if (!steps[k]) continue;
-      const d = dirAt(run, k);
-      // (The foot of a run that starts on this floor: an arrow up it. Where the run comes up from below, the
-      // landing's arrow down marks it instead.)
-      if (k === first && k === 0) arrow(g, run[k][0], run[k][1], d, 0.5);
-      else chevron(g, run[k][0], run[k][1], d, 0.17, 0.075, INK, 0.6);
-    }
-    // The rail along the run's open side (not at its foot, where you step on).
-    rails(g, run.filter((_, k) => steps[k] && k !== first), floor, 0.07, 0.07);
-    // The landings: up on the top of the run, down where it comes up from the floor below.
-    if (n >= 2 && up.has(key(run[n - 1]))) arrow(g, run[n - 1][0], run[n - 1][1], dirAt(run, n - 1));
-    if (down.has(key(run[0]))) {
-      // (Back the way the run below came up: from the well, or along this run's start.)
-      const below = winderRuns(it.levels[li - 1]).find((r) => r.length >= 2 && key(r[r.length - 1]) === key(run[0]));
-      const d = below ? dirAt(below, below.length - 1) : dirAt(run, 0);
-      arrow(g, run[0][0], run[0][1], [-d[0], -d[1]]);
-    }
+    // (Where it comes up from the floor below: an arrow down on the landing, back the way it came.)
+    if (isDown) arcArrow(g, c, rm, f.th[0] + d * 0.7, f.th[0] - d * 0.7);
   }
 }
