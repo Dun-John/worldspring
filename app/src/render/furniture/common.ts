@@ -1,6 +1,7 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { INK } from '../pen';
+import { roundRadii } from './squash';
 
 export { INK };
 /** Ink outline and inner line widths, in squares (about 3 and 1.6 px at 64 px a square). */
@@ -112,6 +113,8 @@ export function lit(a: number): number {
 
 /** An ellipse as points, turned by `rot`. */
 export function oval(cx: number, cy: number, rx: number, ry: number, rot: number, n = 16): number[] {
+  // Round things stay round under an uneven life-size squash (see `scaledAbout`).
+  if (rx === ry) [rx, ry] = roundRadii(rx);
   const [c, sn] = [Math.cos(rot), Math.sin(rot)];
   const pts: number[] = [];
   for (let i = 0; i < n; i++) {
@@ -128,7 +131,8 @@ export function ring(cx: number, cy: number, r: number, rnd: () => number, j: nu
   for (let k = 0; k < n; k++) {
     const a = (k / n) * Math.PI * 2;
     const rr = r + (rnd() - 0.5) * j;
-    pts.push(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+    const [rx, ry] = roundRadii(rr);
+    pts.push(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry);
   }
   return pts;
 }

@@ -2,6 +2,7 @@ import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
 import { BONE, BRASS, INK, IRON, LINE, type Light, OUT, WOOD, bone, castShadow, frame, litEdges, oval, patch, quad, ring, shade, skullTop } from './common';
+import { trueShape } from './squash';
 import { candle } from './sacred';
 import { BRONZE, GILT } from './tables';
 import { rock } from './under';
@@ -201,13 +202,16 @@ export function openCoffin(g: Graphics, f: InteriorItem, light: Light, rnd: () =
   // Bones in it.
   const [ux, uy] = at(0, 0);
   const [vx, vy] = at(1, 0);
-  skullTop(g, ...at(0.36, 0.5), Math.atan2(uy - vy, ux - vx), 0.08, light);
-  bone(g, at(0.62, 0.42), at(1.02, 0.46), 0.035, light);
-  bone(g, at(0.66, 0.6), at(1.0, 0.54), 0.032, light);
-  for (let i = 0; i < 3; i++) {
-    const u = 0.55 + i * 0.05;
-    g.moveTo(...at(u, 0.44)).quadraticCurveTo(...at(u - 0.02, 0.32), ...at(u + 0.04, 0.3)).stroke({ width: 0.016, color: BONE[1], cap: 'round' });
-  }
+  // (The bones keep their proportions in the squashed coffin.)
+  trueShape(g, ...at(0.36, 0.5), () => skullTop(g, ...at(0.36, 0.5), Math.atan2(uy - vy, ux - vx), 0.08, light));
+  trueShape(g, ...at(0.82, 0.44), () => bone(g, at(0.62, 0.42), at(1.02, 0.46), 0.035, light));
+  trueShape(g, ...at(0.83, 0.57), () => bone(g, at(0.66, 0.6), at(1.0, 0.54), 0.032, light));
+  trueShape(g, ...at(0.6, 0.4), () => {
+    for (let i = 0; i < 3; i++) {
+      const u = 0.55 + i * 0.05;
+      g.moveTo(...at(u, 0.44)).quadraticCurveTo(...at(u - 0.02, 0.32), ...at(u + 0.04, 0.3)).stroke({ width: 0.016, color: BONE[1], cap: 'round' });
+    }
+  });
   // The lid: the lower part of the same shape, pushed down and off to one side.
   const sk = 0.08 + 0.04 * rnd();
   const lid: number[] = [];

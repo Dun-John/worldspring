@@ -2,6 +2,7 @@ import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { type At, CUSHIONS, LEATHER, OAK, type Pt, inkLine } from './hall';
 import { BRASS, DARK_WOOD, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, oval, patch, planks, quad, shade } from './common';
+import { trueShape } from './squash';
 import { GILT, SILVER, VELVET } from './tables';
 import { WALL_GAP } from './home';
 
@@ -78,15 +79,17 @@ export function strongbox(g: Graphics, f: InteriorItem, light: Light, v: number,
   const mx = x + 0.5;
   g.poly(quad([mx - 0.05, y1 - 0.14, mx + 0.05, y1 + 0.01], rnd, 0.003)).fill(strap[1]).stroke({ width: 0.016, color: strap[0] });
   g.circle(mx, y1 - 0.1, 0.016).fill(stud);
-  for (const [w, c] of [
-    [0.042, INK],
-    [0.02, IRON[2]],
-  ])
-    g.moveTo(mx - 0.045, y1 + 0.06).arc(mx, y1 + 0.06, 0.045, Math.PI, Math.PI * 2).stroke({ width: w, color: c });
-  g.poly(quad([mx - 0.08, y1 + 0.05, mx + 0.08, y1 + 0.17], rnd, 0.004)).fill(BRASS).stroke({ width: LINE, color: INK });
-  g.rect(mx - 0.065 - light[0] * 0.005, y1 + 0.06, 0.13, 0.025).fill({ color: 0xfff1cf, alpha: 0.35 });
-  g.circle(mx, y1 + 0.1, 0.017).fill(INK);
-  g.rect(mx - 0.007, y1 + 0.1, 0.014, 0.04).fill(INK);
+  trueShape(g, mx, y1 + 0.08, () => {
+    for (const [w, c] of [
+      [0.042, INK],
+      [0.02, IRON[2]],
+    ])
+      g.moveTo(mx - 0.045, y1 + 0.06).arc(mx, y1 + 0.06, 0.045, Math.PI, Math.PI * 2).stroke({ width: w, color: c });
+    g.poly(quad([mx - 0.08, y1 + 0.05, mx + 0.08, y1 + 0.17], rnd, 0.004)).fill(BRASS).stroke({ width: LINE, color: INK });
+    g.rect(mx - 0.065 - light[0] * 0.005, y1 + 0.06, 0.13, 0.025).fill({ color: 0xfff1cf, alpha: 0.35 });
+    g.circle(mx, y1 + 0.1, 0.017).fill(INK);
+    g.rect(mx - 0.007, y1 + 0.1, 0.014, 0.04).fill(INK);
+  });
 }
 
 /** Counting desk: a desk under a baize (or leather) cloth, a ledger open on it with figures in columns and a

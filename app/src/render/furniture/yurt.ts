@@ -1,6 +1,7 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { BRASS, DARK_WOOD, INK, LINE, type Light, OUT, WOOD, board, quad, ring, shade } from './common';
+import { trueShape } from './squash';
 import { STONE } from './home';
 
 // ---------------------------------------------------------------------------------------
@@ -163,15 +164,18 @@ export function paintedChest(g: Graphics, f: InteriorItem, light: Light, v: numb
   g.poly(quad(inner, rnd, 0.004)).stroke({ width: 0.02, color: OCHRE });
   const [mx, my] = [(fx0 + fx1) / 2, (fy0 + fy1) / 2];
   const [rx, ry] = [Math.min(0.1, (fx1 - fx0) * 0.22), Math.min(0.1, (fy1 - fy0) * 0.22)];
-  g.poly([mx - rx, my, mx, my - ry, mx + rx, my, mx, my + ry]).fill(OCHRE).stroke({ width: 0.016, color: INK });
-  // Horns curling off the lozenge's points, along the lid.
-  for (const s of [-1, 1]) {
-    if (along) g.moveTo(mx + s * rx, my).quadraticCurveTo(mx + s * rx * 2.2, my - ry * 1.4, mx + s * rx * 2.4, my - ry * 0.2);
-    else g.moveTo(mx, my + s * ry).quadraticCurveTo(mx - rx * 1.4, my + s * ry * 2.2, mx - rx * 0.2, my + s * ry * 2.4);
-  }
-  g.stroke({ width: 0.02, color: OCHRE, cap: 'round' });
+  // (The painted lozenge and the hasp keep their shape on the squashed lid.)
+  trueShape(g, mx, my, () => {
+    g.poly([mx - rx, my, mx, my - ry, mx + rx, my, mx, my + ry]).fill(OCHRE).stroke({ width: 0.016, color: INK });
+    // Horns curling off the lozenge's points, along the lid.
+    for (const s of [-1, 1]) {
+      if (along) g.moveTo(mx + s * rx, my).quadraticCurveTo(mx + s * rx * 2.2, my - ry * 1.4, mx + s * rx * 2.4, my - ry * 0.2);
+      else g.moveTo(mx, my + s * ry).quadraticCurveTo(mx - rx * 1.4, my + s * ry * 2.2, mx - rx * 0.2, my + s * ry * 2.4);
+    }
+    g.stroke({ width: 0.02, color: OCHRE, cap: 'round' });
+  });
   const [hx, hy] = [(front[0] + front[2]) / 2, (front[1] + front[3]) / 2];
-  g.rect(hx - 0.04, hy - 0.04, 0.08, 0.08).fill(BRASS).stroke({ width: 0.016, color: INK });
+  trueShape(g, hx, hy, () => g.rect(hx - 0.04, hy - 0.04, 0.08, 0.08).fill(BRASS).stroke({ width: 0.016, color: INK }));
 }
 
 /** A floor cushion or two by the wall (or by the hearth). */

@@ -1,6 +1,9 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { WALL_GAP } from './home';
+import { setSquash, uneven } from './squash';
+
+export { trueShape } from './squash';
 
 /** Life size for furniture. Boxes come from the generator and the drawings fill about 90% of them, so a
  * 4 ft stool read as 9 ft. Each entry here scales the finished drawing (points only: strokes keep their
@@ -69,13 +72,26 @@ export function lifeBack(f: InteriorItem, back: [number, number] | null): [numbe
 }
 
 /** Draws with `fn` scaled by (kx, ky) about the world point (ax, ay). Pixi's matrix moves points, not an
- * arc's radius, so that is scaled here. */
+ * arc's radius, so that is scaled here. When the two factors differ the body is squashed but what is on it
+ * is not: circles (and `ring`/`oval` with equal radii, see `common`) are drawn round at the mean size about
+ * their squashed centre, and `trueShape` does the same for any other drawing. */
 export function scaledAbout(g: Graphics, kx: number, ky: number, ax: number, ay: number, fn: (g: Graphics) => void) {
   const rk = Math.sqrt(kx * ky);
+  const [tx, ty] = [ax * (1 - kx), ay * (1 - ky)];
   const thin: Graphics = new Proxy(g, {
     get(target, prop, receiver) {
       const m = Reflect.get(target, prop, receiver);
       if (typeof m !== 'function') return m;
+      if (uneven() && (prop === 'circle' || prop === 'ellipse')) {
+        return (...args: number[]) => {
+          const round = prop === 'circle' || args[2] === args[3];
+          if (!round) return (m as (...x: unknown[]) => unknown).apply(target, args) === target ? thin : undefined;
+          target.save().setTransform(1, 0, 0, 1, 0, 0);
+          target.circle(kx * args[0] + tx, ky * args[1] + ty, args[2] * rk);
+          target.restore();
+          return thin;
+        };
+      }
       return (...args: unknown[]) => {
         const a = prop === 'arc' ? [args[0], args[1], (args[2] as number) * rk, ...args.slice(3)] : args;
         const out = (m as (...x: unknown[]) => unknown).apply(target, a);
@@ -83,9 +99,11 @@ export function scaledAbout(g: Graphics, kx: number, ky: number, ax: number, ay:
       };
     },
   });
-  g.save().setTransform(kx, 0, 0, ky, ax * (1 - kx), ay * (1 - ky));
+  const old = setSquash({ kx, ky, tx, ty });
+  g.save().setTransform(kx, 0, 0, ky, tx, ty);
   fn(thin);
   g.restore();
+  setSquash(old);
 }
 
 /** Draws `f` with `fn` at life size, if it has an entry; `across` overrides the centre across the back axis

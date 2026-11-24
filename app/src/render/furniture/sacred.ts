@@ -2,6 +2,7 @@ import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
 import { BRASS, DARK_WOOD, DYES, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, oval, patch, planks, quad, ring, shade } from './common';
+import { trueShape } from './squash';
 import { END_GAP, STONE, WALL_GAP, masonry } from './home';
 import { BRONZE, GILT } from './tables';
 import { stageCurtain } from './hangings';
@@ -623,7 +624,7 @@ export function weaponRack(g: Graphics, f: InteriorItem, light: Light, v: number
   for (const u of [END_GAP + 0.04, len - END_GAP - 0.1]) board(g, rect(u, WALL_GAP, u + 0.06, 0.88), DARK_WOOD, light, rnd, !along, 0.015, 0);
   // Weapons at their own lengths (a sword about 3.5 ft, a spear 6), as many as fit along each row.
   const lengths = [0.72, 1.2, 0.6, 0.55];
-  const rows = [0.4, 0.55, 0.7, 0.84];
+  const rows = [0.46, 0.65, 0.84];
   let k = v;
   for (const s0 of rows) {
     let u = END_GAP + 0.06;
@@ -632,7 +633,9 @@ export function weaponRack(g: Graphics, f: InteriorItem, light: Light, v: number
       let kind = k % 4;
       if (u + lengths[kind] > end) kind = [2, 3, 0].find((c) => u + lengths[c] <= end) ?? -1;
       if (kind < 0) break;
-      weapon(g, at, u, u + lengths[kind], s0, kind);
+      // The rack is only shallower, so each weapon keeps its true size (and its length) on it.
+      const [wu, ws] = [u, s0];
+      trueShape(g, ...at(wu + lengths[kind] / 2, ws), () => weapon(g, at, wu, wu + lengths[kind], ws, kind), 1);
       u += lengths[kind] + 0.12;
       k++;
     }
