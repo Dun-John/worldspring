@@ -5,7 +5,8 @@ import { type Light } from './common';
 import { arcaneFocus, arcaneWorkbench, boneMound, climbLadder, crackedFloor, fallenColumn, floodedPit, scaffold, stoneSteps, stoneThrone, totem, wallStub } from './ruins';
 import { basaltColumns, beastNest, caveBoulder, caveIn, caveMoss, cavePool, cobweb, crystal, drainLight, fungus, giantMushrooms, glassPool, grille, guano, iceFormation, iceSheet, ladder, obsidianShards, pipe, pit, ratNest, rockColumn, scorchedRemains, stairsUp, stalagmite, steamVent, sulfurCrust, trap, tunnel, web, well } from './under';
 import { bedroll, grainSacks, hangingLantern, miningTools, oreCart, oreVein, powderKegs, rails } from './mine';
-import { brazier, candelabrum, collapsedWall, dais, dryFountain, ironMaiden, ritualCircle, shackles, stocks, tatteredBanner, torchSconce, treasureHoard } from './dungeon';
+import { tatteredBanner } from './hangings';
+import { brazier, candelabrum, collapsedWall, dais, dryFountain, ironMaiden, ritualCircle, shackles, stocks, torchSconce, treasureHoard } from './dungeon';
 import { burialNiche, burialUrn, coldCampfire, flotsamHeap, offeringBowl, openCoffin, rubbleHeap, scatteredBones, skeletonRemains, skullPile, timberProp } from './tomb';
 import { linkDown, stoneEffigy } from './sacred';
 import { UNDER_DRAWN } from './tables';
@@ -195,7 +196,7 @@ export function drawUnderProp(
       torchSconce(g, f, light, rnd, w);
       break;
     case 'banner':
-      tatteredBanner(g, f, light, v, rnd, w);
+      tatteredBanner(g, f, light, v, w);
       break;
     case 'iron_maiden':
       ironMaiden(g, f, light, rnd);

@@ -10,7 +10,8 @@
 // profile and rhythm, the towers' shape (round, squat, D, octagon, square, a log blockhouse, a tapering earth
 // bastion), the wall's material (stone, a palisade of stakes, rammed earth) and the gatehouse's form.
 export { WALK, PARAPET, styleOf, towerShape, GATE_SQUARE, GATE_ARCHED, GATE_BENT, GATE_LOG, gateForm, type Look, MAT_STONE, MAT_PALISADE, MAT_EARTH, M_BROAD, M_SQUARE, M_SWALLOWTAIL, M_STEPPED, M_STAKES, M_ROUNDED, lookOf, TONES } from './walls/base';
-export { flagFloor, parapetRing, stairHatch, cornerHatch, roundTop, roundParapet, roundWalk, banner } from './walls/tops';
+export { flagFloor, parapetRing, stairHatch, cornerHatch, roundTop, roundParapet, roundWalk } from './walls/tops';
+export { banner } from './walls/flags';
 export { drawWalls } from './walls/curtain';
 export { bastionRamp, drawBastion, drawWallTower } from './walls/towers';
 export { stockadeStakes, GATE_DEPTH, drawGate } from './walls/gates';

@@ -4,7 +4,7 @@ import { rng } from '../atlas';
 import { BRASS, DARK_WOOD, DYES, INK, IRON, LINE, LINEN, type Light, OUT, WOOD, board, castShadow, frame, oval, patch, planks, quad, ring, shade } from './common';
 import { END_GAP, STONE, WALL_GAP, masonry } from './home';
 import { BRONZE, GILT } from './tables';
-import { stageCurtainB } from './hangings';
+import { stageCurtain } from './hangings';
 
 /** Pale stone for statues, effigies and fine work: shade, face, lit. */
 export const MARBLE = [0x8e8a80, 0xc4beb0, 0xe2dccd];
@@ -161,9 +161,9 @@ export function throne(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
 }
 
 /** Stage: a raised platform of planks — its front edge (the apron) darker, a shadow on the floor along the
- * front and sides — a flight of steps up the middle of the front, and a heavy curtain hung along the back,
- * folds in light and dark, a wavy hem, tied back at both ends. */
-export function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number], curtain: 'A' | 'B' = 'A') {
+ * front and sides — a flight of steps up the middle of the front, and a curtain along the back seen from above
+ * as a thin gathered band (`hangings.ts`). */
+export function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { along, len, rect, at } = frame(f, back);
   const wid = along ? f.h : f.w;
   const front = wid - 0.36;
@@ -179,31 +179,7 @@ export function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => num
   planks(g, face, along, Math.round(wid * 4), WOOD[0], rnd);
   // The apron: the front edge, darker.
   g.poly(quad(rect(0.06, front - 0.07, len - 0.06, front), rnd, 0.003)).fill(WOOD[0]).stroke({ width: LINE, color: INK });
-  // (`curtain` 'B': the sprite audit's thin gathered band from above, `hangings.ts`.)
-  if (curtain === 'B') return stageCurtainB(g, at, light, len);
-  // The curtain: folds along the back, a wavy hem over the boards, tied back at both ends.
-  const depth = 0.34;
-  const n = Math.round(len * 6);
-  for (let i = 0; i < n; i++) {
-    const u0 = 0.08 + ((len - 0.16) * i) / n;
-    const u1 = 0.08 + ((len - 0.16) * (i + 1)) / n;
-    const um = (u0 + u1) / 2;
-    g.moveTo(...at(u0, 0.06)).lineTo(...at(u1, 0.06)).lineTo(...at(u1, depth)).quadraticCurveTo(...at(um, depth + 0.07), ...at(u0, depth)).closePath();
-    g.fill(i % 2 ? 0x9a3428 : 0x6e2420);
-  }
-  g.moveTo(...at(0.08, 0.06)).lineTo(...at(len - 0.08, 0.06)).stroke({ width: LINE, color: INK });
-  for (let i = 0; i < n; i++) {
-    const u0 = 0.08 + ((len - 0.16) * i) / n;
-    const u1 = 0.08 + ((len - 0.16) * (i + 1)) / n;
-    g.moveTo(...at(u0, depth)).quadraticCurveTo(...at((u0 + u1) / 2, depth + 0.07), ...at(u1, depth));
-  }
-  g.stroke({ width: LINE, color: INK });
-  g.poly(quad(rect(0.08, 0.06, len - 0.08, 0.1), rnd, 0.002)).fill(GILT[1]);
-  // Tie-backs: the curtain gathered at each end.
-  for (const u of [0.08, len - 0.3]) {
-    g.poly(quad(rect(u, 0.06, u + 0.22, depth + 0.14), rnd, 0.01)).fill(0x7a2a22).stroke({ width: LINE, color: INK });
-    g.moveTo(...at(u, depth - 0.02)).lineTo(...at(u + 0.22, depth - 0.02)).stroke({ width: 0.03, color: GILT[1] });
-  }
+  stageCurtain(g, at, light, len);
 }
 
 /** A ring of wooden staves bound with iron, seen from above (vats): the outer rim, the stave joints, a

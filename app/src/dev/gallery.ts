@@ -28,8 +28,7 @@
 // `&scale=1` draws every battlemap kind at exactly `&sq=` px a square (default 44, never shrunk to fit a cell) on a faint
 // 5-ft grid with a 2-ft body disc beside it, and a body disc on a free floor square of each furniture and prop room.
 // `&panels=streets` (alone) shows the street's drain grate and sewer manhole at true size with the cart, barrels,
-// crates, lamp post and a body disc, on cobbles and on plain ground. `&panels=options` (alone) shows the sprite audit's
-// options side by side (`dev/galleryOptions.ts`). `scripts/galleryshot.mjs` screenshots the lot.
+// crates, lamp post and a body disc, on cobbles and on plain ground. `scripts/galleryshot.mjs` screenshots the lot.
 // The page sets `window.__galleryReady` when it has drawn, and `window.__galleryKinds` (the catalog's ids).
 import { Application, Container, Geometry, GlProgram, Graphics, Mesh, Shader, Sprite, Text, UniformGroup, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
@@ -49,7 +48,6 @@ import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { drawBreakwaterArmour, drawCog, drawLantern } from '../render/harbourShapes';
 import { caveScale, caveSpot, drawCaveMark, drawFall, drawFallCaveBy, drawFallCaveThrough, drawFallMark, poolRadius, sheetRun } from '../render/fallShapes';
 import { breakwaters, piers } from './galleryTimber';
-import { spriteOptions } from './galleryOptions';
 import { flatRoofs } from './galleryRoofs';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
@@ -308,7 +306,7 @@ export async function runGallery(target: HTMLElement) {
   const query = new URLSearchParams(location.search);
   const only = query.get('kinds')?.split(',').map(Number);
   const panel = query.get('panels');
-  const pick = panel === 'streets' || panel === 'options' ? [panel] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
+  const pick = panel === 'streets' ? [panel] : query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
   const trueScale = query.has('scale');
   // `&index=1`: a small number at each cell's corner (reading order); `window.__galleryOrder` lists what each stands for.
   const indexed = query.has('index');
@@ -606,12 +604,6 @@ export async function runGallery(target: HTMLElement) {
   if (pick?.includes('streets')) {
     head('Streets: drain grate, sewer manhole, cart, barrels, crates, lamp post and a 2-ft body disc, at true size on cobbles and on plain ground');
     y = streets(app, catalog, root, y, width, query.has('nolabels'), sq);
-  }
-
-  // The sprite audit's options (`&panels=options`).
-  if (pick?.includes('options')) {
-    head('Options: A today, B and C to choose from, at true size on the 5-ft grid with a 2-ft body disc');
-    y = spriteOptions(root, y, query.has('nolabels'), Number(query.get('sq')) || 64);
   }
 
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);

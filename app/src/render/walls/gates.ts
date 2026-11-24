@@ -3,7 +3,8 @@ import type { Shape } from '../../gen/battlePrep';
 import { FT, rngAt, mix, INK, MOSS, PLUM, WOOD } from '../bridges';
 import { PX } from '../scale';
 import { type At, GATE_ARCHED, GATE_BENT, GATE_LOG, GATE_SQUARE, IRON, LINE, PARAPET, ST, STAKE, TONES, WK, blocks, flagsOf, gateForm, lit, lookOf, rubble, stoneTone, use, setStone } from './base';
-import { banner, cornerHatch, flagFloor, parapetRing } from './tops';
+import { banner } from './flags';
+import { cornerHatch, flagFloor, parapetRing } from './tops';
 import { inset, logPoly, logs, stakeTops } from './towers';
 
 /** A dashed line from `p` to `q` (px): `on` drawn, `off` left, for the caller to stroke. */

@@ -5,6 +5,7 @@ import { PX } from '../atlas';
 import { SQUARE_FT } from '../scale';
 import { drawBounds, drawSails, isBound, SAILS } from '../countryside';
 import { drawCaveMouth, drawThemedEntrance } from '../entrances';
+import { drawDrain, drawManhole } from './grates';
 import { drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawWalls, drawWallTower, GATE_DEPTH } from '../walls';
 
 const STONE = 0x9c968b;
@@ -269,11 +270,8 @@ function drawEntrance(g: Graphics, s: Shape) {
       break;
     }
     case 5: {
-      // Sewer grate: an iron disc with bars over the drain.
-      g.circle(x, y, PX * 0.55).fill(0x2f3236).stroke({ width: 3, color: ROOF_INK });
-      for (const b of [-0.3, -0.1, 0.1, 0.3]) g.moveTo(...at(-0.45, b)).lineTo(...at(0.45, b));
-      g.stroke({ width: 3, color: 0x5d6168 });
-      g.circle(x, y, PX * 0.55).stroke({ width: 4, color: 0x4a4e54 });
+      // Sewer manhole: an iron lid in a stone collar.
+      drawManhole(g, at, 0.25);
       break;
     }
     default: {
@@ -288,21 +286,6 @@ function drawEntrance(g: Graphics, s: Shape) {
 
 type At = (a: number, b: number) => [number, number];
 type Quad = (a0: number, a1: number, b0: number, b1: number) => number[];
-
-/** A drain grate in the street over the sewers (`under::drain_grates`), along the street (`at`'s first axis):
- * a dark slot in a stone kerb, iron bars across it, ink round the frame; lit from the NW like the props. */
-function drawDrain(g: Graphics, at: At, quad: Quad) {
-  const IRON = [0x3e4044, 0x5a5e64, 0x7a7e84];
-  g.poly(quad(-0.38, 0.42, -0.26, 0.3)).fill({ color: 0x000000, alpha: 0.18 });
-  g.poly(quad(-0.42, 0.42, -0.3, 0.3)).fill(STONE).stroke({ width: 2.5, color: ROOF_INK, join: 'round' });
-  g.poly(quad(-0.3, 0.3, -0.18, 0.18)).fill(0x1e1c19);
-  for (let k = 0; k < 5; k++) {
-    const a = -0.24 + k * 0.12;
-    g.poly(quad(a - 0.035, a + 0.035, -0.2, 0.2)).fill(IRON[1]).stroke({ width: 1.2, color: ROOF_INK });
-    g.moveTo(...at(a - 0.02, -0.19)).lineTo(...at(a - 0.02, 0.19)).stroke({ width: 1.4, color: IRON[2] });
-  }
-  g.poly(quad(-0.3, 0.3, -0.18, 0.18)).stroke({ width: 3, color: IRON[0], join: 'round' });
-}
 
 /** Stone grey shaded by `k` (0 light .. 1 dark). */
 const stoneShade = (k: number) => {

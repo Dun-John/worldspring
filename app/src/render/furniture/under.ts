@@ -399,7 +399,7 @@ export function rock(g: Graphics, x: number, y: number, s: number, t: readonly n
 }
 
 /** Daylight through a drain grate in the street overhead (`under::drain_grates`), on a sewer's floor: a soft warm
- * pool in two flat steps, brightest where the grate's square of light lands, its bars faintly across it. No glow:
+ * pool in two flat steps, brightest where the grate's 2 x 1.5 ft of light lands, its bars faintly across it. No glow:
  * it lies on the floor like a painted patch. `run`: the way the tunnel runs (the street's way, which the grate follows). */
 export function drainLight(g: Graphics, f: InteriorItem, rnd: () => number, run: [number, number]) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
@@ -407,11 +407,11 @@ export function drainLight(g: Graphics, f: InteriorItem, rnd: () => number, run:
   const [vx, vy] = [-uy, ux];
   const at = (a: number, b: number): [number, number] => [cx + ux * a + vx * b, cy + uy * a + vy * b];
   const SUN = 0xffe6a0;
-  g.poly(patch(cx, cy, 0.6, 0.56, rnd, 0.1)).fill({ color: SUN, alpha: 0.14 });
-  g.poly(patch(cx, cy, 0.43, 0.4, rnd, 0.08)).fill({ color: SUN, alpha: 0.16 });
-  g.poly([...at(-0.3, -0.2), ...at(0.3, -0.2), ...at(0.3, 0.2), ...at(-0.3, 0.2)]).fill({ color: 0xfff0c4, alpha: 0.26 });
-  for (let k = 0; k < 5; k++) g.moveTo(...at(-0.24 + k * 0.12, -0.19)).lineTo(...at(-0.24 + k * 0.12, 0.19));
-  g.stroke({ width: 0.035, color: 0x2a261c, alpha: 0.2 });
+  g.poly(patch(cx, cy, 0.3, 0.27, rnd, 0.1)).fill({ color: SUN, alpha: 0.14 });
+  g.poly(patch(cx, cy, 0.22, 0.2, rnd, 0.08)).fill({ color: SUN, alpha: 0.16 });
+  g.poly([...at(-0.2, -0.15), ...at(0.2, -0.15), ...at(0.2, 0.15), ...at(-0.2, 0.15)]).fill({ color: 0xfff0c4, alpha: 0.26 });
+  for (let k = 0; k < 4; k++) g.moveTo(...at(-0.12 + k * 0.08, -0.14)).lineTo(...at(-0.12 + k * 0.08, 0.14));
+  g.stroke({ width: 0.02, color: 0x2a261c, alpha: 0.2 });
 }
 
 /** An iron grille across a sewer channel where runs meet, seen from above: a frame bar fixed in each kerb (`span`:

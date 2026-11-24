@@ -1,6 +1,6 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
-import { DARK_WOOD, INK, IRON, LINE, type Light, OUT, WOOD, board, castShadow, frame, glowPool, oval, patch, ring } from './common';
+import { INK, IRON, LINE, type Light, OUT, WOOD, board, castShadow, frame, glowPool, oval, patch, ring } from './common';
 import { MARBLE } from './sacred';
 import { GILT } from './tables';
 import { STONE, masonry } from './home';
@@ -167,42 +167,6 @@ export function torchSconce(g: Graphics, f: InteriorItem, light: Light, rnd: () 
   }
   g.circle(hx, hy, 0.065).fill(0x3a2a1c).stroke({ width: 0.018, color: INK });
   fireTop(g, hx, hy, 0.09, rnd);
-}
-
-/** Tattered banner: hung from a pole along the wall and drawn falling out into the room — a long cloth with a gilt
- * emblem, a fringe at the top, its swallowtail end ragged and torn. */
-export function tatteredBanner(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, wall: [number, number]) {
-  const { at } = frame(f, wall);
-  const cloth = [
-    [0x6a1e1a, 0x8e2a22, 0xb03a2e],
-    [0x1e2e5a, 0x2a4078, 0x3e5898],
-    [0x2a4a22, 0x3a6430, 0x507e42],
-    [0x3a2a4a, 0x523c66, 0x6c5482],
-  ][v % 4];
-  const pts: number[] = [...at(0.22, 0.06), ...at(0.78, 0.06), ...at(0.79, 0.62)];
-  // A ragged swallowtail edge.
-  for (const [u, s] of [[0.72, 0.7], [0.66, 0.62], [0.6, 0.72], [0.54, 0.6], [0.5, 0.52], [0.46, 0.6], [0.4, 0.7], [0.34, 0.6], [0.28, 0.72]]) pts.push(...at(u + (rnd() - 0.5) * 0.03, s + (rnd() - 0.5) * 0.04));
-  pts.push(...at(0.21, 0.62));
-  castShadow(g, pts, light, 0.04);
-  g.poly(pts).fill(cloth[1]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly([...at(0.24, 0.08), ...at(0.4, 0.08), ...at(0.38, 0.6), ...at(0.25, 0.6)]).fill(cloth[2]);
-  g.poly([...at(0.62, 0.08), ...at(0.76, 0.08), ...at(0.77, 0.58), ...at(0.64, 0.6)]).fill(cloth[0]);
-  // A tear, a gilt border, the emblem.
-  g.moveTo(...at(0.66, 0.66)).lineTo(...at(0.62, 0.5)).stroke({ width: 0.016, color: INK });
-  g.poly([...at(0.26, 0.1), ...at(0.74, 0.1), ...at(0.75, 0.56), ...at(0.25, 0.56)]).stroke({ width: 0.014, color: GILT[1], alpha: 0.8 });
-  const [ex, ey] = at(0.5, 0.3);
-  g.poly([ex, ey - 0.09, ex + 0.08, ey - 0.03, ex + 0.06, ey + 0.07, ex, ey + 0.1, ex - 0.06, ey + 0.07, ex - 0.08, ey - 0.03]).fill(GILT[1]).stroke({ width: 0.018, color: INK });
-  g.poly([ex, ey - 0.05, ex + 0.03, ey + 0.02, ex, ey + 0.05, ex - 0.03, ey + 0.02]).fill(cloth[0]);
-  // The pole and its finials.
-  for (const [w, c] of [
-    [0.06, INK],
-    [0.035, DARK_WOOD[1]],
-  ] as const) {
-    g.moveTo(...at(0.12, 0.06)).lineTo(...at(0.88, 0.06)).stroke({ width: w, color: c, cap: 'round' });
-  }
-  for (const u of [0.12, 0.88]) g.circle(...at(u, 0.06), 0.035).fill(GILT[1]).stroke({ width: 0.018, color: INK });
-  for (let i = 0; i < 9; i++) g.moveTo(...at(0.24 + i * 0.065, 0.09)).lineTo(...at(0.24 + i * 0.065, 0.13));
-  g.stroke({ width: 0.014, color: GILT[2] });
 }
 
 /** Iron maiden, from a high angle like the headstones (upright things only read from the side), big: a riveted,

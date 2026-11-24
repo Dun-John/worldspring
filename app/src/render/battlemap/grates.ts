@@ -1,7 +1,5 @@
-// Options for the street's drain grate and the sewer manhole (sprite audit, R7 P8b), shown side by side in the
-// gallery's `&panels=options`; not drawn on the map yet. Drawn in atlas pixels (`PX` a square) through the
-// same `at(a, b)` / `quad` frame as `drawEntrance` (`a` along the street, `b` across it), so the pick drops
-// straight into `structures.ts`.
+// The street's drain grate (2 x 1.5 ft) and the sewer manhole (2.5 ft), drawn by `structures.ts` `drawEntrance`
+// in atlas pixels (`PX` a square) through its `at(a, b)` / `quad` frame (`a` along the street, `b` across it).
 import type { Graphics } from 'pixi.js';
 import { PX } from '../scale';
 import { INK } from '../pen';
@@ -62,10 +60,10 @@ function grating(g: Graphics, at: At, quad: Quad, ha: number, hb: number) {
   g.poly(quad(-ha, ha, -hb, hb)).stroke({ width: 0.025 * PX, color: IRON[0], join: 'round' });
 }
 
-/** Drain option B: a grating about 2 x 1.5 ft overall (0.4 x 0.3 square) set flush in the paving: a thin frame of
+/** A drain grate: a grating about 2 x 1.5 ft overall (0.4 x 0.3 square) set flush in the paving: a thin frame of
  * dressed stone, lit on its NW edges, the iron inside at `LINE` weight, no heavy outline (the frame's edge a dark
  * tone of the stone, as the cobbles' joints are). */
-export function drawDrainB(g: Graphics, at: At, quad: Quad) {
+export function drawDrain(g: Graphics, at: At, quad: Quad) {
   const [fa, fb] = facing(at);
   const [A, B] = [0.2, 0.15];
   g.poly(rough(at, -A, A, -B, B, 0.012, 3)).fill(SET[1]).stroke({ width: 0.018 * PX, color: JOINT, join: 'round' });
@@ -83,42 +81,10 @@ export function drawDrainB(g: Graphics, at: At, quad: Quad) {
   grating(g, at, quad, 0.145, 0.095);
 }
 
-/** Drain option C: a smaller grating, about 1.5 x 1 ft (0.3 x 0.2 square), in a shallow gutter channel of long
- * dished stones that runs along the street through it (two squares here): the channel's two edges a dark tone of
- * the stone, its dished middle a shade darker, the stones' joints across it. */
-export function drawDrainC(g: Graphics, at: At, quad: Quad) {
-  const [, fb] = facing(at);
-  const [len, hw] = [1.0, 0.15];
-  const edge: number[] = [];
-  const side = (b: number, from: number, to: number, seed: number) => {
-    for (let k = 0; k <= 10; k++) {
-      const a = from + ((to - from) * k) / 10;
-      edge.push(...at(a, b + jit(seed + k) * 0.012));
-    }
-  };
-  side(-hw, -len, len, 11);
-  side(hw, len, -len, 31);
-  g.poly(edge).fill(SET[1]);
-  // The dished middle, darker; the lit lip on the side away from the light (it faces the light), the near lip shaded.
-  g.poly(quad(-len, len, -hw * 0.45, hw * 0.45)).fill({ color: SET[0], alpha: 0.55 });
-  g.moveTo(...at(-len, -fb * hw * 0.78)).lineTo(...at(len, -fb * hw * 0.78)).stroke({ width: 0.016 * PX, color: SET[2] });
-  // The stones' joints across the channel; the channel's edges.
-  for (const a of [-0.72, -0.26, 0.31, 0.74]) g.moveTo(...at(a + jit(a * 7) * 0.02, -hw)).lineTo(...at(a + jit(a * 9) * 0.02, hw));
-  g.stroke({ width: 0.016 * PX, color: JOINT });
-  for (const b of [-hw, hw]) {
-    g.moveTo(...at(-len, b));
-    for (let k = 1; k <= 10; k++) g.lineTo(...at(-len + (2 * len * k) / 10, b + jit(b * 100 + k) * 0.01));
-  }
-  g.stroke({ width: 0.018 * PX, color: JOINT });
-  // The grating, its frame stone flush with the channel.
-  g.poly(rough(at, -0.17, 0.17, -0.12, 0.12, 0.01, 5)).fill(SET[1]).stroke({ width: 0.016 * PX, color: JOINT, join: 'round' });
-  grating(g, at, quad, 0.13, 0.085);
-}
-
-/** Manhole options B (r 0.25 square, 2.5 ft across) and C (r 0.3, 3 ft): a warm mid iron lid with a thin ink ring,
+/** A manhole of radius `r` squares (0.25: 2.5 ft across): a warm mid iron lid with a thin ink ring,
  * a few raised checker treads (lit on their NW sides, shaded on the SE) and a pry slot near its edge, lit along
  * its NW and shaded along its SE edge, ringed by a collar of a few dressed stones flush with the paving. */
-export function drawManholeB(g: Graphics, at: At, r: number) {
+export function drawManhole(g: Graphics, at: At, r: number) {
   const [x, y] = at(0, 0);
   const R = r * PX;
   const c = 0.075;
@@ -131,7 +97,7 @@ export function drawManholeB(g: Graphics, at: At, r: number) {
     out.push(x + Math.cos(t) * rr, y + Math.sin(t) * rr);
   }
   g.poly(out).fill(SET[1]).stroke({ width: 0.018 * PX, color: JOINT, join: 'round' });
-  const stones = r > 0.27 ? 7 : 6;
+  const stones = 6;
   for (let k = 0; k < stones; k++) {
     const t = ((k + 0.3 + jit(k * 3) * 0.3) / stones) * Math.PI * 2;
     g.moveTo(x + Math.cos(t) * R, y + Math.sin(t) * R).lineTo(x + Math.cos(t + 0.06) * (R + c * PX * 1.05), y + Math.sin(t + 0.06) * (R + c * PX * 1.05));

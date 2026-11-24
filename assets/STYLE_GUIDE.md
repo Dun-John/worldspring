@@ -47,7 +47,7 @@ battlemap zoom.
 - **Size against the 5-ft square.** Life-sized: a body about 5.5 ft (1.1 squares) inside its 1x2 spot, a pail
   about 1.5 ft across, a lantern small, weapons on a rack no longer than real ones. Oversized props get sent back.
   Monuments are the exception: statues and the market cross are drawn a little over life size (1.2 to 1.3
-  times), as monuments are made.
+  times), as monuments are made. The street's drain grate is 2 x 1.5 ft and the sewer manhole 2.5 ft across.
 - **Read at a glance.** Each batch goes through a blind critique (below). Watch for accidental faces (two spots
   and a mark: an ore vein read as a skull, cushion tufts as eyes and a mouth), wheel- or target-like rings, and
   spidery or star-shaped arms; break them up asymmetrically or change the view.
@@ -60,8 +60,9 @@ battlemap zoom.
 - **Furniture** is strictly top-down. Wall pieces stand clear of the wall's ink with an open front toward the room
   (bookcases half depth with book spines showing, shelves tiered); a bookcase may stand in the middle of a room.
   Tables are bare (but for the high table and the refreshment table, clothed and laid). Hinges and fittings small.
-  Things hung on a wall (banners, tapestries, a cloth of estate) are drawn falling out into the room from a rod
-  along it, as the tattered banner is. A low dais is a single low step of the throne dais's materials (dressed
+  Things hung on a wall (banners, tapestries, a cloth of estate, a stage curtain) are seen from straight above as
+  a thin band (about 0.13 square) on a rod along the wall, their colours in order along its length. Flags are a
+  ribbon seen from above with the pole a dot. A low dais is a single low step of the throne dais's materials (dressed
   stone in blocks, or its timber boards and pegged front beam), no carpet; its dark riser and drop shadow show it
   raised; what stands on it drawn over it.
 - **Water** has an organic, lobed edge with no grey rim or ink outline: pale shallows to a deeper middle, flat

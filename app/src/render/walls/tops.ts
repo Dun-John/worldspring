@@ -1,6 +1,5 @@
 import type { Graphics } from 'pixi.js';
 import { FT, PLUM, INK, mix, WOOD } from '../bridges';
-import { PX } from '../scale';
 import { type At, IRON, LINE, PARAPET, ST, type Side, WK, breach, brick, clipLine, crenelFill, crenelRun, lit, marksFill, merlonMark, notchTone, rhythm, rubble, sidesOf } from './base';
 
 /**
@@ -236,12 +235,4 @@ export function roundWalk(g: Graphics, x: number, y: number, r0: number, r1: num
   g.moveTo(x + Math.cos(Math.PI * 0.85) * (r1 - FT * 0.3), y + Math.sin(Math.PI * 0.85) * (r1 - FT * 0.3));
   g.arc(x, y, r1 - FT * 0.3, Math.PI * 0.85, Math.PI * 1.65);
   g.stroke({ width: FT * 0.6, color: PLUM, alpha: 0.25 });
-}
-
-/** A banner streaming east on the wind from a pole at (x, y). */
-export function banner(g: Graphics, x: number, y: number) {
-  g.moveTo(x, y).lineTo(x + PX * 0.2, y - PX * 1.8).stroke({ width: 2.5, color: 0x3b2f25 });
-  g.poly([x + PX * 0.2, y - PX * 1.8, x + PX * 1.7, y - PX * 1.5, x + PX * 1.4, y - PX * 1.25, x + PX * 1.75, y - PX * 0.95, x + PX * 0.15, y - PX * 1.05])
-    .fill(0x9b2226)
-    .stroke({ width: 1.5, color: INK });
 }

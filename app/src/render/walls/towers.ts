@@ -3,7 +3,8 @@ import type { Graphics } from 'pixi.js';
 import type { Shape } from '../../gen/battlePrep';
 import { PX } from '../scale';
 import { type At, D_BACK, GATE, GATE_ARCHED, GATE_SQUARE, LINE, type Look, MAT_EARTH, MAT_PALISADE, OUT, PARAPET, RUINED, SHAPE_D, SHAPE_OCTAGON, SHAPE_SQUARE, SQUARE, ST, WK, blocks, breach, crenelFill, crenelRun, flagsOf, gateForm, lit, lookOf, rubble, stoneTone, use } from './base';
-import { banner, flagFloor, roundTop, stairHatch } from './tops';
+import { banner } from './flags';
+import { flagFloor, roundTop, stairHatch } from './tops';
 
 /** Packed earth on a bastion's top: dark, mid, light (three close matte tones). */
 const EARTH_TOP = [0xa48d6a, 0xbca580, 0xd0bc96];

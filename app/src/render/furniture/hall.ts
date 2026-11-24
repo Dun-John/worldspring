@@ -5,7 +5,7 @@ import { MARBLE, candle } from './sacred';
 import { GILT, HOUSES, VELVET } from './tables';
 import { PLUSH, STONE, WALL_GAP } from './home';
 import { screenAxes } from './under';
-import { clothOfEstateB } from './hangings';
+import { clothOfEstate } from './hangings';
 
 // ---------------------------------------------------------------------------------------------------
 // Great halls and ballrooms (`interior::FURNITURE`: throne dais to refreshment table).
@@ -89,7 +89,7 @@ function stateChair(g: Graphics, B: { R: Rect; A: At }, light: Light, rnd: () =>
  * cloth of estate hung on the wall behind gilded high-backed thrones with red cushions; 3-5 a plain raised timber
  * platform with a step up its middle and carved oak thrones. Seated `v % 3`: one throne, a pair, a throne and a
  * lesser chair. */
-export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number], cloth: 'A' | 'B' = 'A') {
+export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
   const { along, len, rect, at } = frame(f, back);
   const wid = along ? f.h : f.w;
   const rich = v % 6 < 3;
@@ -126,22 +126,9 @@ export function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number
     // The cloth of estate on the wall behind the seats: blue powdered with gilt, a fringed hem, its rod.
     const c0 = Math.max(0.46, Math.min(...seats.map(([c, w]) => c - w / 2)) - 0.36);
     const c1 = Math.min(len - 0.46, Math.max(...seats.map(([c, w]) => c + w / 2)) + 0.36);
-    // (`cloth` 'B': the sprite audit's thin band from above, `hangings.ts`.)
-    if (cloth === 'B') clothOfEstateB(g, at, light, c0, c1, top);
-    else {
-      const hem = Math.min(0.7, S(1.2));
-      g.poly(quad(rect(c0, top, c1, hem), rnd, 0.004)).fill(0x1e3058).stroke({ width: OUT, color: INK, join: 'round' });
-      g.poly(quad(rect(c0 + 0.05, top + 0.02, c1 - 0.05, hem - 0.06), rnd, 0.003)).fill(0x2e4a82);
-      for (let u = c0 + 0.14; u < c1 - 0.08; u += 0.18) {
-        for (let s = top + 0.1; s < hem - 0.08; s += 0.14) {
-          const [x, y] = at(u + ((Math.round((s - top) / 0.14) % 2) * 0.09), s);
-          g.poly([x, y - 0.025, x + 0.02, y, x, y + 0.025, x - 0.02, y]).fill(GILT[2]);
-        }
-      }
-      for (let u = c0 + 0.04; u < c1 - 0.03; u += 0.045) g.moveTo(...at(u, hem - 0.01)).lineTo(...at(u, hem + 0.04));
-      g.stroke({ width: 0.014, color: GILT[1] });
-      inkLine(g, [at(c0 - 0.06, top), at(c1 + 0.06, top)], 0.04, GILT[1]);
-    }
+    clothOfEstate(g, at, light, c0, c1, top);
+    // (The cloth once drew two jittered quads: 16 random draws, burnt so the chairs' look stays as it was.)
+    for (let i = 0; i < 16; i++) rnd();
   } else {
     // A raised timber platform of pale boards laid front to back, its front beam dark and pegged, a step of darker
     // oak up the middle of its front, a woven rug under the seats (green with a red border, fringed at its ends).
@@ -395,16 +382,6 @@ function heraldicBanner(g: Graphics, P: (a: number, b: number) => Pt, w: number,
   g.lineTo(...P(-hw, bt)).stroke({ width: 0.016, color: GILT[1], join: 'round' });
 }
 
-/** Wall banner: a long heraldic banner in its house's colours hung from a rod along the wall, drawn falling out
- * into the room as the tattered banner is. */
-export function wallBanner(g: Graphics, f: InteriorItem, light: Light, v: number, back: [number, number]) {
-  const { at } = frame(f, back);
-  const top = WALL_GAP - 0.02;
-  heraldicBanner(g, (a, b) => at(0.5 + a, top + b), 0.52, 0.94 - top, v, light, 0.05);
-  inkLine(g, [at(0.16, top), at(0.84, top)], 0.035, DARK_WOOD[1]);
-  for (const u of [0.16, 0.84]) g.circle(...at(u, top), 0.035).fill(GILT[1]).stroke({ width: 0.012, color: INK });
-}
-
 /** Standing banner, from a high angle like the candelabrum (screen up kept up): a weighted round foot, the pole,
  * a crossbar near its top with the banner hanging from it in its house's colours, a gilt spear-point finial. */
 export function standingBanner(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
@@ -429,185 +406,6 @@ export function standingBanner(g: Graphics, f: InteriorItem, light: Light, v: nu
   for (const a of [-0.27, 0.27]) g.circle(...P(a, bar), 0.026).fill(GILT[1]).stroke({ width: 0.01, color: INK });
   const tip = [P(-0.035, bar + 0.1), P(0, bar + 0.2), P(0.035, bar + 0.1)];
   g.poly(tip.flat()).fill(GILT[1]).stroke({ width: 0.012, color: INK, join: 'round' });
-}
-
-/** Tapestry hung along the wall and drawn falling out into the room: a wide woven scene inside a border, the rod
- * along the wall with gilt finials, a fringed hem. The scene in the batch's manner (flat colours, bold ink, a few
- * big figures): a stag hunted by a hound in green woods, a unicorn on a red field of flowers, a ship on the sea by a
- * castle, a rider on the road to a castle on a hill. */
-export function tapestry(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
-  const { len, rect, at } = frame(f, back);
-  const top = WALL_GAP - 0.02;
-  const [u0, u1, s1] = [0.14, len - 0.14, 0.9];
-  const border = [0x6a1e1a, 0x22365e, 0x7a2a22, 0x2e4a26][v % 4];
-  castShadow(g, quad(rect(u0, top, u1, s1), rnd, 0), light, 0.05);
-  g.poly(quad(rect(u0, top, u1, s1), rnd, 0.004)).fill(border).stroke({ width: OUT, color: INK, join: 'round' });
-  const b = 0.055;
-  const [x0, y0] = [u0 + b, top + b];
-  const W = u1 - u0 - 2 * b;
-  const H = s1 - top - 2 * b;
-  /** A point x across the scene from its left and y down from its top. */
-  const P = (x: number, y: number) => at(x0 + x, y0 + y);
-  const INKW = 0.016;
-  const fill = (q: [number, number][], color: number, ink = true) => {
-    g.poly(q.flatMap(([x, y]) => P(x, y))).fill(color);
-    if (ink) g.stroke({ width: INKW, color: INK, join: 'round' });
-  };
-  const blob = (x: number, y: number, rx: number, ry: number, color: number, n = 14) => {
-    const q: [number, number][] = [];
-    for (let k = 0; k < n; k++) q.push([x + Math.cos((k / n) * Math.PI * 2) * rx, y + Math.sin((k / n) * Math.PI * 2) * ry]);
-    fill(q, color);
-  };
-  /** A limb or a pole: an inked stroke. */
-  const limb = (q: [number, number][], w: number, color: number) => {
-    for (const [ww, c] of [
-      [w + INKW * 1.6, INK],
-      [w, color],
-    ] as const) {
-      g.moveTo(...P(...q[0]));
-      for (const p of q.slice(1)) g.lineTo(...P(...p));
-      g.stroke({ width: ww, color: c, cap: 'round', join: 'round' });
-    }
-  };
-  /** A four-legged beast `k` tall standing (or running) on ground line `gy`, facing `d` (1 right, -1 left). */
-  const beast = (x: number, gy: number, k: number, d: number, body: number, opts: { antlers?: boolean; horn?: boolean; run?: boolean; hound?: boolean }) => {
-    const legW = 0.07 * k;
-    const by = gy - 0.5 * k;
-    const legs: [number, number, number][] = opts.run
-      ? [
-          [0.2, 0.42, 0.1],
-          [0.14, 0.3, 0.02],
-          [-0.2, -0.42, 0.1],
-          [-0.26, -0.3, 0.02],
-        ]
-      : [
-          [0.22, 0.24, 0],
-          [0.13, 0.12, 0],
-          [-0.18, -0.2, 0],
-          [-0.26, -0.28, 0],
-        ];
-    // The far legs a shade darker, drawn first; the tail.
-    for (const [i, [a, e, lift]] of legs.entries()) if (i % 2) limb([[x + d * a * k, by], [x + d * e * k, gy - lift * k]], legW, shade(body, 0.8));
-    limb([[x - d * 0.3 * k, by - 0.06 * k], [x - d * (opts.hound ? 0.5 : 0.4) * k, by - (opts.hound ? 0.2 : 0.02) * k]], 0.05 * k, body);
-    for (const [i, [a, e, lift]] of legs.entries()) if (!(i % 2)) limb([[x + d * a * k, by], [x + d * e * k, gy - lift * k]], legW, body);
-    blob(x, by, 0.36 * k, (opts.hound ? 0.12 : 0.17) * k, body, 18);
-    // Neck and head: slanting up and forward (a hound's low and long), the head long, pointing down a little; an ear,
-    // an eye, a mane on a horse or a unicorn.
-    const [nx, ny] = opts.hound ? [x + d * 0.42 * k, by - 0.12 * k] : [x + d * 0.44 * k, by - 0.34 * k];
-    const neck: [number, number][] = [[x + d * 0.14 * k, by - 0.12 * k], [nx - d * 0.06 * k, ny - 0.06 * k], [nx + d * 0.06 * k, ny + 0.06 * k], [x + d * 0.34 * k, by + 0.02 * k]];
-    fill(neck, body);
-    if (!opts.hound && !opts.antlers) limb([[x + d * 0.16 * k, by - 0.14 * k], [nx - d * 0.05 * k, ny - 0.07 * k]], 0.035 * k, shade(body, 0.78));
-    const hq: [number, number][] = [[nx - d * 0.06 * k, ny - 0.07 * k], [nx + d * 0.16 * k, ny - 0.02 * k], [nx + d * 0.24 * k, ny + 0.08 * k], [nx + d * 0.16 * k, ny + 0.11 * k], [nx - d * 0.04 * k, ny + 0.07 * k]];
-    fill(hq, body);
-    fill([[nx - d * 0.02 * k, ny - 0.05 * k], [nx - d * 0.05 * k, ny - 0.17 * k], [nx + d * 0.04 * k, ny - 0.06 * k]], shade(body, 0.85));
-    g.circle(...P(nx + d * 0.06 * k, ny + 0.01 * k), 0.012).fill(INK);
-    if (opts.antlers) {
-      for (const sd of [-0.03, 0.05]) {
-        const bx = nx + d * sd * k;
-        limb([[bx, ny - 0.06 * k], [bx - d * 0.1 * k, ny - 0.3 * k], [bx + d * 0.02 * k, ny - 0.46 * k]], 0.022, 0xf0dca8);
-        limb([[bx - d * 0.07 * k, ny - 0.22 * k], [bx + d * 0.1 * k, ny - 0.3 * k]], 0.02, 0xf0dca8);
-      }
-    }
-    if (opts.horn) limb([[nx + d * 0.06 * k, ny - 0.06 * k], [nx + d * 0.26 * k, ny - 0.3 * k]], 0.024, GILT[2]);
-  };
-  const tree = (x: number, gy: number, k: number, leaf: number, fruit = 0) => {
-    limb([[x, gy], [x, gy - 0.55 * k]], 0.08 * k, 0x6a4428);
-    blob(x - 0.13 * k, gy - 0.62 * k, 0.2 * k, 0.17 * k, leaf);
-    blob(x + 0.14 * k, gy - 0.66 * k, 0.2 * k, 0.17 * k, leaf);
-    blob(x, gy - 0.86 * k, 0.22 * k, 0.17 * k, shade(leaf, 1.15));
-    if (fruit)
-      for (const [fx, fy] of [
-        [-0.16, 0.62],
-        [0.12, 0.72],
-        [0.02, 0.9],
-        [0.2, 0.6],
-      ])
-        g.circle(...P(x + fx * k, gy - fy * k), 0.026).fill(fruit).stroke({ width: 0.01, color: INK });
-  };
-  /** A big flower, few of them: a white or gold disc round a dot. */
-  const flower = (x: number, y: number, c: number) => {
-    g.circle(...P(x, y), 0.03).fill(c).stroke({ width: 0.01, color: INK });
-    g.circle(...P(x, y), 0.011).fill(c === 0xf6efe0 ? 0xe8b83a : 0xb5523a);
-  };
-  const castle = (x: number, gy: number, k: number) => {
-    const stone = 0xd8ccb0;
-    fill([[x - 0.3 * k, gy], [x - 0.3 * k, gy - 0.4 * k], [x + 0.3 * k, gy - 0.4 * k], [x + 0.3 * k, gy]], stone);
-    for (const tx of [-0.32, 0.32]) {
-      fill([[x + (tx - 0.11) * k, gy], [x + (tx - 0.11) * k, gy - 0.66 * k], [x + (tx + 0.11) * k, gy - 0.66 * k], [x + (tx + 0.11) * k, gy]], stone);
-      fill([[x + (tx - 0.15) * k, gy - 0.66 * k], [x + tx * k, gy - 0.94 * k], [x + (tx + 0.15) * k, gy - 0.66 * k]], 0xa8483a);
-    }
-    fill([[x - 0.09 * k, gy], [x - 0.09 * k, gy - 0.18 * k], [x, gy - 0.27 * k], [x + 0.09 * k, gy - 0.18 * k], [x + 0.09 * k, gy]], 0x3a2a22);
-  };
-  const scene = v % 4;
-  const all: [number, number][] = [[0, 0], [W, 0], [W, H], [0, H]];
-  if (scene === 0) {
-    // The hunt: a stag leaping away from a hound under a tree, on two greens.
-    fill(all, 0x4a7a36, false);
-    fill([[0, H * 0.7], [W * 0.35, H * 0.62], [W * 0.7, H * 0.68], [W, H * 0.6], [W, H], [0, H]], 0x86a84e);
-    tree(W * 0.1, H * 0.72, H * 0.8, 0x2f5a2c);
-    if (W > 2) tree(W * 0.9, H * 0.66, H * 0.72, 0x2f5a2c);
-    for (const [fx, fy, c] of [
-      [0.3, 0.86, 0xf6efe0],
-      [0.48, 0.92, 0xf2c94c],
-      [0.82, 0.88, 0xf6efe0],
-    ])
-      if (fx * W < W - 0.1) flower(fx * W, fy * H, c);
-    beast(W * 0.62, H * 0.95, H * 0.66, 1, 0xb87a40, { antlers: true, run: true });
-    beast(W * 0.32, H * 0.96, H * 0.55, 1, 0xece0c4, { run: true, hound: true });
-  } else if (scene === 1) {
-    // The unicorn on a red field, an orange tree beside it, a few big flowers.
-    fill(all, 0x9e3428, false);
-    for (const [fx, fy, c] of [
-      [0.08, 0.3, 0xf6efe0],
-      [0.22, 0.75, 0xf2c94c],
-      [0.4, 0.2, 0xf2c94c],
-      [0.8, 0.82, 0xf6efe0],
-      [0.92, 0.3, 0xf2c94c],
-      [0.55, 0.88, 0xf6efe0],
-    ])
-      flower(fx * W, fy * H, c);
-    tree(W * 0.72, H * 0.96, H * 0.95, 0x3e6a2e, 0xf28a1e);
-    beast(W * 0.4, H * 0.96, H * 0.8, 1, 0xf6efe0, { horn: true });
-  } else if (scene === 2) {
-    // A ship on the sea before a castle on its headland.
-    fill(all, 0xe6dcc0, false);
-    fill([[0, H * 0.5], [W, H * 0.5], [W, H], [0, H]], 0x34628a);
-    for (let row = 0; row < 2; row++) {
-      for (let x = 0.1 + row * 0.14; x < W - 0.1; x += 0.3)
-        limb([[x, H * (0.68 + row * 0.18)], [x + 0.07, H * (0.62 + row * 0.18)], [x + 0.14, H * (0.68 + row * 0.18)]], 0.016, 0xf6efe0);
-    }
-    fill([[W * 0.7, H * 0.5], [W * 0.78, H * 0.26], [W, H * 0.22], [W, H * 0.62], [W * 0.84, H * 0.6]], 0x5e8a40);
-    castle(W * 0.88, H * 0.42, H * 0.4);
-    const sx = W * 0.38;
-    const k = H * 0.82;
-    const wl = H * 0.62;
-    fill([[sx - 0.42 * k, wl], [sx + 0.46 * k, wl], [sx + 0.3 * k, wl + 0.22 * k], [sx - 0.3 * k, wl + 0.22 * k]], 0x7a4a28);
-    limb([[sx, wl], [sx, wl - 0.62 * k]], 0.022, 0x5a3820);
-    fill([[sx - 0.28 * k, wl - 0.56 * k], [sx + 0.28 * k, wl - 0.56 * k], [sx + 0.32 * k, wl - 0.1 * k], [sx - 0.32 * k, wl - 0.1 * k]], 0xf6efe0);
-    fill([[sx - 0.06 * k, wl - 0.56 * k], [sx + 0.06 * k, wl - 0.56 * k], [sx + 0.07 * k, wl - 0.1 * k], [sx - 0.07 * k, wl - 0.1 * k]], 0xb5523a);
-    fill([[sx, wl - 0.62 * k], [sx + 0.16 * k, wl - 0.68 * k], [sx, wl - 0.74 * k]], 0xb5523a);
-  } else {
-    // A rider on the road to a castle on a green hill.
-    fill(all, 0xd4dccc, false);
-    fill([[0, H * 0.72], [W * 0.18, H * 0.42], [W * 0.42, H * 0.36], [W * 0.62, H * 0.56], [W, H * 0.62], [W, H], [0, H]], 0x6a9a48);
-    castle(W * 0.28, H * 0.46, H * 0.6);
-    limb([[W * 0.32, H * 0.5], [W * 0.46, H * 0.74], [W * 0.62, H * 0.98]], 0.04, 0xe0c890);
-    const k = H * 0.72;
-    beast(W * 0.72, H * 0.97, k, -1, 0x6a4a32, {});
-    // The rider: a blue cloak over the horse's back, a pale face, a lance with a pennon.
-    const [rx, ry] = [W * 0.72, H * 0.97 - k * 0.62];
-    limb([[rx + 0.05, ry + 0.02], [rx - 0.22, ry - 0.3]], 0.016, 0xd8c8a0);
-    fill([[rx - 0.22, ry - 0.3], [rx - 0.36, ry - 0.27], [rx - 0.24, ry - 0.24]], 0xb5523a);
-    fill([[rx - 0.08, ry + 0.06], [rx - 0.06, ry - 0.14], [rx + 0.06, ry - 0.14], [rx + 0.1, ry + 0.06]], 0x34528a);
-    blob(rx, ry - 0.19, 0.05, 0.05, 0xe8c8a0, 10);
-  }
-  // The border's gilt line, the fringed hem, the rod.
-  g.poly(quad(rect(u0 + b * 0.45, top + b * 0.45, u1 - b * 0.45, s1 - b * 0.45), rnd, 0.002)).stroke({ width: 0.014, color: GILT[2], alpha: 0.9 });
-  g.poly(quad(rect(u0 + b, top + b, u1 - b, s1 - b), rnd, 0.002)).stroke({ width: INKW, color: INK });
-  for (let u = u0 + 0.03; u < u1 - 0.02; u += 0.05) g.moveTo(...at(u, s1)).lineTo(...at(u, s1 + 0.05));
-  g.stroke({ width: 0.016, color: GILT[1] });
-  inkLine(g, [at(u0 - 0.06, top), at(u1 + 0.06, top)], 0.04, DARK_WOOD[1]);
-  for (const u of [u0 - 0.06, u1 + 0.06]) g.circle(...at(u, top), 0.04).fill(GILT[1]).stroke({ width: 0.012, color: INK });
 }
 
 /** Carpet runner along its length (one or two squares wide): a field with a border along both sides, a band

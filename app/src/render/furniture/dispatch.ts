@@ -1,10 +1,11 @@
 import type { Graphics } from 'pixi.js';
 import type { InteriorItem } from '../../gen/protocol';
 import { rng } from '../atlas';
-import { councilTable, countingDesk, guildArms, jobBoard, stableStall, strongbox } from './guild';
+import { councilTable, countingDesk, stableStall, strongbox } from './guild';
+import { guildArms, jobBoard, tapestry, wallBanner } from './hangings';
 import { type Fit, floorCushion, paintedChest, yurtHearth, yurtPallet } from './yurt';
 import { candleStand, carvedScreen, godStatue, screenGate, sideAltar } from './gods';
-import { carpetRunner, chairOfOffice, cloisterWell, danceFloor, font, harpsichord, highTable, lowDais, musiciansCorner, refreshmentTable, standingBanner, tapestry, throneDais, wallBanner } from './hall';
+import { carpetRunner, chairOfOffice, cloisterWell, danceFloor, font, harpsichord, highTable, lowDais, musiciansCorner, refreshmentTable, standingBanner, throneDais } from './hall';
 import { type Light } from './common';
 import { alchemyBench, altar, barricade, bell, cage, cauldron, lighthouseLamp, linkDown, millstones, pillar, sarcophagus, spiralStair, spurWheel, stage, statue, telescope, throne, tortureRack, trapdoor, vat, weaponRack, winch } from './sacred';
 import { anvil, bar, barrel, bath, bed, bench, bookcase, boothSeat, boothTable, bucket, chair, chest, cot, couch, counter, crates, desk, display, forge, hearth, keg, oven, pew, planter, roofDome, roundTable, rug, shelf, sideboard, table, wardrobe, washingLine, waterJar, workbench } from './home';
@@ -250,7 +251,7 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       highTable(g, f, light, v, rnd, back ?? [0, -1]);
       break;
     case 'tapestry':
-      tapestry(g, f, light, v, rnd, back ?? [0, -1]);
+      tapestry(g, f, light, v, back ?? [0, -1]);
       break;
     case 'wall_banner':
       wallBanner(g, f, light, v, back ?? [0, -1]);
@@ -312,7 +313,7 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       stableStall(g, f, light, v, rnd, back ?? (f.w > f.h ? [-1, 0] : [0, -1]));
       break;
     case 'guild_arms':
-      guildArms(g, f, light, v, rnd, back ?? [0, -1]);
+      guildArms(g, f, light, v, back ?? [0, -1]);
       break;
     case 'council_table':
       councilTable(g, f, light, v, rnd);

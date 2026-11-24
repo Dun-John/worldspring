@@ -1,14 +1,12 @@
-// Options for the tower and keep flags (`tops.ts` `banner`, sprite audit R7 P8b), shown in the gallery's
-// `&panels=options`; not drawn on the map yet. Strictly from above: the pole is a dot, the flag its rippling
-// ribbon streaming downwind, its shadow cast well off toward the SE on the roof (the flag flies high). Atlas
-// pixels (`PX` a square), the same call as `banner(g, x, y)`.
+// The tower and keep flags. Strictly from above: the pole is a dot, the flag its rippling ribbon streaming
+// downwind, its shadow cast well off toward the SE on the roof (the flag flies high). Atlas pixels (`PX` a square).
 import type { Graphics } from 'pixi.js';
 import { PX } from '../scale';
 import { INK, LINE } from '../pen';
 
 /** The flag's ribbon round a pole at (x, y): `w` wide (squares), `len` long, `ripples` waves, as a polygon
  * and, for two tones, the ribbon cut into its half-waves. */
-function ribbon(x: number, y: number, w: number, len: number, ripples: number): { pts: number[]; halves: number[][]; north: [number, number][] } {
+function ribbon(x: number, y: number, w: number, len: number, ripples: number): { pts: number[]; halves: number[][] } {
   const n = 28;
   const mid: [number, number][] = [];
   for (let k = 0; k <= n; k++) {
@@ -39,19 +37,17 @@ function ribbon(x: number, y: number, w: number, len: number, ripples: number): 
     const q: [number, number][] = [...left.slice(k0, k1 + 1), ...right.slice(k0, k1 + 1).reverse()];
     halves.push(q.flat());
   }
-  // `left` is the south edge (y down), `right` the north.
-  return { pts, halves, north: right };
+  return { pts, halves };
 }
 
-/** Flag option B (`wide` false) and C (`wide` true): the pole a small ink-ringed dot, a thin rippling ribbon
- * (B 0.11 square wide, C 0.16) about 1.2 squares long streaming east in the flag's colour, B one tone with a lit
- * edge to the north, C its half-waves in two tones (those turned to the light lighter); the soft shadow of
- * flag and pole on the roof, offset to the SE. */
-export function bannerFromAbove(g: Graphics, x: number, y: number, wide = false, color = 0x9b2226) {
-  const [w, ripples] = wide ? [0.16, 2] : [0.11, 1.5];
+/** A flag on a pole at (x, y): the pole a small ink-ringed dot, a thin rippling ribbon (0.16 square wide) about
+ * 1.2 squares long streaming east in the flag's colour, its half-waves in two tones (those turned to the light
+ * lighter); the soft shadow of flag and pole on the roof, offset to the SE. */
+export function banner(g: Graphics, x: number, y: number, color = 0x9b2226) {
+  const [w, ripples] = [0.16, 2];
   const len = 1.2;
   const [dx, dy] = [0.42 * PX, 0.55 * PX];
-  const { pts, halves, north } = ribbon(x, y, w, len, ripples);
+  const { pts, halves } = ribbon(x, y, w, len, ripples);
   // The shadow: pole and flag, soft.
   g.moveTo(x, y).lineTo(x + dx, y + dy).stroke({ width: 0.035 * PX, color: 0x14100c, alpha: 0.16, cap: 'round' });
   g.poly(pts.map((p, k) => p + (k % 2 ? dy : dx))).fill({ color: 0x14100c, alpha: 0.18 });
@@ -60,15 +56,8 @@ export function bannerFromAbove(g: Graphics, x: number, y: number, wide = false,
     return (ch(16) << 16) | (ch(8) << 8) | ch(0);
   };
   g.poly(pts).fill(color);
-  if (wide) {
-    // Alternate half-waves face up into the light or away from it.
-    halves.forEach((q, h) => g.poly(q).fill(h % 2 ? tone(0.72) : tone(1.18)));
-  } else {
-    // The lit north edge of the hem.
-    g.moveTo(north[1][0], north[1][1] + 0.022 * PX);
-    for (const [px, py] of north.slice(2, -3)) g.lineTo(px, py + 0.022 * PX);
-    g.stroke({ width: 0.018 * PX, color: tone(1.3), alpha: 0.9 });
-  }
+  // Alternate half-waves face up into the light or away from it.
+  halves.forEach((q, h) => g.poly(q).fill(h % 2 ? tone(0.72) : tone(1.18)));
   g.poly(pts).stroke({ width: LINE, color: INK, join: 'round' });
   // The pole: a dot with its gilt cap.
   g.circle(x, y, 0.07 * PX).fill(0x725440).stroke({ width: LINE, color: INK });
