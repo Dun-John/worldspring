@@ -122,14 +122,34 @@ pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
     let towers = crate::interior::towers(l);
     let clear = |q: P| towers.iter().all(|&(t, r, gate)| town::geom::dist(q, t) >= r + if gate { 22.0 } else { 5.0 });
     let segs = street_segments(l);
+    // (Only what can reach the section is tested below: a grate counts only `inside` it, so a
+    // street, building, deck or wall farther from the section's inner box than it can reach a
+    // tested point never decides one. The same grates as testing all of them, in a city's
+    // fraction of the time: the battlemap works this out for every chunk.)
+    let near = |r: [f64; 4], m: f64| r[2] >= origin[0] + 15.0 - m && r[0] <= origin[0] + s - 15.0 + m && r[3] >= origin[1] + 15.0 - m && r[1] <= origin[1] + s - 15.0 + m;
+    // A tested square's centre lies within the inner box grown by twice the widest street's half
+    // width (the gutter's offset from a line point no farther out than a half width) and two squares.
+    let reach = 2.0 * segs.iter().fold(0.0f64, |m, sg| m.max(sg.2)) + 2.0 * SQUARE_FT + 1.0;
+    let segs_near: Vec<(usize, P, P, f64)> =
+        segs.iter().enumerate().filter(|(_, (a, b, h))| near([a[0].min(b[0]) - h - 2.0, a[1].min(b[1]) - h - 2.0, a[0].max(b[0]) + h + 2.0, a[1].max(b[1]) + h + 2.0], reach)).map(|(i, &(a, b, h))| (i, a, b, h)).collect();
     // The squares the battlemap paves for the streets: centre within the street's half width.
-    let paved = |c: P| segs.iter().any(|(a, b, h)| town::geom::seg_dist(c, *a, *b) < *h);
+    let paved = |c: P| segs_near.iter().any(|(_, a, b, h)| town::geom::seg_dist(c, *a, *b) < *h);
     let square_c = |q: P| [crate::core::floor(q[0] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT, crate::core::floor(q[1] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT];
+    let rect_of = |pts: &[P], m: f64| pts.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |r, p| [r[0].min(p[0] - m), r[1].min(p[1] - m), r[2].max(p[0] + m), r[3].max(p[1] + m)]);
+    // (Gathered when a grate first gets this far: most sections' streets have none that does.)
+    let gathered: std::cell::OnceCell<[Vec<&Vec<P>>; 3]> = std::cell::OnceCell::new();
     // Under a building, a bridge or a pier (a deck, not paving), on a plank quay or on a wall.
     let off_ground = |q: P| {
-        l.walls.iter().any(|w| w.windows(2).any(|e| town::geom::seg_dist(q, e[0], e[1]) < 8.0))
-            || l.buildings.iter().any(|b| town::geom::contains(&b.poly, q) || (0..b.poly.len()).any(|k| town::geom::seg_dist(q, b.poly[k], b.poly[(k + 1) % b.poly.len()]) < 2.0))
-            || l.bridges.iter().chain(&l.piers).any(|d| town::geom::contains(d, q) || (0..d.len()).any(|k| town::geom::seg_dist(q, d[k], d[(k + 1) % d.len()]) < 3.0))
+        let [walls, buildings, decks] = gathered.get_or_init(|| {
+            [
+                l.walls.iter().filter(|w| near(rect_of(w, 8.0), 0.0)).collect(),
+                l.buildings.iter().map(|b| &b.poly).filter(|p| near(rect_of(p, 2.0), 0.0)).collect(),
+                l.bridges.iter().chain(&l.piers).filter(|d| near(rect_of(d, 3.0), 0.0)).collect(),
+            ]
+        });
+        walls.iter().any(|w| w.windows(2).any(|e| town::geom::seg_dist(q, e[0], e[1]) < 8.0))
+            || buildings.iter().any(|p| town::geom::contains(p, q) || (0..p.len()).any(|k| town::geom::seg_dist(q, p[k], p[(k + 1) % p.len()]) < 2.0))
+            || decks.iter().any(|d| town::geom::contains(d, q) || (0..d.len()).any(|k| town::geom::seg_dist(q, d[k], d[(k + 1) % d.len()]) < 3.0))
             || l.quays.iter().filter(|k| k.timber).any(|k| town::geom::contains(&k.band(), q))
     };
     const STEP: f64 = 55.0;
@@ -152,10 +172,18 @@ pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
             let on_line = add(a, mul(dir, t));
             t += STEP;
             n += 1;
+            if out.len() >= 6 {
+                return out;
+            }
+            let gutter = half - 1.25;
+            // (A point of the line farther from the inner box than the gutter is from the line puts
+            // no grate inside it.)
+            if !near([on_line[0], on_line[1], on_line[0], on_line[1]], gutter.abs()) {
+                continue;
+            }
             let side = if crate::core::rng::unit(hash3(l.roof_seed ^ 0x6c37, key.0, key.1, n)) < 0.5 { -1.0 } else { 1.0 };
             // The gutter if its square and the four beside it are paved (the paving's edge is
             // ragged to a square), else the street's line, if its square is.
-            let gutter = half - 1.25;
             let spot = [gutter, 0.0].into_iter().find_map(|o| {
                 let q = add(on_line, mul(norm, side * o));
                 let c = square_c(q);
@@ -165,8 +193,9 @@ pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
             let Some(q) = spot else { continue };
             let apart = |o: &P| town::geom::dist(*o, q) >= 40.0;
             // Not on another street's paving (a junction's open centre), 2 ft clear of it.
-            let junction = segs.iter().enumerate().any(|(sj, (a2, b2, h2))| sj != si && town::geom::seg_dist(q, *a2, *b2) < *h2 + 2.0);
-            if out.len() >= 6 || !inside(q) || !ways.iter().all(apart) || !out.iter().all(|(o, _)| apart(o)) || !clear(q) || junction || off_ground(q) || wet(t0, q) {
+            let junction = || segs_near.iter().any(|&(sj, a2, b2, h2)| sj != si && town::geom::seg_dist(q, a2, b2) < h2 + 2.0);
+            // (The cheap tests first.)
+            if !inside(q) || !ways.iter().all(apart) || !out.iter().all(|(o, _)| apart(o)) || !clear(q) || wet(t0, q) || junction() || off_ground(q) {
                 continue;
             }
             out.push((q, dir));
