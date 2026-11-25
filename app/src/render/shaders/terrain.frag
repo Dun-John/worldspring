@@ -458,6 +458,11 @@ void main() {
             col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - cliff) * (1.0 - scarp) * (1.0 - smoothstep(2.5, 4.0, fa / (aa0 * 2.2))));
         }
     }
+#elif !CLIFFS
+    // Never taken (a program without the patterns draws only where uPatAlpha is 0), but with neither
+    // this branch nor the cliffs' between the hillshade and the contours Direct3D compiles the two
+    // into other arithmetic: about one view in ten then has a pixel a level off the whole shader's.
+    if (uPatAlpha > 0.0) col = INK;
 #endif
 
     // Contours on land; fade out where they would crowd closer than a few pixels.
