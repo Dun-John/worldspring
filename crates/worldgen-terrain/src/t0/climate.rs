@@ -156,44 +156,60 @@ fn box_blur(w: usize, h: usize, v: &[f64], land: &[bool], r: usize) -> Vec<f64> 
 pub fn distance_to(w: usize, h: usize, target: &[bool]) -> Vec<f64> {
     const D1: f64 = 1.0;
     const D2: f64 = std::f64::consts::SQRT_2;
+    // (No NaN and no -0 here, so this is `f64::min` without its NaN handling.)
+    #[inline(always)]
+    fn mn(a: f64, b: f64) -> f64 {
+        if b < a { b } else { a }
+    }
     let big = (w + h) as f64 * 2.0;
     let mut d: Vec<f64> = target.iter().map(|&t| if t { 0.0 } else { big }).collect();
-    for j in 0..h {
-        for i in 0..w {
-            let k = j * w + i;
-            let mut v = d[k];
-            if i > 0 {
-                v = v.min(d[k - 1] + D1);
-            }
-            if j > 0 {
-                v = v.min(d[k - w] + D1);
-                if i > 0 {
-                    v = v.min(d[k - w - 1] + D2);
-                }
-                if i + 1 < w {
-                    v = v.min(d[k - w + 1] + D2);
-                }
-            }
-            d[k] = v;
+    if w == 0 || h == 0 {
+        return d;
+    }
+    // Each row in one run with its neighbour row as a slice: the three steps from that row first
+    // (they don't wait on the cell before), then the step along the row.
+    let mut prev = d[0];
+    for x in &mut d[1..w] {
+        prev = mn(*x, prev + D1);
+        *x = prev;
+    }
+    for j in 1..h {
+        let (up, cur) = d[(j - 1) * w..(j + 1) * w].split_at_mut(w);
+        let mut prev = mn(cur[0], up[0] + D1);
+        if w > 1 {
+            prev = mn(prev, up[1] + D2);
+        }
+        cur[0] = prev;
+        for i in 1..w - 1 {
+            let t = mn(mn(mn(cur[i], up[i] + D1), up[i - 1] + D2), up[i + 1] + D2);
+            prev = mn(t, prev + D1);
+            cur[i] = prev;
+        }
+        if w > 1 {
+            let i = w - 1;
+            cur[i] = mn(mn(mn(cur[i], up[i] + D1), up[i - 1] + D2), prev + D1);
         }
     }
-    for j in (0..h).rev() {
-        for i in (0..w).rev() {
-            let k = j * w + i;
-            let mut v = d[k];
-            if i + 1 < w {
-                v = v.min(d[k + 1] + D1);
-            }
-            if j + 1 < h {
-                v = v.min(d[k + w] + D1);
-                if i + 1 < w {
-                    v = v.min(d[k + w + 1] + D2);
-                }
-                if i > 0 {
-                    v = v.min(d[k + w - 1] + D2);
-                }
-            }
-            d[k] = v;
+    let mut prev = d[(h - 1) * w + w - 1];
+    for x in d[(h - 1) * w..h * w - 1].iter_mut().rev() {
+        prev = mn(*x, prev + D1);
+        *x = prev;
+    }
+    for j in (0..h - 1).rev() {
+        let (cur, down) = d[j * w..(j + 2) * w].split_at_mut(w);
+        let i = w - 1;
+        let mut prev = mn(cur[i], down[i] + D1);
+        if w > 1 {
+            prev = mn(prev, down[i - 1] + D2);
+        }
+        cur[i] = prev;
+        for i in (1..w - 1).rev() {
+            let t = mn(mn(mn(cur[i], down[i] + D1), down[i + 1] + D2), down[i - 1] + D2);
+            prev = mn(t, prev + D1);
+            cur[i] = prev;
+        }
+        if w > 1 {
+            cur[0] = mn(mn(mn(cur[0], down[0] + D1), down[1] + D2), prev + D1);
         }
     }
     d
