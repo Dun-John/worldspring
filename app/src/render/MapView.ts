@@ -2024,8 +2024,9 @@ export class MapView {
     // an even wallpaper of dots, so they fade out and are skipped; the forests keep their area tint.
     const far = Math.min(1, Math.max(0, (ftPerPx - 6) / 6));
     u.uSymAlpha = u.uPatAlpha * (1 - far * far * (3 - 2 * far));
-    // Forest tufts: out to the whole continent, gone (0.9 to 0.5 ft/px) as the battlemap's trees come in.
-    const near = Math.min(1, Math.max(0, (ftPerPx - 0.5) / 0.4));
+    // Forest tufts: out to the whole continent, gone (0.9 to 0.574 ft/px) as the battlemap's trees come in,
+    // so the fade band past 0.574 draws the tile programs without them.
+    const near = Math.min(1, Math.max(0, (ftPerPx - 0.574) / 0.326));
     u.uForestAlpha = near * near * (3 - 2 * near);
     if (ftPerPx > 300) [u.uContour, u.uIndexEvery] = [1000, 5];
     else if (ftPerPx > 30) [u.uContour, u.uIndexEvery] = [200, 5];
