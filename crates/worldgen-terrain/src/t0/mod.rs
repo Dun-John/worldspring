@@ -1050,6 +1050,17 @@ impl T0 {
         )
     }
 
+    /// `biome_warp` for a scan over a grid: the same values, each octave's noise cell kept from
+    /// one point to the next (`noise::Fbm`; a battlemap's squares all lie in a cell or two).
+    pub fn biome_warper(&self) -> impl FnMut(f64, f64) -> (f64, f64) + '_ {
+        let mut a = crate::core::noise::Fbm::new(self.biome_seed, 4, 2.2, 0.6);
+        let mut b = crate::core::noise::Fbm::new(self.biome_seed ^ 0x9e37, 4, 2.2, 0.6);
+        move |x_ft, y_ft| {
+            let (cx, cy) = (x_ft / self.cell_ft, y_ft / self.cell_ft);
+            (1.3 * a.at(cx / 2.0, cy / 2.0), 1.3 * b.at(cx / 2.0 + 3.1, cy / 2.0 + 7.7))
+        }
+    }
+
     /// Biome texel: [primary, secondary, blend, coast distance (sqrt-encoded)]: the nearest
     /// cell after warping by `warp` (from `biome_warp`, possibly interpolated).
     #[inline]

@@ -1344,6 +1344,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let road_bed = hh.clone();
     let mut biome = vec![Biome::Grassland; n];
     let mut slope = vec![0f64; n];
+    // (The warp as `T0::biome_warp` gives it, its noise cells kept along the scan.)
+    let mut warp = t0.biome_warper();
     // Steps on slopes made by hand, by street segment and way up: (segment start, its direction,
     // street width, the squares' places along it).
     let mut hand_runs: std::collections::BTreeMap<((u32, u32, u32), bool), ([f64; 2], [f64; 2], f64, Vec<f64>)> = std::collections::BTreeMap::new();
@@ -1355,7 +1357,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for i in 0..SQ {
             let k = j * SQ + i;
             let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
-            biome[k] = Biome::from_u8(t0.sample_biome(x, y, t0.biome_warp(x, y))[0]);
+            biome[k] = Biome::from_u8(t0.sample_biome(x, y, warp(x, y))[0]);
             let c = sidx(i as i64, j as i64);
             let h = (j + 1) * HS + i + 1;
             // (Over a created settlement's pad or track, from the padded heights.)
