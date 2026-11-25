@@ -264,7 +264,9 @@ impl RiverCurve {
         ([f.base[0] + f.nrm[0] * off, f.base[1] + f.nrm[1] * off], f.nrm, half)
     }
 
-    fn frame(&self, k: usize, t: f64, cell_ft: f64) -> Frame {
+    /// The spline through the control points on segment `k` at `t`: its point and unit normal.
+    #[inline]
+    fn spline(&self, k: usize, t: f64) -> ([f64; 2], [f64; 2]) {
         let n = self.pts.len();
         let p = |i: isize| self.pts[i.clamp(0, n as isize - 1) as usize];
         let (p0, p1, p2, p3) = (p(k as isize - 1), p(k as isize), p(k as isize + 1), p(k as isize + 2));
@@ -278,7 +280,48 @@ impl RiverCurve {
         let base = [cr(p0[0], p1[0], p2[0], p3[0]), cr(p0[1], p1[1], p2[1], p3[1])];
         let tan = [dcr(p0[0], p1[0], p2[0], p3[0]), dcr(p0[1], p1[1], p2[1], p3[1])];
         let tl = crate::core::sqrt(tan[0] * tan[0] + tan[1] * tan[1]).max(1e-9);
-        let nrm = [-tan[1] / tl, tan[0] / tl];
+        (base, [-tan[1] / tl, tan[0] / tl])
+    }
+
+    /// Whether `eval(k, t, spacing, ..)` surely lies outside the box `[x0, y0, x1, y1]`, for
+    /// `t` inside (0, 1), at a fraction of `eval`'s cost (`pieces` skips those points). The point
+    /// stands off the spline by the drift, the meander and the wiggle (`eval`): the meander's
+    /// amplitude is under 0.32 wavelengths and 0.3 cells, the wiggle under 1.2 widths and the
+    /// drift under 0.22 cells (the noise keeps within ±1), each times a taper no greater than
+    /// its ends'. So a spline point farther off than all three is out; one nearer is tried again
+    /// from where the drift (one noise sample) puts it, with the other two's reach (`swing`:
+    /// `swing_ft`, the segment's).
+    fn misses(&self, k: usize, t: f64, spacing: f64, cell_ft: f64, bx: [f64; 4], swing: f64) -> bool {
+        let out = |p: [f64; 2], m: f64| p[0] < bx[0] - m || p[0] > bx[2] + m || p[1] < bx[1] - m || p[1] > bx[3] + m;
+        let (base, nrm) = self.spline(k, t);
+        // (In the box: most likely in, and no bound will tell.)
+        if !out(base, 0.0) {
+            return false;
+        }
+        let k1 = (k + 1).min(self.pts.len() - 1);
+        if out(base, swing + (self.taper[k].abs().max(self.taper[k1].abs())) as f64 * 0.22 * cell_ft) {
+            return true;
+        }
+        let lerp = |a: f64, b: f64| a + (b - a) * t;
+        let at_mouth = self.mouth && k + 1 == self.segments();
+        let taper = if at_mouth { self.taper[k] as f64 * (1.0 - smoothstep(0.45, 1.0, t)) } else { lerp(self.taper[k] as f64, self.taper[k1] as f64) };
+        let drift_len = 2.5 * cell_ft;
+        let drift = 0.22 * cell_ft * gradient2(self.seed ^ 0x99, lerp(self.s[k], self.s[k1]) / drift_len, 0.13);
+        let off = taper * (1.0 - smoothstep(0.12, 0.35, spacing / drift_len)) * drift;
+        out([base[0] + nrm[0] * off, base[1] + nrm[1] * off], swing)
+    }
+
+    /// How far the meander and the wiggle can carry segment `k`'s points off the drifted spline
+    /// (`misses`), and a foot over (rounding in the interpolated width and taper).
+    fn swing_ft(&self, k: usize, cell_ft: f64) -> f64 {
+        let k1 = (k + 1).min(self.pts.len() - 1);
+        let w = width_ft(self.q[k].max(self.q[k1]) as f64);
+        (self.taper[k].abs().max(self.taper[k1].abs())) as f64 * ((0.32 * wavelength_ft(w)).min(0.3 * cell_ft) + 1.2 * w) + 1.0
+    }
+
+    fn frame(&self, k: usize, t: f64, cell_ft: f64) -> Frame {
+        let n = self.pts.len();
+        let (base, nrm) = self.spline(k, t);
 
         let k1 = (k + 1).min(n - 1);
         let lerp = |a: f64, b: f64| a + (b - a) * t;
@@ -1010,9 +1053,18 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
                 ts.extend([fa.t, fa.t1]);
                 ts.sort_by(f64::total_cmp);
             }
+            // Points surely outside (`RiverCurve::misses`) with both neighbours surely outside are
+            // not sampled: no piece would keep them (a piece is the points inside and the one
+            // before and after), and a long segment is nearly all such points by a small rectangle.
+            let bx = [rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad];
+            let swing = r.swing_ft(k, cell_ft);
+            let far: Vec<bool> = ts.iter().map(|&t| t > 0.0 && t < 1.0 && r.misses(k, t, spacing, cell_ft, bx, swing)).collect();
             for (j, &t) in ts.iter().enumerate() {
                 // A joint is the previous segment's last point.
                 if j == 0 && k > k0 as usize {
+                    continue;
+                }
+                if far[j] && far[j - 1] && far[j + 1] {
                     continue;
                 }
                 let cp = r.eval(k, t, spacing, cell_ft);
