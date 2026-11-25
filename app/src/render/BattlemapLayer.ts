@@ -239,6 +239,13 @@ function bridgeGround(c: PreparedChunk, s: Shape): BridgeGround {
 
 /** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`; `battlemap::MAX_STAIR_AXES`). */
 const STAIR_AXES = 64;
+let noStairsGroup: UniformGroup | null = null;
+/** The treads of a chunk with no steps: one static group for them all, so the 2 KB array is not
+ * sent with every such chunk's draw (Pixi sends a non-static array uniform each time). What it holds
+ * is never read: `uStairN` 0 stops the ground's loop before it. */
+function noStairs(): UniformGroup {
+  return (noStairsGroup ??= new UniformGroup({ uStairs: { value: new Float32Array(STAIR_AXES * 8), type: 'vec4<f32>', size: STAIR_AXES * 2 } }, { isStatic: true }));
+}
 /** `URBAN_*` kinds that stand on the ground (battlemap.rs), as hover labels. */
 const RAISED: Record<number, string> = { 6: 'bridge deck', 7: 'wall walk', 8: 'tower top' };
 
@@ -989,7 +996,6 @@ export class BattlemapLayer {
       uPxPerSq: { value: 16, type: 'f32' },
       uNoiseOff: { value: noiseOff, type: 'vec2<f32>' },
       uSea: { value: c.sea, type: 'f32' },
-      uStairs: { value: stairs, type: 'vec4<f32>', size: STAIR_AXES * 2 },
       uStairN: { value: nStairs, type: 'f32' },
       // (Gravel here, or park ground by the edge, whose neighbour's gravel the halo may hold.)
       uGravel: { value: c.surface.includes(20) || parkEdge(c.raised) ? 1 : 0, type: 'f32' },
@@ -1001,7 +1007,7 @@ export class BattlemapLayer {
     });
     const ground = new Mesh({
       geometry: this.quad,
-      shader: new Shader({ glProgram: c.lava || crater[2] > 0 ? lavaGroundProgram : this.groundProgram, resources: { uData: dataSrc, uHeights: hSrc, uLavaF: lavaSrc, uNoise: noiseSource(), chunk: uniforms, battleFrame: this.frame } }),
+      shader: new Shader({ glProgram: c.lava || crater[2] > 0 ? lavaGroundProgram : this.groundProgram, resources: { uData: dataSrc, uHeights: hSrc, uLavaF: lavaSrc, uNoise: noiseSource(), chunk: uniforms, stairs: nStairs ? new UniformGroup({ uStairs: { value: stairs, type: 'vec4<f32>', size: STAIR_AXES * 2 } }) : noStairs(), battleFrame: this.frame } }),
     });
     ground.scale.set(SQ * PX);
     this.prewarm(ground);
@@ -1015,13 +1021,20 @@ export class BattlemapLayer {
     // Fully static particles: the chunk moves as a whole, so nothing is re-uploaded per frame
     // (Pixi's default re-uploads every position, every frame).
     const fixed = { vertex: false, position: false, rotation: false, uvs: false, color: false };
-    // (The low layer: ground marks, then the short props' shadows, then the short props.)
-    const flat = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
-    const lowShadows = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
-    const low = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
+    // (The low layer: ground marks, then the short props' shadows, then the short props, in one
+    // container: a draw call each would be three a chunk, felt by the GPU process with a town in view.)
+    const flat: Particle[] = [];
+    const lowShadows: Particle[] = [];
+    const lowProps: Particle[] = [];
     const shadows = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
     const tall = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
+    let since = performance.now();
     for (let i = 0; i < nObj; i++) {
+      // (A chunk thick with props is laid out over a few frames, not in one.)
+      if ((i & 127) === 127 && performance.now() - since > BUILD_SLICE_MS) {
+        yield;
+        since = performance.now();
+      }
       const [kind, look, x, y, rot, scale] = c.objs.subarray(i * 6, i * 6 + 6);
       // The variant byte, and the turned flag above it (`battlePrep`).
       const [variant, turned] = [look & 255, look >> 8 === 1];
@@ -1044,19 +1057,19 @@ export class BattlemapLayer {
       if (sh) {
         // (A short prop's shadow lies under it and the props beside it, over the ground marks; a tall
         // one's falls over the short props and walls about it.)
-        (isTall ? shadows : lowShadows).addParticle(
-          new Particle({
-            texture: atlas.shadow,
-            x: o.x * PX + sh.dx,
-            y: o.y * PX + sh.dy,
-            anchorX: 0.5,
-            anchorY: 0.5,
-            scaleX: sh.sx,
-            scaleY: sh.sy,
-            rotation: sh.rot,
-            alpha: sh.alpha,
-          }),
-        );
+        const p = new Particle({
+          texture: atlas.shadow,
+          x: o.x * PX + sh.dx,
+          y: o.y * PX + sh.dy,
+          anchorX: 0.5,
+          anchorY: 0.5,
+          scaleX: sh.sx,
+          scaleY: sh.sy,
+          rotation: sh.rot,
+          alpha: sh.alpha,
+        });
+        if (isTall) shadows.addParticle(p);
+        else lowShadows.push(p);
       }
       // Lit sprites keep their NW highlights; logs, bones and wall segments follow their line,
       // market stalls and carts face their row's aisle.
@@ -1068,17 +1081,21 @@ export class BattlemapLayer {
         pc.addParticle(new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: k, scaleY: k, rotation: o.rot }));
         continue;
       }
-      (isTall ? tall : standing ? low : flat).addParticle(
-        new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: o.scale, scaleY: o.scale, rotation }),
-      );
+      const p = new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: o.scale, scaleY: o.scale, rotation });
+      if (isTall) tall.addParticle(p);
+      else (standing ? lowProps : flat).push(p);
     }
 
     yield;
-    for (const layer of [flat, lowShadows, low, shadows, tall]) {
+    const low = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
+    for (const list of [flat, lowShadows, lowProps]) for (const p of list) low.addParticle(p);
+    for (const layer of [low, shadows, tall]) {
       this.prewarm(layer);
       yield;
     }
     for (const pc of customs.values()) this.prewarm(pc);
+    yield;
+    since = performance.now();
 
     // Roof shadows and pitched roofs as one prebuilt mesh; battlemented roofs over it.
     let roofMesh: Mesh<Geometry, Shader> | null = null;
@@ -1097,6 +1114,10 @@ export class BattlemapLayer {
     // Daises and a court's gravel walks sit on the ground, under every prop.
     const daisG = new Graphics();
     for (const s of c.shapes) {
+      if (performance.now() - since > BUILD_SLICE_MS) {
+        yield;
+        since = performance.now();
+      }
       if (s.kind === 5) drawDais(daisG, s, plazaGround(c, s, cx, cy));
       else if (s.kind === 13) drawGravelWalk(daisG, s);
       // R5 M20: a breakwater's armour, on the ground and the water by it.
@@ -1114,6 +1135,10 @@ export class BattlemapLayer {
     const bridgeG = new Graphics();
     const gridG = new Graphics();
     for (const s of c.shapes) {
+      if (performance.now() - since > BUILD_SLICE_MS) {
+        yield;
+        since = performance.now();
+      }
       if (s.kind === 2) drawDeck(bridgeG, s, bridgeGround(c, s));
       else if (s.kind === 3) drawRoadBridge(bridgeG, s, bridgeGround(c, s));
       else if (s.kind === SHIP) {
@@ -1132,6 +1157,7 @@ export class BattlemapLayer {
     }
     // (A dry ditch's sides, then the inked tops of its banks over them all.)
     for (const ink of [false, true]) for (const s of c.shapes) if (s.kind === 19) drawDitchBank(bridgeG, s, ink);
+    if (performance.now() - since > BUILD_SLICE_MS) yield;
     // A drawbridge's deck lies over the walls and under its gatehouse (which covers its inner end);
     // its deck and grid, and the stub shown when play raises it, each on their own (shown by door
     // state). Chunks without one draw their structures in one piece.
@@ -1175,7 +1201,7 @@ export class BattlemapLayer {
       this.prewarm(part);
       yield;
     }
-    const parts = [[ground], [flat, lowShadows, low], [shadows], [tall]].map((os, i) => {
+    const parts = [[ground], [low], [shadows], [tall]].map((os, i) => {
       const holder = new Container();
       holder.addChild(...os);
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
@@ -1591,6 +1617,8 @@ export function dropShadowOf(inf: { name?: string; radius: number; height_ft: nu
 
 /** R5 M20 shapes (`battlemap::ShapeKind`): a breakwater's armour, a moored cog, a lighthouse's lantern. */
 const BREAKWATER = 32;
+/** A chunk's build stage stops for the next frame once it has run this long (ms). */
+const BUILD_SLICE_MS = 6;
 const SHIP = 33;
 const LANTERN = 34;
 const COPING = 35;

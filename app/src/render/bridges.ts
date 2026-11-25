@@ -104,26 +104,40 @@ function castShadow(g: Graphics, poly: number[], alpha: number) {
     y0 = Math.min(y0, poly[i + 1]);
     y1 = Math.max(y1, poly[i + 1]);
   }
-  const inside = (x: number, y: number) => {
-    let c = false;
+  // (Even-odd inside test by scanline: where each row's middle crosses the edges, sorted; a cell's
+  // middle is inside when an odd number of crossings lie to its right.)
+  const crossings = (y: number) => {
+    const xs: number[] = [];
     for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
-      if (poly[i + 1] > y !== poly[j + 1] > y && x < ((poly[j] - poly[i]) * (y - poly[i + 1])) / (poly[j + 1] - poly[i + 1]) + poly[i]) c = !c;
+      if (poly[i + 1] > y !== poly[j + 1] > y) xs.push(((poly[j] - poly[i]) * (y - poly[i + 1])) / (poly[j + 1] - poly[i + 1]) + poly[i]);
     }
-    return c;
+    return xs.sort((a, b) => a - b);
   };
+  // (Each row's run of wet or of dry cells as one strip: a stone bridge's shadow is thousands of
+  // cells, too many shapes to tessellate in a frame.)
   const wet: number[][] = [];
   const dryCells: number[][] = [];
   const cs = FT * 0.5;
   for (let y = y0; y < y1; y += cs) {
+    let run: number[] | null = null;
+    let runDry = false;
+    const xs = crossings(y + cs / 2);
+    let k = 0;
     for (let x = x0; x < x1; x += cs) {
-      if (!inside(x + cs / 2, y + cs / 2)) continue;
-      (cur.dry(x + cs / 2, y + cs / 2) ? dryCells : wet).push([x, y]);
+      while (k < xs.length && xs[k] <= x + cs / 2) k++;
+      if (((xs.length - k) & 1) === 0) {
+        run = null;
+        continue;
+      }
+      const dry = cur.dry(x + cs / 2, y + cs / 2);
+      if (run && dry === runDry) run[2] = x;
+      else (dry ? dryCells : wet).push((run = [x, y, x])), (runDry = dry);
     }
   }
   const col = mix(cur.land, 0x1a1c24, 0.4);
-  for (const [x, y] of wet) g.rect(x, y, cs + 0.5, cs + 0.5);
+  for (const [x, y, xe] of wet) g.rect(x, y, xe - x + cs + 0.5, cs + 0.5);
   if (wet.length) g.fill({ color: waterShade(), alpha });
-  for (const [x, y] of dryCells) g.rect(x, y, cs + 0.5, cs + 0.5);
+  for (const [x, y, xe] of dryCells) g.rect(x, y, xe - x + cs + 0.5, cs + 0.5);
   if (dryCells.length) g.fill({ color: col, alpha: Math.min(alpha, 0.16) * 0.8 });
 }
 
