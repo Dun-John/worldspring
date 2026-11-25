@@ -1394,25 +1394,41 @@ impl Drop for Local<'_> {
 /// (`cost` per cell entered; ties to the lower set), `dist` the steps. Both hold what is known
 /// before (`u32::MAX`: nothing); `seeds` (set, place) start at 0.
 fn grow(l: &Local, seeds: &[(u32, usize)], cost: &dyn Fn(usize) -> u32, dist: &mut [u32], owner: &mut [u32]) {
-    use std::cmp::Reverse;
-    let mut heap = std::collections::BinaryHeap::new();
+    // Dijkstra's order by buckets of equal steps: a step costs 1 to `RING - 1`, so the steps
+    // waiting span less than `RING` and each has its bucket in the ring. Within a bucket the
+    // order is free: every cell in it has its set by then (a better one could only come from
+    // fewer steps, all done), and an entry its cell no longer holds is passed over.
+    const RING: usize = BARRIER as usize + 2;
+    let mut ring: [Vec<(u32, u32)>; RING] = std::array::from_fn(|_| Vec::new());
+    let mut left = 0usize;
     for &(o, i) in seeds {
         if dist[i] != 0 || o < owner[i] {
             (dist[i], owner[i]) = (0, o);
-            heap.push(Reverse((0u32, o, i)));
+            ring[0].push((o, i as u32));
+            left += 1;
         }
     }
-    while let Some(Reverse((d, o, i))) = heap.pop() {
-        if d != dist[i] || o != owner[i] {
-            continue;
-        }
-        for j in l.around(i) {
-            let nd = d + cost(l.cells[j] as usize);
-            if nd < dist[j] || (nd == dist[j] && o < owner[j]) {
-                (dist[j], owner[j]) = (nd, o);
-                heap.push(Reverse((nd, o, j)));
+    let mut d = 0u32;
+    while left > 0 {
+        let b = d as usize % RING;
+        while let Some((o, i)) = ring[b].pop() {
+            left -= 1;
+            let i = i as usize;
+            if d != dist[i] || o != owner[i] {
+                continue;
+            }
+            for j in l.around(i) {
+                let c = cost(l.cells[j] as usize);
+                assert!(c >= 1 && (c as usize) < RING);
+                let nd = d + c;
+                if nd < dist[j] || (nd == dist[j] && o < owner[j]) {
+                    (dist[j], owner[j]) = (nd, o);
+                    ring[nd as usize % RING].push((o, j as u32));
+                    left += 1;
+                }
             }
         }
+        d += 1;
     }
 }
 
