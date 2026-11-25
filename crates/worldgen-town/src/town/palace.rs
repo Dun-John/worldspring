@@ -23,7 +23,7 @@
 //! else it is grown again. Nothing overlaps a palace, by the area two outlines share
 //! (`super::overlap`), however little.
 
-use super::geom::{Labeled, add, area, centroid, clip, contains, dist, dot, hull, mul, obb, sub};
+use super::geom::{Labeled, add, area, bbox, centroid, clip, contains, dist, dot, hull, mul, obb, sub};
 use super::{Building, Layout, P, Site, Structure, Ward, catalog, on_lot, overlap, poly_seg_dist};
 
 /// The footprint a palace grows to (sq ft): a capital's round a court, another's round its hall.
@@ -918,13 +918,23 @@ const GARDEN_CLEARS: f64 = 100.0;
 /// a town laid out anew by hand lays it out again.
 pub(super) fn gardens(site: &Site, l: &mut Layout, off: P) {
     let local = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
-    let clear = |l: &Layout, q: &[P], clears: Option<&[P]>| {
-        l.buildings.iter().all(|b| overlap(&b.poly, q) <= TOUCH || (clears.is_some() && takes(b)))
-            && l.roads.iter().all(|r| clears.is_some_and(|block| is_alley(r, block)) || r.0.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 0.5 * r.2 + 2.0 && !contains(q, s[0])))
-            && l.streets.iter().all(|pts| pts.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 11.0 && !contains(q, s[0])))
-            && l.walls.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 8.0 && !contains(q, s[0])))
-            && l.plazas.iter().map(|x| &x.pts).chain(l.parks.iter().map(|x| &x.pts)).chain(&l.monuments).chain(&l.fields).all(|x| overlap(x, q) <= TOUCH)
-            && l.forecourts.iter().all(|f| overlap(&f.yard, q) <= TOUCH && f.way.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 8.0 && !contains(q, s[0])))
+    // (`boxes`: the buildings' bounding boxes. A thing whose box is farther from the garden's
+    // than it must keep off, and a hair more for rounding, is clear of it unmeasured: the same
+    // answer, a city's buildings and lanes not measured one by one for every depth tried.)
+    let clear = |l: &Layout, boxes: &[[f64; 4]], q: &[P], clears: Option<&[P]>| {
+        let qb = bbox(q);
+        let off = |b: [f64; 4], gap: f64| {
+            let g = gap + 1e-6;
+            b[0] - qb[2] > g || qb[0] - b[2] > g || b[1] - qb[3] > g || qb[1] - b[3] > g
+        };
+        let off_poly = |x: &[P]| off(bbox(x), 0.0);
+        let seg_clear = |s: &[P], gap: f64| off([s[0][0].min(s[1][0]), s[0][1].min(s[1][1]), s[0][0].max(s[1][0]), s[0][1].max(s[1][1])], gap) || (poly_seg_dist(q, s[0], s[1]) >= gap && !contains(q, s[0]));
+        l.buildings.iter().zip(boxes).all(|(b, &bb)| off(bb, 0.0) || overlap(&b.poly, q) <= TOUCH || (clears.is_some() && takes(b)))
+            && l.roads.iter().all(|r| r.0.windows(2).all(|s| seg_clear(s, 0.5 * r.2 + 2.0)) || clears.is_some_and(|block| is_alley(r, block)))
+            && l.streets.iter().all(|pts| pts.windows(2).all(|s| seg_clear(s, 11.0)))
+            && l.walls.iter().all(|w| w.windows(2).all(|s| seg_clear(s, 8.0)))
+            && l.plazas.iter().map(|x| &x.pts).chain(l.parks.iter().map(|x| &x.pts)).chain(&l.monuments).chain(&l.fields).all(|x| off_poly(x) || overlap(x, q) <= TOUCH)
+            && l.forecourts.iter().all(|f| (off_poly(&f.yard) || overlap(&f.yard, q) <= TOUCH) && f.way.windows(2).all(|s| seg_clear(s, 8.0)))
     };
     // (By id: the capital's takes homes in.)
     let palaces: Vec<(u32, Vec<P>)> = l
@@ -941,6 +951,7 @@ pub(super) fn gardens(site: &Site, l: &mut Layout, off: P) {
         let clears = capital.then_some(&block[..]);
         let taken = |l: &Layout, q: &[P]| -> Vec<usize> { (0..l.buildings.len()).filter(|&k| clears.is_some() && takes(&l.buildings[k]) && overlap(&l.buildings[k].poly, q) > TOUCH).collect() };
         let mut best: Option<(f64, Vec<P>)> = None;
+        let boxes: Vec<[f64; 4]> = l.buildings.iter().map(|b| bbox(&b.poly)).collect();
         for k in 0..4 {
             let (a, b) = (rect[k], rect[(k + 1) % 4]);
             let e = sub(b, a);
@@ -960,7 +971,7 @@ pub(super) fn gardens(site: &Site, l: &mut Layout, off: P) {
                 }
                 let lq = local(&q);
                 let inside = q.iter().all(|p| contains(&block, *p));
-                if inside && clear(l, &q, clears) && !(capital && strands(l, &q, &block, id, &taken(l, &q))) {
+                if inside && clear(l, &boxes, &q, clears) &&!(capital && strands(l, &q, &block, id, &taken(l, &q))) {
                     let (lo, hi) = site.dry_relief(&lq);
                     let dry = lq.iter().chain(std::iter::once(&centroid(&lq))).all(|&p| !site.wet(p) && !site.near_river(p, 20.0));
                     if dry && hi - lo <= GARDEN_RELIEF {
