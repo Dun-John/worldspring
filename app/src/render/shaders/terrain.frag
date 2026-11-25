@@ -31,6 +31,21 @@ uniform vec4 uPat1;
 // Up to four active volcanoes' craters near the tile: [i] (x, y, lava radius, scorch radius) in tile
 // units (lava radius 0 ends the list), [4 + i] (edge phase, 0, 0, 0).
 uniform vec4 uCraters[8];
+// The parts a tile or a zoom can do without, compiled out (`TileLayer`'s lean programs: Direct3D
+// runs a part behind a uniform that is 0 all the same): LAVA the craters, FOREST the woods' tufts
+// (uForestAlpha 0), PATTERN the symbols and hachures (uPatAlpha 0), SYMBOLS the symbols (uSymAlpha 0).
+#ifndef LAVA
+#define LAVA 1
+#endif
+#ifndef FOREST
+#define FOREST 1
+#endif
+#ifndef PATTERN
+#define PATTERN 1
+#endif
+#ifndef SYMBOLS
+#define SYMBOLS 1
+#endif
 
 // Per frame.
 uniform float uExag;
@@ -279,6 +294,7 @@ void main() {
         // Woods: hatched tufts, feathered by the biome blend.
         int w1 = WOOD[b1], w2 = WOOD[b2];
         float wood = (w1 != 0 ? 1.0 - blend * 0.5 : 0.0) + (w2 != 0 ? blend * 0.5 : 0.0);
+#if FOREST
         if (uForestAlpha > 0.0 && wood > 0.0) {
             float fa = uForestAlpha * smoothstep(0.15, 0.6, wood);
             int wk = w1 != 0 ? w1 : w2;
@@ -309,6 +325,7 @@ void main() {
             float t = abs(tex0 - 1.0) > abs(tex1 - 1.0) ? tex0 : tex1;
             col *= mix(1.0, t, fa * smoothstep(0.3, 0.7, wood));
         }
+#endif
         float above = h - water;
         bool beachy = b1 != 2 && b1 != 3 && b1 != 5 && b1 != 14;
         if (beachy && above < 6.0 && slope < 0.08) col = mix(col, SAND, 1.0 - smoothstep(3.0, 6.0, above));
@@ -379,12 +396,14 @@ void main() {
     }
 
     // Map symbols, blended across two octaves; ecotones dither between the two biomes.
+#if PATTERN
     if (!wet && uPatAlpha > 0.0) {
         float aa0 = max(fwidth(p0.x), 1e-4);
         float aa1 = max(fwidth(p1.x), 1e-4);
         // Far zoom: the symbols are gone (uSymAlpha 0), so none of their work is done (uniform branch);
         // nor where neither biome has a symbol (the woods: no tree symbols on the map).
         float mixin = max(0.0, blend - 0.55) * 0.9;
+#if SYMBOLS
         if (uSymAlpha > 0.0 && (SYMBOL[b1] != 0 || (mixin > 0.0 && SYMBOL[b2] != 0))) {
             // Symbol lattices turned ~20 deg so rows don't line up with the screen. The matrix entries are
             // multiples of 1/256, so a 256-cell shift of the origin stays a whole-cell shift (no tile seams).
@@ -410,6 +429,7 @@ void main() {
             float ink = max(s0, s1) * uSymAlpha;
             col = mix(col, INK, min(ink * 0.75, 0.9));
         }
+#endif
 
         // Hachures: fine strokes down steep slopes (strokes follow the fall line). Where the fall line
         // turns fast (round a small steep hill) the strokes, measured across it from the pattern's
@@ -424,6 +444,7 @@ void main() {
             col = mix(col, INK, line * steep * 0.28 * uPatAlpha * (1.0 - cliff) * (1.0 - scarp) * (1.0 - smoothstep(2.5, 4.0, fa / (aa0 * 2.2))));
         }
     }
+#endif
 
     // Contours on land; fade out where they would crowd closer than a few pixels.
     // Only where the ground slopes in the samples: level ground at a contour height (a plateau's
@@ -463,6 +484,7 @@ void main() {
     // Active craters: a lava lake in a ring of scorched rock with a warm glow round it, never
     // smaller than a few pixels so it reads at continent zoom (uniform loop: tiles without one
     // skip it).
+#if LAVA
     if (!wet) {
         float px = 1.0 / uTilePx;
         for (int i = 0; i < 4; i++) {
@@ -484,6 +506,7 @@ void main() {
             col = mix(col, lava, 1.0 - smoothstep(rl - 0.5 * px, rl + 0.5 * px, d));
         }
     }
+#endif
 
     // Paper grain (periodic over 512 px).
     vec2 gp = uGrainOrigin + vLocal * uTilePx;

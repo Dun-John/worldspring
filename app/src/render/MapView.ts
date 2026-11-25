@@ -31,7 +31,7 @@ import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
 import { lookOf, shore } from '../editor/water';
 import { editDirty, isMade, siteReach } from './editDirty';
-import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
+import { RIVER_Q, TileLayer, warmLeanTerrain, type LayerStats } from './TileLayer';
 
 export interface InteriorState {
   id: string;
@@ -2063,11 +2063,13 @@ export class MapView {
     warmHexes.destroy();
   }
 
-  /** The underground shader compiled in the background and warmed (the reference laptop: ~12 s
+  /** The lean terrain shaders (`warmLeanTerrain`: under a second), then the underground shader
+   * compiled in the background and warmed (the reference laptop: ~12 s
    * of compiling, which held the main thread ~7 s when done in one go), then the battlemap's
    * ground with lava (`lavaGroundProgram`: only chunks by lava or a crater use it), after it, so the
    * two compiles never compete with each other or with the map's first seconds. */
   private async warmUnder() {
+    await warmLeanTerrain(this.app.renderer);
     await precompile(this.app.renderer, [underProgram]);
     warmUnderground(this.app.renderer);
     await precompile(this.app.renderer, [lavaGroundProgram]);

@@ -16,6 +16,7 @@ import siteFillFragment from './shaders/sitefill.frag?raw';
 import siteFillVertex from './shaders/sitefill.vert?raw';
 import inkFragment from './shaders/tileink.frag?raw';
 import inkVertex from './shaders/tileink.vert?raw';
+import { precompile } from './precompile';
 import { tundraSource } from './tundraTexture';
 
 /** Discharge (mm·cells) of the smallest mapped river; matches worldgen RIVER_Q. */
@@ -59,6 +60,8 @@ export class Edited {
 
 interface GpuTile {
   id: string;
+  /** An active crater on or near it (its shader is the whole one). */
+  lava: boolean;
   level: number;
   x: number;
   y: number;
@@ -94,6 +97,30 @@ export interface LayerStats {
   targetReady: number;
   gpuTiles: number;
   queuedUploads: number;
+}
+
+/** The terrain shader without the parts a zoom has no use for (and without the craters: a tile by one
+ * draws with the whole shader). Behind a uniform that is 0 a part draws nothing, but Direct3D runs
+ * it all the same: on the reference laptop the tufts and symbols cost ~0.9 ms a frame at battlemap
+ * zooms, the symbols ~1 ms out at continent zoom. Compiled in the background once the map is up
+ * (`warmLeanTerrain`); until one is ready the next fuller one draws, the whole shader at first. */
+const lean = (forest: number, pattern: number, symbols: number, name: string) => ({
+  forest,
+  pattern,
+  symbols,
+  ready: false,
+  program: GlProgram.from({ vertex, fragment: fragment.replace(/^(#version[^\n]*\n)/, `$1#define LAVA 0\n#define FOREST ${forest}\n#define PATTERN ${pattern}\n#define SYMBOLS ${symbols}\n`), name }),
+});
+/** Leanest first: battlemap zooms, the fade to them, continent and region zooms, the rest. */
+const LEAN = [lean(0, 0, 0, 'terrain-tile-near'), lean(1, 0, 0, 'terrain-tile-tufts'), lean(1, 1, 0, 'terrain-tile-far'), lean(1, 1, 1, 'terrain-tile-plain')];
+
+/** Compile the lean terrain shaders in the background, one by one; each draws from then on. */
+export async function warmLeanTerrain(renderer: Renderer) {
+  for (const l of LEAN) l.ready = false;
+  for (const l of LEAN) {
+    await precompile(renderer, [l.program]);
+    l.ready = true;
+  }
 }
 
 const UV0 = 0.5 / TILE_SAMPLES;
@@ -277,9 +304,14 @@ export class TileLayer {
       if (measured > 0) this.viewRms += (measured - this.viewRms) * 0.1;
     }
 
+    // The leanest shader ready that has all this zoom draws.
+    const fu = this.frameUniforms.uniforms;
+    const [forest, pattern, symbols] = [fu.uForestAlpha > 0 ? 1 : 0, fu.uPatAlpha > 0 ? 1 : 0, fu.uSymAlpha > 0 ? 1 : 0];
+    const plain = LEAN.find((l) => l.ready && l.forest >= forest && l.pattern >= pattern && l.symbols >= symbols)?.program ?? this.program;
     for (const t of this.tiles.values()) {
       const show = visible.has(t);
       t.mesh.visible = show;
+      if (show) t.mesh.shader!.glProgram = t.lava ? this.program : plain;
       if (t.river) t.river.visible = show;
       if (t.road) t.road.visible = show;
       if (t.siteFill) t.siteFill.visible = show;
@@ -512,6 +544,7 @@ export class TileLayer {
       y: m.y,
       base: m.base,
       gradRms: m.gradRms,
+      lava: nc > 0,
       texData: m.tex,
       texture,
       biomeTexture,
