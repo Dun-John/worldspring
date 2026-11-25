@@ -351,9 +351,12 @@ function canTake(gw: GenWorker, job: Job, backlog: Map<number, number>): boolean
   const t = job.towns[0];
   const o = t === undefined ? undefined : ownersOf(t);
   if (!o?.size || o.has(gw)) return true;
-  const build = buildMs.get(t);
+  // (A town whose build no job reported, as a hand-laid city's: then only `SPILL_MIN_MS` holds a
+  // second worker back. Waiting for a build time that never comes kept such a town's tiles on one
+  // worker for good: the acceptance city's last tiles never came.)
+  const build = buildMs.get(t) ?? 0;
   const tile = tileMs.get(t);
-  if (o.size >= MAX_OWNERS || !madeBy.get(t)?.size || build === undefined || !tile) return false;
+  if (o.size >= MAX_OWNERS || !madeBy.get(t)?.size || !tile) return false;
   const wait = ((backlog.get(t) ?? 0) * (tile[0] / tile[1])) / o.size;
   return wait > SPILL_BUILDS * build && wait > SPILL_MIN_MS;
 }
