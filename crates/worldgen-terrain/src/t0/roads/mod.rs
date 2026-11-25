@@ -954,7 +954,7 @@ impl Search {
         heap.push(Node { f: 0.0, i: start as u32 });
         let mut found = false;
         let mut expanded = 0;
-        while let Some(Node { i, .. }) = heap.pop() {
+        while let Some(Node { f, i }) = heap.pop() {
             let i = i as usize;
             if i == goal {
                 found = true;
@@ -965,6 +965,15 @@ impl Search {
                 break;
             }
             let (ix, iy) = ((i % w) as i64, (i / w) as i64);
+            // An entry left from before a shorter way to its cell was found: that way's entry
+            // came out first (lower by as much) and the cell's steps were tried from it, so
+            // trying them again from the same cost would change nothing. (Counted all the same.)
+            if i != start {
+                let hdist = crate::core::sqrt((ix as f64 - gx) * (ix as f64 - gx) + (iy as f64 - gy) * (iy as f64 - gy));
+                if f != g[i] + 0.35 * hdist {
+                    continue;
+                }
+            }
             for (d, (dx, dy)) in DIRS.into_iter().enumerate() {
                 let (nx, ny) = (ix + dx, iy + dy);
                 if nx < bx0 || nx > bx1 || ny < by0 || ny > by1 {
