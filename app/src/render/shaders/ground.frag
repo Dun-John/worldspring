@@ -35,6 +35,11 @@ uniform float uPaved;
 // Whether drawn lava lies near the chunk (`uLavaF` holds its field; else it is a blank, not sampled).
 uniform float uLava;
 uniform highp sampler2D uLavaF;
+// LAVA 0: the variant for chunks with no drawn lava and no crater near (BattlemapLayer), its lava
+// paths left out (with them in, Direct3D ran the whole shader slower, though no pixel took them).
+#ifndef LAVA
+#define LAVA 1
+#endif
 
 const float N = 128.0;
 const vec3 INK = vec3(0.12, 0.10, 0.08);
@@ -690,8 +695,8 @@ void main() {
     // lookup gave lava past the shore: scorched rock, which the band below draws as it should be.
     float lavaD = -1e9;
     vec2 lf = vec2(-32.0);
-    bool nearCrater = uCrater[0].z > 0.0 && length(q - uCrater[0].xy) < 1.3 * uCrater[0].w;
-    if (uLava > 0.5 && !nearCrater) {
+    bool nearCrater = LAVA != 0 && uCrater[0].z > 0.0 && length(q - uCrater[0].xy) < 1.3 * uCrater[0].w;
+    if (LAVA != 0 && uLava > 0.5 && !nearCrater) {
         lf = lavaField(q);
         if (lf.y > -20.0) {
             // An uneven hand-drawn shore: world-space swells (3-6 squares long, up to ~4 ft) and ripples
@@ -843,7 +848,7 @@ void main() {
     // far inside the lake's shore (squares; the lake is drawn over the relief below).
     float lavaE = -1e9;
     vec4 cr = uCrater[0];
-    if (cr.z > 0.0 && depth <= 0.0 && !onRoad && (surf <= 9 || surf == 12 || surf == 21 || surf == 22)) {
+    if (LAVA != 0 && cr.z > 0.0 && depth <= 0.0 && !onRoad && (surf <= 9 || surf == 12 || surf == 21 || surf == 22)) {
         vec2 v = q - cr.xy;
         float dd = length(v);
         if (dd < 1.25 * cr.w) {
@@ -882,7 +887,7 @@ void main() {
     // world's noise and fading into the ground over a square or so. Open ground only, as the
     // squares are: natural ground the generator left unburnt inside the band (a town's) stays. (A
     // field is burnt as the ground is: cut back to the band's edge.)
-    if (lavaE < -1e8 && uLava > 0.5 && lf.y > -8.0 && depth <= 0.0 && !onRoad && (surf <= 9 || surf == 12 || surf == 18 || surf == 21 || surf == 22) && !nearCrater) {
+    if (LAVA != 0 && lavaE < -1e8 && uLava > 0.5 && lf.y > -8.0 && depth <= 0.0 && !onRoad && (surf <= 9 || surf == 12 || surf == 18 || surf == 21 || surf == 22) && !nearCrater) {
         float s = lf.y + (vnoise(w * 0.3 + 4.0) - 0.5) * 4.0 + (vnoise(w * 1.1 + 2.0) - 0.5) * 1.2;
         float m = smoothstep(-2.5, 2.5, s);
         bool ring = surf == 12 || surf == 22;

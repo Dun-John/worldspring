@@ -282,7 +282,7 @@ export class BattlemapLayer {
   private building: Generator<void, void, void> | null = null;
   private warmTarget: RenderTexture | null = null;
   private atlas: Atlas | null = null;
-  private readonly groundProgram = GlProgram.from({ vertex, fragment: groundFragment, name: 'battle-ground' });
+  private readonly groundProgram = plainGroundProgram;
   private readonly atmoProgram = GlProgram.from({ vertex, fragment: atmoFragment, name: 'battle-atmo' });
   private readonly colorMeshProgram = GlProgram.from({ vertex: colorMeshVertex, fragment: colorMeshFragment, name: 'battle-roofs' });
   /** Its shader programs (compiled ahead: `precompile`). */
@@ -1001,7 +1001,7 @@ export class BattlemapLayer {
     });
     const ground = new Mesh({
       geometry: this.quad,
-      shader: new Shader({ glProgram: this.groundProgram, resources: { uData: dataSrc, uHeights: hSrc, uLavaF: lavaSrc, uNoise: noiseSource(), chunk: uniforms, battleFrame: this.frame } }),
+      shader: new Shader({ glProgram: c.lava || crater[2] > 0 ? lavaGroundProgram : this.groundProgram, resources: { uData: dataSrc, uHeights: hSrc, uLavaF: lavaSrc, uNoise: noiseSource(), chunk: uniforms, battleFrame: this.frame } }),
     });
     ground.scale.set(SQ * PX);
     this.prewarm(ground);
@@ -1437,6 +1437,14 @@ function chunkLavaShore(surface: Uint8Array): number[] {
   }
   return pts;
 }
+
+/** The ground without its lava (`LAVA 0`): every chunk with no drawn lava and no crater near. With
+ * the lava paths in, Direct3D ran the whole shader slower on every chunk (play's flights 60 -> 53
+ * fps on the reference laptop), though no pixel took them. */
+const plainGroundProgram = GlProgram.from({ vertex, fragment: groundFragment.replace(/^(#version[^\n]*\n)/, '$1#define LAVA 0\n'), name: 'battle-ground' });
+/** The ground with lava: the few chunks by drawn lava or an active crater (compiled in the background
+ * after the map is up, with the underground's: `MapView.warmUnder`). */
+export const lavaGroundProgram = GlProgram.from({ vertex, fragment: groundFragment, name: 'battle-ground-lava' });
 
 /** The ground's lava field where no drawn lava lies near (never sampled: `uLava` 0), shared. */
 let noLava: BufferImageSource | null = null;

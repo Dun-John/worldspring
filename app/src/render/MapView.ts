@@ -5,7 +5,7 @@ import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
 import { type Created, type Edits, type Feature, type GenFall, type GenIslet, type MadeSettlement, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, SITE_MIN_LEVEL, halfToFloat, linkSites } from '../gen/protocol';
 import { hillLevel } from '../editor/hill';
-import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
+import { BattlemapLayer, dropSharedAtlas, lavaGroundProgram, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
 import { loadSprites } from './spriteCode';
@@ -2064,10 +2064,13 @@ export class MapView {
   }
 
   /** The underground shader compiled in the background and warmed (the reference laptop: ~12 s
-   * of compiling, which held the main thread ~7 s when done in one go). */
+   * of compiling, which held the main thread ~7 s when done in one go), then the battlemap's
+   * ground with lava (`lavaGroundProgram`: only chunks by lava or a crater use it), after it, so the
+   * two compiles never compete with each other or with the map's first seconds. */
   private async warmUnder() {
     await precompile(this.app.renderer, [underProgram]);
     warmUnderground(this.app.renderer);
+    await precompile(this.app.renderer, [lavaGroundProgram]);
   }
 
   /** The battlemap's shaders compiled in the background and its sprite atlas drawn, once the
