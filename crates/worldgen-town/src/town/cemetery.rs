@@ -220,6 +220,8 @@ pub(super) fn by_roads(site: &Site, s: &Settlement, plan: &TownPlan, l: &mut Lay
             .then(a.cmp(&b))
     });
     let ways = world_ways(site);
+    // (The buildings' boxes, once for every place tried: `clear_by_road`.)
+    let boxes: Vec<[f64; 4]> = l.buildings.iter().map(|b| bbox(&b.poly)).collect();
     let mut laid = 0;
     for &rk in &order {
         if laid >= want {
@@ -278,7 +280,7 @@ pub(super) fn by_roads(site: &Site, s: &Settlement, plan: &TownPlan, l: &mut Lay
                 let nrm = mul([-t[1], t[0]], side);
                 let c = add(p, mul(nrm, 0.5 * w + VERGE + BEND + 0.5 * deep));
                 let poly = super::rect(c, t, along, deep);
-                if clear_by_road(site, plan, l, &poly, &ways) {
+                if clear_by_road(site, plan, l, &boxes, &poly, &ways) {
                     // (The side facing the road: corners 0-1 lie at -v, `rect`.)
                     let v = [-t[1], t[0]];
                     let road_side = if dot(v, nrm) > 0.0 { 0 } else { 2 };
@@ -342,8 +344,10 @@ fn world_ways(site: &Site) -> Vec<(u32, Vec<P>, f64)> {
 }
 
 /// Whether a cemetery `poly` (local ft) beside a road stands
-/// clear: outside the town, dry, gentle, off every way.
-fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, poly: &[P], ways: &[(u32, Vec<P>, f64)]) -> bool {
+/// clear: outside the town, dry, gentle, off every way. `boxes`: the buildings' bounding boxes.
+/// (Each thing is measured only where its box comes within its gap of the plot's: the same
+/// answer, a city's ten thousand buildings not measured one by one for every place tried.)
+fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, boxes: &[[f64; 4]], poly: &[P], ways: &[(u32, Vec<P>, f64)]) -> bool {
     let o = obb(poly);
     let c = centroid(poly);
     let mut samples: Vec<P> = poly.to_vec();
@@ -360,38 +364,45 @@ fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, poly: &[P], ways: &[(
     if samples.iter().any(|&p| plan.in_town(p) || site.wet(p) || site.near_river(p, 25.0)) || site.grade(poly) > 0.1 {
         return false;
     }
-    let near = |q: &[P], gap: f64| poly_gap(q, poly) < gap || contains(poly, q[0]) || contains(q, c);
-    let seg_gap = |a: P, b: P| poly_gap(&[a, b], poly);
+    // (A box farther than `gap` from the plot's, and a hair more for rounding: what is in it is too.)
+    let pb = bbox(poly);
+    let off = |qb: [f64; 4], gap: f64| {
+        let g = gap + 1e-6;
+        qb[0] - pb[2] > g || pb[0] - qb[2] > g || qb[1] - pb[3] > g || pb[1] - qb[3] > g
+    };
+    let near_in = |q: &[P], gap: f64| poly_gap(q, poly) < gap || contains(poly, q[0]) || contains(q, c);
+    let near = |q: &[P], gap: f64| !off(bbox(q), gap) && near_in(q, gap);
+    let seg_near = |a: P, b: P, gap: f64| !off([a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])], gap) && poly_gap(&[a, b], poly) < gap;
     // (Off the wall's line as planned, built or not, its towers and bastions with it: the same place
     // whether its walls are taken down or put up by hand.)
     let mp = &plan.mesh.pos;
     for (chain, closed, _) in &plan.wall_runs {
         let n = chain.len();
         let segs = if *closed { n } else { n.saturating_sub(1) };
-        if (0..segs).any(|k| seg_gap(mp[chain[k]], mp[chain[(k + 1) % n]]) < WALL_OFF) {
+        if (0..segs).any(|k| seg_near(mp[chain[k]], mp[chain[(k + 1) % n]], WALL_OFF)) {
             return false;
         }
     }
     if l.castles.iter().any(|&(cc, r)| dist(cc, c) < r + 0.5 * o.long + 60.0) {
         return false;
     }
-    if l.buildings.iter().any(|b| near(&b.poly, 10.0)) {
+    if l.buildings.iter().zip(boxes).any(|(b, &bb)| !off(bb, 10.0) && near_in(&b.poly, 10.0)) {
         return false;
     }
     // (Every road `VERGE` off and more, its own too where it bends: the plot's every corner clear.)
     for (_, pts, w) in ways {
         let need = 0.5 * w + VERGE;
-        if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
+        if pts.windows(2).any(|s| seg_near(s[0], s[1], need)) {
             return false;
         }
     }
     for (pts, _, w) in &l.roads {
         let need = 0.5 * w + VERGE;
-        if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
+        if pts.windows(2).any(|s| seg_near(s[0], s[1], need)) {
             return false;
         }
     }
-    if l.streets.iter().any(|q| q.windows(2).any(|s| seg_gap(s[0], s[1]) < 15.0)) {
+    if l.streets.iter().any(|q| q.windows(2).any(|s| seg_near(s[0], s[1], 15.0))) {
         return false;
     }
     let polys = l
