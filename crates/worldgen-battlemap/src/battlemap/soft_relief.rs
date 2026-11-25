@@ -34,10 +34,20 @@ pub(super) fn mask(features: &[Relief], base: &[f32], gsx: i64, gsy: i64) -> Vec
         let reach = super::RELIEF_REACH + MARGIN_SQ + 1.0;
         let (x0, x1) = (((f.cx - reach) as i64 - gsx).max(0), ((f.cx + reach) as i64 - gsx + 1).min(HS as i64));
         let (y0, y1) = (((f.cy - reach) as i64 - gsy).max(0), ((f.cy + reach) as i64 - gsy + 1).min(HS as i64));
+        // (Past the farthest its outline reaches and the margin, a hair over for rounding: past
+        // its rim by more than the margin whatever the angle, none worked out.)
+        let far = super::ground::relief_reach(f) + MARGIN_SQ;
+        let far2 = far * far * (1.0 + 1e-8);
+        let beyond = |x: f64, y: f64| {
+            let (dx, dy) = (x - f.cx, y - f.cy);
+            let (along, across) = ((dx * f.dir.0 + dy * f.dir.1) / f.elong, -dx * f.dir.1 + dy * f.dir.0);
+            along * along + across * across > far2
+        };
         for y in y0..y1 {
             for x in x0..x1 {
                 let k = y as usize * HS + x as usize;
-                if out[k] || past_rim(f, (gsx + x) as f64 + 0.5, (gsy + y) as f64 + 0.5) > MARGIN_SQ {
+                let (px, py) = ((gsx + x) as f64 + 0.5, (gsy + y) as f64 + 0.5);
+                if out[k] || beyond(px, py) || past_rim(f, px, py) > MARGIN_SQ {
                     continue;
                 }
                 out[k] = grade(base, x as usize, y as usize) < GENTLE;

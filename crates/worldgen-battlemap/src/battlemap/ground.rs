@@ -168,10 +168,23 @@ pub(super) fn relief_in_cell(seed: u64, gx: i64, gy: i64, biome: Biome) -> Vec<R
     out
 }
 
-fn relief_value(f: &Relief, x: f64, y: f64) -> f64 {
+/// The farthest a feature's outline reaches from its middle (squares, measured as `relief_value`
+/// does: along its length over `elong`): its radius at the most its wobble swells it. Past it
+/// (and a hair more for rounding) the feature is nothing, whatever the angle. Infinite where
+/// that bound doesn't hold.
+pub(super) fn relief_reach(f: &Relief) -> f64 {
+    let swell: f64 = f.wobble.iter().map(|w| crate::core::fabs(w.0)).sum();
+    if f.r > 0.0 && swell < 0.999 { f.r * (1.0 + swell) } else { f64::INFINITY }
+}
+
+/// `far2`: `relief_reach` squared, a hair over (no angle worked out for the squares past it).
+fn relief_value(f: &Relief, far2: f64, x: f64, y: f64) -> f64 {
     let (dx, dy) = (x - f.cx, y - f.cy);
     let along = (dx * f.dir.0 + dy * f.dir.1) / f.elong;
     let across = -dx * f.dir.1 + dy * f.dir.0;
+    if along * along + across * across >= far2 {
+        return 0.0;
+    }
     // Irregular outline: the radius swells and pinches with the angle.
     let th = libm::atan2(across, along);
     let edge = 1.0 + f.wobble.iter().enumerate().map(|(k, (a, ph))| a * libm::cos((k + 1) as f64 * th + ph)).sum::<f64>();
@@ -202,13 +215,15 @@ pub(super) fn apply_relief(f: &Relief, height: &mut [f32], water: &[f32], gsx: i
     let reach = RELIEF_REACH + 1.0;
     let (x0, x1) = ((f.cx - reach) as i64 - gsx, (f.cx + reach) as i64 - gsx + 1);
     let (y0, y1) = ((f.cy - reach) as i64 - gsy, (f.cy + reach) as i64 - gsy + 1);
+    let far = relief_reach(f);
+    let far2 = far * far * (1.0 + 1e-8);
     for y in y0.max(0)..y1.min(dim as i64) {
         for x in x0.max(0)..x1.min(dim as i64) {
             let k = y as usize * dim + x as usize;
             if water[k] > height[k] - 1.0 {
                 continue;
             }
-            let v = relief_value(f, (gsx + x) as f64 + 0.5, (gsy + y) as f64 + 0.5);
+            let v = relief_value(f, far2, (gsx + x) as f64 + 0.5, (gsy + y) as f64 + 0.5);
             // Depressions never cut below the water table.
             height[k] = (height[k] as f64 + v).max(water[k] as f64 + 0.5) as f32;
         }
