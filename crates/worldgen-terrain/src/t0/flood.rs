@@ -1,7 +1,6 @@
 //! Priority-flood depression filling (Barnes et al. 2014) and D8 flow routing, shared by
 //! erosion and hydrology. Deterministic: heap ties break on cell index.
 
-use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 pub const SQRT2: f64 = std::f64::consts::SQRT_2;
@@ -17,32 +16,17 @@ pub const D8: [(i32, i32, f64); 8] = [
     (-1, -1, SQRT2),
 ];
 
-/// A heap entry: the height as an integer key ordered like `f64::total_cmp`, and the cell.
-#[derive(PartialEq, Eq)]
-struct Node {
-    k: u64,
-    i: u32,
-}
+/// A heap entry: the height as an integer key ordered like `f64::total_cmp` over the cell's
+/// index, in one integer (one comparison, with no branch on which half decides), reversed:
+/// `BinaryHeap` is a max-heap and the lowest cell comes first, ties to the lower index.
+type Node = std::cmp::Reverse<u128>;
 
-impl Node {
-    fn new(h: f64, i: u32) -> Node {
-        // total_cmp's order as unsigned integers: flip all bits of negatives, the sign of the rest.
-        let b = h.to_bits();
-        Node { k: if b >> 63 == 1 { !b } else { b | (1 << 63) }, i }
-    }
-}
-
-impl Ord for Node {
-    // Reversed: BinaryHeap is a max-heap and we want the lowest cell first.
-    fn cmp(&self, o: &Self) -> Ordering {
-        o.k.cmp(&self.k).then_with(|| o.i.cmp(&self.i))
-    }
-}
-
-impl PartialOrd for Node {
-    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
-        Some(self.cmp(o))
-    }
+#[inline]
+fn node(h: f64, i: u32) -> Node {
+    // total_cmp's order as unsigned integers: flip all bits of negatives, the sign of the rest.
+    let b = h.to_bits();
+    let k = if b >> 63 == 1 { !b } else { b | (1 << 63) };
+    std::cmp::Reverse((k as u128) << 32 | i as u128)
 }
 
 #[inline]
@@ -83,7 +67,7 @@ pub fn priority_flood(w: usize, h: usize, height: &[f64], outlet: &[bool], eps: 
             // index), so the result is the same).
             let open = if inner[i] { offsets.iter().any(|&o| !outlet[(i as isize + o) as usize]) } else { neighbors(w, h, i).any(|(nb, _)| !outlet[nb]) };
             if open {
-                heap.push(Node::new(height[i], i as u32));
+                heap.push(node(height[i], i as u32));
             }
         }
     }
@@ -92,12 +76,13 @@ pub fn priority_flood(w: usize, h: usize, height: &[f64], outlet: &[bool], eps: 
             let (x, y) = (i % w, i / w);
             if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
                 closed[i] = true;
-                heap.push(Node::new(height[i], i as u32));
+                heap.push(node(height[i], i as u32));
             }
         }
     }
     let mut order = Vec::with_capacity(n);
-    while let Some(Node { i, .. }) = heap.pop() {
+    while let Some(std::cmp::Reverse(top)) = heap.pop() {
+        let i = top as u32;
         let i = i as usize;
         if !outlet[i] && any {
             order.push(i as u32);
@@ -108,7 +93,7 @@ pub fn priority_flood(w: usize, h: usize, height: &[f64], outlet: &[bool], eps: 
             }
             closed[nb] = true;
             filled[nb] = filled[nb].max(filled[i] + eps);
-            heap.push(Node::new(filled[nb], nb as u32));
+            heap.push(node(filled[nb], nb as u32));
         };
         if inner[i] {
             for o in offsets {
