@@ -837,10 +837,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for e in l.entrances.iter().filter(|_| !in_building && !behind_fall) {
             use crate::town::geom::{add, mul};
             // (Roadmap 7, 193: a mausoleum where one fits inside the lot's wall, else the plain stair.)
-            let in_yard = l.buildings.iter().any(|b| b.structure == crate::town::Structure::Open && crate::town::geom::contains(&b.poly, e.at) && crate::town::cemetery::lot(&l, b).is_some_and(|p| p.mausoleum));
+            // (Asked of the catacombs' ways down alone: a city's sewer grates, hundreds of them, are
+            // not looked up among its buildings in every chunk.)
+            let in_yard = || l.buildings.iter().any(|b| b.structure == crate::town::Structure::Open && crate::town::geom::contains(&b.poly, e.at) && crate::town::cemetery::lot(&l, b).is_some_and(|p| p.mausoleum));
             let style = match e.kind {
                 crate::under::UnderKind::Dungeon | crate::under::UnderKind::Crypt => 1u8,
-                crate::under::UnderKind::Catacombs if in_yard => 2,
+                crate::under::UnderKind::Catacombs if in_yard() => 2,
                 _ => 0,
             };
             // v63 underground: a wild site's way down by its theme (`under::surface`), and the crag
