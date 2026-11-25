@@ -141,6 +141,7 @@ export class PlayLayer {
   private readonly fogDirty = new Set<string>();
   private vision: { b: Bitmap; loc: string; src: BufferImageSource; tex: Texture; sprite: Sprite } | null = null;
   private fogRT: RenderTexture | null = null;
+  private fogSize = [0, 0];
   private readonly fogSprite = new Sprite();
   private readonly ruler = new Graphics();
   private readonly rulerText = new Text({ text: '', style: rulerStyle, anchor: { x: 0, y: 1 }, resolution: 2 });
@@ -780,8 +781,11 @@ export class PlayLayer {
     const d = this.fogDrawn;
     if (d.cx === cam.cx && d.cy === cam.cy && d.zoom === cam.zoom && d.w === w && d.h === h && d.fog === fog && d.los === los && d.loc === loc && d.rotation === rotation && d.version === this.fogVersion && d.player === player) return;
     Object.assign(d, { cx: cam.cx, cy: cam.cy, zoom: cam.zoom, w, h, fog, los, loc, rotation, version: this.fogVersion, player });
-    if (!this.fogRT || this.fogRT.width !== w || this.fogRT.height !== h) {
+    // (Its own size is rounded to whole pixels at half resolution: compare what was asked for, or an odd
+    // view would make a new one every frame.)
+    if (!this.fogRT || this.fogSize[0] !== w || this.fogSize[1] !== h) {
       this.fogRT?.destroy(true);
+      this.fogSize = [w, h];
       // Half resolution: fog is soft anyway, and this is a full-screen pass every frame.
       this.fogRT = RenderTexture.create({ width: w, height: h, resolution: 0.5 });
       this.fogSprite.texture = this.fogRT;
