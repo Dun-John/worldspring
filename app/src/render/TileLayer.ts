@@ -62,6 +62,8 @@ interface GpuTile {
   id: string;
   /** An active crater on or near it (its shader is the whole one). */
   lava: boolean;
+  /** The most its grade changes from one sample to the next (`gradeStep`: Infinity on steep ground). */
+  gradeStep: number;
   level: number;
   x: number;
   y: number;
@@ -104,15 +106,58 @@ export interface LayerStats {
  * it all the same: on the reference laptop the tufts and symbols cost ~0.9 ms a frame at battlemap
  * zooms, the symbols ~1 ms out at continent zoom. Compiled in the background once the map is up
  * (`warmLeanTerrain`); until one is ready the next fuller one draws, the whole shader at first. */
-const lean = (forest: number, pattern: number, symbols: number, name: string) => ({
+const lean = (forest: number, pattern: number, symbols: number, cliffs: number, name: string) => ({
   forest,
   pattern,
   symbols,
+  cliffs,
   ready: false,
-  program: GlProgram.from({ vertex, fragment: fragment.replace(/^(#version[^\n]*\n)/, `$1#define LAVA 0\n#define FOREST ${forest}\n#define PATTERN ${pattern}\n#define SYMBOLS ${symbols}\n`), name }),
+  program: GlProgram.from({ vertex, fragment: fragment.replace(/^(#version[^\n]*\n)/, `$1#define LAVA 0\n#define FOREST ${forest}\n#define PATTERN ${pattern}\n#define SYMBOLS ${symbols}\n#define CLIFFS ${cliffs}\n`), name }),
 });
-/** Leanest first: battlemap zooms, the fade to them, continent and region zooms, the rest. */
-const LEAN = [lean(0, 0, 0, 'terrain-tile-near'), lean(1, 0, 0, 'terrain-tile-tufts'), lean(1, 1, 0, 'terrain-tile-far'), lean(1, 1, 1, 'terrain-tile-plain')];
+/** Leanest first: battlemap zooms and the fade to them (each without the cliffs too, for tiles of
+ * gentle ground: ~0.5 ms a frame), continent and region zooms, the rest. */
+const LEAN = [
+  lean(0, 0, 0, 0, 'terrain-tile-near-gentle'),
+  lean(0, 0, 0, 1, 'terrain-tile-near'),
+  lean(1, 0, 0, 0, 'terrain-tile-tufts-gentle'),
+  lean(1, 0, 0, 1, 'terrain-tile-tufts'),
+  lean(1, 1, 0, 1, 'terrain-tile-far'),
+  lean(1, 1, 1, 1, 'terrain-tile-plain'),
+];
+
+/** f16 bits to their value, for `gradeStep`. */
+let HALF: Float32Array | null = null;
+/** The steepest grade a tile can have and draw nothing of the cliffs (terrain.frag: scarp strokes
+ * start at 0.25, faces at 0.9), and the most the grade may change per screen pixel (rims and feet
+ * start at 0.04). */
+const GENTLE_GRADE = 0.24;
+const GENTLE_STEP = 0.035;
+
+/** The most a tile's gradient changes between neighbouring samples (so, read bilinearly, per sample
+ * of distance anywhere on it); Infinity if any sample is steeper than `GENTLE_GRADE`. */
+function gradeStep(tex: Uint16Array): number {
+  if (!HALF) {
+    HALF = new Float32Array(65536);
+    for (let h = 0; h < 65536; h++) HALF[h] = halfToFloat(h);
+  }
+  const n = TILE_SAMPLES;
+  const above = new Float32Array(n * 2);
+  let d2 = 0;
+  for (let y = 0, i = 1; y < n; y++) {
+    let px = 0;
+    let py = 0;
+    for (let x = 0; x < n; x++, i += 4) {
+      const gx = HALF[tex[i]];
+      const gy = HALF[tex[i + 1]];
+      if (!(gx * gx + gy * gy <= GENTLE_GRADE * GENTLE_GRADE)) return Infinity;
+      if (x > 0) d2 = Math.max(d2, (gx - px) * (gx - px) + (gy - py) * (gy - py));
+      if (y > 0) d2 = Math.max(d2, (gx - above[2 * x]) * (gx - above[2 * x]) + (gy - above[2 * x + 1]) * (gy - above[2 * x + 1]));
+      px = above[2 * x] = gx;
+      py = above[2 * x + 1] = gy;
+    }
+  }
+  return Math.sqrt(d2);
+}
 
 /** Compile the lean terrain shaders in the background, one by one; each draws from then on. */
 export async function warmLeanTerrain(renderer: Renderer) {
@@ -304,14 +349,20 @@ export class TileLayer {
       if (measured > 0) this.viewRms += (measured - this.viewRms) * 0.1;
     }
 
-    // The leanest shader ready that has all this zoom draws.
+    // The leanest shader ready that has all this zoom draws; and without the cliffs on a tile
+    // that draws none: no sample steeper than `GENTLE_GRADE`, and the grade changing by less than
+    // `GENTLE_STEP` from one screen pixel to the next (the grade is the length of the gradient read
+    // bilinearly, so over a pixel it changes by no more than the gradient does over that many
+    // samples: along x and along y, hence the sqrt 2; the 0.02 is the sampler's 1/256 steps).
     const fu = this.frameUniforms.uniforms;
     const [forest, pattern, symbols] = [fu.uForestAlpha > 0 ? 1 : 0, fu.uPatAlpha > 0 ? 1 : 0, fu.uSymAlpha > 0 ? 1 : 0];
-    const plain = LEAN.find((l) => l.ready && l.forest >= forest && l.pattern >= pattern && l.symbols >= symbols)?.program ?? this.program;
+    const pick = (cliffs: number) => LEAN.find((l) => l.ready && l.forest >= forest && l.pattern >= pattern && l.symbols >= symbols && l.cliffs >= cliffs)?.program ?? this.program;
+    const [plain, gentle] = [pick(1), pick(0)];
+    const samplesPerPx = (TILE_SAMPLES / (this.geom.domain_ft * cam.ppf * Math.min(1, resolution))) * Math.SQRT2;
     for (const t of this.tiles.values()) {
       const show = visible.has(t);
       t.mesh.visible = show;
-      if (show) t.mesh.shader!.glProgram = t.lava ? this.program : plain;
+      if (show) t.mesh.shader!.glProgram = t.lava ? this.program : (samplesPerPx * 2 ** t.level + 0.02) * t.gradeStep <= GENTLE_STEP ? gentle : plain;
       if (t.river) t.river.visible = show;
       if (t.road) t.road.visible = show;
       if (t.siteFill) t.siteFill.visible = show;
@@ -545,6 +596,7 @@ export class TileLayer {
       base: m.base,
       gradRms: m.gradRms,
       lava: nc > 0,
+      gradeStep: gradeStep(m.tex),
       texData: m.tex,
       texture,
       biomeTexture,

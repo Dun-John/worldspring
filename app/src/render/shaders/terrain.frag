@@ -33,7 +33,8 @@ uniform vec4 uPat1;
 uniform vec4 uCraters[8];
 // The parts a tile or a zoom can do without, compiled out (`TileLayer`'s lean programs: Direct3D
 // runs a part behind a uniform that is 0 all the same): LAVA the craters, FOREST the woods' tufts
-// (uForestAlpha 0), PATTERN the symbols and hachures (uPatAlpha 0), SYMBOLS the symbols (uSymAlpha 0).
+// (uForestAlpha 0), PATTERN the symbols and hachures (uPatAlpha 0), SYMBOLS the symbols (uSymAlpha 0),
+// CLIFFS the faces, scarp strokes, rims and feet (a tile of gentle, even ground: `TileLayer`'s `gentle`).
 #ifndef LAVA
 #define LAVA 1
 #endif
@@ -45,6 +46,9 @@ uniform vec4 uCraters[8];
 #endif
 #ifndef SYMBOLS
 #define SYMBOLS 1
+#endif
+#ifndef CLIFFS
+#define CLIFFS 1
 #endif
 
 // Per frame.
@@ -340,14 +344,22 @@ void main() {
     // is tempered, so a run tapers off into the slope's shading. Close in the strokes hatch the
     // slopes beside a face.
     float fill = 1.0 - smoothstep(5.0, 14.0, uFtPerPx);
+#if CLIFFS
     float cliff = wet ? 0.0 : smoothstep(0.9, 1.3, slope) * fill;
+#else
+    float cliff = 0.0;
+#endif
     float dsl = length(dslope);
     vec2 up = g / max(slope, 1e-6);
     // Far out, risers are the only natural ground steeper than ~0.3 (mountainsides stay under it at
     // those levels), and a riser a pixel or two wide changes grade sharply from pixel to pixel; so
     // at every zoom the strokes keep to sharp grade changes (a face's sides), not to an even steep
     // slope (a hill raised by hand, which keeps the plain hillshade).
+#if CLIFFS
     float scarp = wet ? 0.0 : smoothstep(mix(0.25, 0.4, fill), mix(0.45, 1.0, fill), slope) * mix(smoothstep(0.08, 0.25, dsl / max(slope, 0.05)), smoothstep(0.02, 0.08, dsl), fill) * (1.0 - cliff);
+#else
+    float scarp = 0.0;
+#endif
 
     // Hillshade, normalized so flat ground is 1.0; light from the north-west. (On a hatched scarp
     // the exaggerated grade is held to a moderate one: the strokes carry it.)
@@ -360,6 +372,7 @@ void main() {
     float shade = wet ? mix(1.0, lambert, 0.1) : lambert;
     col *= clamp(mix(1.0, shade, 0.85), 0.3, 1.3);
 
+#if CLIFFS
     if (!wet) {
         float facing = dot(-up, vec2(-0.7071));
         float away = smoothstep(0.14, 0.26, -facing);
@@ -394,6 +407,7 @@ void main() {
             }
         }
     }
+#endif
 
     // Map symbols, blended across two octaves; ecotones dither between the two biomes.
 #if PATTERN
