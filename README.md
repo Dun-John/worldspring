@@ -17,7 +17,7 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 | | |
 |---|---|
 | ![The whole continent](docs/media/continent.png) | ![A city with its districts](docs/media/city.png) |
-| **The continent**: biomes, ranges, rivers, seas, and the roads between towns, over bridges, fords and ferries. | **Cities** with walls, wards, markets, docks and named districts. |
+| **The continent**: biomes, ranges, cliffs, rivers, waterfalls, seas, volcanoes, and the roads between towns, over bridges, fords and ferries. | **Cities** with walls, wards, markets, graveyards and named districts, streets in grids, rings or radial plans, and quays along their harbours. |
 | ![A street battlemap](docs/media/battlemap.png) | ![Inside an inn](docs/media/interior.png) |
 | **Battlemaps** everywhere, on a 5-ft grid. | **Inside every building**, floor by floor. |
 
@@ -26,7 +26,7 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 | ![A dungeon under a ruin](docs/media/dungeon.png) | ![A cave of grottoes and mycelium halls](docs/media/cave.png) |
 | **Dungeons** under ruins, crypts and catacombs, level by level. | **Caves** grown from the rock, with pools, ledges and grottoes. |
 | ![A mine along its haulage way](docs/media/mine.png) | ![A lava tube](docs/media/lava-tube.png) |
-| **Mines** along their ore veins, with a station, lift and break-ins. | **Lava tubes** under volcanic ground, with their chambers. |
+| **Mines** along their ore veins, with a station, lift and break-ins. | **Lava tubes** under volcanic ground, with lava flows, forges and fire temples. |
 
 ## Getting around
 
@@ -60,12 +60,12 @@ options**. Every change can be undone, and the Gazetteer lists the roads and fen
 | Group › tool | What you can do |
 |---|---|
 | **Settlements › Places** (S) | Add a village, town, city or metropolis (the world is remade round it; Take back, Undo or Remove on its card takes it away again, and what was made on it is kept in Notes), or your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
-| **Settlements › Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Push, Smudge, Grow, Shrink, Soften, Even out). Give a ward another use, change its lots, merge or reroll them, or clear a ward and build your own. Or **Lay out by hand**: the town's streets become yours to draw, join, widen or delete, each block filled with houses, lots of your choosing or left open, and a street lined with houses. |
+| **Settlements › Streets** (U) | Re-plan the town in view: pick its street pattern (grid, rings, radial or linear), drag its ward corners, or move them with brushes (Push, Smudge, Grow, Shrink, Soften, Even out). Give a ward another use, change its lots, merge or reroll them, or clear a ward and build your own. Or **Lay out by hand**: the town's streets become yours to draw, join, widen or delete, each block filled with houses, lots of your choosing or left open, and a street lined with houses. |
 | **Settlements › Town wall** (Shift+U) | Put the walls up or down, and click a corner on the wall for a gate or a tower. |
 | **Settlements › Join or leave** (Shift+J) | What you build within 300 ft of a town joins it (its people, style and shops); pick what should be part of a town, or taken out of one. Outskirts taken out become a place of their own. |
 | **Buildings** | **Draw a building** (B: rectangles, polygons, round towers), set down **One building** (Q) facing the nearest street, line a street with a **Row of houses** (E, and lay a road along it if you like), **Fill an area** (L) with buildings, lots or open ground, or raise a **Castle & walls** (K, W) anywhere. |
-| **Roads & water** | Draw **Roads** (V), put a bridge, ford or ferry across a river bank to bank (**Crossing**, X), paint or outline **Water** (I: lakes, ponds, moats, inlets), and build **Docks & islets** (H): quays, piers and breakwaters. |
-| **Land › Ground** (M) | Shape a battlemap's ground: raise, lower, smooth or put it back with a brush, or draw a plateau, a cliff or a pit (a castle on a cliff) and change its level later. Buildings, streets and walls stand on it; a city street climbing steeply turns to steps. |
+| **Roads & water** | Draw **Roads** (V; a road over water gets a bridge), put a bridge, ford or ferry across a river bank to bank (**Crossing**, X), paint or outline **Water** (I: lakes, ponds, moats, inlets) or **Lava** (Shift+I: lava rivers and pits that glow and scorch the ground), and build **Docks & islets** (H): brush a quay along the shore, or lay piers and breakwaters. |
+| **Land › Ground** (M) | Shape a battlemap's ground: raise, lower, smooth or put it back with a brush, or draw a plateau, a cliff or a pit (a castle on a cliff) and change its level later, or raise a hill up to 300 ft (a big one shows on the map too). Buildings, streets and walls stand on it; a city street climbing steeply turns to steps. |
 | **Land › Fences & hedges** (F) | Draw hedgerows, clipped hedges, stone walls, rails, wattle, pickets, iron railings, stockades and high walls; put gates in them; erase a stretch of any fence, the generated ones too. |
 | **Land › Props** (C) | Place objects on a battlemap one at a time (turned, picked up and moved again), brush them on, or erase them. Upload your own pictures to use as objects. Objects go outdoors (the ghost turns red where a roof would hide one); furniture, props and traps inside a building or down a site go in Rooms. |
 | **Rooms** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, and furniture and props placed as on the battlemap (turned, picked up and moved again). **Stairs & passages** (J) joins a square below ground to another level or another place. |
