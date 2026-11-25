@@ -531,20 +531,29 @@ impl RiverNet {
         // (a fall the levels step down over, a low shore by the mouth), calming would only
         // straighten the river into a canal and lift it no less.
         for r in &mut self.rivers {
-            let base_perched: Vec<bool> = (0..r.segments())
-                .map(|k| {
-                    (1..8).any(|j| {
-                        let t = j as f64 / 8.0;
-                        let p = r.frame(k, t, cell_ft).base;
-                        let level = r.z[k] as f64 + (r.z[k + 1] - r.z[k]) as f64 * t;
-                        !wet(p[0], p[1]) && level > ground(p[0], p[1]) + 3.0
-                    })
-                })
-                .collect();
+            // (Looked up when a segment first asks, on the spline alone: `frame`'s base.)
+            let mut base_perched: Vec<Option<bool>> = vec![None; r.segments()];
+            let mut last: Option<Vec<bool>> = None;
             for _ in 0..3 {
                 let mut calm = vec![false; r.pts.len()];
                 for k in 0..r.segments() {
-                    if (r.taper[k] <= 0.0 && r.taper[k + 1] <= 0.0) || base_perched[k] {
+                    if r.taper[k] <= 0.0 && r.taper[k + 1] <= 0.0 {
+                        continue;
+                    }
+                    // (A segment's points move only with its two ends' tapers: sound last round
+                    // and neither halved since, it is sound still.)
+                    if last.as_ref().is_some_and(|c| !c[k] && !c[k + 1]) {
+                        continue;
+                    }
+                    let on_base = *base_perched[k].get_or_insert_with(|| {
+                        (1..8).any(|j| {
+                            let t = j as f64 / 8.0;
+                            let p = r.spline(k, t).0;
+                            let level = r.z[k] as f64 + (r.z[k + 1] - r.z[k]) as f64 * t;
+                            !wet(p[0], p[1]) && level > ground(p[0], p[1]) + 3.0
+                        })
+                    });
+                    if on_base {
                         continue;
                     }
                     let perched = (1..8).any(|j| {
@@ -566,6 +575,7 @@ impl RiverNet {
                         *t *= 0.5;
                     }
                 }
+                last = Some(calm);
             }
         }
     }
