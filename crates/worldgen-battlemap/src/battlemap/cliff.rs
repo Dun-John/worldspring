@@ -56,6 +56,8 @@ pub(super) fn marks(c: &Chunk, padded: &[f32], sidx: &dyn Fn(i64, i64) -> usize)
             h[at(i, j)] = padded[s];
         }
     }
+    // (No face anywhere, as on most ground: no square looks round itself for one.)
+    let any_face = face.contains(&true);
     for j in 0..SQ as i64 {
         for i in 0..SQ as i64 {
             let k = j as usize * SQ + i as usize;
@@ -68,7 +70,7 @@ pub(super) fn marks(c: &Chunk, padded: &[f32], sidx: &dyn Fn(i64, i64) -> usize)
                 out[k] = 16;
                 continue;
             }
-            let scree = (-SCREE_SQ..=SCREE_SQ).any(|dy| (-SCREE_SQ..=SCREE_SQ).any(|dx| face[at(i + dx, j + dy)] && h[at(i + dx, j + dy)] >= h[own] + SCREE_RISE));
+            let scree = any_face && (-SCREE_SQ..=SCREE_SQ).any(|dy| (-SCREE_SQ..=SCREE_SQ).any(|dx| face[at(i + dx, j + dy)] && h[at(i + dx, j + dy)] >= h[own] + SCREE_RISE));
             if scree {
                 out[k] = 16 | 64;
             } else if drawn[own] {
