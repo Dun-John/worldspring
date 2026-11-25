@@ -172,12 +172,19 @@ pub fn shape(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], l
         let (x, y) = ((k % w) as f64 * cell, (k / w) as f64 * cell);
         let hk = height[k];
         let above = orig[k] - sea;
-        let gate = fit(k, orig[k], slope_at(w, h, cell, &orig, k));
         let mut m = weight[k] as f64;
-        if gate > 0.0 {
+        // (`fit`, its slope looked up only where the coast and the height leave it a say, and
+        // the province noise only where the gate and the upland do: 0 otherwise, as multiplied.)
+        let coast_ft = coast[k] * cell;
+        let open = smoothstep(1.5 * MI, 6.0 * MI, coast_ft) * (1.0 - smoothstep(0.45 * top, 0.65 * top, above));
+        if open > 0.0 {
+            let gate = open * (1.0 - smoothstep(0.025, 0.07, slope_at(w, h, cell, &orig, k)));
             let dry = 1.0 - smoothstep(300.0, 900.0, clim.precip[k] as f64);
             let upland = (dry * smoothstep(100.0, 600.0, above)).max(0.9 * smoothstep(800.0, 2_500.0, above));
-            m = m.max(gate * upland * smoothstep(threshold, threshold + 0.12, prov.at(x / (160.0 * MI), y / (160.0 * MI))));
+            let share = gate * upland;
+            if share > 0.0 {
+                m = m.max(share * smoothstep(threshold, threshold + 0.12, prov.at(x / (160.0 * MI), y / (160.0 * MI))));
+            }
         }
         weight[k] = m as f32;
         if m <= 0.0 {
@@ -308,7 +315,9 @@ pub fn incise(world: &World, w: usize, h: usize, cell: f64, height: &mut [f64], 
 /// them, so one pass settles all: a cell is final before any step out of it is looked at.
 fn downhill(n: usize, height: &mut [f64], orig: &[f64], land: &[bool], hy: &Hydro, sea: f64) {
     // Flow edges u -> d of every river (shared cells join them into one graph).
-    let mut next: Vec<Vec<u32>> = vec![Vec::new(); n];
+    // (Kept per river cell, `slot` its place in `next`: a list per map cell is a million of them.)
+    let mut slot = vec![u32::MAX; n];
+    let mut next: Vec<Vec<u32>> = Vec::new();
     let mut indeg = vec![0u32; n];
     let mut on = vec![false; n];
     for r in &hy.rivers {
@@ -316,12 +325,20 @@ fn downhill(n: usize, height: &mut [f64], orig: &[f64], land: &[bool], hy: &Hydr
             let (u, d) = (pair[0] as usize, pair[1]);
             on[u] = true;
             on[d as usize] = true;
-            if u != d as usize && !next[u].contains(&d) {
-                next[u].push(d);
-                indeg[d as usize] += 1;
+            if u != d as usize {
+                if slot[u] == u32::MAX {
+                    slot[u] = next.len() as u32;
+                    next.push(Vec::new());
+                }
+                let out = &mut next[slot[u] as usize];
+                if !out.contains(&d) {
+                    out.push(d);
+                    indeg[d as usize] += 1;
+                }
             }
         }
     }
+    let outs = |u: usize| -> &[u32] { if slot[u] == u32::MAX { &[] } else { &next[slot[u] as usize] } };
     // Kahn's order (ascending cell index among the ready ones: deterministic).
     let mut ready: std::collections::BinaryHeap<std::cmp::Reverse<u32>> = (0..n as u32).filter(|&k| on[k as usize] && indeg[k as usize] == 0).map(std::cmp::Reverse).collect();
     let mut seen = 0usize;
@@ -334,7 +351,7 @@ fn downhill(n: usize, height: &mut [f64], orig: &[f64], land: &[bool], hy: &Hydr
         if hu >= orig[u] || hy.lake_of[u] != hydro::NO_LAKE {
             return;
         }
-        for &d in &next[u] {
+        for &d in outs(u) {
             let d = d as usize;
             if land[d] && hy.lake_of[d] == hydro::NO_LAKE && height[d] > sea && height[d] > hu - gap {
                 height[d] = hu - gap;
@@ -347,7 +364,7 @@ fn downhill(n: usize, height: &mut [f64], orig: &[f64], land: &[bool], hy: &Hydr
         done[u] = true;
         seen += 1;
         fix(u, height);
-        for &d in &next[u] {
+        for &d in outs(u) {
             indeg[d as usize] -= 1;
             if indeg[d as usize] == 0 {
                 ready.push(std::cmp::Reverse(d));
@@ -362,7 +379,7 @@ fn downhill(n: usize, height: &mut [f64], orig: &[f64], land: &[bool], hy: &Hydr
             }
         }
     }
-    debug_assert!((0..n).all(|u| height[u] >= orig[u] || hy.lake_of[u] != hydro::NO_LAKE || next[u].iter().all(|&d| {
+    debug_assert!((0..n).all(|u| height[u] >= orig[u] || hy.lake_of[u] != hydro::NO_LAKE || outs(u).iter().all(|&d| {
         let d = d as usize;
         !land[d] || hy.lake_of[d] != hydro::NO_LAKE || height[d] <= sea || height[d] < height[u]
     })));
