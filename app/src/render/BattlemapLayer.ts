@@ -45,9 +45,11 @@ import groundFragment from './shaders/ground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
 
 const CHUNK_CAP = 24;
-/** Battlemap fades in between these ft-per-pixel values (5-ft square ≈ 7 px → 17 px). */
+/** Battlemap fades in between these ft-per-pixel values (5-ft square ≈ 7 px → 16 px). Opaque by a 16 px
+ * square (0.3125 ft/px, two zoom steps out from the table's 64 px): held there a little short of opaque, the
+ * tiles under it were a second full-screen pass every frame. */
 const FADE_START = 0.7;
-const FADE_END = 0.3;
+const FADE_END = 0.32;
 /** How far into that fade (0-1) the objects are already opaque. */
 const OBJECTS_OPAQUE_AT = 0.3;
 /** Chunks are requested a little before they fade in. */
