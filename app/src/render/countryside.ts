@@ -11,7 +11,7 @@
  * bushes, stones, posts) is laid on a lattice of world distance along its line and hashed by the line, so a
  * piece cut at a chunk edge carries on in the next chunk as if it were one.
  */
-import type { Graphics } from 'pixi.js';
+import { Graphics, type FillInput, type StrokeInput } from 'pixi.js';
 import { SQ, type Shape } from '../gen/battlePrep';
 import { PX } from './atlas';
 import { FT, INK, LX, LY, mix, PLUM, STONE, WOOD } from './bridges';
@@ -185,7 +185,7 @@ const rev = (pts: number[]) => {
 const ring = (L: number[], R: number[]) => [...L, ...rev(R)];
 
 /** Ink a piece's outline: its sides, and across its free ends only (none over a mitre or a chunk's edge). */
-function inkOutline(g: Graphics, r: Run, L: number[], R: number[], width: number) {
+function inkOutline(g: Pen, r: Run, L: number[], R: number[], width: number) {
   const [A, B] = r.ends;
   const openA = A.mitred || A.cut;
   const openB = B.mitred || B.cut;
@@ -327,7 +327,7 @@ function envelope(r: Run, cl: Clump[]): [number[], number[]] {
 
 /** A leafy round (`n` points) in the canopy manner: ink, dark, a mid round toward the light, a light
  * spot; `rs` the rounds (x, y, radius), `tones` dark, mid, light; the ink drawn `ink` wider. */
-function leafy(g: Graphics, r: Run, rs: [number, number, number][], tones: number[], ink: number) {
+function leafy(g: Pen, r: Run, rs: [number, number, number][], tones: number[], ink: number) {
   if (!rs.length) return;
   for (const [x, y, rad] of rs) g.poly(disc(r, x, y, rad + ink, 16));
   g.fill(INK);
@@ -347,10 +347,18 @@ function leafy(g: Graphics, r: Run, rs: [number, number, number][], tones: numbe
  * Every 40-80 ft or so (by world distance along the line) a bigger bush or a hedgerow tree stands
  * out of it.
  */
-function drawHedges(g: Graphics, rs: Run[]) {
+function* drawHedges(g: Pen, rs: Run[]): Generator<void, void, void> {
   const hw = FT * 2.35;
-  const cls = rs.map((r) => clumps(r, hw));
-  const sides = rs.map((r, i) => (cls[i].length ? envelope(r, cls[i]) : [[], []]));
+  // (A generator, as the walls' and fences': a chunk's hedges take 10-25 ms to work out, so the
+  // caller that lays them in pieces, `boundPieces`, may leave the rest for the next frame.)
+  const cls: Clump[][] = [];
+  const sides: number[][][] = [];
+  for (const r of rs) {
+    const cl = clumps(r, hw);
+    cls.push(cl);
+    sides.push(cl.length ? envelope(r, cl) : [[], []]);
+    yield;
+  }
   const rings = sides.map(([L, R]) => ring(L, R));
   // Bushes and trees: a lattice of 60 ft cells along the line, most with one somewhere in its middle.
   const extras = rs.map((r) => {
@@ -369,6 +377,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
   });
   // A soft shadow to the south-east, the bushes' and trees' with it.
   const off = FT * 2.1;
+  yield;
   for (const [f, alpha] of [
     [1, 0.11],
     [0.55, 0.15],
@@ -385,6 +394,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
   }
   // The ink round the band first, then the leaves over its inner half: an outline round the whole.
   // (A field's hedges' joins bevelled: as good at this weight, and far fewer points.)
+  yield;
   for (const row of [false, true]) {
     const opened: number[][] = [];
     const closed: number[][] = [];
@@ -404,11 +414,13 @@ function drawHedges(g: Graphics, rs: Run[]) {
     for (const p of closed) g.poly(p, true);
     if (closed.length) g.stroke({ width: HEDGE_INK * 2, color: INK, join });
   }
+  yield;
   rings.forEach((p) => p.length && g.poly(p));
   g.fill(LEAF[0]);
   // The mid leaves: the band again from its clumps a little smaller and toward the light, one mass
   // with the dark left as a scalloped crescent on the shaded side; then each clump's light spot,
   // bigger on the band's lit side.
+  yield;
   rs.forEach((r, i) => {
     if (!cls[i].length) return;
     const [ta, tn] = [LX * r.ux + LY * r.uy, LX * r.nx + LY * r.ny];
@@ -417,6 +429,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
   });
   g.fill(LEAF[1]);
   // (Not on every clump, nor all one size: in a row they would read as beads on a string.)
+  yield;
   rs.forEach((r, i) => {
     for (const c of cls[i]) {
       const h = c.k === undefined ? 0.5 : hk(r, c.k, CLUMP, 56);
@@ -428,6 +441,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
   });
   g.fill({ color: LEAF[2], alpha: 0.7 });
   // Leaves picked out, a few to a clump: light toward the light, dark away from it.
+  yield;
   for (const light of [true, false]) {
     rs.forEach((r, i) => {
       for (const c of cls[i]) {
@@ -445,6 +459,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
   }
   // Bushes and trees: lobes round a middle one, in the leafy trees' manner, each tree's shade on the
   // hedge under it.
+  yield;
   rs.forEach((r, i) => {
     for (const e of extras[i]) {
       const [x, y] = at(r, e.a, e.d);
@@ -477,11 +492,12 @@ const stoneTone = (l: number, t: number) => {
  * joints between) either side of a pale coping line of stones set on edge across the top; a rough
  * ink outline.
  */
-function drawDryWalls(g: Graphics, rs: Run[]) {
+function* drawDryWalls(g: Pen, rs: Run[]): Generator<void, void, void> {
   const step = FT * 0.75;
   const rough = (r: Run, sd: number) => (k: number) => (hk(r, k, step, sd + 11) - 0.5) * 0.18;
   const sides = rs.map((r) => [edge(r, 1, step, rough(r, 1), 1), edge(r, -1, step, rough(r, -1), 1)]);
   const reach = FT * 1.5;
+  yield;
   for (const [f, alpha] of [
     [1, 0.11],
     [0.55, 0.15],
@@ -489,8 +505,10 @@ function drawDryWalls(g: Graphics, rs: Run[]) {
     rs.forEach((_, i) => g.poly(ring(sides[i][0], sides[i][1]).map((v) => v + reach * f)));
     g.fill({ color: 0x000000, alpha });
   }
+  yield;
   rs.forEach((_, i) => g.poly(ring(sides[i][0], sides[i][1])));
   g.fill(mix(STONE[0], PLUM, 0.18));
+  yield;
   for (const r of rs) {
     // How far along a point `d` across may reach before the mitre (or the piece's end).
     const lim = (E: End, d: number, a: number) => {
@@ -553,7 +571,9 @@ function drawDryWalls(g: Graphics, rs: Run[]) {
     const sun = r.lit >= 0 ? 1 : -1;
     g.moveTo(...at(r, clampA(0, sun * c, 0), sun * c * 0.7)).lineTo(...at(r, clampA(r.l, sun * c, 0), sun * c * 0.7));
     g.stroke({ width: 1.4, color: STONE[3], alpha: 0.5 * Math.max(0.3, Math.abs(r.lit)) });
+    yield;
   }
+  yield;
   rs.forEach((r, i) => inkOutline(g, r, sides[i][0], sides[i][1], 2.6));
 }
 
@@ -567,7 +587,7 @@ const RAIL_LIT = mix(WOOD[1], WOOD[2], 0.6);
  * over them, inked, lit toward the north-west; the fence's and posts' shadows to the south-east. A
  * post at every corner and free end; none where a chunk cuts it.
  */
-function drawFences(g: Graphics, rs: Run[], bold = false) {
+function* drawFences(g: Pen, rs: Run[], bold = false): Generator<void, void, void> {
   // (R5 towns, 114: a horse park's corral or a yurt's pen, drawn a third thicker by the generator, bolder
   // and darker, its posts closer, so it reads round the trodden ground at a town's battle zoom.)
   const k = bold ? 2 : 1;
@@ -578,6 +598,7 @@ function drawFences(g: Graphics, rs: Run[], bold = false) {
     const key = `${Math.round(p[0])},${Math.round(p[1])}`;
     if (!seen.has(key)) seen.add(key), posts.push([p, r]);
   };
+  yield;
   for (const r of rs) {
     for (const [E, a] of [
       [r.ends[0], 0],
@@ -597,6 +618,7 @@ function drawFences(g: Graphics, rs: Run[], bold = false) {
     g.moveTo(p[0] + shift, p[1] + shift).lineTo(q[0] + shift, q[1] + shift);
   };
   // Shadows.
+  yield;
   for (const r of rs) line(r, 0, FT * 0.9 * k);
   g.stroke({ width: FT * 1.3 * k, color: 0x000000, alpha: bold ? 0.24 : 0.15, cap: 'butt' });
   const pw = FT * 1.45 * (bold ? 1.3 : 1);
@@ -605,12 +627,14 @@ function drawFences(g: Graphics, rs: Run[], bold = false) {
     const c = (sa: number, sd: number) => [p[0] + (r.ux * sa + r.nx * sd) * half + shift, p[1] + (r.uy * sa + r.ny * sd) * half + shift];
     g.poly([...c(-1, -1), ...c(1, -1), ...c(1, 1), ...c(-1, 1)]);
   };
+  yield;
   for (const [p, r] of posts) square(p, r, pw * 0.55, FT * 1.1 * k);
   g.fill({ color: 0x000000, alpha: bold ? 0.3 : 0.2 });
   // The rails: ink under both, the wood, a lit edge on each.
   // (Butt ends: a rail cut at a chunk's edge carries on next door; corners and free ends have posts.)
   const rail = FT * 0.5 * k;
   const apart = FT * 0.5 * (bold ? 1.25 : 1);
+  yield;
   for (const [width, color] of [
     [rail + 3.4 * k, INK],
     [rail, rail0],
@@ -618,14 +642,17 @@ function drawFences(g: Graphics, rs: Run[], bold = false) {
     for (const r of rs) for (const d of [apart, -apart]) line(r, d);
     g.stroke({ width, color, cap: 'butt', join: 'round' });
   }
+  yield;
   for (const r of rs) {
     const sun = r.lit >= 0 ? 1 : -1;
     for (const d of [apart, -apart]) line(r, d + sun * rail * 0.22);
   }
   g.stroke({ width: rail * 0.34, color: lit0, cap: 'butt' });
   // The posts: square tops in ink, the wood, the half toward the light lit.
+  yield;
   for (const [p, r] of posts) square(p, r, pw / 2);
   g.fill(rail0).stroke({ width: 1.8 * k, color: INK, join: 'round' });
+  yield;
   for (const [p, r] of posts) {
     const h = pw / 2 - 1.2;
     const c = (sa: number, sd: number) => [p[0] + (r.ux * sa + r.nx * sd) * h, p[1] + (r.uy * sa + r.ny * sd) * h];
@@ -646,19 +673,122 @@ function drawFences(g: Graphics, rs: Run[], bold = false) {
  * (`ox`, `oy`: the chunk's corner in world px, for the lattice along the lines; `side` the chunk's
  * width, where pieces are cut.)
  */
-export function drawBounds(g: Graphics, shapes: Shape[], ox = 0, oy = 0, side = SQ * PX) {
+export function drawBounds(g: Pen, shapes: Shape[], ox = 0, oy = 0, side = SQ * PX) {
+  for (const _ of boundKinds(g, shapes, ox, oy, side));
+}
+
+/** `drawBounds`, a kind at a time. */
+function* boundKinds(g: Pen, shapes: Shape[], ox: number, oy: number, side: number): Generator<void, void, void> {
   for (const [kind, draw] of [
     [HEDGE, drawHedges],
     [DRY_WALL, drawDryWalls],
     [FENCE, drawFences],
   ] as const) {
     const of = shapes.filter((s) => s.kind === kind);
+    if (!of.length) continue;
     // (A corral's fence comes a third thicker than a field's: `rural::CORRAL_DRAWN_FT`.)
     const bold = kind === FENCE ? of.filter((s) => s.size > 0.19 * PX) : [];
     const rest = bold.length ? of.filter((s) => s.size <= 0.19 * PX) : of;
-    if (rest.length) draw(g, runs(rest, ox, oy, side));
-    if (bold.length) drawFences(g, runs(bold, ox, oy, side), true);
+    if (rest.length) yield* draw(g, runs(rest, ox, oy, side));
+    if (bold.length) yield* drawFences(g, runs(bold, ox, oy, side), true);
+    yield;
   }
+}
+
+/** What the bounds' drawing uses of a Graphics. */
+export interface Pen {
+  poly(points: number[], close?: boolean): Pen;
+  moveTo(x: number, y: number): Pen;
+  lineTo(x: number, y: number): Pen;
+  fill(style?: FillInput): Pen;
+  stroke(style?: StrokeInput): Pen;
+}
+
+/** A path as drawn: a polygon (`poly`'s arguments) or a line (`moveTo`, then `lineTo`s). */
+type Path = { pts: number[]; close: boolean | undefined; line: boolean };
+/** Paths and what paints them: a fill, a stroke, or one after the other on the same paths. */
+type Painted = { paths: Path[]; paints: { stroke: boolean; style: FillInput | StrokeInput | undefined }[] };
+
+/** Takes down what the bounds' drawing draws, for `boundPieces` to lay into Graphics a piece at a time. */
+class Tape implements Pen {
+  readonly ops: Painted[] = [];
+  private open: Painted | null = null;
+  private last: Painted | null = null;
+  private add(p: Path) {
+    if (!this.open) this.ops.push((this.open = { paths: [], paints: [] }));
+    this.open.paths.push(p);
+    return this;
+  }
+  poly(points: number[], close?: boolean) {
+    return this.add({ pts: points, close, line: false });
+  }
+  moveTo(x: number, y: number) {
+    return this.add({ pts: [x, y], close: undefined, line: true });
+  }
+  lineTo(x: number, y: number) {
+    const paths = this.open?.paths;
+    if (!paths?.length || !paths[paths.length - 1].line) return this.add({ pts: [x, y], close: undefined, line: true });
+    paths[paths.length - 1].pts.push(x, y);
+    return this;
+  }
+  private paint(stroke: boolean, style: FillInput | StrokeInput | undefined) {
+    // (A paint with no path since the last one paints that one's paths again, as a Graphics does.)
+    if (this.open) [this.last, this.open] = [this.open, null];
+    else if (!this.last) this.ops.push((this.last = { paths: [], paints: [] }));
+    this.last!.paints.push({ stroke, style });
+    return this;
+  }
+  fill(style?: FillInput) {
+    return this.paint(false, style);
+  }
+  stroke(style?: StrokeInput) {
+    return this.paint(true, style);
+  }
+}
+
+/** Points to a piece of `boundPieces`: about 5 ms to tessellate on the reference laptop. */
+const PIECE_POINTS = 12000;
+
+/**
+ * `drawBounds` as several Graphics to be shown one over the other in order (the same picture), each of
+ * some `PIECE_POINTS` points: a chunk of fields has tens of thousands of points of hedge and wall,
+ * 15-50 ms to draw and as long again to tessellate if they are one Graphics. Yields between the
+ * steps (a kind worked out, a piece laid), so the caller can leave the rest for the next frame.
+ * (Paths painted by one fill or stroke go to several pieces as they come, each painted the same;
+ * paths painted twice, a fill then its stroke, stay together.)
+ */
+export function* boundPieces(shapes: Shape[], ox = 0, oy = 0, side = SQ * PX): Generator<void, Graphics[], void> {
+  const tape = new Tape();
+  for (const _ of boundKinds(tape, shapes, ox, oy, side)) yield;
+  const out: Graphics[] = [];
+  let g = new Graphics();
+  let n = 0;
+  const paint = (q: Painted['paints'][number]) => (q.stroke ? g.stroke(q.style as StrokeInput) : g.fill(q.style as FillInput));
+  for (const op of tape.ops) {
+    for (let k = 0; k < op.paths.length; k++) {
+      const p = op.paths[k];
+      if (p.line) {
+        g.moveTo(p.pts[0], p.pts[1]);
+        for (let i = 2; i < p.pts.length; i += 2) g.lineTo(p.pts[i], p.pts[i + 1]);
+      } else g.poly(p.pts, p.close);
+      n += p.pts.length >> 1;
+      if (n >= PIECE_POINTS && op.paints.length === 1 && k < op.paths.length - 1) {
+        paint(op.paints[0]);
+        out.push(g);
+        [g, n] = [new Graphics(), 0];
+        yield;
+      }
+    }
+    for (const q of op.paints) paint(q);
+    if (n >= PIECE_POINTS) {
+      out.push(g);
+      [g, n] = [new Graphics(), 0];
+      yield;
+    }
+  }
+  if (n > 0) out.push(g);
+  else g.destroy();
+  return out;
 }
 
 /** Sail cloth: lit, shaded. */

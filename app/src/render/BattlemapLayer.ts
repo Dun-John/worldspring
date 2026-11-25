@@ -25,7 +25,7 @@ import { Edited } from './TileLayer';
 import { DRAWN_R, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { sprites } from './spriteCode';
 import { type BridgeGround, deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
-import { boundAt, isBound, SAILS } from './countryside';
+import { boundAt, boundPieces, isBound, SAILS } from './countryside';
 import { drawBreakwaterArmour, drawCog, drawLantern, drawQuayCoping } from './harbourShapes';
 import { caveScale, drawCaveMark, drawFall, drawFallCave, drawFallCaveThrough, mistScale, sheetRun } from './fallShapes';
 import type { GenFall } from '../gen/protocol';
@@ -1164,12 +1164,30 @@ export class BattlemapLayer {
     // its deck and grid, and the stub shown when play raises it, each on their own (shown by door
     // state). Chunks without one draw their structures in one piece.
     const drawbridges = c.shapes.filter((s) => s.kind === 18);
-    const lowKind = (k: number) => k === 0 || isBound(k);
+    const lowKind = (k: number) => k === 0;
     const highKind = (k: number) => k === 4 || (k >= 10 && k <= 12);
     // (Gatehouses go under the towers but over every chunk's walls (`gateG`): a curtain owned by the next
     // chunk would otherwise end on top of its gate block. The walls still learn from them which way the
     // town lies.)
     const gates = c.shapes.filter((s) => s.kind === 9);
+    // Hedges, walls and fences, under the rest: in pieces, laid a few to a frame.
+    const boundGs: Graphics[] = [];
+    const bounds = c.shapes.filter((s) => isBound(s.kind));
+    if (bounds.length) {
+      since = performance.now();
+      const pieces = boundPieces(bounds, cx * SQ * PX, cy * SQ * PX);
+      for (let r = pieces.next(); ; r = pieces.next()) {
+        if (r.done) {
+          boundGs.push(...r.value);
+          break;
+        }
+        if (performance.now() - since > BUILD_SLICE_MS) {
+          yield;
+          since = performance.now();
+        }
+      }
+      yield;
+    }
     const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX, gates, (s) => plazaGround(c, s, cx, cy));
     const structHigh = drawbridges.length ? drawStructures(c.shapes.filter((s) => highKind(s.kind)), 0, 0, undefined, (s) => plazaGround(c, s, cx, cy)) : null;
     const bridges = drawbridges.map((s) => {
@@ -1198,7 +1216,7 @@ export class BattlemapLayer {
     const pathGridG = new Graphics();
     for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 9 ? gateGridG : s.kind === 13 || s.kind === 20 ? pathGridG : walkGridG, s);
     for (const gr of [gridG, walkGridG, topGridG, pathGridG, gateGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
-    for (const part of [roofMesh, bastionG, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, gateG, gateGridG, towerG, topGridG]) {
+    for (const part of [roofMesh, bastionG, daisG, pathGridG, battleG, bridgeG, gridG, ...boundGs, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, gateG, gateGridG, towerG, topGridG]) {
       if (!part) continue;
       this.prewarm(part);
       yield;
@@ -1209,7 +1227,7 @@ export class BattlemapLayer {
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
       if (i === 0) holder.addChild(bastionG, daisG, pathGridG);
       if (i === 2) {
-        holder.addChild(structG);
+        holder.addChild(...boundGs, structG);
         for (const b of bridges) holder.addChild(b.deck);
         if (structHigh) holder.addChild(structHigh);
         for (const b of bridges) holder.addChild(b.stub);
